@@ -39,8 +39,25 @@ const STORED_ROW = {
   },
 }
 
+// The row as it sits in the database: every column, including the ones the
+// route must never echo.
+const fullRow = (arg) => ({ data: { ...STORED_ROW, settings: arg.settings }, error: null })
+
+// PostgREST returns what the select names: a bare .select() or select('*')
+// is the whole row (Sensibo key, ThinQ PAT and all), so a regression to one
+// reaches the no-leak checks below.
+function pickColumns(row, cols) {
+  if (cols === undefined || String(cols).trim() === '*') return row
+  const out = {}
+  for (const c of String(cols).split(',').map((x) => x.trim()).filter(Boolean)) {
+    if (c in row) out[c] = row[c]
+  }
+  return out
+}
+
 // A scripted double: the first locations call is the read, the second the
-// write (update -> eq -> select -> single).
+// write (update -> eq -> select -> single). writeResult gives the full stored
+// row; the double hands back only the selected columns of it.
 function mockDb({ readResult, writeResult }) {
   const calls = { updateArg: null, writeSelect: undefined }
   let n = 0
@@ -57,7 +74,12 @@ function mockDb({ readResult, writeResult }) {
             eq: () => ({
               select: (cols) => {
                 calls.writeSelect = cols
-                return { single: async () => writeResult(arg) }
+                return {
+                  single: async () => {
+                    const r = writeResult(arg)
+                    return r?.data ? { ...r, data: pickColumns(r.data, cols) } : r
+                  },
+                }
               },
             }),
           }
@@ -87,13 +109,14 @@ describe('PUT /api/locations/[id]/integrations: the echo (N8NECHO.1)', () => {
   it('echoes only glofox + webhooks, masked, under the old paths; no other column or slice', async () => {
     const calls = mockDb({
       readResult: { data: { settings: STORED_ROW.settings, organization_id: ORG }, error: null },
-      writeResult: (arg) => ({ data: { id: LOC, name: 'Test Studio', slug: 'test-studio', settings: arg.settings }, error: null }),
+      writeResult: fullRow,
     })
     const res = await put({ glofox: { ...STORED_ROW.settings.glofox, api_key: 'SYNTH-GK-NEW' } })
     expect(res.status).toBe(200)
     const body = await res.json()
 
     expect(body.success).toBe(true)
+    expect(JSON.stringify(body)).not.toMatch(/SYNTH-|test_phones|sensibo|thinq|unifi|bca_config/)
     expect(body.data).toEqual({
       id: LOC, name: 'Test Studio', slug: 'test-studio',
       settings: {
@@ -101,7 +124,6 @@ describe('PUT /api/locations/[id]/integrations: the echo (N8NECHO.1)', () => {
         webhooks: { lead_url: 'https://n8n.example/hook' },
       },
     })
-    expect(JSON.stringify(body)).not.toMatch(/SYNTH-|test_phones|sensibo|thinq|unifi|bca_config/)
     // The write names its columns: the whole row never leaves the database.
     expect(calls.writeSelect).toBe('id, name, slug, settings')
     // The write still merges into the stored settings (nothing else is dropped on disk).
@@ -112,7 +134,7 @@ describe('PUT /api/locations/[id]/integrations: the echo (N8NECHO.1)', () => {
   it('the registry re-sync still gets the RAW written row (it needs the real credentials)', async () => {
     mockDb({
       readResult: { data: { settings: STORED_ROW.settings, organization_id: ORG }, error: null },
-      writeResult: (arg) => ({ data: { id: LOC, name: 'Test Studio', slug: 'test-studio', settings: arg.settings }, error: null }),
+      writeResult: fullRow,
     })
     await put({ glofox: STORED_ROW.settings.glofox })
     const [, , platform, row] = syncConnectionFromLegacy.mock.calls[0]
@@ -123,7 +145,7 @@ describe('PUT /api/locations/[id]/integrations: the echo (N8NECHO.1)', () => {
   it('a slice that is absent echoes null', async () => {
     mockDb({
       readResult: { data: { settings: { customer_agent: { enabled: true } }, organization_id: ORG }, error: null },
-      writeResult: (arg) => ({ data: { id: LOC, name: 'N', slug: 's', settings: arg.settings }, error: null }),
+      writeResult: fullRow,
     })
     const body = await (await put({ webhooks: { lead_url: 'https://n8n.example/h2' } })).json()
     expect(body.data.settings).toEqual({ glofox: null, webhooks: { lead_url: 'https://n8n.example/h2' } })
@@ -137,16 +159,15 @@ describe('PUT /api/locations/[id]/integrations: the masked echo sent back (N8NEC
     ...STORED_ROW.settings,
     webhooks: { lead_url: 'https://n8n.example/hook', signing_secret: 'SYNTH-WHS' },
   }
-  const rowFrom = (arg) => ({ data: { id: LOC, name: 'Test Studio', slug: 'test-studio', settings: arg.settings }, error: null })
 
   it("PUT with the previous PUT's response body keeps the stored credentials, and the registry sync gets the real ones", async () => {
-    mockDb({ readResult: { data: { settings: SETTINGS, organization_id: ORG }, error: null }, writeResult: rowFrom })
+    mockDb({ readResult: { data: { settings: SETTINGS, organization_id: ORG }, error: null }, writeResult: fullRow })
     const first = await (await put({ glofox: SETTINGS.glofox, webhooks: SETTINGS.webhooks })).json()
     expect(first.data.settings.glofox.api_key).toBe(SECRET_MASK)
     expect(first.data.settings.webhooks.signing_secret).toBe(SECRET_MASK)
 
     vi.clearAllMocks()
-    const calls = mockDb({ readResult: { data: { settings: SETTINGS, organization_id: ORG }, error: null }, writeResult: rowFrom })
+    const calls = mockDb({ readResult: { data: { settings: SETTINGS, organization_id: ORG }, error: null }, writeResult: fullRow })
     const res = await put({ glofox: first.data.settings.glofox, webhooks: first.data.settings.webhooks })
     expect(res.status).toBe(200)
 
@@ -161,14 +182,14 @@ describe('PUT /api/locations/[id]/integrations: the masked echo sent back (N8NEC
   it('a masked key with nothing stored behind it is dropped, not written as the mask', async () => {
     const calls = mockDb({
       readResult: { data: { settings: { glofox: { branch_id: 'b1' } }, organization_id: ORG }, error: null },
-      writeResult: rowFrom,
+      writeResult: fullRow,
     })
     await put({ glofox: { branch_id: 'b1', api_key: SECRET_MASK } })
     expect(calls.updateArg.settings.glofox).toEqual({ branch_id: 'b1' })
   })
 
   it('a real new value is still written, and non-secret fields change as sent', async () => {
-    const calls = mockDb({ readResult: { data: { settings: SETTINGS, organization_id: ORG }, error: null }, writeResult: rowFrom })
+    const calls = mockDb({ readResult: { data: { settings: SETTINGS, organization_id: ORG }, error: null }, writeResult: fullRow })
     await put({
       glofox: { ...SETTINGS.glofox, branch_id: 'b2', api_token: 'SYNTH-GT-NEW', api_key: SECRET_MASK },
       webhooks: { lead_url: 'https://n8n.example/h3', signing_secret: 'SYNTH-WHS-NEW' },
