@@ -547,6 +547,14 @@ describe('findOrCreateGlofoxMember — the initial password is never stored (PAS
     })
 
     expect(out.status).toBe('needs_review')
+    // The create path was reached: a needs_review from an earlier step (an
+    // ambiguous search, a phone match) would pass the "stores nothing" check
+    // without ever minting a password.
+    expect(registerGlofoxMember).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ password: 'TEST-1234' }))
+    expect(out.glofox_member_id).toBe('gx-new')
+    // The desk button shows it on needs_review too, so it is still returned once.
+    expect(out.passcode).toBe('TEST-1234')
+    expect(contactUpdates).toEqual([{ glofox_member_id: 'gx-new', glofox_synced_at: expect.any(String) }])
     expect(JSON.stringify({ contactUpdates, pushEvents })).not.toContain('TEST-1234')
   })
 })
