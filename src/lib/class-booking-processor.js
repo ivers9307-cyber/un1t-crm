@@ -369,15 +369,21 @@ export async function processClassBookingRequest(db, request) {
   // if no readable sibling has a balance, the rescue THROWS CreditReadError
   // (CBPCREDITREAD.1) and the queue retries.
   // CBPCREDITREAD.1 — set when a sibling's credits could not be read.
+  //
+  // membershipOnly: the rescue made when the ANCHOR's own credits read
+  // failed. Only a sibling with a BOOKABLE MEMBERSHIP qualifies (it needs no
+  // credits read, as on main); a sibling whose only asset is credits is not
+  // spent while the anchor's own balance is unknown, and no sibling is read.
+  // The caller throws CreditReadError when this finds nobody.
   let siblingCreditsUnread = false
-  async function rescueSiblingBalance() {
+  async function rescueSiblingBalance({ membershipOnly = false } = {}) {
     const rescueable = reusableAccounts
       .filter((row) => row.glofox_member_id && row.glofox_member_id !== memberId)
       .filter((row) => row.glofox_membership_status !== 'classpass_payg')
       .sort((a, b) => (String(a.id) < String(b.id) ? -1 : String(a.id) > String(b.id) ? 1 : 0))
     for (const row of rescueable) {
       let usable = hasBookableMembership(row)
-      if (!usable) {
+      if (!usable && !membershipOnly) {
         const siblingRead = await readCredits(creds, row.glofox_member_id)
         if (!siblingRead.ok) {
           // Unknown is not empty: note it and keep looking. Another sibling
@@ -418,12 +424,14 @@ export async function processClassBookingRequest(db, request) {
     const read = await readCredits(creds, memberId)
     // CBPCREDITREAD.1 — an UNREAD balance is not "nothing to book with":
     // retry rather than tell staff the returner has no balance. A bookable
-    // membership still books without it, exactly as before.
+    // membership still books without it, exactly as before, on this account
+    // or (the rescue that needs no read) on a reusable sibling's.
     if (!read.ok && !activeMembership) {
-      logWarn('cbp', 'credit check unreadable; the queue retries', { requestId: request.id })
-      throw creditReadError()
-    }
-    if (!(read.remaining > 0) && !activeMembership && !(await rescueSiblingBalance())) {
+      if (!(await rescueSiblingBalance({ membershipOnly: true }))) {
+        logWarn('cbp', 'credit check unreadable; the queue retries', { requestId: request.id })
+        throw creditReadError()
+      }
+    } else if (!(read.remaining > 0) && !activeMembership && !(await rescueSiblingBalance())) {
       return toReview('prior_attendance')
     }
     // Fall through to the booking — consuming the EXISTING balance, never a
@@ -459,13 +467,16 @@ export async function processClassBookingRequest(db, request) {
   if (!attended && !grantedTrial) {
     // CBPCREDITREAD.1 — needs_credit_grant only on a read that WORKED: its
     // approve path buys the trial membership, so it must never rest on a read
-    // that failed. Unread → retry (the queue), then credit_check_failed.
+    // that failed. Unread → first the rescue that needs no read (a reusable
+    // sibling's bookable membership), else retry (the queue), then
+    // credit_check_failed.
     const read = await readCredits(creds, memberId)
     if (!read.ok) {
-      logWarn('cbp', 'credit check unreadable; the queue retries', { requestId: request.id })
-      throw creditReadError()
-    }
-    if (read.remaining == null || read.remaining <= 0) {
+      if (!(await rescueSiblingBalance({ membershipOnly: true }))) {
+        logWarn('cbp', 'credit check unreadable; the queue retries', { requestId: request.id })
+        throw creditReadError()
+      }
+    } else if (read.remaining == null || read.remaining <= 0) {
       // PERSON-ACCT.9 — before asking staff to grant a credit, check the rest
       // of this person: a corroborated sibling may already hold a balance
       // (the same rescue the attended path makes). Only a person-wide empty

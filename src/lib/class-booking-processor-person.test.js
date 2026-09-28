@@ -710,3 +710,69 @@ describe('CBPCREDITREAD.1: the retry carries the elected account', () => {
     expect(amrInsert(db)).toBeUndefined()
   })
 })
+
+// CBPCREDITREAD.1 review (decided) — a failed ANCHOR read must not throw
+// before the rescue that needs no read at all: a reusable sibling with a
+// BOOKABLE MEMBERSHIP books without anyone's credits being read, exactly as
+// on main. Only when no such sibling exists does the failed read throw. The
+// failed anchor read is never treated as zero: a sibling whose only asset is
+// CREDITS is not spent while the anchor's own balance is unknown.
+describe('CBPCREDITREAD.1: a failed anchor read still tries the no-read sibling rescue', () => {
+  const anchorUnread = async (_c, id) => (id === 'gm-anchor' ? { ok: false, credits: [] } : { ok: true, credits: ['rich'] })
+  const memberSibling = () => sibling('c-member', {
+    glofox_member_id: 'gm-member',
+    glofox_membership_status: 'member', glofox_membership_state: 'active',
+  })
+
+  it('returner, anchor read fails, a reusable sibling holds a bookable membership → books on the sibling', async () => {
+    fetchUserCreditsResult.mockImplementation(anchorUnread)
+    const db = makeDb({
+      contact: funnelContact({ glofox_member_id: 'gm-anchor', last_attended_at: '2026-06-01T10:00:00Z' }),
+      siblings: [memberSibling()],
+      groupMemberIds: grouped(['c-member']),
+    })
+
+    const r = await processClassBookingRequest(db, req)
+
+    expect(r.outcome).toBe('booked')
+    expect(createBooking).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ user_id: 'gm-member' }))
+  })
+
+  it('never-attended, anchor read fails, a reusable sibling holds a bookable membership → books on the sibling', async () => {
+    fetchUserCreditsResult.mockImplementation(anchorUnread)
+    const db = makeDb({
+      contact: funnelContact({ glofox_member_id: 'gm-anchor' }),
+      siblings: [memberSibling()],
+      groupMemberIds: grouped(['c-member']),
+    })
+
+    const r = await processClassBookingRequest(db, req)
+
+    expect(r.outcome).toBe('booked')
+    expect(createBooking).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ user_id: 'gm-member' }))
+  })
+
+  it('returner, anchor read fails, no sibling with a bookable membership → throws; no booking, no card', async () => {
+    fetchUserCreditsResult.mockImplementation(anchorUnread)
+    computeCreditsRemaining.mockImplementation((rows) => (rows?.length ? 2 : 0))
+    const db = makeDb({
+      contact: funnelContact({ glofox_member_id: 'gm-anchor', last_attended_at: '2026-06-01T10:00:00Z' }),
+      // Credits only: not spent while the anchor's own balance is unknown.
+      siblings: [sibling('c-rich', { glofox_member_id: 'gm-rich' })],
+      groupMemberIds: grouped(['c-rich']),
+    })
+
+    await expect(processClassBookingRequest(db, req)).rejects.toBeInstanceOf(CreditReadError)
+    expect(createBooking).not.toHaveBeenCalled()
+    expect(amrInsert(db)).toBeUndefined()
+  })
+
+  it('never-attended, anchor read fails, no sibling at all → throws (never needs_credit_grant)', async () => {
+    fetchUserCreditsResult.mockImplementation(anchorUnread)
+    const db = makeDb({ contact: funnelContact({ glofox_member_id: 'gm-anchor' }) })
+
+    await expect(processClassBookingRequest(db, req)).rejects.toBeInstanceOf(CreditReadError)
+    expect(createBooking).not.toHaveBeenCalled()
+    expect(amrInsert(db)).toBeUndefined()
+  })
+})
