@@ -36,6 +36,8 @@ import { fileURLToPath } from 'node:url'
 // ROLESWEEP.1 — the patterns moved to scripts/lib/active-role-gates.mjs so
 // tests/role-at-target.test.js (the repo-wide guard) scans the same tokens.
 import { activeRoleGates } from '../../../../../scripts/lib/active-role-gates.mjs'
+// ACDEVLOC.1 — the path-id rule below uses the same comment stripper.
+import { stripComments } from '../../../../../scripts/lib/strip-comments.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 
@@ -91,6 +93,59 @@ describe('/api/locations/[id] routes judge the role at the path location', () =>
     expect(files.length).toBeGreaterThan(30) // 41 on 27 Sep 2026; a wrong HERE finds 0
     const offenders = files.flatMap((file) =>
       activeRoleGates(fs.readFileSync(file, 'utf8')).map((hit) => `${path.relative(HERE, file)}: ${hit}`))
+    expect(offenders).toEqual([])
+  })
+})
+
+// ACDEVLOC.1 — judging the role at the path is half the rule; the route must
+// also ACT on the path. A route in this folder that never reads its [id], or
+// that reads the caller's active studio (user.activeLocation, or withAuth,
+// which hands the handler user.activeLocation.id as `locationId`), acts on a
+// studio its URL does not name. All 41 routes passed when this was written
+// (28 Sep 2026). Honest limit: it would NOT have caught ACDEVLOC.1 itself —
+// those routes lived outside this folder (tests/location-settings-target.test.js
+// is the guard that does). Blind spots: an id read and then ignored, and the
+// read hidden in a helper.
+const PATH_ID_READS = [
+  /\bparams\??\.id\b/, //                                              params.id, params?.id
+  /\{\s*id\b[^}]*\}\s*=\s*(?:await\s+)?(?:props\.|ctx\.|context\.)?params\b/, // const { id: x } = await props.params
+  /\bparams\s*\)\s*\??\.id\b/, //                                      (await props.params).id
+]
+const ACTIVE_STUDIO_READS = [/\buser\??\.activeLocation\b/g, /\bwithAuth\(/g]
+
+const readsPathId = (src) => { const s = stripComments(src); return PATH_ID_READS.some((re) => re.test(s)) }
+const activeStudioReads = (src) => {
+  const s = stripComments(src)
+  return ACTIVE_STUDIO_READS.flatMap((re) => [...s.matchAll(re)].map((m) => m[0]))
+}
+
+describe('/api/locations/[id] routes act on the path location (ACDEVLOC.1)', () => {
+  it('sees the id-read shapes in use, and not a comment', () => {
+    expect(readsPathId('const params = await props.params\nconst locationId = params.id')).toBe(true)
+    expect(readsPathId('const locationId = params?.id')).toBe(true)
+    expect(readsPathId('const { id: locationId } = await params')).toBe(true)
+    expect(readsPathId('const { id: locationId } = await props.params')).toBe(true)
+    expect(readsPathId('const { id: locationId, connId } = params')).toBe(true)
+    expect(readsPathId('const locationId = (await props.params).id')).toBe(true)
+    expect(readsPathId('const loc = user.activeLocation?.id')).toBe(false)
+    expect(readsPathId('// params.id')).toBe(false)
+  })
+
+  it('sees an active-studio read, and not a comment', () => {
+    expect(activeStudioReads('const loc = user.activeLocation?.id')).toEqual(['user.activeLocation'])
+    expect(activeStudioReads('const loc = user?.activeLocation.id')).toEqual(['user?.activeLocation'])
+    expect(activeStudioReads("export const GET = withAuth({ permission: 'x' }, h)")).toEqual(['withAuth('])
+    expect(activeStudioReads('// user.activeLocation')).toEqual([])
+  })
+
+  it('every route in this folder reads its [id] and never the active studio', () => {
+    const files = routeFiles(HERE)
+    const offenders = files.flatMap((file) => {
+      const src = fs.readFileSync(file, 'utf8')
+      const out = activeStudioReads(src).map((hit) => `${path.relative(HERE, file)}: ${hit}`)
+      if (!readsPathId(src)) out.push(`${path.relative(HERE, file)}: never reads params.id`)
+      return out
+    })
     expect(offenders).toEqual([])
   })
 })
