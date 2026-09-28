@@ -5,8 +5,8 @@
 // as JSON, must carry their PRESENCE (several screens ask "is Glofox
 // configured?") but never their VALUE. Each non-empty one is replaced by
 // LOCATION_SECRET_MASK:
-//   * the key stays, so truthiness checks (StaffForm.isUnifiConfigured,
-//     LocationIntegrations statuses) still hold;
+//   * the key stays, so truthiness checks (LocationIntegrations statuses)
+//     still hold;
 //   * the mask starts with '••', which isFreshSecret()
 //     (src/lib/integration-secret-merge.js) rejects, so a mask echoed back to
 //     PUT /api/locations/[id]/integrations/[provider] keeps the stored value.
@@ -17,7 +17,7 @@
 // rule's depth cap of 12. So a credential added to `settings` later (a new
 // integration slice, a key inside an array) is hidden without anyone
 // remembering this file. That also masks the `bca_config` COLUMN whole where
-// a row carries it (the staff pages and /admin/matrix read select('*')): no
+// a row carries it (the /api/staff embeds and /admin/matrix read '*'): no
 // consumer of a redacted row reads it (the BCA routes and the integrations
 // tab read it fresh, not off these rows), and the user object never loads it
 // (USER_LOCATION_COLUMNS). Booleans and blank values are left as they are.
