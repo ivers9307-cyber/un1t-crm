@@ -472,3 +472,81 @@ describe('findOrCreateGlofoxMember — a failed audit insert is logged, never si
     warn.mockRestore()
   })
 })
+
+// PASSCODEREAD.1 — the generated password registers the member and is handed
+// back ONCE (the manual Create-in-Glofox button shows it to the staff member
+// who pressed it). It is never written anywhere: it used to land on
+// contacts.glofox_passcode and glofox_push_events.passcode_sent, where every
+// staff member at the location could read it from their own session, for a
+// welcome email that was never switched on. Mig 651 now refuses both columns.
+describe('findOrCreateGlofoxMember — the initial password is never stored (PASSCODEREAD.1)', () => {
+  function recordingDb() {
+    const contactUpdates = []
+    const pushEvents = []
+    const db = {
+      from(table) {
+        if (table === 'contacts') {
+          return {
+            update: (patch) => {
+              contactUpdates.push(patch)
+              return { eq: () => Promise.resolve({ error: null }) }
+            },
+          }
+        }
+        if (table === 'glofox_push_events') {
+          return {
+            insert: (row) => {
+              pushEvents.push(row)
+              return { select: () => ({ single: () => Promise.resolve({ data: { id: 'evt-1' }, error: null }) }) }
+            },
+          }
+        }
+        if (table === 'contact_tags') return { insert: () => Promise.resolve({ error: null }) }
+        if (table === 'locations') {
+          return { select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: { settings: {} }, error: null }) }) }) }
+        }
+        throw new Error(`fake db: unhandled table ${table}`)
+      },
+    }
+    return { db, contactUpdates, pushEvents }
+  }
+
+  beforeEach(() => {
+    searchGlofoxByEmail.mockResolvedValue({ found: false })
+  })
+
+  it('registers with the generated password, returns it once, and writes it nowhere', async () => {
+    registerGlofoxMember.mockResolvedValueOnce({ ok: true, member: { _id: 'gx-new' } })
+    const { db, contactUpdates, pushEvents } = recordingDb()
+    const out = await findOrCreateGlofoxMember({
+      db, locationId: 'loc1', source: 'booking_form',
+      contact: { id: 'c1', email: 'a@b.com', first_name: 'Alice', last_name: 'Smith' },
+      createIfMissing: true,
+      attachTrial: false,
+    })
+
+    expect(out.status).toBe('created')
+    expect(registerGlofoxMember).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ password: 'TEST-1234' }))
+    expect(out.passcode).toBe('TEST-1234')
+
+    expect(contactUpdates).toEqual([{ glofox_member_id: 'gx-new', glofox_synced_at: expect.any(String) }])
+    expect(pushEvents).toHaveLength(1)
+    expect(pushEvents[0]).not.toHaveProperty('passcode_sent')
+    expect(JSON.stringify({ contactUpdates, pushEvents })).not.toContain('TEST-1234')
+  })
+
+  it('stores nothing on the needs_review path either (trial not configured)', async () => {
+    registerGlofoxMember.mockResolvedValueOnce({ ok: true, member: { _id: 'gx-new' } })
+    const { db, contactUpdates, pushEvents } = recordingDb()
+    const out = await findOrCreateGlofoxMember({
+      db, locationId: 'loc1', source: 'manual_button',
+      contact: { id: 'c1', email: 'a@b.com', first_name: 'Alice', last_name: 'Smith' },
+      createIfMissing: true,
+      attachTrial: true,
+      trialOverride: { membershipId: null, planCode: null },
+    })
+
+    expect(out.status).toBe('needs_review')
+    expect(JSON.stringify({ contactUpdates, pushEvents })).not.toContain('TEST-1234')
+  })
+})
