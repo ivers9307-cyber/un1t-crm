@@ -202,12 +202,11 @@ export default function StaffForm({
   const addableLocations = locations
     .filter(l => callerScope.has(l.id) && !assignedIds.has(l.id))
 
+  // STAFFFORMSETTINGS.1 — computed on the server (loadStaffFormLocations,
+  // the save path's own rule: registry overlay + getLocationUnifiConfig).
+  // The form never receives a location's settings.
   function isUnifiConfigured(loc) {
-    const cfg = loc?.settings?.unifi || {}
-    return Boolean(
-      cfg.host && cfg.api_token &&
-      cfg.staff_policy_id && cfg.manager_policy_id
-    )
+    return loc?.unifi_configured === true
   }
 
   // All toggle helpers now operate on the SELECTED assignment's
