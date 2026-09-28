@@ -46,6 +46,7 @@ import {
 import { Instagram as InstagramIcon } from '@/components/icons/InstagramIcon'
 import { buttonClasses } from '@/components/ui'
 import IntegrationsHubDrawer from './IntegrationsHubDrawer'
+import XeroCallbackNotice from './XeroCallbackNotice'
 
 // ── status chips — the light-theme contrast recipe (bg-*-500/10 + text-*-700,
 // lint-enforced via check:guardrails no-low-contrast-chip) ──
@@ -531,6 +532,10 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
         <StatusChip status="coming_soon" />
         <StatusChip status="platform" />
       </div>
+
+      {/* CHANNELREAD.1 — the Xero card's Connect returns here from OAuth
+          (return_to), with the outcome as a code in the URL. */}
+      <XeroCallbackNotice className="mb-4" />
 
       {/* ── Plan & wallet strip (INTEG-C4) — read-only, pinning-gated ──
           Manage-plan deep-links into the D1 billing page (/settings/billing,

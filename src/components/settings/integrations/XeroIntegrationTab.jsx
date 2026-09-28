@@ -12,11 +12,14 @@
 
 import XeroLocationCard from '@/components/settings/XeroLocationCard'
 import ReadFailedNote from '@/components/settings/ReadFailedNote'
+import XeroCallbackNotice from '@/components/settings/XeroCallbackNotice'
 
 // CHANNELREAD.1 — `readFailed`: the page's xero_connections read failed.
 // Rendering XeroLocationCard with connection=null would say "Not connected."
 // and offer Connect Xero (an OAuth REBIND of this location) over a live
 // connection. The data is server-rendered, so Try again re-opens this tab.
+// XeroCallbackNotice: this tab is where GET /api/xero/callback lands by
+// default, so the connect's outcome (a code in the URL) is shown here.
 export default function XeroIntegrationTab({ location, connection, readFailed = false }) {
   return (
     <div className="space-y-3">
@@ -25,6 +28,7 @@ export default function XeroIntegrationTab({ location, connection, readFailed = 
         when a car is marked completed, and to forward supplier-invoice docs into Xero's
         Bills inbox via auto-OCR.
       </div>
+      <XeroCallbackNotice />
       {readFailed ? (
         <ReadFailedNote what="this location's Xero connection" href={`/settings/locations/${location.id}?tab=xero`} />
       ) : (

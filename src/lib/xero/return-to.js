@@ -24,7 +24,7 @@ const ALLOWLIST = ['/settings/integrations-hub', '/settings']
 
 // The EXISTING default redirect the callback already uses:
 // /settings/locations/<id>?tab=xero. Matched on the path (query stripped),
-// so ?tab=xero&connected=… decoration passes.
+// so ?tab=xero&xero_connected=1 decoration passes.
 const LOCATION_TAB_RE = /^\/settings\/locations\/[^/?#]+$/
 
 // Control chars (0x00-0x1F, 0x7F) + any whitespace — none may appear in a path.

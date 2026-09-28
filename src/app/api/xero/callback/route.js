@@ -19,7 +19,8 @@ import { pullTaxRates } from '@/lib/xero/tax-rates-sync'
 import { pullContacts } from '@/lib/xero/contacts-sync'
 import { safeReturnTo, decodeReturnTo } from '@/lib/xero/return-to'
 import { chooseTenantToBind } from '@/lib/xero/tenant-binding'
-import { logError } from '@/lib/log'
+import { logError, logWarn } from '@/lib/log'
+import { XERO_CALLBACK_PARAMS as P, XERO_CALLBACK_ERRORS as E } from '@/lib/xero/callback-notice'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -35,6 +36,12 @@ export const dynamic = 'force-dynamic'
 // never become the post-OAuth redirect target. An invalid returnTo is
 // ignored and the default is used. The success/error query params are always
 // appended on top, whichever base is chosen.
+//
+// CHANNELREAD.1 — the params are CODES (`xero_error=<code>`,
+// `xero_connected=1[&xero_orgs=N]`, src/lib/xero/callback-notice.js), which
+// every landing page maps to plain copy via XeroCallbackNotice. They used to
+// be free text (`?error=DB error: <pg message>`, `?connected=<org name>`) that
+// no page read, so every outcome was invisible. The raw detail is logged here.
 function settingsUrl(req, locationId, params = {}, returnTo = null) {
   const validated = safeReturnTo(returnTo)
   const u = validated
@@ -68,7 +75,7 @@ export async function GET(req) {
   // profileRole). Owner is judged at the state's location below, never at
   // the caller's ACTIVE studio (`user.role`).
   if (!hasRoleAtAnyLocation(user, ['owner'])) {
-    return NextResponse.redirect(settingsUrl(req, stateLocationId, { error: 'Not permitted' }, stateReturnTo))
+    return NextResponse.redirect(settingsUrl(req, stateLocationId, { [P.error]: E.NOT_PERMITTED }, stateReturnTo))
   }
 
   // Clear the cookie regardless of outcome.
@@ -78,19 +85,20 @@ export async function GET(req) {
   }
 
   if (oauthError) {
-    return clearCookie(NextResponse.redirect(settingsUrl(req, stateLocationId, { error: `Xero declined: ${oauthError}` }, stateReturnTo)))
+    logWarn('xero-callback', 'Xero declined the connection', { locationId: stateLocationId, oauthError })
+    return clearCookie(NextResponse.redirect(settingsUrl(req, stateLocationId, { [P.error]: E.DECLINED }, stateReturnTo)))
   }
   if (!code || !state) {
-    return clearCookie(NextResponse.redirect(settingsUrl(req, stateLocationId, { error: 'Missing code/state' }, stateReturnTo)))
+    return clearCookie(NextResponse.redirect(settingsUrl(req, stateLocationId, { [P.error]: E.MISSING_CODE }, stateReturnTo)))
   }
   if (!cookieState || cookieState !== state) {
-    return clearCookie(NextResponse.redirect(settingsUrl(req, null, { error: 'OAuth state mismatch' })))
+    return clearCookie(NextResponse.redirect(settingsUrl(req, null, { [P.error]: E.STATE_MISMATCH })))
   }
 
   const [, locationId] = state.split('.')
   const returnTo = stateReturnTo // already decoded from the verified state
   if (!locationId) {
-    return clearCookie(NextResponse.redirect(settingsUrl(req, null, { error: 'Invalid state' }, returnTo)))
+    return clearCookie(NextResponse.redirect(settingsUrl(req, null, { [P.error]: E.INVALID_STATE }, returnTo)))
   }
   // SECFIX.1 (security) — the state's location had NO membership check. The
   // state is verified only against the xero_oauth_state cookie, which the
@@ -99,14 +107,14 @@ export async function GET(req) {
   // Owner AT that location (implies membership; masters pass via
   // profileRole), before the code exchange, or the route's 'Not permitted'.
   if (!hasRoleAtLocation(user, locationId, ['owner'])) {
-    return clearCookie(NextResponse.redirect(settingsUrl(req, locationId, { error: 'Not permitted' }, returnTo)))
+    return clearCookie(NextResponse.redirect(settingsUrl(req, locationId, { [P.error]: E.NOT_PERMITTED }, returnTo)))
   }
 
   try {
     const tokens = await exchangeAuthorizationCode(code)
     const tenants = await listConnectedTenants(tokens.access_token)
     if (!tenants.length) {
-      return clearCookie(NextResponse.redirect(settingsUrl(req, locationId, { error: 'No Xero tenants returned' }, returnTo)))
+      return clearCookie(NextResponse.redirect(settingsUrl(req, locationId, { [P.error]: E.NO_TENANTS }, returnTo)))
     }
     // XERO-ONE-ORG.1 — this used to be `const tenant = tenants[0]`, on the
     // stated assumption that "most users have a single tenant anyway". Every
@@ -129,9 +137,7 @@ export async function GET(req) {
     // nothing; the operator reconnects.
     if (existingErr) {
       logError('xero-callback', 'xero_connections read failed', { locationId, err: existingErr.message })
-      return clearCookie(NextResponse.redirect(settingsUrl(req, locationId, {
-        error: 'Could not check which Xero organisations are already connected, so nothing was changed. Try connecting again.',
-      }, returnTo)))
+      return clearCookie(NextResponse.redirect(settingsUrl(req, locationId, { [P.error]: E.TAKEN_READ_FAILED }, returnTo)))
     }
     const existingRows = (existing || []).map((r) => ({
       tenant_id: r.tenant_id,
@@ -145,10 +151,16 @@ export async function GET(req) {
 
     const choice = chooseTenantToBind(tenants, existingRows, locationId)
     if (!choice.ok) {
-      const msg = choice.reason === 'all_taken'
-        ? `Every Xero organisation this login grants is already connected to another location (${choice.taken.map((t) => `${t.tenantName || t.tenantId} → ${t.claimedBy}`).join(', ')}). Each location needs its own Xero organisation.`
-        : 'No Xero tenants returned'
-      return clearCookie(NextResponse.redirect(settingsUrl(req, locationId, { error: msg }, returnTo)))
+      // Which org is held by which location is logged, not put in the URL:
+      // the landing page shows copy by code and never echoes the URL.
+      if (choice.reason === 'all_taken') {
+        logWarn('xero-callback', 'every granted Xero org is already bound to another location', {
+          locationId,
+          taken: choice.taken.map((t) => ({ tenantId: t.tenantId, claimedBy: t.claimedBy })),
+        })
+      }
+      const code = choice.reason === 'all_taken' ? E.ALL_TAKEN : E.NO_TENANTS
+      return clearCookie(NextResponse.redirect(settingsUrl(req, locationId, { [P.error]: code }, returnTo)))
     }
     const tenant = choice.tenant
 
@@ -167,7 +179,8 @@ export async function GET(req) {
         connected_by: user.id,
       }, { onConflict: 'location_id' })
     if (upErr) {
-      return clearCookie(NextResponse.redirect(settingsUrl(req, locationId, { error: `DB error: ${upErr.message}` }, returnTo)))
+      logError('xero-callback', 'xero_connections upsert failed', { locationId, err: upErr.message })
+      return clearCookie(NextResponse.redirect(settingsUrl(req, locationId, { [P.error]: E.SAVE_FAILED }, returnTo)))
     }
 
     // Prime the caches so a freshly-connected location has accounts +
@@ -189,14 +202,15 @@ export async function GET(req) {
       try { await pullContacts(locationId) } catch (e) { console.warn(`[xero connect] contacts sync after org change: ${e?.message || e}`) }
     }
 
-    // Name the org that was bound. When more than one was free the pick was
-    // arbitrary, so say so — that is the moment to catch a wrong binding.
-    const connectedMsg = choice.ambiguous
-      ? `${tenant.tenantName || 'Xero'} (this login grants ${choice.alternatives.length + 1} organisations — check this is the right one for ${'this location'})`
-      : (tenant.tenantName || 'Xero')
-    return clearCookie(NextResponse.redirect(settingsUrl(req, locationId, { connected: connectedMsg }, returnTo)))
+    // When more than one org was free the pick was arbitrary, so say how many
+    // — that is the moment to catch a wrong binding. The org's NAME is not
+    // carried: the Xero card on the landing page shows the bound org itself.
+    const connected = { [P.connected]: '1' }
+    if (choice.ambiguous) connected[P.orgs] = String(choice.alternatives.length + 1)
+    return clearCookie(NextResponse.redirect(settingsUrl(req, locationId, connected, returnTo)))
   } catch (e) {
-    const msg = e instanceof XeroError ? e.message : (e.message || String(e))
-    return clearCookie(NextResponse.redirect(settingsUrl(req, locationId, { error: msg }, returnTo)))
+    const msg = e instanceof XeroError ? e.message : (e?.message || String(e))
+    logError('xero-callback', 'Xero connect failed', { locationId, err: msg })
+    return clearCookie(NextResponse.redirect(settingsUrl(req, locationId, { [P.error]: E.XERO_ERROR }, returnTo)))
   }
 }
