@@ -6,7 +6,7 @@ import {
   applyConnectionOverlay,
   normalizeConnectionRow,
   normalizeLegacyConnection,
-  getConnection,
+  readConnection,
   getGlofoxConfig,
   overlayConnections,
   overlayConnectionsMany,
@@ -265,10 +265,11 @@ describe('normalizeConnectionRow / normalizeLegacyConnection', () => {
 
 // ── async accessors ──────────────────────────────────────────
 
-describe('getConnection', () => {
+describe('readConnection', () => {
   it('prefers the active registry row', async () => {
     const db = mockDb({ rows: [rowFor('sensibo', { access_token: 'reg-key' })] })
-    const conn = await getConnection(db, 'loc-1', 'sensibo')
+    const { conn, error } = await readConnection(db, 'loc-1', 'sensibo')
+    expect(error).toBeNull()
     expect(conn.source).toBe('registry')
     expect(conn.accessToken).toBe('reg-key')
     expect(db.queries).toEqual(['channel_connections'])
@@ -276,14 +277,14 @@ describe('getConnection', () => {
 
   it('falls back to legacy location fields when no row exists', async () => {
     const db = mockDb({ rows: [], location: { id: 'loc-1', sensibo_api_key: 'leg-key', sensibo_pod_id: 'p1' } })
-    const conn = await getConnection(db, 'loc-1', 'sensibo')
+    const { conn } = await readConnection(db, 'loc-1', 'sensibo')
     expect(conn.source).toBe('legacy')
     expect(conn.accessToken).toBe('leg-key')
     expect(conn.config).toEqual({ pod_id: 'p1' })
   })
 
   it('throws on an unknown platform', async () => {
-    await expect(getConnection(mockDb(), 'loc-1', 'whatsapp')).rejects.toThrow(/unknown platform/)
+    await expect(readConnection(mockDb(), 'loc-1', 'whatsapp')).rejects.toThrow(/unknown platform/)
   })
 })
 
