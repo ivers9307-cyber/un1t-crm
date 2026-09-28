@@ -4,7 +4,10 @@
 // SECURITY: two properties carry this route.
 //   1. Service-role reads mean NO RLS. hasPermission(user,'settings') is
 //      the only thing between an ordinary staffer and the ability to
-//      push a notification to the whole fleet.
+//      push a notification to the whole fleet. TENANTSCOPE.1: "the
+//      fleet" is the ACTIVE organisation's people (loadFleetScope; a
+//      master keeps the estate) — an id from another tenant is ignored
+//      exactly like an unknown one.
 //   2. The client sends profile IDS ONLY. Who is outdated is recomputed
 //      here from device_tokens and intersected with the request, so a
 //      caller can never nudge someone who is perfectly up to date by
@@ -32,6 +35,7 @@ import { createServerClient } from '@/lib/supabase'
 import { validateBody, uuidLike } from '@/lib/validate'
 import { sendPush } from '@/lib/push'
 import { deriveTargetVersion, deviceVerdict, currentDevice } from '@/lib/staff-devices'
+import { loadFleetScope, inFleetScope } from '@/lib/staff-fleet-scope'
 
 export const runtime = 'nodejs'
 
@@ -66,9 +70,13 @@ export async function POST(request) {
   const db = createServerClient()
 
   // supabase-js builders are thenables — try/await/catch, never .catch().
+  let scope = null
   let profiles = []
   let devices = []
   try {
+    // A failed scope read throws into the catch below: a 500 and nothing
+    // sent, never a guess at who is "ours".
+    scope = await loadFleetScope(db, user)
     const [profilesRes, devicesRes] = await Promise.all([
       db.from('profiles').select('id, active').eq('active', true).range(0, PAGE_MAX - 1),
       db
@@ -127,9 +135,10 @@ export async function POST(request) {
 
   // Deduplicate: a repeated id in the request must not double-push.
   for (const id of new Set(requestedIds)) {
-    // An id we don't recognise as active staff is simply ignored — never
-    // trusted into a send.
-    if (!activeIds.has(id)) continue
+    // An id we don't recognise as active staff, or one outside the
+    // caller's organisation (TENANTSCOPE.1), is simply ignored — never
+    // trusted into a send, and not counted in any skipped_* either.
+    if (!activeIds.has(id) || !inFleetScope(scope, id)) continue
 
     const own = byUser.get(id) || []
     const verdict = deviceVerdict(own, targetVersion, now)

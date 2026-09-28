@@ -6,6 +6,13 @@
 // this fills it for registrations confirmed before the feature shipped.
 // Master/owner only. Idempotent — the underlying upsert ignores duplicates,
 // so re-running is always safe. Returns per-event counts.
+//
+// TENANTSCOPE.1 — an owner back-fills THEIR organisation's hosts only: the
+// ACTIVE studio's organisation, where the gate below judged them owner
+// (whether an owner elsewhere in the organisation also qualifies is C18
+// ORGROLE.1's question). A master keeps the estate-wide one-shot this was
+// written as. The response names every event it touched, so an unscoped
+// run also handed one tenant's owner another tenant's event names.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
@@ -29,13 +36,38 @@ export async function POST() {
 
   const db = createServerClient()
 
-  // Every hosted event (host_id NOT NULL), range-paginated past the 1k cap.
+  // null = every host (a master's run); otherwise the active organisation's.
+  let hostIds = null
+  if (!user.isMaster) {
+    const organizationId = user.activeOrganization?.id || null
+    if (!organizationId) {
+      return NextResponse.json({ success: false, error: 'No active organisation' }, { status: 400 })
+    }
+    // Hosts per organisation are a handful (1 on prod), far under one page.
+    const { data: hosts, error: hostErr } = await db
+      .from('event_hosts')
+      .select('id')
+      .eq('organization_id', organizationId)
+      .order('id', { ascending: true })
+      .range(0, PAGE - 1)
+    if (hostErr) {
+      return NextResponse.json({ success: false, error: hostErr.message }, { status: 500 })
+    }
+    hostIds = (hosts || []).map((h) => h.id)
+    if (hostIds.length === 0) {
+      return NextResponse.json({ success: true, data: { events: [], total: 0 } })
+    }
+  }
+
+  // The hosted events in scope, range-paginated past the 1k cap.
   const events = []
   for (let from = 0; ; from += PAGE) {
-    const { data, error } = await db
+    let query = db
       .from('race_events')
       .select('id, name, host_id')
       .not('host_id', 'is', null)
+    if (hostIds) query = query.in('host_id', hostIds)
+    const { data, error } = await query
       .order('id', { ascending: true })
       .range(from, from + PAGE - 1)
     if (error) {

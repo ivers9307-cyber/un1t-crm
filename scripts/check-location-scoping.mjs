@@ -250,10 +250,6 @@ export const EXEMPT = {
   // ——— SAAS-9 triage (2026-07-19). Category (b) = cross-tenant/public by
   // design; TODO-LEAK = real finding, needs its own fix PR. ———
 
-  'src/app/api/admin/backfill-host-contacts/route.js': {
-    race_events:
-      'Master/owner-gated one-off admin backfill that walks EVERY hosted event to link host contacts at each host\'s anchor location — hosted-events hosts are a platform-level surface, and the route returns counts only (no tenant rows).',
-  },
   'src/app/api/unsubscribe/host/[token]/route.js': {
     contacts:
       'HOST-CONSENT.1 — RFC 8058 one-click target for host marketing mail. The contacts row is reached ONLY via the HMAC host-unsubscribe token (src/lib/host-unsubscribe.js) that names exactly one (host, contact) pair; the capability IS the scoping, the same argument as /api/unsubscribe/[token]. The query reads a single email column to push the Postmark suppression on the host\'s own stream and returns nothing about the contact.',
@@ -367,12 +363,6 @@ export const EXEMPT = {
   'src/app/welcome/[location]/status/page.js': {
     landing_page_settings:
       'Public status page: public_path → location resolution (the path IS the published tenant selector); renders only the coy member view from buildStatusView(), never internal detail.',
-  },
-
-  // Settings fleet dashboard — deliberately estate-wide.
-  'src/app/settings/notifications/health/page.js': {
-    profile_locations:
-      'Push-delivery fleet dashboard (NOTIF.4 + STAFF-DEV.4) gated by hasPermission(settings): groups active staff under EVERY location on purpose — it is the estate-wide device/app-version fleet view. Single-org estate today; revisit when a second org onboards (same caveat as public/branding).',
   },
 
   // The first page scan's four real findings needed NO exemption in the end:

@@ -48,7 +48,10 @@ const recorded = (calls, ...prefix) =>
 const DAY = 86400_000
 const daysAgo = (n) => new Date(Date.now() - n * DAY).toISOString()
 
-const settingsUser = { id: 'u-admin', profileRole: 'owner' }
+// A master: the fleet is the whole fixture, so these tests stay about
+// verdict shaping. Tenant scoping (TENANTSCOPE.1) is pinned against the
+// two-tenant double in tests/cross-tenant/tenantscope-routes.test.js.
+const settingsUser = { id: 'u-admin', profileRole: 'master', isMaster: true }
 
 beforeEach(() => {
   vi.clearAllMocks()

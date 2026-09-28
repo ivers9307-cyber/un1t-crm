@@ -149,7 +149,10 @@ const FLEET = {
   ],
 }
 
-const settingsUser = { id: 'u-admin', profileRole: 'owner' }
+// A master: the fleet is the whole fixture, so these tests stay about the
+// verdict, throttle and claim. Tenant scoping (TENANTSCOPE.1) is pinned in
+// tests/cross-tenant/tenantscope-routes.test.js.
+const settingsUser = { id: 'u-admin', profileRole: 'master', isMaster: true }
 const allIds = Object.values(ID)
 
 beforeEach(() => {

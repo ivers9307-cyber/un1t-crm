@@ -1,6 +1,8 @@
 // RCOV.P2 — the Runs & health tab: heartbeat status for the two
 // receipt-coverage crons, hunt-inbox health, recent run history, and
-// the week's LLM spend against the $15 hunt budget.
+// the week's LLM spend at this studio. TENANTSCOPE.1: the $15 hunt budget
+// is shared by every studio, so the route sends only whether it is
+// reached (and the estate total to a master).
 'use client'
 
 import { useEffect, useState } from 'react'
@@ -96,7 +98,10 @@ export default function RunsHealthPanel() {
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-semibold text-un1t-text">Recent runs</h3>
           <span className="text-xs text-un1t-subtle">
-            LLM spend, last 7 days: ${data.spend7dUsd.toFixed(2)} of $15 budget
+            LLM spend here, last 7 days: ${data.spend7dUsd.toFixed(2)}
+            {data.spend7dUsdAll != null ? ` (all studios: $${data.spend7dUsdAll.toFixed(2)})` : ''}
+            {` · weekly budget $${data.budget.weeklyUsd}, shared by all studios`}
+            {data.budget.exhausted ? ' · reached, hunting paused until it frees up' : ''}
           </span>
         </div>
         {data.runs.length === 0 ? (

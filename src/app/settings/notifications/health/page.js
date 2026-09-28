@@ -36,6 +36,11 @@
 // Auth: master or owner. /settings/notifications already gates on
 // hasPermission(user, 'settings') — same gate inherited here.
 //
+// TENANTSCOPE.1 — the fleet is the ACTIVE organisation's studios and staff
+// (loadFleetScope; a master keeps the estate). The target version still
+// comes from every active person's devices: one app binary for the estate,
+// and only the version string is rendered.
+//
 // STAFF-DEV.4 — this page is also the fleet view for app versions and
 // geofence permission (it already loads every device_tokens row, so a
 // second page would only be able to disagree with it). Version verdicts
@@ -51,6 +56,7 @@ import { ArrowLeft, ShieldCheck, Smartphone, Mail } from 'lucide-react'
 import TestPushButton from '@/components/settings/TestPushButton'
 import NudgeUpdateButton from '@/components/settings/NudgeUpdateButton'
 import { deriveTargetVersion, deviceVerdict, currentDevice, pushHealthStatus, PUSH_HEALTHY_DAYS } from '@/lib/staff-devices'
+import { loadFleetScope, inFleetScope } from '@/lib/staff-fleet-scope'
 import { geofencePermissionChip } from '@/lib/geofence-permission-chips'
 
 export const dynamic = 'force-dynamic'
@@ -76,11 +82,23 @@ export default async function PushHealthPage() {
 
   const db = createServerClient()
 
+  // A failed scope read throws to the error page: it is never "no staff".
+  const scope = await loadFleetScope(db, user)
+  // A non-master with no active organisation has no fleet to show.
+  if (!scope.all && scope.locationIds.length === 0) redirect('/')
+
+  let locationsQuery = db.from('locations').select('id, name, active').eq('active', true).eq('is_host_anchor', false)
+  let linksQuery = db.from('profile_locations').select('profile_id, location_id')
+  if (!scope.all) {
+    locationsQuery = locationsQuery.in('id', scope.locationIds)
+    linksQuery = linksQuery.in('location_id', scope.locationIds)
+  }
+
   // One round-trip per resource. Compose in JS — datasets are small
   // (~30 staff, ~few hundred device tokens at most).
   const [profilesRes, locationsRes, tokensRes, sendsRes, plRes] = await Promise.all([
     db.from('profiles').select('id, full_name, email, role, active').eq('active', true),
-    db.from('locations').select('id, name, active').eq('active', true).eq('is_host_anchor', false).order('name'),
+    locationsQuery.order('name'),
     // ANDROID-VIS.1b — expo_push_token is SELECTED (never rendered) purely
     // so pushHealthStatus can tell "reports but unreachable" from "healthy".
     // REPSET-PUB.1A — native_build is SELECTED so the Build column can show
@@ -91,10 +109,13 @@ export default async function PushHealthPage() {
     db.from('push_reminder_sends')
       .select('recipient_id, sent_at')
       .gte('sent_at', new Date(Date.now() - 30 * 86400 * 1000).toISOString()),
-    db.from('profile_locations').select('profile_id, location_id'),
+    linksQuery,
   ])
 
-  const profiles = profilesRes.data || []
+  // The whole active fleet feeds the target version (below); only the
+  // people in scope are listed, counted or offered a button.
+  const fleetProfiles = profilesRes.data || []
+  const profiles = fleetProfiles.filter((p) => inFleetScope(scope, p.id))
   const locations = locationsRes.data || []
   const tokens = tokensRes.data || []
   const sends = sendsRes.data || []
@@ -120,39 +141,55 @@ export default async function PushHealthPage() {
   // the target is derived from ACTIVE staff's devices only — a leaver's
   // newer phone must not mark everyone still here as outdated.
   const now = Date.now()
-  const activeIds = new Set(profiles.map(p => p.id))
+  const activeIds = new Set(fleetProfiles.map(p => p.id))
   const targetVersion = deriveTargetVersion(tokens.filter(t => activeIds.has(t.user_id)), now)
+
+  const toRow = (p) => {
+    const ownTokens = tokensByUser.get(p.id) || []
+    return {
+      ...p,
+      tokens: ownTokens,
+      pushesLast30d: sendsByUser.get(p.id) || 0,
+      verdict: deviceVerdict(ownTokens, targetVersion, now),
+      // Permission reads off the CURRENT device only — an old iPad
+      // that once granted "always" says nothing about today's phone.
+      permission: currentDevice(ownTokens)?.geofence_permission ?? null,
+      // REPSET-PUB.1A — same rule for the binary's build number: the
+      // question is which app THIS person is using today.
+      nativeBuild: currentDevice(ownTokens)?.native_build ?? null,
+    }
+  }
+  const byName = (a, b) => (a.full_name || '').localeCompare(b.full_name || '')
 
   // Group profiles by location for display. A profile can be at
   // multiple locations — show them under each (rare; only ~3 staff
   // hit this today).
   const groups = locations.map(loc => ({
     location: loc,
-    profiles: profiles.filter(p => profileLocByUser.get(p.id)?.has(loc.id))
-      .map(p => {
-        const ownTokens = tokensByUser.get(p.id) || []
-        return {
-          ...p,
-          tokens: ownTokens,
-          pushesLast30d: sendsByUser.get(p.id) || 0,
-          verdict: deviceVerdict(ownTokens, targetVersion, now),
-          // Permission reads off the CURRENT device only — an old iPad
-          // that once granted "always" says nothing about today's phone.
-          permission: currentDevice(ownTokens)?.geofence_permission ?? null,
-          // REPSET-PUB.1A — same rule for the binary's build number: the
-          // question is which app THIS person is using today.
-          nativeBuild: currentDevice(ownTokens)?.native_build ?? null,
-        }
-      })
-      .sort((a, b) => a.full_name.localeCompare(b.full_name || '')),
+    profiles: profiles.filter(p => profileLocByUser.get(p.id)?.has(loc.id)).map(toRow).sort(byName),
   }))
+
+  // TENANTSCOPE.1 — everyone counted in "Total staff" is listed somewhere.
+  // An org admin (profile_organizations, no studio membership) is in the
+  // fleet — GET /api/staff-devices lists them and the nudge reaches them —
+  // but sits under no studio above, and so does anyone whose only
+  // membership is an inactive or host-anchor location. They get their own
+  // group rather than being counted and never shown.
+  const listed = new Set(groups.flatMap(g => g.profiles.map(p => p.id)))
+  const unlisted = profiles.filter(p => !listed.has(p.id))
+  if (unlisted.length > 0) {
+    groups.push({
+      location: { id: 'no-active-studio', name: 'No active studio' },
+      profiles: unlisted.map(toRow).sort(byName),
+    })
+  }
 
   // Rollup counts for the header
   const totals = {
     profiles: profiles.length,
     healthy: 0, stale: 0, no_app: 0, no_push: 0,
     on_latest: 0,
-    total_tokens: tokens.length,
+    total_tokens: tokens.filter(t => profiles.some(p => p.id === t.user_id)).length,
   }
   for (const p of profiles) {
     const s = pushHealthStatus(tokensByUser.get(p.id) || [], now)
