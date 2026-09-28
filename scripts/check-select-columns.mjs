@@ -51,8 +51,10 @@
 //     (a skipped view, a `private.` table, a table made by hand);
 //   - an embed whose relation name is neither a table nor a single-column FK
 //     of its parent (an FK into auth.*, a composite FK, one made outside the
-//     migrations) — none in src/ at SELCOLS2.1;
-//   - `mobile/**` and `tests/**`, which are outside the scan entirely.
+//     migrations or inside a `DO $$` block, e.g. fleet_device_health's) —
+//     none in src/ at SELCOLS2.1;
+//   - everything outside `src/**` — `mobile/**`, `shared/**` and `tests/**`
+//     are not scanned at all.
 // A clean run therefore means "no phantom column among the ones I could
 // read", never "every column in the repo exists". Widening what it can read
 // is always worth more than tightening what it does with what it reads.
@@ -625,9 +627,13 @@ export function firstStringArg(argsText) {
 // file), `let`/`var` (reassignable), a name declared more than once in the
 // file (shadowing: we cannot tell which one reaches the call), a member
 // (`X.cols`), any other call (`COLS.join(',')` on a named array, `pick()`),
-// and any other `${expr}`. Known blind spot: a function PARAMETER that
-// shadows the file's one `const` of the same name reads as the const (a
-// regex cannot see scopes). That can only add a check, never hide one.
+// and any other `${expr}`. Known blind spot: a regex cannot see scopes, so
+// a function or arrow PARAMETER, a destructured binding, a second declarator
+// (`let a = 1, X = …`) or a `catch (X)` that shadows the file's one `const X`
+// still reads as the const. That checks the WRONG string against the chain's
+// table: it can raise a false phantom (blocks CI) or count a site as read
+// when the value actually passed was never checked. 0 such sites in src/ at
+// SELCOLS2.1.
 
 /**
  * Split a call's argument text (or an array literal's body) on top-level
@@ -1025,7 +1031,7 @@ function main() {
   if (failures.length === 0) {
     console.log(
       `✓ select columns: ${schema.size} tables/views (replayed from ${MIGRATIONS_ROOT}), ` +
-      `${files.length} source files, ${checked} literal column references resolved, ` +
+      `${files.length} source files, ${checked} readable column references resolved, ` +
       `${allowed.length} allowlisted` +
       (skippedViews.size ? `; ${skippedViews.size} view(s) skipped (unreadable select list): ${[...skippedViews].sort().join(', ')}` : '')
     )
