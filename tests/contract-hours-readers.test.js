@@ -168,7 +168,8 @@ describe('every reader of contracted hours has been reviewed (CONTRACTVIS.1)', (
   })
 
   it('REVIEWED has no stale entries', () => {
-    const found = new Set([...namers, ...consumers])
+    // A producer is reviewed because it hands on contracts, whether or not it names the column itself.
+    const found = new Set([...namers, ...consumers, ...Object.keys(PRODUCERS)])
     expect(Object.keys(REVIEWED).filter((f) => !found.has(f))).toEqual([])
   })
 })
