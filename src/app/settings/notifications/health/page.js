@@ -144,29 +144,45 @@ export default async function PushHealthPage() {
   const activeIds = new Set(fleetProfiles.map(p => p.id))
   const targetVersion = deriveTargetVersion(tokens.filter(t => activeIds.has(t.user_id)), now)
 
+  const toRow = (p) => {
+    const ownTokens = tokensByUser.get(p.id) || []
+    return {
+      ...p,
+      tokens: ownTokens,
+      pushesLast30d: sendsByUser.get(p.id) || 0,
+      verdict: deviceVerdict(ownTokens, targetVersion, now),
+      // Permission reads off the CURRENT device only — an old iPad
+      // that once granted "always" says nothing about today's phone.
+      permission: currentDevice(ownTokens)?.geofence_permission ?? null,
+      // REPSET-PUB.1A — same rule for the binary's build number: the
+      // question is which app THIS person is using today.
+      nativeBuild: currentDevice(ownTokens)?.native_build ?? null,
+    }
+  }
+  const byName = (a, b) => (a.full_name || '').localeCompare(b.full_name || '')
+
   // Group profiles by location for display. A profile can be at
   // multiple locations — show them under each (rare; only ~3 staff
   // hit this today).
   const groups = locations.map(loc => ({
     location: loc,
-    profiles: profiles.filter(p => profileLocByUser.get(p.id)?.has(loc.id))
-      .map(p => {
-        const ownTokens = tokensByUser.get(p.id) || []
-        return {
-          ...p,
-          tokens: ownTokens,
-          pushesLast30d: sendsByUser.get(p.id) || 0,
-          verdict: deviceVerdict(ownTokens, targetVersion, now),
-          // Permission reads off the CURRENT device only — an old iPad
-          // that once granted "always" says nothing about today's phone.
-          permission: currentDevice(ownTokens)?.geofence_permission ?? null,
-          // REPSET-PUB.1A — same rule for the binary's build number: the
-          // question is which app THIS person is using today.
-          nativeBuild: currentDevice(ownTokens)?.native_build ?? null,
-        }
-      })
-      .sort((a, b) => a.full_name.localeCompare(b.full_name || '')),
+    profiles: profiles.filter(p => profileLocByUser.get(p.id)?.has(loc.id)).map(toRow).sort(byName),
   }))
+
+  // TENANTSCOPE.1 — everyone counted in "Total staff" is listed somewhere.
+  // An org admin (profile_organizations, no studio membership) is in the
+  // fleet — GET /api/staff-devices lists them and the nudge reaches them —
+  // but sits under no studio above, and so does anyone whose only
+  // membership is an inactive or host-anchor location. They get their own
+  // group rather than being counted and never shown.
+  const listed = new Set(groups.flatMap(g => g.profiles.map(p => p.id)))
+  const unlisted = profiles.filter(p => !listed.has(p.id))
+  if (unlisted.length > 0) {
+    groups.push({
+      location: { id: 'no-active-studio', name: 'No active studio' },
+      profiles: unlisted.map(toRow).sort(byName),
+    })
+  }
 
   // Rollup counts for the header
   const totals = {

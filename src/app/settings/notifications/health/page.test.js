@@ -76,3 +76,36 @@ describe('/settings/notifications/health — the active organisation only (TENAN
     expect(html).toContain('B Two')
   })
 })
+
+// "Total staff" is the big number on the page; read it off the card.
+const totalStaff = (html) => Number(html.match(/>(\d+)<\/div><div[^>]*>Total staff</)?.[1])
+
+describe('/settings/notifications/health — everyone counted is listed (TENANTSCOPE.1)', () => {
+  it("lists org A's org admin, who has no studio membership, under \"No active studio\"", async () => {
+    const html = await render(users.managerA1())
+    // Org A's fleet: four studio members + the org admin (profile_organizations only).
+    expect(totalStaff(html)).toBe(5)
+    expect(html).toContain('No active studio')
+    expect(html).toContain('Org Admin A') // main of this branch: counted in the 5, listed nowhere
+    for (const email of ['staff.a1@a.com', 'mgr.a1@a.com', 'owner.a1@a.com', 'staff.a2@a.com', 'admin@a.com']) {
+      expect(html).toContain(email)
+    }
+  })
+
+  it('every counted person appears in some group, for a master too', async () => {
+    const html = await render(users.master())
+    const listedEmails = new Set(html.match(/[a-z0-9.]+@[a-z]+\.com/g))
+    expect(totalStaff(html)).toBe(9)
+    expect(listedEmails.size).toBe(9) // The Master + Org Admin A sit under "No active studio"
+  })
+
+  it('shows no "No active studio" group when everyone has a studio', async () => {
+    const world = fleetWorld()
+    world.profile_organizations = []
+    vi.mocked(getCurrentUser).mockResolvedValue(users.managerA1())
+    vi.mocked(createServerClient).mockReturnValue(makeTenantDb(world))
+    const html = renderToStaticMarkup(await PushHealthPage())
+    expect(totalStaff(html)).toBe(4)
+    expect(html).not.toContain('No active studio')
+  })
+})
