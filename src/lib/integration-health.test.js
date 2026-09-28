@@ -348,3 +348,26 @@ describe('getIntegrationHealth — webhook dead-letter count', () => {
     expect(wh.detail).toBe('Unavailable')
   })
 })
+
+// ── getIntegrationHealth — the Glofox row (REGISTRYREAD.1a) ──
+describe('getIntegrationHealth — Glofox settings read', () => {
+  it('a failed settings read is "Unavailable", never "Not connected"', async () => {
+    const db = makeHealthDb({
+      channel_connections: { data: [], error: null },
+      locations: { data: null, error: { message: 'boom' } },
+    })
+    const rows = await getIntegrationHealth(db, 'loc-1')
+    const g = rows.find((r) => r.key === 'glofox')
+    expect(g.status).toBe('unknown')
+    expect(g.detail).toBe('Unavailable')
+  })
+
+  it('a genuinely unconfigured location still reads "Not connected"', async () => {
+    const db = makeHealthDb({
+      channel_connections: { data: [], error: null },
+      locations: { data: { id: 'loc-1', settings: {} }, error: null },
+    })
+    const rows = await getIntegrationHealth(db, 'loc-1')
+    expect(rows.find((r) => r.key === 'glofox').detail).toBe('Not connected')
+  })
+})

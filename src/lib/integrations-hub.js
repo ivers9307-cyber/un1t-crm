@@ -7,7 +7,7 @@
 //                        bca / instagram — the registry (migs 230/411/412),
 //                        with legacy location-field fallback via the
 //                        connection-registry pure mappers (dual-read, same
-//                        rules as getConnection()).
+//                        rules as readConnection()).
 //   xero_connections     per-location Xero OAuth binding (tenant + scopes).
 //   whatsapp_numbers     per-location WA Cloud API numbers (read-only here).
 //   ad_accounts          Meta/TikTok ad account presence (read-only here).
