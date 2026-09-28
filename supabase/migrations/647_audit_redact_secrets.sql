@@ -46,7 +46,7 @@
 -- ===========================================================================
 -- Redact by KEY NAME, at every depth, in every audited table:
 --   private.audit_is_secret_key(key)   the one rule (below)
---   private.audit_redact(doc, changed, prefix)
+--   private.audit_redact(doc, changed, prefix, depth)
 --                                      copies a jsonb value, replacing each
 --                                      secret-named key's value with
 --                                      "[redacted]" ("[redacted: changed]"
@@ -55,18 +55,24 @@
 --                                      image only). A JSON
 --                                      null or "" is kept as is, so "was
 --                                      cleared" / "was never set" stay visible.
---   private.audit_secret_paths(doc, prefix)
+--   private.audit_secret_paths(doc, prefix, depth)
 --                                      every secret leaf as (path, value), so
 --                                      the trigger can say WHICH secret
 --                                      changed without storing it.
+--   Both walks stop at depth 12: a deeper object/array is stored as
+--   "[redacted: too deep]" (and reported whole by audit_secret_paths), so no
+--   document can recurse the walk into the stack limit.
 -- log_mutation() diffs the RAW rows (so a pure credential rotation is still
 -- an audit row, showing "[redacted]" -> "[redacted: changed]"), then stores
 -- only redacted copies. The four mig-191 deny columns are now masked instead
 -- of dropped: a change to one of them alone used to log nothing, and now
 -- logs who changed it (never the value).
--- All of it runs inside the existing best-effort block: a redaction error
--- skips the audit row (with a WARNING in the Postgres log, no values), it
--- never aborts the real write and never falls back to an unredacted copy.
+-- All of it runs inside the existing best-effort block. On ANY error the
+-- audit row is still written, with who / what / when / target and
+-- details = {"audit_redaction_failed": <SQLSTATE>} (no values), plus a
+-- WARNING naming the operation, target and SQLSTATE (never SQLERRM). If that
+-- insert fails too, a WARNING says so. It never aborts the real write and
+-- never falls back to an unredacted copy.
 --
 -- The rule (case-insensitive, whole key name):
 --   ends in (^|_) + api_key | apikey | token | secret | password | passwd |
@@ -106,10 +112,16 @@ $$;
 comment on function private.audit_is_secret_key(text) is
   'AUDITSECRETS.1 (mig 647) — true when a jsonb key / column name holds a credential; private.audit_redact masks its value in audit_events.details.';
 
+-- Both walkers stop at depth 12 (the value reached by 12 keys / array
+-- indexes from the top; a row's columns are depth 1). A container that deep
+-- is replaced whole, so a pathological document can never recurse far
+-- enough to hit max_stack_depth (each level is a plpgsql call inside a SQL
+-- query: a deep stack frame). Real rows are 5 deep at most.
 create or replace function private.audit_redact(
   p_doc jsonb,
   p_changed text[] default '{}',
-  p_prefix text default ''
+  p_prefix text default '',
+  p_depth integer default 0
 )
 returns jsonb
 language plpgsql
@@ -117,9 +129,12 @@ immutable
 set search_path = ''
 as $$
 declare
+  c_max_depth constant integer := 12;
   v_out jsonb;
 begin
-  if jsonb_typeof(p_doc) = 'object' then
+  if jsonb_typeof(p_doc) in ('object', 'array') and p_depth >= c_max_depth then
+    return to_jsonb('[redacted: too deep]'::text);
+  elsif jsonb_typeof(p_doc) = 'object' then
     select coalesce(jsonb_object_agg(e.key,
              case
                when private.audit_is_secret_key(e.key) then
@@ -128,13 +143,13 @@ begin
                    when (p_prefix || e.key) = any (p_changed) then to_jsonb('[redacted: changed]'::text)
                    else to_jsonb('[redacted]'::text)
                  end
-               else private.audit_redact(e.value, p_changed, p_prefix || e.key || '.')
+               else private.audit_redact(e.value, p_changed, p_prefix || e.key || '.', p_depth + 1)
              end), '{}'::jsonb)
       into v_out
       from jsonb_each(p_doc) as e;
     return v_out;
   elsif jsonb_typeof(p_doc) = 'array' then
-    select coalesce(jsonb_agg(private.audit_redact(a.value, p_changed, p_prefix || (a.ord - 1)::text || '.')
+    select coalesce(jsonb_agg(private.audit_redact(a.value, p_changed, p_prefix || (a.ord - 1)::text || '.', p_depth + 1)
                               order by a.ord), '[]'::jsonb)
       into v_out
       from jsonb_array_elements(p_doc) with ordinality as a(value, ord);
@@ -144,16 +159,21 @@ begin
 end;
 $$;
 
-comment on function private.audit_redact(jsonb, text[], text) is
-  'AUDITSECRETS.1 (mig 647) — copy of a jsonb value with every secret-named key (private.audit_is_secret_key) masked "[redacted]", or "[redacted: changed]" when its dotted path is in p_changed. JSON null and "" are kept.';
+comment on function private.audit_redact(jsonb, text[], text, integer) is
+  'AUDITSECRETS.1 (mig 647) — copy of a jsonb value with every secret-named key (private.audit_is_secret_key) masked "[redacted]", or "[redacted: changed]" when its dotted path is in p_changed. JSON null and "" are kept. An object/array at depth 12 or deeper becomes "[redacted: too deep]".';
 
-create or replace function private.audit_secret_paths(p_doc jsonb, p_prefix text default '')
+create or replace function private.audit_secret_paths(
+  p_doc jsonb,
+  p_prefix text default '',
+  p_depth integer default 0
+)
 returns table (path text, val jsonb)
 language plpgsql
 immutable
 set search_path = ''
 as $$
 declare
+  c_max_depth constant integer := 12;  -- the same cap as audit_redact
   r record;
 begin
   if jsonb_typeof(p_doc) = 'object' then
@@ -162,14 +182,26 @@ begin
         path := p_prefix || r.key;
         val := r.value;
         return next;
+      elsif jsonb_typeof(r.value) in ('object', 'array') and p_depth + 1 >= c_max_depth then
+        -- Too deep to look inside: report the subtree whole, as a
+        -- possible secret (audit_redact masks it "[redacted: too deep]").
+        path := p_prefix || r.key;
+        val := r.value;
+        return next;
       elsif jsonb_typeof(r.value) in ('object', 'array') then
-        return query select s.path, s.val from private.audit_secret_paths(r.value, p_prefix || r.key || '.') as s;
+        return query select s.path, s.val
+          from private.audit_secret_paths(r.value, p_prefix || r.key || '.', p_depth + 1) as s;
       end if;
     end loop;
   elsif jsonb_typeof(p_doc) = 'array' then
     for r in select a.value, a.ord from jsonb_array_elements(p_doc) with ordinality as a(value, ord) loop
-      if jsonb_typeof(r.value) in ('object', 'array') then
-        return query select s.path, s.val from private.audit_secret_paths(r.value, p_prefix || (r.ord - 1)::text || '.') as s;
+      if jsonb_typeof(r.value) in ('object', 'array') and p_depth + 1 >= c_max_depth then
+        path := p_prefix || (r.ord - 1)::text;
+        val := r.value;
+        return next;
+      elsif jsonb_typeof(r.value) in ('object', 'array') then
+        return query select s.path, s.val
+          from private.audit_secret_paths(r.value, p_prefix || (r.ord - 1)::text || '.', p_depth + 1) as s;
       end if;
     end loop;
   end if;
@@ -177,14 +209,14 @@ begin
 end;
 $$;
 
-comment on function private.audit_secret_paths(jsonb, text) is
-  'AUDITSECRETS.1 (mig 647) — every secret-named leaf of a jsonb value as (dotted path, value). Used by log_mutation to mark which secret changed; never stored.';
+comment on function private.audit_secret_paths(jsonb, text, integer) is
+  'AUDITSECRETS.1 (mig 647) — every secret-named leaf of a jsonb value as (dotted path, value); a subtree at depth 12 or deeper is reported whole. Used by log_mutation to mark which secret changed; never stored.';
 
 -- Pure helpers for the trigger only. `authenticated` holds USAGE on the
 -- private schema, so shut the default PUBLIC EXECUTE.
 revoke all on function private.audit_is_secret_key(text) from public, anon, authenticated;
-revoke all on function private.audit_redact(jsonb, text[], text) from public, anon, authenticated;
-revoke all on function private.audit_secret_paths(jsonb, text) from public, anon, authenticated;
+revoke all on function private.audit_redact(jsonb, text[], text, integer) from public, anon, authenticated;
+revoke all on function private.audit_secret_paths(jsonb, text, integer) from public, anon, authenticated;
 
 create or replace function private.log_mutation()
 returns trigger
@@ -202,25 +234,32 @@ declare
   v_before  jsonb;
   v_after   jsonb;
   v_changed text[];
-  v_verb    text;
+  v_verb    text := case tg_op when 'INSERT' then 'created' when 'DELETE' then 'deleted' else 'updated' end;
   v_details jsonb;
+  v_target  text;
+  v_loc     uuid;
+  v_state   text;
+  v_state2  text;
 begin
   begin
-    if (tg_op = 'INSERT') then
+    -- Who / what / where first: the failure path below reuses them.
+    if (tg_op = 'DELETE') then
+      v_idrow := to_jsonb(OLD);
+    else
       v_idrow := to_jsonb(NEW);
-      v_verb  := 'created';
+    end if;
+    v_target := tg_table_name || '/' || coalesce(v_idrow ->> 'id', '?');
+    v_loc    := nullif(v_idrow ->> 'location_id', '')::uuid;
+
+    if (tg_op = 'INSERT') then
       v_details := jsonb_build_object('after', private.audit_redact(v_idrow));
 
     elsif (tg_op = 'DELETE') then
-      v_idrow := to_jsonb(OLD);
-      v_verb  := 'deleted';
       v_details := jsonb_build_object('before', private.audit_redact(v_idrow));
 
     else  -- UPDATE: diff the RAW rows, store only redacted copies.
       v_old   := to_jsonb(OLD);
-      v_new   := to_jsonb(NEW);
-      v_idrow := v_new;
-      v_verb  := 'updated';
+      v_new   := v_idrow;
       select jsonb_object_agg(k, v_old -> k), jsonb_object_agg(k, v_new -> k)
         into v_before, v_after
       from jsonb_object_keys(v_new) as k
@@ -245,15 +284,36 @@ begin
       'mutation',
       tg_table_name || '.' || v_verb,
       auth.uid(),
-      tg_table_name || '/' || coalesce(v_idrow ->> 'id', '?'),
-      nullif(v_idrow ->> 'location_id', '')::uuid,
+      v_target,
+      v_loc,
       v_details
     );
   exception when others then
     -- Best-effort: an audit failure must never break the mutation, and a
-    -- redaction failure must never store an unredacted copy. The warning
-    -- names the table and SQLSTATE only (no values).
-    raise warning 'log_mutation: audit row skipped for % (%)', tg_table_name, sqlstate;
+    -- redaction failure must never store an unredacted copy. So the row is
+    -- still written, with who / what / when / target and the SQLSTATE, and
+    -- NO values. If that insert fails too, the write still goes through.
+    -- The warnings name the operation, the target id and SQLSTATEs only
+    -- (never SQLERRM, which can quote a value).
+    v_state := sqlstate;
+    begin
+      insert into public.audit_events
+        (category, action, actor_id, target_resource, location_id, details)
+      values (
+        'mutation',
+        tg_table_name || '.' || v_verb,
+        auth.uid(),
+        coalesce(v_target, tg_table_name || '/?'),
+        v_loc,
+        jsonb_build_object('audit_redaction_failed', v_state)
+      );
+      raise warning 'log_mutation: audit details dropped for % % (%)',
+        tg_op, coalesce(v_target, tg_table_name || '/?'), v_state;
+    exception when others then
+      v_state2 := sqlstate;
+      raise warning 'log_mutation: audit row skipped for % % (% then %)',
+        tg_op, coalesce(v_target, tg_table_name || '/?'), v_state, v_state2;
+    end;
   end;
 
   return null;  -- AFTER ROW trigger: return value is ignored
@@ -270,6 +330,7 @@ declare
   v_got    jsonb;
   v_want   jsonb;
   v_fn     text;
+  v_deep   jsonb := '{"api_token":"t","note":"n"}'::jsonb;
 begin
   -- 1. the trigger is still on exactly the six mig-191 tables, enabled
   select array_agg(c.relname::text order by c.relname)
@@ -297,8 +358,8 @@ begin
   -- 3. the helpers are not callable from a browser or phone session
   foreach v_fn in array array[
     'private.audit_is_secret_key(text)',
-    'private.audit_redact(jsonb,text[],text)',
-    'private.audit_secret_paths(jsonb,text)'
+    'private.audit_redact(jsonb,text[],text,integer)',
+    'private.audit_secret_paths(jsonb,text,integer)'
   ] loop
     if has_function_privilege('authenticated', v_fn, 'EXECUTE')
        or has_function_privilege('anon', v_fn, 'EXECUTE') then
@@ -328,6 +389,21 @@ begin
   if (select count(*) from private.audit_secret_paths(v_want)) <> 9 then
     raise exception 'AUDITSECRETS.1: audit_secret_paths found % secret leaves in the fixture (expected 9)',
       (select count(*) from private.audit_secret_paths(v_want));
+  end if;
+
+  -- 5. the depth cap: in a 15-deep document the container at depth 12 is
+  --    replaced, and audit_secret_paths reports it whole
+  for i in 1..15 loop
+    v_deep := jsonb_build_object('a', v_deep);
+  end loop;
+  v_got := private.audit_redact(v_deep);
+  if jsonb_typeof(v_got #> array_fill('a'::text, array[11])) is distinct from 'object'
+     or (v_got #>> array_fill('a'::text, array[12])) is distinct from '[redacted: too deep]' then
+    raise exception 'AUDITSECRETS.1: audit_redact depth cap is not at 12 (got %)', v_got;
+  end if;
+  if (select array_agg(s.path) from private.audit_secret_paths(v_deep) as s)
+     is distinct from array[array_to_string(array_fill('a'::text, array[12]), '.')] then
+    raise exception 'AUDITSECRETS.1: audit_secret_paths depth cap is not at 12';
   end if;
 end;
 $$;

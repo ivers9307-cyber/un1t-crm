@@ -276,12 +276,170 @@ describe('mig 647 redacts every secret-named key, at any depth', () => {
     const { rows } = await db.query(`
       SELECT bool_or(has_function_privilege(r, f, 'EXECUTE')) AS any_grant
       FROM unnest(array['anon','authenticated']) r,
-           unnest(array['private.audit_is_secret_key(text)','private.audit_redact(jsonb,text[],text)','private.audit_secret_paths(jsonb,text)']) f`)
+           unnest(array['private.audit_is_secret_key(text)','private.audit_redact(jsonb,text[],text,integer)','private.audit_secret_paths(jsonb,text,integer)']) f`)
     expect(rows[0].any_grant).toBe(false)
   })
 
   it('re-applying the file is harmless (create or replace + the self-check)', async () => {
     await expect(db.exec(MIG_647)).resolves.toBeDefined()
+  })
+})
+
+// { a: { a: ... leaf } }, the leaf reached by `depth` keys.
+function nested(depth, leaf) {
+  let o = leaf
+  for (let i = 0; i < depth; i++) o = { a: o }
+  return o
+}
+const A = (n) => Array.from({ length: n }, () => 'a')
+const MAX_DEPTH = 12 // the cap in private.audit_redact / private.audit_secret_paths
+
+describe('the walk is depth-capped, so it cannot hit the stack limit', () => {
+  // The cap is exercised at its real value (12), on a 30-deep document:
+  // without the cap the walk would recurse 30 plpgsql-in-SQL levels.
+  let db
+  beforeAll(async () => {
+    db = await freshDb()
+    await db.query(`INSERT INTO public.locations (id, name, settings) VALUES ($1, 'Studio A', $2)`, [LOC, JSON.stringify(SETTINGS)])
+  })
+  afterAll(async () => { await db.close() })
+
+  it('a 30-deep document: the container at depth 12 becomes "[redacted: too deep]"', async () => {
+    const doc = nested(30, { api_token: 'FAKESECRET-deep-1', note: 'bottom' })
+    const { rows } = await db.query(`SELECT private.audit_redact($1::jsonb) AS r`, [JSON.stringify(doc)])
+    const r = rows[0].r
+    expect(JSON.stringify(r)).not.toContain('FAKESECRET')
+    let node = r
+    for (let i = 0; i < MAX_DEPTH - 1; i++) node = node.a
+    expect(typeof node).toBe('object') // depth 11 is still walked
+    expect(node.a).toBe('[redacted: too deep]') // depth 12 is not
+  })
+
+  it('the boundary: a container at depth 11 is walked (secret masked, sibling kept); at depth 12 it is replaced', async () => {
+    const leaf = { api_token: 'FAKESECRET-edge-1', note: 'kept' }
+    const { rows } = await db.query(
+      `SELECT private.audit_redact($1::jsonb) #> $3::text[] AS at11, private.audit_redact($2::jsonb) #> $4::text[] AS at12`,
+      [JSON.stringify(nested(MAX_DEPTH - 1, leaf)), JSON.stringify(nested(MAX_DEPTH, leaf)), A(MAX_DEPTH - 1), A(MAX_DEPTH)],
+    )
+    expect(rows[0].at11).toEqual({ api_token: '[redacted]', note: 'kept' })
+    expect(rows[0].at12).toBe('[redacted: too deep]')
+  })
+
+  it('audit_secret_paths reports a subtree past the cap whole, as a possible secret', async () => {
+    const leaf = { api_token: 'v' }
+    const { rows } = await db.query(
+      `SELECT (SELECT array_agg(path) FROM private.audit_secret_paths($1::jsonb)) AS p11,
+              (SELECT array_agg(path) FROM private.audit_secret_paths($2::jsonb)) AS p12,
+              (SELECT jsonb_agg(val)  FROM private.audit_secret_paths($2::jsonb)) AS v12`,
+      [JSON.stringify(nested(MAX_DEPTH - 1, leaf)), JSON.stringify(nested(MAX_DEPTH, leaf))],
+    )
+    expect(rows[0].p11).toEqual([[...A(MAX_DEPTH - 1), 'api_token'].join('.')])
+    expect(rows[0].p12).toEqual([A(MAX_DEPTH).join('.')])
+    expect(rows[0].v12).toEqual([leaf])
+  })
+
+  it('through the trigger: a 30-deep settings value is logged, masked "too deep", nothing leaks', async () => {
+    const next = { ...SETTINGS, deep: nested(30, { api_token: 'FAKESECRET-deep-2' }) }
+    await db.query(`UPDATE public.locations SET settings = $2 WHERE id = $1`, [LOC, JSON.stringify(next)])
+    const ev = await lastEvent(db, 'locations.updated')
+    expect(ev).not.toBeNull()
+    expect(ev.txt).not.toContain('FAKESECRET')
+    // row depth: settings = 1, deep = 2, so 10 more keys reach depth 12
+    let node = ev.details.after.settings.deep
+    for (let i = 0; i < MAX_DEPTH - 3; i++) node = node.a
+    expect(node.a).toBe('[redacted: too deep]')
+    expect(ev.details.after.settings.glofox.api_key).toBe('[redacted]')
+    expect(ev.details.after.settings.glofox.branch_id).toBe('branch-1')
+  })
+})
+
+describe('a redaction failure still writes the audit row, without values, and never aborts the write', () => {
+  // Fixture: wrap the rule so it raises while the GUC c27.force_fail is on.
+  // Everything else is the real 647.
+  let db
+  const notices = []
+  const onNotice = (n) => notices.push(n)
+  async function forced(sql, params) {
+    await db.query(`SELECT set_config('c27.force_fail', 'on', false), set_config('request.jwt.claims', $1, false)`, [JSON.stringify({ sub: PERSON })])
+    try {
+      return await db.query(sql, params, { onNotice })
+    } finally {
+      await db.query(`SELECT set_config('c27.force_fail', 'off', false), set_config('request.jwt.claims', '', false)`)
+    }
+  }
+  const run = (sql) => db.exec(sql)
+
+  beforeAll(async () => {
+    db = await freshDb()
+    await run(`
+      ALTER FUNCTION private.audit_is_secret_key(text) RENAME TO audit_is_secret_key_orig;
+      CREATE FUNCTION private.audit_is_secret_key(p_key text) RETURNS boolean
+      LANGUAGE plpgsql SET search_path = '' AS $fn$
+      BEGIN
+        IF current_setting('c27.force_fail', true) = 'on' THEN
+          RAISE EXCEPTION 'forced failure at key % FAKESECRET-errmsg', p_key;
+        END IF;
+        RETURN private.audit_is_secret_key_orig(p_key);
+      END $fn$;
+    `)
+    await db.query(`INSERT INTO public.locations (id, name, settings) VALUES ($1, 'Studio A', $2)`, [LOC, JSON.stringify(SETTINGS)])
+  })
+  afterAll(async () => { await db.close() })
+
+  it('UPDATE: the write lands; the audit row keeps who/what/target and holds only the SQLSTATE', async () => {
+    notices.length = 0
+    await forced(
+      `UPDATE public.locations SET name = 'Studio F', settings = jsonb_set(settings, '{glofox,api_key}', '"FAKESECRET-gk-9"') WHERE id = $1`,
+      [LOC],
+    )
+    const { rows } = await db.query(`SELECT name FROM public.locations WHERE id = $1`, [LOC])
+    expect(rows[0].name).toBe('Studio F')
+    const ev = (await db.query(
+      `SELECT category, actor_id, target_resource, location_id, details, occurred_at
+         FROM public.audit_events WHERE action = 'locations.updated' ORDER BY seq DESC LIMIT 1`,
+    )).rows[0]
+    expect(ev.details).toEqual({ audit_redaction_failed: 'P0001' })
+    expect(ev.category).toBe('mutation')
+    expect(ev.actor_id).toBe(PERSON)
+    expect(ev.target_resource).toBe(`locations/${LOC}`)
+    expect(ev.occurred_at).toBeInstanceOf(Date)
+    const warn = notices.filter((n) => n.severity === 'WARNING').map((n) => n.message)
+    expect(warn).toHaveLength(1)
+    expect(warn[0]).toMatch(/^log_mutation:/)
+    expect(warn[0]).toContain('UPDATE')
+    expect(warn[0]).toContain(`locations/${LOC}`)
+    expect(warn[0]).toContain('P0001')
+    expect(warn[0]).not.toContain('FAKESECRET') // never SQLERRM
+  })
+
+  it('INSERT: the row keeps its location_id', async () => {
+    await forced(
+      `INSERT INTO public.cars (id, location_id, status, deposit_revolut_checkout_url) VALUES ($1, $2, 'listed', 'https://pay.example.test/FAKESECRET-co-9')`,
+      [CAR, LOC],
+    )
+    const ev = (await db.query(`SELECT location_id, target_resource, details FROM public.audit_events WHERE action = 'cars.created'`)).rows
+    expect(ev).toEqual([{ location_id: LOC, target_resource: `cars/${CAR}`, details: { audit_redaction_failed: 'P0001' } }])
+  })
+
+  it('when the fallback insert fails too, the write still lands and a WARNING says so', async () => {
+    notices.length = 0
+    await run(`ALTER TABLE public.audit_events RENAME TO audit_events_away`)
+    try {
+      await forced(`UPDATE public.locations SET name = 'Studio G' WHERE id = $1`, [LOC])
+    } finally {
+      await run(`ALTER TABLE public.audit_events_away RENAME TO audit_events`)
+    }
+    const { rows } = await db.query(`SELECT name FROM public.locations WHERE id = $1`, [LOC])
+    expect(rows[0].name).toBe('Studio G')
+    const warn = notices.filter((n) => n.severity === 'WARNING').map((n) => n.message)
+    expect(warn).toHaveLength(1)
+    expect(warn[0]).toMatch(/^log_mutation: audit row skipped/)
+    expect(warn[0]).toContain(`locations/${LOC}`)
+    expect(warn[0]).not.toContain('FAKESECRET')
+  })
+
+  it('no audit row anywhere holds a fixture secret', async () => {
+    expect(await leakCount(db)).toBe(0)
   })
 })
 
@@ -314,7 +472,7 @@ describe('the self-check aborts the whole file', () => {
       await db.exec(`DROP TRIGGER audit_mutation ON public.cars`)
       await expect(db.exec(MIG_647)).rejects.toThrow(/AUDITSECRETS\.1: audit_mutation is attached to/)
       // Nothing from the file survived: log_mutation is still mig 191's.
-      const { rows } = await db.query(`SELECT to_regprocedure('private.audit_redact(jsonb,text[],text)') AS f`)
+      const { rows } = await db.query(`SELECT to_regprocedure('private.audit_redact(jsonb,text[],text,integer)') AS f`)
       expect(rows[0].f).toBeNull()
     } finally {
       await db.close()
