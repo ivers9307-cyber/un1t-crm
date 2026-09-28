@@ -186,3 +186,56 @@ describe('PUT /api/sequences/[id] — audience filter validated at save time (CO
     expect(updateSpy).toHaveBeenCalledTimes(2)
   })
 })
+
+// SEQPAGEGATE.1 — the PUT used to answer .select() (the whole row, the
+// webhook secret included) to the editor who just saved. It now answers the
+// builder shape: has_webhook_secret, never the value.
+describe('PUT /api/sequences/[id] — response carries no webhook secret (SEQPAGEGATE.1)', () => {
+  function secretDb(stored) {
+    const seen = { updateSelect: null, update: null }
+    const db = {
+      from: vi.fn(() => ({
+        select: vi.fn(() => ({
+          eq: vi.fn(() => ({ single: vi.fn(async () => ({ data: stored, error: null })) })),
+        })),
+        update: vi.fn((patch) => {
+          seen.update = patch
+          return {
+            eq: vi.fn(() => ({
+              select: vi.fn((cols) => {
+                seen.updateSelect = cols
+                return { single: vi.fn(async () => ({ data: { ...stored, ...patch }, error: null })) }
+              }),
+            })),
+          }
+        }),
+      })),
+    }
+    return { db, seen }
+  }
+  const STORED = {
+    id: SEQ_ID, location_id: LOC_ID, name: 'Hook', status: 'draft', trigger_type: 'webhook', trigger_config: {},
+    webhook_token: 'b'.repeat(32), webhook_secret: 'SYNTH-SECRET',
+  }
+
+  it('answers has_webhook_secret and the token, never the secret, from a named select', async () => {
+    const { db, seen } = secretDb(STORED)
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(putReq({ name: 'Hook 2' }), props)
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.sequence).not.toHaveProperty('webhook_secret')
+    expect(body.sequence.has_webhook_secret).toBe(true)
+    expect(body.sequence.webhook_token).toBe('b'.repeat(32))
+    expect(JSON.stringify(body)).not.toContain('SYNTH-')
+    expect(seen.updateSelect).toBeTruthy()
+    expect(seen.updateSelect).not.toContain('*')
+  })
+
+  it('a body without webhook_secret leaves the stored secret alone (no key in the update)', async () => {
+    const { db, seen } = secretDb(STORED)
+    createServerClient.mockReturnValue(db)
+    await PUT(putReq({ name: 'Hook 2' }), props)
+    expect(seen.update).not.toHaveProperty('webhook_secret')
+  })
+})

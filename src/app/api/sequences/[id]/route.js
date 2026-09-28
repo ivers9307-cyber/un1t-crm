@@ -7,6 +7,7 @@ import { canBuildSequencesAt, canBuildSequencesSomewhere, sequencePermissionRequ
 import { validateBody } from '@/lib/validate'
 import { logError } from '@/lib/log'
 import { validateAudienceFilter, InvalidAudienceFilterError } from '@/lib/audience-filter'
+import { SEQUENCE_BUILDER_ROW_SELECT, toBuilderSequence } from '@/lib/sequences/builder-shape'
 
 const SequenceUpdateSchema = z.object({
   name: z.string().min(1).max(200).optional(),
@@ -203,14 +204,18 @@ export async function PUT(request, props) {
     if (needsToken) updates.webhook_token = randomBytes(16).toString('hex')
   }
 
+  // SEQPAGEGATE.1 — the builder shape: the settings fields, the token (the
+  // panel shows the URL) and has_webhook_secret. The secret itself never
+  // goes back to the browser, not even to the editor who just set it (the
+  // panel still holds what they typed).
   const { data, error } = await db.from('email_sequences')
     .update(updates)
     .eq('id', params.id)
-    .select()
+    .select(SEQUENCE_BUILDER_ROW_SELECT)
     .single()
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
-  return NextResponse.json({ success: true, sequence: data })
+  return NextResponse.json({ success: true, sequence: toBuilderSequence(data) })
 }
 
 // DELETE /api/sequences/[id]
