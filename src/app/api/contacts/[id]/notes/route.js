@@ -18,7 +18,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 
@@ -45,7 +45,7 @@ export async function POST(request, props) {
   }
   // Notes are a core contact action — gate on `contacts` (granted to every role
   // by default). Staff with contacts access off can't add notes.
-  if (!hasPermission(user, 'contacts')) {
+  if (!hasPermissionAtAnyLocation(user, 'contacts')) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -67,6 +67,10 @@ export async function POST(request, props) {
   // their location(s). 404 (not 403) so contact ids can't be enumerated.
   const guard = assertLocationAccessOr404(user, contact.location_id)
   if (guard) return guard
+  // ROLESWEEP.1c — `contacts` judged at the contact's location, not the active studio.
+  if (!hasPermissionForLocation(user, contact.location_id, 'contacts')) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+  }
 
   const validation = await validateBody(request, CreateNoteSchema)
   if (!validation.ok) return validation.response

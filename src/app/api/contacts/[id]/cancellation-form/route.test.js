@@ -11,7 +11,20 @@ vi.mock('@/lib/auth', () => ({
     return null
   },
 }))
-vi.mock('@/lib/permissions', () => ({ hasPermission: vi.fn(() => true), hasMobilePermission: vi.fn(() => false) }))
+vi.mock('@/lib/permissions', () => {
+  // ROLESWEEP.1c — the route asks the any-location pre-check and the
+  // at-the-target decision; both follow this file's switch below.
+  const hasPermission = vi.fn(() => true)
+  const hasMobilePermission = vi.fn(() => false)
+  return {
+    hasPermission,
+    hasPermissionAtAnyLocation: (u, k) => hasPermission(u, k),
+    hasPermissionForLocation: (u, _loc, k) => hasPermission(u, k),
+    hasMobilePermission,
+    hasMobilePermissionAtAnyLocation: (u, k) => hasMobilePermission(u, k),
+    hasMobilePermissionForLocation: (u, _loc, k) => hasMobilePermission(u, k),
+  }
+})
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => dbMock) }))
 vi.mock('@/lib/app-url', () => ({ getAppUrl: () => 'https://crm.example' }))
 vi.mock('@/lib/cancellation-form/links', () => ({

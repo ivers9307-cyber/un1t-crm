@@ -12,7 +12,9 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/auth', () => ({
+// ROLESWEEP.1c — the REAL per-location role helpers (pure: role-at-location).
+vi.mock('@/lib/auth', async () => ({
+  ...(await vi.importActual('@/lib/role-at-location')),
   getCurrentUser: vi.fn(),
   getUserLocationIds: (u) => (u?.locations || []).map((l) => l.id),
   // ROSTER-FIX.6c — a spy, not a re-implementation: what matters here is that

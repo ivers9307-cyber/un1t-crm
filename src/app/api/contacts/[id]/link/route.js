@@ -11,7 +11,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import {
@@ -41,7 +41,7 @@ export async function POST(request, props) {
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   }
-  if (!hasPermission(user, 'contact_linking')) {
+  if (!hasPermissionAtAnyLocation(user, 'contact_linking')) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -60,6 +60,10 @@ export async function POST(request, props) {
 
   const guard = assertLocationAccessOr404(user, contact.location_id)
   if (guard) return guard
+  // ROLESWEEP.1c — `contact_linking` judged at the contact's location, not the active studio.
+  if (!hasPermissionForLocation(user, contact.location_id, 'contact_linking')) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+  }
 
   const url = new URL(request.url)
   const action = url.searchParams.get('action')
@@ -177,7 +181,7 @@ export async function DELETE(request, props) {
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   }
-  if (!hasPermission(user, 'contact_linking')) {
+  if (!hasPermissionAtAnyLocation(user, 'contact_linking')) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -196,6 +200,10 @@ export async function DELETE(request, props) {
 
   const guard = assertLocationAccessOr404(user, contact.location_id)
   if (guard) return guard
+  // ROLESWEEP.1c — `contact_linking` judged at the contact's location, not the active studio.
+  if (!hasPermissionForLocation(user, contact.location_id, 'contact_linking')) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+  }
 
   const pg = await getPersonGroup(db, id)
   if (!pg) {

@@ -23,7 +23,16 @@ vi.mock('@/lib/auth', () => ({
   },
 }))
 
-vi.mock('@/lib/permissions', () => ({ hasPermission: vi.fn(() => true) }))
+vi.mock('@/lib/permissions', () => {
+  // ROLESWEEP.1c — the route asks the any-location pre-check and the
+  // at-the-target decision; both follow this file's switch below.
+  const hasPermission = vi.fn(() => true)
+  return {
+    hasPermission,
+    hasPermissionAtAnyLocation: (u, k) => hasPermission(u, k),
+    hasPermissionForLocation: (u, _loc, k) => hasPermission(u, k),
+  }
+})
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/glofox-sync', () => ({ ensureDealForContact: vi.fn(() => Promise.resolve({ action: 'move', to_slug: 'cold_lead' })) }))
 vi.mock('@/lib/activity-events', () => ({ logPipelineDismissal: vi.fn(() => Promise.resolve()) }))

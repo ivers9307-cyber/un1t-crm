@@ -34,7 +34,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getUserLocationIds, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { uuidLike, realIsoDate, MANAGER_ROLES, ADMIN_ROLES } from '@/lib/schemas'
 import { computeMonthlyContractorSpend, contractorSpendOnly } from '@/lib/roster-summary-server'
 
@@ -67,13 +67,13 @@ export async function GET(request) {
   }
   const { location_id, reference_date } = parsed.data
 
-  // Location-membership gate, then the role THERE (master bypasses both).
-  if (user.role !== 'master') {
-    const userLocationIds = getUserLocationIds(user)
-    if (!userLocationIds.includes(location_id)) {
-      return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
-    }
-  }
+  // Location-membership gate, then the role THERE (master: hasRoleAtLocation's
+  // profileRole bypass). ROLESWEEP.1c — the canonical membership helper instead
+  // of a hand-rolled `user.role !== 'master'` + getUserLocationIds check; same
+  // 403 body. (A master's user.locations holds ACTIVE locations only, so a
+  // master asking for an inactive location is now refused here.)
+  const guard = assertLocationAccess(user, location_id)
+  if (guard) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   if (!hasRoleAtLocation(user, location_id, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }

@@ -38,7 +38,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createClient } from '@supabase/supabase-js'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { canOverrideStaffPassword } from '@/lib/staff-access'
 import { checkRateLimit, rateLimitResponse } from '@/lib/rate-limit'
 import { validateBody } from '@/lib/validate'
@@ -84,7 +84,10 @@ export async function POST(request) {
   if (!user) {
     return NextResponse.json({ success: false, error: 'unauthorized' }, { status: 401 })
   }
-  if (!['master', 'owner'].includes(user.role)) {
+  // ROLESWEEP.1c — coarse pre-check (owner SOMEWHERE, or master). The member
+  // branch judges owner at the contact's location; the staff branch's
+  // canOverrideStaffPassword judges it at the target's locations.
+  if (user.role !== 'master' && !hasRoleAtAnyLocation(user, ['owner'])) {
     return NextResponse.json({ success: false, error: 'forbidden' }, { status: 403 })
   }
 
@@ -188,6 +191,10 @@ export async function POST(request) {
     }
     const locationGuard = assertLocationAccess(user, data.location_id)
     if (locationGuard) return locationGuard
+    // ROLESWEEP.1c — owner at the member's location, not the active studio.
+    if (user.role !== 'master' && !hasRoleAtLocation(user, data.location_id, ['owner'])) {
+      return NextResponse.json({ success: false, error: 'forbidden' }, { status: 403 })
+    }
 
     if (!data.user_id) {
       return NextResponse.json({

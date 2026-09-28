@@ -8,7 +8,7 @@
 // Manager+ at the contact's location.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { getContactImpact } from '@/lib/contact-merge'
@@ -20,7 +20,8 @@ export async function GET(_request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!MANAGER_ROLES.includes(user.role)) {
+  // ROLESWEEP.1c — coarse pre-check; the role is judged at the contact's location below.
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   }
 
@@ -32,6 +33,10 @@ export async function GET(_request, props) {
     if (!userLocIds.includes(contact.location_id)) {
       return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
     }
+  }
+  // ROLESWEEP.1c — MANAGER_ROLES at the contact's location.
+  if (!hasRoleAtLocation(user, contact.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   }
 
   const impact = await getContactImpact(db, params.id)

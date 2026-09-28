@@ -27,9 +27,20 @@ vi.mock('@/lib/auth', () => ({
   },
 }))
 
-vi.mock('@/lib/permissions', () => ({
-  hasPermission: vi.fn(() => false),
-}))
+vi.mock('@/lib/permissions', () => {
+  // ROLESWEEP.1c — the route asks the any-location pre-check and the
+  // at-the-target decision; both follow this file's switch below.
+  const hasPermission = vi.fn(() => false)
+  return {
+    hasPermission,
+    hasPermissionAtAnyLocation: (u, k) => hasPermission(u, k),
+    hasPermissionForLocation: (u, _loc, k) => hasPermission(u, k),
+    // The drawer flags accept the web OR the mobile toggle (contact-page-gates);
+    // the mobile half is off here so this file's web switch decides.
+    hasMobilePermissionForLocation: () => false,
+    hasMobilePermissionAtAnyLocation: () => false,
+  }
+})
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 

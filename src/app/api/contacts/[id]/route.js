@@ -5,7 +5,7 @@ import { authenticateApiKey, requireApiKeyOrManager, assertRowInOrg } from '@/li
 import { validateBody } from '@/lib/validate'
 import { email, phone, leadSourceSchema, MANAGER_ROLES } from '@/lib/schemas'
 import { triggerSequencesForTagsAdded } from '@/lib/sequences'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { redactWhatsAppForContact, redactInBodyForContact, getContactImpact } from '@/lib/contact-merge'
 import { redactMailForContact } from '@/lib/contact-mail-erasure'
 import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
@@ -28,7 +28,7 @@ const ContactUpdateSchema = z.object({
   hr_leaderboard_opt_out: z.boolean().optional(),
   // HOST-MASTER.6 (mig 464) — blocks AUTOMATIC sequence/automation enrolment
   // only (manual staff enrolment ignores it). Staff-decision field: writable
-  // via the cookie path only (Manager+ — requireApiKeyOrManager gates it);
+  // via the cookie path only (Manager+ at the contact, judged in PUT);
   // API-key callers get it stripped in the handler below.
   automations_exempt: z.boolean().optional(),
   // tags is a TEXT[] in Postgres. Frontend code that wants to "add a tag"
@@ -53,10 +53,11 @@ export async function PUT(request, props) {
   const body = validation.data
 
   // HOST-MASTER.6 — automations_exempt is a staff decision. The route has no
-  // per-field gating, but its cookie path is already Manager+-only
-  // (requireApiKeyOrManager), so auth.user present ⇒ MANAGER_ROLES. API-key
-  // callers (auth.user null — n8n / integrations) may not flip it: strip
-  // rather than 403 so integrations that PUT whole objects keep working.
+  // per-field gating, but its cookie path is Manager+-only AT THE CONTACT
+  // (judged below, before any write), so auth.user present ⇒ MANAGER_ROLES
+  // there. API-key callers (auth.user null — n8n / integrations) may not flip
+  // it: strip rather than 403 so integrations that PUT whole objects keep
+  // working.
   if (!auth.user) delete body.automations_exempt
 
   const db = createServerClient()
@@ -89,6 +90,13 @@ export async function PUT(request, props) {
     if (!oldRow || !userLocIds.includes(oldRow.location_id)) {
       return NextResponse.json({ success: false, error: 'not_found' }, { status: 404 })
     }
+  }
+  // ROLESWEEP.1c/.2 — requireApiKeyOrManager's cookie branch only says
+  // "Manager+ somewhere" (src/lib/api-auth.js); THIS is the decision:
+  // MANAGER_ROLES at the contact's location, answered as the route answers a
+  // non-member (404 not_found).
+  if (auth.user && oldRow && !hasRoleAtLocation(auth.user, oldRow.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'not_found' }, { status: 404 })
   }
 
   // Only forward keys actually present (Zod with .optional() leaves undefined keys out).
@@ -224,7 +232,8 @@ export async function DELETE(_request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!MANAGER_ROLES.includes(user.role)) {
+  // ROLESWEEP.1c — coarse pre-check; the role is judged at the contact's location below.
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Head coach, manager, owner, or master required' }, { status: 403 })
   }
 
@@ -239,6 +248,10 @@ export async function DELETE(_request, props) {
     if (!userLocIds.includes(existing.location_id)) {
       return NextResponse.json({ success: false, error: 'Contact is at a different location' }, { status: 403 })
     }
+  }
+  // ROLESWEEP.1c — MANAGER_ROLES at the contact's location.
+  if (!hasRoleAtLocation(user, existing.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Head coach, manager, owner, or master required' }, { status: 403 })
   }
 
   // DELBLOCK.1 — the blocker check. Runs AFTER the auth + location guards

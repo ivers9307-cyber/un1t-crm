@@ -10,7 +10,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 
@@ -37,7 +37,7 @@ export async function PUT(request, props) {
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   }
-  if (!hasPermission(user, 'consultations')) {
+  if (!hasPermissionAtAnyLocation(user, 'consultations')) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -55,6 +55,10 @@ export async function PUT(request, props) {
 
   const guard = assertLocationAccessOr404(user, contact.location_id)
   if (guard) return guard
+  // ROLESWEEP.1c — `consultations` judged at the contact's location, not the active studio.
+  if (!hasPermissionForLocation(user, contact.location_id, 'consultations')) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+  }
 
   const validation = await validateBody(request, UpdateConsultationSchema)
   if (!validation.ok) return validation.response
@@ -95,7 +99,7 @@ export async function DELETE(request, props) {
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   }
-  if (!hasPermission(user, 'consultations')) {
+  if (!hasPermissionAtAnyLocation(user, 'consultations')) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -113,6 +117,10 @@ export async function DELETE(request, props) {
 
   const guard = assertLocationAccessOr404(user, contact.location_id)
   if (guard) return guard
+  // ROLESWEEP.1c — `consultations` judged at the contact's location, not the active studio.
+  if (!hasPermissionForLocation(user, contact.location_id, 'consultations')) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+  }
 
   const { error } = await db
     .from('consultations')
