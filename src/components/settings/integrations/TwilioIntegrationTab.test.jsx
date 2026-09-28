@@ -40,6 +40,21 @@ describe('TwilioIntegrationTab (SECFIX.3b)', () => {
     expect(document.querySelectorAll('input[type="password"]').length).toBe(0)
   })
 
+  // N1 — removing a location's Twilio sender depends on this: a cleared field
+  // must reach the route as an explicit blank (the route stores it as NULL and
+  // deactivates the twilio_sender registry row), never be dropped from the
+  // body, which the route would read as "untouched" and keep the old sender.
+  // The route's schema is a string, so the tab sends '' rather than null.
+  it('clearing the sender sends an explicit blank, which the route stores as null', async () => {
+    render(<TwilioIntegrationTab location={LOC} canEdit />)
+    fireEvent.change(screen.getByLabelText('Alpha Sender ID'), { target: { value: '   ' } })
+    fireEvent.click(screen.getByRole('button', { name: /Save/ }))
+    await waitFor(() => expect(putCall()).toBeTruthy())
+    const body = JSON.parse(putCall()[1].body)
+    expect(body).toHaveProperty('sender_id')
+    expect(body).toEqual({ sender_id: '' })
+  })
+
   it('an invalid sender ID shows the inline error and makes no PUT', async () => {
     render(<TwilioIntegrationTab location={LOC} canEdit />)
     fireEvent.change(screen.getByLabelText('Alpha Sender ID'), { target: { value: 'x'.repeat(12) } })
