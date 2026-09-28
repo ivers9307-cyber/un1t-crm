@@ -58,11 +58,7 @@ const REVIEWED_DYNAMIC = {
 }
 
 // ACDEVLOC.1 owns these and its Task 7 deletes them. Never add to this list.
-const PENDING_ACDEVLOC = [
-  'src/components/settings/integrations/AcDevicesIntegrationTab.jsx :: /api/studio-management/ac/devices',
-  'src/components/settings/integrations/AcDevicesIntegrationTab.jsx :: /api/studio-management/ac/devices/${deviceId}',
-  'src/components/settings/integrations/AcDevicesIntegrationTab.jsx :: path',
-]
+const PENDING_ACDEVLOC = []
 
 function resolveImport(spec, fromFile) {
   const base = spec.startsWith('@/') ? path.join('src', spec.slice(2)) : path.join(path.dirname(fromFile), spec)

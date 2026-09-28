@@ -142,7 +142,8 @@ export default function LocationIntegrations({ location, xeroConnection, xeroRea
   // master edits credentials and adds devices. Connected status fires
   // when at least one vendor has credentials saved on the location.
   if (isOwnerOrMaster) {
-    const acConfigured = !!(location.sensibo_api_key || location.thinq_pat)
+    // ACDEVLOC.1 — the page sends has_* flags, never the credentials.
+    const acConfigured = !!(location.has_sensibo_key || location.has_thinq_pat)
     tabs.push({
       key: 'ac-devices',
       label: 'AC Devices',
@@ -223,7 +224,7 @@ export default function LocationIntegrations({ location, xeroConnection, xeroRea
             <UnifiIntegrationTab location={location} canEdit={isMaster} />
           )}
           {activeKey === 'ac-devices' && (
-            <AcDevicesIntegrationTab location={location} canEdit={isOwnerOrMaster} />
+            <AcDevicesIntegrationTab location={location} canEdit={isOwnerOrMaster} canManage={isMaster} />
           )}
           {activeKey === 'bca' && (
             <BcaIntegrationTab location={location} canEdit={isMaster} sampleCar={sampleBcaCar} />

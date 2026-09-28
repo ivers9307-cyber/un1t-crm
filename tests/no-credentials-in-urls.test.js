@@ -25,13 +25,7 @@ const CLIENT_RE = new RegExp(String.raw`[?&](?:${CRED_PARAMS.join('|')})=`)
 const CLIENT_ROOTS = ['src/components', 'src/app', 'mobile/app', 'mobile/components', 'mobile/lib', 'shared']
 
 // ACDEVLOC.1 owns these and its Task 7 deletes them. Never add to this list.
-const PENDING_ACDEVLOC = {
-  server: [
-    'src/app/api/studio-management/ac/lg-devices/route.js',
-    'src/app/api/studio-management/ac/pods/route.js',
-  ],
-  client: ['src/components/settings/integrations/AcDevicesIntegrationTab.jsx'],
-}
+const PENDING_ACDEVLOC = { server: [], client: [] }
 
 function walk(rel, keep) {
   const out = []
