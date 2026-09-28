@@ -3,6 +3,14 @@
 // Glofox-connected location. Service-role; service bypasses RLS.
 //
 // Auth: CRON_SECRET (same pattern as the other crons).
+//
+// Heartbeat: stamped after the loop on every run that read the locations
+// list, including runs where a location's sync failed, so a Glofox that
+// ANSWERS with an error does not page. One that HANGS or RATE-LIMITS past
+// the 60 s maxDuration kills the tick before its stamp, so it does (mig 644,
+// CLASSSYNCHB.1). TRAINERCALLS.1: the stamp carries the
+// run's stats as last_outcome; trainer_api_calls is 0 on every tick but the
+// daily trainer-lookup tick (04:00 Dublin, src/lib/class-occurrences.js).
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
@@ -33,11 +41,12 @@ export async function GET(request) {
     return g.branch_id && g.api_key && g.api_token
   })
 
-  const stats = { locations: 0, upserted: 0, errors: 0 }
+  const stats = { locations: 0, upserted: 0, errors: 0, trainer_api_calls: 0 }
   for (const loc of connected) {
     stats.locations++
     const creds = await glofoxCredentialsForLocation(db, loc.id)
     const out = await syncOccurrencesForLocation(db, { locationId: loc.id, creds })
+    stats.trainer_api_calls += Number(out.trainerApiCalls) || 0
     if (out.ok) {
       stats.upserted += out.upserted
     } else {
@@ -46,7 +55,7 @@ export async function GET(request) {
     }
   }
 
-  await stampHeartbeat('sync-class-occurrences').catch((err) =>
+  await stampHeartbeat('sync-class-occurrences', stats).catch((err) =>
     logWarn('cron-sync-class-occurrences', 'heartbeat failed', { err }))
   return NextResponse.json({ success: true, stats })
 }
