@@ -56,6 +56,10 @@ const rel = (file) => path.relative(API, file).split(path.sep).join('/')
 export const REVIEWED = {
   'agent/membership-requests/route.js':
     'The MANAGER_ROLES gate guards only the no-param branch, which reads user.activeLocation.id. getUserLocationIds belongs to the ?conversation_id branch above it, which has no role gate (a membership-scoped read).',
+  'events/route.js':
+    'ROLESWEEP.1b: `races` is judged at the listed/created location (hasPermissionForLocation :141, :230) and the POST payee gate at body.location_id (:262). The one active gate left is GET :166, ADMIN_ROLES.includes(user.role) on the HOST-EDIT.1 branch that adds hosted events of the ACTIVE org (user.activeOrganization / user.activeLocation.organization_id, :165): an active-org read, judged at the active studio on purpose.',
+  'events/[id]/route.js':
+    'ROLESWEEP.1b: the member path judges `races` (:144, :177), the payee change (:190) and DELETE MANAGER_ROLES + races (:370, :373) at the event row. The active gate left is hostEventOrgAccess (:115), the HOST-EDIT.1 host path: ADMIN_ROLES at the active studio for an event whose host belongs to the ACTIVE org (:116-123); on that path `races` stays judged at user.activeLocation (:144, :177), as before.',
   'dashboard/business/route.js':
     'Reads only user.activeLocation.id; its assertLocationAccess is on that same active id held in a variable, so the "another location" sign is a false positive.',
   'settings/scoring/route.js':
