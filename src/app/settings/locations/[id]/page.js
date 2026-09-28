@@ -20,6 +20,7 @@ import { ToggleRight, Image as ImageIcon, Clock, CalendarDays, ChevronRight, Bel
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
 import { canEditLocationFeatures } from '@/lib/staff-access'
 import { logError } from '@/lib/log'
+import { toClientLocation } from '@/lib/location-client-shape'
 import LocationForm from '@/components/LocationForm'
 import LocationFeatures from '@/components/LocationFeatures'
 import RolePermissions from '@/components/RolePermissions'
@@ -79,9 +80,15 @@ export default async function EditLocationPage(props) {
   if (guardMasterOrOwner(user, params.id)) redirect('/')
 
   const db = createServerClient()
-  const { data: location } = await db.from('locations').select('*').eq('id', params.id).single()
+  const { data: locationRow } = await db.from('locations').select('*').eq('id', params.id).single()
 
-  if (!location) notFound()
+  if (!locationRow) notFound()
+
+  // ACDEVLOC.1 — every component below is a CLIENT component, so whatever
+  // `location` holds is serialised into this page's HTML. The Sensibo key and
+  // ThinQ PAT stop here: the AC tab gets has_sensibo_key / has_thinq_pat and
+  // saves through the masked PUT /api/locations/[id]/integrations/ac.
+  const location = toClientLocation(locationRow)
 
   // This location's OWN organisation (mig 079) — powers the read-only org
   // line in LocationForm and the org-level branding defaults above the
