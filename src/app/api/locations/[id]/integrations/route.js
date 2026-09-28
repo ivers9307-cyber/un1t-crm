@@ -4,6 +4,8 @@ import { createServerClient } from '@/lib/supabase'
 import { authenticateApiKey } from '@/lib/api-auth'
 import { overlayConnections, syncConnectionFromLegacy } from '@/lib/connection-registry'
 import { validateBody } from '@/lib/validate'
+import { maskSecretKeysDeep } from '@/lib/secret-keys'
+import { logError } from '@/lib/log'
 
 const IntegrationsUpdateSchema = z.object({
   glofox: z.unknown().nullable().optional(),
@@ -60,13 +62,22 @@ export async function PUT(request, props) {
   const body = validation.data
   const db = createServerClient()
 
-  // Get current settings
-  const { data: location } = await db
+  // Get current settings. N8NECHO.1: the error is read, not discarded. A
+  // failed read used to answer "Location not found", which n8n cannot tell
+  // from a wrong id.
+  const { data: location, error: readError } = await db
     .from('locations')
     .select('settings, organization_id')
     .eq('id', params.id)
     .single()
 
+  if (readError && readError.code !== 'PGRST116') {
+    logError('locations/integrations', 'location read failed; nothing written', {
+      locationId: params.id,
+      code: readError.code || null,
+    })
+    return NextResponse.json({ success: false, error: 'Could not read the location' }, { status: 500 })
+  }
   if (!location) {
     return NextResponse.json({ success: false, error: 'Location not found' }, { status: 404 })
   }
@@ -86,7 +97,7 @@ export async function PUT(request, props) {
     .from('locations')
     .update({ settings: updatedSettings, updated_at: new Date().toISOString() })
     .eq('id', params.id)
-    .select()
+    .select('id, name, slug, settings')
     .single()
 
   if (error) {
@@ -104,5 +115,23 @@ export async function PUT(request, props) {
     }
   }
 
-  return NextResponse.json({ success: true, data })
+  // N8NECHO.1: never echo the row. It carried the Sensibo key, the ThinQ
+  // PAT, every settings credential and the customer agent's test phones back
+  // to a caller that had only just sent two slices. Return exactly those two,
+  // under the old key paths (an n8n node reading data.settings.glofox.branch_id
+  // keeps working), with every secret-named key masked (mig 647's rule). The
+  // GET above still serves the values to the key holder, by design.
+  const settings = data?.settings || {}
+  return NextResponse.json({
+    success: true,
+    data: {
+      id: data?.id ?? params.id,
+      name: data?.name ?? null,
+      slug: data?.slug ?? null,
+      settings: {
+        glofox: settings.glofox == null ? null : maskSecretKeysDeep(settings.glofox),
+        webhooks: settings.webhooks == null ? null : maskSecretKeysDeep(settings.webhooks),
+      },
+    },
+  })
 }
