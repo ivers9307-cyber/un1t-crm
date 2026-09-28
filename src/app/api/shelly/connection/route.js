@@ -154,8 +154,8 @@ export const PUT = withAuth(
     // driver happened to hand back.
     const storedRow = storedError ? null : stored
 
-    // Write-only secret merge: the UI renders the key as "••••abcd" and posts
-    // it back blank, so a blank or absent auth_key KEEPS the stored one and
+    // Write-only secret merge: the UI shows only that a key is stored
+    // (SECRET_MASK) and posts the field blank, so a blank or absent auth_key KEEPS the stored one and
     // only a fresh value overwrites it. Without this, "change only the
     // server" would wipe the credential.
     const merged = mergeSecretSlice({
