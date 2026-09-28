@@ -368,6 +368,17 @@ const config = [
       'src/app/api/cron/contract-reminders/route.js',
       'src/app/api/cron/checklist-sweep/route.js',
       'src/app/api/cron/equipment-inspection-sweep/route.js',
+      // PUSHDONE.1b — the member engagement pushes and their claim helper.
+      // Measured on main 4c991179: run-challenge-events 3 (the three
+      // announced_* stamps), the four nudge crons 0; 0 after. live-class.js
+      // is NOT armed: it keeps three unrelated bare writes (session and
+      // achievement stamps), a follow-up in the C21 plan.
+      'src/lib/customer-nudge-claim.js',
+      'src/app/api/cron/notify-streak-at-risk/route.js',
+      'src/app/api/cron/notify-winback/route.js',
+      'src/app/api/cron/notify-onboarding-pace/route.js',
+      'src/app/api/cron/send-class-booking-reminders/route.js',
+      'src/app/api/cron/run-challenge-events/route.js',
       // SETTINGSWIPE.1 — the one writer of locations.settings and the seven
       // routes that used to wipe it (three of them with bare or discarded
       // writes that answered success). Measured on main 6c6775ee: 3 findings
