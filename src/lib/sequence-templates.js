@@ -209,9 +209,13 @@ export const SEQUENCE_TEMPLATES = [
   // FROM the CRM — booking-form opt-in (GLOFOX3.2), event-
   // registration opt-in (GLOFOX3.3), or the manual "Create in
   // Glofox" button (GLOFOX3.4). The push orchestrator tags the
-  // contact 'glofox_account_created' and stashes the one-time
-  // passcode on contacts.glofox_passcode so this template's
-  // {{glofox_passcode}} merge tag resolves at send time.
+  // contact 'glofox_account_created'.
+  //
+  // PASSCODEREAD.1: this used to send the member their initial Glofox
+  // password ({{glofox_passcode}}). Passwords are no longer stored
+  // (mig 651), so the member sets their own with the Glofox app's
+  // "Forgot password?". The id keeps its old name: templates are cloned
+  // by id, and the id never reaches a customer.
   //
   // SHIPS INACTIVE — operator clones, reviews copy, fills in app-
   // store links, then activates. Inactive-by-default avoids us
@@ -219,19 +223,16 @@ export const SEQUENCE_TEMPLATES = [
   {
     id: 'glofox_welcome_passcode',
     category: 'Welcome',
-    name: 'Glofox welcome + passcode',
-    description: 'Fires when CRM creates a new Glofox account for a contact (tag: glofox_account_created). Sends the one-time passcode immediately so the member can log into the Glofox app, with a follow-up nudge the next day if they haven\'t booked yet. SHIPS INACTIVE — operator should review copy and fill in app-store links before activating.',
+    name: 'Glofox welcome + first login',
+    description: 'Fires when CRM creates a new Glofox account for a contact (tag: glofox_account_created). Tells the member how to log into the Glofox app for the first time (Forgot password? with their email), with a follow-up nudge the next day if they haven\'t booked yet. SHIPS INACTIVE: review the copy against the Glofox app and fill in app-store links before activating.',
     trigger_type: 'tag_added',
     trigger_config: { tag: 'glofox_account_created' },
     // No goal_config: this is a transactional welcome, not a
     // conversion drip. Letting it run to completion is the
     // intended path even if the member books mid-sequence.
     goal_config: null,
-    // 365-day cooldown — a passcode is minted once per Glofox
-    // account; if the same contact somehow re-triggers we don't
-    // want to send another passcode (it'd be stale anyway). The
-    // operator would re-mint via the manual button in that case,
-    // which would re-tag and pass the cooldown.
+    // 365-day cooldown — an account is created once per member; if the same
+    // contact somehow re-triggers we don't want to re-send the welcome.
     re_enrolment_cooldown_days: 365,
     send_window: { start_hour: 8, end_hour: 21, skip_days: [] },
     // All templates clone to status='draft' (from-template route) —
@@ -241,19 +242,17 @@ export const SEQUENCE_TEMPLATES = [
     // would email broken links to brand-new members.
     steps: [
       {
-        // Email 1 — immediate. Lands the passcode + the app links.
+        // Email 1 — immediate. First-login instructions + the app links.
         // Operator MUST fill in the iOS/Android URLs (placeholders
         // below) before activating, otherwise members get broken
         // "Download the app" links.
         step_type: 'email',
         delay_days: 0,
         delay_hours: 0,
-        subject: 'Welcome to UN1T: your Glofox login is ready, {{first_name}}',
+        subject: 'Welcome to UN1T: your Glofox account is ready, {{first_name}}',
         html_content: `<p>Hi {{first_name}},</p>
-<p>Your UN1T account is live. Download the Glofox app and log in with the credentials below to book your first class.</p>
-<p><strong>Email:</strong> {{email}}<br />
-<strong>One-time passcode:</strong> <code>{{glofox_passcode}}</code></p>
-<p>You'll be asked to set your own password the first time you log in.</p>
+<p>Your UN1T account is live. Download the Glofox app to book your first class.</p>
+<p>To log in for the first time, open the app, tap <strong>Forgot password?</strong> and enter <strong>{{email}}</strong>. Glofox will email you a link to set your own password.</p>
 <p>
   <a href="https://apps.apple.com/app/REPLACE-WITH-IOS-LINK">Download on the App Store</a> ·
   <a href="https://play.google.com/store/apps/details?id=REPLACE-WITH-ANDROID-ID">Get it on Google Play</a>
@@ -262,15 +261,15 @@ export const SEQUENCE_TEMPLATES = [
 <p>See you on the floor.<br />UN1T {{location_name}}</p>`,
       },
       {
-        // SMS — same hour-ish window so the member sees the
-        // passcode somewhere even if the email lands in junk.
+        // SMS — same hour-ish window so the member sees the login
+        // instructions somewhere even if the email lands in junk.
         // 15-minute delay rather than 0 so the email arrives
         // first (most members will see the email and never read
         // the SMS).
         step_type: 'sms',
         delay_days: 0,
         delay_hours: 0.25,
-        sms_body: 'UN1T: Hi {{first_name}}, your Glofox login is set. Email: {{email}} · Passcode: {{glofox_passcode}}. Open the Glofox app to book your first class.',
+        sms_body: 'UN1T: Hi {{first_name}}, your Glofox account is set up for {{email}}. Open the Glofox app and tap Forgot password? to set your password, then book your first class.',
       },
       {
         // Day-2 nudge — only if the member hasn't booked yet.
@@ -285,7 +284,7 @@ export const SEQUENCE_TEMPLATES = [
         subject: 'Need a hand booking your first class?',
         html_content: `<p>Hi {{first_name}},</p>
 <p>Just checking in. Did you manage to get logged in and have a look at the timetable?</p>
-<p>If anything's not working (passcode didn't arrive, app's grumpy, can't see the schedule), reply to this email and someone from the team will sort it within the hour.</p>
+<p>If anything's not working (can't log in, app's grumpy, can't see the schedule), reply to this email and someone from the team will sort it within the hour.</p>
 <p>If you'd rather chat in person, we're at the studio Mon–Fri 6am–9pm and weekends 8am–4pm. Just walk in.</p>
 <p>UN1T {{location_name}}</p>`,
       },
