@@ -14,6 +14,8 @@ import { activeRoleGates } from '../scripts/lib/active-role-gates.mjs'
 const ROOT = path.resolve(import.meta.dirname, '..')
 const PAGES = [
   'src/app/(sales)/contacts/[id]/page.js',
+  'src/app/(sales)/contacts/[id]/edit/page.js',
+  'src/app/(sales)/contacts/new/page.js',
 ]
 
 describe('ROLEUI.1 — no active-studio gate on the contact and booking-type pages', () => {
