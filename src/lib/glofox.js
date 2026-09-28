@@ -17,7 +17,9 @@
 //                             a one-line change here.
 
 import { createHmac, timingSafeEqual } from 'node:crypto'
-import { getGlofoxConfig, findGlofoxConfigByBranchId } from '@/lib/connection-registry'
+import { readGlofoxConfig, findGlofoxConfigByBranchId } from '@/lib/connection-registry'
+import { logError } from '@/lib/log'
+import { GLOFOX_SETTINGS_UNREADABLE } from '@/lib/glofox-settings-read'
 import { toMobileE164 } from '@/lib/phone-validate'
 
 // ─────────────────────────────────────────────────────────────
@@ -330,21 +332,11 @@ export { EVENT_TYPE_TAGS }
 
 const GLOFOX_API_BASE = 'https://gf-api.aws.glofox.com/prod'
 
-/**
- * Pull Glofox credentials for a single location.
- * @param {object} db        Service-role Supabase client
- * @param {string} locationId  CRM location uuid
- * @returns {Promise<{branchId, apiKey, apiToken, webhookSecret}>}
- *   All fields are null when missing. Use missingGlofoxCredentialsForLocation()
- *   for a friendly array of missing-field names.
- */
-export async function glofoxCredentialsForLocation(db, locationId) {
-  if (!db || !locationId) {
-    return { branchId: null, apiKey: null, apiToken: null, namespace: null, webhookSecret: null }
-  }
-  // INTEG-A2 dual-read: active channel_connections row first, legacy
-  // locations.settings.glofox otherwise (same shape either way).
-  const cfg = await getGlofoxConfig(db, locationId)
+// REGISTRYREAD.1a — one credentials object shape for every answer. On a
+// failed settings read every credential is null (so missingGlofoxCredentials…
+// still lists all three and unmigrated callers behave exactly as before) and
+// readError says WHY. Callers that act on "not configured" must check it.
+function glofoxCredsFromConfig(cfg, readError = null) {
   return {
     branchId:      cfg.branch_id      || null,
     apiKey:        cfg.api_key        || null,
@@ -363,52 +355,94 @@ export async function glofoxCredentialsForLocation(db, locationId) {
     trainerNames:  (cfg.trainer_names && typeof cfg.trainer_names === 'object')
       ? cfg.trainer_names
       : null,
+    // REGISTRYREAD.1a: the public deny-list rides on THIS read, so
+    // listPublicClasses needs no second read that could fail open.
+    hiddenClassKeywords: cfg.hidden_class_keywords ?? null,
     webhookSecret: cfg.webhook_secret || null,
+    readError,
   }
 }
 
 /**
- * Pull Glofox credentials by branch_id (used by the inbound
- * webhook receiver — it knows the branch from the payload before
- * it knows the location). Returns location_id alongside the
- * credentials so the caller can attribute the event correctly.
+ * Pull Glofox credentials for a single location.
+ * @param {object} db        Service-role Supabase client
+ * @param {string} locationId  CRM location uuid
+ * @returns {Promise<{branchId, apiKey, apiToken, namespace, trainerNames, hiddenClassKeywords, webhookSecret, readError}>}
+ *   Credential fields are null when missing. readError is
+ *   'glofox_settings_unreadable' when the settings could not be READ (a DB
+ *   blip) — that is not "not configured"; null otherwise. Use
+ *   missingGlofoxCredentialsForLocation() for the missing-field names.
+ */
+export async function glofoxCredentialsForLocation(db, locationId) {
+  if (!db || !locationId) return glofoxCredsFromConfig({})
+  // INTEG-A2 dual-read: active channel_connections row first, legacy
+  // locations.settings.glofox otherwise (same shape either way).
+  const { cfg, error } = await readGlofoxConfig(db, locationId)
+  if (error) {
+    logError('glofox', 'credentials unreadable: the settings read failed (this is not "not configured")', { locationId, err: error })
+    return glofoxCredsFromConfig({}, GLOFOX_SETTINGS_UNREADABLE)
+  }
+  return glofoxCredsFromConfig(cfg)
+}
+
+/**
+ * Pull Glofox credentials by branch_id (used by the inbound webhook
+ * receiver — it knows the branch from the payload before it knows the
+ * location). Never throws.
  *
  * @param {object} db
  * @param {string} branchId
- * @returns {Promise<null | {locationId, branchId, apiKey, apiToken, webhookSecret}>}
+ * @returns {Promise<{ creds: (null | {locationId, branchId, apiKey, apiToken, webhookSecret}), error: (object|null) }>}
+ *   creds null + error null = no location has this branch (a real answer).
+ *   error set = the lookup could not be made (REGISTRYREAD.1a): never
+ *   "unknown branch".
  */
-export async function glofoxCredentialsByBranchId(db, branchId) {
-  if (!db || !branchId) return null
+export async function readGlofoxCredentialsByBranchId(db, branchId) {
+  if (!db || !branchId) return { creds: null, error: null }
   // INTEG-A2 dual-read: the registry indexes (platform,
   // external_account_id), so an active glofox row resolves directly.
+  // A registry error answers null here (logged) and falls to legacy.
   const fromRegistry = await findGlofoxConfigByBranchId(db, branchId)
   if (fromRegistry) {
     const cfg = fromRegistry.cfg
     return {
-      locationId:    fromRegistry.locationId,
-      branchId:      cfg.branch_id      || null,
-      apiKey:        cfg.api_key        || null,
-      apiToken:      cfg.api_token      || null,
-      webhookSecret: cfg.webhook_secret || null,
+      creds: {
+        locationId:    fromRegistry.locationId,
+        branchId:      cfg.branch_id      || null,
+        apiKey:        cfg.api_key        || null,
+        apiToken:      cfg.api_token      || null,
+        webhookSecret: cfg.webhook_secret || null,
+      },
+      error: null,
     }
   }
   // Legacy fallback. settings is JSONB; the @> operator finds rows
   // where the settings tree contains the given subtree. Index on
   // settings (mig 004 GIN if present) keeps this fast even at scale.
-  const { data } = await db
-    .from('locations')
-    .select('id, settings')
-    .filter('settings', 'cs', JSON.stringify({ glofox: { branch_id: branchId } }))
-    .limit(1)
+  let data
+  try {
+    const res = await db
+      .from('locations')
+      .select('id, settings')
+      .filter('settings', 'cs', JSON.stringify({ glofox: { branch_id: branchId } }))
+      .limit(1)
+    if (res.error) return { creds: null, error: res.error }
+    data = res.data
+  } catch (e) {
+    return { creds: null, error: e }
+  }
   const row = data?.[0]
-  if (!row) return null
+  if (!row) return { creds: null, error: null }
   const cfg = row.settings?.glofox || {}
   return {
-    locationId:    row.id,
-    branchId:      cfg.branch_id      || null,
-    apiKey:        cfg.api_key        || null,
-    apiToken:      cfg.api_token      || null,
-    webhookSecret: cfg.webhook_secret || null,
+    creds: {
+      locationId:    row.id,
+      branchId:      cfg.branch_id      || null,
+      apiKey:        cfg.api_key        || null,
+      apiToken:      cfg.api_token      || null,
+      webhookSecret: cfg.webhook_secret || null,
+    },
+    error: null,
   }
 }
 
