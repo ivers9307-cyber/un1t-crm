@@ -22,9 +22,13 @@
 // descriptor), and this page needs it: BcaIntegrationTab prefills its form
 // from it and LocationIntegrations reads bca_config.send_from for the status
 // dot. Masked, the tab would show the defaults and a Save would overwrite the
-// stored config with them. So it crosses as stored.
+// stored config with them. So it crosses with its fields intact, but walked by
+// the same secret-key rule: a secret-named key added inside it later (an
+// smtp_password, say) is masked, while today's keys (send_from, send_to, cc,
+// subject_template, body_template, documents) all pass unchanged.
 
-import { redactLocationSecrets } from './location-secrets.js'
+import { LOCATION_SECRET_MASK, redactLocationSecrets } from './location-secrets.js'
+import { maskSecretKeysDeep } from './secret-keys.js'
 
 export const LOCATION_SECRET_COLUMNS = Object.freeze(['sensibo_api_key', 'thinq_pat'])
 
@@ -32,12 +36,15 @@ export const LOCATION_SECRET_COLUMNS = Object.freeze(['sensibo_api_key', 'thinq_
  * @param {object|null} row  a `locations` row
  * @returns {object|null}    the row without the AC credentials, plus
  *                           has_sensibo_key / has_thinq_pat, every other
- *                           credential masked (bca_config kept as stored)
+ *                           credential masked (bca_config kept, its
+ *                           secret-named sub-keys masked)
  */
 export function toClientLocation(row) {
   if (!row || typeof row !== 'object') return row
   const { sensibo_api_key: sensiboApiKey, thinq_pat: thinqPat, ...rest } = row
   const out = { ...redactLocationSecrets(rest), has_sensibo_key: !!sensiboApiKey, has_thinq_pat: !!thinqPat }
-  if (Object.prototype.hasOwnProperty.call(rest, 'bca_config')) out.bca_config = rest.bca_config
+  if (Object.prototype.hasOwnProperty.call(rest, 'bca_config')) {
+    out.bca_config = maskSecretKeysDeep(rest.bca_config, { mask: LOCATION_SECRET_MASK })
+  }
   return out
 }

@@ -49,4 +49,24 @@ describe('toClientLocation', () => {
     expect(out.bca_config).toEqual(bca)
     expect(toClientLocation({ id: 'x' })).not.toHaveProperty('bca_config')
   })
+
+  // S2 — bca_config crosses as stored because it holds no credential TODAY;
+  // a secret-named key added to it later must still be masked on the way out.
+  it('SECFIX.3b: masks a secret-named key inside bca_config and keeps the non-secret fields', () => {
+    const out = toClientLocation({ id: 'x', bca_config: { smtp_password: 'SYNTH-PW', send_from: 'cars@example.test' } })
+    expect(out.bca_config).toEqual({ smtp_password: LOCATION_SECRET_MASK, send_from: 'cars@example.test' })
+    expect(JSON.stringify(out)).not.toContain('SYNTH-PW')
+  })
+
+  it('SECFIX.3b: bca_config\'s real keys today cross unchanged', () => {
+    const bca = {
+      send_from: 'cars@example.test',
+      send_to: 'bca@example.test',
+      cc: 'office@example.test',
+      subject_template: 'Vehicle {{reg}}',
+      body_template: 'Please find the documents for {{reg}}.',
+      documents: [{ slug: 'doc_01', label: 'V5' }, { slug: 'doc_02', label: 'Service history' }],
+    }
+    expect(toClientLocation({ id: 'x', bca_config: bca }).bca_config).toEqual(bca)
+  })
 })
