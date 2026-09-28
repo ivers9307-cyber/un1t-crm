@@ -9,6 +9,8 @@
 //                redactProfileLocations / toClientLocation) before the rows
 //                reach a client component or a JSON response
 //   server-only  the rows never leave the server (reason given)
+//   api-key-json the rows ARE returned as JSON, but only to an API-key
+//                holder (never a browser session), by design (reason given)
 //   pending-3b   still crosses today; SECFIX.3b removes it
 //
 // A floor, not a proof: a select string built at runtime is invisible here.
@@ -30,7 +32,7 @@ export const STAR_READS = {
   'src/app/admin/matrix/page.js': { count: 1, disposition: 'redacted' },
   'src/app/api/staff/[id]/permanent/route.js': { count: 1, disposition: 'server-only', why: 'master-only; the embed feeds the UniFi revoke; the response is the tombstone RPC result' },
   'src/app/settings/page.js': { count: 1, disposition: 'server-only', why: 'server-rendered list (name, address, slug, active); no client component receives the rows' },
-  'src/app/api/locations/[id]/integrations/route.js': { count: 1, disposition: 'server-only', why: 'API-key (n8n) route whose purpose is serving Glofox credentials to the key holder; follow-up F4 trims its PUT echo' },
+  'src/app/api/locations/[id]/integrations/route.js': { count: 1, disposition: 'api-key-json', why: 'a JSON response, but only to an API-key (n8n) holder, never a signed-in browser: its GET exists to serve the Glofox credentials to that key holder. The star-read is its PUT echo (update().select()), which returns the whole row to the same key holder; trimming it is follow-up C42 N8NECHO.1' },
   'src/app/settings/locations/[id]/page.js': { count: 1, disposition: 'pending-3b', why: 'toClientLocation (C24) strips the AC pair; SECFIX.3b makes it mask the settings credentials' },
   'src/components/LocationForm.jsx': { count: 1, disposition: 'pending-3b', why: 'browser update(...).select() returns every column; SECFIX.3b names id' },
 }
@@ -88,8 +90,9 @@ describe('every star-read of locations is reviewed (SECFIX.3a)', () => {
     expect(usesRedactor(readFileSync(path.join(ROOT, file), 'utf8'))).toBe(true)
   })
 
-  it('every server-only or pending entry says why', () => {
+  it('every entry has a known disposition, and every non-redacted one says why', () => {
     for (const [file, e] of Object.entries(STAR_READS)) {
+      expect(['redacted', 'server-only', 'api-key-json', 'pending-3b'], file).toContain(e.disposition)
       if (e.disposition !== 'redacted') expect(e.why, file).toBeTruthy()
     }
   })
