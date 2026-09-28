@@ -74,7 +74,12 @@ export async function sendNudgeOnce(db, { contactId, type, dedupKey, payload, mo
     return { status: 'claim_failed', result: null }
   }
   const claimId = data?.[0]?.id
-  if (!claimId) return { status: 'deduped', result: null }
+  if (!claimId) {
+    // No error and no row should not happen (the insert selects its id). Treat
+    // it as claimed elsewhere, so nothing is sent unclaimed, but say it.
+    logWarn(module, 'nudge claim insert returned no row; treated as already claimed, nothing sent', meta)
+    return { status: 'deduped', result: null }
+  }
 
   let result = null
   try {

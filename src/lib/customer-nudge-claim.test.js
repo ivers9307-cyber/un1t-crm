@@ -80,6 +80,14 @@ describe('sendNudgeOnce', () => {
     expect(logWarn).not.toHaveBeenCalled()
   })
 
+  it('an insert that succeeds but returns no row is said, then treated as deduped: nothing sent', async () => {
+    const db = makeDb({ insertRows: [] })
+    expect((await sendNudgeOnce(db, ARGS)).status).toBe('deduped')
+    expect(sendCustomerPush).not.toHaveBeenCalled()
+    expect(logWarn).toHaveBeenCalledWith('cron-winback', 'nudge claim insert returned no row; treated as already claimed, nothing sent',
+      { contactId: 'c1', type: 'winback', dedupKey: '2026-09' })
+  })
+
   it('any other claim error sends NOTHING and says so (F4)', async () => {
     const db = makeDb({ insertError: { code: '08006', message: 'connection failure' } })
     expect((await sendNudgeOnce(db, ARGS)).status).toBe('claim_failed')
