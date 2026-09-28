@@ -72,8 +72,17 @@ describe('runApprovalsSlaSweep', () => {
   // C21 PUSHDONE.1 — the fake tells the owed-notice read (status=expired)
   // from the pending read, and can fail a write. `updates` records every
   // UPDATE with its filters, in order.
-  function sweepDb({ rows, claimMatches = true, owed = [], updateError = null, owedError = null }) {
+  // PUSHDONE.1a — `expired` is every status='expired' row in the table, and
+  // the read returns only the rows its filters match (a `details->>key` eq
+  // reads the JSON key as Postgres does: absent/null never equals a value).
+  // A fake that ignored the filter would pass with the filter deleted.
+  function sweepDb({ rows, claimMatches = true, expired = [], updateError = null, owedError = null }) {
     const updates = []
+    const matches = (row, eqs) => Object.entries(eqs).every(([col, val]) => {
+      if (col === 'status') return true
+      if (col.startsWith('details->>')) return row.details?.[col.slice('details->>'.length)] === val
+      return row[col] === val
+    })
     const db = {
       from(table) {
         const state = { eqs: {}, is: {} }
@@ -88,7 +97,7 @@ describe('runApprovalsSlaSweep', () => {
           then: (res, rej) => {
             let out
             if (state.patch) out = { data: null, error: updateError }
-            else if (state.eqs.status === 'expired') out = owedError ? { data: null, error: owedError } : { data: owed, error: null }
+            else if (state.eqs.status === 'expired') out = owedError ? { data: null, error: owedError } : { data: expired.filter(r => matches(r, state.eqs)), error: null }
             else out = { data: rows, error: null }
             return Promise.resolve(out).then(res, rej)
           },
@@ -262,7 +271,7 @@ describe('runApprovalsSlaSweep', () => {
   }
 
   it('owed pass: a notice still owed from an earlier tick is re-sent and settled', async () => {
-    const { db, updates } = sweepDb({ rows: [], owed: [owedRow] })
+    const { db, updates } = sweepDb({ rows: [], expired: [owedRow] })
     const out = await runApprovalsSlaSweep(db, { nowMs: NOW })
     expect(sendPushToRolesAtLocation).toHaveBeenCalledTimes(1)
     expect(sendPushToRolesAtLocation.mock.calls[0][2].data).toEqual({ type: 'agent_request_expired', request_id: 'r9' })
@@ -273,7 +282,7 @@ describe('runApprovalsSlaSweep', () => {
   })
 
   it('owed pass: still failing → stays owed', async () => {
-    const { db, updates } = sweepDb({ rows: [], owed: [owedRow] })
+    const { db, updates } = sweepDb({ rows: [], expired: [owedRow] })
     sendPushToRolesAtLocation.mockResolvedValueOnce({ sent: 0, failed: 1 })
     const out = await runApprovalsSlaSweep(db, { nowMs: NOW })
     expect(updates).toEqual([])
@@ -282,12 +291,30 @@ describe('runApprovalsSlaSweep', () => {
 
   it('owed pass: past the retry window it gives up at error level, without sending', async () => {
     const stale = { ...owedRow, details: { ...owedRow.details, expired_at: new Date(NOW - (SLA_ALERT_RETRY_HOURS + 1) * H).toISOString() } }
-    const { db, updates } = sweepDb({ rows: [], owed: [stale] })
+    const { db, updates } = sweepDb({ rows: [], expired: [stale] })
     const out = await runApprovalsSlaSweep(db, { nowMs: NOW })
     expect(sendPushToRolesAtLocation).not.toHaveBeenCalled()
     expect(updates[0].patch.details.expire_notice).toBe('gave_up')
     expect(out.gave_up).toBe(1)
     expect(logError).toHaveBeenCalledWith('approvals-sla', 'expiry notice never reached a manager; gave up', expect.objectContaining({ id: 'r9' }))
+  })
+
+  // PUSHDONE.1a — only 'owed' is re-sent. A notice already settled, and every
+  // row expired before C21 (no expire_notice at all), must never be re-sent:
+  // without the filter, each tick would push every expired row in the table.
+  it('owed pass: already-settled and legacy expired rows are never re-sent', async () => {
+    const recent = new Date(NOW - 2 * H).toISOString()
+    const done = (id, notice) => ({ ...owedRow, id, details: { ...owedRow.details, expired_at: recent, expire_notice: notice } })
+    const legacy = { ...owedRow, id: 'r-legacy', details: { class_name: 'FURY', class_time: 'Sun 09:00', expired_at: recent } }
+    const { db, updates } = sweepDb({
+      rows: [],
+      expired: [done('r-sent', 'sent'), done('r-settled', 'settled'), done('r-gave-up', 'gave_up'), legacy,
+        { ...owedRow, id: 'r-null-details', details: null }],
+    })
+    const out = await runApprovalsSlaSweep(db, { nowMs: NOW })
+    expect(sendPushToRolesAtLocation).not.toHaveBeenCalled()
+    expect(updates).toEqual([])
+    expect(out).toMatchObject({ notices_retried: 0, notice_failed: 0, gave_up: 0 })
   })
 
   it('owed pass: an unreadable owed list is logged and the pending sweep still runs', async () => {
