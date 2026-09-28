@@ -5726,6 +5726,8 @@ registry.registerPath({
       content: { 'application/json': { schema: z.object({ success: z.literal(true), discarded: z.literal(true) }).openapi('SequenceDraftDiscarded') } },
     },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    // SEQROUTEGATE.1 — email or WhatsApp permission at the sequence's studio.
+    403: { description: 'Email or WhatsApp permission required', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Sequence not found (or no access)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })

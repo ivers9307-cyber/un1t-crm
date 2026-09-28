@@ -33,8 +33,8 @@ const SEQ_ID  = 'a0000000-0000-0000-0000-000000000001'
 const USER_ID = 'b0000000-0000-0000-0000-000000000002'
 const LOC_ID  = 'c0000000-0000-0000-0000-000000000003'
 
-const OWNER    = { id: USER_ID, role: 'owner', locations: [{ id: LOC_ID }] }
-const OUTSIDER = { id: USER_ID, role: 'owner', locations: [{ id: 'd0000000-0000-0000-0000-000000000004' }] }
+const OWNER    = { id: USER_ID, role: 'owner', locations: [{ id: LOC_ID, role: 'owner' }] }
+const OUTSIDER = { id: USER_ID, role: 'owner', locations: [{ id: 'd0000000-0000-0000-0000-000000000004', role: 'owner' }] }
 
 const publishedGraph = {
   version: 1,
