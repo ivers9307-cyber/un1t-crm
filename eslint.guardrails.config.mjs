@@ -368,6 +368,17 @@ const config = [
       'src/app/api/cron/contract-reminders/route.js',
       'src/app/api/cron/checklist-sweep/route.js',
       'src/app/api/cron/equipment-inspection-sweep/route.js',
+      // PUSHDONE.1b — the member engagement pushes and their claim helper.
+      // Measured on main 4c991179: run-challenge-events 3 (the three
+      // announced_* stamps), the four nudge crons 0; 0 after. live-class.js
+      // is NOT armed: it keeps three unrelated bare writes (session and
+      // achievement stamps), a follow-up in the C21 plan.
+      'src/lib/customer-nudge-claim.js',
+      'src/app/api/cron/notify-streak-at-risk/route.js',
+      'src/app/api/cron/notify-winback/route.js',
+      'src/app/api/cron/notify-onboarding-pace/route.js',
+      'src/app/api/cron/send-class-booking-reminders/route.js',
+      'src/app/api/cron/run-challenge-events/route.js',
       // SETTINGSWIPE.1 — the one writer of locations.settings and the seven
       // routes that used to wipe it (three of them with bare or discarded
       // writes that answered success). Measured on main 6c6775ee: 3 findings
@@ -427,6 +438,34 @@ const config = [
     },
     rules: {
       'guardrails/no-substring-redirect-assertion': 'error',
+    },
+  },
+  {
+    // D2 EXPECTLINT.1 — `expect(…).resolves/.rejects` and `expect.poll` return a
+    // promise, and one nothing waits for races the test's end: it passes
+    // without checking, or fails a LATER test. #1762 lost a CI run that way.
+    // Test files plus the helpers they import (a helper that asserts is test
+    // code too). Measured on main 91ab55bf with this rule: 0 findings, across
+    // the 755 lines in 202 test files that use .resolves/.rejects (97 of them
+    // multi-line chains a grep would miss). mobile/lib's tests are armed in
+    // eslint.mobile.config.mjs, since mobile/** is outside this config.
+    files: [
+      '**/*.test.js',
+      '**/*.test.jsx',
+      '**/*.test-helpers.js',
+      '**/_test-*.js',
+      'tests/helpers/**/*.js',
+    ],
+    plugins: { guardrails },
+    linterOptions: { reportUnusedDisableDirectives: 'off' },
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: 'module',
+      parserOptions: { ecmaFeatures: { jsx: true } },
+      globals: { ...globals.node, ...globals.browser },
+    },
+    rules: {
+      'guardrails/no-unawaited-async-expect': 'error',
     },
   },
 ]

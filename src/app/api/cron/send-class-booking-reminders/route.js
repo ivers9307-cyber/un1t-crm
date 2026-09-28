@@ -10,9 +10,16 @@
 //
 // class_bookings.starts_at is a UTC timestamptz (Glofox-fed), so the window
 // logic compares UTC instants directly; only the time label uses the location tz.
+//
+// C21 PUSHDONE.1b (F4) — the claim / send / release moved into sendNudgeOnce
+// (src/lib/customer-nudge-claim.js), unchanged in behaviour, plus two silent
+// failures made visible: a failed token read skipped its members as
+// "unreachable" with nothing said (now counted in `reachability_failed` and
+// logged; still retried next tick), and a failed claim INSERT read as
+// "already reminded" (now logged; still retried next tick).
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { sendCustomerPush } from '@/lib/customer-push'
+import { sendNudgeOnce, readReachableContacts, nudgeFailed } from '@/lib/customer-nudge-claim'
 import { buildClassReminderPush } from '@/lib/customer-notifications'
 import {
   resolveClassReminderLeadTimes, selectDueClassReminders, classTimeLabel,
@@ -108,13 +115,8 @@ export async function GET(request) {
   // Keep only reachable members (have a push token). Filter BEFORE dedup —
   // burning a dedup row for an unreachable contact would block a later send
   // if they install the app before the class (mirrors notify-streak-at-risk).
-  const candidateIds = [...new Set(due.map((d) => d.contactId))]
-  const reachable = new Set()
-  for (let i = 0; i < candidateIds.length; i += 200) {
-    const chunk = candidateIds.slice(i, i + 200)
-    const { data: toks } = await db.from('champ_push_tokens').select('contact_id').in('contact_id', chunk)
-    for (const t of toks || []) reachable.add(t.contact_id)
-  }
+  const { reachable, failed: reachabilityFailed } =
+    await readReachableContacts(db, due.map((d) => d.contactId), 'cron-class-reminders')
 
   // Record (claim-before-send, idempotent) + push. The nudge insert is
   // the dedup claim; if the Expo send then FAILS outright (sent=0 with
@@ -128,46 +130,25 @@ export async function GET(request) {
   let sendFailed = 0
   for (const d of due) {
     if (!reachable.has(d.contactId)) continue
-    const dedupKey = `${d.bookingId}:${d.leadMinutes}`
-    const { data: ins, error: insErr } = await db
-      .from('customer_engagement_nudges')
-      .insert({ contact_id: d.contactId, type: 'class_reminder', dedup_key: dedupKey })
-      .select('id')
-    if (insErr || !ins || !ins.length) continue // already reminded for this booking+lead, or error
     const loc = locById.get(d.locationId)
-    const payload = buildClassReminderPush({
-      className: d.className,
-      timeLabel: classTimeLabel(d.startsAt, loc?.timezone || 'Europe/Dublin'),
-      classBookingId: d.bookingId,
+    const { status } = await sendNudgeOnce(db, {
+      contactId: d.contactId,
+      type: 'class_reminder',
+      dedupKey: `${d.bookingId}:${d.leadMinutes}`,
+      payload: buildClassReminderPush({
+        className: d.className,
+        timeLabel: classTimeLabel(d.startsAt, loc?.timezone || 'Europe/Dublin'),
+        classBookingId: d.bookingId,
+      }),
+      module: 'cron-class-reminders',
     })
-    let result = null
-    try {
-      result = await sendCustomerPush(db, d.contactId, payload)
-    } catch (err) {
-      logWarn('cron-class-reminders', 'push threw', { err, contactId: d.contactId })
-    }
-    if (result && result.sent > 0) {
-      sent++
-    } else if (!result || (result.failed || 0) > 0) {
-      // Total send failure (throw, or all tokens failed after retries) —
-      // release the dedup claim so the next tick can retry.
-      sendFailed++
-      const { error: delErr } = await db
-        .from('customer_engagement_nudges')
-        .delete()
-        .eq('id', ins[0].id)
-      if (delErr) {
-        logWarn('cron-class-reminders', 'failed-send claim release failed — reminder will NOT retry', {
-          err: delErr, contactId: d.contactId, dedupKey,
-        })
-      }
-    }
-    // else: sent=0 and failed=0 — token vanished between the reachability
-    // check and the send. Keep the claim (nothing to retry against).
+    if (status === 'sent') sent++
+    else if (nudgeFailed(status)) sendFailed++
   }
 
-  logInfo('cron-class-reminders', 'tick', { bookings: bookings.length, due: due.length, sent, send_failed: sendFailed })
+  const summary = { bookings: bookings.length, due: due.length, sent, send_failed: sendFailed, reachability_failed: reachabilityFailed }
+  logInfo('cron-class-reminders', 'tick', summary)
   await stampHeartbeat('send-class-booking-reminders').catch((err) =>
     logWarn('cron-class-reminders', 'heartbeat failed', { err }))
-  return NextResponse.json({ ok: true, bookings: bookings.length, due: due.length, sent, send_failed: sendFailed })
+  return NextResponse.json({ ok: true, ...summary })
 }

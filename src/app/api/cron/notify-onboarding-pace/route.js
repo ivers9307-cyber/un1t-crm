@@ -10,12 +10,16 @@
 // (type='onboarding_pace', dedup_key '<contact_id>:wk<weekIndex>') — the nudge
 // insert is the claim-before-send.
 //
+// C21 PUSHDONE.1b — through sendNudgeOnce: a nudge that reached nobody because
+// something broke gives its claim back, so the next daily run (same journey
+// week key) tries again. It used to keep the claim and lose the week's nudge.
+//
 // HARD CONSTRAINT (pulse-scope-no-booking): the push copy from
 // buildOnboardingPacePush is motivational only — never any booking language.
 // Pulse never books, pauses or cancels.
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { sendCustomerPush } from '@/lib/customer-push'
+import { sendNudgeOnce, readReachableContacts, nudgeFailed } from '@/lib/customer-nudge-claim'
 import { loadJourneyLane } from '@/lib/onboarding-journey-data'
 import { buildOnboardingPacePush } from '@/lib/onboarding-journey'
 import { logInfo, logWarn } from '@/lib/log'
@@ -73,6 +77,7 @@ export async function GET(request) {
   let candidates = 0
   let nudged = 0
   let failed = 0
+  let reachabilityFailed = 0
 
   for (const loc of liveLocations) {
     let lane
@@ -89,35 +94,23 @@ export async function GET(request) {
     // send-class-booking-reminders).
     const actionable = (lane || []).filter((row) => NUDGE_STATUSES.has(row?.status))
     if (actionable.length === 0) continue
-    const reachable = new Set()
-    const ids = [...new Set(actionable.map((r) => r.contactId))]
-    for (let i = 0; i < ids.length; i += 200) {
-      const chunk = ids.slice(i, i + 200)
-      const { data: toks } = await db
-        .from('champ_push_tokens')
-        .select('contact_id')
-        .in('contact_id', chunk)
-      for (const t of toks || []) reachable.add(t.contact_id)
-    }
+    const reach = await readReachableContacts(db, actionable.map((r) => r.contactId), 'cron-onboarding-pace')
+    const reachable = reach.reachable
+    reachabilityFailed += reach.failed
 
     const toNudge = selectPaceNudgeRows(lane, reachable)
     candidates += toNudge.length
 
     for (const row of toNudge) {
       try {
-        // Claim-before-send: the nudge insert is the at-most-once dedup. A
-        // unique-conflict (already nudged this journey week) returns no row and
-        // we skip — max one pace nudge per member per week.
-        const dedupKey = `${row.contactId}:wk${row.weekIndex}`
-        const { data: ins, error: insErr } = await db
-          .from('customer_engagement_nudges')
-          .insert({ contact_id: row.contactId, type: 'onboarding_pace', dedup_key: dedupKey })
-          .select('id')
-        if (insErr || !ins || !ins.length) continue // already nudged this week, or error
-
-        const payload = buildOnboardingPacePush(row)
-        await sendCustomerPush(db, [row.contactId], payload)
-        nudged++
+        // Claim-before-send: the nudge insert is the at-most-once dedup — max
+        // one pace nudge per member per journey week; released if it failed.
+        const { status } = await sendNudgeOnce(db, {
+          contactId: row.contactId, type: 'onboarding_pace', dedupKey: `${row.contactId}:wk${row.weekIndex}`,
+          payload: buildOnboardingPacePush(row), module: 'cron-onboarding-pace',
+        })
+        if (status === 'sent') nudged++
+        else if (nudgeFailed(status)) failed++
       } catch (err) {
         failed++
         logWarn('cron-onboarding-pace', 'nudge failed', { err, contactId: row.contactId })
@@ -126,11 +119,11 @@ export async function GET(request) {
   }
 
   logInfo('cron-onboarding-pace', 'tick', {
-    locations: liveLocations.length, candidates, nudged, failed,
+    locations: liveLocations.length, candidates, nudged, failed, reachability_failed: reachabilityFailed,
   })
   await stampHeartbeat('notify-onboarding-pace').catch((err) =>
     logWarn('cron-onboarding-pace', 'heartbeat failed', { err }))
   return NextResponse.json({
-    ok: true, locations: liveLocations.length, candidates, nudged, failed,
+    ok: true, locations: liveLocations.length, candidates, nudged, failed, reachability_failed: reachabilityFailed,
   })
 }
