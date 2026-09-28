@@ -7,6 +7,7 @@ import { validateBody, uuidLike } from '@/lib/validate'
 import { MANAGER_ROLES, reportFrequencySchema, reportTypeSchema } from '@/lib/schemas'
 import {
   canViewReportType, isRateReportType, RATE_REPORT_VIEWER_ROLES, RATE_REPORT_TYPES_IN_LIST,
+  adminOnlyReportRefusal, adminOnlyReportName,
 } from '@/lib/report-access'
 import { checkRateReportRecipientsForSave } from '@/lib/report-recipients'
 
@@ -63,7 +64,8 @@ const ScheduledReportPatchSchema = z.object({
 })
 
 const NOTIFICATION_REFUSED = 'In-app notification delivery is no longer offered. Reports always appear in Report History; use email to have them sent.'
-const RATE_SCHEDULE_REFUSED = 'Only owners and managers can schedule staff cost reports.'
+
+const capitalise = (s) => s.charAt(0).toUpperCase() + s.slice(1)
 
 function cleanRecipients(list) {
   const seen = new Set()
@@ -99,7 +101,8 @@ async function checkRecipientsForSave({ db, locationId, reportType, deliverEmail
     return { response: NextResponse.json({
       success: false,
       code: 'recipient_not_rate_viewer',
-      error: `Staff cost reports can only go to owners and managers at this studio. Remove: ${check.refused.join(', ')}`,
+      // CONTRACTVIS.1 — named per type: utilisation is admin-only too.
+      error: `${capitalise(adminOnlyReportName(reportType))} reports can only go to owners and managers at this studio. Remove: ${check.refused.join(', ')}`,
       refused_recipients: check.refused,
     }, { status: 400 }) }
   }
@@ -107,7 +110,7 @@ async function checkRecipientsForSave({ db, locationId, reportType, deliverEmail
     return { response: NextResponse.json({
       success: false,
       code: 'confirm_external_recipients',
-      error: `These addresses are not staff at this studio: ${check.needsConfirmation.join(', ')}. Confirm they should receive staff cost figures.`,
+      error: `These addresses are not staff at this studio: ${check.needsConfirmation.join(', ')}. Confirm they should receive ${adminOnlyReportName(reportType)} figures.`,
       external_recipients: check.needsConfirmation,
     }, { status: 409 }) }
   }
@@ -171,7 +174,7 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
   if (isRateReportType(body.report_type) && !hasRoleAtLocation(user, locationId, RATE_REPORT_VIEWER_ROLES)) {
-    return NextResponse.json({ success: false, error: RATE_SCHEDULE_REFUSED }, { status: 403 })
+    return NextResponse.json({ success: false, error: adminOnlyReportRefusal('schedule', body.report_type) }, { status: 403 })
   }
   if (body.deliver_notification === true) {
     return NextResponse.json({ success: false, error: NOTIFICATION_REFUSED }, { status: 400 })
@@ -247,7 +250,7 @@ export async function PATCH(request) {
   const reportType = body.report_type ?? existing.report_type
   if (reportType !== existing.report_type
     && !canViewReportType(user, existing.location_id, reportType, { hasRole: hasRoleAtLocation })) {
-    return NextResponse.json({ success: false, error: RATE_SCHEDULE_REFUSED }, { status: 403 })
+    return NextResponse.json({ success: false, error: adminOnlyReportRefusal('schedule', reportType) }, { status: 403 })
   }
   if (body.deliver_notification === true) {
     return NextResponse.json({ success: false, error: NOTIFICATION_REFUSED }, { status: 400 })

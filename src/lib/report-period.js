@@ -25,12 +25,14 @@ function spanDays(start, end) {
 /**
  * The reason a report period is refused, or null when it is fine: both ends
  * real calendar dates, end on or after start, at most MAX_REPORT_DAYS days.
+ * `names` lets a caller whose parameters are called something else (the
+ * attendance report's from/to) say so in the message.
  */
-export function reportPeriodError(start, end) {
+export function reportPeriodError(start, end, { startName = 'period_start', endName = 'period_end' } = {}) {
   if (!isRealCalendarDate(start) || !isRealCalendarDate(end)) {
-    return 'period_start and period_end must be real dates, YYYY-MM-DD'
+    return `${startName} and ${endName} must be real dates, YYYY-MM-DD`
   }
-  if (end < start) return 'period_end must be on or after period_start'
+  if (end < start) return `${endName} must be on or after ${startName}`
   if (spanDays(start, end) > MAX_REPORT_DAYS) return `A report can cover at most ${MAX_REPORT_DAYS} days`
   return null
 }

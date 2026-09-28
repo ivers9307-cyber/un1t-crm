@@ -30,6 +30,19 @@ describe('reportPeriodError', () => {
   })
 })
 
+describe('reportPeriodError — named parameters (ATTENDREPORT.1)', () => {
+  const names = { startName: 'from', endName: 'to' }
+  it('says the names the caller uses', () => {
+    expect(reportPeriodError('2026-02-30', '2026-03-06', names)).toBe('from and to must be real dates, YYYY-MM-DD')
+    expect(reportPeriodError('2026-05-10', '2026-05-04', names)).toBe('to must be on or after from')
+    expect(reportPeriodError('2026-01-01', '2027-01-02', names)).toBe('A report can cover at most 366 days')
+    expect(reportPeriodError('2026-01-01', '2027-01-01', names)).toBeNull()
+  })
+  it('without names, the messages are unchanged', () => {
+    expect(reportPeriodError('2026-05-10', '2026-05-04')).toBe('period_end must be on or after period_start')
+  })
+})
+
 describe('eachReportDay', () => {
   it('walks every calendar day, both ends included, across a month and a DST change', () => {
     expect([...eachReportDay('2026-03-28', '2026-04-01')]).toEqual([

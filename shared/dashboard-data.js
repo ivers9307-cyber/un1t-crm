@@ -24,7 +24,12 @@ import { pctDelta, sumCampaignRows, shapeFunnel, FUNNEL_SLUGS } from './dashboar
 const isLiveRow = (a) => a?.status !== 'cancelled'
 
 // ============================================================
-// Date helpers (shared across all three fetchers)
+// Date helpers — the RUNNING device's local calendar.
+// A4 REVENUEMTD.1: on a staff phone in Ireland, local IS Dublin, which is what
+// the phone-run fetchers want (fetchPersonalDashboardData's fallback,
+// fetchStudioDashboardData). On the server local is UTC (Vercel), so a
+// server-run fetcher must never use these: it loads the Dublin calendar with
+// loadDublinTime() instead (pinned in dashboard-data.test.js).
 // ============================================================
 
 export function isoDate(d) {
@@ -52,6 +57,18 @@ export function endOfWeek(d = new Date()) {
 
 export function startOfMonth(d = new Date()) {
   return new Date(d.getFullYear(), d.getMonth(), 1)
+}
+
+// A4 REVENUEMTD.1 — the Europe/Dublin calendar, for the fetchers that run on
+// the SERVER: fetchTodayOps, fetchRevenueMTD, fetchFunnelCounts and
+// fetchAdsSummary (the Business dashboard, on web and, via
+// /api/dashboard/business, on the phone). Loaded on first use, never at module
+// scope: the staff app imports this module, and a Hermes build without full
+// ICU throws on the timeZone formatters dublin-time.js builds at import
+// (mobile/lib/dates.js, ROSTER-FIX.7f). The phone never calls those four, so it
+// never loads it.
+function loadDublinTime() {
+  return import('./dublin-time.js')
 }
 
 // ============================================================
@@ -140,22 +157,31 @@ async function fetchDashboardShifts(supabase, { profileId, locationId, startDate
 // Personal — your shifts, your swaps, your inbox.
 // ============================================================
 
-export async function fetchPersonalDashboardData(supabase, profileId, locationId) {
+export async function fetchPersonalDashboardData(supabase, profileId, locationId, opts) {
   if (!profileId) return { success: false, error: 'No profile' }
 
-  // 14-day window — this Monday → next Sunday — fetched as a single
-  // query and split client-side. Cheaper than two queries.
-  const today = new Date()
-  const todayIso = isoDate(today)
-  const thisWeekStart = startOfWeek(today)
-  const thisWeekEnd = endOfWeek(today)
-  const nextWeekStart = new Date(thisWeekEnd); nextWeekStart.setDate(nextWeekStart.getDate() + 1)
-  const nextWeekEnd = new Date(nextWeekStart); nextWeekEnd.setDate(nextWeekEnd.getDate() + 6); nextWeekEnd.setHours(23, 59, 59, 999)
+  // A4 REVENUEMTD.1 — whose "today"? This runs in two places. The web Today
+  // page runs it on the SERVER (UTC on Vercel) and passes its Dublin today
+  // (dublinTodayStr); without that, from 00:00 to 01:00 Dublin on a summer
+  // Monday "This week" was last week. The phone passes nothing and keeps its
+  // device day: Dublin for staff in Ireland, and no Intl, which a Hermes build
+  // without full ICU cannot construct (mobile/lib/dates.js, ROSTER-FIX.7f).
+  // A real calendar date only: '2027-13-45' or '2027-02-30' would otherwise
+  // reach upcomingWeeksBounds and come back as NaN. Date.parse + toISOString
+  // is plain UTC maths, no Intl, so it is Hermes-safe.
+  const callerTodayIso = opts?.todayIso
+  const isRealDay = typeof callerTodayIso === 'string'
+    && /^\d{4}-\d{2}-\d{2}$/.test(callerTodayIso)
+    && !Number.isNaN(Date.parse(`${callerTodayIso}T00:00:00Z`))
+    && new Date(`${callerTodayIso}T00:00:00Z`).toISOString().slice(0, 10) === callerTodayIso
+  const todayIso = isRealDay ? callerTodayIso : isoDate(new Date())
 
-  const thisWeekStartIso = isoDate(thisWeekStart)
-  const thisWeekEndIso = isoDate(thisWeekEnd)
-  const nextWeekStartIso = isoDate(nextWeekStart)
-  const nextWeekEndIso = isoDate(nextWeekEnd)
+  // 14-day window — this Monday → next Sunday — fetched as a single
+  // query and split client-side. Cheaper than two queries. Pure date-string
+  // maths from here (upcomingWeeksBounds), so no clock or zone is read again.
+  const { monthStartIso: thisWeekStartIso, monthEndIso: thisWeekEndIso } = upcomingWeeksBounds(todayIso, 1)
+  const { monthEndIso: nextWeekEndIso } = upcomingWeeksBounds(todayIso, 2)
+  const { monthStartIso: nextWeekStartIso } = upcomingWeeksBounds(nextWeekEndIso, 1)
 
   // Rolling 7-week roster window (this week + the next 6), anchored on the same
   // "today" as the week dates. Kept under the monthStartIso/monthEndIso/monthShifts
@@ -531,22 +557,41 @@ export async function paginatedSumCents(supabase, filters) {
 // Revenue MTD from PAID invoices only (glofox_invoices is stale for
 // anything else — mig 324's daily reconcile keeps statuses honest).
 // Delta compares against the same day-window of last month.
+// A4 REVENUEMTD.1 — both windows are Europe/Dublin calendar days, as half-open
+// UTC ranges over invoice_date (timestamptz, mig 140):
+//   this month  [1st 00:00 Dublin, …)
+//   last month  [its 1st 00:00 Dublin, 00:00 Dublin the day after the same
+//               day-of-month), the same day clamped to last month's length.
+// They were the server's local midnights (UTC on Vercel): from 00:00 to 01:00
+// Dublin on the 1st in summer "MTD" was the whole previous month, and a
+// payment in that hour never counted in its own month. And with no clamp, on
+// the 31st after a 30-day month "last month" ran on into this one.
 export async function fetchRevenueMTD(supabase, locationId, now = new Date()) {
-  const monthStart = startOfMonth(now)
-  const lastMonthStart = startOfMonth(new Date(now.getFullYear(), now.getMonth() - 1, 1))
-  const lastMonthSameDay = new Date(lastMonthStart)
-  lastMonthSameDay.setDate(lastMonthSameDay.getDate() + (now.getDate() - 1))
-  lastMonthSameDay.setHours(23, 59, 59, 999)
+  const { dublinDateKey, dublinMonthStartMs, dublinDayRangeMs } = await loadDublinTime()
+  const nowMs = now.getTime()
+  const [y, m, d] = dublinDateKey(nowMs).split('-').map(Number)
+  const monthStartIso = new Date(dublinMonthStartMs(nowMs)).toISOString()
+  const prevY = m === 1 ? y - 1 : y
+  const prevM = m === 1 ? 12 : m - 1
+  // Day 0 of this month is the last day of the previous one.
+  const daysInPrev = new Date(Date.UTC(y, m - 1, 0)).getUTCDate()
+  const pad = (n) => String(n).padStart(2, '0')
+  const prevRange = dublinDayRangeMs(
+    `${prevY}-${pad(prevM)}-01`,
+    `${prevY}-${pad(prevM)}-${pad(Math.min(d, daysInPrev))}`,
+  )
+  const prevStartIso = new Date(prevRange.startMs).toISOString()
+  const prevEndIso = new Date(prevRange.endMs).toISOString()
 
   const cur = await paginatedSumCents(supabase, q => q
     .eq('location_id', locationId).eq('status', 'PAID')
-    .gte('invoice_date', monthStart.toISOString()))
+    .gte('invoice_date', monthStartIso))
   if (cur.error) return { success: false, error: cur.error.message }
 
   const prev = await paginatedSumCents(supabase, q => q
     .eq('location_id', locationId).eq('status', 'PAID')
-    .gte('invoice_date', lastMonthStart.toISOString())
-    .lte('invoice_date', lastMonthSameDay.toISOString()))
+    .gte('invoice_date', prevStartIso)
+    .lt('invoice_date', prevEndIso))
   if (prev.error) return { success: false, error: prev.error.message }
 
   return {
@@ -586,7 +631,10 @@ export async function fetchArrearsSummary(supabase, locationId) {
 // entered uses joined_at (lead_created_at is import-poisoned);
 // conversions use converted_at (mig 350).
 export async function fetchFunnelCounts(supabase, locationId, now = new Date()) {
-  const monthStartIso = startOfMonth(now).toISOString()
+  // A4 REVENUEMTD.1 — the same Dublin month as Revenue MTD (was the server's
+  // local month: UTC on Vercel).
+  const { dublinMonthStartMs } = await loadDublinTime()
+  const monthStartIso = new Date(dublinMonthStartMs(now.getTime())).toISOString()
 
   // All 7 head-counts are independent — run them in one Promise.all.
   const results = await Promise.all([
@@ -622,8 +670,15 @@ export async function fetchFunnelCounts(supabase, locationId, now = new Date()) 
 // silently truncate spend (order by id for stable pages, like
 // paginatedSumCents above).
 export async function fetchAdsSummary(supabase, locationId, now = new Date()) {
-  const since = new Date(now); since.setDate(since.getDate() - 7)
-  const sinceIso = isoDate(since)
+  // A4 REVENUEMTD.1 — ad_insights_daily.date is a Dublin day, as src/lib/ads/read.js
+  // reads it (that file steps back 168 h and formats a Dublin date, which differs
+  // from calendar minus 7 only in the first Dublin hour after spring-forward);
+  // the server's local day is UTC's. Leads are a rolling
+  // 7 x 24 h over attributed_at (timestamptz), with no local time involved.
+  const { dublinDateKey, dublinAddDays, DUBLIN_DAY_MS } = await loadDublinTime()
+  const nowMs = now.getTime()
+  const sinceIso = dublinAddDays(dublinDateKey(nowMs), -7)
+  const attributedSinceIso = new Date(nowMs - 7 * DUBLIN_DAY_MS).toISOString()
   let from = 0
   const page = 1000
   const rows = []
@@ -645,7 +700,7 @@ export async function fetchAdsSummary(supabase, locationId, now = new Date()) {
     .select('id', { count: 'exact', head: true })
     .eq('location_id', locationId)
     .not('ad_provider', 'is', null)
-    .gte('attributed_at', since.toISOString())
+    .gte('attributed_at', attributedSinceIso)
   if (e2) return { success: false, error: e2.message }
   return {
     success: true,
@@ -664,11 +719,9 @@ export async function fetchTodayOps(supabase, locationId, now = new Date()) {
   // and both callers run on Vercel in UTC: from 00:00 to 01:00 Dublin in
   // summer the strip showed YESTERDAY's bookings, classes and staff, and on a
   // Monday in that hour it costed LAST week's labour.
-  // Loaded lazily, not at module scope: this module is also imported by the
-  // staff app, and a Hermes build without full ICU throws on a timeZone
-  // formatter built at import (mobile/lib/dates.js, ROSTER-FIX.7f). This
-  // function only ever runs on the server, so the phone never loads it.
-  const { dublinDateKey, dublinDayRangeMs, dublinWeekStartMs, dublinAddDays } = await import('./dublin-time.js')
+  // Loaded lazily through loadDublinTime (see there): this function only ever
+  // runs on the server, so the phone never loads it.
+  const { dublinDateKey, dublinDayRangeMs, dublinWeekStartMs, dublinAddDays } = await loadDublinTime()
   const nowMs = now.getTime()
   const todayIso = dublinDateKey(nowMs)
   // class_occurrences (mig 284) has no date column — it stores starts_at
