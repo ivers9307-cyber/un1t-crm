@@ -105,3 +105,27 @@ describe('RosterSummaryPanel contractor spend: published and not yet published',
     expect(container.textContent).toContain('€801 more in shifts not yet published: €1 over budget once published.')
   })
 })
+
+// FTECOSTVIS.1 (Richard, 28 Sep 2026: "keep the cost hidden") — the server
+// sends fteImplicitCostEur only to owner / manager / master at the studio. The
+// panel shows the line only when the figure came, and never fills in a €0.
+describe('RosterSummaryPanel FTE labour line (FTECOSTVIS.1)', () => {
+  const withheld = Object.fromEntries(Object.entries(SPEND).filter(([k]) => k !== 'fteImplicitCostEur'))
+
+  it('shows the FTE labour total when the server sent it', () => {
+    const { container } = renderPanel({ contractorSpend: { ...SPEND, fteImplicitCostEur: 850 } })
+    expect(container.textContent).toContain('FTE labour (sunk cost): €850')
+  })
+
+  it('says nothing about FTE labour when the figure was withheld (a head coach), and keeps the rest', () => {
+    const { container } = renderPanel({ contractorSpend: withheld })
+    expect(container.textContent).not.toMatch(/FTE labour|sunk cost/)
+    expect(container.textContent).toContain('€800 remaining')
+    expect(screen.getByText('Published')).toBeTruthy()
+  })
+
+  it('treats a null figure as withheld, never as €0', () => {
+    const { container } = renderPanel({ contractorSpend: { ...SPEND, fteImplicitCostEur: null } })
+    expect(container.textContent).not.toMatch(/FTE labour|sunk cost/)
+  })
+})
