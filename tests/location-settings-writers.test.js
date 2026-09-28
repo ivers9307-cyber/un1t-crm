@@ -39,8 +39,8 @@ export const REVIEWED = {
   'src/app/api/locations/[id]/integrations/[provider]/route.js': 'loadLocation: read error → 404 before applySlice.',
   'src/app/api/locations/[id]/stripe-connect/connect/route.js': 'readErr → 404 before the write.',
   'src/app/api/locations/[id]/stripe-connect/select/route.js': 'readErr → 404 before the write.',
-  'src/components/settings/integrations/GlofoxIntegrationTab.jsx': 'browser: readErr → error shown, no write.',
-  'src/components/settings/integrations/UnifiIntegrationTab.jsx': 'browser: readErr → error shown, no write.',
+  // SECFIX.3b removed the two browser writers (the Glofox and UniFi tabs):
+  // they save through PUT /api/locations/[id]/integrations/[provider] above.
 }
 
 const HELPER = 'src/lib/location-settings.js'
