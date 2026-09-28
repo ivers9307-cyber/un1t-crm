@@ -83,8 +83,8 @@ describe('glofoxFetch counters', () => {
 })
 
 describe('fetchMembershipResult', () => {
-  it('a failed read is ok:false and NOT cached, so the next member in the run asks again', async () => {
-    fetch.mockResolvedValueOnce(res(404))
+  it('a failed read (5xx after retries) is ok:false and NOT cached, so the next member in the run asks again', async () => {
+    for (let i = 0; i < 4; i++) fetch.mockResolvedValueOnce(res(500))
     const cache = new Map()
     expect(await fetchMembershipResult(creds, 'mem-1', cache)).toEqual({ ok: false, membership: null })
     expect(cache.has('mem-1')).toBe(false)
@@ -94,9 +94,25 @@ describe('fetchMembershipResult', () => {
     expect(r).toEqual({ ok: true, membership: { _id: 'mem-1', trial: false, plans: [{ type: 'num_classes' }] } })
     expect(cache.get('mem-1')).toEqual(r.membership)
 
-    // served from the cache: no third call
+    // served from the cache: no further call
     expect(await fetchMembershipResult(creds, 'mem-1', cache)).toEqual(r)
-    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(fetch).toHaveBeenCalledTimes(5)
+  })
+
+  it('a 404 is an answer ("no such membership"): ok:true, null, and cached', async () => {
+    fetch.mockResolvedValueOnce(res(404))
+    const cache = new Map()
+    expect(await fetchMembershipResult(creds, 'mem-3', cache)).toEqual({ ok: true, membership: null })
+    expect(cache.has('mem-3')).toBe(true)
+    expect(await fetchMembershipResult(creds, 'mem-3', cache)).toEqual({ ok: true, membership: null })
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('a 429 after retries is a failure, not cached', async () => {
+    fetch.mockResolvedValue(res(429))
+    const cache = new Map()
+    expect(await fetchMembershipResult(creds, 'mem-4', cache)).toEqual({ ok: false, membership: null })
+    expect(cache.has('mem-4')).toBe(false)
   })
 
   it('a thrown fetch is ok:false, not cached', async () => {

@@ -66,7 +66,7 @@ describe('buildCreditMemberContext', () => {
   it('credits read, membership read failed: membershipsFailed only, and the failure is not cached', async () => {
     fetch.mockImplementation(async (url) => (String(url).includes('/2.0/credits')
       ? res(200, { data: [pack(3)] })
-      : res(404)))
+      : res(500)))
     const cache = new Map()
     const ctx = await buildCreditMemberContext(creds, member, cache)
     expect(ctx.creditsFailed).toBe(false)
@@ -131,6 +131,55 @@ describe('previewMemberSync — an unread credit context', () => {
     })
     expect(out.changes.glofox_membership_status).toEqual({ from: 'credit_member', to: 'trial' })
     expect(out.changes).not.toHaveProperty('trial_credits_remaining')
+  })
+})
+
+describe('a membership 404 is an ANSWER, not a failed read', () => {
+  const res = (status, body = {}) => ({
+    ok: status >= 200 && status < 300, status,
+    headers: { get: (k) => (k.toLowerCase() === 'retry-after' ? '0.001' : null) },
+    json: async () => body,
+  })
+  const membershipCalls = () => fetch.mock.calls.filter(([url]) => String(url).includes('/2.0/memberships/')).length
+  beforeEach(() => vi.stubGlobal('fetch', vi.fn()))
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('404 behind an active pack: read (no credits_unread), normal detection applies, cached for the run', async () => {
+    fetch.mockImplementation(async (url) => (String(url).includes('/2.0/credits')
+      ? res(200, { data: [pack(6)] })
+      : res(404, { message: 'not found' })))
+    const cache = new Map()
+    const out = await previewMemberSync(makeDb(stored()), LOC, member, { creds, membershipCache: cache })
+    expect(out).not.toHaveProperty('credits_unread')
+    // Not a Class Pack membership (it does not exist), so the stored label is NOT held.
+    expect(out.changes.glofox_membership_status).toEqual({ from: 'credit_member', to: 'member' })
+    expect(out.changes.trial_credits_remaining).toEqual({ from: 7, to: 6 })
+    expect(cache.has(PACKS_ID)).toBe(true)
+    expect(cache.get(PACKS_ID)).toBeNull()
+    // A second member in the same run does not ask again.
+    await previewMemberSync(makeDb(stored()), LOC, member, { creds, membershipCache: cache })
+    expect(membershipCalls()).toBe(1)
+  })
+
+  it('500 on the membership read: still unread, the label is held, nothing cached', async () => {
+    fetch.mockImplementation(async (url) => (String(url).includes('/2.0/credits')
+      ? res(200, { data: [pack(6)] })
+      : res(500)))
+    const cache = new Map()
+    const out = await previewMemberSync(makeDb(stored()), LOC, member, { creds, membershipCache: cache })
+    expect(out.credits_unread).toBe(true)
+    expect(out.changes).not.toHaveProperty('glofox_membership_status')
+    expect(cache.has(PACKS_ID)).toBe(false)
+  })
+
+  it('429 on the membership read is a failure too (uncached)', async () => {
+    fetch.mockImplementation(async (url) => (String(url).includes('/2.0/credits')
+      ? res(200, { data: [pack(6)] })
+      : res(429)))
+    const cache = new Map()
+    const ctx = await buildCreditMemberContext(creds, member, cache)
+    expect(ctx.membershipsFailed).toBe(true)
+    expect(cache.has(PACKS_ID)).toBe(false)
   })
 })
 

@@ -663,8 +663,9 @@ export async function fetchUserCreditsResult(creds, userId) {
  * benefits from caching across the run.
  *
  * Returns the membership object or null on failure / not-found.
- * Only answers are cached (CREDITSREAD.1): a failed read is retried by the
- * next caller in the run instead of poisoning the cache with null.
+ * Only answers are cached (CREDITSREAD.1), a not-found included: a failed
+ * read is retried by the next caller in the run instead of poisoning the
+ * cache with null.
  */
 export async function fetchMembership(creds, membershipId, cache = null) {
   const { membership } = await fetchMembershipResult(creds, membershipId, cache)
@@ -672,14 +673,20 @@ export async function fetchMembership(creds, membershipId, cache = null) {
 }
 
 // CREDITSREAD.1 — ok-aware variant. Only an ANSWER is cached: a failed read
-// (non-2xx, network, bad JSON) used to be cached as null for the whole bulk
+// (429, 5xx, network, bad JSON) used to be cached as null for the whole bulk
 // run, so one blip re-labelled every credit member the run touched as
-// 'member'. Now the next member in the run simply asks again.
+// 'member'. Now the next member in the run simply asks again. A 4xx other
+// than 429 (a 404 above all) IS an answer, "no such membership": it is
+// { ok: true, membership: null } and cached, so the run asks once.
 export async function fetchMembershipResult(creds, membershipId, cache = null) {
   if (!creds || !membershipId) return { ok: false, membership: null }
   if (cache && cache.has(membershipId)) return { ok: true, membership: cache.get(membershipId) }
   try {
     const r = await glofoxFetch(creds, `/2.0/memberships/${encodeURIComponent(membershipId)}`)
+    if (r.status >= 400 && r.status < 500 && r.status !== 429) {
+      if (cache) cache.set(membershipId, null)
+      return { ok: true, membership: null }
+    }
     if (!r.ok) return { ok: false, membership: null }
     const membership = await r.json()
     if (cache) cache.set(membershipId, membership)
