@@ -93,3 +93,27 @@ export function inLeadWindow(dueUtcIso, nowMs, leadMinutes, windowMin = 5, lateW
   const deltaMs = t - targetMs // > 0 = we're early, < 0 = we're late
   return deltaMs <= windowMin * 60 * 1000 && deltaMs >= -lateWindowMin * 60 * 1000
 }
+
+/**
+ * CRONREADERR.1 — Pure: is this the LAST cron tick that can fire this lead?
+ *
+ * The push-reminder cron fires an (entity, recipient, lead) while
+ * delta = minutesAway - lead is inside [-lateWindowMin, +windowMin]. The next
+ * tick comes tickMin later, plus up to jitterMin of Vercel lateness, and sees
+ * delta - tickMin - jitterMin. So this tick is the last chance when that falls
+ * outside the late edge.
+ *
+ * Used when the "already sent?" read fails: hold the reminder while a later
+ * tick can still send it (no duplicate, no loss), send unchecked only on the
+ * last chance (a possible duplicate beats a certain loss). An unreadable input
+ * answers true for the same reason.
+ *
+ * @param {number} minutesAway minutes until the entity is due
+ * @param {number} lead        the lead time being fired, in minutes
+ * @param {{ lateWindowMin?: number, tickMin?: number, jitterMin?: number }} [opts]
+ */
+export function isLastFireTick(minutesAway, lead, { lateWindowMin = 15, tickMin = 5, jitterMin = 1 } = {}) {
+  const delta = Number(minutesAway) - Number(lead)
+  if (!Number.isFinite(delta)) return true
+  return delta - tickMin - jitterMin < -lateWindowMin
+}
