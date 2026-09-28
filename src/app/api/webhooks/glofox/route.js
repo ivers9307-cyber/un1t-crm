@@ -31,12 +31,12 @@
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { logWarn } from '@/lib/log'
+import { logError, logWarn } from '@/lib/log'
 import {
   verifyGlofoxSignature,
   parseGlofoxEvent,
   tagsForGlofoxEvent,
-  glofoxCredentialsByBranchId,
+  readGlofoxCredentialsByBranchId,
   glofoxFetch,
 } from '@/lib/glofox'
 import {
@@ -111,7 +111,15 @@ export async function POST(request) {
     logWarn('glofox-webhook', 'no branch_id in payload')
     return NextResponse.json({ success: false, error: 'Missing branch_id' }, { status: 400 })
   }
-  const creds = await glofoxCredentialsByBranchId(db, parsed.branchId)
+  const { creds, error: credsErr } = await readGlofoxCredentialsByBranchId(db, parsed.branchId)
+  if (credsErr) {
+    // REGISTRYREAD.1a: the lookup could not be made (a DB blip) — that is
+    // not "unknown branch". 503 lets a sender that retries 5xx redeliver
+    // (event_id UNIQUE dedupes below). Not dead-lettered: the body is
+    // unverified until we can read the secret.
+    logError('glofox-webhook', 'branch lookup failed; answering 503', { branch_id: parsed.branchId, err: credsErr })
+    return NextResponse.json({ success: false, error: 'Temporarily unavailable' }, { status: 503 })
+  }
   if (!creds) {
     logWarn('glofox-webhook', 'unknown branch_id', { branch_id: parsed.branchId })
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
