@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { whyFlagged, customerWords } from './agent-request-why'
+import { whyFlagged, customerWords, approvalGrantsTrialCredit } from './agent-request-why'
 
 describe('whyFlagged', () => {
   it('translates every routeToReview machine code for class bookings', () => {
-    for (const code of ['prior_attendance', 'needs_credit_grant', 'no_credits', 'account_ambiguous', 'account_conflict', 'account_failed', 'attendance_check_failed', 'booking_rejected', 'superseded_duplicate']) {
+    for (const code of ['prior_attendance', 'needs_credit_grant', 'no_credits', 'account_ambiguous', 'account_conflict', 'account_failed', 'attendance_check_failed', 'credit_check_failed', 'booking_rejected', 'superseded_duplicate']) {
       const out = whyFlagged({ kind: 'class_booking', details: { reason: code } })
       expect(out, code).toBeTruthy()
       // Operator copy, never the raw snake_case code on its own.
@@ -155,5 +155,28 @@ describe('accountSummaryLine', () => {
   })
   it('null contact → null', () => {
     expect(accountSummaryLine(null)).toBeNull()
+  })
+})
+
+// CBPCREDITREAD.1 — approving needs_credit_grant BUYS the trial membership
+// before booking (membership-requests/[id]/route.js). That must rest on a
+// read that worked; credit_check_failed is an UNKNOWN balance and buys nothing.
+describe('approvalGrantsTrialCredit', () => {
+  it('is true only for needs_credit_grant', () => {
+    expect(approvalGrantsTrialCredit({ reason: 'needs_credit_grant' })).toBe(true)
+  })
+  it('is false for an unread balance and every other reason', () => {
+    for (const reason of ['credit_check_failed', 'prior_attendance', 'processing_error', 'no_credits', 'booking_failed:YOU_HAVE_NO_CREDITS_LEFT', undefined]) {
+      expect(approvalGrantsTrialCredit({ reason }), String(reason)).toBe(false)
+    }
+    expect(approvalGrantsTrialCredit(null)).toBe(false)
+  })
+})
+
+describe('credit_check_failed copy', () => {
+  it('says the balance is unknown and that approving adds nothing', () => {
+    const out = whyFlagged({ kind: 'class_booking', details: { reason: 'credit_check_failed' } })
+    expect(out).toMatch(/does not mean they have no credits/i)
+    expect(out).toMatch(/approving does not add a credit/i)
   })
 })

@@ -106,6 +106,15 @@ export function whyFlagged(row) {
   return null
 }
 
+// CBPCREDITREAD.1 — the ONE card reason whose approval buys the trial
+// membership before booking (membership-requests/[id]/route.js): a credits
+// read that WORKED and found none on a never-attended account. Every other
+// reason grants nothing, credit_check_failed above all (the balance is
+// UNKNOWN, and the member may already hold a paid pack). Pure.
+export function approvalGrantsTrialCredit(details) {
+  return details?.reason === 'needs_credit_grant'
+}
+
 // AGENT-RETRY.1 — what a FAILED execution's Glofox code means and what to
 // fix before retrying. Keyed on details.result.message_code.
 const FAILURE_EXPLANATIONS = {
