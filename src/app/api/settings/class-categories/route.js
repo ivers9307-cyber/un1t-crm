@@ -8,7 +8,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
 import { normalizeClassName } from '@/lib/hr-analytics'
@@ -19,13 +19,17 @@ export const dynamic = 'force-dynamic'
 
 export async function GET(request) {
   const user = await getCurrentUser()
-  if (!user || !MANAGER_ROLES.includes(user.role)) {
+  if (!user || !hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
   const { searchParams } = new URL(request.url)
   const locationId = searchParams.get('location_id') || user.activeLocation?.id
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
+  // ROLESWEEP.1a — the role is judged at the location being read/written.
+  if (!hasRoleAtLocation(user, locationId, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+  }
 
   const db = createServerClient()
   const seen = await loadSeenClassCategories(db, locationId)
@@ -42,7 +46,7 @@ const PutSchema = z.object({
 
 export async function PUT(request) {
   const user = await getCurrentUser()
-  if (!user || !MANAGER_ROLES.includes(user.role)) {
+  if (!user || !hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
   const validation = await validateBody(request, PutSchema)
@@ -51,6 +55,10 @@ export async function PUT(request) {
   const locationId = body.location_id || user.activeLocation?.id
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
+  // ROLESWEEP.1a — the role is judged at the location being read/written.
+  if (!hasRoleAtLocation(user, locationId, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+  }
 
   const db = createServerClient()
   const toUpsert = []

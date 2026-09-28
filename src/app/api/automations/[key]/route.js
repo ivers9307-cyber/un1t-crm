@@ -2,7 +2,7 @@
 import { z } from 'zod'
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
 import { getAutomation } from '@/lib/automations/registry'
@@ -17,7 +17,9 @@ const Schema = z.object({
 
 export async function PUT(request, { params }) {
   const user = await getCurrentUser()
-  if (!user || !MANAGER_ROLES.includes(user.role)) {
+  // ROLESWEEP.1a — coarse pre-check only; the role is judged at
+  // body.location_id below, never at the active studio (user.role).
+  if (!user || !hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -32,6 +34,9 @@ export async function PUT(request, { params }) {
 
   const guard = assertLocationAccess(user, body.location_id)
   if (guard) return guard
+  if (!hasRoleAtLocation(user, body.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+  }
 
   const db = createServerClient()
   const { data, error } = await db

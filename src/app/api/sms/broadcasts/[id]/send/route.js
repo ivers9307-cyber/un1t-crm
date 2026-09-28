@@ -8,7 +8,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { sendBroadcast } from '@/lib/sms'
 
 export const runtime = 'nodejs'
@@ -23,7 +23,7 @@ export async function POST(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!hasPermission(user, 'sms')) {
+  if (!hasPermissionAtAnyLocation(user, 'sms')) {
     return NextResponse.json({ success: false, error: 'Forbidden — SMS not enabled' }, { status: 403 })
   }
 
@@ -34,6 +34,10 @@ export async function POST(request, props) {
   if (!row) return NextResponse.json({ success: false, error: 'Broadcast not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, row.location_id)
   if (guard) return guard
+  // ROLESWEEP.1a — the permission is judged at the broadcast's location.
+  if (!hasPermissionForLocation(user, row.location_id, 'sms')) {
+    return NextResponse.json({ success: false, error: 'Forbidden — SMS not enabled' }, { status: 403 })
+  }
 
   try {
     // Manual "Send now" — process up to 2000 recipients in this
