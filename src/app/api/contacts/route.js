@@ -7,6 +7,7 @@ import { uuidLike, email, phone, leadSourceSchema, MANAGER_ROLES } from '@/lib/s
 import { sendPushToRolesAtLocationOnce } from '@/lib/push-dedup'
 import { triggerSequencesForPipelineStageChange } from '@/lib/sequences'
 import { logWarn } from '@/lib/log'
+import { assertLocationAccess } from '@/lib/auth'
 
 const ContactCreateSchema = z.object({
   name: z.string().min(1).max(200),
@@ -39,6 +40,22 @@ export async function POST(request) {
   // active location. n8n callers always supply it explicitly.
   if (!body.location_id && auth.user?.activeLocation?.id) {
     body.location_id = auth.user.activeLocation.id
+  }
+  // SECFIX.2 — a cookie caller creates only at a location they belong to.
+  // requireApiKeyOrManager judges the role at the ACTIVE studio and nothing
+  // checked the body's location_id, so a cookie manager could create a
+  // contact (firing its new-lead push, contact-created sequences and Glofox
+  // lead provisioning) at ANY location id, another organisation's included.
+  // A body location, not a row, so a non-member gets assertLocationAccess's
+  // 403. Masters reach every location. API-key callers are unchanged.
+  if (auth.user) {
+    if (!body.location_id) {
+      return NextResponse.json({ success: false, error: 'location_id required' }, { status: 400 })
+    }
+    if (!auth.user.isMaster) {
+      const guard = assertLocationAccess(auth.user, body.location_id)
+      if (guard) return guard
+    }
   }
   const db = createServerClient()
 
