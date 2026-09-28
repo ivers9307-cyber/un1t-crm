@@ -21,10 +21,14 @@ import path from 'node:path'
 import {
   CREDENTIAL_COLUMN_GRANTS, NO_CLIENT_ACCESS_TABLES, CREDENTIAL_GRANT_TABLES, CREDENTIAL_GRANT_MIGRATION, CLIENT_WRITERS,
 } from './helpers/credential-column-grants.js'
-import { columnUses } from './helpers/postgrest-column-uses.js'
+import { columnUses, fkAliasesInto } from './helpers/postgrest-column-uses.js'
+import { collectSchema } from '../scripts/check-select-columns.mjs'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
-const FK_ALIASES = { location_id: 'locations' }
+// Every FK column that points at one of the five tables (location_id,
+// anchor_location_id, master_location_id, sending_location_id,
+// channel_connection_id at SECFIX.3c), from the migrations replay.
+const FK_ALIASES = fkAliasesInto(collectSchema(path.join(ROOT, 'supabase/migrations')).fks, CREDENTIAL_GRANT_TABLES)
 
 function walk(dir, out = []) {
   for (const name of readdirSync(dir)) {
@@ -128,6 +132,35 @@ describe('client code names only granted credential-table columns (SECFIX.3c)', 
   it('sees a bare FK-column embed with no alias', () => {
     expect(probe(`await supabase.from('shift_blocks').select('id, location_id ( settings )')`)).toContain('locations.settings')
     expect(probe(`await supabase.from('shift_blocks').select('id, location_id!inner(thinq_pat)')`)).toContain('locations.thinq_pat')
+  })
+
+  it('sees an embed through every FK column that points at a credential table', () => {
+    expect(probe(`await supabase.from('event_hosts').select('id, anchor_location_id ( settings )')`)).toContain('locations.settings')
+    expect(probe(`await supabase.from('organizations').select('id, master:master_location_id ( thinq_pat )')`)).toContain('locations.thinq_pat')
+    expect(probe(`await supabase.from('race_events').select('id, sending_location_id ( sensibo_api_key )')`)).toContain('locations.sensibo_api_key')
+    expect(probe(`await supabase.from('instagram_conversations').select('id, channel_connection_id ( access_token )')`)).toContain('channel_connections.access_token')
+  })
+
+  it('the FK columns come from the migrations, and a text search finds none the replay missed', () => {
+    // The replay (scripts/check-select-columns.mjs) does not learn an FK made
+    // inside a DO $$ block; a plain text search of the migrations does not
+    // care. Every column it finds that REFERENCES a credential table must be
+    // in FK_ALIASES, so a new FK cannot open an unseen embed path.
+    const dir = path.join(ROOT, 'supabase/migrations')
+    const alt = CREDENTIAL_GRANT_TABLES.join('|')
+    const inline = new RegExp(`\\b"?([a-z_]+)"?\\s+uuid\\b[^,;]*?\\breferences\\s+(?:public\\.)?"?(${alt})\\b`, 'gi')
+    const tableLevel = new RegExp(`foreign\\s+key\\s*\\(\\s*"?([a-z_]+)"?\\s*\\)\\s*references\\s+(?:public\\.)?"?(${alt})\\b`, 'gi')
+    const found = {}
+    for (const f of readdirSync(dir).filter((n) => n.endsWith('.sql'))) {
+      const sql = readFileSync(path.join(dir, f), 'utf8').replace(/--[^\n]*/g, ' ')
+      for (const m of [...sql.matchAll(inline), ...sql.matchAll(tableLevel)]) found[m[1].toLowerCase()] = m[2].toLowerCase()
+    }
+    expect(Object.keys(found).length).toBeGreaterThan(3)
+    for (const [col, table] of Object.entries(found)) expect(FK_ALIASES[col], `${col} → ${table}`).toBe(table)
+    expect(FK_ALIASES).toMatchObject({
+      location_id: 'locations', anchor_location_id: 'locations', master_location_id: 'locations',
+      sending_location_id: 'locations', channel_connection_id: 'channel_connections',
+    })
   })
 })
 

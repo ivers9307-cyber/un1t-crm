@@ -4,6 +4,28 @@
 // (SECFIX.3c; generalised from tests/shift-column-grants-guard.test.js, which
 // keeps its inline copy for now).
 
+/**
+ * FK column → target table, for every single-column FK (learned by the
+ * migrations replay in scripts/check-select-columns.mjs: `collectSchema().fks`)
+ * whose target is one of `tables`. PostgREST embeds through the FK column
+ * (`location_id ( … )`, `anchor:anchor_location_id ( … )`), so each one is a
+ * read path into the target. Throws if one column name points at two of
+ * `tables` from different parents: a name-only scan could not tell them apart.
+ * @param {Map<string, Map<string, {target: string}>>} fks
+ * @param {string[]} tables
+ */
+export function fkAliasesInto(fks, tables) {
+  const out = {}
+  for (const [parent, cols] of fks) {
+    for (const [col, { target }] of cols) {
+      if (!tables.includes(target)) continue
+      if (out[col] && out[col] !== target) throw new Error(`${parent}.${col} → ${target}, but ${col} also → ${out[col]}`)
+      out[col] = target
+    }
+  }
+  return out
+}
+
 /** The text inside the parenthesis that opens at `open` (balanced). */
 export function balanced(text, open) {
   let depth = 0
