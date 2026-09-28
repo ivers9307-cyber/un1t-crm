@@ -11,8 +11,10 @@ import {
 } from './channels'
 
 describe('maskSecret', () => {
-  it('masks long secrets keeping the tail', () => {
-    expect(maskSecret('EAAB1234567890abcdef')).toBe('••••••abcdef')
+  // SECFIX.3a (review S1) — it used to keep the last 6 characters as a hint;
+  // a mask now carries presence only, never a character of the value.
+  it('masks a long secret fully: no tail hint', () => {
+    expect(maskSecret('EAAB1234567890abcdef')).toBe('••••••')
   })
   it('fully masks short secrets', () => {
     expect(maskSecret('abc')).toBe('••••••')
@@ -41,11 +43,47 @@ describe('maskConnectionRow', () => {
       id: '1', platform: 'instagram', access_token: 'tok-1234567890', app_secret: null, page_id: 'P1',
     }
     const out = maskConnectionRow(row)
-    expect(out.access_token).toBe('••••••567890')
+    expect(out.access_token).toBe('••••••')
     expect(out.has_access_token).toBe(true)
     expect(out.app_secret).toBeNull()
     expect(out.has_app_secret).toBe(false)
     expect(out.page_id).toBe('P1') // non-secret untouched
+  })
+
+  // SECFIX.3a (review S1) — the registry keeps a Glofox connection's
+  // api_token (and anything else not mapped to a column) in `config`, and the
+  // mask used to look only at the two top-level columns, so GET …/channels
+  // returned it in clear.
+  it('masks every secret-named key inside config, at any depth (the mig 647 rule)', () => {
+    const row = {
+      id: 'g1', platform: 'glofox', external_account_id: 'branch-1',
+      access_token: 'SYNTH-GLOFOX-KEY-123456', app_secret: 'SYNTH-GLOFOX-WEBHOOK-654321',
+      config: {
+        api_token: 'SYNTH-GLOFOX-TOKEN-abcdef', namespace: 'ns-1', trial_plan_code: 'T1',
+        nested: { client_secret: 'SYNTH-NESTED', label: 'kept' },
+        list: [{ api_key: 'SYNTH-LIST' }],
+        blank: '',
+      },
+    }
+    const out = maskConnectionRow(row)
+    expect(JSON.stringify(out)).not.toMatch(/SYNTH|123456|654321|abcdef/)
+    expect(out.access_token).toBe('••••••')
+    expect(out.app_secret).toBe('••••••')
+    expect(out.has_access_token).toBe(true)
+    expect(out.has_app_secret).toBe(true)
+    expect(out.config).toEqual({
+      api_token: '••••••', namespace: 'ns-1', trial_plan_code: 'T1',
+      nested: { client_secret: '••••••', label: 'kept' },
+      list: [{ api_key: '••••••' }],
+      blank: '',
+    })
+    expect(row.config.api_token).toBe('SYNTH-GLOFOX-TOKEN-abcdef') // input untouched
+  })
+
+  it('leaves a config with no secret alone, and passes null through', () => {
+    const row = { id: 'b1', platform: 'bca', access_token: null, config: { send_from: 'a@example.com' } }
+    expect(maskConnectionRow(row).config).toBe(row.config)
+    expect(maskConnectionRow(null)).toBeNull()
   })
 })
 

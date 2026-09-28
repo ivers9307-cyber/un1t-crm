@@ -19,6 +19,7 @@ import Link from 'next/link'
 import { Building2 } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { redactLocationSecrets } from '@/lib/location-secrets'
 import AdminFeatureMatrix from '@/components/AdminFeatureMatrix'
 import AdminAccessMatrix from '@/components/AdminAccessMatrix'
 import AddOrganizationButton from '@/components/AddOrganizationButton'
@@ -46,7 +47,8 @@ export default async function AdminMatrixPage() {
   ])
 
   const organizations = orgsRes.data || []
-  const locations = locsRes.data || []
+  // SECFIX.3a — both matrices are client components; the rows cross to the browser.
+  const locations = (locsRes.data || []).map(redactLocationSecrets)
   const staff = staffRes.data || []
 
   // Group locations by organization for both matrix renders. We do

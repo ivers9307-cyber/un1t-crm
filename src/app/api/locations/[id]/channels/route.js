@@ -24,16 +24,27 @@ const PLATFORM_LABELS = { instagram: 'Instagram', messenger: 'Messenger' }
 const withArticle = (label) => `${/^[aeiou]/i.test(label) ? 'an' : 'a'} ${label}`
 
 // GET /api/locations/[id]/channels — list channel connections for a
-// location. Masks secrets (access_token, app_secret). Mirrors the
-// whatsapp/numbers route conventions.
+// location, every secret presence-only.
+//
+// SECFIX.3a (review S1) — this was MEMBERSHIP ONLY, and maskConnectionRow
+// masked the two token columns to their last 6 characters and left `config`
+// alone, where the registry keeps a Glofox connection's api_token. So any
+// plain staff member of a studio could read its Glofox API token in clear.
+// Now: the same gate as POST/PATCH/DELETE (membership, then MANAGER_ROLES AT
+// params.id; whoever may replace a token may see that one is set; the
+// Integrations cards that call this are owner/master screens), and every
+// secret-named key at any depth comes back as the mask, never a character.
 export async function GET(request, props) {
   const params = await props.params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
   const locationId = params.id
-  const allowed = user.role === 'master' || (user.locations || []).some(l => l.id === locationId)
-  if (!allowed) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  const guard = assertLocationAccess(user, locationId)
+  if (guard) return guard
+  if (!hasRoleAtLocation(user, locationId, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  }
 
   const db = createServerClient()
   const { data, error } = await db.from('channel_connections')

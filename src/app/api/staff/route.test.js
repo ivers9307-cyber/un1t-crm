@@ -38,7 +38,7 @@ import { createServerClient } from '@/lib/supabase'
 
 const LOC = 'a0000000-0000-0000-0000-000000000001'
 
-function mockDb({ inviteError, profileUpdate, clearError } = {}) {
+function mockDb({ inviteError, profileUpdate, clearError, finalProfile } = {}) {
   const inviteUserByEmail = vi.fn((_email, _opts) =>
     Promise.resolve(inviteError
       ? { data: null, error: inviteError }
@@ -63,7 +63,7 @@ function mockDb({ inviteError, profileUpdate, clearError } = {}) {
           select: vi.fn(() => ({
             eq: vi.fn(() => ({
               single: vi.fn(() => Promise.resolve({
-                data: { id: 'new-user-id', full_name: 'New Coach', profile_locations: [] },
+                data: finalProfile || { id: 'new-user-id', full_name: 'New Coach', profile_locations: [] },
                 error: null,
               })),
             })),
@@ -318,5 +318,34 @@ describe('GET /api/staff — ?include=contract', () => {
     listStaffForUser.mockResolvedValue({ ok: true, data: [] })
     await GET({ url: 'http://x/api/staff?fields=picker', headers: { get: () => '' } })
     expect(listStaffForUser).toHaveBeenLastCalledWith(expect.objectContaining({ includeContract: false }))
+  })
+})
+
+// SECFIX.3a — the create echo re-reads the new profile with
+// profile_locations(*, locations(*)), so it used to hand the caller every
+// stored credential on each assigned studio. The response is redacted.
+describe('POST /api/staff — SECFIX.3a: the echo carries no location credential', () => {
+  it('masks the embedded locations\' credentials in the 201 body', async () => {
+    getCurrentUser.mockResolvedValue(ownerUser)
+    const { db } = mockDb({
+      finalProfile: {
+        id: 'new-user-id', full_name: 'New Coach',
+        profile_locations: [{
+          location_id: LOC, role: 'staff',
+          locations: {
+            id: LOC, name: 'Studio', sensibo_api_key: 'SYNTH-S', thinq_pat: 'SYNTH-T',
+            settings: { glofox: { branch_id: 'b1', api_key: 'SYNTH-GK', api_token: 'SYNTH-GT', webhook_secret: 'SYNTH-GW' }, unifi: { api_token: 'SYNTH-UT' } },
+          },
+        }],
+      },
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(postReq({ email: 'new@example.com', full_name: 'New Coach', assignments: [{ location_id: LOC, role: 'staff' }] }))
+
+    expect(res.status).toBe(201)
+    const body = await res.json()
+    expect(JSON.stringify(body)).not.toMatch(/SYNTH-/)
+    expect(body.data.profile_locations[0].locations.name).toBe('Studio')
   })
 })
