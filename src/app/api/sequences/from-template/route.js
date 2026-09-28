@@ -14,6 +14,7 @@ import { resolveWhatsappTemplateIds, missingWhatsappTemplateNames } from '@/lib/
 import { randomBytes } from 'node:crypto'
 import { z } from 'zod'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { canBuildSequencesAt, canBuildSequencesSomewhere, sequencePermissionRequired } from '@/lib/sequence-access'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
@@ -30,6 +31,9 @@ const Schema = z.object({
 export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+  // SEQROUTEGATE.1 — the builder's rule (email or whatsapp), judged at the
+  // target location below; a coarse pre-check first.
+  if (!canBuildSequencesSomewhere(user)) return sequencePermissionRequired()
 
   const validation = await validateBody(request, Schema)
   if (!validation.ok) return validation.response
@@ -52,6 +56,7 @@ export async function POST(request) {
       error: 'No active location — cannot create sequence',
     }, { status: 400 })
   }
+  if (!canBuildSequencesAt(user, locationId)) return sequencePermissionRequired()
 
   const db = createServerClient()
   // DUNNING.6 / PAYLINK.8 — resolve WhatsApp steps named by template against
@@ -138,8 +143,12 @@ export async function POST(request) {
 }
 
 // GET /api/sequences/from-template — list available templates for
-// the picker UI. Pure metadata, no DB hit.
+// the picker UI. Pure metadata, no DB hit. SEQROUTEGATE.1 — behind a session
+// and the builder's rule, like every other sequence route.
 export async function GET() {
+  const user = await getCurrentUser()
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+  if (!canBuildSequencesSomewhere(user)) return sequencePermissionRequired()
   const { SEQUENCE_TEMPLATES } = await import('@/lib/sequence-templates')
   return NextResponse.json({
     success: true,
