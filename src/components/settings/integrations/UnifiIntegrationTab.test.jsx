@@ -39,6 +39,15 @@ describe('UnifiIntegrationTab (SECFIX.3b)', () => {
     expect(document.body.innerHTML).not.toContain(LOCATION_SECRET_MASK)
   })
 
+  // S1 — autocomplete="off" is ignored by password managers; an autofilled
+  // login would be saved as the UniFi token. "new-password" blocks the fill.
+  it('the API Token input is autocomplete="new-password" (a password manager must not fill it)', () => {
+    render(<UnifiIntegrationTab location={LOC} canEdit />)
+    const pw = document.querySelectorAll('input[type="password"]')
+    expect(pw.length).toBe(1)
+    expect(pw[0].getAttribute('autocomplete')).toBe('new-password')
+  })
+
   it('an untouched save PUTs the non-secret fields and no api_token', async () => {
     render(<UnifiIntegrationTab location={LOC} canEdit />)
     fireEvent.click(screen.getByRole('button', { name: /Save/ }))

@@ -33,6 +33,13 @@ describe('TwilioIntegrationTab (SECFIX.3b)', () => {
     expect(browserClient).not.toHaveBeenCalled()
   })
 
+  // S1 — the sender ID is not a credential, so this tab has no password input
+  // for a password manager to fill (the Glofox and UniFi tabs pin theirs).
+  it('has no credential input', () => {
+    render(<TwilioIntegrationTab location={LOC} canEdit />)
+    expect(document.querySelectorAll('input[type="password"]').length).toBe(0)
+  })
+
   it('an invalid sender ID shows the inline error and makes no PUT', async () => {
     render(<TwilioIntegrationTab location={LOC} canEdit />)
     fireEvent.change(screen.getByLabelText('Alpha Sender ID'), { target: { value: 'x'.repeat(12) } })

@@ -43,6 +43,17 @@ describe('GlofoxIntegrationTab (SECFIX.3b)', () => {
     expect(document.body.innerHTML).not.toContain(LOCATION_SECRET_MASK)
   })
 
+  // S1 — a password manager ignores autocomplete="off" and would fill a saved
+  // CRM login into a blank password field; any non-blank value is sent as a
+  // new secret, so one unrelated Save would overwrite the live Glofox key.
+  // "new-password" is the value managers honour (no fill).
+  it('every credential input is autocomplete="new-password" (a password manager must not fill it)', () => {
+    render(<GlofoxIntegrationTab location={LOC} canEdit />)
+    const pw = document.querySelectorAll('input[type="password"]')
+    expect(pw.length).toBe(3)
+    for (const input of pw) expect(input.getAttribute('autocomplete')).toBe('new-password')
+  })
+
   it('a stored key still loads the trial-membership picker (presence, not value)', async () => {
     render(<GlofoxIntegrationTab location={LOC} canEdit />)
     await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => url === `/api/locations/${LOC.id}/glofox-memberships`)).toBe(true))

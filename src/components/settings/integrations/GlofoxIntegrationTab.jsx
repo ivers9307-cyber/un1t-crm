@@ -174,17 +174,17 @@ export default function GlofoxIntegrationTab({ location, canEdit }) {
           className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text" />
       </Field>
       <Field label="API Key" htmlFor="glofox-api-key">
-        <input id="glofox-api-key" type="password" autoComplete="off" value={apiKey} onChange={e => setApiKey(e.target.value)}
+        <input id="glofox-api-key" type="password" autoComplete="new-password" value={apiKey} onChange={e => setApiKey(e.target.value)}
           placeholder={saved.api_key ? 'Saved (hidden). Type to replace.' : ''}
           className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text" />
       </Field>
       <Field label="API Token" htmlFor="glofox-api-token">
-        <input id="glofox-api-token" type="password" autoComplete="off" value={apiToken} onChange={e => setApiToken(e.target.value)}
+        <input id="glofox-api-token" type="password" autoComplete="new-password" value={apiToken} onChange={e => setApiToken(e.target.value)}
           placeholder={saved.api_token ? 'Saved (hidden). Type to replace.' : ''}
           className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text" />
       </Field>
       <Field label="Webhook Secret" htmlFor="glofox-webhook-secret">
-        <input id="glofox-webhook-secret" type="password" autoComplete="off" value={webhookSecret} onChange={e => setWebhookSecret(e.target.value)}
+        <input id="glofox-webhook-secret" type="password" autoComplete="new-password" value={webhookSecret} onChange={e => setWebhookSecret(e.target.value)}
           placeholder={saved.webhook_secret ? 'Saved (hidden). Type to replace.' : ''}
           className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text" />
       </Field>
