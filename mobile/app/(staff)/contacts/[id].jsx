@@ -23,7 +23,7 @@
 //
 // Editing contact fields stays on the web — this screen adds read
 // surfaces plus the note + kudos writes only.
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo, useEffect } from 'react'
 import { View, Text, ScrollView, ActivityIndicator, Pressable, Linking, Alert } from 'react-native'
 import { useLocalSearchParams, useFocusEffect, useRouter, Stack } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
@@ -181,6 +181,9 @@ export default function ContactDetail() {
   // ROLEUI.1 — the bundle's per-contact `permissions`; null = not loaded
   // (every action stays hidden until it is).
   const [actionPermissions, setActionPermissions] = useState(null)
+  // A different contact on the same screen instance must never inherit the
+  // previous contact's button flags: hide everything until its bundle lands.
+  useEffect(() => { setActionPermissions(null) }, [id])
   const [bookings, setBookings] = useState([])
   const [waConversation, setWaConversation] = useState(null)
   // MOBILE-CONTACT-SEND.1 — which channel composer (if any) is open.

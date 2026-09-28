@@ -18,7 +18,9 @@
 // a second copy of the tier order on the phone is a rule that drifts.
 //
 // Fail closed: until the flags arrive, or if they could not be read, every
-// action is hidden (the timeline shows its own load error and retry).
+// action is hidden. The timeline shows its load error as text; there is
+// no retry control, so recovery is leaving and returning to the screen
+// (it re-fetches on focus) or posting a note.
 // Pure: no react-native imports, so the repo's vitest collects the test.
 
 /**
