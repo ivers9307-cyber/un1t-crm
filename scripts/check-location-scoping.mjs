@@ -250,10 +250,6 @@ export const EXEMPT = {
   // ——— SAAS-9 triage (2026-07-19). Category (b) = cross-tenant/public by
   // design; TODO-LEAK = real finding, needs its own fix PR. ———
 
-  'src/app/api/admin/backfill-host-contacts/route.js': {
-    race_events:
-      'Master/owner-gated one-off admin backfill that walks EVERY hosted event to link host contacts at each host\'s anchor location — hosted-events hosts are a platform-level surface, and the route returns counts only (no tenant rows).',
-  },
   'src/app/api/unsubscribe/host/[token]/route.js': {
     contacts:
       'HOST-CONSENT.1 — RFC 8058 one-click target for host marketing mail. The contacts row is reached ONLY via the HMAC host-unsubscribe token (src/lib/host-unsubscribe.js) that names exactly one (host, contact) pair; the capability IS the scoping, the same argument as /api/unsubscribe/[token]. The query reads a single email column to push the Postmark suppression on the host\'s own stream and returns nothing about the contact.',

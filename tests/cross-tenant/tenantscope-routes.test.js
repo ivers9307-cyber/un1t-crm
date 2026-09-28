@@ -267,3 +267,29 @@ describe('POST /api/admin/push/test — only someone in your own organisation (T
     expect(status).toBe(200)
   })
 })
+
+// ─── the two host jobs ───────────────────────────────────────────────
+describe("POST /api/admin/backfill-host-contacts — your organisation's hosts only (TENANTSCOPE.1)", () => {
+  it("an owner at A One back-fills org A's hosted events only", async () => {
+    as(users.ownerA1())
+    const { status, json } = await jsonOf(await backfillHosts.POST())
+    expect(status).toBe(200)
+    expect(idsOf(json.data.events, 'event_id')).toEqual([EV_A]) // main: [EV_A, EV_B]
+    expect(vi.mocked(addEventAttendeesToHostList).mock.calls.map((c) => c[1])).toEqual([EV_A])
+    expect(JSON.stringify(json)).not.toContain('Race B')
+  })
+
+  it('a master back-fills every hosted event in the estate', async () => {
+    as(users.master())
+    const { json } = await jsonOf(await backfillHosts.POST())
+    expect(idsOf(json.data.events, 'event_id')).toEqual([EV_A, EV_B].sort())
+  })
+
+  it('a non-master with no active organisation is refused, and nothing runs', async () => {
+    as(noActive(users.ownerA1()))
+    const { status, json } = await jsonOf(await backfillHosts.POST())
+    expect(status).toBe(400) // main: 200, every organisation's events
+    expect(json.error).toBe('No active organisation')
+    expect(addEventAttendeesToHostList).not.toHaveBeenCalled()
+  })
+})
