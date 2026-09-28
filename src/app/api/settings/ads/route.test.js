@@ -19,6 +19,7 @@ vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.f
 import { GET, PUT } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { SECRET_MASK } from '@/lib/secret-keys'
 
 const LOC = 'a0000000-0000-4000-8000-000000000001'
 const OWNER = {
@@ -98,6 +99,48 @@ describe('GET /api/settings/ads — a failed read is a 500, never "no account"',
     expect(body.data[0].has_access_token).toBe(true)
     expect(body.data[0].access_token).not.toContain('SECRET')
     expect(body.report_recipients).toEqual(['ops@example.test'])
+  })
+})
+
+describe('N8NECHO.1: the ads token is presence only, and its mask never overwrites it', () => {
+  const STORED_TOKEN = 'SYNTH-ADS-TOKEN-1234'
+  const STORED = { id: 'ad-1', location_id: LOC, provider: 'meta', external_account_id: 'act_1', access_token: STORED_TOKEN, is_active: true }
+
+  it('the GET token is the shared mask, with no character of the stored value', async () => {
+    createServerClient.mockReturnValue(makeDb({
+      ad_accounts: { data: [STORED], error: null },
+      locations: { data: { settings: {} }, error: null },
+    }))
+    const body = await (await GET(get())).json()
+    expect(body.data[0].access_token).toBe(SECRET_MASK)
+    expect(body.data[0].access_token).not.toMatch(/1234/)
+    expect(body.data[0].has_access_token).toBe(true)
+    expect(JSON.stringify(body)).not.toMatch(/SYNTH-/)
+  })
+
+  it('round-trip: the GET mask, sent back on a PUT, leaves the stored token unchanged', async () => {
+    createServerClient.mockReturnValue(makeDb({
+      ad_accounts: { data: [STORED], error: null },
+      locations: { data: { settings: {} }, error: null },
+    }))
+    const echoed = (await (await GET(get())).json()).data[0].access_token
+
+    const db = makeDb({})
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(put({ locationId: LOC, provider: 'meta', external_account_id: 'act_1', access_token: echoed, is_active: true }))
+    expect(res.status).toBe(200)
+    expect(db.writes).toHaveLength(1)
+    const upserted = db.writes[0].row
+    expect(upserted).not.toHaveProperty('access_token')
+    // ON CONFLICT DO UPDATE touches only the columns sent: the stored token survives.
+    expect({ ...STORED, ...upserted }.access_token).toBe(STORED_TOKEN)
+  })
+
+  it('a real new token is still written', async () => {
+    const db = makeDb({})
+    createServerClient.mockReturnValue(db)
+    await PUT(put({ locationId: LOC, provider: 'meta', external_account_id: 'act_1', access_token: 'SYNTH-ADS-NEW-5678' }))
+    expect(db.writes[0].row.access_token).toBe('SYNTH-ADS-NEW-5678')
   })
 })
 
