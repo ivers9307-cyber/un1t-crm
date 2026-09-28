@@ -6,9 +6,10 @@
 //      already in Glofox under a different glofox_member_id.
 //   2. Opt-in create-and-trial — only when a booking form / event
 //      / manual button explicitly elects to push. Creates a fresh
-//      Glofox account, attaches the studio's trial membership,
-//      generates a one-time passcode, tags the contact for
-//      welcome-sequence onboarding.
+//      Glofox account with a random initial password, attaches the
+//      studio's trial membership, tags the contact for
+//      welcome-sequence onboarding. The password is returned ONCE to
+//      the caller and never stored (PASSCODEREAD.1, mig 651).
 //
 // Both paths land an audit row in glofox_push_events.
 //
@@ -186,8 +187,8 @@ export async function findOrCreateGlofoxMember({
   }
 
   // Step 3 — create a fresh Glofox account. Generate a passcode
-  // first (used as the initial password + emailed to the member
-  // for first-login).
+  // first (the initial password; returned once to the caller, never
+  // stored or emailed: PASSCODEREAD.1).
   if (!contact.first_name || !contact.last_name) {
     const ev = await audit(db, {
       contact_id: contact.id, location_id: locationId, source,
@@ -220,14 +221,13 @@ export async function findOrCreateGlofoxMember({
   // Step 4 — write the link to the CRM contact row immediately
   // (before the trial purchase) so even if the membership write
   // fails, we don't leave the contact unlinked.
-  // GLOFOX3.5 (mig 146): stash the passcode on contacts so the
-  // welcome-sequence merge tag {{glofox_passcode}} can read it
-  // at send time. Cleared either by the welcome-sequence
-  // enrolment hook or a future 30-day TTL cron.
+  // PASSCODEREAD.1: the password is NOT written here. GLOFOX3.5 stored it on
+  // contacts.glofox_passcode for a welcome email that was never switched on,
+  // and every staff member at the location could read it from their own
+  // session. Mig 651 CHECKs the column NULL, so writing it now fails the link.
   const { error: linkErr } = await db.from('contacts').update({
     glofox_member_id: newGlofoxId,
     glofox_synced_at: new Date().toISOString(),
-    glofox_passcode: passcode,
   }).eq('id', contact.id)
   if (linkErr) {
     // The Glofox member exists but the CRM link write failed — don't
@@ -240,7 +240,9 @@ export async function findOrCreateGlofoxMember({
       status: 'needs_review', glofox_member_id: newGlofoxId,
       error_message: `Glofox member created but CRM link write failed: ${linkErr.message}`,
     })
-    return { status: 'needs_review', glofox_member_id: newGlofoxId, error: linkErr.message, push_event_id: ev?.id }
+    // The member's first password exists only in this response: return it so
+    // the desk button can show it (callers that don't display it drop it).
+    return { status: 'needs_review', glofox_member_id: newGlofoxId, passcode, error: linkErr.message, push_event_id: ev?.id }
   }
 
   // Step 5 — optional trial-membership purchase. Per-location
@@ -277,7 +279,8 @@ export async function findOrCreateGlofoxMember({
 
   // Step 6 — fire the welcome-sequence trigger via tag. The
   // welcome sequence template (GLOFOX3.5) listens for
-  // 'glofox_account_created' and renders {{glofox_passcode}}.
+  // 'glofox_account_created' (it no longer carries a password:
+  // PASSCODEREAD.1).
   // writeContactTag is idempotent AND fires the tag_added
   // sequence trigger — earlier versions of this code wrote the
   // tag directly to contact_tags but never called the trigger,
@@ -289,18 +292,12 @@ export async function findOrCreateGlofoxMember({
     tag: 'glofox_account_created',
   })
 
-  // Stash the passcode on the contact temporarily (the welcome
-  // sequence email reads it, then it's cleared after first use OR
-  // after a 30-day TTL — TODO follow-up). For now, just store it
-  // on the audit row + via the welcome-sequence merge tag system.
-
   const status = trialPurchaseError ? 'needs_review' : 'created'
   const ev = await audit(db, {
     contact_id: contact.id, location_id: locationId, source,
     status, glofox_member_id: newGlofoxId,
     glofox_response: reg.glofox_response,
     error_message: trialPurchaseError,
-    passcode_sent: passcode,
   })
 
   // Pull the new Glofox state into CRM via the existing

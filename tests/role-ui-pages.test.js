@@ -17,6 +17,7 @@ const PAGES = [
   'src/app/(sales)/contacts/[id]/edit/page.js',
   'src/app/(sales)/contacts/new/page.js',
   'src/app/(members)/bookings/event-types/page.js',
+  'src/app/(members)/bookings/event-types/new/page.js',
   'src/app/(members)/bookings/event-types/[id]/page.js',
   'src/app/(members)/bookings/event-types/[id]/edit/page.js',
 ]

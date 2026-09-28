@@ -27,6 +27,7 @@ import * as contact from '@/app/api/contacts/[id]/route.js'
 import * as contacts from '@/app/api/contacts/route.js'
 import * as stages from '@/app/api/stages/route.js'
 import * as eventType from '@/app/api/bookings/event-types/[id]/route.js'
+import * as eventTypes from '@/app/api/bookings/event-types/route.js'
 
 const T = { getCurrentUser, createServerClient, describe, it, expect }
 const LEGACY_KEY = 'a'.repeat(64)
@@ -166,6 +167,14 @@ describe('event-types/[id]: a missing or unreadable row is never let through', (
     expect({ status, body }).toEqual({ status: 500, body: { success: false, error: 'Could not load event type' } })
   })
 })
+
+// ── POST /api/bookings/event-types: the body's location (EVENTTYPERLS.1) ──
+// Main: API-key only, every cookie caller 401 — the form created through RLS
+// instead, which let any member of the studio do it.
+describeGate('POST /api/bookings/event-types (MANAGER_ROLES at body.location_id)', {
+  call: (loc) => eventTypes.POST(json('POST', { name: 'Consult', location_id: loc })),
+  forbidden: UNAUTHORIZED, hidden: NOT_MEMBER, unauth: UNAUTHORIZED, cases: CASES,
+}, T)
 
 // ── the API-key paths are unchanged: no cookie lookup, no role judgement ──
 describe('the legacy CRM_API_KEY path never reaches getCurrentUser', () => {

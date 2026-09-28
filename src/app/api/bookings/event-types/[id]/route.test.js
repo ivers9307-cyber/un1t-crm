@@ -99,6 +99,35 @@ describe('event-types/[id] — cookie/manager path (SAAS-12)', () => {
     expect(etype('e1').name).toBe('Renamed')
   })
 
+  // EVENTTYPERLS.1 — the booking-type form now saves through this PUT, and it
+  // sends the mig 077 confirmation columns. zod strips unknown keys, so before
+  // the shared schema they were dropped SILENTLY (a 200 that saved nothing).
+  it('PUT persists the confirmation fields the form sends', async () => {
+    getCurrentUser.mockResolvedValue(managerAt('loc-1a'))
+    const res = await PUT(cookiePut('e1', {
+      name: 'Bootcamp',
+      confirmation_enabled: true,
+      confirmation_channels: ['sms'],
+      confirmation_email_template_id: null,
+      confirmation_email_subject: null,
+      confirmation_sms_body: 'See you at the studio',
+    }), props('e1'))
+    expect(res.status).toBe(200)
+    expect(etype('e1')).toMatchObject({
+      confirmation_enabled: true,
+      confirmation_channels: ['sms'],
+      confirmation_sms_body: 'See you at the studio',
+      slug: 'bootcamp',
+    })
+  })
+
+  it('PUT refuses a confirmation channel the DB check would refuse (400, row untouched)', async () => {
+    getCurrentUser.mockResolvedValue(managerAt('loc-1a'))
+    const res = await PUT(cookiePut('e1', { confirmation_channels: ['whatsapp'] }), props('e1'))
+    expect(res.status).toBe(400)
+    expect(etype('e1').confirmation_channels).toBeUndefined()
+  })
+
   it('DELETE a foreign-location event type → 404, row not soft-deleted', async () => {
     getCurrentUser.mockResolvedValue(managerAt('loc-1a'))
     const res = await DELETE(cookieDelete('e2'), props('e2'))

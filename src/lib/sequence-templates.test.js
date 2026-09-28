@@ -118,26 +118,35 @@ describe('GLOFOX3.5 welcome template', () => {
     expect(tpl.category).toBe('Welcome')
   })
 
-  it('first step is the immediate email containing the passcode merge tag', () => {
+  it('first step is the immediate email telling the member how to log in for the first time', () => {
     const step = tpl.steps[0]
     expect(step.step_type).toBe('email')
     expect(step.delay_days).toBe(0)
     expect(step.delay_hours).toBe(0)
-    expect(step.html_content).toContain('{{glofox_passcode}}')
+    expect(step.html_content).toContain('Forgot password?')
     expect(step.html_content).toContain('{{email}}')
   })
 
-  it('also surfaces the passcode via SMS as a backup channel', () => {
-    // Junk-folder insurance — we want the passcode on at least two
-    // channels.
+  it('also explains first login by SMS as a backup channel', () => {
     const smsStep = tpl.steps.find((s) => s.step_type === 'sms')
     expect(smsStep, 'no SMS step in the welcome template').toBeTruthy()
-    expect(smsStep.sms_body).toContain('{{glofox_passcode}}')
+    expect(smsStep.sms_body).toContain('Forgot password?')
   })
 
-  it('uses a long re-enrolment cooldown so a stale passcode isn\'t re-emailed', () => {
-    // A passcode is minted once per Glofox account. If the same tag
-    // somehow fires again, we don't want to email the OLD passcode.
+  it('never carries a password (PASSCODEREAD.1): no step of ANY template uses the retired tag', () => {
+    // Glofox passwords are no longer stored, so {{glofox_passcode}} renders
+    // empty; a step that used it would send "Passcode: " with nothing after.
+    for (const t of SEQUENCE_TEMPLATES) {
+      for (const s of t.steps) {
+        for (const field of ['subject', 'html_content', 'sms_body']) {
+          expect(s[field] || '', `${t.id} ${field}`).not.toContain('{{glofox_passcode}}')
+          expect(s[field] || '', `${t.id} ${field}`).not.toMatch(/passcode/i)
+        }
+      }
+    }
+  })
+
+  it('uses a long re-enrolment cooldown so a re-tag does not re-send the welcome', () => {
     expect(tpl.re_enrolment_cooldown_days).toBeGreaterThanOrEqual(180)
   })
 })

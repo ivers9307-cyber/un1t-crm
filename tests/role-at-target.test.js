@@ -218,7 +218,7 @@ describe('/api routes judge the role at the location they act on', () => {
     const read = (f) => fs.readFileSync(f, 'utf8')
     const callers = routeFiles(API).filter((f) => apiKeyOrManagerCalls(read(f)).length > 0).map(rel)
     expect(callers).toEqual(expect.arrayContaining([
-      'bookings/event-types/[id]/route.js', 'contacts/[id]/route.js', 'contacts/route.js', 'stages/route.js',
+      'bookings/event-types/[id]/route.js', 'bookings/event-types/route.js', 'contacts/[id]/route.js', 'contacts/route.js', 'stages/route.js',
     ]))
     expect(routeFiles(API).filter((f) => apiKeyOrManagerUnjudged(read(f))).map(rel).sort()).toEqual([])
   })

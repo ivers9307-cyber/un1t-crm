@@ -100,7 +100,6 @@ const makeContact = (id) => ({
   email_status: 'active',
   email_marketing: true,
   email_administrative: true,
-  glofox_passcode: null,
   contact_preferences: [{ unsubscribe_token: `tok-${id}` }],
 })
 
