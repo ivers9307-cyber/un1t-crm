@@ -548,7 +548,7 @@ describe('fetchPersonalDashboardData — draft shifts (D1)', () => {
 // ROSTER-FIX.1 — the Today strip's staffToday counted every assignment row on
 // today's blocks, cancelled ones included, so an approved swap-drop still
 // reported a coach as in today. It goes through the module's one `live`
-// predicate (isLiveRow), which every assignment reader here shares.
+// predicate (isLiveRow), which fetchTodayOps uses for its assignment rows.
 describe('fetchTodayOps — staffToday ignores cancelled assignments', () => {
   function makeTodayDb(blocks) {
     return {

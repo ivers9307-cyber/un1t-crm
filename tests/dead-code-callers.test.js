@@ -15,7 +15,7 @@ import { join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
-const SCAN = ['src', 'shared', 'mobile', 'scripts', 'tests']
+const SCAN = ['src', 'shared', 'mobile', 'scripts', 'tests', 'desktop', 'e2e']
 const SKIP_DIRS = new Set(['node_modules', 'ios', 'android', 'dist', 'build'])
 const SOURCE = /\.(js|jsx|mjs)$/
 const SELF = 'tests/dead-code-callers.test.js'
@@ -71,7 +71,7 @@ describe('dead code stays deleted (D1 DEADCODE.1)', () => {
 
   it('the week-end date helper went with its only caller (shared/dashboard-data.js)', () => {
     const src = readFileSync(join(ROOT, 'shared/dashboard-data.js'), 'utf8')
-    expect(src).not.toMatch(/export function endOfWeek\b/)
+    expect(src).not.toMatch(/\bendOfWeek\b/)
   })
 
   it('the working-time route is gone (CANDIDATES.1 replaced it with blocks/{id}/candidates)', () => {
