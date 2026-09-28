@@ -11,6 +11,7 @@
 // platform.
 
 import { createServerClient } from '@/lib/supabase'
+import { SECRET_MASK, maskSecretKeysDeep } from '@/lib/secret-keys'
 
 export const META_GRAPH_VERSION = 'v21.0'
 export const META_GRAPH_URL = `https://graph.facebook.com/${META_GRAPH_VERSION}`
@@ -29,14 +30,16 @@ export const SUPPORTED_PLATFORMS = Object.freeze(['instagram', 'messenger'])
 export const SECRET_FIELDS = Object.freeze(['access_token', 'app_secret'])
 
 /**
- * Mask a secret for display: keep the last `keep` chars behind dots.
- * Returns null for empty input. Pure.
+ * Mask a secret for display: presence only. Returns null for empty input and
+ * the fixed mask otherwise. Pure.
+ *
+ * SECFIX.3a (review S1) — it used to keep the last 6 characters as a hint.
+ * No character of a stored credential leaves the server now; the card shows
+ * "Connected" (has_access_token) and a password field of dots.
  */
-export function maskSecret(value, keep = 6) {
+export function maskSecret(value) {
   if (!value) return null
-  const s = String(value)
-  if (s.length <= keep) return '••••••'
-  return `••••••${s.slice(-keep)}`
+  return SECRET_MASK
 }
 
 /** Is a submitted secret a real new value (vs blank or the masked echo)? */
@@ -51,10 +54,18 @@ export function isFreshSecret(value) {
 /**
  * Shape a DB row for the browser: mask every secret field and add a
  * has_<field> boolean so the UI can show "set / not set". Pure.
+ *
+ * SECFIX.3a (review S1) — the two columns were not the only secrets on a
+ * row: the registry (connection-registry.js) keeps whatever a provider's
+ * legacy slice holds beyond its mapped columns in `config`, which for Glofox
+ * is the api_token. So every secret-named key at any depth (mig 647's rule,
+ * src/lib/secret-keys.js) is masked first, then the columns get their
+ * null-when-empty mask and has_ flags (added last: `has_access_token` itself
+ * ends in "token" and would otherwise be masked).
  */
 export function maskConnectionRow(row) {
   if (!row) return row
-  const out = { ...row }
+  const out = { ...maskSecretKeysDeep(row) }
   for (const f of SECRET_FIELDS) {
     out[`has_${f}`] = !!row[f]
     out[f] = maskSecret(row[f])

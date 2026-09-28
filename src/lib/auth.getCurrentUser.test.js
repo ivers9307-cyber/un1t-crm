@@ -52,6 +52,8 @@ vi.mock('@supabase/supabase-js', () => ({ createClient: vi.fn() }))
 
 import { getCurrentUser, getOwnerOrganizationIds } from './auth.js'
 import { createClient } from '@supabase/supabase-js'
+import { LOCATION_SECRET_MASK, USER_LOCATION_COLUMNS } from './location-secrets.js'
+import { glofoxConnected } from './automations/registry.js'
 
 // ─── scripted Supabase double ───────────────────────────────────────
 // Records every query as { table, calls: [[method, ...args], ...] }
@@ -523,5 +525,105 @@ describe('getCurrentUser — a deactivated staff member (ACTIVEUSER.1)', () => {
       })
       expect(await getCurrentUser()).toBeNull()
     })
+  })
+})
+
+// ─── SECFIX.3a ──────────────────────────────────────────────────────
+// The whole user object is serialised into every CRM page (layout →
+// AppShellServer → <AppShell user={user}>, a client component). The
+// location rows in it must carry no credential value.
+
+describe('getCurrentUser — SECFIX.3a: location loads name their columns', () => {
+  const selectsOn = (queries, table) =>
+    queries.filter((q) => q.table === table).map((q) => findCall(q, 'select')?.[1])
+
+  it('staff + org admin: the profile_locations embed and the org-expanded load name USER_LOCATION_COLUMNS', async () => {
+    const { queries } = setup({
+      profile: { id: 'oa-2', role: 'staff', full_name: 'Org Admin', email: 'oa2@tenant.ie', employment_type: 'fte', active: true },
+      links: [link({ loc: LOC_A1, role: 'staff' })],
+      orgLinks: [{ profile_id: 'oa-2', organization_id: 'org-a', role: 'org_admin' }],
+      orgLocations: [LOC_A1, LOC_A2],
+      orgs: [ORG_A],
+    })
+    await getCurrentUser()
+    expect(selectsOn(queries, 'profile_locations')).toContain(`*, locations(${USER_LOCATION_COLUMNS})`)
+    expect(selectsOn(queries, 'locations')).toEqual([USER_LOCATION_COLUMNS])
+    for (const s of [...selectsOn(queries, 'profile_locations'), ...selectsOn(queries, 'locations')]) {
+      expect(s).not.toMatch(/locations\(\*\)/)
+    }
+  })
+
+  it('master: the all-locations load names USER_LOCATION_COLUMNS', async () => {
+    const { queries } = setup({
+      profile: { id: 'm-2', role: 'master', full_name: 'M', email: 'm2@un1t.ie', employment_type: null, active: true },
+      links: [],
+      allLocations: [LOC_A1],
+      orgs: [ORG_A],
+    })
+    await getCurrentUser()
+    expect(selectsOn(queries, 'locations')).toEqual([USER_LOCATION_COLUMNS])
+  })
+})
+
+describe('getCurrentUser — SECFIX.3a: no credential value on any location row', () => {
+  const SECRET_LOC = {
+    id: 'loc-s', name: 'Secret Studio', organization_id: 'org-a', active: true,
+    sensibo_api_key: 'SYNTH-SENSIBO-KEY', thinq_pat: 'SYNTH-THINQ-PAT',
+    settings: {
+      glofox: { branch_id: 'b1', api_key: 'SYNTH-GLOFOX-KEY', api_token: 'SYNTH-GLOFOX-TOKEN', webhook_secret: 'SYNTH-GLOFOX-WHSEC', trial_membership_id: 'm1' },
+      unifi: { host: 'https://unifi.example', api_token: 'SYNTH-UNIFI-TOKEN' },
+      customer_agent: { enabled: true },
+    },
+  }
+  const expectNoSecret = (user) => expect(JSON.stringify(user)).not.toMatch(/SYNTH-/)
+
+  it('a plain staff member: locations, activeLocation (the default link) and nothing else change', async () => {
+    setup({
+      profile: { id: 'st-1', role: 'staff', full_name: 'Staff', email: 'st@un1t.ie', employment_type: 'fte', active: true },
+      links: [link({ loc: SECRET_LOC, role: 'staff', is_default: true })],
+      orgs: [ORG_A],
+    })
+    const user = await getCurrentUser()
+    expectNoSecret(user)
+    expect(user.activeLocation.settings.glofox.api_key).toBe(LOCATION_SECRET_MASK)
+    expect(user.activeLocation.settings.glofox.branch_id).toBe('b1')
+    expect(user.activeLocation.settings.customer_agent).toEqual({ enabled: true })
+    expect(user.locations[0].sensibo_api_key).toBe(LOCATION_SECRET_MASK)
+    expect(user.rolesByLocation).toEqual({ 'loc-s': 'staff' })
+  })
+
+  it('a master: every active location is redacted', async () => {
+    setup({
+      profile: { id: 'm-1', role: 'master', full_name: 'M', email: 'm@un1t.ie', employment_type: null, active: true },
+      links: [],
+      allLocations: [SECRET_LOC, LOC_A1],
+      orgs: [ORG_A],
+    })
+    const user = await getCurrentUser()
+    expectNoSecret(user)
+    expect(user.locations[1]).toBe(LOC_A1) // nothing to redact → the same object
+  })
+
+  it('an org admin: the org-expanded locations are redacted', async () => {
+    setup({
+      profile: { id: 'oa-1', role: 'staff', full_name: 'Org Admin', email: 'oa@tenant.ie', employment_type: 'fte', active: true },
+      links: [],
+      orgLinks: [{ profile_id: 'oa-1', organization_id: 'org-a', role: 'org_admin' }],
+      orgLocations: [SECRET_LOC],
+      orgs: [ORG_A],
+    })
+    const user = await getCurrentUser()
+    expectNoSecret(user)
+    expect(user.locations.map((l) => l.id)).toEqual(['loc-s'])
+  })
+
+  it('presence survives: the automations page still sees Glofox as connected', async () => {
+    setup({
+      profile: { id: 'st-2', role: 'owner', full_name: 'O', email: 'o@un1t.ie', employment_type: 'fte', active: true },
+      links: [link({ loc: SECRET_LOC, role: 'owner', is_default: true })],
+      orgs: [ORG_A],
+    })
+    const user = await getCurrentUser()
+    expect(glofoxConnected(user.activeLocation)).toBe(true)
   })
 })

@@ -149,7 +149,7 @@ const successBody = (locationId, updatedBy) => ({
     is_active: true,
     token_expires_at: null,
     token_refreshed_at: null,
-    access_token: '••••••123456',
+    access_token: '••••••',
     has_access_token: true,
     app_secret: null,
     has_app_secret: false,
@@ -305,27 +305,89 @@ describe('POST /api/locations/[id]/channels — refuses over a live connection (
   })
 })
 
-// The read side is untouched by LOCFIX-ROLEGATE.1 (membership only, secrets
-// masked) — pinned so the rework cannot quietly narrow or widen it.
-describe('GET /api/locations/[id]/channels — unchanged: membership only, secrets masked', () => {
-  it('a plain staff member of the target lists it, with the token masked', async () => {
-    getCurrentUser.mockResolvedValue(STAFF_A)
-    createServerClient.mockReturnValue(makeDb({ rows: [
-      { id: 'c1', location_id: LOC_A, platform: 'instagram', access_token: 'IGTOKENabcdef123456' },
-      { id: 'c2', location_id: LOC_B, platform: 'instagram', access_token: 'OTHERSTUDIO' },
-    ] }))
+// SECFIX.3a (review S1) — the read side used to be MEMBERSHIP ONLY with a
+// mask that kept the last 6 characters of access_token / app_secret and left
+// `config` alone, where the registry keeps a Glofox connection's api_token. So
+// any plain staff member of a studio could read its Glofox API token in
+// clear. The GET now uses the write gate (the role AT THE TARGET, MANAGER_ROLES:
+// whoever may replace a token may see that it is set; the Integrations cards
+// that call this are owner/master screens), and every secret, at any depth,
+// is presence only.
+const SYNTH_ROWS = [
+  {
+    id: 'c1', location_id: LOC_A, platform: 'instagram', display_name: '@studio',
+    access_token: 'SYNTH-IG-TOKEN-abcdef123456', app_secret: 'SYNTH-IG-APPSECRET-654321', config: {},
+  },
+  {
+    id: 'c3', location_id: LOC_A, platform: 'glofox', external_account_id: 'branch-1',
+    access_token: 'SYNTH-GLOFOX-KEY-111111', app_secret: 'SYNTH-GLOFOX-WEBHOOK-222222',
+    config: { api_token: 'SYNTH-GLOFOX-TOKEN-333333', namespace: 'ns-1' },
+  },
+  { id: 'c2', location_id: LOC_B, platform: 'instagram', access_token: 'SYNTH-OTHERSTUDIO' },
+]
+const NO_SYNTH = /SYNTH|abcdef|123456|654321|111111|222222|333333/
+
+describe('GET /api/locations/[id]/channels — managers at the target only, every secret presence-only', () => {
+  it('a manager at the target lists it: tokens and config.api_token masked, no character of any value', async () => {
+    createServerClient.mockReturnValue(makeDb({ rows: SYNTH_ROWS }))
     const res = await GET(get(LOC_A), props(LOC_A))
     expect(res.status).toBe(200)
-    const body = await res.json()
-    expect(body.connections).toHaveLength(1)
-    expect(body.connections[0].id).toBe('c1')
-    expect(body.connections[0].access_token).toBe('••••••123456')
-    expect(body.connections[0].has_access_token).toBe(true)
+    const text = await res.text()
+    expect(text).not.toMatch(NO_SYNTH)
+    const body = JSON.parse(text)
+    expect(body.connections.map(c => c.id)).toEqual(['c1', 'c3'])
+    const [ig, glofox] = body.connections
+    expect(ig.access_token).toBe('••••••')
+    expect(ig.has_access_token).toBe(true)
+    expect(ig.app_secret).toBe('••••••')
+    expect(ig.display_name).toBe('@studio')
+    expect(glofox.config).toEqual({ api_token: '••••••', namespace: 'ns-1' })
+    expect(glofox.has_access_token).toBe(true)
   })
 
-  it('403s a non-member and 401s an anonymous caller', async () => {
+  it('a plain STAFF member of the target is refused on the role copy, and nothing is read', async () => {
+    getCurrentUser.mockResolvedValue(STAFF_A)
+    const guarded = makeDb({ rows: SYNTH_ROWS })
+    guarded.from = () => { throw new Error('the DB must not be read for a refused caller') }
+    createServerClient.mockReturnValue(guarded)
+    const res = await GET(get(LOC_A), props(LOC_A))
+    expect(res.status).toBe(403)
+    const text = await res.text()
+    expect(text).not.toMatch(NO_SYNTH)
+    expect(JSON.parse(text)).toEqual({ success: false, error: 'Forbidden' })
+  })
+
+  it('a manager at A who is plain staff at B is refused at B', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A_STAFF_B)
+    createServerClient.mockReturnValue(makeDb({ rows: SYNTH_ROWS }))
     expect((await GET(get(LOC_B), props(LOC_B))).status).toBe(403)
+  })
+
+  it('the manager / head coach AT THE TARGET and a master get through', async () => {
+    for (const u of [STAFF_A_MANAGER_B, STAFF_A_HEAD_COACH_B, MASTER]) {
+      getCurrentUser.mockResolvedValue(u)
+      createServerClient.mockReturnValue(makeDb({ rows: SYNTH_ROWS }))
+      const res = await GET(get(LOC_B), props(LOC_B))
+      expect([u.id, res.status]).toEqual([u.id, 200])
+      expect(await res.text()).not.toMatch(NO_SYNTH)
+    }
+  })
+
+  it('403s a non-member on the MEMBERSHIP copy and 401s an anonymous caller', async () => {
+    const res = await GET(get(LOC_B), props(LOC_B))
+    expect(res.status).toBe(403)
+    expect((await res.json()).error).toBe('Forbidden — location not in your assignments')
     getCurrentUser.mockResolvedValue(null)
     expect((await GET(get(LOC_A), props(LOC_A))).status).toBe(401)
+  })
+})
+
+describe('POST /api/locations/[id]/channels — the echo is presence-only', () => {
+  it('a freshly pasted token comes back as the mask, never a character of it', async () => {
+    const res = await POST(post(LOC_A, { ...VALID, access_token: 'SYNTH-NEW-TOKEN-987654', app_secret: 'SYNTH-NEW-SECRET-456789' }), props(LOC_A))
+    expect(res.status).toBe(200)
+    const text = await res.text()
+    expect(text).not.toMatch(/SYNTH|987654|456789/)
+    expect(JSON.parse(text).connection).toMatchObject({ access_token: '••••••', has_access_token: true, app_secret: '••••••', has_app_secret: true })
   })
 })

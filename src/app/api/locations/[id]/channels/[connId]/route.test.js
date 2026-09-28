@@ -76,7 +76,7 @@ const MASTER = {
 //   DELETE .delete().eq('id').eq('location_id')
 // Every mutating call is logged AT THE CALL, so a refusal that reached the DB
 // at all shows up as a non-empty log. Fail LOUD on any other table.
-function makeDb({ existing = { platform: 'instagram' } } = {}) {
+function makeDb({ existing = { platform: 'instagram' }, stored = {} } = {}) {
   const writes = []
   return {
     writes,
@@ -103,7 +103,7 @@ function makeDb({ existing = { platform: 'instagram' } } = {}) {
             neq(col, val) { filters[`not_${col}`] = val; return builder },
             select: () => ({
               single: () => Promise.resolve({
-                data: { id: filters.id, location_id: filters.location_id, platform: existing?.platform, ...patch },
+                data: { id: filters.id, location_id: filters.location_id, platform: existing?.platform, ...stored, ...patch },
                 error: null,
               }),
             }),
@@ -182,6 +182,27 @@ describe('PATCH /api/locations/[id]/channels/[connId] — the legitimate flow is
     const res = await PATCH(patchReq(LOC_A, CONN, VALID), props(LOC_A, CONN))
     expect(res.status).toBe(404)
     expect(db.writes).toEqual([])
+  })
+})
+
+// SECFIX.3a (review S1) — the PATCH echo is the stored row after the update:
+// its tokens and its config secrets are presence only, never a character.
+describe('PATCH /api/locations/[id]/channels/[connId] — the echo is presence-only', () => {
+  it('stored tokens, config.api_token and a freshly pasted token never come back', async () => {
+    createServerClient.mockReturnValue(makeDb({
+      stored: {
+        access_token: 'SYNTH-STORED-TOKEN-111111', app_secret: 'SYNTH-STORED-SECRET-222222',
+        config: { api_token: 'SYNTH-CONFIG-TOKEN-333333', namespace: 'ns-1' },
+      },
+    }))
+    const res = await PATCH(patchReq(LOC_A, CONN, { ...VALID, access_token: 'SYNTH-NEW-TOKEN-987654' }), props(LOC_A, CONN))
+    expect(res.status).toBe(200)
+    const text = await res.text()
+    expect(text).not.toMatch(/SYNTH|111111|222222|333333|987654/)
+    expect(JSON.parse(text).connection).toMatchObject({
+      access_token: '••••••', has_access_token: true, app_secret: '••••••', has_app_secret: true,
+      config: { api_token: '••••••', namespace: 'ns-1' },
+    })
   })
 })
 

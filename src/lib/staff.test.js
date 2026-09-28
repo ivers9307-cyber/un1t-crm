@@ -353,3 +353,38 @@ describe('CONTRACTVIS.1 — getStaffForUser, per person', () => {
     expect(res.data.annual_salary).toBe(40000)
   })
 })
+
+// SECFIX.3a — a manager's FULL rows embed profile_locations(*, locations(*)),
+// and the embed includes the target's OTHER studios, so the staff API (also
+// the phone's staff directory) handed each manager every stored credential
+// on those rows. They stop at this layer; presence survives as the mask.
+describe('SECFIX.3a — a manager\'s staff payload carries no location credential', () => {
+  const SECRET_ROW = {
+    id: 'p1', full_name: 'Ada',
+    profile_locations: [{
+      location_id: 'loc-1', role: 'staff',
+      locations: {
+        id: 'loc-1', name: 'Studio A', sensibo_api_key: 'SYNTH-S', thinq_pat: 'SYNTH-T',
+        settings: { glofox: { branch_id: 'b1', api_key: 'SYNTH-G' }, unifi: { api_token: 'SYNTH-U' } },
+      },
+    }],
+  }
+
+  it('listStaffForUser: managed FULL rows are redacted', async () => {
+    const db = mockDb({ links: [{ profile_id: 'p1', location_id: 'loc-1' }], profiles: [SECRET_ROW] })
+    const result = await listStaffForUser({ db, user: adminUser })
+    expect(result.ok).toBe(true)
+    expect(JSON.stringify(result.data)).not.toMatch(/SYNTH-/)
+    expect(result.data[0].profile_locations[0].locations.name).toBe('Studio A')
+    expect(result.data[0].profile_locations[0].locations.settings.glofox.branch_id).toBe('b1')
+  })
+
+  it('getStaffForUser: the managed FULL row is redacted', async () => {
+    const db = mockDb({ detailLinks: [{ location_id: 'loc-1' }], profiles: [SECRET_ROW] })
+    const result = await getStaffForUser({ db, user: adminUser, id: 'p1' })
+    expect(result.ok).toBe(true)
+    expect(JSON.stringify(result.data)).not.toMatch(/SYNTH-/)
+    expect(result.data.full_name).toBe('Ada')
+    expect(result.data.role_templates).toEqual({})
+  })
+})

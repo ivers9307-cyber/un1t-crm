@@ -90,11 +90,12 @@ export default async function EditLocationPage(props) {
   // has_thinq_pat and saves through the masked
   // PUT /api/locations/[id]/integrations/ac.
   //
-  // NOT CLOSED: the `user` prop below still carries them. getCurrentUser()
-  // loads full `locations` rows (key, PAT and `settings` credentials
-  // included), and this page and AppShell hand `user` to client components.
-  // That wider leak is follow-up C35 SECFIX.3; until it lands the browser
-  // still receives these secrets, just not through `location`.
+  // The `user` prop no longer carries them either (SECFIX.3a):
+  // getCurrentUser() loads only USER_LOCATION_COLUMNS (never the key or PAT
+  // columns) and masks every secret-named key in `settings`.
+  // STILL OPEN until SECFIX.3b: this `location` prop's `settings` carries the
+  // Glofox and UniFi credentials in clear, because those tabs prefill from it
+  // and write the slice back from the browser.
   const location = toClientLocation(locationRow)
 
   // This location's OWN organisation (mig 079) — powers the read-only org

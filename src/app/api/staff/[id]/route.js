@@ -17,6 +17,7 @@ import { getStaffForUser } from '@/lib/staff'
 import { logAuditEvent } from '@/lib/audit'
 import { isTombstone } from '@/lib/staff-tombstone'
 import { suspendStaffLogin, restoreStaffLogin } from '@/lib/staff-login-access'
+import { redactProfileLocations } from '@/lib/location-secrets'
 
 export const runtime = 'nodejs'
 
@@ -403,7 +404,10 @@ export async function PUT(request, props) {
 
   return NextResponse.json({
     success: true,
-    data: final,
+    // SECFIX.3a — `final` embeds whole location rows. The raw embed stays on the
+    // server (targetBefore feeds the UniFi door revoke via getUnifiConfig);
+    // only the response is redacted.
+    data: redactProfileLocations(final),
     ...login.flags,
     // Deactivating revoked every door policy and cleared the toggles, and
     // reactivating deliberately does not guess them back.
