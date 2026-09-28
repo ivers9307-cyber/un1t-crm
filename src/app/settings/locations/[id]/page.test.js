@@ -258,6 +258,35 @@ describe('/settings/locations/[id] — the location prop carries no AC credentia
     expect(JSON.stringify(el.props.location)).not.toContain('synthetic-not-real')
   })
 
+  // C35 SECFIX.3b — the `location` prop's `settings` used to carry the Glofox
+  // and UniFi credentials in clear (those tabs prefilled from it and wrote the
+  // slice back from the browser). They are write-only clients of the masked
+  // PUT now, so the prop keeps each credential's presence and never its value.
+  // bca_config (no credential) still crosses whole: the BCA tab prefills from
+  // it and its status reads send_from.
+  it('the location prop carries no settings credential; presence and bca_config survive (C35 SECFIX.3b)', async () => {
+    const SECRET_ROW = {
+      ...ROW,
+      bca_config: { send_from: 'cars@example.test', send_to: 'bca@example.test' },
+      settings: {
+        glofox: { branch_id: 'b1', api_key: 'gk-synthetic-not-real', api_token: 'gt-synthetic-not-real', webhook_secret: 'gw-synthetic-not-real', trial_membership_id: 'm1' },
+        unifi: { host: 'https://unifi.example', api_token: 'ut-synthetic-not-real' },
+        customer_agent: { enabled: true },
+      },
+    }
+    getCurrentUser.mockResolvedValue(owner())
+    createServerClient.mockReturnValue(makeDb({ location: SECRET_ROW }))
+    for (const [searchParams, component] of [[{ tab: 'glofox' }, 'LocationIntegrations'], [{}, 'LocationForm']]) {
+      const tree = await EditLocationPage({ params: Promise.resolve({ id: LOC_B }), searchParams: Promise.resolve(searchParams) })
+      const loc = findElement(tree, component).props.location
+      expect(JSON.stringify(loc), component).not.toContain('synthetic-not-real')
+      expect(loc.settings.glofox).toEqual({ branch_id: 'b1', api_key: LOCATION_SECRET_MASK, api_token: LOCATION_SECRET_MASK, webhook_secret: LOCATION_SECRET_MASK, trial_membership_id: 'm1' })
+      expect(loc.settings.unifi).toEqual({ host: 'https://unifi.example', api_token: LOCATION_SECRET_MASK })
+      expect(loc.settings.customer_agent).toEqual({ enabled: true })
+      expect(loc.bca_config).toEqual(SECRET_ROW.bca_config)
+    }
+  })
+
   // C35 SECFIX.3a — the `user` prop. getCurrentUser() used to load full
   // `locations` rows, so this page (and AppShell, on every page) serialised
   // the Sensibo key, the ThinQ PAT and the `settings` credentials into the

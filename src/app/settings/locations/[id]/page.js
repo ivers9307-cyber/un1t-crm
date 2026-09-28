@@ -93,9 +93,11 @@ export default async function EditLocationPage(props) {
   // The `user` prop no longer carries them either (SECFIX.3a):
   // getCurrentUser() loads only USER_LOCATION_COLUMNS (never the key or PAT
   // columns) and masks every secret-named key in `settings`.
-  // STILL OPEN until SECFIX.3b: this `location` prop's `settings` carries the
-  // Glofox and UniFi credentials in clear, because those tabs prefill from it
-  // and write the slice back from the browser.
+  // SECFIX.3b: this `location` prop masks every other credential too (the
+  // Glofox and UniFi ones in `settings`), keeping presence only. Those tabs
+  // start their secret inputs blank and save through the masked
+  // PUT /api/locations/[id]/integrations/[provider]. bca_config (no
+  // credential) crosses as stored; see src/lib/location-client-shape.js.
   const location = toClientLocation(locationRow)
 
   // This location's OWN organisation (mig 079) — powers the read-only org

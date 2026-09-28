@@ -170,6 +170,37 @@ describe('Glofox null-collapse guard (the core regression)', () => {
     expect(locRow.settings.glofox.trial_membership_id).toBe('mem-1') // non-exposed field survives
   })
 
+  it('SECFIX.3b: the settings tab\'s trial, hidden-class and trainer fields are saved, secrets untouched', async () => {
+    getCurrentUser.mockResolvedValue(OWNER)
+    const { db, locRow } = makeDb({ location: liveGlofoxLocation() })
+    createServerClient.mockReturnValue(db)
+
+    const res = await PUT(req({
+      branch_id: 'branch-abc', namespace: 'untstillorgan',
+      trial_membership_id: 'mem-2', trial_plan_code: 'plan-9',
+      hidden_class_keywords: ['EL1TES', 'OPEN GYM'],
+      trainer_names: { '0123456789abcdef01234567': 'Coach A' },
+    }), props(LOC, 'glofox'))
+
+    expect(res.status).toBe(200)
+    expect(locRow.settings.glofox).toMatchObject({
+      trial_membership_id: 'mem-2', trial_plan_code: 'plan-9',
+      hidden_class_keywords: ['EL1TES', 'OPEN GYM'],
+      trainer_names: { '0123456789abcdef01234567': 'Coach A' },
+      api_key: 'LIVE_KEY', api_token: 'LIVE_TOKEN', webhook_secret: 'LIVE_SECRET',
+    })
+  })
+
+  it('SECFIX.3b: a drawer save that omits the tab fields leaves them alone', async () => {
+    getCurrentUser.mockResolvedValue(OWNER)
+    const { db, locRow } = makeDb({ location: liveGlofoxLocation() })
+    createServerClient.mockReturnValue(db)
+
+    await PUT(req({ branch_id: 'branch-abc', namespace: 'untstillorgan' }), props(LOC, 'glofox'))
+
+    expect(locRow.settings.glofox.trial_membership_id).toBe('mem-1')
+  })
+
   it('DELETE disconnect clears the slice AND deactivates the registry row', async () => {
     getCurrentUser.mockResolvedValue(OWNER)
     const { db, log, locRow, cc } = makeDb({
@@ -270,6 +301,19 @@ describe('role gates + access', () => {
     expect(res.status).toBe(200)
     expect(m.locRow.twilio_alpha_sender_id).toBe('UN1T STILL')
     expect(body.data.sender_id).toBe('UN1T STILL')
+  })
+
+  // N1 — the other half of the Twilio tab's clear: a blank sender_id removes
+  // the sender (column NULL, connected false), it is not "keep the stored one".
+  it('Twilio: a blank sender_id clears the stored sender to null', async () => {
+    getCurrentUser.mockResolvedValue(OWNER)
+    const m = makeDb({ location: { ...liveGlofoxLocation(), twilio_alpha_sender_id: 'UN1T' } })
+    createServerClient.mockReturnValue(m.db)
+    const res = await PUT(req({ sender_id: '' }), props(LOC, 'twilio'))
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(m.locRow.twilio_alpha_sender_id).toBeNull()
+    expect(body.data).toMatchObject({ connected: false, sender_id: null })
   })
 })
 

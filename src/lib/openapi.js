@@ -798,7 +798,7 @@ registry.registerPath({
   tags: ['Webhooks (Inbound)'],
   security: [{ GlofoxHmac: [] }],
   summary: 'Inbound Glofox events',
-  description: 'Glofox → CRM. HMAC-SHA256 verified against the per-location webhook secret (resolved by branchId). Idempotent via glofox_webhook_events.event_id.',
+  description: 'Glofox → CRM. HMAC-SHA256 verified against the per-location webhook secret (resolved by branchId). Each processed delivery is recorded in glofox_webhook_attempts; glofox_webhook_events keeps the latest event per Glofox entity (event_id is the entity id, Payload.id).',
   request: { body: { content: { 'application/json': { schema: GlofoxEvent } } } },
   responses: {
     200: { description: 'Accepted (and processed unless dark-launched)' },

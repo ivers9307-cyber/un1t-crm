@@ -67,6 +67,22 @@ function queueRow(id, { processedDaysAgo = null, receivedDaysAgo = 200, attempts
   }
 }
 
+function attemptRow(id, { processedDaysAgo }) {
+  return {
+    id,
+    event_row_id: 'event-row-1',
+    location_id: 'loc-1',
+    trace_id: `trace-${id}`,
+    event_type: 'BOOKING_UPDATED',
+    emitted_at: daysAgo(processedDaysAgo),
+    delivered_at: daysAgo(processedDaysAgo),
+    processed_at: daysAgo(processedDaysAgo),
+    status: 'applied',
+    error_message: null,
+    digest: { contact_id: 'c', tags: [] },
+  }
+}
+
 let db
 function setupDb(state) {
   db = makeDb(state)
@@ -122,7 +138,7 @@ describe('the cutoff', () => {
       ],
     })
     const body = await (await GET(req())).json()
-    expect(body.data.deleted).toEqual({ webhook_dead_letter: 1, postmark_webhook_queue: 1 })
+    expect(body.data.deleted).toEqual({ webhook_dead_letter: 1, postmark_webhook_queue: 1, glofox_webhook_attempts: 0 })
     expect(ids(db._state.deadLetters)).toEqual(['d-89'])
     expect(ids(db._state.webhookQueue)).toEqual(['q-89'])
   })
@@ -199,7 +215,7 @@ describe('postmark_webhook_queue — what gets purged', () => {
     const res = await GET(req())
     expect(res.status).toBe(200)
     const body = await res.json()
-    expect(body.data.deleted).toEqual({ webhook_dead_letter: 0, postmark_webhook_queue: 2 })
+    expect(body.data.deleted).toEqual({ webhook_dead_letter: 0, postmark_webhook_queue: 2, glofox_webhook_attempts: 0 })
     expect(ids(db._state.webhookQueue)).toEqual([
       'q-exhausted', 'q-processed-young', 'q-stale-claim', 'q-unprocessed-ancient',
     ])
@@ -259,8 +275,55 @@ describe('paging', () => {
     expect(res.status).toBe(200)
     expect(db.deletes).toEqual([])
     expect(stampHeartbeat).toHaveBeenCalledWith('purge-webhook-payloads', expect.objectContaining({
-      deleted: { webhook_dead_letter: 0, postmark_webhook_queue: 0 },
+      deleted: { webhook_dead_letter: 0, postmark_webhook_queue: 0, glofox_webhook_attempts: 0 },
     }))
+  })
+})
+
+describe('glofox_webhook_attempts — what gets purged (WEBHOOKAUDIT.1)', () => {
+  it('deletes attempt rows processed before the cutoff, keeps younger ones, ordered by processed_at', async () => {
+    setupDb({
+      glofoxAttempts: [
+        attemptRow('a-200', { processedDaysAgo: 200 }),
+        attemptRow('a-91', { processedDaysAgo: RETENTION_DAYS + 1 }),
+        attemptRow('a-89', { processedDaysAgo: RETENTION_DAYS - 1 }),
+        attemptRow('a-1', { processedDaysAgo: 1 }),
+      ],
+    })
+    const orders = []
+    const realFrom = db.from
+    db.from = (table) => {
+      const b = realFrom(table)
+      const origOrder = b.order
+      b.order = (...a) => { orders.push({ table, column: a[0] }); return origOrder(...a) }
+      return b
+    }
+
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.deleted.glofox_webhook_attempts).toBe(2)
+    expect(ids(db._state.glofoxAttempts)).toEqual(['a-1', 'a-89'])
+    const attemptOrders = orders.filter(o => o.table === 'glofox_webhook_attempts')
+    expect(attemptOrders.length).toBeGreaterThan(0)
+    expect(attemptOrders.every(o => o.column === 'processed_at')).toBe(true)
+    expect(db.ranges.filter(r => r.table === 'glofox_webhook_attempts').every(r => r.from === 0 && r.to === PURGE_PAGE_SIZE - 1)).toBe(true)
+  })
+
+  it('a failed attempts delete still purges the other two tables, answers 500 and does NOT stamp', async () => {
+    setupDb({
+      deadLetters: [deadLetter('d-old', 'resolved', { resolvedDaysAgo: 200 })],
+      webhookQueue: [queueRow('q-old', { processedDaysAgo: 200 })],
+      glofoxAttempts: [attemptRow('a-old', { processedDaysAgo: 200 })],
+      errors: { glofox_webhook_attempts: { code: '42P01', message: 'relation does not exist' } },
+    })
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body.error).toMatch(/glofox_webhook_attempts/)
+    expect(body.data.errors).toEqual({ glofox_webhook_attempts: 'relation does not exist' })
+    expect(body.data.deleted).toEqual({ webhook_dead_letter: 1, postmark_webhook_queue: 1, glofox_webhook_attempts: 0 })
+    expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 })
 
@@ -276,7 +339,7 @@ describe('heartbeat and per-table failure', () => {
     expect(stampHeartbeat).toHaveBeenCalledWith('purge-webhook-payloads', expect.objectContaining({
       cutoff: CUTOFF,
       retention_days: RETENTION_DAYS,
-      deleted: { webhook_dead_letter: 1, postmark_webhook_queue: 1 },
+      deleted: { webhook_dead_letter: 1, postmark_webhook_queue: 1, glofox_webhook_attempts: 0 },
     }))
   })
 
@@ -292,7 +355,7 @@ describe('heartbeat and per-table failure', () => {
     expect(body.success).toBe(false)
     expect(body.error).toMatch(/webhook_dead_letter/)
     expect(body.data.errors).toEqual({ webhook_dead_letter: 'column does not exist' })
-    expect(body.data.deleted).toEqual({ webhook_dead_letter: 0, postmark_webhook_queue: 1 })
+    expect(body.data.deleted).toEqual({ webhook_dead_letter: 0, postmark_webhook_queue: 1, glofox_webhook_attempts: 0 })
     expect(ids(db._state.webhookQueue)).toEqual(['q-young'])
     expect(stampHeartbeat).not.toHaveBeenCalled()
   })
@@ -308,7 +371,7 @@ describe('heartbeat and per-table failure', () => {
     const body = await res.json()
     expect(body.error).toMatch(/postmark_webhook_queue/)
     expect(body.data.errors).toEqual({ postmark_webhook_queue: 'permission denied' })
-    expect(body.data.deleted).toEqual({ webhook_dead_letter: 1, postmark_webhook_queue: 0 })
+    expect(body.data.deleted).toEqual({ webhook_dead_letter: 1, postmark_webhook_queue: 0, glofox_webhook_attempts: 0 })
     expect(ids(db._state.deadLetters)).toEqual(['d-pending'])
     expect(stampHeartbeat).not.toHaveBeenCalled()
   })
