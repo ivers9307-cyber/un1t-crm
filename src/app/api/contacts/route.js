@@ -7,7 +7,7 @@ import { uuidLike, email, phone, leadSourceSchema, MANAGER_ROLES } from '@/lib/s
 import { sendPushToRolesAtLocationOnce } from '@/lib/push-dedup'
 import { triggerSequencesForPipelineStageChange } from '@/lib/sequences'
 import { logWarn } from '@/lib/log'
-import { assertLocationAccess } from '@/lib/auth'
+import { assertLocationAccess, hasRoleAtLocation } from '@/lib/auth'
 
 const ContactCreateSchema = z.object({
   name: z.string().min(1).max(200),
@@ -55,6 +55,13 @@ export async function POST(request) {
     if (!auth.user.isMaster) {
       const guard = assertLocationAccess(auth.user, body.location_id)
       if (guard) return guard
+    }
+    // ROLESWEEP.2 — requireApiKeyOrManager's cookie branch only says
+    // "Manager+ somewhere"; THIS is the decision: MANAGER_ROLES at the
+    // location the contact is created at, after membership. A refusal keeps
+    // the helper's 401 body.
+    if (!hasRoleAtLocation(auth.user, body.location_id, MANAGER_ROLES)) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
     }
   }
   const db = createServerClient()

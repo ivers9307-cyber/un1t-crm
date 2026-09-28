@@ -5,9 +5,10 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { requireApiKeyOrManager, assertRowInOrg } from '@/lib/api-auth'
-import { assertLocationAccessOr404 } from '@/lib/auth'
+import { assertLocationAccessOr404, hasRoleAtLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { hexColor, url } from '@/lib/schemas'
+import { hexColor, url, MANAGER_ROLES } from '@/lib/schemas'
+import { logError } from '@/lib/log'
 
 // SAAS-12 — cookie/session location guard for this detail route.
 // assertRowInOrg only scopes per-org API keys (it no-ops when orgId is
@@ -18,10 +19,25 @@ import { hexColor, url } from '@/lib/schemas'
 // NextResponse (not 403) so a cross-tenant probe can't confirm an id
 // exists — same convention as assertRowInOrg. No-op for the API-key
 // paths (user is null). Mirrors the cookie guard in /api/contacts/[id].
+//
+// ROLESWEEP.2 — requireApiKeyOrManager's cookie branch only says "Manager+
+// somewhere"; THIS decides: MANAGER_ROLES at the event type's location, 404
+// like a non-member. A missing row is 404 too (it used to pass: a null
+// location_id reads as "no specific location" to assertLocationAccessOr404),
+// and a failed read is a 500, never a pass.
 async function assertEventTypeSessionAccess(db, user, id) {
   if (!user || user.role === 'master') return null
-  const { data: row } = await db.from('event_types').select('location_id').eq('id', id).maybeSingle()
-  return assertLocationAccessOr404(user, row?.location_id)
+  const { data: row, error } = await db.from('event_types').select('location_id').eq('id', id).maybeSingle()
+  if (error) {
+    logError('event-types', 'session access read failed', { id, err: error })
+    return NextResponse.json({ success: false, error: 'Could not load event type' }, { status: 500 })
+  }
+  const guard = assertLocationAccessOr404(user, row?.location_id)
+  if (guard) return guard
+  if (!hasRoleAtLocation(user, row?.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  }
+  return null
 }
 
 const EventUpdateSchema = z.object({
