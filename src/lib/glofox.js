@@ -1582,8 +1582,10 @@ export function interpretMemberBody(body) {
     return { member: null, refused: true, messageCode: code }
   }
   const member = body.data && typeof body.data === 'object' && !Array.isArray(body.data) ? body.data : body
-  const id = member._id ?? member.id ?? member.member_id
-  if (id == null || String(id).trim() === '') return none
+  // Same id rule as mapGlofoxMember's pluck: the first of _id / id / member_id
+  // that is not null and not blank (an empty _id falls through to id).
+  const id = [member._id, member.id, member.member_id].find((v) => v != null && String(v).trim() !== '')
+  if (id === undefined) return none
   return { member, refused: false, messageCode: null }
 }
 

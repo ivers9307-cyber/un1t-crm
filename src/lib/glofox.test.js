@@ -377,6 +377,12 @@ describe('MEMBERRESULT.1 — a 2xx that carries no member is no data', () => {
   const REFUSAL = { success: false, message: CODE, message_code: CODE }
 
   describe('interpretMemberBody (pure)', () => {
+    it('takes the first non-blank id, like mapGlofoxMember (an empty _id falls through to id)', async () => {
+      const { interpretMemberBody } = await import('./glofox.js')
+      const member = { _id: '', id: 'm-synthetic-1', first_name: 'Test' }
+      expect(interpretMemberBody(member)).toEqual({ member, refused: false, messageCode: null })
+      expect(interpretMemberBody({ _id: '  ', id: null, member_id: '' })).toEqual({ member: null, refused: true, messageCode: 'NO_MEMBER_IN_BODY' })
+    })
     it('a wrapped member is the member', async () => {
       const { interpretMemberBody } = await import('./glofox.js')
       const member = { _id: 'g1', first_name: 'A', membership: { status: 'ACTIVE' } }
