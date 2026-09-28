@@ -33,18 +33,23 @@ const WRITE_ROLES = ['owner', 'manager', 'head_coach']
 // 404 a non-member (detail route: ids stay non-enumerable), then judge
 // WRITE_ROLES at the contact's location. Masters are exempt from both, as on
 // the sibling GET / POST in ../route.js.
+//
+// ONE 404 body for "no such contact" and "a contact at a studio you are not
+// in": assertLocationAccessOr404's own body ({ success:false, error:'Not
+// found' }) differed from the missing-contact body, so the shape alone told a
+// caller the id exists elsewhere. The route's `{ ok:false }` shape is kept —
+// it is what ContactDevicesCard reads (`data.ok` / `data.error`).
+const contactNotFound = () => NextResponse.json({ ok: false, error: 'Contact not found' }, { status: 404 })
+
 async function gateContact(db, user, contactId) {
   const { data: contact, error } = await db
     .from('contacts')
     .select('id, location_id')
     .eq('id', contactId)
     .single()
-  if (error || !contact) {
-    return NextResponse.json({ ok: false, error: 'Contact not found' }, { status: 404 })
-  }
+  if (error || !contact) return contactNotFound()
   if (user.isMaster) return null
-  const guard = assertLocationAccessOr404(user, contact.location_id)
-  if (guard) return guard
+  if (assertLocationAccessOr404(user, contact.location_id)) return contactNotFound()
   if (!hasRoleAtLocation(user, contact.location_id, WRITE_ROLES)) {
     return NextResponse.json({ ok: false, error: 'Admin only' }, { status: 403 })
   }

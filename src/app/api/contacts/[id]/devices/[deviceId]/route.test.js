@@ -6,8 +6,9 @@
 // anywhere could delete or relabel a heart-rate strap on any contact in the
 // estate by id (a cross-tenant IDOR).
 //
-// Now: the contact is read (404 `Contact not found` when absent), a
-// non-member gets the detail-route 404 from assertLocationAccessOr404, and
+// Now: the contact is read, and a missing contact and a contact at a studio
+// the caller is not in answer the SAME 404 `{ ok:false, error:'Contact not
+// found' }` (the shape ContactDevicesCard reads), and
 // the write role is judged AT THE CONTACT'S location (hasRoleAtLocation),
 // never at the active studio. Masters are exempt, as on the sibling
 // GET / POST in ../route.js.
@@ -128,7 +129,7 @@ describe.each(HANDLERS)('%s /api/contacts/[id]/devices/[deviceId]', (_name, call
     createServerClient.mockReturnValue(db)
     const res = await call()
     expect(res.status).toBe(404)
-    expect(await res.json()).toEqual({ success: false, error: 'Not found' })
+    expect(await res.json()).toEqual({ ok: false, error: 'Contact not found' })
     expect(writes).toEqual([])
   })
 
@@ -138,7 +139,20 @@ describe.each(HANDLERS)('%s /api/contacts/[id]/devices/[deviceId]', (_name, call
     createServerClient.mockReturnValue(db)
     const res = await call()
     expect(res.status).toBe(404)
+    expect(await res.json()).toEqual({ ok: false, error: 'Contact not found' })
     expect(writes).toEqual([])
+  })
+
+  it('a contact at another studio and a missing contact answer the SAME 404 (no existence leak)', async () => {
+    const caller = person({ [LOC_B]: 'manager' }, LOC_B)
+    getCurrentUser.mockResolvedValue(caller)
+    createServerClient.mockReturnValue(mockDb().db)
+    const elsewhere = await call()
+    createServerClient.mockReturnValue(mockDb({ contact: null }).db)
+    const missing = await call()
+    expect(missing.status).toBe(404)
+    expect(elsewhere.status).toBe(404)
+    expect(await elsewhere.json()).toEqual(await missing.json())
   })
 
   it('a missing contact answers the route\'s own 404 and writes nothing', async () => {
