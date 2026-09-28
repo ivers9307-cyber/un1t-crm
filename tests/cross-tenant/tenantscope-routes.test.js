@@ -268,6 +268,61 @@ describe('POST /api/admin/push/test — only someone in your own organisation (T
   })
 })
 
+// ─── a failed scope read (plan D2d) ──────────────────────────────────
+// loadFleetScope THROWS on a failed read (pinned in
+// src/lib/staff-fleet-scope.test.js); these pin the other half — every
+// caller turns the throw into a 500 and sends nothing. A route that caught
+// it and carried on with no scope would answer 200/404 instead.
+
+// One table answers { data: null, error } — the builder still chains.
+function failing(base, table) {
+  return {
+    ...base,
+    from(t) {
+      if (t !== table) return base.from(t)
+      const b = {}
+      for (const m of ['select', 'eq', 'in', 'order', 'range']) b[m] = () => b
+      b.then = (onF, onR) => Promise.resolve({ data: null, error: { message: 'boom' } }).then(onF, onR)
+      return b
+    },
+  }
+}
+
+describe('a failed fleet-scope read is a 500 and nothing is sent (TENANTSCOPE.1, D2d)', () => {
+  beforeEach(() => {
+    vi.mocked(createServerClient).mockReturnValue(failing(db, 'profile_organizations'))
+  })
+
+  it('POST /api/staff-devices/nudge answers 500, pushes nothing and claims nothing', async () => {
+    as(users.managerA1())
+    const req = makeReq('/api/staff-devices/nudge', { method: 'POST', body: { profile_ids: [P_STAFF_A1, P_STAFF_B1] } })
+    const { status, json } = await jsonOf(await nudge.POST(req))
+    expect(status).toBe(500)
+    expect(json.success).toBe(false)
+    expect(sendPush).not.toHaveBeenCalled()
+    expect(db._writesTo('device_tokens')).toEqual([])
+    expect(db._writes).toEqual([])
+  })
+
+  it('POST /api/admin/push/test answers 500 (not the 404), and nothing is sent', async () => {
+    as(users.ownerA1())
+    const req = makeReq('/api/admin/push/test', { method: 'POST', body: { recipient_id: P_STAFF_A1 } })
+    const { status, json } = await jsonOf(await pushTest.POST(req))
+    expect(status).toBe(500)
+    expect(json.success).toBe(false)
+    expect(sendPush).not.toHaveBeenCalled()
+    expect(db._writes).toEqual([])
+  })
+
+  it('GET /api/staff-devices answers 500, never an empty fleet', async () => {
+    as(users.managerA1())
+    const { status, json } = await jsonOf(await staffDevices.GET())
+    expect(status).toBe(500)
+    expect(json.success).toBe(false)
+    expect(json).not.toHaveProperty('data')
+  })
+})
+
 // ─── the two host jobs ───────────────────────────────────────────────
 describe("POST /api/admin/backfill-host-contacts — your organisation's hosts only (TENANTSCOPE.1)", () => {
   it("an owner at A One back-fills org A's hosted events only", async () => {
