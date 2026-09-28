@@ -19,6 +19,7 @@ import Link from 'next/link'
 import { ToggleRight, Image as ImageIcon, Clock, CalendarDays, ChevronRight, Bell, Mail } from 'lucide-react'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
 import { canEditLocationFeatures } from '@/lib/staff-access'
+import { logError } from '@/lib/log'
 import LocationForm from '@/components/LocationForm'
 import LocationFeatures from '@/components/LocationFeatures'
 import RolePermissions from '@/components/RolePermissions'
@@ -93,7 +94,7 @@ export default async function EditLocationPage(props) {
   //
   // Pull the Xero connection row (if any) and a sample car for the BCA
   // template preview. Both feed into LocationIntegrations.
-  const [{ data: org }, { data: xeroConnection }, { data: sampleBcaCar }] = await Promise.all([
+  const [{ data: org }, { data: xeroConnection, error: xeroErr }, { data: sampleBcaCar }] = await Promise.all([
     location.organization_id
       ? db.from('organizations').select('*').eq('id', location.organization_id).maybeSingle()
       : Promise.resolve({ data: null }),
@@ -119,6 +120,11 @@ export default async function EditLocationPage(props) {
           .maybeSingle()
       : Promise.resolve({ data: null }),
   ])
+
+  // CHANNELREAD.1 — a failed xero_connections read is not "not connected":
+  // the Xero tab would offer Connect (an OAuth rebind) over a live
+  // connection. The tab renders "Could not load" instead.
+  if (xeroErr) logError('location-settings', 'xero_connections read failed', { locationId: location.id, err: xeroErr.message })
 
   // Build the visible tab list. Features is master-only (per the mig 092
   // audit it's a master knob); Deposits only shows when car_processing is
@@ -345,6 +351,7 @@ export default async function EditLocationPage(props) {
         <LocationIntegrations
           location={location}
           xeroConnection={xeroConnection || null}
+          xeroReadFailed={Boolean(xeroErr)}
           user={user}
           sampleBcaCar={sampleBcaCar || null}
         />

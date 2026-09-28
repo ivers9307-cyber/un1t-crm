@@ -138,3 +138,25 @@ describe('GET /api/xero/callback — owner at the OAuth state\'s location', () =
     expect(exchangeAuthorizationCode).not.toHaveBeenCalled()
   })
 })
+
+// CHANNELREAD.1 — the "which orgs are already taken" read discarded its
+// error, so on a blip chooseTenantToBind saw nothing taken and could bind
+// this location to another location's org (the XERO-ONE-ORG.1 hazard).
+describe('GET /api/xero/callback — a failed taken-orgs read binds nothing', () => {
+  it('redirects with an error and never upserts', async () => {
+    getCurrentUser.mockResolvedValue(person({ [LOC_A]: 'owner' }, LOC_A))
+    listConnectedTenants.mockResolvedValue([{ tenantId: 't-1', tenantName: 'Org One', tenantType: 'ORGANISATION' }])
+    const upsert = vi.fn()
+    createServerClient.mockReturnValue({
+      from: vi.fn(() => ({
+        select: () => Promise.resolve({ data: null, error: { message: 'boom' } }),
+        upsert,
+      })),
+    })
+    const res = await callback(LOC_A)
+    expect(res.status).toBe(307)
+    expect(decodeURIComponent(res.headers.get('location')).replace(/\+/g, ' '))
+      .toContain('Could not check which Xero organisations are already connected, so nothing was changed. Try connecting again.')
+    expect(upsert).not.toHaveBeenCalled()
+  })
+})

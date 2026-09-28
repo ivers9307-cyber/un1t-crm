@@ -19,6 +19,7 @@ import { pullTaxRates } from '@/lib/xero/tax-rates-sync'
 import { pullContacts } from '@/lib/xero/contacts-sync'
 import { safeReturnTo, decodeReturnTo } from '@/lib/xero/return-to'
 import { chooseTenantToBind } from '@/lib/xero/tenant-binding'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -119,9 +120,19 @@ export async function GET(req) {
     // Now: never take an org another location holds, and say which one we did
     // take so a wrong auto-pick is visible immediately rather than months later.
     const db = createServerClient()
-    const { data: existing } = await db
+    const { data: existing, error: existingErr } = await db
       .from('xero_connections')
       .select('tenant_id, location_id, locations:location_id ( name )')
+    // CHANNELREAD.1 — on a failed read `existing` was null, so every org
+    // looked free and chooseTenantToBind could hand this location an org
+    // another location holds (bills filed into the wrong company). Bind
+    // nothing; the operator reconnects.
+    if (existingErr) {
+      logError('xero-callback', 'xero_connections read failed', { locationId, err: existingErr.message })
+      return clearCookie(NextResponse.redirect(settingsUrl(req, locationId, {
+        error: 'Could not check which Xero organisations are already connected, so nothing was changed. Try connecting again.',
+      }, returnTo)))
+    }
     const existingRows = (existing || []).map((r) => ({
       tenant_id: r.tenant_id,
       location_id: r.location_id,
