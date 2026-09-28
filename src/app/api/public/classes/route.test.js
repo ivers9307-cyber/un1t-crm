@@ -13,7 +13,6 @@ vi.mock('@/lib/rate-limit', () => ({
   checkRateLimit: vi.fn(async () => ({ allowed: true })),
   rateLimitResponse: vi.fn(() => Response.json({ success: false }, { status: 429 })),
 }))
-vi.mock('@/lib/connection-registry', () => ({ getGlofoxConfig: vi.fn(async () => ({})) }))
 vi.mock('@/lib/glofox', () => ({
   glofoxCredentialsForLocation: vi.fn(async () => ({ branchId: 'b', apiKey: 'k', apiToken: 't' })),
   missingGlofoxCredentialsForLocation: vi.fn(() => []),
