@@ -11,7 +11,7 @@
 // operator can switch it on the settings card without re-doing OAuth.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { exchangeAuthorizationCode, listConnectedTenants, XeroError } from '@/lib/xero/client'
 import { pullAccounts } from '@/lib/xero/accounts-sync'
@@ -63,7 +63,10 @@ export async function GET(req) {
 
   const user = await getCurrentUser()
   if (!user) return NextResponse.redirect(new URL('/login', req.url))
-  if (user.role !== 'owner' && user.role !== 'master') {
+  // SECFIX.1 — coarse pre-check only (owner somewhere; masters via
+  // profileRole). Owner is judged at the state's location below, never at
+  // the caller's ACTIVE studio (`user.role`).
+  if (!hasRoleAtAnyLocation(user, ['owner'])) {
     return NextResponse.redirect(settingsUrl(req, stateLocationId, { error: 'Not permitted' }, stateReturnTo))
   }
 
@@ -87,6 +90,15 @@ export async function GET(req) {
   const returnTo = stateReturnTo // already decoded from the verified state
   if (!locationId) {
     return clearCookie(NextResponse.redirect(settingsUrl(req, null, { error: 'Invalid state' }, returnTo)))
+  }
+  // SECFIX.1 (security) — the state's location had NO membership check. The
+  // state is verified only against the xero_oauth_state cookie, which the
+  // caller's own browser holds, so an owner anywhere who completed OAuth with
+  // a crafted state could bind a Xero org to another tenant's location.
+  // Owner AT that location (implies membership; masters pass via
+  // profileRole), before the code exchange, or the route's 'Not permitted'.
+  if (!hasRoleAtLocation(user, locationId, ['owner'])) {
+    return clearCookie(NextResponse.redirect(settingsUrl(req, locationId, { error: 'Not permitted' }, returnTo)))
   }
 
   try {
