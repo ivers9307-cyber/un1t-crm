@@ -52,8 +52,11 @@ const BASE_SCHEMA = `
   -- has to undo, so the replay models it rather than granting by hand.
   ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;
 
+  -- Supabase's own auth.uid() shape: an empty claims setting (what a rolled-
+  -- back set_config leaves behind) reads as NULL, never as bad JSON.
   CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$
-    SELECT nullif(current_setting('request.jwt.claims', true)::json->>'sub', '')::uuid
+    SELECT coalesce(nullif(current_setting('request.jwt.claim.sub', true), ''),
+                    (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub'))::uuid
   $$;
   GRANT EXECUTE ON FUNCTION auth.uid() TO authenticated, anon;
 
@@ -133,6 +136,10 @@ const BASE_SCHEMA = `
   CREATE FUNCTION private.auth_contact_id() RETURNS uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$
     SELECT id FROM public.contacts WHERE user_id = auth.uid()
   $$;
+  -- Prod: the private.* helpers are not executable by PUBLIC/anon (the
+  -- plan's inventory: anon's query against these policies ERRORS, 42501 on
+  -- the helper), only by authenticated.
+  REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA private FROM PUBLIC;
   GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA private TO authenticated;
 `
 
@@ -240,6 +247,7 @@ async function asUser(uid, sql, params = []) {
 async function asAnon(sql) {
   await runSql('BEGIN')
   try {
+    await db.query(`SELECT set_config('request.jwt.claims', $1, true)`, [JSON.stringify({ role: 'anon' })])
     await runSql('SET LOCAL ROLE anon')
     return (await db.query(sql)).rows
   } finally {
@@ -310,8 +318,8 @@ describe('before 648 — the leak and the write hole (prod today)', () => {
     expect(rows).toHaveLength(1)
   })
 
-  it('anon is fenced only by an error (no USAGE on private), not by the grant', async () => {
-    await expect(asAnon('SELECT id FROM public.locations')).rejects.toThrow(/permission denied for schema private/)
+  it('anon is fenced only by an error (the private.* helpers), not by the grant', async () => {
+    await expect(asAnon('SELECT id FROM public.locations')).rejects.toThrow(/permission denied for (schema private|function auth_is_)/)
   })
 })
 
@@ -460,7 +468,13 @@ describe('after 648 — people', () => {
 
   it('anon: refused by the grant itself now', async () => {
     await expect(asAnon('SELECT id FROM public.locations')).rejects.toThrow(DENIED)
-    await expect(asAnon('SELECT id FROM public.contact_external_integrations')).rejects.toThrow(DENIED)
+    // The planner pre-evaluates the STABLE auth_contact_id() in this table's
+    // policy while estimating, so anon's first error here is the helper's
+    // EXECUTE, raised before the executor's table check. Refused either way;
+    // the catalog cases above prove anon holds no column of it.
+    await expect(asAnon('SELECT id FROM public.contact_external_integrations'))
+      .rejects.toThrow(/permission denied for (table contact_external_integrations|function auth_contact_id)/)
+    expect((await db.query(`SELECT has_any_column_privilege('anon', 'public.contact_external_integrations', 'SELECT') AS v`)).rows[0].v).toBe(false)
   })
 })
 
