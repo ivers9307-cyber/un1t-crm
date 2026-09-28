@@ -293,3 +293,28 @@ describe("POST /api/admin/backfill-host-contacts — your organisation's hosts o
     expect(addEventAttendeesToHostList).not.toHaveBeenCalled()
   })
 })
+
+describe('POST /api/admin/migrate-host-leads — your organisation only (TENANTSCOPE.1)', () => {
+  const migrateReq = (q = '') => makeReq(`/api/admin/migrate-host-leads${q}`, { method: 'POST' })
+
+  it('an owner at A One runs it for org A only', async () => {
+    as(users.ownerA1())
+    const { status } = await jsonOf(await migrateHostLeads.POST(migrateReq()))
+    expect(status).toBe(200)
+    expect(runHostLeadMigration).toHaveBeenCalledWith(db, { dryRun: true, organizationIds: [ORG_A] }) // main: { dryRun: true }
+  })
+
+  it('a master runs it estate-wide', async () => {
+    as(users.master())
+    await migrateHostLeads.POST(migrateReq('?dry=0'))
+    expect(runHostLeadMigration).toHaveBeenCalledWith(db, { dryRun: false, organizationIds: null })
+  })
+
+  it('a non-master with no active organisation is refused, and nothing runs', async () => {
+    as(noActive(users.ownerA1()))
+    const { status, json } = await jsonOf(await migrateHostLeads.POST(migrateReq('?dry=0')))
+    expect(status).toBe(400) // main: 200, every organisation's anchors
+    expect(json.error).toBe('No active organisation')
+    expect(runHostLeadMigration).not.toHaveBeenCalled()
+  })
+})
