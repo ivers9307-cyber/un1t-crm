@@ -30,20 +30,28 @@
 //      be resolved is skipped BY NAME and the name is printed, so nobody
 //      has to guess what the checker declined to read.
 //   3. Scan src/**/*.{js,jsx} for `.from('<table>')…` chains and check every
-//      PLAIN STRING LITERAL column name on the chain: the PostgREST select
-//      grammar (`a,b`, `alias:col`, `rel(...)`, `rel!fk(...)`, `*`,
-//      `col->>'k'`, casts, aggregates) plus the first argument of
-//      `.order/.eq/.neq/.in/.is/.gt/.gte/.lt/.lte/.like/.ilike`.
+//      column name on the chain whose text it can READ: the PostgREST select
+//      grammar (`a,b`, `alias:col`, `rel(...)`, `rel!fk(...)`, an embed named
+//      by its FK column — `alias:fk_col(...)` / `fk_col(...)` — resolved
+//      through the FKs the replay also learns (SELCOLS2.1), `*`, `col->>'k'`,
+//      casts, aggregates) plus the first argument of
+//      `.order/.eq/.neq/.in/.is/.gt/.gte/.lt/.lte/.like/.ilike`. A select
+//      string is readable when it is a literal or (SELCOLS2.1) a same-file
+//      `const`, template of consts, `+` concatenation or `[…].join()`.
 //
 // THIS IS A FLOOR, NOT A PROOF — same posture as check-location-scoping and
 // check-rls-restrictive. Everything it cannot READ, it SKIPS in silence:
-//   - a select string built from a variable, a template with `${}`, or a
-//     constant imported from elsewhere (very common for shared column lists);
+//   - a select string held in a `let`, a parameter, a member, a call, a name
+//     declared twice in the file, or a constant IMPORTED from another file
+//     (19 sites / 4 constants at SELCOLS2.1, verified clean by hand then),
+//     or a template whose `${}` is not a same-file const;
 //   - a chain built across statements (`let q = db.from(t); q = q.eq(…)`) —
 //     only the links syntactically attached to `.from()` are walked;
 //   - `.from(someVar)`, `.rpc()`, and any table the migrations don't define
 //     (a skipped view, a `private.` table, a table made by hand);
-//   - an embed whose relation name is a FK constraint rather than a table;
+//   - an embed whose relation name is neither a table nor a single-column FK
+//     of its parent (an FK into auth.*, a composite FK, one made outside the
+//     migrations) — none in src/ at SELCOLS2.1;
 //   - `mobile/**` and `tests/**`, which are outside the scan entirely.
 // A clean run therefore means "no phantom column among the ones I could
 // read", never "every column in the repo exists". Widening what it can read
