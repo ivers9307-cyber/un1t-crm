@@ -22,8 +22,9 @@ async function loadOwned(db, user, id) {
     .eq('id', id)
     .single()
   if (!row) return { error: NextResponse.json({ success: false, error: 'Not found' }, { status: 404 }) }
-  const allowed = getUserLocationIds(user) // null = master (no restriction)
-  if (allowed !== null && !allowed.includes(row.location_id)) {
+  // Every location the caller belongs to; a master's is every active one
+  // (getCurrentUser), so a master still passes here. Never null.
+  if (!getUserLocationIds(user).includes(row.location_id)) {
     return { error: NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 }) }
   }
   // ROLESWEEP.1a — the role is judged at the ROW's location, not the
