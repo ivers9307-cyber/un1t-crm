@@ -78,6 +78,12 @@ describe('IntegrationsHub — unknown rows (HUBREAD.1)', () => {
     expect(html).toContain('Could not load Xero just now')
   })
 
+  it('the status legend explains the "Could not load" chip (N1)', () => {
+    const html = renderToStaticMarkup(<IntegrationsHub data={{ ...UNREAD, attention: [] }} isMaster />)
+    const legend = html.match(/aria-label="Status legend">([\s\S]*?)<\/div>/)
+    expect(legend?.[1]).toContain('Could not load')
+  })
+
   it('a genuinely unconnected location still offers Connect (pin)', () => {
     const healthy = {
       ...UNREAD,

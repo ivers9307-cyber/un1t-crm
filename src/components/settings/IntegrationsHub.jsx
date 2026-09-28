@@ -486,6 +486,7 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
         <StatusChip status="action_needed" />
         <StatusChip status="error" />
         <StatusChip status="not_connected" />
+        <StatusChip status="unknown" />
         <StatusChip status="coming_soon" />
         <StatusChip status="platform" />
       </div>
