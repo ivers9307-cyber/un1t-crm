@@ -98,4 +98,15 @@ describe('notifyUsers — failed reads (C16 PUSHREADERR.1, D7)', () => {
     expect(sendEmail).toHaveBeenCalledTimes(1)
     expect(t).toMatchObject({ emailed: 1, email_failed: 1, read_failed: 1 })
   })
+
+  // Review: when only the fallback's own template read fails (sendPush's was
+  // fine), nothing else logs it — readPushAllowedIds is silent by contract.
+  it('unreadable fallback templates are logged once, structurally', async () => {
+    h.profiles = { data: [COACH, { id: 'coach-2', full_name: 'Two', email: 'coach-2@example.test' }], error: null }
+    readPushAllowedIds.mockResolvedValue({ allowed: new Set(['coach-1']), error: null, templatesError: READ_ERR })
+    await notifyUsers(['coach-1', 'coach-2'], PAYLOAD)
+    expect(logError).toHaveBeenCalledTimes(1)
+    expect(logError).toHaveBeenCalledWith('notify', 'fallback role templates read failed; judged on code defaults',
+      expect.objectContaining({ category: 'shift_reminder', recipients: 2, unjudged: 1, err: READ_ERR }))
+  })
 })

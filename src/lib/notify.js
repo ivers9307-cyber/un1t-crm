@@ -130,10 +130,17 @@ export async function notifyUsers(userIds, payload) {
   }
   const allowed = perm.allowed
   if (perm.templatesError) {
-    // C16 (D7d) — judged on code defaults (push.js logged the template read);
-    // a refusal there is unjudged, not an opt-out.
+    // C16 (D7d) — this fallback's own template read failed, so its recipients
+    // were judged on the code defaults; a refusal there is unjudged, not an
+    // opt-out. readPushAllowedIds does not log, and sendPush's template read
+    // is a separate read that may well have succeeded, so this is logged here
+    // (once) or nobody hears of it.
+    const unjudged = noTokenIds.filter(id => !allowed.has(id)).length
     totals.read_failed = 1
-    totals.email_failed += noTokenIds.filter(id => !allowed.has(id)).length
+    totals.email_failed += unjudged
+    logError('notify', 'fallback role templates read failed; judged on code defaults', {
+      category, recipients: noTokenIds.length, unjudged, err: perm.templatesError,
+    })
   }
   const fallbackTargets = (profiles || []).filter(p => p.email && allowed.has(p.id))
   if (!fallbackTargets.length) return totals
