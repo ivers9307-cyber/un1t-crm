@@ -49,7 +49,7 @@ const TARGET = 'c0000000-0000-0000-0000-000000000003'
 
 // Records which tables were read, so "never read the person" is an
 // assertion rather than an assumption.
-function makeDb({ targetLocationIds = [LOC_THEIRS], locError = null, locationRows = [] } = {}) {
+function makeDb({ targetLocationIds = [LOC_THEIRS], locError = null, locationRows = [], locationsError = null } = {}) {
   const touched = []
   const from = (table) => {
     touched.push(table)
@@ -81,7 +81,11 @@ function makeDb({ targetLocationIds = [LOC_THEIRS], locError = null, locationRow
     // locations / location_role_permissions / profile_organizations
     const chain = {}
     for (const op of ['select', 'eq', 'order', 'in']) chain[op] = () => chain
-    chain.then = (res) => Promise.resolve({ data: table === 'locations' ? locationRows : [] }).then(res)
+    chain.then = (res) => Promise.resolve(
+      table === 'locations'
+        ? { data: locationsError ? null : locationRows, error: locationsError }
+        : { data: [] },
+    ).then(res)
     return chain
   }
   return { touched, from }
@@ -217,5 +221,19 @@ describe('/settings/staff/[id] — STAFFFORMSETTINGS.1: StaffForm gets identity 
     expect(theirs.unifi_configured).toBe(false)
     expect(JSON.stringify(el.props.locations)).not.toMatch(/SYNTH-|\+353000000000|test_phones/)
     expect(el.props.callerOwnerLocationIds).toEqual([LOC_MINE, LOC_THEIRS])
+    expect(el.props.locationsLoadFailed).toBe(false)
+  })
+
+  // Review N1: the helper's error used to be discarded, so a failed read
+  // looked like "no studios". The form still renders (never louder), and is
+  // told the read failed so it can say so.
+  it('a failed studios read still renders StaffForm, flagged', async () => {
+    createServerClient.mockReturnValue(makeDb({ locationsError: { code: '57014', message: 'statement timeout' } }))
+    getCurrentUser.mockResolvedValue(user({ role: 'master', isMaster: true, rolesByLocation: {} }))
+
+    const el = findElement(await call(), 'StaffForm')
+    expect(el).toBeTruthy()
+    expect(el.props.locations).toEqual([])
+    expect(el.props.locationsLoadFailed).toBe(true)
   })
 })

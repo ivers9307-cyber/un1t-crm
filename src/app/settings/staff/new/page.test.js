@@ -17,12 +17,16 @@ import { createServerClient } from '@/lib/supabase'
 
 const LOC = 'a0000000-0000-0000-0000-000000000001'
 
-function makeDb(locationRows) {
+function makeDb(locationRows, locationsError = null) {
   return {
     from: (table) => {
       const chain = {}
       for (const op of ['select', 'eq', 'order', 'in']) chain[op] = () => chain
-      chain.then = (res) => Promise.resolve({ data: table === 'locations' ? locationRows : [] }).then(res)
+      chain.then = (res) => Promise.resolve(
+        table === 'locations'
+          ? { data: locationsError ? null : locationRows, error: locationsError }
+          : { data: [] },
+      ).then(res)
       return chain
     },
   }
@@ -59,5 +63,19 @@ describe('/settings/staff/new — STAFFFORMSETTINGS.1: StaffForm gets identity +
     expect(loc).toMatchObject({ id: LOC, name: 'Studio', slug: 'studio' })
     expect(JSON.stringify(el.props.locations)).not.toMatch(/SYNTH-|\+353000000000|test_phones/)
     expect(el.props.callerOwnerLocationIds).toEqual([LOC])
+    expect(el.props.locationsLoadFailed).toBe(false)
+  })
+
+  // Review N1: the helper's error used to be discarded, so a failed read
+  // looked like "no studios". The form still renders (never louder), and is
+  // told the read failed so it can say so.
+  it('a failed studios read still renders StaffForm, flagged', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'm1', isMaster: true, role: 'master', rolesByLocation: {} })
+    createServerClient.mockReturnValue(makeDb([], { code: '57014', message: 'statement timeout' }))
+
+    const el = findElement(await NewStaffPage(), 'StaffForm')
+    expect(el).toBeTruthy()
+    expect(el.props.locations).toEqual([])
+    expect(el.props.locationsLoadFailed).toBe(true)
   })
 })

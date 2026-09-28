@@ -16,8 +16,9 @@ export default async function NewStaffPage() {
   const db = createServerClient()
   // STAFFFORMSETTINGS.1 — identity + unifi_configured, never `settings`
   // (it carried the customer agent's test phone numbers and every
-  // integration's config into this page). A failed read is logged inside.
-  const [{ locations }, { data: templateRows }] = await Promise.all([
+  // integration's config into this page). A failed read is logged inside
+  // and flagged to StaffForm, which still renders but says so.
+  const [{ locations, error: locationsError }, { data: templateRows }] = await Promise.all([
     loadStaffFormLocations(db),
     // PERM-AUDIT.3 — role templates (mig 364) so new assignments
     // start at the role's EFFECTIVE defaults for the chosen location.
@@ -48,6 +49,7 @@ export default async function NewStaffPage() {
       <p className="text-sm text-un1t-subtle mb-6">Create a login for a new staff member</p>
       <StaffForm
         locations={locations}
+        locationsLoadFailed={!!locationsError}
         callerIsMaster={!!user.isMaster}
         callerOwnerLocationIds={callerOwnerLocationIds}
         roleTemplates={roleTemplates}

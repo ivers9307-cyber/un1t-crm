@@ -87,7 +87,8 @@ export default async function EditStaffPage(props) {
       .single(),
     // STAFFFORMSETTINGS.1 — identity + unifi_configured, never `settings`
     // (the customer agent's test phone numbers and every integration's
-    // config rode into this page). A failed read is logged inside.
+    // config rode into this page). A failed read is logged inside and
+    // flagged to StaffForm, which still renders but says so.
     loadStaffFormLocations(db),
     // PERM-AUDIT.3 — role templates (mig 364) so the form hydrates
     // toggles against the role's EFFECTIVE defaults at each location.
@@ -158,6 +159,7 @@ export default async function EditStaffPage(props) {
       <StaffForm
         staff={staff}
         locations={staffFormLocations.locations}
+        locationsLoadFailed={!!staffFormLocations.error}
         callerIsMaster={!!user.isMaster}
         callerOwnerLocationIds={callerOwnerLocationIds}
         roleTemplates={roleTemplates}
