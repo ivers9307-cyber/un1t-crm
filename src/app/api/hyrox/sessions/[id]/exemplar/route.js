@@ -10,6 +10,7 @@ import { createServerClient } from '@/lib/supabase'
 import { APPROVAL_CATEGORY_PERMISSION } from '@shared/permissions'
 import { sessionToExampleText } from '@/lib/hyrox/example-text'
 import { MAX_STORED_EXAMPLES } from '@/lib/hyrox/constants'
+import { mergeLocationSettings, settingsSaveFailure } from '@/lib/location-settings'
 
 export const dynamic = 'force-dynamic'
 
@@ -23,18 +24,19 @@ export async function POST(request, { params }) {
   if (!hasPermissionForLocation(user, session.location_id, APPROVAL_CATEGORY_PERMISSION.hyrox_sessions)) {
     return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   }
-  const { data: loc } = await db.from('locations').select('id, name, settings').eq('id', session.location_id).single()
-  const settings = { ...(loc?.settings || {}) }
-  const hyrox = { ...(settings.hyrox || {}) }
-  const existing = Array.isArray(hyrox.style_examples) ? hyrox.style_examples : []
+  // SETTINGSWIPE.1 — through mergeLocationSettings: this used to discard the
+  // settings read error and rewrite the whole column. `null` = already saved.
   const exampleId = `session:${session.id}`
-  if (existing.some((e) => e?.id === exampleId)) {
-    return NextResponse.json({ success: true, data: { added: false, reason: 'already_saved' } })
-  }
-  const entry = { id: exampleId, source: 'generated', label: `Week ${session.week_no} session ${session.slot}${session.focus ? ` - ${session.focus}` : ''}`, text: sessionToExampleText(session), added_at: new Date().toISOString() }
-  hyrox.style_examples = [entry, ...existing].slice(0, MAX_STORED_EXAMPLES)
-  settings.hyrox = hyrox
-  const { error } = await db.from('locations').update({ settings }).eq('id', session.location_id).select('id').single()
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  const saved = await mergeLocationSettings(db, session.location_id, (settings) => {
+    const hyrox = { ...(settings.hyrox || {}) }
+    const existing = Array.isArray(hyrox.style_examples) ? hyrox.style_examples : []
+    if (existing.some((e) => e?.id === exampleId)) return null
+    const entry = { id: exampleId, source: 'generated', label: `Week ${session.week_no} session ${session.slot}${session.focus ? ` - ${session.focus}` : ''}`, text: sessionToExampleText(session), added_at: new Date().toISOString() }
+    hyrox.style_examples = [entry, ...existing].slice(0, MAX_STORED_EXAMPLES)
+    settings.hyrox = hyrox
+    return settings
+  }, { scope: 'hyrox-exemplar' })
+  if (!saved.ok) return settingsSaveFailure(saved)
+  if (saved.unchanged) return NextResponse.json({ success: true, data: { added: false, reason: 'already_saved' } })
   return NextResponse.json({ success: true, data: { added: true } })
 }

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import ReadFailedNote from '@/components/settings/ReadFailedNote'
 
 // INCLUSION-CORE T5 — operator editor for the UN1T-Points scoring
 // figures: the five per-minute HR-zone point rates (Z1–Z5) plus the
@@ -27,28 +28,33 @@ export default function ScoringClient() {
   const [saving, setSaving] = useState(false)
   const [savedAt, setSavedAt] = useState(null)
   const [error, setError] = useState(null)
+  const [loadFailed, setLoadFailed] = useState(false)
+
+  // SETTINGSWIPE.1 — a failed read is an unknown state with nothing to save.
+  async function load(isCancelled = () => false) {
+    try {
+      const res = await fetch('/api/settings/scoring').then(r => r.json())
+      if (isCancelled()) return
+      if (res.success && res.scoring) {
+        setScoring(res.scoring)
+        setDefaults(res.defaults || null)
+        setLocation(res.location || null)
+        setLoadFailed(false)
+      } else {
+        setScoring(null); setLoadFailed(true)
+      }
+    } catch {
+      if (!isCancelled()) { setScoring(null); setLoadFailed(true) }
+    } finally {
+      if (!isCancelled()) setLoading(false)
+    }
+  }
 
   useEffect(() => {
     let cancelled = false
-    async function load() {
-      try {
-        const res = await fetch('/api/settings/scoring').then(r => r.json())
-        if (cancelled) return
-        if (res.success) {
-          setScoring(res.scoring)
-          setDefaults(res.defaults || null)
-          setLocation(res.location || null)
-        } else {
-          setError(res.error || 'Failed to load')
-        }
-      } catch {
-        if (!cancelled) setError('Failed to load')
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
-    }
-    load()
+    load(() => cancelled)
     return () => { cancelled = true }
+    // load only sets state; run once on mount.
   }, [])
 
   function setZone(id, value) {
@@ -87,7 +93,15 @@ export default function ScoringClient() {
     } catch { setError('Failed to save') } finally { setSaving(false) }
   }
 
-  if (loading || !scoring) return <div className="p-6 text-sm text-un1t-muted">Loading…</div>
+  if (loading) return <div className="p-6 text-sm text-un1t-muted">Loading…</div>
+  if (loadFailed || !scoring) {
+    return (
+      <div className="max-w-3xl">
+        <h1 className="text-xl font-bold text-un1t-text mb-4">Scoring</h1>
+        <ReadFailedNote what="the scoring settings" onRetry={() => load()} />
+      </div>
+    )
+  }
 
   const inputCls = 'w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text'
   const zoneDefaults = defaults?.zone_points || { 1: 1, 2: 2, 3: 3, 4: 4, 5: 5 }

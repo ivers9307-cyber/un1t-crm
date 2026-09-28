@@ -19,6 +19,7 @@ import { useSearchParams } from 'next/navigation'
 import { createBrowserClient } from '@/lib/supabase'
 import { Dumbbell, AlertCircle, Check, RotateCcw, RefreshCw, ChevronRight, X, Plus, Star, Tv, Cast } from 'lucide-react'
 import { Button, Modal, Field, Table } from '@/components/ui'
+import ReadFailedNote from '@/components/settings/ReadFailedNote'
 import { DIFFICULTY_DIALS, MAX_STORED_EXAMPLE_CHARS } from '@/lib/hyrox/constants'
 import HyroxBoard from '@/components/HyroxBoard'
 
@@ -54,7 +55,7 @@ function StatusChip({ status }) {
   )
 }
 
-export default function HyroxPlanner({ initialBlock, initialSessions, initialSettings, locationId, canManage, nextUpId = null }) {
+export default function HyroxPlanner({ initialBlock, initialSessions, initialSettings, locationId, canManage, nextUpId = null, settingsUnreadable = false }) {
   const db = createBrowserClient()
   const searchParams = useSearchParams()
 
@@ -518,127 +519,133 @@ export default function HyroxPlanner({ initialBlock, initialSessions, initialSet
             <ChevronRight size={14} className="text-un1t-subtle transition-transform group-open:rotate-90 shrink-0" />
           </summary>
 
-          <div className="border-t border-un1t-border p-5 space-y-4">
-            <Field
-              id="hyrox-house-style"
-              label="House style"
-              hint="How you run your classes: structure, cue language, favoured formats, equipment, terminology, do's and don'ts."
-            >
-              {(props) => (
-                <textarea
-                  {...props}
-                  rows={5}
-                  maxLength={8000}
-                  value={houseStyle}
-                  onChange={(e) => setHouseStyle(e.target.value)}
-                  placeholder="e.g. Partner relays most weeks, loud counted cueing, always finish with a team effort."
-                  className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
-                />
-              )}
-            </Field>
-
-            <Field
-              id="hyrox-settings-charter"
-              label="Charter"
-              hint="The hard design rules every session is self-checked against. Blank uses the default charter."
-            >
-              {(props) => (
-                <textarea
-                  {...props}
-                  rows={6}
-                  maxLength={8000}
-                  value={settingsCharter}
-                  onChange={(e) => setSettingsCharter(e.target.value)}
-                  placeholder="Leave blank to use the default charter."
-                  className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
-                />
-              )}
-            </Field>
-
-            <div>
-              <span className="block text-sm font-medium text-un1t-text mb-1">Example sessions</span>
-              {examples.length === 0 ? (
-                <p className="text-xs text-un1t-subtle mb-2">
-                  No saved examples yet. Add one below, or use &quot;Save as style example&quot; on a session in the review drawer.
-                </p>
-              ) : (
-                <ul className="divide-y divide-un1t-border/40 border border-un1t-border rounded-md mb-2">
-                  {examples.map((ex, i) => (
-                    <li key={ex.id || i} className="flex items-start justify-between gap-3 px-3 py-2">
-                      <div className="min-w-0">
-                        <p className="text-xs font-medium text-un1t-text truncate">{ex.label || 'Example'}</p>
-                        <p className="text-xs text-un1t-subtle line-clamp-2">
-                          {ex.text.length > 160 ? `${ex.text.slice(0, 160)}…` : ex.text}
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => removeExample(i)}
-                        aria-label="Remove example"
-                        className="text-un1t-muted hover:text-red-700 shrink-0"
-                      >
-                        <X size={14} />
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-
-              {addingExample ? (
-                <div className="bg-un1t-bg border border-un1t-border rounded-md p-3 space-y-2">
-                  <input
-                    type="text"
-                    value={newExampleLabel}
-                    onChange={(e) => setNewExampleLabel(e.target.value)}
-                    placeholder="Label (e.g. Wed engine session)"
-                    className="w-full bg-un1t-surface border border-un1t-border rounded-md px-3 py-1.5 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
-                  />
+          {settingsUnreadable ? (
+            <div className="border-t border-un1t-border p-5">
+              <ReadFailedNote what="the house style and examples" href="/hyrox" />
+            </div>
+          ) : (
+            <div className="border-t border-un1t-border p-5 space-y-4">
+              <Field
+                id="hyrox-house-style"
+                label="House style"
+                hint="How you run your classes: structure, cue language, favoured formats, equipment, terminology, do's and don'ts."
+              >
+                {(props) => (
                   <textarea
-                    rows={4}
-                    maxLength={MAX_STORED_EXAMPLE_CHARS}
-                    value={newExampleText}
-                    onChange={(e) => setNewExampleText(e.target.value)}
-                    placeholder="Paste the session text."
-                    className="w-full bg-un1t-surface border border-un1t-border rounded-md px-3 py-1.5 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
+                    {...props}
+                    rows={5}
+                    maxLength={8000}
+                    value={houseStyle}
+                    onChange={(e) => setHouseStyle(e.target.value)}
+                    placeholder="e.g. Partner relays most weeks, loud counted cueing, always finish with a team effort."
+                    className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
                   />
-                  <div className="flex gap-2">
-                    <Button type="button" size="sm" variant="secondary" disabled={!newExampleText.trim()} onClick={addExample}>
-                      Add
-                    </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => { setAddingExample(false); setNewExampleLabel(''); setNewExampleText('') }}
-                    >
-                      Cancel
-                    </Button>
+                )}
+              </Field>
+
+              <Field
+                id="hyrox-settings-charter"
+                label="Charter"
+                hint="The hard design rules every session is self-checked against. Blank uses the default charter."
+              >
+                {(props) => (
+                  <textarea
+                    {...props}
+                    rows={6}
+                    maxLength={8000}
+                    value={settingsCharter}
+                    onChange={(e) => setSettingsCharter(e.target.value)}
+                    placeholder="Leave blank to use the default charter."
+                    className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
+                  />
+                )}
+              </Field>
+
+              <div>
+                <span className="block text-sm font-medium text-un1t-text mb-1">Example sessions</span>
+                {examples.length === 0 ? (
+                  <p className="text-xs text-un1t-subtle mb-2">
+                    No saved examples yet. Add one below, or use &quot;Save as style example&quot; on a session in the review drawer.
+                  </p>
+                ) : (
+                  <ul className="divide-y divide-un1t-border/40 border border-un1t-border rounded-md mb-2">
+                    {examples.map((ex, i) => (
+                      <li key={ex.id || i} className="flex items-start justify-between gap-3 px-3 py-2">
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium text-un1t-text truncate">{ex.label || 'Example'}</p>
+                          <p className="text-xs text-un1t-subtle line-clamp-2">
+                            {ex.text.length > 160 ? `${ex.text.slice(0, 160)}…` : ex.text}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => removeExample(i)}
+                          aria-label="Remove example"
+                          className="text-un1t-muted hover:text-red-700 shrink-0"
+                        >
+                          <X size={14} />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                {addingExample ? (
+                  <div className="bg-un1t-bg border border-un1t-border rounded-md p-3 space-y-2">
+                    <input
+                      type="text"
+                      value={newExampleLabel}
+                      onChange={(e) => setNewExampleLabel(e.target.value)}
+                      placeholder="Label (e.g. Wed engine session)"
+                      className="w-full bg-un1t-surface border border-un1t-border rounded-md px-3 py-1.5 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
+                    />
+                    <textarea
+                      rows={4}
+                      maxLength={MAX_STORED_EXAMPLE_CHARS}
+                      value={newExampleText}
+                      onChange={(e) => setNewExampleText(e.target.value)}
+                      placeholder="Paste the session text."
+                      className="w-full bg-un1t-surface border border-un1t-border rounded-md px-3 py-1.5 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
+                    />
+                    <div className="flex gap-2">
+                      <Button type="button" size="sm" variant="secondary" disabled={!newExampleText.trim()} onClick={addExample}>
+                        Add
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => { setAddingExample(false); setNewExampleLabel(''); setNewExampleText('') }}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
                   </div>
-                </div>
-              ) : (
-                <Button type="button" size="sm" variant="ghost" icon={Plus} onClick={() => setAddingExample(true)}>
-                  Add example
-                </Button>
-              )}
-            </div>
-
-            {settingsError && (
-              <div className="flex items-center gap-2 text-xs text-red-700 bg-red-500/10 border border-red-500/30 rounded-md px-3 py-2">
-                <AlertCircle size={12} /> {settingsError}
+                ) : (
+                  <Button type="button" size="sm" variant="ghost" icon={Plus} onClick={() => setAddingExample(true)}>
+                    Add example
+                  </Button>
+                )}
               </div>
-            )}
 
-            <div className="flex items-center gap-3 pt-1">
-              <Button type="button" loading={savingSettings} onClick={handleSaveSettings}>
-                Save
-              </Button>
-              {settingsSaved && (
-                <span className="text-xs text-green-700 inline-flex items-center gap-1">
-                  <Check size={12} /> Saved
-                </span>
+              {settingsError && (
+                <div className="flex items-center gap-2 text-xs text-red-700 bg-red-500/10 border border-red-500/30 rounded-md px-3 py-2">
+                  <AlertCircle size={12} /> {settingsError}
+                </div>
               )}
+
+              <div className="flex items-center gap-3 pt-1">
+                <Button type="button" loading={savingSettings} onClick={handleSaveSettings}>
+                  Save
+                </Button>
+                {settingsSaved && (
+                  <span className="text-xs text-green-700 inline-flex items-center gap-1">
+                    <Check size={12} /> Saved
+                  </span>
+                )}
+              </div>
             </div>
-          </div>
+          )}
         </details>
       )}
 
