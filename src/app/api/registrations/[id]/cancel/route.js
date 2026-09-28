@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser, getUserLocationIds, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { cancelRaceRegistration } from '@/lib/race-cancel'
 
@@ -12,7 +12,7 @@ export async function POST(request, props) {
   const params = await props.params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!MANAGER_ROLES.includes(user.role)) {
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
@@ -26,6 +26,11 @@ export async function POST(request, props) {
   const allowed = getUserLocationIds(user) // null = master
   if (allowed !== null && !allowed.includes(reg.race_events.location_id)) {
     return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  }
+  // ROLESWEEP.1b — judged at the registration's event location, not the
+  // caller's active studio.
+  if (!hasRoleAtLocation(user, reg.race_events.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
   const result = await cancelRaceRegistration(db, params.id)

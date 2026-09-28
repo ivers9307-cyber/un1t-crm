@@ -13,7 +13,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 
@@ -40,7 +40,7 @@ export async function PUT(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!hasPermission(user, 'races')) {
+  if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Races feature not enabled for your account' }, { status: 403 })
   }
 
@@ -55,6 +55,10 @@ export async function PUT(request, props) {
   }
   const guard = assertLocationAccessOr404(user, reg.race?.location_id)
   if (guard) return guard
+  // ROLESWEEP.1b — judged at the registration's event location, not the caller's active studio.
+  if (!hasPermissionForLocation(user, reg.race?.location_id, 'races')) {
+    return NextResponse.json({ success: false, error: 'Races feature not enabled for your account' }, { status: 403 })
+  }
 
   const updates = {}
   if (body.wave_id) {
@@ -87,7 +91,7 @@ export async function DELETE(_request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!hasPermission(user, 'races')) {
+  if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Races feature not enabled for your account' }, { status: 403 })
   }
 
@@ -98,6 +102,10 @@ export async function DELETE(_request, props) {
   }
   const guard = assertLocationAccessOr404(user, reg.race?.location_id)
   if (guard) return guard
+  // ROLESWEEP.1b — judged at the registration's event location, not the caller's active studio.
+  if (!hasPermissionForLocation(user, reg.race?.location_id, 'races')) {
+    return NextResponse.json({ success: false, error: 'Races feature not enabled for your account' }, { status: 403 })
+  }
 
   const { error } = await db
     .from('race_registrations')
