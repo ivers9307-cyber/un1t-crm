@@ -25,6 +25,7 @@ const SCAN_TIMEOUT_MS = 30_000
 // name -> the files (besides this one) still allowed to name it.
 const GONE = {
   coachConflictsForBlock: [],
+  isBlockUnstaffedFuture: [],
 }
 
 function walk(dir, out = []) {
