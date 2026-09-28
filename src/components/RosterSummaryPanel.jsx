@@ -26,6 +26,11 @@
 // receives carry no contract anyway; this keeps the panel from labelling every
 // one of them "No contract".
 //
+// FTECOSTVIS.1 (Richard, 28 Sep 2026: "keep the cost hidden") — the month
+// half's "FTE labour (sunk cost)" is salary-derived. The server sends it to
+// owner / manager / master at the studio only, and the line renders only when
+// it came: a head coach sees the contractor figures and no FTE line (never a €0).
+//
 // RSC-AUDIT.2: no own state / events / refs / browser APIs —
 // pure data transformation via summarizeWeek / summarizeMonth +
 // JSX render. Intl.NumberFormat + new Date(y, m, 1) are universal
@@ -256,7 +261,10 @@ export default function RosterSummaryPanel({
                       ? <><TrendingDown size={11} className="inline mr-1" /> {formatEur(Math.abs(month.remainingEur))} over</>
                       : `${formatEur(month.remainingEur)} remaining`}
                   </span>
-                  <span className="text-un1t-muted">FTE labour (sunk cost): {formatEur(month.fteImplicitCostEur)}</span>
+                  {/* FTECOSTVIS.1 — sent to owner / manager / master at the studio only. */}
+                  {Number.isFinite(month.fteImplicitCostEur) && (
+                    <span className="text-un1t-muted">FTE labour (sunk cost): {formatEur(month.fteImplicitCostEur)}</span>
+                  )}
                 </div>
               </>
             )}
