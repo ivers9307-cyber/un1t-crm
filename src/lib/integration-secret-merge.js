@@ -37,8 +37,10 @@ const MASK_PREFIX = '••'
 
 /**
  * Is a submitted secret a REAL new value, versus blank or the masked echo?
- * Mirrors the isFreshSecret contract already used by ads/accounts.js and
- * agent/channels.js so every write-only secret path agrees on "fresh".
+ * ads/accounts.js re-exports this one (N8NECHO.1) and agent/channels.js
+ * applies the same rule, so every write-only secret path agrees on "fresh".
+ * (A tail-keeping maskSecret used to live here with no production caller;
+ * N8NECHO.1 deleted it: a mask carries no character of a secret.)
  * Pure.
  *
  * @param {unknown} value
@@ -50,21 +52,6 @@ export function isFreshSecret(value) {
   if (!s) return false
   if (s.startsWith(MASK_PREFIX)) return false
   return true
-}
-
-/**
- * Mask a secret for display: keep the last `keep` chars behind dots, or a
- * bare bullet run when the value is shorter. null for empty input. Pure.
- *
- * @param {unknown} value
- * @param {number} [keep=4]
- * @returns {string|null}
- */
-export function maskSecret(value, keep = 4) {
-  if (!value) return null
-  const s = String(value)
-  if (s.length <= keep) return '••••••'
-  return `••••••${s.slice(-keep)}`
 }
 
 /** Trim a string-ish patch value; pass non-strings straight through. */

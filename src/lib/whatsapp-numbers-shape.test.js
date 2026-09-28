@@ -1,14 +1,18 @@
 // src/lib/whatsapp-numbers-shape.test.js
 import { describe, it, expect } from 'vitest'
 import { redactToken, publicShape } from './whatsapp-numbers-shape.js'
+import { SECRET_MASK } from './secret-keys.js'
 
-describe('redactToken', () => {
-  it('shows only the last 6 chars', () => {
-    expect(redactToken('EAAG1234567890abcdef')).toBe('••••abcdef')
+describe('redactToken (N8NECHO.1: presence only, no character of the token)', () => {
+  it('any stored token is the shared mask', () => {
+    expect(redactToken('EAAG1234567890abcdef')).toBe(SECRET_MASK)
+    expect(redactToken('short')).toBe(SECRET_MASK)
+    expect(redactToken('EAAG1234567890abcdef')).not.toMatch(/[a-z0-9]/i)
   })
-  it('fully masks short/absent tokens', () => {
-    expect(redactToken('short')).toBe('••••')
+  it('nothing stored is null (the tab reads "Not set")', () => {
     expect(redactToken(null)).toBe(null)
+    expect(redactToken('')).toBe(null)
+    expect(redactToken(undefined)).toBe(null)
   })
 })
 
@@ -16,7 +20,7 @@ describe('publicShape', () => {
   it('never leaks access_token or signup_meta (holds the 2FA PIN), but exposes a coarse history_sync_status', () => {
     const shaped = publicShape({
       id: 'r1', location_id: 'L1', label: 'x', phone_number_id: '1',
-      access_token: 'EAAGtechprovSECRETzz',           // 20 chars → redacts to last 6
+      access_token: 'EAAGtechprovSECRETzz',           // any stored token -> the shared mask
       signup_meta: { pin: '123456', history_sync: { status: 'importing', started_at: '2026-07-16T10:00:00.000Z' } },
       token_type: 'business', connected_via: 'embedded_signup',
       business_account_id: 'w', app_id: 'a', display_phone: 'd', source: 'cloud_api',
@@ -24,7 +28,8 @@ describe('publicShape', () => {
     })
     expect(JSON.stringify(shaped)).not.toContain('EAAGtechprovSECRETzz')
     expect(JSON.stringify(shaped)).not.toContain('123456')
-    expect(shaped.access_token_redacted).toBe('••••CRETzz')
+    expect(shaped.access_token_redacted).toBe(SECRET_MASK)
+    expect(JSON.stringify(shaped)).not.toMatch(/CRET/)
     expect(shaped.token_type).toBe('business')
     expect(shaped.connected_via).toBe('embedded_signup')
     expect(shaped.history_sync_status).toBe('importing')

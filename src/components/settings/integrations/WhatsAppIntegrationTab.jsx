@@ -7,10 +7,10 @@
 // row is a `whatsapp_numbers` record. Operators add/edit/remove
 // numbers and pick which is default for outbound.
 //
-// Tokens are NEVER returned in plain by the API — the list shows
-// the last 6 chars masked behind dots. Editing the token requires
-// pasting the new full value; the field starts empty and is only
-// sent on the wire when non-empty.
+// Tokens are NEVER returned in plain by the API, and the stored token
+// is never shown (the API returns a fixed mask; N8NECHO.1). Editing
+// the token requires pasting the new full value; the field starts
+// empty and is only sent on the wire when non-empty.
 
 import { useEffect, useRef, useState } from 'react'
 import {
@@ -884,10 +884,15 @@ function EditNumberForm({ locationId, number, canEdit, onSaved, onError }) {
       <Row label="App ID">
         <input disabled={!canEdit} className="w-full bg-un1t-surface border border-un1t-border rounded px-2 py-1 text-[11px] text-un1t-text font-mono" value={form.app_id} onChange={(e) => setForm({ ...form, app_id: e.target.value.trim() })} />
       </Row>
-      <Row label="Current token" hint="Stored value (last 6 chars shown). To change, paste a new token below.">
-        <code className="block w-full bg-un1t-surface/50 border border-un1t-border rounded px-2 py-1 text-[11px] text-un1t-muted">
-          {number.access_token_redacted || '••••'}
-        </code>
+      <Row
+        label="Current token"
+        hint={number.access_token_redacted
+          ? 'A token is stored and never shown. To change it, paste a new token below.'
+          : 'No token is saved yet. Paste one below to connect this number.'}
+      >
+        <p className="block w-full bg-un1t-surface/50 border border-un1t-border rounded px-2 py-1 text-[11px] text-un1t-muted">
+          {number.access_token_redacted ? 'Saved (hidden)' : 'Not set'}
+        </p>
       </Row>
       <Row label="New access token (leave blank to keep current)">
         <textarea disabled={!canEdit} rows={2} className="w-full bg-un1t-surface border border-un1t-border rounded px-2 py-1 text-[11px] text-un1t-text font-mono" value={form.new_access_token} onChange={(e) => setForm({ ...form, new_access_token: e.target.value })} />
