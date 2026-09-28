@@ -26,7 +26,7 @@ export default function ContactNextRail({
   sequences = [],
   upcomingBookings = [],
   deals = [],
-  admin, // { canEditDelete, canPasswordOverride, canInvite, hasUserAccount, canEditDevices, canLinkAccount }
+  admin, // contactActionGates(user, contact).admin (src/lib/contact-page-gates.js): { canPasswordOverride, canEdit, canDelete, canInvite, hasUserAccount, canEditDevices, canLinkAccount }
 }) {
   return (
     <>
@@ -140,8 +140,8 @@ export default function ContactNextRail({
           )}
           <ContactEditDeleteActions
             contact={contact}
-            canEdit={admin.canEditDelete}
-            canDelete={admin.canEditDelete}
+            canEdit={admin.canEdit}
+            canDelete={admin.canDelete}
           />
           {admin.canInvite && (
             <InviteToAppButton

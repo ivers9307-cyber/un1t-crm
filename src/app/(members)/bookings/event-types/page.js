@@ -11,6 +11,7 @@ import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { Plus, Calendar, Clock, Users } from 'lucide-react'
 import EventActions from '@/components/EventActions'
+import { canManageEventType } from '@/lib/event-type-gates'
 import CalendlyTabs from '@/components/CalendlyTabs'
 
 export const dynamic = 'force-dynamic'
@@ -168,7 +169,8 @@ export default async function BookingTypesPage(props) {
                 </div>
 
                 <div className="flex items-center gap-2 shrink-0">
-                  <EventActions slug={event.slug} eventId={event.id} eventName={event.name} />
+                  {/* ROLEUI.1 — Delete only where the route would act. */}
+                  <EventActions slug={event.slug} eventId={event.id} eventName={event.name} canDelete={canManageEventType(user, event.location_id)} />
                   <Link
                     href={`/bookings/event-types/${event.id}`}
                     className="text-xs px-3 py-1.5 rounded border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30 transition-colors"
