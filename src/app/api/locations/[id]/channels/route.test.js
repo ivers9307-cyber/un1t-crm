@@ -267,6 +267,28 @@ describe('POST /api/locations/[id]/channels — refuses over a live connection (
     expect(db.writes.map(w => w.op)).toEqual(['insert'])
   })
 
+  it('a 23505 on the index named only in details still 409s', async () => {
+    db = makeDb({ insertError: { code: '23505', message: 'duplicate key', details: 'Key (location_id, platform)=(x, instagram) already exists. idx_channel_connections_one_active' } })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(post(LOC_A, VALID), props(LOC_A))
+    expect(res.status).toBe(409)
+  })
+
+  it('a 23505 from any OTHER unique constraint is a 500, never already_connected', async () => {
+    db = makeDb({ insertError: { code: '23505', message: 'duplicate key value violates unique constraint "channel_connections_pkey"' } })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(post(LOC_A, VALID), props(LOC_A))
+    expect(res.status).toBe(500)
+    expect((await res.json()).code).toBeUndefined()
+  })
+
+  it('a bare 23505 that names no index is a 500', async () => {
+    db = makeDb({ insertError: { code: '23505', message: 'duplicate key' } })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(post(LOC_A, VALID), props(LOC_A))
+    expect(res.status).toBe(500)
+  })
+
   it('any other insert failure is still a 500', async () => {
     db = makeDb({ insertError: { code: '57014', message: 'canceling statement due to statement timeout' } })
     createServerClient.mockReturnValue(db)

@@ -63,6 +63,20 @@ export async function GET(request, props) {
 // intended, more informative change; the ROLE miss keeps this route's
 // "Forbidden". Tier is MANAGER_ROLES (head_coach INCLUDED), deliberately wider
 // than the ['master','owner','manager'] the stripe-connect routes use.
+// CHANNELREAD.1 — a 23505 means "already connected" only when it is THIS
+// partial unique index (mig 230). The code alone is any unique violation on
+// the table (a primary-key clash, a future index), and calling that
+// "already connected" would send the operator to Update over a failure that
+// has nothing to do with an existing row. PostgREST carries the index name in
+// `message` ("... violates unique constraint \"idx_...\""); `details` and
+// `constraint` are checked too in case the shape differs.
+const ONE_ACTIVE_INDEX = 'idx_channel_connections_one_active'
+function isOneActiveConflict(error) {
+  if (error?.code !== '23505') return false
+  return [error.message, error.details, error.constraint]
+    .some((v) => typeof v === 'string' && v.includes(ONE_ACTIVE_INDEX))
+}
+
 export async function POST(request, props) {
   const params = await props.params
   const user = await getCurrentUser()
@@ -101,7 +115,7 @@ export async function POST(request, props) {
     ...patch,
   }).select().single()
   if (error) {
-    if (error.code === '23505') {
+    if (isOneActiveConflict(error)) {
       return NextResponse.json({
         success: false,
         code: 'already_connected',
