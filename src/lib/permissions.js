@@ -208,8 +208,18 @@ export function hasPermissionInOrganization(user, organizationId, key) {
  *
  * Each location goes through hasPermissionForLocation, so the full tier order
  * (feature gate → per-user override → role template → code default) applies
- * at that location; a master is scored the same way (the feature gate binds
- * masters too), across every active location getCurrentUser gives them.
+ * at that location.
+ *
+ * Two ways it differs from its neighbours, both inherited from
+ * hasPermissionForLocation:
+ *   • No derived `approvals_inbox`. hasPermission derives that key from the
+ *     per-category approval grants; this resolves it as a plain key. Don't
+ *     pass it `approvals_inbox`: gate on the category keys instead.
+ *   • Masters are SCORED per location, not short-circuited. Unlike
+ *     hasPermissionInOrganization (which returns true for any master), a
+ *     master passes only if some location getCurrentUser gives them (every
+ *     active one) has the feature on: the feature gate binds masters too.
+ *     The master `settings` escape hatch still applies.
  *
  * @param {object|null} user  — getCurrentUser() result
  * @param {string} key        — WEB_PERMISSIONS key
