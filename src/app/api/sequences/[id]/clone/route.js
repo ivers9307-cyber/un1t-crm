@@ -14,6 +14,7 @@
 import { NextResponse } from 'next/server'
 import { randomBytes } from 'node:crypto'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { sequenceNotFound } from '@/lib/sequence-access'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { uuidLike } from '@/lib/schemas'
@@ -45,7 +46,7 @@ export async function POST(_request, props) {
     .eq('id', sourceId)
     .single()
   if (srcErr || !source) {
-    return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
+    return sequenceNotFound()
   }
 
   // Membership check — operator must be assigned to the source's
