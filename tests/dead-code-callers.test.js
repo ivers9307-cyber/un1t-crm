@@ -7,8 +7,8 @@
 //
 // A source scan, so a FLOOR not proof: it cannot see a name built at runtime.
 // supabase/ (applied migrations are forward-only and keep their comments) and
-// docs/ (history) are not scanned. resolveRoleRecipientIds has its own guard,
-// tests/role-recipients-callers.test.js.
+// docs/ (history) are not scanned. The deleted role-recipients helper has its
+// own guard, tests/role-recipients-callers.test.js.
 import { describe, it, expect } from 'vitest'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
