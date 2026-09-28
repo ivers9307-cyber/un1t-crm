@@ -174,22 +174,25 @@ export default function GlofoxIntegrationTab({ location, canEdit }) {
           className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text" />
       </Field>
       <Field label="API Key" htmlFor="glofox-api-key">
-        <input id="glofox-api-key" type="password" autoComplete="new-password" value={apiKey} onChange={e => setApiKey(e.target.value)}
+        <input id="glofox-api-key" type="password" autoComplete="new-password" aria-describedby="glofox-api-key-status" value={apiKey} onChange={e => setApiKey(e.target.value)}
           placeholder={saved.api_key ? 'Saved (hidden). Type to replace.' : ''}
           className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text" />
+        <SecretStatus id="glofox-api-key-status" isSet={saved.api_key} />
       </Field>
       <Field label="API Token" htmlFor="glofox-api-token">
-        <input id="glofox-api-token" type="password" autoComplete="new-password" value={apiToken} onChange={e => setApiToken(e.target.value)}
+        <input id="glofox-api-token" type="password" autoComplete="new-password" aria-describedby="glofox-api-token-status" value={apiToken} onChange={e => setApiToken(e.target.value)}
           placeholder={saved.api_token ? 'Saved (hidden). Type to replace.' : ''}
           className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text" />
+        <SecretStatus id="glofox-api-token-status" isSet={saved.api_token} />
       </Field>
       <Field label="Webhook Secret" htmlFor="glofox-webhook-secret">
-        <input id="glofox-webhook-secret" type="password" autoComplete="new-password" value={webhookSecret} onChange={e => setWebhookSecret(e.target.value)}
+        <input id="glofox-webhook-secret" type="password" autoComplete="new-password" aria-describedby="glofox-webhook-secret-status" value={webhookSecret} onChange={e => setWebhookSecret(e.target.value)}
           placeholder={saved.webhook_secret ? 'Saved (hidden). Type to replace.' : ''}
           className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text" />
+        <SecretStatus id="glofox-webhook-secret-status" isSet={saved.webhook_secret} />
       </Field>
       <p className="text-[11px] text-un1t-muted">
-        Saved credentials are never shown. Leave a field blank to keep it. To disconnect Glofox, use Disconnect in the Integrations hub.
+        Saved credentials are never shown. To disconnect Glofox, use Disconnect in the Integrations hub.
       </p>
       <Field label="Namespace" htmlFor="glofox-namespace" hint="Required for /Analytics/report queries. Glofox provides this on request.">
         <input id="glofox-namespace" type="text" value={namespace} onChange={e => setNamespace(e.target.value)}
@@ -265,6 +268,17 @@ export default function GlofoxIntegrationTab({ location, canEdit }) {
         </button>
       </div>
     </div>
+  )
+}
+
+// N3 — says whether a write-only credential is stored (the input is always
+// blank), wired to the input by aria-describedby. Same words as the
+// Integrations hub drawer.
+function SecretStatus({ id, isSet }) {
+  return (
+    <p id={id} className="text-[11px] text-un1t-muted mt-1">
+      {isSet ? 'Currently set. Leave blank to keep it, or enter a new value to replace it.' : 'Not set yet.'}
+    </p>
   )
 }
 

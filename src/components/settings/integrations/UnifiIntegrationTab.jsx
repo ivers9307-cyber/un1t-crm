@@ -99,9 +99,12 @@ export default function UnifiIntegrationTab({ location, canEdit }) {
           className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text" />
       </Field>
       <Field label="API Token" htmlFor="unifi-api-token">
-        <input id="unifi-api-token" type="password" autoComplete="new-password" value={apiToken} onChange={e => setApiToken(e.target.value)}
+        <input id="unifi-api-token" type="password" autoComplete="new-password" aria-describedby="unifi-api-token-status" value={apiToken} onChange={e => setApiToken(e.target.value)}
           placeholder={savedToken ? 'Saved (hidden). Type to replace.' : ''}
           className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text" />
+        <p id="unifi-api-token-status" className="text-[11px] text-un1t-muted mt-1">
+          {savedToken ? 'Currently set. Leave blank to keep it, or enter a new value to replace it.' : 'Not set yet.'}
+        </p>
       </Field>
       <div className="grid grid-cols-2 gap-3">
         <Field label="Staff policy ID" htmlFor="unifi-staff-policy">

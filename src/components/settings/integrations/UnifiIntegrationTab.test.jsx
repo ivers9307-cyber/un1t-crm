@@ -48,6 +48,21 @@ describe('UnifiIntegrationTab (SECFIX.3b)', () => {
     expect(pw[0].getAttribute('autocomplete')).toBe('new-password')
   })
 
+  // N3 — "Currently set" / "Not set" describes the blank token input.
+  const statusOf = (input) => {
+    const id = input.getAttribute('aria-describedby')
+    expect(id).toBeTruthy()
+    return document.getElementById(id)?.textContent || ''
+  }
+
+  it('the API Token input is described as "Currently set" when stored and "Not set" when not', () => {
+    render(<UnifiIntegrationTab location={LOC} canEdit />)
+    expect(statusOf(screen.getByLabelText('API Token'))).toMatch(/^Currently set/)
+    cleanup()
+    render(<UnifiIntegrationTab location={{ ...LOC, settings: { unifi: { host: 'https://u.example' } } }} canEdit />)
+    expect(statusOf(screen.getByLabelText('API Token'))).toMatch(/^Not set/)
+  })
+
   it('an untouched save PUTs the non-secret fields and no api_token', async () => {
     render(<UnifiIntegrationTab location={LOC} canEdit />)
     fireEvent.click(screen.getByRole('button', { name: /Save/ }))

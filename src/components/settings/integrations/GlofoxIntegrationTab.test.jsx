@@ -54,6 +54,37 @@ describe('GlofoxIntegrationTab (SECFIX.3b)', () => {
     for (const input of pw) expect(input.getAttribute('autocomplete')).toBe('new-password')
   })
 
+  // N3 — the blank input alone cannot say whether a credential is stored (the
+  // placeholder is not announced reliably), so each one is described by a
+  // "Currently set" / "Not set" line, as the Integrations hub drawer shows.
+  const statusOf = (input) => {
+    const id = input.getAttribute('aria-describedby')
+    expect(id).toBeTruthy()
+    return document.getElementById(id)?.textContent || ''
+  }
+
+  it('each credential input is described as "Currently set" when stored', () => {
+    render(<GlofoxIntegrationTab location={LOC} canEdit />)
+    for (const label of ['API Key', 'API Token', 'Webhook Secret']) {
+      expect(statusOf(screen.getByLabelText(label))).toMatch(/^Currently set/)
+    }
+  })
+
+  it('each credential input is described as "Not set" when nothing is stored, and flips after a save', async () => {
+    const bare = { ...LOC, settings: { glofox: { branch_id: 'b1' } } }
+    fetchMock.mockImplementation(async (url, init) => init?.method === 'PUT'
+      ? { ok: true, status: 200, json: async () => ({ success: true, data: { has_api_key: true, has_api_token: false, has_webhook_secret: false } }) }
+      : { ok: true, status: 200, json: async () => ({ success: true, memberships: [], data: { trainers: [] } }) })
+    render(<GlofoxIntegrationTab location={bare} canEdit />)
+    for (const label of ['API Key', 'API Token', 'Webhook Secret']) {
+      expect(statusOf(screen.getByLabelText(label))).toMatch(/^Not set/)
+    }
+    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'NEW-KEY' } })
+    fireEvent.click(screen.getByRole('button', { name: /Save/ }))
+    await waitFor(() => expect(statusOf(screen.getByLabelText('API Key'))).toMatch(/^Currently set/))
+    expect(statusOf(screen.getByLabelText('API Token'))).toMatch(/^Not set/)
+  })
+
   it('a stored key still loads the trial-membership picker (presence, not value)', async () => {
     render(<GlofoxIntegrationTab location={LOC} canEdit />)
     await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => url === `/api/locations/${LOC.id}/glofox-memberships`)).toBe(true))
