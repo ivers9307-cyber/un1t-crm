@@ -66,3 +66,30 @@ describe('WhatsAppIntegrationTab — real answers are unchanged (pin)', () => {
     expect(screen.getByRole('button', { name: /Add WhatsApp number/ })).toBeTruthy()
   })
 })
+
+describe('WhatsAppIntegrationTab — the stored token is never shown (N8NECHO.1)', () => {
+  const NUMBER = {
+    id: 'n1', location_id: LOC.id, label: 'Front desk', phone_number_id: '100', business_account_id: '200',
+    app_id: '300', display_phone: '+353 00 000 0000', source: 'cloud_api', token_type: 'system_user',
+    connected_via: 'manual', is_default: true, is_active: true, access_token_redacted: '••••••',
+    history_sync_status: null, coex_link_status: null, created_at: null, updated_at: null,
+  }
+
+  it('a stored token reads "Saved (hidden)" and the hint never promises characters', async () => {
+    mockFetch(reply(200, { success: true, numbers: [NUMBER] }))
+    render(<WhatsAppIntegrationTab location={LOC} canEdit />)
+    fireEvent.click(await screen.findByText('Front desk'))
+    expect(await screen.findByText('Saved (hidden)')).toBeTruthy()
+    expect(screen.queryByText(/last 6/i)).toBeNull()
+    expect(screen.queryByText('••••••')).toBeNull()
+    expect(screen.getByText(/never shown/i)).toBeTruthy()
+  })
+
+  it('no stored token reads "Not set"', async () => {
+    mockFetch(reply(200, { success: true, numbers: [{ ...NUMBER, access_token_redacted: null }] }))
+    render(<WhatsAppIntegrationTab location={LOC} canEdit />)
+    fireEvent.click(await screen.findByText('Front desk'))
+    expect(await screen.findByText('Not set')).toBeTruthy()
+    expect(screen.queryByText('Saved (hidden)')).toBeNull()
+  })
+})
