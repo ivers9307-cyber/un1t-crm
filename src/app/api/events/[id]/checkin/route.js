@@ -12,7 +12,7 @@ import { z } from 'zod'
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { emitEvent, EVENT_TYPES } from '@/lib/contact-events'
@@ -47,7 +47,7 @@ export async function POST(request, props) {
   const params = await props.params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!hasPermission(user, 'races')) {
+  if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Events feature is disabled at this location' }, { status: 403 })
   }
 
@@ -60,6 +60,10 @@ export async function POST(request, props) {
   if (r.error) return NextResponse.json({ success: false, error: r.error }, { status: r.status })
   const guard = assertLocationAccessOr404(user, r.locationId)
   if (guard) return guard
+  // ROLESWEEP.1b — judged at the event's location, not the caller's active studio.
+  if (!hasPermissionForLocation(user, r.locationId, 'races')) {
+    return NextResponse.json({ success: false, error: 'Events feature is disabled at this location' }, { status: 403 })
+  }
 
   const { error } = await db.from('race_checkins').insert({
     race_registration_id,
@@ -93,7 +97,7 @@ export async function DELETE(request, props) {
   const params = await props.params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!hasPermission(user, 'races')) {
+  if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Events feature is disabled at this location' }, { status: 403 })
   }
 
@@ -109,6 +113,10 @@ export async function DELETE(request, props) {
   if (r.error) return NextResponse.json({ success: false, error: r.error }, { status: r.status })
   const guard = assertLocationAccessOr404(user, r.locationId)
   if (guard) return guard
+  // ROLESWEEP.1b — judged at the event's location, not the caller's active studio.
+  if (!hasPermissionForLocation(user, r.locationId, 'races')) {
+    return NextResponse.json({ success: false, error: 'Events feature is disabled at this location' }, { status: 403 })
+  }
 
   const { error } = await db
     .from('race_checkins')
@@ -127,7 +135,7 @@ export async function GET(_request, props) {
   const params = await props.params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!hasPermission(user, 'races')) {
+  if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Events feature is disabled at this location' }, { status: 403 })
   }
 
@@ -147,6 +155,10 @@ export async function GET(_request, props) {
   if (!race) return NextResponse.json({ success: false, error: 'Event not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, race.location_id)
   if (guard) return guard
+  // ROLESWEEP.1b — judged at the event's location, not the caller's active studio.
+  if (!hasPermissionForLocation(user, race.location_id, 'races')) {
+    return NextResponse.json({ success: false, error: 'Events feature is disabled at this location' }, { status: 403 })
+  }
 
   const confirmed = (race.registrations || []).filter((r) => r.status === 'confirmed')
   const regIds = confirmed.map((r) => r.id)

@@ -5,8 +5,8 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { MANAGER_ROLES } from '@/lib/schemas'
@@ -74,10 +74,10 @@ export async function GET(_request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!MANAGER_ROLES.includes(user.role)) {
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   }
-  if (!hasPermission(user, 'races')) {
+  if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
   }
 
@@ -88,6 +88,13 @@ export async function GET(_request, props) {
   }
   const guard = assertLocationAccessOr404(user, data.location_id)
   if (guard) return guard
+  // ROLESWEEP.1b — judged at the race's location, not the caller's active studio.
+  if (!hasRoleAtLocation(user, data.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
+  }
+  if (!hasPermissionForLocation(user, data.location_id, 'races')) {
+    return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
+  }
 
   return NextResponse.json({ success: true, data })
 }
@@ -96,10 +103,10 @@ export async function PUT(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!MANAGER_ROLES.includes(user.role)) {
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   }
-  if (!hasPermission(user, 'races')) {
+  if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
   }
 
@@ -118,6 +125,13 @@ export async function PUT(request, props) {
   }
   const guard = assertLocationAccessOr404(user, existing.location_id)
   if (guard) return guard
+  // ROLESWEEP.1b — judged at the race's location, not the caller's active studio.
+  if (!hasRoleAtLocation(user, existing.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
+  }
+  if (!hasPermissionForLocation(user, existing.location_id, 'races')) {
+    return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
+  }
 
   // Pull waves out before building the race_events update payload —
   // they go to a different table.
@@ -216,10 +230,10 @@ export async function DELETE(_request, props) {
   // for historical record.
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!MANAGER_ROLES.includes(user.role)) {
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   }
-  if (!hasPermission(user, 'races')) {
+  if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
   }
 
@@ -232,6 +246,13 @@ export async function DELETE(_request, props) {
   if (!existing) return NextResponse.json({ success: false, error: 'Race not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, existing.location_id)
   if (guard) return guard
+  // ROLESWEEP.1b — judged at the race's location, not the caller's active studio.
+  if (!hasRoleAtLocation(user, existing.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
+  }
+  if (!hasPermissionForLocation(user, existing.location_id, 'races')) {
+    return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
+  }
 
   const { error } = await db
     .from('race_events')

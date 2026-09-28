@@ -24,6 +24,10 @@
 // a client component's gate, and a `//` inside a regex literal on the same
 // line as a gate (stripComments has no regex-literal awareness, so the rest
 // of that line vanishes: a SILENT PASS for a forbidden-token scan).
+// And the scan judges whole FILES, not handlers: a file with several handlers
+// passes the pre-check-only rule if any one of them decides at the target
+// (and a REVIEWED file keeps passing whatever a later handler adds), so
+// per-handler coverage is the tables in tests/role-sweep/*, not this scan.
 
 import { stripComments } from './strip-comments.mjs'
 

@@ -12,7 +12,7 @@
 // because it fires BEFORE the lookup and so reveals nothing about the id.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, hasRoleAtAnyLocation } from '@/lib/auth'
 import { guardLiveSession, LIVE_MUTATION_ROLES } from '@/lib/live-access'
 import { createServerClient } from '@/lib/supabase'
 import { endSession } from '@/lib/live-class'
@@ -28,13 +28,14 @@ export async function POST(_request, props) {
     return NextResponse.json({ ok: false, error: 'Unauthorised' }, { status: 401 })
   }
   // Pre-lookup role check: no id has been touched yet, so a 403 here is safe.
-  // It can only see `user.role`, the ACTIVE-location role, because the
-  // session's location is unknown until the lookup below — so it is a cheap
-  // first pass, NOT the gate. SEC-LIVE-API.2: the real role decision is
+  // The session's location is unknown until the lookup below, so it asks only
+  // "a coach role at ANY studio" (ROLESWEEP.1b; it read `user.role`, the
+  // ACTIVE-location role, and so refused a coach at the session's studio
+  // whose active studio was another) — a cheap first pass, NOT the gate. SEC-LIVE-API.2: the real role decision is
   // re-made inside guardLiveSession at `session.location_id`, otherwise a
   // caller who is head_coach at L2 and merely staff at L1 could pick L2 as
   // their active location and end a session on L1's floor.
-  if (!user.isMaster && !LIVE_MUTATION_ROLES.includes(user.role)) {
+  if (!user.isMaster && !hasRoleAtAnyLocation(user, LIVE_MUTATION_ROLES)) {
     return NextResponse.json({ ok: false, error: 'Coach only' }, { status: 403 })
   }
 

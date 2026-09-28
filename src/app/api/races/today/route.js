@@ -28,7 +28,7 @@
 
 import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission, hasPermissionForLocation } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { todayIsoDublin } from '@shared/events'
 
@@ -61,7 +61,9 @@ function firstWaveStart(waves) {
 export async function GET(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!hasPermission(user, 'races')) {
+  // ROLESWEEP.1b — coarse pre-check only; the real gate is the
+  // hasPermissionForLocation at the target below.
+  if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
   }
 
@@ -77,7 +79,8 @@ export async function GET(request) {
   if (guard) return guard
 
   // Second gate, scoped to the TARGET studio rather than the active one.
-  // hasPermission above resolves against user.activeLocation, so a
+  // (Before ROLESWEEP.1b the pre-check above was hasPermission, which
+  // resolves against user.activeLocation, so a
   // multi-studio operator whose active context lags the studio they asked
   // about would otherwise be judged at the wrong one — races can be enabled
   // at Stillorgan and off at Hatch for the same person. Same message as the

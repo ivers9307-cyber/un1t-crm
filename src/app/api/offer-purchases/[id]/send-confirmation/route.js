@@ -9,7 +9,7 @@
 // purchase outside the caller's locations so ids can't be enumerated.
 import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { sendOfferPurchaseEmail } from '@/lib/offer-purchase-emails'
 
@@ -19,7 +19,7 @@ export async function POST(_request, props) {
   const { id } = await props.params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!hasPermission(user, 'approvals_offer_purchases')) {
+  if (!hasPermissionAtAnyLocation(user, 'approvals_offer_purchases')) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
@@ -33,6 +33,10 @@ export async function POST(_request, props) {
   if (!row) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, row.location_id)
   if (guard) return guard
+  // ROLESWEEP.1b — judged at the purchase's location, not the caller's active studio.
+  if (!hasPermissionForLocation(user, row.location_id, 'approvals_offer_purchases')) {
+    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  }
   if (row.state !== 'paid') {
     return NextResponse.json({ success: false, error: 'Purchase is not paid' }, { status: 409 })
   }
