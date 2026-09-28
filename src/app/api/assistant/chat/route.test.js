@@ -697,7 +697,8 @@ describe('executeTool — model-supplied dates are checked before any read (RANG
   it('get_time_off: no active studio is an error, never "nobody is off"', async () => {
     const { tables } = watched({})
     const res = await executeTool('get_time_off', { start_date: '2026-07-01', end_date: '2026-07-07' }, { ...MANAGER, locationId: null })
-    expect(res).toEqual({ error: 'No active location for this action.' })
+    // create_shift's wording: tell the model what the person can do about it.
+    expect(res).toEqual({ error: 'No active location — switch to a location before looking up time off.' })
     expect(tables).toEqual([])
   })
 

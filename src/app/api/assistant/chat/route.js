@@ -284,7 +284,7 @@ export async function executeTool(toolName, input, context) {
     case 'get_time_off': {
       // RANGEVALID.1 — no studio is an error: `.eq('location_id', null)` failed in
       // Postgres, and the discarded error read as "nobody is off".
-      if (!locationId) return { error: 'No active location for this action.' }
+      if (!locationId) return { error: 'No active location — switch to a location before looking up time off.' }
       // The model supplies the range: real dates, in order, at most a year,
       // before any read. It went to Postgres as given, so 2026-02-30 failed
       // there, and a reversed range matched only leave spanning the gap.
