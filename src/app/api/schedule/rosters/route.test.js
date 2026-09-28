@@ -1078,3 +1078,32 @@ describe('POST /api/schedule/rosters — publish snapshot (SNAPSHOT.1)', () => {
     expect((await res.json()).success).toBe(true)
   })
 })
+
+// RANGEVALID.1 — a publish period had no upper bound. The longest roster ever
+// published is 31 days; a roster claiming decades would make every later
+// publish inside it a 409 overlapping_roster.
+describe('POST /api/schedule/rosters — the period is at most a year (RANGEVALID.1)', () => {
+  it('367 days is a 400 before any read or write', async () => {
+    const { db, inserts } = buildDb()
+    createServerClient.mockReturnValue(db)
+    const res = await publish({ period_start: '2026-05-04', period_end: '2027-05-05' })
+    expect(res.status).toBe(400)
+    expect(await res.json()).toEqual({ success: false, error: 'A roster can cover at most 366 days' })
+    expect(createServerClient).not.toHaveBeenCalled()
+    expect(inserts).toHaveLength(0)
+  })
+
+  it('the budget preview (dry_run) is refused the same way', async () => {
+    createServerClient.mockReturnValue(buildDb().db)
+    const res = await publish({ period_start: '2026-01-01', period_end: '2099-12-31', dry_run: true })
+    expect(res.status).toBe(400)
+    expect(projectPublishImpact).not.toHaveBeenCalled()
+  })
+
+  it('reversed keeps its words', async () => {
+    createServerClient.mockReturnValue(buildDb().db)
+    const res = await publish({ period_start: '2026-05-10', period_end: '2026-05-04' })
+    expect(res.status).toBe(400)
+    expect(await res.json()).toEqual({ success: false, error: 'period_end must be on or after period_start' })
+  })
+})

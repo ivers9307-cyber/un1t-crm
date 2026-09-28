@@ -249,3 +249,45 @@ describe('pending_days', () => {
     errors.mockRestore()
   })
 })
+
+// RANGEVALID.1 — ?year= went to .eq('year', …) as given: 'abc' came back as a
+// 400 carrying Postgres's text, and 99999 as a made-up entitlement. The
+// default was the server's year.
+describe('the year (RANGEVALID.1)', () => {
+  const ME = { id: PID, ...at('staff') }
+
+  it('a year that is not four digits in the window is a 400 before any read', async () => {
+    getCurrentUser.mockResolvedValue(ME)
+    for (const y of ['abc', '26', '2026.5', '02026', '99999', '1999', '2101', ' 2026']) {
+      createServerClient.mockReset()
+      createServerClient.mockReturnValue(buildDb({}).db)
+      const res = await GET(req(null, `http://x/api/schedule/allowances?year=${encodeURIComponent(y)}`))
+      expect(res.status, y).toBe(400)
+      expect(await res.json()).toEqual({ success: false, error: 'year must be a four-digit year from 2020 to 2100' })
+      expect(createServerClient).not.toHaveBeenCalled()
+    }
+  })
+
+  it('no year means this year on the Dublin calendar, not the server\'s', async () => {
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.parse('2027-01-01T03:00:00Z') })
+    try {
+      getCurrentUser.mockResolvedValue(ME)
+      const { db, pendingCalls } = buildDb({})
+      createServerClient.mockReturnValue(db)
+      const json = await (await GET(req(null, 'http://x/api/schedule/allowances'))).json()
+      expect(json.data.year).toBe(2027)
+      expect(pendingCalls).toContainEqual(['gte', 'start_date', '2027-01-01'])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('the PUT window is unchanged', async () => {
+    getCurrentUser.mockResolvedValue(MGR)
+    const { db, upsertSpy } = buildDb({})
+    createServerClient.mockReturnValue(db)
+    expect((await PUT(req({ profile_id: PID, year: 2019, total_days: 25 }))).status).toBe(400)
+    expect((await PUT(req({ profile_id: PID, year: 2101, total_days: 25 }))).status).toBe(400)
+    expect(upsertSpy).not.toHaveBeenCalled()
+  })
+})

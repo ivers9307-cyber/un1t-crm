@@ -492,12 +492,6 @@ describe('executeTool — safe empties when there is no active location', () => 
     const res = await executeTool('list_shift_templates', {}, { ...MANAGER, locationId: null })
     expect(res).toEqual({ templates: [] })
   })
-
-  it('get_shifts_for_week returns no shifts (never an unscoped read)', async () => {
-    useDb({ shift_assignments: [{ profile_id: 'p-b1', profiles: { full_name: 'Ben Other' }, shift_blocks: { location_id: 'loc-b', block_date: '2026-07-02', shift_templates: { name: 'AM', start_time: '09:00:00', end_time: '17:00:00' } } }] })
-    const res = await executeTool('get_shifts_for_week', { start_date: '2026-07-01' }, { ...MANAGER, locationId: null })
-    expect(res).toEqual({ shifts: [] })
-  })
 })
 
 // ── get_shifts_for_week — what a staff member may see, and the true times ──
@@ -614,5 +608,170 @@ describe('executeTool — TOOL_PERMISSIONS gate is unchanged', () => {
     const res = await executeTool('create_contact', { name: 'X', email: 'x@x.com' }, { locationId: 'loc-a', role: 'head_coach', userId: 'u' })
     expect(res.error).toMatch(/permission denied/i)
     expect(db._writes.some(w => w.table === 'contacts' && w.op === 'insert')).toBe(false)
+  })
+})
+
+// ── RANGEVALID.1 — the model supplies these dates ────────────────────
+// A bad date used to reach the database: a reversed period came back as a
+// report of 0 hours ("nobody worked"), and get_time_off / get_holiday_allowance
+// discarded their read errors, answering "nobody is off" / the 20-day default.
+// Each is now a tool error the model can act on, returned before any read.
+describe('executeTool — model-supplied dates are checked before any read (RANGEVALID.1)', () => {
+  // Records every table the tool touches, so "nothing was read" is observable.
+  function watched(fixtures = {}) {
+    // makeDb + mockReturnValue (not useDb): react-hooks/rules-of-hooks reads
+    // any use* call inside a named non-hook function as a hook call.
+    const db = makeDb(fixtures)
+    vi.mocked(createServerClient).mockReturnValue(db)
+    const tables = []
+    const from = db.from
+    db.from = (t) => { tables.push(t); return from(t) }
+    return { db, tables }
+  }
+  // One table answers { data: null, error } to any read; the rest are fixtures.
+  function failingOn(table, fixtures = {}) {
+    const ok = makeDb(fixtures)
+    const res = { data: null, error: { message: 'connection reset' } }
+    const db = {
+      from: (t) => {
+        if (t !== table) return ok.from(t)
+        const chain = {}
+        for (const op of ['select', 'eq', 'in', 'gte', 'lte', 'or', 'order', 'limit', 'range']) chain[op] = () => chain
+        chain.single = () => Promise.resolve(res)
+        chain.maybeSingle = () => Promise.resolve(res)
+        chain.then = (f, r) => Promise.resolve(res).then(f, r)
+        return chain
+      },
+    }
+    vi.mocked(createServerClient).mockReturnValue(db)
+    return db
+  }
+
+  it('generate_report: a bad period is the Reporting tab\'s refusal, and nothing is read', async () => {
+    for (const report_type of ['staff_hours', 'staff_cost']) {
+      for (const [period_start, period_end, error] of [
+        ['2026-02-30', '2026-03-06', 'period_start and period_end must be real dates, YYYY-MM-DD'],
+        [undefined, '2026-07-07', 'period_start and period_end must be real dates, YYYY-MM-DD'],
+        ['last week', '2026-07-07', 'period_start and period_end must be real dates, YYYY-MM-DD'],
+        ['2026-07-07', '2026-07-01', 'period_end must be on or after period_start'],
+        ['2026-01-01', '2027-01-02', 'A report can cover at most 366 days'],
+      ]) {
+        const { tables } = watched({})
+        const res = await executeTool('generate_report', { report_type, period_start, period_end }, MANAGER)
+        expect(res, `${report_type} ${period_start}..${period_end}`).toEqual({ error })
+        expect(tables).toEqual([])
+      }
+    }
+  })
+
+  it('create_shift: a date the calendar does not have is refused before any read or write', async () => {
+    for (const shift_date of ['2026-02-30', '2026-7-6', 'next monday', undefined]) {
+      const { db, tables } = watched({})
+      const res = await executeTool('create_shift', { profile_id: 'p-a1', shift_template_id: 't-a1', shift_date }, MANAGER)
+      expect(res, String(shift_date)).toEqual({ error: 'shift_date must be a real date, YYYY-MM-DD.' })
+      expect(tables).toEqual([])
+      expect(db._writes).toEqual([])
+    }
+  })
+
+  it('get_time_off: a bad range is refused before any read', async () => {
+    for (const [start_date, end_date, error] of [
+      ['2026-02-30', '2026-03-06', 'start_date and end_date must be real dates, YYYY-MM-DD'],
+      ['2026-07-01', undefined, 'start_date and end_date must be real dates, YYYY-MM-DD'],
+      ['2026-07-07', '2026-07-01', 'end_date must be on or after start_date'],
+      ['2026-01-01', '2027-01-02', 'A time-off lookup can cover at most 366 days'],
+    ]) {
+      const { tables } = watched({})
+      const res = await executeTool('get_time_off', { start_date, end_date }, MANAGER)
+      expect(res, `${start_date}..${end_date}`).toEqual({ error })
+      expect(tables).toEqual([])
+    }
+  })
+
+  it('get_time_off: no active studio is an error, never "nobody is off"', async () => {
+    const { tables } = watched({})
+    const res = await executeTool('get_time_off', { start_date: '2026-07-01', end_date: '2026-07-07' }, { ...MANAGER, locationId: null })
+    // create_shift's wording: tell the model what the person can do about it.
+    expect(res).toEqual({ error: 'No active location — switch to a location before looking up time off.' })
+    expect(tables).toEqual([])
+  })
+
+  it('get_time_off: a failed read is an error, never an empty list', async () => {
+    failingOn('time_off_requests')
+    const res = await executeTool('get_time_off', { start_date: '2026-07-01', end_date: '2026-07-07' }, MANAGER)
+    expect(res.error).toMatch(/Failed to load time off/)
+    expect(res.time_off).toBeUndefined()
+  })
+
+  // get_shifts_for_week answered no studio with { shifts: [] }, which the
+  // model reads out as "nobody is on shift" (get_time_off's old trap).
+  it('get_shifts_for_week: no active studio is an error, never an empty week, and nothing is read', async () => {
+    const { tables } = watched({ shift_assignments: [{ profile_id: 'p-b1', profiles: { full_name: 'Ben Other' }, shift_blocks: { location_id: 'loc-b', block_date: '2026-07-02', shift_templates: { name: 'AM', start_time: '09:00:00', end_time: '17:00:00' } } }] })
+    const res = await executeTool('get_shifts_for_week', { start_date: '2026-07-01' }, { ...MANAGER, locationId: null })
+    expect(res).toEqual({ error: 'No active location — switch to a location before looking up shifts.' })
+    expect(tables).toEqual([])
+  })
+
+  it('get_shifts_for_week: a failed shifts read is an error, never an empty week', async () => {
+    failingOn('shift_assignments')
+    const res = await executeTool('get_shifts_for_week', { start_date: '2026-07-06' }, MANAGER)
+    expect(res.error).toMatch(/^Failed to load shifts/)
+    expect(res.shifts).toBeUndefined()
+  })
+
+  it('get_shifts_for_week: a failed rosters read is an error, never "every day unpublished"', async () => {
+    failingOn('rosters')
+    const res = await executeTool('get_shifts_for_week', { start_date: '2026-07-06' }, MANAGER)
+    expect(res.error).toMatch(/^Failed to load rosters/)
+    expect(res.shifts).toBeUndefined()
+  })
+
+  // search_contacts discarded its read error, so a failed search read as
+  // "no contact by that name" — and the model would offer to create one.
+  it('search_contacts: a failed read is an error, never "no matches"', async () => {
+    failingOn('contacts')
+    const res = await executeTool('search_contacts', { query: 'alice' }, MANAGER)
+    expect(res.error).toMatch(/^Failed to load contacts/)
+    expect(res.contacts).toBeUndefined()
+    expect(res.count).toBeUndefined()
+  })
+
+  it('get_time_off: a real range still lists this studio\'s overlapping leave', async () => {
+    useDb({
+      time_off_requests: [
+        { location_id: 'loc-a', start_date: '2026-07-02', end_date: '2026-07-03', type: 'holiday', status: 'approved', total_days: 2, reason: null, profile_id: 'p-a1', profiles: { full_name: 'Anna Coach' } },
+        { location_id: 'loc-a', start_date: '2026-08-02', end_date: '2026-08-03', type: 'holiday', status: 'approved', total_days: 2, reason: null, profile_id: 'p-a1', profiles: { full_name: 'Anna Coach' } },
+        { location_id: 'loc-b', start_date: '2026-07-02', end_date: '2026-07-03', type: 'sick', status: 'approved', total_days: 2, reason: null, profile_id: 'p-b1', profiles: { full_name: 'Ben Other' } },
+      ],
+    })
+    const res = await executeTool('get_time_off', { start_date: '2026-07-01', end_date: '2026-07-07' }, MANAGER)
+    expect(res).toEqual({ time_off: [{ staff: 'Anna Coach', type: 'holiday', start: '2026-07-02', end: '2026-07-03', days: 2, status: 'approved', reason: null }] })
+  })
+
+  it('get_holiday_allowance: a year outside 2020-2100, or not a whole four-digit year, is refused before any read', async () => {
+    for (const year of ['abc', 1999, 2101, 2026.5, 20266, '26']) {
+      const { tables } = watched({})
+      const res = await executeTool('get_holiday_allowance', { year }, MANAGER)
+      expect(res, String(year)).toEqual({ error: 'year must be a four-digit year from 2020 to 2100' })
+      expect(tables).toEqual([])
+    }
+  })
+
+  it('get_holiday_allowance: a failed read is an error, never the 20-day default', async () => {
+    failingOn('staff_allowances')
+    const res = await executeTool('get_holiday_allowance', { year: 2026 }, MANAGER)
+    expect(res.error).toMatch(/Failed to load the holiday allowance/)
+    expect(res.total_days).toBeUndefined()
+  })
+
+  it('get_holiday_allowance: no year means this year in Dublin', async () => {
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.parse('2027-01-01T03:00:00Z') })
+    try {
+      useDb({})
+      const res = await executeTool('get_holiday_allowance', {}, MANAGER)
+      expect(res.year).toBe(2027)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
