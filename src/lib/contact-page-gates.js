@@ -9,6 +9,8 @@
 // consultations, goals, photos and scans loaded into the page. Every decision
 // here is made at the contact's location instead.
 import { hasPermissionForLocation, hasMobilePermissionForLocation } from './permissions'
+import { hasRoleAtLocation } from './role-at-location'
+import { ADMIN_ROLES, MANAGER_ROLES } from './schemas'
 
 /**
  * May the page load this contact's consultations, coaching goals,
@@ -41,4 +43,110 @@ export function contactChannelFlags(user, locationId) {
   const at = (key) =>
     hasPermissionForLocation(user, locationId, key) || hasMobilePermissionForLocation(user, locationId, key)
   return { whatsapp: at('whatsapp'), sms: at('sms'), email: at('email') }
+}
+
+// ── ROLEUI.1 — the contact page's action BUTTONS ──────────────────────────
+// Each helper below is the decision of the route its button calls, made the
+// way that route makes it: membership of the contact's location first (masters
+// skip it), then the role AT the contact's location, never user.role (the
+// ACTIVE studio's role). The role tuples are copied from the routes, which do
+// not export them; src/lib/contact-page-gates.test.js runs each helper over the
+// SAME case table as the route's own sweep test, so a drift in either shows.
+
+// invite-app: ALLOWED_INVITE_ROLES in src/app/api/contacts/[id]/invite-app/route.js
+const INVITE_ROLES = Object.freeze(['owner', 'manager'])
+// devices: WRITE_ROLES in src/app/api/contacts/[id]/devices/route.js and
+// devices/[deviceId]/route.js (masters pass on isMaster, before the role)
+const DEVICE_WRITE_ROLES = Object.freeze(['owner', 'manager', 'head_coach'])
+// link-account and the member half of admin/password-override: owner only
+const OWNER_ONLY = Object.freeze(['owner'])
+
+/**
+ * A member of `locationId` (masters are members everywhere) who holds one of
+ * `roles` there. hasRoleAtLocation answers false for a missing location, a
+ * master included, which is what the routes without an isMaster bypass do.
+ */
+function memberWithRole(user, locationId, roles) {
+  if (!user || !locationId) return false
+  if (!user.isMaster && !(user.locations || []).some((l) => l?.id === locationId)) return false
+  return hasRoleAtLocation(user, locationId, roles)
+}
+
+/**
+ * PUT /api/contacts/[id] (cookie path), DELETE /api/contacts/[id] and
+ * GET /api/contacts/[id]/impact: MANAGER_ROLES at the contact's location. The
+ * automations-exempt toggle (a PUT) and the Delete button (impact, then
+ * DELETE) read it. POST /api/contacts makes the same decision at the location
+ * the contact is created at, so /contacts/new asks it of the active studio.
+ *
+ * @param {object|null} user
+ * @param {string|null} locationId
+ * @returns {boolean}
+ */
+export function canWriteContact(user, locationId) {
+  return memberWithRole(user, locationId, MANAGER_ROLES)
+}
+
+/**
+ * The Edit link and the /contacts/[id]/edit page: the PUT's decision plus the
+ * `contacts` permission, both at the contact's location. The page has always
+ * required `contacts` on top of the role (a feature gate the PUT does not
+ * repeat); judging both here keeps the link and the page in step.
+ */
+export function canOpenContactEditor(user, locationId) {
+  return canWriteContact(user, locationId) && hasPermissionForLocation(user, locationId, 'contacts')
+}
+
+/** PATCH /api/contacts/[id]/marketing-preferences: master, or ADMIN_ROLES at the contact. */
+export function canEditMarketingPreferences(user, locationId) {
+  return Boolean(user?.isMaster) || memberWithRole(user, locationId, ADMIN_ROLES)
+}
+
+/** POST /api/contacts/[id]/invite-app: an email on file, and master or owner/manager at the contact. */
+export function canInviteToApp(user, contact) {
+  if (!contact?.email) return false
+  return Boolean(user?.isMaster) || memberWithRole(user, contact.location_id, INVITE_ROLES)
+}
+
+/** POST …/devices and DELETE/PATCH …/devices/[deviceId]: master, or owner/manager/head coach at the contact. */
+export function canEditContactDevices(user, locationId) {
+  return Boolean(user?.isMaster) || memberWithRole(user, locationId, DEVICE_WRITE_ROLES)
+}
+
+/** GET/POST/DELETE /api/contacts/[id]/link-account: master, or owner at the contact. */
+export function canLinkAppAccount(user, locationId) {
+  return Boolean(user?.isMaster) || memberWithRole(user, locationId, OWNER_ONLY)
+}
+
+/**
+ * POST /api/admin/password-override for a member: the contact has a CRM login
+ * (contacts.user_id), and the caller is a master or an owner at the contact.
+ */
+export function canOverrideMemberPassword(user, contact) {
+  if (!contact?.user_id) return false
+  return Boolean(user?.isMaster) || memberWithRole(user, contact.location_id, OWNER_ONLY)
+}
+
+/**
+ * Every action flag the contact page hands its components, judged at the
+ * contact's location.
+ *
+ * @param {object|null} user     getCurrentUser() result
+ * @param {object|null} contact  the contacts row (location_id, email, user_id)
+ */
+export function contactActionGates(user, contact) {
+  const loc = contact?.location_id || null
+  return {
+    canToggleExempt: canWriteContact(user, loc),
+    canEditPrefs: canEditMarketingPreferences(user, loc),
+    admin: {
+      canPasswordOverride: canOverrideMemberPassword(user, contact),
+      canEdit: canOpenContactEditor(user, loc),
+      canDelete: canWriteContact(user, loc),
+      canInvite: canInviteToApp(user, contact),
+      hasUserAccount: Boolean(contact?.user_id),
+      canEditDevices: canEditContactDevices(user, loc),
+      canLinkAccount: canLinkAppAccount(user, loc),
+    },
+  }
 }

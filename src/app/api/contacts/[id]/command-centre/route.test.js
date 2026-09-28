@@ -228,10 +228,27 @@ describe('GET /api/contacts/[id]/command-centre', () => {
     expect(j.notes).toHaveLength(1)
     expect(j.sequences).toHaveLength(1)
     expect(j.wa).toMatchObject({ window_open: true, window_expires_at: future })
-    expect(j.permissions).toEqual({ whatsapp: false, sms: false, email: false })
+    expect(j.permissions).toEqual({ whatsapp: false, sms: false, email: false, kudos: false })
     // no `whatsapp` permission → template table never touched
     expect(db.__queried).not.toContain('whatsapp_templates')
     expect(j.composer_templates).toEqual([])
+  })
+
+  // ROLEUI.1 — the staff phone's contact screen gates Send kudos on this flag:
+  // POST /api/contacts/[id]/kudos decides the web `consultations` permission
+  // at the contact's location (canLoadContactConsultations).
+  it('drawer permissions carry kudos: the consultations permission at the contact', async () => {
+    getCurrentUser.mockResolvedValue(USER)
+    hasPermission.mockImplementation((_u, perm) => perm === 'consultations')
+    const db = mockDb({
+      contacts: { data: CONTACT, error: null },
+      activities: { data: [], error: null },
+      event_types: { data: [], error: null },
+    })
+    createServerClient.mockReturnValue(db)
+    const res = await GET(req('?scope=drawer'), props)
+    const j = await res.json()
+    expect(j.permissions).toEqual({ whatsapp: false, sms: false, email: false, kudos: true })
   })
 
   it('drawer scope loads composer templates when the caller can WhatsApp', async () => {

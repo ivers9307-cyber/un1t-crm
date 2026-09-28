@@ -8,6 +8,7 @@ import { dublinTodayStr } from '@/lib/dublin-time'
 import Link from 'next/link'
 import { ArrowLeft, Edit } from 'lucide-react'
 import EventActions from '@/components/EventActions'
+import { canManageEventType } from '@/lib/event-type-gates'
 import BookingStatusToggle from '@/components/BookingStatusToggle'
 
 export const dynamic = 'force-dynamic'
@@ -50,6 +51,10 @@ export default async function BookingTypeDetailPage(props) {
 
   const upcoming = bookings.filter(b => b.status === 'confirmed' && b.booking_date >= dublinTodayStr())
 
+  // ROLEUI.1 — Edit and Delete show exactly when /api/bookings/event-types/[id]
+  // would act: a master, or MANAGER_ROLES at THIS booking type's location.
+  const canManage = canManageEventType(user, event.location_id)
+
   return (
     <div className="p-8">
       {/* Header */}
@@ -68,14 +73,16 @@ export default async function BookingTypeDetailPage(props) {
           {event.description && <p className="text-sm text-un1t-subtle mt-1 ml-6">{event.description}</p>}
         </div>
         <div className="flex items-center gap-2">
-          <EventActions slug={event.slug} eventId={event.id} eventName={event.name} />
-          <Link
-            href={`/bookings/event-types/${event.id}/edit`}
-            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30 transition-colors"
-          >
-            <Edit size={12} />
-            Edit
-          </Link>
+          <EventActions slug={event.slug} eventId={event.id} eventName={event.name} canDelete={canManage} />
+          {canManage && (
+            <Link
+              href={`/bookings/event-types/${event.id}/edit`}
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30 transition-colors"
+            >
+              <Edit size={12} />
+              Edit
+            </Link>
+          )}
         </div>
       </div>
 
