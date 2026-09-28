@@ -1,6 +1,6 @@
 // PROFILESPREAD.1 (F6) — is Glofox connected at this location, for the
-// automations pages. They used to read it off user.activeLocation.settings,
-// which is why the user object (serialised into EVERY page) had to carry the
+// automations pages. They used to read it off the settings of the user
+// object's active location, which is why the user object (serialised into EVERY page) had to carry the
 // location's settings, including the customer agent's test phone numbers. It
 // now carries none; these two pages read settings themselves, by id, with the
 // service role, and hand the client BOOLEANS only.

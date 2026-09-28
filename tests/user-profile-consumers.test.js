@@ -8,6 +8,13 @@
 // hand-off to a parameter named differently, is invisible to it (the plan's
 // census followed those by hand). Add a column to the list on purpose, with
 // its reader, in src/lib/user-profile.js.
+//
+// Two more halves of the same object (the location rows, PROFILESPREAD.1a F6):
+// the user object's locations carry no `settings`, so nothing in src/,
+// shared/ or mobile/ may read `settings` off `activeLocation` or
+// `user.locations`, and the pure Glofox-presence helpers (which need
+// `settings`) are called only by the registry and the by-id reader
+// (src/lib/automations/glofox-status.js), never by a page on the user object.
 
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
@@ -20,20 +27,41 @@ const PROFILE_COLUMNS = [...collectSchema(path.join(ROOT, 'supabase/migrations')
 const DROPPED = PROFILE_COLUMNS.filter((c) => !USER_PROFILE_COLUMNS.includes(c))
 const USER_IDENT = '(?:user|currentUser|me|viewer|caller|actor|sessionUser|authUser)'
 
+const SKIP_DIRS = new Set(['node_modules', 'ios', 'android', 'dist', 'web-build'])
+
 function walk(dir, out = []) {
   for (const name of readdirSync(dir)) {
-    if (name === 'node_modules' || name.startsWith('.')) continue
+    if (SKIP_DIRS.has(name) || name.startsWith('.')) continue
     const full = path.join(dir, name)
     if (statSync(full).isDirectory()) walk(full, out)
-    else if (/\.(m?js|jsx)$/.test(name) && !/\.test\.(m?js|jsx)$|\.test-helpers\.js$/.test(name)) out.push(full)
+    else if (/\.(m?js|jsx|tsx?)$/.test(name) && !/\.test\.(m?js|jsx|tsx?)$|\.test-helpers\.js$/.test(name)) out.push(full)
   }
   return out
 }
 
 function droppedReads(text, dropped = DROPPED) {
   if (dropped.length === 0) return []
-  const re = new RegExp(`\\b${USER_IDENT}\\??\\.(${dropped.join('|')})\\b`, 'g')
-  return [...text.matchAll(re)].map((m) => m[1])
+  const cols = dropped.join('|')
+  // `user.col`, `user?.col`, `user['col']`, `user?.["col"]`, `` user[`col`] ``
+  const re = new RegExp(
+    `\\b${USER_IDENT}(?:\\??\\.(${cols})\\b|(?:\\?\\.)?\\[\\s*(['"\`])(${cols})\\2\\s*\\])`,
+    'g',
+  )
+  return [...text.matchAll(re)].map((m) => m[1] || m[3])
+}
+
+// The plan's F6 census regex, verbatim.
+const LOCATION_SETTINGS_READ = /(activeLocation|user\??\.locations(\[[^\]]*\])?)\??\.settings\b/g
+
+function locationSettingsReads(text) {
+  return [...text.matchAll(LOCATION_SETTINGS_READ)].map((m) => m[0])
+}
+
+const GLOFOX_PRESENCE_CALL = /\b(glofoxConnected|automationStatus)\(/g
+const GLOFOX_PRESENCE_CALLERS = ['src/lib/automations/registry.js', 'src/lib/automations/glofox-status.js']
+
+function glofoxPresenceCalls(text) {
+  return [...text.matchAll(GLOFOX_PRESENCE_CALL)].map((m) => m[1])
 }
 
 function userSpreads(text) {
@@ -61,9 +89,58 @@ describe('no reader takes a dropped profile column off the user object (PROFILES
   it('the matcher sees the forms it must', () => {
     expect(droppedReads('if (user.pin_hash) x()', ['pin_hash'])).toEqual(['pin_hash'])
     expect(droppedReads('const r = currentUser?.hourly_rate', ['hourly_rate'])).toEqual(['hourly_rate'])
+    expect(droppedReads("if (user?.['pin_hash']) x()", ['pin_hash'])).toEqual(['pin_hash'])
+    expect(droppedReads('const r = user["hourly_rate"]', ['hourly_rate'])).toEqual(['hourly_rate'])
+    expect(droppedReads('const r = me[ `pin_hash` ]', ['pin_hash'])).toEqual(['pin_hash'])
+    expect(droppedReads("user['pin_hash_x']", ['pin_hash'])).toEqual([])
+    expect(droppedReads("user['pin_hash\"]", ['pin_hash'])).toEqual([])
+    expect(droppedReads('user[key]', ['pin_hash'])).toEqual([])
     expect(droppedReads('row.pin_hash', ['pin_hash'])).toEqual([])
     expect(droppedReads('user.pin_hash_x', ['pin_hash'])).toEqual([])
     expect(userSpreads('const o = { ...user, x: 1 }')).toBe(1)
     expect(userSpreads('const o = { ...user.activeLocation }')).toBe(0)
+  })
+})
+
+describe('the user object\'s locations carry no settings, and nothing reads them there (PROFILESPREAD.1a)', () => {
+  const files = ['src', 'shared', 'mobile'].flatMap((d) => walk(path.join(ROOT, d)))
+
+  it('walks all three trees (not vacuous)', () => {
+    for (const d of ['src/', 'shared/', 'mobile/']) {
+      expect(files.some((f) => path.relative(ROOT, f).startsWith(d)), d).toBe(true)
+    }
+  })
+
+  it('no file reads settings off activeLocation or user.locations', () => {
+    const hits = []
+    for (const f of files) for (const h of locationSettingsReads(readFileSync(f, 'utf8'))) hits.push(`${path.relative(ROOT, f)}: ${h}`)
+    expect(hits, 'read the location row fresh by id (readGlofoxAutomationStatus is the pattern)').toEqual([])
+  })
+
+  it('glofoxConnected( and automationStatus( are called only by the registry and the by-id reader', () => {
+    const hits = []
+    for (const f of files) {
+      const rel = path.relative(ROOT, f)
+      if (GLOFOX_PRESENCE_CALLERS.includes(rel)) continue
+      for (const c of glofoxPresenceCalls(readFileSync(f, 'utf8'))) hits.push(`${rel}: ${c}(`)
+    }
+    expect(hits, 'call readGlofoxAutomationStatus(db, locationId) instead').toEqual([])
+  })
+
+  it('the allowed callers exist and still call them (not vacuous)', () => {
+    for (const rel of GLOFOX_PRESENCE_CALLERS) {
+      expect(glofoxPresenceCalls(readFileSync(path.join(ROOT, rel), 'utf8')).length, rel).toBeGreaterThan(0)
+    }
+  })
+
+  it('the matchers see the forms they must', () => {
+    expect(locationSettingsReads('const g = user.activeLocation.settings.glofox')).toEqual(['activeLocation.settings'])
+    expect(locationSettingsReads('const g = activeLocation?.settings')).toEqual(['activeLocation?.settings'])
+    expect(locationSettingsReads('user.locations[0].settings')).toEqual(['user.locations[0].settings'])
+    expect(locationSettingsReads('user?.locations[i]?.settings')).toEqual(['user?.locations[i]?.settings'])
+    expect(locationSettingsReads('row.settings')).toEqual([])
+    expect(locationSettingsReads('activeLocation.settingsVersion')).toEqual([])
+    expect(glofoxPresenceCalls('glofoxConnected(location) && automationStatus(k, l)')).toEqual(['glofoxConnected', 'automationStatus'])
+    expect(glofoxPresenceCalls('import { glofoxConnected } from "x"')).toEqual([])
   })
 })
