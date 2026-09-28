@@ -1,4 +1,6 @@
-// WEBHOOKAUDIT.1 — one PII-free row per processed Glofox webhook delivery.
+// WEBHOOKAUDIT.1 — one row per processed Glofox webhook delivery, with a
+// PII-free digest. (error_message is the same free text markEvent writes to
+// glofox_webhook_events.error_message, capped; it is not part of the digest.)
 //
 // WHY. glofox_webhook_events.event_id is Glofox's ENTITY id (Payload.id: the
 // booking, invoice, member or event), not an id for the emission — that is

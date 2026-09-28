@@ -1,5 +1,6 @@
--- 649 — WEBHOOKAUDIT.1: glofox_webhook_attempts, one PII-free row per
--- processed Glofox webhook delivery.
+-- 649 — WEBHOOKAUDIT.1: glofox_webhook_attempts, one row per processed
+-- Glofox webhook delivery (its digest is PII-free; its error_message is the
+-- same free text markEvent writes to glofox_webhook_events).
 --
 -- WHY
 -- ───
@@ -22,7 +23,10 @@
 -- a failed insert is logged and changes nothing about the delivery):
 --   trace_id / emitted_at   which emission (Metadata.trace_id, Timestamp)
 --   delivered_at            when this delivery reached us
---   status / error_message  what markEvent wrote for it
+--   status / error_message  what markEvent wrote for it (error_message is
+--                           the SAME free text as the event row's, capped
+--                           at 500 chars; it can quote a DB error, so it is
+--                           not covered by the digest's PII-free rule)
 --   digest                  an ALLOWLIST projection of the result — changed
 --                           column NAMES and the from/to of five label/number
 --                           columns; never the name/email/phone/dob/emergency
@@ -79,7 +83,7 @@ REVOKE ALL ON TABLE public.glofox_webhook_attempts FROM anon, authenticated;
 GRANT SELECT, INSERT, DELETE ON TABLE public.glofox_webhook_attempts TO service_role;
 
 COMMENT ON TABLE public.glofox_webhook_attempts IS
-  'One PII-free row per processed Glofox webhook delivery (WEBHOOKAUDIT.1, mig 649). glofox_webhook_events keeps only the LATEST event per Glofox entity; this is the history. Written by /api/webhooks/glofox (src/lib/glofox-webhook-attempts.js); purged 90 days after processed_at by /api/cron/purge-webhook-payloads. Service-role only.';
+  'One row per processed Glofox webhook delivery (WEBHOOKAUDIT.1, mig 649). glofox_webhook_events keeps only the LATEST event per Glofox entity; this is the history. The digest is PII-free (an allowlist of codes, flags, counts, column names and our own ids). error_message is NOT: it is the same free text markEvent writes to glofox_webhook_events.error_message for this delivery (capped at 500 chars), so it is exactly as sensitive as that column. Written by /api/webhooks/glofox (src/lib/glofox-webhook-attempts.js); purged 90 days after processed_at by /api/cron/purge-webhook-payloads. Service-role only.';
 
 COMMENT ON COLUMN public.glofox_webhook_events.event_id IS
   'Glofox ENTITY id (Payload.id: the booking/invoice/member/event), NOT an emission id — every later event about the same entity upserts this same row, so the row holds only the latest event. The per-emission id is payload->Metadata->>trace_id; per-delivery history is glofox_webhook_attempts (mig 649).';

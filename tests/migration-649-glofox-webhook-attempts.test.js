@@ -183,6 +183,14 @@ describe('migration 649 — glofox_webhook_attempts', () => {
     expect(rows[0].c).toMatch(/trace_id/)
   })
 
+  it('the table comment scopes "PII-free" to the digest and names error_message as copied free text', async () => {
+    await runSql(MIG_649)
+    const { rows } = await db.query(`SELECT obj_description('public.glofox_webhook_attempts'::regclass, 'pg_class') AS c`)
+    expect(rows[0].c).toMatch(/digest is PII-free/)
+    expect(rows[0].c).toMatch(/error_message .*free text.*glofox_webhook_events/)
+    expect(rows[0].c).not.toMatch(/One PII-free row/)
+  })
+
   it('appends one sentence to the purge heartbeat notes, once, and replays as a no-op', async () => {
     await runSql(MIG_649)
     const once = await purgeNotes()
