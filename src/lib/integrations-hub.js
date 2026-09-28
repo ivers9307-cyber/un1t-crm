@@ -327,10 +327,11 @@ export function buildAttention(rows, { now = new Date(), expirySoonDays = EXPIRY
 
 /**
  * HUBREAD.1 — the ONE attention row a failed read earns (the Shelly
- * pattern). Pinned to the first in-scope location because
- * attentionCountByOrg (admin-tenants.js) resolves the org THROUGH
- * a.locationId; the UI shows it under every location scope. null when
- * there are no locations. Pure.
+ * pattern). Pinned to the first in-scope location so it has a
+ * locationId at all; the UI shows it under every location scope, and
+ * getTenantsRoster (admin-tenants.js) reads ANY unreadable row as every
+ * org unknown — never count it per org. null when there are no
+ * locations. Pure.
  */
 export function unreadableAttention(cardKey, ids, message) {
   if (!ids?.length) return null

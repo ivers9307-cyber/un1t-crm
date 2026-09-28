@@ -404,7 +404,11 @@ export async function getTenantsRoster(db, { today = dublinTodayStr() } = {}) {
     logError('admin-tenants', 'tenant_cron_health read failed — heartbeat counts unknown', { error: heartbeatsRes.error })
   }
   const stale = heartbeatsKnown ? staleHeartbeatsByLocation(heartbeatsRes.data || []) : {}
-  const attentionByOrg = hub ? attentionCountByOrg(hub.attention, locationOrgMap) : null
+  // HUBREAD.1 — an unreadable attention row is pinned to the FIRST
+  // in-scope location (unreadableAttention), so counting by org would
+  // mark every other org OK. Any unreadable row → every org is unknown.
+  const hubUnreadable = !hub || (hub.attention || []).some((a) => a.unreadable)
+  const attentionByOrg = hubUnreadable ? null : attentionCountByOrg(hub.attention, locationOrgMap)
 
   const walletByLocation = Object.fromEntries(wallets.map((w) => [w.location_id, w]))
 
@@ -430,7 +434,7 @@ export async function getTenantsRoster(db, { today = dublinTodayStr() } = {}) {
         : null,
       usage: usage.byOrg[org.id] || emptyUsage(),
       health: {
-        attentionCount: attentionByOrg ? (attentionByOrg[org.id] || 0) : null,
+        attentionCount: hubUnreadable ? null : (attentionByOrg[org.id] || 0),
         staleHeartbeatCount: heartbeatsKnown ? staleCount : null,
       },
     }

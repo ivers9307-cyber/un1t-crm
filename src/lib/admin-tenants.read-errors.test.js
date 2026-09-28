@@ -57,6 +57,22 @@ describe('getTenantsRoster — failed reads are unknown, never OK (HUBREAD.1)', 
     expect(out.orgs[0].health).toEqual({ attentionCount: 0, staleHeartbeatCount: null })
   })
 
+  it('a hub with an unreadable row → EVERY org is unknown, not just the first (S1)', async () => {
+    // The unreadable attention row is pinned to the first in-scope
+    // location (org A's) — org B must not read that as "nothing wrong".
+    const ORG_B = { ...ORG, id: 'org-2', name: 'Org B', slug: 'org-b' }
+    const LOC_B = { ...LOC, id: 'loc-2', name: 'Second Studio', organization_id: 'org-2' }
+    assembleIntegrationsHub.mockResolvedValue({
+      attention: [{ cardKey: 'xero', locationId: 'loc-1', status: 'unknown', unreadable: true }],
+    })
+    const out = await getTenantsRoster(
+      consoleDb({ organizations: { data: [ORG, ORG_B] }, locations: { data: [LOC, LOC_B] } }),
+      { today: '2026-09-28' },
+    )
+    const byId = Object.fromEntries(out.orgs.map((o) => [o.id, o.health.attentionCount]))
+    expect(byId).toEqual({ 'org-1': null, 'org-2': null })
+  })
+
   it('healthy reads still count real zeros (pin)', async () => {
     const out = await getTenantsRoster(consoleDb(TABLES), { today: '2026-09-28' })
     expect(out.orgs[0].health).toEqual({ attentionCount: 0, staleHeartbeatCount: 0 })
