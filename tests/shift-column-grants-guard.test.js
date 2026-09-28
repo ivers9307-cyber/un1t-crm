@@ -1,6 +1,6 @@
 // NOTESGRANT.1 guard (mig 646). `authenticated` holds SELECT on only SOME
 // columns of shift_blocks / shift_assignments (tests/helpers/shift-column-grants.js).
-// Two ways that can bite later, both pinned here:
+// Three ways that can bite later, all pinned here:
 //
 //  1. Phone-run code (shared/, mobile/) queries these tables with the user's
 //     own session. PostgREST refuses the WHOLE select (42501) when it names a
@@ -12,6 +12,10 @@
 //     authenticated. That must be a decision: the same migration either
 //     GRANTs SELECT on it or says `-- column-grant: withheld <table>.<column>`,
 //     and the helper's lists gain it.
+//  3. A later migration that GRANTs table-level SELECT (or ALL) on either
+//     table to authenticated / anon / PUBLIC, by name or through `ALL TABLES
+//     IN SCHEMA public`, reopens every withheld column at once and nothing
+//     errors. Only column-list grants are allowed after 646.
 //
 // A floor, not a proof (like check:select-columns): a select string built at
 // runtime is invisible here. Server code (src/) is not checked: service_role
@@ -145,6 +149,53 @@ describe('phone-run code names only granted shift columns (NOTESGRANT.1)', () =>
   })
 })
 
+/** A SQL identifier without quotes, lowercased (`"Public"` → `public`). */
+const ident = (s) => s.trim().replace(/["']/g, '').toLowerCase()
+
+/** Split on commas outside parentheses. */
+function splitTop(list) {
+  const out = []
+  let depth = 0
+  let cur = ''
+  for (const ch of list) {
+    if (ch === '(') depth++
+    if (ch === ')') depth--
+    if (ch === ',' && depth === 0) { out.push(cur); cur = '' } else cur += ch
+  }
+  out.push(cur)
+  return out.map((s) => s.trim()).filter(Boolean)
+}
+
+/**
+ * Every GRANT in `sql` that gives a client role (authenticated, anon, PUBLIC)
+ * table-level SELECT on a shift table: `SELECT` or `ALL [PRIVILEGES]` with no
+ * column list, on the table by name (any schema qualification or quoting) or
+ * through `ALL TABLES IN SCHEMA public`. Mig 646 withholds columns by having
+ * NO table-level SELECT; one of these puts it back and every withheld column
+ * is readable again, with no error anywhere. Comments are skipped (a rollback
+ * note is not a grant); a GRANT inside an EXECUTE string is still a grant.
+ */
+function blanketGrants(sql) {
+  const code = sql.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--[^\n]*/g, ' ')
+  const hits = []
+  for (const m of code.matchAll(/\bgrant\s+([\s\S]+?)\s+on\s+([\s\S]+?)\s+to\s+([\s\S]+?)(?:;|'|$)/gi)) {
+    const [stmt, privs, target, to] = m
+    const tableLevelSelect = splitTop(privs).some((p) => /^(select|all(\s+privileges)?)$/i.test(p.trim()))
+    if (!tableLevelSelect) continue
+    const grantees = splitTop(to.replace(/\s+(with\s+grant\s+option|granted\s+by\b)[\s\S]*$/i, '')).map(ident)
+    if (!grantees.some((g) => ['authenticated', 'anon', 'public'].includes(g))) continue
+    const all = target.match(/^all\s+tables\s+in\s+schema\s+([\s\S]+)$/i)
+    if (all) {
+      if (splitTop(all[1]).map(ident).includes('public')) hits.push(stmt.trim())
+      continue
+    }
+    if (/^(sequence|function|procedure|routine|schema|database|foreign|large|language|tablespace|type|domain|all\s)/i.test(target.trim())) continue
+    const tables = splitTop(target.replace(/^\s*table\s+/i, '')).map((t) => ident(t).replace(/^public\./, ''))
+    if (tables.some((t) => SHIFT_GRANT_TABLES.includes(t))) hits.push(stmt.trim())
+  }
+  return hits
+}
+
 describe('a new column on a shift table is granted or withheld on purpose', () => {
   const dir = path.join(ROOT, 'supabase/migrations')
   const later = readdirSync(dir)
@@ -166,6 +217,42 @@ describe('a new column on a shift table is granted or withheld on purpose', () =
       const { granted, withheld } = SHIFT_COLUMN_GRANTS[table]
       expect([...granted, ...withheld], `add ${col} to tests/helpers/shift-column-grants.js`).toContain(col)
     }
+  })
+
+  it.each(later.length ? later : ['(none yet)'])('%s re-grants no table-level SELECT to a client role', (file) => {
+    if (file === '(none yet)') return
+    const sql = readFileSync(path.join(dir, file), 'utf8')
+    expect(blanketGrants(sql), `${file}: re-granting table-level SELECT silently reopens C8's leak (mig 646) — grant columns instead: GRANT SELECT (<col>, …) ON public.<table> TO authenticated`).toEqual([])
+  })
+
+  it('the blanket-grant detector catches every re-grant form and passes column grants', () => {
+    const bad = [
+      'GRANT SELECT ON public.shift_blocks TO authenticated;',
+      'grant select on table shift_assignments to anon;',
+      'GRANT ALL ON "public"."shift_blocks" TO PUBLIC;',
+      'GRANT ALL PRIVILEGES ON "shift_assignments" TO "authenticated" WITH GRANT OPTION;',
+      'GRANT INSERT, SELECT ON public.shift_templates, public.shift_assignments TO service_role, authenticated;',
+      'GRANT SELECT ON ALL TABLES IN SCHEMA public TO authenticated;',
+      'GRANT ALL ON ALL TABLES IN SCHEMA private, "public" TO anon;',
+      `DO $$ BEGIN EXECUTE 'GRANT SELECT ON public.shift_blocks TO authenticated'; END $$;`,
+    ]
+    for (const sql of bad) expect(blanketGrants(sql), sql).not.toEqual([])
+    const ok = [
+      'GRANT SELECT (colour) ON public.shift_blocks TO authenticated;',
+      'GRANT SELECT (colour), UPDATE ON public.shift_blocks TO authenticated;',
+      'GRANT ALL (colour) ON public.shift_blocks TO authenticated;',
+      'GRANT SELECT ON public.shift_blocks TO service_role;',
+      'GRANT SELECT ON public.shift_templates TO authenticated;',
+      'GRANT SELECT ON public.shift_blocks_archive TO authenticated;',
+      'GRANT INSERT, UPDATE ON public.shift_assignments TO authenticated;',
+      'GRANT INSERT ON ALL TABLES IN SCHEMA public TO authenticated;',
+      'GRANT SELECT ON ALL TABLES IN SCHEMA private TO authenticated;',
+      'GRANT EXECUTE ON FUNCTION public.shift_blocks_x() TO authenticated;',
+      'REVOKE SELECT ON public.shift_blocks FROM authenticated, anon;',
+      '-- rollback: GRANT SELECT ON public.shift_blocks TO authenticated;',
+      '/* GRANT ALL ON public.shift_assignments TO anon; */',
+    ]
+    for (const sql of ok) expect(blanketGrants(sql), sql).toEqual([])
   })
 
   it('the detector sees an ALTER … ADD COLUMN and both ways of deciding it', () => {
