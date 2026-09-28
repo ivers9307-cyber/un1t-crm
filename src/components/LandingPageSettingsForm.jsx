@@ -44,6 +44,7 @@ import {
 } from '@/lib/landing-page-blocks'
 import { buildTrialOptions } from '@/lib/glofox-trial-options'
 import { centsToEuros, eurosToCents } from '@/lib/price-format'
+import { DEFAULT_TIMETABLE_UNAVAILABLE_MESSAGE } from '@/lib/public-landing'
 
 // PostMessage namespace shared with src/components/landing-page/
 // EditModeOverlay.jsx so the iframe and the parent only react to
@@ -947,6 +948,12 @@ function ClassFunnelEdit({ block, onUpdate, availableBookingTypes, locationId })
       </Field>
       <Field label="Class booked — message">
         <Textarea value={block.class_done_body || ''} onChange={(v) => onUpdate({ class_done_body: v })} maxLength={400} rows={2} />
+      </Field>
+      {/* REGISTRYREAD.1a — shown when the timetable could not be read at the
+          moment someone books (the booking is not taken; their details stay
+          in the form). Blank keeps the default. */}
+      <Field label="Timetable unavailable — message" hint="Shown if we can't check the timetable when someone books. Leave blank for the default.">
+        <Textarea value={block.timetable_unavailable_message || ''} onChange={(v) => onUpdate({ timetable_unavailable_message: v })} maxLength={300} rows={2} placeholder={DEFAULT_TIMETABLE_UNAVAILABLE_MESSAGE} />
       </Field>
       <Field
         label="Trial product granted on booking"

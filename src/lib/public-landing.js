@@ -64,3 +64,21 @@ export function classFunnelConfigFromBlocks(blocks, landingPath) {
     priceCents, currency,
   }
 }
+
+// REGISTRYREAD.1a — what the class funnel tells a customer when the timetable
+// could not be read (a settings-read blip or Glofox not answering), so the
+// booking was not taken. Customer copy is operator-editable (CLAUDE.md): the
+// class_funnel block's `timetable_unavailable_message` field, edited in the
+// landing-page editor, with this default when it is blank or absent. Same
+// block + override rule as classFunnelConfigFromBlocks. Deliberately NOT
+// seeded into new blocks, so a later change to the default reaches every
+// funnel nobody has customised. No em-dashes in customer copy.
+export const DEFAULT_TIMETABLE_UNAVAILABLE_MESSAGE =
+  'We could not check the timetable just now. Please try again in a minute.'
+
+export function classFunnelTimetableUnavailableMessage(blocks) {
+  const list = Array.isArray(blocks) ? blocks : []
+  const cf = list.find((b) => b && typeof b === 'object' && b.type === 'class_funnel')
+  const v = cf?.timetable_unavailable_message
+  return (typeof v === 'string' && v.trim()) ? v.trim() : DEFAULT_TIMETABLE_UNAVAILABLE_MESSAGE
+}

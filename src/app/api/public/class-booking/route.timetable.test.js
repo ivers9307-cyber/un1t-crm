@@ -5,12 +5,14 @@
 // the funnel shows the error with their details intact.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+// The landing row's blocks: a test sets these to model an operator's edit.
+let pageBlocks = []
 const db = {
   from(table) {
     const b = {
       select: () => b, eq: () => b, is: () => b, update: () => b,
       maybeSingle: async () => (table === 'landing_page_settings'
-        ? { data: { location_id: 'L1', blocks: [] }, error: null }
+        ? { data: { location_id: 'L1', blocks: pageBlocks }, error: null }
         : { data: null, error: null }),
       then: (resolve, reject) => Promise.resolve({ data: null, error: null }).then(resolve, reject),
     }
@@ -45,7 +47,7 @@ const book = () => POST(new Request('http://localhost/api/public/class-booking',
   }),
 }))
 
-beforeEach(() => vi.clearAllMocks())
+beforeEach(() => { vi.clearAllMocks(); pageBlocks = [] })
 
 describe('POST /api/public/class-booking — timetable read', () => {
   it('a timetable read failure answers 503 timetable_unavailable and captures nothing', async () => {
@@ -54,8 +56,18 @@ describe('POST /api/public/class-booking — timetable read', () => {
     expect(res.status).toBe(503)
     const j = await res.json()
     expect(j).toMatchObject({ success: false, code: 'timetable_unavailable' })
+    expect(j.error).toBe('We could not check the timetable just now. Please try again in a minute.')
     expect(j.error).not.toMatch(/—/) // customer copy: no em-dashes
     expect(findOrCreateRaceContact).not.toHaveBeenCalled()
+  })
+
+  it("the message is the operator's copy from the class_funnel block when set (customer copy is editable)", async () => {
+    pageBlocks = [{ type: 'class_funnel', timetable_unavailable_message: 'Our timetable is having a moment. Try again shortly.' }]
+    readPublicClasses.mockResolvedValueOnce({ classes: [], error: 'glofox_unreachable' })
+    const res = await book()
+    expect(res.status).toBe(503)
+    const j = await res.json()
+    expect(j).toMatchObject({ success: false, code: 'timetable_unavailable', error: 'Our timetable is having a moment. Try again shortly.' })
   })
 
   it('a class that really is not in the list is still class_unavailable (unchanged)', async () => {

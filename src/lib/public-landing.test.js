@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { resolveLandingPath, classFunnelConfigFromBlocks } from './public-landing'
+import {
+  resolveLandingPath,
+  classFunnelConfigFromBlocks,
+  classFunnelTimetableUnavailableMessage,
+  DEFAULT_TIMETABLE_UNAVAILABLE_MESSAGE,
+} from './public-landing'
 
 describe('resolveLandingPath', () => {
   it('defaults to stillorgan when the param is absent', () => {
@@ -159,5 +164,29 @@ describe('classFunnelConfigFromBlocks — price', () => {
   })
   it('clamps a negative price to 0', () => {
     expect(classFunnelConfigFromBlocks(withBlock({ price_cents: -5 }), 'stillorgan').priceCents).toBe(0)
+  })
+})
+
+// REGISTRYREAD.1a — the customer-facing "we could not check the timetable"
+// message is operator-editable on the class_funnel block (CLAUDE.md: customer
+// copy is a settings field with a default fallback), same override rule as
+// the block's other fields: a blank or missing field keeps the default.
+describe('classFunnelTimetableUnavailableMessage', () => {
+  it('defaults to the plain-English message when no block or field is set', () => {
+    expect(DEFAULT_TIMETABLE_UNAVAILABLE_MESSAGE).toBe('We could not check the timetable just now. Please try again in a minute.')
+    expect(classFunnelTimetableUnavailableMessage(null)).toBe(DEFAULT_TIMETABLE_UNAVAILABLE_MESSAGE)
+    expect(classFunnelTimetableUnavailableMessage([{ type: 'hero' }])).toBe(DEFAULT_TIMETABLE_UNAVAILABLE_MESSAGE)
+    expect(classFunnelTimetableUnavailableMessage([{ type: 'class_funnel' }])).toBe(DEFAULT_TIMETABLE_UNAVAILABLE_MESSAGE)
+  })
+  it('the default carries no em-dash (customer copy)', () => {
+    expect(DEFAULT_TIMETABLE_UNAVAILABLE_MESSAGE).not.toMatch(/\u2014/)
+  })
+  it("honours the operator's text on the class_funnel block", () => {
+    const blocks = [{ type: 'class_funnel', timetable_unavailable_message: '  Our timetable is having a moment. Try again shortly.  ' }]
+    expect(classFunnelTimetableUnavailableMessage(blocks)).toBe('Our timetable is having a moment. Try again shortly.')
+  })
+  it('a blank or non-string field falls back to the default', () => {
+    expect(classFunnelTimetableUnavailableMessage([{ type: 'class_funnel', timetable_unavailable_message: '   ' }])).toBe(DEFAULT_TIMETABLE_UNAVAILABLE_MESSAGE)
+    expect(classFunnelTimetableUnavailableMessage([{ type: 'class_funnel', timetable_unavailable_message: 42 }])).toBe(DEFAULT_TIMETABLE_UNAVAILABLE_MESSAGE)
   })
 })

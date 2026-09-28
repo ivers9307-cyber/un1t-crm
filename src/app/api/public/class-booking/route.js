@@ -17,7 +17,7 @@ import { isValidMobileNumber } from '@/lib/phone-validate'
 import { publishQueuePush, CLASS_BOOKINGS_WORKER_PATH } from '@/lib/qstash'
 import { logWarn } from '@/lib/log'
 import { placeWaitlistEntry } from '@/lib/waitlist-entry'
-import { resolveLandingPath, classFunnelConfigFromBlocks } from '@/lib/public-landing'
+import { resolveLandingPath, classFunnelConfigFromBlocks, classFunnelTimetableUnavailableMessage } from '@/lib/public-landing'
 import { createClassBookingPayment } from '@/lib/class-booking-payments'
 import { locationCanTakePayments } from '@/lib/location-payments'
 
@@ -106,9 +106,14 @@ export async function POST(request) {
     // REGISTRYREAD.1a: a timetable we could not read is not "that class is
     // gone". class_unavailable told the customer it "filled up while you were
     // typing" and sent them to an empty picker. The funnel shows this error
-    // and keeps what they typed.
+    // and keeps what they typed. The words are the operator's (the
+    // class_funnel block's timetable_unavailable_message), default otherwise.
     logWarn('classbook', 'timetable unreadable', { locationId, error: timetableErr })
-    return NextResponse.json({ success: false, code: 'timetable_unavailable', error: 'We could not check the timetable just now. Please try again in a minute.' }, { status: 503 })
+    return NextResponse.json({
+      success: false,
+      code: 'timetable_unavailable',
+      error: classFunnelTimetableUnavailableMessage(page.blocks),
+    }, { status: 503 })
   }
   if (!chosen) {
     // STARTCONV.1 — a machine-readable code, because the funnel now collects
