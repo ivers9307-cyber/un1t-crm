@@ -9,7 +9,7 @@ vi.mock('@/lib/roster-change-notify', () => ({ notifyRosterChanges: vi.fn(async 
 
 const { logRosterChange } = await import('@/lib/roster-change-log')
 const { notifyRosterChanges } = await import('@/lib/roster-change-notify')
-const { unassignShiftAssignments, logAndNotifyUnassignments } = await import('./shift-unassign.js')
+const { unassignShiftAssignments, logAndNotifyUnassignments, SHIFT_CHANGED_ERROR, SHIFTS_CHANGED_ERROR } = await import('./shift-unassign.js')
 const { fakeDb, queriesOf } = await import('./time-off.test-helpers.js')
 
 const a = (id, location_id, roster_status = 'published', block_date = '2026-06-01') =>
@@ -56,10 +56,12 @@ describe('unassignShiftAssignments — pinned to the coach it read (review 2)', 
     expect(del.columns).toBe('id')
   })
 
-  it('zero rows (the row now belongs to someone else, or is gone) is failed "changed": not logged, not notified', async () => {
+  it('zero rows and the row is still there (it belongs to someone else now) is failed "changed": not logged, not notified', async () => {
+    // The zero-row delete answers [], and so does the re-read here: a row is
+    // still there under that id.
     const db = fakeDb(() => ({ data: [], error: null }))
     const out = await unassignShiftAssignments(db, { actorId: 'mgr', assignments: [a('1', 'loc-1')] })
-    expect(out).toEqual({ removed: [], failed: [{ id: '1', error: 'This shift has just changed. Refresh and try again.', code: 'changed' }] })
+    expect(out).toEqual({ removed: [], failed: [{ id: '1', error: 'This shift has just changed. Refresh and try again.', code: 'changed' }], gone: [] })
     expect(logRosterChange).not.toHaveBeenCalled()
     expect(notifyRosterChanges).not.toHaveBeenCalled()
   })
@@ -104,5 +106,66 @@ describe('logAndNotifyUnassignments', () => {
   it('tolerates an empty / missing list', async () => {
     expect(await logAndNotifyUnassignments(db, { actorId: 'mgr', assignments: [] })).toEqual({ logged: 0, notified: 0 })
     expect(await logAndNotifyUnassignments(db, { actorId: 'mgr' })).toEqual({ logged: 0, notified: 0 })
+  })
+})
+
+// C5 REPLACENITS.1 — a zero-row delete has two meanings. The row is GONE (a
+// double submit's other request, another manager, or the slot's cascade took
+// it): the caller's wish is met, and whoever deleted it logged and told the
+// coach. Or it is still there under ANOTHER coach (a replace won; review 2):
+// "changed", as before. One re-read by id tells them apart. An unreadable
+// re-read is "changed" (today's answer, a refresh), never a guessed success.
+describe('unassignShiftAssignments — gone is done, changed hands is "changed" (REPLACENITS.1)', () => {
+  const CHANGED = { id: '1', error: 'This shift has just changed. Refresh and try again.', code: 'changed' }
+  const dbWith = (reread) => fakeDb((q) => {
+    if (q.action === 'delete') return { data: [], error: null }
+    if (q.table === 'shift_assignments' && q.action === 'select') return typeof reread === 'function' ? reread(q) : reread
+    return { data: null, error: null }
+  })
+
+  it('the row no longer exists: gone, not failed; nothing logged or told a second time', async () => {
+    const db = dbWith({ data: null, error: null })
+    const out = await unassignShiftAssignments(db, { actorId: 'mgr', assignments: [a('1', 'loc-1')] })
+    expect(out).toEqual({ removed: [], failed: [], gone: [a('1', 'loc-1')] })
+    const [read] = queriesOf(db, 'shift_assignments', 'select')
+    expect(read.eq).toEqual({ id: '1' })
+    expect(read.columns).toBe('id')
+    expect(logRosterChange).not.toHaveBeenCalled()
+    expect(notifyRosterChanges).not.toHaveBeenCalled()
+  })
+
+  it('the row is still there under another coach (a replace won): changed, as before', async () => {
+    const out = await unassignShiftAssignments(dbWith({ data: { id: '1' }, error: null }), { actorId: 'mgr', assignments: [a('1', 'loc-1')] })
+    expect(out).toEqual({ removed: [], failed: [CHANGED], gone: [] })
+    expect(SHIFT_CHANGED_ERROR).toBe(CHANGED.error)
+  })
+
+  it('the re-read fails: changed (the caller refreshes), never a guess that it went', async () => {
+    const out = await unassignShiftAssignments(dbWith({ data: null, error: { message: 'down' } }), { actorId: 'mgr', assignments: [a('1', 'loc-1')] })
+    expect(out).toEqual({ removed: [], failed: [CHANGED], gone: [] })
+  })
+
+  it('a re-read that throws is changed too, and the helper still resolves', async () => {
+    const db = dbWith(() => { throw new Error('socket closed') })
+    await expect(unassignShiftAssignments(db, { actorId: 'mgr', assignments: [a('1', 'loc-1')] }))
+      .resolves.toEqual({ removed: [], failed: [CHANGED], gone: [] })
+  })
+
+  it('a mixed batch: removed, gone and changed each land in their own list; only the removed one is logged and told', async () => {
+    const db = fakeDb((q) => {
+      if (q.action === 'delete') return q.eq.id === '1' ? { data: [{ id: '1' }], error: null } : { data: [], error: null }
+      if (q.action === 'select') return q.eq.id === '2' ? { data: null, error: null } : { data: { id: q.eq.id }, error: null }
+      return { data: null, error: null }
+    })
+    const out = await unassignShiftAssignments(db, { actorId: 'mgr', assignments: [a('1', 'loc-1'), a('2', 'loc-1'), a('3', 'loc-1')] })
+    expect(out.removed.map((r) => r.id)).toEqual(['1'])
+    expect(out.gone.map((r) => r.id)).toEqual(['2'])
+    expect(out.failed).toEqual([{ ...CHANGED, id: '3' }])
+    expect(logRosterChange).toHaveBeenCalledTimes(1)
+    expect(notifyRosterChanges.mock.calls[0][1].changes.map((c) => c.blockId)).toEqual(['b-1'])
+  })
+
+  it('the plural words exist for a caller reporting several', () => {
+    expect(SHIFTS_CHANGED_ERROR).toBe('These shifts have just changed. Refresh and try again.')
   })
 })

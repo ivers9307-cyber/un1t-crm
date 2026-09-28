@@ -82,6 +82,21 @@ describe('TimeOffManager — LEAVE.2', () => {
     expect(posted).toEqual([['/api/schedule/time-off/r1/unassign-clashes', { assignment_ids: ['a1', 'a2'] }]])
   })
 
+  it('a double-submitted unassign counts the shifts the first request already removed (REPLACENITS.1)', async () => {
+    const clashes = [{ id: 'a1', block_date: '2026-10-01' }, { id: 'a2', block_date: '2026-10-02' }]
+    mockFetch({
+      onPut: () => ({ success: true, data: { ...PENDING, status: 'approved' }, clashes }),
+      onPost: () => ({ success: true, data: { removed: [], skipped: [], already_removed: ['a1', 'a2'] } }),
+    })
+    await act(async () => { render(<TimeOffManager user={APPROVER} canApprove />) })
+    await waitFor(() => expect(screen.getByText('Clashes with 2 rostered shifts')).toBeTruthy())
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Approve Unavailable request from Sam Demo' })) })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Unassign them' })).toBeTruthy())
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Unassign them' })) })
+    await waitFor(() => expect(screen.getByText(/Unassigned from 2 shifts/)).toBeTruthy())
+    expect(screen.queryByText(/Unassigned from 0 shifts/)).toBeNull()
+  })
+
   it('"Keep them" dismisses without touching the roster', async () => {
     const posted = []
     mockFetch({

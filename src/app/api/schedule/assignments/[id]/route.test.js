@@ -92,7 +92,7 @@ function assignmentRow({
 // REPLACE.1a review 2 — `updateEqs` / `deleteEqs` record every .eq() on the
 // write, and `changedUnder: true` answers the write with zero rows, as
 // PostgREST does when the pinned profile no longer holds the row.
-function buildDb({ assignment = assignmentRow(), fetchErr = null, updateErr = null, deleteErr = null, changedUnder = false } = {}) {
+function buildDb({ assignment = assignmentRow(), fetchErr = null, updateErr = null, deleteErr = null, changedUnder = false, goneUnder = false, rereadErr = null } = {}) {
   const updateSpy = vi.fn()
   const deleteSpy = vi.fn()
   const updateEqs = []
@@ -109,6 +109,10 @@ function buildDb({ assignment = assignmentRow(), fetchErr = null, updateErr = nu
           select: () => ({
             eq: () => ({
               single: () => Promise.resolve({ data: fetchErr ? null : assignment, error: fetchErr }),
+              // REPLACENITS.1 — the helper's re-read after a zero-row delete:
+              // goneUnder = no row any more; otherwise the row is still there
+              // (under another coach, when changedUnder).
+              maybeSingle: () => Promise.resolve({ data: goneUnder || rereadErr ? null : { id: 'assign-1' }, error: rereadErr }),
             }),
           }),
           update: (patch) => {
@@ -140,7 +144,7 @@ function buildDb({ assignment = assignmentRow(), fetchErr = null, updateErr = nu
           delete: () => {
             const chain = {
               eq: (col, val) => { if (deleteEqs.length === 0) deleteSpy(col, val); deleteEqs.push([col, val]); return chain },
-              select: () => Promise.resolve({ data: deleteErr || changedUnder ? [] : [{ id: 'assign-1' }], error: deleteErr }),
+              select: () => Promise.resolve({ data: deleteErr || changedUnder || goneUnder ? [] : [{ id: 'assign-1' }], error: deleteErr }),
             }
             return chain
           },
@@ -557,5 +561,51 @@ describe('PUT / DELETE /api/schedule/assignments/[id] — role at the SHIFT\'s s
     const del = buildDb({ assignment: assignmentRow({ locationId: 'loc-2' }) })
     createServerClient.mockReturnValue(del.db)
     expect((await DELETE(req(), PROPS)).status).toBe(200)
+  })
+})
+
+// C5 REPLACENITS.1 — a double-submitted remove. Both requests read the row;
+// the first deletes it, logs it and tells the coach; the second's delete
+// touches nothing. That used to answer 409 "This shift has just changed" for a
+// removal that happened. The row is gone, which is what the manager asked
+// for: 200, nothing done twice. A row still there under ANOTHER coach (a
+// replace won) is still 409.
+describe('DELETE /api/schedule/assignments/[id] — a double submit is idempotent (REPLACENITS.1)', () => {
+  it('the row is already gone: 200 already_removed, nothing logged, nobody told again', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const { db } = buildDb({ goneUnder: true })
+    createServerClient.mockReturnValue(db)
+    const res = await DELETE({}, PROPS)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ success: true, data: { already_removed: true } })
+    expect(logRosterChange).not.toHaveBeenCalled()
+    expect(notifyRosterChanges).not.toHaveBeenCalled()
+  })
+
+  it('the row is still there under another coach: 409 changed, as before', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const { db } = buildDb({ changedUnder: true })
+    createServerClient.mockReturnValue(db)
+    const res = await DELETE({}, PROPS)
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ success: false, code: 'changed', error: 'This shift has just changed. Refresh and try again.' })
+  })
+
+  it('the re-read fails: still the 409 it was (refresh), never a guessed success', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const { db } = buildDb({ changedUnder: true, rereadErr: { message: 'down' } })
+    createServerClient.mockReturnValue(db)
+    const res = await DELETE({}, PROPS)
+    expect(res.status).toBe(409)
+    expect((await res.json()).code).toBe('changed')
+  })
+
+  it('an ordinary remove answers exactly as before', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const { db } = buildDb()
+    createServerClient.mockReturnValue(db)
+    const res = await DELETE({}, PROPS)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ success: true })
   })
 })

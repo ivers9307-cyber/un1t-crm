@@ -7,7 +7,8 @@
 // does the IO (fetch + upsert).
 
 import { fetchUpcomingEvents, fetchGlofoxTrainers, fetchMemberResult, glofoxDisplayName } from '@/lib/glofox'
-import { logWarn } from '@/lib/log'
+import { dublinTimeLabel } from '@/lib/dublin-time'
+import { logWarn, logError } from '@/lib/log'
 
 export const DEFAULT_CLASS_MINUTES = 60
 
@@ -132,24 +133,109 @@ const TRAINER_MEMBER_LOOKUP_CAP = 10
 // fetchFloor) — 35 gives it margin without touching deep history.
 const BACKFILL_DAYS = 35
 
+// TRAINERCALLS.1 — the sync asks the Glofox API for trainer names on ONE
+// tick a day: the */15 tick that lands in [04:00, 04:15) Dublin wall clock
+// (04:00 exists on both DST days; the 04:15 tick is outside, so exactly one).
+// Live on 27 Sep 2026 every tick spent 1 /2.0/trainers call + one
+// /2.0/members call per trainer id in the window (each answered "200
+// success:false, Resource not available"), ~480 futile calls a day, and
+// instructor was NULL on 647/647 rows. Overrides still apply on every tick
+// (they cost no call), and every other tick reuses the names the spine
+// already holds (readSpineTrainerNames) for ids that LEAD A SINGLE-TRAINER
+// class, so those names do not flap to NULL between lookups. An id seen only
+// in multi-trainer classes has no such memory: on a non-lookup tick its name
+// drops out of the joined label ("A, B" becomes "A"), and past multi-trainer
+// rows keep whatever label they had (CLASSLINK.1 inherits this; pinned by a
+// test). Stateless on purpose: a Vercel function instance is not a cache
+// (consecutive ticks ran on different deployments).
+// vercel.json's */15 schedule is asserted by the route's test.
+export const TRAINER_LOOKUP_DUBLIN_HOUR = 4
+const TRAINER_LOOKUP_WINDOW_MIN = 15
+
 /**
- * STUDIO-KPI.4 — IO: trainer id → display name for a batch of ids.
- * Resolution order, all best-effort (an unresolved id just stays out
- * of the map and the occurrence's instructor stays null):
+ * Pure: is `nowMs` the day's trainer-lookup tick (Dublin 04:00–04:14)?
+ * @param {number} nowMs epoch millis
+ */
+export function isTrainerLookupTick(nowMs) {
+  if (!Number.isFinite(nowMs)) return false
+  const label = dublinTimeLabel(new Date(nowMs).toISOString()) // 'HH:MM', Dublin
+  if (!label) return false
+  const [h, m] = label.split(':').map(Number)
+  return h === TRAINER_LOOKUP_DUBLIN_HOUR && m < TRAINER_LOOKUP_WINDOW_MIN
+}
+
+/**
+ * IO: the names the spine already holds for these trainer ids: on this
+ * location's single-trainer rows of the last BACKFILL_DAYS whose
+ * instructor is set, raw.trainers[0] → that label, the newest row winning.
+ * (Multi-trainer rows carry a joined "A, B" label, not one person's name.)
+ * So only an id that LEADS A SINGLE-TRAINER class in the window can be
+ * remembered; an id that only ever co-teaches gets no name here.
+ *
+ * A failed read is an ERROR, never "no names": the caller asks Glofox this
+ * tick instead (the behaviour before TRAINERCALLS.1).
+ *
+ * Bounded: one studio, 35 days, named single-trainer rows for the window's
+ * ids, ≤ ~230 rows today; newest first, so the 500 cap only ever drops the
+ * oldest.
+ *
+ * @returns {Promise<{ names: Record<string,string>, error: (object|null) }>}
+ */
+export async function readSpineTrainerNames(db, { locationId, trainerIds, nowMs = Date.now() } = {}) {
+  const ids = [...new Set((trainerIds || []).filter(Boolean).map((id) => String(id).toLowerCase()))]
+  if (!db || !locationId || ids.length === 0) return { names: {}, error: null }
+  const sinceIso = new Date(nowMs - BACKFILL_DAYS * 86_400_000).toISOString()
+  const { data, error } = await db
+    .from('class_occurrences')
+    .select('instructor, starts_at, trainer_id:raw->trainers->>0')
+    .eq('location_id', locationId)
+    .gte('starts_at', sinceIso)
+    .in('raw->trainers->>0', ids)
+    .is('raw->trainers->>1', null)
+    .not('instructor', 'is', null)
+    .order('starts_at', { ascending: false })
+    .limit(500)
+  if (error) return { names: {}, error }
+  const names = {}
+  const seenAt = {}
+  for (const r of data || []) {
+    const id = typeof r?.trainer_id === 'string' ? r.trainer_id.toLowerCase() : null
+    const label = typeof r?.instructor === 'string' ? r.instructor.trim() : ''
+    if (!id || !label || TRAINER_ID_RE.test(label)) continue
+    if (!(id in seenAt) || String(r.starts_at) > seenAt[id]) {
+      seenAt[id] = String(r.starts_at)
+      names[id] = label
+    }
+  }
+  return { names, error: null }
+}
+
+/**
+ * STUDIO-KPI.4 / TRAINERCALLS.1 — IO: trainer id → display name for a
+ * batch of ids, plus how many Glofox requests it attempted. Resolution
+ * order, all best-effort (an unresolved id just stays out of the map and
+ * the occurrence's instructor stays null):
  *   1. operator overrides — settings.glofox.trainer_names, carried on
- *      creds.trainerNames by glofoxCredentialsForLocation;
- *   2. GET /2.0/trainers (may not exist on this tier — returns []);
- *   3. GET /2.0/members/{id} per remaining id (trainers are users in
- *      Glofox's model), capped at TRAINER_MEMBER_LOOKUP_CAP per run.
+ *      creds.trainerNames by glofoxCredentialsForLocation (no API call);
+ *   2. only when `lookup`: GET /2.0/trainers (may not exist on this tier —
+ *      returns []), then GET /2.0/members/{id} per remaining id (trainers are
+ *      users in Glofox's model), capped at TRAINER_MEMBER_LOOKUP_CAP;
+ *   3. `known` — names the caller already holds (the sync passes the
+ *      spine's, readSpineTrainerNames: ids that lead a single-trainer
+ *      class only), for ids steps 1-2 left unnamed.
  *
  * @param {object} creds  per-location credentials (+ trainerNames)
  * @param {string[]} trainerIds
- * @returns {Promise<Record<string, string>>}  keys lowercase
+ * @param {{ lookup?: boolean, known?: (Record<string,string>|null) }} [opts]
+ *   lookup defaults to true (a live lookup, as before); known to none.
+ * @returns {Promise<{ names: Record<string,string>, apiCalls: number }>}
+ *   names keyed lowercase; apiCalls = Glofox requests attempted.
  */
-export async function resolveTrainerNames(creds, trainerIds) {
+export async function resolveTrainerNamesWithStats(creds, trainerIds, { lookup = true, known = null } = {}) {
   const ids = [...new Set((trainerIds || []).filter(Boolean).map((id) => String(id).toLowerCase()))]
   const map = {}
-  if (ids.length === 0) return map
+  let apiCalls = 0
+  if (ids.length === 0) return { names: map, apiCalls }
 
   const overrides = {}
   if (creds?.trainerNames && typeof creds.trainerNames === 'object') {
@@ -162,31 +248,52 @@ export async function resolveTrainerNames(creds, trainerIds) {
   }
 
   let unknown = ids.filter((id) => !map[id])
-  if (unknown.length === 0) return map
 
-  const trainers = await fetchGlofoxTrainers(creds)
-  if (trainers.length > 0) {
-    const byId = new Map()
-    for (const t of trainers) {
-      const id = t?._id != null ? String(t._id).toLowerCase() : null
-      const name = glofoxDisplayName(t)
-      if (id && name) byId.set(id, name)
+  if (lookup && unknown.length > 0) {
+    apiCalls++
+    const trainers = await fetchGlofoxTrainers(creds)
+    if (trainers.length > 0) {
+      const byId = new Map()
+      for (const t of trainers) {
+        const id = t?._id != null ? String(t._id).toLowerCase() : null
+        const name = glofoxDisplayName(t)
+        if (id && name) byId.set(id, name)
+      }
+      for (const id of unknown) {
+        const name = byId.get(id)
+        if (name) map[id] = name
+      }
+      unknown = unknown.filter((id) => !map[id])
     }
-    for (const id of unknown) {
-      const name = byId.get(id)
-      if (name) map[id] = name
+
+    for (const id of unknown.slice(0, TRAINER_MEMBER_LOOKUP_CAP)) {
+      apiCalls++
+      const { ok, member } = await fetchMemberResult(creds, id)
+      if (ok) {
+        const name = glofoxDisplayName(member)
+        if (name) map[id] = name
+      }
     }
     unknown = unknown.filter((id) => !map[id])
   }
 
-  for (const id of unknown.slice(0, TRAINER_MEMBER_LOOKUP_CAP)) {
-    const { ok, member } = await fetchMemberResult(creds, id)
-    if (ok) {
-      const name = glofoxDisplayName(member)
-      if (name) map[id] = name
+  if (known && typeof known === 'object') {
+    for (const id of unknown) {
+      const name = known[id]
+      if (typeof name === 'string' && name.trim()) map[id] = name.trim()
     }
   }
-  return map
+  return { names: map, apiCalls }
+}
+
+/**
+ * STUDIO-KPI.4 — trainer id → display name (keys lowercase). A live lookup
+ * unless opts say otherwise; the Glofox settings tab's "Seen in the
+ * timetable" list (GET /api/locations/[id]/glofox-trainers) relies on that.
+ * @returns {Promise<Record<string, string>>}
+ */
+export async function resolveTrainerNames(creds, trainerIds, opts) {
+  return (await resolveTrainerNamesWithStats(creds, trainerIds, opts)).names
 }
 
 /**
@@ -228,10 +335,32 @@ export async function syncOccurrencesForLocation(db, { locationId, creds, window
     return { ok: false, error: result.body?.message || `HTTP ${result.status}`, upserted: 0 }
   }
 
-  // STUDIO-KPI.4 — resolve trainer ids to names (operator overrides →
-  // Glofox API, best-effort) so class_occurrences.instructor populates
-  // and the scorecard's floor table can group per coach.
-  const trainerNames = await resolveTrainerNames(creds, extractTrainerIds(result.events))
+  // STUDIO-KPI.4 — resolve trainer ids to names so class_occurrences.instructor
+  // populates and the scorecard's floor table can group per coach.
+  // TRAINERCALLS.1 — the Glofox API is asked on the day's lookup tick only;
+  // every tick applies overrides and the names the spine already holds for
+  // ids that lead a single-trainer class (a multi-trainer-only id goes
+  // unnamed until the next lookup tick). A failed spine read asks Glofox
+  // this tick (the old behaviour), logged.
+  const trainerIds = extractTrainerIds(result.events)
+  let trainerNames = {}
+  let trainerLookup = 'none'
+  let trainerApiCalls = 0
+  if (trainerIds.length > 0) {
+    const spine = await readSpineTrainerNames(db, { locationId, trainerIds, nowMs })
+    if (spine.error) {
+      logError('class-occurrences', 'spine trainer-name read failed; asking Glofox this tick', {
+        locationId, error: spine.error.message,
+      })
+    }
+    trainerLookup = isTrainerLookupTick(nowMs) ? 'daily' : (spine.error ? 'fallback' : 'skipped')
+    const resolved = await resolveTrainerNamesWithStats(creds, trainerIds, {
+      lookup: trainerLookup !== 'skipped',
+      known: spine.names,
+    })
+    trainerNames = resolved.names
+    trainerApiCalls = resolved.apiCalls
+  }
 
   // Events Glofox currently reports as real (active OR private — private
   // classes still happen). Their spine rows must NOT be cancelled.
@@ -258,7 +387,7 @@ export async function syncOccurrencesForLocation(db, { locationId, creds, window
       .upsert(rows, { onConflict: 'location_id,glofox_event_id' })
     if (error) {
       logWarn('class-occurrences', 'upsert failed', { locationId, error: error.message })
-      return { ok: false, error: error.message, upserted: 0 }
+      return { ok: false, error: error.message, upserted: 0, trainerLookup, trainerApiCalls }
     }
     upserted = rows.length
   }
@@ -334,7 +463,10 @@ export async function syncOccurrencesForLocation(db, { locationId, creds, window
     }
   }
 
-  return { ok: true, upserted, cancelled, seen: (result.events || []).length, trainersMapped: Object.keys(trainerNames).length }
+  return {
+    ok: true, upserted, cancelled, seen: (result.events || []).length,
+    trainersMapped: Object.keys(trainerNames).length, trainerLookup, trainerApiCalls,
+  }
 }
 
 // ── "which class is on right now?" (HR-CLASS-ALLOC.1) ────────────
