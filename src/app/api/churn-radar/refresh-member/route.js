@@ -18,6 +18,7 @@
 // NOT reuse (wrong auth tier, GET/dry-run debug shape, Glofox-id input).
 
 import { NextResponse } from 'next/server'
+import { GLOFOX_SETTINGS_UNREADABLE, GLOFOX_SETTINGS_UNREADABLE_MESSAGE } from '@/lib/glofox-settings-read'
 import { z } from 'zod'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
@@ -81,6 +82,10 @@ export async function POST(request) {
   }
 
   const creds = await glofoxCredentialsForLocation(db, locationId)
+  // REGISTRYREAD.1b: a failed settings read is not "not configured".
+  if (creds.readError) {
+    return NextResponse.json({ success: false, code: GLOFOX_SETTINGS_UNREADABLE, error: GLOFOX_SETTINGS_UNREADABLE_MESSAGE }, { status: 503 })
+  }
   if (!creds.branchId || !creds.apiKey || !creds.apiToken) {
     return NextResponse.json({
       success: false,
