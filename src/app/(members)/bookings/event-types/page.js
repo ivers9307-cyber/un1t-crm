@@ -11,7 +11,7 @@ import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { Plus, Calendar, Clock, Users } from 'lucide-react'
 import EventActions from '@/components/EventActions'
-import { canManageEventType } from '@/lib/event-type-gates'
+import { canManageEventType, canCreateEventType } from '@/lib/event-type-gates'
 import CalendlyTabs from '@/components/CalendlyTabs'
 
 export const dynamic = 'force-dynamic'
@@ -49,6 +49,9 @@ export default async function BookingTypesPage(props) {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
   const events = await getEvents(user.activeLocation?.id)
+  // EVENTTYPERLS.1 — New shows only where POST /api/bookings/event-types
+  // would create (a master, or MANAGER_ROLES at the active studio).
+  const canCreate = canCreateEventType(user)
 
   // Active / inactive split. Defaults to active so operators land on
   // what's actually bookable; inactive (soft-deleted via the Delete
@@ -72,13 +75,15 @@ export default async function BookingTypesPage(props) {
           <h2 className="text-2xl font-bold">Booking types</h2>
           <p className="text-sm text-un1t-subtle mt-1">Bookable templates customers reserve from. Configure once, reuse on every booking page.</p>
         </div>
-        <Link
-          href="/bookings/event-types/new"
-          className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium px-4 py-2.5 rounded-lg transition-colors"
-        >
-          <Plus size={16} />
-          New booking type
-        </Link>
+        {canCreate && (
+          <Link
+            href="/bookings/event-types/new"
+            className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium px-4 py-2.5 rounded-lg transition-colors"
+          >
+            <Plus size={16} />
+            New booking type
+          </Link>
+        )}
       </div>
 
       {/* Active / Inactive tab strip — same pattern as the Upcoming /
@@ -119,7 +124,7 @@ export default async function BookingTypesPage(props) {
               ? 'Deleted or disabled types will appear here so you can re-enable them.'
               : 'Create your first bookable template to start accepting bookings'}
           </p>
-          {tab === 'active' && (
+          {tab === 'active' && canCreate && (
             <Link
               href="/bookings/event-types/new"
               className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium px-4 py-2.5 rounded-lg transition-colors"
