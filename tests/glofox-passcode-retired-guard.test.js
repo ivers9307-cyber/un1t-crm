@@ -24,6 +24,16 @@ import path from 'node:path'
 const ROOT = path.resolve(import.meta.dirname, '..')
 const PASSCODE_RETIRE_MIGRATION = 651
 
+const PASSCODE_RETIRE_FILE = '651_retire_glofox_passcodes.sql'
+
+/**
+ * A migration that can run after 651: a numeric prefix >= 651, except the 651
+ * file itself (by exact name). A plain `> 651` skipped `651b_*.sql` and a
+ * duplicate-prefix `651_*.sql` from another branch (duplicates are allowed).
+ */
+const isLaterMigration = (f) =>
+  f.endsWith('.sql') && f !== PASSCODE_RETIRE_FILE && parseInt(f, 10) >= PASSCODE_RETIRE_MIGRATION
+
 function walk(dir, out = []) {
   if (!existsSync(dir)) return out
   for (const name of readdirSync(dir)) {
@@ -139,8 +149,19 @@ function pushEventClientGrants(sql) {
 
 describe('(c)(d) later migrations keep the passcode retired', () => {
   const dir = path.join(ROOT, 'supabase/migrations')
-  const later = readdirSync(dir).filter((f) => f.endsWith('.sql') && parseInt(f, 10) > PASSCODE_RETIRE_MIGRATION)
+  const later = readdirSync(dir).filter(isLaterMigration)
   const cases = later.length ? later : ['(none yet)']
+
+  it('counts a same-number-suffixed or duplicate-prefix 651 as later, and skips only 651 itself', () => {
+    expect(existsSync(path.join(dir, PASSCODE_RETIRE_FILE))).toBe(true)
+    expect(isLaterMigration(PASSCODE_RETIRE_FILE)).toBe(false)
+    expect(isLaterMigration('651b_regrant.sql')).toBe(true)
+    expect(isLaterMigration('651_another_branch.sql')).toBe(true)
+    expect(isLaterMigration('652_drop_passcode_columns.sql')).toBe(true)
+    expect(isLaterMigration('1000_future.sql')).toBe(true)
+    expect(isLaterMigration('650_earlier.sql')).toBe(false)
+    expect(isLaterMigration('652_notes.md')).toBe(false)
+  })
 
   it.each(cases)('%s grants nothing on glofox_push_events to a client role', (file) => {
     if (file === '(none yet)') return
