@@ -1,0 +1,108 @@
+// CREDITSREAD.1 — glofoxFetch retried 429/5xx and logged nothing, so our
+// Glofox headroom was unmeasurable. It now counts every attempt, 429, 5xx,
+// retry, network error and give-up, and logs one structured line (no ids) when
+// a call is still failing after its retries.
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+
+vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
+
+import { logWarn } from '@/lib/log'
+import { glofoxFetch, glofoxHttpStats, glofoxHttpStatsSince, glofoxPathLabel, fetchMembershipResult } from './glofox.js'
+
+const creds = { branchId: 'br-1', apiKey: 'k', apiToken: 't' }
+// Retry-After of 0.001 s keeps each backoff at 1 ms.
+const res = (status, body = {}) => ({
+  ok: status >= 200 && status < 300,
+  status,
+  headers: { get: (k) => (k.toLowerCase() === 'retry-after' ? '0.001' : null) },
+  json: async () => body,
+})
+
+beforeEach(() => { vi.clearAllMocks(); vi.stubGlobal('fetch', vi.fn()) })
+afterEach(() => { vi.unstubAllGlobals() })
+
+describe('glofoxPathLabel', () => {
+  it('drops the query and replaces ids, so a log line never carries a member id', () => {
+    expect(glofoxPathLabel('/2.0/members/0000000000000000000000b2')).toBe('/2.0/members/:id')
+    expect(glofoxPathLabel('/2.0/credits?user_id=0000000000000000000000b2')).toBe('/2.0/credits')
+    expect(glofoxPathLabel('https://gf-api.aws.glofox.com/prod/2.0/memberships/0000000000000000000000f1?x=1'))
+      .toBe('/prod/2.0/memberships/:id')
+    expect(glofoxPathLabel('/2.0/branches/1234567/events')).toBe('/2.0/branches/:id/events')
+    expect(glofoxPathLabel('/2.0/members')).toBe('/2.0/members')
+  })
+})
+
+describe('glofoxFetch counters', () => {
+  it('a 429 then a 200: two requests, one 429, one retry, no give-up, no log', async () => {
+    fetch.mockResolvedValueOnce(res(429)).mockResolvedValueOnce(res(200, { data: [] }))
+    const before = glofoxHttpStats()
+    const r = await glofoxFetch(creds, '/2.0/credits?user_id=abc')
+    expect(r.status).toBe(200)
+    expect(glofoxHttpStatsSince(before)).toEqual({
+      requests: 2, retries: 1, status_429: 1, status_5xx: 0, network_errors: 0, gave_up: 0,
+    })
+    expect(logWarn).not.toHaveBeenCalled()
+  })
+
+  it('a 503 that never recovers: four requests, three retries, one give-up, one structured warning', async () => {
+    fetch.mockResolvedValue(res(503))
+    const before = glofoxHttpStats()
+    const r = await glofoxFetch(creds, '/2.0/members/0000000000000000000000b2')
+    expect(r.status).toBe(503)
+    expect(glofoxHttpStatsSince(before)).toEqual({
+      requests: 4, retries: 3, status_429: 0, status_5xx: 4, network_errors: 0, gave_up: 1,
+    })
+    expect(logWarn).toHaveBeenCalledTimes(1)
+    expect(logWarn).toHaveBeenCalledWith('glofox', 'Glofox still failing after retries', {
+      status: 503, attempts: 4, path: '/2.0/members/:id',
+    })
+  })
+
+  it('a 404 is an answer: one request, nothing else counted, no log', async () => {
+    fetch.mockResolvedValueOnce(res(404))
+    const before = glofoxHttpStats()
+    await glofoxFetch(creds, '/2.0/members/abc')
+    expect(glofoxHttpStatsSince(before)).toEqual({
+      requests: 1, retries: 0, status_429: 0, status_5xx: 0, network_errors: 0, gave_up: 0,
+    })
+    expect(logWarn).not.toHaveBeenCalled()
+  })
+
+  it('a network error is counted and still thrown (callers already catch it)', async () => {
+    fetch.mockRejectedValueOnce(new TypeError('fetch failed'))
+    const before = glofoxHttpStats()
+    await expect(glofoxFetch(creds, '/2.0/members/abc')).rejects.toThrow('fetch failed')
+    expect(glofoxHttpStatsSince(before)).toMatchObject({ requests: 1, network_errors: 1, gave_up: 0 })
+  })
+
+  it('glofoxHttpStats is a copy: changing it changes nothing', async () => {
+    const snap = glofoxHttpStats()
+    snap.requests = -99
+    expect(glofoxHttpStats().requests).not.toBe(-99)
+  })
+})
+
+describe('fetchMembershipResult', () => {
+  it('a failed read is ok:false and NOT cached, so the next member in the run asks again', async () => {
+    fetch.mockResolvedValueOnce(res(404))
+    const cache = new Map()
+    expect(await fetchMembershipResult(creds, 'mem-1', cache)).toEqual({ ok: false, membership: null })
+    expect(cache.has('mem-1')).toBe(false)
+
+    fetch.mockResolvedValueOnce(res(200, { _id: 'mem-1', trial: false, plans: [{ type: 'num_classes' }] }))
+    const r = await fetchMembershipResult(creds, 'mem-1', cache)
+    expect(r).toEqual({ ok: true, membership: { _id: 'mem-1', trial: false, plans: [{ type: 'num_classes' }] } })
+    expect(cache.get('mem-1')).toEqual(r.membership)
+
+    // served from the cache: no third call
+    expect(await fetchMembershipResult(creds, 'mem-1', cache)).toEqual(r)
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('a thrown fetch is ok:false, not cached', async () => {
+    fetch.mockRejectedValueOnce(new TypeError('fetch failed'))
+    const cache = new Map()
+    expect(await fetchMembershipResult(creds, 'mem-2', cache)).toEqual({ ok: false, membership: null })
+    expect(cache.size).toBe(0)
+  })
+})
