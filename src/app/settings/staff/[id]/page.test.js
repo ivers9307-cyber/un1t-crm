@@ -49,7 +49,7 @@ const TARGET = 'c0000000-0000-0000-0000-000000000003'
 
 // Records which tables were read, so "never read the person" is an
 // assertion rather than an assumption.
-function makeDb({ targetLocationIds = [LOC_THEIRS], locError = null } = {}) {
+function makeDb({ targetLocationIds = [LOC_THEIRS], locError = null, locationRows = [] } = {}) {
   const touched = []
   const from = (table) => {
     touched.push(table)
@@ -81,7 +81,7 @@ function makeDb({ targetLocationIds = [LOC_THEIRS], locError = null } = {}) {
     // locations / location_role_permissions / profile_organizations
     const chain = {}
     for (const op of ['select', 'eq', 'order']) chain[op] = () => chain
-    chain.then = (res) => Promise.resolve({ data: [] }).then(res)
+    chain.then = (res) => Promise.resolve({ data: table === 'locations' ? locationRows : [] }).then(res)
     return chain
   }
   return { touched, from }
@@ -172,5 +172,39 @@ describe('/settings/staff/[id] — the target must be the caller’s to see', ()
 
     await expect(call()).rejects.toThrow(/^NEXT_REDIRECT:\/$/)
     expect(db.touched).toEqual([])
+  })
+})
+
+// SECFIX.3a — StaffForm is a client component, and the page read every
+// active location with select('*'), so each studio's stored credentials were
+// serialised into the editor's HTML. The prop is redacted; presence (what
+// StaffForm.isUnifiConfigured reads) survives as the mask.
+describe('/settings/staff/[id] — SECFIX.3a: the locations prop carries no credential', () => {
+  function findElement(node, name) {
+    if (!node || typeof node !== 'object') return null
+    if (Array.isArray(node)) {
+      for (const n of node) { const f = findElement(n, name); if (f) return f }
+      return null
+    }
+    const t = node.type
+    if (t && (t.name === name || t.displayName === name)) return node
+    return findElement(node.props?.children, name)
+  }
+
+  it('hands StaffForm masked locations', async () => {
+    const db = makeDb({
+      locationRows: [{
+        id: LOC_MINE, name: 'Mine', sensibo_api_key: 'SYNTH-S', thinq_pat: 'SYNTH-T',
+        settings: { glofox: { api_key: 'SYNTH-GK' }, unifi: { host: 'https://unifi.example', api_token: 'SYNTH-UT' } },
+      }],
+    })
+    createServerClient.mockReturnValue(db)
+    getCurrentUser.mockResolvedValue(user({ role: 'master', isMaster: true, rolesByLocation: {} }))
+
+    const el = findElement(await call(), 'StaffForm')
+    expect(el).toBeTruthy()
+    expect(JSON.stringify(el.props.locations)).not.toMatch(/SYNTH-/)
+    expect(el.props.locations[0].settings.unifi.api_token).toBeTruthy()
+    expect(el.props.locations[0].name).toBe('Mine')
   })
 })

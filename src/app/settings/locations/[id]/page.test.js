@@ -36,10 +36,26 @@ vi.mock('@/lib/auth', async (importOriginal) => ({
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 
+// C35 SECFIX.3a — one case below runs the REAL getCurrentUser (the stub
+// delegates to it), which reads its session through next/headers +
+// @supabase/ssr and its rows through a service-role @supabase/supabase-js
+// client. Every other case stubs getCurrentUser and never reaches these.
+let sessionUser = null
+vi.mock('next/headers', () => ({
+  cookies: async () => ({ get: () => undefined, getAll: () => [], set: () => {} }),
+  headers: async () => ({ get: () => null }),
+}))
+vi.mock('@supabase/ssr', () => ({
+  createServerClient: vi.fn(() => ({ auth: { getUser: async () => ({ data: { user: sessionUser } }) } })),
+}))
+vi.mock('@supabase/supabase-js', () => ({ createClient: vi.fn() }))
+
 import EditLocationPage from './page.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { notFound, redirect } from 'next/navigation'
+import { createClient } from '@supabase/supabase-js'
+import { LOCATION_SECRET_MASK } from '@/lib/location-secrets'
 
 const LOC_A = 'a0000000-0000-0000-0000-000000000001' // the caller's own studio
 const LOC_B = 'b0000000-0000-0000-0000-000000000002' // another org's studio
@@ -212,10 +228,9 @@ describe('/settings/locations/[id] — a failed Xero read (CHANNELREAD.1)', () =
 // used to go with it (select('*')), and the AC tab prefilled them into a
 // plain-text input.
 //
-// These cases cover the `location` PROP only. The `user` prop still carries
-// the key, the PAT and the `settings` credentials (getCurrentUser() loads full
-// `locations` rows, and this page and AppShell hand `user` to client
-// components). That is follow-up C35 SECFIX.3; the todo below keeps it visible.
+// These cases cover the `location` PROP. The `user` prop (which this page and
+// AppShell also hand to client components) is the last case: C35 SECFIX.3a
+// redacts it at its source, getCurrentUser().
 describe('/settings/locations/[id] — the location prop carries no AC credentials (ACDEVLOC.1)', () => {
   const owner = () => user({ role: 'owner', rolesByLocation: { [LOC_B]: 'owner' }, locations: [{ id: LOC_B }] })
   const xeroTab = () => EditLocationPage({ params: Promise.resolve({ id: LOC_B }), searchParams: Promise.resolve({ tab: 'xero' }) })
@@ -243,8 +258,58 @@ describe('/settings/locations/[id] — the location prop carries no AC credentia
     expect(JSON.stringify(el.props.location)).not.toContain('synthetic-not-real')
   })
 
-  // OPEN LEAK, not fixed by ACDEVLOC.1: the `user` prop (full `locations` rows
-  // from getCurrentUser) still serialises sensibo_api_key, thinq_pat and the
-  // `settings` credentials into the page. Owned by C35 SECFIX.3.
-  it.todo('the user prop carries no Sensibo key, ThinQ PAT or settings credentials (C35 SECFIX.3)')
+  // C35 SECFIX.3a — the `user` prop. getCurrentUser() used to load full
+  // `locations` rows, so this page (and AppShell, on every page) serialised
+  // the Sensibo key, the ThinQ PAT and the `settings` credentials into the
+  // HTML through `user`. Here getCurrentUser is the REAL function, run
+  // against a service-role double whose location embed carries every stored
+  // credential (the double ignores the select list, so this proves the
+  // redaction, not just the named columns), and the page's own read hands
+  // back the same raw row. Nothing the page passes as `user` may carry a value.
+  it('the user prop carries no Sensibo key, ThinQ PAT or settings credentials (C35 SECFIX.3a)', async () => {
+    const SECRET_ROW = {
+      ...ROW,
+      settings: {
+        glofox: { branch_id: 'b1', api_key: 'gk-synthetic-not-real', api_token: 'gt-synthetic-not-real', webhook_secret: 'gw-synthetic-not-real' },
+        unifi: { host: 'https://unifi.example', api_token: 'ut-synthetic-not-real' },
+      },
+    }
+    const profile = { id: 'u-owner', role: 'owner', full_name: 'Owner', email: 'owner@example.test', active: true }
+    const rows = {
+      profiles: { data: profile },
+      profile_locations: { data: [{ profile_id: profile.id, location_id: LOC_B, role: 'owner', is_default: true, permissions: {}, locations: SECRET_ROW }] },
+      organizations: { data: [{ id: ORG_B, name: 'Another Org', active: true }] },
+      profile_organizations: { data: [] },
+      location_role_permissions: { data: [] },
+    }
+    // A thenable builder that accepts any chain and answers per table.
+    const serviceRole = {
+      from: (table) => {
+        const b = new Proxy({}, {
+          get: (_, k) => (k === 'then'
+            ? (res, rej) => Promise.resolve(rows[table] || { data: null }).then(res, rej)
+            : () => b),
+        })
+        return b
+      },
+    }
+    createClient.mockReturnValue(serviceRole)
+    sessionUser = { id: profile.id, email: profile.email }
+    const { getCurrentUser: realGetCurrentUser } = await vi.importActual('@/lib/auth')
+    getCurrentUser.mockImplementation(realGetCurrentUser)
+    createServerClient.mockReturnValue(makeDb({ location: SECRET_ROW }))
+
+    try {
+      const tree = await EditLocationPage({ params: Promise.resolve({ id: LOC_B }), searchParams: Promise.resolve({ tab: 'glofox' }) })
+      const passedUser = findElement(tree, 'LocationIntegrations').props.user
+      expect(passedUser.id).toBe(profile.id)
+      expect(JSON.stringify(passedUser)).not.toContain('synthetic-not-real')
+      // Presence survives: "is Glofox configured?" still reads true off it.
+      expect(passedUser.activeLocation.settings.glofox.api_key).toBe(LOCATION_SECRET_MASK)
+      expect(passedUser.locations[0].sensibo_api_key).toBe(LOCATION_SECRET_MASK)
+    } finally {
+      sessionUser = null
+      getCurrentUser.mockReset()
+    }
+  })
 })
