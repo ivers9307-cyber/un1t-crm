@@ -150,6 +150,22 @@ describe('GET /api/cron/glofox-attendance-refresh — REGISTRYREAD.1b unreadable
     expect(stampHeartbeat).toHaveBeenCalledWith('glofox-attendance-refresh', expect.any(Object))
   })
 
+  it('CREDITSREAD.1 — a run where every location failed says so in last_outcome (not all zeros)', async () => {
+    const { glofoxCredentialsForLocation } = await import('@/lib/glofox')
+    glofoxCredentialsForLocation.mockResolvedValueOnce({ branchId: null, apiKey: null, apiToken: null, readError: 'glofox_settings_unreadable' })
+    await GET(req())
+    expect(stampHeartbeat).toHaveBeenCalledTimes(1)
+    const [name, outcome] = stampHeartbeat.mock.calls[0]
+    expect(name).toBe('glofox-attendance-refresh')
+    expect(outcome.failed_locations).toBe(1)
+    expect(outcome.refreshed).toBe(0)
+  })
+
+  it('CREDITSREAD.1 — a healthy run records failed_locations: 0', async () => {
+    await GET(req())
+    expect(stampHeartbeat.mock.calls.at(-1)[1].failed_locations).toBe(0)
+  })
+
   it('a location with no credentials keeps its old text', async () => {
     const { glofoxCredentialsForLocation } = await import('@/lib/glofox')
     glofoxCredentialsForLocation.mockResolvedValueOnce({ branchId: null, apiKey: null, apiToken: null, readError: null })

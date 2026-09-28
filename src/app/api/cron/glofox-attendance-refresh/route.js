@@ -113,6 +113,8 @@ function attendanceOutcome(perLocation, budgetExhausted, glofoxHttp) {
     membership_failed: sum('membership_failed'),
     member_refused: sum('member_refused'),
     update_failed: sum('update_failed'),
+    // A run where every location failed would otherwise read as all zeros (idle).
+    failed_locations: perLocation.filter((r) => r.status === 'failed').length,
     budget_exhausted: budgetExhausted,
     glofox_http: glofoxHttp,
   }
