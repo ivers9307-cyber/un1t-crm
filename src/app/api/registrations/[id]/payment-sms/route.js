@@ -26,8 +26,8 @@
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { getCurrentUser, getUserLocationIds, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { sendLocationSms, TwilioError, resolveTenantSmsSender } from '@/lib/twilio'
 import { getAppUrl } from '@/lib/app-url'
@@ -49,10 +49,10 @@ export async function POST(_request, props) {
   const params = await props.params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!MANAGER_ROLES.includes(user.role)) {
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
-  if (!hasPermission(user, 'races')) {
+  if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
   }
 
@@ -77,6 +77,13 @@ export async function POST(_request, props) {
   const allowed = getUserLocationIds(user) // null = master (all locations)
   if (allowed !== null && !allowed.includes(locationId)) {
     return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  }
+  // ROLESWEEP.1b — judged at the race's location, not the caller's active studio.
+  if (!hasRoleAtLocation(user, locationId, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  }
+  if (!hasPermissionForLocation(user, locationId, 'races')) {
+    return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
   }
 
   // INTEG-A2 dual-read: registry twilio_sender row first.

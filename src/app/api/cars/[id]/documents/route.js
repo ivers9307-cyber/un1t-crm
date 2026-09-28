@@ -7,7 +7,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { ALL_DOCUMENT_TYPES } from '@/lib/cars'
 import { enqueueFromCarDocument } from '@/lib/invoices-queue/enqueue'
 import { logWarn } from '@/lib/log'
@@ -21,7 +21,7 @@ export async function POST(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!hasPermission(user, 'car_processing')) {
+  if (!hasPermissionAtAnyLocation(user, 'car_processing')) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
@@ -30,6 +30,10 @@ export async function POST(request, props) {
   if (!car) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, car.location_id)
   if (guard) return guard
+  // ROLESWEEP.1b — judged at the car's location, not the caller's active studio.
+  if (!hasPermissionForLocation(user, car.location_id, 'car_processing')) {
+    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  }
 
   const formData = await request.formData()
   const file = formData.get('file')

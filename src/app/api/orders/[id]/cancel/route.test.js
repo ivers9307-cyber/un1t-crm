@@ -12,7 +12,9 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth', async () => ({
+  // ROLESWEEP.1b — the route judges Manager+ with the real per-location helpers.
+  ...(await vi.importActual('@/lib/role-at-location')),
   getCurrentUser: vi.fn(),
   assertLocationAccess: (user, locationId) => {
     if (!user) {
@@ -38,9 +40,16 @@ vi.mock('@/lib/auth', () => ({
   },
 }))
 
-vi.mock('@/lib/permissions', () => ({
-  hasPermission: vi.fn(() => true),
-}))
+vi.mock('@/lib/permissions', () => {
+  const hasPermission = vi.fn(() => true)
+  return {
+    hasPermission,
+    // ROLESWEEP.1b — the route's any-location pre-check and its check at the
+    // order's location follow the same switch the tests flip.
+    hasPermissionAtAnyLocation: (user, key) => hasPermission(user, key),
+    hasPermissionForLocation: (user, _locationId, key) => hasPermission(user, key),
+  }
+})
 
 vi.mock('@/lib/supabase', () => ({
   createServerClient: vi.fn(),
@@ -122,20 +131,20 @@ describe('POST /api/orders/[id]/cancel', () => {
   })
 
   it('returns 403 when role is not manager+', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'staff', locations: [{ id: 'loc-A' }] })
+    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'staff', locations: [{ id: 'loc-A' }], rolesByLocation: { 'loc-A': 'staff' }, assignmentsByLocation: { 'loc-A': { role: 'staff', permissions: {} } } })
     const res = await POST(req(), { params: { id: 'o1' } })
     expect(res.status).toBe(403)
   })
 
   it('returns 404 when the order is not found', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'manager', locations: [{ id: 'loc-A' }] })
+    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'manager', locations: [{ id: 'loc-A' }], rolesByLocation: { 'loc-A': 'manager' }, assignmentsByLocation: { 'loc-A': { role: 'manager', permissions: {} } } })
     createServerClient.mockReturnValue(mockDb({ order: null, orderError: { message: 'not found' } }))
     const res = await POST(req(), { params: { id: 'missing' } })
     expect(res.status).toBe(404)
   })
 
   it('returns 404 when the order is in a different location (IDOR)', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'manager', locations: [{ id: 'loc-A' }] })
+    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'manager', locations: [{ id: 'loc-A' }], rolesByLocation: { 'loc-A': 'manager' }, assignmentsByLocation: { 'loc-A': { role: 'manager', permissions: {} } } })
     createServerClient.mockReturnValue(mockDb({
       order: { id: 'o1', location_id: 'loc-B', status: 'pending', source_type: 'race_registration', source_id: 's1' },
     }))
@@ -144,7 +153,7 @@ describe('POST /api/orders/[id]/cancel', () => {
   })
 
   it('returns 409 when the order is not pending', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'manager', locations: [{ id: 'loc-A' }] })
+    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'manager', locations: [{ id: 'loc-A' }], rolesByLocation: { 'loc-A': 'manager' }, assignmentsByLocation: { 'loc-A': { role: 'manager', permissions: {} } } })
     createServerClient.mockReturnValue(mockDb({
       order: { id: 'o1', location_id: 'loc-A', status: 'completed', source_type: 'race_registration', source_id: 's1' },
     }))
@@ -155,7 +164,7 @@ describe('POST /api/orders/[id]/cancel', () => {
   })
 
   it('cancels a pending race order, stamps metadata, and cascades to race_payments', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'manager', locations: [{ id: 'loc-A' }] })
+    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'manager', locations: [{ id: 'loc-A' }], rolesByLocation: { 'loc-A': 'manager' }, assignmentsByLocation: { 'loc-A': { role: 'manager', permissions: {} } } })
     const db = mockDb({
       order: { id: 'o1', location_id: 'loc-A', status: 'pending', source_type: 'race_registration', source_id: 'pay-1', metadata: { foo: 'bar' } },
     })
@@ -180,7 +189,7 @@ describe('POST /api/orders/[id]/cancel', () => {
   })
 
   it('cancels a pending car deposit order and cascades to cars', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'manager', locations: [{ id: 'loc-A' }] })
+    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'manager', locations: [{ id: 'loc-A' }], rolesByLocation: { 'loc-A': 'manager' }, assignmentsByLocation: { 'loc-A': { role: 'manager', permissions: {} } } })
     const db = mockDb({
       order: { id: 'o1', location_id: 'loc-A', status: 'pending', source_type: 'car_deposit', source_id: 'car-1' },
     })
@@ -193,7 +202,7 @@ describe('POST /api/orders/[id]/cancel', () => {
   })
 
   it('returns 403 when the orders feature is disabled at the location', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'manager', locations: [{ id: 'loc-A' }] })
+    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'manager', locations: [{ id: 'loc-A' }], rolesByLocation: { 'loc-A': 'manager' }, assignmentsByLocation: { 'loc-A': { role: 'manager', permissions: {} } } })
     hasPermission.mockReturnValue(false)
     const res = await POST(req(), { params: { id: 'o1' } })
     expect(res.status).toBe(403)
