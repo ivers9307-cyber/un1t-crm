@@ -41,9 +41,10 @@
 // RANGEVALID.1 — Rule 3: a route that reads BOTH ends of a query range
 // (start_date/end_date, from/to, start/end, period_start/period_end) hands
 // them together to rangeQueryError / reportPeriodError, or compares them
-// inline (`end < start`). A bound handed to either helper also counts as
-// calendar-checked for Rule 2 (the helpers check each bound). Rule 3 reads
-// the source with its comments stripped: a comment is never the check.
+// inline (`end < start` or `start > end`). A bound handed to either helper
+// also counts as calendar-checked for Rule 2 (the helpers check each bound).
+// Rule 3 reads the source with its comments stripped: a comment is never the
+// check.
 
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
@@ -184,7 +185,9 @@ function unorderedPairOffence(rawSrc) {
       const S = escapeRe(s)
       const E = escapeRe(e)
       const viaHelper = new RegExp(String.raw`\b(?:rangeQueryError|reportPeriodError)\(\s*(?:[\w$]+\.)?${S}\s*,\s*(?:[\w$]+\.)?${E}\s*[,)]`).test(src)
+      // `end < start` or `start > end`; strict only, as the routes write it.
       const inline = new RegExp(String.raw`(?<![\w$.])${E}\s*<\s*${S}(?![\w$])`).test(src)
+        || new RegExp(String.raw`(?<![\w$.])${S}\s*>\s*${E}(?![\w$])`).test(src)
       if (!viaHelper && !inline) return true
     }
   }
@@ -280,6 +283,11 @@ describe('the guard\'s own rules, on sources written to break them', () => {
       const startDate = searchParams.get('start_date')
       const endDate = searchParams.get('end_date')
       rangeQueryError(endDate, startDate)`)).toBe(true)
+    // nor does the inline comparison turned round
+    expect(unorderedPairOffence(`
+      const startDate = searchParams.get('start_date')
+      const endDate = searchParams.get('end_date')
+      if (endDate > startDate) {}`)).toBe(true)
   })
 
   it('rule 3 is not satisfied by a comment that looks like the check', () => {
@@ -319,6 +327,10 @@ describe('the guard\'s own rules, on sources written to break them', () => {
        if (endDate < startDate) return bad('end_date must be on or after start_date')`,
       `const parsed = Q.safeParse({ from: url.searchParams.get('from') || undefined, to: url.searchParams.get('to') || undefined })
        if (from && to && to < from) return fail(400, 'to must be on or after from')`,
+      // inline, the same comparison written start-first
+      `const startDate = url.searchParams.get('start_date')
+       const endDate = url.searchParams.get('end_date')
+       if (startDate > endDate) return bad('end_date must be on or after start_date')`,
       // one end alone is not a range (grid's start_date, week-cost's week_start)
       `const d = url.searchParams.get('start_date')`,
     ]) expect(unorderedPairOffence(src)).toBe(false)
