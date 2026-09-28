@@ -11,6 +11,7 @@
 // gate as /glofox-trainers and /unifi-users.
 
 import { NextResponse } from 'next/server'
+import { GLOFOX_SETTINGS_UNREADABLE, GLOFOX_SETTINGS_UNREADABLE_MESSAGE } from '@/lib/glofox-settings-read'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation } from '@/lib/auth'
 import { ADMIN_ROLES } from '@/lib/schemas'
@@ -35,6 +36,10 @@ export async function GET(_request, { params }) {
 
   const db = createServerClient()
   const creds = await glofoxCredentialsForLocation(db, locationId)
+  // REGISTRYREAD.1b: a failed settings read is not "not configured".
+  if (creds.readError) {
+    return NextResponse.json({ success: false, error: GLOFOX_SETTINGS_UNREADABLE, message: GLOFOX_SETTINGS_UNREADABLE_MESSAGE }, { status: 503 })
+  }
   if (!creds.branchId || !creds.apiKey || !creds.apiToken) {
     return NextResponse.json({
       success: false, error: 'glofox_not_configured',

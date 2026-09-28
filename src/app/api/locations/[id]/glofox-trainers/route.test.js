@@ -35,6 +35,7 @@ import { glofoxCredentialsForLocation } from '@/lib/glofox'
 import { resolveTrainerNames } from '@/lib/class-occurrences'
 import { logError } from '@/lib/log'
 import { ROLE_GATE_CASES, LOC_B, MASTER } from '../_role-gate-cases.js'
+import { GLOFOX_SETTINGS_UNREADABLE, GLOFOX_SETTINGS_UNREADABLE_MESSAGE } from '@/lib/glofox-settings-read'
 
 const ID1 = 'aaaaaaaaaaaaaaaaaaaaaaaa'
 const ID2 = 'bbbbbbbbbbbbbbbbbbbbbbbb'
@@ -130,5 +131,31 @@ describe('GET glofox-trainers — role judged at the path location', () => {
     expect(logError).toHaveBeenCalledWith(expect.any(String), expect.any(String),
       expect.objectContaining({ locationId: LOC_B, error: 'column "raw" does not exist' }))
     expect(resolveTrainerNames).not.toHaveBeenCalled()
+  })
+})
+
+describe('GET glofox-trainers — REGISTRYREAD.1b unreadable settings', () => {
+  it('answers 503 glofox_settings_unreadable, not 400 "set credentials first"', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const db = fakeDb([])
+    createServerClient.mockReturnValue(db.client)
+    glofoxCredentialsForLocation.mockResolvedValue({ branchId: null, apiKey: null, apiToken: null, readError: 'glofox_settings_unreadable' })
+    const res = await call(LOC_B)
+    expect(res.status).toBe(503)
+    const j = await res.json()
+    expect(j.success).toBe(false)
+    expect(j.error).toBe(GLOFOX_SETTINGS_UNREADABLE)
+    expect(j.message).toBe(GLOFOX_SETTINGS_UNREADABLE_MESSAGE)
+    expect(db.calls.from).toEqual([])
+    expect(resolveTrainerNames).not.toHaveBeenCalled()
+  })
+
+  it('a location with no Glofox still answers 400 glofox_not_configured', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    createServerClient.mockReturnValue(fakeDb([]).client)
+    glofoxCredentialsForLocation.mockResolvedValue({ branchId: null, apiKey: null, apiToken: null, readError: null })
+    const res = await call(LOC_B)
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toBe('glofox_not_configured')
   })
 })

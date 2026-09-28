@@ -45,6 +45,14 @@ export async function GET(request) {
   for (const loc of connected) {
     stats.locations++
     const creds = await glofoxCredentialsForLocation(db, loc.id)
+    if (creds.readError) {
+      // REGISTRYREAD.1b: don't call Glofox with null credentials; counted as
+      // an error like any failed sync (the stamp below is unchanged) and the
+      // next 15-minute tick retries.
+      stats.errors++
+      logWarn('cron-sync-class-occurrences', 'glofox settings unreadable; skipped this tick', { locationId: loc.id })
+      continue
+    }
     const out = await syncOccurrencesForLocation(db, { locationId: loc.id, creds })
     // CRONREADERR.1 — this studio's cancellation step could not finish (its
     // read or its UPDATE failed); nothing was cancelled. Counted, never fatal:

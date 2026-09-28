@@ -58,6 +58,8 @@ export async function capturePaymentForRun(db, { locationId, contactId, invoiceI
   try {
     if (!invoiceId) return failed('no_invoice_id')
     const creds = await glofoxCredentialsForLocation(db, locationId)
+    // REGISTRYREAD.1b: record WHY there is no link. The run still starts (by design).
+    if (creds?.readError) return failed(creds.readError)
     if (!creds?.branchId || !creds?.apiKey || !creds?.apiToken) return failed('no_glofox_credentials')
     let memberId = glofoxUserId || null
     if (!memberId && contactId) {
@@ -199,6 +201,9 @@ export async function dunningPresendGate(db, { enrollment, contact, sequence } =
     if (!isTransactionalEnrolment(enrollment)) return PROCEED
 
     const creds = await glofoxCredentialsForLocation(db, sequence?.location_id || contact?.location_id)
+    // REGISTRYREAD.1b: deliberately unchanged. The gate is fail-open, so a
+    // failed settings read still sends the reminder (glofoxCredentialsForLocation
+    // logs it). A reminder is never lost to a failed pre-check.
     if (!creds?.branchId || !creds?.apiKey || !creds?.apiToken) return PROCEED
 
     const res = await getGlofoxOverdueInvoices(creds, { memberId })
