@@ -4081,6 +4081,7 @@ registry.registerPath({
     200: { description: 'Redacted email-domain status' },
     403: { description: 'Forbidden — owners and master only', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Organization not found (or not yours)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Could not read the stored sending-domain state just now; nothing was changed', content: { 'application/json': { schema: ErrorResponse } } },
     503: { description: 'Provisioning not configured on this deployment', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -4091,7 +4092,7 @@ registry.registerPath({
   tags: ['Staff'],
   security: [{ CookieAuth: [] }],
   summary: 'Provision the org\'s Postmark server + sending domain (owner of the org or master)',
-  description: 'Initiate: creates the org\'s dedicated Postmark server (via the Account API) and its sending domain, persists ids/token, and returns the DNS records to add — NEVER the server token. Gated by the custom_email_domain plan add-on (403 if the org\'s plan lacks it). Idempotent: a re-post for an already-provisioned org re-reads Postmark, never spawning a second server. A foreign org answers 404, not 403. 503 when POSTMARK_ACCOUNT_TOKEN is unset.',
+  description: 'Initiate: creates the org\'s dedicated Postmark server (via the Account API) and its sending domain, persists ids/token, and returns the DNS records to add — NEVER the server token. Gated by the custom_email_domain plan add-on (403 if the org\'s plan lacks it). Idempotent: a re-post for an already-provisioned org re-reads Postmark, never spawning a second server. A foreign org answers 404, not 403. 503 when POSTMARK_ACCOUNT_TOKEN is unset. A failed read of the stored state answers 502 and creates nothing.',
   request: {
     body: {
       content: {
@@ -4139,6 +4140,7 @@ registry.registerPath({
     403: { description: 'Forbidden — owners and master only', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Organization not found (or not yours)', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'No sending domain provisioned yet', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Could not read the stored sending-domain state just now; nothing was changed', content: { 'application/json': { schema: ErrorResponse } } },
     502: { description: 'Postmark could not read the domain', content: { 'application/json': { schema: ErrorResponse } } },
     503: { description: 'Provisioning not configured on this deployment', content: { 'application/json': { schema: ErrorResponse } } },
   },

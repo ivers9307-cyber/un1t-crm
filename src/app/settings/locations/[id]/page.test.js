@@ -47,7 +47,7 @@ const ORG_B = 'c0000000-0000-0000-0000-000000000003'
 
 // Records every table touched AND every filter, so "never reached the
 // database" and "read only ITS OWN org" are assertions, not assumptions.
-function makeDb() {
+function makeDb({ errors = {} } = {}) {
   const touched = []
   const filters = []
   const from = (table) => {
@@ -60,9 +60,9 @@ function makeDb() {
         ? { id: LOC_B, organization_id: ORG_B, name: 'Someone else', features: {} }
         : null,
     })
-    c.maybeSingle = () => Promise.resolve({
-      data: table === 'organizations' ? { id: ORG_B, name: 'Another Org' } : null,
-    })
+    c.maybeSingle = () => Promise.resolve(errors[table]
+      ? { data: null, error: errors[table] }
+      : { data: table === 'organizations' ? { id: ORG_B, name: 'Another Org' } : null })
     return c
   }
   return { touched, filters, from }
@@ -170,5 +170,39 @@ describe('/settings/locations/[id] — gates judge the location in the URL', () 
     expect(orgFilters).toEqual([{ table: 'organizations', col: 'id', val: ORG_B }])
     // The old shape listed every active org and picked one client-side.
     expect(orgFilters.some(f => f.col === 'active')).toBe(false)
+  })
+})
+
+// CHANNELREAD.1 — the xero_connections read discarded its error, so a blip
+// rendered "Not connected." + Connect Xero over a live connection (and
+// Connect starts an OAuth rebind). The page now tells the tab.
+function findElement(node, name) {
+  if (!node || typeof node !== 'object') return null
+  if (Array.isArray(node)) {
+    for (const n of node) { const f = findElement(n, name); if (f) return f }
+    return null
+  }
+  if (node.type && node.type.name === name) return node
+  return findElement(node.props?.children, name)
+}
+
+describe('/settings/locations/[id] — a failed Xero read (CHANNELREAD.1)', () => {
+  const owner = () => user({ role: 'owner', rolesByLocation: { [LOC_B]: 'owner' }, locations: [{ id: LOC_B }] })
+  const xeroTab = () => EditLocationPage({ params: Promise.resolve({ id: LOC_B }), searchParams: Promise.resolve({ tab: 'xero' }) })
+
+  it('passes xeroReadFailed to the integrations tabs', async () => {
+    getCurrentUser.mockResolvedValue(owner())
+    createServerClient.mockReturnValue(makeDb({ errors: { xero_connections: { message: 'boom' } } }))
+    const el = findElement(await xeroTab(), 'LocationIntegrations')
+    expect(el).toBeTruthy()
+    expect(el.props.xeroReadFailed).toBe(true)
+    expect(el.props.xeroConnection).toBeNull()
+  })
+
+  it('pin: a good read (no row) is not a failure', async () => {
+    getCurrentUser.mockResolvedValue(owner())
+    createServerClient.mockReturnValue(makeDb())
+    const el = findElement(await xeroTab(), 'LocationIntegrations')
+    expect(el.props.xeroReadFailed).toBe(false)
   })
 })

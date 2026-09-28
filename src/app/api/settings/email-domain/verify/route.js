@@ -47,6 +47,15 @@ export async function POST(request) {
   const db = createServerClient()
   const result = await verifyEmailDomain(db, orgId)
 
+  // CHANNELREAD.1 — our own read of the stored state failed: nothing was
+  // checked, and it is not "not provisioned".
+  if (result.readFailed) {
+    return NextResponse.json(
+      { success: false, error: 'Could not read the sending domain just now, so nothing was checked. Try again.' },
+      { status: 500 }
+    )
+  }
+
   if (result.notProvisioned) {
     return NextResponse.json(
       { success: false, error: 'No sending domain provisioned yet — start one first.' },
