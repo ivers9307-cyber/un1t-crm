@@ -92,6 +92,12 @@ export const masterFeatureOffAtA = (key) => ({
   locations: [{ id: LOC_A, organization_id: ORG, active: true, features: { [key]: false } }, { id: LOC_B, organization_id: ORG, active: true, features: {} }],
   activeLocation: { id: LOC_A, organization_id: ORG, active: true, features: { [key]: false } },
 })
+/** A master whose ACTIVE location (A) has the feature on; the TARGET (B) has it off. */
+export const masterFeatureOffAtB = (key) => ({
+  ...MASTER,
+  locations: [{ id: LOC_A, organization_id: ORG, active: true, features: {} }, { id: LOC_B, organization_id: ORG, active: true, features: { [key]: false } }],
+  activeLocation: { id: LOC_A, organization_id: ORG, active: true, features: {} },
+})
 
 /**
  * Expected-outcome table for a route whose gate is `roles` (+ optional

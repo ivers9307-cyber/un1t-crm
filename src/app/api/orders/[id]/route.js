@@ -27,8 +27,8 @@
 // which row they clicked into.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES } from '@/lib/schemas'
 
@@ -39,10 +39,10 @@ export async function GET(_request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!MANAGER_ROLES.includes(user.role)) {
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   }
-  if (!hasPermission(user, 'orders')) {
+  if (!hasPermissionAtAnyLocation(user, 'orders')) {
     return NextResponse.json({ success: false, error: 'Orders feature is disabled at this location' }, { status: 403 })
   }
 
@@ -57,6 +57,13 @@ export async function GET(_request, props) {
   }
   const guard = assertLocationAccessOr404(user, order.location_id)
   if (guard) return guard
+  // ROLESWEEP.1b — judged at the order's location, not the caller's active studio.
+  if (!hasRoleAtLocation(user, order.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
+  }
+  if (!hasPermissionForLocation(user, order.location_id, 'orders')) {
+    return NextResponse.json({ success: false, error: 'Orders feature is disabled at this location' }, { status: 403 })
+  }
 
   // Retry chain: every order from the same buyer + source_type
   // within +/- 30 days. Drives the chain visualisation. Capped at

@@ -15,11 +15,17 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth', async () => ({
+  // ROLESWEEP.1b — the route judges MANAGER_ROLES with the real per-location helpers.
+  ...(await vi.importActual('@/lib/role-at-location')),
   getCurrentUser: vi.fn(),
   getUserLocationIds: vi.fn(() => null),
 }))
-vi.mock('@/lib/permissions', () => ({ hasPermission: vi.fn(() => true) }))
+vi.mock('@/lib/permissions', () => ({
+  hasPermission: vi.fn(() => true),
+  hasPermissionAtAnyLocation: vi.fn(() => true),
+  hasPermissionForLocation: vi.fn(() => true),
+}))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/app-url', () => ({ getAppUrl: () => 'https://crm.test' }))
 vi.mock('@/lib/connection-registry', () => ({ overlayConnections: vi.fn(async (_db, row) => row) }))
@@ -88,7 +94,7 @@ const props = { params: Promise.resolve({ id: REG_ID }) }
 
 beforeEach(() => {
   vi.clearAllMocks()
-  getCurrentUser.mockResolvedValue({ id: 'u1', role: 'owner', isMaster: true })
+  getCurrentUser.mockResolvedValue({ id: 'u1', role: 'owner', isMaster: true, profileRole: 'master' })
   createServerClient.mockImplementation(() => makeDb())
   sendLocationSms.mockImplementation(async () => ({ sid: 'SM1' }))
   resolveSenderLocation.mockImplementation(async (_db, l) => l)

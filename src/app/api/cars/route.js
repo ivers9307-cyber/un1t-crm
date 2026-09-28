@@ -8,7 +8,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds, assertLocationAccess } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, money } from '@/lib/schemas'
 import { getCachedGbpToEur } from '@/lib/fx'
@@ -50,7 +50,7 @@ const CarCreateSchema = z.object({
 export async function GET(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!hasPermission(user, 'car_processing')) {
+  if (!hasPermissionAtAnyLocation(user, 'car_processing')) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
@@ -64,6 +64,10 @@ export async function GET(request) {
 
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
+  // ROLESWEEP.1b — judged at ?location_id, not the caller's active studio.
+  if (locationId && !hasPermissionForLocation(user, locationId, 'car_processing')) {
+    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  }
 
   const db = createServerClient()
   let query = db.from('cars').select('*, car_documents(id, doc_type, filename)').order('updated_at', { ascending: false })
@@ -71,7 +75,8 @@ export async function GET(request) {
   if (locationId) {
     query = query.eq('location_id', locationId)
   } else {
-    const ids = getUserLocationIds(user)
+    // ROLESWEEP.1b — only the locations where the caller holds car_processing.
+    const ids = getUserLocationIds(user).filter((id) => hasPermissionForLocation(user, id, 'car_processing'))
     if (ids.length === 0) return NextResponse.json({ success: true, data: [] })
     query = query.in('location_id', ids)
   }
@@ -93,7 +98,7 @@ export async function GET(request) {
 export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!hasPermission(user, 'car_processing')) {
+  if (!hasPermissionAtAnyLocation(user, 'car_processing')) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
@@ -108,6 +113,10 @@ export async function POST(request) {
   }
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
+  // ROLESWEEP.1b — judged at the car's location (body, else active studio).
+  if (!hasPermissionForLocation(user, locationId, 'car_processing')) {
+    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  }
 
   // Snapshot today's live FX rate at car creation so the calc stays
   // stable for this deal even after the daily refresh moves the
