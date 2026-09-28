@@ -13,6 +13,13 @@
 // throws. A failed owner/master read is logged and reported per location
 // (recipients_failed), never read as "nobody to chase" (C1 RECIPIENTS.1).
 //
+// C21 PUSHDONE.1 — a push that reached nobody because something broke used to
+// be reported `pushed: true`. sendPushOnce already released the day's key, so
+// a same-day re-run chases again and tomorrow's run chases anyway (the asset
+// is still overdue, the key is per day); what was missing was saying so. It
+// is now `pushed: false, push_failed: true` plus a logWarn. The audit row is
+// unchanged: it records the overdue count, which is true either way.
+//
 // Auth: CRON_SECRET Bearer, same as every other cron.
 
 import { NextResponse } from 'next/server'
@@ -25,6 +32,7 @@ import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { logAuditEvent } from '@/lib/audit'
 import { logWarn, logError } from '@/lib/log'
+import { pushOutcome } from '@/lib/push-outcome'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -77,8 +85,9 @@ export async function GET(request) {
         })
       }
       const ids = recipients.error ? [] : recipients.ids
+      let outcome = null
       if (ids.length) {
-        await sendPushOnce(db, `equip-overdue:${settings.location_id}:${today}`, ids, {
+        const pushResult = await sendPushOnce(db, `equip-overdue:${settings.location_id}:${today}`, ids, {
           title: 'Equipment inspections not done',
           body: buildOverdueBody(outstanding),
           data: { type: 'equipment_inspection_overdue' },
@@ -88,6 +97,12 @@ export async function GET(request) {
           // unregistered and reaches no one but master (PUSHCAT.1).
           category: 'inspection_overdue',
         })
+        outcome = pushOutcome(pushResult)
+        if (outcome === 'failed') {
+          logWarn('equipment-cron', 'overdue push reached nobody; the day key was released, the next run chases again', {
+            locationId: settings.location_id, overdue: outstanding.length, read_failed: !!pushResult?.read_failed,
+          })
+        }
       }
 
       await logAuditEvent({
@@ -101,8 +116,9 @@ export async function GET(request) {
       results.push({
         locationId: settings.location_id,
         overdue: outstanding.length,
-        pushed: ids.length > 0,
+        pushed: ids.length > 0 && outcome !== 'failed',
         ...(recipients.error ? { recipients_failed: true } : {}),
+        ...(outcome === 'failed' ? { push_failed: true } : {}),
       })
     } catch (err) {
       logWarn('equipment-cron', 'sweep failed for location', {

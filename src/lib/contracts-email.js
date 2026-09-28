@@ -153,8 +153,18 @@ export async function sendContractIssuedEmail({ contract, recipient, issuer, tem
  * @param {object} args.recipient    — { full_name, email }
  * @param {string} args.templateName — for the subject line
  */
+// PUSHDONE.1a — Postmark rejections no retry can fix: 300 (invalid email
+// request, e.g. a malformed To) and 406 (inactive recipient: the address
+// hard-bounced or complained before). sendEmail carries Postmark's ErrorCode
+// on the thrown error as `errorCode`. Deliberately narrow: 400/401 (sender
+// signature) and every other code are operator-fixable or transient, so they
+// stay retryable — marking one permanent would record a reminder nobody got.
+const PERMANENT_REMINDER_ERROR_CODES = new Set([300, 406])
+
 export async function sendContractReminderEmail({ contract, recipient, templateName }) {
-  if (!recipient?.email) return { ok: false, error: 'No recipient email' }
+  // C21 PUSHDONE.1 — `permanent`: retrying tomorrow cannot fix this one, so
+  // the reminder cron does not hold its stamp back for it.
+  if (!recipient?.email) return { ok: false, error: 'No recipient email', permanent: true }
   const branding = await getBranding(contract)
   const reviewUrl = `${getAppUrl()}/account/contracts/${contract.id}`
   const subject = `Reminder: ${templateName || 'Your contract'} is awaiting your signature`
@@ -184,7 +194,9 @@ export async function sendContractReminderEmail({ contract, recipient, templateN
     })
     return { ok: true }
   } catch (e) {
-    return { ok: false, error: e?.message || 'Postmark send failed' }
+    const error = e?.message || 'Postmark send failed'
+    if (PERMANENT_REMINDER_ERROR_CODES.has(e?.errorCode)) return { ok: false, error, permanent: true }
+    return { ok: false, error }
   }
 }
 
