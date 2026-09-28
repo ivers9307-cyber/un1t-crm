@@ -193,11 +193,23 @@ export function buildGlofoxWebhookAttempt({
 }
 
 /**
- * Insert one attempt row. Never throws. A refused or thrown insert is one
- * logWarn (no Glofox ids, no payload) and `{ ok: false }`; the caller
- * carries on.
+ * Insert one attempt row. Never throws. Pass a function that builds the row
+ * (`() => buildGlofoxWebhookAttempt({...})`) so the BUILD also runs inside
+ * this try: a builder that ever throws cannot reach the route and 500 the
+ * delivery. A built row is accepted too. A throwing build, or a refused or
+ * thrown insert, is one logWarn (no Glofox ids, no payload) and
+ * `{ ok: false }`; the caller carries on.
+ * @param {object} db
+ * @param {(() => object) | object} rowOrBuild
  */
-export async function recordGlofoxWebhookAttempt(db, row) {
+export async function recordGlofoxWebhookAttempt(db, rowOrBuild) {
+  let row = null
+  try {
+    row = typeof rowOrBuild === 'function' ? rowOrBuild() : rowOrBuild
+  } catch (e) {
+    logWarn('glofox-webhook', 'attempt row build threw', { err: e?.message })
+    return { ok: false, error: e }
+  }
   try {
     const { error } = await db.from(GLOFOX_ATTEMPTS_TABLE).insert(row)
     if (error) {

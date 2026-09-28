@@ -26,6 +26,11 @@ vi.mock('@/lib/glofox-membership', () => ({ applyMembershipPauseWindow: vi.fn() 
 vi.mock('@/lib/dunning', () => ({ maybeEnrolDunning: vi.fn(), exitDunningForContact: vi.fn(), dunningActionFor: vi.fn() }))
 vi.mock('@/lib/glofox-sync', () => ({ applyMemberSync: vi.fn() }))
 vi.mock('@/lib/webhook-dead-letter', () => ({ deadLetterWebhook: vi.fn() }))
+// The real module, with the row builder wrapped so a test can make it throw.
+vi.mock('@/lib/glofox-webhook-attempts', async (importOriginal) => {
+  const actual = await importOriginal()
+  return { ...actual, buildGlofoxWebhookAttempt: vi.fn(actual.buildGlofoxWebhookAttempt) }
+})
 
 import { POST } from './route.js'
 import { createServerClient } from '@/lib/supabase'
@@ -33,6 +38,9 @@ import { readGlofoxCredentialsByBranchId, glofoxFetch } from '@/lib/glofox'
 import { applyMemberSync } from '@/lib/glofox-sync'
 import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
 import { logWarn } from '@/lib/log'
+import { buildGlofoxWebhookAttempt } from '@/lib/glofox-webhook-attempts'
+
+const { buildGlofoxWebhookAttempt: realBuildAttempt } = await vi.importActual('@/lib/glofox-webhook-attempts')
 
 // Synthetic values only.
 const PII_EMAIL = 'person@example.test'
@@ -103,6 +111,7 @@ beforeEach(() => {
   readGlofoxCredentialsByBranchId.mockResolvedValue({ creds: { locationId: 'loc-1', webhookSecret: 'secret' }, error: null })
   glofoxFetch.mockResolvedValue({ ok: true, json: async () => ({ data: { _id: 'member-1' } }) })
   applyMemberSync.mockResolvedValue(syncResult())
+  buildGlofoxWebhookAttempt.mockImplementation(realBuildAttempt)
 })
 
 const useDb = (opts) => { db = makeFakeDb(opts); createServerClient.mockReturnValue(db); return db }
@@ -189,5 +198,27 @@ describe('POST /api/webhooks/glofox — one attempt row per processed delivery',
     expect(deadLetterWebhook).toHaveBeenCalledTimes(1)
     const [attempt] = writes(db, 'glofox_webhook_attempts', 'insert')
     expect(attempt.payload).toMatchObject({ event_row_id: 'row-1', status: 'processing_failed', error_message: 'contacts read exploded', digest: null })
+  })
+
+  it('a row builder that throws (markEvent path) still 200s with the same answer, and is one warning', async () => {
+    useDb({ contacts: [] })
+    buildGlofoxWebhookAttempt.mockImplementation(() => { throw new Error('builder exploded') })
+    const res = await deliver(envelope({ type: 'EVENT_UPDATED' }))
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ success: true, status: 'contact_not_found', email: null, user_id: 'entity-1' })
+    expect(writes(db, 'glofox_webhook_events', 'update')).toHaveLength(1)
+    expect(writes(db, 'glofox_webhook_attempts', 'insert')).toHaveLength(0)
+    expect(deadLetterWebhook).not.toHaveBeenCalled()
+    expect(logWarn).toHaveBeenCalledWith('glofox-webhook', 'attempt row build threw', expect.objectContaining({ err: 'builder exploded' }))
+  })
+
+  it('a row builder that throws (processing-failed path) still dead-letters and 200s', async () => {
+    useDb({ contactsThrow: true })
+    buildGlofoxWebhookAttempt.mockImplementation(() => { throw new Error('builder exploded') })
+    const res = await deliver(envelope({ type: 'EVENT_UPDATED' }))
+    expect(res.status).toBe(200)
+    expect((await res.json()).status).toBe('processing_failed_dead_lettered')
+    expect(deadLetterWebhook).toHaveBeenCalledTimes(1)
+    expect(writes(db, 'glofox_webhook_attempts', 'insert')).toHaveLength(0)
   })
 })

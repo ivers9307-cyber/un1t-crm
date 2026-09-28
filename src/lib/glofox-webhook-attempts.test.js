@@ -276,6 +276,20 @@ describe('recordGlofoxWebhookAttempt', () => {
     expect(logWarn).toHaveBeenCalledWith('glofox-webhook', 'attempt row insert failed', expect.objectContaining({ status: 'applied', code: '42P01' }))
   })
 
+  it('builds the row inside its try when given a builder', async () => {
+    const db = fakeDb('ok')
+    await expect(recordGlofoxWebhookAttempt(db, () => row)).resolves.toEqual({ ok: true, error: null })
+    expect(db.inserts).toEqual([{ table: GLOFOX_ATTEMPTS_TABLE, row }])
+  })
+
+  it('a builder that throws is one warning and { ok: false }, never a throw, and inserts nothing', async () => {
+    const db = fakeDb('ok')
+    const r = await recordGlofoxWebhookAttempt(db, () => { throw new Error('builder exploded') })
+    expect(r.ok).toBe(false)
+    expect(db.inserts).toEqual([])
+    expect(logWarn).toHaveBeenCalledWith('glofox-webhook', 'attempt row build threw', { err: 'builder exploded' })
+  })
+
   it('a thrown insert is one warning and { ok: false }, never a throw', async () => {
     const r = await recordGlofoxWebhookAttempt(fakeDb('throw'), row)
     expect(r.ok).toBe(false)

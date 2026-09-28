@@ -552,7 +552,9 @@ export async function POST(request) {
         error: e,
         locationId: creds.locationId,
       }),
-      recordGlofoxWebhookAttempt(db, buildGlofoxWebhookAttempt({
+      // A builder, not a row: recordGlofoxWebhookAttempt runs it inside its
+      // own try, so nothing about the attempt can throw out of this catch.
+      recordGlofoxWebhookAttempt(db, () => buildGlofoxWebhookAttempt({
         ...attemptCtx, status: 'processing_failed', result: null, errorMessage: e?.message || 'threw',
       })),
     ])
@@ -586,7 +588,8 @@ async function markEvent(db, ctx, status, result, errorMessage) {
       logWarn('glofox-webhook', 'event row update threw', { status, err: e?.message })
     }
   })()
-  const recordAttempt = recordGlofoxWebhookAttempt(db, buildGlofoxWebhookAttempt({
+  // A builder, not a row: it runs inside recordGlofoxWebhookAttempt's try.
+  const recordAttempt = recordGlofoxWebhookAttempt(db, () => buildGlofoxWebhookAttempt({
     ...ctx, status, result, errorMessage, processedAt,
   }))
   await Promise.all([markRow, recordAttempt])
