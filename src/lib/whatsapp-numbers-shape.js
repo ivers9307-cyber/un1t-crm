@@ -1,11 +1,14 @@
 // WA-TECHPROV.3 — shared public projection of whatsapp_numbers rows.
 // The full access_token (and signup_meta, which carries the 2FA PIN)
 // must never reach the browser; every route that returns rows uses this.
+// N8NECHO.1: nor any CHARACTER of it. A stored token is the shared mask
+// (presence only), the same posture as maskConnectionRow since SECFIX.3a.
+
+import { SECRET_MASK } from './secret-keys.js'
 
 export function redactToken(token) {
   if (!token || typeof token !== 'string') return null
-  if (token.length <= 8) return '••••'
-  return `••••${token.slice(-6)}`
+  return SECRET_MASK
 }
 
 export function publicShape(row) {

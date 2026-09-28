@@ -33,7 +33,6 @@ export const STAR_READS = {
   'src/app/admin/matrix/page.js': { count: 1, disposition: 'redacted' },
   'src/app/api/staff/[id]/permanent/route.js': { count: 1, disposition: 'server-only', why: 'master-only; the embed feeds the UniFi revoke; the response is the tombstone RPC result' },
   'src/app/settings/page.js': { count: 1, disposition: 'server-only', why: 'server-rendered list (name, address, slug, active); no client component receives the rows' },
-  'src/app/api/locations/[id]/integrations/route.js': { count: 1, disposition: 'api-key-json', why: 'a JSON response, but only to an API-key (n8n) holder, never a signed-in browser: its GET exists to serve the Glofox credentials to that key holder. The star-read is its PUT echo (update().select()), which returns the whole row to the same key holder; trimming it is follow-up C42 N8NECHO.1' },
   'src/app/settings/locations/[id]/page.js': { count: 1, disposition: 'redacted' },
 }
 
