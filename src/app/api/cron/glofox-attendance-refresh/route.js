@@ -38,7 +38,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
-import { glofoxCredentialsForLocation, fetchUserBookingsResult, fetchMemberResult } from '@/lib/glofox'
+import { glofoxCredentialsForLocation, fetchUserBookingsResult, fetchMemberResult, glofoxHttpStats, glofoxHttpStatsSince } from '@/lib/glofox'
 import { GLOFOX_SETTINGS_UNREADABLE_MESSAGE } from '@/lib/glofox-settings-read'
 import { computeBookingAggregates, mergeBookingAggregates, trimRecentBookings, extractMembershipPlan, extractMembershipState, extractMemberProfile } from '@/lib/glofox-sync'
 import { logWarn } from '@/lib/log'
@@ -63,6 +63,8 @@ export async function GET(request) {
   }
 
   const startedAt = Date.now()
+  // CREDITSREAD.1 — Glofox traffic for this invocation (instance-wide counters).
+  const httpBefore = glofoxHttpStats()
   const db = createServerClient()
 
   // Locations with Glofox configured — same discovery as glofox-sync.
@@ -88,7 +90,11 @@ export async function GET(request) {
     if (res.budget_exhausted) budgetExhausted = true
   }
 
-  await stampHeartbeat('glofox-attendance-refresh')
+  // CREDITSREAD.1 — reach + traffic, readable from SQL (was: last_outcome NULL).
+  // The run is time-bound (sequential, TIME_BUDGET_MS), so refreshed < eligible
+  // with budget_exhausted=true is its normal shape; the stalest-first order
+  // rotates who is left for tomorrow.
+  await stampHeartbeat('glofox-attendance-refresh', attendanceOutcome(perLocation, budgetExhausted, glofoxHttpStatsSince(httpBefore)))
 
   return NextResponse.json({
     success: true,
@@ -96,6 +102,22 @@ export async function GET(request) {
     budget_exhausted: budgetExhausted,
     per_location: perLocation,
   })
+}
+
+function attendanceOutcome(perLocation, budgetExhausted, glofoxHttp) {
+  const sum = (k) => perLocation.reduce((n, r) => n + (r.summary?.[k] ?? 0), 0)
+  return {
+    eligible: perLocation.reduce((n, r) => n + (r.eligible ?? 0), 0),
+    refreshed: sum('refreshed'),
+    fetch_failed: sum('fetch_failed'),
+    membership_failed: sum('membership_failed'),
+    member_refused: sum('member_refused'),
+    update_failed: sum('update_failed'),
+    // A run where every location failed would otherwise read as all zeros (idle).
+    failed_locations: perLocation.filter((r) => r.status === 'failed').length,
+    budget_exhausted: budgetExhausted,
+    glofox_http: glofoxHttp,
+  }
 }
 
 /**
@@ -107,6 +129,7 @@ async function refreshLocation(db, location, startedAt) {
   // member (200 success:false "Resource not available" = a deleted/merged
   // account). Not a blip, so it is counted apart from membership_failed.
   const summary = { refreshed: 0, fetch_failed: 0, update_failed: 0, membership_failed: 0, member_refused: 0 }
+  const httpBefore = glofoxHttpStats()
   let budgetExhausted = false
 
   // Audit row up-front so a mid-run timeout still leaves a trace.
@@ -231,7 +254,7 @@ async function refreshLocation(db, location, startedAt) {
         duration_ms: Date.now() - startedAt,
         leads_processed: summary.refreshed,
         total_available: eligibleCount,
-        summary,
+        summary: { ...summary, glofox_http: glofoxHttpStatsSince(httpBefore) },
         status: 'completed',
       }).eq('id', runId)
     }
