@@ -579,7 +579,7 @@ async function fetchBillingRollups(db, locationIds, monthStart) {
   const PAGE = 1000
   const rows = []
   for (let from = 0; ; from += PAGE) {
-    const { data } = await db
+    const { data, error } = await db
       .from('usage_rollups_daily')
       .select('location_id, meter, quantity')
       .in('location_id', locationIds)
@@ -589,10 +589,12 @@ async function fetchBillingRollups(db, locationIds, monthStart) {
       .order('location_id', { ascending: true })
       .order('meter', { ascending: true })
       .range(from, from + PAGE - 1)
+    // HUBREAD.1 — a failed page is an unreadable meter, never a short count.
+    if (error) return { rows: [], error }
     rows.push(...(data || []))
     if (!data || data.length < PAGE) break
   }
-  return rows
+  return { rows, error: null }
 }
 
 // Current-period overage draws (kind='draw'; `period` stamps the
@@ -602,7 +604,7 @@ async function fetchPeriodDraws(db, locationIds, periodStart) {
   const PAGE = 1000
   const rows = []
   for (let from = 0; ; from += PAGE) {
-    const { data } = await db
+    const { data, error } = await db
       .from('wallet_transactions')
       .select('location_id, meter, amount_cents')
       .in('location_id', locationIds)
@@ -611,10 +613,12 @@ async function fetchPeriodDraws(db, locationIds, periodStart) {
       .order('created_at', { ascending: true })
       .order('id', { ascending: true })
       .range(from, from + PAGE - 1)
+    // HUBREAD.1 — a failed page is an unreadable meter, never a short count.
+    if (error) return { rows: [], error }
     rows.push(...(data || []))
     if (!data || data.length < PAGE) break
   }
-  return rows
+  return { rows, error: null }
 }
 
 // ai_message MTD = COUNT of allowance-eligible usage_events rows
@@ -627,7 +631,7 @@ async function fetchPeriodDraws(db, locationIds, periodStart) {
 // ai_message rollup meter exists.
 async function fetchAiMessageCounts(db, locationIds, monthStart) {
   const entries = await Promise.all(locationIds.map(async (locationId) => {
-    const { count } = await db
+    const { count, error } = await db
       .from('usage_events')
       .select('id', { count: 'exact', head: true })
       .eq('location_id', locationId)
@@ -635,9 +639,13 @@ async function fetchAiMessageCounts(db, locationIds, monthStart) {
       .neq('source', 'assistant_chat')
       // SELECTCOLS.1 — usage_events stamps `occurred_at`; it has no created_at.
       .gte('occurred_at', monthStart)
-    return [locationId, count || 0]
+    return [locationId, count || 0, error || null]
   }))
-  return Object.fromEntries(entries)
+  // HUBREAD.1 — the first failed count makes the pinned rows unreadable.
+  return {
+    counts: Object.fromEntries(entries.map(([id, n]) => [id, n])),
+    error: entries.find((e) => e[2])?.[2] || null,
+  }
 }
 
 /**
@@ -652,7 +660,7 @@ async function assembleBillingStrip(db, locs, todayStr) {
   const unpinnedAll = () => locs.map((l) => ({ locationId: l.id, plan: null }))
   if (!ids.length) return []
 
-  const { data: pinRows } = await db
+  const { data: pinRows, error: pinErr } = await db
     .from('location_plans')
     .select(
       'location_id, ' +
@@ -661,6 +669,12 @@ async function assembleBillingStrip(db, locs, todayStr) {
     )
     .in('location_id', ids)
     .eq('active', true)
+  // HUBREAD.1 — without the pins we cannot say which locations have a plan:
+  // "No platform plan" would be a guess. Every row is unreadable.
+  if (pinErr) {
+    logWarn('integrations-hub', 'location_plans read failed — plan strip unreadable', { error: pinErr.message })
+    return locs.map((l) => ({ locationId: l.id, plan: null, unreadable: true }))
+  }
 
   const pins = groupPlanPins(pinRows || [])
   const pinnedIds = ids.filter((id) => pins[id]?.tier)
@@ -669,7 +683,7 @@ async function assembleBillingStrip(db, locs, todayStr) {
   const monthStart = currentPeriodStart(todayStr)
   const expiresOn = billingExpiresOn(todayStr)
 
-  const [walletsRes, rollupRows, drawRows, aiCounts] = await Promise.all([
+  const [walletsRes, rollupRes, drawRes, aiRes] = await Promise.all([
     db.from('wallets')
       .select('location_id, balance_cents, period_start')
       .in('location_id', pinnedIds),
@@ -677,6 +691,18 @@ async function assembleBillingStrip(db, locs, todayStr) {
     fetchPeriodDraws(db, pinnedIds, monthStart),
     fetchAiMessageCounts(db, pinnedIds, monthStart),
   ])
+  // HUBREAD.1 — a pinned location with an unreadable wallet or meter would
+  // render €0.00 and 0 used: unreadable instead. Unpinned rows are true.
+  const pinnedErr = walletsRes.error || rollupRes.error || drawRes.error || aiRes.error
+  if (pinnedErr) {
+    logWarn('integrations-hub', 'plan strip read failed — pinned rows unreadable', { error: pinnedErr.message })
+    return locs.map((loc) => (pins[loc.id]?.tier
+      ? { locationId: loc.id, plan: null, unreadable: true }
+      : { locationId: loc.id, plan: null }))
+  }
+  const rollupRows = rollupRes.rows
+  const drawRows = drawRes.rows
+  const aiCounts = aiRes.counts
 
   const walletByLoc = Object.fromEntries(
     (walletsRes.data || []).map((w) => [w.location_id, w])
@@ -741,6 +767,12 @@ async function assembleEmailDelivery(db, locs, orgIds) {
       .in('organization_id', orgIds),
     db.from('organizations').select('id, name').in('id', orgIds),
   ])
+  // HUBREAD.1 — a failed domain read is unknown ("Platform email" + Set up
+  // domain would invite re-running the wizard over a live domain). A failed
+  // org-name read only drops a label shown when there are 2+ orgs: log only.
+  const domErr = domRes.error || null
+  if (domErr) logWarn('integrations-hub', 'tenant_email_domains read failed — email card unknown', { error: domErr.message })
+  if (orgRes.error) logWarn('integrations-hub', 'organizations read failed — org names omitted', { error: orgRes.error.message })
   const rowByOrg = Object.fromEntries((domRes.data || []).map((r) => [r.organization_id, r]))
   const nameByOrg = Object.fromEntries((orgRes.data || []).map((o) => [o.id, o.name]))
   const locsByOrg = {}
@@ -754,7 +786,7 @@ async function assembleEmailDelivery(db, locs, orgIds) {
       organizationId: orgId,
       orgName: nameByOrg[orgId] || null,
       locationIds: locsByOrg[orgId] || [],
-      status: gradeTenantEmail(row),
+      status: domErr ? HUB_UNKNOWN : gradeTenantEmail(row),
       sendingDomain: row?.sending_domain ?? null,
       fromEmail: row?.from_email ?? null,
       fromName: row?.from_name ?? null,
@@ -1269,6 +1301,7 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
   // the Postmark server token. Org set derives from the already-scoped locs.
   const orgIds = [...new Set(locs.map((l) => l.organization_id).filter(Boolean))]
   const email = await assembleEmailDelivery(db, locs, orgIds)
+  if (email.some((e) => e.status === HUB_UNKNOWN)) pushUnreadable('email')
 
   // ── Plan & wallet strip (INTEG-C4) — pinning-gated, zero writes ──
   const billing = await assembleBillingStrip(db, locs, dublinDayStr(now))

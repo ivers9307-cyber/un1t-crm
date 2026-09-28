@@ -902,3 +902,59 @@ describe('assembleIntegrationsHub — a failed read is never "not connected" (HU
     for (const r of data.sms) expect(r.senderKnown).toBe(true)
   })
 })
+
+describe('assembleIntegrationsHub — email + plan strip reads (HUBREAD.1)', () => {
+  const ORG_A = { ...LOC_A, organization_id: 'org-1' }
+  const TIER_PIN = {
+    location_id: LOC_A.id,
+    version: {
+      id: 'v1', plan_id: 'p1', effective_from: '2026-01-01', price_cents: 4900, currency: 'EUR',
+      allowances: {}, unit_rates_cents: {}, features: {},
+      plan: { id: 'p1', slug: 'growth', name: 'Growth', kind: 'tier' },
+    },
+  }
+
+  it('a failed sending-domain read is unknown, never "Platform email" + Set up domain', async () => {
+    const db = tableDb({ tenant_email_domains: { error: { message: 'db exploded' } } })
+    const data = await assembleIntegrationsHub(db, [ORG_A], { now: NOW })
+    expect(data.email).toHaveLength(1)
+    expect(data.email[0]).toMatchObject({ organizationId: 'org-1', status: 'unknown', sendingDomain: null })
+    const nag = data.attention.filter((a) => a.cardKey === 'email')
+    expect(nag).toHaveLength(1)
+    expect(nag[0]).toMatchObject({ unreadable: true, message: 'Could not load Email delivery just now. Try again in a moment.' })
+  })
+
+  it('a failed organisations read only drops the label (log only)', async () => {
+    const db = tableDb({ organizations: { error: { message: 'x' } } })
+    const data = await assembleIntegrationsHub(db, [ORG_A], { now: NOW })
+    expect(data.email[0]).toMatchObject({ status: 'platform', orgName: null })
+    expect(data.attention.some((a) => a.cardKey === 'email')).toBe(false)
+  })
+
+  it('a failed plan-pin read is unreadable, never "No platform plan"', async () => {
+    const db = tableDb({ location_plans: { error: { message: 'x' } } })
+    const data = await assembleIntegrationsHub(db, [LOC_A, LOC_B], { now: NOW })
+    expect(data.billing).toEqual([
+      { locationId: LOC_A.id, plan: null, unreadable: true },
+      { locationId: LOC_B.id, plan: null, unreadable: true },
+    ])
+  })
+
+  for (const table of ['wallets', 'usage_rollups_daily', 'wallet_transactions', 'usage_events']) {
+    it(`a failed ${table} read makes the PINNED row unreadable, never a zero balance/usage`, async () => {
+      const db = tableDb({ location_plans: { data: [TIER_PIN] }, [table]: { error: { message: 'x' } } })
+      const data = await assembleIntegrationsHub(db, [LOC_A, LOC_B], { now: NOW })
+      expect(data.billing).toEqual([
+        { locationId: LOC_A.id, plan: null, unreadable: true },
+        { locationId: LOC_B.id, plan: null }, // unpinned: the pin read succeeded, so this is true
+      ])
+    })
+  }
+
+  it('a pinned row with healthy reads still renders its plan (pin)', async () => {
+    const db = tableDb({ location_plans: { data: [TIER_PIN] } })
+    const data = await assembleIntegrationsHub(db, [LOC_A], { now: NOW })
+    expect(data.billing[0].plan).toMatchObject({ name: 'Growth' })
+    expect(data.billing[0].unreadable).toBeUndefined()
+  })
+})
