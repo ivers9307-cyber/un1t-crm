@@ -23,6 +23,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { AlertCircle, Check, Loader2, Plug, Save } from 'lucide-react'
 import { Field } from '@/components/ui'
+import ReadFailedNote from '@/components/settings/ReadFailedNote'
 
 const PROVIDERS = [
   { key: 'meta', label: 'Meta (Facebook & Instagram)', comingSoon: false },
@@ -35,23 +36,26 @@ const PROVIDERS = [
 // unchanged (router.refresh() re-runs the tab's server data + status dots).
 export default function AdsIntegrationTab({ location, canEdit, onChanged }) {
   const router = useRouter()
-  const [rows, setRows] = useState({}) // provider -> masked row (or null)
+  // CHANNELREAD.1 — `rows` is null until a read SUCCEEDS, and a failed read
+  // puts it back to null. null renders ReadFailedNote and no form: the old
+  // code rendered every provider form with row=null (Account ID blank,
+  // Active off) under a red banner, so a Save could deactivate a live account.
+  const [rows, setRows] = useState(null) // provider -> masked row, or null = not read
   const [recipients, setRecipients] = useState('')
   const [loading, setLoading] = useState(true)
-  const [loadError, setLoadError] = useState(null)
 
-  async function load() {
-    setLoading(true); setLoadError(null)
+  async function load({ silent = false } = {}) {
+    if (!silent) setLoading(true)
     try {
       const res = await fetch(`/api/settings/ads?locationId=${location.id}`, { credentials: 'same-origin' })
       const j = await res.json().catch(() => ({}))
-      if (!j.success) throw new Error(j.error || 'Failed to load ad accounts')
+      if (!res.ok || !j.success || !Array.isArray(j.data)) throw new Error(j.error || 'Failed to load ad accounts')
       const byProvider = {}
-      for (const row of j.data || []) byProvider[row.provider] = row
+      for (const row of j.data) byProvider[row.provider] = row
       setRows(byProvider)
       setRecipients((j.report_recipients || []).join(', '))
-    } catch (e) {
-      setLoadError(e.message)
+    } catch {
+      setRows(null)
     } finally {
       setLoading(false)
     }
@@ -66,16 +70,12 @@ export default function AdsIntegrationTab({ location, canEdit, onChanged }) {
         stored server-side and never shown in full once saved.
       </p>
 
-      {loadError && (
-        <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-xs rounded-md p-2 flex items-start gap-2">
-          <AlertCircle size={12} className="mt-0.5" /> {loadError}
-        </div>
-      )}
-
       {loading ? (
         <div className="text-xs text-un1t-subtle inline-flex items-center gap-2">
           <Loader2 size={12} className="animate-spin" /> Loading…
         </div>
+      ) : rows === null ? (
+        <ReadFailedNote what="this location's ad accounts" onRetry={() => load({ silent: true })} />
       ) : (
         <div className="space-y-4">
           <ReportRecipientsSection
