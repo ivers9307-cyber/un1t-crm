@@ -492,12 +492,6 @@ describe('executeTool — safe empties when there is no active location', () => 
     const res = await executeTool('list_shift_templates', {}, { ...MANAGER, locationId: null })
     expect(res).toEqual({ templates: [] })
   })
-
-  it('get_shifts_for_week returns no shifts (never an unscoped read)', async () => {
-    useDb({ shift_assignments: [{ profile_id: 'p-b1', profiles: { full_name: 'Ben Other' }, shift_blocks: { location_id: 'loc-b', block_date: '2026-07-02', shift_templates: { name: 'AM', start_time: '09:00:00', end_time: '17:00:00' } } }] })
-    const res = await executeTool('get_shifts_for_week', { start_date: '2026-07-01' }, { ...MANAGER, locationId: null })
-    expect(res).toEqual({ shifts: [] })
-  })
 })
 
 // ── get_shifts_for_week — what a staff member may see, and the true times ──
@@ -707,6 +701,29 @@ describe('executeTool — model-supplied dates are checked before any read (RANG
     const res = await executeTool('get_time_off', { start_date: '2026-07-01', end_date: '2026-07-07' }, MANAGER)
     expect(res.error).toMatch(/Failed to load time off/)
     expect(res.time_off).toBeUndefined()
+  })
+
+  // get_shifts_for_week answered no studio with { shifts: [] }, which the
+  // model reads out as "nobody is on shift" (get_time_off's old trap).
+  it('get_shifts_for_week: no active studio is an error, never an empty week, and nothing is read', async () => {
+    const { tables } = watched({ shift_assignments: [{ profile_id: 'p-b1', profiles: { full_name: 'Ben Other' }, shift_blocks: { location_id: 'loc-b', block_date: '2026-07-02', shift_templates: { name: 'AM', start_time: '09:00:00', end_time: '17:00:00' } } }] })
+    const res = await executeTool('get_shifts_for_week', { start_date: '2026-07-01' }, { ...MANAGER, locationId: null })
+    expect(res).toEqual({ error: 'No active location — switch to a location before looking up shifts.' })
+    expect(tables).toEqual([])
+  })
+
+  it('get_shifts_for_week: a failed shifts read is an error, never an empty week', async () => {
+    failingOn('shift_assignments')
+    const res = await executeTool('get_shifts_for_week', { start_date: '2026-07-06' }, MANAGER)
+    expect(res.error).toMatch(/^Failed to load shifts/)
+    expect(res.shifts).toBeUndefined()
+  })
+
+  it('get_shifts_for_week: a failed rosters read is an error, never "every day unpublished"', async () => {
+    failingOn('rosters')
+    const res = await executeTool('get_shifts_for_week', { start_date: '2026-07-06' }, MANAGER)
+    expect(res.error).toMatch(/^Failed to load rosters/)
+    expect(res.shifts).toBeUndefined()
   })
 
   it('get_time_off: a real range still lists this studio\'s overlapping leave', async () => {

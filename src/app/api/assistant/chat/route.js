@@ -187,8 +187,9 @@ export async function executeTool(toolName, input, context) {
     }
 
     case 'get_shifts_for_week': {
-      // No location → no unscoped read.
-      if (!locationId) return { shifts: [] }
+      // No location → no unscoped read, and an error rather than
+      // { shifts: [] }, which the model read out as "nobody is on shift".
+      if (!locationId) return { error: 'No active location — switch to a location before looking up shifts.' }
       if (!isRealCalendarDate(input.start_date)) return { error: 'start_date must be a real date, YYYY-MM-DD.' }
       // SCHEDHYGIENE.1 — pure date arithmetic, snapped to the Monday of the
       // week the date falls in (the tool promises Monday to Sunday; a model
