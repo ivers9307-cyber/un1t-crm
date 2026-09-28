@@ -99,6 +99,7 @@ export function producerConsumers(root) {
 const REVIEWED = {
   'shared/candidates.js': 'pure ranking and labels; the key exists only when the candidates route sent it (withContract: ADMIN_ROLES at the block\'s studio)',
   'shared/dashboard-data.js': 'server-only aggregates: a euro labour total and names of incomplete pay profiles; never returns the column',
+  'src/lib/user-profile.js': 'names the column only in a comment listing what the user object NO LONGER carries (PROFILESPREAD.1); reads nothing',
   'src/app/api/assistant/chat/route.js': 'staff_cost tool, RATE_REPORT_VIEWER_ROLES at the active studio only (the assistant is off everywhere)',
   'src/app/api/contracts/[id]/route.js': 'the contract\'s recipient (own), master, or an owner of its organisation',
   'src/app/api/contracts/route.js': 'issuing a contract: master or owner only',
