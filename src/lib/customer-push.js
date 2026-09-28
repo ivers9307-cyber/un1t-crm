@@ -9,8 +9,11 @@
 // by their own notification preferences (contacts.push_prefs, mig 352).
 // Callers with a "was this nudge sent?" ledger (send-class-booking-reminders)
 // use `failed` to tell a pipeline failure apart from "nothing to send".
+// C16 PUSHREADERR.1: a failed token read counts every candidate as failed and
+// adds `read_failed: 1` (absent on a clean read).
 
 import { customerAndroidChannelId, LEGACY_CHANNEL_ALIASES } from '@shared/customer-push-channels'
+import { logError } from './log'
 
 const EXPO_URL = 'https://exp.host/--/api/v2/push/send'
 const BATCH = 100
@@ -102,10 +105,19 @@ export async function sendCustomerPush(db, contactIds, payload) {
     }
   }
 
-  const { data: rows } = await db
+  const { data: rows, error: tokensErr } = await db
     .from('champ_push_tokens')
     .select('id, expo_push_token')
     .in('contact_id', allowedIds)
+  // C16 PUSHREADERR.1 — "no device" is only true when the read worked. A
+  // failed read is every candidate failed + read_failed, so a claim caller
+  // (send-class-booking-reminders) releases and retries.
+  if (tokensErr) {
+    logError('customer-push', 'token read failed; nobody was told', {
+      contacts: allowedIds.length, type: payload?.data?.type ?? null, err: tokensErr,
+    })
+    return { sent: 0, invalidated: 0, failed: allowedIds.length, skipped, read_failed: 1 }
+  }
   if (!rows || !rows.length) return { sent: 0, invalidated: 0, failed: 0, skipped }
 
   const messages = rows.map((r) => ({
