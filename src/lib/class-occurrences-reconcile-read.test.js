@@ -18,7 +18,7 @@ vi.mock('@/lib/glofox', async (importOriginal) => ({
 }))
 
 import { syncOccurrencesForLocation } from './class-occurrences.js'
-import { logError, logWarn } from '@/lib/log'
+import { logError } from '@/lib/log'
 
 const LOC = 'a0000000-0000-0000-0000-000000000001'
 const NOW = Date.parse('2026-06-18T05:40:00.000Z')
@@ -76,14 +76,15 @@ describe('syncOccurrencesForLocation — reconcile read errors (CRONREADERR.1)',
     expect(logError).not.toHaveBeenCalled()
   })
 
-  it('a failed cancel UPDATE is reported too (reconcileFailed), still logged at warn as before', async () => {
+  it('a failed cancel UPDATE is reported too (reconcileFailed), logged at error with the whole error like the read branch', async () => {
+    const cancelErr = { message: 'write failed', code: '42501', details: 'permission denied' }
     const db = makeDb({
       readResult: { data: [{ glofox_event_id: 'evt-gone' }], error: null },
-      updateResult: { data: null, error: { message: 'write failed' } },
+      updateResult: { data: null, error: cancelErr },
     })
     const out = await syncOccurrencesForLocation(db, { locationId: LOC, creds, nowMs: NOW })
     expect(out).toMatchObject({ ok: true, cancelled: 0, reconcileFailed: true })
-    expect(logWarn).toHaveBeenCalledWith('class-occurrences', 'cancel reconcile failed', expect.objectContaining({ locationId: LOC }))
+    expect(logError).toHaveBeenCalledWith('class-occurrences', 'cancel reconcile failed', { locationId: LOC, err: cancelErr })
   })
 
   it('a zero-event fetch does not reconcile, so it cannot fail: reconcileFailed false', async () => {

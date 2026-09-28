@@ -429,7 +429,7 @@ export async function syncOccurrencesForLocation(db, { locationId, creds, window
           .is('cancelled_at', null)
         if (cancelErr) {
           reconcileFailed = true
-          logWarn('class-occurrences', 'cancel reconcile failed', { locationId, error: cancelErr.message })
+          logError('class-occurrences', 'cancel reconcile failed', { locationId, err: cancelErr })
         } else {
           cancelled = goneIds.length
         }
