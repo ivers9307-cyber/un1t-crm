@@ -1524,7 +1524,8 @@ export function mergeBookingAggregates(existing, fresh) {
  * CREDITSREAD.1 — a read that FAILED is flagged, never passed off as
  * "no packs": creditsFailed (the /credits read failed, so the balance is
  * unknown) and membershipsFailed (some active pack's membership could
- * not be read, so the credit_member rule cannot run). previewMemberSync
+ * not be read and none that was read rules credit_member out, so the rule
+ * cannot run). previewMemberSync
  * keeps the stored balance / label for whatever it could not read.
  * Never throws; the caller's sync always proceeds.
  */
@@ -1542,10 +1543,16 @@ export async function buildCreditMemberContext(creds, member, membershipCache = 
     credits.filter(c => c?.active === true).map(c => c?.membership_id).filter(Boolean),
   ))
   let membershipsFailed = false
+  let readNonClassPack = false
   for (const mid of uniqueIds) {
     const r = await fetchMembershipResult(creds, mid, cache)
     if (!r.ok) membershipsFailed = true
+    else if (!isClassPackMembership(r.membership)) readNonClassPack = true
   }
+  // credit_member needs EVERY active pack's membership to be a Class Pack, so
+  // one that was read and is not one already settles it: a failure on another
+  // cannot change the answer, and must not hold a stored credit_member.
+  if (readNonClassPack) membershipsFailed = false
   return { credits, memberships: cache, creditsFailed: false, membershipsFailed }
 }
 

@@ -183,6 +183,46 @@ describe('a membership 404 is an ANSWER, not a failed read', () => {
   })
 })
 
+describe('a membership that was read and is not a Class Pack settles the label', () => {
+  const res = (status, body = {}) => ({
+    ok: status >= 200 && status < 300, status,
+    headers: { get: (k) => (k.toLowerCase() === 'retry-after' ? '0.001' : null) },
+    json: async () => body,
+  })
+  const TIME_ID = '0000000000000000000000e1'
+  const TIME = { _id: TIME_ID, trial: false, plans: [{ type: 'time' }] }
+  const timePack = { active: true, membership_id: TIME_ID, available: 2 }
+  beforeEach(() => vi.stubGlobal('fetch', vi.fn()))
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('one read non-Class-Pack + one failed read: not held, normal detection says member', async () => {
+    fetch.mockImplementation(async (url) => {
+      const u = String(url)
+      if (u.includes('/2.0/credits')) return res(200, { data: [pack(3), timePack] })
+      if (u.includes(TIME_ID)) return res(200, TIME)
+      return res(500)
+    })
+    const ctx = await buildCreditMemberContext(creds, member, new Map())
+    expect(ctx.membershipsFailed).toBe(false)
+
+    const out = await previewMemberSync(makeDb(stored()), LOC, member, { creds, membershipCache: new Map() })
+    expect(out).not.toHaveProperty('credits_unread')
+    expect(out.changes.glofox_membership_status).toEqual({ from: 'credit_member', to: 'member' })
+  })
+
+  it('one read Class Pack + one failed read: still unread, the label is held', async () => {
+    fetch.mockImplementation(async (url) => {
+      const u = String(url)
+      if (u.includes('/2.0/credits')) return res(200, { data: [pack(3), timePack] })
+      if (u.includes(PACKS_ID)) return res(200, PACKS)
+      return res(500)
+    })
+    const out = await previewMemberSync(makeDb(stored()), LOC, member, { creds, membershipCache: new Map() })
+    expect(out.credits_unread).toBe(true)
+    expect(out.changes).not.toHaveProperty('glofox_membership_status')
+  })
+})
+
 describe('previewMemberSync — a healthy read is unchanged', () => {
   it('Glofox genuinely has no active pack: NULL is written and the label follows (no flag, no log)', async () => {
     const out = await previewMemberSync(makeDb(stored()), LOC, member, {
