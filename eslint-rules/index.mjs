@@ -1024,10 +1024,13 @@ const noSubstringRedirectAssertion = {
 // A return does NOT count inside a `.forEach` callback, because forEach
 // drops what its callback returns.
 //
-// Blind spots (a floor, not proof): an assertion handed to a helper that
-// awaits it internally; a promise stored on an object/array other than a
-// Promise combinator's literal array; `.map(...)` whose result is never
-// awaited. Each reads as "waited for" or is not an expect chain at all.
+// Blind spots (a floor, not proof): an assertion inside a callback or helper
+// whose OWN promise floats — `forEach(async …)`, an un-awaited `.map(...)`, an
+// async IIFE, `q.then(async () => …)`, a helper that returns the assertion
+// called without `await`. The inner `await`/concise arrow reads as "waited
+// for". False positives (safe, force a rewrite): an assertion passed as an
+// argument (`await settle(expect(...))`) or stored on an object/array other
+// than a Promise combinator's literal array — bind it to a const and await it.
 const ASYNC_EXPECT_MODIFIERS = new Set(['resolves', 'rejects'])
 const PROMISE_COMBINATORS = new Set(['all', 'allSettled', 'race', 'any'])
 const RETURN_DISCARDING_METHODS = new Set(['forEach'])
