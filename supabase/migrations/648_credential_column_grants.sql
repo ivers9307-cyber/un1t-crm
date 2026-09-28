@@ -160,6 +160,19 @@ DECLARE
   unknown_cols text;
   col text;
 BEGIN
+  -- 0. service_role (every /api route and server page) keeps full DML on all
+  --    five. REVOKE here names only the client roles, but a pre-existing gap
+  --    would break every integration route the moment the client paths close.
+  --    has_table_privilege with a comma list is true if ANY is held, so each
+  --    privilege is checked on its own.
+  FOREACH t IN ARRAY ARRAY['locations', 'contact_external_integrations', 'channel_connections', 'whatsapp_numbers', 'xero_connections'] LOOP
+    FOREACH r IN ARRAY ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE'] LOOP
+      IF NOT has_table_privilege('service_role', 'public.' || t, r) THEN
+        RAISE EXCEPTION 'SECFIX.3c: service_role lacks % on public.%', r, t;
+      END IF;
+    END LOOP;
+  END LOOP;
+
   -- A. The three tables no client may touch at all.
   FOREACH t IN ARRAY ARRAY['channel_connections', 'whatsapp_numbers', 'xero_connections'] LOOP
     FOREACH r IN ARRAY ARRAY['authenticated', 'anon'] LOOP

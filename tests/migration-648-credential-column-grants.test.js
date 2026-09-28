@@ -510,6 +510,16 @@ describe('the self-check aborts the whole file', () => {
     await stillOpen()
   })
 
+  it.each(CREDENTIAL_GRANT_TABLES)('when service_role has lost a privilege on %s (every route would break)', async (table) => {
+    // has_table_privilege with a comma list is true if ANY is held, so each
+    // privilege is checked on its own: losing one alone must abort.
+    await runSql(`BEGIN; REVOKE DELETE ON public.${table} FROM service_role;`)
+    await expect(runSql(MIG_648)).rejects.toThrow(new RegExp(`SECFIX\\.3c: service_role lacks DELETE on public\\.${table}`))
+    await runSql('ROLLBACK')
+    expect(await tablePrivileges(table, 'service_role')).toEqual(ALL_TABLE_PRIVS)
+    await stillOpen()
+  })
+
   it('when a column is unclassified', async () => {
     // Inside the same transaction, so the ROLLBACK removes the column again.
     await runSql('BEGIN; ALTER TABLE public.locations ADD COLUMN shelly_token text;')
