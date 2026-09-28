@@ -177,6 +177,21 @@ describe('client code names only granted credential-table columns (SECFIX.3c)', 
     expect(columnUses(`const S = 'id'\nsupabase.from('locations').select(S)`, CREDENTIAL_GRANT_TABLES, FK_ALIASES).unresolved).toEqual([])
   })
 
+  it('reads the columns inside .or() / .and() logic filters and JSON-path filters', () => {
+    const r = probe(`await supabase.from('locations').select('id')
+      .or('settings.is.null,and(name.eq.x,not.or(thinq_pat.is.null,id.in.(a,b)))')
+      .and('sensibo_api_key.neq.x,email.eq."a,b"')
+      .eq('bca_config->>key', 'x')`)
+    expect(r).toEqual(expect.arrayContaining([
+      'locations.settings', 'locations.name', 'locations.thinq_pat', 'locations.id', 'locations.sensibo_api_key',
+      'locations.email', 'locations.bca_config',
+    ]))
+    expect(r.filter((x) => !/^locations\.[a-z_]+$/.test(x))).toEqual([])
+    expect(probe(`await supabase.from('shift_blocks').select('id, locations(id)').or('settings.is.null', { referencedTable: 'locations' })`))
+      .toContain('locations.settings')
+    expect(probe(`await supabase.from('shift_blocks').select('id').or('settings.is.null')`)).not.toContain('locations.settings')
+  })
+
   it('the FK columns come from the migrations, and a text search finds none the replay missed', () => {
     // The replay (scripts/check-select-columns.mjs) does not learn an FK made
     // inside a DO $$ block; a plain text search of the migrations does not

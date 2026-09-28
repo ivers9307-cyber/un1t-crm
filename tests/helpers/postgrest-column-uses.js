@@ -34,6 +34,43 @@ const WRITE_METHODS = new Set(['update', 'insert', 'upsert', 'delete'])
 const FILTER_METHODS = new Set(['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'in', 'is', 'like', 'ilike', 'contains',
   'order', 'not', 'filter', 'match'])
 
+const LOGIC_METHODS = new Set(['or', 'and'])
+
+/** Split on top-level commas, respecting (…) and "…" (PostgREST logic-tree syntax). */
+function splitLogic(expr) {
+  const out = []
+  let depth = 0
+  let quoted = false
+  let cur = ''
+  for (const ch of expr) {
+    if (ch === '"') quoted = !quoted
+    else if (!quoted && ch === '(') depth++
+    else if (!quoted && ch === ')') depth--
+    if (ch === ',' && depth === 0 && !quoted) { out.push(cur.trim()); cur = '' } else cur += ch
+  }
+  out.push(cur.trim())
+  return out.filter(Boolean)
+}
+
+/**
+ * The columns a PostgREST logic filter names — the argument of `.or()` /
+ * `.and()`: `a.eq.1,and(b.gt.2,not.or(c->>k.is.null,d.in.(x,y)))`. Returns
+ * [table|null, column]: null = the chain's table; an item spelled
+ * `<one of tables>.<col>.<op>.<value>` names that embedded table's column.
+ */
+export function logicFilterColumns(expr, tables = []) {
+  const out = []
+  for (const item of splitLogic(expr)) {
+    const nested = /^(?:not\.)?(?:and|or)\(([\s\S]*)\)$/.exec(item)
+    if (nested) { out.push(...logicFilterColumns(nested[1], tables)); continue }
+    const parts = item.split('.')
+    if (parts.length >= 4 && tables.includes(parts[0])) { out.push([parts[0], parts[1].split('->')[0].trim()]); continue }
+    const col = parts[0].split('->')[0].trim()
+    if (/^[a-z_]+$/.test(col)) out.push([null, col])
+  }
+  return out
+}
+
 /** A call's argument text: from the '(' at `open` to its match, JS-literal aware. */
 function callArgs(src, open) {
   let depth = 0
@@ -115,9 +152,12 @@ export function columnUses(text, tables, fkAliases = {}) {
   //     call, as check:select-columns does, so no fixed window): its own
   //     select list, filters and writes.
   for (const link of extractChainLinks(src)) {
-    const table = link.table
-    if (!tables.includes(table)) continue
     const { method, args } = link
+    // `.or(…, { referencedTable: 'locations' })` / `.order(…, { foreignTable })`
+    // filters an EMBEDDED table, whatever the chain's own table is.
+    const referenced = /\b(?:referencedTable|foreignTable)\s*:\s*['"`]([a-z_]+)['"`]/.exec(args)?.[1]
+    const table = FILTER_METHODS.has(method) || LOGIC_METHODS.has(method) ? referenced ?? link.table : link.table
+    if (!tables.includes(table)) continue
     if (method === 'select') {
       if (!args.trim()) { reads.push([table, '*']); continue }
       const sel = readSelect(args)
@@ -126,8 +166,14 @@ export function columnUses(text, tables, fkAliases = {}) {
       continue
     }
     if (WRITE_METHODS.has(method)) { writes.push([table, method]); continue }
+    if (LOGIC_METHODS.has(method)) {
+      const expr = readSelect(args)
+      if (expr == null) { unresolved.push([table, `${method}(${firstArgText(args).trim()})`]); continue }
+      for (const [t, c] of logicFilterColumns(expr, tables)) reads.push([t ?? table, c])
+      continue
+    }
     if (FILTER_METHODS.has(method)) {
-      const col = firstStringArg(args)
+      const col = firstStringArg(args)?.split('->')[0].trim()
       if (col != null && /^[a-z_]+$/.test(col)) reads.push([table, col])
     }
   }
