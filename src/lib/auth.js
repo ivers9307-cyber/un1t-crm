@@ -11,7 +11,7 @@ import { hasRoleAtLocation, hasRoleAtAnyLocation } from './role-at-location'
 import { isTombstone } from './staff-tombstone.js'
 import { PROFILE_AUTH_SELECT, pickUserProfile } from './user-profile.js'
 import { logError } from './log.js'
-import { USER_LOCATION_COLUMNS, redactLocationSecrets, redactLinkedLocations } from './location-secrets.js'
+import { USER_LOCATION_COLUMNS, toUserLocation, toUserLinkedLocations } from './location-secrets.js'
 
 // React 18's `cache()` is only exported from the server build of react.
 // In the Vitest (Node) environment we get the client build which omits
@@ -390,8 +390,8 @@ export const getCurrentUser = cache(async function getCurrentUser() {
   // SECFIX.3a — NAME the location columns: this object is serialised into
   // every page (AppShell). USER_LOCATION_COLUMNS is the public identity every
   // consumer reads (id, name, organization_id, features, active,
-  // is_host_anchor, slug, country, timezone, …) plus `settings`, redacted
-  // below. The credential columns are never loaded.
+  // is_host_anchor, slug, country, timezone, …): the client identity; no
+  // `settings` (PROFILESPREAD.1). The credential columns are never loaded.
   const linksPromise = db
     .from('profile_locations')
     .select(`*, locations(${USER_LOCATION_COLUMNS})`)
@@ -422,16 +422,15 @@ export const getCurrentUser = cache(async function getCurrentUser() {
     orgAdminLinksPromise,
   ])
 
-  // SECFIX.3a — this object is serialised into EVERY page (layout →
-  // AppShellServer → <AppShell user={user}>, a client component). The
-  // selects above never load the credential columns; `settings` still holds
-  // the Glofox / UniFi credentials as sub-keys, so they are masked here,
-  // once, for every consumer. Presence survives (the mask is truthy), so the
-  // automations pages' "is Glofox connected?" keeps working. Server code that
-  // needs a credential re-reads the row by id (glofoxCredentialsForLocation,
-  // getUnifiConfig, …) and never takes one off `user`.
-  const locationLinks = redactLinkedLocations(rawLocationLinks)
-  const allLocs = Array.isArray(rawAllLocs) ? rawAllLocs.map(redactLocationSecrets) : rawAllLocs
+  // SECFIX.3a / PROFILESPREAD.1 — this object is serialised into EVERY page
+  // (layout → AppShellServer → <AppShell user={user}>). The selects name the
+  // client identity only (no settings, no credential column); the pick is
+  // the second lock. Server code that needs settings or a credential reads
+  // the row fresh by id (readGlofoxAutomationStatus,
+  // glofoxCredentialsForLocation, getUnifiConfig, …) and never takes one off
+  // `user`.
+  const locationLinks = toUserLinkedLocations(rawLocationLinks)
+  const allLocs = Array.isArray(rawAllLocs) ? rawAllLocs.map(toUserLocation) : rawAllLocs
 
   let locations = (locationLinks || []).map(pl => pl.locations).filter(Boolean)
 
@@ -476,7 +475,7 @@ export const getCurrentUser = cache(async function getCurrentUser() {
     const expanded = expandOrgAdminAccess({
       locations,
       rolesByLocation,
-      orgLocations: Array.isArray(orgLocs) ? orgLocs.map(redactLocationSecrets) : orgLocs, // SECFIX.3a
+      orgLocations: Array.isArray(orgLocs) ? orgLocs.map(toUserLocation) : orgLocs, // SECFIX.3a / PROFILESPREAD.1
     })
     locations = expanded.locations
     rolesByLocation = expanded.rolesByLocation

@@ -55,8 +55,7 @@ vi.mock('./log.js', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn
 
 import { getCurrentUser, getOwnerOrganizationIds } from './auth.js'
 import { createClient } from '@supabase/supabase-js'
-import { LOCATION_SECRET_MASK, USER_LOCATION_COLUMNS } from './location-secrets.js'
-import { glofoxConnected } from './automations/registry.js'
+import { USER_LOCATION_COLUMNS } from './location-secrets.js'
 import { PROFILE_AUTH_SELECT, USER_PROFILE_COLUMNS } from './user-profile.js'
 import { logError } from './log.js'
 
@@ -570,17 +569,17 @@ describe('getCurrentUser — SECFIX.3a: location loads name their columns', () =
   })
 })
 
-describe('getCurrentUser — SECFIX.3a: no credential value on any location row', () => {
+describe('getCurrentUser — SECFIX.3a + PROFILESPREAD.1: no settings and no credential on any location row', () => {
   const SECRET_LOC = {
     id: 'loc-s', name: 'Secret Studio', organization_id: 'org-a', active: true,
     sensibo_api_key: 'SYNTH-SENSIBO-KEY', thinq_pat: 'SYNTH-THINQ-PAT',
     settings: {
       glofox: { branch_id: 'b1', api_key: 'SYNTH-GLOFOX-KEY', api_token: 'SYNTH-GLOFOX-TOKEN', webhook_secret: 'SYNTH-GLOFOX-WHSEC', trial_membership_id: 'm1' },
       unifi: { host: 'https://unifi.example', api_token: 'SYNTH-UNIFI-TOKEN' },
-      customer_agent: { enabled: true },
+      customer_agent: { enabled: true, test_phones: ['+353000000001'] },
     },
   }
-  const expectNoSecret = (user) => expect(JSON.stringify(user)).not.toMatch(/SYNTH-/)
+  const expectNoSecret = (user) => expect(JSON.stringify(user)).not.toMatch(/SYNTH-|test_phones|\+353000/)
 
   it('a plain staff member: locations, activeLocation (the default link) and nothing else change', async () => {
     setup({
@@ -590,14 +589,13 @@ describe('getCurrentUser — SECFIX.3a: no credential value on any location row'
     })
     const user = await getCurrentUser()
     expectNoSecret(user)
-    expect(user.activeLocation.settings.glofox.api_key).toBe(LOCATION_SECRET_MASK)
-    expect(user.activeLocation.settings.glofox.branch_id).toBe('b1')
-    expect(user.activeLocation.settings.customer_agent).toEqual({ enabled: true })
-    expect(user.locations[0].sensibo_api_key).toBe(LOCATION_SECRET_MASK)
+    expect(user.activeLocation).not.toHaveProperty('settings')
+    expect(user.activeLocation).not.toHaveProperty('sensibo_api_key')
+    expect(user.activeLocation).toEqual({ id: 'loc-s', name: 'Secret Studio', organization_id: 'org-a', active: true })
     expect(user.rolesByLocation).toEqual({ 'loc-s': 'staff' })
   })
 
-  it('a master: every active location is redacted', async () => {
+  it('a master: no active location carries settings or a credential', async () => {
     setup({
       profile: { id: 'm-1', role: 'master', full_name: 'M', email: 'm@un1t.ie', employment_type: null, active: true },
       links: [],
@@ -606,10 +604,11 @@ describe('getCurrentUser — SECFIX.3a: no credential value on any location row'
     })
     const user = await getCurrentUser()
     expectNoSecret(user)
-    expect(user.locations[1]).toBe(LOC_A1) // nothing to redact → the same object
+    expect(user.locations[0]).not.toHaveProperty('settings')
+    expect(user.locations[1]).toBe(LOC_A1) // nothing to drop → the same object
   })
 
-  it('an org admin: the org-expanded locations are redacted', async () => {
+  it('an org admin: the org-expanded locations carry no settings or credential', async () => {
     setup({
       profile: { id: 'oa-1', role: 'staff', full_name: 'Org Admin', email: 'oa@tenant.ie', employment_type: 'fte', active: true },
       links: [],
@@ -622,14 +621,14 @@ describe('getCurrentUser — SECFIX.3a: no credential value on any location row'
     expect(user.locations.map((l) => l.id)).toEqual(['loc-s'])
   })
 
-  it('presence survives: the automations page still sees Glofox as connected', async () => {
+  it('the user object carries no location settings at all (the automations pages read their own)', async () => {
     setup({
-      profile: { id: 'st-2', role: 'owner', full_name: 'O', email: 'o@un1t.ie', employment_type: 'fte', active: true },
+      profile: { id: 'st-2', role: 'owner', full_name: 'O', email: 'o@example.test', employment_type: 'fte', active: true },
       links: [link({ loc: SECRET_LOC, role: 'owner', is_default: true })],
       orgs: [ORG_A],
     })
     const user = await getCurrentUser()
-    expect(glofoxConnected(user.activeLocation)).toBe(true)
+    expect(JSON.stringify(user)).not.toMatch(/"settings"|customer_agent|test_phones/)
   })
 })
 

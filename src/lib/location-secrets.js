@@ -2,11 +2,11 @@
 //
 // Six stored integration credentials live on the row: two columns and four
 // keys inside `settings`. Anything handed to a client component, or returned
-// as JSON, must carry their PRESENCE (many screens and one server page ask
-// "is Glofox configured?") but never their VALUE. Each non-empty one is
-// replaced by LOCATION_SECRET_MASK:
-//   * the key stays, so truthiness checks (automations glofoxConnected,
-//     StaffForm.isUnifiConfigured, LocationIntegrations statuses) still hold;
+// as JSON, must carry their PRESENCE (several screens ask "is Glofox
+// configured?") but never their VALUE. Each non-empty one is replaced by
+// LOCATION_SECRET_MASK:
+//   * the key stays, so truthiness checks (StaffForm.isUnifiConfigured,
+//     LocationIntegrations statuses) still hold;
 //   * the mask starts with '••', which isFreshSecret()
 //     (src/lib/integration-secret-merge.js) rejects, so a mask echoed back to
 //     PUT /api/locations/[id]/integrations/[provider] keeps the stored value.
@@ -48,14 +48,40 @@ export const CLIENT_LOCATION_COLUMNS = Object.freeze([
   'created_at', 'updated_at', 'country', 'features', 'organization_id', 'is_host_anchor',
 ])
 
-// getCurrentUser()'s location select: the identity plus `settings`, which the
-// automations pages read for Glofox presence (glofoxConnected). `settings` is
-// passed through redactLocationSecrets after the read; the credential COLUMNS
-// are never loaded. A new column is off the user object until added here.
-export const USER_LOCATION_COLUMNS = [...CLIENT_LOCATION_COLUMNS, 'settings'].join(', ')
+// getCurrentUser()'s location select: exactly the client identity. It used
+// to add `settings` (masked) because the automations pages read Glofox
+// presence off the user object; they read it themselves now
+// (readGlofoxAutomationStatus, PROFILESPREAD.1), so every page stops
+// carrying the location's config, including the customer agent's test phone
+// numbers. A new column is off the user object until added to
+// CLIENT_LOCATION_COLUMNS (which is also mig 648's grant list).
+export const USER_LOCATION_COLUMNS = CLIENT_LOCATION_COLUMNS.join(', ')
+
+const USER_LOCATION_KEYS = new Set(CLIENT_LOCATION_COLUMNS)
 
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
 const present = (v) => (typeof v === 'string' ? v.trim() !== '' : v != null && v !== false)
+
+/**
+ * A locations row as the user object carries it: only CLIENT_LOCATION_COLUMNS.
+ * The select already names them; this is the second lock, so a widened select
+ * (or a raw row from anywhere) can never put settings or a credential on the
+ * object. Returns the same object when there is nothing to drop.
+ */
+export function toUserLocation(row) {
+  if (!isPlainObject(row)) return row
+  const keys = Object.keys(row)
+  if (keys.every((k) => USER_LOCATION_KEYS.has(k))) return row
+  const out = {}
+  for (const k of keys) if (USER_LOCATION_KEYS.has(k)) out[k] = row[k]
+  return out
+}
+
+/** profile_locations rows with an embedded `locations` row → the same, location picked. */
+export function toUserLinkedLocations(links) {
+  if (!Array.isArray(links)) return links
+  return links.map((l) => (isPlainObject(l) && isPlainObject(l.locations) ? { ...l, locations: toUserLocation(l.locations) } : l))
+}
 
 /**
  * @param {object|null|undefined} row  a `locations` row (any column subset)
