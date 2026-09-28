@@ -144,3 +144,48 @@ describe('send-push-reminders — the task arm when a read fails (CRONREADERR.1)
     )
   })
 })
+
+describe('send-push-reminders — the booking arm when a read fails (CRONREADERR.1)', () => {
+  it('a failed recipients read sends nothing this tick, writes no ledger row, and says so', async () => {
+    state.bookings = [booking('11:00')]
+    state.bookingLinks = { data: null, error: READ_ERR }
+    const body = await (await GET(req())).json()
+    expect(sendPush).not.toHaveBeenCalled()
+    expect(ledgerRows()).toHaveLength(0)
+    expect(body).toMatchObject({ ok: true, booking_recipients_read_failed: 1, booking_pushed: 0 })
+    expect(logError).toHaveBeenCalledWith(
+      'cron-push-reminders', 'booking recipients read failed; no booking reminder this tick (retried next tick)',
+      expect.objectContaining({ err: READ_ERR }),
+    )
+    expect(stampHeartbeat).toHaveBeenCalledWith('send-push-reminders')
+  })
+
+  it('a failed "already sent?" read with a later tick still to come HOLDS the booking reminder', async () => {
+    state.bookings = [booking('10:58')]
+    state.dedup = { data: null, error: READ_ERR }
+    const body = await (await GET(req())).json()
+    expect(sendPush).not.toHaveBeenCalled()
+    expect(ledgerRows()).toHaveLength(0)
+    expect(body).toMatchObject({ booking_candidates: 1, booking_dedup_unreadable: 1, booking_sent_unchecked: 0 })
+    expect(logError).toHaveBeenCalledWith(
+      'cron-push-reminders', 'booking dedup read failed; held for the next tick',
+      expect.objectContaining({ err: READ_ERR, b: 'bk-1', recipient: 'mgr-1', lead: 60 }),
+    )
+  })
+
+  it('on the LAST tick, a failed dedup read sends the booking reminder anyway', async () => {
+    state.bookings = [booking('10:47')]
+    state.dedup = { data: null, error: READ_ERR }
+    const body = await (await GET(req())).json()
+    expect(sendPush).toHaveBeenCalledWith(['mgr-1'], expect.objectContaining({ category: 'bookings' }))
+    expect(ledgerRows()).toHaveLength(1)
+    expect(body).toMatchObject({ booking_dedup_unreadable: 0, booking_sent_unchecked: 1, booking_pushed: 1 })
+  })
+
+  it('a clean booking tick sends once and reports the new counters as 0 (unchanged behaviour)', async () => {
+    state.bookings = [booking('11:00')]
+    const body = await (await GET(req())).json()
+    expect(sendPush).toHaveBeenCalledTimes(1)
+    expect(body).toMatchObject({ booking_pushed: 1, booking_recipients_read_failed: 0, booking_dedup_unreadable: 0, booking_sent_unchecked: 0 })
+  })
+})
