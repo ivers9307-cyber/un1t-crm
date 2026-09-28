@@ -253,7 +253,7 @@ const PHONE_SWAPS_SQL = `
     FROM public.shift_swap_requests s
    WHERE s.requester_id = $1`
 
-// fetchTodayOps / fetchUnstaffedBlocksThisWeek (server-only today; granted anyway).
+// fetchTodayOps (server-only today; granted anyway).
 const BLOCKS_WITH_ASSIGNMENTS_SQL = `
   SELECT b.id, b.location_id, b.block_date, b.roster_id,
          (SELECT json_agg(row_to_json(q.*)) FROM (SELECT a.profile_id, a.status FROM public.shift_assignments a WHERE a.block_id = b.id) q) AS shift_assignments
@@ -460,7 +460,7 @@ describe('after 646', () => {
       expect(rows[0].requester_shift.shift_blocks).toMatchObject({ block_date: '2026-10-05', shift_templates: { name: 'AM' } })
     })
 
-    it('the blocks-with-assignments shape (fetchTodayOps / fetchUnstaffedBlocksThisWeek)', async () => {
+    it('the blocks-with-assignments shape (fetchTodayOps)', async () => {
       const rows = await asUser(MANAGER, BLOCKS_WITH_ASSIGNMENTS_SQL)
       expect(rows).toHaveLength(1)
       expect(rows[0].shift_assignments).toHaveLength(2)

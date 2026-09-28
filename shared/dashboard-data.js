@@ -48,13 +48,6 @@ export function startOfWeek(d = new Date()) {
   return x
 }
 
-export function endOfWeek(d = new Date()) {
-  const x = startOfWeek(d)
-  x.setDate(x.getDate() + 6)
-  x.setHours(23, 59, 59, 999)
-  return x
-}
-
 export function startOfMonth(d = new Date()) {
   return new Date(d.getFullYear(), d.getMonth(), 1)
 }
@@ -290,53 +283,6 @@ export async function fetchPersonalDashboardData(supabase, profileId, locationId
       unreadInbox,
       assignedConversations: myConvos.data || [],
     },
-  }
-}
-
-// ============================================================
-// Unstaffed blocks — count of empty future shift_blocks across
-// the manager/owner's assigned locations this week. Surfaced as
-// an alert chip on the Today tab + the manager mobile home.
-// Only meaningful for managers, head_coaches, owners.
-//
-// Roster v2 phase 2. Empty blocks are demand windows (template
-// × date) with zero coach assignments — customers will be in the
-// studio either way, so leaving these unsurfaced is a hazard.
-// ============================================================
-
-export async function fetchUnstaffedBlocksThisWeek(supabase, locationIds) {
-  if (!locationIds || locationIds.length === 0) {
-    return { success: true, data: { count: 0, byLocation: {} } }
-  }
-
-  const todayIso = isoDate(new Date())
-  const endIso = isoDate(endOfWeek())
-
-  // Pull blocks for the visible window, then filter to those with
-  // zero assignments. Cheaper than aggregating in SQL given the
-  // small row count (a typical week has ~50 blocks at one location).
-  // ROSTER-FIX.1 — the embed pulls the assignment ROWS, not `(count)`. A
-  // PostgREST aggregate embed cannot be status-filtered, so a block whose only
-  // assignment was cancelled counted as staffed and the alert stayed silent on
-  // exactly the blocks that need a coach.
-  const { data, error } = await supabase
-    .from('shift_blocks')
-    .select('id, location_id, block_date, shift_assignments(profile_id, status)')
-    .in('location_id', locationIds)
-    .gte('block_date', todayIso)
-    .lte('block_date', endIso)
-
-  if (error) return { success: false, error: error.message }
-
-  const empty = (data || []).filter(b => (b.shift_assignments || []).filter(isLiveRow).length === 0)
-  const byLocation = {}
-  for (const b of empty) {
-    byLocation[b.location_id] = (byLocation[b.location_id] || 0) + 1
-  }
-
-  return {
-    success: true,
-    data: { count: empty.length, byLocation },
   }
 }
 

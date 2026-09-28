@@ -1,8 +1,7 @@
 // C1 RECIPIENTS.1 — resolveRoleRecipientIds turned a FAILED "who holds these
 // roles here" read into [], which every caller read as "nobody to tell". Every
-// caller moved to readRoleRecipientIds ({ ids, error }). The old helper stays
-// in src/lib/push.js for ONE deploy (@deprecated), and D1 DEADCODE.1 deletes
-// it with its one contract test; then shrink ALLOWED to this file alone.
+// caller moved to readRoleRecipientIds ({ ids, error }), and D1 DEADCODE.1
+// deleted the old helper and its contract test. Nothing may name it again.
 //
 // resolveLocationMemberIds had the same shape (error discarded, [] on a failed
 // read) and was replaced outright by readLocationMemberIds in the same PR; it
@@ -55,13 +54,8 @@ function namers(name, allowed) {
 }
 
 describe('the swallowed-error recipient readers have no callers (C1 RECIPIENTS.1)', () => {
-  it('nothing outside its own definition and test names resolveRoleRecipientIds', () => {
-    const allowed = new Set([
-      'src/lib/push.js', // the @deprecated definition, until D1 DEADCODE.1
-      'src/lib/push.test.js', // its old-contract test, deleted with it
-      SELF,
-    ])
-    expect(namers('resolveRoleRecipientIds', allowed)).toEqual([])
+  it('nothing names resolveRoleRecipientIds (deleted by D1 DEADCODE.1)', () => {
+    expect(namers('resolveRoleRecipientIds', new Set([SELF]))).toEqual([])
   }, SCAN_TIMEOUT_MS)
 
   it('nothing names resolveLocationMemberIds (replaced by readLocationMemberIds)', () => {

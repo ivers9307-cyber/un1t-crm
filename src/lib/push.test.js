@@ -104,7 +104,7 @@ beforeEach(() => {
   })
 })
 
-import { sendPush, resolvePushAllowedIds, resolveRoleRecipientIds, readRoleRecipientIds } from './push.js'
+import { sendPush, resolvePushAllowedIds, readRoleRecipientIds } from './push.js'
 
 describe('sendPush — ANDROID-VIS.1 token-less device rows (mig 565)', () => {
   it('never sends to a device row whose expo_push_token is NULL', async () => {
@@ -568,9 +568,5 @@ describe('readRoleRecipientIds — the same answer, with the read error', () => 
   it('no studio or no roles is an empty answer, not an error', async () => {
     expect(await readRoleRecipientIds(working, null, ['manager'])).toEqual({ ids: [], error: null })
     expect(await readRoleRecipientIds(working, 'loc1', [])).toEqual({ ids: [], error: null })
-  })
-  it('resolveRoleRecipientIds keeps its old contract: ids only, [] on a failed read', async () => {
-    expect(await resolveRoleRecipientIds(working, 'loc1', ['manager'])).toEqual(['m1'])
-    expect(await resolveRoleRecipientIds(failing, 'loc1', ['manager'])).toEqual([])
   })
 })
