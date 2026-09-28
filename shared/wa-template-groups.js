@@ -4,10 +4,10 @@
 
 export const UNGROUPED_LABEL = 'Ungrouped'
 
-// Body preview text — web rows carry Meta `components`, the mobile select
-// reads the denormalised `body_text` column. Accept either shape.
+// Body preview text, from the row's Meta `components` BODY entry. There is no
+// `body_text` column: the phone once selected one, and PostgREST refused the
+// whole read on every call from 2026-04-30 until WATPLPICKER.1.
 export function templateBodyText(t) {
-  if (typeof t?.body_text === 'string' && t.body_text) return t.body_text
   const body = Array.isArray(t?.components) ? t.components.find(c => c?.type === 'BODY') : null
   return typeof body?.text === 'string' ? body.text : ''
 }
