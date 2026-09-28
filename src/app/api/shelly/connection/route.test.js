@@ -52,6 +52,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { probeConnection, findFingerprintRows } from '@/lib/shelly/connections'
 import { fingerprintAuthKey } from '@/lib/shelly/client'
+import { SECRET_MASK } from '@/lib/secret-keys'
 
 const LOC_A = 'a0000000-0000-0000-0000-000000000001'
 const LOC_B = 'b0000000-0000-0000-0000-000000000002'
@@ -110,7 +111,6 @@ function makeDb(cfg = {}) {
       const p = st.payload
       const data = conf.upsertRow !== undefined ? conf.upsertRow : {
         host: p.host,
-        key_hint: p.key_hint,
         status: p.status,
         last_ok_at: p.last_ok_at,
         last_error: p.last_error,
@@ -212,7 +212,6 @@ describe('GET /api/shelly/connection', () => {
     expect(body.device_count).toBe(4)
     expect(body.connection).toEqual({
       host: HOST,
-      key_hint: '6789',
       has_auth_key: true,
       status: 'connected',
       last_ok_at: '2026-08-22T10:00:00.000Z',
@@ -222,6 +221,9 @@ describe('GET /api/shelly/connection', () => {
     // The fixture row carried both secrets; the response carries neither.
     expect(JSON.stringify(body)).not.toContain(STORED_KEY)
     expect(JSON.stringify(body)).not.toContain(fingerprintAuthKey(STORED_KEY))
+    // SECRETTAILS.1 — the stored row still carries a hint (as before mig 659); none of it leaves.
+    expect(JSON.stringify(body)).not.toContain('6789')
+    expect(JSON.stringify(body)).not.toContain('key_hint')
   })
 
   it('scopes both reads to the session location and never asks for auth_key', async () => {
@@ -316,7 +318,7 @@ describe('PUT /api/shelly/connection — host + key handling', () => {
     const { payload } = db.calls.upserts[0]
     expect(payload.auth_key).toBe(STORED_KEY)
     expect(payload.auth_key_fingerprint).toBe(fingerprintAuthKey(STORED_KEY))
-    expect(payload.key_hint).toBe(STORED_KEY.slice(-4))
+    expect(payload).not.toHaveProperty('key_hint')
     // The host DID change — that is the whole point of a key-less re-paste.
     expect(payload.host).toBe('shelly-99-eu.shelly.cloud')
     expect(probeConnection).toHaveBeenCalledWith({ host: 'shelly-99-eu.shelly.cloud', auth_key: STORED_KEY })
@@ -336,12 +338,14 @@ describe('PUT /api/shelly/connection — host + key handling', () => {
 
   it('the MASKED ECHO the UI renders is kept, never stored as the key', async () => {
     // isFreshSecret rejects anything starting with the bullet run, so a form
-    // that posts its own placeholder back cannot overwrite the credential
-    // with "••••6789" — which would be unrecoverable without the real key.
-    useDb({ connectionRow: storedRow() })
-    await PUT(putReq({ server: HOST, auth_key: '••••6789' }))
-    expect(db.calls.upserts[0].payload.auth_key).toBe(STORED_KEY)
-    expect(db.calls.upserts[0].payload.key_hint).toBe(STORED_KEY.slice(-4))
+    // that posts a placeholder back cannot overwrite the credential. Both the
+    // old hint-shaped echo and today's SECRET_MASK are kept, never stored.
+    for (const echo of ['••••6789', SECRET_MASK]) {
+      useDb({ connectionRow: storedRow() })
+      await PUT(putReq({ server: HOST, auth_key: echo }))
+      expect(db.calls.upserts[0].payload.auth_key).toBe(STORED_KEY)
+      expect(db.calls.upserts[0].payload).not.toHaveProperty('key_hint')
+    }
   })
 
   it('first connect — no stored row and no key asks for the key, it does not 500', async () => {
@@ -547,10 +551,12 @@ describe('PUT /api/shelly/connection — the write', () => {
     expect(json).not.toContain(fingerprintAuthKey(FRESH_KEY))
     expect(json).not.toContain('auth_key_fingerprint')
     expect(Object.keys(body.connection).sort()).toEqual([
-      'has_auth_key', 'host', 'key_hint', 'last_error', 'last_error_at', 'last_ok_at', 'status',
+      'has_auth_key', 'host', 'last_error', 'last_error_at', 'last_ok_at', 'status',
     ])
-    // ...but the hint IS there, so the panel can render "••••dcba".
-    expect(body.connection.key_hint).toBe(FRESH_KEY.slice(-4))
+    // SECRETTAILS.1 — presence, never a character of the key it just wrote.
+    expect(body.connection.has_auth_key).toBe(true)
+    expect(json).not.toContain(FRESH_KEY.slice(-4))
+    expect(json).not.toContain('key_hint')
   })
 
   it('maps a CHECK violation (23514) to readable copy, never the pg message', async () => {
@@ -602,7 +608,8 @@ describe('PUT /api/shelly/connection — the write', () => {
 
     // Never '*': a column added to the table later must not start appearing
     // in a response because nobody remembered to subtract it.
-    expect(db.calls.upserts[0].cols).toBe('host, key_hint, status, last_ok_at, last_error, last_error_at')
+    expect(db.calls.upserts[0].cols).toBe('host, status, last_ok_at, last_error, last_error_at')
+    expect(db.calls.upserts[0].cols).not.toContain('key_hint')
     expect(db.calls.upserts[0].cols).not.toContain('*')
     expect(db.calls.upserts[0].cols).not.toContain('auth_key')
   })

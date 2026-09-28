@@ -71,11 +71,14 @@ describe('classifyFingerprintClash', () => {
 })
 
 describe('publicConnectionView', () => {
-  it('never includes the key or fingerprint', () => {
+  it('never includes the key, the fingerprint or any character of the key (SECRETTAILS.1)', () => {
     const v = publicConnectionView({ id: 'c1', host: 'shelly-1-eu.shelly.cloud', auth_key: 'SECRET', auth_key_fingerprint: 'f'.repeat(64), key_hint: 'CRET', status: 'connected', last_ok_at: 'T', last_error: null, last_error_at: null })
-    expect(v).toEqual({ host: 'shelly-1-eu.shelly.cloud', key_hint: 'CRET', has_auth_key: true, status: 'connected', last_ok_at: 'T', last_error: null, last_error_at: null })
-    expect(JSON.stringify(v)).not.toContain('SECRET')
-    expect(JSON.stringify(v)).not.toContain('f'.repeat(64))
+    expect(v).toEqual({ host: 'shelly-1-eu.shelly.cloud', has_auth_key: true, status: 'connected', last_ok_at: 'T', last_error: null, last_error_at: null })
+    const json = JSON.stringify(v)
+    expect(json).not.toContain('SECRET')
+    expect(json).not.toContain('CRET')
+    expect(json).not.toContain('key_hint')
+    expect(json).not.toContain('f'.repeat(64))
   })
 
   // An allowlist, not a filter: a column added to the table later must not
@@ -86,19 +89,22 @@ describe('publicConnectionView', () => {
       auth_key: 'SECRET', auth_key_fingerprint: 'f'.repeat(64), linked_by: 'user-1',
       id: 'c1', location_id: 'loc-1', created_at: 'T', updated_at: 'T', some_future_secret: 'nope',
     })
-    expect(Object.keys(v).sort()).toEqual(['has_auth_key', 'host', 'key_hint', 'last_error', 'last_error_at', 'last_ok_at', 'status'])
+    expect(Object.keys(v).sort()).toEqual(['has_auth_key', 'host', 'last_error', 'last_error_at', 'last_ok_at', 'status'])
     expect(JSON.stringify(v)).not.toContain('nope')
     expect(JSON.stringify(v)).not.toContain('user-1')
   })
 
-  it('has_auth_key follows the hint rather than claiming true for a partial row', () => {
+  it('has_auth_key follows the stored row: a row cannot exist without a key (mig 562)', () => {
+    expect(publicConnectionView(null).has_auth_key).toBe(false)
     expect(publicConnectionView({}).has_auth_key).toBe(false)
-    expect(publicConnectionView({ key_hint: '' }).has_auth_key).toBe(false)
-    expect(publicConnectionView({ key_hint: 'CRET' }).has_auth_key).toBe(true)
+    expect(publicConnectionView({ host: '' }).has_auth_key).toBe(false)
+    expect(publicConnectionView({ host: 'shelly-1-eu.shelly.cloud' }).has_auth_key).toBe(true)
+    // A row cleared by mig 659 (key_hint NULL) is still a row with a key.
+    expect(publicConnectionView({ host: 'shelly-1-eu.shelly.cloud', key_hint: null }).has_auth_key).toBe(true)
   })
 
   it('a partial row yields nulls, never missing keys', () => {
-    expect(publicConnectionView({})).toEqual({ host: null, key_hint: null, has_auth_key: false, status: null, last_ok_at: null, last_error: null, last_error_at: null })
+    expect(publicConnectionView({})).toEqual({ host: null, has_auth_key: false, status: null, last_ok_at: null, last_error: null, last_error_at: null })
   })
 })
 
@@ -212,11 +218,11 @@ describe('db loaders', () => {
     const db = (data, error) => ({ from: (t) => ({ select: (cols) => ({ eq: (c, v) => { calls.push({ t, cols, c, v }); return { maybeSingle: async () => ({ data, error }) } } }) }) })
     const stored = { id: 'c1', location_id: 'loc-1', host: 'shelly-1-eu.shelly.cloud', key_hint: 'CRET', status: 'connected', last_ok_at: 'T', last_error: null, last_error_at: null, linked_by: 'user-1' }
     const res = await loadPublicConnection(db(stored, null), 'loc-1')
-    expect(res).toEqual({ ok: true, connection: { host: 'shelly-1-eu.shelly.cloud', key_hint: 'CRET', has_auth_key: true, status: 'connected', last_ok_at: 'T', last_error: null, last_error_at: null } })
+    expect(res).toEqual({ ok: true, connection: { host: 'shelly-1-eu.shelly.cloud', has_auth_key: true, status: 'connected', last_ok_at: 'T', last_error: null, last_error_at: null } })
     expect(calls[0]).toMatchObject({ t: 'shelly_connections', c: 'location_id', v: 'loc-1' })
     // The select and the view are ONE allowlist: exactly the columns
     // publicConnectionView projects, so nothing is fetched to be discarded.
-    expect(calls[0].cols.split(',').map((s) => s.trim()).sort()).toEqual(['host', 'key_hint', 'last_error', 'last_error_at', 'last_ok_at', 'status'])
+    expect(calls[0].cols.split(',').map((s) => s.trim()).sort()).toEqual(['host', 'last_error', 'last_error_at', 'last_ok_at', 'status'])
     expect(await loadPublicConnection(db(null, null), 'loc-1')).toEqual({ ok: false, reason: 'not_connected' })
     expect(await loadPublicConnection(db(null, { message: 'boom' }), 'loc-1')).toEqual({ ok: false, reason: 'db_error', error: 'boom' })
   })
