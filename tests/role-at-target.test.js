@@ -55,11 +55,11 @@ const rel = (file) => path.relative(API, file).split(path.sep).join('/')
 // right one to judge (or why the location use is not a different studio).
 export const REVIEWED = {
   'agent/membership-requests/route.js':
-    'The MANAGER_ROLES gate (:54) guards only the no-param branch, which reads user.activeLocation.id (:57). getUserLocationIds belongs to the ?conversation_id branch above it, which has no role gate (a membership-scoped read).',
+    'The MANAGER_ROLES gate guards only the no-param branch, which reads user.activeLocation.id. getUserLocationIds belongs to the ?conversation_id branch above it, which has no role gate (a membership-scoped read).',
   'dashboard/business/route.js':
-    'Reads only user.activeLocation.id (:67); the assertLocationAccess at :71 is on that same active id held in a variable, so the "another location" sign is a false positive.',
+    'Reads only user.activeLocation.id; its assertLocationAccess is on that same active id held in a variable, so the "another location" sign is a false positive.',
   'settings/scoring/route.js':
-    'PUT gates MANAGER_ROLES and writes user.activeLocation.id (:90); the assertLocationAccess at :93 is on that same active id held in a variable (GET is ungated).',
+    'PUT gates MANAGER_ROLES and writes user.activeLocation.id; its assertLocationAccess is on that same active id held in a variable (GET is ungated).',
 }
 
 // Pre-check-only matches whose decision at the target lives in a helper
