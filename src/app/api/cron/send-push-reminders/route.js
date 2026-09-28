@@ -48,7 +48,7 @@ import { createServerClient } from '@/lib/supabase'
 import { sendPush } from '@/lib/push'
 import { logInfo, logWarn, logError } from '@/lib/log'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
-import { localToUtc, formatLocalTime } from '@/lib/push-reminders'
+import { localToUtc, formatLocalTime, isLastFireTick } from '@/lib/push-reminders'
 import { getEffectiveConfig, getEffectiveLeadTimesForUser } from '@/lib/notification-config'
 import { selectAll } from '@/lib/select-all'
 import { runShiftReminders } from '@/lib/shift-reminders'
@@ -66,6 +66,7 @@ export const dynamic = 'force-dynamic'
 
 const WINDOW_MIN = 5       // fire up to 5 min EARLY (matches the cron tick)
 const LATE_WINDOW_MIN = 15 // fire up to 15 min LATE — catch-up runway for missed cron ticks
+const TICK_MIN = 5         // vercel.json */5 — isLastFireTick's cadence (pinned by route.read-errors.test.js)
 
 // True when `minutesAway` (minutes until the entity is due) is inside
 // the asymmetric fire window for `lead`: [lead - LATE_WINDOW_MIN,
@@ -129,10 +130,16 @@ export async function GET(request) {
     task_skipped_dup: 0,
     task_skipped_no_recipient: 0,
     task_send_failed: 0,
+    task_perms_read_failed: 0, // 1 = assignees' lead-time overrides unreadable; studio lead times used (CRONREADERR.1)
+    task_dedup_unreadable: 0, // "already sent?" unreadable, a later tick can still fire it: held, not sent
+    task_sent_unchecked: 0, // "already sent?" unreadable on the LAST tick that can fire it: sent anyway
     booking_candidates: 0,
     booking_pushed: 0,
     booking_skipped_dup: 0,
     booking_send_failed: 0,
+    booking_recipients_read_failed: 0, // 1 = who-to-tell unreadable: no booking reminder this tick, retried next tick (CRONREADERR.1)
+    booking_dedup_unreadable: 0, // as task_dedup_unreadable
+    booking_sent_unchecked: 0, // as task_sent_unchecked
     shift_arm_failed: 0, // 1 = the shift arm THREW this tick (see the SHIFTS block)
     time_change_arm_failed: 0, // 1 = the time-change arm THREW this tick (BLOCKEDIT.1)
     replace_arm_failed: 0, // 1 = the held replace-notice arm threw or reported a fault of its own (errors or stamp_failed; REPLACE.1a, REPLACENITS.1)
@@ -177,11 +184,22 @@ export async function GET(request) {
       // task's location_id determines which row to read for that user.
       const assigneeIds = [...new Set(tasks.map(t => t.assignee_id))]
       const locationIds = [...new Set(tasks.map(t => t.location_id))]
-      const { data: pls } = await db
+      const { data: pls, error: plsErr } = await db
         .from('profile_locations')
         .select('profile_id, location_id, permissions')
         .in('profile_id', assigneeIds)
         .in('location_id', locationIds)
+      if (plsErr) {
+        // CRONREADERR.1 — a failed read is not "no overrides". Proceed on the
+        // studio's lead times (main's behaviour, and exactly right for everyone
+        // today: 0 personal overrides on prod, 28 Sep 2026) rather than skip,
+        // which could lose a reminder whose window closes. Worst case later:
+        // someone with a personal lead time gets an EXTRA push at the studio's
+        // lead time, not a substitute. The ledger keys on the lead time, so
+        // their personal-lead reminder still fires on a tick that reads.
+        summary.task_perms_read_failed = 1
+        logError('cron-push-reminders', 'task permissions read failed; using studio lead times', { err: plsErr })
+      }
       // Map keyed by `${profileId}|${locationId}` for O(1) lookup.
       const mobilePermsByPair = new Map(
         (pls || []).map(pl => [`${pl.profile_id}|${pl.location_id}`, pl.permissions?.mobile || {}])
@@ -210,7 +228,7 @@ export async function GET(request) {
           summary.task_candidates++
 
           // Per-(task, assignee, lead) dedup.
-          const { data: existing } = await db
+          const { data: existing, error: dedupErr } = await db
             .from('push_reminder_sends')
             .select('id')
             .eq('entity_type', 'task')
@@ -219,6 +237,20 @@ export async function GET(request) {
             .eq('lead_time_minutes', lead)
             .maybeSingle()
           if (existing) { summary.task_skipped_dup++; continue }
+          // CRONREADERR.1 — a failed read is not "not sent yet". While a later
+          // tick can still fire this pair, hold it (no duplicate, no loss); on
+          // the last tick that can, send unchecked (a possible duplicate beats
+          // a certain loss). The ledger's unique index then says which it was.
+          let unchecked = false
+          if (dedupErr) {
+            if (!isLastFireTick(minutesAway, lead, { lateWindowMin: LATE_WINDOW_MIN, tickMin: TICK_MIN })) {
+              summary.task_dedup_unreadable++
+              logError('cron-push-reminders', 'task dedup read failed; held for the next tick', { err: dedupErr, t: t.id, lead })
+              continue
+            }
+            unchecked = true
+            logError('cron-push-reminders', 'task dedup read failed on the last tick; sending unchecked', { err: dedupErr, t: t.id, lead })
+          }
 
           const label = leadLabel(lead)
           const result = await sendPush([t.assignee_id], {
@@ -240,6 +272,7 @@ export async function GET(request) {
             logWarn('cron-push-reminders', 'task push send failed — ledger skipped for retry', { t: t.id, lead })
             continue
           }
+          if (unchecked) summary.task_sent_unchecked++
 
           const { error: ledgerErr } = await db.from('push_reminder_sends').insert({
             entity_type: 'task',
@@ -251,6 +284,9 @@ export async function GET(request) {
           })
           if (ledgerErr && ledgerErr.code !== '23505') {
             logWarn('cron-push-reminders', 'task ledger insert failed', { err: ledgerErr, t: t.id })
+          }
+          if (unchecked && ledgerErr?.code === '23505') {
+            logWarn('cron-push-reminders', 'unchecked task reminder was a duplicate', { t: t.id, lead })
           }
 
           if (result.sent > 0) summary.task_pushed++
@@ -298,10 +334,19 @@ export async function GET(request) {
       // (notify_roles, active) filtering still happens per-booking
       // but we avoid N round-trips by pulling them all up front.
       const bookingLocIds = [...new Set(bookings.map(b => b.location_id).filter(Boolean))]
-      const { data: locLinks } = await db
+      const { data: locLinks, error: linksErr } = await db
         .from('profile_locations')
         .select('profile_id, location_id, permissions, profiles!inner(id, role, active)')
         .in('location_id', bookingLocIds)
+      if (linksErr) {
+        // CRONREADERR.1 — a failed read is not "nobody to tell". Nobody can be
+        // told without knowing who, and nothing reaches the ledger, so the next
+        // */5 tick retries inside the 20-minute fire window (main already
+        // skipped here, silently). Lost only if this read fails on every tick
+        // until the window closes.
+        summary.booking_recipients_read_failed = 1
+        logError('cron-push-reminders', 'booking recipients read failed; no booking reminder this tick (retried next tick)', { err: linksErr })
+      }
       const recipientsByLocation = new Map() // location_id -> [{ profile_id, role, perms }]
       for (const link of locLinks || []) {
         if (!link.profiles?.active) continue
@@ -347,7 +392,7 @@ export async function GET(request) {
             summary.booking_candidates++
 
             // Dedup per (booking, recipient, lead).
-            const { data: existing } = await db
+            const { data: existing, error: dedupErr } = await db
               .from('push_reminder_sends')
               .select('id')
               .eq('entity_type', 'booking')
@@ -356,6 +401,18 @@ export async function GET(request) {
               .eq('lead_time_minutes', lead)
               .maybeSingle()
             if (existing) { summary.booking_skipped_dup++; continue }
+            // CRONREADERR.1 — same rule as the task arm: hold while a later
+            // tick can still fire it, send unchecked only on the last chance.
+            let unchecked = false
+            if (dedupErr) {
+              if (!isLastFireTick(minutesAway, lead, { lateWindowMin: LATE_WINDOW_MIN, tickMin: TICK_MIN })) {
+                summary.booking_dedup_unreadable++
+                logError('cron-push-reminders', 'booking dedup read failed; held for the next tick', { err: dedupErr, b: b.id, recipient: recipient.profile_id, lead })
+                continue
+              }
+              unchecked = true
+              logError('cron-push-reminders', 'booking dedup read failed on the last tick; sending unchecked', { err: dedupErr, b: b.id, recipient: recipient.profile_id, lead })
+            }
 
             const label = leadLabel(lead)
             const result = await sendPush([recipient.profile_id], {
@@ -375,6 +432,7 @@ export async function GET(request) {
               logWarn('cron-push-reminders', 'booking push send failed — ledger skipped for retry', { b: b.id, lead })
               continue
             }
+            if (unchecked) summary.booking_sent_unchecked++
 
             const { error: ledgerErr } = await db.from('push_reminder_sends').insert({
               entity_type: 'booking',
@@ -386,6 +444,9 @@ export async function GET(request) {
             })
             if (ledgerErr && ledgerErr.code !== '23505') {
               logWarn('cron-push-reminders', 'booking ledger insert failed', { err: ledgerErr, b: b.id })
+            }
+            if (unchecked && ledgerErr?.code === '23505') {
+              logWarn('cron-push-reminders', 'unchecked booking reminder was a duplicate', { b: b.id, recipient: recipient.profile_id, lead })
             }
 
             if (result.sent > 0) summary.booking_pushed++

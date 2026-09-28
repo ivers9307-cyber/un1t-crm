@@ -323,7 +323,7 @@ describe('isTrainerLookupTick', () => {
     }
     expect(perDay.size).toBe(365)
     expect([...perDay.values()].every((n) => n === 1)).toBe(true)
-  }, 20_000) // 35,040 Intl formats; dublinTimeLabel builds a formatter per call
+  })
 })
 
 describe('readSpineTrainerNames (the names the spine already holds)', () => {

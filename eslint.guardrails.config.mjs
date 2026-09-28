@@ -333,6 +333,16 @@ const config = [
       // a stamp that silently fails re-reads the same contacts every tick
       // (the ~288k-calls-a-day loop this PR removed). Armed clean.
       'src/app/api/cron/glofox-detail-backfill/route.js',
+      // CRONREADERR.1 — the crons whose failed reads used to pass for a quiet
+      // run, plus the class-sync lib and the push-reminder cron (clean on main).
+      // Measured: 5 findings in the first three on main (ad-insights ×2,
+      // class-bookings ×2, contact-imports ×1), 0 after.
+      'src/app/api/cron/ad-insights-sync/route.js',
+      'src/app/api/cron/process-contact-imports/route.js',
+      'src/app/api/cron/process-class-bookings/route.js',
+      'src/app/api/cron/sync-class-occurrences/route.js',
+      'src/app/api/cron/send-push-reminders/route.js',
+      'src/lib/class-occurrences.js',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },
