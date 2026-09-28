@@ -24,7 +24,10 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission, hasMobilePermission } from '@/lib/permissions'
+import {
+  hasPermissionAtAnyLocation, hasPermissionForLocation,
+  hasMobilePermissionAtAnyLocation, hasMobilePermissionForLocation,
+} from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { sendTextMessage, sendTemplateMessage, isWindowOpen, headerComponentFor } from '@/lib/whatsapp'
 import {
@@ -59,7 +62,8 @@ export async function POST(request, props) {
   }
   // Web sidebar `whatsapp` OR the `.mobile.whatsapp` toggle — the
   // composer ships on both the web contact profile and the iOS app.
-  if (!hasPermission(user, 'whatsapp') && !hasMobilePermission(user, 'whatsapp')) {
+  // ROLESWEEP.1c — coarse pre-check; judged at the contact's location below.
+  if (!hasPermissionAtAnyLocation(user, 'whatsapp') && !hasMobilePermissionAtAnyLocation(user, 'whatsapp')) {
     return NextResponse.json({ success: false, error: 'Forbidden — WhatsApp not enabled at this location for your role' }, { status: 403 })
   }
 
@@ -82,6 +86,10 @@ export async function POST(request, props) {
   // IDOR guard — caller must be assigned to the contact's location.
   const guard = assertLocationAccessOr404(user, contact.location_id)
   if (guard) return guard
+  // ROLESWEEP.1c — web OR mobile `whatsapp` judged at the contact's location.
+  if (!hasPermissionForLocation(user, contact.location_id, 'whatsapp') && !hasMobilePermissionForLocation(user, contact.location_id, 'whatsapp')) {
+    return NextResponse.json({ success: false, error: 'Forbidden — WhatsApp not enabled at this location for your role' }, { status: 403 })
+  }
 
   // CANCEL-FORM.4 — get-or-create moved to lib/whatsapp-conversations so the
   // cancellation-form send opens the same thread this composer does.

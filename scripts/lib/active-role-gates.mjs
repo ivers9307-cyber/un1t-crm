@@ -65,6 +65,7 @@ export const OTHER_LOCATION_PATTERNS = Object.freeze([
 export const ANY_LOCATION_PRECHECK_PATTERNS = Object.freeze([
   /\bhasRoleAtAnyLocation\(/g,
   /\bhasPermissionAtAnyLocation\(/g,
+  /\bhasMobilePermissionAtAnyLocation\(/g, // ROLESWEEP.1c — the mobile twin
 ])
 
 // The decision at the target location. A call in the same file counts, so a
@@ -75,6 +76,7 @@ export const TARGET_JUDGEMENT_PATTERNS = Object.freeze([
   /\bhasRoleAtLocation\(/g,
   /\bhasPermissionForLocation\(/g,
   /\bguardMasterOrOwner\(/g,
+  /\bhasMobilePermissionForLocation\(/g, // ROLESWEEP.1c — the mobile twin
 ])
 
 const hits = (code, patterns) => patterns.flatMap((re) => [...code.matchAll(re)].map((m) => m[0]))

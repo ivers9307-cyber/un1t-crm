@@ -27,7 +27,10 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission, hasMobilePermission } from '@/lib/permissions'
+import {
+  hasPermissionAtAnyLocation, hasPermissionForLocation,
+  hasMobilePermissionAtAnyLocation, hasMobilePermissionForLocation,
+} from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { sendLocationSms, TwilioError } from '@/lib/twilio'
 import { applyMergeTags } from '@/lib/postmark'
@@ -51,7 +54,8 @@ export async function POST(request, props) {
   // Web `sms` permission OR the mobile `sms` permission (MOBILE-CONTACT-
   // SEND.1) — the mobile contact card sends through this same route so the
   // text comes from the company Twilio sender, not the staffer's phone.
-  if (!hasPermission(user, 'sms') && !hasMobilePermission(user, 'sms')) {
+  // ROLESWEEP.1c — coarse pre-check; judged at the contact's location below.
+  if (!hasPermissionAtAnyLocation(user, 'sms') && !hasMobilePermissionAtAnyLocation(user, 'sms')) {
     return NextResponse.json({ success: false, error: 'Forbidden — SMS not enabled at this location for your role' }, { status: 403 })
   }
 
@@ -78,6 +82,10 @@ export async function POST(request, props) {
   // IDOR guard — caller must be assigned to the contact's location.
   const guard = assertLocationAccessOr404(user, contact.location_id)
   if (guard) return guard
+  // ROLESWEEP.1c — web OR mobile `sms` judged at the contact's location.
+  if (!hasPermissionForLocation(user, contact.location_id, 'sms') && !hasMobilePermissionForLocation(user, contact.location_id, 'sms')) {
+    return NextResponse.json({ success: false, error: 'Forbidden — SMS not enabled at this location for your role' }, { status: 403 })
+  }
 
   // INTEG-A2 dual-read: registry twilio_sender row first.
   if (contact.locations) {

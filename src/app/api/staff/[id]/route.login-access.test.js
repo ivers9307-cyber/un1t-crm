@@ -8,7 +8,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
-vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn() }))
+// ROLESWEEP.1c — the REAL per-location role helpers (pure: role-at-location).
+vi.mock('@/lib/auth', async () => ({ ...(await vi.importActual('@/lib/role-at-location')), getCurrentUser: vi.fn() }))
 vi.mock('@/lib/unifi-access', () => ({
   getUnifiConfig: vi.fn(async () => ({ configured: false })),
   revokeUnifiUserPolicies: vi.fn(),

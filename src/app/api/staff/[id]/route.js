@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, hasRoleAtAnyLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import {
   employmentTypeSchema, money, hours, days, permissionsSchema,
@@ -75,7 +75,9 @@ export async function PUT(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!user.isMaster && user.role !== 'owner') {
+  // ROLESWEEP.1c — coarse pre-check (owner SOMEWHERE); canEditStaffMember and
+  // assertOwnerAssignmentScope below judge ownership at the target's locations.
+  if (!user.isMaster && !hasRoleAtAnyLocation(user, ['owner'])) {
     return NextResponse.json({
       success: false,
       error: 'Forbidden — must be an owner at this location (or a master) to edit staff',
@@ -460,7 +462,9 @@ export async function DELETE(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!user.isMaster && user.role !== 'owner') {
+  // ROLESWEEP.1c — coarse pre-check (owner SOMEWHERE); the owner-overlap check
+  // and canEditStaffMember below judge ownership at the target's locations.
+  if (!user.isMaster && !hasRoleAtAnyLocation(user, ['owner'])) {
     return NextResponse.json({
       success: false,
       error: 'Forbidden — must be an owner at this location (or a master) to deactivate staff',

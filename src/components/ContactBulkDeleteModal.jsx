@@ -29,6 +29,9 @@ export default function ContactBulkDeleteModal({ contacts, onClose, onDeleted })
   const [error, setError] = useState(null)
 
   const ids = contacts.map(c => c.id)
+  const forbiddenRows = result?.forbidden || []
+  const roleRows = forbiddenRows.filter(r => r.reason === 'Role')
+  const wrongLocationRows = forbiddenRows.filter(r => r.reason !== 'Role')
   const canSubmit = confirm.trim().toUpperCase() === CONFIRM_WORD && !submitting
 
   async function fire() {
@@ -163,11 +166,23 @@ export default function ContactBulkDeleteModal({ contacts, onClose, onDeleted })
                 tone="amber"
               />
             )}
-            {result.forbidden?.length > 0 && (
+            {/* ROLESWEEP.1c — the route judges MANAGER_ROLES at each row's own
+                location, so a row can be skipped for the caller's ROLE there
+                (reason 'Role'). Switching studio does not change that, so a
+                Role skip gets its own group without the switch advice. */}
+            {wrongLocationRows.length > 0 && (
               <Section
-                title={`Skipped — wrong location (${result.forbidden.length})`}
+                title={`Skipped — wrong location (${wrongLocationRows.length})`}
                 hint="These belong to a different studio. Switch active location to delete them."
-                rows={result.forbidden}
+                rows={wrongLocationRows}
+                tone="red"
+              />
+            )}
+            {roleRows.length > 0 && (
+              <Section
+                title={`Skipped: your role at their studio (${roleRows.length})`}
+                hint="Your role at the contact's studio does not allow deleting contacts. A manager or owner there can delete them."
+                rows={roleRows.map(r => ({ ...r, reason: 'Role does not allow delete' }))}
                 tone="red"
               />
             )}

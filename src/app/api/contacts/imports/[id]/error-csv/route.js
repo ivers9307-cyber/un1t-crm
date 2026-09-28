@@ -5,7 +5,7 @@
 // operator can fix the rows and re-upload only the failures.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES } from '@/lib/schemas'
 
@@ -23,7 +23,8 @@ export async function GET(_request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!MANAGER_ROLES.includes(user.role)) {
+  // ROLESWEEP.1c — coarse pre-check; the role is judged at the batch's location below.
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   }
 
@@ -37,6 +38,10 @@ export async function GET(_request, props) {
 
   const guard = assertLocationAccessOr404(user, batch.location_id)
   if (guard) return guard
+  // ROLESWEEP.1c — MANAGER_ROLES at the batch's location.
+  if (!hasRoleAtLocation(user, batch.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
+  }
 
   const { data: failedRows } = await db
     .from('contact_import_rows')
