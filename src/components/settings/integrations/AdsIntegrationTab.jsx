@@ -12,8 +12,9 @@
 //       (endpoint lands in a later task; a 404/400 here is expected
 //       and just surfaces as an error string, not a crash)
 //
-// Tokens are never echoed in plain: the GET response has them masked
-// (`••••••••ttok`) plus a `has_access_token` boolean. We only send a
+// Tokens are never echoed: the GET returns a fixed mask (no character
+// of the token; N8NECHO.1) plus a `has_access_token` boolean, and the
+// field's placeholder says "Saved (hidden)" or "Not set". We only send a
 // fresh `access_token` in the PUT when the operator actually typed a
 // new value (tracked per-card via `tokenEdited`) — the server ignores
 // a re-submitted mask anyway (`isFreshSecret`), but there's no reason
@@ -251,7 +252,7 @@ function ProviderCard({ locationId, provider, label, comingSoon, row, canEdit, o
     }
   }
 
-  const tokenPlaceholder = row?.has_access_token ? row.access_token : 'Not set'
+  const tokenPlaceholder = row?.has_access_token ? 'Saved (hidden)' : 'Not set'
 
   return (
     <div className="bg-un1t-bg border border-un1t-border rounded-md p-3 space-y-3">

@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import {
   SECRET_KEY_PATTERN, SECRET_KEY_EXACT, SECRET_MASK, SECRET_WALK_MAX_DEPTH,
-  isSecretKeyName, maskSecretKeysDeep,
+  isSecretKeyName, maskSecretKeysDeep, AUDIT_PII_KEY_EXACT, isAuditPiiKeyName,
 } from './secret-keys.js'
 import {
   KNOWN_SECRET_NAMES, KNOWN_NOT_SECRET_NAMES, KNOWN_MASKED_LOOKALIKES,
@@ -92,5 +92,34 @@ describe('maskSecretKeysDeep', () => {
     expect(maskSecretKeysDeep(null)).toBeNull()
     expect(maskSecretKeysDeep('api_token')).toBe('api_token')
     expect(maskSecretKeysDeep(7)).toBe(7)
+  })
+})
+
+// Read inside the test, not at load: a missing file fails this pin only.
+const readMig655 = () => readFileSync(
+  path.resolve(import.meta.dirname, '../../supabase/migrations/655_audit_events_client_closed.sql'),
+  'utf8',
+)
+
+describe("the audit PII list is mig 655's, name for name (AUDITRLS.1)", () => {
+  it("equals private.audit_is_pii_key()'s in-list", () => {
+    const m = readMig655().match(/function private\.audit_is_pii_key[\s\S]*?lower\(p_key\) in \(([^)]+)\)/)
+    expect(m).not.toBeNull()
+    expect(m[1].split(',').map((s) => s.trim().replace(/^'|'$/g, ''))).toEqual([...AUDIT_PII_KEY_EXACT])
+  })
+
+  it('isAuditPiiKeyName matches exactly the list, case-insensitively', () => {
+    expect(isAuditPiiKeyName('test_phones')).toBe(true)
+    expect(isAuditPiiKeyName('Test_Phones')).toBe(true)
+    expect(isAuditPiiKeyName('test_phone')).toBe(false)
+    expect(isAuditPiiKeyName('display_phone')).toBe(false)
+    expect(isAuditPiiKeyName(null)).toBe(false)
+    expect(isAuditPiiKeyName(undefined)).toBe(false)
+  })
+
+  it('a PII key is not a secret: maskSecretKeysDeep leaves it alone (owners edit it on screen)', () => {
+    const doc = { customer_agent: { test_phones: ['+353000000001'], enabled: true } }
+    for (const k of AUDIT_PII_KEY_EXACT) expect(isSecretKeyName(k)).toBe(false)
+    expect(maskSecretKeysDeep(doc)).toBe(doc)
   })
 })
