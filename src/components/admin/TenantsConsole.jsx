@@ -9,7 +9,7 @@ import Link from 'next/link'
 import { useState } from 'react'
 import { ChevronRight, Building2, ExternalLink, Eye, PencilLine } from 'lucide-react'
 import { Card, Table } from '@/components/ui'
-import { euro, num } from '@/components/admin/tenants-format'
+import { euro, num, healthCellState } from '@/components/admin/tenants-format'
 
 // SUPPORT-ACCESS — per-row "View into ↗" with a small mode picker. Opens a
 // support session against the org in the chosen mode, then lands the
@@ -98,12 +98,18 @@ function StatTile({ label, value, hint }) {
 }
 
 function HealthCell({ health }) {
-  const { attentionCount, staleHeartbeatCount } = health || {}
-  if (!attentionCount && !staleHeartbeatCount) {
+  // HUBREAD.1 — a null count is a read that failed: "unknown", never OK.
+  const { ok, unknown, attentionCount, staleHeartbeatCount } = healthCellState(health)
+  if (ok) {
     return <span className="inline-block rounded-full px-2 py-0.5 text-xs bg-green-500/10 text-green-700">OK</span>
   }
   return (
     <span className="inline-flex flex-wrap gap-1">
+      {unknown.length > 0 && (
+        <span className="inline-block rounded-full px-2 py-0.5 text-xs bg-amber-500/10 text-amber-700">
+          {`${unknown.join(' + ')} unknown`}
+        </span>
+      )}
       {attentionCount > 0 && (
         <span className="inline-block rounded-full px-2 py-0.5 text-xs bg-amber-500/10 text-amber-700">
           {attentionCount} integration{attentionCount === 1 ? '' : 's'}

@@ -35,6 +35,7 @@ import { dublinTodayStr, dublinDayStr, addDaysISO } from '@/lib/dublin-time'
 import { dublinMonthStartStr } from '@/lib/usage-caps'
 import { resolveAllowances, pickActiveVersion } from '@/lib/plans'
 import { assembleIntegrationsHub } from '@/lib/integrations-hub'
+import { logError } from '@/lib/log'
 import { METER_KEYS } from '@shared/plans'
 
 // ─────────────────────────────────────────────────────────────
@@ -210,12 +211,14 @@ const HUB_STATUS_SECTIONS = [
  * not_connected. Pure.
  *
  * @param {object|null} hub - assembleIntegrationsHub payload (or null
- *   when hub assembly was skipped/failed — degrades to empty)
+ *   when hub assembly failed — HUBREAD.1: returned as unreadable: true,
+ *   never as "no integrations")
  * @param {string} locationId
- * @returns {{ connections: Array<{ key, label, status }>, attention: Array }}
+ * @returns {{ connections: Array<{ key, label, status }>, attention: Array, unreadable?: true }}
  */
 export function summariseHubForLocation(hub, locationId) {
-  if (!hub) return { connections: [], attention: [] }
+  // HUBREAD.1 — null = the hub could not be assembled: say so.
+  if (!hub) return { connections: [], attention: [], unreadable: true }
   const connections = []
   for (const [key, label] of HUB_STATUS_SECTIONS) {
     const row = (hub[key] || []).find((r) => r.locationId === locationId)
@@ -224,7 +227,9 @@ export function summariseHubForLocation(hub, locationId) {
   }
   return {
     connections,
-    attention: (hub.attention || []).filter((a) => a.locationId === locationId),
+    // A card-level unreadable row (one per failed read, pinned to the first
+    // location) belongs to every location in the payload.
+    attention: (hub.attention || []).filter((a) => a.locationId === locationId || a.unreadable),
   }
 }
 
@@ -314,11 +319,13 @@ const LOCATION_COLUMNS =
 
 // Hub assembly is decorative on this surface — a hub failure must not
 // take down the tenants console (same posture as the WA budget meter
-// inside the hub itself).
+// inside the hub itself). HUBREAD.1: null is still returned, but every
+// caller renders it as "integrations unknown", never as OK / none.
 async function tryAssembleHub(db, locations) {
   try {
     return await assembleIntegrationsHub(db, locations)
-  } catch {
+  } catch (err) {
+    logError('admin-tenants', 'hub assembly failed — integrations unknown', { error: err })
     return null
   }
 }
@@ -391,8 +398,13 @@ export async function getTenantsRoster(db, { today = dublinTodayStr() } = {}) {
     ),
     locationOrgMap,
   })
-  const stale = staleHeartbeatsByLocation(heartbeatsRes.data || [])
-  const attentionByOrg = attentionCountByOrg(hub?.attention, locationOrgMap)
+  // HUBREAD.1 — an unread count is null ("unknown"), never 0 ("OK").
+  const heartbeatsKnown = !heartbeatsRes.error
+  if (!heartbeatsKnown) {
+    logError('admin-tenants', 'tenant_cron_health read failed — heartbeat counts unknown', { error: heartbeatsRes.error })
+  }
+  const stale = heartbeatsKnown ? staleHeartbeatsByLocation(heartbeatsRes.data || []) : {}
+  const attentionByOrg = hub ? attentionCountByOrg(hub.attention, locationOrgMap) : null
 
   const walletByLocation = Object.fromEntries(wallets.map((w) => [w.location_id, w]))
 
@@ -418,8 +430,8 @@ export async function getTenantsRoster(db, { today = dublinTodayStr() } = {}) {
         : null,
       usage: usage.byOrg[org.id] || emptyUsage(),
       health: {
-        attentionCount: attentionByOrg[org.id] || 0,
-        staleHeartbeatCount: staleCount,
+        attentionCount: attentionByOrg ? (attentionByOrg[org.id] || 0) : null,
+        staleHeartbeatCount: heartbeatsKnown ? staleCount : null,
       },
     }
   })
