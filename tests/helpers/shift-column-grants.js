@@ -5,10 +5,16 @@
 // into exactly one of these lists, in the same PR as the migration that
 // adds it (the guard test fails otherwise).
 //
-// GRANTED = what the API already serves a coach (slimBlockForCoach in
-// src/app/api/schedule/blocks/route.js, slimShiftRowForCoach in
-// src/lib/roster-read.js) + shift_assignments.block_id, the join key of every
-// phone embed of shift_blocks.
+// GRANTED = the coach projection the phone reads (columns slimBlockForCoach
+// in src/app/api/schedule/blocks/route.js and slimShiftRowForCoach in
+// src/lib/roster-read.js serve a coach) + shift_assignments.block_id, the
+// join key of every phone embed of shift_blocks.
+//
+// WITHHELD is not the same as "what the API strips from a coach": two of its
+// columns, shift_assignments.assigned_by (served as `created_by`) and
+// shift_assignments.updated_at, ARE in the GET /api/schedule/shifts coach
+// payload (toApiShiftRow), but no client reads them directly, so they are
+// not granted. notes / partial_reason are served on the coach's own row only.
 
 export const SHIFT_COLUMN_GRANTS = Object.freeze({
   shift_blocks: Object.freeze({

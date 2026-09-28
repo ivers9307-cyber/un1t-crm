@@ -1,5 +1,5 @@
--- 646 — NOTESGRANT.1: a coach's own Supabase session reads a shift the way
--- the API serves a shift to a coach, and no more.
+-- 646 — NOTESGRANT.1: a coach's own Supabase session reads no more of a
+-- shift than the API serves a coach (and slightly less; see THE FIX).
 --
 -- NOT APPLIED YET when this file was written. "VERIFIED LIVE" below is the
 -- state of prod BEFORE this file runs (read-only, Supabase MCP, 28 Sep 2026);
@@ -14,15 +14,21 @@
 -- client may read (published rosters at their studios, plus their own rows).
 -- RLS cannot hide COLUMNS, and both tables still carry Supabase's default
 -- table-level SELECT for `authenticated` AND `anon`. So a plain coach, with
--- their own JWT and one hand-written PostgREST call, reads everything the API
+-- their own JWT and one hand-written PostgREST call, reads what the API
 -- deliberately strips from a coach (ROSTER-FIX.2 slimBlockForCoach,
 -- COACHSCOPE.1 slimShiftRowForCoach, COACHNOTES.1 #1780, ARRIVALSHOW.1):
 --   shift_blocks.notes                 a manager's working note
 --   shift_blocks.min_coaches/max_coaches  capacity (a manager fact)
 --   shift_assignments.notes            a manager's note about a person
+--                                      (served on the coach's OWN row only)
 --   shift_assignments.partial_reason   why a person's hours were cut
+--                                      (served on the coach's OWN row only)
 --   shift_assignments.arrived_at / arrival_source   colleagues' arrival stamps
---   plus who created/assigned and when.
+-- plus who created/assigned a shift and when. Not all of that last group is
+-- stripped: GET /api/schedule/shifts serves a coach shift_assignments.
+-- assigned_by (as `created_by`) and shift_assignments.updated_at
+-- (toApiShiftRow in src/lib/roster-read.js). See THE FIX for why they are
+-- withheld anyway.
 --
 -- VERIFIED LIVE (28 Sep, BEFORE this migration):
 --   relacl on both tables: anon=arwdDxtm, authenticated=arwdDxtm (table-level
@@ -47,9 +53,15 @@
 -- (mig 153 → 153b; re-measured in the replay test). The table-level REVOKE is
 -- what makes a column grant bind.
 --
--- The grant is an ALLOW-LIST equal to what the API already serves a coach
--- (slimBlockForCoach / slimShiftRowForCoach), plus `shift_assignments.block_id`
--- (the join key every phone embed of shift_blocks rides on):
+-- The grant is an ALLOW-LIST equal to the coach projection the phone reads
+-- (the columns slimBlockForCoach / slimShiftRowForCoach serve that a direct
+-- client read needs), plus `shift_assignments.block_id` (the join key every
+-- phone embed of shift_blocks rides on). It is NOT "everything the API
+-- serves a coach": two withheld columns, shift_assignments.assigned_by
+-- (served as `created_by`) and shift_assignments.updated_at, are in the
+-- /api/schedule/shifts coach payload but have no direct client reader, so
+-- granting them would only widen the surface. A reader that needs them goes
+-- through the API.
 --
 --   shift_blocks       id, location_id, template_id, block_date, start_time,
 --                      end_time, roster_id, briefing
