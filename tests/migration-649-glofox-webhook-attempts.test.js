@@ -13,7 +13,12 @@
 //   * a digest over 4,000 bytes and an error over 500 chars are refused;
 //   * an attempt needs its parent row; deleting the parent removes them;
 //   * replay is a no-op; the purge heartbeat note gains one sentence, once;
-//   * the self-check aborts the WHOLE file when the table is not as intended.
+//   * the self-check aborts the WHOLE file when the table is not as intended
+//     (a missing FK, or a browser grant the REVOKE cannot reach).
+//
+// Setup applies Supabase's default privileges (ALL to anon/authenticated/
+// service_role on every new public table), so the no-privilege test fails if
+// the migration's REVOKE is deleted.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -50,7 +55,13 @@ const purgeNotes = async () =>
 
 beforeEach(async () => {
   db = new PGlite()
-  await runSql('CREATE ROLE anon NOLOGIN; CREATE ROLE authenticated NOLOGIN; CREATE ROLE service_role NOLOGIN;')
+  await runSql(`
+    CREATE ROLE anon NOLOGIN; CREATE ROLE authenticated NOLOGIN; CREATE ROLE service_role NOLOGIN;
+    -- What Supabase does for every table created in public: all three API
+    -- roles hold ALL on it. The migration must take the browser's away itself,
+    -- so without this line the privilege test below could not see its REVOKE.
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;
+  `)
   await runSql(MIG_053)
   await runSql(MIG_132)
   await runSql(`INSERT INTO public.cron_heartbeats (name, expected_interval_seconds, grace_seconds, notes)
@@ -171,6 +182,25 @@ describe('migration 649 — glofox_webhook_attempts', () => {
     // Defensive: leave no aborted transaction block behind (a no-op if PGlite already rolled back).
     await db.query('ROLLBACK').catch(() => {})
     // Rolled back as one transaction: the note, the column comment and RLS never landed.
+    expect(await purgeNotes()).toBe('WEBHOOK-RETENTION.1 — existing notes.')
+    const { rows } = await db.query(
+      `SELECT relrowsecurity FROM pg_class WHERE oid = 'public.glofox_webhook_attempts'::regclass`)
+    expect(rows[0].relrowsecurity).toBe(false)
+  })
+
+  it('the self-check aborts the WHOLE file on a lingering browser grant the REVOKE cannot reach', async () => {
+    // A pre-existing, otherwise-correct table readable through PUBLIC: the
+    // migration's REVOKE (FROM anon, authenticated) does not touch a PUBLIC
+    // grant, but anon and authenticated inherit it; the catalog check must.
+    await runSql(`CREATE TABLE public.glofox_webhook_attempts (
+      id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      event_row_id uuid NOT NULL REFERENCES public.glofox_webhook_events(id) ON DELETE CASCADE,
+      location_id uuid, trace_id text, event_type text, emitted_at timestamptz,
+      delivered_at timestamptz NOT NULL, processed_at timestamptz NOT NULL DEFAULT now(),
+      status text NOT NULL, error_message text, digest jsonb);
+      GRANT SELECT ON public.glofox_webhook_attempts TO PUBLIC;`)
+    await expect(runSql(MIG_649)).rejects.toThrow(/649 self-check: anon still holds SELECT/)
+    await db.query('ROLLBACK').catch(() => {})
     expect(await purgeNotes()).toBe('WEBHOOK-RETENTION.1 — existing notes.')
     const { rows } = await db.query(
       `SELECT relrowsecurity FROM pg_class WHERE oid = 'public.glofox_webhook_attempts'::regclass`)
