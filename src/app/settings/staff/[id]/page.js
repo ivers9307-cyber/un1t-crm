@@ -5,6 +5,7 @@ import StaffForm from '@/components/StaffForm'
 import WidgetTokensCard from '@/components/WidgetTokensCard'
 import { canEditStaffMember, mapProfileLocationToAssignment } from '@/lib/staff-access'
 import { isTombstone } from '@/lib/staff-tombstone'
+import { redactLocationSecrets } from '@/lib/location-secrets'
 
 export const dynamic = 'force-dynamic'
 
@@ -153,7 +154,7 @@ export default async function EditStaffPage(props) {
       <p className="text-sm text-un1t-subtle mb-6">Update role, permissions, and access</p>
       <StaffForm
         staff={staff}
-        locations={locationsRes.data || []}
+        locations={(locationsRes.data || []).map(redactLocationSecrets) /* SECFIX.3a */}
         callerIsMaster={!!user.isMaster}
         callerOwnerLocationIds={callerOwnerLocationIds}
         roleTemplates={roleTemplates}

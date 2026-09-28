@@ -11,6 +11,7 @@ import {
   OWNER_ASSIGNABLE_ROLES, MASTER_ASSIGNABLE_ROLES,
 } from '@/lib/schemas'
 import { sparsifyAssignmentPermissions } from '@/lib/staff-write'
+import { redactProfileLocations } from '@/lib/location-secrets'
 
 export const runtime = 'nodejs'
 
@@ -321,5 +322,6 @@ export async function POST(request) {
     .eq('id', newUserId)
     .single()
 
-  return NextResponse.json({ success: true, data: profile }, { status: 201 })
+  // SECFIX.3a — the echo embeds locations(*); never ship their credentials.
+  return NextResponse.json({ success: true, data: redactProfileLocations(profile) }, { status: 201 })
 }

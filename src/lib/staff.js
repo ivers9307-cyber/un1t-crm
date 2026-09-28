@@ -16,6 +16,7 @@ import { ADMIN_ROLES } from '@/lib/schemas'
 import { hasRoleAtLocation } from '@/lib/role-at-location'
 import { logError } from '@/lib/log'
 import { mergeTemplates } from '@shared/permissions'
+import { redactProfileLocations } from '@/lib/location-secrets'
 
 // CONTRACTVIS.1 (Richard, 27 Sep 2026) — neither shape below carries
 // contracted_hours_per_week. A colleague's contract goes to a master, or to an
@@ -123,7 +124,8 @@ export async function listStaffForUser({ db, user, fields, locationId = null, in
   if (error) return { ok: false, error: error.message }
 
   const rows = (data || []).map((row) => {
-    if (!picker && managed.has(row.id)) return row
+    // SECFIX.3a — FULL rows embed locations(*); the credentials stop here.
+    if (!picker && managed.has(row.id)) return redactProfileLocations(row)
     return slimRow(row, picker ? PICKER_KEYS : PUBLIC_KEYS, (picker ? includeContract : true) && mayContract(row.id))
   })
   return { ok: true, data: rows }
@@ -200,5 +202,6 @@ export async function getStaffForUser({ db, user, id }) {
       // degrade to code defaults
     }
   }
-  return { ok: true, data: { ...data, role_templates: roleTemplates } }
+  // SECFIX.3a — the FULL row embeds locations(*); the credentials stop here.
+  return { ok: true, data: { ...redactProfileLocations(data), role_templates: roleTemplates } }
 }
