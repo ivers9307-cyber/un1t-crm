@@ -4658,6 +4658,24 @@ registry.registerPath({
   },
 })
 
+// SCHEDULE-SPEND-AGG.1 — the roster's contractor spend panel. Studio totals
+// only; FTECOSTVIS.1 keeps the salary-derived FTE labour total to admins.
+registry.registerPath({
+  method: 'get',
+  path: '/api/schedule/contractor-spend',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Contractor spend against the monthly budget for one studio (studio totals only)',
+  description: "Query: location_id (uuid) and reference_date (a real YYYY-MM-DD Dublin date inside the target month). Returns the month's studio totals: monthStartIso, monthEndIso, contractorCostEur (PUBLISHED shifts, priced by whoever holds them at their hourly rate; admin shifts excluded), unpublishedContractorCostEur (drafts and shifts no roster owns yet), projectedContractorCostEur (the two together), monthlyBudgetEur (null = not set), remainingEur, overBudget, projectedOverBudget and utilisationPct. No per-person figure, name, rate or id. Gate: master, owner, manager or head_coach AT location_id, and membership of that location (a location outside the caller's assignments is a 403). FTECOSTVIS.1: fteImplicitCostEur (published FTE hours × salary / 52 / contracted hours, context only; it never counts against the budget) is returned only to an owner, manager or master AT location_id; a head coach gets 200 with every other key and no fteImplicitCostEur.",
+  responses: {
+    200: { description: 'Studio spend totals for the month' },
+    400: { description: 'Missing or malformed location_id / reference_date, or reference_date is not a real calendar date', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — needs a manager role at that location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Location not found', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'A read failed; no figure is returned (never EUR 0)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // CHANGELOG.1 — the human-facing read of roster_change_log (mig 236).
 registry.registerPath({
   method: 'get',
