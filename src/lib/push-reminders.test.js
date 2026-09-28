@@ -163,7 +163,7 @@ describe('localToUtc — invalid timezone tolerance (cached-formatter path)', ()
 // delta = minutesAway - lead is inside [-15, +5], on a */5 cron. When its
 // "already sent?" read fails, it holds the reminder while a later tick can
 // still fire it, and sends unchecked only on the last tick that can. The next
-// tick is tickMin later plus up to jitterMin of Vercel lateness.
+// tick is tickMin later plus up to jitterMin (3.5) of Vercel lateness.
 describe('isLastFireTick', () => {
   it('early and on-time ticks are not the last chance', () => {
     expect(isLastFireTick(65, 60)).toBe(false) // delta +5, the early edge
@@ -171,9 +171,9 @@ describe('isLastFireTick', () => {
     expect(isLastFireTick(55, 60)).toBe(false) // delta -5
   })
 
-  it('the boundary: a later tick (delta - 6) still reaches -15, so delta -9 holds and just past it is the last chance', () => {
-    expect(isLastFireTick(51, 60)).toBe(false)   // delta -9  → next -15, still inside
-    expect(isLastFireTick(50.9, 60)).toBe(true)  // delta -9.1 → next -15.1, outside
+  it('the boundary: a later tick (delta - 8.5) still reaches -15, so delta -6.5 holds and just past it is the last chance', () => {
+    expect(isLastFireTick(53.5, 60)).toBe(false) // delta -6.5 → next -15, still inside
+    expect(isLastFireTick(53.4, 60)).toBe(true)  // delta -6.6 → next -15.1, outside
     expect(isLastFireTick(47, 60)).toBe(true)
     expect(isLastFireTick(45, 60)).toBe(true)    // delta -15, the late edge
   })
@@ -184,9 +184,11 @@ describe('isLastFireTick', () => {
   })
 
   it('honours the cadence and window it is given', () => {
-    expect(isLastFireTick(54, 60, { tickMin: 2 })).toBe(false)  // -6 - 3 = -9
-    expect(isLastFireTick(47.9, 60, { tickMin: 2 })).toBe(true) // -12.1 - 3 = -15.1
-    expect(isLastFireTick(40, 60, { lateWindowMin: 30 })).toBe(false) // -20 - 6 = -26
+    expect(isLastFireTick(50.5, 60, { tickMin: 2 })).toBe(false) // -9.5 - 5.5 = -15
+    expect(isLastFireTick(50.4, 60, { tickMin: 2 })).toBe(true)  // -9.6 - 5.5 = -15.1
+    expect(isLastFireTick(40, 60, { lateWindowMin: 30 })).toBe(false) // -20 - 8.5 = -28.5
+    expect(isLastFireTick(51, 60, { jitterMin: 1 })).toBe(false)  // -9 - 6 = -15
+    expect(isLastFireTick(50.9, 60, { jitterMin: 1 })).toBe(true) // -9.1 - 6 = -15.1
   })
 
   it('agrees with inLeadWindow: whenever it says "not last", the next tick is still inside the window', () => {
@@ -195,7 +197,7 @@ describe('isLastFireTick', () => {
       const minutesAway = 60 + delta
       if (isLastFireTick(minutesAway, 60)) continue
       const due = new Date(now + minutesAway * 60_000).toISOString()
-      const nextTickMs = now + 6 * 60_000 // tick + jitter
+      const nextTickMs = now + (5 + 3.5) * 60_000 // tick + jitter
       expect(inLeadWindow(due, nextTickMs, 60, 5, 15)).toBe(true)
     }
   })

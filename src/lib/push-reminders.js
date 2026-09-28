@@ -108,11 +108,22 @@ export function inLeadWindow(dueUtcIso, nowMs, leadMinutes, windowMin = 5, lateW
  * last chance (a possible duplicate beats a certain loss). An unreadable input
  * answers true for the same reason.
  *
+ * jitterMin defaults to 3.5: Vercel's observed start offsets are 0-95 s with
+ * one 196 s outlier, so a later tick can see delta up to tickMin + 3.5 lower.
+ * For a due time on the 5-minute grid (delta about -5 then -10 on the ticks
+ * after on-time), 3.5 classifies every tick that starts within 90 s of
+ * schedule exactly as the old 1-minute allowance did: hold at -5, last at -10.
+ *
+ * "Last" is not unique for off-grid due times: when delta sits inside the
+ * jitter band, two consecutive ticks can both answer true, so a run of failed
+ * reads sends at most 2 unchecked (main, which never held, could send 4 across
+ * the 20-minute window). The ledger's unique index still records only one.
+ *
  * @param {number} minutesAway minutes until the entity is due
  * @param {number} lead        the lead time being fired, in minutes
  * @param {{ lateWindowMin?: number, tickMin?: number, jitterMin?: number }} [opts]
  */
-export function isLastFireTick(minutesAway, lead, { lateWindowMin = 15, tickMin = 5, jitterMin = 1 } = {}) {
+export function isLastFireTick(minutesAway, lead, { lateWindowMin = 15, tickMin = 5, jitterMin = 3.5 } = {}) {
   const delta = Number(minutesAway) - Number(lead)
   if (!Number.isFinite(delta)) return true
   return delta - tickMin - jitterMin < -lateWindowMin
