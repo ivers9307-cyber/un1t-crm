@@ -3,7 +3,7 @@
 // sequence's location. Mirrors the /stats route's guards.
 import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
-import { canBuildSequencesAt, canBuildSequencesSomewhere, sequencePermissionRequired } from '@/lib/sequence-access'
+import { canBuildSequencesAt, canBuildSequencesSomewhere, sequencePermissionRequired, sequenceNotFound } from '@/lib/sequence-access'
 import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { summariseEnrolmentRun } from '@/lib/sequences/run-history'
@@ -30,7 +30,7 @@ export async function GET(_request, props) {
     .eq('id', params.id)
     .single()
   if (seqErr || !seq) {
-    return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
+    return sequenceNotFound()
   }
   const guard = assertLocationAccessOr404(user, seq.location_id)
   if (guard) return guard

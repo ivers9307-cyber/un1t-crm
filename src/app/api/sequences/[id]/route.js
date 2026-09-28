@@ -3,7 +3,7 @@ import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { canBuildSequencesAt, canBuildSequencesSomewhere, sequencePermissionRequired } from '@/lib/sequence-access'
+import { canBuildSequencesAt, canBuildSequencesSomewhere, sequencePermissionRequired, sequenceNotFound } from '@/lib/sequence-access'
 import { validateBody } from '@/lib/validate'
 import { validateAudienceFilter, InvalidAudienceFilterError } from '@/lib/audience-filter'
 
@@ -74,7 +74,7 @@ export async function GET(request, props) {
     .eq('id', params.id)
     .single()
 
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 404 })
+  if (error) return sequenceNotFound()
 
   const guard = assertLocationAccessOr404(user, data.location_id)
   if (guard) return guard
@@ -105,7 +105,7 @@ export async function PUT(request, props) {
     .select('location_id, trigger_type, trigger_config, status')
     .eq('id', params.id)
     .single()
-  if (!existing) return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
+  if (!existing) return sequenceNotFound()
   const guard = assertLocationAccessOr404(user, existing.location_id)
   if (guard) return guard
   // SEQROUTEGATE.1 — the builder's rule (email or whatsapp) at the sequence.
@@ -219,7 +219,7 @@ export async function DELETE(request, props) {
     .select('location_id')
     .eq('id', params.id)
     .single()
-  if (!existing) return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
+  if (!existing) return sequenceNotFound()
   const guard = assertLocationAccessOr404(user, existing.location_id)
   if (guard) return guard
   // SEQROUTEGATE.1 — the builder's rule (email or whatsapp) at the sequence.

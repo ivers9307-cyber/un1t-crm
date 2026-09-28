@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { canBuildSequencesAt, canBuildSequencesSomewhere, sequencePermissionRequired } from '@/lib/sequence-access'
+import { canBuildSequencesAt, canBuildSequencesSomewhere, sequencePermissionRequired, sequenceNotFound } from '@/lib/sequence-access'
 import { runFlowAgent } from '@/lib/sequences/agent/run'
 import { validateBody } from '@/lib/validate'
 
@@ -27,7 +27,7 @@ export async function POST(request, props) {
   const db = createServerClient()
   const { data: sequence } = await db.from('email_sequences')
     .select('location_id, name, trigger_type, trigger_config').eq('id', params.id).single()
-  if (!sequence) return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
+  if (!sequence) return sequenceNotFound()
   const guard = assertLocationAccessOr404(user, sequence.location_id)
   if (guard) return guard
   // SEQROUTEGATE.1 — the builder's rule (email or whatsapp) at the sequence.

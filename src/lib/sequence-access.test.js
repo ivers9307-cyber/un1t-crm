@@ -2,7 +2,7 @@
 // judged at a named location. Synthetic callers only.
 import { describe, it, expect } from 'vitest'
 import {
-  SEQUENCE_BUILDER_PERMISSIONS, canBuildSequencesAt, canBuildSequencesSomewhere, sequencePermissionRequired,
+  SEQUENCE_BUILDER_PERMISSIONS, canBuildSequencesAt, canBuildSequencesSomewhere, sequencePermissionRequired, sequenceNotFound,
 } from './sequence-access.js'
 import {
   person, LOC_A, LOC_B, MASTER, OUTSIDER, STAFF_A_MANAGER_B, MANAGER_A_STAFF_B,
@@ -58,5 +58,13 @@ describe('sequencePermissionRequired', () => {
     const res = sequencePermissionRequired()
     expect(res.status).toBe(403)
     expect(await res.json()).toEqual({ success: false, error: 'Email or WhatsApp permission required' })
+  })
+})
+
+describe('sequenceNotFound', () => {
+  it('answers exactly what assertLocationAccessOr404 answers for another studio', async () => {
+    const res = sequenceNotFound()
+    expect(res.status).toBe(404)
+    expect(await res.json()).toEqual({ success: false, error: 'Not found' })
   })
 })

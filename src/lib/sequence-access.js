@@ -32,3 +32,10 @@ export function canBuildSequencesSomewhere(user) {
 export function sequencePermissionRequired() {
   return NextResponse.json({ success: false, error: SEQUENCE_PERMISSION_ERROR }, { status: 403 })
 }
+
+// A detail route's answer for a missing sequence: the same body
+// assertLocationAccessOr404 gives another studio's, so the two cannot be told
+// apart and ids cannot be enumerated across studios.
+export function sequenceNotFound() {
+  return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+}

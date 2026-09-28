@@ -2,7 +2,7 @@ import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { canBuildSequencesAt, canBuildSequencesSomewhere, sequencePermissionRequired } from '@/lib/sequence-access'
+import { canBuildSequencesAt, canBuildSequencesSomewhere, sequencePermissionRequired, sequenceNotFound } from '@/lib/sequence-access'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 
@@ -46,7 +46,7 @@ export async function PUT(request, props) {
 
   const db = createServerClient()
   const seqLocation = await loadSequenceLocation(db, params.id)
-  if (!seqLocation) return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
+  if (!seqLocation) return sequenceNotFound()
   const guard = assertLocationAccessOr404(user, seqLocation)
   if (guard) return guard
   // SEQROUTEGATE.1 — the builder's rule (email or whatsapp) at the sequence.
@@ -76,7 +76,7 @@ export async function DELETE(request, props) {
 
   const db = createServerClient()
   const seqLocation = await loadSequenceLocation(db, params.id)
-  if (!seqLocation) return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
+  if (!seqLocation) return sequenceNotFound()
   const guard = assertLocationAccessOr404(user, seqLocation)
   if (guard) return guard
   // SEQROUTEGATE.1 — the builder's rule (email or whatsapp) at the sequence.

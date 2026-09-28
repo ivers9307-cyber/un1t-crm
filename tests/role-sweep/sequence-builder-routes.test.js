@@ -34,6 +34,8 @@ import * as seqTest from '@/app/api/sequences/[id]/test/route.js'
 import * as runs from '@/app/api/sequences/[id]/runs/route.js'
 import * as stats from '@/app/api/sequences/[id]/stats/route.js'
 import * as fromTemplate from '@/app/api/sequences/from-template/route.js'
+import * as clone from '@/app/api/sequences/[id]/clone/route.js'
+import * as seed from '@/app/api/sequences/[id]/audience/seed/route.js'
 
 const T = { getCurrentUser, createServerClient, describe, it, expect }
 const json = (method, body) => new Request('http://localhost/api/x', {
@@ -123,6 +125,32 @@ for (const [title, call] of [
     call, gateReads: SEQ_ROW, forbidden: NO_PERMISSION, managerOnly: MANAGER_REQUIRED, hidden: NOT_FOUND, cases: MANAGER_CASES,
   }, T)
 }
+
+// ── a missing sequence answers exactly like another studio's ──────────────
+// Detail routes 404 an outsider with assertLocationAccessOr404's
+// { success:false, error:'Not found' }. A missing row must answer with the same
+// body, or the difference tells a caller which ids exist elsewhere. `.single()`
+// on no row gives PostgREST's PGRST116 error; `.maybeSingle()` gives null/null.
+const NO_ROW_SINGLE = { data: null, error: { code: 'PGRST116', message: 'JSON object requested, multiple (or no) rows returned' } }
+const NO_ROW_MAYBE = { data: null, error: null }
+describe('a missing sequence answers exactly like another studio\'s (404 Not found)', () => {
+  const MISSING = [
+    ...ROW_ROUTES,
+    ['POST /api/sequences/[id]/test', () => seqTest.POST(bare('POST'), params(id))],
+    ['GET /api/sequences/[id]/runs', () => runs.GET(bare('GET'), params(id))],
+    ['GET /api/sequences/[id]/stats', () => stats.GET(bare('GET'), params(id))],
+    ['POST /api/sequences/[id]/clone', () => clone.POST(bare('POST'), params(id))],
+    ['POST /api/sequences/[id]/audience/seed', () => seed.POST(json('POST', { confirm_count: 0 }), params(id))],
+    ['DELETE /api/sequences/[id]/audience/seed', () => seed.DELETE(bare('DELETE'), params(id))],
+  ]
+  // The seed route's loader reads with maybeSingle; everything else single().
+  const MAYBE = new Set(['POST /api/sequences/[id]/audience/seed', 'DELETE /api/sequences/[id]/audience/seed'])
+  it.each(MISSING)('%s', async (title, call) => {
+    const { probe, status, body } = await probed(STAFF_A_MANAGER_B, call, [MAYBE.has(title) ? NO_ROW_MAYBE : NO_ROW_SINGLE])
+    expect(probe.passed).toBe(false)
+    expect({ status, body }).toEqual(NOT_FOUND)
+  })
+})
 
 // ── routes on a query/body location (403 for outsiders) ───────────────────
 describeGate('GET /api/sequences?location_id= (email or whatsapp there)', {
