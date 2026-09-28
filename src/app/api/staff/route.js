@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess, hasRoleAtAnyLocation } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { listStaffForUser } from '@/lib/staff'
 import { validateBody } from '@/lib/validate'
 import { getAppUrl } from '@/lib/app-url'
@@ -102,7 +102,7 @@ export async function POST(request) {
   // ROLESWEEP.1c — caller must be an owner SOMEWHERE (or master). This used
   // to read user.role (the ACTIVE studio's role) and refused an owner at B
   // whose active studio is A. Each requested assignment is judged below at
-  // its own location (user.rolesByLocation[a.location_id] === 'owner').
+  // its own location (hasRoleAtLocation(user, a.location_id, ['owner'])).
   if (!user.isMaster && !hasRoleAtAnyLocation(user, ['owner'])) {
     return NextResponse.json({
       success: false,
@@ -137,9 +137,11 @@ export async function POST(request) {
         error: `Role '${a.role}' cannot be granted by ${user.isMaster ? 'master' : 'owner'}.`,
       }, { status: 403 })
     }
+    // ROLESWEEP.1c — owner AT this assignment's location (the same test the
+    // inline rolesByLocation read made, spelled as the canonical helper so the
+    // role-at-target guard sees the decision behind the coarse pre-check).
     if (!user.isMaster) {
-      const callerRoleHere = user.rolesByLocation?.[a.location_id]
-      if (callerRoleHere !== 'owner') {
+      if (!hasRoleAtLocation(user, a.location_id, ['owner'])) {
         return NextResponse.json({
           success: false,
           error: 'You can only assign staff at locations where you are an owner.',
