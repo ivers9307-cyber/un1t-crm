@@ -83,21 +83,22 @@ describe('runApprovalsSlaSweep', () => {
       if (col.startsWith('details->>')) return row.details?.[col.slice('details->>'.length)] === val
       return row[col] === val
     })
+    const before = (row, lts) => Object.entries(lts).every(([col, val]) => Date.parse(row[col]) < Date.parse(val))
     const db = {
       from(table) {
-        const state = { eqs: {}, is: {} }
+        const state = { eqs: {}, is: {}, lts: {} }
         const b = {
           select: () => b,
           update(patch) { state.patch = patch; updates.push({ table, patch, eqs: state.eqs, is: state.is }); return b },
           eq: (col, val) => { state.eqs[col] = val; if (col === 'status' && state.patch) state.claimed = claimMatches; return b },
           is: (col, val) => { state.is[col] = val; return b },
-          not: () => b, in: () => b, lt: () => b,
+          not: () => b, in: () => b, lt: (col, val) => { state.lts[col] = val; return b },
           order: () => b, limit: () => b,
           maybeSingle: async () => ({ data: state.patch && state.claimed ? { id: 'r1' } : null, error: null }),
           then: (res, rej) => {
             let out
             if (state.patch) out = { data: null, error: updateError }
-            else if (state.eqs.status === 'expired') out = owedError ? { data: null, error: owedError } : { data: expired.filter(r => matches(r, state.eqs)), error: null }
+            else if (state.eqs.status === 'expired') out = owedError ? { data: null, error: owedError } : { data: expired.filter(r => matches(r, state.eqs) && before(r, state.lts)), error: null }
             else out = { data: rows, error: null }
             return Promise.resolve(out).then(res, rej)
           },
@@ -267,6 +268,7 @@ describe('runApprovalsSlaSweep', () => {
 
   const owedRow = {
     id: 'r9', location_id: 'L1', kind: 'class_booking',
+    updated_at: new Date(NOW - 2 * H).toISOString(),
     details: { class_name: 'FURY', class_time: 'Sun 09:00', expired_at: new Date(NOW - 2 * H).toISOString(), expire_notice: 'owed' },
   }
 
@@ -281,12 +283,34 @@ describe('runApprovalsSlaSweep', () => {
     expect(out.notices_retried).toBe(1)
   })
 
-  it('owed pass: still failing → stays owed', async () => {
+  // PUSHDONE.1a — a failed retry writes NOTHING, updated_at included: the
+  // lease below reads updated_at, so touching it would push the retry out.
+  it('owed pass: still failing → stays owed, and the row is not touched (updated_at unmoved)', async () => {
     const { db, updates } = sweepDb({ rows: [], expired: [owedRow] })
     sendPushToRolesAtLocation.mockResolvedValueOnce({ sent: 0, failed: 1 })
     const out = await runApprovalsSlaSweep(db, { nowMs: NOW })
     expect(updates).toEqual([])
     expect(out.notice_failed).toBe(1)
+  })
+
+  // PUSHDONE.1a — in-flight lease. The expire claim stamps updated_at and
+  // then sends; a second, overlapping tick must not re-send that notice
+  // while the first is mid-send. Rows touched in the last 5 minutes wait.
+  it('owed pass: a row updated 1 minute ago is in flight and skipped', async () => {
+    const fresh = { ...owedRow, updated_at: new Date(NOW - 60_000).toISOString() }
+    const { db, updates } = sweepDb({ rows: [], expired: [fresh] })
+    const out = await runApprovalsSlaSweep(db, { nowMs: NOW })
+    expect(sendPushToRolesAtLocation).not.toHaveBeenCalled()
+    expect(updates).toEqual([])
+    expect(out.notices_retried).toBe(0)
+  })
+
+  it('owed pass: a row updated 10 minutes ago is past the lease and retried', async () => {
+    const stale = { ...owedRow, updated_at: new Date(NOW - 10 * 60_000).toISOString() }
+    const { db } = sweepDb({ rows: [], expired: [stale] })
+    const out = await runApprovalsSlaSweep(db, { nowMs: NOW })
+    expect(sendPushToRolesAtLocation).toHaveBeenCalledTimes(1)
+    expect(out.notices_retried).toBe(1)
   })
 
   it('owed pass: past the retry window it gives up at error level, without sending', async () => {

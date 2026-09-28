@@ -56,6 +56,11 @@ export const APPROVAL_ESCALATE_AFTER_HOURS = 24
 // (every 15-minute tick) before the sweep records it and gives up, loudly.
 export const SLA_ALERT_RETRY_HOURS = 24
 const HOUR_MS = 3_600_000
+// PUSHDONE.1a — in-flight lease on the owed pass. The expire claim stamps
+// updated_at and then sends; an owed row touched this recently may be
+// mid-send in an overlapping tick, so it waits. Well under the 15-minute
+// cadence, so a genuinely owed row is still picked up by the very next tick.
+const OWED_NOTICE_LEASE_MS = 5 * 60_000
 
 /**
  * What, if anything, does this approval row need? Pure.
@@ -120,10 +125,13 @@ async function settleExpireNotice(db, id, details, notice, nowIso) {
  * BEFORE the pending loop, so a notice that fails this tick waits for the next.
  */
 async function retryOwedExpireNotices(db, { nowMs, nowIso, results }) {
+  // The lease reads updated_at, so a failed retry below must write NOTHING
+  // (it only `continue`s); touching updated_at would hold the row back.
   const { data: owed, error } = await db.from('agent_membership_requests')
     .select('id, location_id, kind, details')
     .eq('status', 'expired')
     .eq('details->>expire_notice', 'owed')
+    .lt('updated_at', new Date(nowMs - OWED_NOTICE_LEASE_MS).toISOString())
     .order('updated_at', { ascending: true })
     .limit(50)
   if (error) {
