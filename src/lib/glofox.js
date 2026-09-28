@@ -491,6 +491,7 @@ const glofoxHttpCounters = {
   status_5xx: 0,     // 5xx responses
   network_errors: 0, // fetch threw
   gave_up: 0,        // calls still 429/5xx after every retry
+  aborted: 0,        // calls cancelled by the caller while 429/5xx (retries cut short)
 }
 
 /** A copy of the instance's Glofox HTTP counters. */
@@ -571,6 +572,7 @@ export async function glofoxFetch(creds, pathOrUrl, options = {}) {
   }
   let res
   let attempts = 0
+  let aborted = false
   for (let attempt = 0; ; attempt++) {
     attempts++
     glofoxHttpCounters.requests++
@@ -587,10 +589,10 @@ export async function glofoxFetch(creds, pathOrUrl, options = {}) {
       // PAYLINK.5b — an aborted caller (timed out, or otherwise cancelled)
       // stops retrying immediately and returns the last response as-is,
       // rather than sleeping out a full backoff first.
-      if (options.signal?.aborted) break
+      if (options.signal?.aborted) { aborted = true; break }
       const retryAfter = Number(res.headers?.get?.('retry-after'))
       await _glofoxSleep(computeGlofoxBackoffMs(attempt, Number.isFinite(retryAfter) ? retryAfter : null), options.signal)
-      if (options.signal?.aborted) break
+      if (options.signal?.aborted) { aborted = true; break }
       glofoxHttpCounters.retries++
       continue
     }
@@ -598,7 +600,11 @@ export async function glofoxFetch(creds, pathOrUrl, options = {}) {
   }
   // CREDITSREAD.1 — one line per call that is STILL failing after its retries
   // (never per retry: a throttled minute would write thousands). No ids.
-  if (res.status === 429 || res.status >= 500) {
+  // A call the caller cancelled mid-retry did not use its retries, so it is
+  // counted apart (aborted) and not logged as a give-up.
+  if (aborted) {
+    glofoxHttpCounters.aborted++
+  } else if (res.status === 429 || res.status >= 500) {
     glofoxHttpCounters.gave_up++
     logWarn('glofox', 'Glofox still failing after retries', {
       status: res.status, attempts, path: glofoxPathLabel(pathOrUrl),

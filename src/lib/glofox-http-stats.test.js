@@ -46,7 +46,7 @@ describe('glofoxFetch counters', () => {
     const r = await glofoxFetch(creds, '/2.0/credits?user_id=abc')
     expect(r.status).toBe(200)
     expect(glofoxHttpStatsSince(before)).toEqual({
-      requests: 2, retries: 1, status_429: 1, status_5xx: 0, network_errors: 0, gave_up: 0,
+      requests: 2, retries: 1, status_429: 1, status_5xx: 0, network_errors: 0, gave_up: 0, aborted: 0,
     })
     expect(logWarn).not.toHaveBeenCalled()
   })
@@ -57,7 +57,7 @@ describe('glofoxFetch counters', () => {
     const r = await glofoxFetch(creds, '/2.0/members/0000000000000000000000b2')
     expect(r.status).toBe(503)
     expect(glofoxHttpStatsSince(before)).toEqual({
-      requests: 4, retries: 3, status_429: 0, status_5xx: 4, network_errors: 0, gave_up: 1,
+      requests: 4, retries: 3, status_429: 0, status_5xx: 4, network_errors: 0, gave_up: 1, aborted: 0,
     })
     expect(logWarn).toHaveBeenCalledTimes(1)
     expect(logWarn).toHaveBeenCalledWith('glofox', 'Glofox still failing after retries', {
@@ -70,7 +70,20 @@ describe('glofoxFetch counters', () => {
     const before = glofoxHttpStats()
     await glofoxFetch(creds, '/2.0/members/abc')
     expect(glofoxHttpStatsSince(before)).toEqual({
-      requests: 1, retries: 0, status_429: 0, status_5xx: 0, network_errors: 0, gave_up: 0,
+      requests: 1, retries: 0, status_429: 0, status_5xx: 0, network_errors: 0, gave_up: 0, aborted: 0,
+    })
+    expect(logWarn).not.toHaveBeenCalled()
+  })
+
+  it('a call cancelled mid-retry is counted as aborted, not as still failing after retries', async () => {
+    fetch.mockResolvedValue(res(503))
+    const ctrl = new AbortController()
+    ctrl.abort()
+    const before = glofoxHttpStats()
+    const r = await glofoxFetch(creds, '/2.0/members/0000000000000000000000b2', { signal: ctrl.signal })
+    expect(r.status).toBe(503)
+    expect(glofoxHttpStatsSince(before)).toEqual({
+      requests: 1, retries: 0, status_429: 0, status_5xx: 1, network_errors: 0, gave_up: 0, aborted: 1,
     })
     expect(logWarn).not.toHaveBeenCalled()
   })
