@@ -42,7 +42,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
-import { glofoxCredentialsForLocation, fetchMemberResult } from '@/lib/glofox'
+import { glofoxCredentialsForLocation, fetchMemberResult, glofoxHttpStats, glofoxHttpStatsSince } from '@/lib/glofox'
 import { GLOFOX_SETTINGS_UNREADABLE_MESSAGE } from '@/lib/glofox-settings-read'
 import { applyMemberSync } from '@/lib/glofox-sync'
 import { logWarn, logError } from '@/lib/log'
@@ -75,6 +75,8 @@ export async function GET(request) {
   }
 
   const startedAt = Date.now()
+  // CREDITSREAD.1 — Glofox traffic for this invocation (instance-wide counters).
+  const httpBefore = glofoxHttpStats()
   const db = createServerClient()
 
   const { data: locations, error: locErr } = await db
@@ -108,7 +110,7 @@ export async function GET(request) {
       failed: failed.map((r) => ({ locationId: r.location_id, error: r.first_error })),
     })
   } else {
-    await stampHeartbeat('glofox-detail-backfill', heartbeatOutcome(perLocation))
+    await stampHeartbeat('glofox-detail-backfill', heartbeatOutcome(perLocation, glofoxHttpStatsSince(httpBefore)))
   }
 
   return NextResponse.json({
@@ -120,7 +122,8 @@ export async function GET(request) {
 }
 
 // The heartbeat's last_outcome: enough to verify the cursor from SQL alone.
-function heartbeatOutcome(perLocation) {
+// CREDITSREAD.1 — plus syncs that could not read credits, and Glofox traffic.
+function heartbeatOutcome(perLocation, glofoxHttp) {
   const sum = (pick) => perLocation.reduce((n, r) => n + (pick(r) ?? 0), 0)
   const dues = perLocation.map((r) => r.remaining_due)
   return {
@@ -130,6 +133,8 @@ function heartbeatOutcome(perLocation) {
     fetch_failed: sum((r) => r.summary.fetch_failed),
     error: sum((r) => r.summary.error),
     stamp_failed: sum((r) => r.summary.stamp_failed),
+    credits_unread: sum((r) => r.summary.credits_unread),
+    glofox_http: glofoxHttp,
   }
 }
 
@@ -139,7 +144,8 @@ async function backfillLocation(db, location, startedAt) {
   // in `invalid`.
   // DETAILBACKFILL.1 — stamp_failed: the due-date write failed, so that
   // contact is simply read again next tick (a duplicate, never a loss).
-  const summary = { create: 0, update: 0, leave: 0, fetch_failed: 0, error: 0, ambiguous: 0, invalid: 0, member_refused: 0, stamp_failed: 0 }
+  const summary = { create: 0, update: 0, leave: 0, fetch_failed: 0, error: 0, ambiguous: 0, invalid: 0, member_refused: 0, stamp_failed: 0, credits_unread: 0 }
+  const httpBefore = glofoxHttpStats()
   let budgetExhausted = false
   let candidatesSeen = 0
   let remaining = null
@@ -251,7 +257,7 @@ async function backfillLocation(db, location, startedAt) {
         duration_ms: Date.now() - startedAt,
         leads_processed: (summary.create + summary.update + summary.leave),
         total_available: candidatesSeen,
-        summary: { ...summary, remaining_due: remaining },
+        summary: { ...summary, remaining_due: remaining, glofox_http: glofoxHttpStatsSince(httpBefore) },
         status: 'completed',
       }).eq('id', runId)
       if (runUpdErr) {
@@ -309,6 +315,8 @@ async function readOne(db, locationId, creds, membershipCache, c, summary) {
     })
     if (r?.error) { summary.error++; return 'error' }
     summary[r.action] = (summary[r.action] || 0) + 1
+    // CREDITSREAD.1 — the sync ran, but kept the stored credits/label: counted.
+    if (r.credits_unread) summary.credits_unread++
     return r.action
   } catch {
     summary.error++

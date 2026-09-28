@@ -145,11 +145,11 @@ describe('GET /api/cron/glofox-detail-backfill — DETAILBACKFILL.1 cursor', () 
   it('counts the outcomes, records the new progress signal, and tells the heartbeat', async () => {
     h.countResult = { count: 42, error: null }
     const out = await (await GET(req())).json()
-    const expected = { create: 0, update: 1, leave: 0, fetch_failed: 1, error: 0, ambiguous: 0, invalid: 0, member_refused: 1, stamp_failed: 0 }
+    const expected = { create: 0, update: 1, leave: 0, fetch_failed: 1, error: 0, ambiguous: 0, invalid: 0, member_refused: 1, stamp_failed: 0, credits_unread: 0 }
     expect(out.success).toBe(true)
     expect(out.per_location[0].summary).toEqual(expected)
     expect(out.per_location[0].remaining_due).toBe(42)
-    expect(h.runUpdates.at(-1).summary).toEqual({ ...expected, remaining_due: 42 })
+    expect(h.runUpdates.at(-1).summary).toEqual({ ...expected, remaining_due: 42, glofox_http: expect.any(Object) })
     expect(h.runInserts[0].filter_used).toEqual({
       detail_backfill: true, statuses: STATUSES, sweep_days: 14, retry_hours: 6, per_tick: 100,
     })
@@ -157,6 +157,7 @@ describe('GET /api/cron/glofox-detail-backfill — DETAILBACKFILL.1 cursor', () 
     expect(ors(h.countChains[0])).toEqual([`glofox_detail_due_at.is.null,glofox_detail_due_at.lte.${NOW_ISO}`])
     expect(stampHeartbeat).toHaveBeenCalledWith('glofox-detail-backfill', {
       candidates_seen: 3, remaining_due: 42, member_refused: 1, fetch_failed: 1, error: 0, stamp_failed: 0,
+      credits_unread: 0, glofox_http: expect.any(Object),
     })
   })
 
@@ -185,6 +186,23 @@ describe('GET /api/cron/glofox-detail-backfill — DETAILBACKFILL.1 cursor', () 
     expect(logError).toHaveBeenCalledTimes(1)
     expect(logError).toHaveBeenCalledWith('glofox-detail-backfill', expect.stringContaining('re-read next tick'), { locationId: 'loc-1', stampFailed: 3 })
     expect(stampHeartbeat).toHaveBeenCalled()
+  })
+
+  it('counts a sync that could not read credits, and reports Glofox traffic to the run row and heartbeat', async () => {
+    applyMemberSync.mockResolvedValueOnce({ action: 'update', credits_unread: true })
+    h.candidates = [cand('good1')]
+    const out = await (await GET(req())).json()
+    expect(out.per_location[0].summary.credits_unread).toBe(1)
+    const run = h.runUpdates.at(-1).summary
+    expect(run.credits_unread).toBe(1)
+    expect(run.glofox_http).toEqual({
+      requests: expect.any(Number), retries: expect.any(Number), status_429: expect.any(Number),
+      status_5xx: expect.any(Number), network_errors: expect.any(Number), gave_up: expect.any(Number),
+    })
+    expect(run.glofox_http.requests).toBeGreaterThanOrEqual(1)   // the member GET went through glofoxFetch
+    expect(stampHeartbeat).toHaveBeenCalledWith('glofox-detail-backfill', expect.objectContaining({
+      credits_unread: 1, glofox_http: expect.objectContaining({ requests: expect.any(Number) }),
+    }))
   })
 
   it('a failed candidate read is a fault: nothing read, logged, heartbeat NOT stamped', async () => {
