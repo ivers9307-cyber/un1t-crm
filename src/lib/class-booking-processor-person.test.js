@@ -684,3 +684,29 @@ describe('CBPCREDITREAD.1: an unreadable sibling balance is not an empty one', (
     expect(createBooking).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ user_id: 'gm-b' }))
   })
 })
+
+// CBPCREDITREAD.1 review — the throw can come AFTER the processor elected a
+// sibling's account for the write. The card filed at the cap must still name
+// that account: without it, approving falls back to the funnel contact (no
+// glofox_member_id) and answers NOT_EXECUTABLE.
+describe('CBPCREDITREAD.1: the retry carries the elected account', () => {
+  it('returner on an elected sibling whose credits read fails → CreditReadError names the elected account and the person', async () => {
+    fetchUserCreditsResult.mockResolvedValue({ ok: false, credits: [] })
+    const db = makeDb({
+      contact: funnelContact({ last_attended_at: '2026-06-01T10:00:00Z' }),
+      siblings: [sibling('c-old', { glofox_member_id: 'gm-old' })],
+      groupMemberIds: grouped(['c-old']),
+    })
+
+    const err = await processClassBookingRequest(db, req).catch((e) => e)
+
+    expect(err).toBeInstanceOf(CreditReadError)
+    expect(err.reviewOptions).toMatchObject({
+      executingContactId: 'c-old',
+      electedMemberId: 'gm-old',
+      personContactIds: ['c-new', 'c-old'],
+    })
+    expect(createBooking).not.toHaveBeenCalled()
+    expect(amrInsert(db)).toBeUndefined()
+  })
+})

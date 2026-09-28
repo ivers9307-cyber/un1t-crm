@@ -69,6 +69,10 @@ export async function claimAndProcessBookingJob(db, row) {
     // be done instead of a generic error. Duck-typed on purpose: this lib must
     // not depend on the processor's classes (its unit test mocks the module).
     const reviewReason = (typeof e?.reviewReason === 'string' && e.reviewReason) || 'processing_error'
+    // ...and the account it had chosen (CreditReadError.reviewOptions: the
+    // person's contact ids, the elected sibling). routeToReview's 4th
+    // argument, so the card names the account approving must book on.
+    const reviewOptions = (e?.reviewOptions && typeof e.reviewOptions === 'object') ? e.reviewOptions : undefined
     // Retry under the cap, else flag for staff. The status guard stops this
     // ever clobbering a row the processor already moved to a terminal state.
     const atCap = (row.attempts || 0) + 1 >= MAX_ATTEMPTS
@@ -93,7 +97,7 @@ export async function claimAndProcessBookingJob(db, row) {
       // review_unavailable:* when no card can be filed. Only a row the guard
       // above matched gets here — never one the processor stamped itself.
       try {
-        const review = await routeToReview(db, { ...row, approval_request_id: flagged.approval_request_id ?? row.approval_request_id ?? null }, reviewReason)
+        const review = await routeToReview(db, { ...row, approval_request_id: flagged.approval_request_id ?? row.approval_request_id ?? null }, reviewReason, ...(reviewOptions ? [reviewOptions] : []))
         if (review?.outcome !== 'needs_review') {
           logError('class-booking-queue', 'retries exhausted and no staff card could be filed', { requestId: row.id, detail: review?.detail })
         }

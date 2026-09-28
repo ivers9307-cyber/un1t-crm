@@ -37,11 +37,18 @@ async function setStatus(db, id, fields) {
 // (class-booking-queue.js): re-queued under MAX_ATTEMPTS, then a staff card
 // whose reason is reviewReason, 'credit_check_failed' (its copy says the
 // balance is unknown, and approving it grants nothing).
+//
+// reviewOptions is routeToReview's 4th argument, passed through by the queue:
+// the throw can come AFTER the processor elected a sibling's account for the
+// write, and the card filed at the cap must still name it (executing_contact_id
+// + elected_glofox_member_id). Without it, approving falls back to the funnel
+// contact, which has no Glofox account, and answers NOT_EXECUTABLE.
 export class CreditReadError extends Error {
-  constructor() {
+  constructor({ personContactIds = null, executingContactId = null, electedMemberId = null } = {}) {
     super('credit_check_failed')
     this.name = 'CreditReadError'
     this.reviewReason = 'credit_check_failed'
+    this.reviewOptions = { personContactIds, executingContactId, electedMemberId }
   }
 }
 
@@ -246,6 +253,11 @@ export async function processClassBookingRequest(db, request) {
   const toReview = (reason) => routeToReview(db, request, reason, {
     personContactIds, executingContactId, electedMemberId,
   })
+  // CBPCREDITREAD.1 — the retry signal carries the same account the card
+  // would have named (read at throw time, like toReview above).
+  const creditReadError = () => new CreditReadError({
+    personContactIds, executingContactId, electedMemberId,
+  })
 
   // AGENT-FUNNEL-CREDITS.1 — prior attendance alone no longer blocks the
   // booking (Richard 2026-08-25). /start is aimed at new people, but a
@@ -386,7 +398,7 @@ export async function processClassBookingRequest(db, request) {
     // Nobody we could read has a balance. If someone could NOT be read,
     // "this person has nothing to book with" is not known: retry, rather
     // than file prior_attendance / needs_credit_grant on a guess.
-    if (siblingCreditsUnread) throw new CreditReadError()
+    if (siblingCreditsUnread) throw creditReadError()
     return false
   }
 
@@ -409,7 +421,7 @@ export async function processClassBookingRequest(db, request) {
     // membership still books without it, exactly as before.
     if (!read.ok && !activeMembership) {
       logWarn('cbp', 'credit check unreadable; the queue retries', { requestId: request.id })
-      throw new CreditReadError()
+      throw creditReadError()
     }
     if (!(read.remaining > 0) && !activeMembership && !(await rescueSiblingBalance())) {
       return toReview('prior_attendance')
@@ -451,7 +463,7 @@ export async function processClassBookingRequest(db, request) {
     const read = await readCredits(creds, memberId)
     if (!read.ok) {
       logWarn('cbp', 'credit check unreadable; the queue retries', { requestId: request.id })
-      throw new CreditReadError()
+      throw creditReadError()
     }
     if (read.remaining == null || read.remaining <= 0) {
       // PERSON-ACCT.9 — before asking staff to grant a credit, check the rest

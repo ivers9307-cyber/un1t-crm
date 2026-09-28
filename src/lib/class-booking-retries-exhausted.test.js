@@ -29,6 +29,9 @@ vi.mock('@/lib/meta-capi', () => ({ sendCtwaConversion: vi.fn(), sendWebsiteConv
 vi.mock('@/lib/agent/approval-notify', () => ({ notifyAgentApprovalRequest: vi.fn(async () => ({})) }))
 vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
 vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: vi.fn(async () => {}) }))
+// The approval route (driven below to prove WHICH account an approve books on).
+vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn(async () => ({ id: 'staff-1' })) }))
+vi.mock('@/lib/permissions', () => ({ hasPermissionForLocation: vi.fn(() => true) }))
 let store
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => store.db }))
 
@@ -38,12 +41,14 @@ import { notifyAgentApprovalRequest } from '@/lib/agent/approval-notify'
 import { logError } from '@/lib/log'
 import { GET } from '@/app/api/cron/process-class-bookings/route.js'
 import { whyFlagged } from '@/lib/approvals/agent-request-why'
+import { PATCH as decideRequest } from '@/app/api/agent/membership-requests/[id]/route.js'
+import { createBooking, glofoxCredentialsForLocation, interpretBookingResult } from '@/lib/glofox'
 
 // ── in-memory class_booking_requests + agent_membership_requests ─────────────
 // Filters are applied for real (eq / lt / gte / in / contains), so a guard
 // that matches no row really matches no row.
-function makeStore({ cbr = [], amr = [], insertFails = false, linkedLookupFails = false } = {}) {
-  const tables = { class_booking_requests: cbr.map((r) => ({ ...r })), agent_membership_requests: amr.map((r) => ({ ...r })) }
+function makeStore({ cbr = [], amr = [], contacts = [], insertFails = false, linkedLookupFails = false } = {}) {
+  const tables = { class_booking_requests: cbr.map((r) => ({ ...r })), agent_membership_requests: amr.map((r) => ({ ...r })), contacts: contacts.map((r) => ({ ...r })) }
   const inserts = []
   let seq = 0
   function from(table) {
@@ -78,6 +83,10 @@ function makeStore({ cbr = [], amr = [], insertFails = false, linkedLookupFails 
       maybeSingle: async () => {
         const { data, error } = await run()
         return error ? { data: null, error } : { data: data[0] ?? null, error: null }
+      },
+      single: async () => {
+        const { data, error } = await run()
+        return error ? { data: null, error } : { data: data[0] ?? null, error: data[0] ? null : { message: 'no row' } }
       },
       then(resolve, reject) { return run().then(resolve, reject) },
     }
@@ -135,6 +144,47 @@ describe('queue: retries exhausted on a THROW → staff card', () => {
     expect(why).toMatch(/could not be read/i)
     expect(why).toMatch(/does not mean they have no credits/i)
     expect(why).not.toMatch(/no class credits left/i)
+  })
+
+  // CBPCREDITREAD.1 review — the read can fail AFTER the processor elected a
+  // sibling's account. The card must name it (executing_contact_id +
+  // elected_glofox_member_id), or approving falls back to the funnel contact,
+  // which has no Glofox account, and answers NOT_EXECUTABLE.
+  it('a returner on an elected sibling whose read failed 3 times: the card names the elected account, and approving books on it', async () => {
+    store = makeStore({
+      cbr: [atCap],
+      contacts: [
+        { id: 'ct-1', glofox_member_id: null },
+        { id: 'ct-sib', glofox_member_id: 'gm-sib' },
+      ],
+    })
+    processClassBookingRequest.mockRejectedValue(new CreditReadError({
+      personContactIds: ['ct-1', 'ct-sib'], executingContactId: 'ct-sib', electedMemberId: 'gm-sib',
+    }))
+
+    await claimAndProcessBookingJob(store.db, atCap)
+
+    expect(store.inserts).toHaveLength(1)
+    const card = store.inserts[0]
+    expect(card.contact_id).toBe('ct-1')
+    expect(card.details).toMatchObject({ reason: 'credit_check_failed', executing_contact_id: 'ct-sib', elected_glofox_member_id: 'gm-sib' })
+
+    // Staff approve it: the booking runs on the ELECTED account.
+    glofoxCredentialsForLocation.mockResolvedValue({ branchId: 'b', apiKey: 'k', apiToken: 't' })
+    createBooking.mockResolvedValue({ ok: true, status: 200, body: { _id: 'gfb-sib' } })
+    interpretBookingResult.mockReturnValue({ booked: true, bookingId: 'gfb-sib', messageCode: null, alreadyBooked: false })
+    const res = await decideRequest(
+      new Request(`http://localhost/api/agent/membership-requests/${card.id}`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ status: 'approved' }),
+      }),
+      { params: Promise.resolve({ id: card.id }) },
+    )
+    const json = await res.json()
+
+    expect(createBooking).toHaveBeenCalledTimes(1)
+    expect(createBooking.mock.calls[0][1]).toMatchObject({ user_id: 'gm-sib', model_id: 'ev-1' })
+    expect(json.executed).toMatchObject({ ok: true })
+    expect(json.executed?.message_code).not.toBe('NOT_EXECUTABLE')
   })
 
   it('a plain throw still files processing_error (unchanged)', async () => {
