@@ -82,7 +82,7 @@ OAuth routes:
 - `GET /api/xero/callback` — exchange code, persist tokens, redirect to `/settings/locations/<id>?tab=xero`
 - `POST /api/xero/disconnect` — remove the connection row
 - `GET /api/xero/status?location_id=…` — safe subset of the connection row (no tokens) for client UIs
-- `GET /api/xero/debug` — dev-only diagnostic; dumps masked env vars + the exact authorize URL
+- `GET /api/xero/debug` — dev-only diagnostic; shows presence/length of the Xero client id and secret (never a character) + the exact authorize URL
 
 Settings UI lives on the per-location Integrations tab — Settings → Locations → \<name\> → Integrations → Xero, i.e. `/settings/locations/<id>?tab=xero` (`XeroIntegrationTab.jsx` wrapping `XeroLocationCard.jsx`). The old standalone `/settings/integrations` page was retired (INTEG-A4).
 
@@ -258,7 +258,7 @@ Set via `TWILIO_FROM` env. Twilio infers the sender type from the value's shape 
 - **Energy** is rolled per channel per local day from the monotonic `aenergy.total` counter (resets and power-cut rollbacks handled); read it per device. The carry window is `ENERGY_LOOKBACK_DAYS` = 7 days, selected per device with an explicit column list (never `*` — the row round-trips into the upsert), and `ENERGY_ROW_CAP` pins the worst case (every device × every day of the window) under PostgREST's 1k ceiling.
 - **Device freshness is graded against the engine's WRITE floor, not its read cadence.** The cron reads every adopted plug once a minute but only rewrites a row when something actually moved (a deadband swallows a wattmeter twitching in the third decimal), so an idle plug's `last_seen_at` advances only on the `STATE_REFRESH_MS` refresh floor — every five minutes. The card's green window is therefore that floor plus one sweep (six minutes), amber to fifteen, red past it. Sizing it to the read cadence instead made every healthy idle plug flicker amber for two minutes in every five.
 - **Integrator API** (Shelly's consent-based multi-account model) is a parallel operator application — https://forms.office.com/e/KDxYr4K3vF or support@shelly.cloud, business email required. Swapping to it changes `src/lib/shelly/client.js` only.
-- **Secrets never leave the server**: routes expose `key_hint` (last four characters) and `has_auth_key`; the client never logs a URL or request body (the key rides in the query string / form body); `redactSecret` covers the raw and encoded forms.
+- **Secrets never leave the server**: routes expose only `has_auth_key` (presence; the UI shows `SECRET_MASK`, never a character of the key: SECRETTAILS.1, `key_hint` retired by migs 658/659); the client never logs a URL or request body (the key rides in the query string / form body); `redactSecret` covers the raw and encoded forms.
 
 
 ## Revolut Merchant integration
@@ -424,7 +424,7 @@ If the old key is already lost, there is no recovery: clear the credential colum
 
 ### Handling rules
 
-- The ciphertext columns are **never** selected by any GET. Write-only from the operator's side; the UI shows connection *state*, never the value (`key_hint`-style last-four is the pattern, per Shelly).
+- The ciphertext columns are **never** selected by any GET. Write-only from the operator's side; the UI shows connection *state*, never the value and never any character of it (presence only, `SECRET_MASK` from `src/lib/secret-keys.js`; SECRETTAILS.1).
 - `resolveAuth()` (`src/lib/mail/auth-strategy.js`) is the only reader. It returns `{ user, pass }` or `{ user, accessToken }` — never a raw secret to be passed around — and **never throws, and never puts the secret in an error string**, because those strings land in `email_mailbox_ingress.last_error` and on the operator's screen.
 - Gate credential writes with `guardMailboxAdmin` (master or owner-at-location) and write an audit event on every connect / disconnect / credential change.
 

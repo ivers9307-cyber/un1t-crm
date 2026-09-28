@@ -17,10 +17,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
 import ShellyConnectionPanel from './ShellyConnectionPanel.jsx'
+import { SECRET_MASK } from '@/lib/secret-keys'
 
 const CONNECTED = {
   host: 'shelly-68-eu.shelly.cloud',
-  key_hint: 'ab12',
   has_auth_key: true,
   status: 'connected',
   last_ok_at: new Date(Date.now() - 60_000).toISOString(),
@@ -160,7 +160,7 @@ describe('ShellyConnectionPanel — the linked state', () => {
   it('shows host, masked key and last OK, plus the status chip', () => {
     render(<ShellyConnectionPanel connection={CONNECTED} canManage deviceCount={2} />)
     expect(screen.getByText('Connected')).toBeTruthy()
-    expect(screen.getByText(/shelly-68-eu\.shelly\.cloud · key ••••ab12 · last OK/)).toBeTruthy()
+    expect(screen.getByText(new RegExp(`shelly-68-eu\\.shelly\\.cloud · key ${SECRET_MASK} · last OK`))).toBeTruthy()
   })
 
   it('an error status reads as retrying, never as broken', () => {
@@ -217,5 +217,20 @@ describe('ShellyConnectionPanel — the linked state', () => {
     render(<ShellyConnectionPanel connection={CONNECTED} canManage deviceCount={null} />)
     fireEvent.click(screen.getByRole('button', { name: /Disconnect/ }))
     expect(screen.getByText(/Your adopted plugs stay adopted/)).toBeTruthy()
+  })
+})
+
+describe('ShellyConnectionPanel — key presence (SECRETTAILS.1)', () => {
+  it('shows that a key is stored, never a character of it', () => {
+    // A stale prop carrying a hint must not render it either. canManage: the
+    // read-only (non-manager) line never shows the key line at all.
+    render(<ShellyConnectionPanel connection={{ ...CONNECTED, key_hint: 'ab12' }} canManage deviceCount={3} />)
+    expect(screen.getByText(new RegExp(`key ${SECRET_MASK}`))).toBeTruthy()
+    expect(document.body.textContent).not.toContain('ab12')
+  })
+
+  it('says "no key on file" when the connection has none', () => {
+    render(<ShellyConnectionPanel connection={{ ...CONNECTED, has_auth_key: false }} canManage deviceCount={3} />)
+    expect(screen.getByText(/no key on file/)).toBeTruthy()
   })
 })

@@ -22,13 +22,15 @@ import { createShellyClient } from './client'
 // are one allowlist, so a column can only reach a response by being added in
 // both places. No auth_key, and no auth_key_fingerprint either: the
 // fingerprint is a sha256 OF the key, so publishing it turns "which account is
-// this?" into an offline check anyone holding a candidate key can run.
+// this?" into an offline check anyone holding a candidate key can run. And no
+// key_hint (SECRETTAILS.1): it was the key's last four characters; mig 659
+// clears it and forbids a value.
 // `id`, `location_id`, `linked_by`, `created_at` and `updated_at` are dropped
 // deliberately rather than fetched and discarded: no route needs the
 // connection id (every handler keys on the session's location, spec "Tenancy":
 // no route accepts a location_id), and linked_by is a staff user id the UI
 // never shows.
-const NON_SECRET = 'host, key_hint, status, last_ok_at, last_error, last_error_at'
+const NON_SECRET = 'host, status, last_ok_at, last_error, last_error_at'
 
 // The most locations one Shelly account could plausibly serve, several times
 // over. It is a guard, not a page size: the spec caps the estate at 100
@@ -140,17 +142,17 @@ export async function loadPublicConnection(db, locationId) {
 // remembered to subtract it. Safe against a full row too, which is why
 // loadConnectionWithKey's output can be passed straight in.
 export function publicConnectionView(conn) {
+  const host = conn?.host ?? null
   return {
-    host: conn?.host ?? null,
-    key_hint: conn?.key_hint ?? null,
-    // Derived from the hint, not hard-coded true. The hint is the only
-    // evidence of a key that this projection HAS (auth_key is never selected),
-    // so deriving it from anything else would make the field mean different
-    // things depending on which loader called. A blank hint under-claims —
-    // the operator is asked to paste a key that may already be there, which
-    // is a wasted minute; claiming true for a row with no key strands them
-    // on a connection the UI says is configured and the cron cannot use.
-    has_auth_key: Boolean(conn?.key_hint),
+    host,
+    // SECRETTAILS.1 — PRESENCE ONLY, no character of the key. A stored row
+    // always holds a key: auth_key is NOT NULL and auth_key_fingerprint must
+    // be 64 hex (mig 562), while a blank key has no fingerprint
+    // (fingerprintAuthKey('') === ''). host is NOT NULL on the same row and
+    // every loader selects it, so "host present" means "a stored row", which
+    // means "a key is stored", whichever loader called. Do not derive this
+    // from the old key hint again: mig 659 clears it.
+    has_auth_key: typeof host === 'string' && host !== '',
     status: conn?.status ?? null,
     last_ok_at: conn?.last_ok_at ?? null,
     last_error: conn?.last_error ?? null,
