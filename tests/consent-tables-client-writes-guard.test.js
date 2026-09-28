@@ -166,10 +166,11 @@ describe('later migrations keep consent read-only for clients (mig 660)', () => 
     expect(readdirSync(MIGRATIONS).some((f) => f.startsWith(`${CONSENT_WRITES_OFF_MIGRATION}_`))).toBe(true)
   })
 
-  // From 656, not 660: a lower-numbered migration merged AFTER 660 must not
-  // escape (656-659 were in flight when 660 was written). 001-655 predate the
-  // rule and hold the legacy grants/policies 660 removes.
-  const SCAN_FROM = 656
+  // From 652, not 660: a lower-numbered migration merged AFTER 660 must not
+  // escape (652 C50 recreates contact_location_audience and was not yet
+  // written; 656-659 were in flight). 001-651 predate the rule and hold the
+  // legacy grants/policies 660 removes; 653-655 grant nothing on these tables.
+  const SCAN_FROM = 652
   const later = readdirSync(MIGRATIONS).filter((f) => f.endsWith('.sql') && parseInt(f, 10) >= SCAN_FROM)
   it.each(later)('%s: no client write privilege and no permissive write policy on a consent table', (file) => {
     expect(consentWriteReopeners(readFileSync(path.join(MIGRATIONS, file), 'utf8')),

@@ -694,6 +694,12 @@ describe('the self-check aborts the whole file', () => {
     for (const t of TABLES) expect((await clientAcl(t)).find((r) => r.grantee === 'authenticated').privs, t).toContain('INSERT')
   }
 
+  it('when the old FOR ALL policy read different rows than the new SELECT policy (check 6)', () => expectAbort(
+    `DROP POLICY contact_preferences_location_scoped ON public.contact_preferences;
+     CREATE POLICY contact_preferences_location_scoped ON public.contact_preferences FOR ALL TO authenticated USING (true) WITH CHECK (true);`,
+    /mig 660: contact_preferences_select does not read the same rows as the policy it replaces/,
+  ), 60_000)
+
   it("when another grantor's INSERT on consent_log survives the REVOKE", () => expectAbort(
     `GRANT INSERT ON public.consent_log TO other_grantor WITH GRANT OPTION;
      SET ROLE other_grantor; GRANT INSERT ON public.consent_log TO authenticated; RESET ROLE;`,
