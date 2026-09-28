@@ -515,4 +515,22 @@ describe('getOpenApiSpec', () => {
     expect(op.responses['500'].description).toMatch(/location_read_failed/)
     expect(op.responses['404'].description).toMatch(/location_not_found/)
   })
+
+  // SEQROUTEGATE.1 — every sequence BUILDER route now answers 403 when the
+  // caller lacks email or WhatsApp at the sequence's studio (and POST
+  // /api/sequences 400s with no location). The enrolment routes (enrol, clone,
+  // exit, resume, audience/seed) keep their own email rule and are excluded.
+  it('documents the builder permission 403 on every sequence builder path', () => {
+    const ENROLMENT = /^\/api\/sequences\/\{id\}\/(enrol|clone|enrollments|audience)(\/|$)/
+    const builderPaths = Object.keys(spec.paths).filter((p) => p.startsWith('/api/sequences') && !ENROLMENT.test(p))
+    expect(builderPaths.length).toBeGreaterThan(0)
+    for (const p of builderPaths) {
+      for (const [method, op] of Object.entries(spec.paths[p])) {
+        expect(op.responses?.['403']?.description, `${method.toUpperCase()} ${p}`).toBe('Email or WhatsApp permission required')
+      }
+    }
+    const create = spec.paths['/api/sequences']?.post
+    if (create) expect(create.responses['400'].description).toMatch(/location_id required/)
+  })
 })
+
