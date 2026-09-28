@@ -114,9 +114,23 @@
 --   * no SECURITY INVOKER function over these tables is client-executable.
 --
 -- ===========================================================================
--- APPLY: AFTER SECFIX.3b is deployed and this PR merges. Pre/post probes and
--- the rollback are in
--- docs/superpowers/plans/2026-09-27-followups/C35-SECFIX.3.md (Task 3c-5).
+-- APPLY: AFTER SECFIX.3b is deployed and this PR merges. Pre/post probes are
+-- in docs/superpowers/plans/2026-09-27-followups/C35-SECFIX.3.md (Task 3c-5).
+--
+-- ROLLBACK: forward-only, so a NEW migration named <NNN>_secfix3c_rollback.sql
+-- (the guard allow-lists exactly that name; see
+-- tests/credential-column-grants-guard.test.js). No column lists, so it cannot
+-- drift if a later migration grants another column; the table-level REVOKE
+-- also strips every column ACL. One transaction; no data is touched:
+--   BEGIN;
+--   REVOKE ALL ON public.locations, public.contact_external_integrations,
+--     public.channel_connections, public.whatsapp_numbers, public.xero_connections
+--     FROM authenticated, anon;
+--   GRANT ALL ON public.locations, public.contact_external_integrations,
+--     public.channel_connections, public.whatsapp_numbers, public.xero_connections
+--     TO authenticated, anon;
+--   COMMIT;
+-- That restores the 28 Sep relacl (arwdDxtm for both roles, no column ACLs).
 -- ===========================================================================
 
 BEGIN;

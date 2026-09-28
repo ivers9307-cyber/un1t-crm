@@ -249,6 +249,15 @@ function tableLevelClientGrants(sql) {
   return hits
 }
 
+// ROLLING BACK mig 648: forward-only, so the rollback is a NEW migration named
+// `<NNN>_secfix3c_rollback.sql` (NNN > 648). That exact name is exempt from
+// the table-level-grant check below and from nothing else; keep this whole
+// describe in place (the column checks still bind every other file). Its
+// body is the form in mig 648's header: REVOKE ALL then GRANT ALL on the
+// five tables, FROM/TO authenticated, anon, one transaction, no column lists.
+const isSecfix3cRollback = (file) =>
+  /^\d+_secfix3c_rollback\.sql$/.test(file) && parseInt(file, 10) > CREDENTIAL_GRANT_MIGRATION
+
 describe('later migrations keep the credential grants (SECFIX.3c)', () => {
   const dir = path.join(ROOT, 'supabase/migrations')
   const later = readdirSync(dir).filter((f) => f.endsWith('.sql') && parseInt(f, 10) > CREDENTIAL_GRANT_MIGRATION)
@@ -279,9 +288,16 @@ describe('later migrations keep the credential grants (SECFIX.3c)', () => {
   })
 
   it.each(later.length ? later : ['(none yet)'])('%s: no table-level client grant on a credential table', (file) => {
-    if (file === '(none yet)') return
+    if (file === '(none yet)' || isSecfix3cRollback(file)) return
     expect(tableLevelClientGrants(readFileSync(path.join(dir, file), 'utf8')),
       `${file}: a table-level grant reopens every withheld credential (mig 648). Grant columns instead`).toEqual([])
+  })
+
+  it('a SECFIX.3c rollback migration is allow-listed by its file name, and nothing else is', () => {
+    expect(isSecfix3cRollback('651_secfix3c_rollback.sql')).toBe(true)
+    expect(isSecfix3cRollback('652_secfix3c_rollback.sql')).toBe(true)
+    for (const name of ['651_restore_location_grants.sql', '651_secfix3c_rollback_and_more.sql', 'secfix3c_rollback.sql',
+      '651_secfix3c_rollback.sql.bak', '647_secfix3c_rollback.sql']) expect(isSecfix3cRollback(name), name).toBe(false)
   })
 
   it('the column-add detector sees an added column and accepts either decision', () => {

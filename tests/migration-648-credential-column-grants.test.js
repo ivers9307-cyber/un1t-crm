@@ -546,3 +546,24 @@ describe('the self-check aborts the whole file', () => {
     await stillOpen()
   })
 })
+
+describe("the header's rollback restores the pre-648 grants exactly", () => {
+  beforeAll(() => boot({ migrate: true }), 60_000)
+  afterAll(() => db?.close())
+
+  it('REVOKE ALL + GRANT ALL, no column lists: both roles back to table-level ALL, no column ACL left', async () => {
+    const block = MIG_648.match(/^-- ROLLBACK:[\s\S]*?^--\s+BEGIN;\n([\s\S]*?^--\s+COMMIT;)$/m)
+    expect(block, 'the rollback SQL in the header').not.toBeNull()
+    const sql = `BEGIN;\n${block[1].replace(/^--\s?/gm, '')}`
+    expect(sql).not.toMatch(/\(\s*id\s*,/) // no column lists
+    await runSql(sql)
+    for (const table of CREDENTIAL_GRANT_TABLES) {
+      expect(await tablePrivileges(table, 'authenticated')).toEqual(ALL_TABLE_PRIVS)
+      expect(await tablePrivileges(table, 'anon')).toEqual(ALL_TABLE_PRIVS)
+      expect(await tablePrivileges(table, 'service_role')).toEqual(ALL_TABLE_PRIVS)
+      const { rows } = await db.query(
+        `SELECT count(*)::int n FROM pg_attribute WHERE attrelid = $1::regclass AND attnum > 0 AND attacl IS NOT NULL`, [`public.${table}`])
+      expect(rows[0].n, `${table}: column ACLs left behind`).toBe(0)
+    }
+  })
+})
