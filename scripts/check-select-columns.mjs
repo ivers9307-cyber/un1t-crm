@@ -29,7 +29,8 @@
 //      against the view's own FROM/JOIN aliases. A view whose list cannot
 //      be resolved is skipped BY NAME and the name is printed, so nobody
 //      has to guess what the checker declined to read.
-//   3. Scan src/**/*.{js,jsx} for `.from('<table>')…` chains and check every
+//   3. Scan src/, mobile/ and shared/ (**/*.{js,jsx}; WATPLPICKER.1 added the
+//      last two) for `.from('<table>')…` chains and check every
 //      column name on the chain whose text it can READ: the PostgREST select
 //      grammar (`a,b`, `alias:col`, `rel(...)`, `rel!fk(...)`, an embed named
 //      by its FK column — `alias:fk_col(...)` / `fk_col(...)` — resolved
@@ -53,8 +54,9 @@
 //     of its parent (an FK into auth.*, a composite FK, one made outside the
 //     migrations or inside a `DO $$` block, e.g. fleet_device_health's) —
 //     none in src/ at SELCOLS2.1;
-//   - everything outside `src/**` — `mobile/**`, `shared/**` and `tests/**`
-//     are not scanned at all.
+//   - `tests/**` (this checker's own fixtures name phantom columns on
+//     purpose), anything outside the three roots, and any `node_modules`,
+//     `ios`, `android`, `dist`, `web-build` or dot-directory inside them.
 // A clean run therefore means "no phantom column among the ones I could
 // read", never "every column in the repo exists". Widening what it can read
 // is always worth more than tightening what it does with what it reads.
@@ -80,7 +82,13 @@ import { pathToFileURL } from 'node:url'
 // kept verbatim, right down to the `${}` re-entry.
 
 const MIGRATIONS_ROOT = 'supabase/migrations'
-const SRC_ROOT = 'src'
+// WATPLPICKER.1 — the phone and the shared seam talk to PostgREST too. The
+// phone's WhatsApp template picker selected two columns that never existed
+// and 400'd on every call from 2026-04-30 while this gate, scanning src/
+// only, stayed green.
+export const SOURCE_ROOTS = Object.freeze(['src', 'mobile', 'shared'])
+// Native projects, build output and installed packages are not our source.
+const SKIP_DIRS = new Set(['node_modules', 'ios', 'android', 'dist', 'web-build'])
 const ALLOWLIST_PATH = '.select-columns-allowlist.json'
 
 // Filter methods whose FIRST argument is a column name.
@@ -975,11 +983,12 @@ export function classifyHits(hits, entries, today) {
 // Runner
 // ---------------------------------------------------------------------------
 
-function walkSources(dir, out = []) {
+export function walkSources(dir, out = []) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const p = path.join(dir, entry.name)
-    if (entry.isDirectory()) walkSources(p, out)
-    else if (/\.jsx?$/.test(entry.name)) out.push(p)
+    if (entry.isDirectory()) {
+      if (!entry.name.startsWith('.') && !SKIP_DIRS.has(entry.name)) walkSources(p, out)
+    } else if (/\.jsx?$/.test(entry.name)) out.push(p)
   }
   return out
 }
@@ -1007,7 +1016,7 @@ function main() {
 
   const hits = []
   let checked = 0
-  const files = walkSources(SRC_ROOT)
+  const files = SOURCE_ROOTS.flatMap((root) => walkSources(root))
   for (const file of files) {
     const rel = file.split(path.sep).join('/')
     const src = fs.readFileSync(file, 'utf8')

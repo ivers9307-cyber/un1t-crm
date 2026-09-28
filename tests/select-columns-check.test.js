@@ -8,7 +8,10 @@
 // The shape of every fixture is the ENROLFIX.1 incident (#1685): a select
 // naming `created_at` on a table whose timestamp is `enrolled_at`.
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import {
   applyMigrationSql,
   splitSqlStatements,
@@ -26,6 +29,8 @@ import {
   evaluateStringExpr,
   findConstInitializer,
   resolveSelectArg,
+  walkSources,
+  SOURCE_ROOTS,
 } from '../scripts/check-select-columns.mjs'
 
 /** Replay migration texts in order into a schema map (and the FK map). */
@@ -544,5 +549,52 @@ describe('resolveSelectArg', () => {
     expect(findConstInitializer("var A = 'x'", 'A')).toBeNull()
     expect(findConstInitializer("const AB = 'x'", 'A')).toBeNull()
     expect(findConstInitializer("obj.const A = 'x'", 'A')).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// WATPLPICKER.1 — the gate reads the phone and the shared seam too.
+// ---------------------------------------------------------------------------
+
+describe('which files the gate reads', () => {
+  let tmp = null
+  afterEach(() => { if (tmp) fs.rmSync(tmp, { recursive: true, force: true }); tmp = null })
+
+  function tree(files) {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'selcols-walk-'))
+    for (const f of files) {
+      fs.mkdirSync(path.join(tmp, path.dirname(f)), { recursive: true })
+      fs.writeFileSync(path.join(tmp, f), '')
+    }
+    return tmp
+  }
+  const rel = (root, files) => files.map((f) => path.relative(root, f).split(path.sep).join('/')).sort()
+
+  it('scans src, mobile and shared — the phone picker phantom lived in mobile/lib', () => {
+    expect(SOURCE_ROOTS).toEqual(['src', 'mobile', 'shared'])
+  })
+
+  it('reads .js and .jsx at any depth, and nothing else', () => {
+    const root = tree(['a.js', 'lib/b.jsx', 'app/(staff)/whatsapp/[id].jsx', 'c.ts', 'd.json', 'e.md'])
+    expect(rel(root, walkSources(root))).toEqual(['a.js', 'app/(staff)/whatsapp/[id].jsx', 'lib/b.jsx'])
+  })
+
+  it('skips installed packages, native projects, build output and dot-directories', () => {
+    const root = tree([
+      'lib/keep.js',
+      'node_modules/pkg/index.js',
+      'ios/Pods/x.js',
+      'android/app/y.js',
+      'dist/bundle.js',
+      'web-build/z.js',
+      '.expo/cache.js',
+      '.eas/w.js',
+    ])
+    expect(rel(root, walkSources(root))).toEqual(['lib/keep.js'])
+  })
+
+  it('skips those names only as directories, never a file that shares one', () => {
+    const root = tree(['lib/dist.js', 'lib/ios.jsx'])
+    expect(rel(root, walkSources(root))).toEqual(['lib/dist.js', 'lib/ios.jsx'])
   })
 })
