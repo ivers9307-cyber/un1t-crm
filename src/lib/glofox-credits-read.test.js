@@ -112,6 +112,8 @@ describe('previewMemberSync — an unread credit context', () => {
     expect(out.changes).not.toHaveProperty('glofox_membership_status')
     expect(out.mapped.glofox_membership_status).toBe('credit_member')
     expect(out.credits_unread).toBe(true)
+    expect(logWarn.mock.calls[0][1]).toContain('memberships read failed')
+    expect(logWarn.mock.calls[0][1]).not.toContain('credits read failed')
     expect(logWarn.mock.calls[0][2]).toEqual({ locationId: LOC, contactId: 'c-1', unread: 'memberships' })
   })
 

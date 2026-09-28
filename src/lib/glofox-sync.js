@@ -1688,10 +1688,13 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
     if (mapped.glofox_membership_status === 'member' && existingRow?.glofox_membership_status === 'credit_member') {
       mapped.glofox_membership_status = 'credit_member'
     }
-    logWarn('glofox-sync', 'Glofox credits read failed; stored credit balance and credit_member label kept', {
+    const unread = ctx.creditsFailed ? 'credits' : 'memberships'
+    logWarn('glofox-sync', unread === 'credits'
+      ? 'Glofox credits read failed; stored credit balance and credit_member label kept'
+      : 'Glofox memberships read failed; balance written, stored credit_member label kept', {
       locationId,
       contactId: existingRow?.id ?? null,
-      unread: ctx.creditsFailed ? 'credits' : 'memberships',
+      unread,
     })
   }
   // PIPELINE5.4 — proposed pipeline placement comes from the
