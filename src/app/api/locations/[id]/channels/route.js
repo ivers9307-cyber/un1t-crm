@@ -19,6 +19,9 @@ const ChannelConnectionSchema = z.object({
   app_secret: z.string().max(500).optional(),
 })
 
+// Staff-facing names for the 409 copy (SUPPORTED_PLATFORMS).
+const PLATFORM_LABELS = { instagram: 'Instagram', messenger: 'Messenger' }
+
 // GET /api/locations/[id]/channels — list channel connections for a
 // location. Masks secrets (access_token, app_secret). Mirrors the
 // whatsapp/numbers route conventions.
@@ -42,7 +45,7 @@ export async function GET(request, props) {
   return NextResponse.json({ success: true, connections: (data || []).map(maskConnectionRow) })
 }
 
-// POST /api/locations/[id]/channels — add a connection.
+// POST /api/locations/[id]/channels — add a connection (never replaces an active one: 409).
 //
 // LOCFIX-ROLEGATE.1 — the role is judged AT params.id, never via `user.role`.
 // That field resolves at the caller's ACTIVE location (with a
@@ -82,24 +85,31 @@ export async function POST(request, props) {
   const db = createServerClient()
   const patch = buildConnectionPatch(body)
 
-  // Partial unique index enforces one active per (location, platform).
-  // Deactivate any existing active row for this platform first so the
-  // new one becomes the active connection cleanly.
-  if (patch.is_active !== false) {
-    await db.from('channel_connections')
-      .update({ is_active: false })
-      .eq('location_id', locationId)
-      .eq('platform', body.platform)
-      .eq('is_active', true)
-    patch.is_active = true
-  }
+  // CHANNELREAD.1 — POST CREATES; it never REPLACES. It used to deactivate
+  // the active row for (location, platform) and insert the new one, so the
+  // Instagram card, after a failed read made it believe nothing was
+  // connected, swapped a working connection for whatever was typed into an
+  // empty form. Now the partial unique index (mig 230,
+  // idx_channel_connections_one_active) is the refusal, atomically: an
+  // existing active row answers 23505 → 409. Replacing an account is the
+  // explicit PATCH ("Update Instagram") or Disconnect then Connect.
+  if (patch.is_active !== false) patch.is_active = true
 
   const { data, error } = await db.from('channel_connections').insert({
     location_id: locationId,
     updated_by: user.id,
     ...patch,
   }).select().single()
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    if (error.code === '23505') {
+      return NextResponse.json({
+        success: false,
+        code: 'already_connected',
+        error: `This location already has an active ${PLATFORM_LABELS[body.platform] || body.platform} connection. Reload the page and use Update instead.`,
+      }, { status: 409 })
+    }
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  }
 
   return NextResponse.json({ success: true, connection: maskConnectionRow(data) })
 }

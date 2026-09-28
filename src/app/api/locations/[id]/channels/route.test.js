@@ -74,12 +74,12 @@ const STAFF_A = {
 }
 
 // The route's shapes against channel_connections, modelled honestly:
-//   POST .update({is_active:false}).eq×3        (bare await — the one-active sweep)
-//        .insert(row).select().single()          → echoes the inserted row
+//   POST .insert(row).select().single()          → echoes the inserted row
+//        (or `insertError`; CHANNELREAD.1 removed the one-active sweep)
 //   GET  .select('*').eq('location_id').order().order()
 // Echoing the inserted row back means pinning the success BODY also pins the
 // WRITE. Fail LOUD on any other table or any other chain.
-function makeDb({ rows = [] } = {}) {
+function makeDb({ rows = [], insertError = null } = {}) {
   const writes = []
   return {
     writes,
@@ -99,7 +99,13 @@ function makeDb({ rows = [] } = {}) {
         },
         insert(row) {
           writes.push({ op: 'insert', row })
-          return { select: () => ({ single: () => Promise.resolve({ data: { id: 'conn-1', ...row }, error: null }) }) }
+          return {
+            select: () => ({
+              single: () => Promise.resolve(insertError
+                ? { data: null, error: insertError }
+                : { data: { id: 'conn-1', ...row }, error: null }),
+            }),
+          }
         },
         select() {
           let out = rows
@@ -165,12 +171,16 @@ describe('POST /api/locations/[id]/channels — the legitimate flow is byte-iden
     expect(await res.json()).toEqual(successBody(LOC_A, 'u1'))
   })
 
-  it('sweeps the previous active row for the platform, then inserts against the target location', async () => {
+  // CHANNELREAD.1 — POST used to deactivate the live row and insert the new
+  // one, so a card that wrongly believed nothing was connected (a failed
+  // read) REPLACED a working connection. It now only inserts; the partial
+  // unique index refuses a second active row (next describe).
+  it('inserts against the target location and never deactivates a live row', async () => {
     await POST(post(LOC_A, VALID), props(LOC_A))
-    expect(db.writes.map(w => w.op)).toEqual(['update', 'insert'])
-    expect(db.writes[0].filters).toEqual({ location_id: LOC_A, platform: 'instagram', is_active: true })
-    expect(db.writes[1].row.location_id).toBe(LOC_A)
-    expect(db.writes[1].row.updated_by).toBe('u1')
+    expect(db.writes.map(w => w.op)).toEqual(['insert'])
+    expect(db.writes[0].row.location_id).toBe(LOC_A)
+    expect(db.writes[0].row.updated_by).toBe('u1')
+    expect(db.writes[0].row.is_active).toBe(true)
   })
 
   it('400s an unsupported platform without writing (unchanged)', async () => {
@@ -194,7 +204,7 @@ describe('POST /api/locations/[id]/channels — the gate is the role AT THE TARG
     const res = await POST(post(LOC_B, VALID), props(LOC_B))
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual(successBody(LOC_B, 'u3'))
-    expect(db.writes[1].row.location_id).toBe(LOC_B)
+    expect(db.writes[0].row.location_id).toBe(LOC_B)
   })
 
   it('(c) a master passes with no per-location rows at all', async () => {
@@ -240,6 +250,34 @@ describe('POST /api/locations/[id]/channels — the gate is the role AT THE TARG
     const res = await POST(post(LOC_B, { nonsense: true }), props(LOC_B))
     expect(res.status).toBe(403)
     expect(db.writes).toEqual([])
+  })
+})
+
+describe('POST /api/locations/[id]/channels — refuses over a live connection (CHANNELREAD.1)', () => {
+  it('409s already_connected when an active row exists, having written nothing else', async () => {
+    db = makeDb({ insertError: { code: '23505', message: 'duplicate key value violates unique constraint "idx_channel_connections_one_active"' } })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(post(LOC_A, VALID), props(LOC_A))
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.success).toBe(false)
+    expect(body.code).toBe('already_connected')
+    expect(body.error).toBe('This location already has an active Instagram connection. Reload the page and use Update instead.')
+    // The only write attempted is the refused insert: no deactivation.
+    expect(db.writes.map(w => w.op)).toEqual(['insert'])
+  })
+
+  it('any other insert failure is still a 500', async () => {
+    db = makeDb({ insertError: { code: '57014', message: 'canceling statement due to statement timeout' } })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(post(LOC_A, VALID), props(LOC_A))
+    expect(res.status).toBe(500)
+  })
+
+  it('an explicitly inactive row can still be added beside a live one (no index conflict)', async () => {
+    const res = await POST(post(LOC_A, { ...VALID, is_active: false }), props(LOC_A))
+    expect(res.status).toBe(200)
+    expect(db.writes[0].row.is_active).toBe(false)
   })
 })
 
