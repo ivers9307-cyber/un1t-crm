@@ -123,11 +123,14 @@ export async function executeTool(toolName, input, context) {
       // Scope to the active location — an unscoped search would match
       // contacts in every tenant. No location → no unscoped read.
       if (!locationId) return { contacts: [], count: 0 }
-      const { data } = await db.from('contacts')
+      // A failed read is an error, never "no contact by that name" (which
+      // the model would answer by offering to create one).
+      const { data, error } = await db.from('contacts')
         .select('id, name, email, phone, pipeline_stage_slug, lead_source')
         .eq('location_id', locationId)
         .or(`name.ilike.%${input.query}%,email.ilike.%${input.query}%`)
         .limit(10)
+      if (error) return { error: `Failed to load contacts: ${error.message}` }
       return { contacts: data || [], count: (data || []).length }
     }
 

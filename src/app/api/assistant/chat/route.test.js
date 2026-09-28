@@ -726,6 +726,16 @@ describe('executeTool — model-supplied dates are checked before any read (RANG
     expect(res.shifts).toBeUndefined()
   })
 
+  // search_contacts discarded its read error, so a failed search read as
+  // "no contact by that name" — and the model would offer to create one.
+  it('search_contacts: a failed read is an error, never "no matches"', async () => {
+    failingOn('contacts')
+    const res = await executeTool('search_contacts', { query: 'alice' }, MANAGER)
+    expect(res.error).toMatch(/^Failed to load contacts/)
+    expect(res.contacts).toBeUndefined()
+    expect(res.count).toBeUndefined()
+  })
+
   it('get_time_off: a real range still lists this studio\'s overlapping leave', async () => {
     useDb({
       time_off_requests: [
