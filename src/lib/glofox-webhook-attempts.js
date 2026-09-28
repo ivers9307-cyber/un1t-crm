@@ -24,8 +24,19 @@
 import { logWarn } from '@/lib/log'
 
 export const GLOFOX_ATTEMPTS_TABLE = 'glofox_webhook_attempts'
-/** Mirrors glofox_webhook_attempts_digest_size (mig 649). */
-export const MAX_DIGEST_BYTES = 4000
+/**
+ * glofox_webhook_attempts_digest_size (mig 649): octet_length(digest::text)
+ * <= 4000. That measures jsonb's TEXT form, which puts a space after every
+ * ':' and ',' and so runs longer than JSON.stringify.
+ */
+export const DB_MAX_DIGEST_BYTES = 4000
+/**
+ * The cap this module applies, on JSON.stringify's UTF-8 bytes. The 500-byte
+ * headroom covers jsonb's extra spaces (one per key and per list element; a
+ * full digest has well under 300), so a digest the JS keeps is never refused
+ * by the CHECK (migration-649 test inserts the largest one).
+ */
+export const MAX_DIGEST_BYTES = 3500
 /** Mirrors glofox_webhook_attempts_error_size (mig 649). */
 export const MAX_ERROR_CHARS = 500
 

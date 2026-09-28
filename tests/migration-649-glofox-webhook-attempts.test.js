@@ -24,6 +24,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { PGlite } from '@electric-sql/pglite'
+import { digestGlofoxWebhookResult, MAX_DIGEST_BYTES, DB_MAX_DIGEST_BYTES } from '../src/lib/glofox-webhook-attempts.js'
 
 const read = (name) => readFileSync(path.resolve(import.meta.dirname, '../supabase/migrations', name), 'utf8')
 const MIG_053 = read('053_cron_heartbeats.sql')
@@ -131,6 +132,34 @@ describe('migration 649 — glofox_webhook_attempts', () => {
     await expect(insertAttempt(id, { digest: { pad: 'x'.repeat(4001) } })).rejects.toThrow(/glofox_webhook_attempts_digest_size/)
     await expect(insertAttempt(id, { error: 'e'.repeat(501) })).rejects.toThrow(/glofox_webhook_attempts_error_size/)
     expect(await attemptCount()).toBe(0)
+  })
+
+  it('accepts the largest digest the JS keeps: its jsonb text is longer than its JSON, and still fits', async () => {
+    await runSql(MIG_649)
+    // Many short list elements = many separators, each one a byte longer in
+    // jsonb's text form than in JSON.stringify.
+    const tags = Array.from({ length: 20 }, (_, i) => `t${i}`)
+    const resultFor = (keyChars) => {
+      const changes = {}
+      for (let i = 0, left = keyChars; left > 0; i++, left -= 60) {
+        changes[(String(i).padStart(2, '0') + 'k'.repeat(60)).slice(0, Math.min(left, 60))] = { from: 1, to: 2 }
+      }
+      return { contact_id: 'c', tags, member_sync: { action: 'update', changes, transition_tags: { written: tags, alreadyPresent: tags } } }
+    }
+    let largest = null
+    for (let k = 2000; k <= 3800; k++) {
+      const d = digestGlofoxWebhookResult(resultFor(k))
+      if (d.oversize) break
+      largest = d
+    }
+    const jsonBytes = new TextEncoder().encode(JSON.stringify(largest)).length
+    expect(jsonBytes).toBeGreaterThan(MAX_DIGEST_BYTES - 5)
+
+    const id = await parentRow()
+    await insertAttempt(id, { digest: largest })
+    const { rows } = await db.query('SELECT octet_length(digest::text) AS n FROM public.glofox_webhook_attempts')
+    expect(rows[0].n).toBeGreaterThan(jsonBytes)
+    expect(rows[0].n).toBeLessThanOrEqual(DB_MAX_DIGEST_BYTES)
   })
 
   it('needs its parent row, and goes when the parent goes', async () => {

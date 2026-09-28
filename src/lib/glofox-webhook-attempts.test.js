@@ -11,6 +11,7 @@ import {
   recordGlofoxWebhookAttempt,
   GLOFOX_ATTEMPTS_TABLE,
   MAX_DIGEST_BYTES,
+  DB_MAX_DIGEST_BYTES,
   MAX_ERROR_CHARS,
 } from './glofox-webhook-attempts.js'
 
@@ -146,6 +147,45 @@ describe('digestGlofoxWebhookResult', () => {
     const d = digestGlofoxWebhookResult({ contact_id: 'c', tags, member_sync: { action: 'update', changes } })
     expect(new TextEncoder().encode(JSON.stringify(d)).length).toBeLessThanOrEqual(MAX_DIGEST_BYTES)
     expect(d).toEqual({ oversize: true, contact_id: 'c', member_sync_action: 'update' })
+  })
+})
+
+// A result whose digest grows one byte at a time with `keyChars`: changed
+// column names totalling `keyChars` characters (≤ 60 each, unique prefixes),
+// plus full tag lists so the digest carries many separators.
+const bigResult = (keyChars) => {
+  const changes = {}
+  for (let i = 0, left = keyChars; left > 0; i++, left -= 60) {
+    changes[(String(i).padStart(2, '0') + 'k'.repeat(60)).slice(0, Math.min(left, 60))] = { from: 1, to: 2 }
+  }
+  const tags = Array.from({ length: 20 }, (_, i) => `t${i}`)
+  return {
+    contact_id: 'c', tags,
+    member_sync: { action: 'update', changes, transition_tags: { written: tags, alreadyPresent: tags } },
+  }
+}
+const jsonBytes = (v) => new TextEncoder().encode(JSON.stringify(v)).length
+
+describe('digest size cap (N1)', () => {
+  it('caps the JSON at 3,500 bytes, under the table CHECK of 4,000 on the longer jsonb text', () => {
+    expect(MAX_DIGEST_BYTES).toBe(3500)
+    expect(DB_MAX_DIGEST_BYTES).toBe(4000)
+  })
+
+  it('keeps a digest right up to the cap and collapses the next byte past it', () => {
+    let last = null
+    let crossedAt = null
+    for (let k = 2000; k <= 3800; k++) {
+      const d = digestGlofoxWebhookResult(bigResult(k))
+      if (d.oversize) { crossedAt = k; break }
+      last = { k, d }
+    }
+    expect(crossedAt).not.toBeNull()
+    expect(last.k).toBe(crossedAt - 1)
+    const kept = jsonBytes(last.d)
+    expect(kept).toBeLessThanOrEqual(MAX_DIGEST_BYTES)
+    expect(kept).toBeGreaterThan(MAX_DIGEST_BYTES - 5)
+    expect(jsonBytes(digestGlofoxWebhookResult(bigResult(crossedAt)))).toBeLessThan(200)
   })
 })
 
