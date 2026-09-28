@@ -1184,8 +1184,10 @@ export async function listGlofoxMemberships(creds) {
 
 /**
  * Generate a one-time passcode for a new Glofox account. Used as
- * the initial password on /2.0/register; emailed (and SMS'd) to the
- * member as "log in once with this, change to your own password."
+ * the initial password on /2.0/register. It is returned once to the
+ * caller and never stored or sent (PASSCODEREAD.1, mig 651): the desk
+ * Create-in-Glofox button shows it to the staff member who pressed it,
+ * and anyone else sets their own password with Glofox's "Forgot password?".
  *
  * Glofox enforces a multi-class password policy (live failure 2026-06-30:
  * PASSWORD_RULE_LOWER_CASE — the old uppercase+digits-only alphabet could
