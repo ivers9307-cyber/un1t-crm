@@ -93,14 +93,14 @@ describe('GET /api/cron/glofox-attendance-refresh — MEMBERRESULT.1', () => {
     const out = await (await GET(req())).json()
     const expected = { refreshed: 3, fetch_failed: 0, update_failed: 0, membership_failed: 1, member_refused: 1 }
     expect(out.per_location[0].summary).toEqual(expected)
-    expect(h.runUpdates.at(-1).summary).toEqual(expected)
+    expect(h.runUpdates.at(-1).summary).toEqual({ ...expected, glofox_http: expect.any(Object) })
     expect(logWarn).toHaveBeenCalledWith(
       'glofox-attendance-refresh',
       expect.stringContaining('refused'),
       { locationId: 'loc-1', contactId: 'c-refused', messageCode: CODE },
     )
     expect(logWarn).toHaveBeenCalledTimes(1)
-    expect(stampHeartbeat).toHaveBeenCalledWith('glofox-attendance-refresh')
+    expect(stampHeartbeat).toHaveBeenCalledWith('glofox-attendance-refresh', expect.any(Object))
   })
 
   it('a real member still gets every field (unchanged)', async () => {
@@ -121,6 +121,19 @@ describe('GET /api/cron/glofox-attendance-refresh — MEMBERRESULT.1', () => {
     const gone = patchFor('c-gone')
     for (const k of MEMBER_READ_KEYS) expect(gone).not.toHaveProperty(k)
   })
+
+  it('CREDITSREAD.1 — the heartbeat records reach and Glofox traffic; the run row carries the traffic', async () => {
+    await GET(req())
+    // fetchUserBookingsResult is mocked; the three member GETs are real glofoxFetch calls.
+    const [, outcome] = stampHeartbeat.mock.calls.at(-1)
+    expect(outcome).toMatchObject({
+      eligible: 3, refreshed: 3, fetch_failed: 0, membership_failed: 1, member_refused: 1, update_failed: 0,
+      budget_exhausted: false,
+    })
+    expect(outcome.glofox_http.requests).toBeGreaterThanOrEqual(3)
+    expect(outcome.glofox_http.gave_up).toBe(0)
+    expect(h.runUpdates.at(-1).summary.glofox_http.requests).toBeGreaterThanOrEqual(3)
+  })
 })
 
 describe('GET /api/cron/glofox-attendance-refresh — REGISTRYREAD.1b unreadable settings', () => {
@@ -134,7 +147,7 @@ describe('GET /api/cron/glofox-attendance-refresh — REGISTRYREAD.1b unreadable
     expect(h.runUpdates.at(-1)).toMatchObject({ status: 'failed', first_error: GLOFOX_SETTINGS_UNREADABLE_MESSAGE })
     expect(fetch).not.toHaveBeenCalled()
     expect(h.contactUpdates).toEqual([])
-    expect(stampHeartbeat).toHaveBeenCalledWith('glofox-attendance-refresh')
+    expect(stampHeartbeat).toHaveBeenCalledWith('glofox-attendance-refresh', expect.any(Object))
   })
 
   it('a location with no credentials keeps its old text', async () => {
