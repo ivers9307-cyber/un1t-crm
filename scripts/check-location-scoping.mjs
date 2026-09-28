@@ -369,12 +369,6 @@ export const EXEMPT = {
       'Public status page: public_path → location resolution (the path IS the published tenant selector); renders only the coy member view from buildStatusView(), never internal detail.',
   },
 
-  // Settings fleet dashboard — deliberately estate-wide.
-  'src/app/settings/notifications/health/page.js': {
-    profile_locations:
-      'Push-delivery fleet dashboard (NOTIF.4 + STAFF-DEV.4) gated by hasPermission(settings): groups active staff under EVERY location on purpose — it is the estate-wide device/app-version fleet view. Single-org estate today; revisit when a second org onboards (same caveat as public/branding).',
-  },
-
   // The first page scan's four real findings needed NO exemption in the end:
   // both fixes landed before this check did, so the pages carry their own
   // guards. /email/templates/[id] + /whatsapp/templates/[id] → TPL-IDOR.1
