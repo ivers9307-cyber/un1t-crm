@@ -88,3 +88,18 @@ function walk(value, depth, mask) {
   }
   return out
 }
+
+// AUDITRLS.1 (mig 655) — personal data (not a credential) that the audit
+// trigger ALSO masks: private.audit_is_pii_key(), an exact-name list. It is
+// NOT part of isSecretKeyName and NOT used by maskSecretKeysDeep: an owner
+// sees and edits these values on the customer-agent settings screen. The
+// audit log is the one place a copy is kept forever and read by someone else.
+// src/lib/secret-keys.test.js pins this list to mig 655's in-list; change
+// both in the same PR (and in a new migration).
+export const AUDIT_PII_KEY_EXACT = Object.freeze(['test_phones'])
+
+/** True when mig 655's private.audit_is_pii_key(name) is true. */
+export function isAuditPiiKeyName(name) {
+  if (name == null) return false
+  return AUDIT_PII_KEY_EXACT.includes(String(name).toLowerCase())
+}
