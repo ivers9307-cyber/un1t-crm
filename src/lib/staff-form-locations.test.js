@@ -19,7 +19,7 @@ vi.mock('./connection-registry.js', async (importOriginal) => ({
 import { loadStaffFormLocations, STAFF_FORM_LOCATION_SELECT } from './staff-form-locations.js'
 import { CLIENT_LOCATION_COLUMNS } from './location-secrets.js'
 import { overlayConnectionsMany } from './connection-registry.js'
-import { logError } from './log.js'
+import { logError, logWarn } from './log.js'
 
 const A = 'a0000000-0000-4000-8000-00000000000a'
 const B = 'b0000000-0000-4000-8000-00000000000b'
@@ -115,6 +115,28 @@ describe('loadStaffFormLocations (STAFFFORMSETTINGS.1)', () => {
     expect(error).toEqual({ code: '57014' })
     expect(logError).toHaveBeenCalledWith('staff-form-locations', expect.stringMatching(/locations read failed/), { code: '57014' })
     expect(overlayConnectionsMany).not.toHaveBeenCalled()
+  })
+
+  // Review N2: getLocationUnifiConfig calls .trim() on each field, so a
+  // non-string one (a hand-edited settings blob, a registry config) threw and
+  // 500'd both staff pages. One bad studio now reads "not configured" and the
+  // rest of the list is untouched.
+  it('a malformed UniFi config is "not configured" for that studio only, logged by id and code', async () => {
+    const { db } = makeDb({
+      data: [
+        row(A, 'Alpha', { unifi: { ...UNIFI_OK, host: 42 } }),
+        row(B, 'Bravo', { unifi: UNIFI_OK }),
+        row(C, 'Charlie', { unifi: { ...UNIFI_OK, api_token: { nested: 'SYNTH-UT' } } }),
+      ],
+      error: null,
+    })
+    const { locations, error } = await loadStaffFormLocations(db)
+    expect(error).toBeNull()
+    expect(locations.map((l) => [l.name, l.unifi_configured])).toEqual([['Alpha', false], ['Bravo', true], ['Charlie', false]])
+    expect(logWarn).toHaveBeenCalledTimes(2)
+    expect(logWarn).toHaveBeenCalledWith('staff-form-locations', expect.stringMatching(/unifi/i), { locationId: A, code: 'TypeError' })
+    expect(logWarn).toHaveBeenCalledWith('staff-form-locations', expect.stringMatching(/unifi/i), { locationId: C, code: 'TypeError' })
+    expect(JSON.stringify(logWarn.mock.calls)).not.toContain('SYNTH-')
   })
 
   it('no rows is no studios, not an error', async () => {

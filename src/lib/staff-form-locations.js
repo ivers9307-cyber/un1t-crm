@@ -16,7 +16,7 @@
 import { CLIENT_LOCATION_COLUMNS, toUserLocation } from './location-secrets.js'
 import { overlayConnectionsMany } from './connection-registry.js'
 import { getLocationUnifiConfig } from './unifi-access.js'
-import { logError } from './log.js'
+import { logError, logWarn } from './log.js'
 
 // The identity columns (mig 648's client grant list) plus `settings`, which
 // only the unifi_configured computation below reads.
@@ -50,7 +50,23 @@ export async function loadStaffFormLocations(db) {
   const overlaid = await overlayConnectionsMany(db, rows, ['unifi'])
   const locations = rows.map((row, i) => ({
     ...toUserLocation(row),
-    unifi_configured: getLocationUnifiConfig(overlaid[i] ?? row).configured === true,
+    unifi_configured: unifiConfigured(overlaid[i] ?? row),
   }))
   return { locations, error: null }
+}
+
+// getLocationUnifiConfig .trim()s each field, so a non-string one (a
+// hand-edited settings blob, a registry config) throws. One malformed studio
+// must not 500 both staff pages: it reads "not configured" (no save could
+// use it either) and is logged by id and error code only, never the config.
+function unifiConfigured(location) {
+  try {
+    return getLocationUnifiConfig(location).configured === true
+  } catch (e) {
+    logWarn('staff-form-locations', 'malformed UniFi config; shown as not configured', {
+      locationId: location?.id ?? null,
+      code: e?.code || e?.name || null,
+    })
+    return false
+  }
 }
