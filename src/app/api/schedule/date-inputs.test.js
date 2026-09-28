@@ -34,8 +34,15 @@
 //     or a check whose result is ignored all pass;
 //   - a shape schema aliased first (`const D = isoDate; … from: D`) is caught
 //     only by the file-wide backstop;
-//   - range ORDER and span are not checked here at all (see
-//     src/lib/report-period.js for the reports rule).
+//   - range SPAN is not checked here (each route's own tests pin its cap);
+//     range ORDER is Rule 3 below, for query params only — a body range
+//     (rosters, reports, time-off POST) is its route test's job.
+//
+// RANGEVALID.1 — Rule 3: a route that reads BOTH ends of a query range
+// (start_date/end_date, from/to, start/end, period_start/period_end) hands
+// them together to rangeQueryError / reportPeriodError, or compares them
+// inline (`end < start`). A bound handed to either helper also counts as
+// calendar-checked for Rule 2 (the helpers check each bound).
 
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
@@ -89,6 +96,9 @@ function calendarChecked(src, name) {
   const n = escapeRe(name)
   if (new RegExp(String.raw`(?<![\w$])${n}\s*:\s*realIsoDate\b`).test(src)) return true
   if (new RegExp(String.raw`isRealCalendarDate\(\s*(?:[\w$]+\.)?${n}\s*\)`).test(src)) return true
+  // RANGEVALID.1 — the shared range helpers check each bound they are handed
+  // (first or second argument).
+  if (new RegExp(String.raw`\b(?:rangeQueryError|reportPeriodError)\(\s*(?:[\w$.]+\s*,\s*)?(?:[\w$]+\.)?${n}\s*[,)]`).test(src)) return true
   return /isRealCalendarDate\(/.test(src)
     && new RegExp(String.raw`\[\s*['"][\w]+['"]\s*,\s*(?:[\w$]+\.)?${n}\s*\]`).test(src)
 }
@@ -109,6 +119,36 @@ function uncheckedParamOffence(src) {
   for (const [, variable, key] of src.matchAll(PARAM_READ)) {
     const name = variable || key
     if (!name || !calendarChecked(src, name)) return true
+  }
+  return false
+}
+
+// RANGEVALID.1 — Rule 3. The two ends of a query range, and the names they
+// are read into (`const x = …get('…')` or `key: …get('…')`), in file order:
+// the i-th start read pairs with the i-th end read (time-off reads its list
+// pair, then its preview pair).
+const RANGE_PAIRS = [['start_date', 'end_date'], ['from', 'to'], ['start', 'end'], ['period_start', 'period_end']]
+const NAMED_PARAM_READ = new RegExp(
+  String.raw`(?:(?:const|let|var)\s+([\w$]+)\s*=\s*|([\w$]+)\s*:\s*)?[\w$.]*[pP]arams\.get\(\s*(['"])(\w+)\3\s*\)`,
+  'g',
+)
+
+/** Rule 3: both ends of a query range are read, and never put in order. */
+function unorderedPairOffence(src) {
+  const reads = [...src.matchAll(NAMED_PARAM_READ)].map((m) => ({ binding: m[1] || m[2] || null, param: m[4] }))
+  for (const [startParam, endParam] of RANGE_PAIRS) {
+    const starts = reads.filter((r) => r.param === startParam)
+    const ends = reads.filter((r) => r.param === endParam)
+    for (let i = 0; i < Math.min(starts.length, ends.length); i++) {
+      const s = starts[i].binding
+      const e = ends[i].binding
+      if (!s || !e) return true // read in a form the guard cannot follow
+      const S = escapeRe(s)
+      const E = escapeRe(e)
+      const viaHelper = new RegExp(String.raw`\b(?:rangeQueryError|reportPeriodError)\(\s*(?:[\w$]+\.)?${S}\s*,\s*(?:[\w$]+\.)?${E}\s*[,)]`).test(src)
+      const inline = new RegExp(String.raw`(?<![\w$.])${E}\s*<\s*${S}(?![\w$])`).test(src)
+      if (!viaHelper && !inline) return true
+    }
   }
   return false
 }
@@ -179,6 +219,58 @@ describe('the guard\'s own rules, on sources written to break them', () => {
        const Q = z.object({ from: isoDate })
        for (const [name, value] of [['from', from]]) { if (!isRealCalendarDate(value)) {} }`,
     ]) expect(shapeOnlyOffence(src)).toBe(false)
+  })
+
+  it('rule 2 passes a bound handed to the shared range helpers (RANGEVALID.1)', () => {
+    for (const src of [
+      `const startDate = searchParams.get('start_date')
+       const endDate = searchParams.get('end_date')
+       const rangeError = rangeQueryError(startDate, endDate, { maxDays: 92 })`,
+      `const start = searchParams.get('start') || undefined
+       const end = searchParams.get('end') || undefined
+       const e = rangeQueryError(start, end, { startName: 'start', endName: 'end' })`,
+    ]) expect(uncheckedParamOffence(src)).toBe(false)
+  })
+
+  it('rule 3 flags a query range whose ends are never put in order', () => {
+    expect(unorderedPairOffence(`
+      const startDate = searchParams.get('start_date')
+      const endDate = searchParams.get('end_date')
+      for (const [name, value] of [['start_date', startDate], ['end_date', endDate]]) { if (value && !isRealCalendarDate(value)) {} }`)).toBe(true)
+    // the helper with the ends swapped does not order them
+    expect(unorderedPairOffence(`
+      const startDate = searchParams.get('start_date')
+      const endDate = searchParams.get('end_date')
+      rangeQueryError(endDate, startDate)`)).toBe(true)
+  })
+
+  it('rule 3 is per pair: an ordered preview does not excuse an unordered list (time-off on main)', () => {
+    expect(unorderedPairOffence(`
+      const startDate = searchParams.get('start_date')
+      const endDate = searchParams.get('end_date')
+      const start = searchParams.get('start_date') || ''
+      const end = searchParams.get('end_date') || start
+      if (end < start) {}`)).toBe(true)
+  })
+
+  it('rule 3 passes each ordered form in use', () => {
+    for (const src of [
+      // the helper (blocks, shifts, offers, the time-off list, overview)
+      `const startDate = searchParams.get('start_date')
+       const endDate = searchParams.get('end_date')
+       const rangeError = rangeQueryError(startDate, endDate, { maxDays: 92 })`,
+      `const Q = z.object({ from: realIsoDate, to: realIsoDate })
+       Q.safeParse({ from: url.searchParams.get('from'), to: url.searchParams.get('to') })
+       const periodError = reportPeriodError(from, to, { startName: 'from', endName: 'to', maxDays: 60 })`,
+      // inline (availability, change-log, compare, the time-off preview)
+      `const startDate = url.searchParams.get('start_date')
+       const endDate = url.searchParams.get('end_date')
+       if (endDate < startDate) return bad('end_date must be on or after start_date')`,
+      `const parsed = Q.safeParse({ from: url.searchParams.get('from') || undefined, to: url.searchParams.get('to') || undefined })
+       if (from && to && to < from) return fail(400, 'to must be on or after from')`,
+      // one end alone is not a range (grid's start_date, week-cost's week_start)
+      `const d = url.searchParams.get('start_date')`,
+    ]) expect(unorderedPairOffence(src)).toBe(false)
   })
 })
 
