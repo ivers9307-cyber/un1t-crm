@@ -34,7 +34,7 @@ import {
 import { applyMemberSync } from './glofox-sync.js'
 import { glofoxFetch } from './glofox.js'
 import { writeContactTag } from './contact-tags.js'
-import { getGlofoxConfig } from './connection-registry.js'
+import { readGlofoxConfig } from './connection-registry.js'
 import { logWarn } from './log.js'
 import { toMobileE164 } from './phone-validate.js'
 
@@ -87,6 +87,16 @@ export async function findOrCreateGlofoxMember({
 
   // Resolve credentials.
   const creds = await glofoxCredentialsForLocation(db, locationId)
+  if (creds.readError) {
+    // REGISTRYREAD.1a: a failed settings read is not "not configured" — the
+    // audit row says so, and the admin retry route can re-run it.
+    const error = 'Glofox settings could not be read (a temporary database error). Retry this push.'
+    const ev = await audit(db, {
+      contact_id: contact.id, location_id: locationId, source,
+      status: 'failed', error_message: error,
+    })
+    return { status: 'failed', error, push_event_id: ev?.id }
+  }
   if (!creds.branchId || !creds.apiKey || !creds.apiToken) {
     const ev = await audit(db, {
       contact_id: contact.id, location_id: locationId, source,
@@ -241,10 +251,21 @@ export async function findOrCreateGlofoxMember({
     // otherwise — same settings-shaped object either way.
     // Per-funnel override (from the class_funnel block, captured on the booking
     // row) wins over the location default when BOTH ids are present.
-    const trial = (trialOverride?.membershipId && trialOverride?.planCode)
-      ? { membershipId: trialOverride.membershipId, planCode: trialOverride.planCode }
-      : getLocationTrialConfig({ settings: { glofox: await getGlofoxConfig(db, locationId) } })
-    if (!trial.membershipId || !trial.planCode) {
+    let trial = null
+    let trialReadFailed = false
+    if (trialOverride?.membershipId && trialOverride?.planCode) {
+      trial = { membershipId: trialOverride.membershipId, planCode: trialOverride.planCode }
+    } else {
+      const { cfg, error: cfgErr } = await readGlofoxConfig(db, locationId)
+      if (cfgErr) trialReadFailed = true
+      else trial = getLocationTrialConfig({ settings: { glofox: cfg } })
+    }
+    if (trialReadFailed) {
+      // REGISTRYREAD.1a: the member now exists and the contact is linked, so
+      // a retry of this push would skip ("already linked"). Say what to do.
+      logWarn('glofox-push', 'trial settings unreadable after create', { contactId: contact.id, locationId })
+      trialPurchaseError = 'Could not read the trial membership settings (a temporary database error), so no trial was attached. Attach it in Glofox by hand.'
+    } else if (!trial.membershipId || !trial.planCode) {
       trialPurchaseError = 'Trial membership not configured for this location (Settings → Locations → Glofox Integration → Trial membership picker)'
     } else {
       const purchase = await purchaseGlofoxMembership(creds, newGlofoxId, trial.membershipId, trial.planCode)
