@@ -194,7 +194,9 @@ export async function GET(request) {
         // studio's lead times (main's behaviour, and exactly right for everyone
         // today: 0 personal overrides on prod, 28 Sep 2026) rather than skip,
         // which could lose a reminder whose window closes. Worst case later:
-        // someone with a personal lead time gets one at the studio's.
+        // someone with a personal lead time gets an EXTRA push at the studio's
+        // lead time, not a substitute. The ledger keys on the lead time, so
+        // their personal-lead reminder still fires on a tick that reads.
         summary.task_perms_read_failed = 1
         logError('cron-push-reminders', 'task permissions read failed; using studio lead times', { err: plsErr })
       }
