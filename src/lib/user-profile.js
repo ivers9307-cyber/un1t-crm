@@ -37,7 +37,7 @@ export function pickUserProfile(row) {
 
 // AUTHUSERPICK.1 — the Supabase auth user as the user object carries it.
 //
-// getCurrentUser() used to put the whole auth user on `user.user`: identities
+// getCurrentUser() used to put the whole auth user on the `user` key: identities
 // (each with the provider's identity_data), app_metadata, user_metadata,
 // phone, factors, confirmation and sign-in timestamps. The object is
 // serialised into every page (AppShell, and ~30 page → client-component
