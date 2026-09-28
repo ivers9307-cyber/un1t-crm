@@ -23,10 +23,17 @@ const fakeDb = {
 }
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => fakeDb }))
-vi.mock('@/lib/auth', () => ({
-  getCurrentUser: vi.fn(async () => ({ id: 'u1', email: 'ops@un1t.ie', full_name: 'Ops Person', role: 'owner' })),
-  assertLocationAccessOr404: vi.fn(() => null),
-}))
+// ROLESWEEP.1a — the route judges ADMIN_ROLES at the campaign's location with
+// the real per-location helpers, so the caller carries rolesByLocation.
+vi.mock('@/lib/auth', async () => {
+  const { hasRoleAtLocation, hasRoleAtAnyLocation } = await import('@/lib/role-at-location')
+  return {
+    getCurrentUser: vi.fn(async () => ({ id: 'u1', email: 'ops@un1t.ie', full_name: 'Ops Person', role: 'owner', rolesByLocation: { 'loc-1': 'owner' } })),
+    assertLocationAccessOr404: vi.fn(() => null),
+    hasRoleAtLocation,
+    hasRoleAtAnyLocation,
+  }
+})
 vi.mock('@/lib/app-url', () => ({ getAppUrl: () => 'https://crm.test' }))
 vi.mock('@/lib/postmark', async (importOriginal) => {
   const actual = await importOriginal()

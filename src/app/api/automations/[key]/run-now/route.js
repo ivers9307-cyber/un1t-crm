@@ -7,7 +7,7 @@
 import { z } from 'zod'
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
 import { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation } from '@/lib/glofox'
@@ -33,7 +33,8 @@ const Schema = z.object({
 
 export async function POST(request, { params }) {
   const user = await getCurrentUser()
-  if (!user || !MANAGER_ROLES.includes(user.role)) {
+  // ROLESWEEP.1a — coarse pre-check; the role is judged at the location below.
+  if (!user || !hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -49,6 +50,9 @@ export async function POST(request, { params }) {
 
   const guard = assertLocationAccess(user, location_id)
   if (guard) return guard
+  if (!hasRoleAtLocation(user, location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+  }
 
   const db = createServerClient()
 

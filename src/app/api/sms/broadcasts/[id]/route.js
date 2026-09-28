@@ -8,7 +8,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { audienceFilterSchema } from '@/lib/schemas'
 import { overlayConnections } from '@/lib/connection-registry'
@@ -44,7 +44,7 @@ export async function GET(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!hasPermission(user, 'sms')) {
+  if (!hasPermissionAtAnyLocation(user, 'sms')) {
     return NextResponse.json({ success: false, error: 'Forbidden — SMS not enabled' }, { status: 403 })
   }
 
@@ -55,6 +55,10 @@ export async function GET(request, props) {
   }
   const guard = assertLocationAccessOr404(user, broadcast.location_id)
   if (guard) return guard
+  // ROLESWEEP.1a — the permission is judged at the broadcast's location.
+  if (!hasPermissionForLocation(user, broadcast.location_id, 'sms')) {
+    return NextResponse.json({ success: false, error: 'Forbidden — SMS not enabled' }, { status: 403 })
+  }
 
   // Include recipients summary so the detail page can render
   // sent/failed counts + a few sample errors without a second
@@ -72,7 +76,7 @@ export async function PATCH(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!hasPermission(user, 'sms')) {
+  if (!hasPermissionAtAnyLocation(user, 'sms')) {
     return NextResponse.json({ success: false, error: 'Forbidden — SMS not enabled' }, { status: 403 })
   }
 
@@ -87,6 +91,10 @@ export async function PATCH(request, props) {
   }
   const guard = assertLocationAccessOr404(user, broadcast.location_id)
   if (guard) return guard
+  // ROLESWEEP.1a — the permission is judged at the broadcast's location.
+  if (!hasPermissionForLocation(user, broadcast.location_id, 'sms')) {
+    return NextResponse.json({ success: false, error: 'Forbidden — SMS not enabled' }, { status: 403 })
+  }
 
   // State machine. Editable from 'draft' or 'scheduled'. Going to
   // 'scheduled' requires a future scheduled_at — set it in the same
@@ -132,7 +140,7 @@ export async function DELETE(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!hasPermission(user, 'sms')) {
+  if (!hasPermissionAtAnyLocation(user, 'sms')) {
     return NextResponse.json({ success: false, error: 'Forbidden — SMS not enabled' }, { status: 403 })
   }
 
@@ -143,6 +151,10 @@ export async function DELETE(request, props) {
   }
   const guard = assertLocationAccessOr404(user, broadcast.location_id)
   if (guard) return guard
+  // ROLESWEEP.1a — the permission is judged at the broadcast's location.
+  if (!hasPermissionForLocation(user, broadcast.location_id, 'sms')) {
+    return NextResponse.json({ success: false, error: 'Forbidden — SMS not enabled' }, { status: 403 })
+  }
 
   // Don't permanently delete sent / sending / scheduled broadcasts —
   // sent is audit history; sending shouldn't be touched mid-loop;

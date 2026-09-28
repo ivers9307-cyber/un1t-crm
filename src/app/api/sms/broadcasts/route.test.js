@@ -21,7 +21,11 @@ vi.mock('@/lib/auth', () => ({
   assertLocationAccess: vi.fn(() => null),
   getUserLocationIds: vi.fn(() => ['loc-1']),
 }))
-vi.mock('@/lib/permissions', () => ({ hasPermission: vi.fn(() => true) }))
+vi.mock('@/lib/permissions', () => ({
+  hasPermission: vi.fn(() => true),
+  hasPermissionAtAnyLocation: vi.fn(() => true),
+  hasPermissionForLocation: vi.fn(() => true),
+}))
 vi.mock('@/lib/validate', () => ({
   validateBody: vi.fn(async (req) => ({ ok: true, data: await req.json() })),
 }))

@@ -24,7 +24,13 @@ vi.mock('@/lib/auth', () => ({
   },
 }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
-vi.mock('@/lib/permissions', () => ({ hasPermission: vi.fn() }))
+// ROLESWEEP.1a — the route's pre-check is hasPermissionAtAnyLocation and its
+// decision hasPermissionForLocation; all three share one mock so the
+// "whatsapp permission is off" switch below still switches the gate.
+vi.mock('@/lib/permissions', () => {
+  const perm = vi.fn()
+  return { hasPermission: perm, hasPermissionAtAnyLocation: perm, hasPermissionForLocation: perm }
+})
 vi.mock('@/lib/whatsapp', () => ({ sendBroadcast: vi.fn() }))
 
 import { POST } from './route.js'
