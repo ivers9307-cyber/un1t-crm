@@ -322,6 +322,6 @@ export async function POST(request) {
     .eq('id', newUserId)
     .single()
 
-  // SECFIX.3a — the echo embeds locations(*); never ship their credentials.
+  // SECFIX.3a — the echo embeds whole location rows; never ship their credentials.
   return NextResponse.json({ success: true, data: redactProfileLocations(profile) }, { status: 201 })
 }

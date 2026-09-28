@@ -91,7 +91,7 @@ export function redactLinkedLocations(links) {
     : l))
 }
 
-/** A staff row read with `profile_locations(*, locations(*))` → safe to return as JSON. */
+/** A staff row whose profile_locations embed carries every location column → safe to return as JSON. */
 export function redactProfileLocations(profile) {
   if (!isPlainObject(profile) || !Array.isArray(profile.profile_locations)) return profile
   return { ...profile, profile_locations: redactLinkedLocations(profile.profile_locations) }

@@ -404,7 +404,7 @@ export async function PUT(request, props) {
 
   return NextResponse.json({
     success: true,
-    // SECFIX.3a — `final` embeds locations(*). The raw embed stays on the
+    // SECFIX.3a — `final` embeds whole location rows. The raw embed stays on the
     // server (targetBefore feeds the UniFi door revoke via getUnifiConfig);
     // only the response is redacted.
     data: redactProfileLocations(final),

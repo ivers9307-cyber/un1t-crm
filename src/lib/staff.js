@@ -124,7 +124,7 @@ export async function listStaffForUser({ db, user, fields, locationId = null, in
   if (error) return { ok: false, error: error.message }
 
   const rows = (data || []).map((row) => {
-    // SECFIX.3a — FULL rows embed locations(*); the credentials stop here.
+    // SECFIX.3a — FULL rows embed whole location rows; the credentials stop here.
     if (!picker && managed.has(row.id)) return redactProfileLocations(row)
     return slimRow(row, picker ? PICKER_KEYS : PUBLIC_KEYS, (picker ? includeContract : true) && mayContract(row.id))
   })
@@ -202,6 +202,6 @@ export async function getStaffForUser({ db, user, id }) {
       // degrade to code defaults
     }
   }
-  // SECFIX.3a — the FULL row embeds locations(*); the credentials stop here.
+  // SECFIX.3a — the FULL row embeds whole location rows; the credentials stop here.
   return { ok: true, data: { ...redactProfileLocations(data), role_templates: roleTemplates } }
 }
