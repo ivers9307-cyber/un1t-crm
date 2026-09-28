@@ -28,7 +28,7 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
@@ -46,7 +46,8 @@ const Body = z.object({
 export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!MANAGER_ROLES.includes(user.role)) {
+  // ROLESWEEP.1c — coarse pre-check; the role is judged per row below.
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({
       success: false,
       error: 'Head coach, manager, owner, or master required',
@@ -83,6 +84,11 @@ export async function POST(request) {
     }
     if (user.role !== 'master' && !userLocIds.has(row.location_id)) {
       result.forbidden.push({ id, name: row.name, reason: 'Different location' })
+      continue
+    }
+    // ROLESWEEP.1c — MANAGER_ROLES at THIS contact's location.
+    if (!hasRoleAtLocation(user, row.location_id, MANAGER_ROLES)) {
+      result.forbidden.push({ id, name: row.name, reason: 'Role' })
       continue
     }
     // Mig 094: GDPR scrub of WhatsApp PII before the contact row

@@ -5,7 +5,7 @@ import { authenticateApiKey, requireApiKeyOrManager, assertRowInOrg } from '@/li
 import { validateBody } from '@/lib/validate'
 import { email, phone, leadSourceSchema, MANAGER_ROLES } from '@/lib/schemas'
 import { triggerSequencesForTagsAdded } from '@/lib/sequences'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { redactWhatsAppForContact, redactInBodyForContact, getContactImpact } from '@/lib/contact-merge'
 import { redactMailForContact } from '@/lib/contact-mail-erasure'
 import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
@@ -89,6 +89,14 @@ export async function PUT(request, props) {
     if (!oldRow || !userLocIds.includes(oldRow.location_id)) {
       return NextResponse.json({ success: false, error: 'not_found' }, { status: 404 })
     }
+  }
+  // ROLESWEEP.1c — requireApiKeyOrManager judged MANAGER_ROLES at the caller's
+  // ACTIVE studio (src/lib/api-auth.js, shared); judge it at the contact's
+  // location too, answering as the route answers a non-member (404 not_found).
+  // The too-closed direction (manager here, staff at the active studio) is
+  // still refused by the shared helper — follow-up.
+  if (auth.user && oldRow && !hasRoleAtLocation(auth.user, oldRow.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'not_found' }, { status: 404 })
   }
 
   // Only forward keys actually present (Zod with .optional() leaves undefined keys out).
@@ -224,7 +232,8 @@ export async function DELETE(_request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!MANAGER_ROLES.includes(user.role)) {
+  // ROLESWEEP.1c — coarse pre-check; the role is judged at the contact's location below.
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Head coach, manager, owner, or master required' }, { status: 403 })
   }
 
@@ -239,6 +248,10 @@ export async function DELETE(_request, props) {
     if (!userLocIds.includes(existing.location_id)) {
       return NextResponse.json({ success: false, error: 'Contact is at a different location' }, { status: 403 })
     }
+  }
+  // ROLESWEEP.1c — MANAGER_ROLES at the contact's location.
+  if (!hasRoleAtLocation(user, existing.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Head coach, manager, owner, or master required' }, { status: 403 })
   }
 
   // DELBLOCK.1 — the blocker check. Runs AFTER the auth + location guards

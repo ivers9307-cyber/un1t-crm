@@ -19,7 +19,7 @@
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
 
@@ -31,7 +31,8 @@ export async function POST(_request, { params }) {
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   }
-  if (!MANAGER_ROLES.includes(user.role)) {
+  // ROLESWEEP.1c — coarse pre-check; the role is judged at the contact's location below.
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({
       success: false,
       error: 'Head coach, manager, owner, or master required',
@@ -62,6 +63,13 @@ export async function POST(_request, { params }) {
         error: 'Contact is at a different location',
       }, { status: 403 })
     }
+  }
+  // ROLESWEEP.1c — MANAGER_ROLES at the contact's location.
+  if (!hasRoleAtLocation(user, contact.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({
+      success: false,
+      error: 'Head coach, manager, owner, or master required',
+    }, { status: 403 })
   }
 
   if (contact.glofox_member_id) {
