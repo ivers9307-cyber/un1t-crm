@@ -74,6 +74,27 @@ const STATE_OPTS = [['', 'Any state'], ['active', 'active'], ['paused', 'paused'
 // isGoalMet deliberately refuses to act on, so it must not be selectable.
 const GOAL_STATE_OPTS = STATE_OPTS.filter(([v]) => v !== '')
 
+// SEQPAGEGATE.1 — the stored webhook secret never reaches the browser; the
+// panel knows only whether one is set (sequence.has_webhook_secret). It sends
+// `webhook_secret` ONLY for an explicit act: a typed or generated value
+// ('replace') or Remove ('clear'). An untouched field sends nothing, so a
+// settings save can neither wipe the secret nor needs to know it.
+export function webhookSecretPatch(action, draft) {
+  if (action === 'clear') return { webhook_secret: null }
+  if (action === 'replace') {
+    const value = String(draft ?? '').trim()
+    return value ? { webhook_secret: value } : {}
+  }
+  return {}
+}
+
+// 24 random bytes as hex (48 chars; the PUT schema allows 128).
+export function newWebhookSecret() {
+  const bytes = new Uint8Array(24)
+  globalThis.crypto.getRandomValues(bytes)
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
 export default function SequenceSettings({ sequence }) {
   const [open, setOpen] = useState(false)
   const [name, setName] = useState(sequence?.name || '')
@@ -87,7 +108,9 @@ export default function SequenceSettings({ sequence }) {
   const [tcfg, setTcfg] = useState(sequence?.trigger_config || {})
   const [audienceFilter, setAudienceFilter] = useState(sequence?.audience_filter || null)
   const [webhookToken, setWebhookToken] = useState(sequence?.webhook_token || null)
-  const [webhookSecret, setWebhookSecret] = useState(sequence?.webhook_secret || '')
+  const [hasSecret, setHasSecret] = useState(sequence?.has_webhook_secret === true)
+  const [secretDraft, setSecretDraft] = useState('')
+  const [secretAction, setSecretAction] = useState(null) // null | 'replace' | 'clear'
   const [origin, setOrigin] = useState('')
   const [segments, setSegments] = useState([])
   const [dirty, setDirty] = useState(false)
@@ -155,7 +178,7 @@ export default function SequenceSettings({ sequence }) {
     trigger_type: triggerType,
     trigger_config: tcfg || {},
     audience_filter: (audienceFilter?.filters?.length) ? audienceFilter : null,
-    ...(triggerType === 'webhook' ? { webhook_secret: webhookSecret || null } : {}),
+    ...(triggerType === 'webhook' ? webhookSecretPatch(secretAction, secretDraft) : {}),
   })
 
   const save = async () => {
@@ -166,6 +189,10 @@ export default function SequenceSettings({ sequence }) {
       if (data.success) {
         setDirty(false); setFeedback({ ok: true, text: 'Settings saved' })
         if (data.sequence?.webhook_token) setWebhookToken(data.sequence.webhook_token)
+        if (typeof data.sequence?.has_webhook_secret === 'boolean') setHasSecret(data.sequence.has_webhook_secret)
+        // The typed/generated value stays visible until they leave the page
+        // (they may still be copying it); a later save sends nothing.
+        setSecretAction(null)
       } else setFeedback({ ok: false, text: data.error || 'Could not save settings' })
     } catch { setFeedback({ ok: false, text: 'Network error saving settings' }) } finally { setBusy(null) }
   }
@@ -296,7 +323,30 @@ export default function SequenceSettings({ sequence }) {
                 ) : (
                   <p className="text-[11px] text-un1t-subtle">Save to generate the inbound webhook URL.</p>
                 )}
-                <Labeled label="Shared secret" hint="Optional — sent as the webhook signature; blank = token-in-URL only."><Text value={webhookSecret} onChange={v => { setWebhookSecret(v); touch() }} placeholder="optional secret" /></Labeled>
+                <Labeled
+                  label="Shared secret"
+                  hint={hasSecret
+                    ? 'A secret is set (hidden). Type or generate a new one to replace it.'
+                    : 'Optional. The sender puts it in the X-Webhook-Secret header; leave it blank and the URL alone authenticates.'}
+                >
+                  <Text
+                    value={secretDraft}
+                    onChange={v => { setSecretDraft(v); setSecretAction(v.trim() ? 'replace' : null); touch() }}
+                    placeholder={hasSecret ? 'Saved (hidden). Type to replace.' : 'optional secret'}
+                  />
+                </Labeled>
+                <div className="flex items-center gap-3 text-xs">
+                  <button type="button" onClick={() => { setSecretDraft(newWebhookSecret()); setSecretAction('replace'); touch() }} className="text-un1t-subtle hover:text-un1t-text underline">Generate new secret</button>
+                  {hasSecret && secretAction !== 'clear' && (
+                    <button type="button" onClick={() => { setSecretDraft(''); setSecretAction('clear'); touch() }} className="text-rose-700 hover:underline">Remove secret</button>
+                  )}
+                </div>
+                {secretAction === 'replace' && (
+                  <p className="text-[11px] text-amber-700">Copy this secret into the sending system now. Once you save and leave this page it is never shown again. Saving replaces the old one.</p>
+                )}
+                {secretAction === 'clear' && (
+                  <p className="text-[11px] text-amber-700">The secret is removed when you save; the URL alone will authenticate.</p>
+                )}
               </div>
             )}
           </div>

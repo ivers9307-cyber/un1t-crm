@@ -14,8 +14,8 @@
 // unset value is exactly the unconfigured goal isGoalMet refuses to act on.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, cleanup, fireEvent } from '@testing-library/react'
-import SequenceSettings, { AUDIENCE_CONTINUOUS_HINT } from './SequenceSettings.jsx'
+import { render, cleanup, fireEvent, waitFor } from '@testing-library/react'
+import SequenceSettings, { AUDIENCE_CONTINUOUS_HINT, webhookSecretPatch, newWebhookSecret } from './SequenceSettings.jsx'
 
 describe('Audience conditions hint copy', () => {
   it('says the conditions are re-checked before every step', () => {
@@ -223,5 +223,124 @@ describe('Anniversary from_field — the import stamp is unmistakable (ANNIVSAFE
       trigger_type: 'anniversary', trigger_config: { from_field: 'lead_created_at' },
     })
     expect(getByTestId('anniversary-field-warning').textContent).not.toContain('—')
+  })
+})
+
+// SEQPAGEGATE.1 — the stored webhook secret no longer reaches the browser
+// (the page sends has_webhook_secret). The old panel seeded its input from
+// sequence.webhook_secret and sent `webhook_secret: value || null` on EVERY
+// save, so without the payload rule below a plain rename would WIPE the
+// stored secret. Fictional values only.
+describe('webhookSecretPatch (SEQPAGEGATE.1)', () => {
+  it('untouched sends nothing, so a save can never wipe or re-send the secret', () => {
+    expect(webhookSecretPatch(null, '')).toEqual({})
+    expect(webhookSecretPatch(null, 'anything')).toEqual({})
+  })
+  it('replace sends the trimmed value; a blank replace is no change', () => {
+    expect(webhookSecretPatch('replace', '  SYNTH-NEW  ')).toEqual({ webhook_secret: 'SYNTH-NEW' })
+    expect(webhookSecretPatch('replace', '   ')).toEqual({})
+  })
+  it('clear sends null', () => {
+    expect(webhookSecretPatch('clear', 'ignored')).toEqual({ webhook_secret: null })
+  })
+  it('newWebhookSecret is 48 hex characters and differs each time', () => {
+    const a = newWebhookSecret(); const b = newWebhookSecret()
+    expect(a).toMatch(/^[0-9a-f]{48}$/)
+    expect(a).not.toBe(b)
+  })
+})
+
+describe('Webhook secret panel (SEQPAGEGATE.1)', () => {
+  let puts
+  beforeEach(() => {
+    puts = []
+    vi.stubGlobal('fetch', vi.fn((url, init) => {
+      if (init?.method === 'PUT') {
+        const body = JSON.parse(init.body)
+        puts.push(body)
+        return Promise.resolve({ json: async () => ({ success: true, sequence: { webhook_token: 'c'.repeat(32), has_webhook_secret: !('webhook_secret' in body) || body.webhook_secret !== null } }) })
+      }
+      return new Promise(() => {}) // segments + audience count: irrelevant
+    }))
+  })
+  afterEach(() => { cleanup(); vi.unstubAllGlobals() })
+
+  const SEQ = {
+    id: 'seq-1', location_id: 'loc-1', name: 'Hook', status: 'draft', trigger_type: 'webhook',
+    trigger_config: {}, webhook_token: 'c'.repeat(32), has_webhook_secret: true,
+  }
+  function open(seq = SEQ) {
+    const utils = render(<SequenceSettings sequence={seq} />)
+    fireEvent.click(utils.getByText('Settings & trigger'))
+    return utils
+  }
+
+  it('shows that a secret is set without its value', () => {
+    const { getByPlaceholderText, container } = open()
+    const input = getByPlaceholderText('Saved (hidden). Type to replace.')
+    expect(input.value).toBe('')
+    expect(container.innerHTML).not.toContain('SYNTH-')
+  })
+
+  // THE wipe this row exists to prevent: a stored secret, a rename, a save.
+  it('a save that never touched the secret sends no webhook_secret key', async () => {
+    const { getByPlaceholderText, getByText } = open()
+    fireEvent.change(getByPlaceholderText('Sequence name'), { target: { value: 'Hook renamed' } })
+    fireEvent.click(getByText('Save settings'))
+    await waitFor(() => expect(puts).toHaveLength(1))
+    expect(puts[0]).not.toHaveProperty('webhook_secret')
+    expect(puts[0].name).toBe('Hook renamed')
+  })
+
+  it('a second save after setting a secret sends nothing again', async () => {
+    const { getByPlaceholderText, getByText } = open()
+    fireEvent.change(getByPlaceholderText('Saved (hidden). Type to replace.'), { target: { value: 'SYNTH-TYPED' } })
+    fireEvent.click(getByText('Save settings'))
+    await waitFor(() => expect(puts).toHaveLength(1))
+    expect(puts[0].webhook_secret).toBe('SYNTH-TYPED')
+    fireEvent.change(getByPlaceholderText('Sequence name'), { target: { value: 'Hook again' } })
+    await waitFor(() => expect(getByText('Save settings').closest('button').disabled).toBe(false))
+    fireEvent.click(getByText('Save settings'))
+    await waitFor(() => expect(puts).toHaveLength(2))
+    expect(puts[1]).not.toHaveProperty('webhook_secret')
+  })
+
+  it('Remove secret sends null', async () => {
+    const { getByText } = open()
+    fireEvent.click(getByText('Remove secret'))
+    fireEvent.click(getByText('Save settings'))
+    await waitFor(() => expect(puts).toHaveLength(1))
+    expect(puts[0].webhook_secret).toBeNull()
+  })
+
+  it('Generate fills a fresh secret, shows it once, and sends it', async () => {
+    const { getByText, container } = open()
+    fireEvent.click(getByText('Generate new secret'))
+    expect(container.textContent).toMatch(/Copy this secret into the sending system now/)
+    fireEvent.click(getByText('Save settings'))
+    await waitFor(() => expect(puts).toHaveLength(1))
+    expect(puts[0].webhook_secret).toMatch(/^[0-9a-f]{48}$/)
+  })
+
+  it('a typed secret is sent trimmed', async () => {
+    const { getByPlaceholderText, getByText } = open()
+    fireEvent.change(getByPlaceholderText('Saved (hidden). Type to replace.'), { target: { value: '  SYNTH-TYPED ' } })
+    fireEvent.click(getByText('Save settings'))
+    await waitFor(() => expect(puts).toHaveLength(1))
+    expect(puts[0].webhook_secret).toBe('SYNTH-TYPED')
+  })
+
+  it('no secret set: the ordinary placeholder, and no Remove button', () => {
+    const { getByPlaceholderText, queryByText } = open({ ...SEQ, has_webhook_secret: false })
+    expect(getByPlaceholderText('optional secret')).toBeTruthy()
+    expect(queryByText('Remove secret')).toBeNull()
+  })
+
+  it('the new operator copy carries no em-dash', () => {
+    const { container, getByText } = open()
+    fireEvent.click(getByText('Generate new secret'))
+    const panel = getByText('Generate new secret').closest('div').parentElement
+    expect(panel.textContent).not.toContain('\u2014')
+    expect(container.innerHTML).toContain('Saved (hidden)')
   })
 })

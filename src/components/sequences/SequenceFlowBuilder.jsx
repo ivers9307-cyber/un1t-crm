@@ -136,7 +136,7 @@ export default function SequenceFlowBuilder({ graph, sequence, isDraft, isPublis
   const settingsKey = JSON.stringify({
     n: sequence?.name, s: sequence?.status, tt: sequence?.trigger_type, tc: sequence?.trigger_config,
     g: sequence?.goal_config, sw: sequence?.send_window, rc: sequence?.re_enrolment_cooldown_days,
-    wt: sequence?.webhook_token, ws: sequence?.webhook_secret, d: sequence?.description,
+    wt: sequence?.webhook_token, hs: sequence?.has_webhook_secret, d: sequence?.description,
     af: sequence?.audience_filter,
   })
 
