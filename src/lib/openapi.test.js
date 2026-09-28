@@ -210,7 +210,7 @@ describe('getOpenApiSpec', () => {
     // The connection view is the allowlist — no key, no fingerprint.
     const conn = spec.components.schemas.ShellyConnectionPublic
     expect(Object.keys(conn.properties).sort()).toEqual(
-      ['has_auth_key', 'host', 'key_hint', 'last_error', 'last_error_at', 'last_ok_at', 'status'],
+      ['has_auth_key', 'host', 'last_error', 'last_error_at', 'last_ok_at', 'status'],
     )
   })
 
