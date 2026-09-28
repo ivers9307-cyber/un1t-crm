@@ -48,6 +48,13 @@ const MACHINE_REASONS = {
     'Their Glofox account match needs a human check. Confirm the account in Glofox, then approve to book.',
   attendance_check_failed:
     'Their attendance history could not be read from Glofox, so it was not auto-booked. Check the account and decide.',
+  // CBPCREDITREAD.1 — the funnel could not READ their Glofox credit balance
+  // on any of its 3 attempts (class-booking-queue.js at MAX_ATTEMPTS). The
+  // balance is UNKNOWN, not empty, and approving grants nothing
+  // (approvalGrantsTrialCredit below): staff add a credit themselves if one
+  // is really missing.
+  credit_check_failed:
+    'Their Glofox credit balance could not be read (Glofox did not answer after 3 tries), so the booking was not made. This does not mean they have no credits. Check their account in Glofox: if they have credits or a membership, approve to book against it. If they have none, add a credit in Glofox first, then approve. Approving does not add a credit.',
   booking_rejected:
     'Glofox rejected the live booking attempt. Fix the account (credits / membership), then approve to retry the booking.',
   superseded_duplicate:

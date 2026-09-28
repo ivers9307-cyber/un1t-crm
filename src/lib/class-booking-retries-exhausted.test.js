@@ -19,7 +19,7 @@ vi.mock('./class-booking-processor.js', async (importOriginal) => ({
 }))
 vi.mock('@/lib/glofox', () => ({
   glofoxCredentialsForLocation: vi.fn(), missingGlofoxCredentialsForLocation: vi.fn(() => []),
-  createBooking: vi.fn(), interpretBookingResult: vi.fn(), fetchUserCredits: vi.fn(),
+  createBooking: vi.fn(), interpretBookingResult: vi.fn(), fetchUserCredits: vi.fn(), fetchUserCreditsResult: vi.fn(),
   fetchUserBookingsResult: vi.fn(), GLOFOX_BOOKING_MODEL: 'event',
 }))
 vi.mock('@/lib/glofox-sync', () => ({ computeCreditsRemaining: vi.fn() }))
@@ -33,7 +33,7 @@ let store
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => store.db }))
 
 import { claimAndProcessBookingJob } from './class-booking-queue.js'
-import { processClassBookingRequest } from './class-booking-processor.js'
+import { processClassBookingRequest, CreditReadError } from './class-booking-processor.js'
 import { notifyAgentApprovalRequest } from '@/lib/agent/approval-notify'
 import { logError } from '@/lib/log'
 import { GET } from '@/app/api/cron/process-class-bookings/route.js'
@@ -115,6 +115,35 @@ describe('queue: retries exhausted on a THROW → staff card', () => {
     expect(notifyAgentApprovalRequest).toHaveBeenCalledTimes(1)
     // The card explains itself to staff in plain words.
     expect(whyFlagged({ kind: 'class_booking', details: card.details })).toMatch(/failed 3 times/)
+  })
+
+  // CBPCREDITREAD.1 — three failed credits reads end on a card that says the
+  // balance is UNKNOWN. Never needs_credit_grant: approving that card buys a
+  // trial membership, and never "no class credits left".
+  it('a credits read that failed every attempt files credit_check_failed, with copy that says unknown', async () => {
+    store = makeStore({ cbr: [atCap] })
+    processClassBookingRequest.mockRejectedValue(new CreditReadError())
+
+    const res = await claimAndProcessBookingJob(store.db, atCap)
+
+    expect(res).toEqual({ status: 'failed', error: 'credit_check_failed', requeued: false })
+    expect(store.inserts).toHaveLength(1)
+    const card = store.inserts[0]
+    expect(card.details).toMatchObject({ event_id: 'ev-1', reason: 'credit_check_failed', source: 'start_funnel' })
+    expect(store.cbr('cbr-1')).toMatchObject({ status: 'needs_review', approval_request_id: card.id, last_error: 'credit_check_failed' })
+    const why = whyFlagged({ kind: 'class_booking', details: card.details })
+    expect(why).toMatch(/could not be read/i)
+    expect(why).toMatch(/does not mean they have no credits/i)
+    expect(why).not.toMatch(/no class credits left/i)
+  })
+
+  it('a plain throw still files processing_error (unchanged)', async () => {
+    store = makeStore({ cbr: [atCap] })
+    processClassBookingRequest.mockRejectedValue(new Error('glofox_settings_unreadable'))
+
+    await claimAndProcessBookingJob(store.db, atCap)
+
+    expect(store.inserts[0].details.reason).toBe('processing_error')
   })
 
   it('a row that already names a PENDING card keeps it: no second card', async () => {

@@ -20,7 +20,9 @@
 //                        there is nothing left to retry.
 //   processor THROWS   → retryable. Re-queue under MAX_ATTEMPTS, else
 //                        flag needs_review AND file a staff approvals
-//                        card (routeToReview, reason 'processing_error')
+//                        card (routeToReview, reason 'processing_error', or
+//                        the error's own reviewReason, e.g. CreditReadError's
+//                        'credit_check_failed')
 //                        — a bare needs_review is on no screen. The
 //                        .eq('status','processing') guard stops this
 //                        ever clobbering a row the processor already
@@ -62,6 +64,11 @@ export async function claimAndProcessBookingJob(db, row) {
     return { status: 'processed', outcome: r.outcome, detail: r.detail }
   } catch (e) {
     const error = String(e?.message || e)
+    // CBPCREDITREAD.1 — a throw may name its own staff-card reason
+    // (CreditReadError → 'credit_check_failed'), so staff see WHAT could not
+    // be done instead of a generic error. Duck-typed on purpose: this lib must
+    // not depend on the processor's classes (its unit test mocks the module).
+    const reviewReason = (typeof e?.reviewReason === 'string' && e.reviewReason) || 'processing_error'
     // Retry under the cap, else flag for staff. The status guard stops this
     // ever clobbering a row the processor already moved to a terminal state.
     const atCap = (row.attempts || 0) + 1 >= MAX_ATTEMPTS
@@ -86,7 +93,7 @@ export async function claimAndProcessBookingJob(db, row) {
       // review_unavailable:* when no card can be filed. Only a row the guard
       // above matched gets here — never one the processor stamped itself.
       try {
-        const review = await routeToReview(db, { ...row, approval_request_id: flagged.approval_request_id ?? row.approval_request_id ?? null }, 'processing_error')
+        const review = await routeToReview(db, { ...row, approval_request_id: flagged.approval_request_id ?? row.approval_request_id ?? null }, reviewReason)
         if (review?.outcome !== 'needs_review') {
           logError('class-booking-queue', 'retries exhausted and no staff card could be filed', { requestId: row.id, detail: review?.detail })
         }
