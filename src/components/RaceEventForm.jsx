@@ -1417,8 +1417,9 @@ export default function RaceEventForm({ race, locationId }) {
           {meta.value === 'race' ? ' AND every team member ' : ' '}
           to Glofox: first we search by email and link if a Glofox account already
           exists; if not, we create a fresh Glofox account, attach this location&apos;s
-          trial membership, and tag the contact for the welcome sequence (which emails
-          the member their one-time passcode).
+          trial membership, and tag the contact for the welcome sequence. The member
+          sets their own password with Forgot password? in the Glofox app: no password
+          is saved or emailed.
         </p>
         {createInGlofox && (
           <p className="text-[11px] text-amber-700">
