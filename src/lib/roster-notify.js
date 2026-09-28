@@ -258,12 +258,16 @@ export async function renotifyChangedCoaches(db, { locationId, periodStart, peri
         data: { type: 'schedule_updated', start_date: periodStart, end_date: periodEnd, location_id: locationId },
       })
     }
-    // C16 PUSHREADERR.1 — a read inside notifyUsers failed, so some or all of
-    // these coaches were never judged or told. This is the final attempt for
-    // these rows, so stamping them now would lose the notice for good: leave
-    // them for the next publish, as a throw (below) already does. A coach who
-    // WAS told may hear it again then; a duplicate beats a loss.
-    if (totals?.read_failed) {
+    // C16 PUSHREADERR.1 — a read inside notifyUsers failed AND somebody was
+    // left untold by it (counted in `failed` / `email_failed`). This is the
+    // final attempt for these rows, so stamping them now would lose the notice
+    // for good: leave them for the next publish, as a throw (below) already
+    // does. A coach who WAS told may hear it again then; a duplicate beats a
+    // loss. A read that failed with nobody lost (a template read where every
+    // coach was allowed by default anyway; a fallback device read after which
+    // everyone was emailed) stamps as normal — skipping it would only buy a
+    // certain duplicate "Roster updated" on the next publish.
+    if (totals?.read_failed && ((totals.failed || 0) + (totals.email_failed || 0) > 0)) {
       logWarn('roster-notify', 'republish change-notify hit a failed read; rows left for the next publish', {
         locationId, coaches: coachIds.length,
       })
