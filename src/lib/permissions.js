@@ -189,3 +189,33 @@ export function hasPermissionInOrganization(user, organizationId, key) {
     (l) => l?.organization_id === organizationId && hasPermissionForLocation(user, l.id, key)
   )
 }
+
+/**
+ * ROLESWEEP.1 — does this user hold `key` at ANY location they belong to?
+ *
+ * A COARSE pre-check only, never the authority decision: the permission twin
+ * of hasRoleAtAnyLocation (src/lib/role-at-location.js). A route whose target
+ * location is not known until it has parsed the body or fetched a row keeps
+ * its cheap early refusal with this ("you hold `key` nowhere"), then judges
+ * the real target with hasPermissionForLocation(user, loc, key).
+ *
+ * It replaces `hasPermission(user, key)` in that position. hasPermission
+ * resolves at the ACTIVE location (its features, the active assignment's
+ * overrides, the active role template), so as a pre-check it both refused a
+ * caller who holds the key at the target but not at their active studio, and,
+ * followed only by a membership check, admitted one who holds it at the active
+ * studio but not at the target.
+ *
+ * Each location goes through hasPermissionForLocation, so the full tier order
+ * (feature gate → per-user override → role template → code default) applies
+ * at that location; a master is scored the same way (the feature gate binds
+ * masters too), across every active location getCurrentUser gives them.
+ *
+ * @param {object|null} user  — getCurrentUser() result
+ * @param {string} key        — WEB_PERMISSIONS key
+ * @returns {boolean}
+ */
+export function hasPermissionAtAnyLocation(user, key) {
+  if (!user) return false
+  return (user.locations || []).some((l) => l?.id && hasPermissionForLocation(user, l.id, key))
+}
