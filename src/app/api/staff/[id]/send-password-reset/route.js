@@ -33,9 +33,9 @@ export async function POST(_request, props) {
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   }
-  // Master OR owner-tier at the active location can trigger a reset.
-  // Same gate as staff create — admin operations require admin role.
-  // ROLESWEEP.1c — coarse pre-check; the overlap below is restricted to the
+  // Master, or ADMIN_ROLES at a location the target staffer works at, can
+  // trigger a reset. ROLESWEEP.1c — this is only the coarse pre-check (admin
+  // somewhere); the real decision is the overlap below, which counts only the
   // locations where the caller holds ADMIN_ROLES.
   if (!user.isMaster && !hasRoleAtAnyLocation(user, ADMIN_ROLES)) {
     return NextResponse.json({ success: false, error: 'Admin only' }, { status: 403 })
