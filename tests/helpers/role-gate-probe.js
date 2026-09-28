@@ -128,13 +128,17 @@ export async function runProbed(probe, handler) {
  *   cases               → [label, caller, target, 'pass'|'forbidden'|'hidden'][]
  *
  * 'pass' means the gate let the caller through: either the route reached a
- * database/network call after the gate reads (probe.passed), or it answered
- * with something that is neither refusal (a later 400, say). A refusal must
- * match status AND body exactly, and must not have touched anything past the
- * gate reads.
+ * database/network call after the gate reads (probe.passed, the tripwire),
+ * or it answered with a status that no gate uses (a later 400, say). Any
+ * 401/403/404 without the tripwire is a refusal, whatever its body, so a
+ * refusal by a DIFFERENT gate than the one the spec names cannot count as a
+ * pass. A refusal must match status AND body exactly, and must not have
+ * touched anything past the gate reads.
  */
+// Statuses a gate answers with. Without the tripwire, any of these is a refusal.
+const REFUSAL_STATUSES = new Set([401, 403, 404])
+
 export function describeGate(title, spec, { getCurrentUser, createServerClient, describe, it, expect }) {
-  const same = (want, status, body) => status === want.status && JSON.stringify(body) === JSON.stringify(want.body)
   describe(title, () => {
     it.each(spec.cases)('%s', async (_label, caller, target, outcome) => {
       getCurrentUser.mockResolvedValue(caller)
@@ -142,8 +146,8 @@ export function describeGate(title, spec, { getCurrentUser, createServerClient, 
       createServerClient.mockReturnValue(probe.db)
       const { status, body } = await runProbed(probe, () => spec.call(target))
       if (outcome === 'pass') {
-        const refused = !probe.passed && (same(spec.forbidden, status, body) || same(spec.hidden, status, body))
-        expect(refused, `refused at the gate: ${status} ${JSON.stringify(body)}`).toBe(false)
+        const through = probe.passed || (status !== null && !REFUSAL_STATUSES.has(status))
+        expect(through, `refused at a gate: ${status} ${JSON.stringify(body)}`).toBe(true)
         return
       }
       expect(probe.passed, `got past the gate (${probe.tripped?.kind} ${probe.tripped?.table})`).toBe(false)
