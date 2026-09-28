@@ -52,7 +52,7 @@ import { deviceHealth, HEALTH_TONE_CLASSES } from '@/lib/shelly/device-health'
 // that kept showing the banner would disagree silently.
 import { isLiveOverride, overrideKey } from '@/lib/shelly/plan'
 import { fetchJson, errorText, jsonBody } from './shelly-fetch'
-import ShellyScheduleEditor from './ShellyScheduleEditor'
+import ShellyScheduleEditor, { GLOFOX_UNKNOWN_HINT } from './ShellyScheduleEditor'
 import ShellyEnergyChart from './ShellyEnergyChart'
 
 const HOUR_MS = 60 * 60 * 1000
@@ -139,7 +139,7 @@ export function overrideUntilLabel(iso, nowMs, tz = DEFAULT_TZ) {
   return `${weekday} ${time}`
 }
 
-export default function ShellyDeviceCard({ device, connected, locationTz = DEFAULT_TZ, glofoxConnected, onChanged }) {
+export default function ShellyDeviceCard({ device, connected, locationTz = DEFAULT_TZ, glofoxConnected, glofoxUnknown = false, onChanged }) {
   const [renaming, setRenaming] = useState(false)
   const [nameDraft, setNameDraft] = useState(device.name || '')
   // WHICH action is in flight, not merely "an action is". A boolean would put
@@ -460,7 +460,9 @@ export default function ShellyDeviceCard({ device, connected, locationTz = DEFAU
         <div className="flex flex-wrap items-center justify-between gap-2">
           <label
             className="inline-flex items-center gap-1.5 text-xs text-un1t-text"
-            title={canEnable ? undefined : 'Add a window (or connect Glofox for class mode) first'}
+            title={canEnable ? undefined
+              : glofoxUnknown && device.schedule_mode === 'class' ? GLOFOX_UNKNOWN_HINT
+                : 'Add a window (or connect Glofox for class mode) first'}
           >
             <input
               type="checkbox"
@@ -490,7 +492,7 @@ export default function ShellyDeviceCard({ device, connected, locationTz = DEFAU
           </Button>
         </div>
         <div className="mt-2">
-          <ShellyScheduleEditor device={device} glofoxConnected={glofoxConnected} onSave={patch} />
+          <ShellyScheduleEditor device={device} glofoxConnected={glofoxConnected} glofoxUnknown={glofoxUnknown} onSave={patch} />
         </div>
       </div>
 
