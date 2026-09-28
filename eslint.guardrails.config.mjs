@@ -440,6 +440,34 @@ const config = [
       'guardrails/no-substring-redirect-assertion': 'error',
     },
   },
+  {
+    // D2 EXPECTLINT.1 — `expect(…).resolves/.rejects` and `expect.poll` return a
+    // promise, and one nothing waits for races the test's end: it passes
+    // without checking, or fails a LATER test. #1762 lost a CI run that way.
+    // Test files plus the helpers they import (a helper that asserts is test
+    // code too). Measured on main 91ab55bf with this rule: 0 findings, across
+    // the 755 lines in 202 test files that use .resolves/.rejects (97 of them
+    // multi-line chains a grep would miss). mobile/lib's tests are armed in
+    // eslint.mobile.config.mjs, since mobile/** is outside this config.
+    files: [
+      '**/*.test.js',
+      '**/*.test.jsx',
+      '**/*.test-helpers.js',
+      '**/_test-*.js',
+      'tests/helpers/**/*.js',
+    ],
+    plugins: { guardrails },
+    linterOptions: { reportUnusedDisableDirectives: 'off' },
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: 'module',
+      parserOptions: { ecmaFeatures: { jsx: true } },
+      globals: { ...globals.node, ...globals.browser },
+    },
+    rules: {
+      'guardrails/no-unawaited-async-expect': 'error',
+    },
+  },
 ]
 
 
