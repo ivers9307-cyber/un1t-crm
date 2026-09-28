@@ -4,10 +4,13 @@
 //
 // PATCH /api/contacts/[id]/devices/[deviceId]
 //   Toggle is_active or update label. Same role gate as POST.
+//
+// SECFIX.1 — both handlers read the contact, 404 a non-member, and judge the
+// write role at the CONTACT's location (see gateContact).
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { getPersonGroup } from '@/lib/person-links'
 import { logInfo, logWarn } from '@/lib/log'
@@ -23,17 +26,45 @@ export const dynamic = 'force-dynamic'
 
 const WRITE_ROLES = ['owner', 'manager', 'head_coach']
 
+// SECFIX.1 (security) — neither handler read the contact or checked the
+// caller belongs to its location, and the only gate was the role at the
+// caller's ACTIVE studio: any owner/manager/head coach ANYWHERE could delete
+// or relabel a strap on any contact estate-wide by id. Resolve the contact,
+// 404 a non-member (detail route: ids stay non-enumerable), then judge
+// WRITE_ROLES at the contact's location. Masters are exempt from both, as on
+// the sibling GET / POST in ../route.js.
+async function gateContact(db, user, contactId) {
+  const { data: contact, error } = await db
+    .from('contacts')
+    .select('id, location_id')
+    .eq('id', contactId)
+    .single()
+  if (error || !contact) {
+    return NextResponse.json({ ok: false, error: 'Contact not found' }, { status: 404 })
+  }
+  if (user.isMaster) return null
+  const guard = assertLocationAccessOr404(user, contact.location_id)
+  if (guard) return guard
+  if (!hasRoleAtLocation(user, contact.location_id, WRITE_ROLES)) {
+    return NextResponse.json({ ok: false, error: 'Admin only' }, { status: 403 })
+  }
+  return null
+}
+
 export async function DELETE(_request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) {
     return NextResponse.json({ ok: false, error: 'Unauthorised' }, { status: 401 })
   }
-  if (!user.isMaster && !WRITE_ROLES.includes(user.role)) {
+  // Coarse pre-check only; the role is judged at the contact's location in gateContact.
+  if (!user.isMaster && !hasRoleAtAnyLocation(user, WRITE_ROLES)) {
     return NextResponse.json({ ok: false, error: 'Admin only' }, { status: 403 })
   }
 
   const db = createServerClient()
+  const denied = await gateContact(db, user, params.id)
+  if (denied) return denied
   // Scope the delete to all contacts in the person group so an operator
   // can remove a device that belongs to a linked profile.
   const group = await getPersonGroup(db, params.id)
@@ -60,7 +91,8 @@ export async function PATCH(request, props) {
   if (!user) {
     return NextResponse.json({ ok: false, error: 'Unauthorised' }, { status: 401 })
   }
-  if (!user.isMaster && !WRITE_ROLES.includes(user.role)) {
+  // Coarse pre-check only; the role is judged at the contact's location in gateContact.
+  if (!user.isMaster && !hasRoleAtAnyLocation(user, WRITE_ROLES)) {
     return NextResponse.json({ ok: false, error: 'Admin only' }, { status: 403 })
   }
 
@@ -76,6 +108,8 @@ export async function PATCH(request, props) {
   }
 
   const db = createServerClient()
+  const denied = await gateContact(db, user, params.id)
+  if (denied) return denied
   // Scope the patch to all contacts in the person group so an operator
   // can update a device that belongs to a linked profile.
   const group = await getPersonGroup(db, params.id)
