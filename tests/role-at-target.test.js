@@ -132,6 +132,16 @@ describe('the pre-check-only scan', () => {
     expect(preCheckOnly(PRE + ROW + "// judged by hasRoleAtLocation(user, loc, ROLES) below\n")).toBe(true)
     expect(targetJudgements("hasRoleAtLocationish(user)")).toEqual([])
   })
+
+  // ROLESWEEP.1c — the mobile twins (src/lib/permissions.js).
+  it('knows the mobile pre-check and the mobile decision at the target', () => {
+    const MPRE = "if (!hasMobilePermissionAtAnyLocation(user, 'email')) return no()\n"
+    expect(anyLocationPreChecks(MPRE)).toEqual(['hasMobilePermissionAtAnyLocation('])
+    expect(preCheckOnly(MPRE + ROW)).toBe(true)
+    expect(targetJudgements("hasMobilePermissionForLocation(user, seq.location_id, 'email')")).toEqual(['hasMobilePermissionForLocation('])
+    expect(preCheckOnly(MPRE + ROW + "if (!hasMobilePermissionForLocation(user, seq.location_id, 'email')) return no()")).toBe(false)
+    expect(activeRoleGates("hasMobilePermissionForLocation(user, id, 'email') || hasMobilePermissionAtAnyLocation(user, 'email')")).toEqual([])
+  })
 })
 
 describe('/api routes judge the role at the location they act on', () => {
