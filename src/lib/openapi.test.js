@@ -45,6 +45,12 @@ describe('getOpenApiSpec', () => {
     expect(get.responses).toHaveProperty('404')
   })
 
+  it('no longer documents the retired working-time route (D1 DEADCODE.1)', () => {
+    expect(spec.paths['/api/schedule/working-time']).toBeUndefined()
+    // CANDIDATES.1's replacement is still documented.
+    expect(spec.paths['/api/schedule/blocks/{id}/candidates']).toHaveProperty('get')
+  })
+
   it('documents staff qualifications (QUALS.1): records, the catalogue and template requirements', () => {
     expect(spec.paths['/api/qualifications']).toHaveProperty('get')
     expect(spec.paths['/api/qualifications']).toHaveProperty('post')

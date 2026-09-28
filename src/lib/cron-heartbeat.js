@@ -1,11 +1,25 @@
 // Cron heartbeat helper.
 //
-// Each cron route calls stampHeartbeat(name) on success. The cron_health
-// view (mig 053) flags is_stale=true when last_ok_at falls outside
-// expected_interval + grace, and /api/cron/health-check returns 503 when
-// any row is stale. An external monitor (UptimeRobot, Better Stack, etc.)
-// pings the health-check endpoint every few minutes — one URL covers all
-// crons.
+// Each cron route calls stampHeartbeat(name) when a run succeeds, and so does
+// each cron ARM that has a row of its own (an arm is a job riding another
+// cron's schedule; which arms have rows, and when an arm's run is clean
+// enough to stamp, is src/lib/cron-arm-health.js, or inline in
+// src/app/api/cron/checklist-sweep/route.js for its two arms). public.cron_heartbeats
+// (mig 053) holds one row per name, and the cron_health view (mig 053,
+// security_invoker since mig 054) flags is_stale when last_ok_at falls
+// outside expected_interval + grace. /api/cron/health-check reads that view
+// and returns 503 when any row is stale; the external uptime monitor and
+// Sentinel (its cron-health check turns the 503's `stale` list into one
+// signal per name) both poll it. Only last_ok_at pages: last_outcome
+// (mig 315) is for a person reading the row.
+//
+// Every name needs a row, seeded by a migration (mig 053 seeded the first
+// three; since then, normally in the cron's or arm's own migration). The stamp is
+// UPDATE-only, so a name with no row changes nothing and only logs "stamp
+// matched 0 rows" (below). A new cron's row ships in that cron's migration
+// (CLAUDE.md, "New cron"). An ARM's row is (re-)seeded RIGHT AFTER the deploy
+// that stamps it, because an arm row seeded earlier goes stale after
+// interval + grace and pages (cron-arm-health.js).
 //
 // stampHeartbeat() is intentionally best-effort: a failure to write the
 // heartbeat must NEVER fail the cron itself. Worst case, a transient DB
@@ -21,13 +35,13 @@ import { logWarn } from '@/lib/log'
  * never throws, never blocks the cron's response.
  *
  * @param {string} name — must match a row in public.cron_heartbeats
- *                        (seeded via mig 053 for the three current crons).
+ *                        (seeded by that cron's or arm's own migration).
  * @param {object} [outcome] — optional JSON-serialisable summary of this run's
  *                        work, e.g. { processed: 5, skipped: 0, deadLettered: 1 }.
  *                        When provided, also writes last_outcome so ops can
  *                        distinguish "ran and idle" from "ran but broken".
- *                        When omitted, last_outcome is left unchanged (backward
- *                        compatible — all existing callers are unaffected).
+ *                        When omitted, last_outcome is left unchanged
+ *                        (the view never reads it).
  */
 export async function stampHeartbeat(name, outcome) {
   if (!name || typeof name !== 'string') {

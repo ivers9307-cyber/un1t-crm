@@ -64,8 +64,7 @@ export function staffingStatus(liveCount, minCoaches) {
 
 /**
  * The staffing of a block that is today or later. Past blocks return null —
- * a past shift nobody covered is history, not something to act on (the same
- * rule isBlockUnstaffedFuture has always applied).
+ * a past shift nobody covered is history, not something to act on.
  *
  * SHIFTTYPE.1 — an ADMIN block also returns null. An admin shift has no
  * minimum staffing (Richard, 25 Sep 2026), so there is no staffing question to

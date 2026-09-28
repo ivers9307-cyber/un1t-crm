@@ -47,9 +47,8 @@ export {
  * The Today chip's server read: future blocks from today to the end of this
  * week (Mon-Sun) across the caller's locations, counted by staffing gap.
  *
- * Replaces the web page's use of shared/dashboard-data's
- * fetchUnstaffedBlocksThisWeek (zero-only). That helper is left in shared/
- * untouched, because any change under shared/ publishes an OTA.
+ * It replaced the old zero-only count in shared/dashboard-data (ROSTERVIS.1),
+ * which D1 DEADCODE.1 deleted once nothing read it.
  *
  * "Today" is the Dublin business day, not the server's UTC day.
  *

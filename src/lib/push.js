@@ -493,18 +493,6 @@ export function roleRecipientIdsFromLinks(links, roles) {
 }
 
 /**
- * @deprecated C1 RECIPIENTS.1 — no callers left; use readRoleRecipientIds,
- * which keeps the read error. This returns [] on a FAILED read, which reads
- * as "nobody to tell". Kept for one deploy; deleted by D1 DEADCODE.1.
- * tests/role-recipients-callers.test.js fails if anything calls it.
- *
- * @returns {Promise<string[]>}
- */
-export async function resolveRoleRecipientIds(db, locationId, roles) {
-  return (await readRoleRecipientIds(db, locationId, roles)).ids
-}
-
-/**
  * The active profile ids holding one of `roles` at `locationId`, WITH the
  * read error. REPLACE.1b review 1: the "taken" notice of a claimed shift
  * offer stamped itself done on the empty list a failed read returned, so the
