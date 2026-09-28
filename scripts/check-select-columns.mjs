@@ -199,6 +199,68 @@ export function parseCreateTableBody(body) {
 }
 
 // ---------------------------------------------------------------------------
+// Foreign keys (SELCOLS2.1) — so `alias:fk_column(…)` can be resolved
+// ---------------------------------------------------------------------------
+//
+// PostgREST lets an embed name its relation by the FOREIGN KEY COLUMN instead
+// of the table: `locations:location_id ( name )` on a table whose
+// `location_id` references `locations`. Until SELCOLS2.1 walkSelect only
+// descended when the relation name was itself a table, so every column
+// inside such an embed was skipped in silence (found building LABOUR.1;
+// 214 embeds in src/ at the time). Resolving it needs to know where each
+// single-column FK points — one more thing the migration replay can learn.
+
+const QUALIFIED = '((?:"?\\w+"?\\s*\\.\\s*)?"?\\w+"?)'
+const INLINE_FK_RE = new RegExp(`\\bREFERENCES\\s+${QUALIFIED}`, 'i')
+const TABLE_FK_RE = new RegExp(
+  `^(?:CONSTRAINT\\s+("?\\w+"?)\\s+)?FOREIGN\\s+KEY\\s*\\(\\s*("?\\w+"?)\\s*\\)\\s*REFERENCES\\s+${QUALIFIED}`, 'i'
+)
+const NAMED_INLINE_RE = /\bCONSTRAINT\s+("?\w+"?)\s+REFERENCES\b/i
+
+/** A public FK target → its table name; anything else (auth.users, …) → null. */
+function publicTarget(raw) {
+  const q = parseQualifiedName(raw)
+  return q && q.schema === 'public' ? q.name : null
+}
+
+/**
+ * Single-column foreign keys declared in a CREATE TABLE body (or one ALTER
+ * action), as [{ column, target, constraint }]. `constraint` is the explicit
+ * name, or Postgres's default `<table>_<column>_fkey`, so a later DROP
+ * CONSTRAINT can find it. Composite FKs and FKs into a non-public schema are
+ * left out: PostgREST cannot embed through either by column name.
+ */
+export function parseForeignKeys(table, body) {
+  const out = []
+  for (const item of splitTopLevel(body)) {
+    const tableFk = item.match(TABLE_FK_RE)
+    if (tableFk) {
+      const column = unquote(tableFk[2])
+      const target = publicTarget(tableFk[3])
+      const constraint = tableFk[1] ? unquote(tableFk[1]) : `${table}_${column}_fkey`
+      if (target) out.push({ column, target, constraint })
+      continue
+    }
+    const first = item.match(/^("[^"]+"|[\w]+)/)
+    if (!first) continue
+    const column = unquote(first[1])
+    if (CONSTRAINT_STARTERS.has(column.toLowerCase())) continue
+    const inline = item.match(INLINE_FK_RE)
+    if (!inline) continue
+    const target = publicTarget(inline[1])
+    const named = item.match(NAMED_INLINE_RE)
+    const constraint = named ? unquote(named[1]) : `${table}_${column}_fkey`
+    if (target) out.push({ column, target, constraint })
+  }
+  return out
+}
+
+function setForeignKey(fks, table, fk) {
+  if (!fks.has(table)) fks.set(table, new Map())
+  fks.get(table).set(fk.column, { target: fk.target, constraint: fk.constraint })
+}
+
+// ---------------------------------------------------------------------------
 // View select-list resolution
 // ---------------------------------------------------------------------------
 
@@ -282,8 +344,9 @@ function findTopLevelKeyword(text, keyword) {
 /**
  * Apply one migration file's DDL to a `Map<table, Set<column>>`, in place.
  * `skippedViews` collects view names whose select list we could not resolve.
+ * `fks` collects single-column foreign keys (SELCOLS2.1).
  */
-export function applyMigrationSql(sqlText, schema, skippedViews = new Set()) {
+export function applyMigrationSql(sqlText, schema, skippedViews = new Set(), fks = new Map()) {
   for (const stmt of splitSqlStatements(sqlText)) {
     const flat = stmt.replace(/\s+/g, ' ').trim()
 
@@ -299,13 +362,14 @@ export function applyMigrationSql(sqlText, schema, skippedViews = new Set()) {
       const cols = parseCreateTableBody(body)
       if (!schema.has(q.name)) schema.set(q.name, new Set())
       for (const c of cols) schema.get(q.name).add(c)
+      for (const fk of parseForeignKeys(q.name, body)) setForeignKey(fks, q.name, fk)
       continue
     }
 
     const dropTable = /^DROP\s+TABLE(?:\s+IF\s+EXISTS)?\s+((?:"?\w+"?\s*\.\s*)?"?\w+"?)/i.exec(flat)
     if (dropTable) {
       const q = parseQualifiedName(dropTable[1])
-      if (q && q.schema === 'public') schema.delete(q.name)
+      if (q && q.schema === 'public') { schema.delete(q.name); fks.delete(q.name) }
       continue
     }
 
@@ -333,38 +397,61 @@ export function applyMigrationSql(sqlText, schema, skippedViews = new Set()) {
     if (alter) {
       const q = parseQualifiedName(alter[1])
       if (!q || q.schema !== 'public') continue
-      applyAlterActions(q.name, alter[2], schema)
+      applyAlterActions(q.name, alter[2], schema, fks)
     }
   }
   return schema
 }
 
-/** ADD/DROP/RENAME COLUMN + RENAME TO actions of one ALTER TABLE. */
-function applyAlterActions(table, actionsText, schema) {
+/** ADD/DROP/RENAME COLUMN, ADD/DROP CONSTRAINT (FKs) + RENAME TO of one ALTER TABLE. */
+function applyAlterActions(table, actionsText, schema, fks = new Map()) {
   // A table rename is a whole-statement action, never comma-listed.
-  const renameTable = /^RENAME\s+TO\s+("?\w+"?)$/i.exec(actionsText.trim())
+  const renameTable = actionsText.trim().match(/^RENAME\s+TO\s+("?\w+"?)$/i)
   if (renameTable) {
     const to = unquote(renameTable[1])
     if (schema.has(table)) { schema.set(to, schema.get(table)); schema.delete(table) }
+    if (fks.has(table)) { fks.set(to, fks.get(table)); fks.delete(table) }
+    // FKs are bound to the table, not its name: every FK into it follows.
+    for (const byCol of fks.values()) for (const fk of byCol.values()) if (fk.target === table) fk.target = to
     return
   }
-  const renameCol = /^RENAME\s+COLUMN\s+("?\w+"?)\s+TO\s+("?\w+"?)$/i.exec(actionsText.trim())
+  const renameCol = actionsText.trim().match(/^RENAME\s+COLUMN\s+("?\w+"?)\s+TO\s+("?\w+"?)$/i)
   if (renameCol) {
+    const from = unquote(renameCol[1])
+    const to = unquote(renameCol[2])
     const cols = schema.get(table)
-    if (cols) { cols.delete(unquote(renameCol[1])); cols.add(unquote(renameCol[2])) }
+    if (cols) { cols.delete(from); cols.add(to) }
+    const byCol = fks.get(table)
+    if (byCol?.has(from)) { byCol.set(to, byCol.get(from)); byCol.delete(from) }
     return
   }
 
   for (const action of splitTopLevel(actionsText)) {
-    const add = /^ADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?("?\w+"?)/i.exec(action)
+    const add = action.match(/^ADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?("?\w+"?)/i)
     if (add) {
       if (!schema.has(table)) schema.set(table, new Set())
       schema.get(table).add(unquote(add[1]))
+      // `ADD COLUMN x uuid REFERENCES t(id)` — the column def is what follows ADD COLUMN.
+      const def = action.replace(/^ADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?/i, '')
+      for (const fk of parseForeignKeys(table, def)) setForeignKey(fks, table, fk)
       continue
     }
-    const drop = /^DROP\s+COLUMN\s+(?:IF\s+EXISTS\s+)?("?\w+"?)/i.exec(action)
+    const drop = action.match(/^DROP\s+COLUMN\s+(?:IF\s+EXISTS\s+)?("?\w+"?)/i)
     if (drop) {
       schema.get(table)?.delete(unquote(drop[1]))
+      fks.get(table)?.delete(unquote(drop[1]))
+      continue
+    }
+    const addFk = action.match(/^ADD\s+((?:CONSTRAINT\s+"?\w+"?\s+)?FOREIGN\s+KEY[\s\S]*)$/i)
+    if (addFk) {
+      for (const fk of parseForeignKeys(table, addFk[1])) setForeignKey(fks, table, fk)
+      continue
+    }
+    const dropConstraint = action.match(/^DROP\s+CONSTRAINT\s+(?:IF\s+EXISTS\s+)?("?\w+"?)/i)
+    if (dropConstraint) {
+      const name = unquote(dropConstraint[1])
+      const byCol = fks.get(table)
+      if (byCol) for (const [col, fk] of byCol) if (fk.constraint === name) byCol.delete(col)
       continue
     }
   }
@@ -407,15 +494,16 @@ function endOfCall(text, openIdx) {
   return text.length
 }
 
-/** Replay every .sql migration in filename order → { schema, skippedViews }. */
+/** Replay every .sql migration in filename order → { schema, skippedViews, fks }. */
 export function collectSchema(migrationsDir) {
   const schema = new Map()
   const skippedViews = new Set()
+  const fks = new Map()
   for (const f of fs.readdirSync(migrationsDir).sort()) {
     if (!f.endsWith('.sql')) continue
-    applyMigrationSql(fs.readFileSync(path.join(migrationsDir, f), 'utf8'), schema, skippedViews)
+    applyMigrationSql(fs.readFileSync(path.join(migrationsDir, f), 'utf8'), schema, skippedViews, fks)
   }
-  return { schema, skippedViews }
+  return { schema, skippedViews, fks }
 }
 
 // ---------------------------------------------------------------------------
@@ -437,16 +525,29 @@ export function cleanSelectString(sel) {
 /**
  * Parse a PostgREST select string against `table`, returning
  * [{ table, column }] for every resolvable column reference. Embedded
- * resources are descended into only when the relation name is a known
- * table; everything else is dropped in silence.
+ * resources are descended into when the relation name is a known table or
+ * (SELCOLS2.1, given `fks`) an FK column of `table`; everything else is
+ * dropped in silence.
  */
-export function parseSelect(sel, table, schema) {
+export function parseSelect(sel, table, schema, fks = new Map()) {
   const refs = []
-  walkSelect(cleanSelectString(sel), table, schema, refs)
+  walkSelect(cleanSelectString(sel), table, schema, fks, refs)
   return refs
 }
 
-function walkSelect(sel, table, schema, refs) {
+/**
+ * The table an embed's relation name points at, or null. PostgREST accepts
+ * a table (`locations(…)`, `locations!location_id(…)`) or, for a many-to-one,
+ * the parent's FK column (`location_id(…)`, `locations:location_id(…)`).
+ * Table first, so every embed that resolved before resolves identically.
+ */
+export function resolveEmbedTarget(rel, table, schema, fks = new Map()) {
+  if (schema.has(rel)) return rel
+  const fk = fks.get(table)?.get(rel)
+  return fk && schema.has(fk.target) ? fk.target : null
+}
+
+function walkSelect(sel, table, schema, fks, refs) {
   for (let item of splitTopLevel(sel)) {
     if (item.startsWith('...')) item = item.slice(3) // spread embed
     if (!item) continue
@@ -464,7 +565,8 @@ function walkSelect(sel, table, schema, refs) {
       // `alias:rel!fk` / `rel!inner` / `rel`
       const relRaw = head.includes(':') ? head.slice(head.indexOf(':') + 1) : head
       const rel = unquote(relRaw.split('!')[0])
-      if (inner !== null && schema.has(rel)) walkSelect(inner, rel, schema, refs)
+      const target = resolveEmbedTarget(rel, table, schema, fks)
+      if (inner !== null && target) walkSelect(inner, target, schema, fks, refs)
       continue
     }
     pushColumn(item, table, schema, refs)
@@ -590,14 +692,14 @@ export function maskComments(src) {
   return out.join('')
 }
 
-export function collectFileRefs(src, schema) {
+export function collectFileRefs(src, schema, fks = new Map()) {
   const refs = []
   for (const link of extractChainLinks(maskComments(src))) {
     if (!schema.has(link.table)) continue
     if (link.method === 'select') {
       const sel = firstStringArg(link.args)
       if (sel === null) continue
-      for (const r of parseSelect(sel, link.table, schema)) {
+      for (const r of parseSelect(sel, link.table, schema, fks)) {
         refs.push({ ...r, offset: link.index, via: 'select' })
       }
       continue
@@ -694,7 +796,7 @@ function readAllowlist() {
 }
 
 function main() {
-  const { schema, skippedViews } = collectSchema(MIGRATIONS_ROOT)
+  const { schema, skippedViews, fks } = collectSchema(MIGRATIONS_ROOT)
   const entries = readAllowlist()
   const problems = validateAllowlist(entries)
   if (problems.length) {
@@ -710,7 +812,7 @@ function main() {
   for (const file of files) {
     const rel = file.split(path.sep).join('/')
     const src = fs.readFileSync(file, 'utf8')
-    for (const ref of collectFileRefs(src, schema)) {
+    for (const ref of collectFileRefs(src, schema, fks)) {
       checked++
       if (schema.get(ref.table).has(ref.column)) continue
       hits.push({ file: rel, line: lineOf(src, ref.offset), ...ref })

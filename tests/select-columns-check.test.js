@@ -22,14 +22,16 @@ import {
   lineOf,
   validateAllowlist,
   classifyHits,
+  parseForeignKeys,
 } from '../scripts/check-select-columns.mjs'
 
-/** Replay migration texts in order into a schema map. */
+/** Replay migration texts in order into a schema map (and the FK map). */
 function schemaOf(...sqls) {
   const schema = new Map()
   const skippedViews = new Set()
-  for (const sql of sqls) applyMigrationSql(sql, schema, skippedViews)
-  return { schema, skippedViews }
+  const fks = new Map()
+  for (const sql of sqls) applyMigrationSql(sql, schema, skippedViews, fks)
+  return { schema, skippedViews, fks }
 }
 
 const ENROLMENTS_SQL = `
@@ -320,5 +322,99 @@ describe('allowlist', () => {
   it('reports an entry that no longer matches a hit as stale', () => {
     const { stale } = classifyHits([], [entry], '2026-09-13')
     expect(stale).toEqual([entry])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// SELCOLS2.1 — the two things SELECTCOLS.1 skipped in silence.
+// ---------------------------------------------------------------------------
+
+const LOCATIONS_SQL = 'CREATE TABLE public.locations (id uuid PRIMARY KEY, name text, settings jsonb);'
+const PROFILES_SQL = 'CREATE TABLE public.profiles (id uuid PRIMARY KEY, full_name text);'
+const BLOCKS_SQL = `
+  CREATE TABLE public.shift_blocks (
+    id uuid PRIMARY KEY,
+    location_id uuid NOT NULL REFERENCES public.locations(id) ON DELETE CASCADE,
+    created_by uuid REFERENCES auth.users(id),
+    title text
+  );
+`
+
+describe('foreign-key replay (SELCOLS2.1)', () => {
+  it('reads an inline REFERENCES with Postgres\'s default constraint name', () => {
+    expect(parseForeignKeys('shift_blocks', 'id uuid, location_id uuid NOT NULL REFERENCES public.locations(id) ON DELETE CASCADE'))
+      .toEqual([{ column: 'location_id', target: 'locations', constraint: 'shift_blocks_location_id_fkey' }])
+  })
+
+  it('reads a table-level FOREIGN KEY, keeping its explicit name', () => {
+    expect(parseForeignKeys('shift_assignments',
+      'id uuid, block_id uuid, CONSTRAINT sa_block_fk FOREIGN KEY (block_id) REFERENCES shift_blocks(id)'))
+      .toEqual([{ column: 'block_id', target: 'shift_blocks', constraint: 'sa_block_fk' }])
+  })
+
+  it('leaves out FKs into another schema and composite FKs — neither can name an embed', () => {
+    expect(parseForeignKeys('t',
+      'created_by uuid REFERENCES auth.users(id), a uuid, b uuid, FOREIGN KEY (a, b) REFERENCES pairs(x, y)'))
+      .toEqual([])
+  })
+
+  it('replays ADD COLUMN … REFERENCES, ADD CONSTRAINT … FOREIGN KEY and DROP CONSTRAINT', () => {
+    const { fks } = schemaOf(LOCATIONS_SQL, PROFILES_SQL, 'CREATE TABLE rosters (id uuid);', `
+      ALTER TABLE public.rosters
+        ADD COLUMN location_id uuid REFERENCES locations(id),
+        ADD COLUMN owner_id uuid;
+    `, 'ALTER TABLE rosters ADD CONSTRAINT rosters_owner_fk FOREIGN KEY (owner_id) REFERENCES profiles(id);')
+    expect(fks.get('rosters').get('location_id').target).toBe('locations')
+    expect(fks.get('rosters').get('owner_id').target).toBe('profiles')
+
+    const after = schemaOf(LOCATIONS_SQL, 'CREATE TABLE rosters (id uuid, location_id uuid REFERENCES locations(id));',
+      'ALTER TABLE rosters DROP CONSTRAINT IF EXISTS rosters_location_id_fkey;').fks
+    expect(after.get('rosters').has('location_id')).toBe(false)
+  })
+
+  it('follows RENAME COLUMN, DROP COLUMN, and a RENAME TO of the target table', () => {
+    const { fks } = schemaOf(
+      'CREATE TABLE inbound_invoices (id uuid);',
+      'CREATE TABLE lines (id uuid, invoice uuid REFERENCES inbound_invoices(id), dead uuid REFERENCES inbound_invoices(id));',
+      'ALTER TABLE lines RENAME COLUMN invoice TO invoice_id;',
+      'ALTER TABLE lines DROP COLUMN dead;',
+      'ALTER TABLE inbound_invoices RENAME TO invoices_queue;',
+    )
+    expect([...fks.get('lines').keys()]).toEqual(['invoice_id'])
+    expect(fks.get('lines').get('invoice_id').target).toBe('invoices_queue')
+  })
+})
+
+describe('embed named by its FK column (SELCOLS2.1, found building LABOUR.1)', () => {
+  const { schema, fks } = schemaOf(LOCATIONS_SQL, PROFILES_SQL, BLOCKS_SQL)
+  const cols = (sel, table = 'shift_blocks') =>
+    parseSelect(sel, table, schema, fks).map((r) => `${r.table}.${r.column}`)
+  const hits = (src) =>
+    collectFileRefs(src, schema, fks)
+      .filter((r) => !schema.get(r.table).has(r.column))
+      .map((r) => `${r.table}.${r.column}`)
+
+  it('THE LABOUR.1 SHAPE: `locations:location_id ( … )` is checked against locations', () => {
+    expect(cols('id, locations:location_id ( name, city )'))
+      .toEqual(['shift_blocks.id', 'locations.name', 'locations.city'])
+    expect(hits(`db.from('shift_blocks').select('id, locations:location_id ( name, city )')`))
+      .toEqual(['locations.city'])
+  })
+
+  it('resolves the bare FK-column form and the spread form', () => {
+    expect(cols('location_id(name)')).toEqual(['locations.name'])
+    expect(cols('...location_id(name)')).toEqual(['locations.name'])
+  })
+
+  it('still resolves a table-named embed with an FK hint (regression)', () => {
+    expect(cols('loc:locations!location_id(name)')).toEqual(['locations.name'])
+  })
+
+  it('stays silent on an FK into auth.users rather than inventing a table', () => {
+    expect(cols('id, creator:created_by(email)')).toEqual(['shift_blocks.id'])
+  })
+
+  it('without the FK map, behaves exactly as before (callers that pass none)', () => {
+    expect(parseSelect('locations:location_id(name)', 'shift_blocks', schema).map((r) => r.column)).toEqual([])
   })
 })
