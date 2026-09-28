@@ -42,7 +42,7 @@ async function classRecipients(db, locationId, occ) {
 }
 
 export async function runHyroxClassReminder(db, { nowMs = Date.now() } = {}) {
-  const stats = { classes: 0, reminded: 0, recipients: 0, recipients_failed: 0 }
+  const stats = { classes: 0, reminded: 0, recipients: 0, recipients_failed: 0, send_failed: 0 }
   const { data: blocks } = await db
     .from('hyrox_blocks').select('id, location_id, starts_on, weeks, session_weekdays').eq('status', 'active')
 
@@ -105,13 +105,31 @@ export async function runHyroxClassReminder(db, { nowMs = Date.now() } = {}) {
         const timeStr = new Date(occ.starts_at).toLocaleTimeString('en-IE', {
           timeZone: 'Europe/Dublin', hour: '2-digit', minute: '2-digit',
         })
-        await sendPush(recipientIds, {
+        const result = await sendPush(recipientIds, {
           title: 'Hyrox class coming up',
           body: session?.focus
             ? `Review "${session.focus}" for your ${timeStr} class.`
             : `Review the workout for your ${timeStr} Hyrox class.`,
           data: session?.id ? { screen: 'hyrox', sessionId: session.id } : { screen: 'hyrox' },
         }, { locationId: block.location_id, requireMobileKey: 'hyrox' })
+
+        // C16 PUSHREADERR.1 — the class was claimed BEFORE the send. Nothing
+        // delivered because something FAILED (a read inside sendPush, or Expo
+        // after its retries): release the claim, so the next 5-minute tick,
+        // still inside the 30-minute lead, tries again. Anything delivered
+        // keeps it (a partial send must never repeat), and so does "nobody
+        // has a device" (sent 0, failed 0): nothing to retry against.
+        if ((result?.sent || 0) === 0 && (result?.failed || 0) > 0) {
+          stats.send_failed++
+          const where = { locationId: block.location_id, class_starts_at: occ.starts_at, read_failed: !!result?.read_failed }
+          const { error: releaseErr } = await db.from('hyrox_class_reminders').delete().eq('id', reminderId)
+          if (releaseErr) {
+            logError('hyrox-reminder', 'nothing delivered and the claim release failed; this class will not be reminded', { ...where, err: releaseErr.message })
+          } else {
+            logWarn('hyrox-reminder', 'nothing delivered; claim released, the next tick retries', where)
+          }
+          continue
+        }
 
         // Best-effort bookkeeping — never fails the send.
         await db.from('hyrox_class_reminders')

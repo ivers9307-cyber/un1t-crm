@@ -80,6 +80,13 @@ export async function GET(request) {
         results.push({ locationId: settings.location_id, due: outstanding.length, pushed: false, recipients_failed: true })
         continue
       }
+      // C16 PUSHREADERR.1 — push.js could not read who may be told or their
+      // devices, and nobody was told: not a sent reminder, not audited as one.
+      // Someone told (a partial send under an unreadable template) still counts.
+      if (r?.read_failed && !((r.sent || 0) > 0)) {
+        results.push({ locationId: settings.location_id, due: outstanding.length, pushed: false, read_failed: true })
+        continue
+      }
 
       await logAuditEvent({
         category: 'business',

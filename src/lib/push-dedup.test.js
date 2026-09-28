@@ -244,3 +244,35 @@ describe('role fan-out variants — ids resolved BEFORE claiming', () => {
     expect(res.recipients_failed).toBeUndefined()
   })
 })
+
+// C16 PUSHREADERR.1 — a failed read inside sendPush used to come back as
+// { sent: 0, failed: 0 }, which sendOnce reads as "no device" and KEEPS the
+// claim, so a replay or retry was deduped and the message lost. It now comes
+// back with failed > 0 and read_failed: 1, which the existing pipelineFailed
+// branch already releases. These pin that contract from this side.
+describe('sendOnce — a failed read inside the send releases the claim (C16 PUSHREADERR.1)', () => {
+  const READ_FAILED = { sent: 0, skipped: 0, invalidated: 0, failed: 2, read_failed: 1 }
+
+  it('sendPushOnce: nothing delivered + read_failed → every claim released, read_failed passed on; the retry sends', async () => {
+    sendPush.mockResolvedValueOnce(READ_FAILED)
+    const r = await sendPushOnce(fakeDb, 'evt:1', ['a', 'b'], { title: 't', body: 'b' })
+    expect(releasedCalls).toEqual([{ eventKey: 'evt:1', ids: ['a', 'b'] }])
+    expect(r).toMatchObject({ sent: 0, failed: 2, read_failed: 1, deduped: 0 })
+
+    sendPush.mockResolvedValueOnce({ sent: 2, skipped: 0, invalidated: 0, failed: 0 })
+    const again = await sendPushOnce(fakeDb, 'evt:1', ['a', 'b'], { title: 't', body: 'b' })
+    expect(again).toMatchObject({ sent: 2, deduped: 0 })
+  })
+
+  it('notifyUsersOnce: the same, through notifyUsers', async () => {
+    notifyUsers.mockResolvedValueOnce({ ...READ_FAILED, failed: 1, emailed: 0, email_failed: 0 })
+    await notifyUsersOnce(fakeDb, 'evt:2', ['a'], { title: 't', body: 'b', category: 'swap' })
+    expect(releasedCalls).toEqual([{ eventKey: 'evt:2', ids: ['a'] }])
+  })
+
+  it('a partial send under read_failed (templates unreadable, someone told) KEEPS the claim: never a duplicate', async () => {
+    sendPush.mockResolvedValueOnce({ sent: 1, skipped: 0, invalidated: 0, failed: 1, read_failed: 1 })
+    await sendPushOnce(fakeDb, 'evt:3', ['a', 'b'], { title: 't', body: 'b' })
+    expect(releasedCalls).toEqual([])
+  })
+})

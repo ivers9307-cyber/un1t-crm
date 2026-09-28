@@ -68,7 +68,8 @@ vi.mock('./push', async (importOriginal) => {
     readRoleRecipientIds: real.readRoleRecipientIds,
     sendPush: vi.fn(),
     // The per-category opt-out is push.js's own tested business; allow all.
-    resolvePushAllowedIds: vi.fn(async (_db, ids) => new Set(ids)),
+    // C16 PUSHREADERR.1 — notifyUsers' fallback reads readPushAllowedIds now.
+    readPushAllowedIds: vi.fn(async (_db, ids) => ({ allowed: new Set(ids), error: null, templatesError: null })),
   }
 })
 vi.mock('./postmark', () => ({ sendEmail: vi.fn() }))

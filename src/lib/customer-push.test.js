@@ -1,10 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { sendCustomerPush } from './customer-push.js'
+import { logError } from './log.js'
+
+vi.mock('./log.js', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 
 // prefRows feeds the contacts.push_prefs lookup (only queried for typed,
 // non-'default'-channel payloads); default [] = nobody opted out.
-function db(rows, { deleteError = null, prefRows = [], prefError = null } = {}) {
+function db(rows, { deleteError = null, prefRows = [], prefError = null, tokenError = null } = {}) {
   const deleted = { tokens: null }
   const queried = { contactIds: null, tokenContactIds: null }
   return {
@@ -15,13 +18,13 @@ function db(rows, { deleteError = null, prefRows = [], prefError = null } = {}) 
         return { select() { return { in: (_c, ids) => { queried.contactIds = ids; return Promise.resolve({ data: prefRows, error: prefError }) } } } }
       }
       return {
-        select() { return { in: (_c, ids) => { queried.tokenContactIds = ids; return Promise.resolve({ data: rows }) } } },
+        select() { return { in: (_c, ids) => { queried.tokenContactIds = ids; return Promise.resolve(tokenError ? { data: null, error: tokenError } : { data: rows, error: null }) } } },
         delete() { return { in: (_c, toks) => { deleted.tokens = toks; return Promise.resolve({ error: deleteError }) } } },
       }
     },
   }
 }
-beforeEach(() => { global.fetch = vi.fn() })
+beforeEach(() => { global.fetch = vi.fn(); vi.mocked(logError).mockClear() })
 afterEach(() => { vi.useRealTimers() })
 
 // Run a send under fake timers so the retry backoff (500ms/2s) doesn't
@@ -223,5 +226,34 @@ describe('staff sender isolation (P3)', () => {
     const staffSrc = readFileSync(new URL('./push.js', import.meta.url), 'utf8')
     expect(staffSrc).not.toContain('LEGACY_CHANNEL_ALIASES')
     expect(staffSrc).not.toContain('customer-push-channels')
+  })
+})
+
+// C16 PUSHREADERR.1 — the champ_push_tokens read discarded its error, so a DB
+// blip came back as { sent: 0, failed: 0 } ("no device") and
+// send-class-booking-reminders KEPT its claim: the member's class reminder was
+// lost. It is now failed + read_failed, which that cron already releases on.
+describe('sendCustomerPush — a failed token read is not "no device" (C16 PUSHREADERR.1)', () => {
+  const READ_ERR = { message: 'fetch failed' }
+
+  it('every candidate failed, read_failed, nothing sent, one logError', async () => {
+    const d = db(null, { tokenError: READ_ERR })
+    const out = await sendCustomerPush(d, ['c1', 'c2'], { title: 't', body: 'b', data: { type: 'class_reminder' } })
+    expect(out).toEqual({ sent: 0, invalidated: 0, failed: 2, skipped: 0, read_failed: 1 })
+    expect(global.fetch).not.toHaveBeenCalled()
+    expect(logError).toHaveBeenCalledTimes(1)
+    expect(logError).toHaveBeenCalledWith('customer-push', 'token read failed; nobody was told',
+      expect.objectContaining({ contacts: 2, type: 'class_reminder', err: READ_ERR }))
+  })
+
+  it('a member who opted out is still skipped, not failed', async () => {
+    const d = db(null, { tokenError: READ_ERR, prefRows: [{ id: 'c2', push_prefs: { class_reminders: false } }] })
+    const out = await sendCustomerPush(d, ['c1', 'c2'], { title: 't', body: 'b', data: { type: 'class_reminder' } })
+    expect(out).toEqual({ sent: 0, invalidated: 0, failed: 1, skipped: 1, read_failed: 1 })
+  })
+
+  it('send-class-booking-reminders releases its claim on exactly this answer (sent 0, failed > 0)', async () => {
+    const out = await sendCustomerPush(db(null, { tokenError: READ_ERR }), 'c1', { title: 't', body: 'b', data: { type: 'class_reminder' } })
+    expect(!(out.sent > 0) && (out.failed || 0) > 0).toBe(true)
   })
 })
