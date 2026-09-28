@@ -16,6 +16,9 @@
 //     manage are reported as skipped, never removed.
 // Removal goes through unassignShiftAssignments, the helper that DELETE uses,
 // so the change log and the NOTIFY.1 coach notification happen the same way.
+// REPLACENITS.1 — every row "changed" (the roster moved since the approver
+// was shown it) is 409 "refresh", not a 500; a row already gone (a double
+// submit) is reported as already_removed, not as a failure.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -25,7 +28,7 @@ import { validateBody } from '@/lib/validate'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { canDecideTimeOff, decidingLocationIds, getProfileLocationIds, findLeaveClashes } from '@/lib/time-off-leave'
-import { unassignShiftAssignments } from '@/lib/shift-unassign'
+import { unassignShiftAssignments, SHIFT_CHANGED_ERROR, SHIFTS_CHANGED_ERROR } from '@/lib/shift-unassign'
 
 const UnassignSchema = z.object({
   // Optional: only these assignments (the ones the approver was shown). A
@@ -79,15 +82,26 @@ export async function POST(request, props) {
     toRemove.push(c)
   }
 
-  const { removed, failed } = await unassignShiftAssignments(db, { actorId: user.id, assignments: toRemove })
+  const { removed, failed, gone = [] } = await unassignShiftAssignments(db, { actorId: user.id, assignments: toRemove })
+
+  // 500 only when nothing went and something failed for a reason of ours; a
+  // roster that moved under the approver is theirs to refresh (409).
+  const allChanged = failed.length > 0 && removed.length === 0 && failed.every((f) => f.code === 'changed')
+  const status = failed.length === 0 || removed.length > 0 ? 200 : allChanged ? 409 : 500
+  const error = failed.length === 0 ? null
+    : allChanged ? (failed.length === 1 ? SHIFT_CHANGED_ERROR : SHIFTS_CHANGED_ERROR)
+      : `${failed.length} shift${failed.length === 1 ? '' : 's'} could not be unassigned`
+  const row = (c) => ({ assignment_id: c.id, block_date: c.block_date, location_name: c.location_name })
 
   return NextResponse.json({
     success: failed.length === 0,
-    ...(failed.length ? { error: `${failed.length} shift${failed.length === 1 ? '' : 's'} could not be unassigned` } : {}),
+    ...(allChanged ? { code: 'changed' } : {}),
+    ...(error ? { error } : {}),
     data: {
-      removed: removed.map((c) => ({ assignment_id: c.id, block_date: c.block_date, location_name: c.location_name })),
+      removed: removed.map(row),
+      already_removed: gone.map(row),
       skipped,
       failed,
     },
-  }, { status: failed.length && removed.length === 0 ? 500 : 200 })
+  }, { status })
 }

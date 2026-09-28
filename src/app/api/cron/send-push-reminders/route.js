@@ -56,7 +56,7 @@ import { SHIFT_REMINDERS_HEARTBEAT, shiftReminderArmHealthy, SHIFT_TIME_CHANGES_
 import { runShiftTimeChangeNotices } from '@/lib/block-edit-notify'
 // REPLACE.1a — the held replace-notice arm, self-contained (see its block below).
 import { runReplaceNotices } from '@/lib/shift-replace-notify'
-import { REPLACE_NOTICES_HEARTBEAT, replaceNoticeArmHealthy } from '@/lib/cron-arm-health'
+import { REPLACE_NOTICES_HEARTBEAT, replaceNoticeArmHealthy, pushReminderTickIsNews } from '@/lib/cron-arm-health'
 // REPLACE.1b — the "Offer to team" arm, self-contained (see its block below).
 import { runShiftOfferSweep } from '@/lib/shift-offer-server'
 import { SHIFT_OFFER_SWEEP_HEARTBEAT, offerSweepArmHealthy } from '@/lib/cron-arm-health'
@@ -135,7 +135,7 @@ export async function GET(request) {
     booking_send_failed: 0,
     shift_arm_failed: 0, // 1 = the shift arm THREW this tick (see the SHIFTS block)
     time_change_arm_failed: 0, // 1 = the time-change arm THREW this tick (BLOCKEDIT.1)
-    replace_arm_failed: 0, // 1 = the held replace-notice arm threw or reported errors (REPLACE.1a)
+    replace_arm_failed: 0, // 1 = the held replace-notice arm threw or reported a fault of its own (errors or stamp_failed; REPLACE.1a, REPLACENITS.1)
     offer_arm_failed: 0, // 1 = the shift-offer arm threw or reported a fault of its own (REPLACE.1b)
     lead_time_buckets: [], // for logging / debugging
   }
@@ -469,7 +469,10 @@ export async function GET(request) {
   try {
     replaceSummary = await runReplaceNotices(db, { nowMs })
     summary.replace_notices = replaceSummary
-    if ((replaceSummary?.errors || 0) > 0) summary.replace_arm_failed = 1
+    // REPLACENITS.1 — the arm's own health predicate, like the offer arm
+    // below: a delivered notice whose stamp failed (stamp_failed; the coach is
+    // told again every tick) is a fault, and used to read 0 here.
+    if (replaceSummary && !replaceNoticeArmHealthy(replaceSummary)) summary.replace_arm_failed = 1
   } catch (err) {
     summary.replace_arm_failed = 1
     logError('cron-push-reminders', 'replace notice arm threw', { err })
@@ -504,8 +507,10 @@ export async function GET(request) {
   }
 
   // quiet_hours alone is not news: it is 1 on every tick from 22:00 to 07:00.
-  // time_change_quiet likewise (BLOCKEDIT.1).
-  if (Object.entries(summary).some(([k, v]) => k !== 'quiet_hours' && k !== 'time_change_quiet' && (Array.isArray(v) ? v.length > 0 : v > 0))) {
+  // time_change_quiet likewise (BLOCKEDIT.1). The replace and offer arms'
+  // NESTED outcomes are judged by their own news keys (REPLACENITS.1): an
+  // object never counted, so a notice told or an offer sent never logged.
+  if (pushReminderTickIsNews(summary)) {
     logInfo('cron-push-reminders', 'tick', summary)
   }
 

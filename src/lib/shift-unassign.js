@@ -13,9 +13,12 @@
 
 import { logRosterChange } from '@/lib/roster-change-log'
 import { notifyRosterChanges } from '@/lib/roster-change-notify'
+import { logWarn } from '@/lib/log'
 
 /** The words for a row that changed under the caller (review 2). */
 export const SHIFT_CHANGED_ERROR = 'This shift has just changed. Refresh and try again.'
+/** REPLACENITS.1 — the same, for a caller reporting several rows at once. */
+export const SHIFTS_CHANGED_ERROR = 'These shifts have just changed. Refresh and try again.'
 
 /**
  * @param {object} db   service-role client
@@ -23,11 +26,16 @@ export const SHIFT_CHANGED_ERROR = 'This shift has just changed. Refresh and try
  * @param {string} args.actorId
  * @param {Array<{ id: string, profile_id: string, block_id: string,
  *   block_date: string, location_id: string, roster_status?: string|null }>} args.assignments
- * @returns {Promise<{ removed: object[], failed: Array<{ id: string, error: string }> }>}
+ * @returns {Promise<{ removed: object[], failed: Array<{ id: string, error: string, code?: string }>, gone: object[] }>}
+ *   gone (REPLACENITS.1): rows someone else had already deleted (a double
+ *   submit's other request, another manager, the slot's cascade). The caller's
+ *   wish is met; they are neither logged nor told here, because whoever
+ *   deleted them did both.
  */
 export async function unassignShiftAssignments(db, { actorId, assignments }) {
   const removed = []
   const failed = []
+  const gone = []
 
   // One DELETE per row, each judged on its own: a failure on one shift must
   // not be reported as the whole set failing, nor hide the ones that went.
@@ -35,8 +43,8 @@ export async function unassignShiftAssignments(db, { actorId, assignments }) {
   // REPLACE.1a review 2 — pinned to the coach it was READ for. A replace
   // hands a row to another coach under the same id, so a delete by id alone,
   // racing a replace, would take the NEW coach off and log and tell the old
-  // one. Zero rows = the row changed hands or is gone: 'changed', nothing
-  // logged, nobody told.
+  // one. Zero rows = the row changed hands or is gone; REPLACENITS.1 re-reads
+  // it to say which. Neither is logged and nobody is told.
   for (const a of assignments || []) {
     const { data, error } = await db.from('shift_assignments')
       .delete()
@@ -48,6 +56,7 @@ export async function unassignShiftAssignments(db, { actorId, assignments }) {
       continue
     }
     if (!data || data.length === 0) {
+      if (await rowIsGone(db, a.id)) { gone.push(a); continue }
       failed.push({ id: a.id, error: SHIFT_CHANGED_ERROR, code: 'changed' })
       continue
     }
@@ -56,7 +65,28 @@ export async function unassignShiftAssignments(db, { actorId, assignments }) {
 
   await logAndNotifyUnassignments(db, { actorId, assignments: removed })
 
-  return { removed, failed }
+  return { removed, failed, gone }
+}
+
+/**
+ * REPLACENITS.1 — a delete pinned to (id, coach) touched nothing. Is the row
+ * gone altogether (true), or still there under another coach (false)?
+ * Unreadable is false: "changed, refresh" is the answer the caller got before
+ * this existed, and costs a refresh; guessing "gone" could tell a manager a
+ * coach is off a shift they are still on. Never throws.
+ */
+async function rowIsGone(db, id) {
+  try {
+    const { data, error } = await db.from('shift_assignments').select('id').eq('id', id).maybeSingle()
+    if (error) {
+      logWarn('shift-unassign', 'could not re-read a shift that changed under a delete; answering "changed"', { assignmentId: id, err: error.message })
+      return false
+    }
+    return !data
+  } catch (e) {
+    logWarn('shift-unassign', 'could not re-read a shift that changed under a delete; answering "changed"', { assignmentId: id, err: e?.message })
+    return false
+  }
 }
 
 /**

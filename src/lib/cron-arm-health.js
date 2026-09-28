@@ -146,3 +146,32 @@ export function offerSweepArmHealthy(outcome) {
   if (!isOutcome(outcome)) return false
   return count(outcome.errors) === 0 && count(outcome.stamp_failed) === 0
 }
+
+// C5 REPLACENITS.1 — the */5 send-push-reminders tick log line. The route
+// logs its summary only when the tick did something, so a quiet night writes
+// nothing. The replace and offer arms report a NESTED outcome
+// (summary.replace_notices, summary.shift_offers), and the old top-level test
+// (`v > 0`) is always false for an object: a notice told, an offer sent, a
+// give-up never reached the log. Each nested outcome is judged by the
+// counters that mean something HAPPENED. Left out on purpose, because they
+// repeat every tick while nothing changes: a held notice (rows, groups,
+// quiet, fresh, undelivered) and a waiting offer (open, claimed_owed, none,
+// busy, leased, quiet_hours).
+export const REPLACE_NOTICE_NEWS_KEYS = Object.freeze(['told', 'silent', 'started', 'gone', 'send_failed', 'stamp_failed', 'errors'])
+export const OFFER_SWEEP_NEWS_KEYS = Object.freeze(['expired', 'filled', 'raced', 'retry', 'sent', 'stamp_failed', 'gave_up', 'capped', 'errors'])
+
+const NESTED_NEWS_KEYS = Object.freeze({ replace_notices: REPLACE_NOTICE_NEWS_KEYS, shift_offers: OFFER_SWEEP_NEWS_KEYS })
+// Top-level keys that are 1 on every tick from 22:00 to 07:00.
+const QUIET_KEYS = new Set(['quiet_hours', 'time_change_quiet'])
+
+/** True when a send-push-reminders tick summary is worth one log line. */
+export function pushReminderTickIsNews(summary) {
+  if (!isOutcome(summary)) return false
+  return Object.entries(summary).some(([k, v]) => {
+    if (QUIET_KEYS.has(k)) return false
+    const nested = NESTED_NEWS_KEYS[k]
+    if (nested) return isOutcome(v) && nested.some((key) => count(v[key]) > 0)
+    if (Array.isArray(v)) return v.length > 0
+    return count(v) > 0
+  })
+}

@@ -150,9 +150,11 @@ describe('POST /replace — the log pair and ONE notice each', () => {
     const res = await call()
     expect(res.status).toBe(200)
     expect((await res.json()).data).toEqual({ assignment_id: 'as-1', from_profile_id: 'coach-a', profile_id: B_ID, notice: 'now', closed_swaps: 0 })
+    // REPLACENITS.1 — each row also records the shift's start, so a held
+    // notice still knows it if the slot is deleted before 07:00.
     expect(logRosterChange.mock.calls.map((c) => [c[1].coachId, c[1].action, c[1].details])).toEqual([
-      ['coach-a', 'unassigned', { via: 'replace' }],
-      [B_ID, 'assigned', { via: 'replace' }],
+      ['coach-a', 'unassigned', { via: 'replace', start_time: '06:00:00' }],
+      [B_ID, 'assigned', { via: 'replace', start_time: '06:00:00' }],
     ])
     expect(after).toHaveBeenCalledTimes(1)
     expect(notifyRosterChanges).toHaveBeenCalledTimes(1)

@@ -5010,9 +5010,10 @@ registry.registerPath({
     body: { content: { 'application/json': { schema: z.object({ assignment_ids: z.array(uuidLike).optional() }) } } },
   },
   responses: {
-    200: { description: '{ removed, skipped, failed }' },
+    200: { description: '{ removed, already_removed, skipped, failed }. already_removed = shifts another request had already taken off (a double submit); not failures.' },
     404: { description: 'Not found, or not decidable by the caller', content: { 'application/json': { schema: ErrorResponse } } },
-    409: { description: 'The leave is not approved', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'The leave is not approved; or every shift changed since it was shown (`code: changed`: refresh and try again)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Nothing was removed and at least one delete failed for a server reason', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -5043,9 +5044,10 @@ registry.registerPath({
   description: 'Deletes one shift_assignments row. Manager-only (master, owner, manager, head_coach): a coach cannot remove themselves from a shift — they post a swap request instead (POST /api/schedule/swaps), which a manager approves. A non-master manager is scoped to their own locations; an assignment at another location returns 404.',
   request: { params: z.object({ id: uuidLike }) },
   responses: {
-    200: { description: 'Assignment removed' },
+    200: { description: 'Assignment removed. A repeat of a removal another request already carried out (a double submit) is also 200, with `data.already_removed: true`; nothing is logged or sent twice.' },
     403: { description: 'Forbidden — ask for a swap to drop this shift', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Assignment not found, or at a location you do not own', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'The shift changed hands since it was read (`code: changed`): refresh and try again', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -5112,7 +5114,7 @@ registry.registerPath({
     200: { description: "Claimed; the shift is on the caller's roster" },
     403: { description: 'Not on the staff of this studio', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Offer not found', content: { 'application/json': { schema: ErrorResponse } } },
-    409: { description: 'Taken, withdrawn, filled, started, or the caller is on leave / another shift / already on it', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Taken, withdrawn, filled, started, or the caller is on leave / another shift / already on it; or someone was changing the shift at that same moment (`code: try_again`: try again)', content: { 'application/json': { schema: ErrorResponse } } },
     503: { description: 'The leave / shift check could not be read; try again', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
