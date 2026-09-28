@@ -188,3 +188,34 @@ describe('GET /api/sequences/from-template (the template list)', () => {
     expect(body.data.length).toBeGreaterThan(0)
   })
 })
+
+// ── the two GETs name their columns; webhook secrets stay out ─────────────
+// The builder's settings panel (SequenceSettings.jsx) gets webhook_token /
+// webhook_secret from the /automations/[id] server page's own read and from
+// the PUT response, never from these GETs.
+describe('GET /api/sequences and GET /api/sequences/[id] leave out webhook secrets', () => {
+  const selectOf = (chain) => chain.find((c) => c[0] === 'select')?.[1]
+  const noSecrets = (cols) => {
+    expect(cols).toBeTypeOf('string')
+    expect(cols).not.toMatch(/\*(?!\))/) // a bare * (sequence_steps(*) is fine)
+    expect(cols).not.toMatch(/webhook_token|webhook_secret/)
+  }
+
+  it('the list', async () => {
+    const { probe } = await probed(STAFF_A_MANAGER_B, () => list.GET(bare('GET', `location_id=${LOC_B}`)))
+    const cols = selectOf(probe.tripped.chain)
+    noSecrets(cols)
+    for (const c of ['id', 'name', 'description', 'status', 'trigger_type']) expect(cols).toMatch(new RegExp(`\\b${c}\\b`))
+  })
+
+  it('the detail (everything the builder reads, bar the secrets)', async () => {
+    let cols = null
+    const answer = (chain) => { cols = selectOf(chain); return SEQ_ROW(LOC_B)[0] }
+    const { status } = await probed(STAFF_A_MANAGER_B, () => detail.GET(bare('GET'), params(id)), [answer])
+    expect(status).toBe(200)
+    noSecrets(cols)
+    for (const c of ['location_id', 'trigger_config', 'audience_filter', 'graph', 'draft_graph', 'graph_version', 'sequence_steps\\(\\*\\)']) {
+      expect(cols).toMatch(new RegExp(c))
+    }
+  })
+})

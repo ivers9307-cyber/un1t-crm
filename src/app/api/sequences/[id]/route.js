@@ -47,6 +47,20 @@ const SequenceUpdateSchema = z.object({
   rotate_webhook_token: z.boolean().optional(),
 })
 
+// SEQROUTEGATE.1 — every column but webhook_token / webhook_secret (the
+// builder's settings panel gets those from the /automations/[id] page's own
+// read, and the token from the PUT response below) and the dead `active`.
+const SEQUENCE_DETAIL_COLUMNS = [
+  'id, location_id, name, description, status',
+  'trigger_type, trigger_config, audience_filter, goal_config, send_window, re_enrolment_cooldown_days',
+  'graph, draft_graph, graph_version',
+  'from_email, from_name, reply_to',
+  'audience_seeded_at, audience_seeded_by, audience_seed_count',
+  'total_enrolled, total_completed, total_exited',
+  'created_by, created_at, updated_at',
+  'sequence_steps(*)',
+].join(', ')
+
 // GET /api/sequences/[id]
 export async function GET(request, props) {
   const params = await props.params;
@@ -56,7 +70,7 @@ export async function GET(request, props) {
 
   const db = createServerClient()
   const { data, error } = await db.from('email_sequences')
-    .select('*, sequence_steps(*)')
+    .select(SEQUENCE_DETAIL_COLUMNS)
     .eq('id', params.id)
     .single()
 
