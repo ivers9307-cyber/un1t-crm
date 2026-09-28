@@ -393,32 +393,46 @@ export async function syncOccurrencesForLocation(db, { locationId, creds, window
   }
 
   let cancelled = 0
+  // CRONREADERR.1 — true when this tick could not finish reconciling: the read
+  // of the spine's live rows failed, or the cancel UPDATE did. Either way
+  // nothing was cancelled (fail SAFE: a class Glofox dropped stays one more
+  // 15-min tick, the AC may pre-cool for it; a real class is never cancelled),
+  // and the sync is still ok because the upsert above happened. The route
+  // counts it (stats.reconcile_errors); this location only.
+  let reconcileFailed = false
   if (canReconcile) {
     // Rows in THIS location within the fetched window that we did NOT see as
     // active/private → cancelled or deleted. Bound strictly to the window.
     const windowStartIso = new Date(nowMs).toISOString()
     const windowEndIso = new Date(nowMs + windowHours * 3600 * 1000).toISOString()
-    const { data: existing } = await db
+    const { data: existing, error: existingErr } = await db
       .from('class_occurrences')
       .select('glofox_event_id')
       .eq('location_id', locationId)
       .gte('starts_at', windowStartIso)
       .lte('starts_at', windowEndIso)
       .is('cancelled_at', null)
-    const goneIds = (existing || [])
-      .map((r) => r.glofox_event_id)
-      .filter((id) => id && !seenEventIds.has(String(id)))
-    if (goneIds.length > 0) {
-      const { error: cancelErr } = await db
-        .from('class_occurrences')
-        .update({ cancelled_at: new Date().toISOString() })
-        .eq('location_id', locationId)
-        .in('glofox_event_id', goneIds)
-        .is('cancelled_at', null)
-      if (cancelErr) {
-        logWarn('class-occurrences', 'cancel reconcile failed', { locationId, error: cancelErr.message })
-      } else {
-        cancelled = goneIds.length
+    if (existingErr) {
+      // A failed read is not "nothing to cancel".
+      reconcileFailed = true
+      logError('class-occurrences', 'cancel reconcile read failed; nothing cancelled this tick', { locationId, err: existingErr })
+    } else {
+      const goneIds = (existing || [])
+        .map((r) => r.glofox_event_id)
+        .filter((id) => id && !seenEventIds.has(String(id)))
+      if (goneIds.length > 0) {
+        const { error: cancelErr } = await db
+          .from('class_occurrences')
+          .update({ cancelled_at: new Date().toISOString() })
+          .eq('location_id', locationId)
+          .in('glofox_event_id', goneIds)
+          .is('cancelled_at', null)
+        if (cancelErr) {
+          reconcileFailed = true
+          logWarn('class-occurrences', 'cancel reconcile failed', { locationId, error: cancelErr.message })
+        } else {
+          cancelled = goneIds.length
+        }
       }
     }
   }
@@ -464,7 +478,7 @@ export async function syncOccurrencesForLocation(db, { locationId, creds, window
   }
 
   return {
-    ok: true, upserted, cancelled, seen: (result.events || []).length,
+    ok: true, upserted, cancelled, reconcileFailed, seen: (result.events || []).length,
     trainersMapped: Object.keys(trainerNames).length, trainerLookup, trainerApiCalls,
   }
 }
