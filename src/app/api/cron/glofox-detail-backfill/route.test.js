@@ -73,16 +73,16 @@ describe('GET /api/cron/glofox-detail-backfill — MEMBERRESULT.1', () => {
 
   it('counts the refusal as member_refused, not invalid and not fetch_failed, and logs the count once', async () => {
     const out = await (await GET(req())).json()
-    const expected = { create: 0, update: 1, leave: 0, fetch_failed: 1, error: 0, ambiguous: 0, invalid: 0, member_refused: 1 }
+    const expected = { create: 0, update: 1, leave: 0, fetch_failed: 1, error: 0, ambiguous: 0, invalid: 0, member_refused: 1, stamp_failed: 0 }
     expect(out.per_location[0].summary).toEqual(expected)
-    expect(h.runUpdates.at(-1).summary).toEqual({ ...expected, remaining_missing_plan: 0 })
+    expect(h.runUpdates.at(-1).summary).toEqual({ ...expected, remaining_due: 0 })
     expect(logWarn).toHaveBeenCalledWith(
       'glofox-detail-backfill',
       expect.stringContaining('refused'),
       { locationId: 'loc-1', refused: 1 },
     )
     expect(logWarn).toHaveBeenCalledTimes(1)
-    expect(stampHeartbeat).toHaveBeenCalledWith('glofox-detail-backfill')
+    expect(stampHeartbeat).toHaveBeenCalledWith('glofox-detail-backfill', expect.any(Object))
   })
 
   it('a run with no refusals logs nothing', async () => {
