@@ -179,3 +179,50 @@ describe('AcDevicesIntegrationTab — the location in the URL (ACDEVLOC.1)', () 
     expect(screen.queryByLabelText('Sensibo API key')).toBeNull()
   })
 })
+
+// N3 — discovery accepts a just-typed key in its body, but adding a unit needs
+// the key SAVED on the location (the add route answers 412 otherwise), so a
+// typed-but-unsaved secret gets a hint by the Add buttons.
+describe('AcDevicesIntegrationTab — typed but unsaved credentials (ACDEVLOC.1 N3)', () => {
+  const HINT = 'Save the key first, then add units.'
+
+  it('no hint with nothing typed', async () => {
+    global.fetch = routeFetch({ [LIST]: reply(200, { success: true, devices: [] }) })
+    render(<AcDevicesIntegrationTab location={LOC} canEdit canManage />)
+    await screen.findByText(/No devices configured/)
+    expect(screen.queryByText(HINT)).toBeNull()
+  })
+
+  it('a typed Sensibo key shows the hint; saving clears it', async () => {
+    global.fetch = routeFetch({
+      [LIST]: reply(200, { success: true, devices: [] }),
+      [`PUT /api/locations/${LOC_ID}/integrations/ac`]: reply(200, {
+        success: true,
+        data: { has_sensibo_key: true, has_thinq_pat: false, thinq_client_id: null, thinq_country_code: 'IE' },
+      }),
+    })
+    render(<AcDevicesIntegrationTab location={LOC} canEdit canManage />)
+    await screen.findByText(/No devices configured/)
+    fireEvent.change(screen.getByLabelText('Sensibo API key'), { target: { value: 'sk-typed-synthetic' } })
+    expect(screen.getByText(HINT)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Save credentials' }))
+    await screen.findByText(/Credentials saved at/)
+    expect(screen.queryByText(HINT)).toBeNull()
+  })
+
+  it('a typed ThinQ PAT shows the hint too', async () => {
+    global.fetch = routeFetch({ [LIST]: reply(200, { success: true, devices: [] }) })
+    render(<AcDevicesIntegrationTab location={LOC} canEdit canManage />)
+    await screen.findByText(/No devices configured/)
+    fireEvent.change(screen.getByLabelText('LG ThinQ PAT'), { target: { value: 'pat-typed-synthetic' } })
+    expect(screen.getByText(HINT)).toBeTruthy()
+  })
+
+  it('whitespace alone is not a typed key', async () => {
+    global.fetch = routeFetch({ [LIST]: reply(200, { success: true, devices: [] }) })
+    render(<AcDevicesIntegrationTab location={LOC} canEdit canManage />)
+    await screen.findByText(/No devices configured/)
+    fireEvent.change(screen.getByLabelText('Sensibo API key'), { target: { value: '   ' } })
+    expect(screen.queryByText(HINT)).toBeNull()
+  })
+})

@@ -192,6 +192,9 @@ export default function AcDevicesIntegrationTab({ location, canEdit, canManage =
 
   const sensiboReady = hasSensiboKey || !!sensiboApiKey.trim()
   const thinqReady = (hasThinqPat || !!thinqPat.trim()) && !!thinqClientId.trim()
+  // Discovery takes a just-typed secret in its body, but adding a unit needs
+  // it SAVED on this location (the add route answers 412 otherwise).
+  const unsavedSecret = !!sensiboApiKey.trim() || !!thinqPat.trim()
   const inputClass = 'w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text'
 
   return (
@@ -345,6 +348,10 @@ export default function AcDevicesIntegrationTab({ location, canEdit, canManage =
             </div>
           )}
         </div>
+
+        {canManage && devices !== null && unsavedSecret && (
+          <p className="text-[11px] text-un1t-muted">Save the key first, then add units.</p>
+        )}
 
         {/* Add-device discovery panel (never over an unread device list) */}
         {adding && devices !== null && (
