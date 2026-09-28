@@ -1,4 +1,4 @@
-// ACDEVLOC.1 — the locations row as the settings page passes it in its `location` prop (the `user` prop is C35 SECFIX.3).
+// ACDEVLOC.1 — the locations row as the settings page passes it in its `location` prop (the `user` prop is masked by C35 SECFIX.3a; this prop's settings credentials are SECFIX.3b).
 import { describe, it, expect } from 'vitest'
 import { toClientLocation, LOCATION_SECRET_COLUMNS } from './location-client-shape.js'
 

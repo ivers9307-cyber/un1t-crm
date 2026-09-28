@@ -16,9 +16,10 @@
 // registry re-sync in the handler). This tab never reads or renders the
 // stored key or PAT: its `location` prop carries only has_sensibo_key /
 // has_thinq_pat, a typed secret travels once in a request BODY, and a URL
-// never carries one. The browser still RECEIVES them through the `user`
-// object (getCurrentUser() loads full location rows); that is follow-up
-// C35 SECFIX.3, not closed here.
+// never carries one. Nor does the `user` object any more: SECFIX.3a made
+// getCurrentUser() load only the named, credential-free location columns
+// (plus `settings`, masked). The page's `location` prop still carries the
+// `settings` credentials (Glofox, UniFi) until SECFIX.3b.
 //
 // Master + owner can view (`canEdit`); only a master manages (`canManage`),
 // the same rule every route behind this tab enforces.
