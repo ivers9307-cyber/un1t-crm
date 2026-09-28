@@ -68,9 +68,10 @@ export function columnUses(text, tables, fkAliases = {}) {
       const inner = balanced(list, e.index + e[0].length - 1)
       if (inner != null) for (const c of topLevelColumns(inner)) reads.push([e[1], c])
     }
-    // (c) FK-column embeds: `alias:location_id ( … )` reads the FK's table.
+    // (c) FK-column embeds: `[alias:]location_id ( … )` reads the FK's table.
+    //     The alias is optional: PostgREST embeds through a bare FK column.
     for (const [fk, table] of Object.entries(fkAliases)) {
-      for (const e of list.matchAll(new RegExp(`(?<=^|[\\s,(])[a-z_]+\\s*:\\s*${fk}(?:![a-z_]+)?\\s*\\(`, 'g'))) {
+      for (const e of list.matchAll(new RegExp(`(?<=^|[\\s,(])(?:[a-z_]+\\s*:\\s*)?${fk}(?:![a-z_]+)?\\s*\\(`, 'g'))) {
         const inner = balanced(list, e.index + e[0].length - 1)
         if (inner != null) for (const c of topLevelColumns(inner)) reads.push([table, c])
       }

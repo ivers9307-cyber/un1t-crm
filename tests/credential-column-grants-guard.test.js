@@ -121,6 +121,14 @@ describe('client code names only granted credential-table columns (SECFIX.3c)', 
     expect(r).not.toContain('locations.color')
     expect(writes).toEqual(expect.arrayContaining([['xero_connections', 'delete'], ['locations', 'update']]))
   })
+
+  // Review S4 probes: each was a blind spot, found by a probe, before the fix.
+  const probe = (src) => columnUses(src, CREDENTIAL_GRANT_TABLES, FK_ALIASES).reads.map(([t, c]) => `${t}.${c}`)
+
+  it('sees a bare FK-column embed with no alias', () => {
+    expect(probe(`await supabase.from('shift_blocks').select('id, location_id ( settings )')`)).toContain('locations.settings')
+    expect(probe(`await supabase.from('shift_blocks').select('id, location_id!inner(thinq_pat)')`)).toContain('locations.thinq_pat')
+  })
 })
 
 // ── migrations after 648 ──────────────────────────────────────────────
