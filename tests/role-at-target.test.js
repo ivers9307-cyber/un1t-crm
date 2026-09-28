@@ -3,7 +3,8 @@
 //
 // A route fails when its source (comments stripped) holds BOTH
 //   • an active-studio gate: ROLES.includes(user.role), user.role === 'owner',
-//     switch (user.role), hasPermission(user, …); and
+//     switch (user.role), hasPermission(user, …), hasMobilePermission(user, …);
+//     and
 //   • a sign it acts on a location that can be another one:
 //     assertLocationAccess(Or404)(user, <anything but user.activeLocation>),
 //     getUserLocationIds(user), user.locations.
@@ -95,6 +96,9 @@ describe('the scan', () => {
     expect(otherLocationUses('assertLocationAccess(user, user.activeLocation?.id)')).toEqual([])
     expect(otherLocationUses('const ids = getUserLocationIds(user)')).toEqual(['getUserLocationIds(user)'])
     expect(activeRoleGates("if (!hasPermission(user, 'orders')) {}")).toEqual(['hasPermission(user,'])
+    expect(activeRoleGates("if (!hasMobilePermission(user, 'churn_radar')) {}")).toEqual(['hasMobilePermission(user,'])
+    expect(activeRoleGates("if (!hasPermission(user, 'email') && !hasMobilePermission(user, 'email')) {}"))
+      .toEqual(['hasPermission(user,', 'hasMobilePermission(user,'])
     expect(activeRoleGates("if (!hasPermissionForLocation(user, id, 'orders')) {}")).toEqual([])
     expect(activeRoleGates("if (!hasRoleAtLocation(user, id, MANAGER_ROLES)) {}")).toEqual([])
     expect(activeRoleGates("if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {}")).toEqual([])

@@ -41,6 +41,11 @@ export const ACTIVE_ROLE_GATE_PATTERNS = Object.freeze([
   // (user, id, key) is the per-location form, kept out by the \( right after
   // the name.
   /\bhasPermission\(\s*user\s*,/g,
+  // hasMobilePermission() resolves at the ACTIVE location too (user.role,
+  // user.activeLocation, the active assignment's mobile overrides, the active
+  // role template; src/lib/permissions.js). A `hasPermission ||
+  // hasMobilePermission` gate is only fixed when BOTH halves judge the target.
+  /\bhasMobilePermission\(\s*user\s*,/g,
 ])
 
 // Signs that a route acts on a location OTHER than the active one: a
