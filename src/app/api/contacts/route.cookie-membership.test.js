@@ -95,6 +95,17 @@ describe('POST /api/contacts — cookie caller creates only where they belong', 
     expect((await jsonOf(await create('orgAdminA', { location_id: LOC_B1 }))).status).toBe(403)
   })
 
+  it('a cookie caller with no body location and no active studio gets 400 and nothing is created', async () => {
+    vi.mocked(getCurrentUser).mockResolvedValue({ ...users.managerA1(), locations: [], activeLocation: null })
+    const { status, json } = await jsonOf(await contactsRoute.POST(makeReq('/api/contacts', {
+      method: 'POST',
+      body: { name: 'New Lead', email: NEW_EMAIL },
+    })))
+    expect(status).toBe(400)
+    expect(json.error).toBe('location_id required')
+    expect(created()).toEqual([])
+  })
+
   it('a master may create at any location', async () => {
     const { status, json } = await jsonOf(await create('master', { location_id: LOC_B1 }))
     expect(status).toBe(200)
