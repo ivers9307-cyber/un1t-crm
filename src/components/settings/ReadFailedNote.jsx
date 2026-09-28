@@ -46,9 +46,13 @@ export default function ReadFailedNote({ what, onRetry, href }) {
             {pending ? 'Trying…' : 'Try again'}
           </button>
         )}
-        {!pending && tried && (
-          <span role="status" className="text-xs text-amber-700">Still could not load. Try again in a minute.</span>
-        )}
+        {/* a11y: rendered from the start and never unmounted; only its text
+            changes. A live region created together with its text is not
+            reliably announced. The text clears while a retry is pending, so a
+            second failure is announced again. */}
+        <span role="status" aria-live="polite" className="text-xs text-amber-700">
+          {!pending && tried ? 'Still could not load. Try again in a minute.' : ''}
+        </span>
       </span>
     </div>
   )

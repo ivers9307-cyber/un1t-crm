@@ -5,7 +5,7 @@
 // UnreadableNote (HUBREAD.1). The only action it ever offers is a re-read.
 
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react'
 import ReadFailedNote from './ReadFailedNote.jsx'
 
 afterEach(() => cleanup())
@@ -34,5 +34,27 @@ describe('ReadFailedNote', () => {
     expect(screen.queryByRole('button')).toBeNull()
     const link = screen.getByRole('link', { name: 'Try again' })
     expect(link.getAttribute('href')).toBe('/settings/locations/x?tab=xero')
+  })
+
+  // a11y: a live region that is created together with its text is not
+  // reliably announced. The status region is rendered from the start (empty)
+  // and only its TEXT changes, so "Still could not load" is read out.
+  it('keeps one persistent polite live region and changes only its text', async () => {
+    let finish
+    const onRetry = vi.fn(() => new Promise((r) => { finish = r }))
+    render(<ReadFailedNote what="the ad accounts" onRetry={onRetry} />)
+    const region = screen.getByRole('status')
+    expect(region.getAttribute('aria-live')).toBe('polite')
+    expect(region.textContent).toBe('')
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    await act(async () => { finish() })
+    await waitFor(() => expect(region.textContent).toBe('Still could not load. Try again in a minute.'))
+    expect(screen.getByRole('status')).toBe(region)
+    // A second failure clears then re-sets the text, so it is announced again.
+    fireEvent.click(screen.getByRole('button', { name: /Try again|Trying/ }))
+    expect(region.textContent).toBe('')
+    await act(async () => { finish() })
+    await waitFor(() => expect(region.textContent).toBe('Still could not load. Try again in a minute.'))
+    expect(screen.getByRole('status')).toBe(region)
   })
 })

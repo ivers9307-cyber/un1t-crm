@@ -251,9 +251,11 @@ function StatusDot({ status }) {
     return <AlertCircle size={10} className="text-red-400" />
   }
   // CHANNELREAD.1 — the read behind this tab failed (amber, like the hub's
-  // "Could not load" chip); never the grey "not configured" dot.
+  // "Could not load" chip); never the grey "not configured" dot. role="img"
+  // so the label is announced (an aria-label on a bare span is ignored) and
+  // joins the tab button's accessible name.
   if (status === 'unknown') {
-    return <span className="w-2 h-2 rounded-full bg-amber-500 inline-block" aria-label="Could not load" />
+    return <span role="img" className="w-2 h-2 rounded-full bg-amber-500 inline-block" aria-label="Could not load" />
   }
   // not-configured: small grey dot
   return <span className="w-2 h-2 rounded-full bg-un1t-muted inline-block" />
