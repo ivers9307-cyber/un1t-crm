@@ -16,10 +16,18 @@ vi.mock('@/lib/auth', async (importOriginal) => {
   return { ...actual, getCurrentUser: vi.fn() }
 })
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+// Real registry sync by default; a test can make one call fail.
+vi.mock('@/lib/connection-registry', async (importOriginal) => {
+  const actual = await importOriginal()
+  return { ...actual, syncConnectionFromLegacy: vi.fn(actual.syncConnectionFromLegacy) }
+})
+vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
 
 import { PUT, DELETE } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { syncConnectionFromLegacy } from '@/lib/connection-registry'
+import { logError } from '@/lib/log'
 
 const LOC = 'loc-still'
 
@@ -262,5 +270,37 @@ describe('role gates + access', () => {
     expect(res.status).toBe(200)
     expect(m.locRow.twilio_alpha_sender_id).toBe('UN1T STILL')
     expect(body.data.sender_id).toBe('UN1T STILL')
+  })
+})
+
+// REGISTRYREAD.1a — a failed registry sync used to surface only as an error
+// string in the response; on a disconnect that can leave the registry row
+// ACTIVE after the legacy slice was cleared. It is now logged; the response
+// is unchanged.
+describe('a failed registry sync is logged, the response unchanged', () => {
+  it('DELETE: logError fires with location + platform; still 200 disconnected with the error string', async () => {
+    getCurrentUser.mockResolvedValue(OWNER)
+    const { db } = makeDb({ location: liveGlofoxLocation() })
+    createServerClient.mockReturnValue(db)
+    const boom = new Error('registry write failed')
+    syncConnectionFromLegacy.mockRejectedValueOnce(boom)
+
+    const res = await DELETE(req(), props(LOC, 'glofox'))
+    const body = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(body.data.disconnected).toBe(true)
+    expect(body.data.registry).toEqual({ glofox: 'error: registry write failed' })
+    expect(logError).toHaveBeenCalledWith('integrations', 'registry sync failed', { locationId: LOC, platform: 'glofox', err: boom })
+  })
+
+  it('a clean sync logs nothing', async () => {
+    getCurrentUser.mockResolvedValue(OWNER)
+    const { db } = makeDb({ location: liveGlofoxLocation() })
+    createServerClient.mockReturnValue(db)
+
+    await DELETE(req(), props(LOC, 'glofox'))
+
+    expect(logError).not.toHaveBeenCalled()
   })
 })

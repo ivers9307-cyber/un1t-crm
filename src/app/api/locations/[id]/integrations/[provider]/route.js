@@ -46,6 +46,7 @@ import { syncConnectionFromLegacy } from '@/lib/connection-registry'
 import { mergeSecretSlice, sliceHasValue } from '@/lib/integration-secret-merge'
 import { validateAlphaSenderId } from '@/lib/twilio'
 import { getBcaConfig, validateBcaConfig } from '@/lib/bca'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -308,6 +309,10 @@ async function guard(props) {
 
 // Re-sync every registry platform this provider maps to, IN-HANDLER (no
 // fire-and-forget). Returns { [platform]: action | error-string }.
+// REGISTRYREAD.1a — a failed sync is logged structurally: on a disconnect it
+// can leave the registry row ACTIVE after the legacy slice was cleared, and
+// the only other trace is an error string in a response nobody reads. The
+// response itself is unchanged.
 async function syncRegistry(db, locationId, descriptor, nextLocation) {
   const results = {}
   for (const platform of descriptor.platforms) {
@@ -315,6 +320,7 @@ async function syncRegistry(db, locationId, descriptor, nextLocation) {
       const { action } = await syncConnectionFromLegacy(db, locationId, platform, nextLocation)
       results[platform] = action
     } catch (e) {
+      logError('integrations', 'registry sync failed', { locationId, platform, err: e })
       results[platform] = `error: ${e?.message || e}`
     }
   }
