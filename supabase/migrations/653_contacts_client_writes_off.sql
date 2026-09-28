@@ -1,5 +1,10 @@
 -- 653 — CONTACTSELFWRITE.1: no browser or phone session writes public.contacts.
 --
+-- APPLY ORDER: 651_retire_glofox_passcodes MUST be applied BEFORE this file.
+-- 651's self-check asserts authenticated still holds UPDATE on contacts, so
+-- applying 653 first makes 651 abort (reproduced in PGlite). Check
+-- list_migrations shows 651 first.
+--
 -- NOT APPLIED YET when this file was written. "VERIFIED LIVE" below is the
 -- state of prod BEFORE this file runs (read-only, Supabase MCP, 28 Sep 2026).
 -- Behaviour is proven ahead of apply by a PGlite replay

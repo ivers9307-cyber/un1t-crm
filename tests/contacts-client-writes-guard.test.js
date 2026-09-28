@@ -155,7 +155,11 @@ describe('later migrations keep contacts read-only for clients (mig 653)', () =>
     expect(readdirSync(MIGRATIONS).some((f) => f.startsWith(`${CONTACTS_WRITES_OFF_MIGRATION}_`))).toBe(true)
   })
 
-  const later = readdirSync(MIGRATIONS).filter((f) => f.endsWith('.sql') && parseInt(f, 10) >= CONTACTS_WRITES_OFF_MIGRATION)
+  // From 648, not 653: a lower-numbered migration merged AFTER 653 must not
+  // escape (648-652 were all in flight when 653 was written). 001-647 predate
+  // the rule and hold the legacy grants/policies 653 removes.
+  const SCAN_FROM = 648
+  const later = readdirSync(MIGRATIONS).filter((f) => f.endsWith('.sql') && parseInt(f, 10) >= SCAN_FROM)
   it.each(later)('%s: no client write grant and no permissive write policy on contacts', (file) => {
     expect(contactsWriteReopeners(readFileSync(path.join(MIGRATIONS, file), 'utf8')),
       `${file} reopens client writes on contacts (mig 653). Write through a service-role route instead`).toEqual([])

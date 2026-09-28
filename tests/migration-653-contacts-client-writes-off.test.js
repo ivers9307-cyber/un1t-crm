@@ -279,6 +279,15 @@ async function policies() {
   return rows
 }
 
+// The policies with their full text: the rollback must restore the predicates,
+// not just the names, commands and roles.
+async function policiesWithText() {
+  const { rows } = await db.query(
+    `SELECT policyname, permissive, cmd, roles::text AS roles, qual, with_check FROM pg_policies
+      WHERE schemaname = 'public' AND tablename = 'contacts' ORDER BY policyname`)
+  return rows
+}
+
 async function clientAcl() {
   const { rows } = await db.query(`
     SELECT r.rolname AS grantee, string_agg(a.privilege_type, ',' ORDER BY a.privilege_type) AS privs
@@ -484,11 +493,11 @@ describe("the plan's rollback record", () => {
   it('restores the 28 Sep grants and policies exactly (and so the hole)', async () => {
     await boot()
     const aclBefore = await clientAcl()
-    const policiesBefore = await policies()
+    const policiesBefore = await policiesWithText()
     await runSql(MIG_653)
     await runSql(ROLLBACK_653)
     expect(await clientAcl()).toEqual(aclBefore)
-    expect(await policies()).toEqual(policiesBefore)
+    expect(await policiesWithText()).toEqual(policiesBefore)
     expect(await asUser(MEMBER_USER, `UPDATE public.contacts SET tags = '{x}' WHERE user_id = '${MEMBER_USER}' RETURNING id`))
       .toEqual([{ id: C_MEMBER }])
   }, 60_000)
