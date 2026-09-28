@@ -8515,6 +8515,7 @@ registry.registerPath({
     200: { description: 'Settings saved', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('HyroxSettingsUpdateResponse') } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — no approvals_hyrox_sessions grant at this location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Location not found (nothing was written)', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'settings_unreadable (the location settings could not be read, so nothing was written) or settings_write_failed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })

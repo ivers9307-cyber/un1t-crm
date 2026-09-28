@@ -13,8 +13,9 @@
 //
 // A FLOOR, NOT A PROOF: it matches `.update({ … settings … })` and
 // `update: { settings` in a file that names the locations table. A payload
-// built in a variable (`.update(patch)`) is invisible; the helper itself
-// writes that way and is its own contract (src/lib/location-settings.test.js).
+// built in a variable (`.update(patch)`) is invisible, and so is a whole-column
+// write through `.upsert(` or `.insert(`. The helper itself is exempt by name
+// (HELPER below) and is its own contract (src/lib/location-settings.test.js).
 
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs'
@@ -42,8 +43,11 @@ export const REVIEWED = {
   'src/components/settings/integrations/UnifiIntegrationTab.jsx': 'browser: readErr → error shown, no write.',
 }
 
+const HELPER = 'src/lib/location-settings.js'
+
 function walk(dir, out = []) {
   for (const name of readdirSync(dir)) {
+    if (name === 'node_modules') continue
     const p = join(dir, name)
     if (statSync(p).isDirectory()) walk(p, out)
     else if (/\.(js|jsx)$/.test(name) && !/\.test\./.test(name)) out.push(p)
@@ -59,9 +63,8 @@ export function undecidedWriters(root = repo) {
     const dir = join(root, top)
     if (!existsSync(dir)) continue
     for (const file of walk(dir)) {
-      if (file.includes('node_modules')) continue
       const r = rel(file)
-      if (REVIEWED[r]) continue
+      if (r === HELPER || REVIEWED[r]) continue
       if (writesSettings(code(file))) out.push(r)
     }
   }

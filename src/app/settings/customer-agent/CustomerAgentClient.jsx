@@ -56,18 +56,21 @@ export default function CustomerAgentClient() {
 
   async function load(isCancelled = () => false) {
     try {
-      const [sRes, kRes] = await Promise.all([
+      // allSettled: a failed KNOWLEDGE read must not be reported as a failed
+      // settings read (the editor would hide a Save it can safely offer).
+      const [sOut, kOut] = await Promise.allSettled([
         fetch('/api/settings/customer-agent').then(r => r.json()),
         fetch('/api/agent/knowledge').then(r => r.json()),
       ])
       if (isCancelled()) return
-      if (sRes.success && sRes.settings) {
+      const sRes = sOut.status === 'fulfilled' ? sOut.value : null
+      if (sRes?.success && sRes.settings) {
         setSettings(sRes.settings); setLocation(sRes.location || null); setCheckinStats(sRes.checkin_stats || null)
         setLoadFailed(false)
       } else {
         setSettings(null); setLoadFailed(true)
       }
-      if (kRes.success) setEntries(kRes.entries || [])
+      if (kOut.status === 'fulfilled' && kOut.value?.success) setEntries(kOut.value.entries || [])
     } catch {
       if (!isCancelled()) { setSettings(null); setLoadFailed(true) }
     } finally {

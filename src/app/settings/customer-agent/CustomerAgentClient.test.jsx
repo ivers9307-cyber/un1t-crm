@@ -20,7 +20,7 @@ const GOOD = reply(200, {
   checkin_stats: { sent_today: 0, total: 0, last: null, last_run: null },
 })
 
-function mockFetch(settingsAnswers) {
+function mockFetch(settingsAnswers, { knowledgeFails = false } = {}) {
   let i = 0
   global.fetch = vi.fn(async (url) => {
     if (String(url).startsWith('/api/settings/customer-agent')) {
@@ -28,7 +28,10 @@ function mockFetch(settingsAnswers) {
       if (a instanceof Error) throw a
       return a
     }
-    if (String(url).startsWith('/api/agent/knowledge')) return reply(200, { success: true, entries: [] })
+    if (String(url).startsWith('/api/agent/knowledge')) {
+      if (knowledgeFails) throw new TypeError('Failed to fetch')
+      return reply(200, { success: true, entries: [] })
+    }
     return reply(200, { success: true, templates: [] })
   })
 }
@@ -56,6 +59,13 @@ describe('CustomerAgentClient — a failed read (SETTINGSWIPE.1)', () => {
     render(<CustomerAgentClient />)
     await waitFor(() => expect(screen.getByText(NOTE)).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /Save settings/ }).length).toBeGreaterThan(0))
+    expect(screen.queryByText(NOTE)).toBeNull()
+  })
+
+  it('a failed KNOWLEDGE read does not hide a good settings read', async () => {
+    mockFetch([GOOD], { knowledgeFails: true })
+    render(<CustomerAgentClient />)
     await waitFor(() => expect(screen.getAllByRole('button', { name: /Save settings/ }).length).toBeGreaterThan(0))
     expect(screen.queryByText(NOTE)).toBeNull()
   })
