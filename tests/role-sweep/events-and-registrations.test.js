@@ -18,8 +18,8 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { ADMIN_ROLES, MANAGER_ROLES } from '@/lib/schemas'
 import { signCheckinToken } from '@/lib/event-checkin-tokens'
-import { describeGate } from '../helpers/role-gate-probe.js'
-import { roleCases, permissionCases, person, keyOnAtBOnly, ORG, LOC_A } from '../helpers/role-sweep-callers.js'
+import { describeGate, gateProbe, runProbed } from '../helpers/role-gate-probe.js'
+import { roleCases, permissionCases, person, keyOnAtBOnly, ORG, LOC_A, LOC_B } from '../helpers/role-sweep-callers.js'
 import * as events from '@/app/api/events/route.js'
 import * as eventDetail from '@/app/api/events/[id]/route.js'
 import * as checkin from '@/app/api/events/[id]/checkin/route.js'
@@ -80,6 +80,31 @@ const EVENT_BODY = (loc, extra = {}) => ({ location_id: loc, name: 'Open Day', r
 gate('GET /api/events?location_id= — races at the location', {
   call: (loc) => events.GET(bare('GET', `?location_id=${loc}`)),
   forbidden: EVENTS_OFF, hidden: NOT_MEMBER, cases: permissionCases('races'),
+})
+// The HOST-EDIT.1 branch of GET adds the ACTIVE organisation's hosted events,
+// which sit on anchor locations no staff belongs to. The active studio is the
+// only judgement for them (as in events/[id]), so it needs ADMIN_ROLES and
+// `races` THERE, whatever ?location_id lists. On main the active-studio
+// `races` check refused the whole call; the branch must not widen that.
+describe('GET /api/events?location_id= — the hosted-events branch judges races at the ACTIVE studio', () => {
+  const run = async (caller) => {
+    getCurrentUser.mockResolvedValue(caller)
+    const probe = gateProbe([{ data: [], error: null }]) // the listed location's events
+    createServerClient.mockReturnValue(probe.db)
+    const out = await runProbed(probe, () => events.GET(bare('GET', `?location_id=${LOC_B}`)))
+    return { probe, ...out }
+  }
+  it('races off at the active studio, on at the listed one: lists B without the hosted events', async () => {
+    const { probe, status, body } = await run(keyOnAtBOnly('races'))
+    expect(probe.passed, `read ${probe.tripped?.table} ${JSON.stringify(probe.tripped?.chain)}`).toBe(false)
+    expect(status).toBe(200)
+    expect(body).toEqual({ success: true, data: [] })
+  })
+  it('races on at the active studio: the hosted-events read runs', async () => {
+    const { probe } = await run(person({ [LOC_A]: { role: 'owner', permissions: { races: true } }, [LOC_B]: { role: 'owner', permissions: { races: true } } }, LOC_A))
+    expect(probe.tripped?.table).toBe('race_events')
+    expect(probe.tripped.chain).toContainEqual(['not', 'host_id', 'is', null])
+  })
 })
 gate('POST /api/events — races at body.location_id', {
   call: (loc) => events.POST(json('POST', EVENT_BODY(loc))),

@@ -161,9 +161,15 @@ export async function GET(request) {
   // HOST-EDIT.1 — org admins also see their org's HOST events (which live on
   // the host's own anchor location, not the active studio) so hosted events
   // can be found and edited from /events. Org-scoped, additive, deduped.
+  // ROLESWEEP.1b — those events sit on a per-host anchor location no staff
+  // belongs to, so the ACTIVE studio is the only judgement for them (as in
+  // events/[id]'s hostEventOrgAccess): ADMIN_ROLES and `races` there, whatever
+  // ?location_id lists. Without the `races` half, an admin with races off at
+  // the active studio would get them by listing another studio.
   let rows = data || []
   const orgId = user.activeOrganization?.id || user.activeLocation?.organization_id || null
-  if (orgId && ADMIN_ROLES.includes(user.role)) {
+  if (orgId && ADMIN_ROLES.includes(user.role)
+      && hasPermissionForLocation(user, user.activeLocation?.id, 'races')) {
     const { data: hosted } = await db
       .from('race_events')
       .select(`
