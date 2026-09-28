@@ -56,6 +56,7 @@ vi.mock('@/components/automations/AutomationPerformance', () => ({
 import SequenceBuilderPage from './page.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { LOC_A, LOC_B, MANAGER_A_STAFF_B, STAFF_A_MANAGER_B } from '../../../../../tests/helpers/role-sweep-callers.js'
 
 function mockDb({ sequence = null } = {}) {
   return {
@@ -72,15 +73,20 @@ function mockDb({ sequence = null } = {}) {
   }
 }
 
+// The same staff role and permission bag at every studio the user belongs to
+// (the per-location mirror is what the SEQROUTEGATE.1 gate reads).
 function user({ locations = [{ id: 'loc1' }], perms = {} } = {}) {
+  const assignment = {
+    role: 'staff',
+    permissions: { automations: false, email: false, whatsapp: false, device_control: false, ...perms },
+  }
   return {
     id: 'u1',
     role: 'staff',
     locations,
     activeLocation: locations[0] || null,
-    activeAssignment: {
-      permissions: { automations: false, email: false, whatsapp: false, device_control: false, ...perms },
-    },
+    activeAssignment: assignment,
+    assignmentsByLocation: Object.fromEntries(locations.map((l) => [l.id, assignment])),
   }
 }
 
@@ -143,5 +149,28 @@ describe('/automations/[id] builder page', () => {
       mockDb({ sequence: { ...mySequence, location_id: 'loc9', name: 'Foreign flow' } })
     )
     await expect(SequenceBuilderPage(props())).rejects.toThrow('NEXT_NOT_FOUND')
+  })
+
+  // SEQROUTEGATE.1 — the rule is judged at the SEQUENCE's studio, the same
+  // place every /api/sequences route judges it, so the page never opens a
+  // builder whose every save would then be refused.
+  it('404s a sequence at a studio where the user may not build, even when the active studio allows it', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A_STAFF_B) // manager at A (active), staff at B
+    createServerClient.mockReturnValue(mockDb({ sequence: { ...mySequence, location_id: LOC_B, name: 'Studio B flow' } }))
+    await expect(SequenceBuilderPage(props())).rejects.toThrow('NEXT_NOT_FOUND')
+  })
+
+  it('renders a sequence at the studio where the user may build (same studio as active)', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A_STAFF_B)
+    createServerClient.mockReturnValue(mockDb({ sequence: { ...mySequence, location_id: LOC_A, name: 'Studio A flow' } }))
+    const html = renderToStaticMarkup(await SequenceBuilderPage(props()))
+    expect(html).toContain('Studio A flow')
+  })
+
+  it('renders a sequence at a non-active studio where the user may build', async () => {
+    getCurrentUser.mockResolvedValue(STAFF_A_MANAGER_B) // staff at A (active), manager at B
+    createServerClient.mockReturnValue(mockDb({ sequence: { ...mySequence, location_id: LOC_B, name: 'Studio B flow' } }))
+    const html = renderToStaticMarkup(await SequenceBuilderPage(props()))
+    expect(html).toContain('Studio B flow')
   })
 })
