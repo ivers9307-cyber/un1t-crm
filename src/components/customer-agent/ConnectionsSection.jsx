@@ -42,7 +42,10 @@ export default function ConnectionsSection({ locationId, locationName, embedded 
   const [savedAt, setSavedAt] = useState(null)
   const [error, setError] = useState(null)
 
-  const load = useCallback(async () => {
+  // `keep` (optional): fields the operator typed, laid over the re-read row.
+  // Used after a 409, where the card learns a connection exists and switches
+  // to Update; losing the token they just pasted would make them paste again.
+  const load = useCallback(async (keep = null) => {
     if (!locationId) return
     try {
       const res = await fetch(`/api/locations/${locationId}/channels`)
@@ -52,7 +55,7 @@ export default function ConnectionsSection({ locationId, locationName, embedded 
       }
       setConnections(j.connections)
       const ig = j.connections.find(c => c.platform === 'instagram')
-      setDraft(ig ? { ...ig } : {})
+      setDraft({ ...(ig || {}), ...(keep || {}) })
       setReadState('ready')
     } catch {
       setConnections([])
@@ -66,6 +69,21 @@ export default function ConnectionsSection({ locationId, locationName, embedded 
   const igConn = connections.find(c => c.platform === 'instagram')
 
   function setField(k, v) { setDraft(d => ({ ...d, [k]: v })) }
+
+  // The form fields the operator actually filled in (a masked secret echoed
+  // back by the API is not "typed"). Empty ones are dropped so they never
+  // blank the re-read row's values.
+  function typedFields(d) {
+    const out = {}
+    for (const f of IG_FIELDS) {
+      const v = d[f.key]
+      if (v === undefined || v === null || v === '') continue
+      if (f.secret && String(v).startsWith('••')) continue
+      out[f.key] = v
+    }
+    if (d.agent_enabled !== undefined) out.agent_enabled = d.agent_enabled
+    return out
+  }
 
   async function saveInstagram() {
     if (readState !== 'ready') return // never write over a state we could not read
@@ -94,7 +112,7 @@ export default function ConnectionsSection({ locationId, locationName, embedded 
         setError(j.error || 'Failed to save')
         // 409 already_connected: a connection exists that this card did not
         // know about. Re-read so the card shows it and offers Update.
-        if (res.status === 409) await load()
+        if (res.status === 409) await load(typedFields(draft))
       }
     } catch { setError('Failed to save') }
     finally { setSaving(false) }

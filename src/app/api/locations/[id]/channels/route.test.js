@@ -262,7 +262,9 @@ describe('POST /api/locations/[id]/channels — refuses over a live connection (
     const body = await res.json()
     expect(body.success).toBe(false)
     expect(body.code).toBe('already_connected')
-    expect(body.error).toBe('This location already has an active Instagram connection. Reload the page and use Update instead.')
+    // The card reloads itself and switches to Update, so the copy never
+    // asks the operator to reload.
+    expect(body.error).toBe('This location already has an Instagram connection. Use Update to change its token.')
     // The only write attempted is the refused insert: no deactivation.
     expect(db.writes.map(w => w.op)).toEqual(['insert'])
   })

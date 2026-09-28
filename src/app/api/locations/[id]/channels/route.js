@@ -21,6 +21,7 @@ const ChannelConnectionSchema = z.object({
 
 // Staff-facing names for the 409 copy (SUPPORTED_PLATFORMS).
 const PLATFORM_LABELS = { instagram: 'Instagram', messenger: 'Messenger' }
+const withArticle = (label) => `${/^[aeiou]/i.test(label) ? 'an' : 'a'} ${label}`
 
 // GET /api/locations/[id]/channels — list channel connections for a
 // location. Masks secrets (access_token, app_secret). Mirrors the
@@ -119,7 +120,9 @@ export async function POST(request, props) {
       return NextResponse.json({
         success: false,
         code: 'already_connected',
-        error: `This location already has an active ${PLATFORM_LABELS[body.platform] || body.platform} connection. Reload the page and use Update instead.`,
+        // The card reloads on a 409 and switches to Update itself (keeping
+        // what was typed), so the copy never asks for a reload.
+        error: `This location already has ${withArticle(PLATFORM_LABELS[body.platform] || body.platform)} connection. Use Update to change its token.`,
       }, { status: 409 })
     }
     return NextResponse.json({ success: false, error: error.message }, { status: 500 })

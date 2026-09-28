@@ -124,7 +124,7 @@ describe('ConnectionsSection — real answers are unchanged (pins)', () => {
   })
 
   it('a 409 already_connected shows the message and reloads, so the card switches to Update', async () => {
-    const msg = 'This location already has an active Instagram connection. Reload the page and use Update instead.'
+    const msg = 'This location already has an Instagram connection. Use Update to change its token.'
     mockFetch({
       gets: [ok([]), ok([LIVE_IG])],
       post: reply(409, { success: false, code: 'already_connected', error: msg }),
@@ -133,5 +133,30 @@ describe('ConnectionsSection — real answers are unchanged (pins)', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Connect Instagram' }))
     expect(await screen.findByRole('button', { name: 'Update Instagram' })).toBeTruthy()
     expect(screen.getByText(msg)).toBeTruthy()
+    expect(msg).not.toMatch(/reload/i)
+  })
+
+  it('a 409 keeps what the operator typed, over the reloaded row, so Update sends it', async () => {
+    mockFetch({
+      gets: [ok([]), ok([LIVE_IG])],
+      post: reply(409, { success: false, code: 'already_connected', error: 'x' }),
+    })
+    const { container } = render(<ConnectionsSection locationId={LOC} embedded />)
+    await screen.findByRole('button', { name: 'Connect Instagram' })
+    const input = (label) => screen.getByText(label, { exact: false }).parentElement.querySelector('input')
+    fireEvent.change(input('Instagram access token'), { target: { value: 'IGAA-synthetic-new-token' } })
+    fireEvent.change(input('Instagram handle / name'), { target: { value: '@typed_handle' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Connect Instagram' }))
+    await screen.findByRole('button', { name: 'Update Instagram' })
+    expect(input('Instagram access token').value).toBe('IGAA-synthetic-new-token')
+    expect(input('Instagram handle / name').value).toBe('@typed_handle')
+    // A field the operator never typed shows the live row's value.
+    expect(input('Instagram professional account ID').value).toBe(LIVE_IG.external_account_id)
+    fireEvent.click(screen.getByRole('button', { name: 'Update Instagram' }))
+    await screen.findByText('Saved ✓')
+    const sent = JSON.parse(calls('PATCH')[0][1].body)
+    expect(sent.access_token).toBe('IGAA-synthetic-new-token')
+    expect(sent.display_name).toBe('@typed_handle')
+    expect(container).toBeTruthy()
   })
 })
