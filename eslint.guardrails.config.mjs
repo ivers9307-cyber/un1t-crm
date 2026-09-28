@@ -354,6 +354,18 @@ const config = [
       'src/lib/notify.js',
       'src/lib/push-dedup.js',
       'src/lib/customer-push.js',
+      // SETTINGSWIPE.1 — the one writer of locations.settings and the seven
+      // routes that used to wipe it (three of them with bare or discarded
+      // writes that answered success). Measured on main 6c6775ee: 3 findings
+      // (card-sets PUT, conversational-automation POST, status-page PUT); 0 after.
+      'src/lib/location-settings.js',
+      'src/app/api/whatsapp/card-sets/route.js',
+      'src/app/api/whatsapp/conversational-automation/route.js',
+      'src/app/api/settings/customer-agent/route.js',
+      'src/app/api/settings/scoring/route.js',
+      'src/app/api/settings/status-page/route.js',
+      'src/app/api/hyrox/settings/route.js',
+      'src/app/api/hyrox/sessions/*/exemplar/route.js',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },
