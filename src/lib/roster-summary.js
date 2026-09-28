@@ -366,7 +366,9 @@ export function summarizeMonth({ blocks, pay, referenceDate, monthlyBudgetEur })
 
   let contractorCostEur = 0
   let unpublishedContractorCostEur = 0
-  let fteImplicitCostEur = 0  // FTE doesn't hit the budget but we expose it for context
+  // FTE doesn't hit the budget; it is context for owners / managers / masters.
+  // Salary-derived, so the route withholds it from head coaches (FTECOSTVIS.1).
+  let fteImplicitCostEur = 0
   for (const r of blocksToShiftRows(monthBlocks)) {
     const person = pay?.get(r.profile_id)
     if (!person) continue
