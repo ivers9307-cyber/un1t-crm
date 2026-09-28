@@ -1,6 +1,7 @@
 // ACDEVLOC.1 — the locations row as the settings page passes it in its `location` prop (the `user` prop is masked by C35 SECFIX.3a; this prop's settings credentials are SECFIX.3b).
 import { describe, it, expect } from 'vitest'
 import { toClientLocation, LOCATION_SECRET_COLUMNS } from './location-client-shape.js'
+import { LOCATION_SECRET_MASK } from './location-secrets.js'
 
 describe('toClientLocation', () => {
   it('drops the Sensibo key and ThinQ PAT and says whether each is set', () => {
@@ -22,5 +23,50 @@ describe('toClientLocation', () => {
 
   it('names exactly the two AC credentials', () => {
     expect(LOCATION_SECRET_COLUMNS).toEqual(['sensibo_api_key', 'thinq_pat'])
+  })
+
+  it('SECFIX.3b: masks the Glofox and UniFi credentials inside settings, keeps the rest', () => {
+    const out = toClientLocation({
+      id: 'x', sensibo_api_key: 'SYNTH-S', thinq_pat: null,
+      settings: { glofox: { branch_id: 'b', api_key: 'SYNTH-G' }, unifi: { api_token: 'SYNTH-U' }, payments: { provider: 'stripe_connect' } },
+    })
+    expect(out.settings.glofox).toEqual({ branch_id: 'b', api_key: LOCATION_SECRET_MASK })
+    expect(out.settings.unifi.api_token).toBe(LOCATION_SECRET_MASK)
+    expect(out.settings.payments).toEqual({ provider: 'stripe_connect' })
+    expect(out).not.toHaveProperty('sensibo_api_key')
+    expect(out.has_sensibo_key).toBe(true)
+    expect(JSON.stringify(out)).not.toMatch(/SYNTH-/)
+  })
+
+  it('SECFIX.3b: masks any other secret-named key inside settings too', () => {
+    const out = toClientLocation({ id: 'x', settings: { some_new_integration: { access_token: 'SYNTH-NEW', region: 'eu' } } })
+    expect(out.settings.some_new_integration).toEqual({ access_token: LOCATION_SECRET_MASK, region: 'eu' })
+  })
+
+  it('SECFIX.3b: keeps bca_config whole (no credential; the BCA tab prefills from it and its status reads send_from)', () => {
+    const bca = { send_from: 'cars@example.test', send_to: 'bca@example.test', documents: [{ slug: 'doc_01', label: 'V5' }] }
+    const out = toClientLocation({ id: 'x', bca_config: bca, settings: { glofox: { api_key: 'SYNTH-G' } } })
+    expect(out.bca_config).toEqual(bca)
+    expect(toClientLocation({ id: 'x' })).not.toHaveProperty('bca_config')
+  })
+
+  // S2 — bca_config crosses as stored because it holds no credential TODAY;
+  // a secret-named key added to it later must still be masked on the way out.
+  it('SECFIX.3b: masks a secret-named key inside bca_config and keeps the non-secret fields', () => {
+    const out = toClientLocation({ id: 'x', bca_config: { smtp_password: 'SYNTH-PW', send_from: 'cars@example.test' } })
+    expect(out.bca_config).toEqual({ smtp_password: LOCATION_SECRET_MASK, send_from: 'cars@example.test' })
+    expect(JSON.stringify(out)).not.toContain('SYNTH-PW')
+  })
+
+  it('SECFIX.3b: bca_config\'s real keys today cross unchanged', () => {
+    const bca = {
+      send_from: 'cars@example.test',
+      send_to: 'bca@example.test',
+      cc: 'office@example.test',
+      subject_template: 'Vehicle {{reg}}',
+      body_template: 'Please find the documents for {{reg}}.',
+      documents: [{ slug: 'doc_01', label: 'V5' }, { slug: 'doc_02', label: 'Service history' }],
+    }
+    expect(toClientLocation({ id: 'x', bca_config: bca }).bca_config).toEqual(bca)
   })
 })
