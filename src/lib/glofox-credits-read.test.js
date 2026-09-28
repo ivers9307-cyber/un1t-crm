@@ -115,8 +115,8 @@ describe('previewMemberSync — an unread credit context', () => {
     expect(logWarn.mock.calls[0][2]).toEqual({ locationId: LOC, contactId: 'c-1', unread: 'memberships' })
   })
 
-  it('a stored member stays member (the hold only ever keeps credit_member)', async () => {
-    const out = await previewMemberSync(makeDb(stored({ glofox_membership_status: 'member', trial_credits_remaining: null })), LOC, member, {
+  it('a stored member stays member (the hold only ever keeps credit_member), and its balance is kept', async () => {
+    const out = await previewMemberSync(makeDb(stored({ glofox_membership_status: 'member', trial_credits_remaining: 4 })), LOC, member, {
       ctx: { credits: [], memberships: new Map(), creditsFailed: true, membershipsFailed: true },
     })
     expect(out.mapped.glofox_membership_status).toBe('member')
