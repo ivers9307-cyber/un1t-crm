@@ -6,7 +6,7 @@
 
 import { NextResponse } from 'next/server'
 import { randomBytes } from 'node:crypto'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { buildAuthorizeUrl } from '@/lib/xero/client'
 import { safeReturnTo, encodeReturnTo } from '@/lib/xero/return-to'
 
@@ -21,7 +21,10 @@ export async function GET(req) {
   // Connecting a Xero org is an owner/master finance-admin action.
   // (Previously gated on the car_processing permission — a holdover
   // from when Xero existed only for the CCF Autos car-invoice push.)
-  if (user.role !== 'owner' && user.role !== 'master') {
+  // SECFIX.1 — coarse pre-check only (owner somewhere; masters via
+  // profileRole). Owner is judged at the target location below, never at the
+  // caller's ACTIVE studio (`user.role`).
+  if (!hasRoleAtAnyLocation(user, ['owner'])) {
     return NextResponse.json({ success: false, error: 'Not permitted' }, { status: 403 })
   }
 
@@ -36,6 +39,12 @@ export async function GET(req) {
   const userLocationIds = (user.locations || []).map((l) => l.id)
   if (!isMaster && !userLocationIds.includes(locationId)) {
     return NextResponse.json({ success: false, error: 'Not a member of that location' }, { status: 403 })
+  }
+  // SECFIX.1 (security) — owner AT the location acted on (masters via
+  // profileRole). An owner at A who is staff at B, with A active, passed the
+  // old active-studio check and could act on B's Xero connection.
+  if (!hasRoleAtLocation(user, locationId, ['owner'])) {
+    return NextResponse.json({ success: false, error: 'Not permitted' }, { status: 403 })
   }
 
   // CSRF: the cookie value is what we trust on callback. Encode the
