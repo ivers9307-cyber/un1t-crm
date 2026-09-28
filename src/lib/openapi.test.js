@@ -36,6 +36,15 @@ describe('getOpenApiSpec', () => {
     expect(path.put.description).toMatch(/only its end date moved/)
   })
 
+  it('documents contractor spend and who gets the FTE labour total (FTECOSTVIS.1)', () => {
+    const get = spec.paths['/api/schedule/contractor-spend']?.get
+    expect(get).toBeDefined()
+    expect(get.security).toEqual([{ CookieAuth: [] }])
+    expect(get.description).toMatch(/fteImplicitCostEur/)
+    expect(get.description).toMatch(/owner, manager or master AT location_id/)
+    expect(get.responses).toHaveProperty('404')
+  })
+
   it('documents staff qualifications (QUALS.1): records, the catalogue and template requirements', () => {
     expect(spec.paths['/api/qualifications']).toHaveProperty('get')
     expect(spec.paths['/api/qualifications']).toHaveProperty('post')

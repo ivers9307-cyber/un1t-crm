@@ -1620,8 +1620,10 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
       {/* Roster v2 phase 4 — week + month summary. Manager-only. */}
       {/* Phase 6: passes `timeOff` so FTE utilisation is leave-aware. */}
       {/* SCHEDULE-SPEND-AGG.1: contractorSpend comes from a server-
-          computed aggregate so head_coach sees real totals + over-
-          budget signals without being granted hourly_rate visibility. */}
+          computed aggregate so head_coach sees real contractor totals +
+          over-budget signals without being granted hourly_rate visibility.
+          FTECOSTVIS.1: the FTE labour total is owner/manager/master only;
+          the server leaves it out for a head coach. */}
       {/* ROSTER-FIX.6c: `staff` is the pay-free picker shape now, so no role
           gets rates here and the canSeePay prop had nothing left to gate. */}
       {!loading && isManager && (

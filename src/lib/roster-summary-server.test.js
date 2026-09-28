@@ -5,7 +5,7 @@
 // SHIFTTYPE.1 (kept) — the read carries each block's template kind, so the
 // panel and the publish gate price the same shifts.
 import { describe, it, expect } from 'vitest'
-import { computeMonthlyContractorSpend } from './roster-summary-server'
+import { computeMonthlyContractorSpend, CONTRACTOR_SPEND_KEYS, SALARY_DERIVED_SPEND_KEYS, contractorSpendOnly } from './roster-summary-server'
 import { fakeSpendDb, spendBlock } from './roster-summary.test-helpers'
 
 // hourly_rate 999 on profiles = the DEPRECATED copy; it must never be priced.
@@ -100,5 +100,51 @@ describe('computeMonthlyContractorSpend', () => {
       'unpublishedContractorCostEur', 'utilisationPct',
     ])
     expect(JSON.stringify(r)).not.toMatch(/\bdan\b|\bgus\b|rate|salary|profile/i)
+  })
+})
+
+// FTECOSTVIS.1 (Richard, 28 Sep 2026: "keep the cost hidden") — the FTE labour
+// total is rostered hours × salary / 52 / contracted hours: with one employee
+// on the month's shifts it IS their pay. Head coaches get the contractor
+// figures only, through an allowlist, so an unclassified key never reaches them.
+// annual_salary 999999 on profiles = the deprecated copy; never read.
+const EVE = { id: 'eve', full_name: 'Eve', active: true, employment_type: 'fte', annual_salary: 999999 }
+const EVE_COMP = { profile_id: 'eve', annual_salary: 31200, contracted_hours_per_week: 30 } // 31,200 / 52 / 30 = EUR 20 an hour
+
+function danAndEve() {
+  return fakeSpendDb({
+    blocks: [spendBlock('c', '2026-05-04', '09:00', '11:00', ['dan', 'eve'])],
+    profiles: [DAN, EVE], comp: [...COMP, EVE_COMP],
+  })
+}
+
+describe('FTECOSTVIS.1 — what a head coach may see of the spend', () => {
+  it('every key the spend returns is classified exactly once: contractor or salary-derived', async () => {
+    const r = await computeMonthlyContractorSpend({ db: danAndEve(), ...MAY })
+    expect([...CONTRACTOR_SPEND_KEYS, ...SALARY_DERIVED_SPEND_KEYS].sort()).toEqual(Object.keys(r).sort())
+    expect(CONTRACTOR_SPEND_KEYS.filter((k) => SALARY_DERIVED_SPEND_KEYS.includes(k))).toEqual([])
+  })
+
+  it('the FTE labour total is the one salary-derived figure', () => {
+    expect([...SALARY_DERIVED_SPEND_KEYS]).toEqual(['fteImplicitCostEur'])
+  })
+
+  it('contractorSpendOnly keeps every contractor figure and drops the FTE labour total', async () => {
+    const r = await computeMonthlyContractorSpend({ db: danAndEve(), ...MAY })
+    expect(r.fteImplicitCostEur).toBe(40) // 2h × EUR 20: the figure is really there to drop
+    expect(r.contractorCostEur).toBe(70) // 2h × EUR 35
+    const shown = contractorSpendOnly(r)
+    expect(shown).not.toHaveProperty('fteImplicitCostEur')
+    for (const k of CONTRACTOR_SPEND_KEYS) expect(shown[k]).toEqual(r[k])
+    expect(JSON.stringify(shown)).not.toMatch(/fte|salary/i)
+  })
+
+  it('contractorSpendOnly fails closed: a key nobody classified never passes', () => {
+    expect(contractorSpendOnly({ contractorCostEur: 1, fteProjectedCostEur: 2, somethingNew: 3 })).toEqual({ contractorCostEur: 1 })
+  })
+
+  it('contractorSpendOnly of nothing is an empty object', () => {
+    expect(contractorSpendOnly(null)).toEqual({})
+    expect(contractorSpendOnly(undefined)).toEqual({})
   })
 })
