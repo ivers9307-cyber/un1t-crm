@@ -14,7 +14,7 @@
 import { NextResponse } from 'next/server'
 import { randomBytes } from 'node:crypto'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { uuidLike } from '@/lib/schemas'
 
@@ -25,7 +25,7 @@ export async function POST(_request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!hasPermission(user, 'email')) {
+  if (!hasPermissionAtAnyLocation(user, 'email')) {
     return NextResponse.json({ success: false, error: 'Email permission required' }, { status: 403 })
   }
 
@@ -52,6 +52,10 @@ export async function POST(_request, props) {
   // location. Master bypasses via assertLocationAccessOr404.
   const guard = assertLocationAccessOr404(user, source.location_id)
   if (guard) return guard
+  // ROLESWEEP.1a — the permission is judged at the SOURCE's location.
+  if (!hasPermissionForLocation(user, source.location_id, 'email')) {
+    return NextResponse.json({ success: false, error: 'Email permission required' }, { status: 403 })
+  }
 
   // 2. Insert the new sequence as a draft. Pull every config /
   // metadata column from the source so the clone is a true copy

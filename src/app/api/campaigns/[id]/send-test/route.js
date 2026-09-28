@@ -18,7 +18,7 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { sendEmail, applyMergeTags } from '@/lib/postmark'
 import { getAppUrl } from '@/lib/app-url'
@@ -41,7 +41,9 @@ export async function POST(request, props) {
   }
   // Same gate as the real send — anyone who can send a campaign
   // can also send a test of it.
-  if (!user.isMaster && !ADMIN_ROLES.includes(user.role)) {
+  // ROLESWEEP.1a — coarse pre-check; the role is judged at the campaign's
+  // location once it is loaded.
+  if (!user.isMaster && !hasRoleAtAnyLocation(user, ADMIN_ROLES)) {
     return NextResponse.json({ success: false, error: 'Admin only' }, { status: 403 })
   }
 
@@ -70,6 +72,9 @@ export async function POST(request, props) {
   // bypasses RLS, so this app-layer check is the only scoping.
   const guard = assertLocationAccessOr404(user, campaign.location_id)
   if (guard) return guard
+  if (!hasRoleAtLocation(user, campaign.location_id, ADMIN_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Admin only' }, { status: 403 })
+  }
   if (!campaign.subject || !campaign.html_content) {
     return NextResponse.json({
       success: false,

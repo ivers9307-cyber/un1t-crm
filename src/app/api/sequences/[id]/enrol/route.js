@@ -14,7 +14,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { enrolContacts } from '@/lib/sequences'
 import { validateBody } from '@/lib/validate'
@@ -35,7 +35,7 @@ export async function POST(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!hasPermission(user, 'email')) {
+  if (!hasPermissionAtAnyLocation(user, 'email')) {
     return NextResponse.json({ success: false, error: 'Email permission required' }, { status: 403 })
   }
 
@@ -54,6 +54,10 @@ export async function POST(request, props) {
   const locationIds = getUserLocationIds(user)
   if (user.role !== 'master' && !locationIds.includes(sequence.location_id)) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  }
+  // ROLESWEEP.1a — the permission is judged at the sequence's location.
+  if (!hasPermissionForLocation(user, sequence.location_id, 'email')) {
+    return NextResponse.json({ success: false, error: 'Email permission required' }, { status: 403 })
   }
 
   // Constrain enrolments to contacts at the same location.

@@ -18,9 +18,13 @@ vi.mock('@/lib/auth', async (importActual) => {
   const actual = await importActual()
   return { ...actual, getCurrentUser: vi.fn(async () => null) }
 })
+// ROLESWEEP.1a — the route's pre-check is hasPermissionAtAnyLocation and its
+// decision hasPermissionForLocation; all three share one mock so the
+// "without the email permission" switch below still switches the gate.
 vi.mock('@/lib/permissions', async (importActual) => {
   const actual = await importActual()
-  return { ...actual, hasPermission: vi.fn(() => true) }
+  const perm = vi.fn(() => true)
+  return { ...actual, hasPermission: perm, hasPermissionAtAnyLocation: perm, hasPermissionForLocation: perm }
 })
 
 import { POST } from './route.js'

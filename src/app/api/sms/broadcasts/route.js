@@ -9,7 +9,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess, getUserLocationIds } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, audienceFilterSchema } from '@/lib/schemas'
 import { validateAudienceFilter, InvalidAudienceFilterError } from '@/lib/audience-filter'
@@ -34,7 +34,7 @@ const BroadcastCreateSchema = z.object({
 export async function GET(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!hasPermission(user, 'sms')) {
+  if (!hasPermissionAtAnyLocation(user, 'sms')) {
     return NextResponse.json({ success: false, error: 'Forbidden — SMS not enabled' }, { status: 403 })
   }
 
@@ -42,6 +42,10 @@ export async function GET(request) {
   const locationId = searchParams.get('location_id')
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
+  // ROLESWEEP.1a — the permission is judged at the location listed.
+  if (locationId && !hasPermissionForLocation(user, locationId, 'sms')) {
+    return NextResponse.json({ success: false, error: 'Forbidden — SMS not enabled' }, { status: 403 })
+  }
 
   const db = createServerClient()
   let query = db.from('sms_broadcasts')
@@ -51,7 +55,9 @@ export async function GET(request) {
   if (locationId) {
     query = query.eq('location_id', locationId)
   } else {
-    const userLocationIds = getUserLocationIds(user)
+    // ROLESWEEP.1a — "all my locations" means all the locations where the
+    // caller holds `sms`, not every location they belong to.
+    const userLocationIds = getUserLocationIds(user).filter((id) => hasPermissionForLocation(user, id, 'sms'))
     if (userLocationIds.length === 0) return NextResponse.json({ success: true, broadcasts: [] })
     query = query.in('location_id', userLocationIds)
   }
@@ -65,7 +71,7 @@ export async function GET(request) {
 export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!hasPermission(user, 'sms')) {
+  if (!hasPermissionAtAnyLocation(user, 'sms')) {
     return NextResponse.json({ success: false, error: 'Forbidden — SMS not enabled' }, { status: 403 })
   }
 
@@ -76,6 +82,9 @@ export async function POST(request) {
   const locationId = body.location_id || user.activeLocation?.id
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
+  if (!hasPermissionForLocation(user, locationId, 'sms')) {
+    return NextResponse.json({ success: false, error: 'Forbidden — SMS not enabled' }, { status: 403 })
+  }
 
   // COMMSFIX.B.7 — reject an invalid audience filter at save time instead of
   // parking a broadcast whose audience can never resolve.

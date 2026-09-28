@@ -33,7 +33,9 @@ import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { stripComments } from '../../../../../scripts/lib/strip-comments.mjs'
+// ROLESWEEP.1 — the patterns moved to scripts/lib/active-role-gates.mjs so
+// tests/role-at-target.test.js (the repo-wide guard) scans the same tokens.
+import { activeRoleGates } from '../../../../../scripts/lib/active-role-gates.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 
@@ -45,27 +47,6 @@ function routeFiles(dir) {
     else if (entry.name === 'route.js') out.push(full)
   }
   return out
-}
-
-// `user.role` or `user?.role`, and not `user.rolesByLocation` (the \b).
-const USER_ROLE = String.raw`\buser\??\.role\b`
-const NON_MASTER = String.raw`['"](?:owner|manager|head_coach|reception|staff)['"]`
-const EQ = String.raw`\s*[!=]==?\s*`
-const PATTERNS = [
-  new RegExp(String.raw`\.(?:includes|has)\(\s*${USER_ROLE}\s*\)`, 'g'), // ROLES.includes(user.role)
-  new RegExp(`${USER_ROLE}${EQ}${NON_MASTER}`, 'g'), //                     user.role === 'owner'
-  new RegExp(`${NON_MASTER}${EQ}${USER_ROLE}`, 'g'), //                     'owner' === user.role
-  new RegExp(String.raw`\bswitch\s*\(\s*${USER_ROLE}\s*\)`, 'g'), //     switch (user.role) { case 'owner': }
-  // hasPermission() resolves against the ACTIVE location's role, assignment
-  // and features, so it is the same bug one call away. hasPermissionForLocation
-  // (user, id, key) is the per-location form; the \( right after the name keeps
-  // it out.
-  /\bhasPermission\(\s*user\s*,/g,
-]
-
-function activeRoleGates(source) {
-  const code = stripComments(source)
-  return PATTERNS.flatMap((re) => [...code.matchAll(re)].map((m) => m[0]))
 }
 
 describe('/api/locations/[id] routes judge the role at the path location', () => {

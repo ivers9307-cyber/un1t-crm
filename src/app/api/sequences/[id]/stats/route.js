@@ -20,7 +20,7 @@
 // Manager+ at the sequence's location.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { selectAll } from '@/lib/select-all'
@@ -32,7 +32,8 @@ export async function GET(_request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!MANAGER_ROLES.includes(user.role)) {
+  // ROLESWEEP.1a — coarse pre-check; judged at the sequence's location below.
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   }
 
@@ -47,6 +48,9 @@ export async function GET(_request, props) {
   }
   const guard = assertLocationAccessOr404(user, seq.location_id)
   if (guard) return guard
+  if (!hasRoleAtLocation(user, seq.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
+  }
 
   // Per-step email_sends rows. Pull the lot, aggregate client-side
   // — Supabase JS doesn't expose GROUP BY directly. Paginates via

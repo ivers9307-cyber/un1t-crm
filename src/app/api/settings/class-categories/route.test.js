@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn(), assertLocationAccess: vi.fn(() => null) }))
+// ROLESWEEP.1a — the route judges MANAGER_ROLES at the location with the real
+// per-location helpers; the fixtures already carry rolesByLocation.
+vi.mock('@/lib/auth', async () => {
+  const { hasRoleAtLocation, hasRoleAtAnyLocation } = await import('@/lib/role-at-location')
+  return { getCurrentUser: vi.fn(), assertLocationAccess: vi.fn(() => null), hasRoleAtLocation, hasRoleAtAnyLocation }
+})
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/class-categories', async (orig) => {
   const actual = await orig()
