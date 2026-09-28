@@ -9,7 +9,9 @@ import { loadRoleTemplatesForLocations } from './role-templates.js'
 import { SUPPORT_COOKIE, verifySupportCookie } from './support-session-edge'
 import { hasRoleAtLocation, hasRoleAtAnyLocation } from './role-at-location'
 import { isTombstone } from './staff-tombstone.js'
-import { USER_LOCATION_COLUMNS, redactLocationSecrets, redactLinkedLocations } from './location-secrets.js'
+import { PROFILE_AUTH_SELECT, pickUserProfile } from './user-profile.js'
+import { logError } from './log.js'
+import { USER_LOCATION_COLUMNS, toUserLocation, toUserLinkedLocations } from './location-secrets.js'
 
 // React 18's `cache()` is only exported from the server build of react.
 // In the Vitest (Node) environment we get the client build which omits
@@ -279,10 +281,20 @@ export const getCurrentUser = cache(async function getCurrentUser() {
   // don't know whether to fetch it until realProfile is loaded
   // (only masters can impersonate), but the cookie read is cheap and
   // doesn't depend on the profile fetch.
-  const [{ data: realProfile }, { readImpersonationTarget }] = await Promise.all([
-    db.from('profiles').select('*').eq('id', user.id).single(),
+  //
+  // PROFILESPREAD.1 — NAME the columns: the result is spread into the user
+  // object, which every page serialises (AppShell). PROFILE_AUTH_SELECT is
+  // the ten fields readers use + deleted_at (tombstone check, never spread).
+  const [{ data: realProfile, error: profileErr }, { readImpersonationTarget }] = await Promise.all([
+    db.from('profiles').select(PROFILE_AUTH_SELECT).eq('id', user.id).single(),
     import('./impersonation.js'),
   ])
+  // A failed read still resolves "signed out", as before, but not silently:
+  // a column-name mistake here would sign EVERYONE out. PGRST116 (no row) is
+  // the normal answer for a member who has no staff profile.
+  if (profileErr && profileErr.code !== 'PGRST116') {
+    logError('auth', 'profile read failed; request resolves signed out', { code: profileErr.code || null })
+  }
 
   // STAFFDELETE.1 — a permanently deleted staff member keeps a profiles row (a
   // tombstone, so history still names them) but is nobody: the auth user is
@@ -324,11 +336,14 @@ export const getCurrentUser = cache(async function getCurrentUser() {
   if (realProfile.role === 'master') {
     const targetId = await readImpersonationTarget()
     if (targetId && targetId !== realProfile.id) {
-      const { data: target } = await db
+      const { data: target, error: targetErr } = await db
         .from('profiles')
-        .select('*')
+        .select(PROFILE_AUTH_SELECT) // PROFILESPREAD.1
         .eq('id', targetId)
         .single()
+      if (targetErr && targetErr.code !== 'PGRST116') {
+        logError('auth', 'impersonation target read failed; master stays themselves', { code: targetErr.code || null })
+      }
       // Only treat this as a live impersonation if there's an OPEN
       // impersonation_log row for this master+target. A leftover
       // un1t_impersonate cookie (e.g. the browser kept it after a
@@ -375,8 +390,8 @@ export const getCurrentUser = cache(async function getCurrentUser() {
   // SECFIX.3a — NAME the location columns: this object is serialised into
   // every page (AppShell). USER_LOCATION_COLUMNS is the public identity every
   // consumer reads (id, name, organization_id, features, active,
-  // is_host_anchor, slug, country, timezone, …) plus `settings`, redacted
-  // below. The credential columns are never loaded.
+  // is_host_anchor, slug, country, timezone, …): the client identity; no
+  // `settings` (PROFILESPREAD.1). The credential columns are never loaded.
   const linksPromise = db
     .from('profile_locations')
     .select(`*, locations(${USER_LOCATION_COLUMNS})`)
@@ -407,16 +422,15 @@ export const getCurrentUser = cache(async function getCurrentUser() {
     orgAdminLinksPromise,
   ])
 
-  // SECFIX.3a — this object is serialised into EVERY page (layout →
-  // AppShellServer → <AppShell user={user}>, a client component). The
-  // selects above never load the credential columns; `settings` still holds
-  // the Glofox / UniFi credentials as sub-keys, so they are masked here,
-  // once, for every consumer. Presence survives (the mask is truthy), so the
-  // automations pages' "is Glofox connected?" keeps working. Server code that
-  // needs a credential re-reads the row by id (glofoxCredentialsForLocation,
-  // getUnifiConfig, …) and never takes one off `user`.
-  const locationLinks = redactLinkedLocations(rawLocationLinks)
-  const allLocs = Array.isArray(rawAllLocs) ? rawAllLocs.map(redactLocationSecrets) : rawAllLocs
+  // SECFIX.3a / PROFILESPREAD.1 — this object is serialised into EVERY page
+  // (layout → AppShellServer → <AppShell user={user}>). The selects name the
+  // client identity only (no settings, no credential column); the pick is
+  // the second lock. Server code that needs settings or a credential reads
+  // the row fresh by id (readGlofoxAutomationStatus,
+  // glofoxCredentialsForLocation, getUnifiConfig, …) and never takes one off
+  // `user`.
+  const locationLinks = toUserLinkedLocations(rawLocationLinks)
+  const allLocs = Array.isArray(rawAllLocs) ? rawAllLocs.map(toUserLocation) : rawAllLocs
 
   let locations = (locationLinks || []).map(pl => pl.locations).filter(Boolean)
 
@@ -461,7 +475,7 @@ export const getCurrentUser = cache(async function getCurrentUser() {
     const expanded = expandOrgAdminAccess({
       locations,
       rolesByLocation,
-      orgLocations: Array.isArray(orgLocs) ? orgLocs.map(redactLocationSecrets) : orgLocs, // SECFIX.3a
+      orgLocations: Array.isArray(orgLocs) ? orgLocs.map(toUserLocation) : orgLocs, // SECFIX.3a / PROFILESPREAD.1
     })
     locations = expanded.locations
     rolesByLocation = expanded.rolesByLocation
@@ -642,7 +656,9 @@ export const getCurrentUser = cache(async function getCurrentUser() {
   }
 
   return {
-    ...profile,
+    // PROFILESPREAD.1 — only the ten listed fields (src/lib/user-profile.js),
+    // never pin_hash / pay / UniFi id / tombstone bookkeeping.
+    ...pickUserProfile(profile),
     user,
     locations,
     activeLocation,

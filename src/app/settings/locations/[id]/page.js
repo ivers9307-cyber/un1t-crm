@@ -91,8 +91,8 @@ export default async function EditLocationPage(props) {
   // PUT /api/locations/[id]/integrations/ac.
   //
   // The `user` prop no longer carries them either (SECFIX.3a):
-  // getCurrentUser() loads only USER_LOCATION_COLUMNS (never the key or PAT
-  // columns) and masks every secret-named key in `settings`.
+  // getCurrentUser() loads only USER_LOCATION_COLUMNS: the client identity,
+  // no `settings` and no credential column (SECFIX.3a, PROFILESPREAD.1).
   // SECFIX.3b: this `location` prop masks every other credential too (the
   // Glofox and UniFi ones in `settings`), keeping presence only. Those tabs
   // start their secret inputs blank and save through the masked
