@@ -46,7 +46,7 @@ import { mergeTimeline } from 'shared/approval-cards'
 import { groupWaTemplates, UNGROUPED_LABEL, templateBodyText } from 'shared/wa-template-groups'
 import {
   bodyVariableSlots, templateSendBlock, SEND_BLOCK_TEXT,
-  initialTemplateValues, renderTemplatePreview, buildTemplateSend,
+  initialTemplateValues, renderTemplatePreview, buildTemplateSend, templateHeaderMedia,
 } from 'shared/wa-template-send'
 import MessageBubble from '../../../components/MessageBubble'
 import ThreadApprovalCard from '../../../components/ThreadApprovalCard'
@@ -86,6 +86,7 @@ export default function Conversation() {
   const [blocking, setBlocking] = useState(false)
   const [reactingId, setReactingId] = useState(null)
   const scrollRef = useRef(null)
+  const sendingTplRef = useRef(false)
 
   // One call for conversation + messages + flow availability; the GET
   // also resets unread_count server-side (no separate mark-read).
@@ -169,12 +170,21 @@ export default function Conversation() {
   }
 
   async function sendChosenTemplate() {
+    // A ref, not state: a second tap can land before the re-render that
+    // disables the button, and a template to a customer can't be unsent.
+    if (sendingTplRef.current) return
     const built = buildTemplateSend(chosenTemplate, templateValues)
     if (!built.ok || sending) return
+    sendingTplRef.current = true
     closeTemplates()
     setSending(true)
-    const res = await sendTemplate(conversationId, built.payload, activeLocation?.id)
-    setSending(false)
+    let res
+    try {
+      res = await sendTemplate(conversationId, built.payload, activeLocation?.id)
+    } finally {
+      sendingTplRef.current = false
+      setSending(false)
+    }
     if (!res.success) {
       Alert.alert('Couldn’t send template', res.error || 'Unknown error')
       return
@@ -303,7 +313,8 @@ export default function Conversation() {
     || conv?.wa_profile_name
     || conv?.wa_phone
     || 'Conversation'
-  const contactFirstName = conv?.contacts?.first_name || conv?.wa_profile_name?.split(' ')[0] || null
+  // {{1}}'s guess is the contact's first name only, as the web inbox makes it.
+  const contactFirstName = conv?.contacts?.first_name || null
 
   return (
     <KeyboardAvoidingView
@@ -521,7 +532,10 @@ export default function Conversation() {
                 {chosenTemplate ? (
                   <ScrollView keyboardShouldPersistTaps="handled">
                     <Text className="text-sm font-semibold text-un1t-text mb-2">{chosenTemplate.name}</Text>
-                    {/* What the customer will read; a blank {{n}} stays visible. */}
+                    {/* The body the customer will read; a blank {{n}} stays visible. */}
+                    {templateHeaderMedia(chosenTemplate) && (
+                      <Text className="text-xs text-un1t-subtle mb-1">{`Includes a ${templateHeaderMedia(chosenTemplate)}`}</Text>
+                    )}
                     <View className="bg-un1t-surface border border-un1t-border rounded-xl p-3 mb-3">
                       <Text className="text-sm text-un1t-text">
                         {renderTemplatePreview(chosenTemplate, templateValues)}
@@ -541,12 +555,16 @@ export default function Conversation() {
                     ))}
                     <Pressable
                       onPress={sendChosenTemplate}
+                      accessibilityRole="button"
+                      accessibilityLabel="Send template"
                       disabled={!buildTemplateSend(chosenTemplate, templateValues).ok || sending}
                       className={`mt-2 py-3 rounded-xl items-center ${
                         buildTemplateSend(chosenTemplate, templateValues).ok && !sending ? 'bg-blue-500' : 'bg-un1t-border'
                       }`}
                     >
-                      <Text className="text-white font-semibold text-sm">Send template</Text>
+                      <Text className={`font-semibold text-sm ${
+                        buildTemplateSend(chosenTemplate, templateValues).ok && !sending ? 'text-white' : 'text-un1t-subtle'
+                      }`}>Send template</Text>
                     </Pressable>
                   </ScrollView>
                 ) : (

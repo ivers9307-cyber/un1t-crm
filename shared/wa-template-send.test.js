@@ -6,6 +6,7 @@ import {
   initialTemplateValues,
   renderTemplatePreview,
   buildTemplateSend,
+  templateHeaderMedia,
 } from './wa-template-send.js'
 
 // Row shapes are the live whatsapp_templates `components` (Meta's template
@@ -128,5 +129,31 @@ describe('buildTemplateSend', () => {
   })
   it("falls back to 'en' only when the row has no language", () => {
     expect(buildTemplateSend(tpl({ language: null }), { 1: 'Sam' }).payload.template_language).toBe('en')
+  })
+})
+
+describe('pasted whitespace (Meta 132018 refuses newlines, tabs, 4+ spaces)', () => {
+  it('collapses every whitespace run in a value to one space before sending', () => {
+    const out = buildTemplateSend(tpl(), { 1: '  Ann\n\tMarie    Lee ' })
+    expect(out.ok).toBe(true)
+    expect(out.payload.template_components[0].parameters[0].text).toBe('Ann Marie Lee')
+  })
+  it('the preview shows the same collapsed value', () => {
+    expect(renderTemplatePreview(tpl(), { 1: 'Ann\nMarie' })).toBe('Hi Ann Marie, are you still interested?')
+  })
+  it('a value that is only whitespace is still missing', () => {
+    expect(buildTemplateSend(tpl(), { 1: ' \n\t ' })).toEqual({ ok: false, missing: [1] })
+  })
+})
+
+describe('templateHeaderMedia', () => {
+  it('names the media a template header attaches, or null', () => {
+    expect(templateHeaderMedia(tpl({ components: [{ type: 'HEADER', format: 'VIDEO' }, body('Hi')] }))).toBe('video')
+    expect(templateHeaderMedia(tpl({ components: [{ type: 'HEADER', format: 'IMAGE' }, body('Hi')] }))).toBe('image')
+    expect(templateHeaderMedia(tpl({ components: [{ type: 'HEADER', format: 'DOCUMENT' }, body('Hi')] }))).toBe('document')
+    expect(templateHeaderMedia(tpl({ components: [{ type: 'HEADER', format: 'TEXT', text: 'Hey' }, body('Hi')] }))).toBe(null)
+    expect(templateHeaderMedia(tpl())).toBe(null)
+    expect(templateHeaderMedia({ name: 'x' })).toBe(null)
+    expect(templateHeaderMedia(null)).toBe(null)
   })
 })

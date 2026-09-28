@@ -42,4 +42,15 @@ describe('phone WhatsApp thread: template picker', () => {
     expect(SCREEN).toMatch(/onPress=\{\(\) => chooseTemplate\(t\)\}/)
     expect(SCREEN).toMatch(/onPress=\{sendChosenTemplate\}/)
   })
+  it('a template send cannot fire twice from a double tap (a ref, set before the await)', () => {
+    expect(SCREEN).toMatch(/if \(sendingTplRef\.current\) return/)
+    expect(SCREEN).toMatch(/sendingTplRef\.current = true[\s\S]*await sendTemplate\(/)
+    expect(SCREEN).toMatch(/finally \{\s*sendingTplRef\.current = false/)
+  })
+  it('{{1}} is prefilled from the contact first name only, as the web does', () => {
+    expect(SCREEN).not.toMatch(/wa_profile_name\?\.split/)
+  })
+  it('the preview says when a video/image/document goes with the template', () => {
+    expect(SCREEN).toContain('templateHeaderMedia(chosenTemplate)')
+  })
 })

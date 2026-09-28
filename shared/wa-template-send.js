@@ -91,12 +91,25 @@ export function initialTemplateValues(t, firstName) {
   return { 1: name }
 }
 
+// A filled value as it will be sent: every whitespace run becomes one space.
+// Meta refuses a parameter holding a newline, a tab or 4+ spaces in a row
+// (132018), and a paste into the field can carry them.
+function slotValue(values, n) {
+  return typeof values?.[n] === 'string' ? values[n].replace(/\s+/g, ' ').trim() : ''
+}
+
+/** The media a template's header attaches ('image' | 'video' | 'document'), or null. */
+export function templateHeaderMedia(t) {
+  const header = Array.isArray(t?.components)
+    ? t.components.find((c) => String(c?.type || '').toUpperCase() === 'HEADER')
+    : null
+  const format = String(header?.format || '').toUpperCase()
+  return ['IMAGE', 'VIDEO', 'DOCUMENT'].includes(format) ? format.toLowerCase() : null
+}
+
 /** The body as the customer will read it; an unfilled slot stays as {{n}}. */
 export function renderTemplatePreview(t, values = {}) {
-  return templateBodyText(t).replace(/\{\{\s*(\d+)\s*\}\}/g, (whole, n) => {
-    const v = typeof values?.[n] === 'string' ? values[n].trim() : ''
-    return v || whole
-  })
+  return templateBodyText(t).replace(/\{\{\s*(\d+)\s*\}\}/g, (whole, n) => slotValue(values, n) || whole)
 }
 
 /**
@@ -111,7 +124,7 @@ export function buildTemplateSend(t, values = {}) {
   const blocked = templateSendBlock(t)
   if (blocked) return { ok: false, blocked }
   const slots = bodyVariableSlots(t)
-  const text = (n) => (typeof values?.[n] === 'string' ? values[n].trim() : '')
+  const text = (n) => slotValue(values, n)
   const missing = slots.filter((n) => !text(n))
   if (missing.length) return { ok: false, missing }
   return {
