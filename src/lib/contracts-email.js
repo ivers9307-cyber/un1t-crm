@@ -154,7 +154,9 @@ export async function sendContractIssuedEmail({ contract, recipient, issuer, tem
  * @param {string} args.templateName — for the subject line
  */
 export async function sendContractReminderEmail({ contract, recipient, templateName }) {
-  if (!recipient?.email) return { ok: false, error: 'No recipient email' }
+  // C21 PUSHDONE.1 — `permanent`: retrying tomorrow cannot fix this one, so
+  // the reminder cron does not hold its stamp back for it.
+  if (!recipient?.email) return { ok: false, error: 'No recipient email', permanent: true }
   const branding = await getBranding(contract)
   const reviewUrl = `${getAppUrl()}/account/contracts/${contract.id}`
   const subject = `Reminder: ${templateName || 'Your contract'} is awaiting your signature`

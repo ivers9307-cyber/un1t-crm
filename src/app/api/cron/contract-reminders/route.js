@@ -29,6 +29,7 @@ import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { reminderDue } from '@/lib/contracts'
 import { sendContractReminderEmail } from '@/lib/contracts-email'
 import { sendPush } from '@/lib/push'
+import { pushOutcome } from '@/lib/push-outcome'
 import { logWarn, logError } from '@/lib/log'
 import { runRosterRunwayAlerts } from '@/lib/roster-runway-notify'
 import { runQualificationDigest } from '@/lib/qualification-digest'
@@ -140,6 +141,7 @@ export async function GET(request) {
   let sent = 0
   let emailFailed = 0
   let rowErrors = 0
+  let undelivered = 0
 
   for (const contract of candidates) {
     if (!reminderDue(contract, now)) continue
@@ -158,9 +160,10 @@ export async function GET(request) {
       // Push notification (best effort, never blocks) — mirrors the
       // issue-route's push block: category 'contract_issued', deep link
       // /contracts/<id>.
+      let push = 'settled'
       try {
         if (recipient?.id) {
-          await sendPush([recipient.id], {
+          push = pushOutcome(await sendPush([recipient.id], {
             title: 'Contract awaiting signature',
             body: templateName
               ? `Reminder: "${templateName}" is still awaiting your signature. Tap to review and sign.`
@@ -171,10 +174,30 @@ export async function GET(request) {
               contract_id: contract.id,
               path: `/contracts/${contract.id}`,
             },
-          })
+          }))
         }
-      } catch {
-        // Push is non-blocking; intentionally swallow (mirrors the issue route).
+      } catch (err) {
+        push = 'failed'
+        logWarn('cron-contract-reminders', 'reminder push threw', { contract_id: contract.id, err: err?.message || String(err) })
+      }
+
+      // C21 PUSHDONE.1 — the stamp is the cadence ("reminder N went out").
+      // It used to be written whatever happened, so a Postmark blip plus a
+      // push failure recorded a reminder nobody received, and the second one
+      // came four days later as if the first had landed. Hold it back only
+      // when NOTHING reached them and something transient broke: tomorrow's
+      // run (daily) sends it again, and it cannot duplicate what never went
+      // out. Email delivered → recorded, whatever the push did (retrying
+      // would repeat the email). No address and no device → recorded:
+      // nothing to retry against.
+      const reached = emailResult.ok || push === 'delivered'
+      const transient = (!emailResult.ok && !emailResult.permanent) || push === 'failed'
+      if (!reached && transient) {
+        undelivered++
+        logWarn('cron-contract-reminders', 'reminder reached nobody; not recorded, tomorrow retries', {
+          contract_id: contract.id, email_error: emailResult.error ?? null, push,
+        })
+        continue
       }
 
       const { error: updErr } = await db
@@ -199,7 +222,7 @@ export async function GET(request) {
   }
 
   const outcome = {
-    checked: candidates.length, sent, emailFailed, rowErrors,
+    checked: candidates.length, sent, emailFailed, rowErrors, undelivered,
     runway, runway_arm_failed: runwayArmFailed,
     qualifications, qualification_arm_failed: qualificationArmFailed,
   }
