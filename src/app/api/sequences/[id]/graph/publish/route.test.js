@@ -32,7 +32,7 @@ import { logWarn } from '@/lib/log'
 
 const SEQ_ID = 'a0000000-0000-0000-0000-000000000001'
 const LOC_ID = 'c0000000-0000-0000-0000-000000000003'
-const OWNER = { id: 'b0000000-0000-0000-0000-000000000002', role: 'owner', locations: [{ id: LOC_ID }] }
+const OWNER = { id: 'b0000000-0000-0000-0000-000000000002', role: 'owner', locations: [{ id: LOC_ID, role: 'owner' }] }
 
 const DYNAMIC_TPL = {
   id: 'wt-dyn',

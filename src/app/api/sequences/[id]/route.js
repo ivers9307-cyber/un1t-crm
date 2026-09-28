@@ -3,6 +3,7 @@ import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { canBuildSequencesAt, canBuildSequencesSomewhere, sequencePermissionRequired } from '@/lib/sequence-access'
 import { validateBody } from '@/lib/validate'
 import { validateAudienceFilter, InvalidAudienceFilterError } from '@/lib/audience-filter'
 
@@ -51,6 +52,7 @@ export async function GET(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (!canBuildSequencesSomewhere(user)) return sequencePermissionRequired()
 
   const db = createServerClient()
   const { data, error } = await db.from('email_sequences')
@@ -62,6 +64,8 @@ export async function GET(request, props) {
 
   const guard = assertLocationAccessOr404(user, data.location_id)
   if (guard) return guard
+  // SEQROUTEGATE.1 — the builder's rule (email or whatsapp) at the sequence.
+  if (!canBuildSequencesAt(user, data.location_id)) return sequencePermissionRequired()
 
   // Sort steps by step_order
   if (data.sequence_steps) {
@@ -76,6 +80,7 @@ export async function PUT(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (!canBuildSequencesSomewhere(user)) return sequencePermissionRequired()
 
   const db = createServerClient()
 
@@ -89,6 +94,8 @@ export async function PUT(request, props) {
   if (!existing) return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, existing.location_id)
   if (guard) return guard
+  // SEQROUTEGATE.1 — the builder's rule (email or whatsapp) at the sequence.
+  if (!canBuildSequencesAt(user, existing.location_id)) return sequencePermissionRequired()
 
   const validation = await validateBody(request, SequenceUpdateSchema)
   if (!validation.ok) return validation.response
@@ -190,6 +197,7 @@ export async function DELETE(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (!canBuildSequencesSomewhere(user)) return sequencePermissionRequired()
 
   const db = createServerClient()
 
@@ -200,6 +208,8 @@ export async function DELETE(request, props) {
   if (!existing) return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, existing.location_id)
   if (guard) return guard
+  // SEQROUTEGATE.1 — the builder's rule (email or whatsapp) at the sequence.
+  if (!canBuildSequencesAt(user, existing.location_id)) return sequencePermissionRequired()
 
   // Delete steps first
   await db.from('sequence_steps').delete().eq('sequence_id', params.id)

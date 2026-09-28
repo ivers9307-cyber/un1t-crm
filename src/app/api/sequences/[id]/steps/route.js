@@ -2,6 +2,7 @@ import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { canBuildSequencesAt, canBuildSequencesSomewhere, sequencePermissionRequired } from '@/lib/sequence-access'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 
@@ -50,12 +51,15 @@ export async function GET(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (!canBuildSequencesSomewhere(user)) return sequencePermissionRequired()
 
   const db = createServerClient()
   const seqLocation = await loadSequenceLocation(db, params.id)
   if (!seqLocation) return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, seqLocation)
   if (guard) return guard
+  // SEQROUTEGATE.1 — the builder's rule (email or whatsapp) at the sequence.
+  if (!canBuildSequencesAt(user, seqLocation)) return sequencePermissionRequired()
 
   const { data, error } = await db.from('sequence_steps')
     .select('*')
@@ -71,12 +75,15 @@ export async function POST(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (!canBuildSequencesSomewhere(user)) return sequencePermissionRequired()
 
   const db = createServerClient()
   const seqLocation = await loadSequenceLocation(db, params.id)
   if (!seqLocation) return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, seqLocation)
   if (guard) return guard
+  // SEQROUTEGATE.1 — the builder's rule (email or whatsapp) at the sequence.
+  if (!canBuildSequencesAt(user, seqLocation)) return sequencePermissionRequired()
 
   const validation = await validateBody(request, StepCreateSchema)
   if (!validation.ok) return validation.response
@@ -127,12 +134,15 @@ export async function PUT(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (!canBuildSequencesSomewhere(user)) return sequencePermissionRequired()
 
   const db = createServerClient()
   const seqLocation = await loadSequenceLocation(db, params.id)
   if (!seqLocation) return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, seqLocation)
   if (guard) return guard
+  // SEQROUTEGATE.1 — the builder's rule (email or whatsapp) at the sequence.
+  if (!canBuildSequencesAt(user, seqLocation)) return sequencePermissionRequired()
 
   const validation = await validateBody(request, StepBulkUpdateSchema)
   if (!validation.ok) return validation.response

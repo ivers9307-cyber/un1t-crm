@@ -3,6 +3,7 @@
 // sequence's location. Mirrors the /stats route's guards.
 import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { canBuildSequencesAt, canBuildSequencesSomewhere, sequencePermissionRequired } from '@/lib/sequence-access'
 import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { summariseEnrolmentRun } from '@/lib/sequences/run-history'
@@ -18,6 +19,9 @@ export async function GET(_request, props) {
   if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   }
+  // SEQROUTEGATE.1 — and the builder's rule (email or whatsapp); judged at the
+  // sequence below, after the role.
+  if (!canBuildSequencesSomewhere(user)) return sequencePermissionRequired()
 
   const db = createServerClient()
   const { data: seq, error: seqErr } = await db
@@ -33,6 +37,7 @@ export async function GET(_request, props) {
   if (!hasRoleAtLocation(user, seq.location_id, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   }
+  if (!canBuildSequencesAt(user, seq.location_id)) return sequencePermissionRequired()
 
   // Total step count for the "Step X of N" label.
   const { count: stepCount } = await db
