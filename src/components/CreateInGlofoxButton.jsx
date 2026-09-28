@@ -12,15 +12,78 @@
 // On success (linked / created), the component triggers a soft
 // route refresh so the freshly-synced Glofox card re-renders
 // alongside the rest of the contact data.
+//
+// PASSCODEREAD.1 — that refresh switches the card to its linked branch,
+// which unmounts this button. The result (and the one-time password it may
+// carry, stored nowhere: mig 651) therefore lives in
+// CreateInGlofoxResultScope, which GlofoxProfileCard renders ABOVE its
+// linked/unlinked switch, and stays on screen until the staff member presses
+// Dismiss. Outside a scope the button keeps and shows the result itself.
 
-import { useState } from 'react'
+import { createContext, useContext, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Loader2, UserPlus, CheckCircle2, AlertTriangle } from 'lucide-react'
+import { Loader2, UserPlus, CheckCircle2, AlertTriangle, X } from 'lucide-react'
+
+const ResultContext = createContext(null)
+
+export function CreateInGlofoxResultScope({ children }) {
+  const [result, setResult] = useState(null)
+  return (
+    <ResultContext.Provider value={{ result, setResult }}>
+      {children}
+    </ResultContext.Provider>
+  )
+}
+
+// Rendered by GlofoxProfileCard above the linked switch, so it survives the
+// refresh that links the contact.
+export function CreateInGlofoxResultSlot() {
+  const scope = useContext(ResultContext)
+  if (!scope) return null
+  return <CreateInGlofoxResult result={scope.result} onDismiss={() => scope.setResult(null)} />
+}
+
+// PASSCODEREAD.1 — the only time this password is ever shown. It is not
+// stored anywhere (mig 651) and no message carries it.
+function passwordNote(passcode) {
+  return passcode
+    ? ` First-login password: ${passcode}. Give it to the member now: it is not saved and nothing emails it. They can also use Forgot password? in the Glofox app.`
+    : ''
+}
+
+function CreateInGlofoxResult({ result, onDismiss }) {
+  if (!result) return null
+  const meta = {
+    linked:        { Icon: CheckCircle2, cls: 'text-emerald-400', text: 'Linked to an existing Glofox account.' },
+    created:       { Icon: CheckCircle2, cls: 'text-emerald-400', text: `Created in Glofox.${passwordNote(result.passcode)}` },
+    needs_review:  { Icon: AlertTriangle, cls: 'text-amber-400', text: `Partial success, operator review required. ${result.error || ''}`.trim() + passwordNote(result.passcode) },
+    skipped:       { Icon: AlertTriangle, cls: 'text-un1t-subtle', text: 'Skipped (no matching Glofox account and create-if-missing was off).' },
+    failed:        { Icon: AlertTriangle, cls: 'text-red-400', text: `Failed: ${result.error || 'unknown error'}` },
+  }[result.status]
+  if (!meta) return null
+  return (
+    <div className={`text-[11px] leading-snug flex items-start gap-1.5 ${meta.cls}`}>
+      <meta.Icon size={12} className="shrink-0 mt-0.5" />
+      <span className="flex-1">{meta.text}</span>
+      <button
+        type="button"
+        onClick={onDismiss}
+        aria-label="Dismiss"
+        title="Dismiss"
+        className="shrink-0 text-un1t-muted hover:text-un1t-text"
+      >
+        <X size={12} />
+      </button>
+    </div>
+  )
+}
 
 export default function CreateInGlofoxButton({ contact }) {
   const router = useRouter()
+  const scope = useContext(ResultContext)
+  const [ownResult, setOwnResult] = useState(null)
+  const setResult = scope ? scope.setResult : setOwnResult
   const [busy, setBusy] = useState(false)
-  const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
 
   const missing = []
@@ -48,7 +111,8 @@ export default function CreateInGlofoxButton({ contact }) {
         return
       }
       setResult(j.result)
-      // Refresh the page so the linked Glofox card renders.
+      // Refresh the page so the linked Glofox card renders. The result is
+      // held above the card's linked switch, so it outlives this button.
       router.refresh()
     } catch (e) {
       setError(e?.message || 'Network error')
@@ -56,22 +120,6 @@ export default function CreateInGlofoxButton({ contact }) {
       setBusy(false)
     }
   }
-
-  // After a successful link/create, the parent re-renders with the
-  // linked variant of the card — but the result message is useful
-  // for the brief window before the refresh lands, and for the
-  // needs_review case where it'll persist.
-  const resultMeta = result && {
-    linked:        { Icon: CheckCircle2, cls: 'text-emerald-400', text: 'Linked to an existing Glofox account.' },
-    // PASSCODEREAD.1 — the only time this password is ever shown. It is not
-    // stored anywhere (mig 651) and no message carries it.
-    created:       { Icon: CheckCircle2, cls: 'text-emerald-400', text: result.passcode
-      ? `Created in Glofox. First-login password: ${result.passcode}. Give it to the member now: it is not saved and nothing emails it. They can also use Forgot password? in the Glofox app.`
-      : 'Created in Glofox.' },
-    needs_review:  { Icon: AlertTriangle, cls: 'text-amber-400', text: `Partial success — operator review required. ${result.error || ''}`.trim() },
-    skipped:       { Icon: AlertTriangle, cls: 'text-un1t-subtle', text: 'Skipped (no matching Glofox account and create-if-missing was off).' },
-    failed:        { Icon: AlertTriangle, cls: 'text-red-400', text: `Failed: ${result.error || 'unknown error'}` },
-  }[result.status]
 
   return (
     <div className="pt-2 space-y-2">
@@ -100,12 +148,7 @@ export default function CreateInGlofoxButton({ contact }) {
         <p className="text-[11px] text-red-400 leading-snug">{error}</p>
       )}
 
-      {resultMeta && (
-        <p className={`text-[11px] leading-snug flex items-start gap-1.5 ${resultMeta.cls}`}>
-          <resultMeta.Icon size={12} className="shrink-0 mt-0.5" />
-          <span>{resultMeta.text}</span>
-        </p>
-      )}
+      {!scope && <CreateInGlofoxResult result={ownResult} onDismiss={() => setOwnResult(null)} />}
     </div>
   )
 }
