@@ -5,8 +5,9 @@
 // below is exactly what assembleIntegrationsHub now returns when every read
 // fails (see integrations-hub.test.js), rendered to static markup.
 
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { render, cleanup, screen, fireEvent, act } from '@testing-library/react'
 
 vi.mock('next/link', () => ({
   default: ({ href, children, className }) => <a href={typeof href === 'string' ? href : ''} className={className}>{children}</a>,
@@ -113,5 +114,53 @@ describe('IntegrationsHub — unknown rows (HUBREAD.1)', () => {
     const html = renderToStaticMarkup(<IntegrationsHub data={healthy} isMaster />)
     expect(html).toMatch(/>Connect</)
     expect(html).toContain('All connections healthy')
+  })
+})
+
+describe('IntegrationsHub — Try again gives feedback (HUBREAD.1 N4)', () => {
+  afterEach(() => { cleanup(); vi.unstubAllGlobals() })
+
+  // The re-fetch is held open until the test releases it.
+  function heldFetch() {
+    let release
+    const gate = new Promise((r) => { release = r })
+    const fetchMock = vi.fn(() => gate)
+    vi.stubGlobal('fetch', fetchMock)
+    return { fetchMock, release }
+  }
+
+  it('shows a pending state, then "Still couldn\'t load" when the retry fails', async () => {
+    const { fetchMock, release } = heldFetch()
+    render(<IntegrationsHub data={UNREAD} isMaster />)
+    const [first] = screen.getAllByRole('button', { name: 'Try again' })
+    await act(async () => { fireEvent.click(first) })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const pending = screen.getAllByRole('button', { name: 'Trying…' })
+    expect(pending.length).toBeGreaterThan(0)
+    for (const b of pending) expect(b.disabled).toBe(true)
+
+    await act(async () => { release({ json: async () => ({ success: false, error: 'boom' }) }) })
+
+    expect(screen.queryAllByRole('button', { name: 'Trying…' })).toHaveLength(0)
+    // Only under the button that was pressed, not on every card.
+    expect(screen.getAllByText("Still couldn't load. Try again in a minute.")).toHaveLength(1)
+  })
+
+  it('a thrown fetch is a failed retry too', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('offline'))))
+    render(<IntegrationsHub data={UNREAD} isMaster />)
+    await act(async () => { fireEvent.click(screen.getAllByRole('button', { name: 'Try again' })[0]) })
+    expect(screen.getByText("Still couldn't load. Try again in a minute.")).toBeTruthy()
+  })
+
+  it('a retry that loads clears the card: no failure note (pin)', async () => {
+    const healthy = { ...UNREAD, xero: [], attention: [], billing: [{ locationId: LOC.id, plan: null }] }
+    vi.stubGlobal('fetch', vi.fn(async () => ({ json: async () => ({ success: true, data: healthy }) })))
+    render(<IntegrationsHub data={UNREAD} isMaster />)
+    // The first Try again is the billing strip's; after the load it is gone.
+    await act(async () => { fireEvent.click(screen.getAllByRole('button', { name: 'Try again' })[0]) })
+    expect(screen.queryByText("Still couldn't load. Try again in a minute.")).toBeNull()
+    expect(screen.getByText(/No platform plan/)).toBeTruthy()
   })
 })

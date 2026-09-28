@@ -36,7 +36,7 @@
 // wizard, or the billing page — no new mutation surface here, and the old
 // tabs are untouched.
 
-import { useCallback, useState } from 'react'
+import { createContext, useCallback, useContext, useState } from 'react'
 import Link from 'next/link'
 import {
   Zap, MessageCircle, Landmark, Megaphone, Plug,
@@ -98,13 +98,32 @@ function worstOf(statuses) {
 // working connection gets overwritten. Only "Try again", which re-fetches.
 const isUnread = (rows) => rows.some((r) => r.status === 'unknown')
 
-function UnreadableNote({ what, onRetry }) {
+// Every "Try again" shares one re-fetch: while it runs they all show a
+// pending state, and when the button that asked is still on screen after
+// it (the read failed again) it says so, instead of silently doing nothing.
+const RetryContext = createContext({ retry: () => {}, pending: false, failedId: null })
+
+function RetryButton({ id }) {
+  const { retry, pending, failedId } = useContext(RetryContext)
+  return (
+    <span className="inline-flex flex-wrap items-center gap-2">
+      <button type="button" onClick={() => retry(id)} disabled={pending} aria-busy={pending} className={linkBtn()}>
+        {pending ? 'Trying…' : 'Try again'}
+      </button>
+      {!pending && failedId === id && (
+        <span role="status" className="text-xs text-amber-700">Still couldn&apos;t load. Try again in a minute.</span>
+      )}
+    </span>
+  )
+}
+
+function UnreadableNote({ what }) {
   return (
     <div className="space-y-2">
       <p className="text-xs text-amber-700 bg-amber-500/10 rounded px-2 py-1.5">
         {`Could not load ${what} just now, so nothing is shown and nothing can be changed here until it loads.`}
       </p>
-      <button type="button" onClick={onRetry} className={linkBtn()}>Try again</button>
+      <RetryButton id={`card-${what}`} />
     </div>
   )
 }
@@ -399,15 +418,32 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
   // per-location, so the drawer always targets one location's connection.
   const [managing, setManaging] = useState(null)
 
-  const refetchHub = useCallback(async () => {
+  // HUBREAD.1 — the shared "Try again" state (see RetryButton).
+  const [retryState, setRetryState] = useState({ pending: false, failedId: null })
+
+  // true when a fresh payload landed; false keeps the last-good payload.
+  const loadHub = useCallback(async () => {
     try {
       const res = await fetch('/api/integrations/hub', { credentials: 'same-origin' })
       const j = await res.json().catch(() => ({}))
-      if (j.success && j.data) setData(j.data)
+      if (j.success && j.data) { setData(j.data); return true }
     } catch {
-      /* keep last-good payload — the drawer's own UI already showed the save result */
+      /* keep last-good payload */
     }
+    return false
   }, [])
+
+  // After a drawer save — the drawer's own UI already showed the result.
+  const refetchHub = useCallback(async () => { await loadHub() }, [loadHub])
+
+  // "Try again": if the asking button is still rendered afterwards (the
+  // fetch failed, or the fresh payload is still unreadable there), it
+  // shows "Still couldn't load"; a card that loaded drops its button.
+  const retryHub = useCallback(async (id) => {
+    setRetryState({ pending: true, failedId: null })
+    await loadHub()
+    setRetryState({ pending: false, failedId: id })
+  }, [loadHub])
 
   const locations = data.locations || []
   const nameById = Object.fromEntries(locations.map((l) => [l.id, l.name]))
@@ -443,6 +479,7 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
   const connTag = (arr, fallback) => (arr.length && !isUnread(arr) ? nameById[arr[0].locationId] : fallback)
 
   return (
+    <RetryContext.Provider value={{ retry: retryHub, ...retryState }}>
     <div className="p-8 max-w-6xl">
       {/* ── Header ── */}
       <div className="text-xs text-un1t-muted mb-1">Settings <span className="text-un1t-subtle font-medium">/ Integrations</span></div>
@@ -503,7 +540,7 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
           <div className="rounded-xl border border-un1t-border bg-white px-4 py-3 flex flex-wrap items-center justify-between gap-3">
             <span className="text-sm text-amber-700">Could not load the platform plan just now.</span>
             <div className="flex gap-2">
-              <button type="button" onClick={refetchHub} className={linkBtn()}>Try again</button>
+              <RetryButton id="billing" />
               <Link href="/settings/billing" className={linkBtn()}>Manage plan</Link>
             </div>
           </div>
@@ -542,7 +579,7 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
               <span className="text-un1t-subtle">: {a.message}</span>
             </span>
             {a.unreadable
-              ? <button type="button" onClick={refetchHub} className={linkBtn()}>Try again</button>
+              ? <RetryButton id={`attention-${a.cardKey}`} />
               : <Link href={a.href} className={linkBtn()}>Open</Link>}
           </div>
         ))}
@@ -564,7 +601,7 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
           chip={<StatusChip status={worstOf(glofox.map((r) => r.status))} />}
         >
           {isUnread(glofox) ? (
-            <UnreadableNote what="Glofox" onRetry={refetchHub} />
+            <UnreadableNote what="Glofox" />
           ) : (
           <div className="divide-y divide-un1t-border border-t border-un1t-border text-sm">
             {glofox.map((r) => (
@@ -597,7 +634,7 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
           chip={<StatusChip status={worstOf(whatsapp.map((r) => r.status))} />}
         >
           {isUnread(whatsapp) ? (
-            <UnreadableNote what="WhatsApp" onRetry={refetchHub} />
+            <UnreadableNote what="WhatsApp" />
           ) : (
           <div className="divide-y divide-un1t-border border-t border-un1t-border text-sm">
             {whatsapp.map((r) => (
@@ -643,7 +680,7 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
           chip={<StatusChip status={worstOf(instagram.map((r) => r.status))} />}
         >
           {isUnread(instagram) ? (
-            <UnreadableNote what="Instagram" onRetry={refetchHub} />
+            <UnreadableNote what="Instagram" />
           ) : instagram.length === 0 ? (
             <>
               <p className="text-xs text-un1t-subtle">No Instagram connection{scope === 'all' ? '' : ' at this location'} yet.</p>
@@ -696,7 +733,7 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
           chip={<StatusChip status={worstOf(xero.map((r) => r.status))} />}
         >
           {isUnread(xero) ? (
-            <UnreadableNote what="Xero" onRetry={refetchHub} />
+            <UnreadableNote what="Xero" />
           ) : xero.length === 0 ? (
             <>
               <p className="text-xs text-un1t-subtle">No Xero organisation connected{scope === 'all' ? '' : ' at this location'}.</p>
@@ -745,7 +782,7 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
           chip={<StatusChip status={worstOf(ads.map((r) => r.status))} />}
         >
           {isUnread(ads) ? (
-            <UnreadableNote what="Meta Ads" onRetry={refetchHub} />
+            <UnreadableNote what="Meta Ads" />
           ) : (
           <>
           {ads.length === 0 ? (
@@ -875,7 +912,7 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
           muted
         >
           {isUnread(email) ? (
-            <UnreadableNote what="email delivery" onRetry={refetchHub} />
+            <UnreadableNote what="email delivery" />
           ) : email.length === 0 ? (
             <p className="text-xs text-un1t-subtle">· Sending via the platform email account</p>
           ) : (
@@ -914,7 +951,7 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
           muted
         >
           {sms.some((r) => r.senderKnown === false) ? (
-            <UnreadableNote what="the SMS sender" onRetry={refetchHub} />
+            <UnreadableNote what="the SMS sender" />
           ) : (
           <>
           <div className="text-xs text-un1t-subtle space-y-0.5">
@@ -979,7 +1016,7 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
           dashed
         >
           {isUnread(unifi) ? (
-            <UnreadableNote what="UniFi Access" onRetry={refetchHub} />
+            <UnreadableNote what="UniFi Access" />
           ) : (
           <>
           <div className="text-xs text-un1t-subtle space-y-0.5">
@@ -1012,7 +1049,7 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
           dashed
         >
           {isUnread(climate) ? (
-            <UnreadableNote what="climate devices" onRetry={refetchHub} />
+            <UnreadableNote what="climate devices" />
           ) : (
           <>
           <div className="text-xs text-un1t-subtle space-y-0.5">
@@ -1059,7 +1096,7 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
           dashed
         >
           {isUnread(bca) ? (
-            <UnreadableNote what="BCA Submit" onRetry={refetchHub} />
+            <UnreadableNote what="BCA Submit" />
           ) : (
           <>
           <p className="text-xs text-un1t-subtle">· Org-gated to CCF Autos. Not offered to gym tenants.</p>
@@ -1120,5 +1157,6 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
         />
       )}
     </div>
+    </RetryContext.Provider>
   )
 }
