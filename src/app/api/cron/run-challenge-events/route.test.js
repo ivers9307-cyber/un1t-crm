@@ -100,6 +100,19 @@ describe('run-challenge-events — claim, send, release on failure (C21 PUSHDONE
     expect(updates.some(releaseOf)).toBe(false)
   })
 
+  it('a partial broadcast says how many sends failed (a count, no member ids)', async () => {
+    sendCustomerPush.mockResolvedValueOnce({ sent: 1, invalidated: 0, failed: 3, skipped: 0 })
+    const body = await (await GET(req())).json()
+    expect(body).toMatchObject({ started: 1, failed: 0 })
+    expect(logWarn).toHaveBeenCalledWith('cron-challenge-events', 'announcement delivered to some members; failed sends are not retried',
+      { id: 'ch-1', column: 'announced_start_at', failed: 3 })
+  })
+
+  it('a clean broadcast warns nothing', async () => {
+    await GET(req())
+    expect(logWarn).not.toHaveBeenCalled()
+  })
+
   it('an announcement another run already claimed is not sent', async () => {
     claimMatches = false
     const body = await (await GET(req())).json()

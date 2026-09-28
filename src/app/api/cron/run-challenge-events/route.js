@@ -70,6 +70,11 @@ async function announceOnce(db, ch, column, stamp, ids, payload) {
     logWarn(MODULE, 'announcement push threw', { id: ch.id, column, err: err?.message || String(err) })
   }
   const outcome = pushOutcome(result)
+  if (outcome === 'delivered' && result?.failed > 0) {
+    // Partial: the claim stays (a re-send would repeat it to everyone who got
+    // it), so the members whose send failed miss this one. Said, as a count.
+    logWarn(MODULE, 'announcement delivered to some members; failed sends are not retried', { id: ch.id, column, failed: result.failed })
+  }
   if (outcome !== 'failed') return outcome
 
   const { error: releaseErr } = await db.from('challenges')
