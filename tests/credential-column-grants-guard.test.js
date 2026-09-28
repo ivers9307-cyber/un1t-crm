@@ -90,6 +90,21 @@ describe('client code names only granted credential-table columns (SECFIX.3c)', 
     expect(offenders, 'read it through a service-role /api route that masks, or grant the column in a migration').toEqual([])
   })
 
+  it('every select on a credential table is readable (fail closed)', () => {
+    // A select string the scanner cannot evaluate (a parameter, an import, a
+    // call, a `let`) could name any column, so it is an offender unless it
+    // was reviewed by hand and listed here as `<file>: <table> <arg text>`.
+    const REVIEWED_DYNAMIC_SELECTS = []
+    const unread = []
+    for (const file of files) {
+      for (const [table, arg] of columnUses(readFileSync(file, 'utf8'), CREDENTIAL_GRANT_TABLES, FK_ALIASES).unresolved) {
+        const key = `${path.relative(ROOT, file)}: ${table} ${arg}`
+        if (!REVIEWED_DYNAMIC_SELECTS.includes(key)) unread.push(key)
+      }
+    }
+    expect(unread, 'name the columns in a literal or a same-file const, or review it and list it').toEqual([])
+  })
+
   it('client writes are exactly the reviewed writers, update only', () => {
     const seen = {}
     const nonUpdate = []
@@ -150,6 +165,16 @@ describe('client code names only granted credential-table columns (SECFIX.3c)', 
     const two = `const a = await supabase.from('locations').eq('id', x)
       const b = await supabase.from('contacts').select('id, settings')`
     expect(probe(two)).not.toContain('locations.settings')
+  })
+
+  it('resolves a select held in a same-file const, and reports one it cannot read', () => {
+    expect(probe(`const COLS = 'id, settings'\nawait supabase.from('locations').select(COLS)`)).toContain('locations.settings')
+    expect(probe("const A = 'id'\nconst B = `${A}, thinq_pat`\nawait supabase.from('locations').select(B)")).toContain('locations.thinq_pat')
+    expect(probe(`const SEL = 'id, locations:location_id ( settings )'\nawait supabase.from('shift_blocks').select(SEL)`))
+      .toContain('locations.settings')
+    const dyn = columnUses(`function f(cols) { return supabase.from('locations').select(cols) }`, CREDENTIAL_GRANT_TABLES, FK_ALIASES)
+    expect(dyn.unresolved).toEqual([['locations', 'cols']])
+    expect(columnUses(`const S = 'id'\nsupabase.from('locations').select(S)`, CREDENTIAL_GRANT_TABLES, FK_ALIASES).unresolved).toEqual([])
   })
 
   it('the FK columns come from the migrations, and a text search finds none the replay missed', () => {

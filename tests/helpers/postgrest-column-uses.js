@@ -4,7 +4,9 @@
 // (SECFIX.3c; generalised from tests/shift-column-grants-guard.test.js, which
 // keeps its inline copy for now).
 
-import { extractChainLinks, firstStringArg, maskComments } from '../../scripts/check-select-columns.mjs'
+import {
+  extractChainLinks, firstArgText, firstStringArg, maskComments, resolveSelectArg,
+} from '../../scripts/check-select-columns.mjs'
 
 /**
  * FK column → target table, for every single-column FK (learned by the
@@ -31,6 +33,24 @@ export function fkAliasesInto(fks, tables) {
 const WRITE_METHODS = new Set(['update', 'insert', 'upsert', 'delete'])
 const FILTER_METHODS = new Set(['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'in', 'is', 'like', 'ilike', 'contains',
   'order', 'not', 'filter', 'match'])
+
+/** A call's argument text: from the '(' at `open` to its match, JS-literal aware. */
+function callArgs(src, open) {
+  let depth = 0
+  let quote = null
+  for (let i = open; i < src.length; i++) {
+    const c = src[i]
+    if (quote) {
+      if (c === '\\') { i++; continue }
+      if (c === quote) quote = null
+      continue
+    }
+    if (c === "'" || c === '"' || c === '`') { quote = c; continue }
+    if (c === '(') depth++
+    else if (c === ')' && --depth === 0) return src.slice(open + 1, i)
+  }
+  return null
+}
 
 /** The text inside the parenthesis that opens at `open` (balanced). */
 export function balanced(text, open) {
@@ -66,14 +86,30 @@ export function topLevelColumns(list) {
  * @param {string} text   source
  * @param {string[]} tables
  * @param {Record<string,string>} fkAliases  FK column → table, for `alias:fk_col ( … )` embeds
- * @returns {{ reads: [string,string][], writes: [string,string][] }}
+ * @returns {{ reads: [string,string][], writes: [string,string][], unresolved: [string,string][] }}
+ *   unresolved = [table, arg text] for a select on one of `tables` whose
+ *   string the scanner cannot evaluate: it could name any column, so the
+ *   caller must fail closed on it.
  */
 export function columnUses(text, tables, fkAliases = {}) {
   const alt = tables.join('|')
   const reads = []
   const writes = []
+  const unresolved = []
   const src = maskComments(text)
-  const selectStrings = [...src.matchAll(/\.select\(\s*(['"`])([\s\S]*?)\1/g)]
+  // A select string is a literal or (as check:select-columns reads it since
+  // SELCOLS2.1) a same-file const, a template of consts, `+` or `[…].join()`.
+  const readSelect = (args) => firstStringArg(args) ?? resolveSelectArg(args, src)
+  // Every `.select(…)` in the file, for the embed scan below. A string that
+  // cannot be evaluated still gives up its literal text (a template with a
+  // dynamic `${}`), so an embed spelled out in it is still seen.
+  const selectStrings = []
+  for (const m of src.matchAll(/\.select\(/g)) {
+    const args = callArgs(src, m.index + m[0].length - 1)
+    if (args == null) continue
+    const sel = readSelect(args) ?? /^\s*(['"`])([\s\S]*?)\1/.exec(args)?.[2]
+    if (sel != null) selectStrings.push(sel)
+  }
 
   // (a) `.from('<table>')…` — every link attached to the chain (walked call by
   //     call, as check:select-columns does, so no fixed window): its own
@@ -84,8 +120,9 @@ export function columnUses(text, tables, fkAliases = {}) {
     const { method, args } = link
     if (method === 'select') {
       if (!args.trim()) { reads.push([table, '*']); continue }
-      const sel = firstStringArg(args)
-      if (sel != null) for (const c of topLevelColumns(sel)) reads.push([table, c])
+      const sel = readSelect(args)
+      if (sel == null) unresolved.push([table, firstArgText(args).trim()])
+      else for (const c of topLevelColumns(sel)) reads.push([table, c])
       continue
     }
     if (WRITE_METHODS.has(method)) { writes.push([table, method]); continue }
@@ -95,8 +132,7 @@ export function columnUses(text, tables, fkAliases = {}) {
     }
   }
 
-  for (const s of selectStrings) {
-    const list = s[2]
+  for (const list of selectStrings) {
     // (b) Embeds anywhere in a select: `[alias:]<table>[!hint] ( … )`.
     //     Lookbehind, not a consumed prefix: a nested embed starts right after
     //     its parent's '('.
@@ -119,5 +155,5 @@ export function columnUses(text, tables, fkAliases = {}) {
   //     name a column (shared/location-colors.js, AdsIntegrationTab), and a
   //     filter column is never a template literal here.
   for (const f of src.matchAll(new RegExp(`(['"])(${alt})\\.([a-z_]+)\\1`, 'g'))) reads.push([f[2], f[3]])
-  return { reads, writes }
+  return { reads, writes, unresolved }
 }
