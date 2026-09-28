@@ -5,11 +5,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const updates = []
+const selects = []
 let contractRows = []
 function makeBuilder(table) {
   const state = {}
   const b = {}
-  for (const m of ['select', 'in', 'lt', 'order', 'range', 'eq']) b[m] = () => b
+  for (const m of ['in', 'lt', 'order', 'range', 'eq']) b[m] = () => b
+  b.select = (cols) => { selects.push({ table, cols }); return b }
   b.update = (patch) => { state.patch = patch; updates.push({ table, patch }); return b }
   b.then = (resolve, reject) => Promise.resolve(state.patch ? { data: null, error: null } : { data: contractRows, error: null }).then(resolve, reject)
   return b
@@ -26,6 +28,7 @@ vi.mock('@/lib/roster-runway-notify', () => ({ runRosterRunwayAlerts: vi.fn(asyn
 vi.mock('@/lib/qualification-digest', () => ({ runQualificationDigest: vi.fn(async () => ({})) }))
 
 const { GET } = await import('./route.js')
+const { reminderDue } = await import('@/lib/contracts')
 const { sendContractReminderEmail } = await import('@/lib/contracts-email')
 const { sendPush } = await import('@/lib/push')
 const { logWarn } = await import('@/lib/log')
@@ -42,6 +45,7 @@ beforeEach(() => {
   process.env.CRON_SECRET = 'test-secret'
   vi.clearAllMocks()
   updates.length = 0
+  selects.length = 0
   contractRows = [CONTRACT]
 })
 
@@ -114,5 +118,19 @@ describe('contract-reminders — record the reminder only when it went out (C21 
     const body = await (await GET(req())).json()
     expect(stamped()).toHaveLength(1)
     expect(body.undelivered).toBe(0)
+  })
+})
+
+// PUSHDONE.1a — reminderDue spaces reminder 2 from the RECORDED reminder 1,
+// so the candidate read must carry last_reminded_at into it.
+describe('contract-reminders — reminder spacing input (PUSHDONE.1a)', () => {
+  it('reads last_reminded_at and hands it to reminderDue', async () => {
+    contractRows = [{ ...CONTRACT, reminder_count: 1, last_reminded_at: '2026-09-26T08:00:00Z' }]
+    sendContractReminderEmail.mockResolvedValue({ ok: true })
+    sendPush.mockResolvedValue(PUSH_DELIVERED)
+    await GET(req())
+    const contractSelect = selects.find((q) => q.table === 'contracts')
+    expect(contractSelect.cols).toMatch(/\blast_reminded_at\b/)
+    expect(reminderDue).toHaveBeenCalledWith(expect.objectContaining({ last_reminded_at: '2026-09-26T08:00:00Z' }), expect.any(Date))
   })
 })

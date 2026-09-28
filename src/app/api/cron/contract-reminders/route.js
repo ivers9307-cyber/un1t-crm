@@ -2,7 +2,9 @@
 // 'issued'/'viewed' with no signature: a reminder email + push at 3 days
 // (1st) and 7 days (2nd, final) since issued_at, capped at 2 total. Mirrors
 // the issue-time notification in POST /api/contracts (same email shell via
-// contracts-email.js, same push shape via src/lib/push.js).
+// contracts-email.js, same push shape via src/lib/push.js). PUSHDONE.1a: the
+// 2nd also waits 4 days after the RECORDED 1st (last_reminded_at), so a 1st
+// held back by retries is not followed by the 2nd the next day.
 //
 // Registration: mirrors the newest existing cron (expand-hyrox-weeks, mig
 // 441 / HYROX-TC.3) — a plain vercel.json schedule entry with a Bearer
@@ -121,7 +123,7 @@ export async function GET(request) {
     const { data, error } = await db
       .from('contracts')
       .select(`
-        id, status, issued_at, reminder_count, location_id, profile_id,
+        id, status, issued_at, reminder_count, last_reminded_at, location_id, profile_id,
         profile:profiles!profile_id (id, full_name, email),
         template:contract_templates!template_id (name)
       `)
