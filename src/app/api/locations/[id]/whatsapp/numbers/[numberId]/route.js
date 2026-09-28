@@ -15,6 +15,7 @@ import { z } from 'zod'
 import { getCurrentUser, assertLocationAccess, guardMasterOrOwner } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { publicShape } from '@/lib/whatsapp-numbers-shape'
+import { isFreshSecret } from '@/lib/integration-secret-merge'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -41,6 +42,13 @@ export async function PATCH(request, props) {
   if (roleGuard) return roleGuard
 
   const raw = await request.json().catch(() => ({}))
+  // N8NECHO.1: the screens are handed SECRET_MASK for a stored token. A mask
+  // (or a blank) sent back is "no change", so it is dropped before validation
+  // and the rest of the save applies; only a fresh token is ever written.
+  // min(20) below is not the guard: it would refuse the whole save instead.
+  if (raw && typeof raw === 'object' && raw.access_token !== undefined && !isFreshSecret(raw.access_token)) {
+    delete raw.access_token
+  }
   const parsed = PatchBody.safeParse(raw)
   if (!parsed.success) {
     return NextResponse.json({

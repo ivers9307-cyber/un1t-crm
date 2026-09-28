@@ -3,9 +3,9 @@
 // The numbers screens show a stored Meta token as the shared mask
 // (publicShape().access_token_redacted === SECRET_MASK, presence only). If a
 // client ever sends that mask back as access_token, the stored token must
-// stay exactly as it is: the PATCH refuses the body (the token must be at
-// least 20 characters, and no mask shape is) and writes nothing. The old
-// 4-bullet-plus-last-6 shape is pinned too. Fictional values only (public
+// stay exactly as it is: the PATCH drops a token that is not fresh (the
+// shared '••' rule, isFreshSecret) before validating, and applies the rest
+// of the body. The old 4-bullet-plus-last-6 shape is pinned too. Fictional values only (public
 // repo): every secret starts SYNTH-.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -74,23 +74,32 @@ beforeEach(() => {
 })
 
 describe('PATCH whatsapp number: a masked token echo never overwrites the stored token (N8NECHO.1)', () => {
-  it('round-trip: the mask the screen is given, sent back, leaves the stored token unchanged', async () => {
+  it('round-trip: the mask the screen is given, sent back with a label change, saves the label and leaves the stored token unchanged', async () => {
     const state = mockDb()
     const echoed = publicShape(state.stored).access_token_redacted
     expect(echoed).toBe(SECRET_MASK)
 
-    const res = await patch({ label: 'Front desk', access_token: echoed })
-    expect(res.status).toBe(400)
+    const res = await patch({ label: 'Front desk renamed', access_token: echoed })
+    expect(res.status).toBe(200)
+    expect(state.updates.some((u) => 'access_token' in u)).toBe(false)
+    expect(state.stored.access_token).toBe(STORED_TOKEN)
+    expect(state.stored.label).toBe('Front desk renamed')
+  })
+
+  it('the old tail-keeping mask shape is dropped the same way', async () => {
+    const state = mockDb()
+    const res = await patch({ access_token: '••••' + STORED_TOKEN.slice(-6) })
+    expect(res.status).toBe(200)
     expect(state.updates.some((u) => 'access_token' in u)).toBe(false)
     expect(state.stored.access_token).toBe(STORED_TOKEN)
   })
 
-  it('the old tail-keeping mask shape is refused the same way', async () => {
+  it('a blank token is dropped too, not refused', async () => {
     const state = mockDb()
-    const res = await patch({ access_token: '••••' + STORED_TOKEN.slice(-6) })
-    expect(res.status).toBe(400)
-    expect(state.updates).toEqual([])
+    const res = await patch({ label: 'Front desk 3', access_token: '' })
+    expect(res.status).toBe(200)
     expect(state.stored.access_token).toBe(STORED_TOKEN)
+    expect(state.stored.label).toBe('Front desk 3')
   })
 
   it('a save without a token keeps the stored token and answers with the mask, not a tail', async () => {
