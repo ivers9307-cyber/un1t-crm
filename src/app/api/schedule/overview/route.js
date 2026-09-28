@@ -25,6 +25,7 @@ import { getCurrentUser, assertLocationAccess, hasRoleAtLocation } from '@/lib/a
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES, uuidLike, realIsoDate } from '@/lib/schemas'
+import { reportPeriodError } from '@/lib/report-period'
 import { getLocationMemberIds, leaveScopeOrFilter } from '@/lib/time-off-leave'
 import {
   eventTypeHasWindowForDate,
@@ -129,24 +130,14 @@ async function handleGet(request) {
     return NextResponse.json({ success: false, error: 'Schedule feature is disabled at this location' }, { status: 403 })
   }
 
-  // Reject ranges over the cap (one round-trip would otherwise pull
-  // a year of events at once). Explicit destructure rather than spread
-  // because spread + Date.UTC was triggering a build-time mangling
-  // issue on Vercel's serverless bundler.
-  const [fy, fm, fd] = from.split('-').map(Number)
-  const [ty, tm, td] = to.split('-').map(Number)
-  const fromMs = Date.UTC(fy, fm - 1, fd)
-  const toMs   = Date.UTC(ty, tm - 1, td)
-  if (toMs < fromMs) {
-    return NextResponse.json({ success: false, error: 'to must be on or after from' }, { status: 400 })
-  }
-  const dayCount = Math.floor((toMs - fromMs) / 86400_000) + 1
-  if (dayCount > MAX_DAYS_PER_REQUEST) {
-    return NextResponse.json({
-      success: false,
-      error: `Range too wide (${dayCount} days). Max ${MAX_DAYS_PER_REQUEST}.`,
-    }, { status: 400 })
-  }
+  // Reject ranges over the cap (one round-trip would otherwise pull a year of
+  // events at once). RANGEVALID.1 — the shared rule (real, in order, at most
+  // MAX_DAYS_PER_REQUEST days), so every schedule range reads alike and the
+  // date guard can see it. Still after the role gate, still before any read.
+  const periodError = reportPeriodError(from, to, {
+    startName: 'from', endName: 'to', maxDays: MAX_DAYS_PER_REQUEST, what: 'The overview',
+  })
+  if (periodError) return NextResponse.json({ success: false, error: periodError }, { status: 400 })
 
   const db = createServerClient()
 

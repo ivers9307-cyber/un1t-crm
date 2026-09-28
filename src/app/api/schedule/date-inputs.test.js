@@ -287,4 +287,8 @@ describe('schedule routes refuse a date the calendar does not have (DATECHECK.1)
   it('a route that reads a date-named query param checks the calendar', () => {
     expect(ROUTES.filter((r) => uncheckedParamOffence(r.src)).map((r) => r.rel)).toEqual([])
   })
+
+  it('a route that reads both ends of a query range puts them in order (RANGEVALID.1)', () => {
+    expect(ROUTES.filter((r) => unorderedPairOffence(r.src)).map((r) => r.rel)).toEqual([])
+  })
 })
