@@ -9,7 +9,7 @@ vi.mock('@/lib/permissions', () => ({ hasPermission: vi.fn((u, k) => k === 'devi
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => ({ from: () => { throw new Error('the page itself must not query') } })) }))
 vi.mock('next/navigation', () => ({ redirect: vi.fn((u) => { throw new Error(`NEXT_REDIRECT:${u}`) }) }))
 vi.mock('@/lib/automations/glofox-status', () => ({ readGlofoxAutomationStatus: vi.fn() }))
-vi.mock('@/components/automations/ShellyDevicesClient', () => ({ default: (p) => <div>{`shelly:${p.glofoxConnected}`}</div> }))
+vi.mock('@/components/automations/ShellyDevicesClient', () => ({ default: (p) => <div>{`shelly:${p.glofoxConnected}:unknown=${p.glofoxUnknown}`}</div> }))
 
 import ShellyPage from './page.js'
 import { getCurrentUser } from '@/lib/auth'
@@ -28,14 +28,21 @@ describe('/automations/shelly — Glofox presence (PROFILESPREAD.1)', () => {
     readGlofoxAutomationStatus.mockResolvedValue({ known: true, connected: true, statuses: {} })
     const html = renderToStaticMarkup(await ShellyPage())
     expect(readGlofoxAutomationStatus).toHaveBeenCalledWith(expect.anything(), LOC)
-    expect(html).toContain('shelly:true')
+    expect(html).toContain('shelly:true:unknown=false')
     expect(html).not.toMatch(/Couldn(?:&#x27;|')t check/)
   })
 
   it('unknown: class mode off, with a notice that says why', async () => {
     readGlofoxAutomationStatus.mockResolvedValue({ known: false, connected: null, statuses: {} })
     const html = renderToStaticMarkup(await ShellyPage())
-    expect(html).toContain('shelly:false')
+    expect(html).toContain('shelly:false:unknown=true')
     expect(html).toMatch(NOTICE)
+  })
+
+  it('known not connected: class mode off, not unknown, no notice', async () => {
+    readGlofoxAutomationStatus.mockResolvedValue({ known: true, connected: false, statuses: {} })
+    const html = renderToStaticMarkup(await ShellyPage())
+    expect(html).toContain('shelly:false:unknown=false')
+    expect(html).not.toMatch(/Couldn(?:&#x27;|')t check/)
   })
 })

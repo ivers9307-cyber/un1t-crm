@@ -15,7 +15,9 @@
 //   glofoxConnected       — whether class-linked schedules are even offerable
 //                           (the timetable is the trigger source), read by id
 //                           with the service role (PROFILESPREAD.1); unknown on
-//                           a failed read, which the page says in a notice.
+//                           a failed read, which the page says in a notice
+//                           and passes down as `glofoxUnknown`, so no card
+//                           says "Connect Glofox" over a status it never read.
 //   canManageConnection   — whether to show the Connect form at all. This is
 //                           an AFFORDANCE, not the enforcement: PUT/DELETE
 //                           /api/shelly/connection run guardMasterOrOwner
@@ -65,6 +67,9 @@ export default async function ShellyPage() {
         locationName={location.name || ''}
         locationTz={location.timezone || DEFAULT_TZ}
         glofoxConnected={glofox.connected === true}
+        // Unknown (a failed read): class mode stays off either way, but the
+        // editor says the check failed instead of "Connect Glofox".
+        glofoxUnknown={glofox.known === false}
         // guardMasterOrOwner returns a 403 response or null; null is "allowed".
         canManageConnection={guardMasterOrOwner(user, location.id) === null}
       />
