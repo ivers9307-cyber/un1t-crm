@@ -14,7 +14,7 @@
 //       requested: number,
 //       deleted: number,
 //       blocked: [{ id, name, reason }],     // FK violation (whatsapp_*) etc.
-//       forbidden: [{ id, name, reason }],   // wrong location
+//       forbidden: [{ id, name, reason }],   // 'Different location' or 'Role'
 //       missing: string[],                   // ids that didn't resolve
 //       scrub_warnings?: [{ id, name, failures }] // MAIL-GDPR.1: partial mail scrub (deleted anyway).
 //                                            // Key ABSENT on a clean run, like the single route.
