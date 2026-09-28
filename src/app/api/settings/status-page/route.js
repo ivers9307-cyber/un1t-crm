@@ -11,6 +11,8 @@ import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { DEFAULT_COPY, pruneStatusOverrides } from '@/lib/status-page'
+import { logError } from '@/lib/log'
+import { mergeLocationSettings, settingsSaveFailure } from '@/lib/location-settings'
 
 export const runtime = 'nodejs'
 
@@ -40,7 +42,13 @@ export async function GET() {
   if (gate.error) return gate.error
   const db = createServerClient()
 
-  const { data: loc } = await db.from('locations').select('name, settings').eq('id', gate.locationId).single()
+  // SETTINGSWIPE.1 — a failed read is not "no overrides" (the form would show
+  // the defaults and Save/Reset would drop the real copy).
+  const { data: loc, error: locErr } = await db.from('locations').select('name, settings').eq('id', gate.locationId).single()
+  if (locErr || !loc) {
+    logError('settings-status-page', 'settings read failed', { locationId: gate.locationId, err: locErr?.message || 'no row' })
+    return NextResponse.json({ success: false, code: 'settings_unreadable', error: 'Could not load the status page copy just now.' }, { status: 500 })
+  }
   // Public URL for the preview link — resolved by public_path like the page.
   const { data: lp } = await db
     .from('landing_page_settings')
@@ -67,11 +75,13 @@ export async function PUT(request) {
   const overrides = pruneStatusOverrides(v.data)
 
   const db = createServerClient()
-  const { data: loc } = await db.from('locations').select('settings').eq('id', gate.locationId).single()
-  const settings = loc?.settings || {}
-  if (Object.keys(overrides).length) settings.status_page = overrides
-  else delete settings.status_page // fully-default → drop the key entirely
-
-  await db.from('locations').update({ settings }).eq('id', gate.locationId).select('id').single()
+  // SETTINGSWIPE.1 — ONE key, through mergeLocationSettings (this used to
+  // discard the read error, rewrite the whole column and ignore the write).
+  const saved = await mergeLocationSettings(db, gate.locationId, (settings) => {
+    if (Object.keys(overrides).length) settings.status_page = overrides
+    else delete settings.status_page // fully-default → drop the key entirely
+    return settings
+  }, { scope: 'settings-status-page' })
+  if (!saved.ok) return settingsSaveFailure(saved)
   return NextResponse.json({ success: true, overrides })
 }

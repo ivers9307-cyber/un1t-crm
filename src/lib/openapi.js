@@ -3200,6 +3200,7 @@ registry.registerPath({
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Location not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
     502: { description: 'Meta conversational_automation call failed', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Applied at Meta, but the locations.settings mirror could not be read or written (applied_at_meta: true); nothing else changed. Save again.', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -3230,6 +3231,7 @@ registry.registerPath({
     200: { description: 'Card sets for the location', content: { 'application/json': { schema: z.object({ success: z.literal(true), sets: z.array(WaCardSet) }) } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Location not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Could not read the location settings (never answered as an empty list)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -3248,6 +3250,7 @@ registry.registerPath({
     400: { description: 'Validation failed', content: { 'application/json': { schema: ErrorResponse } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Location not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'settings_unreadable (the location settings could not be read, so nothing was written) or settings_write_failed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -8504,14 +8507,16 @@ registry.registerPath({
   security: [{ CookieAuth: [] }],
   summary: 'Operator editor for the Hyrox charter, house style, and style examples',
   description:
-    'Read-modify-write onto locations.settings.hyrox — merges into the sibling settings keys, never ' +
-    'clobbers them. Collection-style write (location_id in the body): missing the per-location ' +
+    'Merges one key (locations.settings.hyrox) via mergeLocationSettings: sibling settings keys are ' +
+    'never clobbered, and a failed read writes nothing (500). Collection-style write (location_id in the body): missing the per-location ' +
     'approvals_hyrox_sessions grant answers 403 (not the detail-routes\' 404 IDOR posture).',
   request: { body: { content: { 'application/json': { schema: HyroxSettingsUpdate } } } },
   responses: {
     200: { description: 'Settings saved', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('HyroxSettingsUpdateResponse') } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — no approvals_hyrox_sessions grant at this location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Location not found (nothing was written)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'settings_unreadable (the location settings could not be read, so nothing was written) or settings_write_failed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -8530,6 +8535,7 @@ registry.registerPath({
     200: { description: 'Example added (or already saved)', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('HyroxExemplarResponse') } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Not found (missing session, or no permission at this location)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'settings_unreadable (the location settings could not be read, so nothing was written) or settings_write_failed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

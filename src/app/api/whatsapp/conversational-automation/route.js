@@ -5,6 +5,7 @@ import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { setConversationalAutomation } from '@/lib/whatsapp'
+import { mergeLocationSettings } from '@/lib/location-settings'
 
 const ConversationalAutomationSchema = z.object({
   location_id: uuidLike,
@@ -38,15 +39,25 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: e?.message || 'Meta conversational_automation call failed' }, { status: 502 })
   }
 
-  // Mirror the applied config onto the location (jsonb merge — read,
-  // spread, update) so the UI shows what's live at Meta.
+  // Mirror the applied config onto the location so the UI shows what's live
+  // at Meta. SETTINGSWIPE.1: this used to read with the error discarded and
+  // bare-write the whole column, so a blip wiped every other settings key and
+  // still said success. Meta already has the openers (the source of truth,
+  // and idempotent), so a failed mirror says exactly that.
   const db = createServerClient()
-  const { data: loc } = await db.from('locations').select('settings').eq('id', locationId).single()
-  const settings = {
-    ...(loc?.settings || {}),
-    conversational_automation: { enable_welcome: enableWelcome, prompts },
+  const saved = await mergeLocationSettings(
+    db,
+    locationId,
+    (s) => ({ ...s, conversational_automation: { enable_welcome: enableWelcome, prompts } }),
+    { scope: 'wa-conversational-automation' },
+  )
+  if (!saved.ok) {
+    return NextResponse.json({
+      success: false,
+      applied_at_meta: true,
+      error: 'The chat openers are live on WhatsApp, but this screen could not record them just now. Save again so it shows what is live.',
+    }, { status: 500 })
   }
-  await db.from('locations').update({ settings }).eq('id', locationId)
 
   return NextResponse.json({ success: true, data: { enable_welcome: enableWelcome, prompts } })
 }

@@ -13,6 +13,7 @@ import {
   OVERRIDE_SERVICE_KEYS,
   OVERRIDE_VERDICT_KEYS,
 } from '@/lib/status-page'
+import ReadFailedNote from './ReadFailedNote'
 
 const VERDICT_TITLE = {
   operational: 'When everything is operational',
@@ -50,28 +51,35 @@ export default function StatusPageSettingsForm() {
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState(null)
+  const [loadFailed, setLoadFailed] = useState(false)
+
+  // SETTINGSWIPE.1 — a failed read shows nothing that saves (the empty form
+  // + Save used to drop the saved copy).
+  async function load(isCancelled = () => false) {
+    try {
+      const res = await fetch('/api/settings/status-page')
+      const data = await res.json().catch(() => ({}))
+      if (isCancelled()) return
+      if (res.ok && data.success) {
+        setForm(hydrate(data.overrides))
+        setDefaults(data.defaults || null)
+        setPublicPath(data.publicPath || null)
+        setLoadFailed(false)
+      } else {
+        setLoadFailed(true)
+      }
+    } catch {
+      if (!isCancelled()) setLoadFailed(true)
+    } finally {
+      if (!isCancelled()) setLoading(false)
+    }
+  }
 
   useEffect(() => {
     let cancelled = false
-    ;(async () => {
-      try {
-        const res = await fetch('/api/settings/status-page')
-        const data = await res.json().catch(() => ({}))
-        if (cancelled) return
-        if (res.ok && data.success) {
-          setForm(hydrate(data.overrides))
-          setDefaults(data.defaults || null)
-          setPublicPath(data.publicPath || null)
-        } else {
-          setError(data.error || 'Could not load settings')
-        }
-      } catch {
-        if (!cancelled) setError('Could not load settings')
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
-    })()
+    load(() => cancelled)
     return () => { cancelled = true }
+    // load only sets state; run once on mount.
   }, [])
 
   function setSvc(key, field, value) {
@@ -110,6 +118,7 @@ export default function StatusPageSettingsForm() {
   }
 
   if (loading) return <p className="text-sm text-un1t-subtle">Loading…</p>
+  if (loadFailed) return <ReadFailedNote what="the status page copy" onRetry={() => load()} />
 
   const d = defaults || {}
 
