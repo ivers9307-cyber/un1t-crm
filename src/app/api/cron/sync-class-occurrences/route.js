@@ -41,11 +41,15 @@ export async function GET(request) {
     return g.branch_id && g.api_key && g.api_token
   })
 
-  const stats = { locations: 0, upserted: 0, errors: 0, trainer_api_calls: 0 }
+  const stats = { locations: 0, upserted: 0, errors: 0, trainer_api_calls: 0, reconcile_errors: 0 }
   for (const loc of connected) {
     stats.locations++
     const creds = await glofoxCredentialsForLocation(db, loc.id)
     const out = await syncOccurrencesForLocation(db, { locationId: loc.id, creds })
+    // CRONREADERR.1 — this studio's cancellation step could not finish (its
+    // read or its UPDATE failed); nothing was cancelled. Counted, never fatal:
+    // the next studio still syncs and the stamp below is unchanged.
+    if (out.reconcileFailed) stats.reconcile_errors++
     stats.trainer_api_calls += Number(out.trainerApiCalls) || 0
     if (out.ok) {
       stats.upserted += out.upserted
