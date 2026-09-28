@@ -588,6 +588,25 @@ describe('reminderDue', () => {
     expect(reminderDue({ status: 'viewed', issued_at: daysAgo(10), reminder_count: 1 }, NOW)).toBe(true)
   })
 
+  // PUSHDONE.1a — reminder 1 can be held back by retries (the cron records a
+  // reminder only once it reached someone). Held from day 3 to day 7, the
+  // day-7 rule alone would send reminder 2 the very next day. Reminder 2 also
+  // waits the planned 3→7 spacing (4 days) after the RECORDED reminder 1.
+  it('reminder 2 waits 4 days after the recorded reminder 1, even past day 7', () => {
+    const late = { status: 'issued', issued_at: daysAgo(8), reminder_count: 1, last_reminded_at: daysAgo(1) }
+    expect(reminderDue(late, NOW)).toBe(false)
+    expect(reminderDue({ ...late, last_reminded_at: daysAgo(3.9) }, NOW)).toBe(false)
+    expect(reminderDue({ ...late, last_reminded_at: daysAgo(4) }, NOW)).toBe(true)
+  })
+
+  it('the spacing never pulls reminder 2 earlier than day 7', () => {
+    expect(reminderDue({ status: 'issued', issued_at: daysAgo(6), reminder_count: 1, last_reminded_at: daysAgo(5) }, NOW)).toBe(false)
+  })
+
+  it('with no recorded last_reminded_at the day-since-issued rule alone applies', () => {
+    expect(reminderDue({ status: 'issued', issued_at: daysAgo(7), reminder_count: 1, last_reminded_at: null }, NOW)).toBe(true)
+  })
+
   it('is never due once reminder_count reaches the cap of 2', () => {
     expect(reminderDue({ status: 'issued', issued_at: daysAgo(100), reminder_count: 2 }, NOW)).toBe(false)
     expect(reminderDue({ status: 'issued', issued_at: daysAgo(365), reminder_count: 5 }, NOW)).toBe(false)

@@ -28,7 +28,7 @@ function chain(result) {
 // `claimed` is the hyrox_class_reminders unique index, kept across runs so a
 // test can follow one class over two ticks.
 // `existsError` makes the cheap "already reminded?" read fail.
-function makeDb({ onShift = [], onShiftError = null, claimed = new Set(), existsError = null, deleteError = null } = {}) {
+function makeDb({ onShift = [], onShiftError = null, claimed = new Set(), existsError = null, deleteError = null, upsertError = null, updateError = null } = {}) {
   const calls = { upserts: [], updates: [], rpc: [], existsReads: [], deletes: [] }
   const idToKey = new Map()
   return {
@@ -56,6 +56,7 @@ function makeDb({ onShift = [], onShiftError = null, claimed = new Set(), exists
           upsert: (row) => ({
             select: () => {
               calls.upserts.push(row)
+              if (upsertError) return thenable({ data: null, error: upsertError })
               const key = `${row.location_id}|${row.class_starts_at}`
               if (claimed.has(key)) return thenable({ data: [], error: null })
               claimed.add(key)
@@ -64,7 +65,7 @@ function makeDb({ onShift = [], onShiftError = null, claimed = new Set(), exists
               return thenable({ data: [{ id }], error: null })
             },
           }),
-          update: (patch) => ({ eq: (_c, id) => { calls.updates.push({ id, patch }); return thenable({ error: null }) } }),
+          update: (patch) => ({ eq: (_c, id) => { calls.updates.push({ id, patch }); return thenable({ error: updateError }) } }),
           delete: () => ({
             eq: (_c, id) => {
               calls.deletes.push(id)
@@ -100,7 +101,7 @@ describe('runHyroxClassReminder', () => {
     expect(sendPush.mock.calls[0][0]).toEqual(['c1'])
     expect(sendPush.mock.calls[0][2]).toEqual({ locationId: 'loc-1', requireMobileKey: 'hyrox' })
     expect(db.calls.updates).toEqual([{ id: 'rem-1', patch: { session_id: null, recipient_count: 1 } }])
-    expect(stats).toEqual({ classes: 1, reminded: 1, recipients: 1, recipients_failed: 0, send_failed: 0 })
+    expect(stats).toEqual({ classes: 1, reminded: 1, recipients: 1, recipients_failed: 0, send_failed: 0, claim_failed: 0 })
   })
 
   it('nobody on shift: the approver roles at that studio are reminded', async () => {
@@ -116,7 +117,7 @@ describe('runHyroxClassReminder', () => {
     const first = await runHyroxClassReminder(db, { nowMs: NOW })
     expect(db.calls.upserts).toEqual([])
     expect(sendPush).not.toHaveBeenCalled()
-    expect(first).toEqual({ classes: 1, reminded: 0, recipients: 0, recipients_failed: 1, send_failed: 0 })
+    expect(first).toEqual({ classes: 1, reminded: 0, recipients: 0, recipients_failed: 1, send_failed: 0, claim_failed: 0 })
     expect(logError).toHaveBeenCalledWith('hyrox-reminder', expect.stringContaining('read failed'),
       expect.objectContaining({ locationId: 'loc-1', class_starts_at: OCC.starts_at, err: 'down' }))
 
@@ -163,7 +164,7 @@ describe('runHyroxClassReminder', () => {
     expect(db.calls.upserts).toEqual([])
     expect(logError).not.toHaveBeenCalled()
     expect(sendPush).not.toHaveBeenCalled()
-    expect(stats).toEqual({ classes: 1, reminded: 0, recipients: 0, recipients_failed: 0, send_failed: 0 })
+    expect(stats).toEqual({ classes: 1, reminded: 0, recipients: 0, recipients_failed: 0, send_failed: 0, claim_failed: 0 })
   })
 
   // The existence read is only an early-out; the ON CONFLICT claim stays the
@@ -176,7 +177,7 @@ describe('runHyroxClassReminder', () => {
     expect(sendPush).toHaveBeenCalledTimes(1)
     expect(sendPush.mock.calls[0][0]).toEqual(['c1'])
     expect(logError).not.toHaveBeenCalled()
-    expect(stats).toEqual({ classes: 1, reminded: 1, recipients: 1, recipients_failed: 0, send_failed: 0 })
+    expect(stats).toEqual({ classes: 1, reminded: 1, recipients: 1, recipients_failed: 0, send_failed: 0, claim_failed: 0 })
   })
 
   it('a failed existence read on an already-claimed class still never sends twice', async () => {
@@ -203,7 +204,7 @@ describe('runHyroxClassReminder — a send that reached nobody because something
     expect(db.calls.deletes).toEqual(['rem-1'])
     expect(db.claimed.size).toBe(0)
     expect(db.calls.updates).toEqual([])
-    expect(first).toEqual({ classes: 1, reminded: 0, recipients: 0, recipients_failed: 0, send_failed: 1 })
+    expect(first).toEqual({ classes: 1, reminded: 0, recipients: 0, recipients_failed: 0, send_failed: 1, claim_failed: 0 })
     expect(logWarn).toHaveBeenCalledWith('hyrox-reminder', 'nothing delivered; claim released, the next tick retries',
       expect.objectContaining({ locationId: 'loc-1', class_starts_at: OCC.starts_at, read_failed: true }))
 
@@ -236,5 +237,27 @@ describe('runHyroxClassReminder — a send that reached nobody because something
     expect(stats.send_failed).toBe(1)
     expect(logError).toHaveBeenCalledWith('hyrox-reminder', 'nothing delivered and the claim release failed; this class will not be reminded',
       expect.objectContaining({ locationId: 'loc-1', err: 'down' }))
+  })
+
+  // C21 PUSHDONE.1 (F3) — a failed claim write read as "already claimed".
+  it('a failed claim write sends nothing, is counted and said, and the next tick claims and sends', async () => {
+    const db = makeDb({ onShift: [{ profile_id: 'c1' }], upsertError: { message: 'down' } })
+    const first = await runHyroxClassReminder(db, { nowMs: NOW })
+    expect(sendPush).not.toHaveBeenCalled()
+    expect(first).toMatchObject({ reminded: 0, claim_failed: 1 })
+    expect(logWarn).toHaveBeenCalledWith('hyrox-reminder', 'claim write failed; nothing sent, the next tick retries',
+      { locationId: 'loc-1', class_starts_at: OCC.starts_at, err: 'down' })
+
+    const healthy = makeDb({ onShift: [{ profile_id: 'c1' }], claimed: db.claimed })
+    const second = await runHyroxClassReminder(healthy, { nowMs: NOW + 5 * 60_000 })
+    expect(sendPush).toHaveBeenCalledTimes(1)
+    expect(second).toMatchObject({ reminded: 1, claim_failed: 0 })
+  })
+
+  it('a lost bookkeeping write is said, and the reminder still counts as sent', async () => {
+    const db = makeDb({ onShift: [{ profile_id: 'c1' }], updateError: { message: 'down' } })
+    const stats = await runHyroxClassReminder(db, { nowMs: NOW })
+    expect(stats).toMatchObject({ reminded: 1 })
+    expect(logWarn).toHaveBeenCalledWith('hyrox-reminder', 'reminder bookkeeping write failed; the reminder was sent', { reminderId: 'rem-1', err: 'down' })
   })
 })
