@@ -340,12 +340,17 @@ describe('PUT /api/shelly/connection — host + key handling', () => {
     // isFreshSecret rejects anything starting with the bullet run, so a form
     // that posts a placeholder back cannot overwrite the credential. Both the
     // old hint-shaped echo and today's SECRET_MASK are kept, never stored.
-    for (const echo of ['••••6789', SECRET_MASK]) {
-      useDb({ connectionRow: storedRow() })
-      await PUT(putReq({ server: HOST, auth_key: echo }))
-      expect(db.calls.upserts[0].payload.auth_key).toBe(STORED_KEY)
-      expect(db.calls.upserts[0].payload).not.toHaveProperty('key_hint')
-    }
+    // Unrolled, not a loop: useDb is hook-named and rules-of-hooks refuses
+    // it inside one.
+    useDb({ connectionRow: storedRow() })
+    await PUT(putReq({ server: HOST, auth_key: '••••6789' }))
+    expect(db.calls.upserts[0].payload.auth_key).toBe(STORED_KEY)
+    expect(db.calls.upserts[0].payload).not.toHaveProperty('key_hint')
+
+    useDb({ connectionRow: storedRow() })
+    await PUT(putReq({ server: HOST, auth_key: SECRET_MASK }))
+    expect(db.calls.upserts[0].payload.auth_key).toBe(STORED_KEY)
+    expect(db.calls.upserts[0].payload).not.toHaveProperty('key_hint')
   })
 
   it('first connect — no stored row and no key asks for the key, it does not 500', async () => {
