@@ -112,3 +112,24 @@ export function preCheckOnly(source) {
     && otherLocationUses(source).length > 0
     && targetJudgements(source).length === 0
 }
+
+// ROLESWEEP.2 — requireApiKeyOrManager (src/lib/api-auth.js). Its cookie
+// branch is the coarse "Manager+ at SOME location" pre-check
+// (hasRoleAtAnyLocation), and every route that calls it acts on a location (a
+// contact, an event type, a stage list), so every such route must also decide
+// at the target in the same file. Unlike preCheckOnly this does not wait for
+// an "another location" token: the helper's callers read `auth.user`, which
+// OTHER_LOCATION_PATTERNS (written for a bare `user`) do not see.
+export const API_KEY_OR_MANAGER_PATTERNS = Object.freeze([
+  /\brequireApiKeyOrManager\(/g,
+])
+
+/** Every requireApiKeyOrManager( call in `source` (comments ignored). */
+export function apiKeyOrManagerCalls(source) {
+  return hits(stripComments(source), API_KEY_OR_MANAGER_PATTERNS)
+}
+
+/** A requireApiKeyOrManager caller with NO decision at the target in the file. */
+export function apiKeyOrManagerUnjudged(source) {
+  return apiKeyOrManagerCalls(source).length > 0 && targetJudgements(source).length === 0
+}

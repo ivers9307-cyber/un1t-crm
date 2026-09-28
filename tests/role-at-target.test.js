@@ -39,7 +39,7 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { activeRoleGates, otherLocationUses, anyLocationPreChecks, targetJudgements, preCheckOnly } from '../scripts/lib/active-role-gates.mjs'
+import { activeRoleGates, otherLocationUses, anyLocationPreChecks, targetJudgements, preCheckOnly, apiKeyOrManagerCalls, apiKeyOrManagerUnjudged } from '../scripts/lib/active-role-gates.mjs'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const API = path.join(ROOT, 'src/app/api')
@@ -150,6 +150,31 @@ describe('the pre-check-only scan', () => {
     expect(targetJudgements("hasMobilePermissionForLocation(user, seq.location_id, 'email')")).toEqual(['hasMobilePermissionForLocation('])
     expect(preCheckOnly(MPRE + ROW + "if (!hasMobilePermissionForLocation(user, seq.location_id, 'email')) return no()")).toBe(false)
     expect(activeRoleGates("hasMobilePermissionForLocation(user, id, 'email') || hasMobilePermissionAtAnyLocation(user, 'email')")).toEqual([])
+  })
+})
+
+// ROLESWEEP.2 — requireApiKeyOrManager's cookie branch is a coarse pre-check.
+describe('the requireApiKeyOrManager scan', () => {
+  const CALL = "const auth = await requireApiKeyOrManager(request)\nif (!auth.ok) return auth.response\n"
+  const AT = "if (auth.user && !hasRoleAtLocation(auth.user, row.location_id, MANAGER_ROLES)) return no()\n"
+
+  it('flags a caller with no decision at the target', () => {
+    expect(apiKeyOrManagerCalls(CALL)).toEqual(['requireApiKeyOrManager('])
+    expect(apiKeyOrManagerUnjudged(CALL)).toBe(true)
+    expect(apiKeyOrManagerUnjudged(CALL + "const g = assertLocationAccess(auth.user, body.location_id)")).toBe(true)
+  })
+
+  it('passes once the target is judged in the file (route or local helper)', () => {
+    expect(apiKeyOrManagerUnjudged(CALL + AT)).toBe(false)
+    expect(apiKeyOrManagerUnjudged(CALL + "if (!hasPermissionForLocation(auth.user, loc, 'contacts')) return no()")).toBe(false)
+    expect(apiKeyOrManagerUnjudged("async function access(db, user, id) {\n  " + AT + "}\n" + CALL)).toBe(false)
+  })
+
+  it('ignores the name in an import or a comment, and a file that never calls it', () => {
+    expect(apiKeyOrManagerCalls("import { requireApiKeyOrManager } from '@/lib/api-auth'")).toEqual([])
+    expect(apiKeyOrManagerUnjudged("// requireApiKeyOrManager(request) gates it\n")).toBe(false)
+    expect(apiKeyOrManagerUnjudged(CALL + "// judged by hasRoleAtLocation(auth.user, loc, ROLES)\n")).toBe(true)
+    expect(apiKeyOrManagerUnjudged(AT)).toBe(false)
   })
 })
 
