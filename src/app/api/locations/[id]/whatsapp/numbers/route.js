@@ -2,9 +2,9 @@
 //
 // GET  /api/locations/[id]/whatsapp/numbers
 //   List configured numbers for this location. Returns
-//   access_token in a redacted form (last 6 chars only) so the UI
-//   can show "..xxxxxx" without ever exposing the secret to the
-//   browser.
+//   access_token as a fixed mask (presence only; N8NECHO.1) so the UI
+//   can say a token is saved without ever exposing any character of
+//   the secret to the browser.
 //
 // POST /api/locations/[id]/whatsapp/numbers
 //   Body: { label, phone_number_id, access_token, business_account_id?,
