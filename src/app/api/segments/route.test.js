@@ -52,11 +52,16 @@ function makeDb() {
   }
 }
 
+// ROLESWEEP.1a — the route judges the role at the location it counts
+// (hasRoleAtLocation), so the fixture carries per-location roles the way
+// getCurrentUser builds them.
 const manager = (activeId, ...locationIds) => ({
   role: 'manager',
+  profileRole: 'manager',
   isMaster: false,
   activeLocation: activeId ? { id: activeId } : null,
   locations: locationIds.map(id => ({ id, organization_id: 'org-1' })),
+  rolesByLocation: Object.fromEntries(locationIds.map(id => [id, 'manager'])),
 })
 
 const req = (qs = '') => new Request(`http://localhost/api/segments${qs}`)
@@ -160,12 +165,15 @@ describe('GET /api/segments — guards', () => {
   })
 
   it('403s below manager', async () => {
-    getCurrentUser.mockResolvedValue({ ...manager('loc-1', 'loc-1'), role: 'staff' })
+    getCurrentUser.mockResolvedValue({ ...manager('loc-1', 'loc-1'), role: 'staff', rolesByLocation: { 'loc-1': 'staff' } })
     expect((await GET(req())).status).toBe(403)
   })
 
   it('still returns the vocabulary with zero counts when no location can be resolved', async () => {
-    getCurrentUser.mockResolvedValue(manager(null))
+    // The case the route's own comment names: a master with no active
+    // location. (A non-master with no locations holds no role anywhere, so
+    // hasRoleAtAnyLocation refuses them first.)
+    getCurrentUser.mockResolvedValue({ ...manager(null), role: 'master', profileRole: 'master', isMaster: true })
     const body = await (await GET(req())).json()
     expect(body.success).toBe(true)
     expect(body.data.length).toBeGreaterThan(TAG_RULES.length)
