@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import ReadFailedNote from '@/components/settings/ReadFailedNote'
 
 // RADAR-AGENT.0b / IG-HOME.1 — per-location channel connections.
 // Home is now the per-location Integrations tab strip (Settings →
@@ -24,9 +25,19 @@ const IG_FIELDS = [
 // its own card. The component's own `load()` still refreshes the in-card
 // state either way; onChanged is purely a notify-up hook.
 export default function ConnectionsSection({ locationId, locationName, embedded = false, onChanged }) {
+  // CHANNELREAD.1 — three states, never two:
+  //   'loading'  the first read is in flight;
+  //   'ready'    the read SUCCEEDED, so `connections` is the truth
+  //              ([] really means nothing is connected);
+  //   'unknown'  the read failed. It renders NO token form and NO
+  //              Connect / Update / Disconnect. Save used to take the POST
+  //              (create) branch whenever the list was empty, and after a
+  //              failed read the list was empty over a LIVE connection.
+  // A failed re-read (e.g. right after a save) also goes to 'unknown': the
+  // last good list is exactly what a create just made stale.
+  const [readState, setReadState] = useState('loading')
   const [connections, setConnections] = useState([])
   const [draft, setDraft] = useState({})
-  const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [savedAt, setSavedAt] = useState(null)
   const [error, setError] = useState(null)
@@ -34,14 +45,20 @@ export default function ConnectionsSection({ locationId, locationName, embedded 
   const load = useCallback(async () => {
     if (!locationId) return
     try {
-      const res = await fetch(`/api/locations/${locationId}/channels`).then(r => r.json())
-      if (res.success) {
-        setConnections(res.connections || [])
-        const ig = (res.connections || []).find(c => c.platform === 'instagram')
-        setDraft(ig ? { ...ig } : {})
+      const res = await fetch(`/api/locations/${locationId}/channels`)
+      const j = await res.json()
+      if (!res.ok || j?.success !== true || !Array.isArray(j.connections)) {
+        throw new Error(j?.error || `HTTP ${res.status}`)
       }
-    } catch { setError('Failed to load connections') }
-    finally { setLoading(false) }
+      setConnections(j.connections)
+      const ig = j.connections.find(c => c.platform === 'instagram')
+      setDraft(ig ? { ...ig } : {})
+      setReadState('ready')
+    } catch {
+      setConnections([])
+      setDraft({})
+      setReadState('unknown')
+    }
   }, [locationId])
 
   useEffect(() => { load() }, [load])
@@ -51,6 +68,7 @@ export default function ConnectionsSection({ locationId, locationName, embedded 
   function setField(k, v) { setDraft(d => ({ ...d, [k]: v })) }
 
   async function saveInstagram() {
+    if (readState !== 'ready') return // never write over a state we could not read
     setSaving(true); setError(null)
     try {
       const payload = { platform: 'instagram', is_active: true }
@@ -72,7 +90,12 @@ export default function ConnectionsSection({ locationId, locationName, embedded 
       })
       const j = await res.json()
       if (j.success) { setSavedAt(Date.now()); await load(); onChanged?.() }
-      else setError(j.error || 'Failed to save')
+      else {
+        setError(j.error || 'Failed to save')
+        // 409 already_connected: a connection exists that this card did not
+        // know about. Re-read so the card shows it and offers Update.
+        if (res.status === 409) await load()
+      }
     } catch { setError('Failed to save') }
     finally { setSaving(false) }
   }
@@ -84,12 +107,24 @@ export default function ConnectionsSection({ locationId, locationName, embedded 
     onChanged?.()
   }
 
-  if (loading) return <div className="text-sm text-un1t-muted">Loading connections…</div>
+  if (readState === 'loading') return <div className="text-sm text-un1t-muted">Loading connections…</div>
 
   const inputCls = 'w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text'
   const igLive = !!(igConn && igConn.has_access_token)
 
-  const instagramCard = (
+  const unknownCard = (
+    <div className="border border-un1t-border rounded-md px-4 py-4">
+      <div className="flex items-center justify-between mb-3">
+        <div className="text-sm font-medium text-un1t-text">
+          Instagram
+          <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-700">Could not load</span>
+        </div>
+      </div>
+      <ReadFailedNote what="the Instagram connection" onRetry={load} />
+    </div>
+  )
+
+  const connectedCard = (
     <div className="border border-un1t-border rounded-md px-4 py-4">
         <div className="flex items-center justify-between mb-3">
           <div className="text-sm font-medium text-un1t-text">
@@ -148,6 +183,8 @@ export default function ConnectionsSection({ locationId, locationName, embedded 
         </div>
     </div>
   )
+
+  const instagramCard = readState === 'unknown' ? unknownCard : connectedCard
 
   if (embedded) return instagramCard
 
