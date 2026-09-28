@@ -212,6 +212,17 @@ describe('/api routes judge the role at the location they act on', () => {
     expect(Object.keys(PRECHECK_REVIEWED).filter((r) => !preOnly.includes(r))).toEqual([])
   })
 
+  // ROLESWEEP.2 — no allowlist: a caller that acts only on the active studio
+  // judges hasRoleAtLocation(auth.user, auth.user.activeLocation.id, …).
+  it('every requireApiKeyOrManager caller decides at the target in the same file', () => {
+    const read = (f) => fs.readFileSync(f, 'utf8')
+    const callers = routeFiles(API).filter((f) => apiKeyOrManagerCalls(read(f)).length > 0).map(rel)
+    expect(callers).toEqual(expect.arrayContaining([
+      'bookings/event-types/[id]/route.js', 'contacts/[id]/route.js', 'contacts/route.js', 'stages/route.js',
+    ]))
+    expect(routeFiles(API).filter((f) => apiKeyOrManagerUnjudged(read(f))).map(rel).sort()).toEqual([])
+  })
+
   it('no route is in two lists', () => {
     const all = [...Object.keys(REVIEWED), ...pendingRoutes.map((p) => p.route)]
     expect(all.filter((r, i) => all.indexOf(r) !== i)).toEqual([])
