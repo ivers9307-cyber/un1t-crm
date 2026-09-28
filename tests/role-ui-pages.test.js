@@ -16,6 +16,9 @@ const PAGES = [
   'src/app/(sales)/contacts/[id]/page.js',
   'src/app/(sales)/contacts/[id]/edit/page.js',
   'src/app/(sales)/contacts/new/page.js',
+  'src/app/(members)/bookings/event-types/page.js',
+  'src/app/(members)/bookings/event-types/[id]/page.js',
+  'src/app/(members)/bookings/event-types/[id]/edit/page.js',
 ]
 
 describe('ROLEUI.1 — no active-studio gate on the contact and booking-type pages', () => {
