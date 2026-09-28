@@ -108,4 +108,16 @@ describe('GET /api/schedule/offers — manager view', () => {
     getCurrentUser.mockResolvedValue(MANAGER)
     expect((await call(`location_id=${LOC1}&view=manage&start_date=2026-02-30&end_date=2026-03-04`)).status).toBe(400)
   })
+
+  it('RANGEVALID.1 — a reversed or over-92-day period is a 400 before any read', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const reversed = await call(`location_id=${LOC1}&view=manage&start_date=2026-10-04&end_date=2026-09-28`)
+    expect(reversed.status).toBe(400)
+    expect((await reversed.json()).error).toBe('end_date must be on or after start_date')
+    const wide = await call(`location_id=${LOC1}&view=manage&start_date=2026-01-01&end_date=2026-04-03`)
+    expect(wide.status).toBe(400)
+    expect((await wide.json()).error).toBe('The range can cover at most 92 days')
+    expect(listOpenOffers).not.toHaveBeenCalled()
+    expect((await call(`location_id=${LOC1}&view=manage&start_date=2026-09-28&end_date=2026-10-04`)).status).toBe(200)
+  })
 })

@@ -1199,3 +1199,38 @@ describe('GET /api/schedule/time-off — a date the calendar does not have', () 
     expect(list.calls).toContainEqual(['gte', 'end_date', '2026-02-23'])
   })
 })
+
+// RANGEVALID.1 — the list's overlap filters are start_date <= end AND
+// end_date >= start, so a reversed range answered a 200 holding only leave
+// that spans the whole gap between the two dates.
+describe('GET /api/schedule/time-off — the list\'s range is in order and at most a year (RANGEVALID.1)', () => {
+  const getReq = (qs) => ({ url: `http://x/api/schedule/time-off${qs}`, headers: { get: () => '' } })
+  const MANAGER = { id: 'boss', role: 'manager', profileRole: 'staff', activeLocation: { id: 'loc-1' }, locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'manager' } }
+
+  it('a reversed or over-366-day range is a 400 before any read', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    for (const [qs, error] of [
+      ['?location_id=loc-1&start_date=2026-10-09&end_date=2026-10-05', 'end_date must be on or after start_date'],
+      ['?location_id=loc-1&start_date=2026-01-01&end_date=2027-01-02', 'The range can cover at most 366 days'],
+    ]) {
+      const db = fakeDb(() => ({ data: [], error: null }))
+      createServerClient.mockReturnValue(db)
+      const res = await GET(getReq(qs))
+      expect(res.status).toBe(400)
+      expect(await res.json()).toEqual({ success: false, error })
+      expect(db.queries).toHaveLength(0)
+    }
+  })
+
+  it('a year, the calendar\'s range, and no range at all (My leave) still list', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    for (const qs of [
+      '?location_id=loc-1&start_date=2026-01-01&end_date=2027-01-01',
+      '?location_id=loc-1&start_date=2026-08-31&end_date=2026-10-11&status=approved',
+      '?location_id=loc-1',
+    ]) {
+      createServerClient.mockReturnValue(fakeDb(() => ({ data: [], error: null })))
+      expect((await GET(getReq(qs))).status).toBe(200)
+    }
+  })
+})

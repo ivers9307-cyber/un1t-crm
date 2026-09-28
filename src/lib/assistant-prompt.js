@@ -227,7 +227,7 @@ export const TOOLS = [
       properties: {
         profile_id: { type: 'string', description: 'The staff member UUID' },
         shift_template_id: { type: 'string', description: 'The shift template UUID' },
-        shift_date: { type: 'string', description: 'Date in YYYY-MM-DD format' },
+        shift_date: { type: 'string', description: 'A real calendar date, YYYY-MM-DD' },
       },
       required: ['profile_id', 'shift_template_id', 'shift_date'],
     },
@@ -295,8 +295,8 @@ export const TOOLS = [
     input_schema: {
       type: 'object',
       properties: {
-        start_date: { type: 'string', description: 'Start date (YYYY-MM-DD)' },
-        end_date: { type: 'string', description: 'End date (YYYY-MM-DD)' },
+        start_date: { type: 'string', description: 'Start date, a real date (YYYY-MM-DD)' },
+        end_date: { type: 'string', description: 'End date (YYYY-MM-DD), on or after start_date and at most 366 days after it' },
         status: { type: 'string', enum: ['pending', 'approved', 'rejected', 'cancelled'], description: 'Filter by status (default: all)' },
       },
       required: ['start_date', 'end_date'],
@@ -309,7 +309,7 @@ export const TOOLS = [
       type: 'object',
       properties: {
         profile_id: { type: 'string', description: 'Staff member UUID (defaults to current user)' },
-        year: { type: 'number', description: 'Year (defaults to current year)' },
+        year: { type: 'number', description: 'Four-digit year from 2020 to 2100 (defaults to the current year)' },
       },
     },
   },
@@ -320,8 +320,8 @@ export const TOOLS = [
       type: 'object',
       properties: {
         report_type: { type: 'string', enum: ['staff_hours', 'staff_cost', 'time_off_summary', 'roster_coverage', 'utilisation'], description: 'Type of report to generate' },
-        period_start: { type: 'string', description: 'Start date (YYYY-MM-DD)' },
-        period_end: { type: 'string', description: 'End date (YYYY-MM-DD)' },
+        period_start: { type: 'string', description: 'Start date, a real date (YYYY-MM-DD)' },
+        period_end: { type: 'string', description: 'End date (YYYY-MM-DD), on or after period_start; the period is at most 366 days' },
       },
       required: ['report_type', 'period_start', 'period_end'],
     },

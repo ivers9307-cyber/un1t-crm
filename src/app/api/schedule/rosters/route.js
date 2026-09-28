@@ -30,6 +30,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess, getUserLocationIds, hasRoleAtLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, realIsoDate, MANAGER_ROLES } from '@/lib/schemas'
+import { reportPeriodError } from '@/lib/report-period'
 import {
   projectPublishImpact,
   findConflictingPublishedRosters,
@@ -171,9 +172,11 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
-  if (period_end < period_start) {
-    return NextResponse.json({ success: false, error: 'period_end must be on or after period_start' }, { status: 400 })
-  }
+  // RANGEVALID.1 — in order (same words as before) and at most a year: a period
+  // had no upper bound, and a roster claiming decades would make every later
+  // publish inside it a 409. The longest ever published is 31 days.
+  const periodError = reportPeriodError(period_start, period_end, { what: 'A roster' })
+  if (periodError) return NextResponse.json({ success: false, error: periodError }, { status: 400 })
 
   const db = createServerClient()
 

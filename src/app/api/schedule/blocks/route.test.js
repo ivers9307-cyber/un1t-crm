@@ -495,3 +495,45 @@ describe('GET /api/schedule/blocks — briefing (BLOCKEDIT.1)', () => {
     expect((await (await GET(req())).json()).data[0].briefing).toBe('Fire drill at 10')
   })
 })
+
+// RANGEVALID.1 — reversed used to be an empty 200 ("nothing rostered"), and a
+// wide range one unpaged select that PostgREST cuts at 1,000 blocks without
+// saying so. The calendar asks for at most 42 days, the phone for 7.
+describe('GET /api/schedule/blocks — in order and at most 92 days (RANGEVALID.1)', () => {
+  const MANAGER = { id: 'm', role: 'manager', profileRole: 'manager', rolesByLocation: { 'loc-1': 'manager' } }
+  const url = (qs) => `http://x/api/schedule/blocks?location_id=loc-1${qs}`
+
+  it('a reversed range is a 400 before any read', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    createServerClient.mockReturnValue(buildDb([]))
+    const res = await GET(req(url('&start_date=2026-09-28&end_date=2026-09-27')))
+    expect(res.status).toBe(400)
+    expect(await res.json()).toEqual({ success: false, error: 'end_date must be on or after start_date' })
+    expect(createServerClient).not.toHaveBeenCalled()
+  })
+
+  it('93 days is a 400 before any read; 92 still reads', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    createServerClient.mockReturnValue(buildDb([]))
+    const res = await GET(req(url('&start_date=2026-01-01&end_date=2026-04-03')))
+    expect(res.status).toBe(400)
+    expect(await res.json()).toEqual({ success: false, error: 'The range can cover at most 92 days' })
+    expect(createServerClient).not.toHaveBeenCalled()
+    expect((await GET(req(url('&start_date=2026-01-01&end_date=2026-04-02')))).status).toBe(200)
+  })
+
+  it('the calendar\'s month grid and the phone\'s week still read', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    createServerClient.mockReturnValue(buildDb([]))
+    expect((await GET(req(url('&start_date=2026-08-31&end_date=2026-10-11')))).status).toBe(200)
+    expect((await GET(req(url('&start_date=2026-09-28&end_date=2026-10-04')))).status).toBe(200)
+  })
+
+  it('one bound, or none, still reads as before (no span to judge)', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    createServerClient.mockReturnValue(buildDb([]))
+    for (const qs of ['', '&start_date=2020-01-01', '&end_date=2030-12-31']) {
+      expect((await GET(req(url(qs)))).status).toBe(200)
+    }
+  })
+})

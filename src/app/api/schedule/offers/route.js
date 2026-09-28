@@ -19,7 +19,8 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess, hasRoleAtLocation } from '@/lib/auth'
-import { MANAGER_ROLES, isRealCalendarDate, uuidLike } from '@/lib/schemas'
+import { MANAGER_ROLES, uuidLike } from '@/lib/schemas'
+import { rangeQueryError, MAX_LIST_RANGE_DAYS } from '@/lib/report-period'
 import { listOpenOffers } from '@/lib/shift-offer-server'
 import { loadBlockCandidates } from '@/lib/candidates-data'
 import { offerIsFor, coachOfferRow, managerOfferRow, offerBlock } from '@/lib/shift-offer-notice'
@@ -49,11 +50,11 @@ export async function GET(request) {
   if (manage && !hasRoleAtLocation(user, locationId, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
-  for (const [name, value] of [['start_date', startDate], ['end_date', endDate]]) {
-    if (value && !isRealCalendarDate(value)) {
-      return NextResponse.json({ success: false, error: `${name}: not a real date` }, { status: 400 })
-    }
-  }
+  // RANGEVALID.1 — and, when both are given, in order and at most
+  // MAX_LIST_RANGE_DAYS apart, before any read: reversed was an empty 200, and
+  // a wide range one unpaged select PostgREST silently cut at 1,000 rows.
+  const rangeError = rangeQueryError(startDate, endDate, { maxDays: MAX_LIST_RANGE_DAYS })
+  if (rangeError) return NextResponse.json({ success: false, error: rangeError }, { status: 400 })
 
   const db = createServerClient()
   const { offers, error } = await listOpenOffers(db, { locationId })
