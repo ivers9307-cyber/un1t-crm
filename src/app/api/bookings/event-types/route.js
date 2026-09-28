@@ -4,39 +4,14 @@
 // next.config.js for the back-compat rewrite from old /api/events/*.
 
 import { NextResponse } from 'next/server'
-import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { authenticateApiKey, orgScopeLocationIds, assertCreateInOrg } from '@/lib/api-auth'
+import { authenticateApiKey, requireApiKeyOrManager, orgScopeLocationIds, assertCreateInOrg } from '@/lib/api-auth'
+import { assertLocationAccess, hasRoleAtLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { uuidLike, hexColor, url, DEFAULT_COLOR } from '@/lib/schemas'
+import { DEFAULT_COLOR, MANAGER_ROLES } from '@/lib/schemas'
+import { EventTypeCreateSchema, CONFIRMATION_FIELDS, eventTypeSlug } from '@/lib/event-type-schema'
 
-const EventCreateSchema = z.object({
-  name: z.string().min(1).max(200),
-  slug: z.string().max(100).optional(),
-  description: z.string().max(5000).nullable().optional(),
-  duration_minutes: z.number().int().min(1).max(1440).optional(),
-  color: hexColor.optional(),
-  availability: z.unknown().optional(),  // opaque JSON shape, schema lives client-side
-  buffer_minutes: z.number().int().min(0).max(1440).optional(),
-  max_advance_days: z.number().int().min(0).max(3650).optional(),
-  custom_fields: z.array(z.unknown()).optional(),
-  webhook_url: url.nullable().optional(),
-  active: z.boolean().optional(),
-  location_id: uuidLike.optional(),
-  // Mig 125: how many staff are needed to keep this booking type
-  // bookable. Commitment-based — if availability exists for a day,
-  // this many staff must be rostered to cover (regardless of actual
-  // booking count). 0 = covered by another role. Drives the studio
-  // overview classifier on /schedule.
-  staff_required: z.number().int().min(0).max(50).optional(),
-  // Mig 144 (GLOFOX3.2): when true, public bookings on this event
-  // type push the booking customer to Glofox (search-and-link OR
-  // create + attach trial). Default false — operator opts in per
-  // booking type. See /api/public/book/route.js for the call site.
-  create_in_glofox: z.boolean().optional(),
-})
-
-// GET /api/bookings/event-types — List all event types
+// GET /api/bookings/event-types — List all event types (API key only)
 export async function GET(request) {
   const auth = await authenticateApiKey(request)
   if (!auth.ok) return auth.response
@@ -60,13 +35,38 @@ export async function GET(request) {
 }
 
 // POST /api/bookings/event-types — Create a new event type
+//
+// EVENTTYPERLS.1 — also the booking-type form's create (cookie). The form
+// used to INSERT with the browser client, which RLS (event_types_location_
+// scoped, FOR ALL, any member) let plain staff do; mig 650 takes that write
+// off the browser roles. A cookie caller must name the studio and be a
+// master or hold MANAGER_ROLES there — canManageEventType, the rule the New
+// page, the Edit/Delete buttons and /api/bookings/event-types/[id] use.
+// Refusals copy POST /api/contacts: non-member 403, role 401 (the helper's
+// body), no location 400. API-key callers are unchanged.
 export async function POST(request) {
-  const auth = await authenticateApiKey(request)
+  const auth = await requireApiKeyOrManager(request)
   if (!auth.ok) return auth.response
 
-  const validation = await validateBody(request, EventCreateSchema)
+  const validation = await validateBody(request, EventTypeCreateSchema)
   if (!validation.ok) return validation.response
   const body = validation.data
+
+  if (auth.user) {
+    if (!body.location_id) {
+      return NextResponse.json({ success: false, error: 'location_id required' }, { status: 400 })
+    }
+    if (!auth.user.isMaster) {
+      const guard = assertLocationAccess(auth.user, body.location_id)
+      if (guard) return guard
+    }
+    // requireApiKeyOrManager's cookie branch only says "Manager+ somewhere";
+    // THIS is the decision, at the studio the booking type is created in.
+    if (!hasRoleAtLocation(auth.user, body.location_id, MANAGER_ROLES)) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+    }
+  }
+
   const db = createServerClient()
 
   // APIKEYS.3 — per-org key may only create an event type at a location in its org.
@@ -74,7 +74,13 @@ export async function POST(request) {
   if (scopeErr) return scopeErr
 
   // Auto-generate slug from name if not provided
-  const slug = body.slug || body.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
+  const slug = body.slug || eventTypeSlug(body.name)
+
+  // Mig 077 confirmation columns: written only when sent (the form always
+  // sends all five; API-key creates keep the column defaults).
+  const confirmation = Object.fromEntries(
+    CONFIRMATION_FIELDS.filter((k) => body[k] !== undefined).map((k) => [k, body[k]]),
+  )
 
   const { data, error } = await db.from('event_types').insert({
     name: body.name,
@@ -84,12 +90,13 @@ export async function POST(request) {
     color: body.color || DEFAULT_COLOR,
     availability: body.availability || undefined,
     buffer_minutes: body.buffer_minutes || 0,
-    max_advance_days: body.max_advance_days || 30,
+    max_advance_days: body.max_advance_days ?? 30,
     custom_fields: body.custom_fields || [],
     webhook_url: body.webhook_url || null,
     active: body.active !== false,
     staff_required: body.staff_required ?? 1,
     create_in_glofox: body.create_in_glofox === true,
+    ...confirmation,
     ...(body.location_id ? { location_id: body.location_id } : {}),
   }).select().single()
 

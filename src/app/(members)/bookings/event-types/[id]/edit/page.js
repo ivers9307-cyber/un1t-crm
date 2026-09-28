@@ -22,11 +22,9 @@ export default async function EditBookingTypePage(props) {
   // page's guard (found by the PAGE-SCOPE.1 scan).
   //
   // ROLEUI.1 — and a caller who may not manage this booking type (not a
-  // master, not MANAGER_ROLES at its location) gets the same panel. The form
-  // saves the row with the browser client (RLS: any member, C39
-  // EVENTTYPERLS.1) and then syncs reminders through
-  // /api/bookings/event-types/[id]/reminders, which judges exactly this and
-  // would 403 them after a partial save.
+  // master, not MANAGER_ROLES at its location) gets the same panel: the form
+  // saves through PUT /api/bookings/event-types/[id] and syncs reminders
+  // through /reminders (EVENTTYPERLS.1), and both judge exactly this.
   if (!event || assertLocationAccess(user, event.location_id) || !canManageEventType(user, event.location_id)) {
     return (
       <div className="p-8">
