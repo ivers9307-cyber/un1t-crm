@@ -454,6 +454,11 @@ function expectNoShellySecrets(json) {
   for (const secret of [SHELLY_KEY_A1, SHELLY_KEY_B1, SHELLY_FP_A1, SHELLY_FP_B1]) {
     expect(body).not.toContain(secret)
   }
+  // SECRETTAILS.1 — the fixture rows carry a hint (as before mig 659); no
+  // response may carry it or the field.
+  expect(body).not.toContain('key_hint')
+  expect(body).not.toContain('aaa1')
+  expect(body).not.toContain('bbb1')
 }
 
 // ─── shared assertion loop ───────────────────────────────────────────

@@ -35,8 +35,8 @@
 // ad_accounts.access_token straight to a has_access_token boolean
 // (same posture as maskConnectionRow / maskAccountRow / publicShape),
 // and selects neither shelly_connections.auth_key nor its
-// auth_key_fingerprint — only key_hint, which publicConnectionView
-// already treats as non-secret.
+// auth_key_fingerprint nor the retired key hint (SECRETTAILS.1): the
+// Shelly card carries key presence only.
 //
 // Pure helpers up top (unit-tested in integrations-hub.test.js); the
 // single async assembler at the bottom does batched reads only — one
@@ -838,8 +838,8 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
     // is a sha256 OF the key, so publishing it turns "which account is this?"
     // into an offline check anyone holding a candidate key can run (the same
     // allowlist argument as NON_SECRET in src/lib/shelly/connections.js).
-    // key_hint is the last ≤4 characters and IS non-secret — publicConnectionView
-    // returns it, and the card renders it as ••••abcd.
+    // No key hint either (SECRETTAILS.1, mig 659): the card shows presence,
+    // derived from the row.
     // updated_at is the LAST ATTEMPT: markConnectionStatus stamps it on every
     // reconcile tick that touches the status, success or failure, where
     // last_ok_at only advances on success. Next to each other they separate
@@ -848,7 +848,7 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
     // location_id is UNIQUE on this table, so ids.length rows is the ceiling;
     // asking for one MORE makes a truncated read distinguishable from a full one.
     db.from('shelly_connections')
-      .select('location_id, host, status, last_error, last_ok_at, updated_at, key_hint')
+      .select('location_id, host, status, last_error, last_ok_at, updated_at')
       .in('location_id', ids)
       .limit(ids.length + 1),
     fetchShellyDevices(db, ids),
@@ -1156,12 +1156,11 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
       status,
       message: grade.message,
       host: row?.host ?? null,
-      // Presence derived from the hint, the same argument as
-      // publicConnectionView.has_auth_key: the hint is the only evidence of
-      // a key this projection HAS, so deriving it from anything else would
-      // make the field mean different things per caller.
-      hasAuthKey: !!row?.key_hint,
-      keyHint: row?.key_hint ?? null,
+      // SECRETTAILS.1 — presence only, the same rule as
+      // publicConnectionView.has_auth_key: a stored row always holds a key
+      // (mig 562: auth_key NOT NULL, fingerprint CHECK), and host is NOT NULL
+      // on it, so "a row with a host" is "a key is stored".
+      hasAuthKey: typeof row?.host === 'string' && row.host !== '',
       lastOkAt: row?.last_ok_at ?? null,
       lastAttemptAt: row?.updated_at ?? null,
       lastError: row?.last_error ?? null,
