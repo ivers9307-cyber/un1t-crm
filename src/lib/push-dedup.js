@@ -16,9 +16,11 @@
 //      with nothing delivered), RELEASE the claims so a later retry
 //      (webhook redelivery, client retry) can still notify — mirrors
 //      the nudge-claim release in send-class-booking-reminders (#755).
-//      "sent=0, failed=0" (recipient has no tokens) KEEPS the claim:
-//      there is nothing to retry against, and for notifyUsers callers
-//      the email fallback already ran.
+//      That includes a READ that failed inside sendPush/notifyUsers:
+//      since C16 PUSHREADERR.1 it comes back as failed>0 + read_failed,
+//      not as zeros. "sent=0, failed=0" (recipient has no tokens, or
+//      opted out) KEEPS the claim: there is nothing to retry against,
+//      and for notifyUsers callers the email fallback already ran.
 //
 // event_key must be stable + replay-safe: derived from the entity that
 // caused the notification, never from timestamps or invocation state.

@@ -346,6 +346,14 @@ const config = [
       'src/app/api/cron/sync-class-occurrences/route.js',
       'src/app/api/cron/send-push-reminders/route.js',
       'src/lib/class-occurrences.js',
+      // PUSHREADERR.1 — the staff and customer push pipeline: a failed read
+      // here used to pass for "nobody to tell"; the write half is guarded so
+      // it cannot come back as a silent failed claim/prune. Measured clean
+      // (0 findings on main 12f3d019, 0 after).
+      'src/lib/push.js',
+      'src/lib/notify.js',
+      'src/lib/push-dedup.js',
+      'src/lib/customer-push.js',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },

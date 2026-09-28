@@ -189,3 +189,35 @@ describe('send-push-reminders — the booking arm when a read fails (CRONREADERR
     expect(body).toMatchObject({ booking_pushed: 1, booking_recipients_read_failed: 0, booking_dedup_unreadable: 0, booking_sent_unchecked: 0 })
   })
 })
+
+// C16 PUSHREADERR.1 — the row's named loss. sendPush used to answer a failed
+// read with { sent: 0, failed: 0 }, which this cron reads as "nothing to send"
+// and LEDGERS, so the reminder never went. It now answers failed > 0 +
+// read_failed, which the cron's existing sendFailed branch skips the ledger on,
+// so the next tick retries. Pins: these pass on main; the failing-on-main half
+// is src/lib/push-read-errors.test.js.
+describe('send-push-reminders — a failed read inside sendPush is a failed send (C16 PUSHREADERR.1)', () => {
+  const READ_FAILED = { sent: 0, skipped: 0, invalidated: 0, failed: 1, read_failed: 1 }
+
+  it('task: no ledger row on the failed tick; the next tick sends and ledgers', async () => {
+    state.tasks = [task('11:00')]
+    sendPush.mockResolvedValueOnce(READ_FAILED)
+    const body = await (await GET(req())).json()
+    expect(sendPush).toHaveBeenCalledTimes(1)
+    expect(ledgerRows()).toHaveLength(0)
+    expect(body).toMatchObject({ task_send_failed: 1, task_pushed: 0 })
+
+    sendPush.mockResolvedValueOnce({ sent: 1, skipped: 0, invalidated: 0, failed: 0 })
+    await GET(req())
+    expect(ledgerRows()).toHaveLength(1)
+  })
+
+  it('booking: the same', async () => {
+    state.bookings = [booking('11:00')]
+    sendPush.mockResolvedValueOnce(READ_FAILED)
+    const body = await (await GET(req())).json()
+    expect(sendPush).toHaveBeenCalledTimes(1)
+    expect(ledgerRows()).toHaveLength(0)
+    expect(body).toMatchObject({ booking_send_failed: 1, booking_pushed: 0 })
+  })
+})
