@@ -69,11 +69,6 @@ export function fingerprintAuthKey(key) {
   return createHash('sha256').update(s, 'utf8').digest('hex')
 }
 
-export function keyHint(key) {
-  const s = String(key || '')
-  return s.length >= 4 ? s.slice(-4) : ''
-}
-
 export function redactSecret(err, secret) {
   const name = err?.name || 'Error'
   let message = String(err?.message ?? err ?? '')
