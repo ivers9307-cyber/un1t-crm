@@ -56,13 +56,28 @@ function ConnectionChip({ c }) {
   )
 }
 
+// HUBREAD.1 — how the page names a read it could not do.
+const SIGNAL_LABELS = {
+  locations: 'the tenant list',
+  heartbeats: 'cron heartbeats',
+  connections: 'integration connections',
+  rollups: 'AI spend',
+  campaigns: 'the campaign queue',
+}
+
+// One template literal per text node: renderToStaticMarkup separates adjacent
+// JSX text and expressions with <!-- -->, and the page test reads the markup.
+function UnknownChip({ what }) {
+  return <span className="inline-block rounded-full px-2 py-0.5 text-xs bg-amber-500/10 text-amber-700">{`${what} · could not load`}</span>
+}
+
 export default async function TenantHealthPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
   if (user.profileRole !== 'master') redirect('/')
 
   const db = createServerClient()
-  const orgs = await getTenantHealth(db)
+  const { orgs, unreadable } = await getTenantHealth(db)
 
   return (
     <div className="p-6 max-w-5xl">
@@ -79,12 +94,20 @@ export default async function TenantHealthPage() {
         backlog. Heartbeat rows appear after each cron&rsquo;s first per-tenant stamp.
       </p>
 
+      {unreadable.length > 0 && (
+        <div className="mb-6 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-700">
+          {`Could not load ${unreadable.map((s) => SIGNAL_LABELS[s] || s).join(', ')} just now, so nothing that depends on ${unreadable.length === 1 ? 'it' : 'them'} is marked healthy. Reload the page to try again.`}
+        </div>
+      )}
+
       {orgs.map((org) => (
         <div key={org.organizationId} className="mb-8">
           <div className="flex items-center gap-2 mb-3">
             <h2 className="text-lg font-semibold">{org.name}</h2>
             {org.needsAttention ? (
               <span className="inline-block rounded-full px-2 py-0.5 text-xs bg-red-500/10 text-red-700">needs attention</span>
+            ) : org.unverified ? (
+              <span className="inline-block rounded-full px-2 py-0.5 text-xs bg-amber-500/10 text-amber-700">could not check everything</span>
             ) : (
               <span className="inline-block rounded-full px-2 py-0.5 text-xs bg-green-500/10 text-green-700">healthy</span>
             )}
@@ -98,12 +121,17 @@ export default async function TenantHealthPage() {
                 <div className="flex items-baseline justify-between gap-4 flex-wrap mb-2">
                   <div className="font-medium">{loc.name}</div>
                   <div className="text-xs text-un1t-subtle tabular-nums">
-                    Mia ${(loc.aiCostCentsMtd / 100).toFixed(2)} MTD
-                    {loc.campaignBacklog > 0 && <> · {loc.campaignBacklog} campaign{loc.campaignBacklog > 1 ? 's' : ''} in queue</>}
+                    {loc.aiCostCentsMtd == null ? 'Mia spend unavailable' : <>Mia ${(loc.aiCostCentsMtd / 100).toFixed(2)} MTD</>}
+                    {loc.campaignBacklog == null
+                      ? <> · campaign queue unavailable</>
+                      : loc.campaignBacklog > 0 && <> · {loc.campaignBacklog} campaign{loc.campaignBacklog > 1 ? 's' : ''} in queue</>}
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-1.5">
-                  {loc.heartbeats.length === 0 && loc.connections.length === 0 && (
+                  {loc.unknownSignals?.includes('heartbeats') && <UnknownChip what="heartbeats" />}
+                  {loc.unknownSignals?.includes('connections') && <UnknownChip what="connections" />}
+                  {loc.heartbeats.length === 0 && loc.connections.length === 0 &&
+                    !loc.unknownSignals?.includes('heartbeats') && !loc.unknownSignals?.includes('connections') && (
                     <span className="text-xs text-un1t-subtle">No per-tenant signals yet.</span>
                   )}
                   {loc.heartbeats.map((hb) => (
@@ -119,7 +147,7 @@ export default async function TenantHealthPage() {
         </div>
       ))}
 
-      {orgs.length === 0 && <div className="text-sm text-un1t-subtle">No active locations.</div>}
+      {orgs.length === 0 && !unreadable.includes('locations') && <div className="text-sm text-un1t-subtle">No active locations.</div>}
     </div>
   )
 }

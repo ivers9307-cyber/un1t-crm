@@ -8062,6 +8062,9 @@ registry.registerPath({
     'per-meter MTD usage vs allowance with overage cents drawn from the wallet ledger; ' +
     'unpinned locations (all of them today) return { locationId, plan: null }. ' +
     'Secrets are never returned — no token columns are selected. ' +
+    'HUBREAD.1: a row whose underlying read FAILED carries status `unknown` (never `not_connected` or ' +
+    '`connected`) and offers no action; each failed read adds ONE `attention` entry with `unreadable: true`. ' +
+    '`sms` rows carry `senderKnown`; `billing` rows carry `unreadable: true` when the plan reads failed. ' +
     'B4 access: master sees every location; owner/org-admin (SAAS-4) sees ONLY their own ' +
     'organisation(s)\' locations (payload hard-scoped via getOwnerOrganizationIds → ' +
     '.in(organization_id)); managers/head_coach/staff get 403.',
@@ -8072,6 +8075,7 @@ registry.registerPath({
     },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Not an owner/org-admin/master account', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The locations read failed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

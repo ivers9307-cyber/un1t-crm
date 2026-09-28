@@ -58,6 +58,7 @@ import NudgeUpdateButton from '@/components/settings/NudgeUpdateButton'
 import { deriveTargetVersion, deviceVerdict, currentDevice, pushHealthStatus, PUSH_HEALTHY_DAYS } from '@/lib/staff-devices'
 import { loadFleetScope, inFleetScope } from '@/lib/staff-fleet-scope'
 import { geofencePermissionChip } from '@/lib/geofence-permission-chips'
+import { logError, logWarn } from '@/lib/log'
 
 export const dynamic = 'force-dynamic'
 
@@ -112,6 +113,24 @@ export default async function PushHealthPage() {
     linksQuery,
   ])
 
+  // HUBREAD.1 — these four reads ARE the page. A failure in any of them used
+  // to render "0 staff", everyone "No app installed" under a Nudge, or
+  // everyone under "No active studio". Say we could not load it instead.
+  const spineFailed = [
+    ['profiles', profilesRes], ['locations', locationsRes],
+    ['device_tokens', tokensRes], ['profile_locations', plRes],
+  ].filter(([, res]) => res.error)
+  if (spineFailed.length) {
+    logError('push-health', 'fleet page read failed', {
+      tables: spineFailed.map(([t]) => t),
+      error: spineFailed[0][1].error,
+    })
+    return <FleetUnavailable />
+  }
+  // The 30-day push count is one column: a failed read blanks it, never 0.
+  const sendsKnown = !sendsRes.error
+  if (!sendsKnown) logWarn('push-health', 'push_reminder_sends read failed — Pushes 30d unknown', { error: sendsRes.error })
+
   // The whole active fleet feeds the target version (below); only the
   // people in scope are listed, counted or offered a button.
   const fleetProfiles = profilesRes.data || []
@@ -149,7 +168,7 @@ export default async function PushHealthPage() {
     return {
       ...p,
       tokens: ownTokens,
-      pushesLast30d: sendsByUser.get(p.id) || 0,
+      pushesLast30d: sendsKnown ? (sendsByUser.get(p.id) || 0) : null,
       verdict: deviceVerdict(ownTokens, targetVersion, now),
       // Permission reads off the CURRENT device only — an old iPad
       // that once granted "always" says nothing about today's phone.
@@ -233,6 +252,12 @@ export default async function PushHealthPage() {
         />
       </div>
 
+      {!sendsKnown && (
+        <p className="text-xs text-amber-700 mb-4">
+          Push counts for the last 30 days could not be loaded just now, so that column shows a dash. Reload the page to try again.
+        </p>
+      )}
+
       {totals.no_app > 0 && (
         <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 mb-6 text-xs text-amber-700">
           <strong className="font-semibold">{totals.no_app}</strong> of {totals.profiles} active staff have no device tokens registered.
@@ -314,7 +339,7 @@ export default async function PushHealthPage() {
                         <PermissionChip value={p.permission} />
                       </td>
                       <td className="px-4 py-2.5 text-xs text-un1t-subtle">{fmtRelative(newestSeen)}</td>
-                      <td className="px-4 py-2.5 text-xs text-un1t-subtle">{p.pushesLast30d}</td>
+                      <td className="px-4 py-2.5 text-xs text-un1t-subtle">{p.pushesLast30d ?? '—'}</td>
                       <td className="px-4 py-2.5 text-right">
                         {/* ANDROID-VIS.1b — gated on canPush, NOT on having
                             a device row: a token-less device has a row and
@@ -343,6 +368,23 @@ export default async function PushHealthPage() {
         Stale = the device hasn&apos;t opened the app in {PUSH_HEALTHY_DAYS}+ days. Token may still be valid; a test push tells you for sure.
         Visible, no push = the device reports its version and permissions but holds no push token, so nothing can reach it — Android until FCM credentials are set up (mobile/docs/android-fcm-setup.md), or a declined iOS notification prompt. There is no test push to send.
         Tokens that come back DeviceNotRegistered from Expo are auto-pruned by src/lib/push.js.
+      </p>
+    </div>
+  )
+}
+
+function FleetUnavailable() {
+  return (
+    <div className="p-8 max-w-5xl">
+      <Link
+        href="/settings/notifications"
+        className="inline-flex items-center gap-1.5 text-xs text-un1t-subtle hover:text-un1t-text mb-4"
+      >
+        <ArrowLeft size={12} /> Notification registry
+      </Link>
+      <h2 className="text-2xl font-bold mb-2">Push delivery health</h2>
+      <p className="text-sm text-amber-700">
+        Could not load the staff fleet just now. Nothing is shown rather than a wrong count. Reload the page to try again.
       </p>
     </div>
   )
