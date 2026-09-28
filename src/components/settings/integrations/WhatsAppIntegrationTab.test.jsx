@@ -6,7 +6,7 @@
 // phone_number_id (409), so this was low severity, but the screen lied.
 
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, cleanup } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import WhatsAppIntegrationTab from './WhatsAppIntegrationTab.jsx'
 
 const LOC = { id: 'a0000000-0000-4000-8000-000000000001', name: 'Test Studio', settings: {} }
@@ -42,6 +42,18 @@ describe('WhatsAppIntegrationTab — a failed numbers read (CHANNELREAD.1)', () 
     mockFetch(new TypeError('Failed to fetch'))
     render(<WhatsAppIntegrationTab location={LOC} canEdit />)
     expect(await screen.findByRole('button', { name: 'Try again' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Add WhatsApp number/ })).toBeNull()
+  })
+})
+
+describe('WhatsAppIntegrationTab — Try again (CHANNELREAD.1)', () => {
+  it('a retry that fails again stays on the note and says "Still could not load"', async () => {
+    mockFetch(reply(500, { success: false, error: 'boom' }))
+    render(<WhatsAppIntegrationTab location={LOC} canEdit />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Try again' }))
+    expect(await screen.findByText('Still could not load. Try again in a minute.')).toBeTruthy()
+    expect(urls().filter((u) => u.endsWith('/whatsapp/numbers'))).toHaveLength(2)
+    expect(screen.queryByText(/No numbers configured/)).toBeNull()
     expect(screen.queryByRole('button', { name: /Add WhatsApp number/ })).toBeNull()
   })
 })
