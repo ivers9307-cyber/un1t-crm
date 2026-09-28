@@ -49,7 +49,7 @@ const NON_MASTER_ROLES = ALL_ROLES.filter((r) => r !== 'master')
 
 beforeEach(() => {
   vi.clearAllMocks()
-  getTenantHealth.mockResolvedValue([])
+  getTenantHealth.mockResolvedValue({ orgs: [], unreadable: [] })
 })
 
 describe('/admin/health page', () => {
@@ -80,5 +80,36 @@ describe('/admin/health page', () => {
     // accidentally reads `user.role` instead.
     getCurrentUser.mockResolvedValue(user('master', 'owner'))
     await expect(TenantHealthPage()).rejects.toThrow(/^NEXT_REDIRECT:\/$/)
+  })
+
+  it('names a failed read and never says "healthy" over it (HUBREAD.1)', async () => {
+    getCurrentUser.mockResolvedValue(user('master'))
+    getTenantHealth.mockResolvedValue({
+      unreadable: ['connections', 'rollups'],
+      orgs: [{
+        organizationId: 'o1', name: 'UN1T Group', needsAttention: false, unverified: true,
+        locations: [{
+          id: 'l1', name: 'Stillorgan', heartbeats: [], connections: [],
+          aiCostCentsMtd: null, campaignBacklog: 0, needsAttention: false,
+          unknownSignals: ['connections', 'rollups'],
+        }],
+      }],
+    })
+    const html = renderToStaticMarkup(await TenantHealthPage())
+    expect(html).toContain('Could not load integration connections, AI spend just now')
+    expect(html).toContain('could not check everything')
+    expect(html).toContain('connections · could not load')
+    expect(html).toContain('Mia spend unavailable')
+    expect(html).not.toContain('>healthy<')
+    expect(html).not.toContain('No per-tenant signals yet')
+    expect(html).not.toContain('Mia $0.00')
+  })
+
+  it('an unreadable tenant list is not "No active locations" (HUBREAD.1)', async () => {
+    getCurrentUser.mockResolvedValue(user('master'))
+    getTenantHealth.mockResolvedValue({ orgs: [], unreadable: ['locations'] })
+    const html = renderToStaticMarkup(await TenantHealthPage())
+    expect(html).toContain('Could not load the tenant list just now')
+    expect(html).not.toContain('No active locations')
   })
 })
