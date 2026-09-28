@@ -19,7 +19,14 @@
 -- one hand-written PostgREST call reads email_sequences.webhook_token /
 -- webhook_secret and can UPDATE / INSERT / DELETE sequences (status, graph,
 -- from_email: activate one that emails customers), steps (email bodies) and
--- enrolments (enrol or exit any contact), bypassing every route check.
+-- enrolments (enrol or exit any contact), directly, without any route.
+--
+-- 654 closes that DIRECT PostgREST access, and only that. The
+-- /api/sequences/** routes (service role) currently gate on location
+-- membership alone, with no `email` permission check, so the same staff
+-- member can still activate, publish, rewrite or delete a sequence through
+-- them (follow-up C60 SEQROUTEGATE.1). Until that lands, 654 is defence in
+-- depth, not the whole fix.
 --
 -- VERIFIED LIVE (29 Sep, BEFORE this migration):
 --   relacl on all three: anon=arwdDxtm, authenticated=arwdDxtm,
@@ -58,9 +65,11 @@
 -- It is an allow-list: a column added to email_sequences later is invisible
 -- to clients until a migration grants it (or says it is withheld);
 -- tests/sequence-column-grants-guard.test.js enforces that, fails a later
--- table-level client grant on email_sequences or client write grant on the
--- children, and fails client code that reads a withheld column or writes any
--- of the three tables.
+-- migration that grants anything to anon/PUBLIC on the three tables, a
+-- table-level privilege on email_sequences, a write (table or column level)
+-- on any of them, a column SELECT of a withheld column, or re-creates one of
+-- them, and fails client code that reads a withheld column or writes any of
+-- the three tables.
 --
 -- A GRANT is per ROLE, not per person: owners and masters lose the same
 -- direct access. Every surface that shows or edits these rows is a
@@ -88,6 +97,9 @@
 --     log -G). No OTA needed.
 --   * champ-app, un1t-platform, champ-bridge (origin/main and working
 --     trees): never name the tables.
+--   * un1t-sentinel (src/lib/tools/crm-db.js, the investigator's
+--     query_crm_table): reads sequence_enrollments, SELECT only, through
+--     crmDb on CRM_SUPABASE_SERVICE_KEY (service role). Unaffected.
 --
 -- ===========================================================================
 -- APPLY: AFTER the PR merges, the same day (plan C41 Task 1b-5). Nothing in
@@ -210,9 +222,10 @@ BEGIN
   END IF;
 
   -- A2. No table-level privilege of any kind for either client role
-  --     (inheritance-aware, any grantor).
+  --     (inheritance-aware, any grantor). MAINTAIN is Postgres 17's `m`
+  --     (in the default ALL; information_schema does not show it).
   FOREACH r IN ARRAY ARRAY['authenticated', 'anon'] LOOP
-    FOREACH priv IN ARRAY ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'] LOOP
+    FOREACH priv IN ARRAY ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER', 'MAINTAIN'] LOOP
       IF has_table_privilege(r, 'public.email_sequences', priv) THEN
         RAISE EXCEPTION 'PROFILESPREAD.1b: table-level % on public.email_sequences survived for % — a column grant would not bind', priv, r;
       END IF;
@@ -269,7 +282,7 @@ BEGIN
       RAISE EXCEPTION 'PROFILESPREAD.1b: authenticated lost SELECT on % (the reads must not change)', t;
     END IF;
     FOREACH r IN ARRAY ARRAY['authenticated', 'anon'] LOOP
-      FOREACH priv IN ARRAY ARRAY['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'] LOOP
+      FOREACH priv IN ARRAY ARRAY['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER', 'MAINTAIN'] LOOP
         IF has_table_privilege(r, t, priv) THEN
           RAISE EXCEPTION 'PROFILESPREAD.1b: % still holds % on %', r, priv, t;
         END IF;

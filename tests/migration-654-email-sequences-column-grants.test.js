@@ -171,6 +171,10 @@ const SEED = `
 const NAMED = EMAIL_SEQUENCES_SELECT.join(', ')
 const ALL_TABLE_PRIVS = ['DELETE', 'INSERT', 'REFERENCES', 'SELECT', 'TRIGGER', 'TRUNCATE', 'UPDATE']
 const WRITE_PRIVS = ['DELETE', 'INSERT', 'REFERENCES', 'TRIGGER', 'TRUNCATE', 'UPDATE']
+// Postgres 17's `m` (VACUUM/ANALYZE/REINDEX/LOCK TABLE): part of the default
+// ALL (prod relacl arwdDxtm) but invisible to information_schema, so it is
+// checked with has_table_privilege.
+const MAINTAIN = 'MAINTAIN'
 const sorted = (xs) => [...xs].sort() // sort in JS: collation-independent
 
 let db
@@ -257,6 +261,10 @@ describe('before 654: the leak and the write hole (prod today)', () => {
     expect(await tablePrivileges(t, 'authenticated')).toEqual(ALL_TABLE_PRIVS)
     expect(await tablePrivileges(t, 'anon')).toEqual(ALL_TABLE_PRIVS)
     expect(await tablePrivileges(t, 'service_role')).toEqual(ALL_TABLE_PRIVS)
+    for (const role of ['authenticated', 'anon']) {
+      const { rows: [r] } = await db.query(`SELECT has_table_privilege($1, $2, $3) AS v`, [role, `public.${t}`, MAINTAIN])
+      expect([role, t, MAINTAIN, r.v]).toEqual([role, t, MAINTAIN, true])
+    }
   })
 
   it("a plain staff login reads its studio's webhook secret and token", async () => {
@@ -336,7 +344,7 @@ describe('after 654: the catalog', () => {
 
   it.each(SEQUENCE_TABLES)('%s: no client write privilege, one privilege per call (a comma list is true if ANY is held)', async (t) => {
     for (const role of ['authenticated', 'anon']) {
-      for (const p of WRITE_PRIVS) {
+      for (const p of [...WRITE_PRIVS, MAINTAIN]) {
         const { rows: [r] } = await db.query(`SELECT has_table_privilege($1, $2, $3) AS v`, [role, `public.${t}`, p])
         expect([role, t, p, r.v]).toEqual([role, t, p, false])
       }
@@ -504,6 +512,17 @@ describe('the self-check aborts the WHOLE file', () => {
   it("when section B's REVOKE is dropped (the write hole stays open)", async () => {
     await abortsWith(mutated('REVOKE ALL ON public.sequence_steps, public.sequence_enrollments FROM authenticated, anon;\n', ''),
       /PROFILESPREAD\.1b: authenticated still holds \w+ on public\.sequence_steps/)
+  })
+
+  it('when MAINTAIN survives on email_sequences (a table-level privilege the column grant cannot see)', async () => {
+    await abortsWith(mutated('  ON public.email_sequences TO authenticated;\n', '  ON public.email_sequences TO authenticated;\nGRANT MAINTAIN ON public.email_sequences TO anon;\n'),
+      /PROFILESPREAD\.1b: table-level MAINTAIN on public\.email_sequences survived for anon/)
+  })
+
+  it('when MAINTAIN survives on a child table', async () => {
+    await abortsWith(mutated('GRANT SELECT ON public.sequence_steps, public.sequence_enrollments TO authenticated;\n',
+      'GRANT SELECT ON public.sequence_steps, public.sequence_enrollments TO authenticated;\nGRANT MAINTAIN ON public.sequence_enrollments TO authenticated;\n'),
+    /PROFILESPREAD\.1b: authenticated still holds MAINTAIN on public\.sequence_enrollments/)
   })
 
   it('when email_sequences has a column the file does not classify', async () => {
