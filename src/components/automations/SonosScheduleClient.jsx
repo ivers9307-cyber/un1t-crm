@@ -277,6 +277,12 @@ function SonosScheduleInner({ locationName }) {
       const res = await fetch('/api/sonos/household')
       const j = await res.json()
       if (!res.ok || j.success === false) throw new Error(j.error || 'Failed to load Sonos status')
+      // CHANNELREAD.1 — `db_error` means OUR read of sonos_connections
+      // failed, not that the studio has no Sonos. It is a load error (Try
+      // again), never the not-connected panel and its Connect Sonos button.
+      if (j.connected === false && j.reason === 'db_error') {
+        throw new Error("Couldn't check the Sonos connection just now, so nothing is shown and nothing can be changed here until it loads.")
+      }
       setHousehold(j)
       setLoadError(null)
     } catch (e) {
@@ -446,7 +452,6 @@ function NotConnectedPanel({ reason }) {
 
   const detail = {
     refresh_failed: "Sonos revoked or expired this studio's connection. Reconnect to restore control.",
-    db_error: "Couldn't check the Sonos connection just now. Try again — reconnect if this keeps happening.",
   }[reason] || "This studio hasn't connected a Sonos system yet."
 
   return (
