@@ -25,7 +25,7 @@ const ROOT = path.resolve(import.meta.dirname, '..')
 const CONTACTS_WRITES_OFF_MIGRATION = 653
 const MIGRATIONS = path.join(ROOT, 'supabase/migrations')
 
-const WRITE = /\.from\(\s*['"`]contacts['"`]\s*\)\s*\.\s*(insert|update|upsert|delete)\s*\(/g
+const WRITE = /\.from\(\s*['"`]contacts['"`]\s*\)\s*\??\.\s*(insert|update|upsert|delete)\s*\(/g
 const rel = (f) => path.relative(ROOT, f).split(path.sep).join('/')
 
 function walk(dir, out = []) {
@@ -39,9 +39,11 @@ function walk(dir, out = []) {
   return out
 }
 
+// Client-bound: runs in the browser, or queries with the signed-in user's own
+// session on the server (createAuthClient). Either one is refused by mig 653.
 function isBrowserFile(text) {
   const code = stripComments(text).trimStart()
-  return /^['"]use client['"]/.test(code) || /\bcreateBrowserClient\b/.test(code)
+  return /^['"]use client['"]/.test(code) || /\bcreateBrowserClient\b/.test(code) || /\bcreateAuthClient\s*\(/.test(code)
 }
 
 function clientFiles() {
@@ -86,6 +88,15 @@ export function contactsWriteReopeners(sql) {
     const tables = splitTop(t.replace(/^table\s+/i, '')).map((x) => ident(x).replace(/^public\./, ''))
     if (tables.includes('contacts')) hits.push(stmt.trim())
   }
+  // A role that may hold writes, granted to a client role (GRANT <role> TO …, no ON).
+  for (const m of code.matchAll(/\bgrant\s+("?[a-z_][\w]*"?(?:\s*,\s*"?[a-z_][\w]*"?)*)\s+to\s+([^;]+?)(?:;|$)/gi)) {
+    const [stmt, roles, to] = m
+    if (/\bon\b/i.test(stmt)) continue
+    const granted = splitTop(roles).map(ident)
+    if (granted.some((r) => ['all', 'select', 'insert', 'update', 'delete', 'usage', 'execute'].includes(r))) continue
+    const grantees = splitTop(to.replace(/\s+with\s+(admin|inherit|set)\s+option[\s\S]*$/i, '')).map(ident)
+    if (grantees.some((g) => CLIENT_ROLES.includes(g))) hits.push(stmt.trim())
+  }
   for (const m of code.matchAll(/\bcreate\s+policy\s+(?:"[^"]+"|\S+)\s+on\s+(?:"?public"?\.)?"?contacts"?(?=[\s;])([\s\S]*?)(?:;|$)/gi)) {
     const body = m[1]
     if (/\bas\s+restrictive\b/i.test(body)) continue   // a restrictive policy can only deny
@@ -104,8 +115,10 @@ describe('client code never writes contacts (CONTACTSELFWRITE.1, mig 653)', () =
       'mobile/lib/contacts-api.js', 'mobile/lib/member/contact-context.jsx', 'mobile/lib/identity-context.jsx',
       'shared/dashboard-data.js', 'src/components/TasksPage.jsx',
     ]))
-    // …and route handlers are not in it (service role).
-    expect(names.some((n) => n.startsWith('src/app/api/'))).toBe(false)
+    // …and service-role route handlers are not in it: a route is scanned only
+    // when it queries with the caller's own session (createAuthClient).
+    const routes = files.filter((f) => rel(f).startsWith('src/app/api/'))
+    for (const f of routes) expect(/\bcreateAuthClient\s*\(/.test(readFileSync(f, 'utf8')), rel(f)).toBe(true)
   })
 
   it('no browser or phone file writes contacts', () => {
@@ -120,8 +133,9 @@ describe('client code never writes contacts (CONTACTSELFWRITE.1, mig 653)', () =
       await supabase.from("contacts")
         .insert(row)
       await db.from(\`contacts\`).upsert(row, { onConflict: 'id' })
-      await supabase.from('contacts') . delete().eq('id', id)`
-    expect(contactsWrites(bad)).toEqual(['update', 'insert', 'upsert', 'delete'])
+      await supabase.from('contacts') . delete().eq('id', id)
+      await supabase?.from('contacts')?.update({ tags })`
+    expect(contactsWrites(bad)).toEqual(['update', 'insert', 'upsert', 'delete', 'update'])
     const ok = `
       await supabase.from('contacts').select('id, name').eq('user_id', uid)
       // await supabase.from('contacts').update({ tags })
@@ -132,6 +146,11 @@ describe('client code never writes contacts (CONTACTSELFWRITE.1, mig 653)', () =
 })
 
 describe('later migrations keep contacts read-only for clients (mig 653)', () => {
+  it('a server file that queries with the signed-in user\'s session is client-bound', () => {
+    expect(isBrowserFile(`import { createAuthClient } from '@/lib/supabase'\nconst db = createAuthClient()`)).toBe(true)
+    expect(isBrowserFile(`import { createServerClient } from '@/lib/supabase'`)).toBe(false)
+  })
+
   it('mig 653 is present', () => {
     expect(readdirSync(MIGRATIONS).some((f) => f.startsWith(`${CONTACTS_WRITES_OFF_MIGRATION}_`))).toBe(true)
   })
@@ -154,6 +173,9 @@ describe('later migrations keep contacts read-only for clients (mig 653)', () =>
       'CREATE POLICY contacts_self_update ON public.contacts FOR UPDATE TO authenticated USING (true);',
       'create policy "x" on contacts to authenticated using (true);',
       'CREATE POLICY contacts_all ON public.contacts FOR ALL USING (true);',
+      // a role that holds writes, handed to a client role (no ON clause)
+      'GRANT contacts_writer TO authenticated;',
+      'grant "some_role" to anon, authenticated;',
     ]
     for (const sql of bad) expect(contactsWriteReopeners(sql), sql).not.toEqual([])
     const ok = [
@@ -168,6 +190,7 @@ describe('later migrations keep contacts read-only for clients (mig 653)', () =>
       'CREATE POLICY contacts_deny ON public.contacts AS RESTRICTIVE FOR ALL TO anon USING (false);',
       'CREATE POLICY contact_devices_insert ON public.contact_devices FOR INSERT WITH CHECK (true);',
       '-- rollback: GRANT UPDATE ON public.contacts TO authenticated;',
+      'GRANT authenticated TO authenticator;',
     ]
     for (const sql of ok) expect(contactsWriteReopeners(sql), sql).toEqual([])
   })
