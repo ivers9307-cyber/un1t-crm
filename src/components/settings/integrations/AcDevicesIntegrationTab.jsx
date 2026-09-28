@@ -22,6 +22,7 @@ import { createBrowserClient } from '@/lib/supabase'
 import {
   Save, Loader2, Check, AlertCircle, Plus, Power, PowerOff, Edit3, X,
 } from 'lucide-react'
+import ReadFailedNote from '@/components/settings/ReadFailedNote'
 
 // uuid4 generated client-side for ThinQ client_id. crypto.randomUUID
 // is available in every browser the CRM supports (set in middleware).
@@ -51,9 +52,13 @@ export default function AcDevicesIntegrationTab({ location, canEdit }) {
   const [credsSavedAt, setCredsSavedAt] = useState(null)
 
   // ---- Devices ----
-  const [devices, setDevices] = useState([])
-  const [devicesLoading, setDevicesLoading] = useState(false)
-  const [devicesError, setDevicesError] = useState(null)
+  // CHANNELREAD.1 — `devices` is null until a read SUCCEEDS, and a failed
+  // read puts it back to null: no "No devices configured", no Add buttons
+  // over a list we could not read.
+  const [devices, setDevices] = useState(null)
+  // true from the first render: with `devices` null and loading false, the
+  // "could not load" note would flash before the mount effect starts the read.
+  const [devicesLoading, setDevicesLoading] = useState(true)
 
   // ---- Add-device flow ----
   const [adding, setAdding] = useState(null)  // 'sensibo' | 'thinq' | null
@@ -64,15 +69,17 @@ export default function AcDevicesIntegrationTab({ location, canEdit }) {
   // Hydrate the devices table after creds are saved or on mount.
   useEffect(() => { loadDevices() }, [])
 
-  async function loadDevices() {
-    setDevicesLoading(true); setDevicesError(null)
+  // silent: the Try again re-read keeps ReadFailedNote mounted, so a retry
+  // that fails again can say so ("Still could not load").
+  async function loadDevices({ silent = false } = {}) {
+    if (!silent) setDevicesLoading(true)
     try {
       const r = await fetch('/api/studio-management/ac/devices', { cache: 'no-store' })
       const j = await r.json()
-      if (!r.ok || j.success === false) throw new Error(j.error || `Failed (${r.status})`)
-      setDevices(j.data || [])
-    } catch (e) {
-      setDevicesError(e.message || 'Failed to load devices')
+      if (!r.ok || j.success === false || !Array.isArray(j.data)) throw new Error(j.error || `Failed (${r.status})`)
+      setDevices(j.data)
+    } catch {
+      setDevices(null)
     } finally {
       setDevicesLoading(false)
     }
@@ -291,30 +298,32 @@ export default function AcDevicesIntegrationTab({ location, canEdit }) {
       <section className="space-y-3 pt-4 border-t border-un1t-border/40">
         <div className="flex items-center justify-between">
           <h4 className="text-xs font-bold text-un1t-text uppercase tracking-wider">Devices</h4>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => startDiscovery('sensibo')}
-              disabled={!sensiboApiKey.trim() || discoveryLoading}
-              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-un1t-border text-xs text-un1t-subtle hover:text-un1t-text disabled:opacity-50"
-              title={!sensiboApiKey.trim() ? 'Save a Sensibo API key first' : ''}
-            >
-              <Plus size={11} /> Add Sensibo
-            </button>
-            <button
-              type="button"
-              onClick={() => startDiscovery('thinq')}
-              disabled={!thinqPat.trim() || !thinqClientId.trim() || discoveryLoading}
-              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-un1t-border text-xs text-un1t-subtle hover:text-un1t-text disabled:opacity-50"
-              title={!thinqPat.trim() ? 'Save a ThinQ PAT first' : ''}
-            >
-              <Plus size={11} /> Add LG ThinQ
-            </button>
-          </div>
+          {devices !== null && (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => startDiscovery('sensibo')}
+                disabled={!sensiboApiKey.trim() || discoveryLoading}
+                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-un1t-border text-xs text-un1t-subtle hover:text-un1t-text disabled:opacity-50"
+                title={!sensiboApiKey.trim() ? 'Save a Sensibo API key first' : ''}
+              >
+                <Plus size={11} /> Add Sensibo
+              </button>
+              <button
+                type="button"
+                onClick={() => startDiscovery('thinq')}
+                disabled={!thinqPat.trim() || !thinqClientId.trim() || discoveryLoading}
+                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-un1t-border text-xs text-un1t-subtle hover:text-un1t-text disabled:opacity-50"
+                title={!thinqPat.trim() ? 'Save a ThinQ PAT first' : ''}
+              >
+                <Plus size={11} /> Add LG ThinQ
+              </button>
+            </div>
+          )}
         </div>
 
-        {/* Add-device discovery panel */}
-        {adding && (
+        {/* Add-device discovery panel (never over an unread device list) */}
+        {adding && devices !== null && (
           <div className="bg-un1t-bg/60 border border-un1t-border rounded-md p-3 space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold text-un1t-text">
@@ -370,22 +379,20 @@ export default function AcDevicesIntegrationTab({ location, canEdit }) {
         )}
 
         {/* Devices list */}
-        {devicesLoading && devices.length === 0 && (
+        {devicesLoading && devices === null && (
           <div className="text-xs text-un1t-subtle inline-flex items-center gap-2">
             <Loader2 size={12} className="animate-spin" /> Loading…
           </div>
         )}
-        {devicesError && (
-          <div className="text-xs text-red-700 bg-red-500/10 border border-red-500/30 rounded p-2 inline-flex items-start gap-2">
-            <AlertCircle size={11} className="mt-0.5" /> {devicesError}
-          </div>
+        {!devicesLoading && devices === null && (
+          <ReadFailedNote what="this studio's AC devices" onRetry={() => loadDevices({ silent: true })} />
         )}
-        {!devicesLoading && devices.length === 0 && (
+        {devices !== null && devices.length === 0 && (
           <div className="text-xs text-un1t-subtle">
             No devices configured. Add one above after saving credentials.
           </div>
         )}
-        {devices.length > 0 && (
+        {devices !== null && devices.length > 0 && (
           <div className="space-y-2">
             {devices.map((d) => (
               <DeviceRow
