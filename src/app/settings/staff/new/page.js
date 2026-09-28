@@ -38,7 +38,7 @@ export default async function NewStaffPage() {
   // Per mig 051 — locations the caller is owner at, derived from the
   // resolved rolesByLocation map. Master gets every location.
   const callerOwnerLocationIds = user.isMaster
-    ? (locations || []).map(l => l.id)
+    ? locations.map(l => l.id)
     : Object.entries(user.rolesByLocation || {})
         .filter(([, r]) => r === 'owner')
         .map(([loc]) => loc)
