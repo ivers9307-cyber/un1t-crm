@@ -46,7 +46,7 @@ vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
 import { GET } from './route.js'
 import { listEnabledSettings, listActiveEquipment, listSubmittedSince } from '@/lib/equipment-db'
 import { readRoleRecipientIds } from '@/lib/push'
-import { logError } from '@/lib/log'
+import { logError, logWarn } from '@/lib/log'
 import { sendPushOnce } from '@/lib/push-dedup'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 
@@ -171,5 +171,28 @@ describe('GET /api/cron/equipment-inspection-sweep', () => {
   it('calls stampHeartbeat with the exact mig-470 name', async () => {
     await GET(req())
     expect(stampHeartbeat).toHaveBeenCalledWith('equipment-inspection-sweep')
+  })
+
+  // C21 PUSHDONE.1 — a push that reached nobody was reported pushed: true.
+  it('a push that reached nobody because it failed is reported push_failed, not pushed, and logged', async () => {
+    listEnabledSettings.mockResolvedValue([SETTINGS_A])
+    listActiveEquipment.mockResolvedValue(OVERDUE_ASSETS)
+    readRoleRecipientIds.mockResolvedValue({ ids: ['prof-owner'], error: null })
+    sendPushOnce.mockResolvedValueOnce({ sent: 0, skipped: 0, invalidated: 0, failed: 1, deduped: 0, read_failed: 1 })
+    const body = await (await GET(req())).json()
+    expect(body.data.locations).toEqual([
+      { locationId: 'loc-a', overdue: 1, pushed: false, push_failed: true },
+    ])
+    expect(logWarn).toHaveBeenCalledWith('equipment-cron', 'overdue push reached nobody; the day key was released, the next run chases again',
+      { locationId: 'loc-a', overdue: 1, read_failed: true })
+  })
+
+  it('a same-day re-run that finds the key already claimed is still pushed (deduped is settled, not failed)', async () => {
+    listEnabledSettings.mockResolvedValue([SETTINGS_A])
+    listActiveEquipment.mockResolvedValue(OVERDUE_ASSETS)
+    readRoleRecipientIds.mockResolvedValue({ ids: ['prof-owner'], error: null })
+    sendPushOnce.mockResolvedValueOnce({ sent: 0, skipped: 0, invalidated: 0, failed: 0, deduped: 1 })
+    const body = await (await GET(req())).json()
+    expect(body.data.locations[0]).toEqual({ locationId: 'loc-a', overdue: 1, pushed: true })
   })
 })

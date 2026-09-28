@@ -354,6 +354,20 @@ const config = [
       'src/lib/notify.js',
       'src/lib/push-dedup.js',
       'src/lib/customer-push.js',
+      // PUSHDONE.1a — the staff callers that record "done" around a push: the
+      // stamp now follows the send, so a lost stamp write must be said.
+      // Measured on main aea71b1f: approvals-sla 3 (the escalate stamp F6,
+      // the expire claim, the funnel-row sync), handoff-sla 2 (the escalate
+      // stamp, the auto-resolve write), reminder-runner 2 (F3), WhatsApp
+      // health 4, the other three 0; 0 after.
+      'src/lib/push-outcome.js',
+      'src/lib/agent/approvals-sla.js',
+      'src/lib/agent/handoff-sla.js',
+      'src/lib/hyrox/reminder-runner.js',
+      'src/app/api/cron/refresh-whatsapp-health/route.js',
+      'src/app/api/cron/contract-reminders/route.js',
+      'src/app/api/cron/checklist-sweep/route.js',
+      'src/app/api/cron/equipment-inspection-sweep/route.js',
       // SETTINGSWIPE.1 — the one writer of locations.settings and the seven
       // routes that used to wipe it (three of them with bare or discarded
       // writes that answered success). Measured on main 6c6775ee: 3 findings

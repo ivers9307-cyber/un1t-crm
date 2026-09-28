@@ -42,7 +42,7 @@ async function classRecipients(db, locationId, occ) {
 }
 
 export async function runHyroxClassReminder(db, { nowMs = Date.now() } = {}) {
-  const stats = { classes: 0, reminded: 0, recipients: 0, recipients_failed: 0, send_failed: 0 }
+  const stats = { classes: 0, reminded: 0, recipients: 0, recipients_failed: 0, send_failed: 0, claim_failed: 0 }
   const { data: blocks } = await db
     .from('hyrox_blocks').select('id, location_id, starts_on, weeks, session_weekdays').eq('status', 'active')
 
@@ -84,10 +84,21 @@ export async function runHyroxClassReminder(db, { nowMs = Date.now() } = {}) {
         // Claim this occurrence race-safely — ON CONFLICT DO NOTHING. Only the
         // insert that actually wrote a row proceeds to send; a second tick (or a
         // concurrent run) gets no rows back and skips.
-        const { data: claimed } = await db.from('hyrox_class_reminders')
+        // C21 PUSHDONE.1 (F3) — a FAILED claim is not "already claimed": it was
+        // read that way in silence. Nothing is sent without a claim (sending
+        // unclaimed could repeat every tick); the next 5-minute tick, still
+        // inside the 30-minute lead, tries again, and the failure is said.
+        const { data: claimed, error: claimErr } = await db.from('hyrox_class_reminders')
           .upsert({ location_id: block.location_id, class_starts_at: occ.starts_at },
                   { onConflict: 'location_id,class_starts_at', ignoreDuplicates: true })
           .select('id')
+        if (claimErr) {
+          stats.claim_failed++
+          logWarn('hyrox-reminder', 'claim write failed; nothing sent, the next tick retries', {
+            locationId: block.location_id, class_starts_at: occ.starts_at, err: claimErr.message,
+          })
+          continue
+        }
         if (!claimed || !claimed.length) continue
         const reminderId = claimed[0].id
 
@@ -131,10 +142,13 @@ export async function runHyroxClassReminder(db, { nowMs = Date.now() } = {}) {
           continue
         }
 
-        // Best-effort bookkeeping — never fails the send.
-        await db.from('hyrox_class_reminders')
+        // Best-effort bookkeeping — never fails the send (F3: now said when lost).
+        const { error: bookErr } = await db.from('hyrox_class_reminders')
           .update({ session_id: session?.id || null, recipient_count: recipientIds.length })
           .eq('id', reminderId)
+        if (bookErr) {
+          logWarn('hyrox-reminder', 'reminder bookkeeping write failed; the reminder was sent', { reminderId, err: bookErr.message })
+        }
         stats.reminded++
         stats.recipients += recipientIds.length
       }
