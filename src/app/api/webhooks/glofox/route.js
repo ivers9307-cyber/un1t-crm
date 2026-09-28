@@ -10,8 +10,11 @@
 //      branch_id matches the payload's branchId).
 //   3. Verify the HMAC-SHA256 signature against THAT location's
 //      webhook_secret. Wrong/missing → 401.
-//   4. Record in glofox_webhook_events for idempotency + audit. The
-//      event_id UNIQUE constraint dedupes retried deliveries.
+//   4. Record in glofox_webhook_events. NOTE (WEBHOOKAUDIT.1): event_id is
+//      Glofox's ENTITY id (Payload.id), not an emission id, so a booking's
+//      later events upsert this same row and it holds only the LATEST
+//      event. Each processed delivery also writes one PII-free row to
+//      glofox_webhook_attempts (src/lib/glofox-webhook-attempts.js).
 //   5. Find the matching CRM contact by email, scoped to the
 //      resolved location. MEMBER_CREATED for an unknown member
 //      CREATES the contact in real time (single-member fetch +
@@ -50,6 +53,7 @@ import { applyMembershipPauseWindow } from '@/lib/glofox-membership'
 import { maybeEnrolDunning, exitDunningForContact, dunningActionFor } from '@/lib/dunning'
 import { applyMemberSync } from '@/lib/glofox-sync'
 import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
+import { buildGlofoxWebhookAttempt, recordGlofoxWebhookAttempt } from '@/lib/glofox-webhook-attempts'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -71,6 +75,9 @@ function getSignatureHeader(request) {
 }
 
 export async function POST(request) {
+  // WEBHOOKAUDIT.1 — when this delivery reached us (the event row's
+  // received_at is when its ENTITY was first seen, not this delivery).
+  const deliveredAt = new Date().toISOString()
   // Read raw body BEFORE parsing — HMAC must compute over the
   // bytes Glofox sent, not a re-stringified copy.
   const rawBody = await request.text()
@@ -143,9 +150,18 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   }
 
-  // 3. Insert / upsert the event row (idempotency boundary). When
-  // event_id is null Glofox didn't include one — we still record
-  // for debug, just skip the dedupe.
+  // 3. Insert / upsert the event row. When event_id is null Glofox didn't
+  // include one — we still record for debug.
+  //
+  // WEBHOOKAUDIT.1 — this is NOT a working dedup boundary, and must not be
+  // "fixed" in passing. event_id is the ENTITY id (Payload.id), so 57% of
+  // deliveries are a LATER event about a booking we already have a row for;
+  // the upsert rewrites status to 'received' and returns it, so the
+  // 'deduped' branch below never fires and each of those events is
+  // processed, as it must be. Switching to ignoreDuplicates: true would
+  // silently drop every one of them. A genuine retry of the same emission
+  // (same Metadata.trace_id; 2 in 30 days) is processed again today. See
+  // follow-up C46 GLOFOXDEDUP.1 before touching this.
   let eventRow
   if (parsed.eventId) {
     const { data, error } = await db
@@ -199,6 +215,10 @@ export async function POST(request) {
     return NextResponse.json({ success: true, status: 'dark_launch', event_row_id: eventRow.id })
   }
 
+  // WEBHOOKAUDIT.1 — everything markEvent needs to write this delivery's
+  // attempt row beside the event row.
+  const attemptCtx = { eventRowId: eventRow.id, locationId: creds.locationId, parsed, payload, deliveredAt }
+
   // 5–9. Action block — everything AFTER auth + dedup + dark-launch is the
   // "processing" boundary. If anything here throws unexpectedly (a bug, a
   // transient lib error, etc.) we capture a dead-letter row and still 200 the
@@ -210,7 +230,7 @@ export async function POST(request) {
     // not failed — Glofox might send domains we haven't mapped yet.
     const tags = tagsForGlofoxEvent(parsed.eventType)
     if (tags.length === 0) {
-      await markEvent(db, eventRow.id, 'unknown_event_type', null, null)
+      await markEvent(db, attemptCtx, 'unknown_event_type', null, null)
       return NextResponse.json({ success: true, status: 'unknown_event_type', event_type: parsed.eventType })
     }
 
@@ -221,7 +241,7 @@ export async function POST(request) {
     //      events which Glofox's payloads ship without an email
     //      (GLOFOX5.1).
     if (!parsed.contactEmail && !parsed.userId) {
-      await markEvent(db, eventRow.id, 'failed', null, 'No contact_email or user_id in payload')
+      await markEvent(db, attemptCtx, 'failed', null, 'No contact_email or user_id in payload')
       return NextResponse.json({ success: true, status: 'no_email' })
     }
 
@@ -234,7 +254,7 @@ export async function POST(request) {
         .eq('email', parsed.contactEmail)
         .limit(1)
       if (contactErr) {
-        await markEvent(db, eventRow.id, 'failed', null, `Contact lookup by email: ${contactErr.message}`)
+        await markEvent(db, attemptCtx, 'failed', null, `Contact lookup by email: ${contactErr.message}`)
         return NextResponse.json({ success: true, status: 'lookup_error' })
       }
       contact = contactRows?.[0] || null
@@ -247,7 +267,7 @@ export async function POST(request) {
         .eq('glofox_member_id', parsed.userId)
         .limit(1)
       if (contactErr) {
-        await markEvent(db, eventRow.id, 'failed', null, `Contact lookup by glofox_member_id: ${contactErr.message}`)
+        await markEvent(db, attemptCtx, 'failed', null, `Contact lookup by glofox_member_id: ${contactErr.message}`)
         return NextResponse.json({ success: true, status: 'lookup_error' })
       }
       contact = contactRows?.[0] || null
@@ -292,7 +312,7 @@ export async function POST(request) {
     }
 
     if (!contact) {
-      await markEvent(db, eventRow.id, 'contact_not_found', null, null)
+      await markEvent(db, attemptCtx, 'contact_not_found', null, null)
       return NextResponse.json({
         success: true,
         status: 'contact_not_found',
@@ -501,7 +521,7 @@ export async function POST(request) {
       }
     }
 
-    await markEvent(db, eventRow.id, 'applied', {
+    await markEvent(db, attemptCtx, 'applied', {
       contact_id: contact.id, tags: appliedTags, ltv: ltvResult,
       service: serviceResult, membership_pause: membershipPauseResult,
       dunning: dunningResult, member_sync: memberSyncResult,
@@ -522,30 +542,52 @@ export async function POST(request) {
     logWarn('glofox-webhook', 'processing threw unexpectedly', {
       err: e?.message, event_type: parsed.eventType, event_id: parsed.eventId,
     })
-    await deadLetterWebhook(db, {
-      provider: 'glofox',
-      eventType: parsed.eventType || null,
-      payload,
-      error: e,
-      locationId: creds.locationId,
-    })
+    // WEBHOOKAUDIT.1 — the dead letter keeps the payload; the attempt row
+    // keeps this delivery in the entity's history. In parallel; neither throws.
+    await Promise.all([
+      deadLetterWebhook(db, {
+        provider: 'glofox',
+        eventType: parsed.eventType || null,
+        payload,
+        error: e,
+        locationId: creds.locationId,
+      }),
+      recordGlofoxWebhookAttempt(db, buildGlofoxWebhookAttempt({
+        ...attemptCtx, status: 'processing_failed', result: null, errorMessage: e?.message || 'threw',
+      })),
+    ])
     // Always 200 Glofox — we have the raw payload in dead_letter for replay.
     return NextResponse.json({ success: true, status: 'processing_failed_dead_lettered' })
   }
 }
 
-async function markEvent(db, id, status, result, errorMessage) {
-  try {
-    await db
-      .from('glofox_webhook_events')
-      .update({
-        status,
-        result,
-        error_message: errorMessage,
-        processed_at: new Date().toISOString(),
-      })
-      .eq('id', id)
-  } catch {
-    // Audit-update failure must not 500 the webhook.
-  }
+// Marks the event row AND writes this delivery's attempt row
+// (WEBHOOKAUDIT.1). The two writes are independent, so they go in parallel:
+// no round trip is added to the delivery. Neither can throw or change the
+// response; a failure of either is one logWarn.
+async function markEvent(db, ctx, status, result, errorMessage) {
+  const processedAt = new Date().toISOString()
+  const markRow = (async () => {
+    try {
+      const { error } = await db
+        .from('glofox_webhook_events')
+        .update({
+          status,
+          result,
+          error_message: errorMessage,
+          processed_at: processedAt,
+        })
+        .eq('id', ctx.eventRowId)
+      // This { error } used to be discarded (only a throw was caught), so a
+      // refused audit update left the row at 'received' in silence.
+      if (error) logWarn('glofox-webhook', 'event row update failed', { status, code: error.code || null, err: error.message })
+    } catch (e) {
+      // Audit-update failure must not 500 the webhook.
+      logWarn('glofox-webhook', 'event row update threw', { status, err: e?.message })
+    }
+  })()
+  const recordAttempt = recordGlofoxWebhookAttempt(db, buildGlofoxWebhookAttempt({
+    ...ctx, status, result, errorMessage, processedAt,
+  }))
+  await Promise.all([markRow, recordAttempt])
 }
