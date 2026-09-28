@@ -6,7 +6,7 @@ import { ArrowLeft, Mail, MessageSquare, MessageCircle } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { canViewContact } from '@/lib/contact-crossovers'
-import { hasPermission } from '@/lib/permissions'
+import { canLoadContactConsultations, contactChannelFlags } from '@/lib/contact-page-gates'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { classifyContact, scoreMember } from '@/lib/churn-radar'
 import { loadContactArrears } from '@/lib/churn-radar-data'
@@ -199,10 +199,11 @@ export default async function ContactDetailPage(props) {
   const messages = buildMessageHistory(emailRes.data || [], smsRes.data || [])
 
   // CONTACT-COMPOSER.1 — messaging context for the unified composer.
-  const canWhatsApp = hasPermission(user, 'whatsapp')
-  const canSms = hasPermission(user, 'sms')
-  // DRAWER.4 — ad-hoc email channel (same gate as the /email route).
-  const canEmail = hasPermission(user, 'email')
+  // DRAWER.4 — ad-hoc email channel.
+  // ROLESWEEP.1c — each flag is the send route's own decision: the web OR the
+  // mobile toggle at the CONTACT's location, not the active studio. canWhatsApp
+  // also gates the template read below.
+  const { whatsapp: canWhatsApp, sms: canSms, email: canEmail } = contactChannelFlags(user, contact.location_id)
   const latestWaConversation = waConversations[0] || null
   const whatsappWindowOpen = latestWaConversation?.window_expires_at
     ? new Date(latestWaConversation.window_expires_at) > new Date()
@@ -234,7 +235,10 @@ export default async function ContactDetailPage(props) {
   // runs through createServerClient() (service role — RLS doesn't bind
   // it), so the permission check IS the access gate here, mirroring the
   // goals/consultations/photos API routes.
-  const canConsultations = hasPermission(user, 'consultations')
+  // ROLESWEEP.1c — judged at the CONTACT's location: a caller with
+  // consultations on at their active studio and off at the contact's must not
+  // get this contact's consultations, goals, photos or scans loaded.
+  const canConsultations = canLoadContactConsultations(user, contact.location_id)
   let consultationsTab = null
   if (canConsultations) {
     const [consultsRes, goalsRes, photosRes, scansRes, coachLinksRes] = await Promise.all([
