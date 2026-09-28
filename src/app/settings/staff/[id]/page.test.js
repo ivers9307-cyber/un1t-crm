@@ -80,7 +80,7 @@ function makeDb({ targetLocationIds = [LOC_THEIRS], locError = null, locationRow
     }
     // locations / location_role_permissions / profile_organizations
     const chain = {}
-    for (const op of ['select', 'eq', 'order']) chain[op] = () => chain
+    for (const op of ['select', 'eq', 'order', 'in']) chain[op] = () => chain
     chain.then = (res) => Promise.resolve({ data: table === 'locations' ? locationRows : [] }).then(res)
     return chain
   }
@@ -175,11 +175,12 @@ describe('/settings/staff/[id] — the target must be the caller’s to see', ()
   })
 })
 
-// SECFIX.3a — StaffForm is a client component, and the page read every
-// active location with select('*'), so each studio's stored credentials were
-// serialised into the editor's HTML. The prop is redacted; presence (what
-// StaffForm.isUnifiConfigured reads) survives as the mask.
-describe('/settings/staff/[id] — SECFIX.3a: the locations prop carries no credential', () => {
+// STAFFFORMSETTINGS.1 — StaffForm is a client component. The page read every
+// active studio with select('*') and passed the rows (credentials masked by
+// SECFIX.3a) to it, so each studio's settings (the customer agent's test
+// phone numbers, every integration's config) went into the editor's HTML.
+// The prop is now the identity + a server-computed unifi_configured.
+describe('/settings/staff/[id] — STAFFFORMSETTINGS.1: StaffForm gets identity + unifi_configured, never settings', () => {
   function findElement(node, name) {
     if (!node || typeof node !== 'object') return null
     if (Array.isArray(node)) {
@@ -191,20 +192,30 @@ describe('/settings/staff/[id] — SECFIX.3a: the locations prop carries no cred
     return findElement(node.props?.children, name)
   }
 
-  it('hands StaffForm masked locations', async () => {
+  it('hands StaffForm no settings, no test phone and no credential, and a UniFi boolean', async () => {
     const db = makeDb({
-      locationRows: [{
-        id: LOC_MINE, name: 'Mine', sensibo_api_key: 'SYNTH-S', thinq_pat: 'SYNTH-T',
-        settings: { glofox: { api_key: 'SYNTH-GK' }, unifi: { host: 'https://unifi.example', api_token: 'SYNTH-UT' } },
-      }],
+      locationRows: [
+        {
+          id: LOC_MINE, name: 'Mine', slug: 'mine', features: {}, sensibo_api_key: 'SYNTH-S', thinq_pat: 'SYNTH-T',
+          settings: {
+            glofox: { api_key: 'SYNTH-GK' },
+            unifi: { host: 'https://unifi.example.test', api_token: 'SYNTH-UT', staff_policy_id: 'p1', manager_policy_id: 'p2' },
+            customer_agent: { enabled: true, test_phones: ['+353000000000'] },
+          },
+        },
+        { id: LOC_THEIRS, name: 'Theirs', slug: 'theirs', features: {}, settings: { unifi: { host: 'https://u2.example.test' } } },
+      ],
     })
     createServerClient.mockReturnValue(db)
     getCurrentUser.mockResolvedValue(user({ role: 'master', isMaster: true, rolesByLocation: {} }))
 
     const el = findElement(await call(), 'StaffForm')
     expect(el).toBeTruthy()
-    expect(JSON.stringify(el.props.locations)).not.toMatch(/SYNTH-/)
-    expect(el.props.locations[0].settings.unifi.api_token).toBeTruthy()
-    expect(el.props.locations[0].name).toBe('Mine')
+    const [mine, theirs] = el.props.locations
+    expect(mine).not.toHaveProperty('settings')
+    expect(mine).toMatchObject({ id: LOC_MINE, name: 'Mine', unifi_configured: true })
+    expect(theirs.unifi_configured).toBe(false)
+    expect(JSON.stringify(el.props.locations)).not.toMatch(/SYNTH-|\+353000000000|test_phones/)
+    expect(el.props.callerOwnerLocationIds).toEqual([LOC_MINE, LOC_THEIRS])
   })
 })

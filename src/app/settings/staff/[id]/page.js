@@ -5,7 +5,7 @@ import StaffForm from '@/components/StaffForm'
 import WidgetTokensCard from '@/components/WidgetTokensCard'
 import { canEditStaffMember, mapProfileLocationToAssignment } from '@/lib/staff-access'
 import { isTombstone } from '@/lib/staff-tombstone'
-import { redactLocationSecrets } from '@/lib/location-secrets'
+import { loadStaffFormLocations } from '@/lib/staff-form-locations'
 
 export const dynamic = 'force-dynamic'
 
@@ -68,7 +68,7 @@ export default async function EditStaffPage(props) {
     if (!targetLocationIds.some(id => ownedByCaller.includes(id))) notFound()
   }
 
-  const [profileRes, locationsRes, templatesRes, orgsRes, orgGrantsRes] = await Promise.all([
+  const [profileRes, staffFormLocations, templatesRes, orgsRes, orgGrantsRes] = await Promise.all([
     // CRITICAL: select profile_locations(*) — EVERY column — so
     // mapProfileLocationToAssignment() always receives the full row.
     // History: a narrowed explicit column list silently dropped a
@@ -85,7 +85,10 @@ export default async function EditStaffPage(props) {
       .select('*, profile_locations(*)')
       .eq('id', params.id)
       .single(),
-    db.from('locations').select('*').eq('active', true).eq('is_host_anchor', false).order('name'),
+    // STAFFFORMSETTINGS.1 — identity + unifi_configured, never `settings`
+    // (the customer agent's test phone numbers and every integration's
+    // config rode into this page). A failed read is logged inside.
+    loadStaffFormLocations(db),
     // PERM-AUDIT.3 — role templates (mig 364) so the form hydrates
     // toggles against the role's EFFECTIVE defaults at each location.
     db.from('location_role_permissions').select('location_id, role, employment_type, permissions'),
@@ -128,7 +131,7 @@ export default async function EditStaffPage(props) {
   // locations they themselves are owner at. Used to gate which cards
   // the form can add/remove/edit.
   const callerOwnerLocationIds = user.isMaster
-    ? (locationsRes.data || []).map(l => l.id)
+    ? staffFormLocations.locations.map(l => l.id)
     : ownedByCaller
 
   const staff = {
@@ -154,7 +157,7 @@ export default async function EditStaffPage(props) {
       <p className="text-sm text-un1t-subtle mb-6">Update role, permissions, and access</p>
       <StaffForm
         staff={staff}
-        locations={(locationsRes.data || []).map(redactLocationSecrets) /* SECFIX.3a */}
+        locations={staffFormLocations.locations}
         callerIsMaster={!!user.isMaster}
         callerOwnerLocationIds={callerOwnerLocationIds}
         roleTemplates={roleTemplates}
