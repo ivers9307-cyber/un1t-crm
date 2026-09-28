@@ -39,6 +39,7 @@ import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { glofoxCredentialsForLocation, fetchMemberResult } from '@/lib/glofox'
 import { applyMemberSync } from '@/lib/glofox-sync'
+import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -103,7 +104,10 @@ export async function GET(request) {
 }
 
 async function backfillLocation(db, location, startedAt) {
-  const summary = { create: 0, update: 0, leave: 0, fetch_failed: 0, error: 0, ambiguous: 0, invalid: 0 }
+  // MEMBERRESULT.1 — member_refused: Glofox answered without a member (200
+  // success:false). Counted apart: it used to reach applyMemberSync and land
+  // in `invalid`.
+  const summary = { create: 0, update: 0, leave: 0, fetch_failed: 0, error: 0, ambiguous: 0, invalid: 0, member_refused: 0 }
   let budgetExhausted = false
   let candidatesSeen = 0
   let remaining = null
@@ -163,7 +167,8 @@ async function backfillLocation(db, location, startedAt) {
         if (idx >= items.length) return
         const c = items[idx]
         try {
-          const { ok, member } = await fetchMemberResult(creds, c.glofox_member_id)
+          const { ok, member, refused } = await fetchMemberResult(creds, c.glofox_member_id)
+          if (refused) { summary.member_refused++; continue }
           if (!ok || !member) { summary.fetch_failed++; continue }
           const r = await applyMemberSync(db, location.id, member, {
             creds, membershipCache, skipBookings: true, skipInteractions: true, skipReclassify: true,
@@ -176,6 +181,13 @@ async function backfillLocation(db, location, startedAt) {
       }
     }
     await Promise.all(Array.from({ length: GLOFOX_CONCURRENCY }, worker))
+    // One structured line per run, not per member: a refused contact with no
+    // plan is re-read every tick, and glofoxFetch already warns per call.
+    if (summary.member_refused > 0) {
+      logWarn('glofox-detail-backfill', 'Glofox refused member reads; nothing written for them', {
+        locationId: location.id, refused: summary.member_refused,
+      })
+    }
 
     // How many in the cohort still need detail (progress signal).
     const { count } = await db
