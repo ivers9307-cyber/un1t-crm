@@ -13,7 +13,11 @@
 //                           formatted it in the browser's zone would print a
 //                           time the engine will not act on.
 //   glofoxConnected       — whether class-linked schedules are even offerable
-//                           (the timetable is the trigger source).
+//                           (the timetable is the trigger source), read by id
+//                           with the service role (PROFILESPREAD.1); unknown on
+//                           a failed read, which the page says in a notice
+//                           and passes down as `glofoxUnknown`, so no card
+//                           says "Connect Glofox" over a status it never read.
 //   canManageConnection   — whether to show the Connect form at all. This is
 //                           an AFFORDANCE, not the enforcement: PUT/DELETE
 //                           /api/shelly/connection run guardMasterOrOwner
@@ -28,7 +32,8 @@
 import { redirect } from 'next/navigation'
 import { getCurrentUser, guardMasterOrOwner } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
-import { glofoxConnected } from '@/lib/automations/registry'
+import { createServerClient } from '@/lib/supabase'
+import { readGlofoxAutomationStatus } from '@/lib/automations/glofox-status'
 import { DEFAULT_TZ } from '@/lib/tz-time'
 import ShellyDevicesClient from '@/components/automations/ShellyDevicesClient'
 
@@ -42,6 +47,9 @@ export default async function ShellyPage() {
   const location = user.activeLocation
   if (!location?.id) redirect('/automations')
 
+  // PROFILESPREAD.1 — read by id; a failed read is unknown, never "not connected".
+  const glofox = await readGlofoxAutomationStatus(createServerClient(), location.id)
+
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-6">
       <div>
@@ -50,10 +58,18 @@ export default async function ShellyPage() {
           Shelly plugs and relays — power schedules, live switching and energy use.
         </p>
       </div>
+      {glofox.known === false && (
+        <p role="alert" className="text-sm bg-amber-500/10 text-amber-700 border border-amber-500/30 rounded-md px-3 py-2">
+          Couldn&apos;t check whether Glofox is connected, so class-linked schedules are unavailable until you reload.
+        </p>
+      )}
       <ShellyDevicesClient
         locationName={location.name || ''}
         locationTz={location.timezone || DEFAULT_TZ}
-        glofoxConnected={glofoxConnected(location)}
+        glofoxConnected={glofox.connected === true}
+        // Unknown (a failed read): class mode stays off either way, but the
+        // editor says the check failed instead of "Connect Glofox".
+        glofoxUnknown={glofox.known === false}
         // guardMasterOrOwner returns a 403 response or null; null is "allowed".
         canManageConnection={guardMasterOrOwner(user, location.id) === null}
       />

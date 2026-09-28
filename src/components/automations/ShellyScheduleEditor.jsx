@@ -28,6 +28,10 @@ const MODES = [
 ]
 
 const GLOFOX_HINT = 'Connect Glofox to use class-linked schedules'
+// PROFILESPREAD.1a: the page could not READ the Glofox status (a failed by-id
+// read). Class mode stays off, but the reason must not claim Glofox is not
+// connected.
+export const GLOFOX_UNKNOWN_HINT = "Couldn't check Glofox. Reload to try again."
 
 const clampMin = (v) => {
   const n = Number(v)
@@ -37,7 +41,8 @@ const clampMin = (v) => {
 
 const sameJson = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
 
-export default function ShellyScheduleEditor({ device, glofoxConnected, onSave }) {
+export default function ShellyScheduleEditor({ device, glofoxConnected, glofoxUnknown = false, onSave }) {
+  const classHint = glofoxUnknown ? GLOFOX_UNKNOWN_HINT : GLOFOX_HINT
   const [mode, setMode] = useState(device.schedule_mode || 'none')
   const [windows, setWindows] = useState(Array.isArray(device.fixed_windows) ? device.fixed_windows : [])
   const [lead, setLead] = useState(device.class_rule?.lead_min ?? DEFAULT_LEAD_MIN)
@@ -115,7 +120,7 @@ export default function ShellyScheduleEditor({ device, glofoxConnected, onSave }
           return (
             <label
               key={m.value}
-              title={disabled ? GLOFOX_HINT : m.hint}
+              title={disabled ? classHint : m.hint}
               className={`inline-flex items-center gap-1.5 text-xs ${disabled ? 'text-un1t-muted' : 'text-un1t-text'}`}
             >
               <input
@@ -151,7 +156,7 @@ export default function ShellyScheduleEditor({ device, glofoxConnected, onSave }
               max={MAX_CLASS_LEAD_LAG_MIN}
               value={lead}
               disabled={!glofoxConnected}
-              title={!glofoxConnected ? GLOFOX_HINT : undefined}
+              title={!glofoxConnected ? classHint : undefined}
               onChange={(e) => { setLead(e.target.value); setSaved(false) }}
               onKeyDown={(e) => onRuleKeyDown(e, () => setLead(storedRule.lead_min))}
               className="w-16 rounded border border-un1t-border bg-un1t-bg px-2 py-1 text-un1t-text disabled:opacity-40"
@@ -166,7 +171,7 @@ export default function ShellyScheduleEditor({ device, glofoxConnected, onSave }
               max={MAX_CLASS_LEAD_LAG_MIN}
               value={lag}
               disabled={!glofoxConnected}
-              title={!glofoxConnected ? GLOFOX_HINT : undefined}
+              title={!glofoxConnected ? classHint : undefined}
               onChange={(e) => { setLag(e.target.value); setSaved(false) }}
               onKeyDown={(e) => onRuleKeyDown(e, () => setLag(storedRule.lag_min))}
               className="w-16 rounded border border-un1t-border bg-un1t-bg px-2 py-1 text-un1t-text disabled:opacity-40"
@@ -177,7 +182,7 @@ export default function ShellyScheduleEditor({ device, glofoxConnected, onSave }
       )}
 
       {mode === 'class' && !glofoxConnected && (
-        <p className="text-xs text-amber-700">{GLOFOX_HINT}.</p>
+        <p className="text-xs text-amber-700">{glofoxUnknown ? GLOFOX_UNKNOWN_HINT : `${GLOFOX_HINT}.`}</p>
       )}
 
       <div className="flex items-center gap-2 pt-1">

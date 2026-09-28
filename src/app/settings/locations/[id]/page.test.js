@@ -295,7 +295,7 @@ describe('/settings/locations/[id] — the location prop carries no AC credentia
   // credential (the double ignores the select list, so this proves the
   // redaction, not just the named columns), and the page's own read hands
   // back the same raw row. Nothing the page passes as `user` may carry a value.
-  it('the user prop carries no Sensibo key, ThinQ PAT or settings credentials (C35 SECFIX.3a)', async () => {
+  it('the user prop carries no Sensibo key, ThinQ PAT or settings (C35 SECFIX.3a, PROFILESPREAD.1)', async () => {
     const SECRET_ROW = {
       ...ROW,
       settings: {
@@ -333,9 +333,12 @@ describe('/settings/locations/[id] — the location prop carries no AC credentia
       const passedUser = findElement(tree, 'LocationIntegrations').props.user
       expect(passedUser.id).toBe(profile.id)
       expect(JSON.stringify(passedUser)).not.toContain('synthetic-not-real')
-      // Presence survives: "is Glofox configured?" still reads true off it.
-      expect(passedUser.activeLocation.settings.glofox.api_key).toBe(LOCATION_SECRET_MASK)
-      expect(passedUser.locations[0].sensibo_api_key).toBe(LOCATION_SECRET_MASK)
+      // PROFILESPREAD.1 — no location on it carries settings or a credential
+      // column at all (the pick drops them even from this raw embed).
+      // LocationIntegrations reads presence off its own `location` prop.
+      expect(passedUser.activeLocation).not.toHaveProperty('settings')
+      expect(passedUser.locations[0]).not.toHaveProperty('settings')
+      expect(passedUser.locations[0]).not.toHaveProperty('sensibo_api_key')
     } finally {
       sessionUser = null
       getCurrentUser.mockReset()

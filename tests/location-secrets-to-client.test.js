@@ -5,8 +5,8 @@
 // shrink by deletion (the role-at-target posture).
 //
 //   redacted     the file references a redaction function
-//                (redactLocationSecrets / redactLinkedLocations /
-//                redactProfileLocations / toClientLocation) before the rows
+//                (redactLocationSecrets / redactProfileLocations /
+//                toClientLocation) before the rows
 //                reach a client component or a JSON response
 //   server-only  the rows never leave the server (reason given)
 //   api-key-json the rows ARE returned as JSON, but only to an API-key
@@ -47,7 +47,7 @@ const PATTERNS = [
   /from\(\s*['"`]locations['"`]\s*\)\s*\.select\(\s*['"`]\s*\*\s*[,'"`]/g,
   /from\(\s*['"`]locations['"`]\s*\)[^;]{0,200}?\.select\(\s*\)/g, // from('locations')….select()
 ]
-const REDACTORS = /\b(redactLocationSecrets|redactLinkedLocations|redactProfileLocations|toClientLocation)\b/
+const REDACTORS = /\b(redactLocationSecrets|redactProfileLocations|toClientLocation)\b/
 
 // A redactor must be USED, not merely imported or named in a comment: both
 // of those survive deleting the call that does the work.
