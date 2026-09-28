@@ -28,6 +28,10 @@
 // passes the pre-check-only rule if any one of them decides at the target
 // (and a REVIEWED file keeps passing whatever a later handler adds), so
 // per-handler coverage is the tables in tests/role-sweep/*, not this scan.
+// The requireApiKeyOrManager rule matches the literal call `name(`, so an
+// aliased import, a space before the paren, a wrapper outside
+// src/app/api/**/route.js, or a target decision that only appears inside a
+// string literal all slip past it.
 
 import { stripComments } from './strip-comments.mjs'
 
