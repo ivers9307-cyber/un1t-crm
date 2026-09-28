@@ -345,6 +345,11 @@ export function unreadableAttention(cardKey, ids, message) {
   }
 }
 
+/** A per-location placeholder row for a card whose read failed. Pure. */
+function unknownRow(locationId, extra = {}) {
+  return { locationId, status: HUB_UNKNOWN, message: HUB_UNKNOWN_MESSAGE, ...extra }
+}
+
 // ─────────────────────────────────────────────────────────────
 // Plan & wallet strip (INTEG-C4) — pure derivation helpers
 // ─────────────────────────────────────────────────────────────
@@ -816,6 +821,31 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
     fetchShellyDevices(db, ids),
   ])
 
+  // HUBREAD.1 — every read here judges its error. A failed read grades every
+  // row it feeds 'unknown' (never not_connected: the card would offer Connect
+  // over a live connection, and Xero's Connect rebinds the location through
+  // OAuth; never connected: the page would call it healthy) and earns ONE
+  // attention row, the Shelly pattern below. The registry does NOT fall back
+  // to legacy here: the hub's job is the health GRADE, which lives only in
+  // the registry (C9's fallback is for routes that need credentials).
+  const regErr = regRes.error || null
+  const xeroErr = xeroRes.error || null
+  const waErr = waRes.error || null
+  const adsErr = adsRes.error || null
+  for (const [table, err] of [
+    ['channel_connections', regErr],
+    ['xero_connections', xeroErr],
+    ['whatsapp_numbers', waErr],
+    ['ad_accounts', adsErr],
+  ]) {
+    if (err) {
+      logWarn('integrations-hub', `${table} read failed — its cards graded unknown`, {
+        error: err.message,
+        locations: ids.length,
+      })
+    }
+  }
+
   const regRows = regRes.data || []
   const xeroRows = xeroRes.data || []
   const waRows = waRes.data || []
@@ -827,9 +857,19 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
   }))
 
   const attentionInputs = []
+  const pushUnreadable = (cardKey, message) => {
+    const row = unreadableAttention(cardKey, ids, message)
+    if (row) attentionInputs.push(row)
+  }
+  if (regErr) pushUnreadable('registry', 'Could not load the Glofox, Instagram and studio device connections just now. Try again in a moment.')
+  if (xeroErr) pushUnreadable('xero')
+  if (waErr) pushUnreadable('whatsapp')
+  if (adsErr) pushUnreadable('ads')
 
   // ── Glofox — per-location rows (registry first, legacy fallback) ──
-  const glofox = locs.map((loc) => {
+  const glofox = regErr
+    ? locs.map((loc) => unknownRow(loc.id, { href: locationTabHref(loc.id, 'glofox') }))
+    : locs.map((loc) => {
     const reg = pickRegistry(regRows, loc.id, 'glofox')
     const legacy = registryRowFromLegacy('glofox', loc) // presence only — secrets stay here
     const status = reg ? reg.status : (legacy ? 'connected' : 'not_connected')
@@ -859,7 +899,9 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
   })
 
   // ── WhatsApp — per-location numbers + optional tier budget meter ──
-  const whatsapp = await Promise.all(locs.map(async (loc) => {
+  const whatsapp = waErr
+    ? locs.map((loc) => unknownRow(loc.id, { numbers: [], budget: null, href: locationTabHref(loc.id, 'whatsapp') }))
+    : await Promise.all(locs.map(async (loc) => {
     const numbers = waRows.filter((n) => n.location_id === loc.id).map((n) => {
       const grade = gradeWhatsappNumber(n)
       return {
@@ -901,7 +943,9 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
   }))
 
   // ── Instagram — registry rows (health cron maintains status) ──
-  const instagram = locs.flatMap((loc) => {
+  const instagram = regErr
+    ? locs.map((loc) => unknownRow(loc.id, { href: locationTabHref(loc.id, 'instagram') }))
+    : locs.flatMap((loc) => {
     const reg = pickRegistry(regRows, loc.id, 'instagram')
     if (!reg) return []
     const href = locationTabHref(loc.id, 'instagram')
@@ -924,7 +968,9 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
   })
 
   // ── Xero — per-location OAuth binding (mirrors XeroIntegrationTab) ──
-  const xero = locs.flatMap((loc) => {
+  const xero = xeroErr
+    ? locs.map((loc) => unknownRow(loc.id, { href: locationTabHref(loc.id, 'xero') }))
+    : locs.flatMap((loc) => {
     const row = xeroRows.find((x) => x.location_id === loc.id) || null
     const grade = gradeXeroConnection(row)
     const href = locationTabHref(loc.id, 'xero')
@@ -947,7 +993,9 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
   })
 
   // ── Ad accounts — presence only (per /api/settings/ads semantics) ──
-  const ads = locs.flatMap((loc) => {
+  const ads = adsErr
+    ? locs.map((loc) => unknownRow(loc.id, { href: locationTabHref(loc.id, 'ads') }))
+    : locs.flatMap((loc) => {
     return adRows.filter((a) => a.location_id === loc.id && a.provider === 'meta').map((a) => {
       const status = a.is_active && a.has_access_token ? 'connected' : 'not_connected'
       const href = locationTabHref(loc.id, 'ads')
@@ -1095,16 +1143,28 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
   })
 
   // ── SMS sender (platform-managed card's live signal) ──
-  const sms = locs.map((loc) => {
-    const reg = pickRegistry(regRows, loc.id, 'twilio_sender')
-    const senderId = reg?.config?.sender_id ?? loc.twilio_alpha_sender_id ?? null
-    return {
-      locationId: loc.id,
-      senderId,
-      source: reg ? 'registry' : 'legacy',
-      href: locationTabHref(loc.id, 'twilio'),
-    }
-  })
+  // senderKnown: false when the registry read failed. The legacy column may
+  // be stale against the registry's config, so the card shows "could not
+  // load" and hides Edit sender ID rather than guess (HUBREAD.1).
+  const sms = regErr
+    ? locs.map((loc) => ({
+        locationId: loc.id,
+        senderId: null,
+        senderKnown: false,
+        source: null,
+        href: locationTabHref(loc.id, 'twilio'),
+      }))
+    : locs.map((loc) => {
+        const reg = pickRegistry(regRows, loc.id, 'twilio_sender')
+        const senderId = reg?.config?.sender_id ?? loc.twilio_alpha_sender_id ?? null
+        return {
+          locationId: loc.id,
+          senderId,
+          senderKnown: true,
+          source: reg ? 'registry' : 'legacy',
+          href: locationTabHref(loc.id, 'twilio'),
+        }
+      })
 
   // ── AI agent live signal (locations.settings.customer_agent) ──
   const agent = locs.map((loc) => ({
@@ -1114,7 +1174,9 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
   }))
 
   // ── Hidden tier: UniFi / Climate / BCA from the registry ──
-  const unifi = locs.flatMap((loc) => {
+  const unifi = regErr
+    ? locs.map((loc) => unknownRow(loc.id, { href: locationTabHref(loc.id, 'unifi') }))
+    : locs.flatMap((loc) => {
     const reg = pickRegistry(regRows, loc.id, 'unifi')
     const legacy = registryRowFromLegacy('unifi', loc)
     if (!reg && !legacy) return []
@@ -1139,7 +1201,9 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
     }]
   })
 
-  const climate = locs.flatMap((loc) => {
+  const climate = regErr
+    ? locs.map((loc) => unknownRow(loc.id, { vendors: [], href: locationTabHref(loc.id, 'ac-devices') }))
+    : locs.flatMap((loc) => {
     const vendors = []
     const sensiboReg = pickRegistry(regRows, loc.id, 'sensibo')
     const sensiboLegacy = registryRowFromLegacy('sensibo', loc)
@@ -1174,7 +1238,9 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
     }]
   })
 
-  const bca = locs.flatMap((loc) => {
+  const bca = regErr
+    ? locs.map((loc) => unknownRow(loc.id, { href: locationTabHref(loc.id, 'bca') }))
+    : locs.flatMap((loc) => {
     const reg = pickRegistry(regRows, loc.id, 'bca')
     const legacy = registryRowFromLegacy('bca', loc)
     if (!reg && !legacy) return []

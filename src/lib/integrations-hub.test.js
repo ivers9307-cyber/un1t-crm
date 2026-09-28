@@ -825,3 +825,80 @@ describe('buildAttention — unreadable rows (HUBREAD.1)', () => {
     expect(out[1].message).toBe('Could not load Email delivery just now. Try again in a moment.')
   })
 })
+
+describe('assembleIntegrationsHub — a failed read is never "not connected" (HUBREAD.1)', () => {
+  // Live legacy Glofox + UniFi + BCA on A: on main a failed registry read
+  // falls back to these and paints them green.
+  const LIVE_A = {
+    ...LOC_A,
+    settings: {
+      glofox: { branch_id: 'br-1', api_key: 'k', api_token: 't' },
+      unifi: { host: 'https://u:12445', api_token: 'u' },
+    },
+    bca_config: { send_from: 'a@ccf.com' },
+  }
+
+  it('registry read fails → every registry-derived row is unknown, for every location', async () => {
+    const db = tableDb({ channel_connections: { error: { message: 'db exploded' } } })
+    const data = await assembleIntegrationsHub(db, [LIVE_A, LOC_B], { now: NOW })
+    for (const key of ['glofox', 'instagram', 'unifi', 'climate', 'bca']) {
+      expect(data[key].map((r) => r.locationId)).toEqual([LIVE_A.id, LOC_B.id])
+      for (const r of data[key]) {
+        expect(r.status).toBe('unknown')
+        expect(r.message).toBe('Could not load this just now. Try again in a moment.')
+      }
+    }
+    // SMS keeps its per-location rows but does not guess the sender.
+    for (const r of data.sms) expect(r).toMatchObject({ senderId: null, senderKnown: false })
+    // ONE attention row for the one failed read.
+    const nag = data.attention.filter((a) => a.unreadable)
+    expect(nag).toHaveLength(1)
+    expect(nag[0]).toMatchObject({
+      cardKey: 'registry',
+      label: 'Connections',
+      locationId: LIVE_A.id,
+      locationName: 'All locations',
+      message: 'Could not load the Glofox, Instagram and studio device connections just now. Try again in a moment.',
+    })
+    expect(JSON.stringify(data)).not.toContain('db exploded')
+  })
+
+  for (const [table, key, label] of [
+    ['xero_connections', 'xero', 'Xero'],
+    ['whatsapp_numbers', 'whatsapp', 'WhatsApp'],
+    ['ad_accounts', 'ads', 'Meta Ads'],
+  ]) {
+    it(`${table} read fails → ${key} rows unknown per location + one attention row`, async () => {
+      const db = tableDb({ [table]: { error: { message: 'db exploded' } } })
+      const data = await assembleIntegrationsHub(db, [LOC_A, LOC_B], { now: NOW })
+      expect(data[key].map((r) => [r.locationId, r.status])).toEqual([
+        [LOC_A.id, 'unknown'],
+        [LOC_B.id, 'unknown'],
+      ])
+      const nag = data.attention.filter((a) => a.cardKey === key)
+      expect(nag).toHaveLength(1)
+      expect(nag[0]).toMatchObject({
+        unreadable: true,
+        locationId: LOC_A.id,
+        message: `Could not load ${label} just now. Try again in a moment.`,
+      })
+      // The other cards still read normally.
+      expect(data.glofox.every((r) => r.status === 'not_connected')).toBe(true)
+    })
+  }
+
+  it('a WhatsApp unknown row carries no numbers and no budget', async () => {
+    const db = tableDb({ whatsapp_numbers: { error: { message: 'x' } } })
+    const data = await assembleIntegrationsHub(db, [LOC_A], { now: NOW })
+    expect(data.whatsapp[0]).toMatchObject({ status: 'unknown', numbers: [], budget: null })
+  })
+
+  it('healthy reads are unchanged: no unknown rows, no unreadable attention', async () => {
+    const data = await assembleIntegrationsHub(tableDb(), [LIVE_A, LOC_B], { now: NOW })
+    const all = ['glofox', 'whatsapp', 'instagram', 'xero', 'ads', 'unifi', 'climate', 'bca'].flatMap((k) => data[k])
+    expect(all.some((r) => r.status === 'unknown')).toBe(false)
+    expect(data.attention.some((a) => a.unreadable)).toBe(false)
+    expect(data.glofox.find((r) => r.locationId === LIVE_A.id).status).toBe('connected')
+    for (const r of data.sms) expect(r.senderKnown).toBe(true)
+  })
+})
