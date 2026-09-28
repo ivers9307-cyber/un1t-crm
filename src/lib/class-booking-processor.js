@@ -4,8 +4,10 @@
 // returner with nothing to book with goes to staff review — and a
 // returner is never auto-granted a fresh trial. Brand-new leads: ensure a
 // Glofox account + trial credit, book the class, send the
-// booking_class_confirmed WhatsApp. Any failure → review.
-import { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, createBooking, interpretBookingResult, fetchUserCredits, fetchUserBookingsResult, GLOFOX_BOOKING_MODEL } from '@/lib/glofox'
+// booking_class_confirmed WhatsApp. Any failure → review, except a read
+// that could not be made (unreadable settings, an unreadable credits
+// balance): those THROW so the queue retries them first.
+import { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, createBooking, interpretBookingResult, fetchUserCreditsResult, fetchUserBookingsResult, GLOFOX_BOOKING_MODEL } from '@/lib/glofox'
 import { computeCreditsRemaining } from '@/lib/glofox-sync'
 import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
 import { hasBookableMembership, personRowsForContact, corroborated, reusableSibling, electWriteAccount, chunkIds } from '@/lib/person-accounts'
@@ -23,6 +25,32 @@ const MAX_ATTEMPTS = 3 // keep in sync with the process-class-bookings cron
 
 async function setStatus(db, id, fields) {
   try { await db.from('class_booking_requests').update(fields).eq('id', id) } catch (e) { logWarn('cbp', 'status update failed', { err: e }) }
+}
+
+// CBPCREDITREAD.1 — a Glofox credits read that FAILED (still 429/5xx after
+// glofoxFetch's own retries, any other non-2xx, a network throw) is
+// "unknown", never "no credits". fetchUserCredits collapsed it into [], so the
+// booking reached staff as needs_credit_grant (whose APPROVE buys the trial
+// membership: membership-requests/[id]/route.js) or prior_attendance ("no
+// usable balance was found"), and staff were told to grant a credit the
+// member may already hold. A THROW is the queue's retry signal
+// (class-booking-queue.js): re-queued under MAX_ATTEMPTS, then a staff card
+// whose reason is reviewReason, 'credit_check_failed' (its copy says the
+// balance is unknown, and approving it grants nothing).
+export class CreditReadError extends Error {
+  constructor() {
+    super('credit_check_failed')
+    this.name = 'CreditReadError'
+    this.reviewReason = 'credit_check_failed'
+  }
+}
+
+// A credits read as a three-way answer: { ok: true, remaining > 0 }, a known
+// nothing ({ ok: true, remaining: 0 | null }; computeCreditsRemaining is null
+// for "no active pack"), or unread ({ ok: false }).
+async function readCredits(creds, memberId) {
+  const { ok, credits } = await fetchUserCreditsResult(creds, memberId)
+  return ok ? { ok: true, remaining: computeCreditsRemaining(credits) } : { ok: false, remaining: null }
 }
 // Exported for class-booking-queue.js (REGISTRYREAD.1a): a booking that
 // exhausts its retries on a THROW lands here too, so staff get a card rather
@@ -334,9 +362,8 @@ export async function processClassBookingRequest(db, request) {
     for (const row of rescueable) {
       let usable = hasBookableMembership(row)
       if (!usable) {
-        let siblingCredits = null
-        try { siblingCredits = computeCreditsRemaining(await fetchUserCredits(creds, row.glofox_member_id)) } catch (e) { logWarn('cbp', 'sibling credit check failed', { err: e }); continue }
-        usable = siblingCredits > 0
+        const siblingRead = await readCredits(creds, row.glofox_member_id)
+        usable = siblingRead.ok && siblingRead.remaining > 0
       }
       if (!usable) continue
       memberId = row.glofox_member_id
@@ -352,18 +379,24 @@ export async function processClassBookingRequest(db, request) {
   if (attended) {
     // Attended before with no Glofox account at all → nothing to book with.
     if (!memberId) return toReview('prior_attendance')
-    let credits = null
-    try { credits = computeCreditsRemaining(await fetchUserCredits(creds, memberId)) } catch (e) { logWarn('cbp', 'credit check failed', { err: e }) }
     // computeCreditsRemaining is null for BOTH "no credits" and "membership
     // without per-class credit records" — the CRM's synced membership status
     // breaks the tie: a bookable membership is bookable (Glofox arbitrates,
     // and a rejection routes to review as booking_failed below). Zero /
-    // null / unreadable with no bookable membership → staff.
+    // null with no bookable membership → staff.
     // hasBookableMembership, NOT status === 'active' — that string never
     // occurs in contacts.glofox_membership_status (see person-accounts.js);
     // this exact check was dead code until PERSON-ACCT.3 fixed it here.
     const activeMembership = hasBookableMembership(balanceRow)
-    if (!(credits > 0) && !activeMembership && !(await rescueSiblingBalance())) {
+    const read = await readCredits(creds, memberId)
+    // CBPCREDITREAD.1 — an UNREAD balance is not "nothing to book with":
+    // retry rather than tell staff the returner has no balance. A bookable
+    // membership still books without it, exactly as before.
+    if (!read.ok && !activeMembership) {
+      logWarn('cbp', 'credit check unreadable; the queue retries', { requestId: request.id })
+      throw new CreditReadError()
+    }
+    if (!(read.remaining > 0) && !activeMembership && !(await rescueSiblingBalance())) {
       return toReview('prior_attendance')
     }
     // Fall through to the booking — consuming the EXISTING balance, never a
@@ -394,12 +427,18 @@ export async function processClassBookingRequest(db, request) {
     grantedTrial = res.status === 'created'
   }
   // Existing never-attended account, no live credit → review (staff grant the
-  // trial + approve); an uncertain credit read also fails safe to review.
+  // trial + approve); an unreadable credit read is retried (CBPCREDITREAD.1).
   // The attended path above did its own balance check.
   if (!attended && !grantedTrial) {
-    let credits = null
-    try { credits = computeCreditsRemaining(await fetchUserCredits(creds, memberId)) } catch (e) { logWarn('cbp', 'credit check failed', { err: e }) }
-    if (credits == null || credits <= 0) {
+    // CBPCREDITREAD.1 — needs_credit_grant only on a read that WORKED: its
+    // approve path buys the trial membership, so it must never rest on a read
+    // that failed. Unread → retry (the queue), then credit_check_failed.
+    const read = await readCredits(creds, memberId)
+    if (!read.ok) {
+      logWarn('cbp', 'credit check unreadable; the queue retries', { requestId: request.id })
+      throw new CreditReadError()
+    }
+    if (read.remaining == null || read.remaining <= 0) {
       // PERSON-ACCT.9 — before asking staff to grant a credit, check the rest
       // of this person: a corroborated sibling may already hold a balance
       // (the same rescue the attended path makes). Only a person-wide empty

@@ -1,20 +1,28 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 // Partial mock: interpretBookingResult stays REAL (it decides booked vs review).
-vi.mock('@/lib/glofox', async (importOriginal) => ({
-  ...(await importOriginal()),
-  glofoxCredentialsForLocation: vi.fn(async () => ({ branchId: 'b', apiKey: 'k', apiToken: 't' })),
-  missingGlofoxCredentialsForLocation: vi.fn(() => []),
-  createBooking: vi.fn(async () => ({ ok: true, status: 200, body: { _id: 'gfb-1' } })),
-  fetchUserCredits: vi.fn(async () => [{ active: true, available: 3 }]),
-  fetchUserBookingsResult: vi.fn(async () => ({ ok: true, bookings: [] })),
-  GLOFOX_BOOKING_MODEL: 'event',
-}))
+// CBPCREDITREAD.1 — the processor reads fetchUserCreditsResult. By default it
+// answers { ok: true } from the fetchUserCredits knob, so every existing test
+// still steers the balance the way it always has (computeCreditsRemaining);
+// a failed read is a per-test mockResolvedValueOnce({ ok: false, credits: [] }).
+vi.mock('@/lib/glofox', async (importOriginal) => {
+  const fetchUserCredits = vi.fn(async () => [{ active: true, available: 3 }])
+  return {
+    ...(await importOriginal()),
+    glofoxCredentialsForLocation: vi.fn(async () => ({ branchId: 'b', apiKey: 'k', apiToken: 't' })),
+    missingGlofoxCredentialsForLocation: vi.fn(() => []),
+    createBooking: vi.fn(async () => ({ ok: true, status: 200, body: { _id: 'gfb-1' } })),
+    fetchUserCredits,
+    fetchUserCreditsResult: vi.fn(async (creds, id) => ({ ok: true, credits: await fetchUserCredits(creds, id) })),
+    fetchUserBookingsResult: vi.fn(async () => ({ ok: true, bookings: [] })),
+    GLOFOX_BOOKING_MODEL: 'event',
+  }
+})
 vi.mock('@/lib/glofox-sync', () => ({ computeCreditsRemaining: vi.fn(() => 3) }))
 vi.mock('@/lib/glofox-push', () => ({ findOrCreateGlofoxMember: vi.fn(async () => ({ status: 'created', glofox_member_id: 'gm1' })) }))
 vi.mock('@/lib/automations/booking-whatsapp-confirm', () => ({ maybeSendBookingWhatsappConfirm: vi.fn(async () => ({ sent: true })), CLASS_CONFIRM_TEMPLATE: 'booking_class_confirmed_' }))
 
-import { processClassBookingRequest } from './class-booking-processor'
-import { createBooking, fetchUserBookingsResult, glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation } from '@/lib/glofox'
+import { processClassBookingRequest, CreditReadError } from './class-booking-processor'
+import { createBooking, fetchUserBookingsResult, fetchUserCreditsResult, glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation } from '@/lib/glofox'
 import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
 import { computeCreditsRemaining } from '@/lib/glofox-sync'
 import { maybeSendBookingWhatsappConfirm, CLASS_CONFIRM_TEMPLATE } from '@/lib/automations/booking-whatsapp-confirm'
@@ -185,5 +193,77 @@ describe('processClassBookingRequest', () => {
     const r = await processClassBookingRequest(db, req)
     expect(r).toEqual({ outcome: 'failed', detail: 'glofox_not_configured' })
     expect(statusWrites).toEqual([{ status: 'failed', last_error: 'glofox_not_configured' }])
+  })
+})
+
+// CBPCREDITREAD.1 — a credits read that FAILED is "unknown", never "no
+// credits". It throws (the queue's retry signal) instead of filing a
+// needs_credit_grant card (whose approve buys a trial membership) or a
+// prior_attendance card ("no usable balance was found").
+describe('CBPCREDITREAD.1: a failed credits read is a retry, never "no credits"', () => {
+  const req = { id: 'r1', location_id: 'L', contact_id: 'c1', glofox_event_id: 'e1', class_name: 'S&C', starts_at: '2026-07-08T17:30:00.000Z' }
+  const unread = { ok: false, credits: [] }
+  // Records every status write and every card insert, so "nothing was
+  // stamped, no card was filed" is asserted, not assumed.
+  function tracedDb(contact) {
+    const db = makeDb(contact)
+    db.statusWrites = []
+    db.cardInserts = []
+    db.update = (patch) => { db.statusWrites.push(patch); return { eq: async () => ({}), is: async () => ({}) } }
+    db.insert = (row) => { db.cardInserts.push(row); return { select: () => ({ maybeSingle: async () => ({ data: { id: 'amr1' } }) }) } }
+    return db
+  }
+
+  it('never-attended linked account, credits read fails → throws CreditReadError; no card, no stamp, no booking', async () => {
+    fetchUserCreditsResult.mockResolvedValueOnce(unread)
+    const db = tracedDb({ id: 'c1', first_name: 'Sam', phone: '0871234567', glofox_member_id: 'gm1', last_attended_at: null })
+
+    const err = await processClassBookingRequest(db, req).catch((e) => e)
+
+    expect(err).toBeInstanceOf(CreditReadError)
+    expect(err.message).toBe('credit_check_failed')
+    expect(err.reviewReason).toBe('credit_check_failed')
+    expect(db.statusWrites).toEqual([])
+    expect(db.cardInserts).toEqual([])
+    expect(createBooking).not.toHaveBeenCalled()
+  })
+
+  it('returner with no bookable membership, credits read fails → throws (not prior_attendance)', async () => {
+    fetchUserCreditsResult.mockResolvedValueOnce(unread)
+    const db = tracedDb({ id: 'c1', first_name: 'Sam', phone: '0871234567', glofox_member_id: 'gm1', glofox_membership_status: 'trial', last_attended_at: '2026-06-01T10:00:00Z' })
+
+    await expect(processClassBookingRequest(db, req)).rejects.toBeInstanceOf(CreditReadError)
+    expect(db.cardInserts).toEqual([])
+    expect(createBooking).not.toHaveBeenCalled()
+  })
+
+  it('returner WITH a bookable membership still books when the credits read fails (Glofox arbitrates, as before)', async () => {
+    fetchUserCreditsResult.mockResolvedValueOnce(unread)
+    const r = await processClassBookingRequest(makeDb({ id: 'c1', first_name: 'Sam', phone: '0871234567', glofox_member_id: 'gm1', glofox_membership_status: 'member', glofox_membership_state: 'active', last_attended_at: '2026-06-01T10:00:00Z' }), req)
+
+    expect(r).toEqual({ outcome: 'booked' })
+    expect(createBooking).toHaveBeenCalled()
+  })
+
+  it('a read that WORKED and found zero still files needs_credit_grant (unchanged)', async () => {
+    computeCreditsRemaining.mockReturnValueOnce(0)
+    const r = await processClassBookingRequest(makeDb({ id: 'c1', first_name: 'Sam', phone: '0871234567', glofox_member_id: 'gm1', last_attended_at: null }), req)
+
+    expect(r).toEqual({ outcome: 'needs_review', detail: 'needs_credit_grant' })
+  })
+
+  it('a returner whose read WORKED and found nothing still files prior_attendance (unchanged)', async () => {
+    computeCreditsRemaining.mockReturnValueOnce(null)
+    const r = await processClassBookingRequest(makeDb({ id: 'c1', first_name: 'Sam', phone: '0871234567', glofox_member_id: 'gm1', glofox_membership_status: 'trial', last_attended_at: '2026-06-01T10:00:00Z' }), req)
+
+    expect(r).toEqual({ outcome: 'needs_review', detail: 'prior_attendance' })
+  })
+
+  it('a brand-new lead never reads credits (the mint grants the trial), so a Glofox credits outage cannot hold it up', async () => {
+    findOrCreateGlofoxMember.mockResolvedValueOnce({ status: 'skipped', glofox_member_id: null })
+    const r = await processClassBookingRequest(makeDb({ id: 'c1', first_name: 'Sam', last_name: 'Lee', phone: '0871234567', glofox_member_id: null, last_attended_at: null }), req)
+
+    expect(r).toEqual({ outcome: 'booked' })
+    expect(fetchUserCreditsResult).not.toHaveBeenCalled()
   })
 })
