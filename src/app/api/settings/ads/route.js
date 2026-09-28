@@ -8,6 +8,7 @@ import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { maskAccountRow, buildAccountPatch } from '@/lib/ads/accounts'
 import { ADMIN_ROLES } from '@/lib/schemas'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -35,8 +36,19 @@ export async function GET(request) {
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
   const db = createServerClient()
-  const { data: accounts } = await db.from('ad_accounts').select('*').eq('location_id', locationId)
-  const { data: locRow } = await db.from('locations').select('settings').eq('id', locationId).maybeSingle()
+  // CHANNELREAD.1 — a failed read is not "no ad account". Answering
+  // success:true + data:[] here made the Ads tab render empty forms (Active
+  // off) over a live account, and hid the failure from its own banner.
+  const { data: accounts, error: accErr } = await db.from('ad_accounts').select('*').eq('location_id', locationId)
+  if (accErr) {
+    logError('settings-ads', 'ad_accounts read failed', { locationId, err: accErr.message })
+    return NextResponse.json({ success: false, error: 'Could not load the ad accounts just now.' }, { status: 500 })
+  }
+  const { data: locRow, error: locErr } = await db.from('locations').select('settings').eq('id', locationId).maybeSingle()
+  if (locErr) {
+    logError('settings-ads', 'locations read failed', { locationId, err: locErr.message })
+    return NextResponse.json({ success: false, error: 'Could not load the report recipients just now.' }, { status: 500 })
+  }
   const existing = locRow?.settings?.ads?.report_recipients
   const report_recipients = Array.isArray(existing) && existing.length ? existing : (user.email ? [user.email] : [])
   return NextResponse.json({ success: true, data: (accounts || []).map(maskAccountRow), report_recipients })
@@ -57,8 +69,16 @@ export async function PUT(request) {
   // Recipients-save mode.
   if (Array.isArray(body.report_recipients)) {
     const recipients = sanitizeRecipients(body.report_recipients)
-    const { data: locRow } = await db.from('locations').select('settings').eq('id', locationId).maybeSingle()
-    const settings = locRow?.settings || {}
+    // CHANNELREAD.1 — this writes the WHOLE settings column back. On a failed
+    // read `settings` used to become {} and the update wiped every other key
+    // (Glofox credentials, UniFi, payments…). A failed read writes nothing.
+    const { data: locRow, error: readErr } = await db.from('locations').select('settings').eq('id', locationId).maybeSingle()
+    if (readErr) {
+      logError('settings-ads', 'settings read before recipients save failed', { locationId, err: readErr.message })
+      return NextResponse.json({ success: false, error: 'Could not read this location\'s settings just now, so nothing was saved. Try again.' }, { status: 500 })
+    }
+    if (!locRow) return NextResponse.json({ success: false, error: 'Location not found' }, { status: 404 })
+    const settings = locRow.settings || {}
     const nextSettings = { ...settings, ads: { ...(settings.ads || {}), report_recipients: recipients } }
     const { error } = await db.from('locations').update({ settings: nextSettings, updated_at: new Date().toISOString() }).eq('id', locationId)
     if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
