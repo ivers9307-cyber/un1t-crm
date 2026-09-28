@@ -74,19 +74,29 @@
 -- insert fails too, a WARNING says so. It never aborts the real write and
 -- never falls back to an unredacted copy.
 --
--- The rule (case-insensitive, whole key name):
---   ends in (^|_) + api_key | apikey | token | secret | password | passwd |
---     passcode | pat | ciphertext | credential(s) | private_key | signing_key |
---     encryption_key | secret_key | access_key | auth_key | key_hash |
---     token_hash | pin_hash
+-- The rule (on the LOWERCASED key name, so accessToken is "accesstoken"):
+--   ends in token | secret | password | passwd | passcode | credential |
+--     ciphertext, optionally plural (s) and/or followed by (_)hash, with no
+--     anchor before it: accessToken, clientSecret, webhookSecret,
+--     refreshToken, tokens, push_tokens, password_hash, secret_hash,
+--     api_token_hash all match;
+--   or ends in (^|_) + pat | pin | api_key | apikey | private_key |
+--     signing_key | encryption_key | secret_key | access_key | auth_key |
+--     key_hash | pin_hash (the short words stay anchored: "compat" is not a
+--     PAT, "spin" is not a PIN; a camelCase fooApiKey is NOT matched);
 --   or is exactly deposit_revolut_checkout_url | bca_config (mig 191's
---     explicit entries; a bearer URL and a whole config blob)
+--     explicit entries; a bearer URL and a whole config blob).
+-- A bare `pin` (and <x>_pin) is masked: it is a PIN. The pin_* bookkeeping
+-- columns (pin_set_at, pin_failed_count, pin_locked_until) are not.
+-- Accepted false positives: token COUNTS (max_tokens, input_tokens) and
+-- has_token-style booleans are masked; none is on an audited table today.
 -- Checked against every key in audit_events.details and every column of the
 -- six audited tables on prod (28 Sep): it matches exactly api_key, api_token,
 -- webhook_secret, deposit_token, deposit_revolut_checkout_url,
 -- sensibo_api_key, thinq_pat, pin_hash (+ bca_config), and none of
--- deposit_token_expires_at, content_hash, password_changed, pin_set_at,
--- pin_failed_count, pin_locked_until, *_url, *_path.
+-- deposit_token_expires_at, token_expires_at, content_hash, password_changed,
+-- pin_set_at, pin_failed_count, pin_locked_until, signature_method,
+-- email_signature*, *_url, *_path.
 --
 -- NOT IN THIS FILE: the 38 existing rows keep their secrets until Richard
 -- runs the held scrub (plan C27 Appendix A). Nothing else changes: no table,
@@ -105,7 +115,7 @@ set search_path = ''
 as $$
   select p_key is not null and (
     lower(p_key) in ('deposit_revolut_checkout_url', 'bca_config')
-    or lower(p_key) ~ '(^|_)(api_?key|token|secret|password|passwd|passcode|pat|ciphertext|credentials?|(private|signing|encryption|secret|access|auth)_?key|(key|token|pin)_hash)$'
+    or lower(p_key) ~ '(token|secret|password|passwd|passcode|credential|ciphertext)s?(_?hash)?$|(^|_)(pat|pin|api_?key|(private|signing|encryption|secret|access|auth)_?key|(key|pin)_?hash)$'
   )
 $$;
 
@@ -372,22 +382,28 @@ begin
   v_got := private.audit_redact(
     '{"id":"x","thinq_pat":"p","pin_hash":"h","sensibo_api_key":null,
       "deposit_token":"","deposit_token_expires_at":"2026-01-01","content_hash":"c",
+      "pin_set_at":"2026-01-01","password_changed":true,"email_signature":"s","signature_method":"m",
       "settings":{"glofox":{"api_key":"k","api_token":"t","webhook_secret":"w","branch_id":"b"},
                   "unifi":{"api_token":"u","host":"10.0.0.1"},
+                  "oauth":{"accessToken":"a","clientSecret":"c","token_expires_at":"2026-01-01"},
+                  "door":{"pin":"1","password_hash":"p","tokens":["t"]},
                   "wa_card_sets":[{"label":"l","access_token":"a"}]}}'::jsonb,
     array['settings.glofox.api_key']);
   v_want :=
     '{"id":"x","thinq_pat":"[redacted]","pin_hash":"[redacted]","sensibo_api_key":null,
       "deposit_token":"","deposit_token_expires_at":"2026-01-01","content_hash":"c",
+      "pin_set_at":"2026-01-01","password_changed":true,"email_signature":"s","signature_method":"m",
       "settings":{"glofox":{"api_key":"[redacted: changed]","api_token":"[redacted]","webhook_secret":"[redacted]","branch_id":"b"},
                   "unifi":{"api_token":"[redacted]","host":"10.0.0.1"},
+                  "oauth":{"accessToken":"[redacted]","clientSecret":"[redacted]","token_expires_at":"2026-01-01"},
+                  "door":{"pin":"[redacted]","password_hash":"[redacted]","tokens":"[redacted]"},
                   "wa_card_sets":[{"label":"l","access_token":"[redacted]"}]}}'::jsonb;
   if v_got is distinct from v_want then
     raise exception 'AUDITSECRETS.1: audit_redact returned % (expected %)', v_got, v_want;
   end if;
 
-  if (select count(*) from private.audit_secret_paths(v_want)) <> 9 then
-    raise exception 'AUDITSECRETS.1: audit_secret_paths found % secret leaves in the fixture (expected 9)',
+  if (select count(*) from private.audit_secret_paths(v_want)) <> 14 then
+    raise exception 'AUDITSECRETS.1: audit_secret_paths found % secret leaves in the fixture (expected 14)',
       (select count(*) from private.audit_secret_paths(v_want));
   end if;
 

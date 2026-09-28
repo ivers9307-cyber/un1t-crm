@@ -28,6 +28,7 @@ import {
   AUDIT_SECRET_EXACT,
   KNOWN_SECRET_NAMES,
   KNOWN_NOT_SECRET_NAMES,
+  KNOWN_MASKED_LOOKALIKES,
   isAuditSecretKey,
 } from './helpers/audit-secret-keys.js'
 
@@ -454,7 +455,7 @@ describe('the rule: SQL and the JS mirror agree', () => {
   })
 
   it('every known secret name is redacted, every known non-secret is not (SQL and JS)', async () => {
-    const names = [...KNOWN_SECRET_NAMES, ...KNOWN_NOT_SECRET_NAMES, 'API_KEY', 'Glofox_Api_Token', null]
+    const names = [...KNOWN_SECRET_NAMES, ...KNOWN_NOT_SECRET_NAMES, ...KNOWN_MASKED_LOOKALIKES, 'API_KEY', 'Glofox_Api_Token', null]
     const { rows } = await db.query(
       `SELECT n, private.audit_is_secret_key(n) AS s FROM unnest($1::text[]) WITH ORDINALITY AS t(n, o) ORDER BY o`,
       [names],
@@ -462,6 +463,49 @@ describe('the rule: SQL and the JS mirror agree', () => {
     for (const { n, s } of rows) expect([n, s]).toEqual([n, isAuditSecretKey(n)])
     for (const n of KNOWN_SECRET_NAMES) expect([n, isAuditSecretKey(n)]).toEqual([n, true])
     for (const n of KNOWN_NOT_SECRET_NAMES) expect([n, isAuditSecretKey(n)]).toEqual([n, false])
+    for (const n of KNOWN_MASKED_LOOKALIKES) expect([n, isAuditSecretKey(n)]).toEqual([n, true])
+  })
+})
+
+describe('the rule: camelCase, plurals, hashes and PINs (review fix)', () => {
+  let db
+  beforeAll(async () => { db = await freshDb() })
+  afterAll(async () => { await db.close() })
+
+  it('each new shape is masked through the trigger; the prod look-alikes stay visible', async () => {
+    const settings = {
+      stripe: { accessToken: 'FAKESECRET-at', refreshToken: 'FAKESECRET-rt', clientSecret: 'FAKESECRET-cs', account_id: 'acct-1' },
+      webhook: { webhookSecret: 'FAKESECRET-ws', apiKey: 'FAKESECRET-ak', signature_method: 'hmac-sha256' },
+      push_tokens: ['FAKESECRET-pt-1', 'FAKESECRET-pt-2'],
+      tokens: { a: 'FAKESECRET-t' },
+      door: { pin: 'FAKESECRET-1234', door_pin: 'FAKESECRET-5678', pin_hint: 'birthday' },
+      auth: { password_hash: 'FAKESECRET-ph', secret_hash: 'FAKESECRET-sh', password_changed: true },
+      mail: { email_signature: 'Regards', email_signature_html: '<p>Regards</p>', content_hash: 'c1' },
+      oauth: { token_expires_at: '2026-10-01', deposit_token_expires_at: '2026-10-02' },
+      files: { avatar_path: 'a/b.png', logo_url: 'https://example.test/l.png' },
+    }
+    await db.query(`INSERT INTO public.locations (id, name, settings) VALUES ($1, 'Studio C', $2)`, [LOC, JSON.stringify(settings)])
+    const { details, txt } = await lastEvent(db, 'locations.created')
+    expect(txt).not.toContain('FAKESECRET')
+    const s = details.after.settings
+    expect(s.stripe).toEqual({ accessToken: '[redacted]', refreshToken: '[redacted]', clientSecret: '[redacted]', account_id: 'acct-1' })
+    expect(s.webhook).toEqual({ webhookSecret: '[redacted]', apiKey: '[redacted]', signature_method: 'hmac-sha256' })
+    expect(s.push_tokens).toBe('[redacted]')
+    expect(s.tokens).toBe('[redacted]')
+    expect(s.door).toEqual({ pin: '[redacted]', door_pin: '[redacted]', pin_hint: 'birthday' })
+    expect(s.auth).toEqual({ password_hash: '[redacted]', secret_hash: '[redacted]', password_changed: true })
+    expect(s.mail).toEqual(settings.mail)
+    expect(s.oauth).toEqual(settings.oauth)
+    expect(s.files).toEqual(settings.files)
+  })
+
+  it('profiles pin_* bookkeeping columns stay visible', async () => {
+    await db.query(`INSERT INTO public.profiles (id, full_name, role, pin_hash, pin_set_at, pin_failed_count) VALUES ($1, 'Test Person', 'staff', 'FAKESECRET-scrypt-2', '2026-09-28T10:00:00Z', 2)`, [PERSON])
+    const { details, txt } = await lastEvent(db, 'profiles.created')
+    expect(txt).not.toContain('FAKESECRET')
+    expect(details.after.pin_hash).toBe('[redacted]')
+    expect(details.after.pin_set_at).toMatch(/^2026-09-28/)
+    expect(details.after.pin_failed_count).toBe(2)
   })
 })
 

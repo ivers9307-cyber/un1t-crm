@@ -5,7 +5,7 @@
 // drift. Change both in the same PR (and in a new migration).
 
 export const AUDIT_SECRET_KEY_PATTERN =
-  '(^|_)(api_?key|token|secret|password|passwd|passcode|pat|ciphertext|credentials?|(private|signing|encryption|secret|access|auth)_?key|(key|token|pin)_hash)$'
+  '(token|secret|password|passwd|passcode|credential|ciphertext)s?(_?hash)?$|(^|_)(pat|pin|api_?key|(private|signing|encryption|secret|access|auth)_?key|(key|pin)_?hash)$'
 
 export const AUDIT_SECRET_EXACT = Object.freeze(['deposit_revolut_checkout_url', 'bca_config'])
 
@@ -39,6 +39,20 @@ export const KNOWN_SECRET_NAMES = Object.freeze([
   'api_token_hash', 'previous_token_hash', 'device_token_hash', 'expo_push_token',
   'webhook_token', 'share_token', 'view_token', 'download_token', 'unsubscribe_token',
   'payment_checkout_token', 'token',
+  // Review fix (28 Sep): camelCase, plurals and hash shapes. The key is
+  // lowercased first, so accessToken is "accesstoken".
+  'accessToken', 'refreshToken', 'clientSecret', 'webhookSecret', 'webhookSigningSecret',
+  'appPassword', 'apiKey', 'privateKey', 'tokens', 'push_tokens', 'secrets', 'credentials',
+  'password_hash', 'secret_hash', 'passwordHash', 'apiTokenHash',
+  // A PIN is a secret: a bare `pin` key, and `<x>_pin` (door_pin).
+  'pin', 'door_pin',
+])
+
+/** Accepted false positives: not credentials, but the rule masks them
+ *  (token COUNTS, has_token-style flags). None is on an audited table today;
+ *  masking fails toward hiding a number, never toward leaking a secret. */
+export const KNOWN_MASKED_LOOKALIKES = Object.freeze([
+  'max_tokens', 'input_tokens', 'output_tokens', 'has_token', 'hasApiToken',
 ])
 
 /** Names on the audited tables / in audit details that look secret-ish but are
@@ -55,4 +69,9 @@ export const KNOWN_NOT_SECRET_NAMES = Object.freeze([
   'auth_key_fingerprint', 'token_fingerprint', 'passcode_sent', 'token_refreshed_at',
   'last_refreshed_at', 'token_issued_at', 'previous_token_expires_at', 'share_token_expires_at',
   'compat', 'public_path',
+  // Review fix (28 Sep): the prod census look-alikes the wider rule must
+  // still leave visible, and the pin_* bookkeeping columns.
+  'signature_method', 'email_signature', 'email_signature_html', 'emailSignature',
+  'tokenExpiresAt', 'passwordChanged', 'avatar_path', 'logo_url',
+  'pinned', 'is_pinned', 'pin_hint', 'spin', 'token_count', 'secret_name',
 ])
