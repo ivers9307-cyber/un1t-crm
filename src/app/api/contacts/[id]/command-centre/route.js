@@ -20,7 +20,7 @@
 import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
-import { contactChannelFlags } from '@/lib/contact-page-gates'
+import { contactChannelFlags, canLoadContactConsultations } from '@/lib/contact-page-gates'
 import { extractTemplateBody, isSendableUtilityTemplate } from '@/lib/radar-outreach'
 import { classifyContact, scoreMember } from '@/lib/churn-radar'
 import { loadContactArrears } from '@/lib/churn-radar-data'
@@ -188,7 +188,11 @@ export async function GET(request, props) {
         window_expires_at: latestWa?.window_expires_at || null,
       },
       composer_templates: composerTemplates,
-      permissions: channels,
+      // ROLEUI.1 — `kudos` is POST /api/contacts/[id]/kudos's decision (the
+      // web `consultations` permission at the contact's location). The staff
+      // phone's contact screen reads every flag here instead of judging its
+      // buttons at the active studio.
+      permissions: { ...channels, kudos: canLoadContactConsultations(user, contact.location_id) },
     }
   }
 
