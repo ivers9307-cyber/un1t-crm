@@ -7,6 +7,7 @@
 // a glofox_member_id, fetches each one's bookings, upserts. Master-only.
 
 import { NextResponse } from 'next/server'
+import { GLOFOX_SETTINGS_UNREADABLE, GLOFOX_SETTINGS_UNREADABLE_MESSAGE } from '@/lib/glofox-settings-read'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { uuidLike } from '@/lib/schemas'
@@ -40,6 +41,10 @@ export async function POST(request) {
 
   const db = createServerClient()
   const creds = await glofoxCredentialsForLocation(db, locationId)
+  // REGISTRYREAD.1b: a failed settings read is not "not configured".
+  if (creds.readError) {
+    return NextResponse.json({ success: false, code: GLOFOX_SETTINGS_UNREADABLE, error: GLOFOX_SETTINGS_UNREADABLE_MESSAGE }, { status: 503 })
+  }
   if (missingGlofoxCredentialsForLocation(creds)) {
     return NextResponse.json({ success: false, error: 'Location not connected to Glofox' }, { status: 400 })
   }

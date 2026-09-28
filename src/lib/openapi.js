@@ -3775,6 +3775,7 @@ registry.registerPath({
     403: { description: 'Forbidden — owner or manager at this location required', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Not a member of this location (indistinguishable from a missing id)', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'class_occurrences_read_failed — the timetable read failed (logged)', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'glofox_settings_unreadable: the studio\'s Glofox settings could not be read just now (a transient read failure, not "not configured"); retry', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -3794,6 +3795,7 @@ registry.registerPath({
     403: { description: 'Forbidden — owner or manager at this location required', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Not a member of this location (indistinguishable from a missing id)', content: { 'application/json': { schema: ErrorResponse } } },
     502: { description: 'glofox_request_failed — the Glofox API call failed', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'glofox_settings_unreadable: the studio\'s Glofox settings could not be read just now (a transient read failure, not "not configured"); retry', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

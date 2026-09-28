@@ -104,3 +104,24 @@ describe('the daily trainer lookup needs a tick inside [04:00, 04:15) Dublin', (
     ).toEqual(['*/15 * * * *'])
   })
 })
+
+describe('GET /api/cron/sync-class-occurrences — REGISTRYREAD.1b unreadable settings', () => {
+  it('skips the Glofox call for that studio, counts an error, logs it, still stamps; the next studio still syncs', async () => {
+    const { glofoxCredentialsForLocation } = await import('@/lib/glofox')
+    const { logWarn } = await import('@/lib/log')
+    const LOC2 = { ...LOC, id: 'a0000000-0000-0000-0000-000000000002', name: 'Studio 2' }
+    locationsResult = { data: [LOC, LOC2], error: null }
+    glofoxCredentialsForLocation
+      .mockResolvedValueOnce({ branchId: null, apiKey: null, apiToken: null, readError: 'glofox_settings_unreadable' })
+      .mockResolvedValueOnce({ branchId: 'b', apiKey: 'k', apiToken: 't', readError: null })
+    syncOccurrencesForLocation.mockResolvedValue({ ok: true, upserted: 4, trainerApiCalls: 0 })
+
+    const body = await (await GET(req())).json()
+    expect(syncOccurrencesForLocation).toHaveBeenCalledTimes(1)
+    expect(syncOccurrencesForLocation.mock.calls[0][1]).toMatchObject({ locationId: LOC2.id })
+    const stats = { locations: 2, upserted: 4, errors: 1, trainer_api_calls: 0, reconcile_errors: 0 }
+    expect(body).toEqual({ success: true, stats })
+    expect(logWarn).toHaveBeenCalledWith('cron-sync-class-occurrences', expect.stringContaining('unreadable'), { locationId: LOC.id })
+    expect(stampHeartbeat).toHaveBeenCalledWith('sync-class-occurrences', stats)
+  })
+})

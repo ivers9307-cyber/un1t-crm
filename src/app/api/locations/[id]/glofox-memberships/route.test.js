@@ -18,7 +18,8 @@ vi.mock('@/lib/glofox', () => ({
 import { GET } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { glofoxCredentialsForLocation, listGlofoxMemberships } from '@/lib/glofox'
-import { ROLE_GATE_CASES, LOC_B } from '../_role-gate-cases.js'
+import { ROLE_GATE_CASES, LOC_B, MASTER } from '../_role-gate-cases.js'
+import { GLOFOX_SETTINGS_UNREADABLE, GLOFOX_SETTINGS_UNREADABLE_MESSAGE } from '@/lib/glofox-settings-read'
 
 const MEMBERSHIPS = [{ _id: 'm-1', name: 'Trial', plans: [{ code: 'p-1' }] }]
 const call = (id) => GET({}, { params: Promise.resolve({ id }) })
@@ -49,5 +50,25 @@ describe('GET glofox-memberships — role judged at the path location', () => {
     const res = await call(LOC_B)
     expect(res.status).toBe(401)
     expect(glofoxCredentialsForLocation).not.toHaveBeenCalled()
+  })
+})
+
+describe('GET glofox-memberships — REGISTRYREAD.1b unreadable settings', () => {
+  it('answers 503 glofox_settings_unreadable and never calls Glofox', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    glofoxCredentialsForLocation.mockResolvedValue({ branchId: null, apiKey: null, apiToken: null, readError: 'glofox_settings_unreadable' })
+    const res = await call(LOC_B)
+    expect(res.status).toBe(503)
+    const j = await res.json()
+    expect(j).toEqual({ success: false, error: GLOFOX_SETTINGS_UNREADABLE, message: GLOFOX_SETTINGS_UNREADABLE_MESSAGE })
+    expect(listGlofoxMemberships).not.toHaveBeenCalled()
+  })
+
+  it('a location with no Glofox still answers 400 glofox_not_configured', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    glofoxCredentialsForLocation.mockResolvedValue({ branchId: null, apiKey: null, apiToken: null, readError: null })
+    const res = await call(LOC_B)
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toBe('glofox_not_configured')
   })
 })
