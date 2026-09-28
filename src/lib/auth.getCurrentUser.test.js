@@ -693,8 +693,43 @@ describe('getCurrentUser — PROFILESPREAD.1: named profile columns', () => {
   })
 
   it('the tombstone check still sees deleted_at (selected, not spread)', async () => {
-    setup({ profile: FULL({ deleted_at: '2026-09-19T10:00:00Z', active: false }), links: [], orgs: [ORG_A] })
+    // active: true and a live membership, so only isTombstone can refuse it
+    // (an inactive profile is refused on its own, which would make this vacuous).
+    setup({
+      profile: FULL({ deleted_at: '2026-09-19T10:00:00Z', active: true }),
+      links: [link({ loc: LOC_A1, role: 'staff', is_default: true })],
+      orgs: [ORG_A],
+    })
     expect(await getCurrentUser()).toBeNull()
+  })
+
+  it('the same profile without deleted_at signs in (the tombstone case above is not vacuous)', async () => {
+    setup({ profile: FULL({ active: true }), links: [link({ loc: LOC_A1, role: 'staff', is_default: true })], orgs: [ORG_A] })
+    expect((await getCurrentUser())?.id).toBe('p-1')
+  })
+
+  it('the View-as target read errors: logged (code only), master stays themselves', async () => {
+    const M_ID = '55555555-5555-4555-8555-555555555555'
+    const T_ID = '66666666-6666-4666-8666-666666666666'
+    cookieMap.set('un1t_impersonate', T_ID)
+    const master = FULL({ id: M_ID, role: 'master', full_name: 'M', email: 'm8@example.test' })
+    const scenario = { profile: master, openImpersonation: true, links: [], allLocations: [LOC_A1], orgs: [ORG_A] }
+    const base = respondFor(scenario)
+    const { db, queries } = makeDb((q) => {
+      const idCall = q.calls.find((c) => c[0] === 'eq' && c[1] === 'id')
+      if (q.table === 'profiles' && idCall?.[2] === T_ID) {
+        return { data: null, error: { code: '42703', message: 'column x does not exist' } }
+      }
+      return base(q)
+    })
+    createClient.mockReturnValue(db)
+    authUser = { id: M_ID, email: master.email }
+    const user = await getCurrentUser()
+    expect(user.id).toBe(M_ID)
+    expect(user.full_name).toBe('M')
+    expect(user.impersonatingFrom ?? null).toBeNull()
+    expect(queries.filter((q) => q.table === 'profiles')).toHaveLength(2)
+    expect(logError).toHaveBeenCalledWith('auth', expect.stringMatching(/impersonation target read failed; master stays themselves/), { code: '42703' })
   })
 
   it('a failed profile read is logged (code only) and still resolves null', async () => {
