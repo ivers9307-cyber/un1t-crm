@@ -141,6 +141,17 @@ describe('client code names only granted credential-table columns (SECFIX.3c)', 
     expect(probe(`await supabase.from('instagram_conversations').select('id, channel_connection_id ( access_token )')`)).toContain('channel_connections.access_token')
   })
 
+  it('reads the select anywhere on the chain, however far from .from()', () => {
+    const far = `await supabase.from('locations')
+      .eq('organization_id', '${'0'.repeat(450)}')
+      .select('id, settings')`
+    expect(probe(far)).toContain('locations.settings')
+    // …and a later chain's select is never credited to an earlier .from().
+    const two = `const a = await supabase.from('locations').eq('id', x)
+      const b = await supabase.from('contacts').select('id, settings')`
+    expect(probe(two)).not.toContain('locations.settings')
+  })
+
   it('the FK columns come from the migrations, and a text search finds none the replay missed', () => {
     // The replay (scripts/check-select-columns.mjs) does not learn an FK made
     // inside a DO $$ block; a plain text search of the migrations does not

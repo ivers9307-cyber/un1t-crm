@@ -4,6 +4,8 @@
 // (SECFIX.3c; generalised from tests/shift-column-grants-guard.test.js, which
 // keeps its inline copy for now).
 
+import { extractChainLinks, firstStringArg, maskComments } from '../../scripts/check-select-columns.mjs'
+
 /**
  * FK column → target table, for every single-column FK (learned by the
  * migrations replay in scripts/check-select-columns.mjs: `collectSchema().fks`)
@@ -25,6 +27,10 @@ export function fkAliasesInto(fks, tables) {
   }
   return out
 }
+
+const WRITE_METHODS = new Set(['update', 'insert', 'upsert', 'delete'])
+const FILTER_METHODS = new Set(['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'in', 'is', 'like', 'ilike', 'contains',
+  'order', 'not', 'filter', 'match'])
 
 /** The text inside the parenthesis that opens at `open` (balanced). */
 export function balanced(text, open) {
@@ -66,19 +72,27 @@ export function columnUses(text, tables, fkAliases = {}) {
   const alt = tables.join('|')
   const reads = []
   const writes = []
-  const selectStrings = [...text.matchAll(/\.select\(\s*(['"`])([\s\S]*?)\1/g)]
+  const src = maskComments(text)
+  const selectStrings = [...src.matchAll(/\.select\(\s*(['"`])([\s\S]*?)\1/g)]
 
-  // (a) `.from('<table>')…` — the chain's own select list, filters and writes,
-  //     up to the next statement boundary.
-  for (const m of text.matchAll(new RegExp(`\\.from\\(\\s*['"\`](${alt})['"\`]\\s*\\)`, 'g'))) {
-    const tail = text.slice(m.index, m.index + 1200)
-    const end = tail.search(/\n\s*\n|\bawait\b(?!\s*$)|;|\]\)/)
-    const chain = end > 0 ? tail.slice(0, end) : tail
-    const sel = selectStrings.find((s) => s.index > m.index && s.index - m.index < 400)
-    if (sel && sel.index - m.index < chain.length + 50) for (const c of topLevelColumns(sel[2])) reads.push([m[1], c])
-    if (/\.select\(\s*\)/.test(chain)) reads.push([m[1], '*'])
-    for (const f of chain.matchAll(/\.(?:eq|neq|gt|gte|lt|lte|in|is|like|ilike|contains|order|not|filter|match)\(\s*['"`]([a-z_]+)['"`]/g)) reads.push([m[1], f[1]])
-    for (const w of chain.matchAll(/\.(update|insert|upsert|delete)\(/g)) writes.push([m[1], w[1]])
+  // (a) `.from('<table>')…` — every link attached to the chain (walked call by
+  //     call, as check:select-columns does, so no fixed window): its own
+  //     select list, filters and writes.
+  for (const link of extractChainLinks(src)) {
+    const table = link.table
+    if (!tables.includes(table)) continue
+    const { method, args } = link
+    if (method === 'select') {
+      if (!args.trim()) { reads.push([table, '*']); continue }
+      const sel = firstStringArg(args)
+      if (sel != null) for (const c of topLevelColumns(sel)) reads.push([table, c])
+      continue
+    }
+    if (WRITE_METHODS.has(method)) { writes.push([table, method]); continue }
+    if (FILTER_METHODS.has(method)) {
+      const col = firstStringArg(args)
+      if (col != null && /^[a-z_]+$/.test(col)) reads.push([table, col])
+    }
   }
 
   for (const s of selectStrings) {
@@ -104,6 +118,6 @@ export function columnUses(text, tables, fkAliases = {}) {
   //     only: a backticked `locations.color` is how the codebase's COMMENTS
   //     name a column (shared/location-colors.js, AdsIntegrationTab), and a
   //     filter column is never a template literal here.
-  for (const f of text.matchAll(new RegExp(`(['"])(${alt})\\.([a-z_]+)\\1`, 'g'))) reads.push([f[2], f[3]])
+  for (const f of src.matchAll(new RegExp(`(['"])(${alt})\\.([a-z_]+)\\1`, 'g'))) reads.push([f[2], f[3]])
   return { reads, writes }
 }
