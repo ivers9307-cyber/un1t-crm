@@ -91,7 +91,7 @@ describe('EventForm — saves through the routes (EVENTTYPERLS.1)', () => {
   })
 
   it('a refused save says so, syncs no reminders and stays on the page', async () => {
-    answer({ 'POST /api/bookings/event-types': { status: 401, body: { success: false, error: 'Unauthorized' } } })
+    answer({ 'POST /api/bookings/event-types': { status: 403, body: { success: false, error: 'Forbidden' } } })
     const { container } = render(<EventForm locationId="loc-1" />)
     fireEvent.change(screen.getByPlaceholderText('e.g. Free Consultation'), { target: { value: 'Consult' } })
     fireEvent.submit(container.querySelector('form'))
@@ -100,6 +100,38 @@ describe('EventForm — saves through the routes (EVENTTYPERLS.1)', () => {
     expect(keys()).toEqual(['POST /api/bookings/event-types'])
     expect(router.push).not.toHaveBeenCalled()
     expect(screen.getByRole('button', { name: 'Create event type' }).disabled).toBe(false)
+  })
+
+  it('a create whose reminder sync fails turns a retry into an edit of the SAME row (no second booking type)', async () => {
+    answer({
+      'POST /api/bookings/event-types': { body: { success: true, data: { id: 'et-new' } } },
+      'PUT /api/bookings/event-types/et-new/reminders': { status: 500, body: { success: false, error: 'boom' } },
+      'PUT /api/bookings/event-types/et-new': { body: { success: true, data: { id: 'et-new' } } },
+    })
+    const { container } = render(<EventForm locationId="loc-1" />)
+    fireEvent.change(screen.getByPlaceholderText('e.g. Free Consultation'), { target: { value: 'Consult' } })
+    fireEvent.submit(container.querySelector('form'))
+    expect(await screen.findByText('Saved event but reminder sync failed: boom')).toBeTruthy()
+
+    fireEvent.submit(container.querySelector('form'))
+    await waitFor(() => expect(keys().filter((k) => k === 'PUT /api/bookings/event-types/et-new/reminders')).toHaveLength(2))
+    expect(keys().filter((k) => k === 'POST /api/bookings/event-types')).toHaveLength(1)
+    expect(keys()).toContain('PUT /api/bookings/event-types/et-new')
+    expect('location_id' in bodyOf('PUT /api/bookings/event-types/et-new')).toBe(false)
+    expect(router.push).not.toHaveBeenCalled()
+  })
+
+  it('a 401 says the session ended, not that access is refused', async () => {
+    answer({ 'POST /api/bookings/event-types': { status: 401, body: { success: false, error: 'Unauthorized' } } })
+    const { container } = render(<EventForm locationId="loc-1" />)
+    fireEvent.change(screen.getByPlaceholderText('e.g. Free Consultation'), { target: { value: 'Consult' } })
+    fireEvent.submit(container.querySelector('form'))
+    expect(await screen.findByText('Your session has ended. Sign in again, then save.')).toBeTruthy()
+  })
+
+  it('the text fields carry the routes\' length limits', () => {
+    render(<EventForm locationId="loc-1" />)
+    expect(screen.getByPlaceholderText('e.g. Free Consultation').getAttribute('maxLength')).toBe('200')
   })
 
   it('a validation refusal names the field', async () => {

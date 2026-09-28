@@ -90,7 +90,7 @@ export async function POST(request) {
     color: body.color || DEFAULT_COLOR,
     availability: body.availability || undefined,
     buffer_minutes: body.buffer_minutes || 0,
-    max_advance_days: body.max_advance_days || 30,
+    max_advance_days: body.max_advance_days ?? 30,
     custom_fields: body.custom_fields || [],
     webhook_url: body.webhook_url || null,
     active: body.active !== false,
