@@ -60,4 +60,8 @@ describe('buildAccountPatch', () => {
     const patch = buildAccountPatch({ access_token: 'EAABnewtoken1234' })
     expect(patch.access_token).toBe('EAABnewtoken1234')
   })
+  it('stores a pasted token trimmed (a stray space or newline would break every ads call)', () => {
+    const patch = buildAccountPatch({ access_token: '  SYNTH-ADS-TOKEN-PASTED\n' })
+    expect(patch.access_token).toBe('SYNTH-ADS-TOKEN-PASTED')
+  })
 })

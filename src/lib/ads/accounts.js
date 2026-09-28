@@ -36,7 +36,7 @@ export function buildAccountPatch(body) {
   for (const k of ['external_account_id', 'business_account_id', 'display_name', 'is_active', 'currency', 'account_timezone']) {
     if (body[k] !== undefined) patch[k] = body[k]
   }
-  if (isFreshSecret(body.access_token)) patch.access_token = body.access_token
+  if (isFreshSecret(body.access_token)) patch.access_token = String(body.access_token).trim()
   return patch
 }
 
