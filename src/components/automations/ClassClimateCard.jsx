@@ -330,8 +330,13 @@ export default function ClassClimateCard({ locationId, glofoxConnected, devices,
           )}
           {run?.phase === 'done' && (
             <div className="mt-2 text-[11px] space-y-0.5">
-              {!run.glofox_configured && <p className="text-amber-700">Glofox isn&apos;t connected — no schedule to check.</p>}
-              {run.glofox_configured && (run.planned?.length || 0) === 0 && (
+              {/* REGISTRYREAD.1b: a failed settings read is not "not connected".
+                  The sync was skipped, but the runner still read the stored
+                  class_occurrences, i.e. the last synced timetable. */}
+              {run.glofox_settings_unreadable
+                ? <p className="text-amber-700">Couldn&apos;t read this studio&apos;s Glofox settings just now. The schedule wasn&apos;t refreshed, so this run used the last known timetable.</p>
+                : !run.glofox_configured && <p className="text-amber-700">Glofox isn&apos;t connected — no schedule to check.</p>}
+              {(run.glofox_configured || run.glofox_settings_unreadable) && (run.planned?.length || 0) === 0 && (
                 <p className="text-un1t-subtle">No class is within its lead window right now — nothing to turn on yet.</p>
               )}
               {(run.actions || []).map((a, i) => (
