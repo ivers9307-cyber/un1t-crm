@@ -123,16 +123,17 @@ export function redactLocationSecrets(row) {
   return maskSecretKeysDeep(out, { mask: LOCATION_SECRET_MASK })
 }
 
-/** profile_locations rows with an embedded `locations` row → same rows, location redacted. */
-export function redactLinkedLocations(links) {
-  if (!Array.isArray(links)) return links
-  return links.map((l) => (isPlainObject(l) && isPlainObject(l.locations)
-    ? { ...l, locations: redactLocationSecrets(l.locations) }
-    : l))
-}
-
-/** A staff row whose profile_locations embed carries every location column → safe to return as JSON. */
+/**
+ * A staff row whose profile_locations embed carries every location column → safe to return as JSON.
+ * (Its per-link half was exported as redactLinkedLocations until PROFILESPREAD.1a
+ * left getCurrentUser, its only other caller, with no settings to mask.)
+ */
 export function redactProfileLocations(profile) {
   if (!isPlainObject(profile) || !Array.isArray(profile.profile_locations)) return profile
-  return { ...profile, profile_locations: redactLinkedLocations(profile.profile_locations) }
+  return {
+    ...profile,
+    profile_locations: profile.profile_locations.map((l) => (isPlainObject(l) && isPlainObject(l.locations)
+      ? { ...l, locations: redactLocationSecrets(l.locations) }
+      : l)),
+  }
 }

@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   LOCATION_SECRET_MASK, USER_LOCATION_COLUMNS, CLIENT_LOCATION_COLUMNS,
-  redactLocationSecrets, redactLinkedLocations, redactProfileLocations,
+  redactLocationSecrets, redactProfileLocations,
   toUserLocation, toUserLinkedLocations,
 } from './location-secrets.js'
 import { isFreshSecret } from './integration-secret-merge.js'
@@ -136,14 +136,13 @@ describe('toUserLocation / toUserLinkedLocations', () => {
   })
 })
 
-describe('redactLinkedLocations / redactProfileLocations', () => {
+describe('redactProfileLocations', () => {
   it('redacts the embedded location of every profile_locations link', () => {
     const links = [{ location_id: 'loc-1', role: 'staff', locations: ROW }, { location_id: 'loc-2', role: 'staff', locations: null }]
-    const out = redactLinkedLocations(links)
+    const out = redactProfileLocations({ id: 'p', profile_locations: links }).profile_locations
     expect(out[0].locations.sensibo_api_key).toBe(LOCATION_SECRET_MASK)
     expect(out[0].role).toBe('staff')
     expect(out[1]).toBe(links[1])
-    expect(redactLinkedLocations(null)).toBeNull()
   })
 
   it('redacts a staff row and passes a row without links through', () => {
