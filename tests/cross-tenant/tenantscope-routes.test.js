@@ -179,3 +179,64 @@ describe('GET /api/accounting/health — a studio sees its own LLM spend (TENANT
     expect(json.data.budget).toEqual({ weeklyUsd: 15, exhausted: false })
   })
 })
+
+// ─── the staff fleet ─────────────────────────────────────────────────
+describe("GET /api/staff-devices — the active organisation's fleet (TENANTSCOPE.1)", () => {
+  it("a manager at A One sees org A's staff (members + org admin), never org B's", async () => {
+    as(users.managerA1())
+    const { status, json } = await jsonOf(await staffDevices.GET())
+    expect(status).toBe(200)
+    expect(idsOf(json.data.staff)).toEqual(A_FLEET) // main: all nine profiles
+    expect(JSON.stringify(json)).not.toContain('@b.com')
+    expect(JSON.stringify(json)).not.toContain('phone-b1')
+  })
+
+  it('keeps the target version estate-wide — one app binary', async () => {
+    as(users.managerA1())
+    const { json } = await jsonOf(await staffDevices.GET())
+    expect(json.data.target_version).toBe('2.5.0') // set by org B's newest phone
+    const a1 = json.data.staff.find((s) => s.id === P_STAFF_A1)
+    expect(a1.verdict.kind).toBe('outdated')
+  })
+
+  it('a master still sees the whole estate', async () => {
+    as(users.master())
+    const { json } = await jsonOf(await staffDevices.GET())
+    expect(idsOf(json.data.staff)).toEqual(ALL_PROFILES)
+  })
+
+  it('a non-master with no active organisation sees nobody', async () => {
+    as(noActive(users.managerA1()))
+    const { status, json } = await jsonOf(await staffDevices.GET())
+    expect(status).toBe(200)
+    expect(json.data.staff).toEqual([]) // main: all nine profiles
+  })
+})
+
+describe('POST /api/staff-devices/nudge — only your own organisation (TENANTSCOPE.1)', () => {
+  const nudgeReq = (ids) => makeReq('/api/staff-devices/nudge', { method: 'POST', body: { profile_ids: ids } })
+
+  it("a manager at A One cannot push to org B's outdated staff", async () => {
+    as(users.managerA1())
+    const { status, json } = await jsonOf(await nudge.POST(nudgeReq([P_STAFF_B1])))
+    expect(status).toBe(200)
+    expect(json.data).toEqual({ sent: 0, skipped_throttled: 0, skipped_no_app: 0, skipped_no_token: 0 }) // main: sent 1
+    expect(sendPush).not.toHaveBeenCalled()
+    expect(db._writesTo('device_tokens')).toEqual([]) // nothing claimed either
+  })
+
+  it("nudges org A's outdated staff and drops the org B id from a mixed list", async () => {
+    as(users.managerA1())
+    const { json } = await jsonOf(await nudge.POST(nudgeReq([P_STAFF_A1, P_STAFF_B1])))
+    expect(json.data.sent).toBe(1)
+    expect(sendPush).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(sendPush).mock.calls[0][0]).toEqual([P_STAFF_A1]) // main: [A1, B1]
+  })
+
+  it('a master can nudge anyone in the estate', async () => {
+    as(users.master())
+    const { json } = await jsonOf(await nudge.POST(nudgeReq([P_STAFF_B1])))
+    expect(json.data.sent).toBe(1)
+    expect(vi.mocked(sendPush).mock.calls[0][0]).toEqual([P_STAFF_B1])
+  })
+})

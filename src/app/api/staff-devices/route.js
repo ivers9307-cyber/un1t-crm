@@ -13,6 +13,10 @@
 // getCurrentUser + hasPermission(user,'settings') gate below is the ONLY
 // thing keeping the fleet (names, emails, devices) away from ordinary
 // staff. Same gate as /settings/notifications/health, which this backs.
+// TENANTSCOPE.1 — and the fleet is the ACTIVE organisation's people
+// (loadFleetScope; a master keeps the estate), never another tenant's.
+// The target version still comes from every active person's devices: one
+// app binary for the estate, and only the version string leaves.
 //
 // Both selects are bounded by the size of the staff table (~22 profiles,
 // ~11 devices today), so a single 1,000-row page is enough — but it is
@@ -24,6 +28,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { deriveTargetVersion, deviceVerdict, currentDevice, isStale } from '@/lib/staff-devices'
+import { loadFleetScope, inFleetScope } from '@/lib/staff-fleet-scope'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -44,9 +49,13 @@ export async function GET() {
 
   // supabase-js builders are thenables, not Promises — try/await/catch,
   // never `.catch()`.
+  let scope = null
   let profiles = []
   let devices = []
   try {
+    // A failed scope read throws into the catch below: a 500, never an
+    // empty fleet.
+    scope = await loadFleetScope(db, user)
     const [profilesRes, devicesRes] = await Promise.all([
       db
         .from('profiles')
@@ -114,7 +123,7 @@ export async function GET() {
     now,
   )
 
-  const staff = profiles.map((profile) => {
+  const staff = profiles.filter((profile) => inFleetScope(scope, profile.id)).map((profile) => {
     const own = byUser.get(profile.id) || []
     const verdict = deviceVerdict(own, targetVersion, now)
     // Staff-level permission reflects the CURRENT device only — an old
