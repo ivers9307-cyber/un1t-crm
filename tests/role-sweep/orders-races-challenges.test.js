@@ -18,7 +18,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { describeGate, gateProbe, runProbed } from '../helpers/role-gate-probe.js'
-import { roleCases, permissionCases, keyOffAtB, MANAGER_A_STAFF_B, LOC_A } from '../helpers/role-sweep-callers.js'
+import { roleCases, permissionCases, keyOffAtB, masterFeatureOffAtB, MANAGER_A_STAFF_B, LOC_A } from '../helpers/role-sweep-callers.js'
 import * as orderDetail from '@/app/api/orders/[id]/route.js'
 import * as orderCancel from '@/app/api/orders/[id]/cancel/route.js'
 import * as orderRefund from '@/app/api/orders/[id]/refund/route.js'
@@ -78,6 +78,7 @@ describe('GET /api/races (no location_id) lists only locations where the caller 
   for (const [label, caller] of [
     ['drops B where they are staff (main listed A and B)', MANAGER_A_STAFF_B],
     ['drops B where races is switched off for them (main listed A and B)', keyOffAtB('races')],
+    ['a master: drops B where the races feature is off (main listed A and B)', masterFeatureOffAtB('races')],
   ]) {
     it(label, async () => {
       getCurrentUser.mockResolvedValue(caller)

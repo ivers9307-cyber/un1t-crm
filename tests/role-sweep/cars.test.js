@@ -18,7 +18,7 @@ vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), 
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { describeGate, gateProbe, runProbed } from '../helpers/role-gate-probe.js'
-import { permissionCases, person, keyOffAtB, OUTSIDER, LOC_A } from '../helpers/role-sweep-callers.js'
+import { permissionCases, person, keyOffAtB, masterFeatureOffAtB, OUTSIDER, LOC_A, LOC_B } from '../helpers/role-sweep-callers.js'
 import * as cars from '@/app/api/cars/route.js'
 import * as car from '@/app/api/cars/[id]/route.js'
 import * as bca from '@/app/api/cars/[id]/bca/route.js'
@@ -72,14 +72,20 @@ gate('POST /api/cars — car_processing at body.location_id', {
   forbidden: FORBIDDEN_PLAIN, hidden: NOT_MEMBER, cases: CASES,
 })
 describe('GET /api/cars (no location_id) lists only locations where the caller holds car_processing', () => {
-  it('drops B where car_processing is switched off for them (main listed A and B)', async () => {
-    getCurrentUser.mockResolvedValue(keyOffAtB(KEY))
-    const probe = gateProbe([])
-    createServerClient.mockReturnValue(probe.db)
-    await runProbed(probe, () => cars.GET(bare('GET')))
-    expect(probe.tripped.table).toBe('cars')
-    expect(probe.tripped.chain).toContainEqual(['in', 'location_id', [LOC_A]])
-  })
+  for (const [label, caller] of [
+    ['drops B where car_processing is switched off for them (main listed A and B)', keyOffAtB(KEY)],
+    // A master is scored at each location's features: the feature is off at B.
+    ['a master: drops B where the car_processing feature is off (main listed A and B)', masterFeatureOffAtB(KEY)],
+  ]) {
+    it(label, async () => {
+      getCurrentUser.mockResolvedValue(caller)
+      const probe = gateProbe([])
+      createServerClient.mockReturnValue(probe.db)
+      await runProbed(probe, () => cars.GET(bare('GET')))
+      expect(probe.tripped.table).toBe('cars')
+      expect(probe.tripped.chain).toContainEqual(['in', 'location_id', [LOC_A]])
+    })
+  }
 })
 
 // ── detail routes ─────────────────────────────────────────────────────────
@@ -115,4 +121,18 @@ const DETAIL = [
 ]
 for (const [name, call, gateReads, forbidden] of DETAIL) {
   gate(`${name} — car_processing at the car`, { call, gateReads, forbidden, hidden: NOT_FOUND, cases: CASES })
+}
+
+// A master is refused a car whose location has the car_processing feature off,
+// even with it on at their active studio (open question 1: the one car at a
+// UN1T studio). main let them through on the active studio's feature.
+for (const [name, call] of [
+  ['GET /api/cars/[id]', () => car.GET(bare('GET'), params(CAR_ID))],
+  ['PATCH /api/cars/[id]', () => car.PATCH(json('PATCH', { make: 'Toyota' }), params(CAR_ID))],
+  ['DELETE /api/cars/[id]', () => car.DELETE(bare('DELETE'), params(CAR_ID))],
+]) {
+  gate(`${name} — a master, car_processing off at the car's location`, {
+    call, gateReads: CAR, forbidden: FORBIDDEN_PLAIN, hidden: NOT_FOUND,
+    cases: [["a master, feature off at the car's location, on at the active one (main: pass)", masterFeatureOffAtB(KEY), LOC_B, 'forbidden']],
+  })
 }
