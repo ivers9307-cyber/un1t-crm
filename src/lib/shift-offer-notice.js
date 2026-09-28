@@ -185,8 +185,23 @@ export const offerBlock = (offer) => ({ ...offer.shift_blocks, location_id: offe
 /** push_event_sends key, numbered by attempt: a crashed attempt's claim never dedups the retry. */
 export const offerNoticeKey = (kind, offerId, attempt) => `shift_offer_${kind}:${offerId}:a${attempt}`
 
-/** claim_shift_offer error -> { status, error }. */
+/**
+ * REPLACENITS.1 — claim_shift_offer lost a deadlock (SQLSTATE 40P01). The
+ * cycle: a manager adding the SAME coach holds the new (block_id, profile_id)
+ * index entry and waits for its FK's KEY SHARE on the shift, while the claim
+ * holds the shift FOR UPDATE (step 2) and its insert (step 9) waits on that
+ * entry. Mig 641's header says an FK KEY SHARE path cannot close a cycle; it
+ * missed the unique-index wait (the migration is applied, so this is the
+ * correction). The victim's transaction rolled back: nothing was claimed,
+ * and trying again gives the true answer ("You already have this shift." if
+ * the manager's insert won, or the claim).
+ */
+export const OFFER_CLAIM_TRY_AGAIN = 'try_again'
+export const OFFER_CLAIM_TRY_AGAIN_ERROR = 'Someone was changing this shift at the same moment. Try again.'
+
+/** claim_shift_offer error -> { status, error, code? }. */
 export function offerClaimRpcError(err) {
+  if (err?.code === '40P01') return { status: 409, code: OFFER_CLAIM_TRY_AGAIN, error: OFFER_CLAIM_TRY_AGAIN_ERROR }
   if (err?.code === '23505') return { status: 409, error: ALREADY_YOURS }
   const msg = String(err?.message || '')
   switch (msg.split(':')[0]) {

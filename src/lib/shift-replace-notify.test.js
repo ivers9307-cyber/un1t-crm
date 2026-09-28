@@ -279,3 +279,71 @@ describe('runReplaceNotices', () => {
     expect(stats).toMatchObject({ told: 1, gone: 1, errors: 0 })
   })
 })
+
+// C5 REPLACENITS.1 — a slot deleted overnight after a replace: its rows lose
+// their block (ON DELETE SET NULL), so the arm used to see no start time,
+// took the shift for "not started", and told coach A at 07:05 about a 06:00
+// shift. The replace now logs the start in details; the arm reads it, so a
+// started pile goes the review-3 way (stamped silently, at any hour) and a
+// later one is told WITH its time. B's "added" row is review 4's, unchanged.
+describe('runReplaceNotices — a deleted slot knows its start (REPLACENITS.1)', () => {
+  const gone = (start) => ({ block_id: null, shift_blocks: null, details: { via: 'replace', ...(start ? { start_time: start } : {}) } })
+
+  it('reads details with each held row', async () => {
+    const db = scriptedDb({ roster_change_log: [{ data: [], error: null }] })
+    await runReplaceNotices(db, { nowMs: IN_BAND, todayStr: '2026-09-29' })
+    const [c] = chainsFor(db, 'roster_change_log')
+    expect(argsOf(c, 'select')[0]).toMatch(/(^|, )details(,|$)/)
+  })
+
+  it('a 06:00 slot deleted overnight: at 07:05 A\'s "removed" is stamped silently as started, and nobody is told', async () => {
+    const db = scriptedDb({
+      roster_change_log: [
+        { data: [row('r1', 'coach-a', 'unassigned', gone('06:00:00')), row('r2', 'coach-b', 'assigned', gone('06:00:00'))], error: null },
+        STAMPED(['r2']), STAMPED(['r1']),
+      ],
+      locations: [LOC],
+    })
+    const stats = await runReplaceNotices(db, { nowMs: IN_BAND, todayStr: '2026-09-29' })
+    expect(notifyRosterChanges).not.toHaveBeenCalled()
+    const [, goneStamp, startedStamp] = chainsFor(db, 'roster_change_log')
+    expect(argsOf(goneStamp, 'in')).toEqual(['id', ['r2']])
+    expect(argsOf(startedStamp, 'update')[0]).toEqual({ notified_at: new Date(IN_BAND).toISOString(), details: { via: 'replace', reason: REPLACE_STARTED_REASON } })
+    expect(argsOf(startedStamp, 'in')).toEqual(['id', ['r1']])
+    expect(argsOf(startedStamp, 'is')).toEqual(['notified_at', null])
+    expect(stats).toMatchObject({ told: 0, gone: 1, started: 1, errors: 0 })
+  })
+
+  it('a 09:00 slot deleted overnight: A is told at 07:05, and the words can name 09:00', async () => {
+    const db = scriptedDb({
+      roster_change_log: [
+        { data: [row('r1', 'coach-a', 'unassigned', gone('09:00:00')), row('r2', 'coach-b', 'assigned', gone('09:00:00'))], error: null },
+        STAMPED(['r2']), STAMPED(['r1']),
+      ],
+      locations: [LOC],
+    })
+    const stats = await runReplaceNotices(db, { nowMs: IN_BAND, todayStr: '2026-09-29' })
+    expect(notifyRosterChanges.mock.calls[0][1].changes).toEqual([
+      { coachId: 'coach-a', blockId: null, blockDate: '2026-09-29', startTime: '09:00:00', action: 'unassigned' },
+    ])
+    expect(stats).toMatchObject({ told: 1, gone: 1, started: 0 })
+  })
+
+  it('in quiet hours too: a 04:30 deleted slot at 05:00 is stamped as started, not held for 07:00', async () => {
+    const db = scriptedDb({
+      roster_change_log: [{ data: [row('r1', 'coach-a', 'unassigned', gone('04:30:00'))], error: null }, STAMPED(['r1'])],
+      locations: [LOC],
+    })
+    expect(await runReplaceNotices(db, { nowMs: QUIET, todayStr: '2026-09-29' })).toMatchObject({ started: 1, quiet: 0 })
+  })
+
+  it('a row written before REPLACENITS.1 (no logged start) behaves exactly as before: told at 07:05, no time', async () => {
+    const db = scriptedDb({
+      roster_change_log: [{ data: [row('r1', 'coach-a', 'unassigned', gone(null))], error: null }, STAMPED(['r1'])],
+      locations: [LOC],
+    })
+    const stats = await runReplaceNotices(db, { nowMs: IN_BAND, todayStr: '2026-09-29' })
+    expect(notifyRosterChanges.mock.calls[0][1].changes[0].startTime).toBeNull()
+    expect(stats).toMatchObject({ told: 1, started: 0 })
+  })
+})

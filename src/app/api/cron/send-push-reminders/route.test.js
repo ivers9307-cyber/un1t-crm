@@ -447,3 +447,65 @@ describe('GET /api/cron/send-push-reminders — REPLACE.1b shift offers', () => 
     expect(logWarn).toHaveBeenCalledWith('cron-push-reminders', 'shift-offer-sweep heartbeat failed', expect.anything())
   })
 })
+
+// C5 REPLACENITS.1 — (1) the replace arm's failure flag uses the same
+// predicate as its heartbeat, like the offer arm: a delivered notice whose
+// stamp failed (the coach is told again every tick) used to read
+// replace_arm_failed: 0. (2) The nested arm outcomes reach the tick log when
+// they did something; an object never counted before.
+describe('GET /api/cron/send-push-reminders — REPLACENITS.1 flag and tick log', () => {
+  const QUIET_SHIFT = { quiet_hours: 1, shift_candidates: 0, shift_pushed: 0 }
+  const QUIET_TIME = { time_change_quiet: 1, time_change_rows: 0, time_change_told: 0 }
+  const REPLACE_IDLE = { rows: 0, groups: 0, told: 0, silent: 0, started: 0, gone: 0, quiet: 0, fresh: 0, undelivered: 0, send_failed: 0, stamp_failed: 0, errors: 0 }
+  const OFFER_IDLE = { open: 0, claimed_owed: 0, none: 0, quiet_hours: 0, leased: 0, expired: 0, filled: 0, raced: 0, busy: 0, retry: 0, sent: 0, stamp_failed: 0, gave_up: 0, capped: 0, errors: 0 }
+
+  beforeEach(() => {
+    runShiftReminders.mockResolvedValue(QUIET_SHIFT)
+    runShiftTimeChangeNotices.mockResolvedValue(QUIET_TIME)
+    runReplaceNotices.mockResolvedValue(REPLACE_IDLE)
+    runShiftOfferSweep.mockResolvedValue(OFFER_IDLE)
+  })
+
+  it('a delivered notice whose stamp failed flags replace_arm_failed, logs the tick, and is not stamped', async () => {
+    runReplaceNotices.mockResolvedValue({ ...REPLACE_IDLE, rows: 1, groups: 1, told: 1, stamp_failed: 1 })
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.replace_arm_failed).toBe(1)
+    expect(body.replace_notices).toMatchObject({ stamp_failed: 1 })
+    expect(stampedNames()).not.toContain('replace-notices')
+    expect(stampedNames()).toContain('send-push-reminders')
+    expect(logInfo).toHaveBeenCalledWith('cron-push-reminders', 'tick', expect.objectContaining({ replace_arm_failed: 1 }))
+  })
+
+  it('a resolved non-object is not flagged (as before, and as the offer arm): the missing stamp says it', async () => {
+    runReplaceNotices.mockResolvedValue(undefined)
+    const body = await (await GET(req())).json()
+    expect(body.replace_arm_failed).toBe(0)
+    expect(stampedNames()).not.toContain('replace-notices')
+  })
+
+  it('a replace notice told is news: the tick is logged with the arm\'s counts', async () => {
+    runReplaceNotices.mockResolvedValue({ ...REPLACE_IDLE, rows: 2, groups: 1, told: 2 })
+    await GET(req())
+    expect(logInfo).toHaveBeenCalledWith('cron-push-reminders', 'tick', expect.objectContaining({
+      replace_notices: expect.objectContaining({ told: 2 }), replace_arm_failed: 0,
+    }))
+    expect(stampedNames()).toContain('replace-notices')
+  })
+
+  it('an offer notice sent is news too', async () => {
+    runShiftOfferSweep.mockResolvedValue({ ...OFFER_IDLE, open: 1, sent: 1 })
+    await GET(req())
+    expect(logInfo).toHaveBeenCalledWith('cron-push-reminders', 'tick', expect.objectContaining({
+      shift_offers: expect.objectContaining({ sent: 1 }),
+    }))
+  })
+
+  it('a notice held overnight and an offer waiting are not news: no line 108 times a night', async () => {
+    runReplaceNotices.mockResolvedValue({ ...REPLACE_IDLE, rows: 1, groups: 0, quiet: 1 })
+    runShiftOfferSweep.mockResolvedValue({ ...OFFER_IDLE, open: 1, quiet_hours: 1 })
+    await GET(req())
+    expect(logInfo).not.toHaveBeenCalled()
+  })
+})

@@ -27,7 +27,7 @@ import { offerClaimRefusal, offerClaimRpcError, offerBlock } from '@/lib/shift-o
 import { swapShiftHasStarted } from '@/lib/swap-cover'
 import { liveAssignments } from '@/lib/roster'
 import { logRosterChange, markChangesNotified } from '@/lib/roster-change-log'
-import { logError } from '@/lib/log'
+import { logError, logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -81,7 +81,11 @@ export async function POST(_request, props) {
   if (rpcErr) {
     const m = offerClaimRpcError(rpcErr)
     if (m.status === 500) logError('shift-offer', 'claim_shift_offer failed', { offerId: offer.id, err: rpcErr.message })
-    return NextResponse.json({ success: false, error: m.error }, { status: m.status })
+    // REPLACENITS.1 — a deadlock with a manager adding the same coach: the
+    // RPC rolled back, nothing was claimed. Counted at warn (it should stay
+    // rare), and the coach is asked to try again. No automatic retry.
+    else if (m.code === 'try_again') logWarn('shift-offer', 'claim_shift_offer lost a deadlock; the coach is asked to try again', { offerId: offer.id, err: rpcErr.message })
+    return NextResponse.json({ success: false, ...(m.code ? { code: m.code } : {}), error: m.error }, { status: m.status })
   }
   if (result?.outcome !== 'claimed') {
     return NextResponse.json({ success: false, error: CLOSED_WORDS.filled }, { status: 409 })

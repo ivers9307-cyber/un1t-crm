@@ -133,6 +133,36 @@ export function replaceChanges({ block, fromProfileId, toProfileId }) {
   ]
 }
 
+// 'HH:MM' or 'HH:MM:SS', 00:00-23:59. Anything else is not written, and not
+// believed when read back.
+const START_TIME = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/
+const readableStart = (t) => (START_TIME.test(String(t ?? '')) ? t : null)
+
+/**
+ * REPLACENITS.1 — roster_change_log.details on each row of a replace: the via
+ * label the held-notice arm filters on, and the shift's start AS IT WAS at the
+ * replace. The start is what lets the arm hold back a notice for a shift that
+ * has started once the slot is DELETED (block_id is ON DELETE SET NULL, so the
+ * block embed is gone). Never a browser field: publicDetails
+ * (roster-change-log.js) does not whitelist it.
+ */
+export function replaceLogDetails(change) {
+  const start = readableStart(change?.startTime)
+  return start ? { via: REPLACE_VIA, start_time: start } : { via: REPLACE_VIA }
+}
+
+/**
+ * REPLACENITS.1 — a held replace row's shift start: the live block's (a time
+ * edit after the replace moved it), else the start logged at the replace (the
+ * block is gone), else null: a row written before REPLACENITS.1, which the
+ * started check reads as "not started", as it always did.
+ */
+export function replaceRowStartTime(r) {
+  const live = r?.shift_blocks?.start_time
+  if (live) return live
+  return readableStart(r?.details?.start_time)
+}
+
 /** 'none' (draft: the first publish tells them) | 'now' | 'morning' (quiet hours: the arm sends from 07:00). */
 export function replaceNoticeWhen({ published, inBand }) {
   if (!published) return 'none'
@@ -214,6 +244,9 @@ const byTime = (x, y) => String(x.created_at).localeCompare(String(y.created_at)
  * tells its LAST action instead: at worst a coach hears again, never "added"
  * without "removed".
  *
+ * startTime is replaceRowStartTime(last): the live block's, else the one
+ * logged at the replace (REPLACENITS.1), else null.
+ *
  * @returns {{ send: Array<{locationId, actorId, coachId, blockId, blockDate, startTime, action, rowIds}>,
  *             silent: Array<{ locationId, coachId, rowIds }>,
  *             gone: Array<{ locationId, coachId, rowIds }> }}  gone: review 4
@@ -253,7 +286,7 @@ export function netReplaceChanges(rows, { mayHaveBeenTold = () => false } = {}) 
       coachId: last.coach_id,
       blockId: last.block_id ?? null,
       blockDate: last.block_date,
-      startTime: last.shift_blocks?.start_time ?? null,
+      startTime: replaceRowStartTime(last),
       action: last.action,
       rowIds,
     })
