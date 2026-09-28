@@ -1555,6 +1555,41 @@ export async function fetchGlofoxTrainers(creds) {
 }
 
 /**
+ * MEMBERRESULT.1 — judge a 2xx body from GET /2.0/members/{id}.
+ *
+ * Glofox answers 200 with `{ success: false, message_code }` for an id it will
+ * not serve (a deleted or merged account, a trainer id): "Resource not
+ * available, empty result cant be processed", seen live every 10 minutes since
+ * 30 Aug 2026. Its own guidance is to treat that as a 400. So:
+ *   - success === false                      → refused, Glofox's code kept
+ *     (message_code, else message, else GLOFOX_SUCCESS_FALSE);
+ *   - no member object, or a member without
+ *     _id / id / member_id (the ids mapGlofoxMember needs) → refused,
+ *     NO_MEMBER_IN_BODY;
+ *   - otherwise                              → the member (unwrapped from
+ *     `data` when wrapped).
+ * Pure; exported for tests and for any future /2.0/members reader.
+ *
+ * @returns {{ member: (object|null), refused: boolean, messageCode: (string|null) }}
+ */
+export function interpretMemberBody(body) {
+  const none = { member: null, refused: true, messageCode: 'NO_MEMBER_IN_BODY' }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return none
+  if (body.success === false) {
+    const code = (typeof body.message_code === 'string' && body.message_code)
+      || (typeof body.message === 'string' && body.message)
+      || 'GLOFOX_SUCCESS_FALSE'
+    return { member: null, refused: true, messageCode: code }
+  }
+  const member = body.data && typeof body.data === 'object' && !Array.isArray(body.data) ? body.data : body
+  // Same id rule as mapGlofoxMember's pluck: the first of _id / id / member_id
+  // that is not null and not blank (an empty _id falls through to id).
+  const id = [member._id, member.id, member.member_id].find((v) => v != null && String(v).trim() !== '')
+  if (id === undefined) return none
+  return { member, refused: false, messageCode: null }
+}
+
+/**
  * Error-aware single-member fetch — GET /2.0/members/{id}.
  *
  * The /2.0/members LIST payload carries only a thin membership
@@ -1563,25 +1598,28 @@ export async function fetchGlofoxTrainers(creds) {
  * cron to keep contacts.glofox_membership_plan current for the
  * whole member base.
  *
- *   { ok: true,  member: {...} }  — request succeeded
- *   { ok: false, member: null }   — request failed; caller should
- *                                   leave the member's stored data
- *                                   untouched (don't wipe to null)
+ *   { ok: true,  member, refused: false, messageCode: null } — a member
+ *   { ok: false, member: null, refused: true,  messageCode }  — Glofox
+ *       answered 2xx WITHOUT a member (200 success:false, or no member id):
+ *       "no data", never a write. Callers count it apart from a blip.
+ *   { ok: false, member: null, refused: false, messageCode: null } — the
+ *       request failed (non-2xx, network, bad JSON); retry next run.
  *
- * @returns {Promise<{ ok: boolean, member: (object|null) }>}
+ * Either ok:false: the caller leaves the member's stored data untouched
+ * (never wipe to null).
+ *
+ * @returns {Promise<{ ok: boolean, member: (object|null), refused: boolean, messageCode: (string|null) }>}
  */
 export async function fetchMemberResult(creds, memberId) {
-  if (!creds || !memberId) return { ok: false, member: null }
+  const failed = { ok: false, member: null, refused: false, messageCode: null }
+  if (!creds || !memberId) return failed
   try {
     const r = await glofoxFetch(creds, `/2.0/members/${encodeURIComponent(memberId)}`)
-    if (!r.ok) return { ok: false, member: null }
-    const body = await r.json()
-    // The single-member endpoint wraps the member under `data`;
-    // tolerate an unwrapped body too.
-    const member = body && typeof body === 'object' && body.data ? body.data : body
-    return { ok: true, member: (member && typeof member === 'object') ? member : null }
+    if (!r.ok) return failed
+    const { member, refused, messageCode } = interpretMemberBody(await r.json())
+    return { ok: !refused, member, refused, messageCode }
   } catch {
-    return { ok: false, member: null }
+    return failed
   }
 }
 
