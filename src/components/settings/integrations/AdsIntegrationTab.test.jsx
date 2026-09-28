@@ -15,7 +15,7 @@ import AdsIntegrationTab from './AdsIntegrationTab.jsx'
 const LOC = { id: 'a0000000-0000-4000-8000-000000000001', name: 'Test Studio' }
 const META = {
   id: 'ad-1', provider: 'meta', external_account_id: 'act_1234567890', is_active: true,
-  access_token: '••••••••1234', has_access_token: true, last_synced_at: null, last_sync_error: null,
+  access_token: '••••••', has_access_token: true, last_synced_at: null, last_sync_error: null,
 }
 const reply = (status, body) => ({ ok: status < 400, status, json: async () => body })
 
@@ -74,5 +74,23 @@ describe('AdsIntegrationTab — real answers are unchanged (pins)', () => {
     render(<AdsIntegrationTab location={LOC} canEdit />)
     expect(await screen.findByText('Daily report recipients')).toBeTruthy()
     expect(screen.getAllByText('Account ID').length).toBeGreaterThan(0)
+  })
+})
+
+describe('AdsIntegrationTab — the stored token is never shown (N8NECHO.1)', () => {
+  it('a saved token shows "Saved (hidden)" as the placeholder, never characters', async () => {
+    mockGets(reply(200, { success: true, data: [META], report_recipients: [] }))
+    render(<AdsIntegrationTab location={LOC} canEdit />)
+    await screen.findByDisplayValue('act_1234567890')
+    const input = document.getElementById('meta-access-token')
+    expect(input.getAttribute('placeholder')).toBe('Saved (hidden)')
+    expect(input.getAttribute('placeholder')).not.toMatch(/•/)
+  })
+
+  it('no saved token shows "Not set"', async () => {
+    mockGets(reply(200, { success: true, data: [{ ...META, access_token: '', has_access_token: false }], report_recipients: [] }))
+    render(<AdsIntegrationTab location={LOC} canEdit />)
+    await screen.findByDisplayValue('act_1234567890')
+    expect(document.getElementById('meta-access-token').getAttribute('placeholder')).toBe('Not set')
   })
 })

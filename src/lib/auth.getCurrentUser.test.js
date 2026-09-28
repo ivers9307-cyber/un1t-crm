@@ -50,10 +50,14 @@ vi.mock('@supabase/ssr', () => ({
 // Service-role client — replaced with the scripted double below.
 vi.mock('@supabase/supabase-js', () => ({ createClient: vi.fn() }))
 
+// PROFILESPREAD.1 — auth.js logs a failed profile read.
+vi.mock('./log.js', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
+
 import { getCurrentUser, getOwnerOrganizationIds } from './auth.js'
 import { createClient } from '@supabase/supabase-js'
-import { LOCATION_SECRET_MASK, USER_LOCATION_COLUMNS } from './location-secrets.js'
-import { glofoxConnected } from './automations/registry.js'
+import { USER_LOCATION_COLUMNS } from './location-secrets.js'
+import { PROFILE_AUTH_SELECT, USER_PROFILE_COLUMNS } from './user-profile.js'
+import { logError } from './log.js'
 
 // ─── scripted Supabase double ───────────────────────────────────────
 // Records every query as { table, calls: [[method, ...args], ...] }
@@ -565,17 +569,17 @@ describe('getCurrentUser — SECFIX.3a: location loads name their columns', () =
   })
 })
 
-describe('getCurrentUser — SECFIX.3a: no credential value on any location row', () => {
+describe('getCurrentUser — SECFIX.3a + PROFILESPREAD.1: no settings and no credential on any location row', () => {
   const SECRET_LOC = {
     id: 'loc-s', name: 'Secret Studio', organization_id: 'org-a', active: true,
     sensibo_api_key: 'SYNTH-SENSIBO-KEY', thinq_pat: 'SYNTH-THINQ-PAT',
     settings: {
       glofox: { branch_id: 'b1', api_key: 'SYNTH-GLOFOX-KEY', api_token: 'SYNTH-GLOFOX-TOKEN', webhook_secret: 'SYNTH-GLOFOX-WHSEC', trial_membership_id: 'm1' },
       unifi: { host: 'https://unifi.example', api_token: 'SYNTH-UNIFI-TOKEN' },
-      customer_agent: { enabled: true },
+      customer_agent: { enabled: true, test_phones: ['+353000000001'] },
     },
   }
-  const expectNoSecret = (user) => expect(JSON.stringify(user)).not.toMatch(/SYNTH-/)
+  const expectNoSecret = (user) => expect(JSON.stringify(user)).not.toMatch(/SYNTH-|test_phones|\+353000/)
 
   it('a plain staff member: locations, activeLocation (the default link) and nothing else change', async () => {
     setup({
@@ -585,14 +589,13 @@ describe('getCurrentUser — SECFIX.3a: no credential value on any location row'
     })
     const user = await getCurrentUser()
     expectNoSecret(user)
-    expect(user.activeLocation.settings.glofox.api_key).toBe(LOCATION_SECRET_MASK)
-    expect(user.activeLocation.settings.glofox.branch_id).toBe('b1')
-    expect(user.activeLocation.settings.customer_agent).toEqual({ enabled: true })
-    expect(user.locations[0].sensibo_api_key).toBe(LOCATION_SECRET_MASK)
+    expect(user.activeLocation).not.toHaveProperty('settings')
+    expect(user.activeLocation).not.toHaveProperty('sensibo_api_key')
+    expect(user.activeLocation).toEqual({ id: 'loc-s', name: 'Secret Studio', organization_id: 'org-a', active: true })
     expect(user.rolesByLocation).toEqual({ 'loc-s': 'staff' })
   })
 
-  it('a master: every active location is redacted', async () => {
+  it('a master: no active location carries settings or a credential', async () => {
     setup({
       profile: { id: 'm-1', role: 'master', full_name: 'M', email: 'm@un1t.ie', employment_type: null, active: true },
       links: [],
@@ -601,10 +604,11 @@ describe('getCurrentUser — SECFIX.3a: no credential value on any location row'
     })
     const user = await getCurrentUser()
     expectNoSecret(user)
-    expect(user.locations[1]).toBe(LOC_A1) // nothing to redact → the same object
+    expect(user.locations[0]).not.toHaveProperty('settings')
+    expect(user.locations[1]).toBe(LOC_A1) // nothing to drop → the same object
   })
 
-  it('an org admin: the org-expanded locations are redacted', async () => {
+  it('an org admin: the org-expanded locations carry no settings or credential', async () => {
     setup({
       profile: { id: 'oa-1', role: 'staff', full_name: 'Org Admin', email: 'oa@tenant.ie', employment_type: 'fte', active: true },
       links: [],
@@ -617,13 +621,130 @@ describe('getCurrentUser — SECFIX.3a: no credential value on any location row'
     expect(user.locations.map((l) => l.id)).toEqual(['loc-s'])
   })
 
-  it('presence survives: the automations page still sees Glofox as connected', async () => {
+  it('the user object carries no location settings at all (the automations pages read their own)', async () => {
     setup({
-      profile: { id: 'st-2', role: 'owner', full_name: 'O', email: 'o@un1t.ie', employment_type: 'fte', active: true },
+      profile: { id: 'st-2', role: 'owner', full_name: 'O', email: 'o@example.test', employment_type: 'fte', active: true },
       links: [link({ loc: SECRET_LOC, role: 'owner', is_default: true })],
       orgs: [ORG_A],
     })
     const user = await getCurrentUser()
-    expect(glofoxConnected(user.activeLocation)).toBe(true)
+    expect(JSON.stringify(user)).not.toMatch(/"settings"|customer_agent|test_phones/)
+  })
+})
+
+// ─── PROFILESPREAD.1 ────────────────────────────────────────────────
+// The user object is serialised into every page. It carries the ten profile
+// columns its readers use, never pin_hash / pay / UniFi-id / tombstone
+// bookkeeping, for the real person AND for a master's "View as" target.
+
+describe('getCurrentUser — PROFILESPREAD.1: named profile columns', () => {
+  const FULL = (over = {}) => ({
+    id: 'p-1', role: 'staff', full_name: 'Plain Staff', email: 'p@example.test', employment_type: 'fte', active: true,
+    avatar_url: null, permissions: { landing_preference: 'today' }, email_signature: 'sig', email_signature_rich: null,
+    pin_hash: 'SYNTH-PIN-HASH', pin_set_at: '2026-01-01T00:00:00Z', pin_failed_count: 0, pin_locked_until: null,
+    annual_salary: 12345, hourly_rate: 67, contracted_hours_per_week: 39, annual_leave_entitlement: 20, overtime_rate: 1.5,
+    unifi_user_id: 'SYNTH-UNIFI-ID', unifi_door_access: true, home_screen_path: '/studio',
+    two_factor_enabled: false, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-02T00:00:00Z',
+    deleted_at: null, deleted_by: null, deleted_role: null, auth_disposition: null, auth_completed_at: null,
+    ...over,
+  })
+  const DROPPED = ['pin_hash', 'pin_set_at', 'pin_failed_count', 'pin_locked_until', 'annual_salary', 'hourly_rate',
+    'contracted_hours_per_week', 'annual_leave_entitlement', 'overtime_rate', 'unifi_user_id', 'unifi_door_access',
+    'home_screen_path', 'two_factor_enabled', 'created_at', 'updated_at', 'deleted_at', 'deleted_by', 'deleted_role',
+    'auth_disposition', 'auth_completed_at']
+
+  it('selects PROFILE_AUTH_SELECT, never *', async () => {
+    const { queries } = setup({ profile: FULL(), links: [link({ loc: LOC_A1, role: 'staff', is_default: true })], orgs: [ORG_A] })
+    await getCurrentUser()
+    const selects = queries.filter((q) => q.table === 'profiles').map((q) => findCall(q, 'select')?.[1])
+    expect(selects).toEqual([PROFILE_AUTH_SELECT])
+  })
+
+  it('the user object carries the ten columns and none of the others (a stray value from the read is dropped)', async () => {
+    setup({ profile: FULL(), links: [link({ loc: LOC_A1, role: 'staff', is_default: true })], orgs: [ORG_A] })
+    const user = await getCurrentUser()
+    for (const k of DROPPED) expect([k, Object.prototype.hasOwnProperty.call(user, k)]).toEqual([k, false])
+    expect(JSON.stringify(user)).not.toMatch(/SYNTH-|12345/)
+    for (const k of USER_PROFILE_COLUMNS.filter((c) => c !== 'role')) expect(user[k]).toEqual(FULL()[k])
+    expect(user.role).toBe('staff')
+    expect(user.profileRole).toBe('staff')
+  })
+
+  it('"View as": the TARGET is read with the same named select, and its pin/pay never reach the master\'s page', async () => {
+    // UUIDs, as the existing "View as" cases use (readImpersonationTarget is real).
+    const M_ID = '33333333-3333-4333-8333-333333333333'
+    const T_ID = '44444444-4444-4444-8444-444444444444'
+    cookieMap.set('un1t_impersonate', T_ID)
+    const master = FULL({ id: M_ID, role: 'master', full_name: 'M', email: 'm9@example.test' })
+    const { queries } = setup({
+      profile: master,
+      profilesById: { [M_ID]: master, [T_ID]: FULL({ id: T_ID, full_name: 'Target', pin_hash: 'SYNTH-TARGET-PIN', hourly_rate: 99 }) },
+      openImpersonation: true,
+      links: [link({ loc: LOC_A1, role: 'staff', is_default: true })],
+      allLocations: [LOC_A1],
+      orgs: [ORG_A],
+    })
+    const user = await getCurrentUser()
+    expect(user.id).toBe(T_ID)
+    expect(queries.filter((q) => q.table === 'profiles').map((q) => findCall(q, 'select')?.[1]))
+      .toEqual([PROFILE_AUTH_SELECT, PROFILE_AUTH_SELECT])
+    expect(JSON.stringify(user)).not.toMatch(/SYNTH-TARGET-PIN/)
+    expect(user).not.toHaveProperty('hourly_rate')
+  })
+
+  it('the tombstone check still sees deleted_at (selected, not spread)', async () => {
+    // active: true and a live membership, so only isTombstone can refuse it
+    // (an inactive profile is refused on its own, which would make this vacuous).
+    setup({
+      profile: FULL({ deleted_at: '2026-09-19T10:00:00Z', active: true }),
+      links: [link({ loc: LOC_A1, role: 'staff', is_default: true })],
+      orgs: [ORG_A],
+    })
+    expect(await getCurrentUser()).toBeNull()
+  })
+
+  it('the same profile without deleted_at signs in (the tombstone case above is not vacuous)', async () => {
+    setup({ profile: FULL({ active: true }), links: [link({ loc: LOC_A1, role: 'staff', is_default: true })], orgs: [ORG_A] })
+    expect((await getCurrentUser())?.id).toBe('p-1')
+  })
+
+  it('the View-as target read errors: logged (code only), master stays themselves', async () => {
+    const M_ID = '55555555-5555-4555-8555-555555555555'
+    const T_ID = '66666666-6666-4666-8666-666666666666'
+    cookieMap.set('un1t_impersonate', T_ID)
+    const master = FULL({ id: M_ID, role: 'master', full_name: 'M', email: 'm8@example.test' })
+    const scenario = { profile: master, openImpersonation: true, links: [], allLocations: [LOC_A1], orgs: [ORG_A] }
+    const base = respondFor(scenario)
+    const { db, queries } = makeDb((q) => {
+      const idCall = q.calls.find((c) => c[0] === 'eq' && c[1] === 'id')
+      if (q.table === 'profiles' && idCall?.[2] === T_ID) {
+        return { data: null, error: { code: '42703', message: 'column x does not exist' } }
+      }
+      return base(q)
+    })
+    createClient.mockReturnValue(db)
+    authUser = { id: M_ID, email: master.email }
+    const user = await getCurrentUser()
+    expect(user.id).toBe(M_ID)
+    expect(user.full_name).toBe('M')
+    expect(user.impersonatingFrom ?? null).toBeNull()
+    expect(queries.filter((q) => q.table === 'profiles')).toHaveLength(2)
+    expect(logError).toHaveBeenCalledWith('auth', expect.stringMatching(/impersonation target read failed; master stays themselves/), { code: '42703' })
+  })
+
+  it('a failed profile read is logged (code only) and still resolves null', async () => {
+    const { db } = makeDb((q) => (q.table === 'profiles' ? { data: null, error: { code: '42703', message: 'column x does not exist' } } : { data: null }))
+    createClient.mockReturnValue(db)
+    authUser = { id: 'p-1', email: 'p@example.test' }
+    expect(await getCurrentUser()).toBeNull()
+    expect(logError).toHaveBeenCalledWith('auth', expect.stringMatching(/profile read failed/), { code: '42703' })
+  })
+
+  it('"no row" (PGRST116) is not logged: a signed-in auth user without a profile is a member, not a fault', async () => {
+    const { db } = makeDb((q) => (q.table === 'profiles' ? { data: null, error: { code: 'PGRST116', message: 'no rows' } } : { data: null }))
+    createClient.mockReturnValue(db)
+    authUser = { id: 'member-1', email: 'm@example.test' }
+    expect(await getCurrentUser()).toBeNull()
+    expect(logError).not.toHaveBeenCalled()
   })
 })
