@@ -11,6 +11,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { redirect } from 'next/navigation'
 import { resolveHyroxSettings } from '@/lib/hyrox/settings'
+import { logError } from '@/lib/log'
 import { weekNoFor, slotFor } from '@/lib/hyrox/mapping'
 import HyroxPlanner from './HyroxPlanner'
 
@@ -49,11 +50,15 @@ export default async function HyroxAdmin() {
       .order('slot', { ascending: true })
     : { data: [] }
 
-  const { data: loc } = await db
+  // SETTINGSWIPE.1 — a failed read is not "default house style": passing
+  // resolveHyroxSettings(null) let Save replace the real style and wipe the
+  // saved examples. The planner shows Could not load instead.
+  const { data: loc, error: locErr } = await db
     .from('locations')
     .select('id, settings')
     .eq('id', locationId)
     .single()
+  if (locErr) logError('hyrox-page', 'settings read failed', { locationId, err: locErr.message })
 
   // The session the NEXT upcoming Hyrox class maps to (same date -> week/slot
   // logic the publish cron uses), so the planner can flag it as "next up".
@@ -80,7 +85,8 @@ export default async function HyroxAdmin() {
     <HyroxPlanner
       initialBlock={block || null}
       initialSessions={sessions || []}
-      initialSettings={resolveHyroxSettings(loc)}
+      initialSettings={locErr ? null : resolveHyroxSettings(loc)}
+      settingsUnreadable={!!locErr}
       locationId={locationId}
       canManage={['owner', 'manager', 'head_coach', 'master'].includes(user.role)}
       nextUpId={nextUpId}
