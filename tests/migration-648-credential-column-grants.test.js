@@ -374,6 +374,10 @@ describe('after 648 — the catalog', () => {
     }
   })
 
+  it("takes its locks with a 5s lock_timeout, set right after BEGIN (never queues behind a long reader)", () => {
+    expect(MIG_648).toMatch(/^BEGIN;\nSET LOCAL lock_timeout = '5s';\n/m)
+  })
+
   it('a second run passes its own self-check (idempotent)', async () => {
     await expect(runSql(MIG_648)).resolves.toBeDefined()
     expect(await columnGrants('locations', 'authenticated', 'SELECT')).toEqual(sorted(CREDENTIAL_COLUMN_GRANTS.locations.select))

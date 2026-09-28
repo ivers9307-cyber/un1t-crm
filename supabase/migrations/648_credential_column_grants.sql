@@ -120,6 +120,10 @@
 -- ===========================================================================
 
 BEGIN;
+SET LOCAL lock_timeout = '5s';
+-- Never wait indefinitely for a lock on these hot tables (COMMENT ON takes
+-- SHARE UPDATE EXCLUSIVE; a concurrent DDL or vacuum can hold a conflicting
+-- one). After 5s the file fails whole, nothing changes, and it is re-run.
 
 -- Order matters: a column GRANT binds only once the table-level grant is gone.
 REVOKE ALL ON public.locations FROM authenticated, anon;
