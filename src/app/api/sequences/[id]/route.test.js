@@ -35,7 +35,7 @@ const USER_ID = 'b0000000-0000-0000-0000-000000000002'
 const LOC_ID  = 'c0000000-0000-0000-0000-000000000003'
 const SEG_ID  = 'e0000000-0000-0000-0000-000000000005'
 
-const OWNER = { id: USER_ID, role: 'owner', locations: [{ id: LOC_ID }] }
+const OWNER = { id: USER_ID, role: 'owner', locations: [{ id: LOC_ID, role: 'owner' }] }
 
 // PUT reads the sequence row up front (guard + effective-value merge),
 // then updates. `row` feeds every select; `updateSpy` captures writes.

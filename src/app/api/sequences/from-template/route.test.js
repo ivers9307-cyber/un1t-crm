@@ -25,7 +25,9 @@ import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 
 const LOC = 'a0000000-0000-0000-0000-000000000001'
-const USER = { id: 'user-1', activeLocation: { id: LOC } }
+// SEQROUTEGATE.1 — an owner AT the location, so the builder rule (email or
+// whatsapp there) resolves.
+const USER = { id: 'user-1', role: 'owner', locations: [{ id: LOC, role: 'owner' }], activeLocation: { id: LOC } }
 
 function req(body) {
   return new Request('http://localhost/api/sequences/from-template', {
