@@ -37,6 +37,7 @@ import WindowsEditor from './WindowsEditor'
 // different answer to "is a window active?" than the cron itself does.
 import { resolveServeWindows } from '@/lib/schedule/desired-state'
 import { playbackLabel } from '@/lib/sonos/playback'
+import ReadFailedNote from '@/components/settings/ReadFailedNote'
 
 const MAX_WINDOWS = 16 // mirrors SchedulePayload's windows.max(16) in the API
 const DEFAULT_VOLUME = 30
@@ -270,7 +271,10 @@ function SonosScheduleInner({ locationName }) {
 
   const [household, setHousehold] = useState(null)
   const [loading, setLoading] = useState(true)
-  const [loadError, setLoadError] = useState(null)
+  // CHANNELREAD.1 — true when the household read failed (a non-2xx, a
+  // network error, or `db_error`). Renders the shared ReadFailedNote, like
+  // the other connection screens, and nothing that can act.
+  const [loadError, setLoadError] = useState(false)
 
   const loadHousehold = useCallback(async () => {
     try {
@@ -281,12 +285,13 @@ function SonosScheduleInner({ locationName }) {
       // failed, not that the studio has no Sonos. It is a load error (Try
       // again), never the not-connected panel and its Connect Sonos button.
       if (j.connected === false && j.reason === 'db_error') {
-        throw new Error("Couldn't check the Sonos connection just now, so nothing is shown and nothing can be changed here until it loads.")
+        throw new Error('sonos_connections read failed (db_error)')
       }
       setHousehold(j)
-      setLoadError(null)
+      setLoadError(false)
     } catch (e) {
-      setLoadError(e.message)
+      console.error('[sonos] household load failed:', e?.message || e)
+      setLoadError(true)
     } finally {
       setLoading(false)
     }
@@ -384,11 +389,7 @@ function SonosScheduleInner({ locationName }) {
 
       {!loading && loadError && (
         <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
-          <p className="text-sm text-red-700">{loadError}</p>
-          <button type="button" onClick={loadHousehold}
-            className="mt-2 text-xs font-semibold underline text-un1t-subtle">
-            Try again
-          </button>
+          <ReadFailedNote what="the Sonos connection" onRetry={loadHousehold} />
         </div>
       )}
 
