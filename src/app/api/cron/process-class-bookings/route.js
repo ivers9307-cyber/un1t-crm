@@ -10,6 +10,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { claimAndProcessBookingJob, MAX_ATTEMPTS } from '@/lib/class-booking-queue'
+import { routeToReview } from '@/lib/class-booking-processor'
 import { logWarn, logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -24,7 +25,7 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   }
   const db = createServerClient()
-  const stats = { reaped: 0, processed: 0, booked: 0, review: 0, failed: 0, reap_failed: 0 }
+  const stats = { reaped: 0, reap_carded: 0, processed: 0, booked: 0, review: 0, failed: 0, reap_failed: 0 }
   try {
     // Reaper: rows stuck in 'processing' (a prior run died mid-flight) would
     // otherwise be lost forever — the member may already be booked in Glofox.
@@ -44,11 +45,26 @@ export async function GET(request) {
       } else {
         stats.reaped = (requeued || []).length
       }
-      const { error: reviewErr } = await db.from('class_booking_requests').update({ status: 'needs_review', last_error: 'max_attempts_stuck_processing' })
-        .eq('status', 'processing').lt('updated_at', staleBefore).gte('attempts', MAX_ATTEMPTS)
+      const { data: flagged, error: reviewErr } = await db.from('class_booking_requests').update({ status: 'needs_review', last_error: 'max_attempts_stuck_processing' })
+        .eq('status', 'processing').lt('updated_at', staleBefore).gte('attempts', MAX_ATTEMPTS).select('*')
       if (reviewErr) {
         stats.reap_failed = 1
         logError('process-class-bookings', 'reaper needs_review flag failed; stuck rows wait for the next tick', { err: reviewErr })
+      }
+      // REGISTRYREAD.1a — a bare needs_review is on no screen: file the staff
+      // card for every row the guarded flip above just matched (reused if the
+      // row already names a pending one). routeToReview falls back to 'failed'
+      // with review_unavailable:* when no card can be filed. One row's failure
+      // never stops the others, and none of it withholds the heartbeat: the
+      // row is already out of 'processing', so a next tick cannot retry it.
+      for (const row of flagged || []) {
+        try {
+          const review = await routeToReview(db, row, 'max_attempts_stuck_processing')
+          if (review?.outcome === 'needs_review') stats.reap_carded++
+          else logError('process-class-bookings', 'stuck row flagged but no staff card could be filed', { requestId: row.id, detail: review?.detail })
+        } catch (e) {
+          logError('process-class-bookings', 'stuck row flagged but filing the staff card threw', { requestId: row.id, err: e })
+        }
       }
     } catch (e) {
       stats.reap_failed = 1

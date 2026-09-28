@@ -117,6 +117,18 @@ describe('findOrCreateGlofoxMember — guard clauses', () => {
     expect(out.status).toBe('failed')
     expect(out.error).toMatch(/credentials/)
   })
+
+  it('REGISTRYREAD.1a: an unreadable settings row is "could not be read — retry", not "not configured"', async () => {
+    glofoxCredentialsForLocation.mockResolvedValueOnce({ branchId: null, apiKey: null, apiToken: null, readError: 'glofox_settings_unreadable' })
+    const out = await findOrCreateGlofoxMember({
+      db: makeFakeDb(), locationId: 'loc1', source: 'dup_check',
+      contact: { id: 'c1', email: 'a@b.com' },
+    })
+    expect(out.status).toBe('failed')
+    expect(out.error).toMatch(/could not be read/)
+    expect(out.error).not.toMatch(/not configured/)
+    expect(searchGlofoxByEmail).not.toHaveBeenCalled()
+  })
 })
 
 describe('findOrCreateGlofoxMember — search-and-link (createIfMissing=false)', () => {
@@ -321,6 +333,20 @@ describe('findOrCreateGlofoxMember — create-and-trial (createIfMissing=true)',
     })
     expect(out.status).toBe('created')
     expect(purchaseGlofoxMembership).toHaveBeenCalledWith(VALID_CREDS, 'gx-new', 'mem-trial', 999)
+  })
+
+  it('REGISTRYREAD.1a: a failed trial-settings read says so (not "Trial membership not configured")', async () => {
+    registerGlofoxMember.mockResolvedValueOnce({ ok: true, member: { _id: 'gx-new' } })
+    const db = makeFakeDb({ locationSelect: { data: null, error: { message: 'boom' } } })
+    const out = await findOrCreateGlofoxMember({
+      db, locationId: 'loc1', source: 'booking_form',
+      contact: { id: 'c1', email: 'a@b.com', first_name: 'Alice', last_name: 'Smith' },
+      createIfMissing: true,
+      attachTrial: true,
+    })
+    expect(out.status).toBe('needs_review')
+    expect(out.error).toMatch(/Could not read the trial membership settings/)
+    expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
   })
 })
 

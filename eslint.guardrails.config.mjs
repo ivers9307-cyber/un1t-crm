@@ -329,6 +329,9 @@ const config = [
       'src/lib/shift-offer-server.js',
       'src/app/api/schedule/offers/**',
       'src/app/api/schedule/blocks/*/offer/**',
+      // REGISTRYREAD.1a — the registry's dual-write sync. Its deactivate was a
+      // bare UPDATE answering "deactivated"; now every write judges its error.
+      'src/lib/connection-registry.js',
       // DETAILBACKFILL.1 — the detail backfill's due-date stamp is its cursor:
       // a stamp that silently fails re-reads the same contacts every tick
       // (the ~288k-calls-a-day loop this PR removed). Armed clean.

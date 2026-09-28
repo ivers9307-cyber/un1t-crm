@@ -7,7 +7,6 @@
 // judged on the RAW Glofox event before shaping, and a full class is simply
 // left out of the list.
 import { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, fetchUpcomingEvents } from '@/lib/glofox'
-import { getGlofoxConfig } from '@/lib/connection-registry'
 
 const DUBLIN = 'Europe/Dublin'
 const dayFmt = new Intl.DateTimeFormat('en-CA', { timeZone: DUBLIN, year: 'numeric', month: '2-digit', day: '2-digit' })
@@ -42,7 +41,7 @@ export function shapePublicClass(e) {
 // Operator deny-list. Hide classes whose name contains any configured keyword
 // (case-insensitive), stored at locations.settings.glofox.hidden_class_keywords
 // — keeps free-trial leads out of e.g. ELITES / members-only sessions. Applied
-// inside listPublicClasses so it governs BOTH the public picker AND the booking
+// inside readPublicClasses so it governs BOTH the public picker AND the booking
 // enqueue (both go through here): a hidden class can be neither seen nor booked.
 export function parseHiddenKeywords(raw) {
   const arr = Array.isArray(raw) ? raw : typeof raw === 'string' ? raw.split(/[\n,]/) : []
@@ -54,25 +53,39 @@ export function isClassHidden(name, keywords) {
   return keywords.some((k) => n.includes(k))
 }
 
-// Resolve a location's live, bookable classes for the next `days` days.
-export async function listPublicClasses(db, locationId, days = 7) {
+/**
+ * Resolve a location's live, bookable classes for the next `days` days.
+ * Never throws.
+ * @returns {Promise<{ classes: object[], error: (string|null) }>}
+ *   error 'glofox_settings_unreadable' — the studio's Glofox settings could
+ *     not be READ (a DB blip): not "no classes", not "not configured".
+ *   error 'glofox_unreachable' — Glofox did not answer.
+ *   A studio with no Glofox is { classes: [], error: null }.
+ */
+export async function readPublicClasses(db, locationId, days = 7) {
   const creds = await glofoxCredentialsForLocation(db, locationId)
-  if (missingGlofoxCredentialsForLocation(creds).length) return []
-  let hidden = []
-  try {
-    // INTEG-A2 dual-read: registry config first, legacy settings.glofox otherwise.
-    const glofoxCfg = await getGlofoxConfig(db, locationId)
-    hidden = parseHiddenKeywords(glofoxCfg?.hidden_class_keywords)
-  } catch { /* no-op: a read failure just means no deny-list applied */ }
+  if (creds.readError) return { classes: [], error: creds.readError }
+  if (missingGlofoxCredentialsForLocation(creds).length) return { classes: [], error: null }
+  // REGISTRYREAD.1a: the deny-list rides on the SAME read as the credentials.
+  // A second read used to fail OPEN — a blip answered {} and listed (and let
+  // the funnel book) every hidden class.
+  const hidden = parseHiddenKeywords(creds.hiddenClassKeywords)
   const start = Math.floor(Date.now() / 1000)
   const end = start + Math.min(14, Math.max(1, days)) * 86400
   const { ok, events } = await fetchUpcomingEvents(creds, { start, end, limit: 100 })
-  if (!ok || !Array.isArray(events)) return []
+  if (!ok || !Array.isArray(events)) return { classes: [], error: 'glofox_unreachable' }
   const now = Date.now()
-  return events
+  const classes = events
     .filter((e) => e && e.active !== false && e.private !== true && (Number(e.time_start) || 0) * 1000 > now)
     .filter((e) => !isEventFull(e))
     .map(shapePublicClass)
     .filter((c) => !isClassHidden(c.name, hidden))
     .sort((a, b) => a.starts_at.localeCompare(b.starts_at))
+  return { classes, error: null }
+}
+
+// Old contract ([] on any failure) for the public list route and the
+// WhatsApp Flow, where an empty screen is the honest fallback.
+export async function listPublicClasses(db, locationId, days = 7) {
+  return (await readPublicClasses(db, locationId, days)).classes
 }

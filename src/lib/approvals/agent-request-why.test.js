@@ -101,6 +101,13 @@ describe('failureExplanation', () => {
     expect(failureExplanation({ status: 'actioned', details: { result: { ok: true } } })).toBeNull()
     expect(failureExplanation(null)).toBeNull()
   })
+
+  it('REGISTRYREAD.1a: GLOFOX_SETTINGS_UNREADABLE says the settings could not be read and to retry', () => {
+    const out = failureExplanation({ status: 'failed', details: { result: { ok: false, message_code: 'GLOFOX_SETTINGS_UNREADABLE' } } })
+    expect(out).toMatch(/could not be read/)
+    expect(out).toMatch(/Retry/)
+    expect(out).not.toMatch(/Glofox rejected/)
+  })
 })
 
 // AGENT-FUNNEL-CREDITS.1 — the account summary line on approval cards.

@@ -22,6 +22,7 @@ import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { ADMIN_ROLES } from '@/lib/schemas'
 import { DUAL_READ_PLATFORMS, syncConnectionFromLegacy } from '@/lib/connection-registry'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -55,6 +56,9 @@ export async function POST(_request, props) {
       const { action } = await syncConnectionFromLegacy(db, locationId, platform, location)
       results[platform] = action
     } catch (e) {
+      // REGISTRYREAD.1a — the tabs fire-and-forget this call, so the result
+      // string is read by no one: log it (response unchanged).
+      logError('integrations', 'registry sync failed', { locationId, platform, err: e })
       results[platform] = `error: ${e?.message || e}`
     }
   }
