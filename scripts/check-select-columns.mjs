@@ -601,6 +601,190 @@ export function firstStringArg(argsText) {
   return tpl ? tpl[1] : null
 }
 
+// ---------------------------------------------------------------------------
+// Select strings held in a constant (SELCOLS2.1)
+// ---------------------------------------------------------------------------
+//
+// `const COLS = 'id, name'` then `.select(COLS)` was skipped in silence
+// (found building REPLACE.1b), and it is the house style for any column list
+// used twice. What is readable now, all within ONE file:
+//   - an identifier naming a `const` declared exactly once in the file;
+//   - a `'…'` / `"…"` / `` `…` `` literal;
+//   - a template whose every `${…}` is itself such an identifier;
+//   - an array literal of the above, joined: `[ 'a', 'b' ].join(', ')`;
+//   - any `+` concatenation of the above.
+// Still skipped, deliberately: an imported constant (it lives in another
+// file), `let`/`var` (reassignable), a name declared more than once in the
+// file (shadowing: we cannot tell which one reaches the call), a member
+// (`X.cols`), any other call (`COLS.join(',')` on a named array, `pick()`),
+// and any other `${expr}`. Known blind spot: a function PARAMETER that
+// shadows the file's one `const` of the same name reads as the const (a
+// regex cannot see scopes). That can only add a check, never hide one.
+
+/**
+ * Split a call's argument text (or an array literal's body) on top-level
+ * commas, JS-literal aware. A trailing comma yields no empty last element.
+ */
+export function splitArgs(text) {
+  const parts = []
+  let depth = 0
+  let quote = null
+  let start = 0
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]
+    if (quote) {
+      if (c === '\\') { i++; continue }
+      if (c === quote) quote = null
+      continue
+    }
+    if (c === "'" || c === '"' || c === '`') { quote = c; continue }
+    if (c === '(' || c === '[' || c === '{') depth++
+    else if (c === ')' || c === ']' || c === '}') depth--
+    else if (c === ',' && depth === 0) { parts.push(text.slice(start, i)); start = i + 1 }
+  }
+  parts.push(text.slice(start))
+  return parts.map((p) => p.trim()).filter((p, idx, all) => p || idx < all.length - 1)
+}
+
+/** The first top-level argument of a call's argument text. */
+export function firstArgText(argsText) {
+  return splitArgs(argsText)[0] ?? ''
+}
+
+/** Offset of the `]` closing the `[` at `openIdx` (JS-literal aware), or -1. */
+function closingBracket(s, openIdx) {
+  let depth = 0
+  let quote = null
+  for (let i = openIdx; i < s.length; i++) {
+    const c = s[i]
+    if (quote) {
+      if (c === '\\') { i++; continue }
+      if (c === quote) quote = null
+      continue
+    }
+    if (c === "'" || c === '"' || c === '`') { quote = c; continue }
+    if (c === '[' || c === '(' || c === '{') depth++
+    else if (c === ']' || c === ')' || c === '}') { depth--; if (depth === 0) return c === ']' ? i : -1 }
+  }
+  return -1
+}
+
+const ESCAPES = { n: '\n', t: '\t', r: '\r' }
+const IDENT_RE = /^[A-Za-z_$][\w$]*/
+const JOIN_RE = /^\s*\.\s*join\s*\(\s*(?:(['"])((?:(?!\1)[^\\\n])*)\1\s*)?\)/
+
+/**
+ * Evaluate a string expression made only of literals, `+`, `[…].join()` and
+ * resolvable identifiers. `lookup(name, seen)` returns a string or null.
+ * Returns the string, or null for anything else.
+ *
+ * `prefix` mode reads a declaration's initializer, which is followed by the
+ * rest of the file: it stops at the end of the expression (`;`, `,`, `)`,
+ * `}`, or a newline before the next statement) and refuses anything that
+ * would continue it (`.trim()`, `?? x`, `[0]`, …).
+ */
+export function evaluateStringExpr(text, lookup, seen = new Set(), prefix = false) {
+  const s = text
+  let i = 0
+  let out = ''
+  for (;;) {
+    while (i < s.length && /\s/.test(s[i])) i++
+    const c = s[i]
+    if (c === "'" || c === '"' || c === '`') {
+      let j = i + 1
+      let v = ''
+      while (j < s.length && s[j] !== c) {
+        if (s[j] === '\\') { v += ESCAPES[s[j + 1]] ?? s[j + 1]; j += 2; continue }
+        if (c !== '`' && s[j] === '\n') return null
+        if (c === '`' && s[j] === '$' && s[j + 1] === '{') {
+          const close = s.indexOf('}', j)
+          if (close === -1) return null
+          const inner = s.slice(j + 2, close).trim()
+          const id = inner.match(IDENT_RE)
+          if (!id || id[0] !== inner) return null
+          const r = lookup(inner, seen)
+          if (r === null) return null
+          v += r
+          j = close + 1
+          continue
+        }
+        v += s[j]
+        j++
+      }
+      if (j >= s.length) return null
+      out += v
+      i = j + 1
+    } else if (c === '[') {
+      // `[ 'a', 'b', X ].join(', ')` — the other house way to spell a column list.
+      const close = closingBracket(s, i)
+      if (close === -1) return null
+      const join = s.slice(close + 1).match(JOIN_RE)
+      if (!join) return null
+      const parts = []
+      for (const el of splitArgs(s.slice(i + 1, close))) {
+        const v = evaluateStringExpr(el, lookup, seen)
+        if (v === null) return null
+        parts.push(v)
+      }
+      out += parts.join(join[1] ? join[2] : ',')
+      i = close + 1 + join[0].length
+    } else {
+      const m = s.slice(i).match(IDENT_RE)
+      if (!m) return null
+      const r = lookup(m[0], seen)
+      if (r === null) return null
+      out += r
+      i += m[0].length
+    }
+    // After a token: a `+` continues, the end finishes, anything else refuses
+    // (or, in prefix mode, must be something that ends the initializer).
+    let k = i
+    let sawNewline = false
+    while (k < s.length && /\s/.test(s[k])) { if (s[k] === '\n') sawNewline = true; k++ }
+    if (k >= s.length) return out
+    if (s[k] === '+') { i = k + 1; continue }
+    if (!prefix) return null
+    if (';,)}'.includes(s[k])) return out
+    if (sawNewline && /[A-Za-z_$]/.test(s[k])) return out // next statement (ASI)
+    return null
+  }
+}
+
+/**
+ * The text after `const NAME =` when NAME is declared exactly once in the
+ * file, and that one declaration is a `const`. Otherwise null. `src` must be
+ * comment-masked, so a declaration in a comment does not count.
+ */
+export function findConstInitializer(src, name) {
+  if (!/^[A-Za-z_$][\w$]*$/.test(name)) return null
+  const escaped = name.replace(/\$/g, '\\$')
+  const decl = new RegExp(`(?<![\\w$.])(const|let|var|function)\\s+${escaped}(?![\\w$])\\s*(=)?`, 'g')
+  const matches = [...src.matchAll(decl)]
+  if (matches.length !== 1) return null
+  const [m] = matches
+  if (m[1] !== 'const' || !m[2]) return null
+  return src.slice(m.index + m[0].length)
+}
+
+/**
+ * The select string a `.select(<args>)` call passes, when it is anything
+ * other than the plain literal firstStringArg already reads: an identifier
+ * bound to a same-file `const`, a template of such identifiers, a `+`
+ * concatenation or a `[…].join()`. `src` is the comment-masked file.
+ * Null = unreadable, and the call is skipped exactly as before.
+ */
+export function resolveSelectArg(argsText, src) {
+  const lookup = (name, seen) => {
+    if (seen.has(name)) return null // a cycle is not a string
+    const init = findConstInitializer(src, name)
+    if (init === null) return null
+    return evaluateStringExpr(init, lookup, new Set([...seen, name]), true)
+  }
+  const arg = firstArgText(argsText).trim()
+  if (!arg) return null
+  return evaluateStringExpr(arg, lookup)
+}
+
 /**
  * Walk every `.from('<t>')` chain in a source file, yielding
  * [{ table, method, args, index }] for each `.method(args)` link attached
@@ -694,10 +878,11 @@ export function maskComments(src) {
 
 export function collectFileRefs(src, schema, fks = new Map()) {
   const refs = []
-  for (const link of extractChainLinks(maskComments(src))) {
+  const masked = maskComments(src)
+  for (const link of extractChainLinks(masked)) {
     if (!schema.has(link.table)) continue
     if (link.method === 'select') {
-      const sel = firstStringArg(link.args)
+      const sel = firstStringArg(link.args) ?? resolveSelectArg(link.args, masked)
       if (sel === null) continue
       for (const r of parseSelect(sel, link.table, schema, fks)) {
         refs.push({ ...r, offset: link.index, via: 'select' })

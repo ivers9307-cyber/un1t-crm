@@ -23,6 +23,9 @@ import {
   validateAllowlist,
   classifyHits,
   parseForeignKeys,
+  evaluateStringExpr,
+  findConstInitializer,
+  resolveSelectArg,
 } from '../scripts/check-select-columns.mjs'
 
 /** Replay migration texts in order into a schema map (and the FK map). */
@@ -416,5 +419,130 @@ describe('embed named by its FK column (SELCOLS2.1, found building LABOUR.1)', (
 
   it('without the FK map, behaves exactly as before (callers that pass none)', () => {
     expect(parseSelect('locations:location_id(name)', 'shift_blocks', schema).map((r) => r.column)).toEqual([])
+  })
+})
+
+describe('select string held in a constant (SELCOLS2.1, found building REPLACE.1b)', () => {
+  const { schema, fks } = schemaOf(ENROLMENTS_SQL, CONTACTS_SQL, LOCATIONS_SQL, BLOCKS_SQL)
+  const hits = (src) =>
+    collectFileRefs(src, schema, fks)
+      .filter((r) => !schema.get(r.table).has(r.column))
+      .map((r) => `${r.table}.${r.column}@${lineOf(src, r.offset)}`)
+
+  it('THE REPLACE.1b SHAPE: `const COLS = \'…\'` then `.select(COLS)`, reported at the .select line', () => {
+    expect(hits([
+      "const COLS = 'id, status, created_at'",
+      '',
+      "const { data } = await db.from('sequence_enrollments')",
+      '  .select(COLS)',
+    ].join('\n'))).toEqual(['sequence_enrollments.created_at@4'])
+  })
+
+  it('reads a multi-line template constant and a second options argument', () => {
+    expect(hits([
+      'const COLS = `',
+      '  id,',
+      '  created_at',
+      '`',
+      "db.from('sequence_enrollments').select(COLS, { count: 'exact' })",
+    ].join('\n'))).toEqual(['sequence_enrollments.created_at@5'])
+  })
+
+  it('reads templates of constants, at the declaration and at the call site', () => {
+    const src = [
+      "const BASE = 'id, status'",
+      'const MORE = `${BASE}, created_at`',
+      "db.from('sequence_enrollments').select(MORE)",
+      "db.from('sequence_enrollments').select(`${BASE}, nope`)",
+    ].join('\n')
+    expect(hits(src)).toEqual(['sequence_enrollments.created_at@3', 'sequence_enrollments.nope@4'])
+  })
+
+  it('reads + concatenation, across lines', () => {
+    expect(hits([
+      "const BASE = 'id, status'",
+      "const ALL = BASE +",
+      "  ', created_at'",
+      "db.from('sequence_enrollments').select(ALL)",
+    ].join('\n'))).toEqual(['sequence_enrollments.created_at@4'])
+  })
+
+  it("reads an array literal joined into a column list: [ 'a', 'b' ].join(', ')", () => {
+    expect(hits([
+      'const COLS = [',
+      "  'id', 'status',",
+      "  'created_at',",
+      "].join(', ')",
+      "db.from('sequence_enrollments').select(COLS)",
+    ].join('\n'))).toEqual(['sequence_enrollments.created_at@5'])
+  })
+
+  it('checks an FK-column embed inside a constant (both fixes together)', () => {
+    expect(hits([
+      "const BLOCK_COLS = 'id, locations:location_id ( name, city )'",
+      "db.from('shift_blocks').select(BLOCK_COLS)",
+    ].join('\n'))).toEqual(['locations.city@2'])
+  })
+
+  it('refuses what it cannot prove, and stays silent', () => {
+    const silent = [
+      // imported: another file
+      "import { COLS } from './cols'\ndb.from('sequence_enrollments').select(COLS)",
+      // let is reassignable
+      "let COLS = 'created_at'\ndb.from('sequence_enrollments').select(COLS)",
+      // declared twice: we cannot tell which one reaches the call
+      "const COLS = 'id'\nfunction f() { const COLS = 'created_at'; return db.from('sequence_enrollments').select(COLS) }",
+      // a parameter, a member, a call
+      "function f(COLS) { return db.from('sequence_enrollments').select(COLS) }",
+      "db.from('sequence_enrollments').select(opts.cols)",
+      "const LIST = ['created_at']\ndb.from('sequence_enrollments').select(LIST.join(','))",
+      // an initializer that keeps going after the literal
+      "const COLS = 'created_at'.trim()\ndb.from('sequence_enrollments').select(COLS)",
+      "const COLS = pick() || 'created_at'\ndb.from('sequence_enrollments').select(COLS)",
+      // an interpolation that is not a bare identifier
+      "const X = { a: 'created_at' }\ndb.from('sequence_enrollments').select(`id, ${X.a}`)",
+      // a cycle
+      "const A = B\nconst B = A\ndb.from('sequence_enrollments').select(A)",
+      // a declaration that only lives in a comment
+      "// const COLS = 'created_at'\ndb.from('sequence_enrollments').select(COLS)",
+    ]
+    for (const src of silent) expect(hits(src), src).toEqual([])
+  })
+})
+
+describe('evaluateStringExpr', () => {
+  const none = () => null
+
+  it('reads literals and + in full mode, refusing any trailing text', () => {
+    expect(evaluateStringExpr(`'a, ' + "b"`, none)).toBe('a, b')
+    expect(evaluateStringExpr("'a'.trim()", none)).toBeNull()
+    expect(evaluateStringExpr('', none)).toBeNull()
+  })
+
+  it('in prefix mode, stops where the initializer ends', () => {
+    expect(evaluateStringExpr("'a';\nconst y = 1", none, new Set(), true)).toBe('a')
+    expect(evaluateStringExpr("'a'\nexport const y = 1", none, new Set(), true)).toBe('a')
+    expect(evaluateStringExpr("'a', B = 'b'", none, new Set(), true)).toBe('a')
+    expect(evaluateStringExpr("'a'\n  .trim()", none, new Set(), true)).toBeNull()
+    expect(evaluateStringExpr("'a' ?? b", none, new Set(), true)).toBeNull()
+  })
+
+  it('maps \\n / \\t escapes to whitespace (which the select parser then strips)', () => {
+    expect(cleanSelectString(evaluateStringExpr("'id,\\n  name'", none))).toBe('id,name')
+  })
+})
+
+describe('resolveSelectArg', () => {
+  it('returns null for an empty .select() (that means *) and for a bare unknown name', () => {
+    expect(resolveSelectArg('', '')).toBeNull()
+    expect(resolveSelectArg('COLUMNS', 'db.from(x).select(COLUMNS)')).toBeNull()
+  })
+
+  it('findConstInitializer insists on exactly one declaration, and a const', () => {
+    expect(findConstInitializer("const A = 'x'", 'A')).toBe(" 'x'")
+    expect(findConstInitializer("const A = 'x'\nconst A = 'y'", 'A')).toBeNull()
+    expect(findConstInitializer("var A = 'x'", 'A')).toBeNull()
+    expect(findConstInitializer("const AB = 'x'", 'A')).toBeNull()
+    expect(findConstInitializer("obj.const A = 'x'", 'A')).toBeNull()
   })
 })
