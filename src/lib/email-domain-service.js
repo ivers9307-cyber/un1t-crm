@@ -10,7 +10,7 @@
 // token the moment they are minted).
 
 import { getOwnerOrganizationIds } from '@/lib/auth'
-import { logWarn } from '@/lib/log'
+import { logWarn, logError } from '@/lib/log'
 import {
   createTenantServer,
   createTenantDomain,
@@ -40,6 +40,9 @@ export function resolveEmailDomainOrgId(user, requested) {
   return { orgId: target }
 }
 
+// CHANNELREAD.1 — what a failed tenant_email_domains read says to operators.
+export const EMAIL_DOMAIN_READ_FAILED = 'Could not read the email domain just now, so nothing was changed. Try again.'
+
 /**
  * Load the raw tenant_email_domains row for an org (service-role client).
  * INCLUDES the secret server token — callers MUST redact via
@@ -55,7 +58,13 @@ export async function loadEmailDomainRow(db, orgId) {
   // showed the set-up wizard over a provisioned domain, and made
   // provisionEmailDomain mint a SECOND Postmark server and overwrite the
   // stored server id + token. Callers turn the throw into a 500/502.
-  if (error) throw new Error(`Could not read the email domain: ${error.message}`)
+  // The message is plain copy because it reaches operators: the POST route
+  // stores it as last_error and answers it in its 502. The Postgres text is
+  // logged here, structurally, and never shown.
+  if (error) {
+    logError('tenant-email-domain', 'tenant_email_domains read failed', { orgId, err: error.message })
+    throw new Error(EMAIL_DOMAIN_READ_FAILED)
+  }
   return data || null
 }
 

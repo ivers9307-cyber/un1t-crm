@@ -18,10 +18,13 @@ vi.mock('@/lib/postmark-account', () => ({
 
 import { loadEmailDomainRow, provisionEmailDomain, verifyEmailDomain } from './email-domain-service.js'
 import { createTenantServer, verifyTenantDomainDkim } from '@/lib/postmark-account'
+import { logError } from '@/lib/log'
 
+const PG = 'canceling statement due to statement timeout'
+const PLAIN = 'Could not read the email domain just now, so nothing was changed. Try again.'
 const failingDb = () => ({
   from: () => ({
-    select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: null, error: { message: 'boom' } }) }) }),
+    select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: null, error: { message: PG } }) }) }),
     upsert: vi.fn(),
   }),
 })
@@ -44,5 +47,15 @@ describe('email-domain-service — a failed read is not "no domain" (CHANNELREAD
     expect(res.readFailed).toBe(true)
     expect(res.notProvisioned).toBeUndefined()
     expect(verifyTenantDomainDkim).not.toHaveBeenCalled()
+  })
+
+  // The thrown message reaches operators: the POST route stores it as
+  // last_error (shown by the status endpoint) and answers it in its 502.
+  // It must be plain copy; the Postgres text goes to the structured log.
+  it('the thrown message is plain copy, with the raw Postgres text only in the log', async () => {
+    const err = await loadEmailDomainRow(failingDb(), 'org-a').catch((e) => e)
+    expect(err.message).toBe(PLAIN)
+    expect(err.message).not.toContain(PG)
+    expect(logError).toHaveBeenCalledWith('tenant-email-domain', expect.any(String), expect.objectContaining({ orgId: 'org-a', err: PG }))
   })
 })

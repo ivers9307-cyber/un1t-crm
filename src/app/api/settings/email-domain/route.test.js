@@ -22,6 +22,7 @@ import { GET, POST } from './route'
 import { getCurrentUser } from '@/lib/auth'
 import { orgHasEmailDomainAddon } from '@/lib/tenant-email'
 import { loadEmailDomainRow, provisionEmailDomain } from '@/lib/email-domain-service'
+import { createServerClient } from '@/lib/supabase'
 
 const ownerA = {
   id: 'owner-a',
@@ -130,5 +131,33 @@ describe('GET /api/settings/email-domain — a failed read (CHANNELREAD.1)', () 
     const body = await res.json()
     expect(body.success).toBe(false)
     expect(body.data).toBeUndefined()
+  })
+})
+
+// CHANNELREAD.1 — the provision path reads through loadEmailDomainRow. When
+// that read fails, the POST catch stores the error as last_error (the status
+// endpoint shows it) and answers it in its 502, so it must be plain copy,
+// never "Could not read the email domain: <postgres message>".
+describe('POST /api/settings/email-domain — a failed read during provision (CHANNELREAD.1)', () => {
+  it('stores and answers a plain message, never the Postgres text', async () => {
+    const PG = 'canceling statement due to statement timeout'
+    const actual = await vi.importActual('@/lib/email-domain-service')
+    const readDb = {
+      from: () => ({ select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: null, error: { message: PG } }) }) }) }),
+    }
+    const readErr = await actual.loadEmailDomainRow(readDb, 'org-a').catch((e) => e)
+    provisionEmailDomain.mockRejectedValue(readErr)
+    const updates = []
+    createServerClient.mockReturnValue({
+      from: () => ({ update: (patch) => { updates.push(patch); return { eq: () => Promise.resolve({ error: null }) } } }),
+    })
+    getCurrentUser.mockResolvedValue(ownerA)
+    const res = await POST(postReq({ domain: 'mail.gyma.com' }))
+    expect(res.status).toBe(502)
+    const body = await res.json()
+    expect(body.error).toBe('Could not read the email domain just now, so nothing was changed. Try again.')
+    expect(body.error).not.toContain(PG)
+    expect(updates).toHaveLength(1)
+    expect(updates[0].last_error).toBe('Could not read the email domain just now, so nothing was changed. Try again.')
   })
 })
