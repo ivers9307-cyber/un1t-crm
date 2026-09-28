@@ -19,7 +19,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { ADMIN_ROLES, MANAGER_ROLES } from '@/lib/schemas'
 import { signCheckinToken } from '@/lib/event-checkin-tokens'
 import { describeGate } from '../helpers/role-gate-probe.js'
-import { roleCases, permissionCases } from '../helpers/role-sweep-callers.js'
+import { roleCases, permissionCases, person, keyOnAtBOnly, ORG, LOC_A } from '../helpers/role-sweep-callers.js'
 import * as events from '@/app/api/events/route.js'
 import * as eventDetail from '@/app/api/events/[id]/route.js'
 import * as checkin from '@/app/api/events/[id]/checkin/route.js'
@@ -116,6 +116,41 @@ gate('DELETE /api/events/[id] — races at the event', {
   call: () => eventDetail.DELETE(bare('DELETE'), params({ id: EV })),
   gateReads: EVENT_ROW, forbidden: RACES_OFF, hidden: NOT_FOUND, cases: permissionCases('races'),
 })
+
+// ── /api/events/[id], the HOST-EDIT.1 host path ───────────────────────────
+// A hosted event lives on its host's own anchor location, which no staff
+// belongs to, so the membership check refuses everyone and hostEventOrgAccess
+// is the way in: ADMIN_ROLES at the ACTIVE studio, and the event's host in the
+// ACTIVE organisation. On that path `races` is judged at the active studio
+// (the `guard ? user.activeLocation?.id : …` branch) and a payee change is
+// not re-judged (the `!guard` short-circuit). These rows pin that.
+const HOST_ANCHOR = 'c0000000-0000-4000-8000-00000000000c'
+const OTHER_ORG = 'f0000000-0000-4000-8000-0000000000f1'
+const HOST_2 = '5e000000-0000-4000-8000-0000000000e6'
+const hostedEvent = (hostOrg) => () => [
+  { data: { id: EV, name: 'Hosted Open Day', location_id: HOST_ANCHOR, host_id: HOST, registrations: [], waves: [] }, error: null },
+  { data: { id: HOST, organization_id: hostOrg }, error: null }, // hostEventOrgAccess's event_hosts read
+]
+const orgAdmin = person({ [LOC_A]: { role: 'owner', permissions: { races: true } } }, LOC_A)
+const nonAdmin = person({ [LOC_A]: { role: 'head_coach', permissions: { races: true } } }, LOC_A)
+const HOST_CASES = [
+  ['an org admin who does not belong to the anchor, host in the active org', orgAdmin, HOST_ANCHOR, 'pass'],
+  ['races off for them at the active studio (on at another)', keyOnAtBOnly('races'), HOST_ANCHOR, 'forbidden'],
+  ['a head coach (not ADMIN_ROLES) at the active studio', nonAdmin, HOST_ANCHOR, 'hidden'],
+]
+for (const [name, call] of [
+  ['GET /api/events/[id]', () => eventDetail.GET(bare('GET'), params({ id: EV }))],
+  ['PUT /api/events/[id]', () => eventDetail.PUT(json('PUT', { name: 'Renamed' }), params({ id: EV }))],
+  ['PUT /api/events/[id] changing the payee', () => eventDetail.PUT(json('PUT', { host_id: HOST_2 }), params({ id: EV }))],
+]) {
+  gate(`${name} — a hosted event, via the host path`, {
+    call, gateReads: hostedEvent(ORG), forbidden: RACES_OFF, hidden: NOT_FOUND, cases: HOST_CASES,
+  })
+  gate(`${name} — a hosted event whose host is in another organisation`, {
+    call, gateReads: hostedEvent(OTHER_ORG), forbidden: RACES_OFF, hidden: NOT_FOUND,
+    cases: [['an org admin of the active organisation', orgAdmin, HOST_ANCHOR, 'hidden']],
+  })
+}
 
 // ── event sub-routes: `races` at the event ────────────────────────────────
 const REG_ROW = nested((loc) => ({ id: REG, race_event_id: EV, race_events: { id: EV, location_id: loc }, teams: { id: 'team-1', team_members: [{ id: TM, name: 'Runner One', email: null, contact_id: null }] } }))
