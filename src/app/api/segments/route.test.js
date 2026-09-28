@@ -179,4 +179,17 @@ describe('GET /api/segments — guards', () => {
     expect(body.data.length).toBeGreaterThan(TAG_RULES.length)
     expect(body.data.every(d => d.count === 0)).toBe(true)
   })
+
+  it('403s a non-master with no locations at all (no role anywhere)', async () => {
+    // Such a caller cannot exist in practice: staff are minted WITH a
+    // profile_locations row (mig 404's handle_new_user), and one with none
+    // has no studio to compose a send for. Before ROLESWEEP.1a this shape got
+    // the zero-count vocabulary (MANAGER_ROLES.includes(user.role) passed on
+    // the profile's role); hasRoleAtAnyLocation holds no role anywhere, so it
+    // is now refused before any read.
+    getCurrentUser.mockResolvedValue(manager(null))
+    const res = await GET(req())
+    expect(res.status).toBe(403)
+    expect(db.calls).toEqual([])
+  })
 })
