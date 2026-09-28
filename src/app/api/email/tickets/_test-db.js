@@ -111,6 +111,9 @@ const TABLE_KEYS = {
   // cron deletes from (mig 315 / mig 158).
   webhook_dead_letter: 'deadLetters',
   postmark_webhook_queue: 'webhookQueue',
+  // WEBHOOKAUDIT.1 — the Glofox delivery history (mig 649), purged by the
+  // same retention cron.
+  glofox_webhook_attempts: 'glofoxAttempts',
   // audit_events is DELIBERATELY ABSENT, same reasoning as email_conversations:
   // logAuditEvent() builds its own client (which the tests point at this fake),
   // so its inserts land on db.inserts — assertable — without polluting a read.
@@ -136,6 +139,8 @@ export function makeDb(state = {}) {
     attachments: [], storageUsage: [], objects: new Map(), storageErrors: {},
     // WEBHOOK-RETENTION.1
     deadLetters: [], webhookQueue: [],
+    // WEBHOOKAUDIT.1
+    glofoxAttempts: [],
     errors: {},
     ...state,
   }

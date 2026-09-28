@@ -64,6 +64,11 @@ export function retentionCutoff(nowMs = Date.now()) {
  *       NULL (the success path clears the marker): it would exclude exactly
  *       the rows this cron exists to delete.
  *
+ *   glofox_webhook_attempts (WEBHOOKAUDIT.1, mig 649) — one PII-free row per
+ *   processed Glofox webhook delivery, written after processing, so every row
+ *   is finished: `processed_at < cutoff`, nothing else. (glofox_webhook_events
+ *   itself is NOT purged here — follow-up C47.)
+ *
  * PAGING: delete-as-you-go. Each iteration reads the OLDEST PURGE_PAGE_SIZE
  * candidate ids with .range(0, n-1) ordered by the table's finished clock;
  * after that page is deleted the next oldest rows move into range 0, so the
@@ -106,6 +111,14 @@ export async function GET(request) {
         .not('processed_at', 'is', null)
         .lt('processed_at', cutoff)
         .or(`error.is.null,error.neq.${CLAIMED_ERROR_MARKER}`),
+    },
+    {
+      // WEBHOOKAUDIT.1 (mig 649). One row per processed Glofox delivery,
+      // written AFTER processing, so every row is finished when written:
+      // processed_at (NOT NULL) is the only clock and there is no open work.
+      table: 'glofox_webhook_attempts',
+      clock: 'processed_at',
+      finished: (q) => q.lt('processed_at', cutoff),
     },
   ]
 
