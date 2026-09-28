@@ -56,8 +56,25 @@ describe('/automations — Glofox presence (PROFILESPREAD.1)', () => {
     })
     const html = renderToStaticMarkup(await AutomationsPage())
     expect(html).toMatch(/role="alert"[^>]*>[^<]*Couldn(?:&#x27;|')t check whether Glofox is connected/)
+    // A disabled card can't be switched OFF either, so "switched on" undersold it.
+    expect(html).toMatch(/The automation cards below can(?:&#x27;|')t be changed until it can\. Reload to try again\./)
+    expect(html).not.toMatch(/switched on until/)
     expect(html).toContain('glofox_lead_provisioning:false:unknown')
     expect(html).toContain('climate:false:unknown')
     expect(html).toContain('bathroom:false:unknown')
+  })
+
+  it('the Glofox read and the location_automations read run together, not one after the other', async () => {
+    const order = []
+    const chain = { select: () => chain, eq: () => chain, order: () => chain, then: (r) => r({ data: [], error: null }) }
+    createServerClient.mockReturnValue({ from: (t) => { order.push(`from:${t}`); return chain } })
+    readGlofoxAutomationStatus.mockImplementation(async () => {
+      await Promise.resolve()
+      order.push('glofox:resolved')
+      return { known: true, connected: false, statuses: { glofox_lead_provisioning: { available: false, trialConfigured: false } } }
+    })
+    await AutomationsPage()
+    expect(order.indexOf('from:location_automations')).toBeGreaterThanOrEqual(0)
+    expect(order.indexOf('from:location_automations')).toBeLessThan(order.indexOf('glofox:resolved'))
   })
 })

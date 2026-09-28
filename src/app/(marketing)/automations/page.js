@@ -39,12 +39,17 @@ export default async function AutomationsPage() {
   if (canCurated) {
     // PROFILESPREAD.1 — Glofox presence read by id (the user object no
     // longer carries settings). Booleans only reach the client; a failed
-    // read is `known: false` and the page says so.
-    glofox = await readGlofoxAutomationStatus(db, location?.id || null)
-    const { data: rows } = await db
-      .from('location_automations')
-      .select('automation_key, enabled, config')
-      .eq('location_id', location?.id || NO_LOCATION)
+    // read is `known: false` and the page says so. The reader never throws
+    // (it logs and answers unknown), so running it alongside the
+    // location_automations read changes neither read's failure handling.
+    let rows
+    ;[glofox, { data: rows }] = await Promise.all([
+      readGlofoxAutomationStatus(db, location?.id || null),
+      db
+        .from('location_automations')
+        .select('automation_key, enabled, config')
+        .eq('location_id', location?.id || NO_LOCATION),
+    ])
     const byKey = Object.fromEntries((rows || []).map((r) => [r.automation_key, r]))
 
     cards = AUTOMATIONS
@@ -87,7 +92,7 @@ export default async function AutomationsPage() {
       </div>
       {canCurated && glofox?.known === false && (
         <p role="alert" className="text-sm bg-amber-500/10 text-amber-700 border border-amber-500/30 rounded-md px-3 py-2">
-          Couldn&apos;t check whether Glofox is connected at this location. The automation cards below can&apos;t be switched on until it can. Reload to try again.
+          Couldn&apos;t check whether Glofox is connected at this location. The automation cards below can&apos;t be changed until it can. Reload to try again.
         </p>
       )}
       {canCurated && (
