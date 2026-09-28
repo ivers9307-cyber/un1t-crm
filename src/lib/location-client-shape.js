@@ -1,5 +1,5 @@
-// ACDEVLOC.1 — the `locations` row as it may cross to the browser from
-// /settings/locations/[id].
+// ACDEVLOC.1 — the `locations` row as /settings/locations/[id] passes it in
+// its `location` PROP.
 //
 // That page reads the row with select('*') through the service role and hands
 // it to client components, which serialises every column into the HTML. The
@@ -7,10 +7,15 @@
 // needs their values (the AC tab saves through the write-only
 // PUT /api/locations/[id]/integrations/ac, which answers has_* flags).
 //
-// NOT a general secret filter. `settings` (Glofox credentials, the UniFi
-// token) still crosses, because the Glofox and UniFi tabs prefill from it and
-// write the slice back from the browser; moving those tabs onto the masked
-// integrations route comes first (follow-up SECFIX.3).
+// Scope, precisely: this keeps the key and PAT out of the `location` prop
+// ONLY. They still reach the browser through the `user` object:
+// getCurrentUser() loads full `locations` rows, and the page and AppShell
+// pass `user` to client components. That leak is follow-up C35 SECFIX.3.
+//
+// NOT a general secret filter either. `settings` (Glofox credentials, the
+// UniFi token) still crosses in this prop too, because the Glofox and UniFi
+// tabs prefill from it and write the slice back from the browser; moving
+// those tabs onto the masked integrations route is also SECFIX.3.
 
 export const LOCATION_SECRET_COLUMNS = Object.freeze(['sensibo_api_key', 'thinq_pat'])
 

@@ -211,7 +211,12 @@ describe('/settings/locations/[id] — a failed Xero read (CHANNELREAD.1)', () =
 // `location` prop is serialised into the HTML. The Sensibo key and ThinQ PAT
 // used to go with it (select('*')), and the AC tab prefilled them into a
 // plain-text input.
-describe('/settings/locations/[id] — AC credentials never reach the browser (ACDEVLOC.1)', () => {
+//
+// These cases cover the `location` PROP only. The `user` prop still carries
+// the key, the PAT and the `settings` credentials (getCurrentUser() loads full
+// `locations` rows, and this page and AppShell hand `user` to client
+// components). That is follow-up C35 SECFIX.3; the todo below keeps it visible.
+describe('/settings/locations/[id] — the location prop carries no AC credentials (ACDEVLOC.1)', () => {
   const owner = () => user({ role: 'owner', rolesByLocation: { [LOC_B]: 'owner' }, locations: [{ id: LOC_B }] })
   const xeroTab = () => EditLocationPage({ params: Promise.resolve({ id: LOC_B }), searchParams: Promise.resolve({ tab: 'xero' }) })
   const ROW = {
@@ -237,4 +242,9 @@ describe('/settings/locations/[id] — AC credentials never reach the browser (A
     expect(el).toBeTruthy()
     expect(JSON.stringify(el.props.location)).not.toContain('synthetic-not-real')
   })
+
+  // OPEN LEAK, not fixed by ACDEVLOC.1: the `user` prop (full `locations` rows
+  // from getCurrentUser) still serialises sensibo_api_key, thinq_pat and the
+  // `settings` credentials into the page. Owned by C35 SECFIX.3.
+  it.todo('the user prop carries no Sensibo key, ThinQ PAT or settings credentials (C35 SECFIX.3)')
 })

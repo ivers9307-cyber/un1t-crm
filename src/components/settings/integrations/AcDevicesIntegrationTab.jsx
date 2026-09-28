@@ -13,9 +13,12 @@
 // active studio: list, discovery, add and edits go through
 // /api/locations/[id]/ac-devices…, credentials through
 // PUT /api/locations/[id]/integrations/ac (write-only secrets, masked echo,
-// registry re-sync in the handler). The stored key and PAT never reach the
-// browser: the page sends has_sensibo_key / has_thinq_pat, a typed secret
-// travels once in a request BODY, and a URL never carries one.
+// registry re-sync in the handler). This tab never reads or renders the
+// stored key or PAT: its `location` prop carries only has_sensibo_key /
+// has_thinq_pat, a typed secret travels once in a request BODY, and a URL
+// never carries one. The browser still RECEIVES them through the `user`
+// object (getCurrentUser() loads full location rows); that is follow-up
+// C35 SECFIX.3, not closed here.
 //
 // Master + owner can view (`canEdit`); only a master manages (`canManage`),
 // the same rule every route behind this tab enforces.
@@ -32,7 +35,7 @@ const JSON_HEADERS = { 'Content-Type': 'application/json' }
 export default function AcDevicesIntegrationTab({ location, canEdit, canManage = false }) {
   const router = useRouter()
 
-  // ---- Credentials: write-only. Stored values never reach the browser. ----
+  // ---- Credentials: write-only. Stored values are never in this tab's props. ----
   const [hasSensiboKey, setHasSensiboKey] = useState(!!location.has_sensibo_key)
   const [hasThinqPat, setHasThinqPat] = useState(!!location.has_thinq_pat)
   const [sensiboApiKey, setSensiboApiKey] = useState('')
