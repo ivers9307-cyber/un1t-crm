@@ -6258,7 +6258,7 @@ const ShellyConnectionPut = ShellyConnectionPutRaw.extend({}).openapi('ShellyCon
   description:
     'server is the account API host from the Shelly app (e.g. shelly-103-eu.shelly.cloud); a pasted URL is '
     + 'normalised to its hostname server-side and a bad one comes back as the helper\'s own copy, not a zod '
-    + 'message. auth_key is WRITE-ONLY and optional: the UI never renders the stored key (only key_hint), so an '
+    + 'message. auth_key is WRITE-ONLY and optional: the UI never renders the stored key or any character of it, so an '
     + 'absent or blank auth_key KEEPS the stored one and only a fresh value overwrites it — which is what makes '
     + '"change only the server" possible. A supplied key shorter than ' + MIN_AUTH_KEY_LENGTH + ' characters is a '
     + '400. Unknown keys are REJECTED rather than dropped: on a two-field body where one field is a credential, '
@@ -6441,7 +6441,6 @@ const ShellyErrorResponse = ErrorResponse.extend({
 
 const ShellyConnectionPublic = z.object({
   host: z.string().nullable(),
-  key_hint: z.string().nullable(),
   has_auth_key: z.boolean(),
   status: z.enum(['connected', 'action_needed', 'error']).nullable(),
   last_ok_at: z.string().datetime().nullable(),
@@ -6451,9 +6450,9 @@ const ShellyConnectionPublic = z.object({
   description: 'The ONLY connection shape any route returns (publicConnectionView, src/lib/shelly/connections.js), '
     + 'and an allowlist rather than the row minus a few fields. auth_key never appears — and neither does '
     + 'auth_key_fingerprint, which is as sensitive for this purpose: it is a sha256 OF the key, so publishing it '
-    + 'would turn "is this the account?" into an offline check anyone holding a candidate key could run. key_hint '
-    + 'is the last four characters, for rendering "••••abcd", and has_auth_key is DERIVED from it so the field can '
-    + 'never claim a key this projection has no evidence of. status: "connected" = the last tick had at least one '
+    + 'would turn "is this the account?" into an offline check anyone holding a candidate key could run. No '
+    + 'character of the key is ever returned (SECRETTAILS.1): has_auth_key says only that one is stored, and a '
+    + 'stored row always holds one (auth_key NOT NULL, fingerprint CHECK). status: "connected" = the last tick had at least one '
     + '2xx; "action_needed" = the key was rejected or the host is invalid, and an owner must re-paste; "error" = '
     + 'every call failed for a NON-auth reason (network/429/5xx), which the UI phrases as retrying rather than as '
     + 'broken — a single blip parks the connection for five minutes and nothing needs fixing.',

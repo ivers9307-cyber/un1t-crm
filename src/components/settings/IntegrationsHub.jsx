@@ -47,6 +47,7 @@ import { Instagram as InstagramIcon } from '@/components/icons/InstagramIcon'
 import { buttonClasses } from '@/components/ui'
 import IntegrationsHubDrawer from './IntegrationsHubDrawer'
 import XeroCallbackNotice from './XeroCallbackNotice'
+import { SECRET_MASK } from '@/lib/secret-keys'
 
 // ── status chips — the light-theme contrast recipe (bg-*-500/10 + text-*-700,
 // lint-enforced via check:guardrails no-low-contrast-chip) ──
@@ -195,20 +196,18 @@ function shellyDetail(r, generatedAt) {
 }
 
 // Secondary line for a row that IS connected in the DB but needs hands:
-// which account and which key, so a re-paste replaces the right one, plus
+// which account, and that a key is stored, plus
 // when the cron last TRIED. "last checked" is lastAttemptAt (stamped on
 // every reconcile tick, success or failure) — the answer to the only
 // question a red badge raises: is it still retrying, or has nothing
-// touched this in days? The hint is the last ≤4 characters of the key and
-// is non-secret by the shelly connections allowlist. There is no "no key
-// stored" case: key_hint is NOT NULL with a length CHECK (mig 562), so a
-// row that exists has one.
+// touched this in days? The key shows as presence only (SECRETTAILS.1): a
+// row that exists has one (mig 562).
 function shellyContext(r, generatedAt) {
   if (r.status === 'connected' || r.status === 'not_connected' || !r.host) return null
   const checked = fmtAgo(r.lastAttemptAt, generatedAt)
   return [
     r.host,
-    r.keyHint ? `key ••••${r.keyHint}` : null,
+    r.hasAuthKey ? `key ${SECRET_MASK}` : null,
     plugSummary(r),
     checked ? `last checked ${checked}` : null,
   ].filter(Boolean).join(' · ')

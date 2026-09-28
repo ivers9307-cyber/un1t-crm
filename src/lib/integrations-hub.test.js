@@ -591,7 +591,6 @@ describe('assembleIntegrationsHub — Shelly plugs card', () => {
       message: null,
       host: 'shelly-77-eu.shelly.cloud',
       hasAuthKey: true,
-      keyHint: 'ab12',
       lastOkAt: '2026-07-19T11:58:00Z',
       // last ATTEMPT (updated_at) is carried separately from last SUCCESS:
       // the pair is what distinguishes "still retrying" from "abandoned".
@@ -609,9 +608,10 @@ describe('assembleIntegrationsHub — Shelly plugs card', () => {
     const json = JSON.stringify(data)
     expect(json).not.toContain('SECRET_SHELLY')
     expect(json).not.toContain('FP_SECRET')
-    // The hint IS non-secret (publicConnectionView returns it) — pinned so a
-    // future over-correction that strips it fails loudly rather than quietly.
-    expect(json).toContain('ab12')
+    // SECRETTAILS.1 — the row still carries a hint (as before mig 659); the
+    // card carries presence only, never a character of the key.
+    expect(data.shelly[0]).not.toHaveProperty('keyHint')
+    expect(json).not.toContain('ab12')
   })
 
   it('a location that never connected yields a not_connected row with zero counts', async () => {
@@ -624,7 +624,6 @@ describe('assembleIntegrationsHub — Shelly plugs card', () => {
       message: null,
       host: null,
       hasAuthKey: false,
-      keyHint: null,
       lastOkAt: null,
       lastAttemptAt: null,
       // Zero here is a READING, not an absence of one — countsKnown says so.
@@ -769,8 +768,10 @@ describe('assembleIntegrationsHub — Shelly plugs card', () => {
 
     const a = data.shelly.find((r) => r.locationId === LOC_A.id)
     const b = data.shelly.find((r) => r.locationId === LOC_B.id)
-    expect(a).toMatchObject({ status: 'connected', countsKnown: true, deviceCount: 3, enabledCount: 2, onlineCount: 1, keyHint: 'ab12' })
-    expect(b).toMatchObject({ status: 'action_needed', countsKnown: true, deviceCount: 1, enabledCount: 0, onlineCount: 1, keyHint: 'cd34' })
+    expect(a).toMatchObject({ status: 'connected', countsKnown: true, deviceCount: 3, enabledCount: 2, onlineCount: 1 })
+    expect(a.hasAuthKey).toBe(true)
+    expect(b).toMatchObject({ status: 'action_needed', countsKnown: true, deviceCount: 1, enabledCount: 0, onlineCount: 1 })
+    expect(b.hasAuthKey).toBe(true)
     expect(b.message).toMatch(/re-paste/i)
 
     // B's action_needed lands in the warning band with the re-paste prompt;
