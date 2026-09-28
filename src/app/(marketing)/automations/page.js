@@ -5,7 +5,8 @@ import { Music2, Plug } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
-import { AUTOMATIONS, automationStatus, glofoxConnected } from '@/lib/automations/registry'
+import { AUTOMATIONS } from '@/lib/automations/registry'
+import { readGlofoxAutomationStatus } from '@/lib/automations/glofox-status'
 import AutomationsView from '@/components/automations/AutomationsView'
 import AutomationsFlowList from '@/components/automations/AutomationsFlowList'
 import ClassClimateCard from '@/components/automations/ClassClimateCard'
@@ -34,7 +35,12 @@ export default async function AutomationsPage() {
   let climate = null
   let bathroom = null
   let climateDevices = []
+  let glofox = null
   if (canCurated) {
+    // PROFILESPREAD.1 — Glofox presence read by id (the user object no
+    // longer carries settings). Booleans only reach the client; a failed
+    // read is `known: false` and the page says so.
+    glofox = await readGlofoxAutomationStatus(db, location?.id || null)
     const { data: rows } = await db
       .from('location_automations')
       .select('automation_key, enabled, config')
@@ -47,7 +53,7 @@ export default async function AutomationsPage() {
         key: a.key, label: a.label, description: a.description,
         supportsBackfill: a.supportsBackfill, reviewBase: a.reviewBase,
         enabled: Boolean(byKey[a.key]?.enabled),
-        status: automationStatus(a.key, location),
+        status: glofox.statuses[a.key],
       }))
 
     const { data: devices } = await db
@@ -79,19 +85,26 @@ export default async function AutomationsPage() {
         <h1 className="text-xl font-semibold text-un1t-text">Automations</h1>
         <p className="text-sm text-un1t-subtle mt-1">Things that run by themselves for {location?.name || 'your studio'}</p>
       </div>
+      {canCurated && glofox?.known === false && (
+        <p role="alert" className="text-sm bg-amber-500/10 text-amber-700 border border-amber-500/30 rounded-md px-3 py-2">
+          Couldn&apos;t check whether Glofox is connected at this location. The automation cards below can&apos;t be switched on until it can. Reload to try again.
+        </p>
+      )}
       {canCurated && (
         <div className="space-y-4">
           <AutomationsView locationId={location?.id || null} locationName={location?.name || ''} cards={cards} />
           <ClassClimateCard
             locationId={location?.id || null}
-            glofoxConnected={glofoxConnected(location)}
+            glofoxConnected={glofox?.connected === true}
+            glofoxUnknown={glofox?.known === false}
             devices={climateDevices}
             initialEnabled={climate?.enabled}
             initialConfig={climate?.config}
           />
           <BathroomClimateCard
             locationId={location?.id || null}
-            glofoxConnected={glofoxConnected(location)}
+            glofoxConnected={glofox?.connected === true}
+            glofoxUnknown={glofox?.known === false}
             devices={climateDevices}
             initialEnabled={bathroom?.enabled}
             initialConfig={bathroom?.config}
