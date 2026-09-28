@@ -1,4 +1,5 @@
 import { hasBookableMembership } from '@/lib/person-accounts'
+import { CLASS_BOOKING_MAX_ATTEMPTS } from '@/lib/class-booking-attempts'
 
 // AGENT-REQ-UX.1 — operator-readable explanations for agent requests.
 //
@@ -48,6 +49,14 @@ const MACHINE_REASONS = {
     'Their Glofox account match needs a human check. Confirm the account in Glofox, then approve to book.',
   attendance_check_failed:
     'Their attendance history could not be read from Glofox, so it was not auto-booked. Check the account and decide.',
+  // CBPCREDITREAD.1 — the funnel could not READ their Glofox credit balance
+  // on any of its attempts (class-booking-queue.js at MAX_ATTEMPTS; the
+  // count in the copy is that same constant). The
+  // balance is UNKNOWN, not empty, and approving grants nothing
+  // (approvalGrantsTrialCredit below): staff add a credit themselves if one
+  // is really missing.
+  credit_check_failed:
+    `Their Glofox credit balance could not be read (Glofox did not answer after ${CLASS_BOOKING_MAX_ATTEMPTS} tries), so the booking was not made. This does not mean they have no credits. Check their account in Glofox: if they have credits or a membership, approve to book against it. If they have none, add a credit in Glofox first, then approve. Approving does not add a credit.`,
   booking_rejected:
     'Glofox rejected the live booking attempt. Fix the account (credits / membership), then approve to retry the booking.',
   superseded_duplicate:
@@ -55,11 +64,26 @@ const MACHINE_REASONS = {
   // REGISTRYREAD.1a — the automatic booking THREW on every attempt
   // (class-booking-queue.js at MAX_ATTEMPTS). Nothing reached Glofox.
   processing_error:
-    "The automatic booking failed 3 times (for example, the studio's Glofox settings could not be read). Nothing was booked. Approve to book now.",
+    `The automatic booking failed ${CLASS_BOOKING_MAX_ATTEMPTS} times (for example, the studio's Glofox settings could not be read). Nothing was booked. Approve to book now.`,
   // REGISTRYREAD.1a — the cron's reaper found the row stuck mid-run past the
   // attempt cap. A run that died mid-flight may already have booked it.
   max_attempts_stuck_processing:
-    'The automatic booking was interrupted 3 times and never finished, so it may or may not have gone through. Check Glofox for the booking first; if it is not there, approve to book now.',
+    `The automatic booking was interrupted ${CLASS_BOOKING_MAX_ATTEMPTS} times and never finished, so it may or may not have gone through. Check Glofox for the booking first; if it is not there, approve to book now.`,
+}
+
+// CBPCREDITREAD.1 — credit_check_failed names WHICH account's credits could
+// not be read (details.credit_unread_accounts, written by the processor): the
+// account the booking was for, or another account linked to the same person.
+// By Glofox member ID only, which staff can look up in Glofox; no name, email
+// or phone. A malformed list renders nothing extra.
+function creditUnreadLine(accounts) {
+  if (!Array.isArray(accounts)) return null
+  const parts = accounts
+    .filter((a) => a && typeof a.glofox_member_id === 'string' && a.glofox_member_id)
+    .map((a) => (a.role === 'linked_account'
+      ? `another Glofox account linked to this person (member ID ${a.glofox_member_id})`
+      : `the Glofox account this booking was for (member ID ${a.glofox_member_id})`))
+  return parts.length ? `Could not be read: ${parts.join('; ')}.` : null
 }
 
 // booking_failed:<CODE> — keep the Glofox message code visible but lead
@@ -82,6 +106,10 @@ export function whyFlagged(row) {
   const d = row.details || {}
   const reason = typeof d.reason === 'string' ? d.reason : null
   if (reason) {
+    if (reason === 'credit_check_failed') {
+      const line = creditUnreadLine(d.credit_unread_accounts)
+      return line ? `${MACHINE_REASONS[reason]} ${line}` : MACHINE_REASONS[reason]
+    }
     if (MACHINE_REASONS[reason]) return MACHINE_REASONS[reason]
     if (reason.startsWith('booking_failed:')) {
       return bookingFailedExplanation(reason.slice('booking_failed:'.length) || 'unknown')
@@ -97,6 +125,15 @@ export function whyFlagged(row) {
     return 'Mia drafted this booking for staff confirmation (agent booking mode is set to draft). Approving books it in Glofox.'
   }
   return null
+}
+
+// CBPCREDITREAD.1 — the ONE card reason whose approval buys the trial
+// membership before booking (membership-requests/[id]/route.js): a credits
+// read that WORKED and found none on a never-attended account. Every other
+// reason grants nothing, credit_check_failed above all (the balance is
+// UNKNOWN, and the member may already hold a paid pack). Pure.
+export function approvalGrantsTrialCredit(details) {
+  return details?.reason === 'needs_credit_grant'
 }
 
 // AGENT-RETRY.1 — what a FAILED execution's Glofox code means and what to

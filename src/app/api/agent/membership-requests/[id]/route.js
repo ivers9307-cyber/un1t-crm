@@ -13,6 +13,7 @@ import {
   executingMarker,
   finishedMarker,
 } from '@/lib/agent/request-recovery'
+import { approvalGrantsTrialCredit } from '@/lib/approvals/agent-request-why'
 
 // PATCH /api/agent/membership-requests/[id] — staff decides a queued
 // agent request. Decision rights follow the comms surface (any staff
@@ -364,7 +365,7 @@ export async function PATCH(request, { params }) {
       // If the processor sent this for a credit grant (existing account with no
       // live credits), grant the trial class credit BEFORE booking — otherwise
       // Glofox rejects on no-credits and staff could never complete it.
-      if (details?.reason === 'needs_credit_grant') {
+      if (approvalGrantsTrialCredit(details)) {
         try {
           const { purchaseGlofoxMembership } = await import('@/lib/glofox')
           const { getGlofoxConfig } = await import('@/lib/connection-registry')
