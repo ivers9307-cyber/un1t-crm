@@ -3469,7 +3469,7 @@ registry.registerPath({
   tags: ['Staff'],
   security: [{ CookieAuth: [] }],
   summary: 'Staff app versions, devices and geofence permission',
-  description: 'Every active staff profile with their registered devices, the target app version derived from the non-stale fleet, and a per-person verdict (current | outdated | unknown_version | no_device). The verdict keys off each person\'s most recently seen device, never their best version. Requires the settings permission.',
+  description: 'Every active staff profile in the caller\'s ACTIVE organisation (a master: the whole estate) with their registered devices, the target app version derived from the non-stale fleet of the whole estate (one app binary), and a per-person verdict (current | outdated | unknown_version | no_device). The verdict keys off each person\'s most recently seen device, never their best version. Requires the settings permission.',
   responses: {
     200: { description: 'Fleet payload — { target_version, staff[] }' },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
@@ -3483,7 +3483,7 @@ registry.registerPath({
   tags: ['Staff'],
   security: [{ CookieAuth: [] }],
   summary: 'Push an update reminder to staff on an outdated app build',
-  description: 'Sends an "App update available" push. Who is outdated is recomputed SERVER-SIDE from device_tokens and intersected with `profile_ids` — the caller cannot nominate a staff member who is up to date, and profiles with no device are skipped (nothing to push to). Throttled to one nudge per device per 24h via device_tokens.last_update_nudge_at (mig 466). Requires the settings permission.',
+  description: 'Sends an "App update available" push. Who is outdated is recomputed SERVER-SIDE from device_tokens and intersected with `profile_ids` — the caller cannot nominate a staff member who is up to date, and profiles with no device are skipped (nothing to push to). Throttled to one nudge per device per 24h via device_tokens.last_update_nudge_at (mig 466). Only staff in the caller\'s ACTIVE organisation can be nudged (a master: anyone); any other id is ignored like an unknown one. Requires the settings permission.',
   request: {
     body: {
       content: {
@@ -7350,7 +7350,7 @@ registry.registerPath({
   tags: ['Accounting'],
   security: [{ CookieAuth: [] }],
   summary: 'Runs & health for the receipt-coverage feature',
-  description: 'Recent recon runs (pulls + weekly reports), hunt-inbox health, the two cron heartbeats with staleness, and 7-day LLM spend vs the hunt budget. Requires the accounting_hub permission.',
+  description: 'Recent recon runs (the active studio\'s pulls + the estate weekly reports), the active studio\'s hunt-inbox health, the two cron heartbeats with staleness, the active studio\'s 7-day LLM spend, and `budget` { weeklyUsd, exhausted } for the ONE hunt budget all studios share. A master also gets `spend7dUsdAll`. Requires the accounting_hub permission.',
   responses: {
     200: { description: 'Runs, mailboxes, heartbeats, spend', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
