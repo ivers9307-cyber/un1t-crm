@@ -1,6 +1,5 @@
-// Roster v2 lib tests — block generation, day-code mapping, and
-// the unstaffed-future predicate that drives the calendar's red
-// flag.
+// Roster v2 lib tests — block generation, day-code mapping, and the
+// one definition of a live assignment.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
@@ -11,7 +10,6 @@ import {
   expandDaysToDates,
   generateBlocksForTemplate,
   clampMinCoaches,
-  isBlockUnstaffedFuture,
   isLiveAssignment,
   liveAssignments,
   findPublishedRosterFor,
@@ -401,34 +399,6 @@ describe('generateBlocksForTemplate', () => {
       await expect(generateBlocksForTemplate(db, tpl, '2026-05-04', 1)).rejects.toThrow(/removals down/)
       expect(upsertMock).not.toHaveBeenCalled()
     })
-  })
-})
-
-describe('isBlockUnstaffedFuture', () => {
-  const now = new Date('2026-05-04T12:00:00')
-
-  it('flags an empty future block', () => {
-    expect(
-      isBlockUnstaffedFuture({ block_date: '2026-05-10' }, 0, now)
-    ).toBe(true)
-  })
-
-  it('flags an empty block on today', () => {
-    expect(
-      isBlockUnstaffedFuture({ block_date: '2026-05-04' }, 0, now)
-    ).toBe(true)
-  })
-
-  it('does NOT flag a past empty block — those are noise', () => {
-    expect(
-      isBlockUnstaffedFuture({ block_date: '2026-04-30' }, 0, now)
-    ).toBe(false)
-  })
-
-  it('does NOT flag a future block with at least one assignment', () => {
-    expect(
-      isBlockUnstaffedFuture({ block_date: '2026-05-10' }, 1, now)
-    ).toBe(false)
   })
 })
 

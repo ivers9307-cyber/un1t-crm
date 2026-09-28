@@ -416,21 +416,6 @@ export async function generateBlocksForTemplate(db, template, fromDate = null, w
 }
 
 /**
- * Compute "is block unstaffed AND in the future" — the condition
- * the calendar uses to flag a block red. Pure function so the
- * Today-tab badge counter can reuse it.
- *
- * @param {object} block         shift_blocks row with block_date
- * @param {number} assignmentCount  current number of assignments on the block
- * @param {Date|string} now      current date (for testability)
- */
-export function isBlockUnstaffedFuture(block, assignmentCount, now = new Date()) {
-  if (assignmentCount > 0) return false
-  const today = formatDate(now instanceof Date ? now : new Date(now))
-  return block.block_date >= today
-}
-
-/**
  * ROSTER-FIX.1 — the one definition of "this assignment still puts a coach
  * on the block". Every reader (capacity, budget, notify, reports, copy)
  * goes through this so a dropped shift can't be counted somewhere by

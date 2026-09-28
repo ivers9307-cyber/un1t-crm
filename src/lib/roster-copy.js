@@ -155,8 +155,8 @@ function templateRunsOn(tpl, weekday) {
  *
  * The status is re-checked here rather than trusted from the caller's query:
  * this is the function that says "on leave", so it must not be able to say it
- * about a request nobody approved (same posture as coachConflictsForBlock in
- * schedule-overlap.js). Any leave TYPE counts: holiday, sick, unavailable.
+ * about a request nobody approved. Any leave TYPE counts: holiday, sick,
+ * unavailable.
  */
 export function approvedLeaveLookup(leaveRows) {
   const byProfile = new Map()

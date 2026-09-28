@@ -50,7 +50,7 @@ function isoMonday() {
 const TEMPLATE = { id: 't1', name: 'Morning', start_time: '09:00', end_time: '12:00', color: '#3B82F6', active: true, max_coaches: 3 }
 
 // Both fixtures sit on today (or Monday, whichever is later in the week) so
-// `isBlockUnstaffedFuture` sees them as future demand.
+// `futureBlockStaffing` (shared/roster-staffing.js) sees them as live demand.
 const BLOCK_DATE = isoMonday() > isoToday() ? isoMonday() : isoToday()
 
 const STAFFED_BLOCK = {
