@@ -240,7 +240,9 @@ export async function findOrCreateGlofoxMember({
       status: 'needs_review', glofox_member_id: newGlofoxId,
       error_message: `Glofox member created but CRM link write failed: ${linkErr.message}`,
     })
-    return { status: 'needs_review', glofox_member_id: newGlofoxId, error: linkErr.message, push_event_id: ev?.id }
+    // The member's first password exists only in this response: return it so
+    // the desk button can show it (callers that don't display it drop it).
+    return { status: 'needs_review', glofox_member_id: newGlofoxId, passcode, error: linkErr.message, push_event_id: ev?.id }
   }
 
   // Step 5 — optional trial-membership purchase. Per-location

@@ -557,4 +557,24 @@ describe('findOrCreateGlofoxMember — the initial password is never stored (PAS
     expect(contactUpdates).toEqual([{ glofox_member_id: 'gx-new', glofox_synced_at: expect.any(String) }])
     expect(JSON.stringify({ contactUpdates, pushEvents })).not.toContain('TEST-1234')
   })
+
+  it('a failed CRM link write after the create still returns the password once (it exists nowhere else)', async () => {
+    registerGlofoxMember.mockResolvedValueOnce({ ok: true, member: { _id: 'gx-new' } })
+    const { db, pushEvents } = recordingDb()
+    const realFrom = db.from
+    db.from = (table) => table === 'contacts'
+      ? { update: () => ({ eq: () => Promise.resolve({ error: { message: 'link failed' } }) }) }
+      : realFrom(table)
+    const out = await findOrCreateGlofoxMember({
+      db, locationId: 'loc1', source: 'manual_button',
+      contact: { id: 'c1', email: 'a@b.com', first_name: 'Alice', last_name: 'Smith' },
+      createIfMissing: true,
+      attachTrial: false,
+    })
+
+    expect(out.status).toBe('needs_review')
+    expect(out.glofox_member_id).toBe('gx-new')
+    expect(out.passcode).toBe('TEST-1234')
+    expect(JSON.stringify(pushEvents)).not.toContain('TEST-1234')
+  })
 })
