@@ -19,6 +19,14 @@
 //   - the block read carries roster status (published vs not) and pages.
 // Every read failure throws; the route answers 500 and the panel says
 // "Could not be loaded" rather than showing EUR 0.
+//
+// FTECOSTVIS.1 (Richard, 28 Sep 2026: "keep the cost hidden") — one figure
+// here is salary-derived: fteImplicitCostEur, rostered FTE hours × annual_salary
+// / 52 / contracted_hours_per_week (implicitHourlyRate). With one employee on
+// the month's shifts it is that person's pay. It goes to owner / manager /
+// master AT the studio only; the route hands everyone else
+// contractorSpendOnly(), an ALLOWLIST, so a figure added to summarizeMonth
+// later stays hidden from head coaches until someone classifies it below.
 
 import { summarizeMonth } from './roster-summary'
 import { monthBounds } from '@shared/roster-month'
@@ -71,4 +79,35 @@ export async function computeMonthlyContractorSpend({ db, locationId, referenceD
     referenceDate,
     monthlyBudgetEur: loc.monthly_contractor_budget_eur,
   })
+}
+
+/**
+ * FTECOSTVIS.1 — the spend figures every MANAGER_ROLES caller at the studio
+ * may see: contractor pay (hours × hourly_rate) and the budget built on it.
+ * Every key computeMonthlyContractorSpend returns is in exactly one of this
+ * list and SALARY_DERIVED_SPEND_KEYS (pinned in roster-summary-server.test.js).
+ */
+export const CONTRACTOR_SPEND_KEYS = Object.freeze([
+  'monthStartIso', 'monthEndIso',
+  'contractorCostEur', 'unpublishedContractorCostEur', 'projectedContractorCostEur',
+  'monthlyBudgetEur', 'remainingEur', 'overBudget', 'projectedOverBudget', 'utilisationPct',
+])
+
+/** FTECOSTVIS.1 — figures computed from a salary: owner / manager / master at the studio only. */
+export const SALARY_DERIVED_SPEND_KEYS = Object.freeze(['fteImplicitCostEur'])
+
+/**
+ * FTECOSTVIS.1 — the spend as a head coach receives it: only the keys in
+ * CONTRACTOR_SPEND_KEYS, copied. Anything else (the FTE labour total, or a key
+ * nobody has classified yet) is left behind.
+ * @param {object|null|undefined} spend  computeMonthlyContractorSpend's result
+ * @returns {object}
+ */
+export function contractorSpendOnly(spend) {
+  const out = {}
+  if (!spend) return out
+  for (const k of CONTRACTOR_SPEND_KEYS) {
+    if (Object.hasOwn(spend, k)) out[k] = spend[k]
+  }
+  return out
 }
