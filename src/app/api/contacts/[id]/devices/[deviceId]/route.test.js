@@ -33,11 +33,14 @@ vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn() }))
 import { DELETE, PATCH } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { getPersonGroup } from '@/lib/person-links'
 
 const LOC_A = 'a0000000-0000-4000-8000-00000000000a'
 const LOC_B = 'b0000000-0000-4000-8000-00000000000b'
 const CONTACT_ID = 'c0000000-0000-4000-8000-000000000001'
 const DEVICE_ID = 'd0000000-0000-4000-8000-000000000001'
+// A second profile linked to CONTACT_ID in the same person group.
+const LINKED_ID = 'c0000000-0000-4000-8000-000000000002'
 
 // A non-master caller: `roles` is { [locationId]: role }, `active` the active studio.
 const person = (roles, active) => ({
@@ -63,9 +66,23 @@ const DEVICE_ROW = {
   manufacturer: null, is_active: true, added_by_contact: false, created_at: '2026-01-01T00:00:00Z',
 }
 
-// Records every write so a test can assert nothing was deleted / updated.
+// Records every write so a test can assert nothing was deleted / updated,
+// and every call on the contact_devices chain (`deviceCalls`, as
+// [method, ...args]) so a test can pin the scoping filters. The chain offers
+// every method at every step and is awaitable at every step, so dropping a
+// filter from the route does NOT break the chain — only the pins catch it.
 function mockDb({ contact = { id: CONTACT_ID, location_id: LOC_A }, contactError = null } = {}) {
   const writes = []
+  const deviceCalls = []
+  const deviceChain = () => {
+    const chain = {}
+    for (const m of ['eq', 'in', 'select']) {
+      chain[m] = vi.fn((...args) => { deviceCalls.push([m, ...args]); return chain })
+    }
+    chain.single = vi.fn(() => { deviceCalls.push(['single']); return Promise.resolve({ data: DEVICE_ROW, error: null }) })
+    chain.then = (ok, bad) => Promise.resolve({ data: null, error: null }).then(ok, bad)
+    return chain
+  }
   const db = {
     from: vi.fn((table) => {
       if (table === 'contacts') {
@@ -81,26 +98,14 @@ function mockDb({ contact = { id: CONTACT_ID, location_id: LOC_A }, contactError
       }
       if (table === 'contact_devices') {
         return {
-          delete: vi.fn(() => {
-            writes.push('delete')
-            return { eq: vi.fn(() => ({ in: vi.fn(() => Promise.resolve({ error: null })) })) }
-          }),
-          update: vi.fn(() => {
-            writes.push('update')
-            return {
-              eq: vi.fn(() => ({
-                in: vi.fn(() => ({
-                  select: vi.fn(() => ({ single: vi.fn(() => Promise.resolve({ data: DEVICE_ROW, error: null })) })),
-                })),
-              })),
-            }
-          }),
+          delete: vi.fn((...args) => { writes.push('delete'); deviceCalls.push(['delete', ...args]); return deviceChain() }),
+          update: vi.fn((...args) => { writes.push('update'); deviceCalls.push(['update', ...args]); return deviceChain() }),
         }
       }
       throw new Error(`unexpected table ${table}`)
     }),
   }
-  return { db, writes }
+  return { db, writes, deviceCalls }
 }
 
 const params = () => ({ params: Promise.resolve({ id: CONTACT_ID, deviceId: DEVICE_ID }) })
@@ -109,7 +114,10 @@ const patchReq = (body = { label: 'Right strap' }) => new Request('http://localh
   method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
 })
 
-beforeEach(() => vi.clearAllMocks())
+beforeEach(() => {
+  vi.clearAllMocks()
+  getPersonGroup.mockResolvedValue(null)
+})
 
 const HANDLERS = [
   ['DELETE', () => DELETE(delReq(), params()), 'delete'],
@@ -212,5 +220,30 @@ describe.each(HANDLERS)('%s /api/contacts/[id]/devices/[deviceId]', (_name, call
     const res = await call()
     expect(res.status).toBe(200)
     expect(writes).toEqual([write])
+  })
+
+  // The device is addressed by id AND by the contact (or its person group).
+  // Without the contact_id filter, a caller allowed at THIS contact could
+  // delete or relabel any strap in the estate by passing its device id.
+  it('scopes the write to the device id AND this contact (no person group)', async () => {
+    getCurrentUser.mockResolvedValue(person({ [LOC_A]: 'manager' }, LOC_A))
+    const { db, deviceCalls } = mockDb()
+    createServerClient.mockReturnValue(db)
+    const res = await call()
+    expect(res.status).toBe(200)
+    expect(deviceCalls).toContainEqual(['eq', 'id', DEVICE_ID])
+    expect(deviceCalls).toContainEqual(['in', 'contact_id', [CONTACT_ID]])
+  })
+
+  it('scopes the write to the person group when the contact has linked profiles', async () => {
+    getCurrentUser.mockResolvedValue(person({ [LOC_A]: 'manager' }, LOC_A))
+    getPersonGroup.mockResolvedValue({ members: [{ contact_id: CONTACT_ID }, { contact_id: LINKED_ID }] })
+    const { db, deviceCalls } = mockDb()
+    createServerClient.mockReturnValue(db)
+    const res = await call()
+    expect(res.status).toBe(200)
+    expect(getPersonGroup).toHaveBeenCalledWith(db, CONTACT_ID)
+    expect(deviceCalls).toContainEqual(['eq', 'id', DEVICE_ID])
+    expect(deviceCalls).toContainEqual(['in', 'contact_id', [CONTACT_ID, LINKED_ID]])
   })
 })
