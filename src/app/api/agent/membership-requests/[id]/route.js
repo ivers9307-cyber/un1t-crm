@@ -249,7 +249,12 @@ export async function PATCH(request, { params }) {
     // against the wrong account — which is why PR1 refused to draft those at
     // all. Honour the override when the row carries one.
     const executingMemberId = row.details?.executing_glofox_member_id || contact?.glofox_member_id || null
-    if (!executingMemberId || !creds || missingGlofoxCredentialsForLocation(creds).length) {
+    if (creds?.readError) {
+      // REGISTRYREAD.1a: the settings read failed; nothing was sent to
+      // Glofox. Same 'failed' + Fix & retry lane, true advice on the card.
+      finalStatus = 'failed'
+      details = { ...details, result: { ok: false, message_code: 'GLOFOX_SETTINGS_UNREADABLE' } }
+    } else if (!executingMemberId || !creds || missingGlofoxCredentialsForLocation(creds).length) {
       finalStatus = 'failed'
       details = { ...details, result: { ok: false, message_code: 'NOT_EXECUTABLE' } }
     } else {
@@ -343,7 +348,11 @@ export async function PATCH(request, { params }) {
     const accountMismatch = !!electedMemberId
       && !!contact?.glofox_member_id
       && contact.glofox_member_id !== electedMemberId
-    if (!contact?.glofox_member_id || !creds || missingGlofoxCredentialsForLocation(creds).length) {
+    if (creds?.readError) {
+      // REGISTRYREAD.1a: as above.
+      finalStatus = 'failed'
+      details = { ...details, result: { ok: false, message_code: 'GLOFOX_SETTINGS_UNREADABLE' } }
+    } else if (!contact?.glofox_member_id || !creds || missingGlofoxCredentialsForLocation(creds).length) {
       finalStatus = 'failed'
       details = { ...details, result: { ok: false, message_code: 'NOT_EXECUTABLE' } }
     } else if (accountMismatch) {

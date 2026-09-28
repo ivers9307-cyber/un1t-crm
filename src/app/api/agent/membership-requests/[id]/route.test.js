@@ -4,7 +4,7 @@
 // on the created booking id (interpretBookingResult — REAL here, only the
 // HTTP call is mocked), land the row on 'failed', and never send the
 // in-thread confirmation for a booking that did not happen.
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 let db
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => db }))
@@ -25,7 +25,7 @@ vi.mock('@/lib/agent/notify', () => ({
   agentConfirmationTemplates: vi.fn(async () => ({})),
 }))
 
-import { createBooking, cancelBooking } from '@/lib/glofox'
+import { createBooking, cancelBooking, glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation } from '@/lib/glofox'
 import { sendAgentThreadMessage } from '@/lib/agent/notify'
 import { PATCH } from './route.js'
 
@@ -442,5 +442,32 @@ describe('PATCH class_cancellation approval — executing account override', () 
     await approve()
 
     expect(cancelBooking).toHaveBeenCalledWith(expect.anything(), '64bb00000000000000000001', 'gm1')
+  })
+})
+
+describe('PATCH approval — REGISTRYREAD.1a unreadable Glofox settings', () => {
+  const UNREADABLE = { branchId: null, apiKey: null, apiToken: null, readError: 'glofox_settings_unreadable' }
+  const realMissing = (c) => ['Branch ID', 'API Key', 'API Token'].filter((_, i) => ![c?.branchId, c?.apiKey, c?.apiToken][i])
+  beforeEach(() => { missingGlofoxCredentialsForLocation.mockImplementation(realMissing) })
+  afterEach(() => { missingGlofoxCredentialsForLocation.mockImplementation(() => []) })
+
+  it('class_booking: failed with GLOFOX_SETTINGS_UNREADABLE (not NOT_EXECUTABLE); no Glofox call; no confirmation', async () => {
+    glofoxCredentialsForLocation.mockResolvedValueOnce(UNREADABLE)
+    await approve()
+    const final = updates.at(-1).patch
+    expect(final.status).toBe('failed')
+    expect(final.details.result).toEqual({ ok: false, message_code: 'GLOFOX_SETTINGS_UNREADABLE' })
+    expect(createBooking).not.toHaveBeenCalled()
+    expect(sendAgentThreadMessage).not.toHaveBeenCalled()
+  })
+
+  it('class_cancellation: the same', async () => {
+    glofoxCredentialsForLocation.mockResolvedValueOnce(UNREADABLE)
+    db = makeDbFor({ ...ROW, kind: 'class_cancellation', details: { booking_id: '64bb00000000000000000001', class_name: 'ARENA', class_time: 'Mon 06:15' } }, updates)
+    await approve()
+    const final = updates.at(-1).patch
+    expect(final.status).toBe('failed')
+    expect(final.details.result).toEqual({ ok: false, message_code: 'GLOFOX_SETTINGS_UNREADABLE' })
+    expect(cancelBooking).not.toHaveBeenCalled()
   })
 })

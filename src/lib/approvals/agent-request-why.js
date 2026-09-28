@@ -108,6 +108,10 @@ const FAILURE_EXPLANATIONS = {
     'No machine-readable end date on this request, so Glofox was not called. Set the end date on the card and approve again, or cancel in Glofox by hand.',
   NO_USER_MEMBERSHIP:
     'Glofox returned no active membership for this account, so there was nothing to cancel. Check the membership in Glofox (it may already be cancelled or on another account), then retry.',
+  // REGISTRYREAD.1a — the studio's Glofox settings could not be read when
+  // staff approved (a database blip). Nothing reached Glofox.
+  GLOFOX_SETTINGS_UNREADABLE:
+    "The studio's Glofox settings could not be read (a temporary database error), so nothing was sent to Glofox. Retry.",
 }
 
 /**
