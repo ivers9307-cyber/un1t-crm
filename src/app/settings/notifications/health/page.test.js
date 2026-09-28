@@ -109,3 +109,51 @@ describe('/settings/notifications/health — everyone counted is listed (TENANTS
     expect(html).not.toContain('No active studio')
   })
 })
+
+// ── HUBREAD.1 — a failed read is never "no app installed" ──
+// A db that answers `table` with an error and delegates every other table.
+function failingTable(db, table) {
+  const result = { data: null, error: { message: 'db exploded' } }
+  const failed = new Proxy({}, {
+    get: (_, key) => (key === 'then' ? (res, rej) => Promise.resolve(result).then(res, rej) : () => failed),
+  })
+  return { ...db, from: (t) => (t === table ? failed : db.from(t)) }
+}
+
+async function renderFailing(table) {
+  // Master: loadFleetScope makes no reads, so only the page's own reads fail.
+  vi.mocked(getCurrentUser).mockResolvedValue(users.master())
+  vi.mocked(createServerClient).mockReturnValue(failingTable(makeTenantDb(fleetWorld()), table))
+  return renderToStaticMarkup(await PushHealthPage())
+}
+
+describe('/settings/notifications/health — failed reads (HUBREAD.1)', () => {
+  for (const table of ['profiles', 'locations', 'device_tokens', 'profile_locations']) {
+    it(`a failed ${table} read says it could not load: no counts, no buttons`, async () => {
+      const html = await renderFailing(table)
+      expect(html).toContain('Could not load the staff fleet just now')
+      expect(html).not.toContain('No app installed')
+      expect(html).not.toContain('Total staff')
+      expect(html).not.toContain('No active studio')
+      expect(html).not.toContain('Nudge')
+      expect(html).not.toContain('db exploded')
+    })
+  }
+
+  it('a failed push-count read blanks that column with a note, never 0', async () => {
+    const html = await renderFailing('push_reminder_sends')
+    expect(html).toContain('Total staff')
+    expect(html).toContain('Push counts for the last 30 days could not be loaded just now')
+    // The Pushes 30d cell is a dash, never a zero (the healthy render below
+    // proves this pattern does match that cell when the read succeeds).
+    expect(html).not.toMatch(/text-un1t-subtle">0<\/td>/)
+  })
+
+  it('a healthy push-count read still renders the counts (pin)', async () => {
+    vi.mocked(getCurrentUser).mockResolvedValue(users.master())
+    vi.mocked(createServerClient).mockReturnValue(makeTenantDb(fleetWorld()))
+    const html = renderToStaticMarkup(await PushHealthPage())
+    expect(html).toMatch(/text-un1t-subtle">0<\/td>/)
+    expect(html).not.toContain('could not be loaded')
+  })
+})
