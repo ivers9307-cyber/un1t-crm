@@ -8,6 +8,7 @@ import {
   inferContinuousArrivals,
   GEOFENCE_EARLY_WINDOW_MS,
   GEOFENCE_REENTRY_GAP_MS,
+  effectiveWindowAt,
 } from './staff-attendance'
 
 describe('resolveScheduledAt', () => {
@@ -304,5 +305,144 @@ describe('arrivalToTimeOnly', () => {
   })
   it('returns null on null input', () => {
     expect(arrivalToTimeOnly(null, 'Europe/Dublin')).toBeNull()
+  })
+})
+
+// ATTENDREPORT.1 (D5) — the single-pass offset read was an hour wrong for a band
+// of each change day in a zone west of UTC. Dublin's answers do not change.
+describe('resolveScheduledAt — DST days in any zone (ATTENDREPORT.1)', () => {
+  const LA = 'America/Los_Angeles'
+  const D = 'Europe/Dublin'
+
+  it('Los Angeles on both of its change days', () => {
+    expect(resolveScheduledAt('2026-03-08', '07:00:00', LA).toISOString()).toBe('2026-03-08T14:00:00.000Z') // PDT
+    expect(resolveScheduledAt('2026-11-01', '07:00:00', LA).toISOString()).toBe('2026-11-01T15:00:00.000Z') // PST
+    expect(resolveScheduledAt('2026-07-15', '07:00:00', LA).toISOString()).toBe('2026-07-15T14:00:00.000Z')
+  })
+
+  it('Dublin on both of its change days (unchanged)', () => {
+    expect(resolveScheduledAt('2026-03-29', '07:00:00', D).toISOString()).toBe('2026-03-29T06:00:00.000Z')
+    expect(resolveScheduledAt('2026-03-29', '00:30:00', D).toISOString()).toBe('2026-03-29T00:30:00.000Z')
+    expect(resolveScheduledAt('2026-10-25', '00:30:00', D).toISOString()).toBe('2026-10-24T23:30:00.000Z')
+    expect(resolveScheduledAt('2026-10-25', '07:00:00', D).toISOString()).toBe('2026-10-25T07:00:00.000Z')
+  })
+
+  it('the gap and the repeated hour keep today\'s answers', () => {
+    expect(resolveScheduledAt('2026-03-29', '01:30:00', D).toISOString()).toBe('2026-03-29T00:30:00.000Z') // gap
+    expect(resolveScheduledAt('2026-10-25', '01:30:00', D).toISOString()).toBe('2026-10-25T01:30:00.000Z') // second 01:30
+    expect(resolveScheduledAt('2026-03-08', '02:30:00', LA).toISOString()).toBe('2026-03-08T10:30:00.000Z') // gap
+    expect(resolveScheduledAt('2026-11-01', '01:30:00', LA).toISOString()).toBe('2026-11-01T08:30:00.000Z') // first 01:30
+  })
+
+  // The plan's D5 claim, pinned rather than trusted: for Europe/Dublin and
+  // Europe/London the two-pass answer is the old single-pass answer, every 5
+  // minutes, on both 2026 change days and the day either side of each
+  // (including the gap and the repeated hour). The reference below is
+  // origin/main's single-pass body, verbatim in substance.
+  it('Dublin and London: identical to the old single pass on both change days and the days either side', () => {
+    const fmts = {}
+    function singlePass(dateStr, timeStr, tz) {
+      const [yy, mm, dd] = dateStr.split('-').map(Number)
+      const [hh = 0, mi = 0, ss = 0] = timeStr.split(':').map(Number)
+      const guess = new Date(Date.UTC(yy, mm - 1, dd, hh, mi, ss))
+      fmts[tz] ||= new Intl.DateTimeFormat('en-CA', {
+        timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+      })
+      const parts = Object.fromEntries(fmts[tz].formatToParts(guess).map((p) => [p.type, p.value]))
+      const h = (+parts.hour === 24) ? 0 : +parts.hour
+      const observed = Date.UTC(+parts.year, +parts.month - 1, +parts.day, h, +parts.minute, +parts.second)
+      return guess.getTime() + (guess.getTime() - observed)
+    }
+    const days = ['2026-03-28', '2026-03-29', '2026-03-30', '2026-10-24', '2026-10-25', '2026-10-26']
+    let checked = 0
+    const differ = []
+    for (const tz of [D, 'Europe/London']) {
+      for (const day of days) {
+        for (let m = 0; m < 24 * 60; m += 5) {
+          const t = `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}:00`
+          checked++
+          if (resolveScheduledAt(day, t, tz).getTime() !== singlePass(day, t, tz)) differ.push(`${tz} ${day} ${t}`)
+        }
+      }
+    }
+    expect(checked).toBe(2 * 6 * 288)
+    expect(differ).toEqual([])
+  }, 20_000) // ~3.5k Intl reads: generous for a loaded runner
+
+  it('every existing wall time on both zones\' change days reads back as itself', () => {
+    const wall = (d, tz) => new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hour12: false,
+    }).format(d).replace(', ', ' ').replace(' 24:', ' 00:')
+    const gaps = { [D]: ['01'], [LA]: ['02'] }
+    const days = { [D]: ['2026-03-29', '2026-10-25'], [LA]: ['2026-03-08', '2026-11-01'] }
+    for (const tz of [D, LA]) {
+      for (const day of days[tz]) {
+        for (let m = 0; m < 24 * 60; m += 5) {
+          const hh = String(Math.floor(m / 60)).padStart(2, '0')
+          const mm = String(m % 60).padStart(2, '0')
+          // The spring-forward hour does not exist on that day, so skip it (checked above).
+          if (day.endsWith('-03-29') || day.endsWith('-03-08')) { if (gaps[tz].includes(hh)) continue }
+          expect(wall(resolveScheduledAt(day, `${hh}:${mm}:00`, tz), tz)).toBe(`${day} ${hh}:${mm}`)
+        }
+      }
+    }
+  })
+})
+
+describe('effectiveWindowAt (ATTENDREPORT.1)', () => {
+  const D = 'Europe/Dublin'
+  const LA = 'America/Los_Angeles'
+  const iso = (w) => ({ start: w.start?.toISOString() ?? null, end: w.end?.toISOString() ?? null })
+
+  it("no override: the block's own times (BST)", () => {
+    expect(iso(effectiveWindowAt('2026-07-15', { start_time: '07:00:00', end_time: '08:00:00' }, D)))
+      .toEqual({ start: '2026-07-15T06:00:00.000Z', end: '2026-07-15T07:00:00.000Z' })
+  })
+
+  it('an override wins over the block, each end on its own', () => {
+    expect(iso(effectiveWindowAt('2026-07-15', { start_time: '07:00:00', end_time: '10:00:00', start_time_override: '08:00:00' }, D)))
+      .toEqual({ start: '2026-07-15T07:00:00.000Z', end: '2026-07-15T09:00:00.000Z' })
+    expect(iso(effectiveWindowAt('2026-07-15', { start_time: '07:00:00', end_time: '08:00:00', end_time_override: '09:00:00' }, D)))
+      .toEqual({ start: '2026-07-15T06:00:00.000Z', end: '2026-07-15T08:00:00.000Z' })
+  })
+
+  it('reads the normalised row shape and, last, the template', () => {
+    expect(iso(effectiveWindowAt('2026-07-15', { block_start_time: '07:00:00', block_end_time: '08:00:00' }, D)).start)
+      .toBe('2026-07-15T06:00:00.000Z')
+    expect(iso(effectiveWindowAt('2026-07-15', { shift_templates: { start_time: '07:00:00', end_time: '08:00:00' } }, D)).end)
+      .toBe('2026-07-15T07:00:00.000Z')
+  })
+
+  it('an end at or before the start ends the next day', () => {
+    expect(iso(effectiveWindowAt('2026-07-15', { start_time_override: '22:00:00', end_time_override: '01:00:00' }, D)))
+      .toEqual({ start: '2026-07-15T21:00:00.000Z', end: '2026-07-16T00:00:00.000Z' })
+    expect(iso(effectiveWindowAt('2026-07-31', { start_time_override: '22:00:00', end_time_override: '01:00:00' }, D)).end)
+      .toBe('2026-08-01T00:00:00.000Z')
+  })
+
+  it('24:00 is the next midnight, not a wrap', () => {
+    expect(iso(effectiveWindowAt('2026-07-15', { start_time: '22:00:00', end_time: '24:00:00' }, D)))
+      .toEqual({ start: '2026-07-15T21:00:00.000Z', end: '2026-07-15T23:00:00.000Z' })
+  })
+
+  it('into the spring-forward day and into the clocks-back day', () => {
+    expect(iso(effectiveWindowAt('2026-03-28', { start_time_override: '22:00:00', end_time_override: '00:30:00' }, D)))
+      .toEqual({ start: '2026-03-28T22:00:00.000Z', end: '2026-03-29T00:30:00.000Z' })
+    expect(iso(effectiveWindowAt('2026-10-24', { start_time_override: '23:00:00', end_time_override: '02:00:00' }, D)))
+      .toEqual({ start: '2026-10-24T22:00:00.000Z', end: '2026-10-25T02:00:00.000Z' })
+  })
+
+  it('Los Angeles, including its own change day', () => {
+    expect(iso(effectiveWindowAt('2026-07-15', { start_time: '07:00:00', end_time: '08:00:00' }, LA)))
+      .toEqual({ start: '2026-07-15T14:00:00.000Z', end: '2026-07-15T15:00:00.000Z' })
+    expect(iso(effectiveWindowAt('2026-03-08', { start_time: '07:00:00', end_time: '08:00:00' }, LA)).start)
+      .toBe('2026-03-08T14:00:00.000Z')
+  })
+
+  it('no times: both null', () => {
+    expect(effectiveWindowAt('2026-07-15', {}, D)).toEqual({ start: null, end: null })
+    expect(effectiveWindowAt(null, { start_time: '07:00:00', end_time: '08:00:00' }, D)).toEqual({ start: null, end: null })
   })
 })
