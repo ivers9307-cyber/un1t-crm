@@ -20,7 +20,10 @@ export async function DELETE(_request, props) {
   }
 
   const db = createServerClient()
-  // Look up location via the parent car so we can authz check it.
+  // Authz reads the note's own denormalised location_id. Every insert copies
+  // it from the car (cars/[id]/notes POST, issue-deposit-link,
+  // src/lib/deposit-receipts.js), and the car_id filter pins the note to
+  // this car.
   const { data: note } = await db
     .from('car_notes')
     .select('id, location_id')
@@ -30,7 +33,8 @@ export async function DELETE(_request, props) {
   if (!note) return NextResponse.json({ success: false, error: 'Note not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, note.location_id)
   if (guard) return guard
-  // ROLESWEEP.1b — judged at the car's location, not the caller's active studio.
+  // ROLESWEEP.1b — judged at the note's location_id (the car's location, copied
+  // on insert), not the caller's active studio.
   if (!hasPermissionForLocation(user, note.location_id, 'car_processing')) {
     return NextResponse.json({ success: false, error: 'Not permitted' }, { status: 403 })
   }
