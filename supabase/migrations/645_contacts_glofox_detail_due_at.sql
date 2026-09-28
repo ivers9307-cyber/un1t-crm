@@ -52,3 +52,36 @@ begin
     raise exception 'mig 645: contacts.glofox_detail_due_at missing or wrong type after ALTER';
   end if;
 end $$;
+
+-- HEARTBEAT (review of DETAILBACKFILL.1): the route now withholds its stamp
+-- when a location run fails (the candidate read, or missing credentials). The
+-- live row was 600 + 600, so ONE failed tick (gap ~1,200 s + run time) already
+-- sat on the boundary and could page. 600 + 900: one missed tick never pages,
+-- two in a row do (25 min), the CLASSSYNCHB.1 (mig 644) rule. Interval, grace
+-- and notes only; last_ok_at is never re-armed. Rollback (a NEW migration):
+--   UPDATE public.cron_heartbeats SET expected_interval_seconds = 600, grace_seconds = 600, notes = 'Glofox per-member membership-detail backfill. Vercel cron */10 * * * *' WHERE name = 'glofox-detail-backfill';
+insert into public.cron_heartbeats (name, expected_interval_seconds, grace_seconds, notes)
+values (
+  'glofox-detail-backfill',
+  600,
+  900,
+  'Glofox per-member membership-detail backfill, re-sized by DETAILBACKFILL.1 (mig 645). Vercel cron */10 * * * *. Stamped at the end of every run except one whose location run failed (candidate read or missing credentials); per-contact Glofox failures are counts, so an erroring Glofox does not page. 600 + 900: one missed tick never pages, two in a row do (25 min). last_outcome carries the run summary.'
+)
+on conflict (name) do update
+  set expected_interval_seconds = excluded.expected_interval_seconds,
+      grace_seconds = excluded.grace_seconds,
+      notes = excluded.notes;
+
+do $$
+declare e record;
+begin
+  for e in select * from (values
+    ('glofox-detail-backfill', 600, 900)
+  ) as v(name, interval_s, grace_s) loop
+    perform 1 from public.cron_heartbeats h
+     where h.name = e.name and h.expected_interval_seconds = e.interval_s and h.grace_seconds = e.grace_s;
+    if not found then
+      raise exception 'mig 645: cron_heartbeats row % did not end up on % + %', e.name, e.interval_s, e.grace_s;
+    end if;
+  end loop;
+end $$;

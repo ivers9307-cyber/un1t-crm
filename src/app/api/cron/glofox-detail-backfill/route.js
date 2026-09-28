@@ -211,8 +211,8 @@ async function backfillLocation(db, location, startedAt) {
     }
     await Promise.all(Array.from({ length: GLOFOX_CONCURRENCY }, worker))
 
-    // One structured line per run, not per member: a refused contact with no
-    // plan is re-read every tick, and glofoxFetch already warns per call.
+    // One structured line per run, not per member: glofoxFetch already warns
+    // per call. A refused contact is due again in 10.5-17.5 days, like any answer.
     if (summary.member_refused > 0) {
       logWarn('glofox-detail-backfill', 'Glofox refused member reads; nothing written for them', {
         locationId: location.id, refused: summary.member_refused,
