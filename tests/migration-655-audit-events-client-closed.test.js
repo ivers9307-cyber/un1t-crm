@@ -205,7 +205,7 @@ describe('after 655', () => {
              (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.audit_events'::regclass) AS rls,
              (SELECT bool_or(has_table_privilege(r, 'public.audit_events', p))
                 FROM unnest(array['anon','authenticated']) r,
-                     unnest(array['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER']) p) AS any_client,
+                     unnest(array['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER','MAINTAIN']) p) AS any_client,
              (SELECT bool_or(has_any_column_privilege(r, 'public.audit_events', p))
                 FROM unnest(array['anon','authenticated']) r,
                      unnest(array['SELECT','INSERT','UPDATE','REFERENCES']) p) AS any_client_column,
@@ -322,6 +322,18 @@ describe('the self-check aborts the WHOLE file', () => {
              has_table_privilege('authenticated', 'public.audit_events', 'SELECT') AS auth_sel,
              to_regprocedure('private.audit_is_pii_key(text)') IS NULL AS no_pii_fn`)
     expect(r).toEqual({ policies: 2, auth_sel: true, no_pii_fn: true })
+    await db.close()
+  })
+
+  it("the audit trigger's owner unable to run a helper aborts it (else every audit row would be audit_redaction_failed)", async () => {
+    const db = await freshDb()
+    // Another role owns the trigger function; the helpers stay postgres-owned
+    // with PUBLIC's EXECUTE revoked, so that owner cannot call them.
+    await runSql(db, `CREATE ROLE audit_other_owner NOLOGIN; ALTER FUNCTION private.log_mutation() OWNER TO audit_other_owner;`)
+    await expect(runSql(db, MIG_655)).rejects.toThrow(/AUDITRLS\.1: the audit trigger's owner \(audit_other_owner\) cannot execute private\./)
+    await runSql(db, 'ROLLBACK')
+    const { rows: [r] } = await db.query(`SELECT count(*)::int AS n FROM pg_policies WHERE tablename = 'audit_events'`)
+    expect(r.n).toBe(1)
     await db.close()
   })
 

@@ -188,6 +188,7 @@ comment on function private.audit_secret_paths(jsonb, text, integer) is
 do $$
 declare
   v_fn     text;
+  v_owner  text;
   v_role   text;
   v_priv   text;
   v_got    jsonb;
@@ -209,7 +210,7 @@ begin
   -- 3. no client privilege, table or column, inheritance-aware: one
   --    has_table_privilege call per (role, privilege)
   foreach v_role in array array['anon', 'authenticated'] loop
-    foreach v_priv in array array['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER'] loop
+    foreach v_priv in array array['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER','MAINTAIN'] loop
       if has_table_privilege(v_role, 'public.audit_events', v_priv) then
         raise exception 'AUDITRLS.1: % still holds % on public.audit_events', v_role, v_priv;
       end if;
@@ -250,7 +251,12 @@ begin
     raise exception 'AUDITRLS.1: the audit trigger function lost SECURITY DEFINER or its empty search_path; with no client grant it could not write';
   end if;
 
-  -- 6. no helper callable by a client
+  -- 6. no helper callable by a client, and every helper callable by the
+  --    audit trigger's OWNER (the walkers run as that role: if it could not
+  --    execute one, every audit row would silently become
+  --    audit_redaction_failed, and a check run as the applying role would
+  --    not notice).
+  select proowner::regrole::text into v_owner from pg_proc where oid = 'private.log_mutation()'::regprocedure;
   foreach v_fn in array array[
     'private.audit_is_pii_key(text)',
     'private.audit_is_secret_key(text)',
@@ -260,6 +266,9 @@ begin
     if has_function_privilege('authenticated', v_fn, 'EXECUTE')
        or has_function_privilege('anon', v_fn, 'EXECUTE') then
       raise exception 'AUDITRLS.1: % is executable by a client role', v_fn;
+    end if;
+    if not has_function_privilege(v_owner, v_fn, 'EXECUTE') then
+      raise exception 'AUDITRLS.1: the audit trigger''s owner (%) cannot execute %', v_owner, v_fn;
     end if;
   end loop;
 
