@@ -164,7 +164,8 @@ describe('processClassBookingRequest', () => {
 
   // REGISTRYREAD.1a — an unreadable Glofox settings row is not "not
   // configured". 'failed' is terminal; a THROW is the queue's retry signal
-  // (claimAndProcessBookingJob re-queues under MAX_ATTEMPTS, then needs_review).
+  // (claimAndProcessBookingJob re-queues under MAX_ATTEMPTS, then needs_review
+  // with a staff card: class-booking-retries-exhausted.test.js).
   it('an unreadable settings row THROWS (the queue retries it) and stamps nothing', async () => {
     glofoxCredentialsForLocation.mockResolvedValueOnce({ branchId: null, apiKey: null, apiToken: null, readError: 'glofox_settings_unreadable' })
     const db = makeDb({ id: 'c1', first_name: 'Sam', phone: '0871234567' })

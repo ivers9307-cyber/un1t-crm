@@ -19,16 +19,20 @@
 //                        every returned outcome is 'processed' here —
 //                        there is nothing left to retry.
 //   processor THROWS   → retryable. Re-queue under MAX_ATTEMPTS, else
-//                        flag needs_review for staff. The
+//                        flag needs_review AND file a staff approvals
+//                        card (routeToReview, reason 'processing_error')
+//                        — a bare needs_review is on no screen. The
 //                        .eq('status','processing') guard stops this
 //                        ever clobbering a row the processor already
-//                        moved to a terminal state.
+//                        moved to a terminal state; only a row the guard
+//                        matched gets a card.
 //
 // A consumer that CRASHES mid-run (function timeout, deploy) leaves the
 // row in 'processing'; the cron's reaper — deliberately CRON-ONLY —
 // re-queues it after its staleness window.
 
-import { processClassBookingRequest } from './class-booking-processor.js'
+import { processClassBookingRequest, routeToReview } from './class-booking-processor.js'
+import { logWarn, logError } from '@/lib/log'
 
 // Keep in sync with class-booking-processor.js (its routeToReview
 // review-unavailable fallback caps on the same number).
@@ -60,13 +64,35 @@ export async function claimAndProcessBookingJob(db, row) {
     const error = String(e?.message || e)
     // Retry under the cap, else flag for staff. The status guard stops this
     // ever clobbering a row the processor already moved to a terminal state.
-    const next = (row.attempts || 0) + 1 >= MAX_ATTEMPTS ? 'needs_review' : 'queued'
+    const atCap = (row.attempts || 0) + 1 >= MAX_ATTEMPTS
+    const next = atCap ? 'needs_review' : 'queued'
+    let flagged = null
     try {
-      await db.from('class_booking_requests').update({ status: next, last_error: error })
+      const { data, error: stampErr } = await db.from('class_booking_requests')
+        .update({ status: next, last_error: error })
         .eq('id', row.id).eq('status', 'processing')
-    } catch {
+        .select('id, approval_request_id')
+      if (stampErr) throw stampErr
+      flagged = (data || [])[0] || null
+    } catch (stampErr) {
       // Bookkeeping is best-effort — a row left in 'processing' is
-      // re-queued by the cron's reaper.
+      // re-queued by the cron's reaper (and, past the cap, carded there).
+      logWarn('class-booking-queue', 'failure bookkeeping failed; the reaper picks the row up', { requestId: row.id, err: stampErr })
+    }
+    if (atCap && flagged) {
+      // The retries are spent: a bare needs_review is on no screen, so file
+      // the staff card (approval_request_id + approver push). routeToReview
+      // reuses a card the row already names, and falls back to 'failed' with
+      // review_unavailable:* when no card can be filed. Only a row the guard
+      // above matched gets here — never one the processor stamped itself.
+      try {
+        const review = await routeToReview(db, { ...row, approval_request_id: flagged.approval_request_id ?? row.approval_request_id ?? null }, 'processing_error')
+        if (review?.outcome !== 'needs_review') {
+          logError('class-booking-queue', 'retries exhausted and no staff card could be filed', { requestId: row.id, detail: review?.detail })
+        }
+      } catch (reviewErr) {
+        logError('class-booking-queue', 'retries exhausted and filing the staff card threw', { requestId: row.id, err: reviewErr })
+      }
     }
     return { status: 'failed', error, requeued: next === 'queued' }
   }

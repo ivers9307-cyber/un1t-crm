@@ -16,7 +16,12 @@
 //   processor THROWS   → retryable; re-queue under MAX_ATTEMPTS, else
 //                        flag needs_review — guarded on status still
 //                        'processing' so a terminal stamp is never
-//                        clobbered.
+//                        clobbered — and file the staff card
+//                        (routeToReview 'processing_error') for the row
+//                        the guard matched. The card's own behaviour
+//                        (one card, reuse, fallback) runs against the
+//                        real routeToReview in
+//                        class-booking-retries-exhausted.test.js.
 //
 // Pure unit tests — no DB. Supabase client + processor are mocked.
 
@@ -24,10 +29,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/class-booking-processor', () => ({
   processClassBookingRequest: vi.fn(),
+  routeToReview: vi.fn(async () => ({ outcome: 'needs_review', detail: 'processing_error' })),
 }))
+vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
 
 import { claimAndProcessBookingJob, MAX_ATTEMPTS } from './class-booking-queue.js'
-import { processClassBookingRequest } from '@/lib/class-booking-processor'
+import { processClassBookingRequest, routeToReview } from '@/lib/class-booking-processor'
+import { logError, logWarn } from '@/lib/log'
 
 // ── db mock factory ───────────────────────────────────────────────────────────
 
@@ -36,11 +44,12 @@ import { processClassBookingRequest } from '@/lib/class-booking-processor'
  *   claim       — update({status:'processing',attempts}).eq('id').eq('status','queued')
  *                 .select('id').maybeSingle()
  *   bookkeeping — update({status:'queued'|'needs_review',last_error}).eq('id')
- *                 .eq('status','processing')  ← awaited directly
+ *                 .eq('status','processing').select('id, approval_request_id')
+ *                 ← awaited directly; resolves the rows the guard matched
  * Builders are thenables (the repo invariant), so the mock is too.
  * Records every update payload + filter chain for assertions.
  */
-function makeDb({ claimData = { id: 'cbr-1' }, stampRejects = false } = {}) {
+function makeDb({ claimData = { id: 'cbr-1' }, stampRejects = false, stampResult = { data: [{ id: 'cbr-1', approval_request_id: null }], error: null } } = {}) {
   const calls = { updates: [] }
 
   const fromMock = vi.fn(() => ({
@@ -59,14 +68,14 @@ function makeDb({ claimData = { id: 'cbr-1' }, stampRejects = false } = {}) {
               calls.updates.push(record)
               return Promise.resolve({ data: claimData })
             },
+            // Bookkeeping awaits the .select() directly (an array).
+            then(resolve, reject) {
+              calls.updates.push(record)
+              if (stampRejects) return Promise.reject(new Error('db down')).then(resolve, reject)
+              return Promise.resolve(stampResult).then(resolve, reject)
+            },
           }
         }),
-        // Bookkeeping updates are awaited without a trailing .select().
-        then(resolve, reject) {
-          calls.updates.push(record)
-          if (stampRejects) return Promise.reject(new Error('db down')).then(resolve, reject)
-          return Promise.resolve({ data: null, error: null }).then(resolve, reject)
-        },
       }
       return builder
     }),
@@ -175,6 +184,8 @@ describe('claimAndProcessBookingJob', () => {
       ['eq', 'id', 'cbr-1'],
       ['eq', 'status', 'processing'],
     ])
+    // Under the cap there are retries left: no staff card yet.
+    expect(routeToReview).not.toHaveBeenCalled()
   })
 
   it('flags needs_review at the attempt cap when the processor throws', async () => {
@@ -188,6 +199,51 @@ describe('claimAndProcessBookingJob', () => {
       status: 'needs_review',
       last_error: 'glofox 502',
     })
+    // REGISTRYREAD.1a — a bare needs_review is on no screen: the row the
+    // guard matched gets its staff card.
+    expect(routeToReview).toHaveBeenCalledTimes(1)
+    expect(routeToReview).toHaveBeenCalledWith(db, expect.objectContaining({ id: 'cbr-1', approval_request_id: null }), 'processing_error')
+    expect(logError).not.toHaveBeenCalled()
+  })
+
+  it('at the cap, passes the card the row ALREADY names so routeToReview reuses it', async () => {
+    const db = makeDb({ stampResult: { data: [{ id: 'cbr-1', approval_request_id: 'amr-9' }], error: null } })
+    processClassBookingRequest.mockRejectedValue(new Error('glofox 502'))
+
+    await claimAndProcessBookingJob(db, { ...ROW, attempts: 2 })
+
+    expect(routeToReview).toHaveBeenCalledWith(db, expect.objectContaining({ approval_request_id: 'amr-9' }), 'processing_error')
+  })
+
+  it('at the cap, files NO card when the guard matched no row (the processor stamped it terminal)', async () => {
+    const db = makeDb({ stampResult: { data: [], error: null } })
+    processClassBookingRequest.mockRejectedValue(new Error('glofox 502'))
+
+    const result = await claimAndProcessBookingJob(db, { ...ROW, attempts: 2 })
+
+    expect(result).toEqual({ status: 'failed', error: 'glofox 502', requeued: false })
+    expect(routeToReview).not.toHaveBeenCalled()
+  })
+
+  it('at the cap, files NO card when the bookkeeping write fails (the row is still processing; the reaper owns it)', async () => {
+    const db = makeDb({ stampResult: { data: null, error: { message: 'fetch failed' } } })
+    processClassBookingRequest.mockRejectedValue(new Error('glofox 502'))
+
+    const result = await claimAndProcessBookingJob(db, { ...ROW, attempts: 2 })
+
+    expect(result).toEqual({ status: 'failed', error: 'glofox 502', requeued: false })
+    expect(routeToReview).not.toHaveBeenCalled()
+    expect(logWarn).toHaveBeenCalledWith('class-booking-queue', expect.stringContaining('bookkeeping failed'), expect.objectContaining({ requestId: 'cbr-1' }))
+  })
+
+  it('at the cap, logs an error when no card could be filed', async () => {
+    const db = makeDb()
+    processClassBookingRequest.mockRejectedValue(new Error('glofox 502'))
+    routeToReview.mockResolvedValueOnce({ outcome: 'failed', detail: 'review_unavailable:processing_error' })
+
+    await claimAndProcessBookingJob(db, { ...ROW, attempts: 2 })
+
+    expect(logError).toHaveBeenCalledWith('class-booking-queue', 'retries exhausted and no staff card could be filed', expect.objectContaining({ requestId: 'cbr-1' }))
   })
 
   it('stringifies non-Error throws', async () => {

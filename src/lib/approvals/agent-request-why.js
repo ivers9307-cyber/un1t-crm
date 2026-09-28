@@ -52,6 +52,14 @@ const MACHINE_REASONS = {
     'Glofox rejected the live booking attempt. Fix the account (credits / membership), then approve to retry the booking.',
   superseded_duplicate:
     'Duplicate of an earlier pending booking request for the same class.',
+  // REGISTRYREAD.1a — the automatic booking THREW on every attempt
+  // (class-booking-queue.js at MAX_ATTEMPTS). Nothing reached Glofox.
+  processing_error:
+    "The automatic booking failed 3 times (for example, the studio's Glofox settings could not be read). Nothing was booked. Approve to book now.",
+  // REGISTRYREAD.1a — the cron's reaper found the row stuck mid-run past the
+  // attempt cap. A run that died mid-flight may already have booked it.
+  max_attempts_stuck_processing:
+    'The automatic booking was interrupted 3 times and never finished, so it may or may not have gone through. Check Glofox for the booking first; if it is not there, approve to book now.',
 }
 
 // booking_failed:<CODE> — keep the Glofox message code visible but lead

@@ -24,8 +24,30 @@ const MAX_ATTEMPTS = 3 // keep in sync with the process-class-bookings cron
 async function setStatus(db, id, fields) {
   try { await db.from('class_booking_requests').update(fields).eq('id', id) } catch (e) { logWarn('cbp', 'status update failed', { err: e }) }
 }
-async function routeToReview(db, request, reason, { personContactIds = null, executingContactId = null, electedMemberId = null } = {}) {
+// Exported for class-booking-queue.js (REGISTRYREAD.1a): a booking that
+// exhausts its retries on a THROW lands here too, so staff get a card rather
+// than a bare needs_review nobody is shown. Also run by the cron's reaper for
+// rows stuck in 'processing' past the attempt cap.
+export async function routeToReview(db, request, reason, { personContactIds = null, executingContactId = null, electedMemberId = null } = {}) {
   let approvalId = null
+  // A row that ALREADY names a card keeps it while that card is still pending
+  // — never file a second one for the same booking. The person-wide lookup
+  // below would usually find it too, but only by (contact, event), so a card
+  // filed against a sibling contact would slip through it. A card that has
+  // since been decided is not reused (the row would point at a closed card);
+  // an unreadable one IS reused, because a second card staff could approve
+  // twice is the worse of the two errors.
+  if (request.approval_request_id) {
+    try {
+      const { data: linked, error } = await db.from('agent_membership_requests')
+        .select('id, status').eq('id', request.approval_request_id).maybeSingle()
+      if (error) throw error
+      if (linked?.status === 'pending') approvalId = linked.id
+    } catch (e) {
+      logWarn('cbp', 'linked review lookup failed; keeping the existing card', { err: e })
+      approvalId = request.approval_request_id
+    }
+  }
   // Reuse an existing pending review item for this (PERSON, class) so a
   // re-submit/retry can't create a duplicate that staff approve twice.
   //
@@ -47,15 +69,17 @@ async function routeToReview(db, request, reason, { personContactIds = null, exe
   const dedupeIds = (personContactIds && personContactIds.length)
     ? personContactIds
     : [request.contact_id]
-  try {
-    for (const batch of chunkIds(dedupeIds)) {
-      const { data: existing, error } = await db.from('agent_membership_requests')
-        .select('id').in('contact_id', batch).eq('kind', 'class_booking').eq('status', 'pending')
-        .contains('details', { event_id: request.glofox_event_id }).limit(1).maybeSingle()
-      if (error) throw error
-      if (existing?.id) { approvalId = existing.id; break }
-    }
-  } catch (e) { logWarn('cbp', 'review lookup failed', { err: e }) }
+  if (!approvalId) {
+    try {
+      for (const batch of chunkIds(dedupeIds)) {
+        const { data: existing, error } = await db.from('agent_membership_requests')
+          .select('id').in('contact_id', batch).eq('kind', 'class_booking').eq('status', 'pending')
+          .contains('details', { event_id: request.glofox_event_id }).limit(1).maybeSingle()
+        if (error) throw error
+        if (existing?.id) { approvalId = existing.id; break }
+      }
+    } catch (e) { logWarn('cbp', 'review lookup failed', { err: e }) }
+  }
 
   if (!approvalId) {
     try {
@@ -113,8 +137,9 @@ export async function processClassBookingRequest(db, request) {
   // REGISTRYREAD.1a: an unreadable settings row is not "not configured".
   // 'failed' is terminal and nothing retries it; a THROW is the queue's
   // documented retry signal (class-booking-queue.js: re-queue under
-  // MAX_ATTEMPTS, then needs_review). A blip costs a 2-minute retry, never
-  // the customer's class.
+  // MAX_ATTEMPTS, then needs_review with a staff card, reason
+  // 'processing_error'). A blip costs a 2-minute retry, never the
+  // customer's class.
   if (creds.readError) throw new Error(creds.readError)
   if (missingGlofoxCredentialsForLocation(creds).length) {
     await setStatus(db, request.id, { status: 'failed', last_error: 'glofox_not_configured' })
