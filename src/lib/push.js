@@ -36,6 +36,14 @@
  * retries — callers that keep a "was this reminder sent?" ledger use it
  * to distinguish "nothing to send" from "the send pipeline fell over"
  * (see send-push-reminders cron).
+ *
+ * C16 PUSHREADERR.1 — a failed READ is a failed send too. When the
+ * permission, template or device read fails, every recipient that could
+ * not be judged or reached counts in `failed`, the result carries
+ * `read_failed: 1`, and the failure is logged once with logError. It used
+ * to come back as `skipped` / plain zeros — "nobody to tell" — and the
+ * send-once callers ledgered it, losing the message for good. The clean
+ * path's shape is unchanged (no `read_failed` key).
  */
 
 import { createServerClient } from './supabase'
@@ -107,6 +115,17 @@ async function postExpoBatch(chunk) {
   return null
 }
 
+// C16 PUSHREADERR.1 — the one answer to a read sendPush could not make:
+// logged once, structurally, and returned with every recipient it could not
+// judge or reach counted as failed, so a ledger caller retries instead of
+// recording "nobody to tell".
+function pushReadFailed(what, meta, payload, error, { skipped = 0, failed }) {
+  logError('push', `${what} read failed; nobody was told`, {
+    ...meta, type: payload?.data?.type ?? null, category: payload?.category ?? null, err: error,
+  })
+  return { sent: 0, skipped, invalidated: 0, failed, read_failed: 1 }
+}
+
 /**
  * Resolve which of `ids` may receive a push for `category`, reading the LIVE
  * permission source — `profile_locations.permissions` (per mig 058).
@@ -144,34 +163,51 @@ async function postExpoBatch(chunk) {
  * 2026-07-03). Users with no assignment at the given location (master;
  * cross-location assignees) keep the conservative all-assignments rule.
  *
+ * C16 PUSHREADERR.1 — returns the read errors beside the answer. `error`
+ * (profiles or profile_locations unreadable): nobody can be judged, `allowed`
+ * is empty and means nothing. `templatesError` (role templates unreadable):
+ * `allowed` is judged on the code defaults, as it always silently was, so a
+ * refusal in it may be a default standing in for a template that turns the
+ * category ON (the staff/fte template does, for bookings) — the caller must
+ * not read that refusal as an opt-out.
+ *
  * @param {object} db        service-role supabase client
  * @param {string[]} ids     profile ids to consider
  * @param {string} [category]  notify_<category> to gate on (omit = master only)
  * @param {object} [opts]
  * @param {string} [opts.locationId]  the location this notification belongs to
- * @returns {Promise<Set<string>>} the allowed profile ids
+ * @returns {Promise<{ allowed: Set<string>, error: object|null, templatesError: object|null }>}
  */
-export async function resolvePushAllowedIds(db, ids, category, opts = {}) {
+export async function readPushAllowedIds(db, ids, category, opts = {}) {
   const allowed = new Set()
-  if (!ids?.length) return allowed
-  const { data: profiles } = await db.from('profiles').select('id, active, employment_type').in('id', ids)
-  const { data: links } = await db
+  if (!ids?.length) return { allowed, error: null, templatesError: null }
+  const { data: profiles, error: profilesErr } = await db.from('profiles').select('id, active, employment_type').in('id', ids)
+  const { data: links, error: linksErr } = await db
     .from('profile_locations').select('profile_id, location_id, role, permissions').in('profile_id', ids)
+  // Without these two nobody can be judged: `active` and every opt-out live
+  // here. A failed read is not "nobody may be told" (and not "everybody").
+  if (profilesErr || linksErr) return { allowed, error: profilesErr || linksErr, templatesError: null }
 
   // Role templates (mig 364) for every (location, role) pair in play.
   // RECEPTION.2 (mig 367): 'all' rows apply to everyone of the role;
   // employment-type rows layer on top for matching users.
   const locationIds = [...new Set((links || []).map(l => l.location_id).filter(Boolean))]
   let templates = []
+  let templatesError = null
   if (locationIds.length > 0) {
+    // A builder RESOLVES with { error } rather than throwing, so the old
+    // try/catch alone never saw a failed read. Both are kept: the catch for a
+    // genuine throw. Either way we degrade to code defaults (as before) and
+    // SAY so, so sendPush can count the refusals as unjudged.
     try {
-      const { data } = await db
+      const { data, error } = await db
         .from('location_role_permissions')
         .select('location_id, role, employment_type, permissions')
         .in('location_id', locationIds)
-      templates = data || []
-    } catch {
-      templates = [] // degrade to code defaults
+      if (error) templatesError = error
+      else templates = data || []
+    } catch (err) {
+      templatesError = err
     }
   }
   const rowFor = (locId, role, emp) =>
@@ -217,7 +253,19 @@ export async function resolvePushAllowedIds(db, ids, category, opts = {}) {
     if (opts.requireMobileKey && gateLinks.some(l => !resolves(l, opts.requireMobileKey))) continue
     allowed.add(id)
   }
-  return allowed
+  return { allowed, error: null, templatesError }
+}
+
+/**
+ * The allowed set alone — the pre-C16 contract (an empty Set on a failed
+ * read). No production caller may use it (tests/push-allowed-callers.test.js):
+ * a caller that ledgers, claims or reports must use readPushAllowedIds and
+ * treat `error` / `templatesError` as "not judged", never as "opted out".
+ *
+ * @returns {Promise<Set<string>>}
+ */
+export async function resolvePushAllowedIds(db, ids, category, opts = {}) {
+  return (await readPushAllowedIds(db, ids, category, opts)).allowed
 }
 
 /**
@@ -245,7 +293,7 @@ export async function resolvePushAllowedIds(db, ids, category, opts = {}) {
  *                                    the recipient must hold (e.g. 'whatsapp'
  *                                    inbox access) on top of the category gate.
  *
- * @returns {Promise<{sent:number, skipped:number, invalidated:number, failed:number}>}
+ * @returns {Promise<{sent:number, skipped:number, invalidated:number, failed:number, read_failed?:1}>}
  */
 export async function sendPush(userIds, payload, opts = {}) {
   const ids = Array.isArray(userIds) ? userIds : [userIds]
@@ -259,11 +307,29 @@ export async function sendPush(userIds, payload, opts = {}) {
   // immediately be filtered out anyway.
   // Per-category opt-out lives on profile_locations.permissions (mig 058);
   // profiles.permissions is stale and must NOT be read here.
-  const allowedSet = await resolvePushAllowedIds(db, ids, payload.category, { locationId: opts.locationId, requireMobileKey: opts.requireMobileKey })
-  const allowedIds = ids.filter(id => allowedSet.has(id))
-  let skipped = ids.length - allowedIds.length
+  const meta = { candidates: ids.length, locationId: opts.locationId ?? null }
+  const { allowed: allowedSet, error: permErr, templatesError } = await readPushAllowedIds(
+    db, ids, payload.category, { locationId: opts.locationId, requireMobileKey: opts.requireMobileKey },
+  )
+  // C16 PUSHREADERR.1 (D1/D2) — nobody could be judged: report it, never as
+  // opt-outs.
+  if (permErr) return pushReadFailed('permissions', meta, payload, permErr, { failed: ids.length })
 
-  if (!allowedIds.length) return { sent: 0, skipped, invalidated: 0, failed: 0 }
+  const allowedIds = ids.filter(id => allowedSet.has(id))
+  const refused = ids.length - allowedIds.length
+  // D3 — with the role templates unreadable, a refusal was made on the code
+  // default, which a template may override (staff/fte turns bookings ON). It
+  // is unjudged, not an opt-out: counted as failed so a ledger caller retries.
+  const unjudged = templatesError ? refused : 0
+  const skipped = refused - unjudged
+  const readFlag = templatesError ? { read_failed: 1 } : {}
+  if (templatesError) {
+    logError('push', 'role templates read failed; judged on code defaults', {
+      ...meta, refused, type: payload?.data?.type ?? null, category: payload?.category ?? null, err: templatesError,
+    })
+  }
+
+  if (!allowedIds.length) return { sent: 0, skipped, invalidated: 0, failed: unjudged, ...readFlag }
 
   // Fetch all push tokens for the allowed users.
   //
@@ -272,13 +338,19 @@ export async function sendPush(userIds, payload, opts = {}) {
   // credentials exist; iOS with notifications declined). Those rows are not
   // recipients — `to: null` would be sent to Expo and come back as a
   // per-ticket error, counted as `failed`, which is a lie about the send.
-  const { data: tokens } = await db
+  const { data: tokens, error: tokensErr } = await db
     .from('device_tokens')
     .select('id, expo_push_token')
     .not('expo_push_token', 'is', null)
     .in('user_id', allowedIds)
 
-  if (!tokens?.length) return { sent: 0, skipped, invalidated: 0, failed: 0 }
+  // D4 — "no device" is only true when the read worked.
+  if (tokensErr) {
+    return pushReadFailed('device_tokens', { ...meta, candidates: allowedIds.length }, payload, tokensErr, {
+      skipped, failed: allowedIds.length + unjudged,
+    })
+  }
+  if (!tokens?.length) return { sent: 0, skipped, invalidated: 0, failed: unjudged, ...readFlag }
 
   // Build Expo messages — one per token. Expo will silently drop
   // malformed tokens; we additionally prune any reported as
@@ -348,7 +420,7 @@ export async function sendPush(userIds, payload, opts = {}) {
     if (pruneErr) console.error('[push] dead-token prune failed', pruneErr)
   }
 
-  return { sent, skipped, invalidated, failed }
+  return { sent, skipped, invalidated, failed: failed + unjudged, ...readFlag }
 }
 
 /**
