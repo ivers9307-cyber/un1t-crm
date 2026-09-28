@@ -445,11 +445,16 @@ function LocationBlock({ loc, orgId, catalogue, onAdjust, onChanged }) {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
         <div>
           <div className="text-xs uppercase tracking-wider text-un1t-subtle font-semibold mb-2">Integrations</div>
-          {loc.integrations?.connections?.length ? (
+          {loc.integrations?.unreadable ? (
+            <div className="text-sm text-amber-700">Could not load integrations just now. Reload to try again.</div>
+          ) : loc.integrations?.connections?.length ? (
             <div className="flex flex-wrap gap-1.5">
               {loc.integrations.connections.map((c) => (
                 <span key={c.key} className={`inline-block rounded-full px-2 py-0.5 text-xs ${STATUS_CHIPS[c.status] || STATUS_CHIPS.not_connected}`}>
-                  {c.label}{c.status !== 'connected' ? ` · ${c.status.replaceAll('_', ' ')}` : ''}
+                  {c.label}
+                  {c.status === 'unknown'
+                    ? ' · could not load'
+                    : c.status !== 'connected' ? ` · ${c.status.replaceAll('_', ' ')}` : ''}
                 </span>
               ))}
             </div>

@@ -48,10 +48,26 @@ export const LEDGER_KINDS = {
 }
 
 // Integrations hub status → chip recipe (mirrors the hub's status
-// model: connected | action_needed | error | not_connected).
+// model: connected | action_needed | error | not_connected, + unknown
+// for a row whose read failed, HUBREAD.1).
 export const STATUS_CHIPS = {
   connected: 'bg-green-500/10 text-green-700',
   action_needed: 'bg-amber-500/10 text-amber-700',
   error: 'bg-red-500/10 text-red-700',
   not_connected: 'bg-gray-500/10 text-gray-700',
+  unknown: 'bg-amber-500/10 text-amber-700',
+}
+
+/**
+ * HUBREAD.1 — the roster's health cell. A null (or missing) count means the
+ * read behind it FAILED: it is "unknown", never folded into OK. Pure.
+ */
+export function healthCellState(health) {
+  const attentionCount = health?.attentionCount ?? null
+  const staleHeartbeatCount = health?.staleHeartbeatCount ?? null
+  const unknown = []
+  if (attentionCount == null) unknown.push('integrations')
+  if (staleHeartbeatCount == null) unknown.push('heartbeats')
+  const ok = unknown.length === 0 && !attentionCount && !staleHeartbeatCount
+  return { ok, unknown, attentionCount, staleHeartbeatCount }
 }

@@ -36,7 +36,7 @@
 // wizard, or the billing page — no new mutation surface here, and the old
 // tabs are untouched.
 
-import { useCallback, useState } from 'react'
+import { createContext, useCallback, useContext, useState } from 'react'
 import Link from 'next/link'
 import {
   Zap, MessageCircle, Landmark, Megaphone, Plug,
@@ -54,6 +54,7 @@ const CHIP_STYLES = {
   action_needed: 'bg-amber-500/10 text-amber-700',
   error: 'bg-red-500/10 text-red-700',
   not_connected: 'bg-zinc-500/10 text-zinc-700',
+  unknown: 'bg-amber-500/10 text-amber-700',
   platform: 'bg-blue-500/10 text-blue-700',
   coming_soon: 'border border-dashed border-un1t-border text-un1t-subtle',
 }
@@ -63,6 +64,7 @@ const CHIP_LABELS = {
   action_needed: 'Action needed',
   error: 'Error',
   not_connected: 'Not connected',
+  unknown: 'Could not load',
   platform: 'Platform-managed',
   coming_soon: 'Coming soon',
 }
@@ -80,7 +82,7 @@ function StatusChip({ status, label }) {
 // Card-level aggregation of visible row statuses (scope-aware, so it
 // lives client-side). Mirrors worstStatus() in src/lib/integrations-hub.js —
 // kept local so this client bundle doesn't pull in server-side libs.
-const STATUS_RANK = { error: 3, action_needed: 2, connected: 1, not_connected: 0 }
+const STATUS_RANK = { error: 4, unknown: 3, action_needed: 2, connected: 1, not_connected: 0 }
 function worstOf(statuses) {
   let best = null
   for (const s of statuses) {
@@ -88,6 +90,42 @@ function worstOf(statuses) {
     if (best === null || STATUS_RANK[s] > STATUS_RANK[best]) best = s
   }
   return best === null ? 'not_connected' : best
+}
+
+// HUBREAD.1 — a card whose read failed ('unknown' rows; mirrors HUB_UNKNOWN
+// in src/lib/integrations-hub.js, kept local like worstOf). It gets no
+// Connect/Manage/Disconnect: acting on a state we could not read is how a
+// working connection gets overwritten. Only "Try again", which re-fetches.
+const isUnread = (rows) => rows.some((r) => r.status === 'unknown')
+
+// Every "Try again" shares one re-fetch: while it runs they all show a
+// pending state, and when the button that asked is still on screen after
+// it (the read failed again) it says so, instead of silently doing nothing.
+const RetryContext = createContext({ retry: () => {}, pending: false, failedId: null })
+
+function RetryButton({ id }) {
+  const { retry, pending, failedId } = useContext(RetryContext)
+  return (
+    <span className="inline-flex flex-wrap items-center gap-2">
+      <button type="button" onClick={() => retry(id)} disabled={pending} aria-busy={pending} className={linkBtn()}>
+        {pending ? 'Trying…' : 'Try again'}
+      </button>
+      {!pending && failedId === id && (
+        <span role="status" className="text-xs text-amber-700">Still couldn&apos;t load. Try again in a minute.</span>
+      )}
+    </span>
+  )
+}
+
+function UnreadableNote({ what }) {
+  return (
+    <div className="space-y-2">
+      <p className="text-xs text-amber-700 bg-amber-500/10 rounded px-2 py-1.5">
+        {`Could not load ${what} just now, so nothing is shown and nothing can be changed here until it loads.`}
+      </p>
+      <RetryButton id={`card-${what}`} />
+    </div>
+  )
 }
 
 function fmtDate(iso) {
@@ -182,9 +220,10 @@ const EMAIL_CHIP_LABELS = {
   connected: 'Custom domain',
   action_needed: 'Setup in progress',
   error: 'Attention',
+  unknown: 'Could not load',
 }
 
-const EMAIL_RANK = { error: 3, action_needed: 2, connected: 1, platform: 0 }
+const EMAIL_RANK = { unknown: 4, error: 3, action_needed: 2, connected: 1, platform: 0 }
 function emailCardStatus(entries) {
   let best = 'platform'
   for (const e of entries) {
@@ -379,15 +418,32 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
   // per-location, so the drawer always targets one location's connection.
   const [managing, setManaging] = useState(null)
 
-  const refetchHub = useCallback(async () => {
+  // HUBREAD.1 — the shared "Try again" state (see RetryButton).
+  const [retryState, setRetryState] = useState({ pending: false, failedId: null })
+
+  // true when a fresh payload landed; false keeps the last-good payload.
+  const loadHub = useCallback(async () => {
     try {
       const res = await fetch('/api/integrations/hub', { credentials: 'same-origin' })
       const j = await res.json().catch(() => ({}))
-      if (j.success && j.data) setData(j.data)
+      if (j.success && j.data) { setData(j.data); return true }
     } catch {
-      /* keep last-good payload — the drawer's own UI already showed the save result */
+      /* keep last-good payload */
     }
+    return false
   }, [])
+
+  // After a drawer save — the drawer's own UI already showed the result.
+  const refetchHub = useCallback(async () => { await loadHub() }, [loadHub])
+
+  // "Try again": if the asking button is still rendered afterwards (the
+  // fetch failed, or the fresh payload is still unreadable there), it
+  // shows "Still couldn't load"; a card that loaded drops its button.
+  const retryHub = useCallback(async (id) => {
+    setRetryState({ pending: true, failedId: null })
+    await loadHub()
+    setRetryState({ pending: false, failedId: id })
+  }, [loadHub])
 
   const locations = data.locations || []
   const nameById = Object.fromEntries(locations.map((l) => [l.id, l.name]))
@@ -407,15 +463,23 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
   const unifi = (data.unifi || []).filter((r) => inScope(r.locationId))
   const climate = (data.climate || []).filter((r) => inScope(r.locationId))
   const bca = (data.bca || []).filter((r) => inScope(r.locationId))
-  const attention = (data.attention || []).filter((r) => inScope(r.locationId))
+  // HUBREAD.1 — an unreadable row is card-level (pinned to the first
+  // location for the tenants console's per-org count): show it under
+  // every scope, or a narrower scope would read "All connections healthy".
+  const attention = (data.attention || []).filter((r) => r.unreadable || inScope(r.locationId))
   const billing = (data.billing || []).filter((r) => inScope(r.locationId))
   const pinnedBilling = billing.filter((r) => r.plan)
 
   const scopeTag = scope === 'all'
     ? (arr) => (arr.length > 1 ? `${arr.length} locations` : (arr[0] ? nameById[arr[0].locationId] : null))
     : () => nameById[scope]
+  // A single-connection card tags the location it names. An unreadable
+  // card has an unknown row per location — naming the first would put
+  // one site's name under "All locations" (HUBREAD.1), so it counts.
+  const connTag = (arr, fallback) => (arr.length && !isUnread(arr) ? nameById[arr[0].locationId] : fallback)
 
   return (
+    <RetryContext.Provider value={{ retry: retryHub, ...retryState }}>
     <div className="p-8 max-w-6xl">
       {/* ── Header ── */}
       <div className="text-xs text-un1t-muted mb-1">Settings <span className="text-un1t-subtle font-medium">/ Integrations</span></div>
@@ -463,6 +527,7 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
         <StatusChip status="action_needed" />
         <StatusChip status="error" />
         <StatusChip status="not_connected" />
+        <StatusChip status="unknown" />
         <StatusChip status="coming_soon" />
         <StatusChip status="platform" />
       </div>
@@ -471,7 +536,15 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
           Manage-plan deep-links into the D1 billing page (/settings/billing,
           owner+/master). */}
       <div className="space-y-3 mb-6">
-        {pinnedBilling.length === 0 ? (
+        {billing.some((r) => r.unreadable) ? (
+          <div className="rounded-xl border border-un1t-border bg-white px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+            <span className="text-sm text-amber-700">Could not load the platform plan just now.</span>
+            <div className="flex gap-2">
+              <RetryButton id="billing" />
+              <Link href="/settings/billing" className={linkBtn()}>Manage plan</Link>
+            </div>
+          </div>
+        ) : pinnedBilling.length === 0 ? (
           <div className="rounded-xl border border-un1t-border bg-white px-4 py-3 flex flex-wrap items-center justify-between gap-3">
             <span className="text-sm text-un1t-subtle">
               No platform plan{scope !== 'all' && nameById[scope] ? ` — ${nameById[scope]}` : ''}
@@ -505,7 +578,9 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
               {scope === 'all' && a.locationName ? <span className="text-un1t-subtle"> · {a.locationName}</span> : null}
               <span className="text-un1t-subtle">: {a.message}</span>
             </span>
-            <Link href={a.href} className={linkBtn()}>Open</Link>
+            {a.unreadable
+              ? <RetryButton id={`attention-${a.cardKey}`} />
+              : <Link href={a.href} className={linkBtn()}>Open</Link>}
           </div>
         ))}
       </div>
@@ -525,6 +600,9 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
           provider="Bookings, members & payments sync"
           chip={<StatusChip status={worstOf(glofox.map((r) => r.status))} />}
         >
+          {isUnread(glofox) ? (
+            <UnreadableNote what="Glofox" />
+          ) : (
           <div className="divide-y divide-un1t-border border-t border-un1t-border text-sm">
             {glofox.map((r) => (
               <div key={r.locationId} className="flex items-center gap-3 py-2">
@@ -544,6 +622,7 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
               </div>
             ))}
           </div>
+          )}
         </HubCard>
 
         {/* WhatsApp — per-location numbers + tier budget meter */}
@@ -554,6 +633,9 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
           provider="Meta Cloud API · Embedded Signup"
           chip={<StatusChip status={worstOf(whatsapp.map((r) => r.status))} />}
         >
+          {isUnread(whatsapp) ? (
+            <UnreadableNote what="WhatsApp" />
+          ) : (
           <div className="divide-y divide-un1t-border border-t border-un1t-border text-sm">
             {whatsapp.map((r) => (
               <div key={r.locationId} className="py-2 space-y-1.5">
@@ -586,17 +668,20 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
               </div>
             ))}
           </div>
+          )}
         </HubCard>
 
         {/* Instagram */}
         <HubCard
           icon={InstagramIcon}
           title="Instagram"
-          locTag={instagram.length ? nameById[instagram[0].locationId] : scopeTag(instagram)}
+          locTag={connTag(instagram, scopeTag(instagram))}
           provider={instagram[0]?.displayName ? `${instagram[0].displayName} · Instagram DMs` : 'Instagram DMs'}
           chip={<StatusChip status={worstOf(instagram.map((r) => r.status))} />}
         >
-          {instagram.length === 0 ? (
+          {isUnread(instagram) ? (
+            <UnreadableNote what="Instagram" />
+          ) : instagram.length === 0 ? (
             <>
               <p className="text-xs text-un1t-subtle">No Instagram connection{scope === 'all' ? '' : ' at this location'} yet.</p>
               <div className="flex gap-2 pt-1 mt-auto">
@@ -643,11 +728,13 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
         <HubCard
           icon={Landmark}
           title="Xero"
-          locTag={xero.length ? nameById[xero[0].locationId] : scopeTag(xero)}
+          locTag={connTag(xero, scopeTag(xero))}
           provider="Accounting — invoices & bills"
           chip={<StatusChip status={worstOf(xero.map((r) => r.status))} />}
         >
-          {xero.length === 0 ? (
+          {isUnread(xero) ? (
+            <UnreadableNote what="Xero" />
+          ) : xero.length === 0 ? (
             <>
               <p className="text-xs text-un1t-subtle">No Xero organisation connected{scope === 'all' ? '' : ' at this location'}.</p>
               <div className="flex gap-2 pt-1 mt-auto">
@@ -690,10 +777,14 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
         <HubCard
           icon={Megaphone}
           title="Meta Ads"
-          locTag={ads.length ? nameById[ads[0].locationId] : scopeTag(ads)}
+          locTag={connTag(ads, scopeTag(ads))}
           provider={ads[0]?.externalAccountId ? `Ad account ${ads[0].externalAccountId}` : 'Spend & attribution reporting'}
           chip={<StatusChip status={worstOf(ads.map((r) => r.status))} />}
         >
+          {isUnread(ads) ? (
+            <UnreadableNote what="Meta Ads" />
+          ) : (
+          <>
           {ads.length === 0 ? (
             <p className="text-xs text-un1t-subtle">No ad account connected{scope === 'all' ? '' : ' at this location'} yet.</p>
           ) : (
@@ -721,6 +812,8 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
               </button>
             ))}
           </div>
+          </>
+          )}
         </HubCard>
 
         {/* Shelly plugs — per-location connection grade + adopted device counts */}
@@ -818,7 +911,9 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
           chip={<StatusChip status={emailCardStatus(email)} label={email.length === 0 ? CHIP_LABELS.platform : EMAIL_CHIP_LABELS[emailCardStatus(email)]} />}
           muted
         >
-          {email.length === 0 ? (
+          {isUnread(email) ? (
+            <UnreadableNote what="email delivery" />
+          ) : email.length === 0 ? (
             <p className="text-xs text-un1t-subtle">· Sending via the platform email account</p>
           ) : (
             <div className="divide-y divide-un1t-border border-t border-un1t-border text-sm">
@@ -855,6 +950,10 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
           chip={<StatusChip status="platform" />}
           muted
         >
+          {sms.some((r) => r.senderKnown === false) ? (
+            <UnreadableNote what="the SMS sender" />
+          ) : (
+          <>
           <div className="text-xs text-un1t-subtle space-y-0.5">
             {sms.map((r) => (
               <p key={r.locationId}>
@@ -876,6 +975,8 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
               </button>
             ))}
           </div>
+          </>
+          )}
         </HubCard>
 
         {/* Push notifications */}
@@ -909,11 +1010,15 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
         <HubCard
           icon={DoorOpen}
           title="UniFi Access"
-          locTag={unifi.length ? nameById[unifi[0].locationId] : null}
+          locTag={connTag(unifi, isUnread(unifi) ? scopeTag(unifi) : null)}
           provider="Door access · gym entry"
           chip={<StatusChip status={worstOf(unifi.map((r) => r.status))} />}
           dashed
         >
+          {isUnread(unifi) ? (
+            <UnreadableNote what="UniFi Access" />
+          ) : (
+          <>
           <div className="text-xs text-un1t-subtle space-y-0.5">
             <p>· UN1T studio customisation · not offered to tenants</p>
             {unifi.map((r) => r.lastError && <p key={r.locationId} className="text-red-700">· {r.lastError}</p>)}
@@ -930,6 +1035,8 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
               </button>
             ))}
           </div>
+          </>
+          )}
         </HubCard>
 
         {/* Climate devices */}
@@ -941,6 +1048,10 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
           chip={<StatusChip status={worstOf(climate.map((r) => r.status))} />}
           dashed
         >
+          {isUnread(climate) ? (
+            <UnreadableNote what="climate devices" />
+          ) : (
+          <>
           <div className="text-xs text-un1t-subtle space-y-0.5">
             <p>· UN1T studio customisation · not offered to tenants</p>
             {climate.flatMap((r) => r.vendors.filter((v) => v.lastError).map((v) => (
@@ -959,6 +1070,8 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
               </button>
             ))}
           </div>
+          </>
+          )}
         </HubCard>
 
         {/* Revolut Merchant — org-gated, static */}
@@ -982,6 +1095,10 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
             : <StatusChip status="not_connected" label="CCF Autos only" />}
           dashed
         >
+          {isUnread(bca) ? (
+            <UnreadableNote what="BCA Submit" />
+          ) : (
+          <>
           <p className="text-xs text-un1t-subtle">· Org-gated to CCF Autos. Not offered to gym tenants.</p>
           {bca.length > 0 && (
             <div className="flex gap-2 pt-1 mt-auto">
@@ -993,6 +1110,8 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
                 Manage
               </button>
             </div>
+          )}
+          </>
           )}
         </HubCard>
 
@@ -1038,5 +1157,6 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
         />
       )}
     </div>
+    </RetryContext.Provider>
   )
 }
