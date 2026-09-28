@@ -2,7 +2,7 @@
 // announced_* column) before the send and RELEASED when the push reached
 // nobody because something broke. It used to be stamped after the send
 // whatever happened, with the stamp's own error discarded.
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 const updates = []
 let challengeRows = []
@@ -21,10 +21,20 @@ function makeBuilder(table) {
   b.then = (res, rej) => {
     let out
     if (state.patch) {
-      const isRelease = Object.values(state.patch).every((v) => v === null)
-      if (isRelease) out = { data: null, error: releaseError }
-      else out = claimError ? { data: null, error: claimError } : { data: claimMatches ? [{ id: state.eqs.id }] : [], error: null }
-    } else if (table === 'challenges') out = { data: challengeRows, error: null }
+      // The claim and the release act on the stored row, so a second run sees
+      // what the first one left (announced exactly once across runs).
+      const [column, value] = Object.entries(state.patch)[0]
+      const row = challengeRows.find((r) => r.id === state.eqs.id)
+      if (value === null) {
+        if (!releaseError && row && row[column] === state.eqs[column]) row[column] = null
+        out = { data: null, error: releaseError }
+      } else if (claimError) out = { data: null, error: claimError }
+      else {
+        const won = claimMatches && (!row || row[column] == null)
+        if (won && row) row[column] = value
+        out = { data: won ? [{ id: state.eqs.id }] : [], error: null }
+      }
+    } else if (table === 'challenges') out = { data: challengeRows.map((r) => ({ ...r })), error: null }
     else if (table === 'champ_push_tokens') out = { data: tokenRows, error: null }
     else out = { data: [], error: null }
     return Promise.resolve(out).then(res, rej)
@@ -39,9 +49,10 @@ vi.mock('@/lib/customer-push', () => ({ sendCustomerPush: vi.fn() }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 vi.mock('@/lib/challenges-io', () => ({ computeStandings: vi.fn(async () => []), computeCollective: vi.fn(async () => ({ total: 0, target: 10, pct: 0 })) }))
 
-const { GET } = await import('./route.js')
+const { GET, END_ANNOUNCE_RETRY_DAYS } = await import('./route.js')
 const { sendCustomerPush } = await import('@/lib/customer-push')
 const { logWarn, logError } = await import('@/lib/log')
+const { computeStandings } = await import('@/lib/challenges-io')
 
 const req = () => ({ headers: { get: (k) => (k.toLowerCase() === 'authorization' ? 'Bearer test-secret' : null) } })
 const today = () => new Date().toISOString().slice(0, 10)
@@ -119,5 +130,70 @@ describe('run-challenge-events — claim, send, release on failure (C21 PUSHDONE
     await GET(req())
     expect(logError).toHaveBeenCalledWith('cron-challenge-events', 'announcement reached nobody and the claim release failed; it will not be sent',
       { id: 'ch-1', column: 'announced_start_at', err: 'down' })
+  })
+})
+
+// PUSHDONE.1b review — a released END used to be retried every day for ever
+// (`ends_on < today` stays true), so a persistent push failure could reach
+// members weeks after the challenge ended. It is retried for
+// END_ANNOUNCE_RETRY_DAYS (Dublin dates), then stamped unsent with a logError.
+describe('run-challenge-events — the END retry is bounded (C21 PUSHDONE.1b)', () => {
+  const NOW = '2026-10-15T08:00:00.000Z' // the 08:00 UTC cron; Dublin date 2026-10-15
+  const END = (ends_on) => ({ id: 'ch-end', location_id: 'loc-1', name: 'October points', mode: 'individual', metric: 'points', starts_on: '2026-10-01', ends_on, target: null, announced_start_at: '2026-10-01T08:00:00.000Z', announced_end_at: null, announced_target_at: null })
+  const endClaimOf = (u) => u.patch.announced_end_at && u.is.announced_end_at === null
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(NOW))
+  })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('the window is two days', () => {
+    expect(END_ANNOUNCE_RETRY_DAYS).toBe(2)
+  })
+
+  it('an END still inside the window is retried after a failure, then announced exactly once', async () => {
+    challengeRows = [END('2026-10-13')] // today - 2: the last day it may go out
+    sendCustomerPush.mockResolvedValueOnce({ sent: 0, invalidated: 0, failed: 2, skipped: 0 })
+    const first = await (await GET(req())).json()
+    expect(first).toMatchObject({ ended: 0, failed: 1, gave_up: 0 })
+    expect(challengeRows[0].announced_end_at).toBeNull()
+
+    const second = await (await GET(req())).json()
+    expect(second).toMatchObject({ ended: 1, failed: 0, gave_up: 0 })
+    expect(challengeRows[0].announced_end_at).toBe(NOW)
+
+    const third = await (await GET(req())).json()
+    expect(third).toMatchObject({ ended: 0, failed: 0, gave_up: 0 })
+    expect(sendCustomerPush).toHaveBeenCalledTimes(2)
+    expect(logError).not.toHaveBeenCalled()
+  })
+
+  it('an END past the window is stamped WITHOUT a send, at error level, once', async () => {
+    challengeRows = [END('2026-10-12')] // today - 3
+    const first = await (await GET(req())).json()
+    expect(sendCustomerPush).not.toHaveBeenCalled()
+    expect(computeStandings).not.toHaveBeenCalled()
+    expect(updates.find(endClaimOf).eqs).toEqual({ id: 'ch-end' })
+    expect(challengeRows[0].announced_end_at).toBe(NOW)
+    expect(first).toMatchObject({ ended: 0, failed: 0, gave_up: 1 })
+    expect(logError).toHaveBeenCalledWith('cron-challenge-events', 'end announcement not sent within its retry window; gave up',
+      { challengeId: 'ch-end' })
+
+    const second = await (await GET(req())).json()
+    expect(second).toMatchObject({ gave_up: 0 })
+    expect(sendCustomerPush).not.toHaveBeenCalled()
+    expect(logError).toHaveBeenCalledTimes(1)
+  })
+
+  it('a failed give-up stamp is said and counted; the next run tries again', async () => {
+    challengeRows = [END('2026-09-01')]
+    claimError = { message: 'down' }
+    const body = await (await GET(req())).json()
+    expect(sendCustomerPush).not.toHaveBeenCalled()
+    expect(body).toMatchObject({ failed: 1, gave_up: 0 })
+    expect(logError).not.toHaveBeenCalled()
+    expect(logWarn).toHaveBeenCalledWith('cron-challenge-events', 'end announcement is past its retry window and the give-up stamp failed; the next run tries again',
+      { challengeId: 'ch-end', err: 'down' })
   })
 })
