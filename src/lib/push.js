@@ -44,6 +44,13 @@
  * to come back as `skipped` / plain zeros — "nobody to tell" — and the
  * send-once callers ledgered it, losing the message for good. The clean
  * path's shape is unchanged (no `read_failed` key).
+ *
+ * Each of those reads (profiles, profile_locations, the role templates,
+ * device_tokens) is retried ONCE, in-process, after a short pause
+ * (READ_RETRY_DELAY_MS, overridable per call with `readRetryDelayMs`) before
+ * it counts as failed — most read errors are a one-request blip, and the
+ * retry turns them back into a normal send instead of a deferred one. Only a
+ * read is ever retried here, never a send; the final failure is logged once.
  */
 
 import { createServerClient } from './supabase'
@@ -61,6 +68,27 @@ const BATCH_SIZE = 100 // Expo accepts up to 100 messages per request
 const RETRY_DELAYS_MS = [500, 2000]
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+// C16 PUSHREADERR.1 review — the pause before the one retry of a failed READ.
+// Short on purpose: at most four reads per sendPush call can each spend it
+// once, so a send that hits a real outage costs well under a second more.
+const READ_RETRY_DELAY_MS = 200
+
+/**
+ * Run a read, and on an `{ error }` run it once more after `delayMs`. The
+ * retry's answer is final, whatever it is. `read` must BUILD the query each
+ * time (a supabase-js builder is a thenable; the retry needs a fresh one).
+ * A read that throws is not caught here: the caller decides, as before.
+ *
+ * @param {() => PromiseLike<{ data?: any, error?: any }>} read
+ * @param {number} delayMs
+ */
+async function readWithOneRetry(read, delayMs) {
+  const first = await read()
+  if (!first?.error) return first
+  if (delayMs > 0) await sleep(delayMs)
+  return read()
+}
 
 /**
  * POST one batch of messages to Expo with retry + backoff.
@@ -176,17 +204,26 @@ function pushReadFailed(what, meta, payload, error, { skipped = 0, failed }) {
  * @param {string} [category]  notify_<category> to gate on (omit = master only)
  * @param {object} [opts]
  * @param {string} [opts.locationId]  the location this notification belongs to
+ * @param {number} [opts.readRetryDelayMs]  pause before the one retry of a
+ *   failed read (default READ_RETRY_DELAY_MS; tests pass 0)
  * @returns {Promise<{ allowed: Set<string>, error: object|null, templatesError: object|null }>}
  */
 export async function readPushAllowedIds(db, ids, category, opts = {}) {
   const allowed = new Set()
   if (!ids?.length) return { allowed, error: null, templatesError: null }
-  const { data: profiles, error: profilesErr } = await db.from('profiles').select('id, active, employment_type').in('id', ids)
-  const { data: links, error: linksErr } = await db
-    .from('profile_locations').select('profile_id, location_id, role, permissions').in('profile_id', ids)
+  const retryDelay = opts.readRetryDelayMs ?? READ_RETRY_DELAY_MS
+  // Each read gets one retry before it counts as failed (see the file header).
   // Without these two nobody can be judged: `active` and every opt-out live
   // here. A failed read is not "nobody may be told" (and not "everybody").
-  if (profilesErr || linksErr) return { allowed, error: profilesErr || linksErr, templatesError: null }
+  const { data: profiles, error: profilesErr } = await readWithOneRetry(
+    () => db.from('profiles').select('id, active, employment_type').in('id', ids), retryDelay,
+  )
+  if (profilesErr) return { allowed, error: profilesErr, templatesError: null }
+  const { data: links, error: linksErr } = await readWithOneRetry(
+    () => db.from('profile_locations').select('profile_id, location_id, role, permissions').in('profile_id', ids),
+    retryDelay,
+  )
+  if (linksErr) return { allowed, error: linksErr, templatesError: null }
 
   // Role templates (mig 364) for every (location, role) pair in play.
   // RECEPTION.2 (mig 367): 'all' rows apply to everyone of the role;
@@ -197,18 +234,21 @@ export async function readPushAllowedIds(db, ids, category, opts = {}) {
   if (locationIds.length > 0) {
     // A builder RESOLVES with { error } rather than throwing, so the old
     // try/catch alone never saw a failed read. Both are kept: the catch for a
-    // genuine throw. Either way we degrade to code defaults (as before) and
-    // SAY so, so sendPush can count the refusals as unjudged.
-    try {
-      const { data, error } = await db
-        .from('location_role_permissions')
-        .select('location_id, role, employment_type, permissions')
-        .in('location_id', locationIds)
-      if (error) templatesError = error
-      else templates = data || []
-    } catch (err) {
-      templatesError = err
-    }
+    // genuine throw (folded into `error`, so it gets the one retry too).
+    // Either way we degrade to code defaults (as before) and SAY so, so
+    // sendPush can count the refusals as unjudged.
+    const { data, error } = await readWithOneRetry(async () => {
+      try {
+        return await db
+          .from('location_role_permissions')
+          .select('location_id, role, employment_type, permissions')
+          .in('location_id', locationIds)
+      } catch (err) {
+        return { data: null, error: err }
+      }
+    }, retryDelay)
+    if (error) templatesError = error
+    else templates = data || []
   }
   const rowFor = (locId, role, emp) =>
     templates.find(t => t.location_id === locId && t.role === role && t.employment_type === emp)?.permissions || null
@@ -292,6 +332,8 @@ export async function resolvePushAllowedIds(db, ids, category, opts = {}) {
  * @param {string} [opts.requireMobileKey]  Extra mobile-permission capability
  *                                    the recipient must hold (e.g. 'whatsapp'
  *                                    inbox access) on top of the category gate.
+ * @param {number} [opts.readRetryDelayMs]  Pause before the one retry of a
+ *                                    failed read (default READ_RETRY_DELAY_MS).
  *
  * @returns {Promise<{sent:number, skipped:number, invalidated:number, failed:number, read_failed?:1}>}
  */
@@ -308,8 +350,10 @@ export async function sendPush(userIds, payload, opts = {}) {
   // Per-category opt-out lives on profile_locations.permissions (mig 058);
   // profiles.permissions is stale and must NOT be read here.
   const meta = { candidates: ids.length, locationId: opts.locationId ?? null }
+  const retryDelay = opts.readRetryDelayMs ?? READ_RETRY_DELAY_MS
   const { allowed: allowedSet, error: permErr, templatesError } = await readPushAllowedIds(
-    db, ids, payload.category, { locationId: opts.locationId, requireMobileKey: opts.requireMobileKey },
+    db, ids, payload.category,
+    { locationId: opts.locationId, requireMobileKey: opts.requireMobileKey, readRetryDelayMs: retryDelay },
   )
   // C16 PUSHREADERR.1 (D1/D2) — nobody could be judged: report it, never as
   // opt-outs.
@@ -338,11 +382,12 @@ export async function sendPush(userIds, payload, opts = {}) {
   // credentials exist; iOS with notifications declined). Those rows are not
   // recipients — `to: null` would be sent to Expo and come back as a
   // per-ticket error, counted as `failed`, which is a lie about the send.
-  const { data: tokens, error: tokensErr } = await db
+  // One retry before it counts as failed (see the file header).
+  const { data: tokens, error: tokensErr } = await readWithOneRetry(() => db
     .from('device_tokens')
     .select('id, expo_push_token')
     .not('expo_push_token', 'is', null)
-    .in('user_id', allowedIds)
+    .in('user_id', allowedIds), retryDelay)
 
   // D4 — "no device" is only true when the read worked.
   if (tokensErr) {
