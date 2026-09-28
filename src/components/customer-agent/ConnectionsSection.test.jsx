@@ -159,4 +159,34 @@ describe('ConnectionsSection — real answers are unchanged (pins)', () => {
     expect(sent.display_name).toBe('@typed_handle')
     expect(container).toBeTruthy()
   })
+
+  // A newer INACTIVE row (the old POST's supersede left them behind) sorts
+  // first by updated_at. Picking it made Update PATCH that row with
+  // is_active: true, and the PATCH route then deactivates every OTHER active
+  // row: the live connection.
+  it('an active row wins over a newer inactive one: Connected, and Update PATCHes the ACTIVE row', async () => {
+    const STALE = { ...LIVE_IG, id: 'conn-old', is_active: false, display_name: '@old_account', access_token: '••••••••zzzz' }
+    mockFetch({ gets: [ok([STALE, LIVE_IG])] })
+    render(<ConnectionsSection locationId={LOC} embedded />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Update Instagram' }))
+    await screen.findByText('Saved ✓')
+    expect(screen.getByText('Connected')).toBeTruthy()
+    expect(String(calls('PATCH')[0][0])).toBe(`/api/locations/${LOC}/channels/conn-1`)
+  })
+
+  it('only inactive rows: Not connected, Connect POSTs (the server refuses over a live one), non-secret fields prefilled', async () => {
+    const STALE = { ...LIVE_IG, id: 'conn-old', is_active: false }
+    mockFetch({ gets: [ok([STALE])] })
+    render(<ConnectionsSection locationId={LOC} embedded />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect Instagram' }))
+    expect(screen.getByText('Not connected')).toBeTruthy()
+    await screen.findByText('Saved ✓')
+    expect(calls('PATCH')).toHaveLength(0)
+    expect(calls('POST')).toHaveLength(1)
+    const sent = JSON.parse(calls('POST')[0][1].body)
+    expect(sent.display_name).toBe(LIVE_IG.display_name)
+    expect(sent.external_account_id).toBe(LIVE_IG.external_account_id)
+    expect(sent.access_token).toBeUndefined()
+    expect(screen.queryByRole('button', { name: 'Disconnect' })).toBeNull()
+  })
 })

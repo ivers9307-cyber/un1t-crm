@@ -20,6 +20,31 @@ const IG_FIELDS = [
   { key: 'app_secret', label: 'Instagram app secret (also set as INSTAGRAM_APP_SECRET env)', placeholder: 'paste to set', secret: true },
 ]
 
+// CHANNELREAD.1 — which Instagram row the card acts on. The GET lists rows
+// newest-first by updated_at, and an INACTIVE row (the old POST's supersede
+// left them behind) can be newer than the live one. Picking it was not
+// cosmetic: Update PATCHes the picked row with is_active: true, and the PATCH
+// route then deactivates every OTHER active row, i.e. the live connection.
+//   active    the newest ACTIVE row: the only row Update/Disconnect touch.
+//   previous  when no row is active, the newest inactive one. It is used
+//             ONLY to prefill the non-secret fields for a reconnect; the
+//             card still says Not connected and Save POSTs a new row, which
+//             the server refuses (409) if a live connection appeared since
+//             this read. Re-activating it by PATCH would instead deactivate
+//             whatever went live meanwhile.
+function pickInstagram(connections) {
+  const ig = connections.filter(c => c.platform === 'instagram')
+  const active = ig.find(c => c.is_active !== false) || null
+  return { active, previous: active ? null : (ig[0] || null) }
+}
+
+function reconnectPrefill(row) {
+  if (!row) return {}
+  const out = {}
+  for (const f of IG_FIELDS) if (!f.secret && row[f.key]) out[f.key] = row[f.key]
+  return out
+}
+
 // `onChanged` (optional): fired after a successful Instagram connect/update
 // or disconnect so a host surface (the Integrations hub drawer) can re-grade
 // its own card. The component's own `load()` still refreshes the in-card
@@ -54,8 +79,8 @@ export default function ConnectionsSection({ locationId, locationName, embedded 
         throw new Error(j?.error || `HTTP ${res.status}`)
       }
       setConnections(j.connections)
-      const ig = j.connections.find(c => c.platform === 'instagram')
-      setDraft({ ...(ig || {}), ...(keep || {}) })
+      const { active, previous } = pickInstagram(j.connections)
+      setDraft({ ...(active ? { ...active } : reconnectPrefill(previous)), ...(keep || {}) })
       setReadState('ready')
     } catch {
       setConnections([])
@@ -66,7 +91,7 @@ export default function ConnectionsSection({ locationId, locationName, embedded 
 
   useEffect(() => { load() }, [load])
 
-  const igConn = connections.find(c => c.platform === 'instagram')
+  const igConn = pickInstagram(connections).active
 
   function setField(k, v) { setDraft(d => ({ ...d, [k]: v })) }
 
