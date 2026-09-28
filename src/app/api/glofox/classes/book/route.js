@@ -9,6 +9,7 @@
 // operator sees exactly what Glofox said (design-doc requirement).
 
 import { NextResponse } from 'next/server'
+import { GLOFOX_SETTINGS_UNREADABLE, GLOFOX_SETTINGS_UNREADABLE_MESSAGE } from '@/lib/glofox-settings-read'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
@@ -57,6 +58,10 @@ export async function POST(request) {
   }
 
   const creds = await glofoxCredentialsForLocation(db, contact.location_id)
+  // REGISTRYREAD.1b: a failed settings read is not "not configured".
+  if (creds.readError) {
+    return NextResponse.json({ success: false, code: GLOFOX_SETTINGS_UNREADABLE, error: GLOFOX_SETTINGS_UNREADABLE_MESSAGE }, { status: 503 })
+  }
   const missing = missingGlofoxCredentialsForLocation(creds)
   if (missing.length > 0) {
     return NextResponse.json({ success: false, error: 'Glofox is not configured for this studio.' }, { status: 400 })

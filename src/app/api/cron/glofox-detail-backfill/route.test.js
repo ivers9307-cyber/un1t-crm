@@ -91,3 +91,23 @@ describe('GET /api/cron/glofox-detail-backfill — MEMBERRESULT.1', () => {
     expect(logWarn).not.toHaveBeenCalled()
   })
 })
+
+describe('GET /api/cron/glofox-detail-backfill — REGISTRYREAD.1b unreadable settings', () => {
+  it('records the true text on the failed location row, calls no Glofox, and leaves the heartbeat exactly as a credential-less location does', async () => {
+    const { glofoxCredentialsForLocation } = await import('@/lib/glofox')
+    const { GLOFOX_SETTINGS_UNREADABLE_MESSAGE } = await import('@/lib/glofox-settings-read')
+
+    glofoxCredentialsForLocation.mockResolvedValueOnce({ branchId: null, apiKey: null, apiToken: null, readError: 'glofox_settings_unreadable' })
+    const out = await (await GET(req())).json()
+    expect(out.per_location[0]).toMatchObject({ status: 'failed', first_error: GLOFOX_SETTINGS_UNREADABLE_MESSAGE })
+    expect(h.runUpdates.at(-1)).toMatchObject({ status: 'failed', first_error: GLOFOX_SETTINGS_UNREADABLE_MESSAGE })
+    expect(fetch).not.toHaveBeenCalled()
+    const unreadableStamps = stampHeartbeat.mock.calls.length
+
+    vi.clearAllMocks()
+    glofoxCredentialsForLocation.mockResolvedValueOnce({ branchId: null, apiKey: null, apiToken: null, readError: null })
+    const missing = await (await GET(req())).json()
+    expect(missing.per_location[0]).toMatchObject({ status: 'failed', first_error: 'Glofox credentials missing on this location.' })
+    expect(stampHeartbeat.mock.calls.length).toBe(unreadableStamps)
+  })
+})

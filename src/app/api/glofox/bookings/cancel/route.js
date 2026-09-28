@@ -13,6 +13,7 @@
 //   }
 
 import { NextResponse } from 'next/server'
+import { GLOFOX_SETTINGS_UNREADABLE, GLOFOX_SETTINGS_UNREADABLE_MESSAGE } from '@/lib/glofox-settings-read'
 import { z } from 'zod'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
@@ -49,6 +50,10 @@ export async function POST(request) {
 
   const db = createServerClient()
   const creds = await glofoxCredentialsForLocation(db, locationId)
+  // REGISTRYREAD.1b: a failed settings read is not "not configured".
+  if (creds.readError) {
+    return NextResponse.json({ ok: false, code: GLOFOX_SETTINGS_UNREADABLE, error: GLOFOX_SETTINGS_UNREADABLE_MESSAGE }, { status: 503 })
+  }
   if (!creds.branchId || !creds.apiKey || !creds.apiToken) {
     return NextResponse.json({
       ok: false,

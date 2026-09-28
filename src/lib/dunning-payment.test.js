@@ -95,6 +95,12 @@ describe('capturePaymentForRun (IO, never throws)', () => {
     const { payment } = await capturePaymentForRun(dbWith(null), { locationId: 'loc', contactId: 'c1', invoiceId: INVOICE, glofoxUserId: '679bfd4c2f6535e4f200078e' })
     expect(payment).toMatchObject({ invoice_id: INVOICE, link: null, error: 'no_glofox_credentials' })
   })
+  it('REGISTRYREAD.1b: an unreadable settings row is recorded as glofox_settings_unreadable, not no_glofox_credentials', async () => {
+    glofoxCredentialsForLocation.mockResolvedValueOnce({ branchId: null, apiKey: null, apiToken: null, readError: 'glofox_settings_unreadable' })
+    const { payment } = await capturePaymentForRun(dbWith(null), { locationId: 'loc', contactId: 'c1', invoiceId: INVOICE, glofoxUserId: '679bfd4c2f6535e4f200078e' })
+    expect(payment).toMatchObject({ invoice_id: INVOICE, link: null, error: 'glofox_settings_unreadable' })
+    expect(getGlofoxInvoicePaymentLink).not.toHaveBeenCalled()
+  })
   it('no invoice id → payment with error, nothing called', async () => {
     const { payment } = await capturePaymentForRun(dbWith(null), { locationId: 'loc', contactId: 'c1', invoiceId: null })
     expect(payment).toMatchObject({ invoice_id: null, link: null, error: 'no_invoice_id' })
@@ -366,6 +372,20 @@ describe('PRESEND.1 — dunningPresendGate', () => {
 // overdue invoices would come back with a truncated list, and "not in the
 // list" would then mean "possibly just off the end of page one" rather than
 // "settled" — exiting a live chase on a debt that is still owed.
+describe('REGISTRYREAD.1b — the presend gate stays fail-open on a failed settings read', () => {
+  it('an unreadable settings row still sends the reminder and asks Glofox nothing', async () => {
+    glofoxCredentialsForLocation.mockResolvedValueOnce({ branchId: null, apiKey: null, apiToken: null, readError: 'glofox_settings_unreadable' })
+    const r = await dunningPresendGate({}, {
+      enrollment: { id: 'e1', source_type: 'invoice_past_due', metadata: { payment: { invoice_id: INVOICE } } },
+      contact: { id: 'c1', glofox_member_id: '679bfd4c2f6535e4f200078e' },
+      sequence: { id: 'seq-1', location_id: 'loc-1' },
+    })
+    expect(r).toEqual({ proceed: true })
+    expect(getGlofoxOverdueInvoices).not.toHaveBeenCalled()
+    expect(setEnrollmentStatus).not.toHaveBeenCalled()
+  })
+})
+
 describe('PRESEND.1 — a possibly-truncated overdue list is inconclusive, never an exit', () => {
   const OVERDUE = { id: 'e1', source_type: 'invoice_past_due', metadata: { payment: { invoice_id: INVOICE } } }
   const contact = { id: 'c1', glofox_member_id: '679bfd4c2f6535e4f200078e' }

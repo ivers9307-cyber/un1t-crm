@@ -66,6 +66,9 @@ export async function POST(request, { params }) {
   return NextResponse.json({
     success: true,
     glofox_configured: missing.length === 0,
+    // REGISTRYREAD.1b: the class sync was skipped because the settings could
+    // not be read, not because Glofox is absent.
+    glofox_settings_unreadable: Boolean(creds.readError),
     synced,
     planned: loc.planned,
     actions: loc.actions,
