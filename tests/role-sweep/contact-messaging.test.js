@@ -17,7 +17,6 @@ vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), 
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { describeGate, gateProbe, runProbed } from '../helpers/role-gate-probe.js'
-import { keyOffAtB, keyOnAtBOnly, LOC_B } from '../helpers/role-sweep-callers.js'
 import { webOrMobileCases } from '../helpers/role-sweep-callers-c.js'
 import * as cancelForm from '@/app/api/contacts/[id]/cancellation-form/route.js'
 import * as email from '@/app/api/contacts/[id]/email/route.js'
@@ -111,23 +110,29 @@ describeGate('POST /api/admin/tv-displays/upload (tv_displays, web OR mobile, at
 
 // ── command centre: the drawer's channel flags at the contact's location ───
 // Not an access gate (the route is membership-only); the flags decide what
-// the drawer offers. The contact read is scripted; every other read answers
-// an empty list, so the route runs to completion and the flags are asserted.
-describe('GET /api/contacts/[id]/command-centre?scope=drawer — channel flags judged at the contact', () => {
+// the drawer's composer offers. They make the SEND routes' decision (web OR
+// mobile at the contact's location), so they run on the very case table the
+// email / sms / whatsapp gates above run on: 'pass' → the flag is on,
+// 'forbidden' → off, 'hidden' → the route's own 404 for a non-member. The
+// contact read is scripted; every other read answers an empty list, so the
+// route runs to completion and the flags are asserted.
+describe('GET /api/contacts/[id]/command-centre?scope=drawer — channel flags = the send routes\' decision', () => {
   const EMPTY = { data: [], error: null }
-  const flagCases = ['whatsapp', 'sms', 'email'].flatMap((key) => [
-    [`${key} switched off for them at B, A active (main: true)`, keyOffAtB(key), key, false],
-    [`${key} switched off for them at A only, A active (main: false)`, keyOnAtBOnly(key), key, true],
-  ])
-  it.each(flagCases)('%s', async (_label, caller, key, want) => {
+  const flagCases = ['whatsapp', 'sms', 'email'].flatMap((key) =>
+    webOrMobileCases([key]).map(([label, caller, target, want]) => [`${key}: ${label}`, caller, target, key, want]))
+  it.each(flagCases)('%s', async (_label, caller, target, key, want) => {
     getCurrentUser.mockResolvedValue(caller)
     const probe = gateProbe([
-      { data: { id: CONTACT_ID, name: 'Member One', location_id: LOC_B }, error: null },
+      { data: { id: CONTACT_ID, name: 'Member One', location_id: target }, error: null },
       ...Array.from({ length: 30 }, () => EMPTY),
     ])
     createServerClient.mockReturnValue(probe.db)
     const { status, body } = await runProbed(probe, () => commandCentre.GET(bare('GET', '?scope=drawer'), params({ id: CONTACT_ID })))
+    if (want === 'hidden') {
+      expect(status).toBe(404)
+      return
+    }
     expect(status).toBe(200)
-    expect(body.permissions[key]).toBe(want)
+    expect(body.permissions[key]).toBe(want === 'pass')
   })
 })

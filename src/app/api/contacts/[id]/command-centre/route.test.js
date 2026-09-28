@@ -35,6 +35,10 @@ vi.mock('@/lib/permissions', () => {
     hasPermission,
     hasPermissionAtAnyLocation: (u, k) => hasPermission(u, k),
     hasPermissionForLocation: (u, _loc, k) => hasPermission(u, k),
+    // The drawer flags accept the web OR the mobile toggle (contact-page-gates);
+    // the mobile half is off here so this file's web switch decides.
+    hasMobilePermissionForLocation: () => false,
+    hasMobilePermissionAtAnyLocation: () => false,
   }
 })
 
