@@ -82,7 +82,7 @@ OAuth routes:
 - `GET /api/xero/callback` — exchange code, persist tokens, redirect to `/settings/locations/<id>?tab=xero`
 - `POST /api/xero/disconnect` — remove the connection row
 - `GET /api/xero/status?location_id=…` — safe subset of the connection row (no tokens) for client UIs
-- `GET /api/xero/debug` — dev-only diagnostic; dumps masked env vars + the exact authorize URL
+- `GET /api/xero/debug` — dev-only diagnostic; shows presence/length of the Xero client id and secret (never a character) + the exact authorize URL
 
 Settings UI lives on the per-location Integrations tab — Settings → Locations → \<name\> → Integrations → Xero, i.e. `/settings/locations/<id>?tab=xero` (`XeroIntegrationTab.jsx` wrapping `XeroLocationCard.jsx`). The old standalone `/settings/integrations` page was retired (INTEG-A4).
 
