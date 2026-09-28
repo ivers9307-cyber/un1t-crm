@@ -15,6 +15,8 @@ import { resolveEmailDomainOrgId, loadEmailDomainRow } from '@/lib/email-domain-
 import { redirect } from 'next/navigation'
 import { AtSign } from 'lucide-react'
 import EmailDomainWizard from '@/components/settings/EmailDomainWizard'
+import ReadFailedNote from '@/components/settings/ReadFailedNote'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -33,15 +35,9 @@ export default async function EmailDomainSettingsPage({ searchParams }) {
 
   const accountConfigured = isPostmarkAccountConfigured()
   const db = createServerClient()
-  const [row, addonActive] = await Promise.all([
-    loadEmailDomainRow(db, orgId),
-    orgHasEmailDomainAddon(db, orgId),
-  ])
-  const state = tenantEmailStatePayload(row, { addonActive, accountConfigured })
   const orgName = user.organizationsById?.[orgId]?.name || null
-
-  return (
-    <div className="p-6 max-w-3xl">
+  const header = (
+    <>
       <div className="flex items-center gap-2 mb-1">
         <AtSign size={20} className="text-un1t-subtle" />
         <h1 className="text-2xl font-semibold">Email domain</h1>
@@ -49,7 +45,35 @@ export default async function EmailDomainSettingsPage({ searchParams }) {
       <p className="text-sm text-un1t-subtle mb-6">
         {orgName ? `${orgName} · ` : ''}send from your own verified domain on a dedicated mail server.
       </p>
+    </>
+  )
 
+  let row
+  let addonActive
+  try {
+    ;[row, addonActive] = await Promise.all([
+      loadEmailDomainRow(db, orgId),
+      orgHasEmailDomainAddon(db, orgId),
+    ])
+  } catch (e) {
+    // CHANNELREAD.1 — a failed read used to render the wizard's set-up
+    // state over a provisioned domain. Say so; Try again re-renders.
+    logError('tenant-email-domain', 'email-domain page read failed', { orgId, err: e?.message })
+    return (
+      <div className="p-6 max-w-3xl">
+        {header}
+        <ReadFailedNote
+          what="this organisation's sending domain"
+          href={requestedOrg ? `/settings/email-domain?organization_id=${encodeURIComponent(requestedOrg)}` : '/settings/email-domain'}
+        />
+      </div>
+    )
+  }
+  const state = tenantEmailStatePayload(row, { addonActive, accountConfigured })
+
+  return (
+    <div className="p-6 max-w-3xl">
+      {header}
       <EmailDomainWizard
         initialState={state}
         organizationId={user.role === 'master' ? orgId : null}

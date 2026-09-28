@@ -120,3 +120,15 @@ describe('POST /api/settings/email-domain', () => {
     expect(provisionEmailDomain).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ orgId: 'org-a', sendingDomain: 'mail.gyma.com' }))
   })
 })
+
+describe('GET /api/settings/email-domain — a failed read (CHANNELREAD.1)', () => {
+  it('500s instead of answering "not configured"', async () => {
+    getCurrentUser.mockResolvedValue(ownerA)
+    loadEmailDomainRow.mockRejectedValue(new Error('Could not read the email domain: boom'))
+    const res = await GET(getReq())
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body.success).toBe(false)
+    expect(body.data).toBeUndefined()
+  })
+})

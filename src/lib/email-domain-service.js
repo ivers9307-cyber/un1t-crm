@@ -46,11 +46,16 @@ export function resolveEmailDomainOrgId(user, requested) {
  * tenantEmailStatePayload before returning it to a client.
  */
 export async function loadEmailDomainRow(db, orgId) {
-  const { data } = await db
+  const { data, error } = await db
     .from('tenant_email_domains')
     .select('*')
     .eq('organization_id', orgId)
     .maybeSingle()
+  // CHANNELREAD.1 — a failed read is not "no domain". Returning null here
+  // showed the set-up wizard over a provisioned domain, and made
+  // provisionEmailDomain mint a SECOND Postmark server and overwrite the
+  // stored server id + token. Callers turn the throw into a 500/502.
+  if (error) throw new Error(`Could not read the email domain: ${error.message}`)
   return data || null
 }
 
@@ -162,10 +167,15 @@ export async function provisionEmailDomain(db, { orgId, orgName, sendingDomain, 
  * and flip status → 'live' when both verify. IDEMPOTENT — re-running once
  * live keeps it live.
  *
- * @returns {Promise<{ row?: object, notProvisioned?: boolean, error?: string }>}
+ * @returns {Promise<{ row?: object, notProvisioned?: boolean, readFailed?: boolean, error?: string }>}
  */
 export async function verifyEmailDomain(db, orgId) {
-  const row = await loadEmailDomainRow(db, orgId)
+  let row
+  try {
+    row = await loadEmailDomainRow(db, orgId)
+  } catch (e) {
+    return { readFailed: true, error: e.message }
+  }
   if (!row?.postmark_domain_id) return { notProvisioned: true }
 
   // Best-effort re-checks: Postmark rejects these while DNS is still
