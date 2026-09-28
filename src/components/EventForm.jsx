@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { createBrowserClient } from '@/lib/supabase'
 import { Plus, Trash2, Bell, Check, Mail, MessageSquare, UserPlus } from 'lucide-react'
 
 const DAYS = [
@@ -33,6 +32,18 @@ const defaultAvailability = {
   fri: { start: '09:00', end: '18:00' },
   sat: null,
   sun: null,
+}
+
+// EVENTTYPERLS.1 — a refusal from the save route, in words the operator can
+// act on. 401/403/404 are the routes' access refusals (canManageEventType);
+// a 400 carries validateBody's issues.
+function saveError(status, json) {
+  if (status === 401 || status === 403 || status === 404) {
+    return "You can't create or edit booking types at this studio."
+  }
+  const issue = Array.isArray(json?.issues) ? json.issues[0] : null
+  if (issue) return `Could not save: ${issue.path ? `${issue.path}: ` : ''}${issue.message}`
+  return json?.error || 'Could not save the booking type. Try again.'
 }
 
 export default function EventForm({ event, locationId }) {
@@ -221,14 +232,8 @@ export default function EventForm({ event, locationId }) {
     setSaving(true)
     setError(null)
 
-    const db = createBrowserClient()
-    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
-
     // mig 076 — reminder config moved to event_type_reminders.
-    // event_types.reminder_* columns are still on disk but
-    // deprecated; the runner doesn't read them. We stop
-    // populating them here too. (A re-saved row gets its old
-    // values blanked via update — fine, since they're stale.)
+    // event_types.reminder_* columns were dropped (mig 241).
     //
     // mig 077 — confirmation lives directly on event_types
     // (singular per booking, doesn't need its own table).
@@ -244,9 +249,10 @@ export default function EventForm({ event, locationId }) {
       if (!Number.isFinite(n)) return fallback
       return Math.max(min, Math.min(max, n))
     }
+    // No slug: both routes derive it from the name (eventTypeSlug), exactly
+    // as this form used to.
     const payload = {
       name,
-      slug,
       description: description || null,
       duration_minutes: clampInt(duration, 30, 1, 1440),
       buffer_minutes:   clampInt(buffer,    0, 0, 1440),
@@ -280,24 +286,38 @@ export default function EventForm({ event, locationId }) {
       ...(locationId && !isEditing ? { location_id: locationId } : {}),
     }
 
-    let result
-    if (isEditing) {
-      result = await db.from('event_types').update(payload).eq('id', event.id).select().single()
-    } else {
-      result = await db.from('event_types').insert(payload).select().single()
-    }
-
-    if (result.error) {
-      setError(result.error.message)
+    // EVENTTYPERLS.1 — save through the guarded routes, never the browser
+    // Supabase client (RLS let any member of the studio write event_types
+    // that way; mig 650 takes the browser write away). The routes judge
+    // canManageEventType's rule: a master, or MANAGER_ROLES at the studio.
+    let saved
+    try {
+      const resp = await fetch(
+        isEditing ? `/api/bookings/event-types/${event.id}` : '/api/bookings/event-types',
+        {
+          method: isEditing ? 'PUT' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        },
+      )
+      const json = await resp.json().catch(() => null)
+      if (!resp.ok || !json?.success) {
+        setError(saveError(resp.status, json))
+        setSaving(false)
+        return
+      }
+      saved = json.data
+    } catch (err) {
+      setError(`Could not save the booking type: ${err.message}`)
       setSaving(false)
       return
     }
 
-    // Sync reminders via PUT /api/events/[id]/reminders. The
+    // Sync reminders via PUT /api/bookings/event-types/[id]/reminders. The
     // endpoint takes the full set; server diffs against existing
     // rows. New rows on the form (no id, just _localId) get
     // server-issued ids back.
-    const eventId = result.data?.id || event?.id
+    const eventId = saved?.id || event?.id
     if (eventId) {
       try {
         const reminderPayload = reminders
