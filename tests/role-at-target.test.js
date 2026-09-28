@@ -14,6 +14,14 @@
 // Routes under src/app/api/locations/[id]/ are held to the stricter
 // role-at-path.test.js (no active gate at all) and skipped here.
 //
+// A second rule, the PRE-CHECK-ONLY shape (preCheckOnly in the same module):
+// a route that calls hasRoleAtAnyLocation( / hasPermissionAtAnyLocation( and
+// acts on another location must also decide at the target in the same file
+// (hasRoleAtLocation( / hasPermissionForLocation( / guardMasterOrOwner(, a
+// local helper that calls one included). "Holds it somewhere" is not the
+// decision. A route whose decision lives in a helper module is listed in
+// PRECHECK_REVIEWED with the helper named; that list is exact too.
+//
 // Two lists, both exact (an entry that no longer matches, or a file that no
 // longer exists, FAILS — the lists can only shrink by deletion):
 //   • REVIEWED (below): matches that were read and are right as they stand.
@@ -25,7 +33,7 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { activeRoleGates, otherLocationUses } from '../scripts/lib/active-role-gates.mjs'
+import { activeRoleGates, otherLocationUses, anyLocationPreChecks, targetJudgements, preCheckOnly } from '../scripts/lib/active-role-gates.mjs'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const API = path.join(ROOT, 'src/app/api')
@@ -51,6 +59,13 @@ export const REVIEWED = {
     'Reads only user.activeLocation.id (:67); the assertLocationAccess at :71 is on that same active id held in a variable, so the "another location" sign is a false positive.',
   'settings/scoring/route.js':
     'PUT gates MANAGER_ROLES and writes user.activeLocation.id (:90); the assertLocationAccess at :93 is on that same active id held in a variable (GET is ungated).',
+}
+
+// Pre-check-only matches whose decision at the target lives in a helper
+// module the scan cannot follow. `reason` names the helper and the call.
+export const PRECHECK_REVIEWED = {
+  'qualifications/route.js':
+    'Decided in src/lib/qualifications-server.js. GET hands the membership-checked ?location_id to loadQualificationsPage, which judges hasRoleAtLocation(user, locationId, QUAL_MANAGER_ROLES) for the manager view (anyone else gets their own records). POST decides in createQualificationRecord via findManagingStudio: hasRoleAtLocation at a studio the PERSON belongs to, 404 if none. The hasRoleAtAnyLocation is only its early refusal.',
 }
 
 function pendingLists() {
@@ -87,6 +102,34 @@ describe('the scan', () => {
   })
 })
 
+describe('the pre-check-only scan', () => {
+  const PRE = "if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) return no()\n"
+  const ROW = "const g = assertLocationAccessOr404(user, seq.location_id)\nif (g) return g\n"
+  const AT = "if (!hasRoleAtLocation(user, seq.location_id, MANAGER_ROLES)) return no()\n"
+
+  it('flags a pre-check plus another-location use with no decision at the target', () => {
+    expect(anyLocationPreChecks(PRE)).toEqual(['hasRoleAtAnyLocation('])
+    expect(anyLocationPreChecks("hasPermissionAtAnyLocation(user, 'email')")).toEqual(['hasPermissionAtAnyLocation('])
+    expect(preCheckOnly(PRE + ROW)).toBe(true)
+    expect(preCheckOnly("if (!hasPermissionAtAnyLocation(user, 'sms')) return no()\nconst ids = getUserLocationIds(user)")).toBe(true)
+  })
+
+  it('passes once the target is judged, in the route or in a local helper', () => {
+    expect(preCheckOnly(PRE + ROW + AT)).toBe(false)
+    expect(preCheckOnly(PRE + ROW + "if (!hasPermissionForLocation(user, seq.location_id, 'email')) return no()")).toBe(false)
+    expect(preCheckOnly(PRE + ROW + "const denied = guardMasterOrOwner(user, seq.location_id)")).toBe(false)
+    const localHelper = "async function loadOwned(db, user, id) {\n  " + AT + "}\n"
+    expect(preCheckOnly(localHelper + PRE + ROW)).toBe(false)
+  })
+
+  it('ignores a pre-check with no other-location use, a decision named only in an import or a comment', () => {
+    expect(preCheckOnly(PRE)).toBe(false)
+    expect(preCheckOnly("import { hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'\n" + PRE + ROW)).toBe(true)
+    expect(preCheckOnly(PRE + ROW + "// judged by hasRoleAtLocation(user, loc, ROLES) below\n")).toBe(true)
+    expect(targetJudgements("hasRoleAtLocationish(user)")).toEqual([])
+  })
+})
+
 describe('/api routes judge the role at the location they act on', () => {
   const found = offenders()
   const pending = pendingLists()
@@ -110,6 +153,15 @@ describe('/api routes judge the role at the location they act on', () => {
 
   it('every pending route still matches (a fixed route leaves its pending file)', () => {
     expect(pendingRoutes.filter((p) => !found.includes(p.route)).map((p) => `${p.list}: ${p.route}`)).toEqual([])
+  })
+
+  it('no route stops at the any-location pre-check while acting on another location', () => {
+    const preOnly = routeFiles(API).filter((f) => preCheckOnly(fs.readFileSync(f, 'utf8'))).map(rel).sort()
+    expect(preOnly.filter((r) => !(r in PRECHECK_REVIEWED))).toEqual([])
+    for (const [route, reason] of Object.entries(PRECHECK_REVIEWED)) {
+      expect(typeof reason === 'string' && reason.length > 20, `${route}: give a reason`).toBe(true)
+    }
+    expect(Object.keys(PRECHECK_REVIEWED).filter((r) => !preOnly.includes(r))).toEqual([])
   })
 
   it('no route is in two lists', () => {

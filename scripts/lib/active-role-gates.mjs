@@ -3,7 +3,8 @@
 //     route under /api/locations/[id] gates on the ACTIVE studio's role;
 //   • tests/role-at-target.test.js (ROLESWEEP.1): no route anywhere under
 //     /api both gates on the ACTIVE studio's role AND acts on a location
-//     that can be another one.
+//     that can be another one; and no such route stops at the coarse
+//     "any location" pre-check without judging the target (preCheckOnly).
 //
 // `user.role` is the caller's role at their ACTIVE studio
 // (resolveActiveLocationRole in src/lib/auth.js), and hasPermission(user, …)
@@ -51,6 +52,22 @@ export const OTHER_LOCATION_PATTERNS = Object.freeze([
   /\buser\??\.locations\b/g,
 ])
 
+// The coarse "holds it somewhere" pre-checks. Never the decision on their own.
+export const ANY_LOCATION_PRECHECK_PATTERNS = Object.freeze([
+  /\bhasRoleAtAnyLocation\(/g,
+  /\bhasPermissionAtAnyLocation\(/g,
+])
+
+// The decision at the target location. A call in the same file counts, so a
+// local helper (a `loadOwned` that calls hasRoleAtLocation) is seen through;
+// a helper in another module is not, and its route goes on the guard's
+// allowlist with the reason.
+export const TARGET_JUDGEMENT_PATTERNS = Object.freeze([
+  /\bhasRoleAtLocation\(/g,
+  /\bhasPermissionForLocation\(/g,
+  /\bguardMasterOrOwner\(/g,
+])
+
 const hits = (code, patterns) => patterns.flatMap((re) => [...code.matchAll(re)].map((m) => m[0]))
 
 /** Every active-studio role/permission gate token in `source` (comments ignored). */
@@ -61,4 +78,26 @@ export function activeRoleGates(source) {
 /** Every "acts on another location" token in `source` (comments ignored). */
 export function otherLocationUses(source) {
   return hits(stripComments(source), OTHER_LOCATION_PATTERNS)
+}
+
+/** Every coarse any-location pre-check call in `source` (comments ignored). */
+export function anyLocationPreChecks(source) {
+  return hits(stripComments(source), ANY_LOCATION_PRECHECK_PATTERNS)
+}
+
+/** Every at-the-target role/permission decision call in `source` (comments ignored). */
+export function targetJudgements(source) {
+  return hits(stripComments(source), TARGET_JUDGEMENT_PATTERNS)
+}
+
+/**
+ * The pre-check-only shape: a coarse any-location pre-check, a sign the
+ * route acts on another location, and NO decision at the target in the file.
+ * "Holds the role somewhere" plus "is a member there" admits a head coach at
+ * one studio to act as one at a studio where they are staff.
+ */
+export function preCheckOnly(source) {
+  return anyLocationPreChecks(source).length > 0
+    && otherLocationUses(source).length > 0
+    && targetJudgements(source).length === 0
 }
