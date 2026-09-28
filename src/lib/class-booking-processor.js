@@ -353,7 +353,11 @@ export async function processClassBookingRequest(db, request) {
   // fetch order (same rule as electWriteAccount). ClassPass rows are never
   // written to: those bookings are governed by ClassPass's own credit/refund
   // ledger, so a booking made directly against the Glofox member would never
-  // reach it. An unreadable sibling read is skipped, never counted as empty.
+  // reach it. An unreadable sibling read is skipped, never counted as empty:
+  // if no readable sibling has a balance, the rescue THROWS CreditReadError
+  // (CBPCREDITREAD.1) and the queue retries.
+  // CBPCREDITREAD.1 — set when a sibling's credits could not be read.
+  let siblingCreditsUnread = false
   async function rescueSiblingBalance() {
     const rescueable = reusableAccounts
       .filter((row) => row.glofox_member_id && row.glofox_member_id !== memberId)
@@ -363,7 +367,14 @@ export async function processClassBookingRequest(db, request) {
       let usable = hasBookableMembership(row)
       if (!usable) {
         const siblingRead = await readCredits(creds, row.glofox_member_id)
-        usable = siblingRead.ok && siblingRead.remaining > 0
+        if (!siblingRead.ok) {
+          // Unknown is not empty: note it and keep looking. Another sibling
+          // that DOES hold a balance still books.
+          siblingCreditsUnread = true
+          logWarn('cbp', 'sibling credit check unreadable', { requestId: request.id })
+          continue
+        }
+        usable = siblingRead.remaining > 0
       }
       if (!usable) continue
       memberId = row.glofox_member_id
@@ -372,6 +383,10 @@ export async function processClassBookingRequest(db, request) {
       balanceRow = row
       return true
     }
+    // Nobody we could read has a balance. If someone could NOT be read,
+    // "this person has nothing to book with" is not known: retry, rather
+    // than file prior_attendance / needs_credit_grant on a guess.
+    if (siblingCreditsUnread) throw new CreditReadError()
     return false
   }
 
