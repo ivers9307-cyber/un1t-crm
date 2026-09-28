@@ -30,7 +30,7 @@ import { notifyRosterChanges } from '@/lib/roster-change-notify'
 import { inStaffPushHours } from '@/lib/staff-push-hours'
 import { readReplaceContext, replaceShiftAssignment } from '@/lib/shift-replace-server'
 import {
-  replaceRefusal, replaceRefusalResponse, replaceShiftStarted, replaceChanges, replaceNoticeWhen, REPLACE_VIA,
+  replaceRefusal, replaceRefusalResponse, replaceShiftStarted, replaceChanges, replaceNoticeWhen, replaceLogDetails,
 } from '@/lib/shift-replace'
 import { logError } from '@/lib/log'
 
@@ -112,7 +112,9 @@ export async function POST(request, props) {
         actorId: user.id,
         coachId: c.coachId,
         action: c.action,
-        details: { via: REPLACE_VIA },
+        // REPLACENITS.1 — via 'replace' plus the shift's start: the held
+        // notice still knows it if the slot is deleted before it goes out.
+        details: replaceLogDetails(c),
       }
       let logged = await logRosterChange(db, row)
       // Out of band the row IS the held notice: the */5 arm sends what it

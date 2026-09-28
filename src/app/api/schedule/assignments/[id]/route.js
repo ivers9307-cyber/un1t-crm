@@ -296,7 +296,7 @@ export async function DELETE(_request, props) {
   // LEAVE.2 — the delete, the change-log row and the coach notification live
   // in unassignShiftAssignments, so the leave-clash "Unassign them" action
   // takes coaches off shifts exactly the way this route does.
-  const { failed } = await unassignShiftAssignments(db, {
+  const { failed, gone } = await unassignShiftAssignments(db, {
     actorId: user.id,
     assignments: [{
       id: assignment.id,
@@ -308,11 +308,19 @@ export async function DELETE(_request, props) {
     }],
   })
   if (failed.length > 0) {
-    // REPLACE.1a review 2 — the row changed hands (or went) since it was read.
+    // REPLACE.1a review 2 — the row changed hands since it was read.
     if (failed[0].code === 'changed') {
       return NextResponse.json({ success: false, code: 'changed', error: failed[0].error }, { status: 409 })
     }
     return NextResponse.json({ success: false, error: failed[0].error }, { status: 400 })
+  }
+  // REPLACENITS.1 — the row went between our read and our delete (a double
+  // submit's other request, another manager, the slot's delete). The coach
+  // is off the shift, which is what was asked, and whoever deleted it logged
+  // it and told them: 200, nothing done twice. A repeat that reads AFTER the
+  // first finished still gets the 404 above (no id enumeration).
+  if ((gone || []).length > 0) {
+    return NextResponse.json({ success: true, data: { already_removed: true } })
   }
 
   return NextResponse.json({ success: true })
