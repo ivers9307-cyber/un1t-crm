@@ -27,6 +27,12 @@ const GONE = {
   coachConflictsForBlock: [],
   isBlockUnstaffedFuture: [],
   fetchUnstaffedBlocksThisWeek: [],
+  // Two negative assertions stay: the web's proof that it never asks the old
+  // route, and the API reference's proof that it no longer documents it.
+  '/api/schedule/working-time': [
+    'src/components/ScheduleCalendar.candidates.test.jsx',
+    'src/lib/openapi.test.js',
+  ],
 }
 
 function walk(dir, out = []) {
@@ -66,5 +72,9 @@ describe('dead code stays deleted (D1 DEADCODE.1)', () => {
   it('the week-end date helper went with its only caller (shared/dashboard-data.js)', () => {
     const src = readFileSync(join(ROOT, 'shared/dashboard-data.js'), 'utf8')
     expect(src).not.toMatch(/export function endOfWeek\b/)
+  })
+
+  it('the working-time route is gone (CANDIDATES.1 replaced it with blocks/{id}/candidates)', () => {
+    expect(existsSync(join(ROOT, 'src/app/api/schedule/working-time'))).toBe(false)
   })
 })
