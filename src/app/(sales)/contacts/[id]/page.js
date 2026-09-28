@@ -6,8 +6,7 @@ import { ArrowLeft, Mail, MessageSquare, MessageCircle } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { canViewContact } from '@/lib/contact-crossovers'
-import { canLoadContactConsultations, contactChannelFlags } from '@/lib/contact-page-gates'
-import { MANAGER_ROLES } from '@/lib/schemas'
+import { canLoadContactConsultations, contactChannelFlags, contactActionGates } from '@/lib/contact-page-gates'
 import { classifyContact, scoreMember } from '@/lib/churn-radar'
 import { loadContactArrears } from '@/lib/churn-radar-data'
 import { loadContactJourney } from '@/lib/onboarding-journey-data'
@@ -239,6 +238,9 @@ export default async function ContactDetailPage(props) {
   // consultations on at their active studio and off at the contact's must not
   // get this contact's consultations, goals, photos or scans loaded.
   const canConsultations = canLoadContactConsultations(user, contact.location_id)
+  // ROLEUI.1 — the action buttons, each the decision of the route it calls,
+  // judged at the CONTACT's location (never user.role, the active studio's).
+  const actions = contactActionGates(user, contact)
   let consultationsTab = null
   if (canConsultations) {
     const [consultsRes, goalsRes, photosRes, scansRes, coachLinksRes] = await Promise.all([
@@ -367,7 +369,7 @@ export default async function ContactDetailPage(props) {
         journey={journey}
         attention={attention}
         nextClassAt={nextClassAt}
-        canToggleExempt={MANAGER_ROLES.includes(user?.role)}
+        canToggleExempt={actions.canToggleExempt}
         cancellationLink={cancellationLink}
         // WAITLIST.6 — a location with no readable primary board resolves null
         // here, which is FALSE, which is today's behaviour (Cold shown).
@@ -389,7 +391,7 @@ export default async function ContactDetailPage(props) {
             person={person}
             identityEmails={identityEmails}
             identityPhones={identityPhones}
-            canEditPrefs={user?.isMaster || ['owner'].includes(user?.role)}
+            canEditPrefs={actions.canEditPrefs}
           />
         </div>
 
@@ -510,17 +512,7 @@ export default async function ContactDetailPage(props) {
             sequences={activeSequences}
             upcomingBookings={upcomingBookings}
             deals={deals}
-            admin={{
-              canPasswordOverride: Boolean(contact.user_id) && ['master', 'owner'].includes(user?.role),
-              canEditDelete: MANAGER_ROLES.includes(user?.role),
-              canInvite: (user?.isMaster || ['owner', 'manager'].includes(user?.role)) && Boolean(contact.email),
-              hasUserAccount: Boolean(contact.user_id),
-              canEditDevices: user?.isMaster || ['owner', 'manager', 'head_coach'].includes(user?.role),
-              // REPSET-P5 — admin contact-linking tool: master/owner ONLY
-              // (staff never self-link their member contact; the route
-              // re-enforces this server-side).
-              canLinkAccount: user?.isMaster || ['master', 'owner'].includes(user?.role),
-            }}
+            admin={actions.admin}
           />
 
           {/* BOOK-ON-PROFILE.1 — book this contact into a consultation or

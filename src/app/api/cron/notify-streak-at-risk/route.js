@@ -2,9 +2,14 @@
 // Pushes a loss-aversion nudge to members whose streak (>= MIN_STREAK days,
 // ending YESTERDAY) will break unless they train today. Idempotent per member
 // per day via customer_engagement_nudges. Reachable members only (push token).
+// C21 PUSHDONE.1b — claim, send and release through sendNudgeOnce: a nudge
+// that reached nobody because something broke gives its claim back (the ledger
+// row is member-readable, so it must not claim a push that never landed). The
+// cron is daily and the key is the day, so the released nudge is not re-sent
+// today; it is logged and counted in `failed`.
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { sendCustomerPush } from '@/lib/customer-push'
+import { sendNudgeOnce, readReachableContacts, nudgeFailed } from '@/lib/customer-nudge-claim'
 import { streakAtRisk, buildStreakAtRiskPush } from '@/lib/customer-notifications'
 import { logInfo, logWarn } from '@/lib/log'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
@@ -84,34 +89,27 @@ export async function GET(request) {
     return NextResponse.json({ ok: true, candidates: ids.length, at_risk: 0, nudged: 0 })
   }
 
-  // 4. Keep only reachable (has a push token).
-  const reachable = new Set()
-  const atRiskIds = atRisk.map((a) => a.cid)
-  for (let i = 0; i < atRiskIds.length; i += 200) {
-    const chunk = atRiskIds.slice(i, i + 200)
-    const { data: toks } = await db.from('champ_push_tokens').select('contact_id').in('contact_id', chunk)
-    for (const t of toks || []) reachable.add(t.contact_id)
-  }
+  // 4. Keep only reachable (has a push token). A failed token read skips
+  //    that chunk (counted), it is not "unreachable".
+  const { reachable, failed: reachabilityFailed } =
+    await readReachableContacts(db, atRisk.map((a) => a.cid), 'cron-streak-risk')
 
-  // 5. Record (idempotent) + push.
+  // 5. Claim (idempotent) + push, released if nothing reached them.
   let nudged = 0
+  let failed = 0
   for (const { cid, streak } of atRisk) {
     if (!reachable.has(cid)) continue
-    const { data: ins, error: insErr } = await db
-      .from('customer_engagement_nudges')
-      .insert({ contact_id: cid, type: 'streak_at_risk', dedup_key: dedupKey })
-      .select('id')
-    if (insErr || !ins || !ins.length) continue // already nudged today, or error
-    try {
-      await sendCustomerPush(db, cid, buildStreakAtRiskPush({ streak }))
-      nudged++
-    } catch (err) {
-      logWarn('cron-streak-risk', 'push threw', { err, cid })
-    }
+    const { status } = await sendNudgeOnce(db, {
+      contactId: cid, type: 'streak_at_risk', dedupKey,
+      payload: buildStreakAtRiskPush({ streak }), module: 'cron-streak-risk',
+    })
+    if (status === 'sent') nudged++
+    else if (nudgeFailed(status)) failed++
   }
 
-  logInfo('cron-streak-risk', 'tick', { candidates: ids.length, at_risk: atRisk.length, nudged })
+  const summary = { candidates: ids.length, at_risk: atRisk.length, nudged, failed, reachability_failed: reachabilityFailed }
+  logInfo('cron-streak-risk', 'tick', summary)
   await stampHeartbeat('notify-streak-at-risk').catch((err) =>
     logWarn('cron-streak-risk', 'heartbeat failed', { err }))
-  return NextResponse.json({ ok: true, candidates: ids.length, at_risk: atRisk.length, nudged })
+  return NextResponse.json({ ok: true, ...summary })
 }

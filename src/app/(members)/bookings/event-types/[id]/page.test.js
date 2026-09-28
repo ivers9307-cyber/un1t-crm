@@ -48,7 +48,11 @@ vi.mock('next/navigation', () => ({
 }))
 
 // Client components — stubs; the test asserts on the server-rendered shell.
-vi.mock('@/components/EventActions', () => ({ default: () => null }))
+// ROLEUI.1 — the stub prints the canDelete it was handed, so the page's
+// decision is visible in the markup.
+vi.mock('@/components/EventActions', () => ({
+  default: ({ canDelete }) => <span data-testid="event-actions" data-can-delete={String(canDelete)} />,
+}))
 vi.mock('@/components/BookingStatusToggle', () => ({ default: () => null }))
 vi.mock('next/link', () => ({
   default: ({ href, children }) => <a href={typeof href === 'string' ? href : ''}>{children}</a>,
@@ -136,5 +140,36 @@ describe('/bookings/event-types/[id] page', () => {
     const html = renderToStaticMarkup(await BookingTypeDetailPage(props()))
     expect(html).toContain('PT Consult')
     expect(html).not.toContain('Booking type not found')
+  })
+
+  // ROLEUI.1 — Edit and Delete show exactly when /api/bookings/event-types/[id]
+  // would act (a master, or MANAGER_ROLES at the booking type's location).
+  // The page used to render both for anyone who could open it.
+  describe('ROLEUI.1 — Edit and Delete follow the route', () => {
+    const at = (role) => ({ ...user, rolesByLocation: { 'loc-mine': role } })
+
+    it('a manager at the booking type\'s studio gets Edit and Delete', async () => {
+      getCurrentUser.mockResolvedValue(at('manager'))
+      createServerClient.mockReturnValue(mockDb({ event: myEvent, bookings: [] }))
+      const html = renderToStaticMarkup(await BookingTypeDetailPage(props()))
+      expect(html).toContain('data-can-delete="true"')
+      expect(html).toContain('href="/bookings/event-types/evt-1/edit"')
+    })
+
+    it('staff there get neither (main: both, and Delete answered "Not found")', async () => {
+      getCurrentUser.mockResolvedValue(at('staff'))
+      createServerClient.mockReturnValue(mockDb({ event: myEvent, bookings: [] }))
+      const html = renderToStaticMarkup(await BookingTypeDetailPage(props()))
+      expect(html).toContain('data-can-delete="false"')
+      expect(html).not.toContain('href="/bookings/event-types/evt-1/edit"')
+    })
+
+    it('a master gets both', async () => {
+      getCurrentUser.mockResolvedValue({ ...user, isMaster: true, profileRole: 'master', role: 'master' })
+      createServerClient.mockReturnValue(mockDb({ event: myEvent, bookings: [] }))
+      const html = renderToStaticMarkup(await BookingTypeDetailPage(props()))
+      expect(html).toContain('data-can-delete="true"')
+      expect(html).toContain('href="/bookings/event-types/evt-1/edit"')
+    })
   })
 })

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { sendCustomerPush } from './customer-push.js'
-import { logError } from './log.js'
+import { logError, logWarn } from './log.js'
 
 vi.mock('./log.js', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 
@@ -24,7 +24,7 @@ function db(rows, { deleteError = null, prefRows = [], prefError = null, tokenEr
     },
   }
 }
-beforeEach(() => { global.fetch = vi.fn(); vi.mocked(logError).mockClear() })
+beforeEach(() => { global.fetch = vi.fn(); vi.mocked(logError).mockClear(); vi.mocked(logWarn).mockClear() })
 afterEach(() => { vi.useRealTimers() })
 
 // Run a send under fake timers so the retry backoff (500ms/2s) doesn't
@@ -255,5 +255,27 @@ describe('sendCustomerPush — a failed token read is not "no device" (C16 PUSHR
   it('send-class-booking-reminders releases its claim on exactly this answer (sent 0, failed > 0)', async () => {
     const out = await sendCustomerPush(db(null, { tokenError: READ_ERR }), 'c1', { title: 't', body: 'b', data: { type: 'class_reminder' } })
     expect(!(out.sent > 0) && (out.failed || 0) > 0).toBe(true)
+  })
+})
+
+// C21 PUSHDONE.1b (F5) — both best-effort failures log structurally.
+describe('sendCustomerPush — structured logs (F5)', () => {
+  const ok = () => ({ ok: true, json: async () => ({ data: [{ status: 'ok' }] }) })
+  const token = (c) => ({ id: c, expo_push_token: `ExponentPushToken[${c}]` })
+
+  it('a failed prefs read says so with logWarn, and still sends (fails open)', async () => {
+    global.fetch.mockResolvedValue(ok())
+    const d = db([token('c1')], { prefRows: null, prefError: { message: 'db down' } })
+    const out = await sendCustomerPush(d, 'c1', { title: 't', body: 'b', data: { type: 'class_reminder' } })
+    expect(out.sent).toBe(1)
+    expect(logWarn).toHaveBeenCalledWith('customer-push', 'push_prefs read failed; sending to every candidate',
+      { contacts: 1, type: 'class_reminder', err: 'db down' })
+  })
+
+  it('a failed dead-token prune says so with logWarn', async () => {
+    global.fetch.mockResolvedValue({ ok: true, json: async () => ({ data: [{ status: 'error', details: { error: 'DeviceNotRegistered' } }] }) })
+    const d = db([{ id: '1', expo_push_token: 'ExponentPushToken[dead]' }], { deleteError: { message: 'rls says no' } })
+    await sendCustomerPush(d, 'c1', { title: 't', body: 'b' })
+    expect(logWarn).toHaveBeenCalledWith('customer-push', 'dead-token prune failed; retried on a later send', { tokens: 1, err: 'rls says no' })
   })
 })

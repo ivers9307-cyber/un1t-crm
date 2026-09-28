@@ -22,6 +22,7 @@ import { resolveBodyMetrics } from '@/lib/body-metrics'
 import { estimateCaloriesKcal } from '@/lib/calories'
 import { sendPostClassEmail } from '@/lib/hr-post-class-email'
 import { sendCustomerPush } from '@/lib/customer-push'
+import { sendNudgeOnce } from '@/lib/customer-nudge-claim'
 import { runDetectionForSession } from '@/lib/achievements'
 import { enqueueExportsForSession } from '@/lib/external-export'
 import { buildSessionPush, buildGoalPush, buildTargetHitPush, buildTierUpPush, periodKey } from '@/lib/customer-notifications'
@@ -559,6 +560,9 @@ export async function finalizeSessionRewards(db, sessionId, { nowMs = Date.now()
 
   // Best-effort: celebrate any active goal completed (this period) by this
   // session. Idempotent per (goal, period) via customer_engagement_nudges.
+  // C21 PUSHDONE.1b — through sendNudgeOnce: a celebration that reached nobody
+  // because something broke gives its claim back, so the member's NEXT session
+  // in the same period (the goal is still met) celebrates it — late, once.
   try {
     const { data: goals } = await db
       .from('contact_goals')
@@ -587,13 +591,13 @@ export async function finalizeSessionRewards(db, sessionId, { nowMs = Date.now()
         if (!def) continue
         const { current } = computeProgress(goal, gSessions || [], new Date(nowMs))
         if (current < goal.target_value) continue
-        const dedupKey = `${goal.id}:${periodKey(def.period, nowMs)}`
-        const { data: ins, error: insErr } = await db
-          .from('customer_engagement_nudges')
-          .insert({ contact_id: session.contact_id, type: 'goal_complete', dedup_key: dedupKey })
-          .select('id')
-        if (insErr || !ins || !ins.length) continue // already celebrated this period, or insert failed
-        await sendCustomerPush(db, session.contact_id, buildGoalPush({ goal, def }))
+        await sendNudgeOnce(db, {
+          contactId: session.contact_id,
+          type: 'goal_complete',
+          dedupKey: `${goal.id}:${periodKey(def.period, nowMs)}`,
+          payload: buildGoalPush({ goal, def }),
+          module: 'live-class',
+        })
       }
     }
   } catch (err) {
@@ -648,13 +652,17 @@ export async function finalizeSessionRewards(db, sessionId, { nowMs = Date.now()
           const newTier = tierForMonths(monthsHit)
           const oldTier = tierForMonths(priorHit)
           if (newTier && (!oldTier || newTier.slug !== oldTier.slug)) {
-            const { data: nins } = await db
-              .from('customer_engagement_nudges')
-              .insert({ contact_id: session.contact_id, type: 'tier_up', dedup_key: newTier.slug })
-              .select('id')
-            if (nins && nins.length) {
-              await sendCustomerPush(db, session.contact_id, buildTierUpPush({ tier: newTier, monthsHit }))
-            }
+            // C21 PUSHDONE.1b — a tier-up that reached nobody gives its claim
+            // back. Nothing re-runs this month's banking, so it is not re-sent
+            // now; the ledger no longer claims it landed, and a later crossing
+            // into the same tier (tier decay) can still celebrate it.
+            await sendNudgeOnce(db, {
+              contactId: session.contact_id,
+              type: 'tier_up',
+              dedupKey: newTier.slug,
+              payload: buildTierUpPush({ tier: newTier, monthsHit }),
+              module: 'live-class',
+            })
           } else {
             const monthLabel = MONTH_NAMES[new Date(nowMs).getUTCMonth()]
             await sendCustomerPush(
