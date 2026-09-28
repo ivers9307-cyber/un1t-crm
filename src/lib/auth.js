@@ -9,6 +9,8 @@ import { loadRoleTemplatesForLocations } from './role-templates.js'
 import { SUPPORT_COOKIE, verifySupportCookie } from './support-session-edge'
 import { hasRoleAtLocation, hasRoleAtAnyLocation } from './role-at-location'
 import { isTombstone } from './staff-tombstone.js'
+import { PROFILE_AUTH_SELECT, pickUserProfile } from './user-profile.js'
+import { logError } from './log.js'
 import { USER_LOCATION_COLUMNS, redactLocationSecrets, redactLinkedLocations } from './location-secrets.js'
 
 // React 18's `cache()` is only exported from the server build of react.
@@ -279,10 +281,20 @@ export const getCurrentUser = cache(async function getCurrentUser() {
   // don't know whether to fetch it until realProfile is loaded
   // (only masters can impersonate), but the cookie read is cheap and
   // doesn't depend on the profile fetch.
-  const [{ data: realProfile }, { readImpersonationTarget }] = await Promise.all([
-    db.from('profiles').select('*').eq('id', user.id).single(),
+  //
+  // PROFILESPREAD.1 — NAME the columns: the result is spread into the user
+  // object, which every page serialises (AppShell). PROFILE_AUTH_SELECT is
+  // the ten fields readers use + deleted_at (tombstone check, never spread).
+  const [{ data: realProfile, error: profileErr }, { readImpersonationTarget }] = await Promise.all([
+    db.from('profiles').select(PROFILE_AUTH_SELECT).eq('id', user.id).single(),
     import('./impersonation.js'),
   ])
+  // A failed read still resolves "signed out", as before, but not silently:
+  // a column-name mistake here would sign EVERYONE out. PGRST116 (no row) is
+  // the normal answer for a member who has no staff profile.
+  if (profileErr && profileErr.code !== 'PGRST116') {
+    logError('auth', 'profile read failed; request resolves signed out', { code: profileErr.code || null })
+  }
 
   // STAFFDELETE.1 — a permanently deleted staff member keeps a profiles row (a
   // tombstone, so history still names them) but is nobody: the auth user is
@@ -324,11 +336,14 @@ export const getCurrentUser = cache(async function getCurrentUser() {
   if (realProfile.role === 'master') {
     const targetId = await readImpersonationTarget()
     if (targetId && targetId !== realProfile.id) {
-      const { data: target } = await db
+      const { data: target, error: targetErr } = await db
         .from('profiles')
-        .select('*')
+        .select(PROFILE_AUTH_SELECT) // PROFILESPREAD.1
         .eq('id', targetId)
         .single()
+      if (targetErr && targetErr.code !== 'PGRST116') {
+        logError('auth', 'impersonation target read failed; master stays themselves', { code: targetErr.code || null })
+      }
       // Only treat this as a live impersonation if there's an OPEN
       // impersonation_log row for this master+target. A leftover
       // un1t_impersonate cookie (e.g. the browser kept it after a
@@ -642,7 +657,9 @@ export const getCurrentUser = cache(async function getCurrentUser() {
   }
 
   return {
-    ...profile,
+    // PROFILESPREAD.1 — only the ten listed fields (src/lib/user-profile.js),
+    // never pin_hash / pay / UniFi id / tombstone bookkeeping.
+    ...pickUserProfile(profile),
     user,
     locations,
     activeLocation,
