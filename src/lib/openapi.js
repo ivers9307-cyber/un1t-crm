@@ -3040,7 +3040,7 @@ registry.registerPath({
             composer_templates: z.array(z.object({
               name: z.string(), language: z.string(), bodyText: z.string(), sendable: z.boolean(),
             })).optional(),
-            permissions: z.object({ whatsapp: z.boolean(), sms: z.boolean(), email: z.boolean() }).optional(),
+            permissions: z.object({ whatsapp: z.boolean(), sms: z.boolean(), email: z.boolean(), kudos: z.boolean() }).optional(),
           }).openapi('ContactCommandCentreBundle'),
         },
       },
