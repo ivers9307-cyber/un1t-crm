@@ -5,7 +5,7 @@
 
 import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 
 export const runtime = 'nodejs'
@@ -15,7 +15,7 @@ export async function DELETE(_request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!hasPermission(user, 'car_processing')) {
+  if (!hasPermissionAtAnyLocation(user, 'car_processing')) {
     return NextResponse.json({ success: false, error: 'Not permitted' }, { status: 403 })
   }
 
@@ -30,6 +30,10 @@ export async function DELETE(_request, props) {
   if (!note) return NextResponse.json({ success: false, error: 'Note not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, note.location_id)
   if (guard) return guard
+  // ROLESWEEP.1b — judged at the car's location, not the caller's active studio.
+  if (!hasPermissionForLocation(user, note.location_id, 'car_processing')) {
+    return NextResponse.json({ success: false, error: 'Not permitted' }, { status: 403 })
+  }
 
   const { error } = await db.from('car_notes').delete().eq('id', params.noteId)
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
