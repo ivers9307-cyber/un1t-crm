@@ -43,12 +43,15 @@ async function setStatus(db, id, fields) {
 // write, and the card filed at the cap must still name it (executing_contact_id
 // + elected_glofox_member_id). Without it, approving falls back to the funnel
 // contact, which has no Glofox account, and answers NOT_EXECUTABLE.
+// creditUnreadAccounts names WHICH read failed ({ role: 'booking_account' |
+// 'linked_account', contact_id, glofox_member_id }), so the card can tell
+// staff which account to check.
 export class CreditReadError extends Error {
-  constructor({ personContactIds = null, executingContactId = null, electedMemberId = null } = {}) {
+  constructor({ personContactIds = null, executingContactId = null, electedMemberId = null, creditUnreadAccounts = null } = {}) {
     super('credit_check_failed')
     this.name = 'CreditReadError'
     this.reviewReason = 'credit_check_failed'
-    this.reviewOptions = { personContactIds, executingContactId, electedMemberId }
+    this.reviewOptions = { personContactIds, executingContactId, electedMemberId, creditUnreadAccounts }
   }
 }
 
@@ -63,7 +66,7 @@ async function readCredits(creds, memberId) {
 // exhausts its retries on a THROW lands here too, so staff get a card rather
 // than a bare needs_review nobody is shown. Also run by the cron's reaper for
 // rows stuck in 'processing' past the attempt cap.
-export async function routeToReview(db, request, reason, { personContactIds = null, executingContactId = null, electedMemberId = null } = {}) {
+export async function routeToReview(db, request, reason, { personContactIds = null, executingContactId = null, electedMemberId = null, creditUnreadAccounts = null } = {}) {
   let approvalId = null
   // A row that ALREADY names a card keeps it while that card is still pending
   // — never file a second one for the same booking. The person-wide lookup
@@ -133,6 +136,11 @@ export async function routeToReview(db, request, reason, { personContactIds = nu
           // ACCOUNT_MISMATCH cross-check has something to compare.
           ...(executingContactId ? { executing_contact_id: executingContactId } : {}),
           ...(electedMemberId ? { elected_glofox_member_id: electedMemberId } : {}),
+          // CBPCREDITREAD.1 — credit_check_failed: which account's credits
+          // could not be read (whyFlagged names it on the card).
+          ...(Array.isArray(creditUnreadAccounts) && creditUnreadAccounts.length
+            ? { credit_unread_accounts: creditUnreadAccounts }
+            : {}),
           ...(request.payment_status === 'paid'
             ? { paid: true, amount_cents: request.amount_cents, currency: request.currency || 'EUR' }
             : {}),
@@ -255,8 +263,10 @@ export async function processClassBookingRequest(db, request) {
   })
   // CBPCREDITREAD.1 — the retry signal carries the same account the card
   // would have named (read at throw time, like toReview above).
+  // unreadCreditAccounts (below) is every account whose read failed.
   const creditReadError = () => new CreditReadError({
     personContactIds, executingContactId, electedMemberId,
+    creditUnreadAccounts: unreadCreditAccounts.length ? [...unreadCreditAccounts] : null,
   })
 
   // AGENT-FUNNEL-CREDITS.1 — prior attendance alone no longer blocks the
@@ -376,6 +386,8 @@ export async function processClassBookingRequest(db, request) {
   // spent while the anchor's own balance is unknown, and no sibling is read.
   // The caller throws CreditReadError when this finds nobody.
   let siblingCreditsUnread = false
+  // CBPCREDITREAD.1 — which accounts could not be read, for the card.
+  const unreadCreditAccounts = []
   async function rescueSiblingBalance({ membershipOnly = false } = {}) {
     const rescueable = reusableAccounts
       .filter((row) => row.glofox_member_id && row.glofox_member_id !== memberId)
@@ -389,6 +401,7 @@ export async function processClassBookingRequest(db, request) {
           // Unknown is not empty: note it and keep looking. Another sibling
           // that DOES hold a balance still books.
           siblingCreditsUnread = true
+          unreadCreditAccounts.push({ role: 'linked_account', contact_id: row.id, glofox_member_id: row.glofox_member_id })
           logWarn('cbp', 'sibling credit check unreadable', { requestId: request.id })
           continue
         }
@@ -427,6 +440,7 @@ export async function processClassBookingRequest(db, request) {
     // membership still books without it, exactly as before, on this account
     // or (the rescue that needs no read) on a reusable sibling's.
     if (!read.ok && !activeMembership) {
+      unreadCreditAccounts.push({ role: 'booking_account', contact_id: balanceRow?.id ?? null, glofox_member_id: memberId })
       if (!(await rescueSiblingBalance({ membershipOnly: true }))) {
         logWarn('cbp', 'credit check unreadable; the queue retries', { requestId: request.id })
         throw creditReadError()
@@ -472,6 +486,7 @@ export async function processClassBookingRequest(db, request) {
     // credit_check_failed.
     const read = await readCredits(creds, memberId)
     if (!read.ok) {
+      unreadCreditAccounts.push({ role: 'booking_account', contact_id: balanceRow?.id ?? null, glofox_member_id: memberId })
       if (!(await rescueSiblingBalance({ membershipOnly: true }))) {
         logWarn('cbp', 'credit check unreadable; the queue retries', { requestId: request.id })
         throw creditReadError()

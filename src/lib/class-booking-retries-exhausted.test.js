@@ -160,6 +160,7 @@ describe('queue: retries exhausted on a THROW → staff card', () => {
     })
     processClassBookingRequest.mockRejectedValue(new CreditReadError({
       personContactIds: ['ct-1', 'ct-sib'], executingContactId: 'ct-sib', electedMemberId: 'gm-sib',
+      creditUnreadAccounts: [{ role: 'booking_account', contact_id: 'ct-sib', glofox_member_id: 'gm-sib' }],
     }))
 
     await claimAndProcessBookingJob(store.db, atCap)
@@ -168,6 +169,9 @@ describe('queue: retries exhausted on a THROW → staff card', () => {
     const card = store.inserts[0]
     expect(card.contact_id).toBe('ct-1')
     expect(card.details).toMatchObject({ reason: 'credit_check_failed', executing_contact_id: 'ct-sib', elected_glofox_member_id: 'gm-sib' })
+    // ...and says which account could not be read.
+    expect(card.details.credit_unread_accounts).toEqual([{ role: 'booking_account', contact_id: 'ct-sib', glofox_member_id: 'gm-sib' }])
+    expect(whyFlagged({ kind: 'class_booking', details: card.details })).toMatch(/this booking was for \(member ID gm-sib\)/)
 
     // Staff approve it: the booking runs on the ELECTED account.
     glofoxCredentialsForLocation.mockResolvedValue({ branchId: 'b', apiKey: 'k', apiToken: 't' })

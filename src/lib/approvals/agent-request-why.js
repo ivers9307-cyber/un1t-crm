@@ -69,6 +69,21 @@ const MACHINE_REASONS = {
     'The automatic booking was interrupted 3 times and never finished, so it may or may not have gone through. Check Glofox for the booking first; if it is not there, approve to book now.',
 }
 
+// CBPCREDITREAD.1 — credit_check_failed names WHICH account's credits could
+// not be read (details.credit_unread_accounts, written by the processor): the
+// account the booking was for, or another account linked to the same person.
+// By Glofox member ID only, which staff can look up in Glofox; no name, email
+// or phone. A malformed list renders nothing extra.
+function creditUnreadLine(accounts) {
+  if (!Array.isArray(accounts)) return null
+  const parts = accounts
+    .filter((a) => a && typeof a.glofox_member_id === 'string' && a.glofox_member_id)
+    .map((a) => (a.role === 'linked_account'
+      ? `another Glofox account linked to this person (member ID ${a.glofox_member_id})`
+      : `the Glofox account this booking was for (member ID ${a.glofox_member_id})`))
+  return parts.length ? `Could not be read: ${parts.join('; ')}.` : null
+}
+
 // booking_failed:<CODE> — keep the Glofox message code visible but lead
 // with plain English for the common case.
 function bookingFailedExplanation(code) {
@@ -89,6 +104,10 @@ export function whyFlagged(row) {
   const d = row.details || {}
   const reason = typeof d.reason === 'string' ? d.reason : null
   if (reason) {
+    if (reason === 'credit_check_failed') {
+      const line = creditUnreadLine(d.credit_unread_accounts)
+      return line ? `${MACHINE_REASONS[reason]} ${line}` : MACHINE_REASONS[reason]
+    }
     if (MACHINE_REASONS[reason]) return MACHINE_REASONS[reason]
     if (reason.startsWith('booking_failed:')) {
       return bookingFailedExplanation(reason.slice('booking_failed:'.length) || 'unknown')

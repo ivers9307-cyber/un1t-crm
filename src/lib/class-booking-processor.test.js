@@ -223,6 +223,7 @@ describe('CBPCREDITREAD.1: a failed credits read is a retry, never "no credits"'
     expect(err).toBeInstanceOf(CreditReadError)
     expect(err.message).toBe('credit_check_failed')
     expect(err.reviewReason).toBe('credit_check_failed')
+    expect(err.reviewOptions.creditUnreadAccounts).toEqual([{ role: 'booking_account', contact_id: 'c1', glofox_member_id: 'gm1' }])
     expect(db.statusWrites).toEqual([])
     expect(db.cardInserts).toEqual([])
     expect(createBooking).not.toHaveBeenCalled()

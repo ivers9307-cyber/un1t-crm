@@ -180,3 +180,40 @@ describe('credit_check_failed copy', () => {
     expect(out).toMatch(/approving does not add a credit/i)
   })
 })
+
+// CBPCREDITREAD.1 review — the card says WHICH account could not be read:
+// the one the booking was for, or another account linked to the same person.
+// Identified by the Glofox member ID only (no name, email or phone).
+describe('credit_check_failed names the unreadable account', () => {
+  const why = (accounts) => whyFlagged({ kind: 'class_booking', details: { reason: 'credit_check_failed', credit_unread_accounts: accounts } })
+
+  it('the account the booking was for', () => {
+    const out = why([{ role: 'booking_account', contact_id: 'c-1', glofox_member_id: 'gm-aaa' }])
+    expect(out).toMatch(/the Glofox account this booking was for \(member ID gm-aaa\)/)
+    expect(out).not.toMatch(/linked to this person/)
+  })
+
+  it('another account linked to the same person', () => {
+    const out = why([{ role: 'linked_account', contact_id: 'c-2', glofox_member_id: 'gm-bbb' }])
+    expect(out).toMatch(/another Glofox account linked to this person \(member ID gm-bbb\)/)
+    expect(out).not.toMatch(/this booking was for/)
+  })
+
+  it('keeps the three pinned phrases, and the plain copy when no account is named', () => {
+    const named = why([{ role: 'booking_account', glofox_member_id: 'gm-aaa' }, { role: 'linked_account', glofox_member_id: 'gm-bbb' }])
+    const plain = why(undefined)
+    for (const out of [named, plain]) {
+      expect(out).toMatch(/could not be read/i)
+      expect(out).toMatch(/does not mean they have no credits/i)
+      expect(out).toMatch(/approving does not add a credit/i)
+    }
+    expect(named).toMatch(/gm-aaa/)
+    expect(named).toMatch(/gm-bbb/)
+    expect(plain).not.toMatch(/member ID/)
+  })
+
+  it('ignores a malformed list rather than rendering it', () => {
+    expect(why('gm-aaa')).toBe(why(undefined))
+    expect(why([{ role: 'booking_account' }, null])).toBe(why(undefined))
+  })
+})

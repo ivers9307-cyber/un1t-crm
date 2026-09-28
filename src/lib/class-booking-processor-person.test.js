@@ -645,7 +645,11 @@ describe('CBPCREDITREAD.1: an unreadable sibling balance is not an empty one', (
       groupMemberIds: grouped(['c-old']),
     })
 
-    await expect(processClassBookingRequest(db, req)).rejects.toBeInstanceOf(CreditReadError)
+    const err = await processClassBookingRequest(db, req).catch((e) => e)
+    expect(err).toBeInstanceOf(CreditReadError)
+    // The card names the sibling that could not be read, not the anchor
+    // (whose read worked and found nothing).
+    expect(err.reviewOptions.creditUnreadAccounts).toEqual([{ role: 'linked_account', contact_id: 'c-old', glofox_member_id: 'gm-old' }])
     expect(createBooking).not.toHaveBeenCalled()
     expect(amrInsert(db)).toBeUndefined()
   })
@@ -705,6 +709,8 @@ describe('CBPCREDITREAD.1: the retry carries the elected account', () => {
       executingContactId: 'c-old',
       electedMemberId: 'gm-old',
       personContactIds: ['c-new', 'c-old'],
+      // The account that could not be read is the one the booking was for.
+      creditUnreadAccounts: [{ role: 'booking_account', contact_id: 'c-old', glofox_member_id: 'gm-old' }],
     })
     expect(createBooking).not.toHaveBeenCalled()
     expect(amrInsert(db)).toBeUndefined()
