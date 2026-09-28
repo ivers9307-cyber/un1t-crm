@@ -11,7 +11,7 @@ const { logWarn, logError } = await import('./log')
 const { sendNudgeOnce, readReachableContacts, nudgeFailed } = await import('./customer-nudge-claim')
 
 // customer_engagement_nudges + champ_push_tokens, just enough of each.
-function makeDb({ insertError = null, insertRows = [{ id: 'nudge-1' }], deleteError = null, tokenRows = [], tokenError = null } = {}) {
+function makeDb({ insertError = null, insertRows = [{ id: 'nudge-1' }], insertReject = null, deleteError = null, deleteReject = null, tokenRows = [], tokenError = null } = {}) {
   const calls = { inserts: [], deletes: [], tokenReads: [] }
   return {
     calls,
@@ -21,8 +21,8 @@ function makeDb({ insertError = null, insertRows = [{ id: 'nudge-1' }], deleteEr
       }
       if (table !== 'customer_engagement_nudges') throw new Error(`unexpected table ${table}`)
       return {
-        insert: (row) => ({ select: () => { calls.inserts.push(row); return Promise.resolve(insertError ? { data: null, error: insertError } : { data: insertRows, error: null }) } }),
-        delete: () => ({ eq: (_c, id) => { calls.deletes.push(id); return Promise.resolve({ error: deleteError }) } }),
+        insert: (row) => ({ select: () => { calls.inserts.push(row); if (insertReject) return Promise.reject(insertReject); return Promise.resolve(insertError ? { data: null, error: insertError } : { data: insertRows, error: null }) } }),
+        delete: () => ({ eq: (_c, id) => { calls.deletes.push(id); if (deleteReject) return Promise.reject(deleteReject); return Promise.resolve({ error: deleteError }) } }),
       }
     },
   }
@@ -102,6 +102,22 @@ describe('sendNudgeOnce', () => {
     expect((await sendNudgeOnce(db, ARGS)).status).toBe('release_failed')
     expect(logError).toHaveBeenCalledWith('cron-winback', 'nothing delivered and the claim release failed; this nudge will not retry',
       expect.objectContaining({ contactId: 'c1', err: 'down' }))
+  })
+
+  it('a claim insert that REJECTS (network) does not throw: claim_failed, nothing sent', async () => {
+    const db = makeDb({ insertReject: new Error('fetch failed') })
+    expect(await sendNudgeOnce(db, ARGS)).toEqual({ status: 'claim_failed', result: null })
+    expect(sendCustomerPush).not.toHaveBeenCalled()
+    expect(logWarn).toHaveBeenCalledWith('cron-winback', 'nudge claim failed; nothing sent, a later run retries',
+      { contactId: 'c1', type: 'winback', dedupKey: '2026-09', err: 'fetch failed' })
+  })
+
+  it('a release delete that REJECTS does not throw: release_failed, at error level', async () => {
+    const db = makeDb({ deleteReject: new Error('fetch failed') })
+    sendCustomerPush.mockResolvedValueOnce({ sent: 0, invalidated: 0, failed: 1, skipped: 0 })
+    expect((await sendNudgeOnce(db, ARGS)).status).toBe('release_failed')
+    expect(logError).toHaveBeenCalledWith('cron-winback', 'nothing delivered and the claim release failed; this nudge will not retry',
+      expect.objectContaining({ contactId: 'c1', err: 'fetch failed' }))
   })
 
   it('nudgeFailed names the three "did not get it this run" statuses', () => {

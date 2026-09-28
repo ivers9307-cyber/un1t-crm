@@ -52,9 +52,39 @@ export async function readReachableContacts(db, contactIds, module) {
   return { reachable, failed }
 }
 
+// A supabase builder resolves { error } on a PostgREST error but REJECTS on a
+// network failure. Both writes below turn a rejection into the same { error }
+// shape, so sendNudgeOnce never throws. Each write stays a direct
+// `const { error } = await db…` so no-unchecked-supabase-write still sees it
+// (a chain handed to a wrapping helper would be invisible to the rule).
+const rejected = (err) => ({ message: err?.message || String(err) })
+
+async function insertClaim(db, contactId, type, dedupKey) {
+  try {
+    const { data, error } = await db
+      .from('customer_engagement_nudges')
+      .insert({ contact_id: contactId, type, dedup_key: dedupKey })
+      .select('id')
+    return { data, error }
+  } catch (err) {
+    return { data: null, error: rejected(err) }
+  }
+}
+
+async function releaseClaim(db, claimId) {
+  try {
+    const { error } = await db.from('customer_engagement_nudges').delete().eq('id', claimId)
+    return error
+  } catch (err) {
+    return rejected(err)
+  }
+}
+
 /**
  * Claim (contact, type, dedupKey), send, and release the claim when nothing
- * reached the member because something broke. Never throws.
+ * reached the member because something broke. Never throws: a rejected claim
+ * insert is 'claim_failed', a throwing send is released like a failed one, a
+ * rejected release delete is 'release_failed'.
  *
  * @returns {Promise<{ status: 'sent'|'settled'|'deduped'|'claim_failed'|'released'|'release_failed', result: object|null }>}
  *   sent — delivered; settled — nothing to deliver to (kept, not retried);
@@ -64,10 +94,7 @@ export async function readReachableContacts(db, contactIds, module) {
  */
 export async function sendNudgeOnce(db, { contactId, type, dedupKey, payload, module }) {
   const meta = { contactId, type, dedupKey }
-  const { data, error } = await db
-    .from('customer_engagement_nudges')
-    .insert({ contact_id: contactId, type, dedup_key: dedupKey })
-    .select('id')
+  const { data, error } = await insertClaim(db, contactId, type, dedupKey)
   if (error) {
     if (error.code === UNIQUE_VIOLATION) return { status: 'deduped', result: null }
     logWarn(module, 'nudge claim failed; nothing sent, a later run retries', { ...meta, err: error.message })
@@ -91,7 +118,7 @@ export async function sendNudgeOnce(db, { contactId, type, dedupKey, payload, mo
   if (outcome === 'delivered') return { status: 'sent', result }
   if (outcome === 'settled') return { status: 'settled', result }
 
-  const { error: releaseErr } = await db.from('customer_engagement_nudges').delete().eq('id', claimId)
+  const releaseErr = await releaseClaim(db, claimId)
   if (releaseErr) {
     logError(module, 'nothing delivered and the claim release failed; this nudge will not retry', { ...meta, err: releaseErr.message })
     return { status: 'release_failed', result }
