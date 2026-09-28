@@ -4,13 +4,32 @@ import { createServerClient } from '@/lib/supabase'
 import { authenticateApiKey } from '@/lib/api-auth'
 import { overlayConnections, syncConnectionFromLegacy } from '@/lib/connection-registry'
 import { validateBody } from '@/lib/validate'
-import { maskSecretKeysDeep } from '@/lib/secret-keys'
+import { isSecretKeyName, maskSecretKeysDeep } from '@/lib/secret-keys'
+import { isFreshSecret } from '@/lib/integration-secret-merge'
 import { logError } from '@/lib/log'
 
 const IntegrationsUpdateSchema = z.object({
   glofox: z.unknown().nullable().optional(),
   webhooks: z.unknown().nullable().optional(),
 })
+
+// N8NECHO.1: the PUT answers with its slices masked, so a caller that sends
+// that answer back (n8n often does) would store SECRET_MASK over the live
+// Glofox credentials, and syncConnectionFromLegacy would copy the mask into
+// channel_connections. For every secret-named key whose incoming value is a
+// string that is not fresh (blank, or the shared '••' mask), keep what is
+// stored, or leave the key out when nothing is. A real new value is written.
+function keepStoredSecrets(incoming, stored) {
+  if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) return incoming
+  const prior = stored && typeof stored === 'object' ? stored : {}
+  const out = { ...incoming }
+  for (const [k, v] of Object.entries(incoming)) {
+    if (!isSecretKeyName(k) || typeof v !== 'string' || isFreshSecret(v)) continue
+    if (Object.prototype.hasOwnProperty.call(prior, k) && prior[k] != null) out[k] = prior[k]
+    else delete out[k]
+  }
+  return out
+}
 
 // GET /api/locations/[id]/integrations — Get integration credentials for a location
 // Used by n8n to fetch Glofox API keys, webhook URLs, etc. per location
@@ -86,11 +105,13 @@ export async function PUT(request, props) {
     return NextResponse.json({ success: false, error: 'Location not found' }, { status: 404 })
   }
 
-  // Merge new integration settings into existing settings
+  // Merge new integration settings into existing settings. A masked or blank
+  // secret in either slice keeps the stored value (keepStoredSecrets above).
+  const stored = location.settings || {}
   const updatedSettings = {
-    ...(location.settings || {}),
-    ...(body.glofox !== undefined ? { glofox: body.glofox } : {}),
-    ...(body.webhooks !== undefined ? { webhooks: body.webhooks } : {}),
+    ...stored,
+    ...(body.glofox !== undefined ? { glofox: keepStoredSecrets(body.glofox, stored.glofox) } : {}),
+    ...(body.webhooks !== undefined ? { webhooks: keepStoredSecrets(body.webhooks, stored.webhooks) } : {}),
   }
 
   const { data, error } = await db

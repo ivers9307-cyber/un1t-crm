@@ -130,6 +130,54 @@ describe('PUT /api/locations/[id]/integrations: the echo (N8NECHO.1)', () => {
   })
 })
 
+describe('PUT /api/locations/[id]/integrations: the masked echo sent back (N8NECHO.1)', () => {
+  // The stored row carries a secret in BOTH slices, so the round-trip is
+  // proved for each.
+  const SETTINGS = {
+    ...STORED_ROW.settings,
+    webhooks: { lead_url: 'https://n8n.example/hook', signing_secret: 'SYNTH-WHS' },
+  }
+  const rowFrom = (arg) => ({ data: { id: LOC, name: 'Test Studio', slug: 'test-studio', settings: arg.settings }, error: null })
+
+  it("PUT with the previous PUT's response body keeps the stored credentials, and the registry sync gets the real ones", async () => {
+    mockDb({ readResult: { data: { settings: SETTINGS, organization_id: ORG }, error: null }, writeResult: rowFrom })
+    const first = await (await put({ glofox: SETTINGS.glofox, webhooks: SETTINGS.webhooks })).json()
+    expect(first.data.settings.glofox.api_key).toBe(SECRET_MASK)
+    expect(first.data.settings.webhooks.signing_secret).toBe(SECRET_MASK)
+
+    vi.clearAllMocks()
+    const calls = mockDb({ readResult: { data: { settings: SETTINGS, organization_id: ORG }, error: null }, writeResult: rowFrom })
+    const res = await put({ glofox: first.data.settings.glofox, webhooks: first.data.settings.webhooks })
+    expect(res.status).toBe(200)
+
+    expect(calls.updateArg.settings.glofox).toEqual(SETTINGS.glofox)
+    expect(calls.updateArg.settings.webhooks).toEqual(SETTINGS.webhooks)
+    expect(JSON.stringify(calls.updateArg)).not.toContain('••')
+    const [, , platform, row] = syncConnectionFromLegacy.mock.calls[0]
+    expect(platform).toBe('glofox')
+    expect(row.settings.glofox).toMatchObject({ api_key: 'SYNTH-GK', api_token: 'SYNTH-GT', webhook_secret: 'SYNTH-GW' })
+  })
+
+  it('a masked key with nothing stored behind it is dropped, not written as the mask', async () => {
+    const calls = mockDb({
+      readResult: { data: { settings: { glofox: { branch_id: 'b1' } }, organization_id: ORG }, error: null },
+      writeResult: rowFrom,
+    })
+    await put({ glofox: { branch_id: 'b1', api_key: SECRET_MASK } })
+    expect(calls.updateArg.settings.glofox).toEqual({ branch_id: 'b1' })
+  })
+
+  it('a real new value is still written, and non-secret fields change as sent', async () => {
+    const calls = mockDb({ readResult: { data: { settings: SETTINGS, organization_id: ORG }, error: null }, writeResult: rowFrom })
+    await put({
+      glofox: { ...SETTINGS.glofox, branch_id: 'b2', api_token: 'SYNTH-GT-NEW', api_key: SECRET_MASK },
+      webhooks: { lead_url: 'https://n8n.example/h3', signing_secret: 'SYNTH-WHS-NEW' },
+    })
+    expect(calls.updateArg.settings.glofox).toEqual({ ...SETTINGS.glofox, branch_id: 'b2', api_token: 'SYNTH-GT-NEW' })
+    expect(calls.updateArg.settings.webhooks).toEqual({ lead_url: 'https://n8n.example/h3', signing_secret: 'SYNTH-WHS-NEW' })
+  })
+})
+
 describe('PUT /api/locations/[id]/integrations: the read (N8NECHO.1)', () => {
   it('a failed read is a logged 500 and writes nothing (it used to answer 404)', async () => {
     const calls = mockDb({
