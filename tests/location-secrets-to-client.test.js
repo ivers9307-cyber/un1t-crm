@@ -36,8 +36,14 @@ export const STAR_READS = {
 }
 
 const PATTERNS = [
-  /\blocations\s*\(\s*\*\s*\)/g, // embed locations(*)
-  /from\(\s*['"`]locations['"`]\s*\)\s*\.select\(\s*(['"`])\*\1/g, // from('locations').select('*')
+  // embed locations(*) / locations(*, …), hinted locations!fk(*) /
+  // locations!inner(*), and any alias in front (location:locations(*))
+  /\blocations(?:!\w+)?\s*\(\s*\*\s*[,)]/g,
+  // an embed through the FK COLUMN: location_id(*), x:location_id(*),
+  // locations:location_id!inner(*)
+  /\blocation_id(?:!\w+)?\s*\(\s*\*\s*[,)]/g,
+  // from('locations').select('*') and select('*, …')
+  /from\(\s*['"`]locations['"`]\s*\)\s*\.select\(\s*['"`]\s*\*\s*[,'"`]/g,
   /from\(\s*['"`]locations['"`]\s*\)[^;]{0,200}?\.select\(\s*\)/g, // from('locations')….select()
 ]
 const REDACTORS = /\b(redactLocationSecrets|redactLinkedLocations|redactProfileLocations|toClientLocation)\b/
@@ -95,6 +101,26 @@ describe('every star-read of locations is reviewed (SECFIX.3a)', () => {
     expect(countStarReads(`db.from('locations').update(p).eq('id', x).select().single()`)).toBe(1)
     expect(countStarReads(`db.from('locations').select('id, name')`)).toBe(0)
     expect(countStarReads(`locations(id, name)`)).toBe(0)
+  })
+
+  // Review N2 — the star forms the first cut missed.
+  it('the counter sees a star with more columns, hinted embeds and FK-column embeds', () => {
+    expect(countStarReads(`db.from('locations').select('*, organizations(name)')`)).toBe(1)
+    expect(countStarReads(`db.from("locations").select("*,features")`)).toBe(1)
+    expect(countStarReads(`db\n  .from('locations')\n  .select(\`\n    *, organizations(name)\`)`)).toBe(1)
+    expect(countStarReads(`select('id, locations!profile_locations_location_id_fkey(*)')`)).toBe(1)
+    expect(countStarReads(`select('id, locations!inner(*, organizations(name))')`)).toBe(1)
+    expect(countStarReads(`select('id, locations(*, organizations(name))')`)).toBe(1)
+    expect(countStarReads(`select('id, location:location_id(*)')`)).toBe(1)
+    expect(countStarReads(`select('id, locations:location_id(*)')`)).toBe(1)
+    expect(countStarReads(`select('id, loc:location_id!inner(*)')`)).toBe(1)
+    expect(countStarReads(`select('id, location_id(*)')`)).toBe(1)
+    expect(countStarReads(`select('id, location:locations!fk(*)')`)).toBe(1)
+    // and still not the named forms
+    expect(countStarReads(`select('id, location:location_id(id, name)')`)).toBe(0)
+    expect(countStarReads(`select('id, locations!inner(id, name)')`)).toBe(0)
+    expect(countStarReads(`select('*, profile_locations(location_id)')`)).toBe(0)
+    expect(countStarReads(`db.from('locations_audit').select('*')`)).toBe(0)
   })
 
   it('an import or a comment alone is not a redaction', () => {
