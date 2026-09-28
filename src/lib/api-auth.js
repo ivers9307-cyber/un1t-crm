@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { safeEqual } from './webhook-auth'
 import { getCurrentUser } from './auth'
+import { hasRoleAtAnyLocation } from './role-at-location'
 import { MANAGER_ROLES } from './schemas'
 import { createServerClient } from './supabase'
 import { hashApiKey, isApiKeyToken } from './api-keys'
@@ -139,6 +140,19 @@ export function requireApiKey(request) {
  * as n8n integration endpoints (POST /api/contacts, etc.) and now
  * also need to be reachable from the web UI.
  *
+ * ROLESWEEP.2 — the cookie branch is a COARSE pre-check only: the
+ * caller holds a MANAGER_ROLES role at SOME location
+ * (hasRoleAtAnyLocation). It used to read `user.role`, the role at the
+ * ACTIVE studio, which refused a manager whose active studio is one
+ * where they are staff, and admitted a head coach at A to act on B
+ * where they are staff. EVERY caller must now judge the role at the
+ * location it acts on — hasRoleAtLocation(auth.user, loc, MANAGER_ROLES)
+ * after its membership check — before it reads or writes anything the
+ * caller may not see. tests/role-at-target.test.js enforces that every
+ * route calling this helper also calls hasRoleAtLocation (or another
+ * target judgement) in the same file. The API-key branches are
+ * unchanged.
+ *
  * Return shape:
  *   { ok: true,  user: <user>|null }    — auth ok. user is null
  *                                          when the caller used the
@@ -171,10 +185,11 @@ export async function requireApiKeyOrManager(request) {
     return { ok: true, user: null, orgId: resolved.orgId }
   }
 
-  // Cookie path. Manager+ only — we don't want random staff
-  // accidentally hitting these endpoints.
+  // Cookie path. Manager+ SOMEWHERE — we don't want random staff
+  // accidentally hitting these endpoints. Not the decision: the route
+  // judges the role at its target (ROLESWEEP.2, see above).
   const user = await getCurrentUser()
-  if (user && MANAGER_ROLES.includes(user.role)) {
+  if (user && hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return { ok: true, user, orgId: null }
   }
 

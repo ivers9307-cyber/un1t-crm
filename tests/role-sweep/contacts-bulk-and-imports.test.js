@@ -1,5 +1,5 @@
 // ROLESWEEP.1c — the MANAGER_ROLES contact routes (export, impact, push to
-// Glofox, contact PUT / DELETE, bulk delete, the import history) and the
+// Glofox, contact DELETE, bulk delete, the import history) and the
 // owner-only merge judge the role at the contact's / batch's / query's
 // location, never at the caller's ACTIVE studio (`user.role`).
 // Harness: tests/helpers/role-gate-probe.js.
@@ -69,19 +69,8 @@ describeGate('DELETE /api/contacts/[id]', {
   gateReads: CONTACT, forbidden: HC_PLUS, hidden: DIFFERENT_LOCATION, cases: CASES,
 }, T)
 
-// PUT goes through the SHARED requireApiKeyOrManager (src/lib/api-auth.js),
-// which still judges MANAGER_ROLES at the ACTIVE studio — so the too-closed
-// rows (manager at the contact's studio, staff at the active one) are still
-// refused there with a 401 and are left out: a known follow-up. The route now
-// also judges the role at the contact's location, answering 404 not_found as
-// it does for a non-member.
-const PUT_NOT_FOUND = { status: 404, body: { success: false, error: 'not_found' } }
-describeGate('PUT /api/contacts/[id] (cookie path: MANAGER_ROLES at the contact)', {
-  call: () => contact.PUT(json('PUT', { label: 'VIP' }), params({ id: CONTACT_ID })),
-  gateReads: (loc) => [{ data: { tags: [], location_id: loc, email: 'member.one@example.com', email_status: 'active', glofox_member_id: null }, error: null }],
-  forbidden: PUT_NOT_FOUND, hidden: PUT_NOT_FOUND,
-  cases: CASES.filter(([label]) => !label.includes('(main: forbidden)')),
-}, T)
+// PUT /api/contacts/[id] is pinned, every row, in tests/role-sweep/api-key-or-manager.test.js
+// (ROLESWEEP.2: the shared requireApiKeyOrManager is now a coarse pre-check).
 
 // Bulk delete answers 200 with a per-row breakdown: a row whose location the
 // caller does not belong to lands in forbidden[] as 'Different location'; a

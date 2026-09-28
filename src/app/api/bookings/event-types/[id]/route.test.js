@@ -56,6 +56,8 @@ const managerAt = (...locationIds) => ({
   role: 'manager',
   isMaster: false,
   locations: locationIds.map((id) => ({ id, organization_id: 'org-1' })),
+  // ROLESWEEP.2 — the role is judged per location (hasRoleAtLocation).
+  rolesByLocation: Object.fromEntries(locationIds.map((id) => [id, 'manager'])),
 })
 
 beforeEach(() => {

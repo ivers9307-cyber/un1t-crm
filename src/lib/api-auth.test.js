@@ -89,6 +89,52 @@ describe('requireApiKeyOrManager', () => {
     expect(auth.response.status).toBe(401)
     expect(getCurrentUser).toHaveBeenCalled()
   })
+
+  // ROLESWEEP.2 — the cookie branch is a COARSE pre-check: Manager+ at ANY
+  // location, never the role at the ACTIVE studio (`user.role`). Each route
+  // decides at its target (tests/role-sweep/api-key-or-manager.test.js).
+  describe('cookie branch (no bearer token)', () => {
+    const cookieUser = (rolesByLocation, activeId, extra = {}) => ({
+      id: 'user-1', profileRole: 'staff', rolesByLocation,
+      locations: Object.keys(rolesByLocation).map((id) => ({ id })),
+      activeLocation: activeId ? { id: activeId } : null,
+      role: rolesByLocation[activeId], ...extra,
+    })
+
+    it('staff at the ACTIVE studio, manager at another → ok (main: 401)', async () => {
+      const user = cookieUser({ 'loc-a': 'staff', 'loc-b': 'manager' }, 'loc-a')
+      getCurrentUser.mockResolvedValue(user)
+      expect(await requireApiKeyOrManager(req(null))).toEqual({ ok: true, user, orgId: null })
+    })
+
+    it('head coach at the active studio → ok (unchanged)', async () => {
+      const user = cookieUser({ 'loc-a': 'head_coach' }, 'loc-a')
+      getCurrentUser.mockResolvedValue(user)
+      expect((await requireApiKeyOrManager(req(null))).ok).toBe(true)
+    })
+
+    it('Manager+ nowhere → 401 (unchanged)', async () => {
+      getCurrentUser.mockResolvedValue(cookieUser({ 'loc-a': 'staff', 'loc-b': 'reception' }, 'loc-a'))
+      const auth = await requireApiKeyOrManager(req(null))
+      expect(auth.ok).toBe(false)
+      expect(auth.response.status).toBe(401)
+    })
+
+    it('a master (profileRole) with no per-location roles → ok (unchanged)', async () => {
+      getCurrentUser.mockResolvedValue(cookieUser({}, null, { profileRole: 'master', role: 'master' }))
+      expect((await requireApiKeyOrManager(req(null))).ok).toBe(true)
+    })
+
+    it('a `user.role` of manager with no per-location role anywhere → 401 (0 such profiles in prod, 28 Sep)', async () => {
+      getCurrentUser.mockResolvedValue(cookieUser({}, null, { role: 'manager' }))
+      expect((await requireApiKeyOrManager(req(null))).ok).toBe(false)
+    })
+
+    it('no session → 401 (unchanged)', async () => {
+      getCurrentUser.mockResolvedValue(null)
+      expect((await requireApiKeyOrManager(req(null))).ok).toBe(false)
+    })
+  })
 })
 
 describe('orgScopeLocationIds', () => {
