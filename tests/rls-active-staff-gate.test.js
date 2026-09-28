@@ -265,8 +265,10 @@ describe('RLSACTIVE.1 — inline policies that read a profile table carry the ac
   const inline = policies.filter((p) => readsProfileTable(p.body))
 
   it('finds the policies it is meant to guard (not vacuous)', () => {
-    expect(inline.length).toBeGreaterThanOrEqual(54) // 47 gated by mig 626 + 7 allowlisted
-    expect(inline.filter((p) => policyGated(p.body)).length).toBeGreaterThanOrEqual(47)
+    // 47 gated by mig 626 + 7 allowlisted, less audit_events_select_master_owner
+    // (gated; dropped by mig 655 AUDITRLS.1, audit_events is service-role only).
+    expect(inline.length).toBeGreaterThanOrEqual(53)
+    expect(inline.filter((p) => policyGated(p.body)).length).toBeGreaterThanOrEqual(46)
     expect(inline.map((p) => `${p.table} :: ${p.name}`)).toContain('public.invoices_queue :: inbound_invoices_read')
   })
 
