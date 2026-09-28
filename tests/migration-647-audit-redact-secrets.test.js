@@ -66,7 +66,10 @@ const BASE_SCHEMA = `
     occurred_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     category text NOT NULL, action text NOT NULL,
     actor_id uuid, actor_label text, target_profile_id uuid, target_label text,
-    target_resource text, location_id uuid, details jsonb, ip_address inet, user_agent text
+    target_resource text, location_id uuid, details jsonb, ip_address inet, user_agent text,
+    -- Test-only: insert order. PGlite's clock can hand two quick writes the
+    -- same occurred_at, so "latest row" orders by this, not the timestamp.
+    seq bigint GENERATED ALWAYS AS IDENTITY
   );
 
   -- The six audited tables, with the columns this test exercises.
@@ -104,7 +107,7 @@ async function freshDb({ applyFix = true } = {}) {
 
 async function lastEvent(db, action) {
   const { rows } = await db.query(
-    `SELECT details, details::text AS txt FROM public.audit_events WHERE action = $1 ORDER BY occurred_at DESC LIMIT 1`,
+    `SELECT details, details::text AS txt FROM public.audit_events WHERE action = $1 ORDER BY seq DESC LIMIT 1`,
     [action],
   )
   return rows[0] || null
