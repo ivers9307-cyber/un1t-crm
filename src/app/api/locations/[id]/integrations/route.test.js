@@ -201,6 +201,24 @@ describe('PUT /api/locations/[id]/integrations: the read (N8NECHO.1)', () => {
     expect(calls.updateArg).toBeNull()
   })
 
+  it('a non-uuid id is 404 with no error log (PostgREST 22P02 is a bad id, not a failed read)', async () => {
+    const calls = mockDb({
+      readResult: { data: null, error: { code: '22P02', message: 'invalid input syntax for type uuid: "not-a-uuid"' } },
+      writeResult: () => { throw new Error('must not write') },
+    })
+    const res = await PUT(
+      new Request('http://x/api/locations/not-a-uuid/integrations', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json', authorization: 'Bearer k' },
+        body: JSON.stringify({ glofox: STORED_ROW.settings.glofox }),
+      }),
+      { params: Promise.resolve({ id: 'not-a-uuid' }) },
+    )
+    expect(res.status).toBe(404)
+    expect(calls.updateArg).toBeNull()
+    expect(logError).not.toHaveBeenCalled()
+  })
+
   it("another org's key still gets 404 (APIKEYS.3 unchanged)", async () => {
     authenticateApiKey.mockResolvedValue({ ok: true, orgId: 'b0000000-0000-4000-8000-0000000000ff' })
     const calls = mockDb({

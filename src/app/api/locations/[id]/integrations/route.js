@@ -90,7 +90,9 @@ export async function PUT(request, props) {
     .eq('id', params.id)
     .single()
 
-  if (readError && readError.code !== 'PGRST116') {
+  // PGRST116 is "no row"; 22P02 is a non-uuid id, which can match no row
+  // either. Both answer 404 below with no error log.
+  if (readError && readError.code !== 'PGRST116' && readError.code !== '22P02') {
     logError('locations/integrations', 'location read failed; nothing written', {
       locationId: params.id,
       code: readError.code || null,
