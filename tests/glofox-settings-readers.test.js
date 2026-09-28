@@ -39,7 +39,6 @@ export const LOG_ONLY = {
   'src/app/api/cron/glofox-detail-backfill/route.js': 'C9b',
   'src/app/api/cron/glofox-sync/route.js': 'C9b',
   'src/app/api/cron/sync-class-occurrences/route.js': 'C9b',
-  'src/lib/agent/booking-tools.js': 'C9b',
   'src/lib/agent/knowledge-import.js': 'C9b',
   'src/lib/dunning-payment.js': 'C9b',
   'src/lib/glofox-note-push.js': 'C9b',

@@ -33,6 +33,21 @@ import { DEFAULT_BOOKING_ISSUE_HANDOFF_TEXT } from './notify'
 import { notifyAgentApprovalRequest } from './approval-notify'
 import { formatDublinClassTime } from './dublin-format'
 
+// REGISTRYREAD.1b — what Mia is told when the auto lane has no usable Glofox
+// credentials. A failed settings READ (creds.readError) is a blip, not "this
+// studio has no booking system": tell the model the difference so it never
+// says booking isn't offered here. Both answers still hand off to the team;
+// only the reason the model is given changes.
+export function noBookingSystemAnswer(creds) {
+  if (creds?.readError) {
+    return {
+      error: 'booking_system_unavailable',
+      message: 'The booking system could not be reached just now. Offer to hand off to the team. Do not say the studio does not take bookings.',
+    }
+  }
+  return { error: 'no_booking_system', message: 'Class booking is not connected at this studio — hand off to the team.' }
+}
+
 // ── Anthropic tool definitions ──────────────────────────────────────
 export const BOOKING_TOOLS = [
   {
@@ -562,7 +577,7 @@ export async function executeBookingTool(toolName, input, ctx) {
       await import('@/lib/glofox')
     const creds = await glofoxCredentialsForLocation(db, locationId)
     if (!creds || missingGlofoxCredentialsForLocation(creds).length) {
-      return { error: 'no_booking_system', message: 'Class booking is not connected at this studio — hand off to the team.' }
+      return noBookingSystemAnswer(creds)
     }
     const days = Math.min(7, Math.max(1, Number(input?.days) || 7))
     const start = Math.floor(Date.now() / 1000)
@@ -602,7 +617,7 @@ export async function executeBookingTool(toolName, input, ctx) {
     const creds = await glofoxCredentialsForLocation(db, locationId)
     // Resolved here rather than returned on: draft mode has never needed
     // Glofox credentials and must keep drafting without them (the auto lane
-    // below still answers no_booking_system).
+    // below still answers noBookingSystemAnswer(creds)).
     const credsUsable = !!creds && missingGlofoxCredentialsForLocation(creds).length === 0
 
     // PERSON-ACCT.7 — one person routinely holds 2-3 contacts rows, each
@@ -757,7 +772,7 @@ export async function executeBookingTool(toolName, input, ctx) {
       let credits = null
       let readFailed = false
       if (!credsUsable) {
-        readFailed = true // no Glofox here — the execute path answers no_booking_system
+        readFailed = true // no usable Glofox here — the execute path answers noBookingSystemAnswer(creds)
       } else {
         try {
           // ok-aware read: a Glofox blip must NOT escalate every booking to
@@ -829,7 +844,7 @@ export async function executeBookingTool(toolName, input, ctx) {
     }
 
     if (!credsUsable) {
-      return { error: 'no_booking_system', message: 'Class booking is not connected at this studio — hand off to the team.' }
+      return noBookingSystemAnswer(creds)
     }
     // Intent BEFORE the side effect (see logBookingRequest).
     const auditId = await logBookingRequest(db, ctx, {
@@ -937,7 +952,7 @@ export async function executeBookingTool(toolName, input, ctx) {
 
     const creds = await glofoxCredentialsForLocation(db, locationId)
     if (!creds || missingGlofoxCredentialsForLocation(creds).length) {
-      return { error: 'no_booking_system', message: 'Class booking is not connected at this studio — hand off to the team.' }
+      return noBookingSystemAnswer(creds)
     }
     // PERSON-ACCT.7 — the shared fan-out (windowDays:0 → upcoming only;
     // allSettled, so one dead account never loses the others' rows). book_class
@@ -1112,7 +1127,7 @@ export async function executeBookingTool(toolName, input, ctx) {
     }
 
     if (!credsUsable) {
-      return { error: 'no_booking_system', message: 'Class booking is not connected at this studio — hand off to the team.' }
+      return noBookingSystemAnswer(creds)
     }
 
     const details = { ...baseDetails, ...ownerDetails }
