@@ -60,11 +60,21 @@ describe('the registry and applyMergeTags() agree', () => {
       pay_amount_phrase: ' of €209',
       payment_cta: '<a href="https://pay.test/x">pay it now here</a>',
     }
-    for (const { tag } of MERGE_TAGS) {
+    for (const { tag, retired } of MERGE_TAGS) {
       const out = applyMergeTags(`<p>${tag}</p>`, contact, extras)
       expect(out, `${tag} was not substituted`).not.toContain(tag)
-      expect(out, `${tag} substituted to an empty string`).not.toBe('<p></p>')
+      if (retired) {
+        expect(out, `${tag} is retired and must render empty`).toBe('<p></p>')
+      } else {
+        expect(out, `${tag} substituted to an empty string`).not.toBe('<p></p>')
+      }
     }
+  })
+
+  it('retires exactly {{glofox_passcode}} (PASSCODEREAD.1), and withholds it from the pickers', () => {
+    const retired = MERGE_TAGS.filter((t) => t.retired)
+    expect(retired.map((t) => t.tag)).toEqual(['{{glofox_passcode}}'])
+    for (const t of retired) expect(t.offered, `${t.tag} is retired but offered`).toBe(false)
   })
 })
 

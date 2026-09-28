@@ -288,7 +288,7 @@ export function renderCampaignWebView(campaign, opts = {}) {
   // future fails loudly in review here instead of silently rendering.
   const anonymousContact = {
     first_name: '', last_name: '', name: '', email: '', phone: '',
-    pipeline_stage_slug: '', glofox_passcode: '',
+    pipeline_stage_slug: '',
   }
 
   const merged = applyMergeTags(html, anonymousContact, {
