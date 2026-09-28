@@ -26,6 +26,7 @@ const SCAN_TIMEOUT_MS = 30_000
 const GONE = {
   coachConflictsForBlock: [],
   isBlockUnstaffedFuture: [],
+  fetchUnstaffedBlocksThisWeek: [],
 }
 
 function walk(dir, out = []) {
@@ -61,4 +62,9 @@ describe('dead code stays deleted (D1 DEADCODE.1)', () => {
     const allowed = new Set([SELF, ...GONE[name]])
     expect(HITS[name].filter((rel) => !allowed.has(rel)).sort()).toEqual([])
   }, SCAN_TIMEOUT_MS)
+
+  it('the week-end date helper went with its only caller (shared/dashboard-data.js)', () => {
+    const src = readFileSync(join(ROOT, 'shared/dashboard-data.js'), 'utf8')
+    expect(src).not.toMatch(/export function endOfWeek\b/)
+  })
 })
