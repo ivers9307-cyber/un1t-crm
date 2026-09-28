@@ -52,6 +52,44 @@ describe('redactLocationSecrets', () => {
     expect(redactLocationSecrets(row)).toBe(row)
   })
 
+  // S2 (review) — the four named keys are not the only credentials a
+  // settings tree can hold: any key mig 647's rule calls a secret is masked,
+  // at any depth, presence kept (so glofoxConnected-style checks hold).
+  it('masks ANY secret-named key in settings, at any depth, keeping presence', () => {
+    const row = {
+      id: 'loc-2',
+      settings: {
+        glofox: { branch_id: 'b2', api_key: 'SYNTH-GK2', trial_plan_code: 'T1' },
+        stripe: { account_id: 'acct-1', webhookSigningSecret: 'SYNTH-SS' },
+        wa_card_sets: [{ label: 'Cards', access_token: 'SYNTH-WA' }],
+        deep: { a: { b: { c: { client_secret: 'SYNTH-CS', note: 'kept' } } } },
+        customer_agent: { enabled: true, test_phones: ['+353000000000'] },
+        empty: { api_token: '' },
+      },
+    }
+    const out = redactLocationSecrets(row)
+    expect(JSON.stringify(out)).not.toMatch(/SYNTH-/)
+    expect(out.settings.stripe).toEqual({ account_id: 'acct-1', webhookSigningSecret: LOCATION_SECRET_MASK })
+    expect(out.settings.wa_card_sets).toEqual([{ label: 'Cards', access_token: LOCATION_SECRET_MASK }])
+    expect(out.settings.deep.a.b.c).toEqual({ client_secret: LOCATION_SECRET_MASK, note: 'kept' })
+    expect(out.settings.glofox).toEqual({ branch_id: 'b2', api_key: LOCATION_SECRET_MASK, trial_plan_code: 'T1' })
+    expect(out.settings.customer_agent).toBe(row.settings.customer_agent)
+    expect(out.settings.empty).toBe(row.settings.empty)
+  })
+
+  it('masks a secret-named COLUMN the explicit list does not name (bca_config whole, a future *_api_key)', () => {
+    const row = { id: 'loc-3', name: 'S', bca_config: { send_from: 'a@example.com' }, future_api_key: 'SYNTH-FK' }
+    const out = redactLocationSecrets(row)
+    expect(out).toEqual({ id: 'loc-3', name: 'S', bca_config: LOCATION_SECRET_MASK, future_api_key: LOCATION_SECRET_MASK })
+  })
+
+  it('a settings tree deeper than the walk limit is masked whole, never walked into the stack', () => {
+    let deep = { api_token: 'SYNTH-DEEP' }
+    for (let i = 0; i < 20; i += 1) deep = { n: deep }
+    const out = redactLocationSecrets({ id: 'x', settings: deep })
+    expect(JSON.stringify(out)).not.toMatch(/SYNTH-/)
+  })
+
   it('passes non-objects and odd shapes through', () => {
     expect(redactLocationSecrets(null)).toBeNull()
     expect(redactLocationSecrets(undefined)).toBeUndefined()

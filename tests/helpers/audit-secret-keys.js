@@ -1,22 +1,20 @@
 // AUDITSECRETS.1 (mig 647) — the rule private.audit_is_secret_key() applies,
 // mirrored in JS so the guard test can check names without a database.
-// tests/migration-647-audit-redact-secrets.test.js pins the migration's regex
-// to AUDIT_SECRET_KEY_PATTERN character for character, so the two can never
-// drift. Change both in the same PR (and in a new migration).
+// SECFIX.3a: the rule itself now lives in src/lib/secret-keys.js (the app
+// masks browser-bound rows by it too), re-exported here under the names the
+// audit tests use, so there is ONE JS copy. Both
+// tests/migration-647-audit-redact-secrets.test.js and
+// src/lib/secret-keys.test.js pin it to the migration's regex character for
+// character. Change both in the same PR (and in a new migration).
 
-export const AUDIT_SECRET_KEY_PATTERN =
-  '(token|secret|password|passwd|passcode|credential|ciphertext)s?(_?hash)?$|(^|_)(pat|pin|api_?key|(private|signing|encryption|secret|access|auth)_?key|(key|pin)_?hash)$'
+import { SECRET_KEY_PATTERN, SECRET_KEY_EXACT, isSecretKeyName } from '../../src/lib/secret-keys.js'
 
-export const AUDIT_SECRET_EXACT = Object.freeze(['deposit_revolut_checkout_url', 'bca_config'])
+export const AUDIT_SECRET_KEY_PATTERN = SECRET_KEY_PATTERN
 
-const RE = new RegExp(AUDIT_SECRET_KEY_PATTERN)
+export const AUDIT_SECRET_EXACT = SECRET_KEY_EXACT
 
 /** True when private.audit_is_secret_key(name) is true. */
-export function isAuditSecretKey(name) {
-  if (name == null) return false
-  const k = String(name).toLowerCase()
-  return AUDIT_SECRET_EXACT.includes(k) || RE.test(k)
-}
+export const isAuditSecretKey = isSecretKeyName
 
 /** The tables mig 191 attached `audit_mutation` to (prod, 28 Sep 2026). */
 export const AUDITED_TABLES = Object.freeze([

@@ -11,6 +11,17 @@
 //     (src/lib/integration-secret-merge.js) rejects, so a mask echoed back to
 //     PUT /api/locations/[id]/integrations/[provider] keeps the stored value.
 //
+// The six are named explicitly below, and ON TOP of them every key that mig
+// 647's audit rule calls a secret (src/lib/secret-keys.js, the one shared
+// copy) is masked, at any depth of the row, `settings` included, up to the
+// rule's depth cap of 12. So a credential added to `settings` later (a new
+// integration slice, a key inside an array) is hidden without anyone
+// remembering this file. That also masks the `bca_config` COLUMN whole where
+// a row carries it (the staff pages and /admin/matrix read select('*')): no
+// consumer of a redacted row reads it (the BCA routes and the integrations
+// tab read it fresh, not off these rows), and the user object never loads it
+// (USER_LOCATION_COLUMNS). Booleans and blank values are left as they are.
+//
 // Server code that needs a credential reads the row fresh by id with the
 // service role (glofoxCredentialsForLocation, getUnifiConfig, the AC and
 // registry helpers). It must never take one off a redacted row.
@@ -18,7 +29,9 @@
 // Structure-preserving on purpose: no key is added or removed, and a row with
 // nothing to redact is returned as the same object.
 
-export const LOCATION_SECRET_MASK = '••••••'
+import { SECRET_MASK, maskSecretKeysDeep } from './secret-keys.js'
+
+export const LOCATION_SECRET_MASK = SECRET_MASK
 
 export const LOCATION_CREDENTIAL_COLUMNS = Object.freeze(['sensibo_api_key', 'thinq_pat'])
 
@@ -46,7 +59,8 @@ const present = (v) => (typeof v === 'string' ? v.trim() !== '' : v != null && v
 
 /**
  * @param {object|null|undefined} row  a `locations` row (any column subset)
- * @returns the row with every present credential masked (same object if none)
+ * @returns the row with every present credential masked (same object if none):
+ *          the six named ones, then every secret-named key at any depth
  */
 export function redactLocationSecrets(row) {
   if (!isPlainObject(row)) return row
@@ -80,7 +94,7 @@ export function redactLocationSecrets(row) {
       out.settings = nextSettings
     }
   }
-  return out
+  return maskSecretKeysDeep(out, { mask: LOCATION_SECRET_MASK })
 }
 
 /** profile_locations rows with an embedded `locations` row → same rows, location redacted. */
