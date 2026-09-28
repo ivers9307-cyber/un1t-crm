@@ -8,6 +8,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
+import { collectSchema, parseSelect } from '../../scripts/check-select-columns.mjs'
 
 vi.mock('./log.js', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 vi.mock('./connection-registry.js', async (importOriginal) => ({
@@ -128,5 +129,20 @@ describe('StaffForm reads no location settings (STAFFFORMSETTINGS.1 D4)', () => 
     const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1')
     expect(code).not.toMatch(/\.settings\b/)
     expect(code).toMatch(/unifi_configured/)
+  })
+})
+
+// CLAUDE.md: a column named in a .select() is a claim about the schema, and no
+// mock checks it. check:select-columns skips this one (it reaches .select()
+// through a constant), so resolve it against the same migration replay.
+describe('STAFF_FORM_LOCATION_SELECT names only real columns (the check:select-columns replay)', () => {
+  it('every column exists on locations', () => {
+    const { schema } = collectSchema('supabase/migrations')
+    const refs = parseSelect(STAFF_FORM_LOCATION_SELECT, 'locations', schema)
+    expect(refs.filter((r) => !schema.get(r.table)?.has(r.column))).toEqual([])
+    // The replay really read the list (a floor that read nothing proves nothing).
+    for (const column of ['features', 'settings', 'is_host_anchor']) {
+      expect(refs).toContainEqual({ table: 'locations', column })
+    }
   })
 })
