@@ -240,3 +240,30 @@ describe('POST /api/staff-devices/nudge — only your own organisation (TENANTSC
     expect(vi.mocked(sendPush).mock.calls[0][0]).toEqual([P_STAFF_B1])
   })
 })
+
+// ─── the test push ───────────────────────────────────────────────────
+describe('POST /api/admin/push/test — only someone in your own organisation (TENANTSCOPE.1)', () => {
+  const pushReq = (id) => makeReq('/api/admin/push/test', { method: 'POST', body: { recipient_id: id } })
+
+  it("an owner at A One gets the unknown-id 404 for org B's staff, and nothing is sent", async () => {
+    as(users.ownerA1())
+    const cross = await jsonOf(await pushTest.POST(pushReq(P_STAFF_B1)))
+    const unknown = await jsonOf(await pushTest.POST(pushReq(tid('dead'))))
+    expect(cross.status).toBe(404) // main: 200 and a push to org B's phone
+    expect(cross).toEqual(unknown)
+    expect(sendPush).not.toHaveBeenCalled()
+  })
+
+  it('still tests someone at A One', async () => {
+    as(users.ownerA1())
+    const { status } = await jsonOf(await pushTest.POST(pushReq(P_STAFF_A1)))
+    expect(status).toBe(200)
+    expect(vi.mocked(sendPush).mock.calls[0][0]).toEqual([P_STAFF_A1])
+  })
+
+  it('a master can test anyone in the estate', async () => {
+    as(users.master())
+    const { status } = await jsonOf(await pushTest.POST(pushReq(P_STAFF_B1)))
+    expect(status).toBe(200)
+  })
+})

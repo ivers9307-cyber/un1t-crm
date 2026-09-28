@@ -31,6 +31,12 @@
 // Auth: master or owner. Restricted because the result reveals
 // device counts + invalidation state — not secret, but not
 // regular-staff info either.
+//
+// TENANTSCOPE.1 — a non-master may test only someone in their ACTIVE
+// organisation's fleet (loadFleetScope: the same people the fleet page
+// that renders this button lists). Anyone else gets the SAME 404 as an
+// unknown id, decided before the profile read, so another tenant's
+// profile ids can't be probed for existence or active state.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -39,6 +45,8 @@ import { createServerClient } from '@/lib/supabase'
 import { sendPush } from '@/lib/push'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
+import { logError } from '@/lib/log'
+import { loadFleetScope, inFleetScope } from '@/lib/staff-fleet-scope'
 
 const PushTestSchema = z.object({
   recipient_id: uuidLike,
@@ -61,6 +69,17 @@ export async function POST(request) {
   const recipientId = v.data.recipient_id
 
   const db = createServerClient()
+
+  let scope
+  try {
+    scope = await loadFleetScope(db, user)
+  } catch (err) {
+    logError('admin-push-test', 'fleet scope read failed', { error: String(err?.message || err) })
+    return NextResponse.json({ success: false, error: 'Failed to load staff scope' }, { status: 500 })
+  }
+  if (!inFleetScope(scope, recipientId)) {
+    return NextResponse.json({ success: false, error: 'Recipient not found' }, { status: 404 })
+  }
   const { data: target, error } = await db
     .from('profiles')
     .select('id, full_name, active')
