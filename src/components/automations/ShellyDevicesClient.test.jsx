@@ -97,6 +97,19 @@ describe('ShellyDevicesClient — the happy path', () => {
   })
 })
 
+// PROFILESPREAD.1a — the page could not read the Glofox status; the flag
+// travels to every card's schedule editor, so none of them says "Connect Glofox".
+describe('ShellyDevicesClient — Glofox status unknown', () => {
+  it('passes glofoxUnknown through to each card\'s schedule editor', async () => {
+    script([[okConn(), okDevices()]])
+    render(<ShellyDevicesClient locationName="Stillorgan" glofoxConnected={false} glofoxUnknown canManageConnection />)
+    await waitFor(() => expect(screen.getByText('Sauna plug')).toBeTruthy())
+    const radio = screen.getByLabelText('Class timetable')
+    expect(radio.disabled).toBe(true)
+    expect(radio.closest('label').getAttribute('title')).toBe("Couldn't check Glofox. Reload to try again.")
+  })
+})
+
 describe('ShellyDevicesClient — the three connection states', () => {
   it('connection_status null shows the Connect form and no cards', async () => {
     script([[json(200, { success: true, connection: null, can_manage: true, device_count: 0 }),

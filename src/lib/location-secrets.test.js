@@ -2,7 +2,8 @@
 import { describe, it, expect } from 'vitest'
 import {
   LOCATION_SECRET_MASK, USER_LOCATION_COLUMNS, CLIENT_LOCATION_COLUMNS,
-  redactLocationSecrets, redactLinkedLocations, redactProfileLocations,
+  redactLocationSecrets, redactProfileLocations,
+  toUserLocation, toUserLinkedLocations,
 } from './location-secrets.js'
 import { isFreshSecret } from './integration-secret-merge.js'
 
@@ -98,27 +99,50 @@ describe('redactLocationSecrets', () => {
   })
 })
 
-describe('USER_LOCATION_COLUMNS', () => {
-  it('names the identity the user object\'s readers use, plus settings, and no credential column', () => {
+describe('USER_LOCATION_COLUMNS (PROFILESPREAD.1: no settings)', () => {
+  it('is exactly the client identity: no settings, no credential column', () => {
     const cols = USER_LOCATION_COLUMNS.split(',').map((s) => s.trim())
-    for (const needed of ['id', 'name', 'organization_id', 'features', 'active', 'is_host_anchor', 'slug', 'country', 'timezone', 'settings']) {
+    expect(cols).toEqual([...CLIENT_LOCATION_COLUMNS])
+    for (const needed of ['id', 'name', 'organization_id', 'features', 'active', 'is_host_anchor', 'slug', 'country', 'timezone']) {
       expect(cols).toContain(needed)
     }
+    expect(cols).not.toContain('settings')
     expect(cols).not.toContain('*')
     expect(cols).not.toContain('sensibo_api_key')
     expect(cols).not.toContain('thinq_pat')
-    expect(cols).toEqual([...CLIENT_LOCATION_COLUMNS, 'settings'])
   })
 })
 
-describe('redactLinkedLocations / redactProfileLocations', () => {
+describe('toUserLocation / toUserLinkedLocations', () => {
+  const RAW = { id: 'l1', name: 'A', organization_id: 'o', active: true, settings: { customer_agent: { test_phones: ['+353000000001'] } }, sensibo_api_key: 'SYNTH-S' }
+
+  it('keeps only the client identity columns', () => {
+    expect(toUserLocation(RAW)).toEqual({ id: 'l1', name: 'A', organization_id: 'o', active: true })
+  })
+
+  it('returns the SAME object when there is nothing to drop', () => {
+    const clean = { id: 'l1', name: 'A' }
+    expect(toUserLocation(clean)).toBe(clean)
+  })
+
+  it('passes a non-object through', () => {
+    expect(toUserLocation(null)).toBe(null)
+    expect(toUserLocation(undefined)).toBe(undefined)
+  })
+
+  it('maps a profile_locations embed', () => {
+    expect(toUserLinkedLocations([{ location_id: 'l1', locations: RAW }])).toEqual([{ location_id: 'l1', locations: { id: 'l1', name: 'A', organization_id: 'o', active: true } }])
+    expect(toUserLinkedLocations(null)).toBe(null)
+  })
+})
+
+describe('redactProfileLocations', () => {
   it('redacts the embedded location of every profile_locations link', () => {
     const links = [{ location_id: 'loc-1', role: 'staff', locations: ROW }, { location_id: 'loc-2', role: 'staff', locations: null }]
-    const out = redactLinkedLocations(links)
+    const out = redactProfileLocations({ id: 'p', profile_locations: links }).profile_locations
     expect(out[0].locations.sensibo_api_key).toBe(LOCATION_SECRET_MASK)
     expect(out[0].role).toBe('staff')
     expect(out[1]).toBe(links[1])
-    expect(redactLinkedLocations(null)).toBeNull()
   })
 
   it('redacts a staff row and passes a row without links through', () => {
