@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { BarChart3 } from 'lucide-react'
 import { CANCELLATION_FORM_DEFAULTS, REASON_CODES } from '@/lib/cancellation-form/defaults'
+import ReadFailedNote from '@/components/settings/ReadFailedNote'
 
 // RADAR-AGENT.0 — operator settings for the customer-facing WhatsApp /
 // Instagram agent. Manager+ only. Two parts: behaviour settings + the
@@ -48,26 +49,40 @@ export default function CustomerAgentClient() {
   const [savedAt, setSavedAt] = useState(null)
   const [checkinStats, setCheckinStats] = useState(null)
   const [error, setError] = useState(null)
+  // SETTINGSWIPE.1 — true when the settings GET failed. The editor must then
+  // show nothing it could save: the GET used to answer a failed read with
+  // the DEFAULTS, and Save wrote them back (Mia off).
+  const [loadFailed, setLoadFailed] = useState(false)
+
+  async function load(isCancelled = () => false) {
+    try {
+      // allSettled: a failed KNOWLEDGE read must not be reported as a failed
+      // settings read (the editor would hide a Save it can safely offer).
+      const [sOut, kOut] = await Promise.allSettled([
+        fetch('/api/settings/customer-agent').then(r => r.json()),
+        fetch('/api/agent/knowledge').then(r => r.json()),
+      ])
+      if (isCancelled()) return
+      const sRes = sOut.status === 'fulfilled' ? sOut.value : null
+      if (sRes?.success && sRes.settings) {
+        setSettings(sRes.settings); setLocation(sRes.location || null); setCheckinStats(sRes.checkin_stats || null)
+        setLoadFailed(false)
+      } else {
+        setSettings(null); setLoadFailed(true)
+      }
+      if (kOut.status === 'fulfilled' && kOut.value?.success) setEntries(kOut.value.entries || [])
+    } catch {
+      if (!isCancelled()) { setSettings(null); setLoadFailed(true) }
+    } finally {
+      if (!isCancelled()) setLoading(false)
+    }
+  }
 
   useEffect(() => {
     let cancelled = false
-    async function load() {
-      try {
-        const [sRes, kRes] = await Promise.all([
-          fetch('/api/settings/customer-agent').then(r => r.json()),
-          fetch('/api/agent/knowledge').then(r => r.json()),
-        ])
-        if (cancelled) return
-        if (sRes.success) { setSettings(sRes.settings); setLocation(sRes.location || null); setCheckinStats(sRes.checkin_stats || null) }
-        if (kRes.success) setEntries(kRes.entries || [])
-      } catch {
-        if (!cancelled) setError('Failed to load')
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
-    }
-    load()
+    load(() => cancelled)
     return () => { cancelled = true }
+    // load is re-created each render and only ever sets state; run once on mount.
   }, [])
 
   function setField(k, v) { setSettings(s => ({ ...s, [k]: v })) }
@@ -228,7 +243,15 @@ export default function CustomerAgentClient() {
     await fetch(`/api/agent/knowledge/${id}`, { method: 'DELETE' })
   }
 
-  if (loading || !settings) return <div className="p-6 text-sm text-un1t-muted">Loading…</div>
+  if (loading) return <div className="p-6 text-sm text-un1t-muted">Loading…</div>
+  if (loadFailed || !settings) {
+    return (
+      <div className="max-w-3xl">
+        <h1 className="text-xl font-bold text-un1t-text mb-4">Customer Agent</h1>
+        <ReadFailedNote what="the customer agent settings" onRetry={() => load()} />
+      </div>
+    )
+  }
 
   const inputCls = 'w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text'
 

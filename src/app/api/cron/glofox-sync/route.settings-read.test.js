@@ -31,10 +31,13 @@ vi.mock('@/lib/glofox-sync', () => ({ applyMemberSync: vi.fn(async () => { throw
 vi.mock('@/lib/glofox', () => ({
   glofoxCredentialsForLocation: vi.fn(),
   fetchAllMembersPage: vi.fn(async () => { throw new Error('fetchAllMembersPage must not be called') }),
+  glofoxHttpStats: vi.fn(() => ({})),
+  glofoxHttpStatsSince: vi.fn(() => ({ requests: 9, retries: 1, status_429: 1, status_5xx: 0, network_errors: 0, gave_up: 0 })),
 }))
 
 import { GET } from './route.js'
 import { glofoxCredentialsForLocation, fetchAllMembersPage } from '@/lib/glofox'
+import { applyMemberSync } from '@/lib/glofox-sync'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { stampTenantHeartbeat } from '@/lib/tenant-heartbeat'
 import { GLOFOX_SETTINGS_UNREADABLE_MESSAGE } from '@/lib/glofox-settings-read'
@@ -65,5 +68,19 @@ describe('GET /api/cron/glofox-sync — REGISTRYREAD.1b', () => {
     const out = await (await GET(req())).json()
     expect(out.per_location[0]).toMatchObject({ status: 'failed', first_error: 'Glofox credentials missing on this location.' })
     expect(stampHeartbeat).toHaveBeenCalledWith('glofox-sync')
+  })
+
+  it('CREDITSREAD.1 — counts syncs that could not read credits, and records Glofox traffic on the run row', async () => {
+    glofoxCredentialsForLocation.mockResolvedValue({ branchId: 'b', apiKey: 'k', apiToken: 't', readError: null })
+    fetchAllMembersPage.mockResolvedValueOnce({ data: [{ _id: 'm1', modified: 0 }, { _id: 'm2', modified: 0 }], total: 2, hasMore: false })
+    applyMemberSync
+      .mockResolvedValueOnce({ action: 'update', credits_unread: true })
+      .mockResolvedValueOnce({ action: 'update' })
+    const out = await (await GET(req())).json()
+    expect(out.per_location[0].summary).toMatchObject({ update: 2, credits_unread: 1 })
+    expect(out.totals.summary.credits_unread).toBe(1)
+    const done = h.runUpdates.find((u) => u.status === 'completed')
+    expect(done.summary).toMatchObject({ update: 2, credits_unread: 1 })
+    expect(done.summary.glofox_http).toEqual({ requests: 9, retries: 1, status_429: 1, status_5xx: 0, network_errors: 0, gave_up: 0 })
   })
 })

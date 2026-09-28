@@ -18,7 +18,7 @@
 
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { readGlofoxConfig, findGlofoxConfigByBranchId } from '@/lib/connection-registry'
-import { logError } from '@/lib/log'
+import { logError, logWarn } from '@/lib/log'
 import { GLOFOX_SETTINGS_UNREADABLE } from '@/lib/glofox-settings-read'
 import { toMobileE164 } from '@/lib/phone-validate'
 
@@ -479,6 +479,53 @@ export function missingGlofoxCredentialsForLocation(creds) {
 // honours Retry-After lets the call succeed within the same tick.
 const GLOFOX_MAX_RETRIES = 3
 
+// CREDITSREAD.1 — Glofox headroom, measured. glofoxFetch retried 429/5xx and
+// said nothing, so nobody could tell how close we run to Glofox's limit. These
+// counters are per server INSTANCE (module scope): a cron reads them with
+// glofoxHttpStatsSince(before), which can include a concurrent request on the
+// same instance, so a run's numbers mean "at least this run's traffic".
+const glofoxHttpCounters = {
+  requests: 0,       // HTTP attempts, retries included
+  retries: 0,        // attempts after the first
+  status_429: 0,     // 429 responses
+  status_5xx: 0,     // 5xx responses
+  network_errors: 0, // fetch threw
+  gave_up: 0,        // calls still 429/5xx after every retry
+  aborted: 0,        // calls cancelled by the caller while 429/5xx (retries cut short)
+}
+
+/** A copy of the instance's Glofox HTTP counters. */
+export function glofoxHttpStats() {
+  return { ...glofoxHttpCounters }
+}
+
+/** Counter deltas since a glofoxHttpStats() snapshot. */
+export function glofoxHttpStatsSince(before) {
+  const now = glofoxHttpStats()
+  const out = {}
+  for (const k of Object.keys(now)) out[k] = now[k] - (Number(before?.[k]) || 0)
+  return out
+}
+
+const GLOFOX_ID_SEGMENT = [
+  /^[0-9a-f]{16,}$/i,                                              // Mongo-style ids
+  /^\d{6,}$/,                                                      // numeric ids
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, // UUIDs (v3.0 payment links)
+]
+
+/**
+ * A Glofox path safe to log: the query dropped (it carries user_id=…) and every
+ * id-like segment (16+ hex chars, 6+ digits, or a UUID) replaced by ':id'.
+ */
+export function glofoxPathLabel(pathOrUrl) {
+  let p = String(pathOrUrl || '')
+  if (/^https?:\/\//i.test(p)) {
+    try { p = new URL(p).pathname } catch { /* keep the raw string */ }
+  }
+  p = p.split('?')[0]
+  return p.split('/').map((seg) => (GLOFOX_ID_SEGMENT.some((re) => re.test(seg)) ? ':id' : seg)).join('/')
+}
+
 /**
  * Backoff delay (ms) for a transient Glofox response. Honours a
  * numeric Retry-After (seconds, capped 30s) when present, else
@@ -524,20 +571,44 @@ export async function glofoxFetch(creds, pathOrUrl, options = {}) {
     ...(options.headers || {}),
   }
   let res
+  let attempts = 0
+  let aborted = false
   for (let attempt = 0; ; attempt++) {
-    res = await fetch(url, { ...options, headers })
+    attempts++
+    glofoxHttpCounters.requests++
+    try {
+      res = await fetch(url, { ...options, headers })
+    } catch (e) {
+      glofoxHttpCounters.network_errors++
+      throw e
+    }
+    if (res.status === 429) glofoxHttpCounters.status_429++
+    else if (res.status >= 500) glofoxHttpCounters.status_5xx++
     // Retry only transient statuses, and only while we have budget.
     if ((res.status === 429 || res.status >= 500) && attempt < GLOFOX_MAX_RETRIES) {
       // PAYLINK.5b — an aborted caller (timed out, or otherwise cancelled)
       // stops retrying immediately and returns the last response as-is,
       // rather than sleeping out a full backoff first.
-      if (options.signal?.aborted) break
+      if (options.signal?.aborted) { aborted = true; break }
       const retryAfter = Number(res.headers?.get?.('retry-after'))
       await _glofoxSleep(computeGlofoxBackoffMs(attempt, Number.isFinite(retryAfter) ? retryAfter : null), options.signal)
-      if (options.signal?.aborted) break
+      if (options.signal?.aborted) { aborted = true; break }
+      glofoxHttpCounters.retries++
       continue
     }
     break
+  }
+  // CREDITSREAD.1 — one line per call that is STILL failing after its retries
+  // (never per retry: a throttled minute would write thousands). No ids.
+  // A call the caller cancelled mid-retry did not use its retries, so it is
+  // counted apart (aborted) and not logged as a give-up.
+  if (aborted) {
+    glofoxHttpCounters.aborted++
+  } else if (res.status === 429 || res.status >= 500) {
+    glofoxHttpCounters.gave_up++
+    logWarn('glofox', 'Glofox still failing after retries', {
+      status: res.status, attempts, path: glofoxPathLabel(pathOrUrl),
+    })
   }
   // GLOFOX-SPEC-2026-09 — Glofox's own guidance: "Older endpoints sometimes
   // return a 200 status code with a success field set to false. That
@@ -604,23 +675,37 @@ export async function fetchUserCreditsResult(creds, userId) {
  * benefits from caching across the run.
  *
  * Returns the membership object or null on failure / not-found.
- * Cache stores nulls too so repeated lookups for a missing
- * membership don't re-hit the API.
+ * Only answers are cached (CREDITSREAD.1), a not-found included: a failed
+ * read is retried by the next caller in the run instead of poisoning the
+ * cache with null.
  */
 export async function fetchMembership(creds, membershipId, cache = null) {
-  if (!creds || !membershipId) return null
-  if (cache && cache.has(membershipId)) return cache.get(membershipId)
-  let result = null
+  const { membership } = await fetchMembershipResult(creds, membershipId, cache)
+  return membership
+}
+
+// CREDITSREAD.1 — ok-aware variant. Only an ANSWER is cached: a failed read
+// (429, 5xx, network, bad JSON) used to be cached as null for the whole bulk
+// run, so one blip re-labelled every credit member the run touched as
+// 'member'. Now the next member in the run simply asks again. A 4xx other
+// than 429 (a 404 above all) IS an answer, "no such membership": it is
+// { ok: true, membership: null } and cached, so the run asks once.
+export async function fetchMembershipResult(creds, membershipId, cache = null) {
+  if (!creds || !membershipId) return { ok: false, membership: null }
+  if (cache && cache.has(membershipId)) return { ok: true, membership: cache.get(membershipId) }
   try {
     const r = await glofoxFetch(creds, `/2.0/memberships/${encodeURIComponent(membershipId)}`)
-    if (r.ok) {
-      result = await r.json()
+    if (r.status >= 400 && r.status < 500 && r.status !== 429) {
+      if (cache) cache.set(membershipId, null)
+      return { ok: true, membership: null }
     }
+    if (!r.ok) return { ok: false, membership: null }
+    const membership = await r.json()
+    if (cache) cache.set(membershipId, membership)
+    return { ok: true, membership }
   } catch {
-    result = null
+    return { ok: false, membership: null }
   }
-  if (cache) cache.set(membershipId, result)
-  return result
 }
 
 /**

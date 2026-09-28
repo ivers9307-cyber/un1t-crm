@@ -5,7 +5,7 @@
 // /api/glofox/sync-member endpoint (dry-run + apply); used
 // tomorrow by the daily bulk-sync cron.
 
-import { fetchUserCredits, fetchMembership, fetchUserBookings, fetchUserInteractions } from './glofox.js'
+import { fetchUserCreditsResult, fetchMembershipResult, fetchUserBookings, fetchUserInteractions } from './glofox.js'
 import { classifyContact } from './pipeline-classifier.js'
 import { upsertClassBookings } from './class-bookings.js'
 import { logWarn } from './log.js'
@@ -1521,27 +1521,39 @@ export function mergeBookingAggregates(existing, fresh) {
  * unique active pack's parent Membership via /2.0/memberships/{id}
  * (cached across the sync run).
  *
- * Best-effort: failures during fetch return an empty/partial ctx
- * so the caller can still proceed with standard mapping. Caller
- * passes the optional `membershipCache` Map to share across many
- * member syncs in a bulk run (the Class Packs membership is the
- * same object for every Credit Member).
+ * CREDITSREAD.1 — a read that FAILED is flagged, never passed off as
+ * "no packs": creditsFailed (the /credits read failed, so the balance is
+ * unknown) and membershipsFailed (some active pack's membership could
+ * not be read and none that was read rules credit_member out, so the rule
+ * cannot run). previewMemberSync
+ * keeps the stored balance / label for whatever it could not read.
+ * Never throws; the caller's sync always proceeds.
  */
 export async function buildCreditMemberContext(creds, member, membershipCache = null) {
-  if (!creds || !member) return { credits: [], memberships: new Map() }
-  const memberId = member._id || member.id || member.member_id
-  if (!memberId) return { credits: [], memberships: new Map() }
-  const credits = await fetchUserCredits(creds, memberId)
   const cache = membershipCache || new Map()
+  const unread = { credits: [], memberships: cache, creditsFailed: true, membershipsFailed: true }
+  if (!creds || !member) return unread
+  const memberId = member._id || member.id || member.member_id
+  if (!memberId) return unread
+  const { ok, credits } = await fetchUserCreditsResult(creds, memberId)
+  if (!ok) return unread
   // Only resolve memberships for ACTIVE packs — saves API calls
   // when historical packs are present.
   const uniqueIds = Array.from(new Set(
     credits.filter(c => c?.active === true).map(c => c?.membership_id).filter(Boolean),
   ))
+  let membershipsFailed = false
+  let readNonClassPack = false
   for (const mid of uniqueIds) {
-    await fetchMembership(creds, mid, cache)
+    const r = await fetchMembershipResult(creds, mid, cache)
+    if (!r.ok) membershipsFailed = true
+    else if (!isClassPackMembership(r.membership)) readNonClassPack = true
   }
-  return { credits, memberships: cache }
+  // credit_member needs EVERY active pack's membership to be a Class Pack, so
+  // one that was read and is not one already settles it: a failure on another
+  // cannot change the answer, and must not hold a stored credit_member.
+  if (readNonClassPack) membershipsFailed = false
+  return { credits, memberships: cache, creditsFailed: false, membershipsFailed }
 }
 
 // GLOFOX-DETAIL (2026-05-30) — the rich membership detail fields that
@@ -1577,7 +1589,12 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
   } else if (opts.ctx) {
     ctx = opts.ctx
   }
-  const mapped = mapGlofoxMember(member, ctx)
+  // CREDITSREAD.1 — what the credit context actually knows. A context passed
+  // in without flags (tests, opts.ctx) counts as read.
+  const balanceKnown = !!ctx?.credits && !ctx.creditsFailed
+  const classKnown = balanceKnown && !ctx.membershipsFailed
+  const creditsUnread = !!ctx && !classKnown
+  const mapped = mapGlofoxMember(member, classKnown ? ctx : null)
   if (!mapped) {
     return { action: 'invalid', reason: 'Could not extract glofox_member_id from payload', mapped: null }
   }
@@ -1588,7 +1605,9 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
   // source of truth for any contact with a glofox_member_id. Sum
   // 'available' across active credit packs (data we already
   // fetched for credit_member detection — zero extra API cost).
-  if (ctx?.credits) {
+  // CREDITSREAD.1 — only a credits read that worked sets the balance; a failed
+  // one leaves `mapped` without the key, so the stored value is kept.
+  if (balanceKnown) {
     mapped.trial_credits_remaining = computeCreditsRemaining(ctx.credits)
   }
 
@@ -1660,6 +1679,24 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
 
   const { byGlofox, byEmail } = await findExistingContact(db, locationId, mapped)
   const existingRow = byGlofox || byEmail
+  // CREDITSREAD.1 — the credit_member rule could not run (a credits or
+  // membership read failed), so the standard mapping's 'member' is not
+  // evidence against a stored 'credit_member'. Keep it until a read works.
+  // Anything else Glofox says (trial, ex_member, lead, …) still wins:
+  // credit detection only ever chooses between member and credit_member.
+  if (creditsUnread) {
+    if (mapped.glofox_membership_status === 'member' && existingRow?.glofox_membership_status === 'credit_member') {
+      mapped.glofox_membership_status = 'credit_member'
+    }
+    const unread = ctx.creditsFailed ? 'credits' : 'memberships'
+    logWarn('glofox-sync', unread === 'credits'
+      ? 'Glofox credits read failed; stored credit balance and credit_member label kept'
+      : 'Glofox memberships read failed; balance written, stored credit_member label kept', {
+      locationId,
+      contactId: existingRow?.id ?? null,
+      unread,
+    })
+  }
   // PIPELINE5.4 — proposed pipeline placement comes from the
   // unified classifier (status × engagement × recency), not just
   // glofox_membership_status. Computed from the post-sync mapped
@@ -1718,6 +1755,7 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
     // Glofox didn't tell us where the contact came from.
     return {
       action: 'create',
+      ...(creditsUnread ? { credits_unread: true } : {}),
       mapped,
       changes: {
         glofox_member_id:         { from: null, to: mapped.glofox_member_id },
@@ -1792,7 +1830,7 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
   // trial_credits_remaining on Glofox-linked contacts will be
   // overwritten on next sync — by design (the operator should comp
   // credits in Glofox, not in the CRM).
-  if (ctx?.credits) {
+  if (balanceKnown) {
     const newRemaining = mapped.trial_credits_remaining
     if (newRemaining !== existing.trial_credits_remaining) {
       changes.trial_credits_remaining = {
@@ -1883,6 +1921,7 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
 
   return {
     action: 'update',
+    ...(creditsUnread ? { credits_unread: true } : {}),
     existing_id: existing.id,
     // PIPELINE-FLAP.2 — expose the matched persisted row so applyMemberSync's
     // reclassify snapshot can fall back to its recency columns
