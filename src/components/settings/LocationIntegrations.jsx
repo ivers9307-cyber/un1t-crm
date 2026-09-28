@@ -35,7 +35,7 @@ import WhatsAppIntegrationTab from './integrations/WhatsAppIntegrationTab'
 import AdsIntegrationTab from './integrations/AdsIntegrationTab'
 import PaymentsIntegrationTab from './integrations/PaymentsIntegrationTab'
 
-export default function LocationIntegrations({ location, xeroConnection, user, sampleBcaCar }) {
+export default function LocationIntegrations({ location, xeroConnection, xeroReadFailed = false, user, sampleBcaCar }) {
   const router = useRouter()
   const searchParams = useSearchParams()
 
@@ -60,7 +60,7 @@ export default function LocationIntegrations({ location, xeroConnection, user, s
       key: 'xero',
       label: 'Xero',
       Icon: Plug,
-      status: xeroConnection?.tenant_id ? 'connected' : 'not-configured',
+      status: xeroReadFailed ? 'unknown' : (xeroConnection?.tenant_id ? 'connected' : 'not-configured'),
     })
   }
   if (location.settings?.glofox || features.bookings || features.contacts) {
@@ -208,7 +208,7 @@ export default function LocationIntegrations({ location, xeroConnection, user, s
         {/* Active tab content */}
         <div className="p-5">
           {activeKey === 'xero' && (
-            <XeroIntegrationTab location={location} connection={xeroConnection} />
+            <XeroIntegrationTab location={location} connection={xeroConnection} readFailed={xeroReadFailed} />
           )}
           {activeKey === 'glofox' && (
             <GlofoxIntegrationTab location={location} canEdit={isOwnerOrMaster} />
@@ -249,6 +249,13 @@ function StatusDot({ status }) {
   }
   if (status === 'error') {
     return <AlertCircle size={10} className="text-red-400" />
+  }
+  // CHANNELREAD.1 — the read behind this tab failed (amber, like the hub's
+  // "Could not load" chip); never the grey "not configured" dot. role="img"
+  // so the label is announced (an aria-label on a bare span is ignored) and
+  // joins the tab button's accessible name.
+  if (status === 'unknown') {
+    return <span role="img" className="w-2 h-2 rounded-full bg-amber-500 inline-block" aria-label="Could not load" />
   }
   // not-configured: small grey dot
   return <span className="w-2 h-2 rounded-full bg-un1t-muted inline-block" />

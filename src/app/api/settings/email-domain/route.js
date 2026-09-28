@@ -71,10 +71,18 @@ export async function GET(request) {
   if (response) return response
 
   const db = createServerClient()
-  const [row, addonActive] = await Promise.all([
-    loadEmailDomainRow(db, orgId),
-    orgHasEmailDomainAddon(db, orgId),
-  ])
+  let row
+  let addonActive
+  try {
+    ;[row, addonActive] = await Promise.all([
+      loadEmailDomainRow(db, orgId),
+      orgHasEmailDomainAddon(db, orgId),
+    ])
+  } catch (e) {
+    // CHANNELREAD.1 — never answer "not configured" off a failed read.
+    logError('tenant-email-domain', 'status read failed', { orgId, err: e?.message })
+    return NextResponse.json({ success: false, error: 'Could not load the sending domain just now.' }, { status: 500 })
+  }
   return NextResponse.json({
     success: true,
     data: tenantEmailStatePayload(row, { addonActive, accountConfigured: true }),

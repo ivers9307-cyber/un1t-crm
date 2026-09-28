@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import ReadFailedNote from '@/components/settings/ReadFailedNote'
 
 // RADAR-AGENT.0b / IG-HOME.1 — per-location channel connections.
 // Home is now the per-location Integrations tab strip (Settings →
@@ -19,38 +20,98 @@ const IG_FIELDS = [
   { key: 'app_secret', label: 'Instagram app secret (also set as INSTAGRAM_APP_SECRET env)', placeholder: 'paste to set', secret: true },
 ]
 
+// CHANNELREAD.1 — which Instagram row the card acts on. The GET lists rows
+// newest-first by updated_at, and an INACTIVE row (the old POST's supersede
+// left them behind) can be newer than the live one. Picking it was not
+// cosmetic: Update PATCHes the picked row with is_active: true, and the PATCH
+// route then deactivates every OTHER active row, i.e. the live connection.
+//   active    the newest ACTIVE row: the only row Update/Disconnect touch.
+//   previous  when no row is active, the newest inactive one. It is used
+//             ONLY to prefill the non-secret fields for a reconnect; the
+//             card still says Not connected and Save POSTs a new row, which
+//             the server refuses (409) if a live connection appeared since
+//             this read. Re-activating it by PATCH would instead deactivate
+//             whatever went live meanwhile.
+function pickInstagram(connections) {
+  const ig = connections.filter(c => c.platform === 'instagram')
+  const active = ig.find(c => c.is_active !== false) || null
+  return { active, previous: active ? null : (ig[0] || null) }
+}
+
+function reconnectPrefill(row) {
+  if (!row) return {}
+  const out = {}
+  for (const f of IG_FIELDS) if (!f.secret && row[f.key]) out[f.key] = row[f.key]
+  return out
+}
+
 // `onChanged` (optional): fired after a successful Instagram connect/update
 // or disconnect so a host surface (the Integrations hub drawer) can re-grade
 // its own card. The component's own `load()` still refreshes the in-card
 // state either way; onChanged is purely a notify-up hook.
 export default function ConnectionsSection({ locationId, locationName, embedded = false, onChanged }) {
+  // CHANNELREAD.1 — three states, never two:
+  //   'loading'  the first read is in flight;
+  //   'ready'    the read SUCCEEDED, so `connections` is the truth
+  //              ([] really means nothing is connected);
+  //   'unknown'  the read failed. It renders NO token form and NO
+  //              Connect / Update / Disconnect. Save used to take the POST
+  //              (create) branch whenever the list was empty, and after a
+  //              failed read the list was empty over a LIVE connection.
+  // A failed re-read (e.g. right after a save) also goes to 'unknown': the
+  // last good list is exactly what a create just made stale.
+  const [readState, setReadState] = useState('loading')
   const [connections, setConnections] = useState([])
   const [draft, setDraft] = useState({})
-  const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [savedAt, setSavedAt] = useState(null)
   const [error, setError] = useState(null)
 
-  const load = useCallback(async () => {
+  // `keep` (optional): fields the operator typed, laid over the re-read row.
+  // Used after a 409, where the card learns a connection exists and switches
+  // to Update; losing the token they just pasted would make them paste again.
+  const load = useCallback(async (keep = null) => {
     if (!locationId) return
     try {
-      const res = await fetch(`/api/locations/${locationId}/channels`).then(r => r.json())
-      if (res.success) {
-        setConnections(res.connections || [])
-        const ig = (res.connections || []).find(c => c.platform === 'instagram')
-        setDraft(ig ? { ...ig } : {})
+      const res = await fetch(`/api/locations/${locationId}/channels`)
+      const j = await res.json()
+      if (!res.ok || j?.success !== true || !Array.isArray(j.connections)) {
+        throw new Error(j?.error || `HTTP ${res.status}`)
       }
-    } catch { setError('Failed to load connections') }
-    finally { setLoading(false) }
+      setConnections(j.connections)
+      const { active, previous } = pickInstagram(j.connections)
+      setDraft({ ...(active ? { ...active } : reconnectPrefill(previous)), ...(keep || {}) })
+      setReadState('ready')
+    } catch {
+      setConnections([])
+      setDraft({})
+      setReadState('unknown')
+    }
   }, [locationId])
 
   useEffect(() => { load() }, [load])
 
-  const igConn = connections.find(c => c.platform === 'instagram')
+  const igConn = pickInstagram(connections).active
 
   function setField(k, v) { setDraft(d => ({ ...d, [k]: v })) }
 
+  // The form fields the operator actually filled in (a masked secret echoed
+  // back by the API is not "typed"). Empty ones are dropped so they never
+  // blank the re-read row's values.
+  function typedFields(d) {
+    const out = {}
+    for (const f of IG_FIELDS) {
+      const v = d[f.key]
+      if (v === undefined || v === null || v === '') continue
+      if (f.secret && String(v).startsWith('••')) continue
+      out[f.key] = v
+    }
+    if (d.agent_enabled !== undefined) out.agent_enabled = d.agent_enabled
+    return out
+  }
+
   async function saveInstagram() {
+    if (readState !== 'ready') return // never write over a state we could not read
     setSaving(true); setError(null)
     try {
       const payload = { platform: 'instagram', is_active: true }
@@ -72,7 +133,12 @@ export default function ConnectionsSection({ locationId, locationName, embedded 
       })
       const j = await res.json()
       if (j.success) { setSavedAt(Date.now()); await load(); onChanged?.() }
-      else setError(j.error || 'Failed to save')
+      else {
+        setError(j.error || 'Failed to save')
+        // 409 already_connected: a connection exists that this card did not
+        // know about. Re-read so the card shows it and offers Update.
+        if (res.status === 409) await load(typedFields(draft))
+      }
     } catch { setError('Failed to save') }
     finally { setSaving(false) }
   }
@@ -84,12 +150,24 @@ export default function ConnectionsSection({ locationId, locationName, embedded 
     onChanged?.()
   }
 
-  if (loading) return <div className="text-sm text-un1t-muted">Loading connections…</div>
+  if (readState === 'loading') return <div className="text-sm text-un1t-muted">Loading connections…</div>
 
   const inputCls = 'w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text'
   const igLive = !!(igConn && igConn.has_access_token)
 
-  const instagramCard = (
+  const unknownCard = (
+    <div className="border border-un1t-border rounded-md px-4 py-4">
+      <div className="flex items-center justify-between mb-3">
+        <div className="text-sm font-medium text-un1t-text">
+          Instagram
+          <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-700">Could not load</span>
+        </div>
+      </div>
+      <ReadFailedNote what="the Instagram connection" onRetry={load} />
+    </div>
+  )
+
+  const connectedCard = (
     <div className="border border-un1t-border rounded-md px-4 py-4">
         <div className="flex items-center justify-between mb-3">
           <div className="text-sm font-medium text-un1t-text">
@@ -148,6 +226,8 @@ export default function ConnectionsSection({ locationId, locationName, embedded 
         </div>
     </div>
   )
+
+  const instagramCard = readState === 'unknown' ? unknownCard : connectedCard
 
   if (embedded) return instagramCard
 

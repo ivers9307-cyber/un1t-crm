@@ -26,9 +26,14 @@ import { effectiveHistorySyncStatus } from '@/lib/whatsapp-coexistence'
 // Manage drawer imports the IDENTICAL component. This tab keeps working —
 // same card, same flow, just imported instead of defined inline.
 import { ConnectWhatsAppCard } from './ConnectWhatsAppCard'
+import ReadFailedNote from '@/components/settings/ReadFailedNote'
 
 export default function WhatsAppIntegrationTab({ location, canEdit }) {
-  const [numbers, setNumbers] = useState([])
+  // CHANNELREAD.1 — `numbers` is null until a read SUCCEEDS, and a failed
+  // read puts it back to null: no "No numbers configured", no Add, no
+  // Connect card over a list we could not read. `error` stays for the row
+  // actions (set default, remove, save), which report through it.
+  const [numbers, setNumbers] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [adding, setAdding] = useState(false)
@@ -43,10 +48,10 @@ export default function WhatsAppIntegrationTab({ location, canEdit }) {
     try {
       const res = await fetch(`/api/locations/${location.id}/whatsapp/numbers`)
       const j = await res.json()
-      if (!j.success) throw new Error(j.error || 'Failed to load numbers')
-      setNumbers(j.numbers || [])
-    } catch (e) {
-      setError(e.message)
+      if (!res.ok || !j.success || !Array.isArray(j.numbers)) throw new Error(j.error || 'Failed to load numbers')
+      setNumbers(j.numbers)
+    } catch {
+      setNumbers(null)
     } finally {
       setLoading(false)
     }
@@ -91,48 +96,54 @@ export default function WhatsAppIntegrationTab({ location, canEdit }) {
         </div>
       ) : (
         <>
-          <div className="space-y-2">
-            {numbers.length === 0 && (
-              <div className="text-xs text-un1t-subtle bg-un1t-bg border border-un1t-border rounded p-3">
-                No numbers configured. This location falls back to the global
-                <code className="text-un1t-muted"> WHATSAPP_*</code> env vars (legacy single-number setup).
-                Add a number below to migrate.
+          {numbers === null ? (
+            <ReadFailedNote what="this location's WhatsApp numbers" onRetry={() => load({ silent: true })} />
+          ) : (
+            <>
+              <div className="space-y-2">
+                {numbers.length === 0 && (
+                  <div className="text-xs text-un1t-subtle bg-un1t-bg border border-un1t-border rounded p-3">
+                    No numbers configured. This location falls back to the global
+                    <code className="text-un1t-muted"> WHATSAPP_*</code> env vars (legacy single-number setup).
+                    Add a number below to migrate.
+                  </div>
+                )}
+                {numbers.map((n) => (
+                  <NumberRow
+                    key={n.id}
+                    location={location}
+                    number={n}
+                    canEdit={canEdit}
+                    expanded={expandedId === n.id}
+                    onExpand={() => setExpandedId(expandedId === n.id ? null : n.id)}
+                    onReload={load}
+                    onError={setError}
+                  />
+                ))}
               </div>
-            )}
-            {numbers.map((n) => (
-              <NumberRow
-                key={n.id}
-                location={location}
-                number={n}
-                canEdit={canEdit}
-                expanded={expandedId === n.id}
-                onExpand={() => setExpandedId(expandedId === n.id ? null : n.id)}
-                onReload={load}
-                onError={setError}
-              />
-            ))}
-          </div>
 
-          {canEdit && (
-            adding ? (
-              <AddNumberForm
-                locationId={location.id}
-                onCancel={() => setAdding(false)}
-                onSaved={() => { setAdding(false); load() }}
-                onError={setError}
-              />
-            ) : (
-              <button
-                type="button"
-                onClick={() => setAdding(true)}
-                className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md bg-un1t-text text-un1t-bg font-semibold hover:bg-un1t-accent"
-              >
-                <Plus size={12} /> Add WhatsApp number
-              </button>
-            )
+              {canEdit && (
+                adding ? (
+                  <AddNumberForm
+                    locationId={location.id}
+                    onCancel={() => setAdding(false)}
+                    onSaved={() => { setAdding(false); load() }}
+                    onError={setError}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setAdding(true)}
+                    className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md bg-un1t-text text-un1t-bg font-semibold hover:bg-un1t-accent"
+                  >
+                    <Plus size={12} /> Add WhatsApp number
+                  </button>
+                )
+              )}
+
+              <ConnectWhatsAppCard location={location} canEdit={canEdit} onConnected={() => load({ silent: true })} />
+            </>
           )}
-
-          <ConnectWhatsAppCard location={location} canEdit={canEdit} onConnected={() => load({ silent: true })} />
 
           <ChatOpenersCard location={location} canEdit={canEdit} />
 

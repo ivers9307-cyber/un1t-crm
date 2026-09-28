@@ -6,6 +6,8 @@ import Link from 'next/link'
 import { MapPin, ChevronRight } from 'lucide-react'
 import { visibleSettingsTree } from '@/lib/settings-tree'
 import { excludeTombstones } from '@/lib/staff-tombstone'
+import { Suspense } from 'react'
+import XeroCallbackNotice from '@/components/settings/XeroCallbackNotice'
 
 // SETTINGS.2g Task 3 — the settings index is now a thin renderer over
 // SETTINGS_TREE (src/lib/settings-tree.js): this page's job is (a) the
@@ -158,6 +160,12 @@ export default async function SettingsPage() {
     <div className="p-8 max-w-4xl">
       <h2 className="text-2xl font-bold mb-1">Settings</h2>
       <p className="text-sm text-un1t-subtle mb-8">Manage your team, locations, communications, and permissions</p>
+
+      {/* CHANNELREAD.1 — the Xero OAuth callback's fallback landing page (a
+          state it could not use carries no location); show its outcome. */}
+      <Suspense fallback={null}>
+        <XeroCallbackNotice className="mb-6" />
+      </Suspense>
 
       <div className="mb-10">
         <h3 className="text-lg font-semibold mb-4">Workspace</h3>

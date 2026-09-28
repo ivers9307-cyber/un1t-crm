@@ -13,6 +13,13 @@ vi.mock('next/link', () => ({
   default: ({ href, children, className }) => <a href={typeof href === 'string' ? href : ''} className={className}>{children}</a>,
 }))
 vi.mock('./IntegrationsHubDrawer', () => ({ default: () => null }))
+// CHANNELREAD.1 — the hub renders XeroCallbackNotice (the Xero OAuth
+// callback's return_to target), which reads the URL.
+vi.mock('next/navigation', () => ({
+  useSearchParams: () => new URLSearchParams(''),
+  usePathname: () => '/settings/integrations-hub',
+  useRouter: () => ({ replace: vi.fn(), push: vi.fn(), refresh: vi.fn() }),
+}))
 
 import IntegrationsHub from './IntegrationsHub'
 
