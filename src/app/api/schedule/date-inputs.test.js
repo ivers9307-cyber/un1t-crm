@@ -42,7 +42,8 @@
 // (start_date/end_date, from/to, start/end, period_start/period_end) hands
 // them together to rangeQueryError / reportPeriodError, or compares them
 // inline (`end < start`). A bound handed to either helper also counts as
-// calendar-checked for Rule 2 (the helpers check each bound).
+// calendar-checked for Rule 2 (the helpers check each bound). Rule 3 reads
+// the source with its comments stripped: a comment is never the check.
 
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
@@ -133,8 +134,45 @@ const NAMED_PARAM_READ = new RegExp(
   'g',
 )
 
+/**
+ * The source with its `//` and `/* *\/` comments blanked, so a comment that
+ * reads like the check (`// TODO: refuse endDate < startDate`) never counts
+ * as one. Strings and template literals are skipped over, so the `//` in a
+ * URL is not taken for a comment. A regex literal holding a quote can throw
+ * the string tracking off; that only ever leaves a comment in place, which is
+ * the pre-strip behaviour, never code removed.
+ */
+function stripComments(src) {
+  let out = ''
+  let quote = null
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i]
+    if (quote) {
+      out += c
+      if (c === '\\') { out += src[++i] ?? ''; continue }
+      if (c === quote) quote = null
+      continue
+    }
+    if (c === '/' && src[i + 1] === '/') {
+      while (i < src.length && src[i] !== '\n') i++
+      out += '\n'
+      continue
+    }
+    if (c === '/' && src[i + 1] === '*') {
+      const close = src.indexOf('*/', i + 2)
+      i = close === -1 ? src.length : close + 1
+      out += ' '
+      continue
+    }
+    if (c === "'" || c === '"' || c === '`') quote = c
+    out += c
+  }
+  return out
+}
+
 /** Rule 3: both ends of a query range are read, and never put in order. */
-function unorderedPairOffence(src) {
+function unorderedPairOffence(rawSrc) {
+  const src = stripComments(rawSrc)
   const reads = [...src.matchAll(NAMED_PARAM_READ)].map((m) => ({ binding: m[1] || m[2] || null, param: m[4] }))
   for (const [startParam, endParam] of RANGE_PAIRS) {
     const starts = reads.filter((r) => r.param === startParam)
@@ -242,6 +280,19 @@ describe('the guard\'s own rules, on sources written to break them', () => {
       const startDate = searchParams.get('start_date')
       const endDate = searchParams.get('end_date')
       rangeQueryError(endDate, startDate)`)).toBe(true)
+  })
+
+  it('rule 3 is not satisfied by a comment that looks like the check', () => {
+    for (const src of [
+      `const startDate = searchParams.get('start_date')
+       const endDate = searchParams.get('end_date')
+       // TODO: refuse endDate < startDate
+       return list(startDate, endDate)`,
+      `const startDate = searchParams.get('start_date')
+       const endDate = searchParams.get('end_date')
+       /* rangeQueryError(startDate, endDate) was here */
+       return list(startDate, endDate)`,
+    ]) expect(unorderedPairOffence(src)).toBe(true)
   })
 
   it('rule 3 is per pair: an ordered preview does not excuse an unordered list (time-off on main)', () => {
