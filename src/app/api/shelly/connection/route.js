@@ -20,7 +20,7 @@ import { NextResponse } from 'next/server'
 import { withAuth } from '@/lib/with-auth'
 import { guardMasterOrOwner } from '@/lib/auth'
 import { logWarn, logError } from '@/lib/log'
-import { normaliseShellyHost, fingerprintAuthKey, keyHint, redactSecret, SHELLY_HOST_HELP } from '@/lib/shelly/client'
+import { normaliseShellyHost, fingerprintAuthKey, redactSecret, SHELLY_HOST_HELP } from '@/lib/shelly/client'
 import {
   classifyFingerprintClash,
   findFingerprintRows,
@@ -40,7 +40,7 @@ const MODULE = 'shelly-connection'
 // select is the same allowlist as connections.js's NON_SECRET, re-stated here
 // because this is a different query. Adding a column to the table cannot make
 // it appear in a response without an edit in both places.
-const NON_SECRET_RETURNING = 'host, key_hint, status, last_ok_at, last_error, last_error_at'
+const NON_SECRET_RETURNING = 'host, status, last_ok_at, last_error, last_error_at'
 
 const bad = (error, status, extra = {}) =>
   NextResponse.json({ success: false, error, ...extra }, { status })
@@ -154,8 +154,8 @@ export const PUT = withAuth(
     // driver happened to hand back.
     const storedRow = storedError ? null : stored
 
-    // Write-only secret merge: the UI renders the key as "••••abcd" and posts
-    // it back blank, so a blank or absent auth_key KEEPS the stored one and
+    // Write-only secret merge: the UI shows only that a key is stored
+    // (SECRET_MASK) and posts the field blank, so a blank or absent auth_key KEEPS the stored one and
     // only a fresh value overwrites it. Without this, "change only the
     // server" would wipe the credential.
     const merged = mergeSecretSlice({
@@ -230,7 +230,7 @@ export const PUT = withAuth(
           host,
           auth_key: key,
           auth_key_fingerprint: fp,
-          key_hint: keyHint(key),
+          // No key_hint (SECRETTAILS.1): the UI shows presence only; mig 659 forbids a value.
           // A successful re-paste MUST clear the error state: the hub card and
           // the panel banner are driven by `status`, so leaving 'action_needed'
           // behind would tell an owner who just fixed the connection that it

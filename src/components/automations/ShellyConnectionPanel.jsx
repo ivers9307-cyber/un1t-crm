@@ -1,10 +1,10 @@
 // SHELLY-UI.6 — the Shelly account this studio controls its plugs through.
 //
 // Reads GET /api/shelly/connection's `connection` (publicConnectionView — host,
-// key_hint, has_auth_key, status, last_ok_at, last_error, last_error_at) and
-// writes through PUT/DELETE. The key itself is never in this component's props
-// and never comes back from the server: `key_hint` is the last four characters
-// and that is all the UI has ever seen.
+// has_auth_key, status, last_ok_at, last_error, last_error_at) and writes
+// through PUT/DELETE. The key itself is never in this component's props and
+// never comes back from the server, nor does any character of it: the panel
+// shows only that a key is stored (SECRETTAILS.1).
 //
 // THREE THINGS THIS PANEL IS CAREFUL ABOUT, each because the route is:
 //
@@ -32,6 +32,7 @@ import { useEffect, useState } from 'react'
 import { AlertCircle, KeyRound, Link2Off, RefreshCw } from 'lucide-react'
 import { Button, Card, Field } from '@/components/ui'
 import { formatRelative } from '@/lib/dates'
+import { SECRET_MASK } from '@/lib/secret-keys'
 import { fetchJson, errorText, jsonBody } from './shelly-fetch'
 
 // Same recipe as the health chip (light theme: bg-<c>-500/10 text-<c>-700).
@@ -133,7 +134,7 @@ export default function ShellyConnectionPanel({ connection, canManage, deviceCou
             {chip && <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${chip.cls}`}>{chip.label}</span>}
             <span className="text-xs text-un1t-subtle">
               {connection.host || 'no server on file'}
-              {connection.key_hint ? ` · key ••••${connection.key_hint}` : ' · no key on file'}
+              {connection.has_auth_key ? ` · key ${SECRET_MASK}` : ' · no key on file'}
               {connection.last_ok_at ? ` · last OK ${formatRelative(connection.last_ok_at)}` : ' · never confirmed'}
             </span>
           </div>

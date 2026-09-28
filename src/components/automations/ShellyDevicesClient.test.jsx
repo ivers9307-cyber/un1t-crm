@@ -16,7 +16,6 @@ import ShellyDevicesClient, { refreshSummary, syncNamesSummary } from './ShellyD
 
 const CONNECTION = {
   host: 'shelly-68-eu.shelly.cloud',
-  key_hint: 'ab12',
   has_auth_key: true,
   status: 'connected',
   last_ok_at: new Date(Date.now() - 60_000).toISOString(),
