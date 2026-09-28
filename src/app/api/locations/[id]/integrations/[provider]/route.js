@@ -85,6 +85,13 @@ const PROVIDERS = {
       api_key: optStr(4000),
       api_token: optStr(4000),
       webhook_secret: optStr(4000),
+      // SECFIX.3b — the /settings/locations/[id] Glofox tab saves through this
+      // route now (it used to write locations.settings from the browser), so
+      // its non-secret fields ride here too. Absent = untouched.
+      trial_membership_id: optStr(200),
+      trial_plan_code: optStr(200),
+      hidden_class_keywords: z.array(z.string().max(200)).max(200).nullable().optional(),
+      trainer_names: z.record(z.string().max(64), z.string().max(200)).nullable().optional(),
     }),
     readSlice: (loc) => plainSlice(loc.settings?.glofox),
     applyMerged: (loc, merged) => writeSettingsSlice(loc, 'glofox', sliceHasValue(merged) ? merged : null),

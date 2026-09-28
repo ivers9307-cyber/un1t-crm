@@ -113,9 +113,9 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
         timezone,
         country,
         active,
-        // mig 079 — org is read-only when editing (cross-org moves are
-        // rare and risky; do them via SQL with intent).
-        organization_id: location.organization_id,
+        // SECFIX.3b — organization_id is NOT sent: the org is read-only here,
+        // and mig 648 grants no client UPDATE on it (locations_upd would
+        // otherwise let an owner re-parent a studio into another org).
         monthly_contractor_budget_eur: contractorBudgetValue,
         invoices_inbound_slug: invoicesSlugValue,
         // email_inbox_reply_to is DELIBERATELY absent — deprecated by mig 485
@@ -123,7 +123,11 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
         // leaves the existing value untouched rather than nulling it.
         updated_at: new Date().toISOString(),
       }
-      const result = await db.from('locations').update(payload).eq('id', location.id).select().single()
+      // SECFIX.3b — name the returned column: mig 648 column-grants SELECT on
+      // locations, and a bare .select() (every column) would fail WHOLE (42501)
+      // after the row had already been updated. .single() still turns "0 rows
+      // updated" (RLS) into an error.
+      const result = await db.from('locations').update(payload).eq('id', location.id).select('id').single()
       if (result.error) {
         setError(result.error.message)
         setSaving(false)

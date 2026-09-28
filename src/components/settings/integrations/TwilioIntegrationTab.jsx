@@ -11,7 +11,6 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { createBrowserClient } from '@/lib/supabase'
 import { Save, Loader2, Check, AlertCircle } from 'lucide-react'
 import { validateAlphaSenderId } from '@/lib/twilio'
 
@@ -30,21 +29,25 @@ export default function TwilioIntegrationTab({ location, canEdit }) {
       const err = validateAlphaSenderId(trimmed)
       if (err) { setError(`Sender ID: ${err}`); setSaving(false); return }
     }
-    const db = createBrowserClient()
-    const { error: upErr } = await db
-      .from('locations')
-      .update({
-        twilio_alpha_sender_id: trimmed || null,
-        updated_at: new Date().toISOString(),
+    // SECFIX.3b — the service-role route writes the column and re-syncs the
+    // twilio_sender registry row in-handler.
+    let res
+    let json = null
+    try {
+      res = await fetch(`/api/locations/${location.id}/integrations/twilio`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sender_id: trimmed }),
       })
-      .eq('id', location.id)
+      json = await res.json().catch(() => null)
+    } catch (e) {
+      setSaving(false)
+      setError(`Could not save: ${e?.message || 'network error'}`)
+      return
+    }
     setSaving(false)
-    if (upErr) { setError(upErr.message); return }
+    if (!res.ok || !json?.success) { setError(json?.error || `Save failed (${res.status})`); return }
     setSavedAt(new Date())
-    // INTEG-A2: re-sync this location's channel_connections registry
-    // rows from the legacy fields just saved (fire-and-forget — the
-    // registry write needs the service role, which lives server-side).
-    fetch(`/api/locations/${location.id}/connections/refresh`, { method: 'POST' }).catch(() => {})
     router.refresh()
   }
 
@@ -78,8 +81,9 @@ export default function TwilioIntegrationTab({ location, canEdit }) {
       )}
 
       <div>
-        <label className="block text-xs text-un1t-subtle mb-1">Alpha Sender ID</label>
+        <label htmlFor="twilio-sender-id" className="block text-xs text-un1t-subtle mb-1">Alpha Sender ID</label>
         <input
+          id="twilio-sender-id"
           type="text"
           value={senderId}
           onChange={e => setSenderId(e.target.value)}
