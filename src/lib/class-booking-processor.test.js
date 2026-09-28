@@ -14,7 +14,7 @@ vi.mock('@/lib/glofox-push', () => ({ findOrCreateGlofoxMember: vi.fn(async () =
 vi.mock('@/lib/automations/booking-whatsapp-confirm', () => ({ maybeSendBookingWhatsappConfirm: vi.fn(async () => ({ sent: true })), CLASS_CONFIRM_TEMPLATE: 'booking_class_confirmed_' }))
 
 import { processClassBookingRequest } from './class-booking-processor'
-import { createBooking, fetchUserBookingsResult } from '@/lib/glofox'
+import { createBooking, fetchUserBookingsResult, glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation } from '@/lib/glofox'
 import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
 import { computeCreditsRemaining } from '@/lib/glofox-sync'
 import { maybeSendBookingWhatsappConfirm, CLASS_CONFIRM_TEMPLATE } from '@/lib/automations/booking-whatsapp-confirm'
@@ -160,5 +160,29 @@ describe('processClassBookingRequest', () => {
     expect(contactsSelect).toBeTruthy()
     expect(contactsSelect.cols).toContain('glofox_membership_state')
     expect(contactsSelect.cols).toContain('glofox_member_id')
+  })
+
+  // REGISTRYREAD.1a — an unreadable Glofox settings row is not "not
+  // configured". 'failed' is terminal; a THROW is the queue's retry signal
+  // (claimAndProcessBookingJob re-queues under MAX_ATTEMPTS, then needs_review).
+  it('an unreadable settings row THROWS (the queue retries it) and stamps nothing', async () => {
+    glofoxCredentialsForLocation.mockResolvedValueOnce({ branchId: null, apiKey: null, apiToken: null, readError: 'glofox_settings_unreadable' })
+    const db = makeDb({ id: 'c1', first_name: 'Sam', phone: '0871234567' })
+    const statusWrites = []
+    db.update = (patch) => { statusWrites.push(patch); return { eq: async () => ({}), is: async () => ({}) } }
+    await expect(processClassBookingRequest(db, req)).rejects.toThrow(/glofox_settings_unreadable/)
+    expect(statusWrites).toEqual([])
+    expect(createBooking).not.toHaveBeenCalled()
+  })
+
+  it('a genuinely unconfigured studio still lands failed glofox_not_configured (unchanged)', async () => {
+    glofoxCredentialsForLocation.mockResolvedValueOnce({ branchId: null, apiKey: null, apiToken: null, readError: null })
+    missingGlofoxCredentialsForLocation.mockReturnValueOnce(['Branch ID', 'API Key', 'API Token'])
+    const db = makeDb({ id: 'c1', first_name: 'Sam', phone: '0871234567' })
+    const statusWrites = []
+    db.update = (patch) => { statusWrites.push(patch); return { eq: async () => ({}), is: async () => ({}) } }
+    const r = await processClassBookingRequest(db, req)
+    expect(r).toEqual({ outcome: 'failed', detail: 'glofox_not_configured' })
+    expect(statusWrites).toEqual([{ status: 'failed', last_error: 'glofox_not_configured' }])
   })
 })

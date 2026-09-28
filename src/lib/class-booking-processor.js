@@ -110,6 +110,12 @@ async function routeToReview(db, request, reason, { personContactIds = null, exe
 
 export async function processClassBookingRequest(db, request) {
   const creds = await glofoxCredentialsForLocation(db, request.location_id)
+  // REGISTRYREAD.1a: an unreadable settings row is not "not configured".
+  // 'failed' is terminal and nothing retries it; a THROW is the queue's
+  // documented retry signal (class-booking-queue.js: re-queue under
+  // MAX_ATTEMPTS, then needs_review). A blip costs a 2-minute retry, never
+  // the customer's class.
+  if (creds.readError) throw new Error(creds.readError)
   if (missingGlofoxCredentialsForLocation(creds).length) {
     await setStatus(db, request.id, { status: 'failed', last_error: 'glofox_not_configured' })
     return { outcome: 'failed', detail: 'glofox_not_configured' }
