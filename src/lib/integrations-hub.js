@@ -23,6 +23,10 @@
 //
 // Status model (mirrors channel_connections.status + the hub mockup):
 //   connected | action_needed | error | not_connected
+//   + unknown (HUBREAD.1): the READ behind the row failed. Never graded
+//     not_connected (the card would offer Connect over a live connection)
+//     or connected (the page would call it healthy); the UI offers no
+//     action on it, only "Try again".
 // (coming_soon / platform_managed are presentation-only tiers, not row
 // states — the UI applies them to static cards.)
 //
@@ -51,8 +55,13 @@ import { METERS, METER_KEYS } from '@shared/plans'
 
 export { EXPIRY_SOON_DAYS }
 
-// Severity order for aggregating many rows into one card chip.
-const STATUS_RANK = { error: 3, action_needed: 2, connected: 1, not_connected: 0 }
+// HUBREAD.1 — the grade for a row whose read FAILED (see the header).
+export const HUB_UNKNOWN = 'unknown'
+export const HUB_UNKNOWN_MESSAGE = 'Could not load this just now. Try again in a moment.'
+
+// Severity order for aggregating many rows into one card chip. unknown sits
+// under error (a known break) and over everything a read could have told us.
+const STATUS_RANK = { error: 4, [HUB_UNKNOWN]: 3, action_needed: 2, connected: 1, not_connected: 0 }
 
 /**
  * Aggregate row statuses into a card-level status: any error wins,
@@ -223,12 +232,16 @@ const CARD_LABELS = {
   unifi: 'UniFi Access',
   climate: 'Climate devices',
   bca: 'BCA Submit',
+  // HUBREAD.1 — card-level rows for a failed read: the registry feeds
+  // several cards at once; email delivery is per organisation.
+  registry: 'Connections',
+  email: 'Email delivery',
 }
 
 /**
  * Build the "Needs attention" strip from assembled card rows.
- * Ordering (per the hub spec): error rows first, then tokens expiring
- * within `expirySoonDays`, then not_connected rows with evidence of a
+ * Ordering (per the hub spec): error rows first, then rows whose read
+ * failed (`unknown`, HUBREAD.1), then tokens expiring within `expirySoonDays`, then not_connected rows with evidence of a
  * partial setup (a registry row exists but is graded not_connected, or
  * a deactivated WhatsApp number) — bare absence never nags. Pure.
  *
@@ -238,10 +251,26 @@ const CARD_LABELS = {
  */
 export function buildAttention(rows, { now = new Date(), expirySoonDays = EXPIRY_SOON_DAYS } = {}) {
   const errors = []
+  const unreadable = []
   const expiring = []
   const setup = []
   for (const r of rows || []) {
     const label = CARD_LABELS[r.cardKey] || r.cardKey
+    // HUBREAD.1 — a read that failed. After real errors (known breaks),
+    // before everything else (nothing under it could be graded).
+    if (r.status === HUB_UNKNOWN) {
+      unreadable.push({
+        severity: 'warning',
+        cardKey: r.cardKey,
+        label,
+        locationId: r.locationId,
+        locationName: r.locationName,
+        message: r.message || `Could not load ${label} just now. Try again in a moment.`,
+        href: r.href ?? null,
+        unreadable: true,
+      })
+      continue
+    }
     if (r.status === 'error') {
       errors.push({
         severity: 'error',
@@ -293,7 +322,27 @@ export function buildAttention(rows, { now = new Date(), expirySoonDays = EXPIRY
       })
     }
   }
-  return [...errors, ...expiring, ...setup]
+  return [...errors, ...unreadable, ...expiring, ...setup]
+}
+
+/**
+ * HUBREAD.1 — the ONE attention row a failed read earns (the Shelly
+ * pattern). Pinned to the first in-scope location because
+ * attentionCountByOrg (admin-tenants.js) resolves the org THROUGH
+ * a.locationId; the UI shows it under every location scope. null when
+ * there are no locations. Pure.
+ */
+export function unreadableAttention(cardKey, ids, message) {
+  if (!ids?.length) return null
+  const label = CARD_LABELS[cardKey] || cardKey
+  return {
+    cardKey,
+    locationId: ids[0],
+    locationName: 'All locations',
+    status: HUB_UNKNOWN,
+    message: message || `Could not load ${label} just now. Try again in a moment.`,
+    href: null,
+  }
 }
 
 // ─────────────────────────────────────────────────────────────

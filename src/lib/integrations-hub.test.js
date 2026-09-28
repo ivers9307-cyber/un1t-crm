@@ -21,6 +21,7 @@ import {
   LAPSE_WARN_MIN_CENTS,
   LAPSE_WARN_DAYS,
   assembleIntegrationsHub,
+  HUB_UNKNOWN,
 } from './integrations-hub'
 // The tenants console counts hub attention rows THROUGH a.locationId; the
 // Shelly card's card-level row is pinned to a real id so that count works.
@@ -777,5 +778,50 @@ describe('assembleIntegrationsHub — Shelly plugs card', () => {
     const nag = data.attention.filter((n) => n.cardKey === 'shelly')
     expect(nag).toHaveLength(1)
     expect(nag[0]).toMatchObject({ severity: 'warning', locationId: LOC_B.id, label: 'Shelly plugs' })
+  })
+})
+
+// ── HUBREAD.1 — a failed read is 'unknown', never not_connected/connected ──
+describe('worstStatus — unknown (HUBREAD.1)', () => {
+  it('an unknown row outranks connected, not_connected and action_needed', () => {
+    expect(worstStatus(['connected', 'unknown'])).toBe('unknown')
+    expect(worstStatus(['not_connected', 'unknown'])).toBe('unknown')
+    expect(worstStatus(['action_needed', 'unknown'])).toBe('unknown')
+  })
+
+  it('a real error still outranks unknown', () => {
+    expect(worstStatus(['unknown', 'error'])).toBe('error')
+  })
+
+  it('exports the status the UI keys on', () => {
+    expect(HUB_UNKNOWN).toBe('unknown')
+  })
+})
+
+describe('buildAttention — unreadable rows (HUBREAD.1)', () => {
+  it('keeps an unknown row, after real errors and before expiring tokens, marked unreadable', () => {
+    const rows = [
+      { cardKey: 'instagram', locationId: 'l1', locationName: 'A', status: 'connected', tokenExpiresAt: '2026-07-22T00:00:00Z', href: '/i' },
+      { cardKey: 'xero', locationId: 'l1', locationName: 'All locations', status: 'unknown', message: 'Could not load Xero just now. Try again in a moment.', href: null },
+      { cardKey: 'glofox', locationId: 'l1', locationName: 'A', status: 'error', message: 'boom', href: '/g' },
+    ]
+    const out = buildAttention(rows, { now: NOW })
+    expect(out.map((a) => a.cardKey)).toEqual(['glofox', 'xero', 'instagram'])
+    expect(out[1]).toMatchObject({
+      severity: 'warning',
+      label: 'Xero',
+      locationName: 'All locations',
+      message: 'Could not load Xero just now. Try again in a moment.',
+      unreadable: true,
+    })
+  })
+
+  it('labels the registry and email rows', () => {
+    const out = buildAttention([
+      { cardKey: 'registry', locationId: 'l1', locationName: 'All locations', status: 'unknown', href: null },
+      { cardKey: 'email', locationId: 'l1', locationName: 'All locations', status: 'unknown', href: null },
+    ], { now: NOW })
+    expect(out.map((a) => a.label)).toEqual(['Connections', 'Email delivery'])
+    expect(out[1].message).toBe('Could not load Email delivery just now. Try again in a moment.')
   })
 })
