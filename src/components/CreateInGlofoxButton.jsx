@@ -63,8 +63,10 @@ export default function CreateInGlofoxButton({ contact }) {
   // needs_review case where it'll persist.
   const resultMeta = result && {
     linked:        { Icon: CheckCircle2, cls: 'text-emerald-400', text: 'Linked to an existing Glofox account.' },
+    // PASSCODEREAD.1 — the only time this password is ever shown. It is not
+    // stored anywhere (mig 651) and no message carries it.
     created:       { Icon: CheckCircle2, cls: 'text-emerald-400', text: result.passcode
-      ? `Created in Glofox. Passcode: ${result.passcode} (will be emailed via the welcome sequence).`
+      ? `Created in Glofox. First-login password: ${result.passcode}. Give it to the member now: it is not saved and nothing emails it. They can also use Forgot password? in the Glofox app.`
       : 'Created in Glofox.' },
     needs_review:  { Icon: AlertTriangle, cls: 'text-amber-400', text: `Partial success — operator review required. ${result.error || ''}`.trim() },
     skipped:       { Icon: AlertTriangle, cls: 'text-un1t-subtle', text: 'Skipped (no matching Glofox account and create-if-missing was off).' },
