@@ -84,6 +84,24 @@ describe('IntegrationsHub — unknown rows (HUBREAD.1)', () => {
     expect(legend?.[1]).toContain('Could not load')
   })
 
+  it('an unreadable card tags "2 locations" under All locations, never the first site (N2)', () => {
+    const B = { id: 'loc-b', name: 'Hatch Street' }
+    const UB = (extra = {}) => ({ ...U(extra), locationId: B.id })
+    const two = {
+      ...UNREAD,
+      locations: [LOC, B],
+      instagram: [U(), UB()],
+      xero: [U(), UB()],
+      ads: [U(), UB()],
+      unifi: [U(), UB()],
+    }
+    const html = renderToStaticMarkup(<IntegrationsHub data={two} isMaster />)
+    for (const title of ['Instagram', 'Xero', 'Meta Ads', 'UniFi Access']) {
+      const tag = html.match(new RegExp(`<h3[^>]*>${title}<span[^>]*>([^<]*)</span>`))?.[1]
+      expect(tag, title).toBe('2 locations')
+    }
+  })
+
   it('a genuinely unconnected location still offers Connect (pin)', () => {
     const healthy = {
       ...UNREAD,

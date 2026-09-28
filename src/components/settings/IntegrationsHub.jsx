@@ -437,6 +437,10 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
   const scopeTag = scope === 'all'
     ? (arr) => (arr.length > 1 ? `${arr.length} locations` : (arr[0] ? nameById[arr[0].locationId] : null))
     : () => nameById[scope]
+  // A single-connection card tags the location it names. An unreadable
+  // card has an unknown row per location — naming the first would put
+  // one site's name under "All locations" (HUBREAD.1), so it counts.
+  const connTag = (arr, fallback) => (arr.length && !isUnread(arr) ? nameById[arr[0].locationId] : fallback)
 
   return (
     <div className="p-8 max-w-6xl">
@@ -634,7 +638,7 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
         <HubCard
           icon={InstagramIcon}
           title="Instagram"
-          locTag={instagram.length ? nameById[instagram[0].locationId] : scopeTag(instagram)}
+          locTag={connTag(instagram, scopeTag(instagram))}
           provider={instagram[0]?.displayName ? `${instagram[0].displayName} · Instagram DMs` : 'Instagram DMs'}
           chip={<StatusChip status={worstOf(instagram.map((r) => r.status))} />}
         >
@@ -687,7 +691,7 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
         <HubCard
           icon={Landmark}
           title="Xero"
-          locTag={xero.length ? nameById[xero[0].locationId] : scopeTag(xero)}
+          locTag={connTag(xero, scopeTag(xero))}
           provider="Accounting — invoices & bills"
           chip={<StatusChip status={worstOf(xero.map((r) => r.status))} />}
         >
@@ -736,7 +740,7 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
         <HubCard
           icon={Megaphone}
           title="Meta Ads"
-          locTag={ads.length ? nameById[ads[0].locationId] : scopeTag(ads)}
+          locTag={connTag(ads, scopeTag(ads))}
           provider={ads[0]?.externalAccountId ? `Ad account ${ads[0].externalAccountId}` : 'Spend & attribution reporting'}
           chip={<StatusChip status={worstOf(ads.map((r) => r.status))} />}
         >
@@ -969,7 +973,7 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
         <HubCard
           icon={DoorOpen}
           title="UniFi Access"
-          locTag={unifi.length ? nameById[unifi[0].locationId] : null}
+          locTag={connTag(unifi, isUnread(unifi) ? scopeTag(unifi) : null)}
           provider="Door access · gym entry"
           chip={<StatusChip status={worstOf(unifi.map((r) => r.status))} />}
           dashed
