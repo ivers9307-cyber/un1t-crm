@@ -1,9 +1,9 @@
-import { describe, it, expect } from 'vitest'
-import { whyFlagged, customerWords } from './agent-request-why'
+import { describe, it, expect, vi } from 'vitest'
+import { whyFlagged, customerWords, approvalGrantsTrialCredit } from './agent-request-why'
 
 describe('whyFlagged', () => {
   it('translates every routeToReview machine code for class bookings', () => {
-    for (const code of ['prior_attendance', 'needs_credit_grant', 'no_credits', 'account_ambiguous', 'account_conflict', 'account_failed', 'attendance_check_failed', 'booking_rejected', 'superseded_duplicate']) {
+    for (const code of ['prior_attendance', 'needs_credit_grant', 'no_credits', 'account_ambiguous', 'account_conflict', 'account_failed', 'attendance_check_failed', 'credit_check_failed', 'booking_rejected', 'superseded_duplicate']) {
       const out = whyFlagged({ kind: 'class_booking', details: { reason: code } })
       expect(out, code).toBeTruthy()
       // Operator copy, never the raw snake_case code on its own.
@@ -155,5 +155,85 @@ describe('accountSummaryLine', () => {
   })
   it('null contact → null', () => {
     expect(accountSummaryLine(null)).toBeNull()
+  })
+})
+
+// CBPCREDITREAD.1 — approving needs_credit_grant BUYS the trial membership
+// before booking (membership-requests/[id]/route.js). That must rest on a
+// read that worked; credit_check_failed is an UNKNOWN balance and buys nothing.
+describe('approvalGrantsTrialCredit', () => {
+  it('is true only for needs_credit_grant', () => {
+    expect(approvalGrantsTrialCredit({ reason: 'needs_credit_grant' })).toBe(true)
+  })
+  it('is false for an unread balance and every other reason', () => {
+    for (const reason of ['credit_check_failed', 'prior_attendance', 'processing_error', 'no_credits', 'booking_failed:YOU_HAVE_NO_CREDITS_LEFT', undefined]) {
+      expect(approvalGrantsTrialCredit({ reason }), String(reason)).toBe(false)
+    }
+    expect(approvalGrantsTrialCredit(null)).toBe(false)
+  })
+})
+
+describe('credit_check_failed copy', () => {
+  it('says the balance is unknown and that approving adds nothing', () => {
+    const out = whyFlagged({ kind: 'class_booking', details: { reason: 'credit_check_failed' } })
+    expect(out).toMatch(/does not mean they have no credits/i)
+    expect(out).toMatch(/approving does not add a credit/i)
+  })
+})
+
+// CBPCREDITREAD.1 review — the card says WHICH account could not be read:
+// the one the booking was for, or another account linked to the same person.
+// Identified by the Glofox member ID only (no name, email or phone).
+describe('credit_check_failed names the unreadable account', () => {
+  const why = (accounts) => whyFlagged({ kind: 'class_booking', details: { reason: 'credit_check_failed', credit_unread_accounts: accounts } })
+
+  it('the account the booking was for', () => {
+    const out = why([{ role: 'booking_account', contact_id: 'c-1', glofox_member_id: 'gm-aaa' }])
+    expect(out).toMatch(/the Glofox account this booking was for \(member ID gm-aaa\)/)
+    expect(out).not.toMatch(/linked to this person/)
+  })
+
+  it('another account linked to the same person', () => {
+    const out = why([{ role: 'linked_account', contact_id: 'c-2', glofox_member_id: 'gm-bbb' }])
+    expect(out).toMatch(/another Glofox account linked to this person \(member ID gm-bbb\)/)
+    expect(out).not.toMatch(/this booking was for/)
+  })
+
+  it('keeps the three pinned phrases, and the plain copy when no account is named', () => {
+    const named = why([{ role: 'booking_account', glofox_member_id: 'gm-aaa' }, { role: 'linked_account', glofox_member_id: 'gm-bbb' }])
+    const plain = why(undefined)
+    for (const out of [named, plain]) {
+      expect(out).toMatch(/could not be read/i)
+      expect(out).toMatch(/does not mean they have no credits/i)
+      expect(out).toMatch(/approving does not add a credit/i)
+    }
+    expect(named).toMatch(/gm-aaa/)
+    expect(named).toMatch(/gm-bbb/)
+    expect(plain).not.toMatch(/member ID/)
+  })
+
+  it('ignores a malformed list rather than rendering it', () => {
+    expect(why('gm-aaa')).toBe(why(undefined))
+    expect(why([{ role: 'booking_account' }, null])).toBe(why(undefined))
+  })
+})
+
+// CBPCREDITREAD.1 review — the retry count in the card copy follows the
+// queue's attempt cap (one constant, class-booking-attempts.js), so the copy
+// can never say "3 tries" after the cap moves.
+describe('the retry count in the copy follows the attempt cap', () => {
+  it('says the cap it was built with', async () => {
+    vi.resetModules()
+    vi.doMock('@/lib/class-booking-attempts', () => ({ CLASS_BOOKING_MAX_ATTEMPTS: 5 }))
+    try {
+      const { whyFlagged: why } = await import('./agent-request-why')
+      const copy = (reason) => why({ kind: 'class_booking', details: { reason } })
+      expect(copy('credit_check_failed')).toMatch(/after 5 tries/)
+      expect(copy('processing_error')).toMatch(/failed 5 times/)
+      expect(copy('max_attempts_stuck_processing')).toMatch(/interrupted 5 times/)
+    } finally {
+      vi.doUnmock('@/lib/class-booking-attempts')
+      vi.resetModules()
+    }
   })
 })

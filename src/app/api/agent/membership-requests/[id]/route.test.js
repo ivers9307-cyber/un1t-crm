@@ -16,6 +16,13 @@ vi.mock('@/lib/glofox', async (importOriginal) => ({
   missingGlofoxCredentialsForLocation: vi.fn(() => []),
   createBooking: vi.fn(),
   cancelBooking: vi.fn(),
+  purchaseGlofoxMembership: vi.fn(async () => ({ ok: true })),
+}))
+// CBPCREDITREAD.1 — the trial-grant call site reads the location's trial
+// plan; configured here so only the card's reason decides whether it fires.
+vi.mock('@/lib/connection-registry', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getGlofoxConfig: vi.fn(async () => ({ trial_membership_id: 'tm-1', trial_plan_code: 'tp-1' })),
 }))
 vi.mock('@/lib/agent/notify', () => ({
   sendAgentThreadMessage: vi.fn(async () => ({ ok: true })),
@@ -25,7 +32,7 @@ vi.mock('@/lib/agent/notify', () => ({
   agentConfirmationTemplates: vi.fn(async () => ({})),
 }))
 
-import { createBooking, cancelBooking, glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation } from '@/lib/glofox'
+import { createBooking, cancelBooking, glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, purchaseGlofoxMembership } from '@/lib/glofox'
 import { sendAgentThreadMessage } from '@/lib/agent/notify'
 import { PATCH } from './route.js'
 
@@ -469,5 +476,35 @@ describe('PATCH approval — REGISTRYREAD.1a unreadable Glofox settings', () => 
     expect(final.status).toBe('failed')
     expect(final.details.result).toEqual({ ok: false, message_code: 'GLOFOX_SETTINGS_UNREADABLE' })
     expect(cancelBooking).not.toHaveBeenCalled()
+  })
+})
+
+// CBPCREDITREAD.1 — approving needs_credit_grant BUYS the trial membership
+// before booking (the purchaseGlofoxMembership call in route.js). A
+// credit_check_failed card is an UNKNOWN balance: the member may already hold
+// a paid pack, so approving it must buy nothing, and still book.
+describe('PATCH class_booking approval — trial grant only on needs_credit_grant', () => {
+  const rowWith = (reason) => ({ ...ROW, details: { ...ROW.details, reason, source: 'start_funnel' } })
+
+  it('needs_credit_grant: buys the trial on the account, then books (the call site is live)', async () => {
+    createBooking.mockResolvedValueOnce({ ok: true, status: 200, body: { _id: 'gfb-1' } })
+    db = makeDbFor(rowWith('needs_credit_grant'), updates)
+
+    await approve()
+
+    expect(purchaseGlofoxMembership).toHaveBeenCalledTimes(1)
+    expect(purchaseGlofoxMembership).toHaveBeenCalledWith(expect.anything(), 'gm1', 'tm-1', 'tp-1')
+    expect(createBooking).toHaveBeenCalledTimes(1)
+  })
+
+  it('credit_check_failed: buys NOTHING, and still books against the account', async () => {
+    createBooking.mockResolvedValueOnce({ ok: true, status: 200, body: { _id: 'gfb-1' } })
+    db = makeDbFor(rowWith('credit_check_failed'), updates)
+
+    await approve()
+
+    expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
+    expect(createBooking).toHaveBeenCalledTimes(1)
+    expect(createBooking.mock.calls[0][1]).toMatchObject({ user_id: 'gm1' })
   })
 })
