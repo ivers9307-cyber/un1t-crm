@@ -1,6 +1,6 @@
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { canBuildSequencesAt, canBuildSequencesSomewhere } from '@/lib/sequence-access'
 import { redirect, notFound } from 'next/navigation'
 import { resolveSequenceGraph } from '@/lib/sequences/graph/persist'
 import SequenceFlowBuilder from '@/components/sequences/SequenceFlowBuilder'
@@ -24,7 +24,10 @@ export default async function SequenceBuilderPage(props) {
   // toggle cards (`automations`) and the Devices link (`device_control`)
   // are unrelated surfaces that never route to a sequence id, so they're
   // deliberately excluded from this gate.
-  if (!hasPermission(user, 'email') && !hasPermission(user, 'whatsapp')) redirect('/')
+  // SEQROUTEGATE.1 — the same `email || whatsapp` rule every /api/sequences
+  // route applies (src/lib/sequence-access.js): coarse here (at SOME studio),
+  // then at the sequence's own studio below.
+  if (!canBuildSequencesSomewhere(user)) redirect('/')
 
   const db = createServerClient()
   const { data: sequence } = await db.from('email_sequences')
@@ -35,6 +38,10 @@ export default async function SequenceBuilderPage(props) {
   if (!sequence) notFound()
   const guard = assertLocationAccess(user, sequence.location_id)
   if (guard) notFound() // don't leak existence across tenants
+  // SEQROUTEGATE.1 — judged at the SEQUENCE's studio, not the active one: a
+  // manager at A who is staff at B would otherwise open B's builder and have
+  // every save, publish and settings call refused by the routes.
+  if (!canBuildSequencesAt(user, sequence.location_id)) notFound()
 
   const graph = resolveSequenceGraph(sequence)
 
