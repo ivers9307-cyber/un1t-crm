@@ -188,8 +188,9 @@ export async function GET(request) {
       // when NOTHING reached them and something transient broke: tomorrow's
       // run (daily) sends it again, and it cannot duplicate what never went
       // out. Email delivered → recorded, whatever the push did (retrying
-      // would repeat the email). No address and no device → recorded:
-      // nothing to retry against.
+      // would repeat the email). No address (or a hard-bounced one, Postmark
+      // 406/300 — PUSHDONE.1a) and no device → recorded: nothing to retry
+      // against, and the contract still stops at the normal 2 reminders.
       const reached = emailResult.ok || push === 'delivered'
       const transient = (!emailResult.ok && !emailResult.permanent) || push === 'failed'
       if (!reached && transient) {

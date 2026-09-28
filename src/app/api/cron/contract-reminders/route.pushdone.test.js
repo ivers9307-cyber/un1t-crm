@@ -88,6 +88,26 @@ describe('contract-reminders — record the reminder only when it went out (C21 
     expect(logWarn).toHaveBeenCalledWith('cron-contract-reminders', 'reminder push threw', { contract_id: 'k1', err: 'boom' })
   })
 
+  // PUSHDONE.1a — a hard-bounced address (Postmark 406 / 300, mapped to
+  // permanent by sendContractReminderEmail) is recorded like a missing one,
+  // so the contract reaches the normal 2-reminder cap instead of being
+  // retried every day forever.
+  it('email hard-bounced (permanent) and no device: recorded, counts toward the cap', async () => {
+    sendContractReminderEmail.mockResolvedValue({ ok: false, error: 'recipient marked as inactive', permanent: true })
+    sendPush.mockResolvedValue(PUSH_NO_DEVICE)
+    const body = await (await GET(req())).json()
+    expect(stamped()).toHaveLength(1)
+    expect(body).toMatchObject({ sent: 1, emailFailed: 1, undelivered: 0 })
+  })
+
+  it('email hard-bounced (permanent) but the push FAILED: NOT recorded (the push can land tomorrow)', async () => {
+    sendContractReminderEmail.mockResolvedValue({ ok: false, error: 'recipient marked as inactive', permanent: true })
+    sendPush.mockResolvedValue(PUSH_FAILED)
+    const body = await (await GET(req())).json()
+    expect(stamped()).toHaveLength(0)
+    expect(body.undelivered).toBe(1)
+  })
+
   it('no email address and no device: recorded — nothing to retry against', async () => {
     sendContractReminderEmail.mockResolvedValue({ ok: false, error: 'No recipient email', permanent: true })
     sendPush.mockResolvedValue(PUSH_NO_DEVICE)
