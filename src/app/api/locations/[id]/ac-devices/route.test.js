@@ -32,13 +32,18 @@ const CREDS_B = { id: LOC_B, sensibo_api_key: 'sk-stored-b', thinq_pat: null, th
 function fakeDb({ list = { data: [DEVICE], error: null }, creds = { data: CREDS_B, error: null }, insert = null } = {}) {
   const calls = []
   const from = (table) => {
-    const call = { table, op: 'select', filters: [], payload: null }
+    const call = { table, op: 'select', filters: [], orders: [], payload: null }
     calls.push(call)
+    // .order() chains (a second .order() is a tiebreak) and is awaitable.
+    const ordered = {
+      order: (col, opts) => { call.orders.push([col, opts]); return ordered },
+      then: (resolve, reject) => Promise.resolve(list).then(resolve, reject),
+    }
     const chain = {
       select: () => chain,
       insert: (payload) => { call.op = 'insert'; call.payload = payload; return chain },
       eq: (col, val) => { call.filters.push([col, val]); return chain },
-      order: () => Promise.resolve(list),
+      order: (col, opts) => ordered.order(col, opts),
       maybeSingle: () => Promise.resolve(creds),
       single: () => Promise.resolve(insert || { data: { id: 'new-device', ...call.payload }, error: null }),
     }
@@ -97,6 +102,17 @@ describe('GET /api/locations/[id]/ac-devices — the path location (ACDEVLOC.1)'
     expect(db.calls[0].filters).toContainEqual(['enabled', true])
     await get(LOC_B, '?include_disabled=1')
     expect(db.calls[1].filters).not.toContainEqual(['enabled', true])
+  })
+
+  // N1 — same order as the studio route this replaced: by group so a group's
+  // units sit together, ungrouped (NULL) last, label as the tiebreak.
+  it('orders by device_group (NULLs last) then label, as the old studio route did', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    await get(LOC_B, '?include_disabled=1')
+    expect(db.calls[0].orders).toEqual([
+      ['device_group', { ascending: true, nullsFirst: false }],
+      ['label', { ascending: true }],
+    ])
   })
 
   it('a failed read is a logged 500, never an empty list', async () => {

@@ -61,7 +61,12 @@ export async function GET(request, props) {
     .select('id, location_id, label, provider, device_group, default_mode, default_temp_c, default_fan, session_minutes, external_auto_off_minutes, enabled, created_at, updated_at')
     .eq('location_id', locationId)
   if (!includeDisabled) query = query.eq('enabled', true)
-  const { data, error } = await query.order('label', { ascending: true })
+  // By group so a group's units sit together in the list, ungrouped units
+  // last (NULLs last), label as the tiebreak: the order the retired studio
+  // route used.
+  const { data, error } = await query
+    .order('device_group', { ascending: true, nullsFirst: false })
+    .order('label', { ascending: true })
   if (error) {
     logError('ac-devices', 'list read failed', { locationId, err: error.message })
     return NextResponse.json({ success: false, error: 'Could not load AC devices.' }, { status: 500 })
