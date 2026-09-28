@@ -16,9 +16,11 @@ vi.mock('next/headers', () => ({
 }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(), createBrowserClient: vi.fn() }))
 vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), getCurrentUser: vi.fn() }))
+vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logError: vi.fn() }))
 
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
+import { logError } from '@/lib/log'
 import { describeGate, gateProbe, runProbed } from '../helpers/role-gate-probe.js'
 import {
   person, LOC_A, LOC_B, MASTER, OUTSIDER, MANAGER_A_STAFF_B, STAFF_A_MANAGER_B,
@@ -143,12 +145,27 @@ describe('a missing sequence answers exactly like another studio\'s (404 Not fou
     ['POST /api/sequences/[id]/audience/seed', () => seed.POST(json('POST', { confirm_count: 0 }), params(id))],
     ['DELETE /api/sequences/[id]/audience/seed', () => seed.DELETE(bare('DELETE'), params(id))],
   ]
-  // The seed route's loader reads with maybeSingle; everything else single().
-  const MAYBE = new Set(['POST /api/sequences/[id]/audience/seed', 'DELETE /api/sequences/[id]/audience/seed'])
+  // GET /api/sequences/[id] and the seed route's loader read with maybeSingle
+  // (a query error is a 500 on the GET, below); everything else single().
+  const MAYBE = new Set(['GET /api/sequences/[id]', 'POST /api/sequences/[id]/audience/seed', 'DELETE /api/sequences/[id]/audience/seed'])
   it.each(MISSING)('%s', async (title, call) => {
     const { probe, status, body } = await probed(STAFF_A_MANAGER_B, call, [MAYBE.has(title) ? NO_ROW_MAYBE : NO_ROW_SINGLE])
     expect(probe.passed).toBe(false)
     expect({ status, body }).toEqual(NOT_FOUND)
+  })
+})
+
+// GET /api/sequences/[id] used to map ANY query error to a 404 carrying
+// PostgREST's message. A failed read is a 500 (logged, no raw message out);
+// only an absent row is a 404.
+describe('GET /api/sequences/[id] when the read fails', () => {
+  it('answers a logged 500, not a 404', async () => {
+    const failed = { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } }
+    const { probe, status, body } = await probed(STAFF_A_MANAGER_B, () => detail.GET(bare('GET'), params(id)), [failed])
+    expect(probe.passed).toBe(false)
+    expect(status).toBe(500)
+    expect(body).toEqual({ success: false, error: 'Could not load the sequence' })
+    expect(logError).toHaveBeenCalledWith('sequences', expect.any(String), expect.objectContaining({ sequenceId: SEQ_ID }))
   })
 })
 

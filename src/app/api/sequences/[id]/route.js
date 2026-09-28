@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { canBuildSequencesAt, canBuildSequencesSomewhere, sequencePermissionRequired, sequenceNotFound } from '@/lib/sequence-access'
 import { validateBody } from '@/lib/validate'
+import { logError } from '@/lib/log'
 import { validateAudienceFilter, InvalidAudienceFilterError } from '@/lib/audience-filter'
 
 const SequenceUpdateSchema = z.object({
@@ -72,9 +73,15 @@ export async function GET(request, props) {
   const { data, error } = await db.from('email_sequences')
     .select(SEQUENCE_DETAIL_COLUMNS)
     .eq('id', params.id)
-    .single()
+    .maybeSingle()
 
-  if (error) return sequenceNotFound()
+  // SEQROUTEGATE.1 — a failed read is a 500 (logged; PostgREST's message stays
+  // server-side), only an absent row is a 404.
+  if (error) {
+    logError('sequences', 'sequence detail read failed', { sequenceId: params.id, code: error.code, err: error.message })
+    return NextResponse.json({ success: false, error: 'Could not load the sequence' }, { status: 500 })
+  }
+  if (!data) return sequenceNotFound()
 
   const guard = assertLocationAccessOr404(user, data.location_id)
   if (guard) return guard
