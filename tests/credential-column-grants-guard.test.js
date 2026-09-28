@@ -10,10 +10,17 @@
 //  3. A migration after 648 that ADDs a column to a column-granted table
 //     decides its grant; one that grants ANY table-level privilege on the five
 //     tables to a client role (by name or ALL TABLES IN SCHEMA public) fails.
-// A floor, not a proof: a select string built at runtime is invisible, and
-// server code (service_role) is not checked because it bypasses grants. The
-// server-side half (a `*` row handed to a client component) is
-// tests/location-secrets-to-client.test.js.
+// What the scanner reads (tests/helpers/postgrest-column-uses.js): every link
+// of a `.from()` chain; a select string that is a literal or a same-file const
+// (as check:select-columns does); embeds by table or through ANY FK column
+// into the five tables (derived from the migrations); `.or()`/`.and()` logic
+// trees; JSON-path filter roots. A select or or/and string on a credential
+// table that it cannot evaluate FAILS unless reviewed and listed.
+// Still a floor, not a proof: `.from(<variable>)`, a chain split across
+// statements, and an unevaluable select on ANOTHER table (whose embeds could
+// reach a credential table) are invisible. Server code (service_role) is not
+// checked because it bypasses grants. The server-side half (a `*` row handed
+// to a client component) is tests/location-secrets-to-client.test.js.
 
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'

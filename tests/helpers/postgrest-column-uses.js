@@ -1,8 +1,9 @@
 // A static scan of PostgREST calls: which (table, column) pairs a file's code
-// reads, and which tables it writes. A floor, not a proof: a select string
-// built at runtime is invisible. Shared by the column-grant guards
-// (SECFIX.3c; generalised from tests/shift-column-grants-guard.test.js, which
-// keeps its inline copy for now).
+// reads, which tables it writes, and which selects on the given tables it
+// could not read (so the caller can fail closed). A floor, not a proof:
+// `.from(<variable>)` and a chain split across statements are invisible.
+// Shared by the column-grant guards (SECFIX.3c; generalised from
+// tests/shift-column-grants-guard.test.js, which keeps its inline copy).
 
 import {
   extractChainLinks, firstArgText, firstStringArg, maskComments, resolveSelectArg,
