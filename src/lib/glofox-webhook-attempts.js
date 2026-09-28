@@ -72,6 +72,11 @@ function digestMemberSync(ms) {
   const existing = isObj(ms.existing) ? ms.existing : {}
   const mapped = isObj(ms.mapped) ? ms.mapped : {}
   const deal = ms.deal_action
+  // applyMemberSync's transition_tags is writeContactTags()'s result
+  // (src/lib/contact-tags.js): null (no transition), { written, alreadyPresent }
+  // (optionally with `error` on a refused insert) or { error } (it threw). The
+  // error text is never kept — only that there was one.
+  const tt = isObj(ms.transition_tags) ? ms.transition_tags : {}
   return {
     action: text(ms.action, MAX_LABEL),
     ok: flag(ms.ok),
@@ -87,7 +92,9 @@ function digestMemberSync(ms) {
       mapped_credits: label(mapped.trial_credits_remaining),
     },
     deal_action: isObj(deal) ? text(deal.action, MAX_LABEL) : text(deal, MAX_LABEL),
-    transition_tags: names(ms.transition_tags, MAX_TAGS),
+    transition_tags: names(tt.written, MAX_TAGS),
+    transition_tags_present: names(tt.alreadyPresent, MAX_TAGS),
+    transition_tags_failed: tt.error !== undefined && tt.error !== null,
   }
 }
 

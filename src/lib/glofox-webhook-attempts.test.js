@@ -44,7 +44,9 @@ const appliedResult = () => ({
       email: { from: PII.email, to: 'other@example.test' },
     },
     deal_action: { action: 'leave', reason: 'classifier output unchanged' },
-    transition_tags: [],
+    // The REAL shape applyMemberSync returns: writeContactTags()'s result
+    // (src/lib/contact-tags.js), not an array.
+    transition_tags: { written: ['status_credit_member_to_member'], alreadyPresent: ['glofox_member'] },
   },
 })
 
@@ -66,6 +68,35 @@ describe('digestGlofoxWebhookResult', () => {
     })
     expect(d.member_sync.deal_action).toBe('leave')
     expect(d.member_sync.credits_unread).toBe(false)
+  })
+
+  it("keeps the transition tags applyMemberSync wrote (writeContactTags' { written, alreadyPresent })", () => {
+    const d = digestGlofoxWebhookResult(appliedResult())
+    expect(d.member_sync.transition_tags).toEqual(['status_credit_member_to_member'])
+    expect(d.member_sync.transition_tags_present).toEqual(['glofox_member'])
+    expect(d.member_sync.transition_tags_failed).toBe(false)
+  })
+
+  it('a failed transition-tag write is a flag, never its error text', () => {
+    for (const tt of [
+      { error: 'insert into contact_tags failed: abc123secret' },
+      { written: [], alreadyPresent: ['glofox_member'], error: 'abc123secret bulk insert refused' },
+    ]) {
+      const r = appliedResult()
+      r.member_sync.transition_tags = tt
+      const d = digestGlofoxWebhookResult(r)
+      expect(d.member_sync.transition_tags_failed).toBe(true)
+      expect(d.member_sync.transition_tags).toEqual([])
+      expect(JSON.stringify(d)).not.toContain('abc123secret')
+    }
+  })
+
+  it('no transition-tag write (null) is empty lists and no failure', () => {
+    const r = appliedResult()
+    r.member_sync.transition_tags = null
+    expect(digestGlofoxWebhookResult(r).member_sync).toMatchObject({
+      transition_tags: [], transition_tags_present: [], transition_tags_failed: false,
+    })
   })
 
   it('carries no personal data at all', () => {
