@@ -27,7 +27,10 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission, hasMobilePermission } from '@/lib/permissions'
+import {
+  hasPermissionAtAnyLocation, hasPermissionForLocation,
+  hasMobilePermissionAtAnyLocation, hasMobilePermissionForLocation,
+} from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { applyMergeTags, sendTransactionalEmail } from '@/lib/postmark'
 
@@ -72,7 +75,8 @@ export async function POST(request, props) {
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   }
-  if (!hasPermission(user, 'email') && !hasMobilePermission(user, 'email')) {
+  // ROLESWEEP.1c — coarse pre-check; judged at the contact's location below.
+  if (!hasPermissionAtAnyLocation(user, 'email') && !hasMobilePermissionAtAnyLocation(user, 'email')) {
     return NextResponse.json({ success: false, error: 'Forbidden — email not enabled at this location for your role' }, { status: 403 })
   }
 
@@ -96,6 +100,10 @@ export async function POST(request, props) {
   // IDOR guard — caller must be assigned to the contact's location.
   const guard = assertLocationAccessOr404(user, contact.location_id)
   if (guard) return guard
+  // ROLESWEEP.1c — web OR mobile `email` judged at the contact's location.
+  if (!hasPermissionForLocation(user, contact.location_id, 'email') && !hasMobilePermissionForLocation(user, contact.location_id, 'email')) {
+    return NextResponse.json({ success: false, error: 'Forbidden — email not enabled at this location for your role' }, { status: 403 })
+  }
 
   if (!contact.email) {
     return NextResponse.json({ success: false, error: 'Contact has no email address on file' }, { status: 400 })

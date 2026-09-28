@@ -20,7 +20,7 @@
 import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionForLocation } from '@/lib/permissions'
 import { extractTemplateBody, isSendableUtilityTemplate } from '@/lib/radar-outreach'
 import { classifyContact, scoreMember } from '@/lib/churn-radar'
 import { loadContactArrears } from '@/lib/churn-radar-data'
@@ -155,7 +155,9 @@ export async function GET(request, props) {
     // isSendableUtilityTemplate chain the contact page builds, only
     // when the caller can send WhatsApp at all.
     let composerTemplates = []
-    const canWhatsApp = hasPermission(user, 'whatsapp')
+    // ROLESWEEP.1c — the drawer's channel flags are judged at the CONTACT's
+    // location (the composer sends from there), not the active studio.
+    const canWhatsApp = hasPermissionForLocation(user, contact.location_id, 'whatsapp')
     if (canWhatsApp) {
       const { data: rawTemplates } = await db
         .from('whatsapp_templates')
@@ -186,8 +188,8 @@ export async function GET(request, props) {
       composer_templates: composerTemplates,
       permissions: {
         whatsapp: canWhatsApp,
-        sms: hasPermission(user, 'sms'),
-        email: hasPermission(user, 'email'),
+        sms: hasPermissionForLocation(user, contact.location_id, 'sms'),
+        email: hasPermissionForLocation(user, contact.location_id, 'email'),
       },
     }
   }
