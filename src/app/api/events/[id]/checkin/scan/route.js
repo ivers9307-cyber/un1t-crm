@@ -7,7 +7,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { emitEvent, EVENT_TYPES } from '@/lib/contact-events'
 import { verifyCheckinToken } from '@/lib/event-checkin-tokens'
@@ -20,7 +20,7 @@ export async function POST(request, props) {
   const params = await props.params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!hasPermission(user, 'races')) {
+  if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Events feature is disabled at this location' }, { status: 403 })
   }
   const validation = await validateBody(request, Schema)
@@ -45,6 +45,10 @@ export async function POST(request, props) {
   const locationId = reg.race_events?.location_id
   const guard = assertLocationAccessOr404(user, locationId)
   if (guard) return guard
+  // ROLESWEEP.1b — judged at the event's location, not the caller's active studio.
+  if (!hasPermissionForLocation(user, locationId, 'races')) {
+    return NextResponse.json({ success: false, error: 'Events feature is disabled at this location' }, { status: 403 })
+  }
   const member = (reg.teams?.team_members || []).find((m) => m.id === payload.memberId)
   if (!member) return NextResponse.json({ success: false, error: 'That person is not on this registration' }, { status: 400 })
 

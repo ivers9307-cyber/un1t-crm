@@ -12,6 +12,11 @@
 // the target instead: hasRoleAtLocation / hasPermissionForLocation /
 // guardMasterOrOwner, with hasRoleAtAnyLocation as a coarse pre-check.
 //
+// BLIND SPOT: the scan judges whole FILES, not handlers. A file with several
+// handlers passes if any one of them decides at the target, so per-handler
+// coverage is the tables in tests/role-sweep/*, not this guard. (The rest of
+// the blind spots are listed in scripts/lib/active-role-gates.mjs.)
+//
 // Routes under src/app/api/locations/[id]/ are held to the stricter
 // role-at-path.test.js (no active gate at all) and skipped here.
 //
@@ -56,6 +61,10 @@ const rel = (file) => path.relative(API, file).split(path.sep).join('/')
 export const REVIEWED = {
   'agent/membership-requests/route.js':
     'The MANAGER_ROLES gate guards only the no-param branch, which reads user.activeLocation.id. getUserLocationIds belongs to the ?conversation_id branch above it, which has no role gate (a membership-scoped read).',
+  'events/route.js':
+    'ROLESWEEP.1b: `races` is judged at the listed or created location (hasPermissionForLocation on ?location_id / body.location_id), and the POST payee gate judges ADMIN_ROLES at body.location_id. The one active gate left is the HOST-EDIT.1 hosted-events branch of GET: ADMIN_ROLES.includes(user.role), with `races` at user.activeLocation, adds the hosted events of the ACTIVE organisation (user.activeOrganization / user.activeLocation.organization_id). Those events sit on a per-host anchor location no staff belongs to, so the active studio is the only judgement available.',
+  'events/[id]/route.js':
+    'ROLESWEEP.1b: on the member path, `races` (GET, PUT), the payee change (PUT) and the DELETE floor (MANAGER_ROLES + `races`) are judged at the location of the event row. The active gate left is hostEventOrgAccess, the HOST-EDIT.1 host path: it admits an org admin (ADMIN_ROLES at the active studio) to an event hosted by the active organisation. Those events sit on a per-host anchor location no staff belongs to, so the active studio is the only judgement available; on that path `races` stays judged at user.activeLocation and the payee change is not re-judged (hostEventOrgAccess already required ADMIN_ROLES).',
   'dashboard/business/route.js':
     'Reads only user.activeLocation.id; its assertLocationAccess is on that same active id held in a variable, so the "another location" sign is a false positive.',
   'settings/scoring/route.js':
