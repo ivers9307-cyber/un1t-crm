@@ -33,15 +33,6 @@ const DEFINITION = 'src/lib/glofox.js'
 export const LOG_ONLY = {
   'src/lib/agent/account-tools.js': 'get_my_payment_reminder returns the reminder with still_overdue unknown — its existing answer for "Glofox unreadable".',
   'src/lib/today-feed-data.js': 'the low-fill classes card is absent for one render.',
-  // ── C9b REGISTRYREAD.1b handles these; each entry is removed as it lands ──
-  'src/app/api/cron/glofox-arrears-reconcile/route.js': 'C9b',
-  'src/app/api/cron/glofox-attendance-refresh/route.js': 'C9b',
-  'src/app/api/cron/glofox-detail-backfill/route.js': 'C9b',
-  'src/app/api/cron/glofox-sync/route.js': 'C9b',
-  'src/app/api/cron/sync-class-occurrences/route.js': 'C9b',
-  'src/lib/agent/knowledge-import.js': 'C9b',
-  'src/lib/dunning-payment.js': 'C9b',
-  'src/lib/glofox-note-push.js': 'C9b',
 }
 
 function walk(dir, out = []) {

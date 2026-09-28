@@ -43,6 +43,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { glofoxCredentialsForLocation, fetchMemberResult } from '@/lib/glofox'
+import { GLOFOX_SETTINGS_UNREADABLE_MESSAGE } from '@/lib/glofox-settings-read'
 import { applyMemberSync } from '@/lib/glofox-sync'
 import { logWarn, logError } from '@/lib/log'
 import {
@@ -168,6 +169,10 @@ async function backfillLocation(db, location, startedAt) {
 
   try {
     const creds = await glofoxCredentialsForLocation(db, location.id)
+    if (creds.readError) {
+      // REGISTRYREAD.1b: same failed-location row, true text; the next run retries.
+      throw new Error(GLOFOX_SETTINGS_UNREADABLE_MESSAGE)
+    }
     if (!creds.branchId || !creds.apiKey || !creds.apiToken) {
       throw new Error('Glofox credentials missing on this location.')
     }

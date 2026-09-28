@@ -122,3 +122,25 @@ describe('GET /api/cron/glofox-attendance-refresh — MEMBERRESULT.1', () => {
     for (const k of MEMBER_READ_KEYS) expect(gone).not.toHaveProperty(k)
   })
 })
+
+describe('GET /api/cron/glofox-attendance-refresh — REGISTRYREAD.1b unreadable settings', () => {
+  it('records the true text on the failed location row, calls no Glofox, and still stamps the heartbeat', async () => {
+    const { glofoxCredentialsForLocation } = await import('@/lib/glofox')
+    const { GLOFOX_SETTINGS_UNREADABLE_MESSAGE } = await import('@/lib/glofox-settings-read')
+
+    glofoxCredentialsForLocation.mockResolvedValueOnce({ branchId: null, apiKey: null, apiToken: null, readError: 'glofox_settings_unreadable' })
+    const out = await (await GET(req())).json()
+    expect(out.per_location[0]).toMatchObject({ status: 'failed', error: GLOFOX_SETTINGS_UNREADABLE_MESSAGE })
+    expect(h.runUpdates.at(-1)).toMatchObject({ status: 'failed', first_error: GLOFOX_SETTINGS_UNREADABLE_MESSAGE })
+    expect(fetch).not.toHaveBeenCalled()
+    expect(h.contactUpdates).toEqual([])
+    expect(stampHeartbeat).toHaveBeenCalledWith('glofox-attendance-refresh')
+  })
+
+  it('a location with no credentials keeps its old text', async () => {
+    const { glofoxCredentialsForLocation } = await import('@/lib/glofox')
+    glofoxCredentialsForLocation.mockResolvedValueOnce({ branchId: null, apiKey: null, apiToken: null, readError: null })
+    const out = await (await GET(req())).json()
+    expect(out.per_location[0]).toMatchObject({ status: 'failed', error: 'Glofox credentials missing on this location.' })
+  })
+})
