@@ -8,10 +8,25 @@
 // outside /api, src/components, mobile/app|components|lib, shared) builds a URL
 // with one. Comments are stripped first.
 //
+// Client forms seen: a literal `?api_key=` / `&api_key=` in a string or
+// template; `new URLSearchParams({ api_key })` (or `{ api_key: k }`, keys
+// quoted or not); and `.set('api_key', …)` / `.append('api_key', …)` on any
+// receiver except a form (`formData.append('password', …)` is a body).
+//
+// BLIND SPOTS (a floor, not a proof):
+//   client  a name held in a variable (`.set(name, k)`, `{ [name]: k }`); a
+//           URLSearchParams object literal with a nested `}` before the
+//           credential key; a URL assembled in a helper outside the roots
+//           above; URLSearchParams built from an array of pairs.
+//   server  `searchParams.get(<variable>)`; `Object.fromEntries(searchParams)`
+//           or any spread/iteration of the query; `url.searchParams` reached
+//           through a helper; a route file not named route.js.
+//
 // OUT OF SCOPE by design: server-to-vendor calls whose vendor demands query
 // auth (src/lib/sensibo.js `apiKey`, the Instagram token-refresh cron's
-// `access_token`), which no log of ours records; and `token=` (unsubscribe and
-// capability links carry a single-purpose token in the URL on purpose).
+// `access_token`, src/lib/ads/providers/meta.js), which no log of ours
+// records; and `token=` (unsubscribe and capability links carry a
+// single-purpose token in the URL on purpose).
 
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
@@ -21,7 +36,16 @@ import { stripComments } from '../scripts/lib/strip-comments.mjs'
 const ROOT = path.resolve(import.meta.dirname, '..')
 const CRED_PARAMS = ['api_key', 'apiKey', 'pat', 'access_token', 'api_token', 'client_secret', 'password', 'webhook_secret']
 const SERVER_RE = new RegExp(String.raw`\bsearchParams\.get\(\s*['"](?:${CRED_PARAMS.join('|')})['"]\s*\)`)
-const CLIENT_RE = new RegExp(String.raw`[?&](?:${CRED_PARAMS.join('|')})=`)
+const CRED_ALT = CRED_PARAMS.join('|')
+const CLIENT_RES = [
+  // `?api_key=` / `&api_key=` in a literal
+  new RegExp(String.raw`[?&](?:${CRED_ALT})=`),
+  // new URLSearchParams({ …, api_key: k }) / ({ api_key }) / ({ 'api_key': k })
+  new RegExp(String.raw`URLSearchParams\(\s*\{[^}]*?['"]?\b(?:${CRED_ALT})\b['"]?\s*[:,}]`),
+  // x.set('api_key', …) / x.append('api_key', …), x not a form
+  new RegExp(String.raw`(?<!\b\w*[Ff]orm\w*|\bfd)\.(?:set|append)\(\s*['"\x60](?:${CRED_ALT})['"\x60]`),
+]
+const CLIENT_RE = { test: (src) => CLIENT_RES.some((re) => re.test(src)) }
 const CLIENT_ROOTS = ['src/components', 'src/app', 'mobile/app', 'mobile/components', 'mobile/lib', 'shared']
 
 // ACDEVLOC.1 owns these and its Task 7 deletes them. Never add to this list.
@@ -58,6 +82,25 @@ describe('the patterns', () => {
     expect(CLIENT_RE.test('`/api/x?api_key=${k}`')).toBe(true)
     expect(CLIENT_RE.test('`/api/x?a=1&access_token=${t}`')).toBe(true)
     expect(CLIENT_RE.test('`/api/x?path=${p}`')).toBe(false)
+  })
+
+  it('see URLSearchParams and .set/.append forms (N4)', () => {
+    expect(CLIENT_RE.test('new URLSearchParams({ api_key: key })')).toBe(true)
+    expect(CLIENT_RE.test('new URLSearchParams({ api_key })')).toBe(true)
+    expect(CLIENT_RE.test("new URLSearchParams({ loc: id, 'pat': p })")).toBe(true)
+    expect(CLIENT_RE.test('new URLSearchParams({\n  location_id: id,\n  access_token: t,\n})')).toBe(true)
+    expect(CLIENT_RE.test("params.set('api_key', key)")).toBe(true)
+    expect(CLIENT_RE.test("url.searchParams.set('pat', p)")).toBe(true)
+    expect(CLIENT_RE.test('qs.append("client_secret", s)')).toBe(true)
+    // look-alikes and bodies stay quiet
+    expect(CLIENT_RE.test('new URLSearchParams({ path: p, location_id: id })')).toBe(false)
+    expect(CLIENT_RE.test('new URLSearchParams({ patient: id })')).toBe(false)
+    expect(CLIENT_RE.test("params.set('path', p)")).toBe(false)
+    expect(CLIENT_RE.test("params.set('token', t)")).toBe(false)
+    expect(CLIENT_RE.test("formData.append('password', pw)")).toBe(false)
+    expect(CLIENT_RE.test("form.set('api_key', k)")).toBe(false)
+    expect(CLIENT_RE.test("fd.append('password', pw)")).toBe(false)
+    expect(CLIENT_RE.test("JSON.stringify({ api_key: key })")).toBe(false)
   })
 })
 
