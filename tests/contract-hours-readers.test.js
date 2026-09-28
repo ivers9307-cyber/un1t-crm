@@ -63,6 +63,7 @@ export const PRODUCERS = {
   'src/lib/report-generator.js': 'generateReport — staff_cost and utilisation rows carry contracts',
   'src/lib/staff.js': 'listStaffForUser / getStaffForUser — the full shape for managed rows',
   'src/lib/shift-holder-pay.js': 'loadHolderPay — per-holder rate, salary and contracted hours (CONTRACTORSPEND.1)',
+  'src/lib/roster-summary-server.js': 'computeMonthlyContractorSpend — fteImplicitCostEur is rostered hours × salary / 52 / contracted hours (FTECOSTVIS.1)',
 }
 
 const SPECIFIER = /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*)['"]([^'"]+)['"]/g
@@ -103,6 +104,7 @@ const REVIEWED = {
   'src/app/api/contracts/route.js': 'issuing a contract: master or owner only',
   'src/app/api/cron/run-scheduled-reports/route.js': 'emails staff_cost / utilisation only to recipients filterRateReportRecipients allows',
   'src/app/api/schedule/blocks/[id]/candidates/route.js': 'withContract only for the manager audience AND ADMIN_ROLES at the block\'s studio (CANDIDATES.1)',
+  'src/app/api/schedule/contractor-spend/route.js': 'the FTE labour total only for ADMIN_ROLES at location_id; everyone else gets contractorSpendOnly, an allowlist of contractor figures (FTECOSTVIS.1)',
   'src/app/api/schedule/grid/route.js': 'ADMIN_ROLES at the studio only (showContract), stripped again otherwise',
   'src/app/api/schedule/offers/[id]/claim/route.js': 'loadBlockCandidates without withContract (defaults false): no contract read',
   'src/app/api/schedule/offers/route.js': 'loadBlockCandidates without withContract (defaults false): no contract read',
@@ -127,7 +129,7 @@ const REVIEWED = {
   'src/lib/roster-grid-data.js': 'reads the column only when showContract',
   'src/lib/roster-grid-model.js': 'pure; the key exists only when the grid route sent it',
   'src/lib/roster-publish.js': 'publish gate: loadHolderPay on the server for the budget check; returns euro totals and advisories, never a person\'s contract',
-  'src/lib/roster-summary-server.js': 'server-only contractor spend aggregates via loadHolderPay; the response is pinned to an exact key list with no per-person pay (the FTE labour total is B4 FTECOSTVIS.1)',
+  'src/lib/roster-summary-server.js': 'server-only contractor spend aggregates via loadHolderPay; the response is pinned to an exact key list with no per-person pay, and its one salary-derived key (fteImplicitCostEur) is classified so the route withholds it below ADMIN_ROLES (FTECOSTVIS.1)',
   'src/lib/roster-summary.js': 'pure; measures only rows the caller was sent',
   'src/lib/roster-week-cost.js': 'server arithmetic behind week-cost',
   'src/lib/schemas.js': 'a comment on the column\'s range',
