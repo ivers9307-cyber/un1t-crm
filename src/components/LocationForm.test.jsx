@@ -24,6 +24,16 @@ import LocationForm from './LocationForm.jsx'
 
 afterEach(() => { cleanup(); calls.update = null; calls.select = null })
 
+// SECFIX.3c (mig 648, plan D6) grants `authenticated` UPDATE on exactly these
+// 15 locations columns: the edit form's 11 plus CarDepositSettings' 4. Any other
+// key in the edit payload would be refused (42501) once 648 applies, and the
+// 3c guard reads the same list from tests/helpers/credential-column-grants.js.
+const MIG_648_LOCATIONS_UPDATE = ['name', 'slug', 'address', 'phone', 'email', 'timezone', 'country', 'active',
+  'monthly_contractor_budget_eur', 'invoices_inbound_slug', 'updated_at', 'car_deposit_default_amount',
+  'car_deposit_terms', 'car_deposit_terms_version', 'car_deposit_receipt_sms_enabled']
+const CAR_DEPOSIT_COLUMNS = ['car_deposit_default_amount', 'car_deposit_terms', 'car_deposit_terms_version', 'car_deposit_receipt_sms_enabled']
+const LOCATION_FORM_UPDATE = MIG_648_LOCATIONS_UPDATE.filter((c) => !CAR_DEPOSIT_COLUMNS.includes(c))
+
 const LOCATION = { id: 'loc-1', name: 'Studio', slug: 'studio', timezone: 'Europe/Dublin', country: 'IE', active: true, organization_id: 'org-1' }
 
 describe('LocationForm edit save (SECFIX.3b)', () => {
@@ -34,5 +44,13 @@ describe('LocationForm edit save (SECFIX.3b)', () => {
     expect(calls.select).toBe('id')
     expect(calls.update).not.toHaveProperty('organization_id')
     expect(calls.update).toMatchObject({ name: 'Studio', slug: 'studio' })
+  })
+
+  it('sends exactly the edit form\'s share of mig 648\'s UPDATE grant, no more and no less', async () => {
+    render(<LocationForm location={LOCATION} organizations={[{ id: 'org-1', name: 'Org' }]} />)
+    fireEvent.submit(screen.getByRole('button', { name: /Update Location/ }).closest('form'))
+    await waitFor(() => expect(calls.update).toBeTruthy())
+    expect(Object.keys(calls.update).sort()).toEqual([...LOCATION_FORM_UPDATE].sort())
+    expect(LOCATION_FORM_UPDATE).toHaveLength(11)
   })
 })
