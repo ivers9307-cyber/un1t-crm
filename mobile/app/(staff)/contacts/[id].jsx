@@ -6,13 +6,20 @@
 //   2. Contact fields (unchanged from W1).
 //   3. Glofox membership card — plan, billing, tenure, engagement,
 //      class bookings — from the denormalised contact columns.
-//   4. CRM event bookings (upcoming/past), when the caller can read
-//      the bookings table (RLS gates on the mobile `bookings` key).
+//   4. CRM event bookings (upcoming/past), whatever RLS lets the caller
+//      read (the mobile `bookings` key at each booking's location).
 //   5. WhatsApp thread deep-link, when one exists and the caller has
-//      the whatsapp permission.
+//      the whatsapp permission at the ACTIVE studio (see below: the
+//      thread screen and its route work at the active studio).
 //   6. Note-first composer + merged notes+activities timeline with
 //      Glofox provenance chips (the drawer bundle route).
 //   7. Send kudos (web-consultations-gated, same as the web card).
+//
+// ROLEUI.1 — every action button is judged at the CONTACT's location, by
+// the server: the timeline bundle carries `permissions` (the send, cancel
+// form and kudos routes' own decisions for this contact) and
+// contactActionFlags turns them into buttons. Nothing here asks canMobile at
+// the ACTIVE studio any more; see mobile/lib/contact-actions.js.
 //
 // Editing contact fields stays on the web — this screen adds read
 // surfaces plus the note + kudos writes only.
@@ -25,7 +32,8 @@ import {
   getWhatsAppThreadForContact, prettyStage, contactDisplayName,
 } from '../../../lib/contacts-api'
 import { useAuth } from '../../../lib/auth-context'
-import { canMobile, canDashboard } from '../../../lib/permissions'
+import { canMobile } from '../../../lib/permissions'
+import { contactActionFlags } from '../../../lib/contact-actions'
 import { colors } from '../../../lib/colors'
 import { isoDate } from '../../../lib/dates'
 import {
@@ -170,16 +178,28 @@ export default function ContactDetail() {
   const [notes, setNotes] = useState(null)
   const [activities, setActivities] = useState(null)
   const [bundleError, setBundleError] = useState(null)
+  // ROLEUI.1 — the bundle's per-contact `permissions`; null = not loaded
+  // (every action stays hidden until it is).
+  const [actionPermissions, setActionPermissions] = useState(null)
   const [bookings, setBookings] = useState([])
   const [waConversation, setWaConversation] = useState(null)
   // MOBILE-CONTACT-SEND.1 — which channel composer (if any) is open.
   const [composeChannel, setComposeChannel] = useState(null)
 
+  const actions = contactActionFlags(actionPermissions, contact)
+  // The WhatsApp THREAD row is navigation, not an action on this contact: it
+  // opens /whatsapp/[conversationId], which loads and sends with the ACTIVE
+  // studio's header, behind GET /api/whatsapp/conversations/[id]'s
+  // requireInboxPermission(user, 'wa') (an active-studio gate). Its target is
+  // the active studio today, so it keeps this gate until that screen and
+  // route are judged at the conversation's location (a follow-up row).
+  const canOpenWhatsAppThread = canMobile(profile, 'whatsapp', activeLocation)
+
   // CANCEL-FORM.6 — channel picker + send for the cancellation form link.
   function offerCancellationForm() {
     const options = []
-    if (contact?.email && canMobile(profile, 'email', activeLocation)) options.push({ text: 'Send by email', onPress: () => sendCancelForm('email') })
-    if ((contact?.wa_phone || contact?.phone) && canMobile(profile, 'whatsapp', activeLocation)) options.push({ text: 'Send by WhatsApp', onPress: () => sendCancelForm('whatsapp') })
+    if (actions.cancelFormEmail) options.push({ text: 'Send by email', onPress: () => sendCancelForm('email') })
+    if (actions.cancelFormWhatsApp) options.push({ text: 'Send by WhatsApp', onPress: () => sendCancelForm('whatsapp') })
     options.push({ text: 'Cancel', style: 'cancel' })
     Alert.alert('Send cancellation form', 'A private, single-use link where the member can pause or cancel. Their answer lands in Approvals.', options)
   }
@@ -188,7 +208,7 @@ export default function ContactDetail() {
     if (res?.success) {
       Alert.alert('Sent', `The form link was sent by ${channel === 'whatsapp' ? 'WhatsApp' : 'email'}. It works once, for 30 days.`)
       load().catch(() => {})
-    } else if (res?.needs_template && contact?.email && canMobile(profile, 'email', activeLocation)) {
+    } else if (res?.needs_template && actions.cancelFormEmail) {
       Alert.alert('WhatsApp window closed', 'No approved template is set up for this, so WhatsApp cannot carry it right now.', [
         { text: 'Send by email instead', onPress: () => sendCancelForm('email') },
         { text: 'Cancel', style: 'cancel' },
@@ -198,13 +218,6 @@ export default function ContactDetail() {
     }
   }
 
-  const canBookings = canMobile(profile, 'bookings', activeLocation)
-  const canWhatsApp = canMobile(profile, 'whatsapp', activeLocation)
-  // Kudos visibility mirrors the web SendKudosCard gate: the top-level
-  // web `consultations` permission (canDashboard resolves top-level keys
-  // against the web defaults — same resolution as web hasPermission).
-  const canKudos = canDashboard(profile, 'consultations', activeLocation)
-
   // Timeline bundle — the web drawer's one-round-trip route. Separate
   // from load() so the note composer can refresh just this slice.
   const loadTimeline = useCallback(async () => {
@@ -213,6 +226,8 @@ export default function ContactDetail() {
       if (res?.success) {
         setNotes(Array.isArray(res.notes) ? res.notes : [])
         setActivities(Array.isArray(res.activities) ? res.activities : [])
+        // A failed refresh keeps the last flags it read (the else below).
+        setActionPermissions(res.permissions || null)
         setBundleError(null)
       } else {
         setBundleError(res?.error || 'Could not load the timeline')
@@ -229,13 +244,15 @@ export default function ContactDetail() {
     setContact(res.data)
     // Secondary sections — best-effort, never block the card.
     loadTimeline()
-    if (canBookings) {
-      listBookingsForContact(id).then(r => setBookings(Array.isArray(r?.data) ? r.data : [])).catch(() => {})
-    }
-    if (canWhatsApp) {
+    // ROLEUI.1 — Supabase-direct, so RLS answers it at each booking's
+    // location (the mobile `bookings` key). A refused read is an empty list
+    // and the section renders nothing when empty, so no client gate: the old
+    // active-studio one only hid rows RLS would have returned.
+    listBookingsForContact(id).then(r => setBookings(Array.isArray(r?.data) ? r.data : [])).catch(() => {})
+    if (canOpenWhatsAppThread) {
       getWhatsAppThreadForContact(id).then(r => setWaConversation(r?.data || null)).catch(() => {})
     }
-  }, [id, loadTimeline, canBookings, canWhatsApp])
+  }, [id, loadTimeline, canOpenWhatsAppThread])
 
   useFocusEffect(useCallback(() => { load().catch(() => {}) }, [load]))
 
@@ -281,16 +298,17 @@ export default function ContactDetail() {
 
           {/* Quick actions. Call stays a phone dial; Text / WhatsApp /
               Email send through the platform's linked services (company
-              sender), gated per-channel by the mobile messaging perms. */}
+              sender), gated per-channel by the server's per-contact flags
+              (contactActionFlags, ROLEUI.1). */}
           <View className="flex-row gap-2 mt-4">
             {contact.phone && <ActionButton icon="call-outline" label="Call" onPress={() => openUrl(`tel:${digits(contact.phone)}`)} />}
-            {contact.phone && canMobile(profile, 'sms', activeLocation) && <ActionButton icon="chatbubble-outline" label="Text" onPress={() => setComposeChannel('sms')} />}
-            {(contact.wa_phone || contact.phone) && canMobile(profile, 'whatsapp', activeLocation) && <ActionButton icon="logo-whatsapp" label="WhatsApp" onPress={() => setComposeChannel('whatsapp')} />}
-            {contact.email && canMobile(profile, 'email', activeLocation) && <ActionButton icon="mail-outline" label="Email" onPress={() => setComposeChannel('email')} />}
+            {actions.sms && <ActionButton icon="chatbubble-outline" label="Text" onPress={() => setComposeChannel('sms')} />}
+            {actions.whatsapp && <ActionButton icon="logo-whatsapp" label="WhatsApp" onPress={() => setComposeChannel('whatsapp')} />}
+            {actions.email && <ActionButton icon="mail-outline" label="Email" onPress={() => setComposeChannel('email')} />}
             {/* CANCEL-FORM.6 — hand the member a single-use pause/cancel form
                 link. Channel choice via a native sheet; the route does the
                 rest (mint, deliver, log). Web has the richer modal. */}
-            {(contact.email || contact.wa_phone || contact.phone) && (canMobile(profile, 'email', activeLocation) || canMobile(profile, 'whatsapp', activeLocation)) && (
+            {actions.cancelForm && (
               <ActionButton icon="document-text-outline" label="Cancel form" onPress={() => offerCancellationForm()} />
             )}
           </View>
@@ -307,14 +325,12 @@ export default function ContactDetail() {
           {/* Glofox membership (plan, billing, engagement, classes) */}
           <ContactGlofoxCard contact={contact} />
 
-          {/* CRM event bookings — only when the caller can read the
-              bookings table at all (RLS gates on the mobile `bookings`
-              permission; rendering an always-empty section would read
-              as "no bookings" for permission reasons). */}
-          {canBookings && <BookingsSection bookings={bookings} />}
+          {/* CRM event bookings — whatever RLS returned; the section
+              renders nothing when there are none. */}
+          <BookingsSection bookings={bookings} />
 
-          {/* WhatsApp thread deep-link */}
-          {canWhatsApp && waConversation && (
+          {/* WhatsApp thread deep-link (active-studio gate, see above) */}
+          {canOpenWhatsAppThread && waConversation && (
             <WhatsAppThreadRow
               conversation={waConversation}
               onPress={() => router.push(`/whatsapp/${waConversation.id}`)}
@@ -332,7 +348,7 @@ export default function ContactDetail() {
           />
 
           {/* Coach kudos (web consultations gate) */}
-          {canKudos && <SendKudosCard contactId={id} />}
+          {actions.kudos && <SendKudosCard contactId={id} />}
 
           <Text className="text-[11px] text-un1t-muted text-center mt-6 px-4">Editing contacts stays on the web for now.</Text>
         </ScrollView>
