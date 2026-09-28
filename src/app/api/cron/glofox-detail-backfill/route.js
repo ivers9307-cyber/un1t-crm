@@ -1,36 +1,41 @@
-// Vercel cron — GLOFOX-DETAIL backfill (2026-05-30).
+// Vercel cron — GLOFOX-DETAIL backfill (2026-05-30; cursor: DETAILBACKFILL.1).
 //
 // WHY THIS EXISTS
 // ───────────────
 // The rich membership detail (plan name, lifecycle state, type,
 // renewal/expiry, price, billing interval, payment method, source)
 // lives ONLY on the single-member GET (/2.0/members/:id) — the bulk
-// LIST payload the nightly glofox-sync uses omits it. Historically
-// the only writer of that detail was glofox-attendance-refresh, which
-// round-robins the whole member base at a slow cadence, so detail
-// coverage sat at ~8% and was badly stale. The shared sync write-path
-// now PERSISTS detail whenever it sees the single-member shape
-// (GLOFOX-DETAIL in glofox-sync.js), so the webhook keeps active
-// members fresh in near-real-time — but the historical base still
-// needs a one-time catch-up. That's this cron.
+// LIST payload the nightly glofox-sync uses omits it. The shared sync
+// write-path persists detail whenever it sees the single-member shape
+// (GLOFOX-DETAIL in glofox-sync.js), so the webhook keeps active members
+// fresh in near-real-time; this cron is the catch-all behind it.
 //
 // WHAT THIS DOES
 // ──────────────
-// For everyone who's ever had a real relationship (member /
-// credit_member / trial / classpass_payg / no_sale_trial) whose
-// detail is missing OR stale (>14d), oldest-first:
-//   1. GET /2.0/members/:id (single-member shape, carries detail)
-//   2. applyMemberSync(..., { skipBookings, skipInteractions }) — this
-//      writes plan/state/type/expiry/price/interval/payment/source +
-//      the live credit balance (via the credits sub-fetch). Booking
-//      aggregates are intentionally skipped — attendance-refresh owns
-//      those, and skipping keeps this fast + detail-focused.
+// Every 10 minutes, for up to DETAIL_PER_TICK contacts in the relationship
+// cohort (member / credit_member / trial / classpass_payg / no_sale_trial)
+// with a Glofox id whose contacts.glofox_detail_due_at is NULL (never
+// tried) or has passed — oldest due first, then stalest glofox_synced_at:
+//   1. GET /2.0/members/:id (single-member shape, carries detail);
+//   2. applyMemberSync(..., { skipBookings, skipInteractions, skipReclassify })
+//      — plan/state/type/expiry/price/interval/payment/source + the live
+//      credit balance (via the /2.0/credits sub-fetch). Booking aggregates
+//      are skipped: attendance-refresh owns them;
+//   3. stamps glofox_detail_due_at WHATEVER the answer
+//      (src/lib/glofox-detail-backfill.js): answered → 10.5–17.5 days on;
+//      failed → 6 hours on.
 //
-// Runs members CONCURRENTLY (pool of GLOFOX_CONCURRENCY) and is
-// time-budgeted: once the budget is hit it stops cleanly and the next
-// tick resumes (oldest-first ordering advances the frontier). Once the
-// base is caught up the candidate query returns ~nothing, so this also
-// serves as a cheap safety net alongside the webhook.
+// DETAILBACKFILL.1 — it used to pick "plan IS NULL or synced > 14 days ago",
+// plan-NULL first, in one select PostgREST caps at 1,000 rows. 2,926 contacts
+// legitimately have no plan, so they filled every page and were re-read every
+// ~30 minutes forever (~288k Glofox calls, ~143k contact UPDATEs a day) while
+// 2,917 contacts with a plan went unrefreshed from 3 Jul. The cursor advances
+// on every attempt, so no answer — no plan, a refusal, a 404 — can pin a
+// contact to the front of the queue again.
+//
+// A tick whose candidate read (or credentials) fails did no work: it logs
+// and does NOT stamp its heartbeat, so a broken backfill pages rather than
+// looking like a quiet one. A tick with nothing due is healthy and stamps.
 //
 // Auth: same fail-closed CRON_SECRET pattern as the other crons.
 
@@ -39,7 +44,11 @@ import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { glofoxCredentialsForLocation, fetchMemberResult } from '@/lib/glofox'
 import { applyMemberSync } from '@/lib/glofox-sync'
-import { logWarn } from '@/lib/log'
+import { logWarn, logError } from '@/lib/log'
+import {
+  DETAIL_PER_TICK, DETAIL_SWEEP_DAYS, DETAIL_RETRY_HOURS,
+  detailDueFilter, nextDetailDueAt,
+} from '@/lib/glofox-detail-backfill'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -55,12 +64,8 @@ const RELATIONSHIP_STATUSES = [
 // User's call (2026-05-30): parallel fetch, 5 at a time.
 const GLOFOX_CONCURRENCY = 5
 // Stop scheduling new members this close to the Vercel ceiling; the
-// rest are picked up next tick.
+// rest are picked up next tick. (100 a tick takes ~10 s; this is a guard.)
 const TIME_BUDGET_MS = 270_000
-// Detail considered stale after this — re-pulled even if present.
-const STALE_DAYS = 14
-// How many candidates to pull into memory per location per tick.
-const CANDIDATE_LIMIT = 3000
 
 export async function GET(request) {
   const auth = request.headers.get('authorization') || ''
@@ -93,21 +98,47 @@ export async function GET(request) {
     if (res.budget_exhausted) budgetExhausted = true
   }
 
-  await stampHeartbeat('glofox-detail-backfill')
+  // DETAILBACKFILL.1 — a location whose candidate read (or credentials)
+  // failed did no work. Stamping would report a healthy quiet run; leave the
+  // heartbeat to go stale (it pages after 20 minutes) and say why.
+  const failed = perLocation.filter((r) => r.status === 'failed')
+  if (failed.length > 0) {
+    logError('glofox-detail-backfill', 'location run failed; heartbeat not stamped', {
+      failed: failed.map((r) => ({ locationId: r.location_id, error: r.first_error })),
+    })
+  } else {
+    await stampHeartbeat('glofox-detail-backfill', heartbeatOutcome(perLocation))
+  }
 
   return NextResponse.json({
-    success: true,
+    success: failed.length === 0,
     locations_processed: perLocation.length,
     budget_exhausted: budgetExhausted,
     per_location: perLocation,
   })
 }
 
+// The heartbeat's last_outcome: enough to verify the cursor from SQL alone.
+function heartbeatOutcome(perLocation) {
+  const sum = (pick) => perLocation.reduce((n, r) => n + (pick(r) ?? 0), 0)
+  const dues = perLocation.map((r) => r.remaining_due)
+  return {
+    candidates_seen: sum((r) => r.candidates_seen),
+    remaining_due: dues.some((d) => d == null) ? null : dues.reduce((a, b) => a + b, 0),
+    member_refused: sum((r) => r.summary.member_refused),
+    fetch_failed: sum((r) => r.summary.fetch_failed),
+    error: sum((r) => r.summary.error),
+    stamp_failed: sum((r) => r.summary.stamp_failed),
+  }
+}
+
 async function backfillLocation(db, location, startedAt) {
   // MEMBERRESULT.1 — member_refused: Glofox answered without a member (200
   // success:false). Counted apart: it used to reach applyMemberSync and land
   // in `invalid`.
-  const summary = { create: 0, update: 0, leave: 0, fetch_failed: 0, error: 0, ambiguous: 0, invalid: 0, member_refused: 0 }
+  // DETAILBACKFILL.1 — stamp_failed: the due-date write failed, so that
+  // contact is simply read again next tick (a duplicate, never a loss).
+  const summary = { create: 0, update: 0, leave: 0, fetch_failed: 0, error: 0, ambiguous: 0, invalid: 0, member_refused: 0, stamp_failed: 0 }
   let budgetExhausted = false
   let candidatesSeen = 0
   let remaining = null
@@ -116,7 +147,13 @@ async function backfillLocation(db, location, startedAt) {
     .from('glofox_sync_runs')
     .insert({
       location_id: location.id,
-      filter_used: { detail_backfill: true, statuses: RELATIONSHIP_STATUSES, stale_days: STALE_DAYS },
+      filter_used: {
+        detail_backfill: true,
+        statuses: RELATIONSHIP_STATUSES,
+        sweep_days: DETAIL_SWEEP_DAYS,
+        retry_hours: DETAIL_RETRY_HOURS,
+        per_tick: DETAIL_PER_TICK,
+      },
       status: 'running',
     })
     .select('id')
@@ -135,21 +172,23 @@ async function backfillLocation(db, location, startedAt) {
       throw new Error('Glofox credentials missing on this location.')
     }
 
-    const staleCutoff = new Date(Date.now() - STALE_DAYS * 86_400_000).toISOString()
-
-    // Candidates: relationship cohort, detail missing OR stale, with a
-    // Glofox id to fetch. Missing-plan first, then stalest, then id.
+    // DETAILBACKFILL.1 — the cursor. Due = never attempted, or its due time
+    // has passed; oldest due first, stalest sync as the tiebreak (so the first
+    // pass after mig 645 takes the contacts unrefreshed since July first).
+    // DETAIL_PER_TICK < 1,000, so this one explicitly ordered page is the
+    // whole tick; the next tick's page is the next slice because every
+    // attempt below moves its contact's due date.
     const { data: candidates, error: candErr } = await db
       .from('contacts')
-      .select('id, glofox_member_id, glofox_membership_plan, glofox_synced_at')
+      .select('id, glofox_member_id, glofox_detail_due_at, glofox_synced_at')
       .eq('location_id', location.id)
       .in('glofox_membership_status', RELATIONSHIP_STATUSES)
       .not('glofox_member_id', 'is', null)
-      .or(`glofox_membership_plan.is.null,glofox_synced_at.lt.${staleCutoff}`)
-      .order('glofox_membership_plan', { ascending: true, nullsFirst: true })
+      .or(detailDueFilter(new Date().toISOString()))
+      .order('glofox_detail_due_at', { ascending: true, nullsFirst: true })
       .order('glofox_synced_at', { ascending: true, nullsFirst: true })
       .order('id', { ascending: true })
-      .range(0, CANDIDATE_LIMIT - 1)
+      .range(0, DETAIL_PER_TICK - 1)
     if (candErr) throw new Error(candErr.message)
 
     const items = candidates || []
@@ -166,48 +205,53 @@ async function backfillLocation(db, location, startedAt) {
         const idx = cursor++
         if (idx >= items.length) return
         const c = items[idx]
-        try {
-          const { ok, member, refused } = await fetchMemberResult(creds, c.glofox_member_id)
-          if (refused) { summary.member_refused++; continue }
-          if (!ok || !member) { summary.fetch_failed++; continue }
-          const r = await applyMemberSync(db, location.id, member, {
-            creds, membershipCache, skipBookings: true, skipInteractions: true, skipReclassify: true,
-          })
-          if (r?.error) summary.error++
-          else summary[r.action] = (summary[r.action] || 0) + 1
-        } catch {
-          summary.error++
-        }
+        const outcome = await readOne(db, location.id, creds, membershipCache, c, summary)
+        await stampDue(db, c.id, outcome, summary)
       }
     }
     await Promise.all(Array.from({ length: GLOFOX_CONCURRENCY }, worker))
-    // One structured line per run, not per member: a refused contact with no
-    // plan is re-read every tick, and glofoxFetch already warns per call.
+
+    // One structured line per run, not per member: glofoxFetch already warns
+    // per call. A refused contact is due again in 10.5-17.5 days, like any answer.
     if (summary.member_refused > 0) {
       logWarn('glofox-detail-backfill', 'Glofox refused member reads; nothing written for them', {
         locationId: location.id, refused: summary.member_refused,
       })
     }
+    // A stamp that keeps failing would rebuild the re-read loop (bounded at
+    // DETAIL_PER_TICK a tick), so it is an error, logged once per run.
+    if (summary.stamp_failed > 0) {
+      logError('glofox-detail-backfill', 'could not stamp glofox_detail_due_at; those contacts will be re-read next tick', {
+        locationId: location.id, stampFailed: summary.stamp_failed,
+      })
+    }
 
-    // How many in the cohort still need detail (progress signal).
-    const { count } = await db
+    // Progress signal: how many in the cohort are still due. A failed count
+    // is null (unknown), never 0.
+    const { count, error: countErr } = await db
       .from('contacts')
       .select('id', { count: 'exact', head: true })
       .eq('location_id', location.id)
       .in('glofox_membership_status', RELATIONSHIP_STATUSES)
       .not('glofox_member_id', 'is', null)
-      .is('glofox_membership_plan', null)
-    remaining = typeof count === 'number' ? count : null
+      .or(detailDueFilter(new Date().toISOString()))
+    if (countErr) {
+      logWarn('glofox-detail-backfill', 'remaining-due count failed', { locationId: location.id, err: countErr.message })
+    }
+    remaining = !countErr && typeof count === 'number' ? count : null
 
     if (runId) {
-      await db.from('glofox_sync_runs').update({
+      const { error: runUpdErr } = await db.from('glofox_sync_runs').update({
         finished_at: new Date().toISOString(),
         duration_ms: Date.now() - startedAt,
         leads_processed: (summary.create + summary.update + summary.leave),
         total_available: candidatesSeen,
-        summary: { ...summary, remaining_missing_plan: remaining },
+        summary: { ...summary, remaining_due: remaining },
         status: 'completed',
       }).eq('id', runId)
+      if (runUpdErr) {
+        logWarn('glofox-detail-backfill', 'audit run row update failed', { locationId: location.id, runId, err: runUpdErr.message })
+      }
     }
 
     return {
@@ -215,30 +259,70 @@ async function backfillLocation(db, location, startedAt) {
       location_name: location.name,
       status: 'completed',
       candidates_seen: candidatesSeen,
-      remaining_missing_plan: remaining,
+      remaining_due: remaining,
       budget_exhausted: budgetExhausted,
       summary,
     }
   } catch (e) {
     const errMessage = e?.message || 'unknown error'
     if (runId) {
-      await db.from('glofox_sync_runs').update({
+      const { error: runUpdErr } = await db.from('glofox_sync_runs').update({
         finished_at: new Date().toISOString(),
         duration_ms: Date.now() - startedAt,
         summary,
         first_error: errMessage,
         status: 'failed',
       }).eq('id', runId)
+      if (runUpdErr) {
+        logWarn('glofox-detail-backfill', 'audit run row update failed', { locationId: location.id, runId, err: runUpdErr.message })
+      }
     }
-    console.warn(`[cron][glofox-detail-backfill] location ${location.id} failed: ${errMessage}`)
     return {
       location_id: location.id,
       location_name: location.name,
       status: 'failed',
       candidates_seen: candidatesSeen,
+      remaining_due: null,
       budget_exhausted: budgetExhausted,
       summary,
       first_error: errMessage,
     }
+  }
+}
+
+/**
+ * Read one contact's detail from Glofox and apply it. Counts the outcome in
+ * `summary` and returns it (the key nextDetailDueAt judges). Never throws.
+ */
+async function readOne(db, locationId, creds, membershipCache, c, summary) {
+  try {
+    const { ok, member, refused } = await fetchMemberResult(creds, c.glofox_member_id)
+    if (refused) { summary.member_refused++; return 'member_refused' }
+    if (!ok || !member) { summary.fetch_failed++; return 'fetch_failed' }
+    const r = await applyMemberSync(db, locationId, member, {
+      creds, membershipCache, skipBookings: true, skipInteractions: true, skipReclassify: true,
+    })
+    if (r?.error) { summary.error++; return 'error' }
+    summary[r.action] = (summary[r.action] || 0) + 1
+    return r.action
+  } catch {
+    summary.error++
+    return 'error'
+  }
+}
+
+/**
+ * DETAILBACKFILL.1 — move this contact's due date, whatever the outcome. A
+ * failed write is counted, never thrown: the contact is read again next tick.
+ */
+async function stampDue(db, contactId, outcome, summary) {
+  try {
+    const { error } = await db
+      .from('contacts')
+      .update({ glofox_detail_due_at: nextDetailDueAt(outcome, Date.now()) })
+      .eq('id', contactId)
+    if (error) summary.stamp_failed++
+  } catch {
+    summary.stamp_failed++
   }
 }
