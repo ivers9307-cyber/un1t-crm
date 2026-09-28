@@ -83,3 +83,34 @@ describe('hasMobilePermissionAtAnyLocation', () => {
     expect(hasMobilePermissionAtAnyLocation(u, 'email')).toBe(false)
   })
 })
+
+// ROLESWEEP.1c review — for a caller with ONE location (the active one), the
+// per-location form must answer exactly what hasMobilePermission answers:
+// the only thing it may change is WHICH studio it asks, never the answer at
+// the same studio. Roles × keys × a .mobile override, a .mobile template, a
+// web-only override (must not leak) and a feature switched off.
+describe('hasMobilePermissionForLocation at the only (active) location = hasMobilePermission', () => {
+  const ROLES = ['owner', 'manager', 'head_coach', 'reception', 'staff']
+  const KEYS = ['email', 'sms', 'whatsapp', 'tv_displays', 'consultations', 'pipeline']
+  const COMBOS = [
+    ['defaults only', {}],
+    ['.mobile override on', { permissions: { mobile: { email: true, sms: true, pipeline: true } } }],
+    ['.mobile override off', { permissions: { mobile: { email: false, whatsapp: false, tv_displays: false } } }],
+    ['web override only', { permissions: { email: true, sms: false, consultations: false } }],
+    ['.mobile template', { template: { mobile: { email: true, whatsapp: false, consultations: true } } }],
+    ['template and override disagree', { template: { mobile: { sms: false } }, permissions: { mobile: { sms: true } } }],
+    ['feature off', { features: { whatsapp: false, email: false, pipeline: false } }],
+  ]
+
+  for (const role of ROLES) {
+    for (const [label, extra] of COMBOS) {
+      it(`${role}, ${label}`, () => {
+        const u = person({ [LOC_A]: { role, ...extra } }, LOC_A)
+        for (const key of KEYS) {
+          expect([key, hasMobilePermissionForLocation(u, LOC_A, key)])
+            .toEqual([key, hasMobilePermission(u, key)])
+        }
+      })
+    }
+  }
+})
