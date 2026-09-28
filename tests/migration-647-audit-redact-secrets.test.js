@@ -514,10 +514,24 @@ describe('the self-check aborts the whole file', () => {
     const db = await freshDb({ applyFix: false })
     try {
       await db.exec(`DROP TRIGGER audit_mutation ON public.cars`)
-      await expect(db.exec(MIG_647)).rejects.toThrow(/AUDITSECRETS\.1: audit_mutation is attached to/)
+      await expect(db.exec(MIG_647)).rejects.toThrow(/AUDITSECRETS\.1: private\.log_mutation\(\) runs on /)
       // Nothing from the file survived: log_mutation is still mig 191's.
       const { rows } = await db.query(`SELECT to_regprocedure('private.audit_redact(jsonb,text[],text,integer)') AS f`)
       expect(rows[0].f).toBeNull()
+    } finally {
+      await db.close()
+    }
+  })
+
+  it('when log_mutation runs on a seventh table under another trigger name', async () => {
+    const db = await freshDb({ applyFix: false })
+    try {
+      await db.exec(`
+        CREATE TABLE public.xero_connections (id uuid PRIMARY KEY, access_token text);
+        CREATE TRIGGER log_xero AFTER INSERT OR UPDATE OR DELETE ON public.xero_connections
+          FOR EACH ROW EXECUTE FUNCTION private.log_mutation();
+      `)
+      await expect(db.exec(MIG_647)).rejects.toThrow(/AUDITSECRETS\.1: private\.log_mutation\(\) runs on .*xero_connections/)
     } finally {
       await db.close()
     }

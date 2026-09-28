@@ -342,17 +342,18 @@ declare
   v_fn     text;
   v_deep   jsonb := '{"api_token":"t","note":"n"}'::jsonb;
 begin
-  -- 1. the trigger is still on exactly the six mig-191 tables, enabled
-  select array_agg(c.relname::text order by c.relname)
+  -- 1. log_mutation (under any trigger name, in any schema) runs on exactly
+  --    the six mig-191 public tables, enabled
+  select array_agg(n.nspname || '.' || c.relname || ':' || t.tgenabled::text order by n.nspname, c.relname)
     into v_tables
   from pg_trigger t
   join pg_class c on c.oid = t.tgrelid
   join pg_namespace n on n.oid = c.relnamespace
-  where t.tgname = 'audit_mutation' and not t.tgisinternal and n.nspname = 'public'
-    and t.tgenabled = 'O'
+  where not t.tgisinternal
     and t.tgfoid = 'private.log_mutation()'::regprocedure;
-  if v_tables is distinct from array['cars','invoices_queue','locations','organizations','profile_locations','profiles'] then
-    raise exception 'AUDITSECRETS.1: audit_mutation is attached to % (expected the six mig-191 tables)', v_tables;
+  if v_tables is distinct from array['public.cars:O','public.invoices_queue:O','public.locations:O',
+                                     'public.organizations:O','public.profile_locations:O','public.profiles:O'] then
+    raise exception 'AUDITSECRETS.1: private.log_mutation() runs on % (expected the six mig-191 tables, enabled)', v_tables;
   end if;
 
   -- 2. log_mutation is still SECURITY DEFINER with an empty search_path

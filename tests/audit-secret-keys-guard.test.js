@@ -5,8 +5,9 @@
 //      whose name the rule does not match;
 //   2. a migration after 647 adds a secret-looking column to an audited table
 //      and the rule does not match it (or it is not a known look-alike);
-//   3. a migration after 647 attaches the audit trigger to a new table without
-//      adding that table to AUDITED_TABLES (so check 2 covers it).
+//   3. a migration after 647 attaches private.log_mutation (under any trigger
+//      name) to a new table without adding that table to AUDITED_TABLES (so
+//      check 2 covers it).
 // Like check:select-columns it is a floor, not a proof: a secret under a
 // name like `dsn` or `url` is invisible to it.
 
@@ -48,17 +49,21 @@ function declaredSecretFields() {
   return out
 }
 
+// `public.x`, `"public"."x"`, `public."x"` or bare `x`; the name is group 1.
+const SCHEMA_Q = '(?:"?public"?\\.)?'
+const NAME_END = '"?(?![a-z0-9_])'
+
 /** Columns a migration adds to an audited table: ADD COLUMN and CREATE TABLE. */
 export function addedAuditedColumns(sql, audited = AUDITED_TABLES) {
   const out = []
   const tables = audited.join('|')
-  const alter = new RegExp(`alter\\s+table\\s+(?:if\\s+exists\\s+)?(?:only\\s+)?(?:public\\.)?(${tables})\\b([^;]*);`, 'gi')
+  const alter = new RegExp(`alter\\s+table\\s+(?:if\\s+exists\\s+)?(?:only\\s+)?${SCHEMA_Q}"?(${tables})${NAME_END}([^;]*);`, 'gi')
   for (const m of sql.matchAll(alter)) {
     for (const c of m[2].matchAll(/add\s+column\s+(?:if\s+not\s+exists\s+)?"?([a-z0-9_]+)"?/gi)) {
       out.push({ table: m[1].toLowerCase(), column: c[1].toLowerCase() })
     }
   }
-  const create = new RegExp(`create\\s+table\\s+(?:if\\s+not\\s+exists\\s+)?(?:public\\.)?(${tables})\\s*\\(([\\s\\S]*?)\\);`, 'gi')
+  const create = new RegExp(`create\\s+table\\s+(?:if\\s+not\\s+exists\\s+)?${SCHEMA_Q}"?(${tables})"?\\s*\\(([\\s\\S]*?)\\);`, 'gi')
   for (const m of sql.matchAll(create)) {
     for (const line of m[2].split(',')) {
       const c = line.trim().match(/^"?([a-z0-9_]+)"?\s+[a-z]/i)
@@ -68,9 +73,17 @@ export function addedAuditedColumns(sql, audited = AUDITED_TABLES) {
   return out
 }
 
-/** Tables a migration attaches the audit trigger to. */
+/** Tables a migration attaches the audit trigger to: any CREATE TRIGGER,
+ *  under any name, that executes private.log_mutation. */
 export function auditTriggerTables(sql) {
-  return [...sql.matchAll(/create\s+trigger\s+audit_mutation\b[\s\S]*?\bon\s+(?:public\.)?([a-z0-9_]+)/gi)].map((m) => m[1].toLowerCase())
+  const out = []
+  for (const m of sql.matchAll(/create\s+(?:or\s+replace\s+)?(?:constraint\s+)?trigger\s+[\s\S]*?;/gi)) {
+    const stmt = m[0]
+    if (!/execute\s+(?:function|procedure)\s+"?private"?\s*\.\s*"?log_mutation\b/i.test(stmt)) continue
+    const on = stmt.match(/\bon\s+(?:only\s+)?(?:"?public"?\.)?"?([a-z0-9_]+)"?/i)
+    if (on) out.push(on[1].toLowerCase())
+  }
+  return out
 }
 
 describe('AUDITSECRETS.1 guard', () => {
@@ -111,6 +124,17 @@ describe('AUDITSECRETS.1 guard', () => {
     expect(addedAuditedColumns('ALTER TABLE public.contacts ADD COLUMN api_token text;')).toEqual([])
     expect(auditTriggerTables('create trigger audit_mutation after insert or update or delete\n  on public.xero_connections for each row execute function private.log_mutation();'))
       .toEqual(['xero_connections'])
+    // Quoted identifiers (review nit).
+    expect(addedAuditedColumns('ALTER TABLE public."locations" ADD COLUMN shelly_secret text;'))
+      .toEqual([{ table: 'locations', column: 'shelly_secret' }])
+    expect(addedAuditedColumns('alter table "public"."profiles" add column "otp_secret" text;'))
+      .toEqual([{ table: 'profiles', column: 'otp_secret' }])
+    expect(addedAuditedColumns('ALTER TABLE public."locations_archive" ADD COLUMN api_token text;')).toEqual([])
+    // The trigger is found by the function it runs, under any trigger name (review nit).
+    expect(auditTriggerTables('CREATE TRIGGER log_changes AFTER UPDATE ON public."xero_connections"\n  FOR EACH ROW EXECUTE PROCEDURE private.log_mutation();'))
+      .toEqual(['xero_connections'])
+    expect(auditTriggerTables('create trigger audit_mutation after insert on public.foo for each row execute function public.other_fn();'))
+      .toEqual([])
     expect(LOOKS_SECRET.test('webhook_signing_secret')).toBe(true)
     expect(isAuditSecretKey('webhook_signing_secret')).toBe(true)
     expect(LOOKS_SECRET.test('nickname')).toBe(false)
