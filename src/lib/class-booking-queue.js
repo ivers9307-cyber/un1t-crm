@@ -35,10 +35,12 @@
 
 import { processClassBookingRequest, routeToReview } from './class-booking-processor.js'
 import { logWarn, logError } from '@/lib/log'
+import { CLASS_BOOKING_MAX_ATTEMPTS } from './class-booking-attempts.js'
 
-// Keep in sync with class-booking-processor.js (its routeToReview
-// review-unavailable fallback caps on the same number).
-export const MAX_ATTEMPTS = 3
+// Shared with class-booking-processor.js (its routeToReview
+// review-unavailable fallback caps on the same number) and with the staff
+// card copy (agent-request-why.js), through class-booking-attempts.js.
+export const MAX_ATTEMPTS = CLASS_BOOKING_MAX_ATTEMPTS
 
 /**
  * Claim one queued booking request (status CAS + attempts bump), run it

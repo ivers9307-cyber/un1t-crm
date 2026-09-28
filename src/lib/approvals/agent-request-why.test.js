@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { whyFlagged, customerWords, approvalGrantsTrialCredit } from './agent-request-why'
 
 describe('whyFlagged', () => {
@@ -215,5 +215,25 @@ describe('credit_check_failed names the unreadable account', () => {
   it('ignores a malformed list rather than rendering it', () => {
     expect(why('gm-aaa')).toBe(why(undefined))
     expect(why([{ role: 'booking_account' }, null])).toBe(why(undefined))
+  })
+})
+
+// CBPCREDITREAD.1 review — the retry count in the card copy follows the
+// queue's attempt cap (one constant, class-booking-attempts.js), so the copy
+// can never say "3 tries" after the cap moves.
+describe('the retry count in the copy follows the attempt cap', () => {
+  it('says the cap it was built with', async () => {
+    vi.resetModules()
+    vi.doMock('@/lib/class-booking-attempts', () => ({ CLASS_BOOKING_MAX_ATTEMPTS: 5 }))
+    try {
+      const { whyFlagged: why } = await import('./agent-request-why')
+      const copy = (reason) => why({ kind: 'class_booking', details: { reason } })
+      expect(copy('credit_check_failed')).toMatch(/after 5 tries/)
+      expect(copy('processing_error')).toMatch(/failed 5 times/)
+      expect(copy('max_attempts_stuck_processing')).toMatch(/interrupted 5 times/)
+    } finally {
+      vi.doUnmock('@/lib/class-booking-attempts')
+      vi.resetModules()
+    }
   })
 })

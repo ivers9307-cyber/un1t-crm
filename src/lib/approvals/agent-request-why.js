@@ -1,4 +1,5 @@
 import { hasBookableMembership } from '@/lib/person-accounts'
+import { CLASS_BOOKING_MAX_ATTEMPTS } from '@/lib/class-booking-attempts'
 
 // AGENT-REQ-UX.1 — operator-readable explanations for agent requests.
 //
@@ -49,12 +50,13 @@ const MACHINE_REASONS = {
   attendance_check_failed:
     'Their attendance history could not be read from Glofox, so it was not auto-booked. Check the account and decide.',
   // CBPCREDITREAD.1 — the funnel could not READ their Glofox credit balance
-  // on any of its 3 attempts (class-booking-queue.js at MAX_ATTEMPTS). The
+  // on any of its attempts (class-booking-queue.js at MAX_ATTEMPTS; the
+  // count in the copy is that same constant). The
   // balance is UNKNOWN, not empty, and approving grants nothing
   // (approvalGrantsTrialCredit below): staff add a credit themselves if one
   // is really missing.
   credit_check_failed:
-    'Their Glofox credit balance could not be read (Glofox did not answer after 3 tries), so the booking was not made. This does not mean they have no credits. Check their account in Glofox: if they have credits or a membership, approve to book against it. If they have none, add a credit in Glofox first, then approve. Approving does not add a credit.',
+    `Their Glofox credit balance could not be read (Glofox did not answer after ${CLASS_BOOKING_MAX_ATTEMPTS} tries), so the booking was not made. This does not mean they have no credits. Check their account in Glofox: if they have credits or a membership, approve to book against it. If they have none, add a credit in Glofox first, then approve. Approving does not add a credit.`,
   booking_rejected:
     'Glofox rejected the live booking attempt. Fix the account (credits / membership), then approve to retry the booking.',
   superseded_duplicate:
@@ -62,11 +64,11 @@ const MACHINE_REASONS = {
   // REGISTRYREAD.1a — the automatic booking THREW on every attempt
   // (class-booking-queue.js at MAX_ATTEMPTS). Nothing reached Glofox.
   processing_error:
-    "The automatic booking failed 3 times (for example, the studio's Glofox settings could not be read). Nothing was booked. Approve to book now.",
+    `The automatic booking failed ${CLASS_BOOKING_MAX_ATTEMPTS} times (for example, the studio's Glofox settings could not be read). Nothing was booked. Approve to book now.`,
   // REGISTRYREAD.1a — the cron's reaper found the row stuck mid-run past the
   // attempt cap. A run that died mid-flight may already have booked it.
   max_attempts_stuck_processing:
-    'The automatic booking was interrupted 3 times and never finished, so it may or may not have gone through. Check Glofox for the booking first; if it is not there, approve to book now.',
+    `The automatic booking was interrupted ${CLASS_BOOKING_MAX_ATTEMPTS} times and never finished, so it may or may not have gone through. Check Glofox for the booking first; if it is not there, approve to book now.`,
 }
 
 // CBPCREDITREAD.1 — credit_check_failed names WHICH account's credits could

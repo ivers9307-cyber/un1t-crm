@@ -9,6 +9,7 @@
 // balance): those THROW so the queue retries them first.
 import { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, createBooking, interpretBookingResult, fetchUserCreditsResult, fetchUserBookingsResult, GLOFOX_BOOKING_MODEL } from '@/lib/glofox'
 import { computeCreditsRemaining } from '@/lib/glofox-sync'
+import { CLASS_BOOKING_MAX_ATTEMPTS } from '@/lib/class-booking-attempts'
 import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
 import { hasBookableMembership, personRowsForContact, corroborated, reusableSibling, electWriteAccount, chunkIds } from '@/lib/person-accounts'
 import { maybeSendBookingWhatsappConfirm, CLASS_CONFIRM_TEMPLATE } from '@/lib/automations/booking-whatsapp-confirm'
@@ -21,7 +22,7 @@ function classLabel(startsAt) {
   const d = new Date(startsAt)
   return isNaN(d.getTime()) ? 'your class' : labelFmt.format(d)
 }
-const MAX_ATTEMPTS = 3 // keep in sync with the process-class-bookings cron
+const MAX_ATTEMPTS = CLASS_BOOKING_MAX_ATTEMPTS // one constant with the queue and the card copy
 
 async function setStatus(db, id, fields) {
   try { await db.from('class_booking_requests').update(fields).eq('id', id) } catch (e) { logWarn('cbp', 'status update failed', { err: e }) }
