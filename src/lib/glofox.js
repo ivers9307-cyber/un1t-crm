@@ -506,9 +506,15 @@ export function glofoxHttpStatsSince(before) {
   return out
 }
 
+const GLOFOX_ID_SEGMENT = [
+  /^[0-9a-f]{16,}$/i,                                              // Mongo-style ids
+  /^\d{6,}$/,                                                      // numeric ids
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, // UUIDs (v3.0 payment links)
+]
+
 /**
  * A Glofox path safe to log: the query dropped (it carries user_id=…) and every
- * id-like segment (16+ hex chars, or 6+ digits) replaced by ':id'.
+ * id-like segment (16+ hex chars, 6+ digits, or a UUID) replaced by ':id'.
  */
 export function glofoxPathLabel(pathOrUrl) {
   let p = String(pathOrUrl || '')
@@ -516,7 +522,7 @@ export function glofoxPathLabel(pathOrUrl) {
     try { p = new URL(p).pathname } catch { /* keep the raw string */ }
   }
   p = p.split('?')[0]
-  return p.split('/').map((seg) => (/^[0-9a-f]{16,}$/i.test(seg) || /^\d{6,}$/.test(seg) ? ':id' : seg)).join('/')
+  return p.split('/').map((seg) => (GLOFOX_ID_SEGMENT.some((re) => re.test(seg)) ? ':id' : seg)).join('/')
 }
 
 /**

@@ -30,6 +30,13 @@ describe('glofoxPathLabel', () => {
     expect(glofoxPathLabel('/2.0/branches/1234567/events')).toBe('/2.0/branches/:id/events')
     expect(glofoxPathLabel('/2.0/members')).toBe('/2.0/members')
   })
+
+  it('replaces a UUID segment too', () => {
+    expect(glofoxPathLabel('/v3.0/payment-links/invoices/0a1b2c3d-0000-4000-8000-00000000abcd'))
+      .toBe('/v3.0/payment-links/invoices/:id')
+    expect(glofoxPathLabel('/v3.0/payment-links/invoices/0A1B2C3D-0000-4000-8000-00000000ABCD/pay'))
+      .toBe('/v3.0/payment-links/invoices/:id/pay')
+  })
 })
 
 describe('glofoxFetch counters', () => {
