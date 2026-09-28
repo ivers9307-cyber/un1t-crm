@@ -58,8 +58,8 @@ import { logAuditEvent } from '@/lib/audit'
 import { runSwapCoverSweep } from '@/lib/swap-cover-server'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { markIncomplete } from '@/lib/checklist-sweep'
-import { sendPush } from '@/lib/push'
-import { logError } from '@/lib/log'
+import { sendPush, sendPushToRolesAtLocation } from '@/lib/push'
+import { logError, logWarn } from '@/lib/log'
 import { runAvailabilityNoticeSweep } from '@/lib/availability-notify'
 
 const INSTANCE = {
@@ -297,5 +297,26 @@ describe('GET /api/cron/checklist-sweep — availability-notice arm', () => {
     expect(stampHeartbeat).toHaveBeenCalledWith('checklist-sweep', expect.objectContaining({
       availability_notices: QUIET_AVAIL, availability_sweep_failed: 0,
     }))
+  })
+})
+
+// C21 PUSHDONE.1 — the flip to 'incomplete' is the truth and is never undone,
+// so the pushes are not retried; a push that reached nobody is now SAID.
+describe('GET /api/cron/checklist-sweep — pushes that reached nobody', () => {
+  it('counts push_failed and logs each failed push; the audit row is still written', async () => {
+    sendPush.mockResolvedValueOnce({ sent: 0, skipped: 0, invalidated: 0, failed: 1, read_failed: 1 })
+    sendPushToRolesAtLocation.mockResolvedValueOnce({ sent: 0, skipped: 0, invalidated: 0, failed: 0, recipients_failed: 1 })
+    const body = await (await GET(req())).json()
+    expect(body.stats).toMatchObject({ swept: 1, push_overdue: 0, push_compliance: 0, push_failed: 2 })
+    expect(logWarn).toHaveBeenCalledWith('cron-checklist-sweep', 'overdue push reached nobody; not retried', { id: 'inst-1', read_failed: true })
+    expect(logWarn).toHaveBeenCalledWith('cron-checklist-sweep', 'compliance push reached nobody; not retried',
+      { id: 'inst-1', read_failed: false, recipients_failed: true })
+    expect(logAuditEvent).toHaveBeenCalledTimes(1)
+  })
+
+  it('nobody to tell is not a failure', async () => {
+    sendPush.mockResolvedValueOnce({ sent: 0, skipped: 1, invalidated: 0, failed: 0 })
+    const body = await (await GET(req())).json()
+    expect(body.stats.push_failed).toBe(0)
   })
 })

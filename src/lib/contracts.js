@@ -443,13 +443,18 @@ const REMINDER_THRESHOLD_DAYS = [3, 7]
  *   - reminder_count 0 -> due once issued_at is >= 3 days old.
  *   - reminder_count 1 -> due once issued_at is >= 7 days old.
  *   - reminder_count >= 2 -> never (capped at 2 reminders total).
+ *   - PUSHDONE.1a: a later reminder also waits the planned spacing (7 - 3 =
+ *     4 days) after the RECORDED previous one (last_reminded_at). The cron
+ *     records a reminder only once it reached someone, so retries can hold
+ *     reminder 1 until day 7; without this, reminder 2 followed next day.
+ *     No last_reminded_at → the day-since-issued rule alone (as before).
  *
  * Diffs two Date instants directly via getTime() — no string
  * parsing, so this is timezone-agnostic (issued_at is a UTC
  * timestamptz; "days old" is the same wall-clock-independent
  * duration regardless of the caller's local timezone).
  *
- * @param {object} contract — { status, issued_at, reminder_count }
+ * @param {object} contract — { status, issued_at, reminder_count, last_reminded_at? }
  * @param {Date|number|string} [now=new Date()]
  * @returns {boolean}
  */
@@ -465,5 +470,15 @@ export function reminderDue(contract, now = new Date()) {
   const issuedAt = contract.issued_at instanceof Date ? contract.issued_at : new Date(contract.issued_at)
   const nowDate = now instanceof Date ? now : new Date(now)
   const ageDays = (nowDate.getTime() - issuedAt.getTime()) / MS_PER_DAY
-  return ageDays >= thresholdDays
+  if (ageDays < thresholdDays) return false
+
+  if (count > 0 && contract.last_reminded_at) {
+    const spacingDays = thresholdDays - REMINDER_THRESHOLD_DAYS[count - 1]
+    const lastAt = contract.last_reminded_at instanceof Date ? contract.last_reminded_at : new Date(contract.last_reminded_at)
+    const sinceLastDays = (nowDate.getTime() - lastAt.getTime()) / MS_PER_DAY
+    // An unparseable stamp is NaN; NaN < spacing is false, so it falls back
+    // to the day-since-issued rule rather than holding the reminder forever.
+    if (sinceLastDays < spacingDays) return false
+  }
+  return true
 }

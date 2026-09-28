@@ -25,12 +25,27 @@
 // cleared wherever the handoff resolves: the cooldown re-arm and the operator
 // resolve (core.resolveRearmPatch), and it is reset when handoff() stamps a
 // NEW agent_handed_off_at.
+//
+// C21 PUSHDONE.1 — the escalation is stamped AFTER the push, never before. It
+// used to stamp first "so a push hiccup must not requeue the escalation every
+// 15 minutes forever", which made every failed push a silent, permanent loss
+// for a customer who is still waiting. Now: a push that reached nobody because
+// something broke (pushOutcome 'failed') leaves the stamp null and the next
+// tick retries, for HANDOFF_ALERT_RETRY_HOURS past the breach, then it is
+// stamped with a logError. A failed push reached nobody, so a retry cannot
+// re-alert anyone; a lost stamp after a delivered push can (a duplicate staff
+// push), and that is the direction CLAUDE.md asks us to err in.
 
 import { sendPushToRolesAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
+import { pushOutcome } from '@/lib/push-outcome'
+import { logWarn, logError } from '@/lib/log'
 import { resolveRearmPatch } from './core'
 
 export const HANDOFF_SLA_DEFAULT_MINUTES = 60
+// C21 PUSHDONE.1 — how long past the breach a failed escalation keeps being
+// retried (every 15-minute tick) before it is stamped and given up, loudly.
+export const HANDOFF_ALERT_RETRY_HOURS = 24
 const MIN_MS = 60_000
 // The manual-takeover patch stamps agent_handed_off_at in the same request
 // as the operator's own message — tolerate small write-order skew so their
@@ -223,12 +238,20 @@ export async function runHandoffAutoResolve(db, { nowMs = Date.now() } = {}) {
           })
           if (!decision.resolve) { results.skipped++; continue }
 
-          await db.from(channel.conversationsTable)
+          const { error: resolveErr } = await db.from(channel.conversationsTable)
             .update({
               resolved_at: nowIso,
               ...resolveRearmPatch({ resolved: true, agent_handed_off_at: c.agent_handed_off_at }),
             })
             .eq('id', c.id)
+          if (resolveErr) {
+            // Not resolved: the thread stays a candidate and the next tick tries again.
+            results.skipped++
+            logWarn('handoff-sla', 'auto-resolve write failed; retried next tick', {
+              channel: channel.name, conversationId: c.id, err: resolveErr.message,
+            })
+            continue
+          }
 
           console.warn('[radar-agent] handoff auto-resolved', JSON.stringify({
             channel: channel.name, conversationId: c.id, reason: decision.reason,
@@ -286,7 +309,7 @@ async function humanRepliedAtMs(db, channel, conversationId, handedOffAtMs) {
  * conversation exactly once. Never throws.
  */
 export async function runHandoffSlaSweep(db, { nowMs = Date.now() } = {}) {
-  const results = { escalated: 0, skipped: 0 }
+  const results = { escalated: 0, skipped: 0, alert_failed: 0, gave_up: 0 }
 
   const { data: locations } = await db.from('locations')
     .select('id, name, settings')
@@ -325,24 +348,45 @@ export async function runHandoffSlaSweep(db, { nowMs = Date.now() } = {}) {
           })
           if (!decision.breach) { results.skipped++; continue }
 
-          // Stamp FIRST — a push hiccup must not requeue the escalation
-          // every 15 minutes forever.
-          await db.from(channel.conversationsTable)
-            .update({ handoff_escalated_at: new Date(nowMs).toISOString() })
-            .eq('id', c.id)
-
+          // C21 PUSHDONE.1 — send FIRST, stamp after (see the header).
           const contact = c.contacts || {}
           const who = contact.first_name || String(contact.name || '').split(/\s+/)[0] || 'A customer'
+          let pushResult = null
           try {
-            await sendPushToRolesAtLocation(location.id, MANAGER_ROLES, {
+            pushResult = await sendPushToRolesAtLocation(location.id, MANAGER_ROLES, {
               title: `${channel.label} · still waiting after handoff`,
               body: `${who} has been waiting ${waitingLabel(handedOffAtMs, nowMs)} since Mia handed off — nobody has replied yet.`,
               category: channel.pushCategory,
               data: { type: channel.handoffType, conversation_id: c.id },
             })
           } catch (e) {
-            console.error(`[radar-agent] handoff-sla push failed (${channel.name}):`, e?.message || e)
+            logWarn('handoff-sla', 'escalation push threw', { channel: channel.name, conversationId: c.id, err: e?.message || String(e) })
           }
+          const outcome = pushOutcome(pushResult)
+          if (outcome === 'failed') {
+            const pastBreachMs = nowMs - handedOffAtMs - slaMinutes * MIN_MS
+            if (pastBreachMs <= HANDOFF_ALERT_RETRY_HOURS * 60 * MIN_MS) {
+              results.alert_failed++
+              logWarn('handoff-sla', 'escalation reached nobody; not stamped, retried next tick', {
+                channel: channel.name, conversationId: c.id, read_failed: !!pushResult?.read_failed,
+              })
+              continue
+            }
+            logError('handoff-sla', 'escalation never reached a manager; gave up', { channel: channel.name, conversationId: c.id })
+            results.gave_up++
+          }
+
+          // CAS on the null stamp: two overlapping ticks stamp once.
+          const { error: stampErr } = await db.from(channel.conversationsTable)
+            .update({ handoff_escalated_at: new Date(nowMs).toISOString() })
+            .eq('id', c.id)
+            .is('handoff_escalated_at', null)
+          if (stampErr) {
+            logError('handoff-sla', 'escalation stamp failed; managers may be alerted again next tick', {
+              channel: channel.name, conversationId: c.id, err: stampErr.message,
+            })
+          }
+          if (outcome === 'failed') continue
           console.warn('[radar-agent] handoff-sla escalated', JSON.stringify({
             channel: channel.name, conversationId: c.id, waitedMinutes: Math.floor((nowMs - handedOffAtMs) / MIN_MS),
           }))
