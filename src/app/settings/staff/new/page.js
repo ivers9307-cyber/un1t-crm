@@ -2,6 +2,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { redirect } from 'next/navigation'
 import StaffForm from '@/components/StaffForm'
+import { redactLocationSecrets } from '@/lib/location-secrets'
 
 export const dynamic = 'force-dynamic'
 
@@ -43,7 +44,7 @@ export default async function NewStaffPage() {
       <h2 className="text-2xl font-bold mb-1">Add Team Member</h2>
       <p className="text-sm text-un1t-subtle mb-6">Create a login for a new staff member</p>
       <StaffForm
-        locations={locations || []}
+        locations={(locations || []).map(redactLocationSecrets) /* SECFIX.3a */}
         callerIsMaster={!!user.isMaster}
         callerOwnerLocationIds={callerOwnerLocationIds}
         roleTemplates={roleTemplates}

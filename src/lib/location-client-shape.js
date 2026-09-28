@@ -7,15 +7,15 @@
 // needs their values (the AC tab saves through the write-only
 // PUT /api/locations/[id]/integrations/ac, which answers has_* flags).
 //
-// Scope, precisely: this keeps the key and PAT out of the `location` prop
-// ONLY. They still reach the browser through the `user` object:
-// getCurrentUser() loads full `locations` rows, and the page and AppShell
-// pass `user` to client components. That leak is follow-up C35 SECFIX.3.
+// Scope, precisely: this keeps the key and PAT out of the `location` prop.
+// The `user` object no longer carries them either: SECFIX.3a made
+// getCurrentUser() load only USER_LOCATION_COLUMNS (no credential column) and
+// mask every secret-named key in `settings` (src/lib/location-secrets.js).
 //
-// NOT a general secret filter either. `settings` (Glofox credentials, the
-// UniFi token) still crosses in this prop too, because the Glofox and UniFi
+// NOT a general secret filter. `settings` (Glofox credentials, the UniFi
+// token) still crosses in this prop in clear, because the Glofox and UniFi
 // tabs prefill from it and write the slice back from the browser; moving
-// those tabs onto the masked integrations route is also SECFIX.3.
+// those tabs onto the masked integrations route is SECFIX.3b.
 
 export const LOCATION_SECRET_COLUMNS = Object.freeze(['sensibo_api_key', 'thinq_pat'])
 

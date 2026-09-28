@@ -4,8 +4,8 @@
 // one above…" and the Add buttons (cases kept below).
 // ACDEVLOC.1 — the tab acts on the location in its URL (location.id), never
 // the caller's active studio; the stored Sensibo key and ThinQ PAT are never in
-// this tab's props or a URL (the `user` object still carries them: C35
-// SECFIX.3); only a master manages.
+// this tab's props or a URL (nor, since C35 SECFIX.3a, in the `user`
+// object); only a master manages.
 
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react'

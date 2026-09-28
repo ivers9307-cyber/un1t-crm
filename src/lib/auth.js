@@ -9,6 +9,7 @@ import { loadRoleTemplatesForLocations } from './role-templates.js'
 import { SUPPORT_COOKIE, verifySupportCookie } from './support-session-edge'
 import { hasRoleAtLocation, hasRoleAtAnyLocation } from './role-at-location'
 import { isTombstone } from './staff-tombstone.js'
+import { USER_LOCATION_COLUMNS, redactLocationSecrets, redactLinkedLocations } from './location-secrets.js'
 
 // React 18's `cache()` is only exported from the server build of react.
 // In the Vitest (Node) environment we get the client build which omits
@@ -371,12 +372,17 @@ export const getCurrentUser = cache(async function getCurrentUser() {
   // regardless of profile_locations, but the rows are still fetched
   // for the is_default flag used by active-location resolution.
   const effectiveProfileId = profile.id
+  // SECFIX.3a — NAME the location columns: this object is serialised into
+  // every page (AppShell). USER_LOCATION_COLUMNS is the public identity every
+  // consumer reads (id, name, organization_id, features, active,
+  // is_host_anchor, slug, country, timezone, …) plus `settings`, redacted
+  // below. The credential columns are never loaded.
   const linksPromise = db
     .from('profile_locations')
-    .select('*, locations(*)')
+    .select(`*, locations(${USER_LOCATION_COLUMNS})`)
     .eq('profile_id', effectiveProfileId)
   const allLocsPromise = profile.role === 'master'
-    ? db.from('locations').select('*').eq('active', true).order('name')
+    ? db.from('locations').select(USER_LOCATION_COLUMNS).eq('active', true).order('name')
     : Promise.resolve({ data: null })
   // Organizations (mig 079). Master sees every active org; non-master
   // sees the orgs whose locations they're a member of (resolved
@@ -394,12 +400,23 @@ export const getCurrentUser = cache(async function getCurrentUser() {
     ? Promise.resolve({ data: null })
     : db.from('profile_organizations').select('*').eq('profile_id', effectiveProfileId)
 
-  const [{ data: locationLinks }, { data: allLocs }, { data: allOrgs }, { data: orgAdminLinks }] = await Promise.all([
+  const [{ data: rawLocationLinks }, { data: rawAllLocs }, { data: allOrgs }, { data: orgAdminLinks }] = await Promise.all([
     linksPromise,
     allLocsPromise,
     allOrgsPromise,
     orgAdminLinksPromise,
   ])
+
+  // SECFIX.3a — this object is serialised into EVERY page (layout →
+  // AppShellServer → <AppShell user={user}>, a client component). The
+  // selects above never load the credential columns; `settings` still holds
+  // the Glofox / UniFi credentials as sub-keys, so they are masked here,
+  // once, for every consumer. Presence survives (the mask is truthy), so the
+  // automations pages' "is Glofox connected?" keeps working. Server code that
+  // needs a credential re-reads the row by id (glofoxCredentialsForLocation,
+  // getUnifiConfig, …) and never takes one off `user`.
+  const locationLinks = redactLinkedLocations(rawLocationLinks)
+  const allLocs = Array.isArray(rawAllLocs) ? rawAllLocs.map(redactLocationSecrets) : rawAllLocs
 
   let locations = (locationLinks || []).map(pl => pl.locations).filter(Boolean)
 
@@ -437,11 +454,15 @@ export const getCurrentUser = cache(async function getCurrentUser() {
   if (orgAdminOrgIds.length > 0) {
     const { data: orgLocs } = await db
       .from('locations')
-      .select('*')
+      .select(USER_LOCATION_COLUMNS) // SECFIX.3a
       .in('organization_id', orgAdminOrgIds)
       .eq('active', true)
       .order('name')
-    const expanded = expandOrgAdminAccess({ locations, rolesByLocation, orgLocations: orgLocs })
+    const expanded = expandOrgAdminAccess({
+      locations,
+      rolesByLocation,
+      orgLocations: Array.isArray(orgLocs) ? orgLocs.map(redactLocationSecrets) : orgLocs, // SECFIX.3a
+    })
     locations = expanded.locations
     rolesByLocation = expanded.rolesByLocation
     orgAdminSyntheticLocationIds = expanded.syntheticLocationIds

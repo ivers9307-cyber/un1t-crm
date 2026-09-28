@@ -113,9 +113,9 @@ export function createContactNote(contactId, content) {
 /**
  * Send a coach kudo (short congratulatory note + optional emoji) the
  * member reads in the champ app. Mirrors web SendKudosCard. The route is
- * gated server-side on the web `consultations` permission; callers gate
- * visibility with canDashboard(profile, 'consultations', activeLocation)
- * so mobile mirrors the web card's gating exactly.
+ * gated server-side on `consultations` at the contact's location; the
+ * contact screen shows it only when the drawer bundle's per-contact
+ * `permissions.kudos` flag is true (ROLEUI.1b), the same decision.
  */
 export function sendContactKudos(contactId, { message, emoji } = {}) {
   return api(`/api/contacts/${contactId}/kudos`, {

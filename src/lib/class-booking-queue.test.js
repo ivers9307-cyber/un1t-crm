@@ -206,6 +206,43 @@ describe('claimAndProcessBookingJob', () => {
     expect(logError).not.toHaveBeenCalled()
   })
 
+  // CBPCREDITREAD.1 — a throw may name its own card reason (CreditReadError
+  // carries reviewReason 'credit_check_failed'). Duck-typed: this lib never
+  // imports the processor's class (this file mocks the whole module).
+  it('at the cap, a throw carrying reviewReason files the card under THAT reason', async () => {
+    const db = makeDb()
+    processClassBookingRequest.mockRejectedValue(Object.assign(new Error('credit_check_failed'), { reviewReason: 'credit_check_failed' }))
+
+    const result = await claimAndProcessBookingJob(db, { ...ROW, attempts: 2 })
+
+    expect(result).toEqual({ status: 'failed', error: 'credit_check_failed', requeued: false })
+    expect(db._calls.updates[1].payload).toEqual({ status: 'needs_review', last_error: 'credit_check_failed' })
+    expect(routeToReview).toHaveBeenCalledWith(db, expect.objectContaining({ id: 'cbr-1' }), 'credit_check_failed')
+  })
+
+  // CBPCREDITREAD.1 review — the throw may also carry the account the
+  // processor had elected; the card must name it (routeToReview's 4th arg).
+  it('at the cap, a throw carrying reviewOptions hands them to routeToReview', async () => {
+    const db = makeDb()
+    const reviewOptions = { personContactIds: ['ct-1', 'ct-sib'], executingContactId: 'ct-sib', electedMemberId: 'gm-sib' }
+    processClassBookingRequest.mockRejectedValue(Object.assign(new Error('credit_check_failed'), { reviewReason: 'credit_check_failed', reviewOptions }))
+
+    await claimAndProcessBookingJob(db, { ...ROW, attempts: 2 })
+
+    expect(routeToReview).toHaveBeenCalledWith(db, expect.objectContaining({ id: 'cbr-1' }), 'credit_check_failed', reviewOptions)
+  })
+
+  it('under the cap, a reviewReason throw is still just a retry (re-queued, no card)', async () => {
+    const db = makeDb()
+    processClassBookingRequest.mockRejectedValue(Object.assign(new Error('credit_check_failed'), { reviewReason: 'credit_check_failed' }))
+
+    const result = await claimAndProcessBookingJob(db, ROW)
+
+    expect(result).toEqual({ status: 'failed', error: 'credit_check_failed', requeued: true })
+    expect(db._calls.updates[1].payload).toEqual({ status: 'queued', last_error: 'credit_check_failed' })
+    expect(routeToReview).not.toHaveBeenCalled()
+  })
+
   it('at the cap, passes the card the row ALREADY names so routeToReview reuses it', async () => {
     const db = makeDb({ stampResult: { data: [{ id: 'cbr-1', approval_request_id: 'amr-9' }], error: null } })
     processClassBookingRequest.mockRejectedValue(new Error('glofox 502'))
