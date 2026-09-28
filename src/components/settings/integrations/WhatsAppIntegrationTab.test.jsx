@@ -91,5 +91,8 @@ describe('WhatsAppIntegrationTab — the stored token is never shown (N8NECHO.1)
     fireEvent.click(await screen.findByText('Front desk'))
     expect(await screen.findByText('Not set')).toBeTruthy()
     expect(screen.queryByText('Saved (hidden)')).toBeNull()
+    // The hint must not claim a token is stored when none is.
+    expect(screen.queryByText(/token is stored/i)).toBeNull()
+    expect(screen.getByText(/No token is saved/i)).toBeTruthy()
   })
 })

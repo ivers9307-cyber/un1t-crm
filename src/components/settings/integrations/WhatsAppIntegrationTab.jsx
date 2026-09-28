@@ -884,7 +884,12 @@ function EditNumberForm({ locationId, number, canEdit, onSaved, onError }) {
       <Row label="App ID">
         <input disabled={!canEdit} className="w-full bg-un1t-surface border border-un1t-border rounded px-2 py-1 text-[11px] text-un1t-text font-mono" value={form.app_id} onChange={(e) => setForm({ ...form, app_id: e.target.value.trim() })} />
       </Row>
-      <Row label="Current token" hint="A token is stored and never shown. To change it, paste a new token below.">
+      <Row
+        label="Current token"
+        hint={number.access_token_redacted
+          ? 'A token is stored and never shown. To change it, paste a new token below.'
+          : 'No token is saved yet. Paste one below to connect this number.'}
+      >
         <p className="block w-full bg-un1t-surface/50 border border-un1t-border rounded px-2 py-1 text-[11px] text-un1t-muted">
           {number.access_token_redacted ? 'Saved (hidden)' : 'Not set'}
         </p>
