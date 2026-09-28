@@ -19,7 +19,7 @@
 // + a Postmark transactional send. Out of scope for v1.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { getAppUrl } from '@/lib/app-url'
 import { ADMIN_ROLES } from '@/lib/schemas'
@@ -33,9 +33,11 @@ export async function POST(_request, props) {
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   }
-  // Master OR owner-tier at the active location can trigger a reset.
-  // Same gate as staff create — admin operations require admin role.
-  if (!user.isMaster && !ADMIN_ROLES.includes(user.role)) {
+  // Master, or ADMIN_ROLES at a location the target staffer works at, can
+  // trigger a reset. ROLESWEEP.1c — this is only the coarse pre-check (admin
+  // somewhere); the real decision is the overlap below, which counts only the
+  // locations where the caller holds ADMIN_ROLES.
+  if (!user.isMaster && !hasRoleAtAnyLocation(user, ADMIN_ROLES)) {
     return NextResponse.json({ success: false, error: 'Admin only' }, { status: 403 })
   }
 
@@ -54,7 +56,10 @@ export async function POST(_request, props) {
   // can't enumerate which profile ids exist at other locations. Masters
   // bypass (platform-wide).
   if (!user.isMaster) {
-    const callerLocations = new Set((user.locations || []).map(l => l.id))
+    // ROLESWEEP.1c — only locations where the caller is an ADMIN count: a
+    // manager at A who is staff at B must not reset a B-only staffer.
+    const callerLocations = new Set((user.locations || []).map(l => l.id)
+      .filter(id => hasRoleAtLocation(user, id, ADMIN_ROLES)))
     const targetLocations = (target.profile_locations || []).map(l => l.location_id)
     const overlap = targetLocations.some(l => callerLocations.has(l))
     if (!overlap) {

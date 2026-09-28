@@ -14,7 +14,7 @@
 import { z } from 'zod'
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser, getUserLocationIds, hasRoleAtLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import {
@@ -53,10 +53,6 @@ function activeInvoiceConflict(period, status) {
   else if (status) error = `You already have a submission pending review for ${period.label}.`
   else error = `You already have an invoice for ${period.label} that is pending review or approved.`
   return NextResponse.json({ success: false, error }, { status: 409 })
-}
-
-function isOwnerOrMaster(user) {
-  return user?.role === 'master' || user?.role === 'owner'
 }
 
 // ── POST: contractor submits an invoice ───────────────────────────
@@ -330,18 +326,21 @@ export async function GET(request) {
   //     another studio. (Master can still override via ?location_id
   //     query param below.)
   //   • everyone else → only their own invoices.
-  if (isOwnerOrMaster(user)) {
-    const isMaster = user.role === 'master'
-    const ownerLocations = Object.entries(user.rolesByLocation || {})
-      .filter(([, r]) => r === 'owner').map(([loc]) => loc)
-    const explicit = new URL(request.url).searchParams.get('location_id')
-    const activeId = user.activeLocation?.id || null
-    const target = explicit || activeId
+  //
+  // ROLESWEEP.1c — "owner" is judged AT THE TARGET location. The branch used
+  // to be chosen on user.role (the ACTIVE studio's role), so an owner at B
+  // whose active studio is A asking for ?location_id=B got only their own
+  // rows. An owner at the active studio asking for a location they do not own
+  // keeps the old 403; everyone else keeps the "own rows" branch.
+  const isMaster = user.role === 'master'
+  const explicit = new URL(request.url).searchParams.get('location_id')
+  const activeId = user.activeLocation?.id || null
+  const target = explicit || activeId
+  if (isMaster || (target && hasRoleAtLocation(user, target, ['owner']))) {
     if (!target) return NextResponse.json({ success: true, data: [] })
-    if (!isMaster && !ownerLocations.includes(target)) {
-      return NextResponse.json({ success: false, error: 'Forbidden — not your location' }, { status: 403 })
-    }
     query = query.eq('location_id', target)
+  } else if (hasRoleAtLocation(user, activeId, ['owner'])) {
+    return NextResponse.json({ success: false, error: 'Forbidden — not your location' }, { status: 403 })
   } else {
     // Everyone else — only their own.
     query = query.eq('contractor_id', user.id)
