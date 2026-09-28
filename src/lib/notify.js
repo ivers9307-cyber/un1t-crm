@@ -26,15 +26,17 @@
 //     invalidated:  number — Expo DeviceNotRegistered (auto-pruned)
 //     emailed:      number — users with 0 tokens who got a fallback email
 //     email_failed: number — fallback email attempted but Postmark rejected
+//     read_failed:  1 — present ONLY when a read failed (C16 PUSHREADERR.1):
+//                   the counts above then include recipients nobody could judge
 //   }
 //
 // Best-effort throughout — never throws.
 
 import { createServerClient } from './supabase'
-import { sendPush, resolvePushAllowedIds } from './push'
+import { sendPush, readPushAllowedIds } from './push'
 import { sendEmail } from './postmark'
 import { getNotificationCategory } from './notifications-registry'
-import { logInfo, logWarn } from './log'
+import { logInfo, logWarn, logError } from './log'
 
 /**
  * @param {string|string[]} userIds  profile id(s)
@@ -69,6 +71,8 @@ export async function notifyUsers(userIds, payload) {
   // pipeline failure ("release the claim, retry later") apart from a
   // quiet no-op ("no tokens" — keep the claim, nothing to retry against).
   totals.failed += pushResult.failed || 0
+  // C16 PUSHREADERR.1 — a read sendPush could not make is said, never dropped.
+  if (pushResult.read_failed) totals.read_failed = 1
 
   if (!shouldFallback) return totals
 
@@ -81,12 +85,22 @@ export async function notifyUsers(userIds, payload) {
   // get nothing at all. An Android staffer having a visible device row must
   // never cost them the notification.
   const db = createServerClient()
-  const { data: tokens } = await db
+  const { data: tokens, error: tokensErr } = await db
     .from('device_tokens')
     .select('user_id')
     .not('expo_push_token', 'is', null)
     .in('user_id', ids)
-  const usersWithTokens = new Set((tokens || []).map(t => t.user_id))
+  if (tokensErr) {
+    // C16 (D7b) — main's reading, kept on purpose: with the token list
+    // unreadable everyone counts as token-less and is emailed. Someone who
+    // also has the app gets it twice; not emailing could mean nobody is told
+    // (the push half may have failed on the same blip).
+    totals.read_failed = 1
+    logError('notify', 'device-token read failed; emailing every allowed recipient as the fallback', {
+      category, recipients: ids.length, err: tokensErr,
+    })
+  }
+  const usersWithTokens = new Set((tokensErr ? [] : (tokens || [])).map(t => t.user_id))
   const noTokenIds = ids.filter(id => !usersWithTokens.has(id))
   if (!noTokenIds.length) return totals
 
@@ -97,11 +111,30 @@ export async function notifyUsers(userIds, payload) {
   // by emailing them.
   // Mirror push.js's gate against the LIVE source (profile_locations.permissions,
   // mig 058 — profiles.permissions is stale). Don't email around an opt-out.
-  const { data: profiles } = await db
+  const { data: profiles, error: profilesErr } = await db
     .from('profiles')
     .select('id, full_name, email')
     .in('id', noTokenIds)
-  const allowed = await resolvePushAllowedIds(db, noTokenIds, category)
+  const perm = await readPushAllowedIds(db, noTokenIds, category)
+  const fallbackReadErr = profilesErr || perm.error
+  if (fallbackReadErr) {
+    // C16 (D7c) — nobody could be judged for the fallback. Counted as
+    // email_failed so a claim caller (shift-reminders, push-dedup) releases
+    // and retries instead of keeping a claim nothing delivered.
+    totals.read_failed = 1
+    totals.email_failed += noTokenIds.length
+    logError('notify', 'fallback recipients read failed; no fallback email sent', {
+      category, recipients: noTokenIds.length, err: fallbackReadErr,
+    })
+    return totals
+  }
+  const allowed = perm.allowed
+  if (perm.templatesError) {
+    // C16 (D7d) — judged on code defaults (push.js logged the template read);
+    // a refusal there is unjudged, not an opt-out.
+    totals.read_failed = 1
+    totals.email_failed += noTokenIds.filter(id => !allowed.has(id)).length
+  }
   const fallbackTargets = (profiles || []).filter(p => p.email && allowed.has(p.id))
   if (!fallbackTargets.length) return totals
 
