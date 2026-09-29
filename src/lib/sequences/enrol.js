@@ -306,8 +306,8 @@ export async function enrolContacts({
   if (error) throw new Error(`Enrol failed: ${error.message}`)
   const enrolledCount = (inserted || []).length
 
-  // SEQCOUNTERS.1 — no counter bump: increment_sequence_enrolled never
-  // existed. /automations counts sequence_enrollments rows instead.
+  // SEQCOUNTERS.1 — no counter bump: the enrolled-counter RPC this used to
+  // call never existed. /automations counts sequence_enrollments rows instead.
 
   // `skipped` counts everything we declined to enrol, including rows the
   // index rejected on conflict (toInsert.length - enrolledCount), which the

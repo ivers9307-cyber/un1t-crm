@@ -60,7 +60,8 @@ export async function POST(_request, props) {
 
   // 2. Insert the new sequence as a draft. Pull every config /
   // metadata column from the source so the clone is a true copy
-  // minus the runtime state (status, total_enrolled, timestamps).
+  // minus the runtime state (status, the retired enrolment counters,
+  // timestamps).
   // FLOW2 — webhook_token + webhook_secret are NEVER copied: a
   // clone needs its own URL (otherwise two sequences would share
   // a token, which is a unique-index violation anyway), and the
