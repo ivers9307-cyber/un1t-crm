@@ -213,6 +213,13 @@ export default function StaffForm({
     return loc?.unifi_configured === true
   }
 
+  // ACALLOWLISTGATE.1 — AC units (Sensibo / LG ThinQ) have nothing to do with
+  // UniFi. ac_configured is computed on the server (loadStaffFormLocations:
+  // the AC control path's credential rule after the registry overlay).
+  function isAcConfigured(loc) {
+    return loc?.ac_configured === true
+  }
+
   // All toggle helpers now operate on the SELECTED assignment's
   // permissions (per-assignment, mig 058). Switching the tab strip
   // above the permissions sections rebinds the helpers to a
@@ -613,6 +620,7 @@ export default function StaffForm({
           const loc = locations.find(l => l.id === a.location_id)
           if (!loc) return null
           const configured = isUnifiConfigured(loc)
+          const acConfigured = isAcConfigured(loc)
           const isManagerRole = a.role === 'owner' || a.role === 'manager'
           return (
             <div key={a.location_id} className="border border-un1t-border/70 rounded-lg p-4 space-y-3">
@@ -758,8 +766,10 @@ export default function StaffForm({
               {/* STUDIO-AC-DEVICES.3 / AC-ROLE.1 — per-location AC device
                   allowlist. Tri-state: null = inherit the role-template
                   (or code) default, [] = this user explicitly sees no
-                  AC, [ids] = this user sees exactly those. */}
-              {isEdit && configured && (
+                  AC, [ids] = this user sees exactly those.
+                  ACALLOWLISTGATE.1 — gated on the studio's AC set-up, not
+                  UniFi's (it used `configured`, the UniFi flag). */}
+              {isEdit && acConfigured && (
                 <AcDeviceAllowlistPicker
                   locationId={a.location_id}
                   locationName={loc.name}
