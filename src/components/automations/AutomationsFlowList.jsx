@@ -25,7 +25,7 @@ const statusConfig = {
   paused: { label: 'Paused', color: 'bg-amber-500/15 text-amber-700', icon: Pause },
 }
 
-export default function AutomationsFlowList({ sequences }) {
+export default function AutomationsFlowList({ sequences, loadFailed = false }) {
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
@@ -46,7 +46,13 @@ export default function AutomationsFlowList({ sequences }) {
         </div>
       </div>
 
-      {(!sequences || sequences.length === 0) ? (
+      {loadFailed ? (
+        // SEQCOUNTERS.1 — a failed read is not an empty list: no "No
+        // automations yet", and no Build button over a list that may exist.
+        <p role="alert" className="text-sm bg-amber-500/10 text-amber-700 border border-amber-500/30 rounded-md px-3 py-2">
+          Couldn&apos;t load your automations. Reload to try again.
+        </p>
+      ) : (!sequences || sequences.length === 0) ? (
         <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-10 text-center">
           <Zap size={32} className="mx-auto mb-3 text-un1t-subtle" />
           <h3 className="text-base font-semibold mb-2">No automations yet</h3>
@@ -73,7 +79,8 @@ export default function AutomationsFlowList({ sequences }) {
                   </div>
                 </Link>
                 <div className="flex items-center gap-3 shrink-0">
-                  {seq.total_enrolled > 0 && (<span className="text-xs text-un1t-subtle">{seq.total_enrolled} enrolled</span>)}
+                  {/* SEQCOUNTERS.1 — counted by the page from sequence_enrollments. */}
+                  {seq.enrolled_count > 0 && (<span className="text-xs text-un1t-subtle">{seq.enrolled_count} enrolled</span>)}
                   <span className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded-full ${config.color}`}>
                     <StatusIcon size={10} />{config.label}
                   </span>

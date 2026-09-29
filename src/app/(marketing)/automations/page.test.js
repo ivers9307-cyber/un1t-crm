@@ -12,7 +12,9 @@ vi.mock('@/lib/automations/glofox-status', () => ({ readGlofoxAutomationStatus: 
 vi.mock('@/components/automations/AutomationsView', () => ({
   default: ({ cards }) => <div data-testid="view">{cards.map((c) => `${c.key}:${c.status.available}:${c.status.unknown ? 'unknown' : 'known'}`).join('|')}</div>,
 }))
-vi.mock('@/components/automations/AutomationsFlowList', () => ({ default: () => null }))
+const seen = vi.hoisted(() => ({ flows: null }))
+vi.mock('@/components/automations/AutomationsFlowList', () => ({ default: (p) => { seen.flows = p; return null } }))
+vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 vi.mock('@/components/automations/ClassClimateCard', () => ({ default: (p) => <div>{`climate:${p.glofoxConnected}:${p.glofoxUnknown ? 'unknown' : 'known'}`}</div> }))
 vi.mock('@/components/automations/BathroomClimateCard', () => ({ default: (p) => <div>{`bathroom:${p.glofoxConnected}:${p.glofoxUnknown ? 'unknown' : 'known'}`}</div> }))
 
@@ -20,6 +22,8 @@ import AutomationsPage from './page.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { readGlofoxAutomationStatus } from '@/lib/automations/glofox-status'
+import { hasPermission } from '@/lib/permissions'
+import { logError } from '@/lib/log'
 
 const LOC = 'a0000000-0000-4000-8000-00000000000a'
 // A db whose every chain resolves to { data: [] } (location_automations, ac_devices).
@@ -36,6 +40,12 @@ beforeEach(() => {
 })
 
 describe('/automations — Glofox presence (PROFILESPREAD.1)', () => {
+  // The flows describe below switches hasPermission; restore the module
+  // mock's implementation so test order cannot leak it in here.
+  beforeEach(() => {
+    hasPermission.mockImplementation((u, k) => k === 'automations')
+  })
+
   it('reads it by the active location id and passes the booleans on', async () => {
     readGlofoxAutomationStatus.mockResolvedValue({
       known: true, connected: true,
@@ -76,5 +86,47 @@ describe('/automations — Glofox presence (PROFILESPREAD.1)', () => {
     await AutomationsPage()
     expect(order.indexOf('from:location_automations')).toBeGreaterThanOrEqual(0)
     expect(order.indexOf('from:location_automations')).toBeLessThan(order.indexOf('glofox:resolved'))
+  })
+})
+
+// SEQCOUNTERS.1 — the flow list's enrolled chip is counted from
+// sequence_enrollments (an embedded count in the same read), and a failed
+// read is a notice, not an empty list.
+describe('/automations — flows (SEQCOUNTERS.1)', () => {
+  function flowsDb(result) {
+    const calls = { select: null }
+    const chain = {
+      select: (c) => { calls.select = c; return chain },
+      eq: () => chain,
+      order: () => chain,
+      then: (r, j) => Promise.resolve(result).then(r, j),
+    }
+    return { db: { from: () => chain }, calls }
+  }
+  beforeEach(() => {
+    seen.flows = null
+    hasPermission.mockImplementation((_u, k) => k === 'email')
+  })
+
+  it('reads named columns with an embedded enrolment count, and passes enrolled_count', async () => {
+    const { db, calls } = flowsDb({
+      data: [{ id: 'a0000000-0000-4000-8000-000000000001', name: 'Welcome', status: 'active', trigger_type: 'manual', created_at: 'T', sequence_steps: [{ id: 's1' }], sequence_enrollments: [{ count: 139 }] }],
+      error: null,
+    })
+    createServerClient.mockReturnValue(db)
+    renderToStaticMarkup(await AutomationsPage()) // the flow list mock captures its props on render
+    expect(calls.select).toBe('id, name, status, trigger_type, created_at, sequence_steps(id), sequence_enrollments(count)')
+    expect(seen.flows.sequences[0].enrolled_count).toBe(139)
+    expect(seen.flows.sequences[0]).not.toHaveProperty('sequence_enrollments')
+    expect(seen.flows.loadFailed).toBe(false)
+  })
+
+  it('a failed read is logged and passed as loadFailed, with no rows', async () => {
+    const { db } = flowsDb({ data: null, error: { code: '57014', message: 'timeout' } })
+    createServerClient.mockReturnValue(db)
+    renderToStaticMarkup(await AutomationsPage()) // the flow list mock captures its props on render
+    expect(seen.flows.loadFailed).toBe(true)
+    expect(seen.flows.sequences).toEqual([])
+    expect(logError).toHaveBeenCalledWith('automations', expect.stringMatching(/sequences read failed/), { code: '57014' })
   })
 })

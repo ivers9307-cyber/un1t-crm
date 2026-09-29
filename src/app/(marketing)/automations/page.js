@@ -5,6 +5,7 @@ import { Music2, Plug } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
+import { logError } from '@/lib/log'
 import { AUTOMATIONS } from '@/lib/automations/registry'
 import { readGlofoxAutomationStatus } from '@/lib/automations/glofox-status'
 import AutomationsView from '@/components/automations/AutomationsView'
@@ -74,14 +75,28 @@ export default async function AutomationsPage() {
   }
 
   // Custom flows (only when the user has email/whatsapp).
+  // SEQCOUNTERS.1 — named columns (AutomationsFlowList reads id, name,
+  // status, trigger_type, sequence_steps, enrolled_count), and the enrolled
+  // number is COUNTED from sequence_enrollments in the same read: the
+  // email_sequences.total_* counters were never maintained (mig 663). A failed
+  // read is a notice, never "No automations yet".
   let sequences = []
+  let flowsLoadFailed = false
   if (canFlows) {
-    const { data } = await db
+    const { data, error } = await db
       .from('email_sequences')
-      .select('*, sequence_steps(id)')
+      .select('id, name, status, trigger_type, created_at, sequence_steps(id), sequence_enrollments(count)')
       .eq('location_id', location?.id)
       .order('created_at', { ascending: false })
-    sequences = data || []
+    if (error) {
+      logError('automations', 'sequences read failed; the flow list shows a notice', { code: error.code || null })
+      flowsLoadFailed = true
+    } else {
+      sequences = (data || []).map(({ sequence_enrollments: enrolments, ...row }) => ({
+        ...row,
+        enrolled_count: Number(enrolments?.[0]?.count ?? 0),
+      }))
+    }
   }
 
   return (
@@ -138,7 +153,7 @@ export default async function AutomationsPage() {
           </Link>
         </div>
       )}
-      {canFlows && <AutomationsFlowList sequences={sequences} />}
+      {canFlows && <AutomationsFlowList sequences={sequences} loadFailed={flowsLoadFailed} />}
     </div>
   )
 }
