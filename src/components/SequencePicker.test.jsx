@@ -6,7 +6,7 @@
 // an operator whose automation was just deleted only "Not found". It says
 // what happened instead. Fictional ids only.
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import SequencePicker, { SEQUENCE_GONE_MESSAGE } from './SequencePicker.jsx'
 
