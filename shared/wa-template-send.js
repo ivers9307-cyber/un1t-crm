@@ -2,9 +2,10 @@
 // template picker, and the exact request that sends it.
 //
 // Pure (no React, no network, no Intl), so the phone loads it under Hermes and
-// vitest pins it. The phone's thread screen is its first caller; the web inbox
-// picker (src/components/WAInbox.jsx) still builds its own body inline and can
-// move onto this when it next changes.
+// vitest pins it. Callers: the phone's thread screen, the web inbox picker
+// (src/components/WAInbox.jsx, since WATPLSEND.1), and the send route itself
+// (POST /api/whatsapp/conversations/[id]/send refuses exactly what
+// templateSendBlock blocks, and logs renderSentTemplateBody's text).
 //
 // Why each rule exists (live on 2026-09-28: 18 approved templates, 17 with body
 // variables, one in en_US, one with a FLOW button, one with a dynamic URL
@@ -13,9 +14,11 @@
 //     (132000), so the picker asks for every value and never sends a blank.
 //   - Meta looks a template up by name AND language; sending 'en' for an en_US
 //     template fails (132001), so the row's own language is sent.
-//   - A FLOW button needs a per-send flow_token (131009) and a dynamic URL
-//     button a per-send value (132012). The conversation send route attaches
-//     neither, so those templates are shown but cannot be picked here.
+//   - A FLOW button needs a per-send flow_token (131009): the send route mints
+//     it from the conversation's contact + studio (WATPLSEND.1), so a FLOW
+//     template is sendable. A dynamic URL button needs a per-send value
+//     (132012) that only its own automation has, so it is shown but cannot be
+//     picked here, and the route refuses it.
 //   - A media header is attached by the send route from the row's stored
 //     header_media_url; without one Meta refuses the send.
 
@@ -57,7 +60,6 @@ export function templateSendBlock(t) {
 
   for (const b of componentOfType(t, 'BUTTONS')?.buttons || []) {
     const type = String(b?.type || '').toUpperCase()
-    if (type === 'FLOW') return 'flow_button'
     if (type === 'URL' && /\{\{/.test(String(b?.url || ''))) return 'button_value'
     if (type === 'COPY_CODE' || type === 'OTP') return 'button_value'
   }
@@ -76,7 +78,6 @@ export function templateSendBlock(t) {
 export const SEND_BLOCK_TEXT = Object.freeze({
   header_media: 'Its media header has no stored file, so it cannot be sent from here.',
   header_value: 'Its header needs a value the inbox cannot fill in.',
-  flow_button: 'It has a booking Flow button, which the inbox cannot attach yet.',
   button_value: 'Its button needs a per-message value, filled in only by its own automation.',
   named_variables: 'Its variables cannot be filled in from the inbox.',
 })
