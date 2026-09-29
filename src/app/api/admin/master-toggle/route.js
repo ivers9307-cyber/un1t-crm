@@ -43,7 +43,7 @@ export const dynamic = 'force-dynamic'
 // `.select()`, the whole row (pin_hash, UniFi id, pay). Neither caller reads
 // `data`; these are the identity columns a future one could want.
 const TOGGLE_ECHO_COLUMNS = 'id, full_name, email, role, active'
-const TOGGLE_ECHO_KEYS = TOGGLE_ECHO_COLUMNS.split(', ')
+const TOGGLE_ECHO_KEYS = TOGGLE_ECHO_COLUMNS.split(',').map((s) => s.trim())
 
 // The second lock behind the select (as pickManagedStaffRow is for the staff
 // API): a widened select can never put another column on the wire.

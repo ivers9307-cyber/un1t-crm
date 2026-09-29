@@ -81,6 +81,8 @@ export function staffPropReads(text) {
   return [...new Set([...code.matchAll(STAFF_PROP_READ)].map((m) => m[1]))].filter((k) => !PAGE_COMPUTED.has(k)).sort()
 }
 
+const STAFF_WHOLE_USE = /=\s*staff\b(?!\s*[.?])|\{\s*\.\.\.staff\b|=\{\s*staff\s*\}|\bstaff\s*\[|[(,][ \t]*staff[ \t]*[,)]/
+
 const NEVER = /^(pin_|unifi_user_id$|unifi_synced_at$|protect_face_id$|deleted_|auth_|two_factor|home_screen_path$|email_signature)/
 
 describe('every star-read of profiles is reviewed (STAFFPROFILEPICK.1)', () => {
@@ -144,6 +146,19 @@ describe('STAFF_EDITOR_FIELDS is exactly what StaffForm reads off `staff` (D5)',
 
   it('the two sets are equal', () => {
     expect(reads, 'add the field to STAFF_EDITOR_FIELDS (src/lib/staff-fields.js), or stop reading it').toEqual([...STAFF_EDITOR_FIELDS].sort())
+  })
+
+  it('the form never hands `staff` on whole (a spread, a pass-through, an index)', () => {
+    // The census reads `staff.x` / `staff?.x`; a row passed on whole would be
+    // read by a component this test never opens, so it is refused outright.
+    const code = stripComments(readFileSync(path.join(ROOT, 'src/components/StaffForm.jsx'), 'utf8'))
+    expect(code.match(STAFF_WHOLE_USE), 'read fields off `staff` by name, so the census sees them').toBeNull()
+    for (const bad of ['const s = staff', '{ ...staff }', '<Child row={staff} />', 'staff[key]', 'describe(staff)', 'f(a, staff, b)']) {
+      expect([bad, STAFF_WHOLE_USE.test(bad)]).toEqual([bad, true])
+    }
+    for (const ok of ['staff,', 'onSaved,\n  staff,\n  locations,', 'const isEdit = !!staff', 'staff.id', 'staff?.full_name', "defaultPermsForRole('staff')", 'staffId']) {
+      expect([ok, STAFF_WHOLE_USE.test(ok)]).toEqual([ok, false])
+    }
   })
 
   it('the census reader sees the forms it must', () => {
