@@ -89,9 +89,11 @@ describe('guards', () => {
     expect(res.status).toBe(404)
   })
 
-  it('403 when the sequence belongs to a location the caller cannot see', async () => {
+  // SEQPAGEGATE.1 — was 403, which told the caller the id existed elsewhere.
+  it('404 — the same answer as a missing one — when the sequence belongs to a location the caller cannot see', async () => {
     const res = await POST(req(), props(OTHER_SEQ))
-    expect(res.status).toBe(403)
+    expect(res.status).toBe(404)
+    expect(await res.json()).toEqual({ success: false, error: 'Not found' })
     expect(tables.sequence_enrollments[0].status).toBe('active')
   })
 
