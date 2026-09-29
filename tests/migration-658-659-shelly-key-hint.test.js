@@ -98,7 +98,56 @@ describe('mig 658 — key_hint may be NULL (applied before the code stops writin
   })
 })
 
-// The 659 half is added by PR 1b (Task 1b-1). Until then there is no file.
-describe.runIf(existsSync(MIG_659_PATH))('mig 659 — placeholder replaced in 1b', () => {
-  it('placeholder', () => { expect(true).toBe(true) })
+const MIG_659 = existsSync(MIG_659_PATH) ? readFileSync(MIG_659_PATH, 'utf8') : ''
+
+describe('mig 659 — the hint is cleared and can never be stored again', () => {
+  it('the file exists (it is applied ≥1 h after the SECRETTAILS.1b deploy)', () => {
+    expect(MIG_659).toMatch(/shelly_connections_key_hint_retired/)
+  })
+
+  it('clears the stored hint without touching updated_at (the hub reads it as the last attempt)', async () => {
+    await runSql(MIG_658)
+    await runSql(MIG_659)
+    expect(await one(`SELECT key_hint, updated_at::text AS u FROM public.shelly_connections WHERE location_id = '${LOC}'`))
+      .toEqual({ key_hint: null, u: '2026-09-01 00:00:00+00' })
+  })
+
+  it('no hint can be stored again: an old-code save fails the retire CHECK', async () => {
+    await runSql(MIG_658)
+    await runSql(MIG_659)
+    await expect(db.query(upsert(LOC, { withHint: 'wxyz' }))).rejects.toThrow(/shelly_connections_key_hint_retired/)
+    await expect(db.query(`UPDATE public.shelly_connections SET key_hint = 'q' WHERE location_id = '${LOC}'`))
+      .rejects.toThrow(/shelly_connections_key_hint_retired/)
+  })
+
+  it('the new code still saves (existing row and first connect)', async () => {
+    await runSql(MIG_658)
+    await runSql(MIG_659)
+    await expect(db.query(upsert(LOC))).resolves.toBeTruthy()
+    await expect(db.query(upsert(LOC_NEW))).resolves.toBeTruthy()
+  })
+
+  it('the old length CHECK is gone and the retire CHECK is validated', async () => {
+    await runSql(MIG_658)
+    await runSql(MIG_659)
+    const cons = (await db.query(`SELECT conname, convalidated FROM pg_constraint
+                                    WHERE conrelid = 'public.shelly_connections'::regclass AND conname LIKE '%key_hint%'
+                                    ORDER BY conname`)).rows
+    expect(cons).toEqual([{ conname: 'shelly_connections_key_hint_retired', convalidated: true }])
+  })
+
+  it('659 WITHOUT 658 aborts the whole file and changes nothing', async () => {
+    await expect(runSql(MIG_659)).rejects.toThrow()
+    await runSql('ROLLBACK').catch(() => {})
+    expect(await one(`SELECT key_hint FROM public.shelly_connections WHERE location_id = '${LOC}'`)).toEqual({ key_hint: 'abcd' })
+    expect(await one(`SELECT count(*)::int AS n FROM pg_constraint WHERE conname = 'shelly_connections_key_hint_retired'`))
+      .toEqual({ n: 0 })
+  })
+
+  it('659 runs twice cleanly (658 is not re-runnable after 659 by design: its self-check refuses once the length CHECK is gone)', async () => {
+    await runSql(MIG_658)
+    await runSql(MIG_659)
+    await runSql(MIG_659)
+    expect(await one(`SELECT count(*)::int AS n FROM public.shelly_connections WHERE key_hint IS NOT NULL`)).toEqual({ n: 0 })
+  })
 })
