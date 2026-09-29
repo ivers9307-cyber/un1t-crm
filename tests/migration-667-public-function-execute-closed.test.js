@@ -1,10 +1,10 @@
-// FNEXECSWEEP.1 — behavioural test for migration 664.
+// FNEXECSWEEP.1 — behavioural test for migration 667.
 //
 // Boots PGlite with prod's FUNCTION default privileges (pg_default_acl, 29 Sep
 // 2026): for role postgres, a per-schema entry in public giving EXECUTE to
 // postgres, anon, authenticated and service_role, and NO global entry — so
 // Postgres's own PUBLIC EXECUTE applies to every new function in every
-// schema. It creates the 50 functions 664 names with prod's exact identity
+// schema. It creates the 50 functions 667 names with prod's exact identity
 // signatures and ACL shapes (stubs, except the four whose behaviour is
 // asserted, which are verbatim from pg_get_functiondef), the two member-app
 // RPCs with their mig 118/193 ACLs, a private RLS helper with a NULL ACL, and
@@ -31,11 +31,26 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { PGlite } from '@electric-sql/pglite'
 
-const MIG_664 = readFileSync(
-  path.resolve(import.meta.dirname, '../supabase/migrations/664_public_function_execute_closed.sql'), 'utf8')
+const MIG_667 = readFileSync(
+  path.resolve(import.meta.dirname, '../supabase/migrations/667_public_function_execute_closed.sql'), 'utf8')
+// The two migrations numbered between the census (29 Sep) and 667 that were
+// applied first (30 Sep): TWILIO-RETIRE.1 and EVENTCONFIRM-WA.1.
+const readMigration = (name) => readFileSync(path.resolve(import.meta.dirname, '../supabase/migrations', name), 'utf8')
+const MIG_664_TWILIO = readMigration('664_twilio_sms_retired.sql')
+const MIG_666_EVENT_WA = readMigration('666_event_type_whatsapp_confirmation.sql')
+// Just enough of the tables they touch (synthetic shapes).
+const TABLES_664_666 = `
+  CREATE TABLE public.cron_heartbeats (name text PRIMARY KEY);
+  CREATE TABLE public.channel_connections (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), platform text, is_active boolean);
+  CREATE TABLE public.whatsapp_templates (id uuid PRIMARY KEY);
+  CREATE TABLE public.event_types (id uuid PRIMARY KEY, confirmation_channels text[],
+    CONSTRAINT event_types_confirmation_channels_check CHECK (confirmation_channels <@ ARRAY['email','sms']::text[]));
+  INSERT INTO public.cron_heartbeats VALUES ('run-sms-broadcasts');
+  INSERT INTO public.channel_connections (platform, is_active) VALUES ('twilio_sender', true);
+`
 
 // The rollback record from the C67 plan (Task 5 Step 7), verbatim.
-const ROLLBACK_664 = `
+const ROLLBACK_667 = `
 BEGIN;
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA extensions REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA private REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
@@ -371,10 +386,10 @@ async function boot({ migrate = false, before = '' } = {}) {
   await runSql(FUNCTIONS())
   await runSql(SEED)
   if (before) await runSql(before)
-  if (migrate) await runSql(MIG_664)
+  if (migrate) await runSql(MIG_667)
 }
 
-describe('before 664 — prod, 29 Sep 2026', () => {
+describe('before 667 — prod, 29 Sep 2026', () => {
   beforeAll(() => boot(), 60_000)
   afterAll(() => db?.close())
 
@@ -406,7 +421,7 @@ describe("the row's literal fix is a no-op", () => {
   })
 })
 
-describe('after 664 — the catalog', () => {
+describe('after 667 — the catalog', () => {
   beforeAll(() => boot({ migrate: true }), 60_000)
   afterAll(() => db?.close())
 
@@ -435,7 +450,7 @@ describe('after 664 — the catalog', () => {
   })
 })
 
-describe('after 664 — people', () => {
+describe('after 667 — people', () => {
   beforeAll(() => boot({ migrate: true }), 60_000)
   afterAll(() => db?.close())
 
@@ -486,7 +501,7 @@ describe('the self-check aborts the whole file', () => {
 
   async function expectAbort(before, message) {
     await boot({ before })
-    await expect(runSql(MIG_664)).rejects.toThrow(message)
+    await expect(runSql(MIG_667)).rejects.toThrow(message)
     await runSql('ROLLBACK')
     // Nothing applied.
     expect(await executableBy('anon')).toEqual(expect.arrayContaining(['bump_presentation_version', 'update_updated_at']))
@@ -498,28 +513,45 @@ describe('the self-check aborts the whole file', () => {
      SET ROLE other_grantor;
      GRANT EXECUTE ON FUNCTION public.bump_presentation_version(uuid, integer) TO anon;
      RESET ROLE;`,
-    /mig 664: anon can still execute: .*bump_presentation_version\(uuid,integer\)/,
+    /mig 667: anon can still execute: .*bump_presentation_version\(uuid,integer\)/,
   ), 60_000)
 
   it('when authenticated inherits EXECUTE through role membership', () => expectAbort(
     `GRANT EXECUTE ON FUNCTION public.funnel_step_counts(uuid, timestamp with time zone, text) TO sneaky;
      GRANT sneaky TO authenticated;`,
-    /mig 664: authenticated can execute functions outside the keep list: .*funnel_step_counts/,
+    /mig 667: authenticated can execute functions outside the keep list: .*funnel_step_counts/,
   ), 60_000)
 
   it('when a function nobody audited appeared before the apply', () => expectAbort(
     `CREATE FUNCTION public.brand_new_rpc() RETURNS integer LANGUAGE sql AS 'SELECT 1';`,
-    /mig 664: anon can still execute: .*brand_new_rpc\(\)/,
+    /mig 667: anon can still execute: .*brand_new_rpc\(\)/,
   ), 60_000)
 
   it('when a member RPC has already lost EXECUTE (a live screen would be broken)', () => expectAbort(
     `REVOKE EXECUTE ON FUNCTION public.list_enabled_integrations() FROM authenticated;`,
-    /mig 664: authenticated lost EXECUTE on (public\.)?list_enabled_integrations\(\)/,
+    /mig 667: authenticated lost EXECUTE on (public\.)?list_enabled_integrations\(\)/,
   ), 60_000)
 
   it('a second run passes (idempotent)', async () => {
     await boot({ migrate: true })
-    await expect(runSql(MIG_664)).resolves.toBeDefined()
+    await expect(runSql(MIG_667)).resolves.toBeDefined()
+    expect(await defaultAcls()).toEqual(AFTER_DEFAULTS)
+  }, 60_000)
+})
+
+describe('migs 664 and 666, applied before 667, change no function privilege', () => {
+  afterAll(() => db?.close())
+
+  it('the census and the defaults are identical after them, and 667 then closes as it would without them', async () => {
+    await boot({ before: TABLES_664_666 })
+    const before = { fns: await fnAcls(), defaults: await defaultAcls() }
+    await runSql(MIG_664_TWILIO)
+    await runSql(MIG_666_EVENT_WA)
+    expect(await fnAcls()).toEqual(before.fns)
+    expect(await defaultAcls()).toEqual(before.defaults)
+    await runSql(MIG_667)
+    expect(await executableBy('anon')).toEqual([])
+    expect(await executableBy('authenticated')).toEqual(sorted(KEEP))
     expect(await defaultAcls()).toEqual(AFTER_DEFAULTS)
   }, 60_000)
 })
@@ -530,8 +562,8 @@ describe("the plan's rollback record", () => {
   it('restores every function ACL and the default privileges exactly (as sets)', async () => {
     await boot()
     const before = { fns: await fnAcls(), defaults: await defaultAcls() }
-    await runSql(MIG_664)
-    await runSql(ROLLBACK_664)
+    await runSql(MIG_667)
+    await runSql(ROLLBACK_667)
     expect(await fnAcls()).toEqual(before.fns)
     expect(await defaultAcls()).toEqual(before.defaults)
     expect(await newFunctionCan('public')).toEqual(OPEN)

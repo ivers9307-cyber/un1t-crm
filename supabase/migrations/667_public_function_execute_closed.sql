@@ -1,11 +1,17 @@
--- 664 — FNEXECSWEEP.1: no function in public is executable by anon or
+-- 667 — FNEXECSWEEP.1: no function in public is executable by anon or
 -- PUBLIC, authenticated keeps EXECUTE only on the two member-app RPCs, and a
 -- NEW function postgres creates in public is executable by postgres +
 -- service_role only.
 --
 -- NOT APPLIED YET when this file was written. "VERIFIED LIVE" is prod BEFORE
--- this file (read-only, Supabase MCP, 29 Sep 2026). Proven ahead of apply by
--- tests/migration-664-public-function-execute-closed.test.js (PGlite).
+-- this file (read-only, Supabase MCP, 29 Sep 2026), RE-VERIFIED 30 Sep 2026
+-- after migs 664 (TWILIO-RETIRE.1) and 666 (EVENTCONFIRM-WA.1) were applied:
+-- the same 106 functions, the same 50/52/47 counts, the same list and the
+-- same default ACLs (neither touches a function or a privilege). Since
+-- TWILIO-RETIRE.1 the three increment_sms_broadcast_* functions have no
+-- caller at all. Numbered 667 because 664 and 666 were taken by those two
+-- (665 is an open PR). Proven ahead of apply by
+-- tests/migration-667-public-function-execute-closed.test.js (PGlite).
 --
 -- ===========================================================================
 -- THE FINDING (follow-ups C67, found planning C56: F1)
@@ -141,7 +147,7 @@ BEGIN
     FROM pg_proc p
    WHERE p.pronamespace = 'public'::regnamespace AND has_function_privilege('anon', p.oid, 'EXECUTE');
   IF v_bad IS NOT NULL THEN
-    RAISE EXCEPTION 'mig 664: anon can still execute: %', v_bad;
+    RAISE EXCEPTION 'mig 667: anon can still execute: %', v_bad;
   END IF;
 
   -- 2. authenticated: exactly the member-app RPCs.
@@ -150,11 +156,11 @@ BEGIN
    WHERE p.pronamespace = 'public'::regnamespace AND has_function_privilege('authenticated', p.oid, 'EXECUTE')
      AND p.oid <> ALL (v_keep);
   IF v_bad IS NOT NULL THEN
-    RAISE EXCEPTION 'mig 664: authenticated can execute functions outside the keep list: %', v_bad;
+    RAISE EXCEPTION 'mig 667: authenticated can execute functions outside the keep list: %', v_bad;
   END IF;
   FOREACH v_oid IN ARRAY v_keep LOOP
     IF NOT has_function_privilege('authenticated', v_oid, 'EXECUTE') THEN
-      RAISE EXCEPTION 'mig 664: authenticated lost EXECUTE on % (the member app calls it signed in)', v_oid::regprocedure;
+      RAISE EXCEPTION 'mig 667: authenticated lost EXECUTE on % (the member app calls it signed in)', v_oid::regprocedure;
     END IF;
   END LOOP;
 
@@ -165,7 +171,7 @@ BEGIN
    WHERE p.pronamespace = 'public'::regnamespace
      AND EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a WHERE a.grantee = 0);
   IF v_bad IS NOT NULL THEN
-    RAISE EXCEPTION 'mig 664: PUBLIC still holds EXECUTE on: %', v_bad;
+    RAISE EXCEPTION 'mig 667: PUBLIC still holds EXECUTE on: %', v_bad;
   END IF;
 
   -- 4. The server path: service_role still executes every public function.
@@ -173,30 +179,30 @@ BEGIN
     FROM pg_proc p
    WHERE p.pronamespace = 'public'::regnamespace AND NOT has_function_privilege('service_role', p.oid, 'EXECUTE');
   IF v_bad IS NOT NULL THEN
-    RAISE EXCEPTION 'mig 664: service_role cannot execute: %', v_bad;
+    RAISE EXCEPTION 'mig 667: service_role cannot execute: %', v_bad;
   END IF;
 
   -- 5. The default, by behaviour: create a probe in each schema, ask, drop.
   FOREACH v_schema IN ARRAY ARRAY['public', 'private', 'extensions'] LOOP
-    v_sig := format('%I._mig664_default_probe()', v_schema);
-    EXECUTE format('DROP FUNCTION IF EXISTS %I._mig664_default_probe()', v_schema);
-    EXECUTE format('CREATE FUNCTION %I._mig664_default_probe() RETURNS integer LANGUAGE sql IMMUTABLE AS %L', v_schema, 'SELECT 1');
+    v_sig := format('%I._mig667_default_probe()', v_schema);
+    EXECUTE format('DROP FUNCTION IF EXISTS %I._mig667_default_probe()', v_schema);
+    EXECUTE format('CREATE FUNCTION %I._mig667_default_probe() RETURNS integer LANGUAGE sql IMMUTABLE AS %L', v_schema, 'SELECT 1');
     IF v_schema = 'public' THEN
       FOREACH v_role IN ARRAY ARRAY['anon', 'authenticated', 'public'] LOOP
         IF has_function_privilege(v_role, v_sig, 'EXECUTE') THEN
-          RAISE EXCEPTION 'mig 664: a new function in public is still executable by %', v_role;
+          RAISE EXCEPTION 'mig 667: a new function in public is still executable by %', v_role;
         END IF;
       END LOOP;
       IF NOT has_function_privilege('service_role', v_sig, 'EXECUTE') THEN
-        RAISE EXCEPTION 'mig 664: a new function in public is not executable by service_role (every new server RPC would 42501)';
+        RAISE EXCEPTION 'mig 667: a new function in public is not executable by service_role (every new server RPC would 42501)';
       END IF;
     ELSIF NOT has_function_privilege('public', v_sig, 'EXECUTE') THEN
-      RAISE EXCEPTION 'mig 664: a new function in % lost the PUBLIC default (RLS helpers / extension functions created later would refuse clients)', v_schema;
+      RAISE EXCEPTION 'mig 667: a new function in % lost the PUBLIC default (RLS helpers / extension functions created later would refuse clients)', v_schema;
     END IF;
-    EXECUTE format('DROP FUNCTION %I._mig664_default_probe()', v_schema);
+    EXECUTE format('DROP FUNCTION %I._mig667_default_probe()', v_schema);
   END LOOP;
 
-  RAISE NOTICE 'mig 664: anon executes nothing in public; authenticated only list_enabled_integrations() and scan_straps_for_contact(); new public functions start service_role-only.';
+  RAISE NOTICE 'mig 667: anon executes nothing in public; authenticated only list_enabled_integrations() and scan_straps_for_contact(); new public functions start service_role-only.';
 END $$;
 
 COMMIT;

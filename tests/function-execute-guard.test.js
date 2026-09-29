@@ -1,19 +1,19 @@
-// FNEXECSWEEP.1 guard (mig 664). Since 664 a function postgres creates in
+// FNEXECSWEEP.1 guard (mig 667). Since 667 a function postgres creates in
 // public is executable by postgres + service_role only: the default
 // privileges no longer hand EXECUTE to PUBLIC, anon or authenticated. So the
 // failure mode FLIPS: forgetting a REVOKE is now closed by default, while
 // forgetting a GRANT breaks a live screen with 42501. Pinned here:
 //
-//  1. A migration from 664 on that CREATEs a non-trigger function in public
+//  1. A migration from 662 on (see SCAN_FROM) that CREATEs a non-trigger function in public
 //     states its EXECUTE decision in the same file: GRANT EXECUTE … TO
 //     authenticated (a signed-in client calls it), or REVOKE EXECUTE … FROM
 //     PUBLIC, anon, authenticated (server-only; still correct on a database
 //     whose defaults were reset). Trigger functions need neither: a trigger
 //     fires without the firing role holding EXECUTE.
-//  2. No migration from 664 on gives anon or PUBLIC EXECUTE on a public
+//  2. No migration from 662 on gives anon or PUBLIC EXECUTE on a public
 //     function (ANON_EXECUTE_ALLOWED is empty), or blanket EXECUTE through
 //     ALL FUNCTIONS/ROUTINES IN SCHEMA public to a client role.
-//  3. No migration from 664 on re-opens the default: ALTER DEFAULT PRIVILEGES
+//  3. No migration from 662 on re-opens the default: ALTER DEFAULT PRIVILEGES
 //     … GRANT … ON FUNCTIONS/ROUTINES to a client role, with no IN SCHEMA or
 //     IN SCHEMA public. (private and extensions keep PUBLIC on purpose.)
 //  4. Every .rpc('<name>') in client-run code (shared/, mobile/, and src/
@@ -38,7 +38,12 @@ import ts from 'typescript'
 import { stripComments as stripCommentsNoRegex } from '../scripts/lib/strip-comments.mjs'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
-const FN_EXECUTE_MIGRATION = 664
+const FN_EXECUTE_MIGRATION = 667
+// Scanned by CONTENT from 662 on, not from 667: migration numbers are
+// reserved ahead of time, so 662, 663 and 665 (open PRs when 667 was
+// written) can land after 667 in time. Each is held to the same rule. 664 and
+// 666 (applied) create, grant and revoke no function, so they pass as-is.
+const SCAN_FROM = 662
 const MIGRATIONS = path.join(ROOT, 'supabase/migrations')
 const rel = (f) => path.relative(ROOT, f).split(path.sep).join('/')
 
@@ -299,19 +304,19 @@ const migrationFiles = () => readdirSync(MIGRATIONS)
   .sort((a, b) => (parseInt(a, 10) - parseInt(b, 10)) || a.localeCompare(b))
 const readMig = (f) => readFileSync(path.join(MIGRATIONS, f), 'utf8')
 
-describe('later migrations keep public functions closed by default (mig 664)', () => {
-  it('mig 664 is present', () => {
+describe('later migrations keep public functions closed by default (mig 667)', () => {
+  it('mig 667 is present', () => {
     expect(migrationFiles().some((f) => f.startsWith(`${FN_EXECUTE_MIGRATION}_`))).toBe(true)
   })
 
-  const later = migrationFiles().filter((f) => parseInt(f, 10) >= FN_EXECUTE_MIGRATION)
+  const later = migrationFiles().filter((f) => parseInt(f, 10) >= SCAN_FROM)
   it.each(later)('%s: every new public function has an EXECUTE decision; nothing opens to anon/PUBLIC; the default stays closed', (file) => {
     const sql = readMig(file)
     const { clientGrants, blanket } = executeDecisions(sql)
     expect(missingDecisions(sql), `${file}: add GRANT EXECUTE … TO authenticated (a client calls it) or REVOKE EXECUTE … FROM PUBLIC, anon, authenticated (server-only)`).toEqual([])
-    expect(clientGrants, `${file}: anon/PUBLIC may not execute a public function (mig 664)`).toEqual([])
-    expect(blanket, `${file}: no blanket EXECUTE on ALL FUNCTIONS IN SCHEMA public to a client role (mig 664)`).toEqual([])
-    expect(defaultReopeners(sql), `${file}: the public function default stays service_role-only (mig 664)`).toEqual([])
+    expect(clientGrants, `${file}: anon/PUBLIC may not execute a public function (mig 667)`).toEqual([])
+    expect(blanket, `${file}: no blanket EXECUTE on ALL FUNCTIONS IN SCHEMA public to a client role (mig 667)`).toEqual([])
+    expect(defaultReopeners(sql), `${file}: the public function default stays service_role-only (mig 667)`).toEqual([])
   })
 })
 
@@ -442,7 +447,7 @@ describe('the scanners never let a comment marker inside a string hide code', ()
   })
 })
 
-describe('client-run code calls only RPCs a signed-in client may execute (mig 664)', () => {
+describe('client-run code calls only RPCs a signed-in client may execute (mig 667)', () => {
   const calls = clientRpcCalls()
 
   it('the scan is not blind: it finds the member app\'s own calls', () => {
