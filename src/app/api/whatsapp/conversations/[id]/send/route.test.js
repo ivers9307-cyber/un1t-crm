@@ -61,7 +61,7 @@ vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.f
 import { POST } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
-import { sendTextMessage, sendTemplateMessage, isWindowOpen } from '@/lib/whatsapp'
+import { sendTextMessage, sendTemplateMessage, isWindowOpen, headerComponentFor } from '@/lib/whatsapp'
 import { logError } from '@/lib/log'
 import { SEND_BLOCK_TEXT } from '@shared/wa-template-send'
 
@@ -124,6 +124,10 @@ function makeDb({
   conversation = CONVERSATION,
   insertSpy = captureInsert(),
   template = { data: null, error: null },
+  // Rows for a PostgREST-shaped simulation of the template read: .eq filters,
+  // .order, .limit, and .maybeSingle erroring on more than one row, the way
+  // PostgREST does. When absent, `template` is returned as-is.
+  templateRows = null,
   templateEq = [],
   updateResult = { error: null },
 } = {}) {
@@ -144,9 +148,23 @@ function makeDb({
         }
       }
       if (table === 'whatsapp_templates') {
+        let orderBy = null
+        let cap = null
         const chain = {
           eq: vi.fn((col, val) => { templateEq.push([col, val]); return chain }),
-          maybeSingle: vi.fn(() => Promise.resolve(template)),
+          order: vi.fn((col, { ascending = true } = {}) => { orderBy = { col, ascending }; return chain }),
+          limit: vi.fn((n) => { cap = n; return chain }),
+          maybeSingle: vi.fn(() => {
+            if (!templateRows) return Promise.resolve(template)
+            let rows = templateRows.filter((r) => templateEq.every(([col, val]) => r[col] === val))
+            if (orderBy) {
+              const { col, ascending } = orderBy
+              rows = [...rows].sort((a, b) => (a[col] < b[col] ? -1 : a[col] > b[col] ? 1 : 0) * (ascending ? 1 : -1))
+            }
+            if (cap != null) rows = rows.slice(0, cap)
+            if (rows.length > 1) return Promise.resolve({ data: null, error: { code: 'PGRST116', message: 'multiple rows' } })
+            return Promise.resolve({ data: rows[0] || null, error: null })
+          }),
         }
         return { select: vi.fn(() => chain) }
       }
@@ -240,6 +258,17 @@ describe('template sends (WATPLSEND.1)', () => {
     expect(JSON.stringify(components)).not.toContain('forged.token')
   })
 
+  it('logs the components the route honoured, not the forged button it dropped', async () => {
+    const insertSpy = captureInsert()
+    createServerClient.mockReturnValue(makeDb({ template: { data: TPL_FLOW, error: null }, insertSpy }))
+    const forged = { type: 'button', sub_type: 'flow', index: '0', parameters: [{ type: 'action', action: { flow_token: 'forged.token' } }] }
+
+    const res = await POST(templateReq(TPL_FLOW, [bodyParams('ALPHA'), forged]), props)
+    expect(res.status).toBe(200)
+    expect(insertSpy.captured().template_variables).toEqual([bodyParams('ALPHA')])
+    expect(JSON.stringify(insertSpy.captured())).not.toContain('forged.token')
+  })
+
   it('refuses a Flow template on a thread with no linked contact: 400, nothing sent or logged', async () => {
     const insertSpy = captureInsert()
     createServerClient.mockReturnValue(makeDb({
@@ -301,8 +330,83 @@ describe('template sends (WATPLSEND.1)', () => {
 
     const res = await POST(templateReq(TPL_PLAIN, [bodyParams('ALPHA')]), props)
     expect(res.status).toBe(400)
+    const { error } = await res.json()
+    expect(error).toMatch(/not in this studio's approved list/)
+    // The phone shows this too: no web-only instruction.
+    expect(error).not.toMatch(/page/i)
+    expect(sendTemplateMessage).not.toHaveBeenCalled()
+  })
+
+  it('reads APPROVED rows only: a template Meta paused is refused with a 400, nothing sent', async () => {
+    const insertSpy = captureInsert()
+    createServerClient.mockReturnValue(makeDb({
+      templateRows: [{ ...TPL_PLAIN, location_id: LOC_ID, status: 'PAUSED', created_at: '2026-09-01T00:00:00Z' }],
+      insertSpy,
+    }))
+
+    const res = await POST(templateReq(TPL_PLAIN, [bodyParams('ALPHA')]), props)
+    expect(res.status).toBe(400)
     expect((await res.json()).error).toMatch(/not in this studio's approved list/)
     expect(sendTemplateMessage).not.toHaveBeenCalled()
+    expect(insertSpy).not.toHaveBeenCalled()
+  })
+
+  it('two approved rows for one name + language (a template re-created at Meta): the newest is sent, not a permanent 500', async () => {
+    const insertSpy = captureInsert()
+    createServerClient.mockReturnValue(makeDb({
+      templateRows: [
+        { ...TPL_PLAIN, location_id: LOC_ID, status: 'APPROVED', created_at: '2026-01-01T00:00:00Z', components: [body('OLD {{1}}')] },
+        { ...TPL_PLAIN, location_id: LOC_ID, status: 'APPROVED', created_at: '2026-09-01T00:00:00Z', components: [body('NEW {{1}}')] },
+        { ...TPL_PLAIN, location_id: LOC_ID, status: 'REJECTED', created_at: '2026-09-20T00:00:00Z', components: [body('REJECTED {{1}}')] },
+      ],
+      insertSpy,
+    }))
+
+    const res = await POST(templateReq(TPL_PLAIN, [bodyParams('ALPHA')]), props)
+    expect(res.status).toBe(200)
+    expect(sendTemplateMessage).toHaveBeenCalledTimes(1)
+    expect(insertSpy.captured().body).toBe('NEW ALPHA')
+  })
+
+  it('attaches the media header stored at upload when the client sends none (WA-TMPL-SEND.1)', async () => {
+    const tpl = {
+      name: 'video_intro_',
+      language: 'en',
+      components: [{ type: 'HEADER', format: 'VIDEO' }, body('Hi {{1}}')],
+      header_media_url: 'https://example.test/v.mp4',
+    }
+    const header = { type: 'header', parameters: [{ type: 'video', video: { link: 'https://example.test/v.mp4' } }] }
+    headerComponentFor.mockReturnValueOnce(header)
+    createServerClient.mockReturnValue(makeDb({ template: { data: tpl, error: null } }))
+
+    const res = await POST(templateReq(tpl, [bodyParams('ALPHA')]), props)
+    expect(res.status).toBe(200)
+    expect(headerComponentFor).toHaveBeenCalledWith(tpl.components, 'https://example.test/v.mp4')
+    expect(sendTemplateMessage.mock.calls[0][3]).toEqual([header, bodyParams('ALPHA')])
+  })
+
+  it('a client-supplied header excuses only the header: a template ALSO blocked for its button is still refused', async () => {
+    const insertSpy = captureInsert()
+    // A media header with no stored file (header_media) AND a dynamic URL
+    // button (button_value). templateSendBlock names the header first.
+    const tpl = {
+      name: 'video_pay_',
+      language: 'en',
+      components: [
+        { type: 'HEADER', format: 'VIDEO' },
+        body('Hi {{1}}'),
+        { type: 'BUTTONS', buttons: [{ type: 'URL', text: 'Pay now', url: 'https://pay.example.test/{{1}}' }] },
+      ],
+      header_media_url: null,
+    }
+    const clientHeader = { type: 'header', parameters: [{ type: 'video', video: { link: 'https://example.test/v.mp4' } }] }
+    createServerClient.mockReturnValue(makeDb({ template: { data: tpl, error: null }, insertSpy }))
+
+    const res = await POST(templateReq(tpl, [clientHeader, bodyParams('ALPHA')]), props)
+    expect(res.status).toBe(400)
+    expect((await res.json()).blocked).toBe('button_value')
+    expect(sendTemplateMessage).not.toHaveBeenCalled()
+    expect(insertSpy).not.toHaveBeenCalled()
   })
 
   it('a Meta refusal is still a 400 and logs nothing (the customer got nothing)', async () => {
