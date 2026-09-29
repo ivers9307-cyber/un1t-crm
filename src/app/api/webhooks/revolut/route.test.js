@@ -22,7 +22,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/revolut', () => ({ verifyWebhookSignature: vi.fn(), getOrder: vi.fn() }))
-vi.mock('@/lib/deposit-receipts', () => ({ sendDepositReceiptSms: vi.fn(async () => ({ status: 'sent' })) }))
 vi.mock('@/lib/orders', () => ({ syncOrderFromCarDeposit: vi.fn(async () => {}) }))
 vi.mock('@/lib/contact-events', () => ({
   emitEvent: vi.fn(async () => {}),
@@ -77,7 +76,7 @@ const CAR = {
   deposit_amount: 500, deposit_paid_amount: null, deposit_receipt_sent_at: null,
   buyer_phone: '+353871234567', buyer_name: 'Sarah', buyer_email: null,
   make: 'Tesla', model: 'Model 3', irish_reg: '241-D-1',
-  locations: { id: 'loc-1', name: 'CCF', car_deposit_receipt_sms_enabled: true, twilio_alpha_sender_id: 'CCFautos' },
+  locations: { id: 'loc-1', name: 'CCF' },
 }
 
 beforeEach(() => {

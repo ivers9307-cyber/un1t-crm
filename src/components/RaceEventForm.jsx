@@ -27,7 +27,7 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { ArrowLeft, Calendar, Clock, Users, Save, AlertCircle, Loader2, Plus, Trash2, BadgeEuro, ImagePlus, X as XIcon, Tv, Flag, GraduationCap, Mic, Star, DoorOpen, UserPlus, Image as ImageIcon, Mail, MessageSquare } from 'lucide-react'
+import { ArrowLeft, Calendar, Clock, Users, Save, AlertCircle, Loader2, Plus, Trash2, BadgeEuro, ImagePlus, X as XIcon, Tv, Flag, GraduationCap, Mic, Star, DoorOpen, UserPlus, Image as ImageIcon, Mail } from 'lucide-react'
 import Link from 'next/link'
 import { toSlug } from '@/lib/slug'
 import { compressImageForUpload, parseUploadResponse } from '@/lib/landing-media-upload'
@@ -183,20 +183,30 @@ export default function RaceEventForm({ race, locationId }) {
   const [description, setDescription] = useState(race?.description || '')
   const [raceDate, setRaceDate] = useState(race?.race_date || '')
 
-  // Single-slot start time + capacity for non-race kinds. On submit
-  // we turn these into a single synthetic wave so the underlying
-  // data shape (waves[], race_registrations.wave_id) stays uniform
-  // across kinds. For races, these stay null and the waves array is
-  // operator-managed.
-  const initialSingleWave = race && race.kind && race.kind !== 'race' && Array.isArray(race.waves) && race.waves[0]
-    ? race.waves[0]
-    : null
-  const [singleStartTime, setSingleStartTime] = useState(
-    initialSingleWave?.start_time ? initialSingleWave.start_time.slice(0, 5) : ''
-  )
-  const [singleCapacity, setSingleCapacity] = useState(
-    initialSingleWave?.capacity != null ? String(initialSingleWave.capacity) : ''
-  )
+  // Start times + capacity for non-race kinds. Usually one; EVENT-
+  // MULTITIME.1 lets staff add more (an 8am and a 9am class on one
+  // page). Each becomes a wave on submit so the data shape (waves[],
+  // race_registrations.wave_id) stays uniform across kinds. EVERY
+  // existing wave is loaded — reading only waves[0] would make a save
+  // delete the others (the server diff-and-applies the wave list).
+  // For races these stay unused and the waves array is operator-managed.
+  const [timeSlots, setTimeSlots] = useState(() => {
+    const incoming = race && race.kind && race.kind !== 'race' && Array.isArray(race.waves)
+      ? race.waves
+      : []
+    const rows = incoming
+      .slice()
+      .sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''))
+      .map((w) => ({
+        id: w.id,
+        start_time: (w.start_time || '').slice(0, 5),
+        capacity: w.capacity != null ? String(w.capacity) : '',
+        label: w.label || '',
+      }))
+    return rows.length > 0 ? rows : [{ start_time: '', capacity: '', label: '' }]
+  })
+  const updateTimeSlot = (i, patch) =>
+    setTimeSlots((prev) => prev.map((row, j) => (j === i ? { ...row, ...patch } : row)))
 
   const [registrationOpensAt, setRegistrationOpensAt] = useState(
     race?.registration_opens_at ? toLocalInput(race.registration_opens_at) : ''
@@ -210,8 +220,7 @@ export default function RaceEventForm({ race, locationId }) {
       : [1, 2, 4]
   )
   // Waves (mig 083) — only managed via UI for kind='race'. For other
-  // kinds we synthesise [{ start_time: singleStartTime, capacity:
-  // singleCapacity, label: null }] on submit.
+  // kinds the timeSlots rows above become the waves on submit.
   const [waves, setWaves] = useState(() => {
     const incoming = Array.isArray(race?.waves) && race.waves.length > 0
       ? race.waves
@@ -275,9 +284,6 @@ export default function RaceEventForm({ race, locationId }) {
   const [confirmationSubject, setConfirmationSubject] = useState(race?.confirmation_email_subject || '')
   const [confirmationIntro, setConfirmationIntro] = useState(race?.confirmation_email_intro || '')
   const [confirmationTemplateId, setConfirmationTemplateId] = useState(race?.confirmation_email_template_id || '')
-  // EVENTS-SMS-TOGGLE (mig 552) — per-event opt-in for the registration SMS
-  // confirmation. Off by default for new events; existing events reflect the DB.
-  const [confirmationSmsEnabled, setConfirmationSmsEnabled] = useState(!!race?.confirmation_sms_enabled)
   const [reminderSubject, setReminderSubject] = useState(race?.reminder_email_subject || '')
   const [reminderIntro, setReminderIntro] = useState(race?.reminder_email_intro || '')
   const [reminderTemplateId, setReminderTemplateId] = useState(race?.reminder_email_template_id || '')
@@ -325,9 +331,8 @@ export default function RaceEventForm({ race, locationId }) {
   const stripeHosts = hosts.filter((h) => h.payment_provider === 'stripe_connect')
   const selectedHost = stripeHosts.find((h) => h.id === hostId) || null
   // EVENT-COMMS-LOC (mig 553) — for host events, which real UN1T location's
-  // Twilio sender + email identity this event's confirmation/reminder texts
-  // and emails use. Host events sit on a sender-less per-host anchor
-  // location, so this override is only surfaced when hostId is set. Options
+  // email identity this event's confirmation/reminder emails use. Host events
+  // sit on a sender-less per-host anchor location, so this override is only surfaced when hostId is set. Options
   // are the org's real (non-anchor) locations, fetched per event location —
   // mirrors the emailTemplates fetch above. A fetch failure just leaves the
   // list empty (operator keeps whatever was already saved).
@@ -475,21 +480,24 @@ export default function RaceEventForm({ race, locationId }) {
       }
       outboundWaves = waves.slice().sort((a, b) => a.start_time.localeCompare(b.start_time))
     } else {
-      if (!singleStartTime) { setError('Start time is required.'); return }
-      const cap = singleCapacity.trim() === '' ? null : Number(singleCapacity)
-      if (cap != null && (!Number.isFinite(cap) || cap < 1)) {
-        setError('Capacity must be a positive whole number (or empty for unlimited).')
-        return
+      const seenTimes = new Set()
+      for (const slot of timeSlots) {
+        if (!slot.start_time) { setError(timeSlots.length > 1 ? 'Every time needs a start time.' : 'Start time is required.'); return }
+        if (seenTimes.has(slot.start_time)) {
+          setError(`Two times can't be the same (${slot.start_time}).`)
+          return
+        }
+        seenTimes.add(slot.start_time)
+        const cap = slot.capacity.trim() === '' ? null : Number(slot.capacity)
+        if (cap != null && (!Number.isInteger(cap) || cap < 1)) {
+          setError('Capacity must be a positive whole number (or empty for unlimited).')
+          return
+        }
       }
-      outboundWaves = [{
-        // Preserve existing wave id on edit so the diff-and-apply on
-        // the server hits update vs insert (and we don't orphan
-        // registrations whose wave_id pointed at it).
-        ...(initialSingleWave?.id ? { id: initialSingleWave.id } : {}),
-        start_time: singleStartTime,
-        capacity: cap != null ? String(cap) : '',
-        label: '',
-      }]
+      // Existing ids ride along so the server's diff-and-apply updates
+      // rather than re-inserts (and never orphans registrations whose
+      // wave_id points at a slot).
+      outboundWaves = timeSlots.slice().sort((a, b) => a.start_time.localeCompare(b.start_time))
     }
 
     // Pricing validation. Empty input → null fee (free for that
@@ -563,8 +571,6 @@ export default function RaceEventForm({ race, locationId }) {
       confirmation_email_subject: confirmationSubject.trim() || null,
       confirmation_email_intro: confirmationIntro.trim() || null,
       confirmation_email_template_id: confirmationTemplateId || null,
-      // EVENTS-SMS-TOGGLE (mig 552) — always sent so toggling it off persists.
-      confirmation_sms_enabled: confirmationSmsEnabled,
       reminder_email_subject: reminderSubject.trim() || null,
       reminder_email_intro: reminderIntro.trim() || null,
       reminder_email_template_id: reminderTemplateId || null,
@@ -723,31 +729,60 @@ export default function RaceEventForm({ race, locationId }) {
           />
         </div>
 
-        {/* Non-race kinds: single start_time + capacity input,
-            replacing the waves UI block below. */}
+        {/* Non-race kinds: start time(s) + capacity, replacing the
+            waves UI block below. One row by default; EVENT-MULTITIME.1
+            adds more (customers then pick a time on the public page). */}
         {!meta.showWaves && (
-          <div className="grid grid-cols-2 gap-3 pt-2 border-t border-un1t-border">
-            <div>
-              <label className="block text-sm text-un1t-subtle mb-1">{meta.timeLabel} *</label>
-              <input
-                type="time"
-                required
-                value={singleStartTime}
-                onChange={e => setSingleStartTime(e.target.value)}
-                className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
-              />
+          <div className="pt-2 border-t border-un1t-border space-y-2">
+            <div className="grid grid-cols-[1fr_1fr_auto] gap-3">
+              <label className="block text-sm text-un1t-subtle">{meta.timeLabel} *</label>
+              <label className="block text-sm text-un1t-subtle">Capacity</label>
+              <span className="w-8" />
             </div>
-            <div>
-              <label className="block text-sm text-un1t-subtle mb-1">Capacity</label>
-              <input
-                type="number"
-                min={1}
-                placeholder="Unlimited"
-                value={singleCapacity}
-                onChange={e => setSingleCapacity(e.target.value)}
-                className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
-              />
-              <p className="text-[11px] text-un1t-muted mt-1">Total spots. Empty = unlimited.</p>
+            {timeSlots.map((slot, i) => (
+              <div key={slot.id || `new-${i}`} className="grid grid-cols-[1fr_1fr_auto] gap-3 items-center">
+                <input
+                  type="time"
+                  required
+                  title="Start time"
+                  value={slot.start_time}
+                  onChange={e => updateTimeSlot(i, { start_time: e.target.value })}
+                  className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+                />
+                <input
+                  type="number"
+                  min={1}
+                  placeholder="Unlimited"
+                  title="Spots at this time (empty = unlimited)"
+                  value={slot.capacity}
+                  onChange={e => updateTimeSlot(i, { capacity: e.target.value })}
+                  className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+                />
+                {timeSlots.length > 1 ? (
+                  <button
+                    type="button"
+                    onClick={() => setTimeSlots(prev => prev.filter((_, j) => j !== i))}
+                    aria-label={`Remove time ${slot.start_time || i + 1}`}
+                    className="w-8 h-8 flex items-center justify-center rounded-md text-un1t-muted hover:text-red-400 hover:bg-un1t-bg"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                ) : <span className="w-8" />}
+              </div>
+            ))}
+            <div className="flex items-start justify-between gap-3">
+              <p className="text-[11px] text-un1t-muted">
+                {timeSlots.length > 1
+                  ? 'Spots per time. Empty = unlimited. Customers choose a time when they book.'
+                  : 'Total spots. Empty = unlimited.'}
+              </p>
+              <button
+                type="button"
+                onClick={() => setTimeSlots(prev => [...prev, { start_time: '', capacity: prev[prev.length - 1]?.capacity || '', label: '' }])}
+                className="shrink-0 inline-flex items-center gap-1 text-xs text-un1t-subtle hover:text-un1t-text"
+              >
+                <Plus size={11} /> Add another time
+              </button>
             </div>
           </div>
         )}
@@ -1333,7 +1368,7 @@ export default function RaceEventForm({ race, locationId }) {
                 ))}
               </select>
               <p className="text-[11px] text-un1t-muted mt-1">
-                Which UN1T location&apos;s Twilio sender + email identity this event&apos;s texts and emails use.
+                Which UN1T location&apos;s email identity this event&apos;s emails use.
               </p>
             </div>
           )}
@@ -1351,27 +1386,6 @@ export default function RaceEventForm({ race, locationId }) {
             onTemplateId={setConfirmationTemplateId}
             templates={emailTemplates}
           />
-
-          {/* EVENTS-SMS-TOGGLE (mig 552) — the signup confirmation can ALSO go
-              out as a text message. OFF by default; the email above always
-              sends. The pre-event reminder below is email + push only (no SMS). */}
-          <label className="flex items-start gap-3 pt-4 border-t border-un1t-border cursor-pointer">
-            <input
-              type="checkbox"
-              checked={confirmationSmsEnabled}
-              onChange={e => setConfirmationSmsEnabled(e.target.checked)}
-              className="mt-0.5 cursor-pointer"
-            />
-            <span>
-              <span className="flex items-center gap-1.5 text-sm font-medium text-un1t-text">
-                <MessageSquare size={14} className="text-un1t-subtle" /> Send a text message (SMS) confirmation
-              </span>
-              <span className="block text-[11px] text-un1t-subtle mt-1">
-                Off by default. Texts the registrant a short confirmation on signup, on top of the email above.
-                Sender ID is set per location in Settings → Locations → SMS.
-              </span>
-            </span>
-          </label>
 
           <div className="pt-4 border-t border-un1t-border">
             <EventEmailFields

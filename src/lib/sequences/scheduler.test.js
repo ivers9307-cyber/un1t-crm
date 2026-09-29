@@ -20,7 +20,7 @@ vi.mock('@/lib/supabase', () => ({
 vi.mock('./steps.js', () => ({
   sendEmailStep: vi.fn(),
   sendWhatsappStep: vi.fn(),
-  sendSmsStep: vi.fn(),
+  retiredSmsStep: vi.fn(),
   applyTagStep: vi.fn(),
   updateFieldStep: vi.fn(),
   webhookStep: vi.fn(),

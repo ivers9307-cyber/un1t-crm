@@ -479,7 +479,6 @@ describe('assembleIntegrationsHub — Phase-2 presence flags + secret non-leak',
     thinq_pat: 'SECRET_PAT',
     thinq_client_id: 'cid-1',
     thinq_country_code: 'IE',
-    twilio_alpha_sender_id: 'UN1T STILL',
     bca_config: { send_from: 'a@ccf.com', send_to: 'b@bca.com', documents: [{ slug: 'doc_01', label: 'x' }] },
     features: { bca_submit: true },
   }
@@ -498,7 +497,8 @@ describe('assembleIntegrationsHub — Phase-2 presence flags + secret non-leak',
     expect(c.thinq).toEqual({ hasPat: true, clientId: 'cid-1', countryCode: 'IE' })
 
     expect(data.bca[0]).toMatchObject({ sendFrom: 'a@ccf.com', sendTo: 'b@bca.com', documentCount: 1 })
-    expect(data.sms[0].senderId).toBe('UN1T STILL')
+    // TWILIO-RETIRE.1 — the SMS card left with the channel.
+    expect(data.sms).toBeUndefined()
 
     // The whole payload must not contain a single raw secret.
     const json = JSON.stringify(data)
@@ -849,8 +849,6 @@ describe('assembleIntegrationsHub — a failed read is never "not connected" (HU
         expect(r.message).toBe('Could not load this just now. Try again in a moment.')
       }
     }
-    // SMS keeps its per-location rows but does not guess the sender.
-    for (const r of data.sms) expect(r).toMatchObject({ senderId: null, senderKnown: false })
     // ONE attention row for the one failed read.
     const nag = data.attention.filter((a) => a.unreadable)
     expect(nag).toHaveLength(1)
@@ -900,7 +898,6 @@ describe('assembleIntegrationsHub — a failed read is never "not connected" (HU
     expect(all.some((r) => r.status === 'unknown')).toBe(false)
     expect(data.attention.some((a) => a.unreadable)).toBe(false)
     expect(data.glofox.find((r) => r.locationId === LIVE_A.id).status).toBe('connected')
-    for (const r of data.sms) expect(r.senderKnown).toBe(true)
   })
 })
 

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
+import { STAFF_MANAGED_SELECT } from './staff-fields.js'
 
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 const { logError } = await import('@/lib/log')
@@ -63,8 +64,10 @@ describe('listStaffForUser', () => {
     const db = mockDb({ links: [{ profile_id: 'p1', location_id: 'loc-1' }], profiles: [{ id: 'p1' }] })
     const res = await listStaffForUser({ db, user: adminUser })
     expect(res.ok).toBe(true)
-    expect(db.calls.profilesSelect).toContain('*')
-    expect(db.calls.profilesSelect).not.toContain(STAFF_PUBLIC_FIELDS)
+    expect(db.calls.profilesSelect).toBe(STAFF_MANAGED_SELECT)
+    // STAFFPROFILEPICK.1 — the managed list now OPENS with the seven public
+    // fields, so "not the public list" is the HR fields being present.
+    expect(db.calls.profilesSelect).toContain('annual_salary')
   })
   it('non-admins get the slim public field list (no salary)', async () => {
     const db = mockDb({ links: [{ profile_id: 'p1', location_id: 'loc-1' }], profiles: [{ id: 'p1' }] })
@@ -323,7 +326,7 @@ describe('CONTRACTVIS.1 — getStaffForUser, per person', () => {
   it('manager at A reading someone at A: the full profile with role templates', async () => {
     const db = mockDb({ detailLinks: [{ location_id: A }], profiles: [target('pA')] })
     const res = await getStaffForUser({ db, user: mixed, id: 'pA' })
-    expect(db.calls.profilesSelect).toContain('*')
+    expect(db.calls.profilesSelect).toBe(STAFF_MANAGED_SELECT)
     expect(res.data.contracted_hours_per_week).toBe(39)
     expect(res.data).toHaveProperty('role_templates')
   })
@@ -376,7 +379,7 @@ describe('SECFIX.3a — a manager\'s staff payload carries no location credentia
     expect(result.ok).toBe(true)
     expect(JSON.stringify(result.data)).not.toMatch(/SYNTH-/)
     expect(result.data[0].profile_locations[0].locations.name).toBe('Studio A')
-    expect(result.data[0].profile_locations[0].locations.settings.glofox.branch_id).toBe('b1')
+    expect(result.data[0].profile_locations[0].locations).not.toHaveProperty('settings')
   })
 
   it('getStaffForUser: the managed FULL row is redacted', async () => {
@@ -386,5 +389,45 @@ describe('SECFIX.3a — a manager\'s staff payload carries no location credentia
     expect(JSON.stringify(result.data)).not.toMatch(/SYNTH-/)
     expect(result.data.full_name).toBe('Ada')
     expect(result.data.role_templates).toEqual({})
+  })
+})
+
+// STAFFPROFILEPICK.1 — a managed row carried profiles.* (pin_hash, the UniFi
+// id, signatures, tombstone/auth bookkeeping) to every manager's browser and
+// phone. The fake returns WHOLE rows whatever the select says, so these also
+// prove the projection strips what the select no longer names.
+describe('STAFFPROFILEPICK.1 — a managed row is the named shape', () => {
+  const WHOLE = {
+    id: 'p1', full_name: 'Ada', email: 'ada@example.test', role: 'staff', avatar_url: null, active: true,
+    employment_type: 'fte', annual_salary: 40000, hourly_rate: null, contracted_hours_per_week: 39,
+    annual_leave_entitlement: 20, overtime_rate: null,
+    pin_hash: 'SYNTH-PIN-HASH', pin_set_at: 'T', unifi_user_id: 'SYNTH-UU', home_screen_path: '/x',
+    email_signature: 'SYNTH-SIG', two_factor_enabled: false, deleted_at: null, auth_disposition: null,
+    permissions: { landing_preference: 'x' },
+    profile_locations: [{
+      location_id: 'loc-1', role: 'staff', is_default: true, permissions: {}, unifi_door_access: false,
+      unifi_user_id: 'SYNTH-UU-L', protect_face_id: 'SYNTH-FACE',
+      locations: { id: 'loc-1', name: 'Studio A', slug: 'a', settings: { customer_agent: { test_phones: ['+353000000000'] } } },
+    }],
+  }
+  const FORBIDDEN = /SYNTH-|\+353000000000|test_phones|pin_|unifi_user_id|home_screen_path|email_signature|two_factor|deleted_|auth_|protect_face_id/
+
+  it('listStaffForUser: a manager\'s managed row carries the HR fields and nothing forbidden', async () => {
+    const db = mockDb({ links: [{ profile_id: 'p1', location_id: 'loc-1' }], profiles: [WHOLE] })
+    const res = await listStaffForUser({ db, user: adminUser })
+    expect(res.data[0].annual_salary).toBe(40000)
+    expect(res.data[0]).not.toHaveProperty('permissions')
+    expect(res.data[0].profile_locations[0]).toMatchObject({ location_id: 'loc-1', role: 'staff', is_default: true, permissions: {}, unifi_door_access: false })
+    expect(res.data[0].profile_locations[0].locations.name).toBe('Studio A')
+    expect(JSON.stringify(res.data)).not.toMatch(FORBIDDEN)
+  })
+
+  it('getStaffForUser: the managed row is the named shape plus role_templates', async () => {
+    const db = mockDb({ detailLinks: [{ location_id: 'loc-1' }], profiles: [WHOLE] })
+    const res = await getStaffForUser({ db, user: adminUser, id: 'p1' })
+    expect(db.calls.profilesSelect).toBe(STAFF_MANAGED_SELECT)
+    expect(res.data.contracted_hours_per_week).toBe(39)
+    expect(res.data).toHaveProperty('role_templates')
+    expect(JSON.stringify(res.data)).not.toMatch(FORBIDDEN)
   })
 })

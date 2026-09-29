@@ -1,6 +1,6 @@
 # un1t-crm — external integrations
 
-> Integration reference (env vars, Xero, Twilio, Revolut, Pay subdomain, Cars deposit) extracted from the root `CLAUDE.md` (2026-06-25). Read when wiring or debugging a specific provider. Linked from the CLAUDE.md "Deep reference" index.
+> Integration reference (env vars, Xero, Revolut, Pay subdomain, Cars deposit; Twilio retired) extracted from the root `CLAUDE.md` (2026-06-25). Read when wiring or debugging a specific provider. Linked from the CLAUDE.md "Deep reference" index.
 
 ## Environment Variables
 
@@ -42,11 +42,6 @@ REVOLUT_OFFER_WEBHOOK_SECRET=    # signing_secret for the OFFERS webhook (/api/w
 REVOLUT_API_VERSION=2026-03-12   # optional; default in src/lib/revolut.js
 NEXT_PUBLIC_REVOLUT_MODE=        # 'prod' | 'sandbox' — must match REVOLUT_API_BASE_URL
 NEXT_PUBLIC_REVOLUT_PUBLIC_KEY=  # Public API key (pk_live_... or pk_sandbox_...) for the embedded checkout widget
-
-# Twilio SMS — see "Twilio integration"
-TWILIO_ACCOUNT_SID=
-TWILIO_AUTH_TOKEN=
-TWILIO_FROM=CCFautos             # alphanumeric ID (Ireland) OR E.164 number OR Messaging Service SID
 
 # Buyer-facing payment domain — see "Pay subdomain"
 DEPOSIT_BASE_URL=https://pay.ccfautos.com           # used server-side when generating deposit links
@@ -157,7 +152,7 @@ Until that is configured, ticket replies simply produce **no** delivery events: 
 
 **Meta WhatsApp.** Strict HMAC verification via `verifyMetaSignature()` against `WHATSAPP_APP_SECRET`. Missing env var or bad signature → 403.
 
-When adding a new webhook handler, read the body with `await request.text()` first (verify HMAC), then `JSON.parse()` — calling `request.json()` consumes the body and the re-serialised JSON won't byte-match the signed payload. Mirror the Postmark pattern of exporting the pure auth predicate from the route module so the test can exercise it without mocking Supabase (see `verifyTwilioSignature` in the Twilio status webhook for another example).
+When adding a new webhook handler, read the body with `await request.text()` first (verify HMAC), then `JSON.parse()` — calling `request.json()` consumes the body and the re-serialised JSON won't byte-match the signed payload. Mirror the Postmark pattern of exporting the pure auth predicate from the route module so the test can exercise it without mocking Supabase.
 
 ### QStash push delivery
 
@@ -203,28 +198,11 @@ A `reviews` landing-page block renders a pure-CSS marquee ("wall of love") of re
 **Reviews are populated manually.** The Google Business Profile API sync (OAuth + `/api/cron/sync-google-reviews` + `google_business_connections`) was retired in **mig 410** — the API's access-approval gate (days–weeks, 0→300 QPM) wasn't worth it for our volume. To load/refresh reviews, insert rows into `google_reviews` (`location_id`, `google_review_id` unique per location, `rating`, `comment`, `author_name`, `review_time`, `hidden=false`); `scripts/seed-google-reviews.mjs` is a starting point. The aggregate header + JSON-LD `aggregateRating` are dormant (they read the removed connection); wire an operator-editable aggregate onto the reviews block if the "X★ · N reviews" headline is wanted. Historical design: `docs/REVIEW_CAROUSEL_DESIGN.md`.
 
 
-## Twilio integration
+## Twilio integration — RETIRED (TWILIO-RETIRE.1, 2026-09-30)
 
-`src/lib/twilio.js` is the single SMS helper. Used by the deposit-link issue flow; designed to be reused for any future transactional SMS.
+Twilio was the CRM's only SMS provider, and **SMS is retired with it**. Barely used by then: one broadcast ever (12 Aug 2026, 6 recipients), the last contact-level SMS on 26 Jul 2026, and the race confirmations (174 sent, the last on 18 Aug 2026, no event opted in any more). Removed: `src/lib/twilio.js`, `src/lib/sms.js`, `src/lib/deposit-receipts.js`, the SMS broadcast routes + cron (`/api/sms/broadcasts*`, `/api/cron/run-sms-broadcasts`), `/api/contacts/[id]/sms`, `/api/registrations/[id]/payment-sms`, `/api/webhooks/twilio/status`, the Twilio settings tab / hub card / `twilio` integrations provider, and every SMS leg (event reminders, booking + race confirmations, the car deposit link and receipt, sequence steps). `toE164Ireland` moved to `src/lib/phone-validate.js` (the WhatsApp automations use it).
 
-**Sender for Ireland.** Twilio's Irish (`+353`) long codes are **voice-only** — the Irish mobile carriers (Vodafone, Three, Eir) don't accept A2P SMS over them. Three viable senders:
-
-| Sender | Cost | Reply support | When to use |
-|---|---|---|---|
-| Alphanumeric ID `CCFautos` (default) | Free | One-way only | Most utility messages — branded, instantly recognisable |
-| UK long code (`+44…`) | ~€1/mo + per-SMS | Two-way | Only if you specifically need replies |
-| Irish short code (e.g. `50500`) | €800+/mo + per-SMS | Two-way | Only at very high volume (banks / Glofox use these) |
-
-Set via `TWILIO_FROM` env. Twilio infers the sender type from the value's shape — alphanumeric ID, E.164 number, or `MGxxx...` Messaging Service SID all go in the same field.
-
-**Trial-account gotcha.** Twilio trial accounts can ONLY send to phone numbers verified in the console (Phone Numbers → Manage → Verified Caller IDs). Adding billing flips the account to paid status and lifts the restriction. Alphanumeric senders are blocked entirely on trial accounts — you must upgrade before testing the alpha sender even works.
-
-**Vodafone IE alpha sender filtering.** Some carriers (Vodafone IE specifically) silently drop unregistered alphanumeric senders. Register `CCFautos` in Twilio Console → Messaging → Senders → Alphanumeric Sender IDs (1-2 business day approval) to avoid this. Three IE and Eir generally accept unregistered alpha senders.
-
-**Diagnostics.** Every SMS the issue endpoint sends inserts a system note on the car (`car_notes` table) with the Twilio SID. Operators paste the SID into Twilio Console → Monitor → Logs → Messaging when a customer says "I never got the SMS" — the log shows delivered / failed / queued + the carrier-specific error code.
-
-**E.164 normalisation.** `toE164Ireland(raw)` is a best-effort helper that handles the common Irish formats operators type (`087 1234567`, `0871234567`, `+353…`, bare `87…`). Falls back to passing the input through unchanged so Twilio gets a chance to reject explicitly with a helpful error code.
-
+**Data stays** (Richard's call): `sms_broadcasts`, `sms_broadcast_recipients`, `locations.twilio_alpha_sender_id`, `*_sms_body`, `confirmation_sms_*`, `car_deposit_receipt_sms_enabled` and the SMS consent columns remain as history; nothing reads or writes them. Mig 664 dropped the `run-sms-broadcasts` heartbeat row and deactivated the `twilio_sender` registry rows. The DB CHECKs still admit `'sms'` (event channels, sequence step type), so a legacy row degrades to a recorded skip rather than an error. Env vars `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` / `TWILIO_FROM` are unused and can be deleted from Vercel.
 
 ## Shelly Cloud (smart plugs and relays)
 
@@ -328,30 +306,30 @@ Buyer-facing deposit pages live on a separate hostname from the CRM. Same Vercel
 
 ## Cars deposit feature
 
-End-to-end flow: operator clicks one button on a car → buyer gets an SMS with a tokenised link → opens `pay.ccfautos.com/deposit/<token>` → reads T&Cs → ticks accept → Revolut embedded checkout widget mounts inline → buyer pays via card / Apple Pay / Google Pay / Revolut Pay → webhook flips the car to **Deposit paid** with audit trail.
+End-to-end flow: operator clicks one button on a car → copies the tokenised link and shares it with the buyer (it was texted via Twilio until TWILIO-RETIRE.1) → buyer opens `pay.ccfautos.com/deposit/<token>` → reads T&Cs → ticks accept → Revolut embedded checkout widget mounts inline → buyer pays via card / Apple Pay / Google Pay / Revolut Pay → webhook flips the car to **Deposit paid** with audit trail.
 
 **Schema (mig 044, 046, 047, 078).** `cars` row gets:
 - `deposit_token` (UUID, unique, indexed) — the public URL key. **Rotates on every issue.**
 - `deposit_token_expires_at` — 24h from last issue. Public endpoints reject expired tokens with HTTP 410 + `{ code: 'TOKEN_EXPIRED' }`.
 - `deposit_amount` — per-car override of `locations.car_deposit_default_amount` (default €500).
-- `deposit_link_sent_at` + `deposit_link_sent_via` (`'sms'` only after the Twilio switch).
+- `deposit_link_sent_at` (the issue time) + `deposit_link_sent_via` (`'sms'` for the Twilio era; NULL since TWILIO-RETIRE.1 — nothing is sent from the CRM).
 - `deposit_terms_accepted_at` + `_ip` + `_version` — evidence trail. Version snapshot at acceptance time so if the operator edits T&Cs later, the buyer's accepted version is preserved.
 - `deposit_revolut_order_id` + `_checkout_url` — Revolut order linkage.
 - `deposit_status` — `null → sent → terms_accepted → paid` (terminal happy path; `cancelled`, `failed`, `refunded` for sad paths).
 - `deposit_paid_at` + `deposit_paid_amount`.
-- `deposit_receipt_sent_at` (mig 078) — idempotency stamp for the buyer-facing receipt SMS. Set ONLY on a confirmed Twilio success so a transient failure can be retried by the next webhook delivery.
+- `deposit_receipt_sent_at` (mig 078) — idempotency stamp for the buyer-facing receipt SMS. History only since TWILIO-RETIRE.1.
 
-`locations` gets `car_deposit_default_amount`, `car_deposit_terms` (operator-editable text), `car_deposit_terms_version` (bumped server-side every time the wording changes), `car_deposit_whatsapp_template_id` (unused after the Twilio switch — kept in schema for now, can be dropped in a follow-up mig), and `car_deposit_receipt_sms_enabled` (mig 078, BOOLEAN NOT NULL DEFAULT FALSE — per-location opt-in for the deposit-paid receipt SMS; backfilled to TRUE for any location with `car_deposit_default_amount IS NOT NULL` at deploy time so CCF Autos auto-enabled).
+`locations` gets `car_deposit_default_amount`, `car_deposit_terms` (operator-editable text), `car_deposit_terms_version` (bumped server-side every time the wording changes), `car_deposit_whatsapp_template_id` (unused after the Twilio switch — kept in schema for now, can be dropped in a follow-up mig), and `car_deposit_receipt_sms_enabled` (mig 078 — the receipt-SMS opt-in; unread since TWILIO-RETIRE.1).
 
 **Token rotation.** Every call to `/api/cars/[id]/issue-deposit-link` generates a fresh `deposit_token` (unless the deposit is already paid — then keeps the existing token so the receipt URL stays valid). Old URLs become 404s. Limits the blast radius if a link is forwarded somewhere it shouldn't be. Same call also sets `deposit_token_expires_at = NOW() + 24h` and clears any in-flight Revolut order linkage so the next accept-and-pay creates a fresh order under the new token's idempotency key.
 
-**System notes (mig 047).** `car_notes` table holds two kinds of entries: `manual` (operator-typed) and `system` (auto-generated). Every `issue-deposit-link` call inserts a system note with the URL + the Twilio SID for cross-referencing in Twilio's logs. The note's URL renders as a clickable link with a copy-to-clipboard button in the UI — exactly the affordance an operator needs when they want to copy / re-test / re-share a link without re-clicking the issue button. RLS-scoped via denormalised `location_id`.
+**System notes (mig 047).** `car_notes` table holds two kinds of entries: `manual` (operator-typed) and `system` (auto-generated). Every `issue-deposit-link` call inserts a system note with the URL. The note's URL renders as a clickable link with a copy-to-clipboard button in the UI — exactly the affordance an operator needs when they want to copy / re-test / re-share a link without re-clicking the issue button. RLS-scoped via denormalised `location_id`.
 
 **Public page (`src/app/deposit/[token]/page.js`).** Renders `<CarDepositPage>` (a client component). Page loads → fetches deposit data → renders T&Cs + accept checkbox → ticks accept → mounts the Revolut embedded checkout widget → buyer submits → SDK calls `createOrder` callback which POSTs to `/api/public/deposit/[token]/accept-and-pay` → endpoint records the consent (timestamp + IP + terms version snapshot) and creates the Revolut order → returns the order token → SDK takes payment → `onSuccess` fires → page refetches deposit data → green confirmation card. The webhook is the authoritative DB-flip; the SDK callback is just for instant UX feedback.
 
-**Operator UI.** `DepositCard.jsx` (dynamic-imported into `CarDetail.jsx`) shows the status badge, amount input, **Send / Resend deposit link** button, expiry countdown ("expires in 22h 14m"), and a 'View public page' preview link. `CarDepositSettings.jsx` (in `/settings/locations/[id]`) exposes the default amount + terms textarea + the **"Send buyer a receipt SMS when their deposit is paid"** toggle (mig 078) — saving with changed terms bumps the version automatically.
+**Operator UI.** `DepositCard.jsx` (dynamic-imported into `CarDetail.jsx`) shows the status badge, amount input, **Create / New deposit link** button, the new link with a Copy button, expiry countdown ("expires in 22h 14m"), and a 'View public page' preview link. `CarDepositSettings.jsx` (in `/settings/locations/[id]`) exposes the default amount + terms textarea — saving with changed terms bumps the version automatically.
 
-**Deposit-paid receipt SMS (mig 078).** When the Revolut webhook receives `ORDER_COMPLETED` for a car's order, after flipping `deposit_status='paid'` it fires `sendDepositReceiptSms` (`src/lib/deposit-receipts.js`) as a best-effort side effect. Three gates in priority order: location toggle (`car_deposit_receipt_sms_enabled`), idempotency (`cars.deposit_receipt_sent_at`), buyer phone present. Body example: `"Hi Sarah, we've received your €500.00 deposit for Tesla Model 3 241-D-1234. Thanks — we'll be in touch shortly to arrange next steps. CCF Autos."` Single segment for typical car-name lengths. Each successful send stamps `deposit_receipt_sent_at` AND inserts a `kind='system'` `car_notes` entry with the recipient phone + Twilio SID — same diagnostic pattern as the issue-deposit-link route. Failure modes: SMS failure leaves `deposit_receipt_sent_at` unstamped (so a future webhook delivery could retry, though in practice we always 200 so retries don't happen — operator can text the buyer manually if needed and the absence of a system note is the visible signal). The receipt is intentionally **not** part of any consent gate — buyer just paid us money, the receipt is a transactional necessity not a marketing message; the per-location toggle is the right place to opt in/out.
+**Deposit-paid receipt SMS (mig 078) — RETIRED** with Twilio (TWILIO-RETIRE.1). The Revolut webhook now only flips the deposit state; the public deposit page shows the paid receipt.
 
 **Concurrency.** Each car is fully isolated end-to-end (`deposit_token`, `deposit_revolut_order_id`, `deposit_revolut_checkout_url`, idempotency key all keyed off the car). 4-5 simultaneous deposits work without contention — Postgres serializes UPDATEs naturally on different rows, Vercel scales horizontally per request, Revolut webhooks land in different car rows. Only edge case: two operators issuing the same car at the exact same moment would race — easy to fix with row-level lock if it ever matters.
 

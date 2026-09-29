@@ -2,6 +2,8 @@
 //
 // COMMS-IA.1 — the consolidated send-detail route.
 //
+// (TWILIO-RETIRE.1: SMS is gone — an sms/<id> URL is an unknown channel now.)
+//
 // The Sends table used to exit into three unrelated chromes: SMS at
 // /communications/sms/broadcasts/[id] (in the Communications shell), WhatsApp
 // at /whatsapp/broadcasts/[id] (bare, outside it) and email at
@@ -25,7 +27,6 @@ vi.mock('next/navigation', () => ({
   redirect: vi.fn((url) => { throw new Error(`NEXT_REDIRECT:${url}`) }),
   notFound: vi.fn(() => { throw new Error('NEXT_NOT_FOUND') }),
 }))
-vi.mock('@/components/SMSBroadcastEditor', () => ({ default: () => <div data-testid="sms-body" /> }))
 vi.mock('@/components/WABroadcastEditor', () => ({ default: () => <div data-testid="wa-body" /> }))
 vi.mock('@/components/CampaignDetail', () => ({ default: () => <div data-testid="email-detail" /> }))
 vi.mock('@/components/CampaignEditor', () => ({ default: () => <div data-testid="email-editor" /> }))
@@ -61,7 +62,6 @@ function dbWith(byTable) {
   }
 }
 
-const SMS_ROW = { id: 's1', name: 'Blast', status: 'sent', location_id: 'loc-1', locations: { id: 'loc-1', name: 'Stillorgan' } }
 const WA_ROW = { id: 'b1', name: 'Blast', status: 'sent', location_id: 'loc-1', delivery_mode: 'bulk', whatsapp_broadcast_recipients: [] }
 const CAMPAIGN_ROW = { id: 'c1', name: 'Spring', status: 'sent', location_id: 'loc-1' }
 
@@ -79,7 +79,6 @@ beforeEach(() => {
   hasPermission.mockReturnValue(true)
   assertLocationAccess.mockReturnValue(null)
   createServerClient.mockReturnValue(dbWith({
-    sms_broadcasts: { data: SMS_ROW },
     whatsapp_broadcasts: { data: WA_ROW },
     campaigns: { data: CAMPAIGN_ROW },
   }))
@@ -90,14 +89,18 @@ describe('/communications/sent/[channel]/[id] — routing', () => {
     await expect(SendDetailPage(args('carrier-pigeon', 'x1'))).rejects.toThrow('NEXT_NOT_FOUND')
   })
 
+  it('404s the retired sms channel (TWILIO-RETIRE.1)', async () => {
+    await expect(SendDetailPage(args('sms', 's1'))).rejects.toThrow('NEXT_NOT_FOUND')
+  })
+
   it('sends a signed-out visitor to /login', async () => {
     getCurrentUser.mockResolvedValue(null)
-    await expect(SendDetailPage(args('sms', 's1'))).rejects.toThrow(/^NEXT_REDIRECT:\/login$/)
+    await expect(SendDetailPage(args('whatsapp', 'b1'))).rejects.toThrow(/^NEXT_REDIRECT:\/login$/)
   })
 })
 
 describe('/communications/sent/[channel]/[id] — per-channel gates', () => {
-  for (const [channel, id, permission] of [['sms', 's1', 'sms'], ['whatsapp', 'b1', 'whatsapp'], ['email', 'c1', 'email']]) {
+  for (const [channel, id, permission] of [['whatsapp', 'b1', 'whatsapp'], ['email', 'c1', 'email']]) {
     it(`${channel}: bounces to the hub without the ${permission} permission`, async () => {
       hasPermission.mockImplementation((_u, key) => key !== permission)
       await expect(SendDetailPage(args(channel, id))).rejects.toThrow(/^NEXT_REDIRECT:\/communications$/)
@@ -116,11 +119,6 @@ describe('/communications/sent/[channel]/[id] — per-channel gates', () => {
 })
 
 describe('/communications/sent/[channel]/[id] — bodies stay distinct', () => {
-  it('renders the SMS body for the sms channel', async () => {
-    render(await SendDetailPage(args('sms', 's1')))
-    expect(screen.getByTestId('sms-body')).toBeTruthy()
-  })
-
   it('renders the WhatsApp body for the whatsapp channel', async () => {
     render(await SendDetailPage(args('whatsapp', 'b1')))
     expect(screen.getByTestId('wa-body')).toBeTruthy()
@@ -164,8 +162,7 @@ describe('/communications/sent/[channel]/[id] — bodies stay distinct', () => {
   )
 })
 
-// COMMS-DETAIL-FIX.5 — the SMS loader selected no contacts, so the recipients
-// list had nothing but contact_id to render. FIX.1 — the WhatsApp loader now
+// FIX.1 — the WhatsApp loader now
 // counts the recipient rows live for every finished broadcast, not only for a
 // drip, so the stat cards and the failed-sends box read one source.
 function recordingDb(byTable) {
@@ -189,17 +186,6 @@ function recordingDb(byTable) {
 }
 
 describe('/communications/sent/[channel]/[id] — the loaders feed the bodies real data', () => {
-  it('joins the contact onto every SMS recipient row', async () => {
-    const { db, selects } = recordingDb({ sms_broadcasts: { data: SMS_ROW } })
-    createServerClient.mockReturnValue(db)
-    await SendDetailPage(args('sms', 's1'))
-    const recipSelect = selects.find(s => s.table === 'sms_broadcast_recipients')
-    expect(recipSelect).toBeTruthy()
-    expect(recipSelect.arg).toMatch(/contacts\s*\(/)
-    expect(recipSelect.arg).toMatch(/name/)
-    expect(recipSelect.arg).toMatch(/phone/)
-  })
-
   it('counts WhatsApp recipient rows live even for a finished bulk broadcast', async () => {
     const { db, selects } = recordingDb({ whatsapp_broadcasts: { data: WA_ROW } })
     createServerClient.mockReturnValue(db)

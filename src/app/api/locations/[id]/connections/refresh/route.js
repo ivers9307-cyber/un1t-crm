@@ -1,7 +1,7 @@
 // POST /api/locations/[id]/connections/refresh
 //
 // INTEG-A2 dual-write bridge. The integration settings tabs (Glofox /
-// UniFi / Twilio / AC devices) save their legacy locations fields via
+// UniFi / AC devices) save their legacy locations fields via
 // the BROWSER Supabase client, but channel_connections is service-role
 // write-only — so a tab save can't update the registry row itself and
 // registry-first reads would go stale. The tabs fire-and-forget this
@@ -11,7 +11,7 @@
 // was cleared) using the exact mig 419 mapping.
 //
 // Scope: the dual-read platforms only (glofox, unifi, sensibo, thinq,
-// twilio_sender, bca). WhatsApp / Instagram / Messenger / Xero are
+// bca). WhatsApp / Instagram / Messenger / Xero are
 // untouched — they have their own lifecycle routes.
 //
 // Auth: session + assertLocationAccess + ADMIN_ROLES at the location
@@ -43,7 +43,7 @@ export async function POST(_request, props) {
   const db = createServerClient()
   const { data: location, error } = await db
     .from('locations')
-    .select('id, settings, sensibo_api_key, sensibo_pod_id, thinq_pat, thinq_client_id, thinq_country_code, twilio_alpha_sender_id, bca_config')
+    .select('id, settings, sensibo_api_key, sensibo_pod_id, thinq_pat, thinq_client_id, thinq_country_code, bca_config')
     .eq('id', locationId)
     .single()
   if (error || !location) {

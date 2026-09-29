@@ -9,11 +9,9 @@
 // already 'completed', so a provider redelivery never re-invokes us).
 // BAREWRITE.3 narrowed the throw to brand-crossing events; BAREWRITE.4 removed
 // it, because the brand cannot differ for any event prod holds today — email
-// identity resolves per ORGANISATION (structural), and no race_event resolves
-// to a (target, fallback) pair with different Twilio alpha senders. Two
-// locations in ONE org do have different senders, so that second half is a fact
-// about the data with an expiry date: the measurement, the query and the
-// condition that ends it are in event-comms-location.js.
+// identity resolves per ORGANISATION (structural). The per-location SMS sender
+// that made the other half a fact about the DATA left with the SMS channel
+// (TWILIO-RETIRE.1); event-comms-location.js keeps the history.
 //
 // These tests deliberately do NOT mock ./event-comms-location. Mocking the
 // resolver is what let the two halves drift: the resolver's own suite proved it
@@ -30,11 +28,6 @@ const sendTransactionalEmail = vi.fn(async () => ({ ok: true }))
 const resolveMasterLocationIdStrict = vi.fn(async () => 'MASTER')
 
 vi.mock('./postmark', () => ({ sendTransactionalEmail: (...a) => sendTransactionalEmail(...a) }))
-vi.mock('./twilio', () => ({
-  sendLocationSms: vi.fn(async () => ({ sid: 'SM1' })),
-  resolveSenderLocation: vi.fn(async (_db, l) => l),
-  TwilioError: class TwilioError extends Error {},
-}))
 vi.mock('./host-events', () => ({ resolveMasterLocationIdStrict: (...a) => resolveMasterLocationIdStrict(...a) }))
 vi.mock('@/lib/connection-registry', () => ({ overlayConnections: vi.fn(async (_db, row) => row) }))
 vi.mock('./connection-registry', () => ({ overlayConnections: vi.fn(async (_db, row) => row) }))
@@ -77,7 +70,7 @@ function makeWorld(race = {}) {
       confirmation_email_subject: null, confirmation_email_intro: null,
       confirmation_email_template_id: null,
       confirmation_sms_enabled: false,
-      locations: { id: 'LOC', name: 'Stillorgan', twilio_alpha_sender_id: 'UN1T', organization_id: 'ORG' },
+      locations: { id: 'LOC', name: 'Stillorgan', organization_id: 'ORG' },
       ...race,
     },
     registration: { id: 'reg1', wave_id: null, wave: null, teams: null },

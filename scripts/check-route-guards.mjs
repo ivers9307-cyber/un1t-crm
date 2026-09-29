@@ -106,7 +106,7 @@ function reExportTarget(src) {
 
 // Webhooks authenticate the SENDER (HMAC / shared secret / provider
 // signature). Matches verifyMetaSignature, verifySharedSecret,
-// verifyTwilioSignature, verifyPostmarkRequest, verifyWebhookSignature,
+// verifyPostmarkRequest, verifyWebhookSignature,
 // verifyXeroSignature, verifyGlofoxSignature, verifyUnifi*Request, etc.
 const WEBHOOK_GUARD = /verify[A-Z][A-Za-z]*\(/
 

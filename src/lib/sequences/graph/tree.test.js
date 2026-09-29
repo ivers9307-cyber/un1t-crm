@@ -5,17 +5,17 @@ import { validateGraph } from './validate.js'
 const g = (nodes, edges, trigger = { type: 'manual', config: {} }) => ({ version: 1, trigger, nodes, edges })
 
 const linear = g(
-  [{ id: 'n1', type: 'sms', config: { body: 'a' } }, { id: 'n2', type: 'wait', config: { days: 1 } }],
+  [{ id: 'n1', type: 'email', config: { subject: 'a' } }, { id: 'n2', type: 'wait', config: { days: 1 } }],
   [{ from: 'trigger', to: 'n1' }, { from: 'n1', to: 'n2' }],
 )
 
-// trigger → n1(sms) → b(branch); yes → y1(sms); no → x1(sms)
+// trigger → n1(email) → b(branch); yes → y1(email); no → x1(email)
 const branchy = g(
   [
-    { id: 'n1', type: 'sms', config: { body: 'hi' } },
+    { id: 'n1', type: 'email', config: { subject: 'hi' } },
     { id: 'b', type: 'branch', config: { predicate: { type: 'has_tag', tag: 'vip' } } },
-    { id: 'y1', type: 'sms', config: { body: 'yes path' } },
-    { id: 'x1', type: 'sms', config: { body: 'no path' } },
+    { id: 'y1', type: 'email', config: { subject: 'yes path' } },
+    { id: 'x1', type: 'email', config: { subject: 'no path' } },
   ],
   [
     { from: 'trigger', to: 'n1' },
@@ -29,7 +29,7 @@ const branchy = g(
 const reconvergent = g(
   [
     { id: 'b', type: 'branch', config: { predicate: { type: 'has_tag', tag: 't' } } },
-    { id: 'm', type: 'sms', config: { body: 'merge' } },
+    { id: 'm', type: 'email', config: { subject: 'merge' } },
   ],
   [
     { from: 'trigger', to: 'b' },
@@ -74,7 +74,7 @@ describe('treeToGraph round-trips', () => {
   }
 
   it('omits the edge for an empty branch lane (validation then flags it)', () => {
-    const tree = [{ id: 'b', type: 'branch', config: { predicate: { type: 'has_tag', tag: 'x' } }, yes: [{ id: 'y', type: 'sms', config: { body: 'y' } }], no: [] }]
+    const tree = [{ id: 'b', type: 'branch', config: { predicate: { type: 'has_tag', tag: 'x' } }, yes: [{ id: 'y', type: 'email', config: { subject: 'y' } }], no: [] }]
     const back = treeToGraph({ type: 'manual', config: {} }, tree)
     expect(back.edges.find(e => e.label === 'no')).toBeUndefined()
     expect(validateGraph(back).errors.map(e => e.code)).toContain('branch_missing_lane')
@@ -89,7 +89,7 @@ describe('isPureTree', () => {
   })
   it('is false when an orphan node sits off the tree', () => {
     const orphaned = g(
-      [...linear.nodes, { id: 'z', type: 'sms', config: { body: 'z' } }],
+      [...linear.nodes, { id: 'z', type: 'email', config: { subject: 'z' } }],
       linear.edges,
     )
     expect(isPureTree(orphaned)).toBe(false)
