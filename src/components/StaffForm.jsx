@@ -124,6 +124,11 @@ export default function StaffForm({
     permissions: hydratePermissions(a.permissions, a.role, templateFor(a.location_id, a.role, targetEmploymentType)),
   }))
 
+  // STAFFPROFILEPICK.1 — every `staff.<field>` read here must be in
+  // STAFF_EDITOR_FIELDS (src/lib/staff-fields.js): the edit page selects and
+  // passes exactly that list, and tests/staff-profile-to-client.test.js
+  // fails until a new field is added there too (a field the page does not
+  // send would render as a default and be saved back over the real value).
   const [form, setForm] = useState({
     full_name: staff?.full_name || '',
     email: staff?.email || '',
