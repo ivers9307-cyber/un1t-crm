@@ -145,9 +145,12 @@ describe('a missing sequence answers exactly like another studio\'s (404 Not fou
     ['POST /api/sequences/[id]/audience/seed', () => seed.POST(json('POST', { confirm_count: 0 }), params(id))],
     ['DELETE /api/sequences/[id]/audience/seed', () => seed.DELETE(bare('DELETE'), params(id))],
   ]
-  // GET /api/sequences/[id] and the seed route's loader read with maybeSingle
-  // (a query error is a 500 on the GET, below); everything else single().
-  const MAYBE = new Set(['GET /api/sequences/[id]', 'POST /api/sequences/[id]/audience/seed', 'DELETE /api/sequences/[id]/audience/seed'])
+  // GET and PUT /api/sequences/[id] and the seed route's loader read with
+  // maybeSingle (a query error is a 500 there, below); everything else single().
+  const MAYBE = new Set([
+    'GET /api/sequences/[id]', 'PUT /api/sequences/[id]', 'PUT /api/sequences/[id] (activate)',
+    'POST /api/sequences/[id]/audience/seed', 'DELETE /api/sequences/[id]/audience/seed',
+  ])
   it.each(MISSING)('%s', async (title, call) => {
     const { probe, status, body } = await probed(STAFF_A_MANAGER_B, call, [MAYBE.has(title) ? NO_ROW_MAYBE : NO_ROW_SINGLE])
     expect(probe.passed).toBe(false)
@@ -162,6 +165,18 @@ describe('GET /api/sequences/[id] when the read fails', () => {
   it('answers a logged 500, not a 404', async () => {
     const failed = { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } }
     const { probe, status, body } = await probed(STAFF_A_MANAGER_B, () => detail.GET(bare('GET'), params(id)), [failed])
+    expect(probe.passed).toBe(false)
+    expect(status).toBe(500)
+    expect(body).toEqual({ success: false, error: 'Could not load the sequence' })
+    expect(logError).toHaveBeenCalledWith('sequences', expect.any(String), expect.objectContaining({ sequenceId: SEQ_ID }))
+  })
+})
+
+// SEQPAGEGATE.1 review N5: PUT's up-front read dropped its error the same way.
+describe('PUT /api/sequences/[id] when the read fails', () => {
+  it('answers a logged 500, not a 404', async () => {
+    const failed = { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } }
+    const { probe, status, body } = await probed(STAFF_A_MANAGER_B, () => detail.PUT(json('PUT', { name: 'Renamed' }), params(id)), [failed])
     expect(probe.passed).toBe(false)
     expect(status).toBe(500)
     expect(body).toEqual({ success: false, error: 'Could not load the sequence' })

@@ -8,6 +8,7 @@ import { validateBody } from '@/lib/validate'
 import { logError } from '@/lib/log'
 import { validateAudienceFilter, InvalidAudienceFilterError } from '@/lib/audience-filter'
 import { SEQUENCE_BUILDER_ROW_SELECT, toBuilderSequence } from '@/lib/sequences/builder-shape'
+import { uuidLike } from '@/lib/schemas'
 
 const SequenceUpdateSchema = z.object({
   name: z.string().min(1).max(200).optional(),
@@ -104,15 +105,25 @@ export async function PUT(request, props) {
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   if (!canBuildSequencesSomewhere(user)) return sequencePermissionRequired()
 
+  // SEQPAGEGATE.1: a malformed id is a missing sequence, never a PostgREST
+  // 22P02 surfacing as the 500 below.
+  if (!uuidLike.safeParse(params.id).success) return sequenceNotFound()
+
   const db = createServerClient()
 
   // Verify caller can write to this sequence's location. trigger_type /
   // trigger_config / status feed the activation guard below (effective
   // values = request merged over the stored row).
-  const { data: existing } = await db.from('email_sequences')
+  // SEQPAGEGATE.1: a failed read is a logged 500 (it used to be discarded
+  // and answer 404 as if the sequence were gone); only no row is a 404.
+  const { data: existing, error: existingErr } = await db.from('email_sequences')
     .select('location_id, trigger_type, trigger_config, status')
     .eq('id', params.id)
-    .single()
+    .maybeSingle()
+  if (existingErr) {
+    logError('sequences', 'sequence update: read failed', { sequenceId: params.id, code: existingErr.code || null, err: existingErr.message })
+    return NextResponse.json({ success: false, error: 'Could not load the sequence' }, { status: 500 })
+  }
   if (!existing) return sequenceNotFound()
   const guard = assertLocationAccessOr404(user, existing.location_id)
   if (guard) return guard
