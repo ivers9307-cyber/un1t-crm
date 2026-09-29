@@ -39,6 +39,21 @@ import { logWarn } from '@/lib/log'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
+// STAFFPROFILEPICK.1 — what the promote/demote echo carries. It used to be
+// `.select()`, the whole row (pin_hash, UniFi id, pay). Neither caller reads
+// `data`; these are the identity columns a future one could want.
+const TOGGLE_ECHO_COLUMNS = 'id, full_name, email, role, active'
+const TOGGLE_ECHO_KEYS = TOGGLE_ECHO_COLUMNS.split(',').map((s) => s.trim())
+
+// The second lock behind the select (as pickManagedStaffRow is for the staff
+// API): a widened select can never put another column on the wire.
+function toggleEcho(row) {
+  if (!row || typeof row !== 'object') return row
+  const out = {}
+  for (const k of TOGGLE_ECHO_KEYS) if (Object.prototype.hasOwnProperty.call(row, k)) out[k] = row[k]
+  return out
+}
+
 const Body = z.discriminatedUnion('action', [
   z.object({
     action: z.literal('promote'),
@@ -91,7 +106,7 @@ export async function POST(request) {
       .from('profiles')
       .update({ role: 'master' })
       .eq('id', body.profile_id)
-      .select()
+      .select(TOGGLE_ECHO_COLUMNS)
       .single()
     if (upErr) {
       return NextResponse.json({ success: false, error: upErr.message }, { status: 400 })
@@ -104,7 +119,7 @@ export async function POST(request) {
       before: { role: existing.role },
       after: { role: 'master' },
     })
-    return NextResponse.json({ success: true, data: updated })
+    return NextResponse.json({ success: true, data: toggleEcho(updated) })
   }
 
   // body.action === 'demote'
@@ -139,7 +154,7 @@ export async function POST(request) {
     .from('profiles')
     .update({ role: body.fallback_role })
     .eq('id', body.profile_id)
-    .select()
+    .select(TOGGLE_ECHO_COLUMNS)
     .single()
   if (upErr) {
     // Could be the DB trigger if the app-layer check raced and was
@@ -154,5 +169,5 @@ export async function POST(request) {
     before: { role: 'master' },
     after: { role: body.fallback_role },
   })
-  return NextResponse.json({ success: true, data: updated })
+  return NextResponse.json({ success: true, data: toggleEcho(updated) })
 }

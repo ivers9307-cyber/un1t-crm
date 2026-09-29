@@ -35,6 +35,7 @@ vi.mock('@/lib/staff-write', () => ({
 import { POST, GET } from './route.js'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { STAFF_MANAGED_SELECT } from '@/lib/staff-fields'
 
 const LOC = 'a0000000-0000-0000-0000-000000000001'
 
@@ -330,11 +331,12 @@ describe('POST /api/staff — SECFIX.3a: the echo carries no location credential
     const { db } = mockDb({
       finalProfile: {
         id: 'new-user-id', full_name: 'New Coach',
+        pin_hash: 'SYNTH-PIN-HASH', unifi_user_id: 'SYNTH-UU', email_signature: 'SYNTH-SIG', auth_disposition: null,
         profile_locations: [{
           location_id: LOC, role: 'staff',
           locations: {
             id: LOC, name: 'Studio', sensibo_api_key: 'SYNTH-S', thinq_pat: 'SYNTH-T',
-            settings: { glofox: { branch_id: 'b1', api_key: 'SYNTH-GK', api_token: 'SYNTH-GT', webhook_secret: 'SYNTH-GW' }, unifi: { api_token: 'SYNTH-UT' } },
+            settings: { glofox: { branch_id: 'b1', api_key: 'SYNTH-GK', api_token: 'SYNTH-GT', webhook_secret: 'SYNTH-GW' }, unifi: { api_token: 'SYNTH-UT' }, customer_agent: { test_phones: ['+353000000000'] } },
           },
         }],
       },
@@ -347,5 +349,14 @@ describe('POST /api/staff — SECFIX.3a: the echo carries no location credential
     const body = await res.json()
     expect(JSON.stringify(body)).not.toMatch(/SYNTH-/)
     expect(body.data.profile_locations[0].locations.name).toBe('Studio')
+    // STAFFPROFILEPICK.1 — the echo re-reads the named managed shape.
+    const profileSelects = db.from.mock.results
+      .map((r) => r.value)
+      .filter((v) => v && typeof v.select === 'function' && v.select.mock)
+      .flatMap((v) => v.select.mock.calls.map((c) => c[0]))
+    expect(profileSelects).toContain(STAFF_MANAGED_SELECT)
+    expect(body.data.id).toBe('new-user-id')
+    expect(body.data.profile_locations[0].locations).not.toHaveProperty('settings')
+    expect(JSON.stringify(body)).not.toMatch(/pin_hash|unifi_user_id|email_signature|auth_|test_phones|\+353000000000/)
   })
 })

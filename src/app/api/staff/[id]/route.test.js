@@ -26,7 +26,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getStaffForUser } from '@/lib/staff'
 import { getUnifiConfig } from '@/lib/unifi-access'
 import { fakeDb } from '@/lib/time-off.test-helpers'
-import { LOCATION_SECRET_MASK } from '@/lib/location-secrets'
+import { STAFF_MANAGED_SELECT } from '@/lib/staff-fields'
 
 const req = () => new Request('http://localhost/api/staff/p1')
 const props = { params: { id: 'p1' } }
@@ -77,6 +77,7 @@ describe('PUT /api/staff/[id] — SECFIX.3a: the echo carries no location creden
     let current = {
       id: ID, email: 'coach@example.test', full_name: 'A Coach', role: 'staff', active: true, deleted_at: null,
       unifi_door_access: true, permissions: {}, employment_type: 'fte',
+      pin_hash: 'SYNTH-PIN-HASH', home_screen_path: '/x', annual_salary: 40000,
       profile_locations: [{ location_id: 'loc-1', role: 'staff', unifi_door_access: true, unifi_user_id: 'uu-1', locations: SECRET_LOC }],
     }
     const db = fakeDb((q) => {
@@ -99,7 +100,17 @@ describe('PUT /api/staff/[id] — SECFIX.3a: the echo carries no location creden
     const body = await res.json()
     expect(body.success).toBe(true)
     expect(JSON.stringify(body)).not.toMatch(/SYNTH-/)
-    expect(body.data.profile_locations[0].locations.settings.unifi.api_token).toBe(LOCATION_SECRET_MASK)
+    // STAFFPROFILEPICK.1 — the echo is the named managed shape: no settings
+    // at all (the mask only proved presence), no PIN hash, no UniFi id.
+    expect(body.data.profile_locations[0].locations).not.toHaveProperty('settings')
+    expect(body.data.profile_locations[0]).not.toHaveProperty('unifi_user_id')
+    expect(body.data).not.toHaveProperty('pin_hash')
+    expect(body.data).not.toHaveProperty('home_screen_path')
+    expect(body.data.annual_salary).toBe(40000)
+    const selects = db.queries.filter((q) => q.table === 'profiles' && q.action === 'select').map((q) => q.columns)
+    expect(selects.at(-1)).toBe(STAFF_MANAGED_SELECT)
+    // The server-side reads stay whole: the door revoke still gets the raw row.
+    expect(selects[0]).toMatch(/^\*, profile_locations\(\*, locations\(\*\)\)$/)
     expect(body.data.profile_locations[0].locations.name).toBe('Studio One')
   })
 })

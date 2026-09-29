@@ -13,6 +13,7 @@ vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 import AdminMatrixPage from './page.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { CLIENT_LOCATION_COLUMNS } from '@/lib/location-secrets'
 
 const ORG = 'c0000000-0000-0000-0000-000000000003'
 
@@ -46,7 +47,8 @@ describe('/admin/matrix — SECFIX.3a: neither matrix receives a location creden
       locations: [{
         id: 'loc-1', name: 'Studio', organization_id: ORG, features: {},
         sensibo_api_key: 'SYNTH-S', thinq_pat: 'SYNTH-T',
-        settings: { glofox: { api_key: 'SYNTH-GK', api_token: 'SYNTH-GT' }, unifi: { api_token: 'SYNTH-UT' } },
+        bca_config: { k: 'SYNTH-BCA' }, monthly_contractor_budget_eur: 1234,
+        settings: { glofox: { api_key: 'SYNTH-GK', api_token: 'SYNTH-GT' }, unifi: { api_token: 'SYNTH-UT' }, customer_agent: { test_phones: ['+353000000000'] } },
       }],
       profiles: [],
     }))
@@ -57,6 +59,12 @@ describe('/admin/matrix — SECFIX.3a: neither matrix receives a location creden
       expect(el, name).toBeTruthy()
       expect(el.props.locationsByOrg[ORG].map((l) => l.id)).toEqual(['loc-1'])
       expect(JSON.stringify(el.props.locationsByOrg), name).not.toMatch(/SYNTH-/)
+      // STAFFPROFILEPICK.1 — identity columns only: no settings (test phones),
+      // no budget, no config column.
+      const [loc] = el.props.locationsByOrg[ORG]
+      for (const k of Object.keys(loc)) expect(CLIENT_LOCATION_COLUMNS, `${name}: ${k}`).toContain(k)
+      expect(loc).toMatchObject({ id: 'loc-1', name: 'Studio', features: {} })
+      expect(JSON.stringify(el.props.locationsByOrg)).not.toMatch(/test_phones|\+353000000000/)
     }
   })
 })

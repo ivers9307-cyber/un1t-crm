@@ -112,8 +112,8 @@ const REVIEWED = {
   'src/app/api/schedule/reports/route.js': 'generate and list refuse staff_cost / utilisation below RATE_REPORT_VIEWER_ROLES at the studio',
   'src/app/api/schedule/reports/scheduled/route.js': 'imports calculateNextRun only; scheduling a staff_cost / utilisation report is RATE_REPORT_VIEWER_ROLES',
   'src/app/api/schedule/week-cost/route.js': 'ADMIN_ROLES at the studio only; contract_visible false otherwise (CONTRACTVIS.1)',
-  'src/app/api/staff/[id]/route.js': 'write schema (PUT is owner/master); reads go through src/lib/staff.js',
-  'src/app/api/staff/route.js': 'write schema (POST is owner/master); reads go through src/lib/staff.js',
+  'src/app/api/staff/[id]/route.js': 'write schema; the PUT echo is the managed shape to its caller, owner at the person\'s studio or master (STAFFPROFILEPICK.1); reads go through src/lib/staff.js',
+  'src/app/api/staff/route.js': 'write schema; the POST echo is the managed shape to its caller, owner at the new person\'s studio or master (STAFFPROFILEPICK.1); reads go through src/lib/staff.js',
   'src/app/settings/staff/page.js': 'comment only; the page names its columns and reads no contract',
   'src/components/ContractTemplateForm.jsx': 'a template variable name and a sample value; no person\'s data',
   'src/components/RosterSummaryPanel.jsx': 'renders a contract only with contractVisible, from rows the server sent (include=contract, managed rows)',
@@ -136,6 +136,7 @@ const REVIEWED = {
   'src/lib/schemas.js': 'a comment on the column\'s range',
   'src/lib/shift-holder-pay.js': 'server-only pay loader for contractor spend and the publish gate; both callers return aggregates only',
   'src/lib/shift-offer-server.js': 'loadBlockCandidates without withContract (defaults false): no contract read',
+  'src/lib/staff-fields.js': 'names the managed and editor HR column lists and projects rows onto them; decides no audience (who gets a managed row stays in src/lib/staff.js, CONTRACTVIS.1; the editor page is owner-at-the-person\'s-studio or master)',
   'src/lib/staff-write.js': 'owner/master writes',
   'src/lib/staff.js': 'adds the column only for rows the caller manages, and their own (CONTRACTVIS.1)',
 }
