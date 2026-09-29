@@ -94,8 +94,6 @@ export async function GET(_request, props) {
   // .limit(10_000) was silently capped at the 1000-row PostgREST
   // ceiling). This is the panel's only source for enrolment counts
   // (the email_sequences.total_* counters were never maintained; mig 663).
-  const enrolmentStats = { total: 0, active: 0, completed: 0, exited: 0, paused: 0 }
-  const exitReasons = {}
   let enrolments
   try {
     enrolments = await selectAll((from, to) => db
@@ -104,12 +102,20 @@ export async function GET(_request, props) {
       .eq('sequence_id', params.id)
       .order('id', { ascending: true })
       .range(from, to))
-  } catch (enrolErr) {
-    // SEQCOUNTERS.1 — a failed read is never "0 enrolled". The panel keeps
-    // its last good numbers on a non-success.
-    logError('sequences', 'stats: enrolments read failed', { sequenceId: params.id, code: enrolErr?.code || null })
-    return NextResponse.json({ success: false, error: 'Could not load enrolments' }, { status: 500 })
+  } catch {
+    // SEQCOUNTERS.1 — a failed read is never "0 enrolled", and it does not
+    // throw away the per-step results, which came from a read that worked.
+    // The counts are null (unknown) and the panel says so. selectAll
+    // rethrows new Error(message), so there is no PostgREST code to log.
+    logError('sequences', 'stats: enrolments read failed', { sequenceId: params.id })
+    return NextResponse.json({
+      success: true,
+      warning: 'Enrolment counts could not be loaded',
+      data: { enrolments: null, exit_reasons: null, per_step: Object.fromEntries(byStep) },
+    })
   }
+  const enrolmentStats = { total: 0, active: 0, completed: 0, exited: 0, paused: 0 }
+  const exitReasons = {}
   for (const e of (enrolments || [])) {
     enrolmentStats.total += 1
     if (e.status === 'active') enrolmentStats.active += 1
