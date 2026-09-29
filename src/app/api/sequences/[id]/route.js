@@ -122,6 +122,9 @@ export async function PUT(request, props) {
   const validation = await validateBody(request, SequenceUpdateSchema)
   if (!validation.ok) return validation.response
   const updates = { ...validation.data }
+  // SEQPAGEGATE.1: '' and null both mean "no secret" (the inbound webhook
+  // and has_webhook_secret agree); store the one spelling, null.
+  if (updates.webhook_secret === '') updates.webhook_secret = null
 
   // COMMSFIX.B.7 — reject an invalid audience_filter at save time. A bad
   // filter used to save cleanly, then contactMatchesSequenceAudience failed

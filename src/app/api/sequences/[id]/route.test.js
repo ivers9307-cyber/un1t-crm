@@ -238,4 +238,22 @@ describe('PUT /api/sequences/[id] — response carries no webhook secret (SEQPAG
     await PUT(putReq({ name: 'Hook 2' }), props)
     expect(seen.update).not.toHaveProperty('webhook_secret')
   })
+
+  // Review N2: an empty string means "no secret" to the inbound webhook and to
+  // has_webhook_secret alike; writing it as '' leaves two spellings of "none"
+  // in the column for every later reader to handle. One spelling: null.
+  it("an empty webhook_secret is written as null, not ''", async () => {
+    const { db, seen } = secretDb(STORED)
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(putReq({ webhook_secret: '' }), props)
+    expect(res.status).toBe(200)
+    expect(seen.update).toHaveProperty('webhook_secret', null)
+  })
+
+  it('a real webhook_secret is written as sent', async () => {
+    const { db, seen } = secretDb(STORED)
+    createServerClient.mockReturnValue(db)
+    await PUT(putReq({ webhook_secret: 'SYNTH-NEW' }), props)
+    expect(seen.update).toHaveProperty('webhook_secret', 'SYNTH-NEW')
+  })
 })
