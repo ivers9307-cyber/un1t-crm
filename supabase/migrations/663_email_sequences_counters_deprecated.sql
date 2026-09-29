@@ -34,11 +34,12 @@
 --   COMMENT ON COLUMN public.email_sequences.total_exited IS NULL;
 
 BEGIN;
+SET LOCAL lock_timeout = '5s';
 
 DO $$
 BEGIN
   IF EXISTS (
-    SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    SELECT 1 FROM pg_proc p
     WHERE p.proname LIKE 'increment\_sequence\_%' ESCAPE '\'
   ) THEN
     RAISE EXCEPTION '663: an increment_sequence_* function exists, so something may maintain these counters; stop and re-plan (C61)';

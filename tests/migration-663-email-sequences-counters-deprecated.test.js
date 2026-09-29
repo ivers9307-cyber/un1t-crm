@@ -53,6 +53,23 @@ describe('migration 663 (SEQCOUNTERS.1)', () => {
     for (const { c } of rows) expect(c).toBeNull() // the whole file rolled back
   })
 
+  it('takes its locks with a 5s lock_timeout, set right after BEGIN (COMMENT ON takes ShareUpdateExclusiveLock)', () => {
+    expect(MIG).toMatch(/^BEGIN;\nSET LOCAL lock_timeout = '5s';\n/m)
+  })
+
+  it('a failed self-check AFTER the comments ran rolls the whole file back', async () => {
+    // One comment no longer carries the marker, so the self-check counts 2
+    // and raises; the two comments that did land must not survive it.
+    const broken = MIG.replace("total_exited IS\n  'DEPRECATED (mig 663", "total_exited IS\n  'deprecated (mig 663")
+    expect(broken).not.toBe(MIG)
+    const db = await fresh()
+    await expect(run(db, broken)).rejects.toThrow(/663 self-check: expected 3 deprecated comments, found 2/)
+    await run(db, 'ROLLBACK;').catch(() => {}) // see the refusal case
+    const rows = await comments(db)
+    expect(rows).toHaveLength(3)
+    for (const { c } of rows) expect(c).toBeNull()
+  })
+
   it('the header rollback restores the pre-663 state (no comments)', async () => {
     expect(MIG).toContain(ROLLBACK.split('\n')[0])
     const db = await fresh()
