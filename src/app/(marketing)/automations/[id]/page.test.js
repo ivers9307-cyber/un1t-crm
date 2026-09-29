@@ -46,31 +46,34 @@ vi.mock('next/navigation', () => ({
   }),
 }))
 
+// SEQPAGEGATE.1 — the mocks record their props: both are 'use client', so
+// whatever the page hands them is serialised into the browser.
+const seen = vi.hoisted(() => ({ builder: null, performance: null }))
 vi.mock('@/components/sequences/SequenceFlowBuilder', () => ({
-  default: ({ sequence }) => <div data-testid="builder">{sequence.name}</div>,
+  default: (props) => { seen.builder = props; return <div data-testid="builder">{props.sequence.name}</div> },
 }))
 vi.mock('@/components/automations/AutomationPerformance', () => ({
-  default: () => null,
+  default: (props) => { seen.performance = props; return null },
 }))
+vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 
 import SequenceBuilderPage from './page.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { logError } from '@/lib/log'
+import { SEQUENCE_BUILDER_PAGE_SELECT } from '@/lib/sequences/builder-shape'
 import { LOC_A, LOC_B, MANAGER_A_STAFF_B, STAFF_A_MANAGER_B } from '../../../../../tests/helpers/role-sweep-callers.js'
 
-function mockDb({ sequence = null } = {}) {
-  return {
-    from: vi.fn(() => ({
-      select: vi.fn(() => ({
-        eq: vi.fn(() => ({
-          single: vi.fn(async () => ({
-            data: sequence,
-            error: sequence ? null : { message: 'not found' },
-          })),
-        })),
-      })),
-    })),
+// SEQPAGEGATE.1 — the page reads with .maybeSingle() (0 rows is "not
+// found", an error is an error) and the chain records its select string.
+function mockDb({ sequence = null, error = null } = {}) {
+  const calls = { select: null }
+  const chain = {
+    select: vi.fn((cols) => { calls.select = cols; return chain }),
+    eq: vi.fn(() => chain),
+    maybeSingle: vi.fn(async () => ({ data: sequence, error })),
   }
+  return { from: vi.fn(() => chain), calls }
 }
 
 // The same staff role and permission bag at every studio the user belongs to
@@ -90,13 +93,18 @@ function user({ locations = [{ id: 'loc1' }], perms = {} } = {}) {
   }
 }
 
-function props(id = 'seq1') {
+// uuid-shaped (the page 404s a non-uuid id without a read); fictional.
+function props(id = '5e000000-0000-4000-8000-000000000001') {
   return { params: Promise.resolve({ id }) }
 }
 
 const mySequence = { id: 'seq1', location_id: 'loc1', name: 'Welcome flow', sequence_steps: [] }
 
-beforeEach(() => vi.clearAllMocks())
+beforeEach(() => {
+  vi.clearAllMocks()
+  seen.builder = null
+  seen.performance = null
+})
 
 describe('/automations/[id] builder page', () => {
   it('redirects to /login without a session', async () => {
@@ -172,5 +180,53 @@ describe('/automations/[id] builder page', () => {
     createServerClient.mockReturnValue(mockDb({ sequence: { ...mySequence, location_id: LOC_B, name: 'Studio B flow' } }))
     const html = renderToStaticMarkup(await SequenceBuilderPage(props()))
     expect(html).toContain('Studio B flow')
+  })
+})
+
+// SEQPAGEGATE.1 — SequenceFlowBuilder and AutomationPerformance are client
+// components; whatever the page passes them is in the browser.
+describe('/automations/[id] — what crosses into the browser (SEQPAGEGATE.1)', () => {
+  const FULL = {
+    ...mySequence, description: null, status: 'draft', trigger_type: 'webhook', trigger_config: {},
+    audience_filter: null, goal_config: null, send_window: null, re_enrolment_cooldown_days: 0,
+    webhook_token: 'd'.repeat(32), webhook_secret: 'SYNTH-SECRET', graph: null, draft_graph: null,
+    sequence_steps: [{ id: 'st1', step_order: 0, step_type: 'email', config: {}, subject: 'Hi', html_content: '<p>SYNTH-HTML</p>', delay_days: 0, delay_hours: 0, delay_minutes: 0 }],
+  }
+
+  it('reads named columns (no star on email_sequences)', async () => {
+    getCurrentUser.mockResolvedValue(user({ perms: { email: true } }))
+    const db = mockDb({ sequence: FULL })
+    createServerClient.mockReturnValue(db)
+    renderToStaticMarkup(await SequenceBuilderPage(props()))
+    // The only star is the server-only steps embed (see builder-shape.js).
+    expect(db.calls.select).toBe(SEQUENCE_BUILDER_PAGE_SELECT)
+    expect(db.calls.select.replace('sequence_steps(*)', '')).not.toContain('*')
+  })
+
+  it('the builder gets has_webhook_secret, never the secret; the performance panel gets id/step_type/config only', async () => {
+    getCurrentUser.mockResolvedValue(user({ perms: { email: true } }))
+    createServerClient.mockReturnValue(mockDb({ sequence: FULL }))
+    renderToStaticMarkup(await SequenceBuilderPage(props()))
+    expect(seen.builder.sequence).not.toHaveProperty('webhook_secret')
+    expect(seen.builder.sequence.has_webhook_secret).toBe(true)
+    expect(seen.builder.sequence).not.toHaveProperty('sequence_steps')
+    expect(seen.performance.steps).toEqual([{ id: 'st1', step_type: 'email', config: {} }])
+    const payload = JSON.stringify({ b: seen.builder.sequence, p: seen.performance })
+    expect(payload).not.toContain('SYNTH-')
+  })
+
+  it('a failed read is logged and thrown (an error page), never "not found"', async () => {
+    getCurrentUser.mockResolvedValue(user({ perms: { email: true } }))
+    createServerClient.mockReturnValue(mockDb({ sequence: null, error: { code: '57014', message: 'timeout' } }))
+    await expect(SequenceBuilderPage(props())).rejects.toThrow(/Could not load the sequence/)
+    expect(logError).toHaveBeenCalledWith('sequences', expect.stringMatching(/builder page/), expect.objectContaining({ code: '57014' }))
+  })
+
+  it('a non-uuid id is not found, without a read', async () => {
+    getCurrentUser.mockResolvedValue(user({ perms: { email: true } }))
+    const db = mockDb({ sequence: FULL })
+    createServerClient.mockReturnValue(db)
+    await expect(SequenceBuilderPage(props('not-a-uuid'))).rejects.toThrow('NEXT_NOT_FOUND')
+    expect(db.from).not.toHaveBeenCalled()
   })
 })

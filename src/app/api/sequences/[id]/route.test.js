@@ -25,8 +25,10 @@ vi.mock('@/lib/auth', () => ({
 }))
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logError: vi.fn() }))
 
 import { PUT } from './route.js'
+import { logError } from '@/lib/log'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 
@@ -54,6 +56,7 @@ function mockDb({ row } = {}) {
         select: vi.fn(() => ({
           eq: vi.fn(() => ({
             single: vi.fn(async () => ({ data: row ?? null, error: row ? null : { message: 'not found' } })),
+            maybeSingle: vi.fn(async () => ({ data: row ?? null, error: null })),
           })),
         })),
         update: updateSpy,
@@ -184,5 +187,127 @@ describe('PUT /api/sequences/[id] — audience filter validated at save time (CO
     const cleared = await PUT(putReq({ audience_filter: null }), props)
     expect(cleared.status).toBe(200)
     expect(updateSpy).toHaveBeenCalledTimes(2)
+  })
+})
+
+// SEQPAGEGATE.1 — the PUT used to answer .select() (the whole row, the
+// webhook secret included) to the editor who just saved. It now answers the
+// builder shape: has_webhook_secret, never the value.
+describe('PUT /api/sequences/[id] — response carries no webhook secret (SEQPAGEGATE.1)', () => {
+  function secretDb(stored) {
+    const seen = { updateSelect: null, update: null }
+    const db = {
+      from: vi.fn(() => ({
+        select: vi.fn(() => ({
+          eq: vi.fn(() => ({
+            single: vi.fn(async () => ({ data: stored, error: null })),
+            maybeSingle: vi.fn(async () => ({ data: stored, error: null })),
+          })),
+        })),
+        update: vi.fn((patch) => {
+          seen.update = patch
+          return {
+            eq: vi.fn(() => ({
+              select: vi.fn((cols) => {
+                seen.updateSelect = cols
+                return { single: vi.fn(async () => ({ data: { ...stored, ...patch }, error: null })) }
+              }),
+            })),
+          }
+        }),
+      })),
+    }
+    return { db, seen }
+  }
+  const STORED = {
+    id: SEQ_ID, location_id: LOC_ID, name: 'Hook', status: 'draft', trigger_type: 'webhook', trigger_config: {},
+    webhook_token: 'b'.repeat(32), webhook_secret: 'SYNTH-SECRET',
+  }
+
+  it('answers has_webhook_secret and the token, never the secret, from a named select', async () => {
+    const { db, seen } = secretDb(STORED)
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(putReq({ name: 'Hook 2' }), props)
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.sequence).not.toHaveProperty('webhook_secret')
+    expect(body.sequence.has_webhook_secret).toBe(true)
+    expect(body.sequence.webhook_token).toBe('b'.repeat(32))
+    expect(JSON.stringify(body)).not.toContain('SYNTH-')
+    expect(seen.updateSelect).toBeTruthy()
+    expect(seen.updateSelect).not.toContain('*')
+  })
+
+  it('a body without webhook_secret leaves the stored secret alone (no key in the update)', async () => {
+    const { db, seen } = secretDb(STORED)
+    createServerClient.mockReturnValue(db)
+    await PUT(putReq({ name: 'Hook 2' }), props)
+    expect(seen.update).not.toHaveProperty('webhook_secret')
+  })
+
+  // Review N2: an empty string means "no secret" to the inbound webhook and to
+  // has_webhook_secret alike; writing it as '' leaves two spellings of "none"
+  // in the column for every later reader to handle. One spelling: null.
+  it("an empty webhook_secret is written as null, not ''", async () => {
+    const { db, seen } = secretDb(STORED)
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(putReq({ webhook_secret: '' }), props)
+    expect(res.status).toBe(200)
+    expect(seen.update).toHaveProperty('webhook_secret', null)
+  })
+
+  it('a real webhook_secret is written as sent', async () => {
+    const { db, seen } = secretDb(STORED)
+    createServerClient.mockReturnValue(db)
+    await PUT(putReq({ webhook_secret: 'SYNTH-NEW' }), props)
+    expect(seen.update).toHaveProperty('webhook_secret', 'SYNTH-NEW')
+  })
+})
+
+// Review N5: the up-front read used .single() and dropped its error, so a
+// read blip (a timeout, a dropped connection) answered 404 "Not found" as if
+// the sequence were gone. It is a logged 500 now; only an absent row is a 404.
+describe('PUT /api/sequences/[id] — the up-front read (SEQPAGEGATE.1 review)', () => {
+  function readDb(result) {
+    const update = vi.fn()
+    const terminal = vi.fn(async () => result)
+    const db = {
+      from: vi.fn(() => ({
+        select: vi.fn(() => ({ eq: vi.fn(() => ({ single: terminal, maybeSingle: terminal })) })),
+        update,
+      })),
+    }
+    return { db, update }
+  }
+
+  it('a failed read is a logged 500 and writes nothing', async () => {
+    const { db, update } = readDb({ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(putReq({ name: 'Renamed' }), props)
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body).toEqual({ success: false, error: 'Could not load the sequence' })
+    expect(JSON.stringify(body)).not.toContain('statement timeout')
+    expect(logError).toHaveBeenCalledWith('sequences', expect.any(String), expect.objectContaining({ sequenceId: SEQ_ID, code: '57014' }))
+    expect(update).not.toHaveBeenCalled()
+  })
+
+  it('no row is a 404 Not found, and nothing is logged', async () => {
+    const { db, update } = readDb({ data: null, error: null })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(putReq({ name: 'Renamed' }), props)
+    expect(res.status).toBe(404)
+    expect(await res.json()).toEqual({ success: false, error: 'Not found' })
+    expect(logError).not.toHaveBeenCalled()
+    expect(update).not.toHaveBeenCalled()
+  })
+
+  it('an id that is not a uuid is a 404 without a read (never a PostgREST 500)', async () => {
+    const { db } = readDb({ data: null, error: { code: '22P02', message: 'invalid input syntax for type uuid' } })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(putReq({ name: 'Renamed' }), { params: { id: 'not-a-uuid' } })
+    expect(res.status).toBe(404)
+    expect(await res.json()).toEqual({ success: false, error: 'Not found' })
+    expect(db.from).not.toHaveBeenCalled()
   })
 })
