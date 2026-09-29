@@ -9,7 +9,7 @@ import { loadRoleTemplatesForLocations } from './role-templates.js'
 import { SUPPORT_COOKIE, verifySupportCookie } from './support-session-edge'
 import { hasRoleAtLocation, hasRoleAtAnyLocation } from './role-at-location'
 import { isTombstone } from './staff-tombstone.js'
-import { PROFILE_AUTH_SELECT, pickUserProfile } from './user-profile.js'
+import { PROFILE_AUTH_SELECT, pickUserProfile, pickAuthUser } from './user-profile.js'
 import { logError } from './log.js'
 import { USER_LOCATION_COLUMNS, toUserLocation, toUserLinkedLocations } from './location-secrets.js'
 
@@ -659,7 +659,11 @@ export const getCurrentUser = cache(async function getCurrentUser() {
     // PROFILESPREAD.1 — only the ten listed fields (src/lib/user-profile.js),
     // never pin_hash / pay / UniFi id / tombstone bookkeeping.
     ...pickUserProfile(profile),
-    user,
+    // AUTHUSERPICK.1 — { id, email } of the Supabase auth user, never the
+    // whole thing (identities, app_metadata, user_metadata, phone, factors):
+    // this object is serialised into every page. Under "View as" it is the
+    // MASTER's auth user. Nothing reads another field (plan C58 §2).
+    user: pickAuthUser(user),
     locations,
     activeLocation,
     // { [org_id]: org row } — every org reachable by this caller.

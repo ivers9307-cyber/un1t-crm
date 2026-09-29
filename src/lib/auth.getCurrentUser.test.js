@@ -748,3 +748,63 @@ describe('getCurrentUser — PROFILESPREAD.1: named profile columns', () => {
     expect(logError).not.toHaveBeenCalled()
   })
 })
+
+// AUTHUSERPICK.1 — the Supabase auth user (identities, app_metadata,
+// user_metadata, phone, factors, timestamps) rode on `user.user` into every
+// page (AppShell). It is now exactly { id, email } on every auth source.
+describe('getCurrentUser — user.user is { id, email } on every source (AUTHUSERPICK.1)', () => {
+  const profile = { id: 'coach-9', role: 'staff', full_name: 'Synth Coach', email: 'coach9@example.test', employment_type: 'fte', active: true }
+  const FAT = (id, email) => ({
+    id, email, phone: '+353000000000', aud: 'authenticated', role: 'authenticated',
+    app_metadata: { provider: 'email', providers: ['email', 'google'] },
+    user_metadata: { full_name: 'SYNTH-META-NAME' },
+    identities: [{ identity_id: 'SYNTH-IDENTITY', provider: 'google', identity_data: { email, sub: 'SYNTH-SUB' } }],
+    factors: [{ id: 'SYNTH-FACTOR', factor_type: 'totp' }],
+    confirmed_at: '2026-01-01T00:00:00Z', last_sign_in_at: '2026-09-01T00:00:00Z',
+  })
+  const scenario = (extra = {}) => ({
+    profile, links: [link({ loc: LOC_A1, role: 'staff', is_default: true })], orgLinks: [], orgs: [ORG_A], ...extra,
+  })
+  const LEAK = /SYNTH-|\+353000000000|identities|app_metadata|user_metadata|factors|last_sign_in_at/
+
+  function via(source, s, identity) {
+    const { db } = makeDb(respondFor(s))
+    createClient.mockReturnValue({ ...db, auth: { getUser: async () => ({ data: { user: source === 'bearer' ? identity : null } }) } })
+    authUser = source === 'cookie' ? identity : null
+    if (source === 'bearer') headerMap.set('authorization', 'Bearer a.supabase.jwt')
+  }
+
+  it.each(['cookie', 'bearer'])('%s session: user.user is exactly { id, email }, and nothing else of the auth user is on the object', async (source) => {
+    via(source, scenario(), FAT(profile.id, profile.email))
+    const user = await getCurrentUser()
+    expect(user.id).toBe(profile.id)
+    expect(user.user).toEqual({ id: profile.id, email: profile.email })
+    expect(JSON.stringify(user)).not.toMatch(LEAK)
+  })
+
+  it('studio PIN session: the same { id, email } shape it always had', async () => {
+    process.env.NEXT_PUBLIC_SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://example.supabase.co'
+    process.env.SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'service-role-test-key'
+    const { mintStudioSession } = await import('./studio-session.js')
+    cookieMap.set('studio_session', mintStudioSession({ profileId: profile.id, deviceId: 'dev-1', locationId: LOC_A1.id }))
+    via('studio', scenario(), null)
+    const user = await getCurrentUser()
+    expect(user.user).toEqual({ id: profile.id, email: profile.email })
+  })
+
+  it('"View as": user.user stays the MASTER\'s { id, email }; nothing else of the master\'s auth user rides along', async () => {
+    const M_ID = '55555555-5555-4555-8555-555555555555'
+    const T_ID = '66666666-6666-4666-8666-666666666666'
+    const master = { id: M_ID, role: 'master', full_name: 'Synth Master', email: 'm5@example.test', employment_type: null, active: true }
+    const target = { id: T_ID, role: 'staff', full_name: 'Synth Target', email: 't6@example.test', employment_type: 'fte', active: true }
+    cookieMap.set('un1t_impersonate', T_ID)
+    via('cookie', {
+      profile: master, profilesById: { [M_ID]: master, [T_ID]: target }, openImpersonation: true,
+      links: [link({ loc: LOC_A1, role: 'staff', is_default: true })], allLocations: [LOC_A1], orgs: [ORG_A],
+    }, FAT(M_ID, master.email))
+    const user = await getCurrentUser()
+    expect(user.id).toBe(T_ID)
+    expect(user.user).toEqual({ id: M_ID, email: master.email })
+    expect(JSON.stringify(user)).not.toMatch(LEAK)
+  })
+})
