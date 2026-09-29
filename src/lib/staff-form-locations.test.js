@@ -1,7 +1,8 @@
 // STAFFFORMSETTINGS.1 — what the staff editor (StaffForm, a client component)
-// may know about each studio: its identity (CLIENT_LOCATION_COLUMNS) and
-// whether UniFi is configured there, computed on the server by the SAME rule
-// the save path uses. Never `settings`: it carried customer_agent.test_phones
+// may know about each studio: its identity (CLIENT_LOCATION_COLUMNS),
+// whether UniFi is configured there (computed on the server by the SAME rule
+// the save path uses) and whether AC is (ACALLOWLISTGATE.1: the AC control
+// path's credential rule). Never `settings`: it carried customer_agent.test_phones
 // (staff phone numbers) and every integration's config into the page.
 // Fictional values only (public repo).
 
@@ -32,7 +33,7 @@ const row = (id, name, settings = {}) => ({
   active: true, created_at: 'T', updated_at: 'T', country: 'IE', features: { pipeline: true },
   organization_id: 'o0000000-0000-4000-8000-000000000001', is_host_anchor: false,
   settings,
-  // a column the select does not name, as a widened select or a raw fixture might carry
+  // a credential the select names for the server-side AC check; it must never reach the result
   sensibo_api_key: 'SYNTH-SENSIBO',
 })
 
@@ -50,22 +51,22 @@ function makeDb(result) {
 beforeEach(() => { vi.clearAllMocks() })
 
 describe('loadStaffFormLocations (STAFFFORMSETTINGS.1)', () => {
-  it('names its columns (no *): the identity list plus settings, read on the server only', async () => {
+  it('names its columns (no *): the identity list plus settings and the AC credentials, read on the server only', async () => {
     const { db, calls } = makeDb({ data: [], error: null })
     await loadStaffFormLocations(db)
     expect(calls.table).toBe('locations')
     expect(calls.select).toBe(STAFF_FORM_LOCATION_SELECT)
-    expect(STAFF_FORM_LOCATION_SELECT).toBe([...CLIENT_LOCATION_COLUMNS, 'settings'].join(', '))
+    expect(STAFF_FORM_LOCATION_SELECT).toBe([...CLIENT_LOCATION_COLUMNS, 'settings', 'sensibo_api_key', 'thinq_pat', 'thinq_client_id'].join(', '))
     expect(STAFF_FORM_LOCATION_SELECT).not.toContain('*')
     expect(calls.filters).toEqual([['active', true], ['is_host_anchor', false]])
     expect(calls.order).toBe('name')
   })
 
-  it('each studio is the identity columns + unifi_configured, and nothing else', async () => {
+  it('each studio is the identity columns + unifi_configured + ac_configured, and nothing else', async () => {
     const { db } = makeDb({ data: [row(A, 'Alpha', { unifi: UNIFI_OK })], error: null })
     const { locations, error } = await loadStaffFormLocations(db)
     expect(error).toBeNull()
-    expect(Object.keys(locations[0]).sort()).toEqual([...CLIENT_LOCATION_COLUMNS, 'unifi_configured'].sort())
+    expect(Object.keys(locations[0]).sort()).toEqual([...CLIENT_LOCATION_COLUMNS, 'unifi_configured', 'ac_configured'].sort())
     expect(locations[0]).toMatchObject({ id: A, name: 'Alpha', slug: 'alpha', features: { pipeline: true } })
   })
 
@@ -97,13 +98,13 @@ describe('loadStaffFormLocations (STAFFFORMSETTINGS.1)', () => {
     expect(locations.map((l) => [l.name, l.unifi_configured])).toEqual([['Alpha', true], ['Bravo', false], ['Charlie', false]])
   })
 
-  it('a studio configured only in the registry counts (one batched overlay, unifi only)', async () => {
+  it('a studio configured only in the registry counts (one batched overlay for UniFi and AC)', async () => {
     overlayConnectionsMany.mockImplementationOnce(async (_db, rows) =>
       rows.map((r) => (r.id === B ? { ...r, settings: { ...r.settings, unifi: UNIFI_OK } } : r)))
     const { db } = makeDb({ data: [row(A, 'Alpha'), row(B, 'Bravo')], error: null })
     const { locations } = await loadStaffFormLocations(db)
     expect(overlayConnectionsMany).toHaveBeenCalledTimes(1)
-    expect(overlayConnectionsMany.mock.calls[0][2]).toEqual(['unifi'])
+    expect(overlayConnectionsMany.mock.calls[0][2]).toEqual(['unifi', 'sensibo', 'thinq'])
     expect(locations.map((l) => l.unifi_configured)).toEqual([false, true])
     expect(JSON.stringify(locations)).not.toContain('SYNTH-UT')
   })
@@ -143,6 +144,35 @@ describe('loadStaffFormLocations (STAFFFORMSETTINGS.1)', () => {
     const { db } = makeDb({ data: [], error: null })
     expect(await loadStaffFormLocations(db)).toEqual({ locations: [], error: null })
   })
+
+  // ACALLOWLISTGATE.1 — the AC allowlist picker's gate: AC credentials, not UniFi.
+  it('ac_configured follows the AC credential rule, independently of UniFi', async () => {
+    const plain = (id, name, cols = {}, settings = {}) => ({ ...row(id, name, settings), sensibo_api_key: null, thinq_pat: null, thinq_client_id: null, ...cols })
+    const { db } = makeDb({
+      data: [
+        plain(A, 'Alpha', { sensibo_api_key: 'SYNTH-S' }),                        // AC, no UniFi
+        plain(B, 'Bravo', {}, { unifi: UNIFI_OK }),                                // UniFi, no AC
+        plain(C, 'Charlie', { thinq_pat: 'SYNTH-T' }),                             // ThinQ without client id
+      ],
+      error: null,
+    })
+    const { locations } = await loadStaffFormLocations(db)
+    expect(locations.map((l) => [l.name, l.unifi_configured, l.ac_configured])).toEqual([
+      ['Alpha', false, true],
+      ['Bravo', true, false],
+      ['Charlie', false, false],
+    ])
+    expect(JSON.stringify(locations)).not.toContain('SYNTH-')
+  })
+
+  it('a studio with AC only in the registry counts', async () => {
+    overlayConnectionsMany.mockImplementationOnce(async (_db, rows) =>
+      rows.map((r) => (r.id === B ? { ...r, sensibo_api_key: 'SYNTH-S-REG' } : r)))
+    const { db } = makeDb({ data: [{ ...row(A, 'Alpha'), sensibo_api_key: null }, { ...row(B, 'Bravo'), sensibo_api_key: null }], error: null })
+    const { locations } = await loadStaffFormLocations(db)
+    expect(locations.map((l) => l.ac_configured)).toEqual([false, true])
+    expect(JSON.stringify(locations)).not.toContain('SYNTH-')
+  })
 })
 
 describe('StaffForm reads no location settings (STAFFFORMSETTINGS.1 D4)', () => {
@@ -163,7 +193,7 @@ describe('STAFF_FORM_LOCATION_SELECT names only real columns (the check:select-c
     const refs = parseSelect(STAFF_FORM_LOCATION_SELECT, 'locations', schema)
     expect(refs.filter((r) => !schema.get(r.table)?.has(r.column))).toEqual([])
     // The replay really read the list (a floor that read nothing proves nothing).
-    for (const column of ['features', 'settings', 'is_host_anchor']) {
+    for (const column of ['features', 'settings', 'is_host_anchor', 'sensibo_api_key', 'thinq_pat', 'thinq_client_id']) {
       expect(refs).toContainEqual({ table: 'locations', column })
     }
   })
