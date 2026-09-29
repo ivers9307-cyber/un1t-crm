@@ -90,43 +90,75 @@ describe('/automations — Glofox presence (PROFILESPREAD.1)', () => {
 })
 
 // SEQCOUNTERS.1 — the flow list's enrolled chip is counted from
-// sequence_enrollments (an embedded count in the same read), and a failed
-// read is a notice, not an empty list.
+// sequence_enrollments (an embedded count in the same read). If that read
+// fails, the list is read again without the count (no chips); only if the
+// plain read fails too is it a notice, never an empty list.
 describe('/automations — flows (SEQCOUNTERS.1)', () => {
-  function flowsDb(result) {
-    const calls = { select: null }
-    const chain = {
-      select: (c) => { calls.select = c; return chain },
-      eq: () => chain,
-      order: () => chain,
-      then: (r, j) => Promise.resolve(result).then(r, j),
+  const WITH_COUNT = 'id, name, status, trigger_type, created_at, sequence_steps(id), sequence_enrollments(count)'
+  const PLAIN = 'id, name, status, trigger_type, created_at, sequence_steps(id)'
+  const ROW = { id: 'a0000000-0000-4000-8000-000000000001', name: 'Welcome', status: 'active', trigger_type: 'manual', created_at: 'T', sequence_steps: [{ id: 's1' }] }
+  // resultFor(selectString) → { data, error }; every read is recorded.
+  function flowsDb(resultFor) {
+    const reads = []
+    const from = (table) => {
+      const read = { table, select: null, eq: [] }
+      reads.push(read)
+      const chain = {
+        select: (c) => { read.select = c; return chain },
+        eq: (...a) => { read.eq.push(a); return chain },
+        order: () => chain,
+        then: (r, j) => Promise.resolve(resultFor(read.select)).then(r, j),
+      }
+      return chain
     }
-    return { db: { from: () => chain }, calls }
+    return { db: { from }, reads }
   }
+  const TIMEOUT = { code: '57014', message: 'timeout' }
   beforeEach(() => {
     seen.flows = null
     hasPermission.mockImplementation((_u, k) => k === 'email')
   })
 
-  it('reads named columns with an embedded enrolment count, and passes enrolled_count', async () => {
-    const { db, calls } = flowsDb({
-      data: [{ id: 'a0000000-0000-4000-8000-000000000001', name: 'Welcome', status: 'active', trigger_type: 'manual', created_at: 'T', sequence_steps: [{ id: 's1' }], sequence_enrollments: [{ count: 139 }] }],
-      error: null,
-    })
+  it('reads named columns with an embedded enrolment count at the active location, and passes enrolled_count', async () => {
+    const { db, reads } = flowsDb(() => ({ data: [{ ...ROW, sequence_enrollments: [{ count: 139 }] }], error: null }))
     createServerClient.mockReturnValue(db)
     renderToStaticMarkup(await AutomationsPage()) // the flow list mock captures its props on render
-    expect(calls.select).toBe('id, name, status, trigger_type, created_at, sequence_steps(id), sequence_enrollments(count)')
+    expect(reads.map((r) => r.select)).toEqual([WITH_COUNT])
+    expect(reads[0].eq).toEqual([['location_id', LOC]])
     expect(seen.flows.sequences[0].enrolled_count).toBe(139)
     expect(seen.flows.sequences[0]).not.toHaveProperty('sequence_enrollments')
     expect(seen.flows.loadFailed).toBe(false)
+    expect(logError).not.toHaveBeenCalled()
   })
 
-  it('a failed read is logged and passed as loadFailed, with no rows', async () => {
-    const { db } = flowsDb({ data: null, error: { code: '57014', message: 'timeout' } })
+  it('a failed count read is logged and retried without the count: the list renders, with no chips', async () => {
+    const { db, reads } = flowsDb((sel) => (sel === WITH_COUNT ? { data: null, error: TIMEOUT } : { data: [ROW], error: null }))
     createServerClient.mockReturnValue(db)
-    renderToStaticMarkup(await AutomationsPage()) // the flow list mock captures its props on render
+    renderToStaticMarkup(await AutomationsPage())
+    expect(reads.map((r) => r.select)).toEqual([WITH_COUNT, PLAIN])
+    expect(reads[1].eq).toEqual([['location_id', LOC]])
+    expect(seen.flows.loadFailed).toBe(false)
+    expect(seen.flows.sequences).toEqual([{ ...ROW, enrolled_count: null }])
+    expect(logError).toHaveBeenCalledTimes(1)
+    expect(logError).toHaveBeenCalledWith('automations', expect.stringMatching(/enrolment count read failed/), { code: '57014', locationId: LOC })
+  })
+
+  it('when the plain read fails too, both are logged and the list is a notice with no rows', async () => {
+    const { db, reads } = flowsDb(() => ({ data: null, error: TIMEOUT }))
+    createServerClient.mockReturnValue(db)
+    renderToStaticMarkup(await AutomationsPage())
+    expect(reads.map((r) => r.select)).toEqual([WITH_COUNT, PLAIN])
     expect(seen.flows.loadFailed).toBe(true)
     expect(seen.flows.sequences).toEqual([])
-    expect(logError).toHaveBeenCalledWith('automations', expect.stringMatching(/sequences read failed/), { code: '57014' })
+    expect(logError).toHaveBeenCalledTimes(2)
+    expect(logError).toHaveBeenLastCalledWith('automations', expect.stringMatching(/sequences read failed/), { code: '57014', locationId: LOC })
+  })
+
+  it('a user with no active location reads the nil location, like the page\'s other reads', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'owner', activeLocation: null, locations: [] })
+    const { db, reads } = flowsDb(() => ({ data: [], error: null }))
+    createServerClient.mockReturnValue(db)
+    renderToStaticMarkup(await AutomationsPage())
+    expect(reads[0].eq).toEqual([['location_id', '00000000-0000-0000-0000-000000000000']])
   })
 })

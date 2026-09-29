@@ -17,6 +17,12 @@ export const dynamic = 'force-dynamic'
 
 const NO_LOCATION = '00000000-0000-0000-0000-000000000000'
 
+// SEQCOUNTERS.1 — what AutomationsFlowList reads, plus (first read only) the
+// enrolment count embedded from sequence_enrollments. Module consts so
+// check:select-columns resolves both.
+const FLOW_COLUMNS = 'id, name, status, trigger_type, created_at, sequence_steps(id)'
+const FLOW_COLUMNS_COUNTED = `${FLOW_COLUMNS}, sequence_enrollments(count)`
+
 export default async function AutomationsPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
@@ -78,24 +84,32 @@ export default async function AutomationsPage() {
   // SEQCOUNTERS.1 — named columns (AutomationsFlowList reads id, name,
   // status, trigger_type, sequence_steps, enrolled_count), and the enrolled
   // number is COUNTED from sequence_enrollments in the same read: the
-  // email_sequences.total_* counters were never maintained (mig 663). A failed
-  // read is a notice, never "No automations yet".
+  // email_sequences.total_* counters were never maintained (mig 663).
+  // The count must not cost the list: if the read with the embed fails, the
+  // list is read again without it and renders with no chips. Only if that
+  // fails too is it a notice, never "No automations yet".
   let sequences = []
   let flowsLoadFailed = false
   if (canFlows) {
-    const { data, error } = await db
-      .from('email_sequences')
-      .select('id, name, status, trigger_type, created_at, sequence_steps(id), sequence_enrollments(count)')
-      .eq('location_id', location?.id)
+    const flowsLocationId = location?.id || NO_LOCATION
+    const scoped = (query) => query
+      .eq('location_id', flowsLocationId)
       .order('created_at', { ascending: false })
-    if (error) {
-      logError('automations', 'sequences read failed; the flow list shows a notice', { code: error.code || null })
-      flowsLoadFailed = true
-    } else {
-      sequences = (data || []).map(({ sequence_enrollments: enrolments, ...row }) => ({
+    const counted = await scoped(db.from('email_sequences').select(FLOW_COLUMNS_COUNTED))
+    if (!counted.error) {
+      sequences = (counted.data || []).map(({ sequence_enrollments: enrolments, ...row }) => ({
         ...row,
         enrolled_count: Number(enrolments?.[0]?.count ?? 0),
       }))
+    } else {
+      logError('automations', 'enrolment count read failed; the flow list renders without counts', { code: counted.error.code || null, locationId: flowsLocationId })
+      const plain = await scoped(db.from('email_sequences').select(FLOW_COLUMNS))
+      if (!plain.error) {
+        sequences = (plain.data || []).map((row) => ({ ...row, enrolled_count: null }))
+      } else {
+        logError('automations', 'sequences read failed; the flow list shows a notice', { code: plain.error.code || null, locationId: flowsLocationId })
+        flowsLoadFailed = true
+      }
     }
   }
 
