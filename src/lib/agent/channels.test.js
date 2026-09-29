@@ -116,6 +116,16 @@ describe('buildConnectionPatch', () => {
     expect(p.token_expires_at).toBe(null)
     expect(p.token_refreshed_at).toBe(null)
   })
+  it('fresh access token clears a stale auth error (the old error described the old token)', () => {
+    const p = buildConnectionPatch({ access_token: 'IGAA-fresh' })
+    expect(p.status).toBe('connected')
+    expect(p.last_error).toBe(null)
+  })
+  it('a save without a fresh token leaves status/last_error alone', () => {
+    const p = buildConnectionPatch({ label: 'x', access_token: '••••••567890' })
+    expect('status' in p).toBe(false)
+    expect('last_error' in p).toBe(false)
+  })
   it('no fresh token → lifecycle stamps untouched', () => {
     const p = buildConnectionPatch({ label: 'x', access_token: '••••••567890' })
     expect('token_expires_at' in p).toBe(false)
