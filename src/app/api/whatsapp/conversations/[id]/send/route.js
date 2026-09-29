@@ -30,13 +30,19 @@ const WINDOW_EXPIRED = 'The 24-hour messaging window has expired. You can only s
 const TEXT = Object.freeze({
   noTemplate: 'Pick a template to send.',
   templateReadFailed: 'Could not read that template, so nothing was sent. Try again.',
-  templateMissing: "That template is not in this studio's approved list in that language, so nothing was sent. Refresh the page and pick it again.",
+  templateMissing: "That template is not in this studio's approved list in that language, so nothing was sent. Reopen the template list and pick it again.",
   flowNeedsContact: 'Not sent. This template has a booking Flow button, which books against a contact: add the sender as a contact first.',
   notLogged: 'Sent to the customer, but it could not be saved to this thread. Do not send it again.',
   threadNotUpdated: 'Sent to the customer, but the conversation could not be updated, so it may not move to the top of the list and Mia may still reply in this thread.',
 })
 const blockedText = (block) => `This template can't be sent from the inbox. ${SEND_BLOCK_TEXT[block]}`
-const isHeaderBlock = (block) => block === 'header_media' || block === 'header_value'
+// A template judged as if it had no HEADER: what is left to refuse once a
+// client has supplied its own header parameter.
+const withoutHeader = (tpl) => ({
+  ...tpl,
+  components: (Array.isArray(tpl.components) ? tpl.components : [])
+    .filter((c) => String(c?.type || '').toUpperCase() !== 'HEADER'),
+})
 
 // POST /api/whatsapp/conversations/[id]/send — send a message in a conversation
 export async function POST(request, props) {
@@ -77,6 +83,7 @@ export async function POST(request, props) {
   const messageType = body.type || 'text'
   let messageBody = body.text || body.body || ''
   let templateName = null
+  let templateVariables = null
   let send // () => Promise<{ messageId }>: the ONE call that reaches Meta
 
   if (messageType === 'template') {
@@ -90,14 +97,23 @@ export async function POST(request, props) {
     // the media header (WA-TMPL-SEND.1), the Flow button, what is refused, and
     // the logged text. Name + LANGUAGE, because Meta keys a template on both and
     // no unique index stops one name existing here in two languages.
-    // maybeSingle: 0 rows is a real answer (not approved at this studio); >1 is
-    // an error and is treated as one.
+    // APPROVED only: a PAUSED/REJECTED/DISABLED row must not reach Meta, and
+    // both pickers list only APPROVED rows. Newest first + limit(1): the sync
+    // (/api/whatsapp/templates) upserts on meta_template_id and never deletes
+    // a row Meta dropped, so a template deleted and re-created at Meta leaves
+    // two rows with one (studio, name, language); without the order, >1 row
+    // made maybeSingle error and the template could never be sent again. By
+    // created_at, not updated_at: the counter RPCs bump updated_at on the old
+    // row too. 0 rows is a real answer (not approved at this studio).
     const { data: tplRow, error: tplError } = await db
       .from('whatsapp_templates')
       .select('name, language, components, header_media_url')
       .eq('location_id', conversation.location_id)
       .eq('name', body.template_name)
       .eq('language', language)
+      .eq('status', 'APPROVED')
+      .order('created_at', { ascending: false })
+      .limit(1)
       .maybeSingle()
     if (tplError) {
       logError(LOG, 'template read failed; nothing sent', {
@@ -112,15 +128,18 @@ export async function POST(request, props) {
     // Button parameters are server-only: the Flow token names the contact and
     // studio a booking lands on, so no client chooses it. Neither inbox sends
     // one (they send only the body), so this drops nothing real.
-    let components = (body.template_components || [])
+    const clientComponents = (body.template_components || [])
       .filter((c) => String(c?.type || '').toLowerCase() !== 'button')
+    let components = clientComponents
     const clientHasHeader = components.some((c) => String(c?.type || '').toLowerCase() === 'header')
 
     // Refuse exactly what the pickers grey out (shared/wa-template-send.js),
-    // before anything reaches Meta. A client that brings its own header is not
-    // refused for the header.
-    const block = templateSendBlock(tplRow)
-    if (block && !(clientHasHeader && isHeaderBlock(block))) {
+    // before anything reaches Meta. A client that brings its own header is
+    // excused the HEADER rules only: the rest of the template is still judged,
+    // so a header block cannot mask a button block (templateSendBlock names
+    // the header first).
+    const block = templateSendBlock(clientHasHeader ? withoutHeader(tplRow) : tplRow)
+    if (block) {
       return NextResponse.json({ success: false, error: blockedText(block), blocked: block }, { status: 400 })
     }
 
@@ -141,6 +160,8 @@ export async function POST(request, props) {
     }
 
     templateName = body.template_name
+    // What the client supplied that the route honoured (never a dropped button).
+    templateVariables = clientComponents
     // WATPLLOG.1 — the text the customer read, filled by variable NUMBER.
     messageBody = renderSentTemplateBody(tplRow, components) || `[Template: ${templateName}]`
     // Route from THIS location's WhatsApp number (whatsapp_numbers), not the
@@ -187,7 +208,7 @@ export async function POST(request, props) {
       body: messageBody,
       media_url: body.media_url || null,
       template_name: templateName,
-      template_variables: body.template_components || null,
+      template_variables: templateVariables,
       status: 'sent',
       // sent_by is UUID REFERENCES profiles(id): take the operator from the
       // SESSION, never the request body (a client string would be rejected by
