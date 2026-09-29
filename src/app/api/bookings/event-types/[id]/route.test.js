@@ -131,9 +131,23 @@ describe('event-types/[id] — cookie/manager path (SAAS-12)', () => {
 
   it('PUT refuses a confirmation channel the DB check would refuse (400, row untouched)', async () => {
     getCurrentUser.mockResolvedValue(managerAt('loc-1a'))
-    const res = await PUT(cookiePut('e1', { confirmation_channels: ['whatsapp'] }), props('e1'))
+    const res = await PUT(cookiePut('e1', { confirmation_channels: ['push'] }), props('e1'))
     expect(res.status).toBe(400)
     expect(etype('e1').confirmation_channels).toBeUndefined()
+  })
+
+  // EVENTCONFIRM-WA.1 (mig 666) — WhatsApp is a confirmation channel, with the
+  // template the operator picked.
+  it('PUT persists a WhatsApp confirmation and its template', async () => {
+    getCurrentUser.mockResolvedValue(managerAt('loc-1a'))
+    const TPL = 'aaaaaaaa-0000-4000-8000-000000000001'
+    const res = await PUT(cookiePut('e1', {
+      confirmation_enabled: true,
+      confirmation_channels: ['whatsapp'],
+      confirmation_whatsapp_template_id: TPL,
+    }), props('e1'))
+    expect(res.status).toBe(200)
+    expect(etype('e1')).toMatchObject({ confirmation_channels: ['whatsapp'], confirmation_whatsapp_template_id: TPL })
   })
 
   it('DELETE a foreign-location event type → 404, row not soft-deleted', async () => {

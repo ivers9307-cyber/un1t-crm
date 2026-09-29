@@ -92,6 +92,40 @@ describe('EventForm — saves through the routes (EVENTTYPERLS.1)', () => {
     expect(browserClient).not.toHaveBeenCalled()
   })
 
+  // EVENTCONFIRM-WA.1 — a WhatsApp confirmation: the picker offers only the
+  // studio's approved UTILITY templates, and the save carries the pick while
+  // nulling the email fields of the channel that is off.
+  it('edit: a WhatsApp confirmation saves its template and offers only Utility ones', async () => {
+    const TPL = 'aaaaaaaa-0000-4000-8000-000000000001'
+    answer({
+      'GET /api/bookings/event-types/et-1/reminders': { body: { success: true, data: [] } },
+      'GET /api/whatsapp/templates?location_id=loc-1&status=APPROVED': { body: { success: true, templates: [
+        { id: TPL, name: 'booking_consult_confirmed', language: 'en', category: 'UTILITY' },
+        { id: 'mkt-1', name: 'autumn_offer', language: 'en', category: 'MARKETING' },
+      ] } },
+      'PUT /api/bookings/event-types/et-1': { body: { success: true, data: { id: 'et-1' } } },
+      'PUT /api/bookings/event-types/et-1/reminders': { body: { success: true, data: [] } },
+    })
+    const event = {
+      id: 'et-1', name: 'Consult', location_id: 'loc-1', duration_minutes: 45,
+      confirmation_enabled: true, confirmation_channels: ['whatsapp'],
+      confirmation_whatsapp_template_id: TPL, confirmation_email_subject: 'stale',
+    }
+    const { container } = render(<EventForm event={event} locationId="loc-1" />)
+    await screen.findByRole('option', { name: /booking_consult_confirmed/ })
+    expect(screen.queryByRole('option', { name: /autumn_offer/ })).toBeNull()
+    fireEvent.submit(container.querySelector('form'))
+
+    await waitFor(() => expect(router.push).toHaveBeenCalledWith('/bookings/event-types'))
+    expect(bodyOf('PUT /api/bookings/event-types/et-1')).toMatchObject({
+      confirmation_enabled: true,
+      confirmation_channels: ['whatsapp'],
+      confirmation_whatsapp_template_id: TPL,
+      confirmation_email_template_id: null,
+      confirmation_email_subject: null,
+    })
+  })
+
   it('a refused save says so, syncs no reminders and stays on the page', async () => {
     answer({ 'POST /api/bookings/event-types': { status: 403, body: { success: false, error: 'Forbidden' } } })
     const { container } = render(<EventForm locationId="loc-1" />)
