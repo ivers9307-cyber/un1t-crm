@@ -60,6 +60,9 @@ describe('/settings/staff/new — STAFFFORMSETTINGS.1: StaffForm gets identity +
     const [loc] = el.props.locations
     expect(loc).not.toHaveProperty('settings')
     expect(loc.unifi_configured).toBe(true)
+    // ACALLOWLISTGATE.1 — the AC allowlist's gate: the studio's Sensibo key
+    // (read on the server; the no-SYNTH- line below proves it never crosses).
+    expect(loc.ac_configured).toBe(true)
     expect(loc).toMatchObject({ id: LOC, name: 'Studio', slug: 'studio' })
     expect(JSON.stringify(el.props.locations)).not.toMatch(/SYNTH-|\+353000000000|test_phones/)
     expect(el.props.callerOwnerLocationIds).toEqual([LOC])
