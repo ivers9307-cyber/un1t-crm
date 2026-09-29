@@ -16,8 +16,8 @@ vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), 
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { ADMIN_ROLES, MANAGER_ROLES } from '@/lib/schemas'
-import { describeGate } from '../helpers/role-gate-probe.js'
-import { roleCases, permissionCases } from '../helpers/role-sweep-callers.js'
+import { describeGate, gateProbe } from '../helpers/role-gate-probe.js'
+import { roleCases, permissionCases, OUTSIDER, LOC_B } from '../helpers/role-sweep-callers.js'
 import * as sendTest from '@/app/api/campaigns/[id]/send-test/route.js'
 import * as emailDraft from '@/app/api/communications/email-draft/route.js'
 import * as release from '@/app/api/communications/list-health/[id]/release/route.js'
@@ -93,15 +93,57 @@ describeGate('POST /api/sequences/[id]/clone (email at the source)', {
 
 describeGate('POST /api/sequences/[id]/enrol (email at the sequence)', {
   call: () => enrol.POST(json('POST', { contact_ids: ['11111111-1111-4111-8111-111111111111'] }), params({ id: SEQ_ID })),
-  gateReads: SEQ_ROW, forbidden: EMAIL_REQUIRED, hidden: FORBIDDEN_PLAIN, cases: permissionCases('email'),
+  // SEQPAGEGATE.1 — another studio's sequence is 404 Not found, like a missing one (was 403).
+  gateReads: SEQ_ROW, forbidden: EMAIL_REQUIRED, hidden: NOT_FOUND, cases: permissionCases('email'),
 }, T)
 
 for (const [name, mod] of [['exit', exit], ['resume', resume]]) {
   describeGate(`POST /api/sequences/[id]/enrollments/[enrollmentId]/${name}`, {
     call: () => mod.POST(bare('POST'), params({ id: SEQ_ID, enrollmentId: ENROL_ID })),
-    gateReads: SEQ_ROW, forbidden: EMAIL_REQUIRED, hidden: FORBIDDEN_PLAIN, cases: permissionCases('email'),
+    gateReads: SEQ_ROW, forbidden: EMAIL_REQUIRED, hidden: NOT_FOUND, cases: permissionCases('email'),
   }, T)
 }
+
+// SEQPAGEGATE.1 — a missing sequence and another studio's must be the same
+// answer, or the status confirms that an id exists.
+describe('enrol / exit / resume: missing and foreign sequences are indistinguishable', () => {
+  const cases = [
+    ['enrol', () => enrol.POST(json('POST', { contact_ids: ['11111111-1111-4111-8111-111111111111'] }), params({ id: SEQ_ID }))],
+    ['exit', () => exit.POST(bare('POST'), params({ id: SEQ_ID, enrollmentId: ENROL_ID }))],
+    ['resume', () => resume.POST(bare('POST'), params({ id: SEQ_ID, enrollmentId: ENROL_ID }))],
+  ]
+  it.each(cases)('%s', async (_name, call) => {
+    getCurrentUser.mockResolvedValue(OUTSIDER)
+    createServerClient.mockReturnValue(gateProbe([{ data: null, error: null }]).db)
+    const missing = await call()
+    createServerClient.mockReturnValue(gateProbe([{ data: { id: SEQ_ID, location_id: LOC_B, name: 'x' }, error: null }]).db)
+    const foreign = await call()
+    expect(missing.status).toBe(404)
+    expect(foreign.status).toBe(404)
+    expect(await foreign.json()).toEqual(await missing.json())
+  })
+
+  it.each(cases)('%s: a failed sequence read is a 500, not "not found"', async (_name, call) => {
+    getCurrentUser.mockResolvedValue(OUTSIDER)
+    createServerClient.mockReturnValue(gateProbe([{ data: null, error: { code: '57014', message: 'timeout' } }]).db)
+    expect((await call()).status).toBe(500)
+  })
+
+  it.each([
+    ['enrol', () => enrol.POST(json('POST', { contact_ids: ['11111111-1111-4111-8111-111111111111'] }), params({ id: 'not-a-uuid' }))],
+    ['exit', () => exit.POST(bare('POST'), params({ id: 'not-a-uuid', enrollmentId: ENROL_ID }))],
+    ['resume', () => resume.POST(bare('POST'), params({ id: 'not-a-uuid', enrollmentId: ENROL_ID }))],
+  ])('%s: a non-uuid sequence id is 404 Not found without a read', async (_name, call) => {
+    getCurrentUser.mockResolvedValue(OUTSIDER)
+    const probe = gateProbe([])
+    createServerClient.mockReturnValue(probe.db)
+    const res = await call()
+    expect(res.status).toBe(404)
+    expect(await res.json()).toEqual(NOT_FOUND.body)
+    expect(probe.reads).toEqual([])
+    expect(probe.passed).toBe(false)
+  })
+})
 
 for (const [name, handler] of [['runs', () => runs.GET(bare('GET'), params({ id: SEQ_ID }))],
                                ['stats', () => stats.GET(bare('GET'), params({ id: SEQ_ID }))],

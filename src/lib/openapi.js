@@ -5763,9 +5763,10 @@ registry.registerPath({
       },
     },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Email permission required, or the sequence is outside the caller’s locations', content: { 'application/json': { schema: ErrorResponse } } },
-    404: { description: 'Sequence or enrolment not found (404 not 403, so ids cannot be enumerated)', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Email permission required at the sequence’s location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Sequence or enrolment not found, or the sequence is at a studio the caller does not belong to (404 not 403, so ids cannot be enumerated)', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'The enrolment is no longer active or paused — already exited or completed. Benign (a double-click or a cron race), not a failure.', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'A database read or write failed (a failed sequence read is logged and is never reported as not found)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -5787,9 +5788,10 @@ registry.registerPath({
   responses: {
     200: { description: 'Resumed', content: { 'application/json': { schema: SuccessResponse(z.object({ id: uuidLike, status: z.literal('active') }).openapi('SequenceEnrollmentResumed')) } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Email permission required, or the sequence is outside the caller’s locations', content: { 'application/json': { schema: ErrorResponse } } },
-    404: { description: 'Sequence or enrolment not found', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Email permission required at the sequence’s location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Sequence or enrolment not found, or the sequence is at a studio the caller does not belong to (404 not 403, so ids cannot be enumerated)', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'The enrolment is no longer paused — a double-click or a concurrent resume.', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'A database read or write failed (a failed sequence read is logged and is never reported as not found)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
