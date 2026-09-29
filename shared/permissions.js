@@ -87,7 +87,8 @@ export const WEB_PERMISSIONS = Object.freeze([
   // — Communications (single hub at /communications) —
   { key: 'email',      label: 'Email Marketing',                hint: 'Postmark broadcasts, sequences (drip campaigns), templates, segments.' },
   { key: 'whatsapp',   label: 'WhatsApp',                       hint: 'WhatsApp Cloud API inbox + broadcasts.' },
-  { key: 'sms',        label: 'SMS',                            hint: 'Send SMS via Twilio. Per-location alpha sender ID configured in Location Settings.' },
+  // (`sms` left with Twilio in TWILIO-RETIRE.1; a stored `sms` flag in a
+  // profile_locations.permissions blob is simply never read.)
   // — Operations —
   { key: 'schedule',          label: 'Schedule',                hint: 'Coach roster, shift blocks, time-off, swap requests.' },
   // Mig 120: zero-touch attendance tracking. Auto-stamps actual
@@ -333,7 +334,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     // email_mailbox_access (mig 485) — holding this key alone shows
     // nothing until a studio has a mailbox and the person has a grant
     // on it, the same two-level shape as approvals_inbox.
-    email: true, email_inbox: true, whatsapp: true, sms: true,
+    email: true, email_inbox: true, whatsapp: true,
     schedule: true, attendance_reports: true, assistant: true, studio_management: true, class_timer: true,
     device_control: true,
     // Studio Management children (STUDIO-GROUP.1) — master has all.
@@ -366,7 +367,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     engagement_analytics: false,                   // retention analytics — not a staff surface
     pulse_admin: false,                            // Pulse operator hub — retention oversight, not a staff surface
     events: true, bookings: true, races: true,    // race-day starts/finishes are a front-of-house duty
-    email: false, email_inbox: false, whatsapp: false, sms: false,
+    email: false, email_inbox: false, whatsapp: false,
     schedule: true, attendance_reports: false, assistant: false, studio_management: false, class_timer: true,
     device_control: false,                         // on-site device control — not a staff surface
     // Studio Management children — all off for staff.
@@ -404,7 +405,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     engagement_analytics: false,
     pulse_admin: false,
     events: true, bookings: true, races: true,       // front desk runs the booking desk
-    email: false, email_inbox: false, whatsapp: true, sms: false,        // WhatsApp inbox is the front-desk channel
+    email: false, email_inbox: false, whatsapp: true,        // WhatsApp inbox is the front-desk channel
     schedule: true, attendance_reports: false, assistant: false, studio_management: false, class_timer: true,
     device_control: false,
     contracts: false, tv_displays: false, glofox_import: false, preferences_import: false,
@@ -436,7 +437,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     engagement_analytics: true,                    // retention analytics — head coaches own retention
     pulse_admin: true,                             // Pulse operator hub — head coaches own retention
     events: true, bookings: true, races: true,
-    email: true, email_inbox: false, whatsapp: true, sms: true,
+    email: true, email_inbox: false, whatsapp: true,
     schedule: true, attendance_reports: false,    // head coaches don't see attendance — owner/manager only
     assistant: true, studio_management: false,    // explicit opt-in
     class_timer: true,                             // running the class timer is a coaching duty
@@ -471,7 +472,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     engagement_analytics: true,                    // managers track engagement / retention by default
     pulse_admin: true,                             // managers run the Pulse operator hub
     events: true, bookings: true, races: true,
-    email: true, email_inbox: true, whatsapp: true, sms: true,
+    email: true, email_inbox: true, whatsapp: true,
     schedule: true, attendance_reports: true, assistant: true, studio_management: true, class_timer: true,
     device_control: true,                          // managers run on-site device control
     // Studio Management children — manager gets TV displays (marketing
@@ -506,7 +507,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     engagement_analytics: true,
     pulse_admin: true,
     events: true, bookings: true, races: true,
-    email: true, email_inbox: true, whatsapp: true, sms: true,
+    email: true, email_inbox: true, whatsapp: true,
     schedule: true, attendance_reports: true, assistant: true, studio_management: true, class_timer: true,
     device_control: true,
     // Studio Management children — owner gets contracts + TV displays
@@ -566,14 +567,11 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   // explicit opt-in on, staff off).
   { key: 'assistant',          label: 'AI Assistant',             hint: 'Chat with the in-app assistant — navigate the CRM and ask questions. Mirrors the web assistant.', webEquivalent: 'assistant' },
   // MOBILE-CONTACT-SEND.1 — ad-hoc one-to-one send from the mobile
-  // contact card, via the platform's linked service (Twilio / Postmark)
-  // so the message comes from the company, not the staffer's personal
-  // phone. These gate the SMS / Email buttons; WhatsApp reuses the
-  // `whatsapp` key above. webEquivalent links them to the web sms / email
-  // keys for the parity linter — dropping both from WEB_ONLY_OK, since the
-  // ad-hoc single-contact send is no longer web-only (broadcasts /
-  // campaign editor stay desktop-only and keep their web gating).
-  { key: 'sms',                label: 'SMS (send to a contact)',  hint: 'Text a contact from the company Twilio sender, not your phone. Broadcasts/sequences stay on web.', webEquivalent: 'sms' },
+  // contact card, via the platform's linked service (Postmark) so the
+  // message comes from the company, not the staffer's personal phone.
+  // This gates the Email button; WhatsApp reuses the `whatsapp` key above.
+  // webEquivalent links it to the web `email` key for the parity linter.
+  // (The SMS twin left with Twilio in TWILIO-RETIRE.1.)
   { key: 'email',              label: 'Email (send to a contact)', hint: 'Email a contact from the company Postmark sender, not your phone. The campaign editor stays on web.', webEquivalent: 'email' },
   // STUDIO-HUB.1 — TV displays on the mobile Studio hub. View the
   // location's registered TVs + what each is currently showing, copy the
@@ -772,7 +770,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   master: {
     hyrox: true,
     schedule: true, pipeline: true, whatsapp: true, assistant: true,
-    sms: true, email: true,
+    email: true,
     tv_displays: true,
     contacts: true,
     tasks: true, bookings: true,
@@ -808,7 +806,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   staff: {
     hyrox: false,
     schedule: true, pipeline: false, whatsapp: false, assistant: false,
-    sms: false, email: false,
+    email: false,
     tv_displays: false,
     contacts: true,
     // Coaches see tasks (they get assigned them) but not booking
@@ -857,7 +855,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   reception: {
     hyrox: false,
     schedule: true, pipeline: false, whatsapp: true, assistant: false,
-    sms: false, email: false,
+    email: false,
     tv_displays: false,
     contacts: true,
     tasks: true, bookings: true,
@@ -893,7 +891,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   head_coach: {
     hyrox: true,
     schedule: true, pipeline: true, whatsapp: true, assistant: true,    // explicit opt-in, mirrors web
-    sms: true, email: true,
+    email: true,
     tv_displays: false,
     contacts: true,
     tasks: true, bookings: true,
@@ -935,7 +933,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   manager: {
     hyrox: true,
     schedule: true, pipeline: true, whatsapp: true, assistant: true,
-    sms: true, email: true,
+    email: true,
     tv_displays: true,
     contacts: true,
     tasks: true, bookings: true,
@@ -979,7 +977,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   owner: {
     hyrox: true,
     schedule: true, pipeline: true, whatsapp: true, assistant: true,
-    sms: true, email: true,
+    email: true,
     tv_displays: true,
     contacts: true,
     tasks: true, bookings: true,

@@ -71,7 +71,7 @@ export const BUNDLE_LABELS = Object.freeze({
 // more than one bundle, because src/lib/nav-items.js's own
 // `anyPermission` unions already OR the same underlying key into more
 // than one hub's sidebar entry:
-//   - `email` / `whatsapp` / `sms`   → both bundle_messaging (the
+//   - `email` / `whatsapp`           → both bundle_messaging (the
 //     Messages hub / inbox) AND bundle_marketing (the Marketing hub's
 //     campaign lifecycle + Automations' custom-flow gate).
 //   - `studio_management`            → both bundle_members (the live
@@ -186,10 +186,10 @@ export const KEY_BUNDLES = Object.freeze({
 
   // ---- bundle_messaging + bundle_marketing (shared — design decision) ----
   // src/lib/nav-items.js '/communications' (Messages) anyPermission
-  // AND '/marketing' anyPermission both list these three.
+  // AND '/marketing' anyPermission both list these two (`sms` left with
+  // Twilio in TWILIO-RETIRE.1; mig 665 reseeded the SQL mirror).
   email: ['bundle_messaging', 'bundle_marketing'],
   whatsapp: ['bundle_messaging', 'bundle_marketing'],
-  sms: ['bundle_messaging', 'bundle_marketing'],
   email_inbox: ['bundle_messaging'],
 
   // ---- bundle_marketing only — src/lib/nav-items.js '/marketing' anyPermission ----
