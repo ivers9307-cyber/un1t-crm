@@ -7,6 +7,7 @@ import {
   renderTemplatePreview,
   buildTemplateSend,
   templateHeaderMedia,
+  renderSentTemplateBody,
 } from './wa-template-send.js'
 
 // Row shapes are the live whatsapp_templates `components` (Meta's template
@@ -95,6 +96,42 @@ describe('renderTemplatePreview', () => {
   })
   it('reads the BODY component (there is no body_text column)', () => {
     expect(renderTemplatePreview(tpl(), {})).toBe('Hi {{1}}, are you still interested?')
+  })
+})
+
+// WATPLLOG.1 (C51) — the thread row must read what the customer read. Meta
+// takes ONE value per DISTINCT {{n}}, in number order (buildTemplateSend builds
+// exactly that), and fills every occurrence of {{n}} with the n-th value.
+const sentBody = (...texts) => [{ type: 'body', parameters: texts.map((text) => ({ type: 'text', text })) }]
+
+describe('renderSentTemplateBody', () => {
+  it('fills by NUMBER, not by order of appearance: a repeat and a {{2}} before {{1}}', () => {
+    const t = tpl({ components: [body('{{2}} then {{1}} and {{2}} again')] })
+    expect(renderSentTemplateBody(t, sentBody('ALPHA', 'BETA'))).toBe('BETA then ALPHA and BETA again')
+  })
+  it('matches what buildTemplateSend actually sends for the same values', () => {
+    const t = tpl({ components: [body('{{2}} then {{1}} and {{2}} again')] })
+    const built = buildTemplateSend(t, { 1: 'ALPHA', 2: 'BETA' })
+    expect(renderSentTemplateBody(t, built.payload.template_components)).toBe('BETA then ALPHA and BETA again')
+  })
+  it('accepts spaced placeholders ({{ 1 }}) the way bodyVariableSlots does', () => {
+    expect(renderSentTemplateBody(tpl({ components: [body('Hi {{ 1 }}!')] }), sentBody('ALPHA'))).toBe('Hi ALPHA!')
+  })
+  it('ignores header and button components, and reads the body component case-insensitively', () => {
+    const comps = [
+      { type: 'header', parameters: [{ type: 'video', video: { link: 'https://example.test/v.mp4' } }] },
+      { type: 'BODY', parameters: [{ type: 'text', text: 'ALPHA' }] },
+      { type: 'button', sub_type: 'flow', index: '0', parameters: [{ type: 'action', action: { flow_token: 'c.l' } }] },
+    ]
+    expect(renderSentTemplateBody(tpl(), comps)).toBe('Hi ALPHA, are you still interested?')
+  })
+  it('leaves a slot with no value visible as {{n}} rather than silently blank', () => {
+    expect(renderSentTemplateBody(tpl(), [])).toBe('Hi {{1}}, are you still interested?')
+    expect(renderSentTemplateBody(tpl(), null)).toBe('Hi {{1}}, are you still interested?')
+  })
+  it('is null when the template has no body text; named placeholders are left as they are', () => {
+    expect(renderSentTemplateBody(tpl({ components: [] }), sentBody('ALPHA'))).toBeNull()
+    expect(renderSentTemplateBody(tpl({ components: [body('Hi {{first_name}}')] }), sentBody('ALPHA'))).toBe('Hi {{first_name}}')
   })
 })
 

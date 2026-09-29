@@ -113,6 +113,29 @@ export function renderTemplatePreview(t, values = {}) {
 }
 
 /**
+ * WATPLLOG.1 — the body text a send delivered, for the thread row. The i-th body
+ * parameter fills the i-th DISTINCT slot in ascending order (the mapping
+ * buildTemplateSend builds and Meta applies), and every occurrence of {{n}} gets
+ * slot n's value. Filling by order of appearance instead logged the wrong text
+ * for a template that repeats a variable or puts {{2}} before {{1}}.
+ * A slot with no value stays visible as {{n}}. null when there is no body text.
+ * Pure and Hermes-safe (a Map, no Object.hasOwn).
+ */
+export function renderSentTemplateBody(t, templateComponents) {
+  const text = templateBodyText(t)
+  if (!text) return null
+  const list = Array.isArray(templateComponents) ? templateComponents : []
+  const bodyComp = list.find((c) => String(c?.type || '').toLowerCase() === 'body')
+  const params = Array.isArray(bodyComp?.parameters) ? bodyComp.parameters : []
+  const bySlot = new Map()
+  bodyVariableSlots(t).forEach((n, i) => {
+    const value = params[i]?.text
+    if (typeof value === 'string') bySlot.set(n, value)
+  })
+  return text.replace(/\{\{\s*(\d+)\s*\}\}/g, (whole, n) => (bySlot.has(Number(n)) ? bySlot.get(Number(n)) : whole))
+}
+
+/**
  * The body for POST /api/whatsapp/conversations/[id]/send, or the reason it
  * cannot be built yet.
  *   { ok: true, payload: { type, template_name, template_language, template_components } }
