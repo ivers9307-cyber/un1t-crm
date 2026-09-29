@@ -30,8 +30,9 @@ export function styleForType(type) {
 // Types an operator can add in the linear builder. `branch` is excluded here —
 // branch authoring (two-lane wiring) lands in the next PR; existing branchy
 // graphs render read-only until then. `move_pipeline_stage` was retired in
-// FUNNEL.1 (stage is classifier-derived; the executor no-ops).
+// FUNNEL.1 (stage is classifier-derived; the executor no-ops), and `sms` with
+// Twilio in TWILIO-RETIRE.1 — both keep a style so a legacy draft still renders.
 export const ADDABLE_TYPES = [
-  'email', 'whatsapp', 'sms', 'wait',
+  'email', 'whatsapp', 'wait',
   'apply_tag', 'update_field', 'internal_task', 'glofox_provision', 'webhook',
 ]

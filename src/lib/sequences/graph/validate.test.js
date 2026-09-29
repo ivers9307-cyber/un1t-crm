@@ -5,7 +5,7 @@ const base = () => ({
   version: 1,
   trigger: { type: 'manual', config: {} },
   nodes: [
-    { id: 'n1', type: 'sms', config: { body: 'hi' } },
+    { id: 'n1', type: 'email', config: { subject: 'hi' } },
   ],
   edges: [{ from: 'trigger', to: 'n1' }],
 })
@@ -33,14 +33,14 @@ describe('validateGraph', () => {
   })
 
   it('flags an orphan (unreachable from trigger)', () => {
-    const g = base(); g.nodes.push({ id: 'n2', type: 'sms', config: { body: 'x' } })
+    const g = base(); g.nodes.push({ id: 'n2', type: 'email', config: { subject: 'x' } })
     expect(codes(g)).toContain('orphan_node')
   })
 
   it('flags a non-branch node with two out-edges', () => {
     const g = base()
-    g.nodes.push({ id: 'n2', type: 'sms', config: { body: 'a' } })
-    g.nodes.push({ id: 'n3', type: 'sms', config: { body: 'b' } })
+    g.nodes.push({ id: 'n2', type: 'email', config: { subject: 'a' } })
+    g.nodes.push({ id: 'n3', type: 'email', config: { subject: 'b' } })
     g.edges.push({ from: 'n1', to: 'n2' }, { from: 'n1', to: 'n3' })
     expect(codes(g)).toContain('too_many_out_edges')
   })
@@ -48,7 +48,7 @@ describe('validateGraph', () => {
   it('flags a branch missing the no lane', () => {
     const g = base()
     g.nodes[0] = { id: 'n1', type: 'branch', config: { predicate: { type: 'has_tag', tag: 'vip' } } }
-    g.nodes.push({ id: 'n2', type: 'sms', config: { body: 'yes' } })
+    g.nodes.push({ id: 'n2', type: 'email', config: { subject: 'yes' } })
     g.edges.push({ from: 'n1', to: 'n2', label: 'yes' })
     expect(codes(g)).toContain('branch_missing_lane')
   })
@@ -60,10 +60,20 @@ describe('validateGraph', () => {
     expect(codes(g)).toContain('cycle')
   })
 
+  // TWILIO-RETIRE.1 — a legacy SMS node still PARSES (drafts keep opening) but
+  // can never publish: the executor would only record a skip for it.
+  it('refuses a retired SMS node, however complete its config', () => {
+    const r = validateGraph({ ...base(), nodes: [{ id: 'n1', type: 'sms', config: { body: 'hi' } }] })
+    expect(r.ok).toBe(false)
+    expect(r.errors).toContainEqual(expect.objectContaining({
+      code: 'missing_config', nodeId: 'n1', message: expect.stringMatching(/SMS has been retired/),
+    }))
+  })
+
   it('flags missing required config per type', () => {
     expect(codes({ ...base(), nodes: [{ id: 'n1', type: 'apply_tag', config: {} }] }))
       .toContain('missing_config')
-    expect(codes({ ...base(), nodes: [{ id: 'n1', type: 'sms', config: {} }] }))
+    expect(codes({ ...base(), nodes: [{ id: 'n1', type: 'email', config: {} }] }))
       .toContain('missing_config')
     expect(codes({ ...base(), nodes: [{ id: 'n1', type: 'webhook', config: { url: 'http://x' } }] }))
       .toContain('missing_config') // non-https rejected
@@ -140,7 +150,7 @@ describe('validateGraph — dynamic URL button value (SEQ-URLBUTTON.1)', () => {
 
   it('names the step so the operator can find it in a long flow', () => {
     const g = waGraph({ template_id: 'wt-dyn', variables: {} })
-    g.nodes.unshift({ id: 'n0', type: 'sms', config: { body: 'hi' } })
+    g.nodes.unshift({ id: 'n0', type: 'email', config: { subject: 'hi' } })
     g.edges = [{ from: 'trigger', to: 'n0' }, { from: 'n0', to: 'n1' }]
     const issue = validateGraph(g, { whatsappTemplates: [DYNAMIC] }).errors.find(e => e.code === 'url_button_value_missing')
     expect(issue.message).toMatch(/step 2/i)

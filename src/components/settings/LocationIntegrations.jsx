@@ -18,7 +18,7 @@
 
 import { useRouter, useSearchParams } from 'next/navigation'
 import {
-  Plug, Zap, DoorOpen, Snowflake, FileCheck, MessageSquare, MessageCircle,
+  Plug, Zap, DoorOpen, Snowflake, FileCheck, MessageCircle,
   AlertCircle, CheckCircle2, Megaphone, CreditCard,
 } from 'lucide-react'
 import { Instagram } from '@/components/icons/InstagramIcon'
@@ -30,7 +30,6 @@ import GlofoxIntegrationTab from './integrations/GlofoxIntegrationTab'
 import UnifiIntegrationTab from './integrations/UnifiIntegrationTab'
 import AcDevicesIntegrationTab from './integrations/AcDevicesIntegrationTab'
 import BcaIntegrationTab from './integrations/BcaIntegrationTab'
-import TwilioIntegrationTab from './integrations/TwilioIntegrationTab'
 import WhatsAppIntegrationTab from './integrations/WhatsAppIntegrationTab'
 import AdsIntegrationTab from './integrations/AdsIntegrationTab'
 import PaymentsIntegrationTab from './integrations/PaymentsIntegrationTab'
@@ -81,17 +80,6 @@ export default function LocationIntegrations({ location, xeroConnection, xeroRea
       status: location.settings?.payments?.provider === 'stripe_connect'
         ? (location.settings?.payments?.stripe_connected_account_id ? 'connected' : 'not-configured')
         : 'connected',
-    })
-  }
-  // Twilio (SMS) — alpha sender ID. Twilio account creds are global
-  // env vars; this tab is only useful when SMS feature is on at the
-  // location AND the operator wants a per-location branded sender.
-  if (isOwnerOrMaster && (features.sms !== false || location.twilio_alpha_sender_id)) {
-    tabs.push({
-      key: 'twilio',
-      label: 'Twilio (SMS)',
-      Icon: MessageSquare,
-      status: location.twilio_alpha_sender_id ? 'connected' : 'not-configured',
     })
   }
   // WA-MULTI.1 — WhatsApp per-location numbers. Tab is visible when
@@ -228,9 +216,6 @@ export default function LocationIntegrations({ location, xeroConnection, xeroRea
           )}
           {activeKey === 'bca' && (
             <BcaIntegrationTab location={location} canEdit={isMaster} sampleCar={sampleBcaCar} />
-          )}
-          {activeKey === 'twilio' && (
-            <TwilioIntegrationTab location={location} canEdit={isOwnerOrMaster} />
           )}
           {activeKey === 'whatsapp' && (
             <WhatsAppIntegrationTab location={location} canEdit={isOwnerOrMaster} />

@@ -8,9 +8,9 @@
 // (which keeps its own ?tab= sub-strip — the two params compose).
 //
 // SETTINGS.1 reorganized the page: every credential-bearing integration
-// (Xero / Glofox / UniFi / Sensibo / BCA Submit / Twilio / WhatsApp)
+// (Xero / Glofox / UniFi / Sensibo / BCA Submit / WhatsApp)
 // lives in the Integrations tab. The Details tab (LocationForm) owns
-// location identity + Twilio alpha + contractor budget.
+// location identity + contractor budget.
 
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess, guardMasterOrOwner } from '@/lib/auth'
@@ -361,7 +361,7 @@ export default async function EditLocationPage(props) {
         </section>
       )}
 
-      {/* Tabbed Integrations — Xero / Glofox / Twilio / UniFi / Sensibo /
+      {/* Tabbed Integrations — Xero / Glofox / UniFi / Sensibo /
           BCA / WhatsApp. Keeps its own ?tab= sub-strip; each tab is
           visible only when its feature is on at this location. */}
       {active === 'integrations' && (

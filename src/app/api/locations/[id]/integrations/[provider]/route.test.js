@@ -52,7 +52,6 @@ function liveGlofoxLocation() {
     thinq_pat: null,
     thinq_client_id: null,
     thinq_country_code: null,
-    twilio_alpha_sender_id: null,
     bca_config: null,
   }
 }
@@ -292,28 +291,14 @@ describe('role gates + access', () => {
     expect(m.locRow.thinq_client_id).toMatch(/^[0-9a-f-]{36}$/)
   })
 
-  it('Twilio: sender ID is returned in full (not a secret)', async () => {
+  // TWILIO-RETIRE.1 — the Twilio sender provider left with the SMS channel.
+  it('twilio is an unknown provider now (404, nothing written)', async () => {
     getCurrentUser.mockResolvedValue(OWNER)
     const m = makeDb({ location: liveGlofoxLocation() })
     createServerClient.mockReturnValue(m.db)
     const res = await PUT(req({ sender_id: 'UN1T STILL' }), props(LOC, 'twilio'))
-    const body = await res.json()
-    expect(res.status).toBe(200)
-    expect(m.locRow.twilio_alpha_sender_id).toBe('UN1T STILL')
-    expect(body.data.sender_id).toBe('UN1T STILL')
-  })
-
-  // N1 — the other half of the Twilio tab's clear: a blank sender_id removes
-  // the sender (column NULL, connected false), it is not "keep the stored one".
-  it('Twilio: a blank sender_id clears the stored sender to null', async () => {
-    getCurrentUser.mockResolvedValue(OWNER)
-    const m = makeDb({ location: { ...liveGlofoxLocation(), twilio_alpha_sender_id: 'UN1T' } })
-    createServerClient.mockReturnValue(m.db)
-    const res = await PUT(req({ sender_id: '' }), props(LOC, 'twilio'))
-    const body = await res.json()
-    expect(res.status).toBe(200)
-    expect(m.locRow.twilio_alpha_sender_id).toBeNull()
-    expect(body.data).toMatchObject({ connected: false, sender_id: null })
+    expect(res.status).toBe(404)
+    expect(m.locRow.twilio_alpha_sender_id).toBeUndefined()
   })
 })
 

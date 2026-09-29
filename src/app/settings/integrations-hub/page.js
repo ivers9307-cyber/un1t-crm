@@ -31,7 +31,7 @@ export const dynamic = 'force-dynamic'
 
 const HUB_LOCATION_COLUMNS =
   'id, name, organization_id, active, settings, features, sensibo_api_key, sensibo_pod_id, ' +
-  'thinq_pat, thinq_client_id, thinq_country_code, twilio_alpha_sender_id, bca_config'
+  'thinq_pat, thinq_client_id, thinq_country_code, bca_config'
 
 export default async function IntegrationsHubPage() {
   const user = await getCurrentUser()

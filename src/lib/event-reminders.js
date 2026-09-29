@@ -1,15 +1,16 @@
 // Per-event reminder runner. Mig 076 — multi-reminder.
 //
 // Each event_type can have N reminders configured (24h email,
-// 2h SMS, day-of email + SMS, etc). Each reminder lives in
+// 2h email, day-of email, etc). Each reminder lives in
 // event_type_reminders with its own channels[], offset and
 // template/body. Per-(booking, reminder) sends are tracked in
 // booking_reminder_sends so the runner doesn't re-fire the
 // same reminder if a tick takes longer than 5 minutes.
 //
-// Channels: 'email' and 'sms' only. WhatsApp was retired in
-// mig 074; the DB CHECK on event_type_reminders.channels
-// rejects anything outside {email, sms}.
+// Channels: 'email' only. WhatsApp was retired in mig 074 and SMS
+// with Twilio (TWILIO-RETIRE.1). The DB CHECK on
+// event_type_reminders.channels still admits 'sms', so a legacy
+// row's sms channel falls through to the unsupported_channel skip.
 //
 // Cron-driven: invoked from /api/cron/run-sequences alongside
 // the sequence runner. Two queries per reminder per tick (the
@@ -23,17 +24,15 @@
 
 import { createServerClient } from '@/lib/supabase'
 import { sendTransactionalEmail, applyMergeTags } from '@/lib/postmark'
-import { sendLocationSms, TwilioError } from '@/lib/twilio'
 import { logTransactionalWalletState } from '@/lib/wallet-enforcement'
 import { logWarn } from '@/lib/log'
 import { fmtBookingTime } from '@/lib/booking-confirmations'
-import { overlayConnections } from '@/lib/connection-registry'
 
 // ±1h covers Dublin DST drift cleanly. Operators set reminder time in
 // coarse units (24h, 2h) so a ±1h fire-time window is acceptable.
 const TOLERANCE_MS = 60 * 60 * 1000
 
-// BOOKING.2 — the reminder email + SMS body render the event time via
+// BOOKING.2 — the reminder email body renders the event time via
 // the shared fmtBookingTime (booking-confirmations). booking_date /
 // start_time are Dublin wall-clock; the old local copy did
 // `new Date(\`${date}T${time}Z\`)` then rendered in Europe/Dublin,
@@ -59,7 +58,7 @@ export async function runEventReminderSends() {
     .from('event_type_reminders')
     .select(`
       id, minutes_before, channels,
-      email_template_id, email_subject, sms_body,
+      email_template_id, email_subject,
       event_types!inner ( id, name, location_id )
     `)
     .eq('active', true)
@@ -91,8 +90,8 @@ export async function runEventReminderSends() {
         booking_date, start_time, skip_reminder,
         contacts (
           first_name, last_name, name, email, phone, wa_phone,
-          email_status, wa_status, sms_status,
-          contact_preferences ( email_administrative, whatsapp_administrative, sms_administrative )
+          email_status, wa_status,
+          contact_preferences ( email_administrative, whatsapp_administrative )
         )
       `)
       .eq('event_type_id', et.id)
@@ -122,7 +121,6 @@ export async function runEventReminderSends() {
       locationId: et.location_id,
       emailTemplateId: reminder.email_template_id,
       emailSubject: reminder.email_subject,
-      smsBody: reminder.sms_body,
     }
 
     // INTEG-C3 — reminders are TRANSACTIONAL: never blocked by billing,
@@ -160,15 +158,12 @@ export async function runEventReminderSends() {
         try {
           if (channel === 'email') {
             channelOutcomes.push({ channel, ...await sendEmailReminder(db, booking, ctx) })
-          } else if (channel === 'sms') {
-            channelOutcomes.push({ channel, ...await sendSmsReminder(db, booking, ctx) })
           } else {
             channelOutcomes.push({ channel, status: 'skipped', reason: `unsupported_channel:${channel}` })
           }
         } catch (e) {
           // Hard error on this channel — record but don't poison
-          // the other one. Email-down doesn't have to take SMS
-          // down too.
+          // any other channel.
           logWarn('event-reminders', `${channel} failed for booking ${booking.id} reminder ${reminder.id}`, { err: e })
           channelOutcomes.push({ channel, status: 'failed', reason: e.message })
           anyHardError = e.message
@@ -300,105 +295,13 @@ async function sendEmailReminder(db, booking, ctx) {
 }
 
 /**
- * SMS event-reminder send. One of two channels (mig 074 retired
- * WhatsApp). Mig 076: reminder config now comes from a per-row
- * ctx object, not the legacy event_types columns.
- *
- *   1. Reject if smsBody is missing on the reminder.
- *   2. Skip if contact has sms_status != active.
- *   3. Skip if contact_preferences.sms_administrative === false.
- *   4. Apply merge tags, send via sendLocationSms using the
- *      event_type's location's alpha sender ID.
- *   5. Write an activities row of type='sms_sent' so the contact
- *      timeline records it.
- */
-async function sendSmsReminder(db, booking, ctx) {
-  if (!ctx.smsBody) {
-    throw new Error('Reminder channel=sms but no sms_body set on the reminder')
-  }
-
-  const c = booking.contacts
-  if (c?.sms_status && c.sms_status !== 'active') {
-    return { status: 'skipped', reason: `sms_status=${c.sms_status}` }
-  }
-  const prefs = c?.contact_preferences
-  const adminConsent = Array.isArray(prefs)
-    ? prefs[0]?.sms_administrative
-    : prefs?.sms_administrative
-  if (adminConsent === false) {
-    return { status: 'skipped', reason: 'opted_out_administrative_sms' }
-  }
-
-  const phone = booking.contacts?.phone || booking.customer_phone
-  if (!phone) return { status: 'skipped', reason: 'no_phone_number' }
-
-  // Resolve the event_type's location for the alpha sender ID
-  // (mig 059). One round-trip per booking is fine — these crons are
-  // low-volume by design.
-  let { data: location } = await db
-    .from('locations')
-    .select('id, name, twilio_alpha_sender_id')
-    .eq('id', ctx.locationId)
-    .single()
-  if (!location) {
-    throw new Error('Event location not found — cannot resolve SMS sender.')
-  }
-  // INTEG-A2 dual-read: registry twilio_sender row first.
-  location = await overlayConnections(db, location, ['twilio_sender'])
-
-  const mergeContact = booking.contacts || {
-    name: booking.customer_name,
-    first_name: booking.customer_name?.split(' ')[0],
-    email: booking.customer_email,
-    phone: booking.customer_phone,
-  }
-
-  const extras = {
-    event_name: ctx.eventName,
-    event_time: fmtBookingTime(booking.booking_date, booking.start_time),
-    location_name: location.name || '',
-  }
-
-  const renderedBody = applyMergeTagsWithExtras(ctx.smsBody, mergeContact, extras)
-
-  let twilioResult
-  try {
-    twilioResult = await sendLocationSms({
-      location,
-      to: phone,
-      body: renderedBody,
-    })
-  } catch (e) {
-    const msg = e instanceof TwilioError
-      ? `Twilio ${e.code || e.status || ''}: ${e.message}`.trim()
-      : (e?.message || 'SMS send failed')
-    throw new Error(msg)
-  }
-
-  // Activity timeline entry. Same shape as broadcast + sequence-step
-  // + ad-hoc sends so the contact page renders consistently.
-  if (booking.contact_id) {
-    await db.from('activities').insert({
-      contact_id: booking.contact_id,
-      location_id: ctx.locationId,
-      type: 'sms_sent',
-      kind: 'event',
-      subject: `SMS reminder: ${ctx.eventName}`,
-      note: renderedBody,
-    })
-  }
-
-  return { status: 'sent', sid: twilioResult?.sid || null }
-}
-
-/**
  * Standard merge-tag substitution + a few event-reminder-specific
  * extras the regular postmark.applyMergeTags doesn't know about.
  */
 function applyMergeTagsWithExtras(html, contact, extras) {
   // Apply the standard tags first (handles {{first_name}} etc).
   // Pass extras.location_name through to applyMergeTags so the
-  // standard {{location_name}} tag works for SMS reminders too.
+  // standard {{location_name}} tag works for reminders too.
   let out = applyMergeTags(html, contact, {
     location_name: extras.location_name || '',
   })
@@ -408,6 +311,6 @@ function applyMergeTagsWithExtras(html, contact, extras) {
 }
 
 // fillReminderTemplate (the WhatsApp body-variable filler) was
-// retired with the WhatsApp branch in mig 074. Email + SMS render
+// retired with the WhatsApp branch in mig 074. Email renders
 // merge tags via applyMergeTags() / mergeReminderBody() above and
 // don't need the {{1}}/{{2}}/{{3}}/{{4}} positional convention.

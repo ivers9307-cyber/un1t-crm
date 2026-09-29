@@ -14,7 +14,7 @@ const fixtures = {
     { step_order: 1, step_type: 'wait', delay_days: 2, delay_hours: 0, delay_minutes: 0 },
     { step_order: 2, step_type: 'branch', config: { predicate: { type: 'has_tag', tag: 'attended' }, then_step_order: 3, else_step_order: 4 } },
     { step_order: 3, step_type: 'email', subject: 'How was it?', html_content: null, template_id: 't9' },
-    { step_order: 4, step_type: 'sms', sms_body: 'come back this week' },
+    { step_order: 4, step_type: 'email', subject: 'come back this week', html_content: null, template_id: null },
   ],
   // SEQ-URLBUTTON.1 — `url_button` is a RESERVED key inside whatsapp_variables,
   // not a numbered body variable. Nothing in compile/decompile enumerates the
@@ -29,7 +29,7 @@ const fixtures = {
   terminal_arms: [
     { step_order: 1, step_type: 'branch', config: { predicate: { type: 'has_tag', tag: 'booked' }, then_step_order: 2, else_step_order: 3 } },
     { step_order: 2, step_type: 'apply_tag', config: { tag: 'already_booked', next_step_order: 'end' } },
-    { step_order: 3, step_type: 'sms', sms_body: 'book your first class', config: { next_step_order: 'end' } },
+    { step_order: 3, step_type: 'email', subject: 'book your first class', config: { next_step_order: 'end' } },
   ],
 }
 

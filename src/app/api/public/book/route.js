@@ -171,7 +171,7 @@ export async function POST(request) {
   }
 
   // Fire the per-event_type confirmation message (mig 077). Best-
-  // effort: a Postmark or Twilio hiccup never breaks the customer's
+  // effort: a Postmark hiccup never breaks the customer's
   // success response; the on-page confirmation still shows. The
   // helper writes its own activity row + handles channel gates.
   let confirmation = null
@@ -232,9 +232,12 @@ export async function POST(request) {
 
   // Campaign WhatsApp confirmation (the /start funnel sends source='meta_book').
   // Best-effort; never blocks the booking response. UTILITY template; Dublin
-  // day/time formatted the same way as the email/SMS confirmation.
+  // day/time formatted the same way as the email confirmation.
+  // EVENTCONFIRM-WA.1 — skipped when the event type's own confirmation already
+  // went out on WhatsApp above, so a /start booker never gets it twice.
   try {
-    if (body.source === 'meta_book' && data?.contact_id) {
+    const alreadyWhatsapped = Array.isArray(confirmation?.sent) && confirmation.sent.includes('whatsapp')
+    if (body.source === 'meta_book' && data?.contact_id && !alreadyWhatsapped) {
       const { fmtBookingTime } = await import('@/lib/booking-confirmations')
       const { maybeSendBookingWhatsappConfirm } = await import('@/lib/automations/booking-whatsapp-confirm')
       const { data: c } = await db.from('contacts')

@@ -14,7 +14,7 @@
 // Two rules this component exists to keep:
 //
 //  1. CHANNEL PARITY. /api/communications/audience-count has send-parity
-//     branches for email, SMS and WhatsApp — each host asks for its OWN
+//     branches for email and WhatsApp — each host asks for its OWN
 //     channel. A WhatsApp broadcast showing an email-reachable count would be
 //     a new lie, not a fix, so `channel` is a required part of the contract
 //     for every send surface.
@@ -46,11 +46,6 @@ const EXCLUDED_LABELS = {
     // longer exists.
     ['suppressed', n => `${n} suppressed for repeat bounces`],
   ],
-  sms: [
-    ['no_phone', n => `${n} no phone number`],
-    ['not_opted_in', n => `${n} no marketing opt-in`],
-    ['opted_out', n => `${n} opted out`],
-  ],
   whatsapp: [
     ['no_number', n => `${n} no WhatsApp number`],
     ['no_consent', n => `${n} no marketing opt-in`],
@@ -76,7 +71,7 @@ function countUnsetRows(filter) {
 /**
  * @param {string}   locationId  required — the location the audience is counted at.
  * @param {object}   filter      the RAW builder filter (unset rows are stripped here).
- * @param {'email'|'sms'|'whatsapp'|null} channel  required in send mode.
+ * @param {'email'|'whatsapp'|null} channel  required in send mode.
  * @param {'send'|'matching'} mode  'matching' = a continuing condition, not a send.
  * @param {(result)=>void} onResult  optional — lets a host gate Send on this
  *        exact number instead of counting a second time.

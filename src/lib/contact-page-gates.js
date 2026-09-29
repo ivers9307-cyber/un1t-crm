@@ -27,9 +27,9 @@ export function canLoadContactConsultations(user, locationId) {
 }
 
 /**
- * The composer's channel flags for a contact: WhatsApp, SMS and email, each
+ * The composer's channel flags for a contact: WhatsApp and email, each
  * the web OR the mobile toggle at the contact's location. That is exactly the
- * decision the send routes (/api/contacts/[id]/whatsapp, /sms, /email) make,
+ * decision the send routes (/api/contacts/[id]/whatsapp, /email) make,
  * so a composer never offers a channel the send route would refuse, nor hides
  * one it would accept. The contact page and the pipeline drawer
  * (/api/contacts/[id]/command-centre?scope=drawer) both read these; `whatsapp`
@@ -37,12 +37,12 @@ export function canLoadContactConsultations(user, locationId) {
  *
  * @param {object|null} user
  * @param {string|null} locationId  the contact's location_id
- * @returns {{ whatsapp: boolean, sms: boolean, email: boolean }}
+ * @returns {{ whatsapp: boolean, email: boolean }}
  */
 export function contactChannelFlags(user, locationId) {
   const at = (key) =>
     hasPermissionForLocation(user, locationId, key) || hasMobilePermissionForLocation(user, locationId, key)
-  return { whatsapp: at('whatsapp'), sms: at('sms'), email: at('email') }
+  return { whatsapp: at('whatsapp'), email: at('email') }
 }
 
 // ── ROLEUI.1 — the contact page's action BUTTONS ──────────────────────────

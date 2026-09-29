@@ -170,7 +170,7 @@ export async function ensureAnchorLocation(db, host) {
 // behaviour, never to a wrong location. Errors also fall back.
 //
 // FAIL-OPEN IS ONLY RIGHT FOR CONTACT HOMING. For SENDER selection the same
-// fallback IS the wrong location — the host anchor has no Twilio/email
+// fallback IS the wrong location — the host anchor has no email
 // identity, so falling back there sends under the wrong brand. That caller
 // (`resolveEventCommsLocation`) must use `resolveMasterLocationIdStrict`
 // below, which surfaces the read failure instead of folding it into the

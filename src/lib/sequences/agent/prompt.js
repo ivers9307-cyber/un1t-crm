@@ -42,10 +42,9 @@ GRAPH SHAPE (emit via the emit_sequence_graph tool):
   "edges": [ { "from": "${TRIGGER_SOURCE_ID}", "to": "n1" }, { "from": "n1", "to": "n2" }, ... ]
 }
 
-NODE TYPES (${ACTIVE_NODE_TYPES.join(', ')}). Channel/timing nodes are ${CHANNEL_NODE_TYPES.join(', ')}. Required config per type:
+NODE TYPES (${ACTIVE_NODE_TYPES.join(', ')}). Channel/timing nodes are ${CHANNEL_NODE_TYPES.filter((t) => ACTIVE_NODE_TYPES.includes(t)).join(', ')}. Required config per type:
 - email:   { subject } (required) and optionally { html_content } — plain HTML.
 - whatsapp:{ template_id } of an APPROVED template, plus { variables: { "1": "first_name", ... } } if it has placeholders.
-- sms:     { body } (required, short).
 - wait:    { days?, hours?, minutes? } — at least one MUST be non-zero. Model every delay as its own wait node.
 - apply_tag:        { tag }.
 - update_field:     { field, value }.

@@ -26,7 +26,6 @@
 // providers stored on the `locations` row, saving through ONE new
 // service-role route — PUT/DELETE /api/locations/[id]/integrations/[provider]:
 //   glofox   (Tier 1, ADMIN_ROLES)  — branch/keys/token/webhook secret
-//   sms      (Tier 2, ADMIN_ROLES)  — Twilio alpha sender ID (NOT a secret)
 //   unifi    (Tier 3, MASTER-ONLY)  — host/token/policy ids
 //   climate  (Tier 3, MASTER-ONLY)  — Sensibo + LG ThinQ CREDS (device table
 //                                     stays on the Advanced-settings deep-link)
@@ -72,17 +71,6 @@ const FORM_SPECS = {
       { name: 'namespace', label: 'Namespace', mono: true, from: (i) => i?.namespace, hint: 'Required for /Analytics/report queries. Glofox provides this on request.' },
     ],
     advancedHint: 'Trial membership + hidden-class settings live under Advanced settings.',
-  },
-  sms: {
-    title: 'Twilio (SMS)',
-    routeProvider: 'twilio',
-    tabKey: 'twilio',
-    masterOnly: false,
-    intro:
-      'Twilio account credentials are global env vars; only the per-location branded alpha sender ID is set here (max 11 alphanumeric chars). Leave blank to use the global fallback.',
-    fields: [
-      { name: 'sender_id', label: 'Alpha Sender ID', mono: true, maxLength: 11, from: (i) => i?.senderId, placeholder: 'e.g. UN1T STILL' },
-    ],
   },
   unifi: {
     title: 'UniFi Access',

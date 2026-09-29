@@ -2,7 +2,7 @@
 // send handlers can see, and it never fetched `source_type`.
 //
 // The row it SELECTs is passed verbatim to sendEmailStep / sendWhatsappStep /
-// sendSmsStep as `enrollment`, and `isTransactionalEnrolment(enrollment)` reads
+// the send handlers as `enrollment`, and `isTransactionalEnrolment(enrollment)` reads
 // exactly that column. Missing it, the predicate was ALWAYS false on the live
 // runner path. Two consequences, one new and one that had been live for weeks:
 //
@@ -40,7 +40,6 @@ vi.mock('@/lib/whatsapp', () => ({
   renderTemplateBody: vi.fn(() => 'rendered'),
 }))
 vi.mock('@/lib/location-branding', () => ({ getLocationBranding: vi.fn(async () => ({ companyName: 'UN1T' })) }))
-vi.mock('@/lib/twilio', () => ({ sendLocationSms: vi.fn(), TwilioError: class TwilioError extends Error {} }))
 vi.mock('@/lib/glofox', () => ({
   glofoxCredentialsForLocation: vi.fn(),
   getGlofoxInvoicePaymentLink: vi.fn(),

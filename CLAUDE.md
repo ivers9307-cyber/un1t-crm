@@ -155,7 +155,7 @@ Full set in [`docs/architecture/REFERENCE.md`](docs/architecture/REFERENCE.md); 
 - **Mutation route skeleton:** `getCurrentUser()` → role check (403) → `validateBody` → `assertLocationAccess` → `createServerClient()` → work → `{ success, data }`. Register new routes in `src/lib/openapi.js`.
 - **Reuse shared Zod blocks** from `@/lib/schemas` (`uuidLike` — Postgres-permissive, NOT `z.string().uuid()`).
 - **No new `console.log` in prod paths** (gate on `NODE_ENV` or use `console.error`).
-- **Fire-and-forget side effects** (confirmation email/SMS/push after a write) run in their own `try/catch` and never block/fail the primary response; the helper swallows its own errors. Multi-channel sends run channels independently (email-down ≠ SMS-down); partial send counts as `sent`.
+- **Fire-and-forget side effects** (confirmation email/push after a write) run in their own `try/catch` and never block/fail the primary response; the helper swallows its own errors. Multi-channel sends run channels independently (email-down ≠ push-down); partial send counts as `sent`.
 - **Deprecated columns stay on disk** — new migration adds + backfills, `COMMENT ... 'DEPRECATED (mig N)'`, code stops reading/writing, a *later* migration drops. Lets code roll back without DB action.
 - **zsh + bracketed paths:** `[id]`/`[slug]` are globs — single-quote or `noglob` git commands or staging silently empties. Stale `.git/*.lock` from an IDE: `find .git -name '*.lock' -delete`, then quit the IDE.
 
@@ -177,7 +177,7 @@ Full set in [`docs/architecture/REFERENCE.md`](docs/architecture/REFERENCE.md); 
 | Doc | When to open |
 |---|---|
 | [`docs/architecture/REFERENCE.md`](docs/architecture/REFERENCE.md) | Module map, lib-helper catalogue, full DB schema + RLS, email/WhatsApp/audience internals, RBAC matrix, orgs, master admin matrix, performance posture |
-| [`docs/architecture/INTEGRATIONS.md`](docs/architecture/INTEGRATIONS.md) | Env vars, Xero, Twilio, Revolut, Pay subdomain, Cars deposit |
+| [`docs/architecture/INTEGRATIONS.md`](docs/architecture/INTEGRATIONS.md) | Env vars, Xero, Revolut, Pay subdomain, Cars deposit (+ the retired Twilio/SMS note) |
 | [`docs/architecture/MOBILE.md`](docs/architecture/MOBILE.md) | The Expo/RN app in `mobile/` — setup, routing, feature flags, push, EAS deployment |
 | [`docs/LESSONS.md`](docs/LESSONS.md) | War stories behind the invariants + per-vendor specifics (+ archived Cowork-sandbox notes) |
 | [`docs/BACKLOG.md`](docs/BACKLOG.md) | Durable do-not-build decisions + design-doc pointers |

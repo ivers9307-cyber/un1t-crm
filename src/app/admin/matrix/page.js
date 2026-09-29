@@ -19,7 +19,7 @@ import Link from 'next/link'
 import { Building2 } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
-import { redactLocationSecrets } from '@/lib/location-secrets'
+import { USER_LOCATION_COLUMNS, toUserLocation } from '@/lib/location-secrets'
 import AdminFeatureMatrix from '@/components/AdminFeatureMatrix'
 import AdminAccessMatrix from '@/components/AdminAccessMatrix'
 import AddOrganizationButton from '@/components/AddOrganizationButton'
@@ -35,7 +35,7 @@ export default async function AdminMatrixPage() {
 
   const [orgsRes, locsRes, staffRes] = await Promise.all([
     db.from('organizations').select('*').eq('active', true).order('name'),
-    db.from('locations').select('*').eq('active', true).eq('is_host_anchor', false).order('name'),
+    db.from('locations').select(USER_LOCATION_COLUMNS).eq('active', true).eq('is_host_anchor', false).order('name'),
     db
       .from('profiles')
       .select(`
@@ -47,8 +47,10 @@ export default async function AdminMatrixPage() {
   ])
 
   const organizations = orgsRes.data || []
-  // SECFIX.3a — both matrices are client components; the rows cross to the browser.
-  const locations = (locsRes.data || []).map(redactLocationSecrets)
+  // STAFFPROFILEPICK.1 — both matrices are client components; they read id,
+  // name, features and organization_id. Identity columns only (no settings,
+  // no config), picked again at the source.
+  const locations = (locsRes.data || []).map(toUserLocation)
   const staff = staffRes.data || []
 
   // Group locations by organization for both matrix renders. We do

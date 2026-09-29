@@ -18,6 +18,10 @@
 //     because the audienceCount prop was omitted;
 //   - the email panel now shows "N will receive it" with the B5 excluded
 //     breakdown instead of a raw filter-only number.
+//
+// TWILIO-RETIRE.1 — these used to drive the SMS channel (a bare textarea);
+// SMS is gone, so they drive email, whose only compose field is the subject
+// once the (mocked, loaded) Unlayer designer is up.
 
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/react'
@@ -76,36 +80,36 @@ function sendButton() {
 describe('UnifiedSendComposer — count errors surface and gate Send (B6)', () => {
   it('renders the server error message from a 400 count, not the placeholder', async () => {
     stubCount(() => bad('OR logic is not supported together with tag, event or studio-list filters. Use AND, or send these as separate audiences.'))
-    render(<UnifiedSendComposer locationId="loc-1" channels={['sms']} initialAudienceFilter={FILTER} />)
+    render(<UnifiedSendComposer locationId="loc-1" channels={['email']} initialAudienceFilter={FILTER} />)
     await screen.findByText(/OR logic is not supported together with tag, event or studio-list filters/, {}, COUNTED)
     expect(screen.queryByText(/Add a condition to see how many contacts match/)).toBeNull()
   })
 
   it('keeps Send disabled while the count is in error, even with a valid message', async () => {
     stubCount(() => bad('tag filter requires a non-empty string value'))
-    const { container } = render(<UnifiedSendComposer locationId="loc-1" channels={['sms']} initialAudienceFilter={FILTER} />)
-    fireEvent.change(container.querySelector('textarea'), { target: { value: 'Hello there' } })
+    render(<UnifiedSendComposer locationId="loc-1" channels={['email']} initialAudienceFilter={FILTER} />)
+    fireEvent.change(screen.getByPlaceholderText('Email subject'), { target: { value: 'Hello there' } })
     await screen.findByText(/tag filter requires a non-empty string value/, {}, COUNTED)
     expect(sendButton().disabled).toBe(true)
   })
 
   it('keeps Send disabled while the count has not arrived yet', () => {
     stubCount(() => new Promise(() => {})) // never resolves
-    const { container } = render(<UnifiedSendComposer locationId="loc-1" channels={['sms']} initialAudienceFilter={FILTER} />)
-    fireEvent.change(container.querySelector('textarea'), { target: { value: 'Hello there' } })
+    render(<UnifiedSendComposer locationId="loc-1" channels={['email']} initialAudienceFilter={FILTER} />)
+    fireEvent.change(screen.getByPlaceholderText('Email subject'), { target: { value: 'Hello there' } })
     expect(sendButton().disabled).toBe(true)
   })
 
   it('enables Send once a positive count arrives and the message is valid', async () => {
-    stubCount(() => ok({ count: 5, matched: 9, excluded: { no_phone: 2, not_opted_in: 1, opted_out: 1 } }))
-    const { container } = render(<UnifiedSendComposer locationId="loc-1" channels={['sms']} initialAudienceFilter={FILTER} />)
-    fireEvent.change(container.querySelector('textarea'), { target: { value: 'Hello there' } })
+    stubCount(() => ok({ count: 5, matched: 9, excluded: { not_opted_in: 2, bounced_or_complained: 1, suppressed: 1 } }))
+    render(<UnifiedSendComposer locationId="loc-1" channels={['email']} initialAudienceFilter={FILTER} />)
+    fireEvent.change(screen.getByPlaceholderText('Email subject'), { target: { value: 'Hello there' } })
     await waitFor(() => expect(sendButton().disabled).toBe(false), COUNTED)
   })
 
   it('does not render the dangling AudienceBuilder "contacts match" footer', () => {
     stubCount(() => new Promise(() => {}))
-    const { container } = render(<UnifiedSendComposer locationId="loc-1" channels={['sms']} initialAudienceFilter={FILTER} />)
+    const { container } = render(<UnifiedSendComposer locationId="loc-1" channels={['email']} initialAudienceFilter={FILTER} />)
     const dangling = Array.from(container.querySelectorAll('span'))
       .some(s => s.textContent.trim() === 'contacts match')
     expect(dangling).toBe(false)
@@ -140,20 +144,20 @@ describe('UnifiedSendComposer — email will-receive breakdown (B6d)', () => {
 describe('UnifiedSendComposer — zero-count message tells the truth (P1.6c)', () => {
   it('says nobody MATCHED when the filter itself returns nothing', async () => {
     stubCount(() => ok({ count: 0, matched: 0, excluded: {} }))
-    render(<UnifiedSendComposer locationId="loc-1" channels={['sms']} initialAudienceFilter={FILTER} />)
+    render(<UnifiedSendComposer locationId="loc-1" channels={['email']} initialAudienceFilter={FILTER} />)
     await screen.findByText(/No contacts match this filter/i, {}, COUNTED)
   })
 
   it('does NOT say "no contacts match" when contacts matched but none are reachable', async () => {
-    stubCount(() => ok({ count: 0, matched: 240, excluded: { no_phone: 240 } }))
-    render(<UnifiedSendComposer locationId="loc-1" channels={['sms']} initialAudienceFilter={FILTER} />)
+    stubCount(() => ok({ count: 0, matched: 240, excluded: { not_opted_in: 240 } }))
+    render(<UnifiedSendComposer locationId="loc-1" channels={['email']} initialAudienceFilter={FILTER} />)
     await waitFor(() => expect(screen.queryByText(/0 will receive it|will receive it/i)).not.toBeNull(), COUNTED)
     expect(screen.queryByText(/^No contacts match this filter\.$/i)).toBeNull()
   })
 
   it('names the matched count and points at reachability instead', async () => {
-    stubCount(() => ok({ count: 0, matched: 240, excluded: { no_phone: 240 } }))
-    render(<UnifiedSendComposer locationId="loc-1" channels={['sms']} initialAudienceFilter={FILTER} />)
+    stubCount(() => ok({ count: 0, matched: 240, excluded: { not_opted_in: 240 } }))
+    render(<UnifiedSendComposer locationId="loc-1" channels={['email']} initialAudienceFilter={FILTER} />)
     const msg = await screen.findByText(/none (of them )?can be reached|but none/i, {}, COUNTED)
     expect(msg.textContent).toMatch(/240/)
   })
