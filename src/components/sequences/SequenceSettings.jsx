@@ -363,7 +363,7 @@ export default function SequenceSettings({ sequence, justSetSecret = null, onJus
                   <p className="text-[11px] text-amber-700">{SECRET_JUST_SET_MESSAGE}</p>
                 )}
                 {secretAction === 'replace' && (
-                  <p className="text-[11px] text-amber-700">Copy this secret into the sending system now. Once you save and leave this page it is never shown again. Saving replaces the old one.</p>
+                  <p className="text-[11px] text-amber-700">Copy this secret into the sending system now. Once you save and leave this page it is never shown again.{hasSecret ? ' Saving replaces the old one.' : ''}</p>
                 )}
                 {secretAction === 'clear' && (
                   <p className="text-[11px] text-amber-700">The secret is removed when you save; the URL alone will authenticate.</p>

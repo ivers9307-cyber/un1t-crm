@@ -424,6 +424,17 @@ describe('Webhook secret panel after a save (SEQPAGEGATE.1 review)', () => {
     expect(again.container.textContent).not.toContain('(hidden)')
   })
 
+  // N1: "Saving replaces the old one." is only true when there IS an old one.
+  it('says saving replaces the old secret only when one is set', () => {
+    const none = open()
+    fireEvent.click(none.getByText('Generate new secret'))
+    expect(none.container.textContent).not.toContain('Saving replaces the old one.')
+    cleanup()
+    const some = open({ ...SEQ, has_webhook_secret: true })
+    fireEvent.click(some.getByText('Generate new secret'))
+    expect(some.container.textContent).toContain('Saving replaces the old one.')
+  })
+
   it('the saved message carries no em-dash', async () => {
     const { container, getByText } = open()
     fireEvent.click(getByText('Generate new secret'))
