@@ -64,6 +64,10 @@ export default function StaffForm({
   // Only the edit page passes these (and only for master callers).
   organizations = [],
   orgAdminOrgIds = [],
+  // STAFFFORMSETTINGS.1 (review N1) — the page's studios read failed, so
+  // `locations` is empty for a reason other than "there are none". The form
+  // still renders (never louder than before); it just says so.
+  locationsLoadFailed = false,
 }) {
   const isEdit = !!staff
   const router = useRouter()
@@ -202,12 +206,11 @@ export default function StaffForm({
   const addableLocations = locations
     .filter(l => callerScope.has(l.id) && !assignedIds.has(l.id))
 
+  // STAFFFORMSETTINGS.1 — computed on the server (loadStaffFormLocations,
+  // the save path's own rule: registry overlay + getLocationUnifiConfig).
+  // The form never receives a location's settings.
   function isUnifiConfigured(loc) {
-    const cfg = loc?.settings?.unifi || {}
-    return Boolean(
-      cfg.host && cfg.api_token &&
-      cfg.staff_policy_id && cfg.manager_policy_id
-    )
+    return loc?.unifi_configured === true
   }
 
   // All toggle helpers now operate on the SELECTED assignment's
@@ -485,6 +488,12 @@ export default function StaffForm({
       {notice && (
         <div role="status" className="bg-amber-500/10 border border-amber-500/30 text-amber-700 text-sm rounded-lg p-3">
           Saved. {notice}
+        </div>
+      )}
+
+      {locationsLoadFailed && (
+        <div role="status" className="bg-amber-500/10 border border-amber-500/30 text-amber-700 text-sm rounded-lg p-3">
+          Couldn&apos;t load studios. Reload before editing.
         </div>
       )}
 
