@@ -70,8 +70,10 @@ describe('chain order mirrors each hub tab strip', () => {
     ])
   })
 
-  it('Marketing: Automations, Landing page, Send', () => {
-    expect(order('/marketing')).toEqual(['/automations', '/settings/landing-page', '/communications/send'])
+  // The Send step existed only for `sms` holders (every other Send key already
+  // reaches /automations first); it left with the SMS channel (TWILIO-RETIRE.1).
+  it('Marketing: Automations, Landing page', () => {
+    expect(order('/marketing')).toEqual(['/automations', '/settings/landing-page'])
   })
 
   it('Operations: Maintenance, Studio, TV, Presentations, Fleet last', () => {
@@ -154,7 +156,7 @@ describe('role floors — a key below the destination role floor is not a door',
   it('a floorless step is unaffected by role', () => {
     for (const role of ['staff', 'reception', 'head_coach', 'manager', 'owner', 'master']) {
       expect(targetAs(role, '/operations', 'fleet_restart')).toBe('/admin/fleet')
-      expect(targetAs(role, '/marketing', 'sms')).toBe('/communications/send')
+      expect(targetAs(role, '/marketing', 'landing_page')).toBe('/settings/landing-page')
     }
   })
 })
@@ -162,17 +164,13 @@ describe('role floors — a key below the destination role floor is not a door',
 // The two defects this branch closes. Each of these assertions FAILS
 // against the pre-HUBDOOR.1 chains, where the key was in the sidebar
 // union but in no branch of the index, so the persona landed on '/'.
-describe('defect A — the sms-only Marketing door', () => {
-  it('an sms-only holder lands on Send, not the / bounce', () => {
-    expect(target('/marketing', 'sms')).toBe('/communications/send')
-  })
-
-  it('sms does not jump the queue: an automations holder still lands on Automations', () => {
-    expect(target('/marketing', 'sms', 'automations')).toBe('/automations')
-  })
-
-  it('sms sits after landing_page, matching the tab strip', () => {
-    expect(target('/marketing', 'sms', 'landing_page')).toBe('/settings/landing-page')
+// Defect A (the sms-only Marketing door) was closed by HUBDOOR.1 and then
+// dissolved by TWILIO-RETIRE.1, which took `sms` out of the Marketing union and
+// its chain step together — the invariant below still requires the two to
+// agree.
+describe('the Marketing chain', () => {
+  it('sms is no longer a door into Marketing (TWILIO-RETIRE.1)', () => {
+    expect(target('/marketing', 'sms')).toBe('/')
   })
 
   it('the Automations step still matches that page own gate exactly', () => {

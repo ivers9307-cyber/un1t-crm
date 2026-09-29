@@ -2,10 +2,11 @@
 //
 // INTEG hub inline #4 (Phase 2). The single service-role mutation surface
 // behind the Integrations-hub Manage drawer for the credential-bearing
-// providers stored on the `locations` row: Glofox, Twilio sender, UniFi,
-// AC/Climate (Sensibo + LG ThinQ), and BCA Submit. One route, a `provider`
-// path param, and a per-provider descriptor (fields, secret fields, role
-// tier, storage layout).
+// providers stored on the `locations` row: Glofox, UniFi, AC/Climate
+// (Sensibo + LG ThinQ), and BCA Submit. (The Twilio sender provider left
+// with the SMS channel, TWILIO-RETIRE.1 — `twilio` is now an unknown provider.)
+// One route, a `provider` path param, and a per-provider descriptor (fields,
+// secret fields, role tier, storage layout).
 //
 // WHY a new route (vs the legacy tabs' browser-client writes):
 //   The old tabs wrote their legacy `locations` fields via the BROWSER
@@ -28,7 +29,7 @@
 //   getCurrentUser → 401
 //   assertLocationAccess(user, locationId) → 403
 //   per-provider role gate → 403
-//     · Glofox / Twilio  = ADMIN_ROLES (owner+/manager/master)
+//     · Glofox           = ADMIN_ROLES (owner+/manager/master)
 //     · UniFi / AC / BCA  = MASTER-ONLY (mirrors the tabs' canEdit={isMaster};
 //                           UniFi is additionally guarded DB-side by mig 034,
 //                           which service-role writes bypass by design)
@@ -44,7 +45,6 @@ import { validateBody } from '@/lib/validate'
 import { ADMIN_ROLES } from '@/lib/schemas'
 import { syncConnectionFromLegacy } from '@/lib/connection-registry'
 import { mergeSecretSlice, sliceHasValue } from '@/lib/integration-secret-merge'
-import { validateAlphaSenderId } from '@/lib/twilio'
 import { getBcaConfig, validateBcaConfig } from '@/lib/bca'
 import { logError } from '@/lib/log'
 
@@ -56,7 +56,7 @@ export const dynamic = 'force-dynamic'
 // customer_agent, ads, unifi… — is never clobbered).
 const LOCATION_COLUMNS =
   'id, name, features, settings, sensibo_api_key, thinq_pat, thinq_client_id, ' +
-  'thinq_country_code, twilio_alpha_sender_id, bca_config'
+  'thinq_country_code, bca_config'
 
 const optStr = (max) => z.string().max(max).optional()
 
@@ -107,33 +107,6 @@ const PROVIDERS = {
         has_webhook_secret: !!g.webhook_secret,
       }
     },
-  },
-
-  twilio: {
-    label: 'Twilio sender',
-    roleTier: 'admin',
-    platforms: ['twilio_sender'],
-    secretFields: [], // an 11-char alpha sender ID is NOT a secret
-    schema: z.object({ sender_id: optStr(11) }),
-    readSlice: (loc) => ({ sender_id: loc.twilio_alpha_sender_id ?? null }),
-    validate: (merged) => {
-      const t = (merged.sender_id || '').trim()
-      if (!t) return null
-      const err = validateAlphaSenderId(t)
-      return err ? `Sender ID: ${err}` : null
-    },
-    applyMerged: (loc, merged) => {
-      const update = { twilio_alpha_sender_id: (merged.sender_id || '').trim() || null }
-      return { update, nextLocation: { ...loc, ...update } }
-    },
-    disconnect: (loc) => {
-      const update = { twilio_alpha_sender_id: null }
-      return { update, nextLocation: { ...loc, ...update } }
-    },
-    echo: (loc) => ({
-      connected: !!loc.twilio_alpha_sender_id,
-      sender_id: loc.twilio_alpha_sender_id ?? null, // non-secret — full value
-    }),
   },
 
   unifi: {

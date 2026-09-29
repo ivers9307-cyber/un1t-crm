@@ -1,28 +1,7 @@
 // PILLAR2 Phase 1 — pure compose helpers shared by the unified send surface
-// (UnifiedSendComposer). Mirrors the proven bits of the SMS + WhatsApp broadcast
-// editors so the unified surface stays consistent with the existing send paths.
+// (UnifiedSendComposer). Mirrors the proven bits of the WhatsApp broadcast
+// editor so the unified surface stays consistent with the existing send path.
 // Pure — no IO, unit-tested in compose.test.js.
-
-// --- SMS -------------------------------------------------------------------
-
-// Hard cap on an SMS body (matches the sms_broadcasts.body CHECK constraint).
-export const SMS_MAX_LEN = 1600
-
-// Merge tags the SMS send path (postmark.applyMergeTags) resolves per-recipient.
-export const SMS_MERGE_TAGS = [
-  { tag: '{{first_name}}', label: 'First name' },
-  { tag: '{{name}}', label: 'Full name' },
-  { tag: '{{location_name}}', label: 'Location' },
-]
-
-// GSM-7 segment math (mirrors SMSBroadcastEditor): a single SMS holds 160 chars;
-// concatenated SMS use 153 chars/segment (7 lost to the UDH header per segment).
-export function smsSegmentInfo(text) {
-  const len = (text || '').length
-  if (len === 0) return { len: 0, segments: 0 }
-  if (len <= 160) return { len, segments: 1 }
-  return { len, segments: Math.ceil(len / 153) }
-}
 
 // --- WhatsApp --------------------------------------------------------------
 

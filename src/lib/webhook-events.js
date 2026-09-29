@@ -7,7 +7,7 @@
 // work.
 //
 // Why this exists
-//   Postmark, Revolut, WhatsApp + Twilio all retry webhooks on
+//   Postmark, Revolut and WhatsApp all retry webhooks on
 //   non-2xx responses for hours-to-days. Our existing per-feature
 //   idempotency (status comparisons in the cars / race-payments
 //   paths, *_sent_at stamps in the confirmation paths) is good but
@@ -43,8 +43,10 @@ export const WEBHOOK_PROVIDERS = Object.freeze({
   // Was missing — the IG webhook route passed `undefined` here, so IG
   // events had NO idempotency (Meta retries could double-process).
   INSTAGRAM: 'instagram',
-  TWILIO: 'twilio',
   XERO: 'xero',
+  // NOTE: 'twilio' (the SMS delivery-status webhook) left with the SMS
+  // channel (TWILIO-RETIRE.1). The DB CHECK still permits it, like the
+  // unifi values below — historical rows carry it.
   // NOTE: 'unifi_access' (mig 120) and 'unifi_protect' (mig 121) used to
   // live here. Both receivers drove the zero-touch staff-attendance
   // pipeline, removed 2026-07-31 (Access: 157 events, none ever matched

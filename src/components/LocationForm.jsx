@@ -30,9 +30,6 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
     location?.organization_id || (organizations[0]?.id ?? '')
   )
 
-  // SETTINGS.1 follow-up — Twilio alpha sender ID moved to its own
-  // tab in <LocationIntegrations>. Not read here anymore.
-
   // Roster v2 phase 4 — monthly contractor labour budget (mig 071).
   // Stored as numeric euros; null = not configured. FTE labour
   // is NOT counted against this — only contractor hours × rate.
@@ -64,7 +61,7 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
   // SETTINGS.1 — Glofox / UniFi / Sensibo / AC are now their own
   // tabs under <LocationIntegrations> below this form. Their state
   // + save logic lives in the per-tab components; LocationForm
-  // covers only the per-location identity + Twilio + budget fields.
+  // covers only the per-location identity + budget fields.
 
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
@@ -102,7 +99,7 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
 
     if (isEditing) {
       // Edits stay browser-side (RLS-checked). SETTINGS.1 —
-      // sensibo/glofox/unifi/twilio slices are owned by the per-tab
+      // sensibo/glofox/unifi slices are owned by the per-tab
       // Integrations save endpoints; untouched columns are left alone.
       const payload = {
         name,
@@ -315,10 +312,6 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
           </div>
         )}
       </div>
-
-      {/* SETTINGS.1 follow-up — SMS (Twilio) alpha sender ID moved
-          into the TwilioIntegrationTab under <LocationIntegrations>
-          so all integration-y per-location config lives in one place. */}
 
       {/* Roster v2 phase 4 — Monthly contractor labour budget (mig 071).
           FTE labour is sunk cost and doesn't count; this ceiling

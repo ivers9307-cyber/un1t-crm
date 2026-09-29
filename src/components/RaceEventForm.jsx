@@ -27,7 +27,7 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { ArrowLeft, Calendar, Clock, Users, Save, AlertCircle, Loader2, Plus, Trash2, BadgeEuro, ImagePlus, X as XIcon, Tv, Flag, GraduationCap, Mic, Star, DoorOpen, UserPlus, Image as ImageIcon, Mail, MessageSquare } from 'lucide-react'
+import { ArrowLeft, Calendar, Clock, Users, Save, AlertCircle, Loader2, Plus, Trash2, BadgeEuro, ImagePlus, X as XIcon, Tv, Flag, GraduationCap, Mic, Star, DoorOpen, UserPlus, Image as ImageIcon, Mail } from 'lucide-react'
 import Link from 'next/link'
 import { toSlug } from '@/lib/slug'
 import { compressImageForUpload, parseUploadResponse } from '@/lib/landing-media-upload'
@@ -284,9 +284,6 @@ export default function RaceEventForm({ race, locationId }) {
   const [confirmationSubject, setConfirmationSubject] = useState(race?.confirmation_email_subject || '')
   const [confirmationIntro, setConfirmationIntro] = useState(race?.confirmation_email_intro || '')
   const [confirmationTemplateId, setConfirmationTemplateId] = useState(race?.confirmation_email_template_id || '')
-  // EVENTS-SMS-TOGGLE (mig 552) — per-event opt-in for the registration SMS
-  // confirmation. Off by default for new events; existing events reflect the DB.
-  const [confirmationSmsEnabled, setConfirmationSmsEnabled] = useState(!!race?.confirmation_sms_enabled)
   const [reminderSubject, setReminderSubject] = useState(race?.reminder_email_subject || '')
   const [reminderIntro, setReminderIntro] = useState(race?.reminder_email_intro || '')
   const [reminderTemplateId, setReminderTemplateId] = useState(race?.reminder_email_template_id || '')
@@ -334,9 +331,8 @@ export default function RaceEventForm({ race, locationId }) {
   const stripeHosts = hosts.filter((h) => h.payment_provider === 'stripe_connect')
   const selectedHost = stripeHosts.find((h) => h.id === hostId) || null
   // EVENT-COMMS-LOC (mig 553) — for host events, which real UN1T location's
-  // Twilio sender + email identity this event's confirmation/reminder texts
-  // and emails use. Host events sit on a sender-less per-host anchor
-  // location, so this override is only surfaced when hostId is set. Options
+  // email identity this event's confirmation/reminder emails use. Host events
+  // sit on a sender-less per-host anchor location, so this override is only surfaced when hostId is set. Options
   // are the org's real (non-anchor) locations, fetched per event location —
   // mirrors the emailTemplates fetch above. A fetch failure just leaves the
   // list empty (operator keeps whatever was already saved).
@@ -575,8 +571,6 @@ export default function RaceEventForm({ race, locationId }) {
       confirmation_email_subject: confirmationSubject.trim() || null,
       confirmation_email_intro: confirmationIntro.trim() || null,
       confirmation_email_template_id: confirmationTemplateId || null,
-      // EVENTS-SMS-TOGGLE (mig 552) — always sent so toggling it off persists.
-      confirmation_sms_enabled: confirmationSmsEnabled,
       reminder_email_subject: reminderSubject.trim() || null,
       reminder_email_intro: reminderIntro.trim() || null,
       reminder_email_template_id: reminderTemplateId || null,
@@ -1374,7 +1368,7 @@ export default function RaceEventForm({ race, locationId }) {
                 ))}
               </select>
               <p className="text-[11px] text-un1t-muted mt-1">
-                Which UN1T location&apos;s Twilio sender + email identity this event&apos;s texts and emails use.
+                Which UN1T location&apos;s email identity this event&apos;s emails use.
               </p>
             </div>
           )}
@@ -1392,27 +1386,6 @@ export default function RaceEventForm({ race, locationId }) {
             onTemplateId={setConfirmationTemplateId}
             templates={emailTemplates}
           />
-
-          {/* EVENTS-SMS-TOGGLE (mig 552) — the signup confirmation can ALSO go
-              out as a text message. OFF by default; the email above always
-              sends. The pre-event reminder below is email + push only (no SMS). */}
-          <label className="flex items-start gap-3 pt-4 border-t border-un1t-border cursor-pointer">
-            <input
-              type="checkbox"
-              checked={confirmationSmsEnabled}
-              onChange={e => setConfirmationSmsEnabled(e.target.checked)}
-              className="mt-0.5 cursor-pointer"
-            />
-            <span>
-              <span className="flex items-center gap-1.5 text-sm font-medium text-un1t-text">
-                <MessageSquare size={14} className="text-un1t-subtle" /> Send a text message (SMS) confirmation
-              </span>
-              <span className="block text-[11px] text-un1t-subtle mt-1">
-                Off by default. Texts the registrant a short confirmation on signup, on top of the email above.
-                Sender ID is set per location in Settings → Locations → SMS.
-              </span>
-            </span>
-          </label>
 
           <div className="pt-4 border-t border-un1t-border">
             <EventEmailFields

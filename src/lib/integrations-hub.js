@@ -3,8 +3,8 @@
 // One place that turns today's scattered connection storage into the
 // uniform card states the master-only hub page renders:
 //
-//   channel_connections  glofox / unifi / sensibo / thinq / twilio_sender /
-//                        bca / instagram — the registry (migs 230/411/412),
+//   channel_connections  glofox / unifi / sensibo / thinq / bca / instagram
+//                        — the registry (migs 230/411/412),
 //                        with legacy location-field fallback via the
 //                        connection-registry pure mappers (dual-read, same
 //                        rules as readConnection()).
@@ -496,7 +496,7 @@ const REGISTRY_HUB_COLUMNS =
   'id, location_id, platform, status, is_active, label, display_name, ' +
   'external_account_id, config, token_expires_at, last_error, last_ok_at'
 
-const REGISTRY_PLATFORMS = ['glofox', 'unifi', 'sensibo', 'thinq', 'twilio_sender', 'bca', 'instagram']
+const REGISTRY_PLATFORMS = ['glofox', 'unifi', 'sensibo', 'thinq', 'bca', 'instagram']
 
 // ── Shelly plugs (SHELLY-UI.7) ────────────────────────────────────────
 //
@@ -807,7 +807,7 @@ async function assembleEmailDelivery(db, locs, orgIds) {
  * @param {object} db  createServerClient() — service role
  * @param {Array<object>} locations  full location rows (id, name, organization_id,
  *   settings, sensibo_api_key, sensibo_pod_id, thinq_pat, thinq_client_id,
- *   thinq_country_code, twilio_alpha_sender_id, bca_config, features)
+ *   thinq_country_code, bca_config, features)
  * @param {{ now?: Date }} [opts]
  */
 export async function assembleIntegrationsHub(db, locations, { now = new Date() } = {}) {
@@ -1174,30 +1174,6 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
     }
   })
 
-  // ── SMS sender (platform-managed card's live signal) ──
-  // senderKnown: false when the registry read failed. The legacy column may
-  // be stale against the registry's config, so the card shows "could not
-  // load" and hides Edit sender ID rather than guess (HUBREAD.1).
-  const sms = regErr
-    ? locs.map((loc) => ({
-        locationId: loc.id,
-        senderId: null,
-        senderKnown: false,
-        source: null,
-        href: locationTabHref(loc.id, 'twilio'),
-      }))
-    : locs.map((loc) => {
-        const reg = pickRegistry(regRows, loc.id, 'twilio_sender')
-        const senderId = reg?.config?.sender_id ?? loc.twilio_alpha_sender_id ?? null
-        return {
-          locationId: loc.id,
-          senderId,
-          senderKnown: true,
-          source: reg ? 'registry' : 'legacy',
-          href: locationTabHref(loc.id, 'twilio'),
-        }
-      })
-
   // ── AI agent live signal (locations.settings.customer_agent) ──
   const agent = locs.map((loc) => ({
     locationId: loc.id,
@@ -1316,7 +1292,6 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
     xero,
     ads,
     shelly,
-    sms,
     agent,
     email,
     unifi,

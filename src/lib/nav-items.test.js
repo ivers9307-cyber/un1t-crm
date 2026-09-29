@@ -97,10 +97,10 @@ describe('Messages hub', () => {
     expect(hrefsIn('messages')).toEqual(['/communications'])
   })
 
-  it('the Messages entry ORs all four channel permissions', () => {
+  it('the Messages entry ORs all three channel permissions (sms left with TWILIO-RETIRE.1)', () => {
     const messages = ALL_NAV.find(i => i.href === '/communications')
     expect(messages.label).toBe('Messages')
-    expect(messages.anyPermission).toEqual(['email', 'whatsapp', 'sms', 'email_inbox'])
+    expect(messages.anyPermission).toEqual(['email', 'whatsapp', 'email_inbox'])
     expect(messages.extraActivePaths).toBeUndefined()
   })
 })
@@ -176,7 +176,7 @@ describe('Marketing hub', () => {
 
   it('the Marketing hub entry ORs its member permissions and lights on the automations path', () => {
     const marketing = ALL_NAV.find(i => i.href === '/marketing')
-    expect(marketing.anyPermission).toEqual(['automations', 'email', 'whatsapp', 'device_control', 'landing_page', 'sms'])
+    expect(marketing.anyPermission).toEqual(['automations', 'email', 'whatsapp', 'device_control', 'landing_page'])
     expect(marketing.extraActivePaths).toEqual(['/automations', '/communications/send', '/communications/sent', '/communications/templates', '/communications/segments', '/communications/list-health'])
   })
 
@@ -282,7 +282,7 @@ describe('Operations hub', () => {
 describe('every hub sidebar union key reaches a real surface', () => {
   // Entries that gate on a union but are NOT redirect indexes. Messages
   // (/communications) renders a real landing page whose own layout admits
-  // all four of its union keys and whose cards are per-channel, so every
+  // all three of its union keys and whose cards are per-channel, so every
   // member of that union genuinely lands somewhere it can use.
   const RENDERED_LANDINGS = ['/communications']
 

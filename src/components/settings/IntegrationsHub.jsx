@@ -40,7 +40,7 @@ import { createContext, useCallback, useContext, useState } from 'react'
 import Link from 'next/link'
 import {
   Zap, MessageCircle, Landmark, Megaphone, Plug,
-  Music2, Bot, Mail, MessageSquare, Bell, DoorOpen, Snowflake,
+  Music2, Bot, Mail, Bell, DoorOpen, Snowflake,
   CreditCard, FileCheck, Activity,
 } from 'lucide-react'
 import { Instagram as InstagramIcon } from '@/components/icons/InstagramIcon'
@@ -455,7 +455,6 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
   const xero = (data.xero || []).filter((r) => inScope(r.locationId))
   const ads = (data.ads || []).filter((r) => inScope(r.locationId))
   const shelly = (data.shelly || []).filter((r) => inScope(r.locationId))
-  const sms = (data.sms || []).filter((r) => inScope(r.locationId))
   const agent = (data.agent || []).filter((r) => inScope(r.locationId))
   // Email delivery is per-ORG; keep an org row when any of its (scoped)
   // locations is in the selected location scope.
@@ -946,43 +945,6 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
           )}
         </HubCard>
 
-        {/* SMS */}
-        <HubCard
-          icon={MessageSquare}
-          title="SMS"
-          provider="One-way utility texts"
-          chip={<StatusChip status="platform" />}
-          muted
-        >
-          {sms.some((r) => r.senderKnown === false) ? (
-            <UnreadableNote what="the SMS sender" />
-          ) : (
-          <>
-          <div className="text-xs text-un1t-subtle space-y-0.5">
-            {sms.map((r) => (
-              <p key={r.locationId}>
-                · {nameById[r.locationId]}: sender ID{' '}
-                {r.senderId ? <span className="font-medium text-un1t-text">{r.senderId}</span> : <span>platform default</span>}
-              </p>
-            ))}
-            <p>· Delivery via the platform account</p>
-          </div>
-          <div className="flex gap-2 pt-1 mt-auto">
-            {sms.slice(0, 1).map((r) => (
-              <button
-                key={r.locationId}
-                type="button"
-                onClick={() => setManaging({ cardKey: 'sms', locationId: r.locationId, initial: r })}
-                className={linkBtn()}
-              >
-                Edit sender ID
-              </button>
-            ))}
-          </div>
-          </>
-          )}
-        </HubCard>
-
         {/* Push notifications */}
         <HubCard
           icon={Bell}
@@ -1136,14 +1098,14 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
       )}
 
       <p className="mt-10 pt-4 border-t border-un1t-border text-xs text-un1t-muted max-w-3xl">
-        Glofox, Twilio, UniFi, Climate, BCA, Meta Ads, Instagram, Xero and WhatsApp now connect and
+        Glofox, UniFi, Climate, BCA, Meta Ads, Instagram, Xero and WhatsApp now connect and
         disconnect right here in a Manage panel — secrets stay write-only (leave a field blank to
         keep it); Xero connects over its OAuth redirect and WhatsApp over Meta&apos;s guided signup,
         with the heavy config one click away. The remaining cards (email delivery, billing)
         deep-link into the surface that owns them. The plan &amp; wallet strip itself is read-only.
       </p>
 
-      {/* Per-card Manage drawer — Ads/Instagram (Phase 1) + Glofox/Twilio/
+      {/* Per-card Manage drawer — Ads/Instagram (Phase 1) + Glofox/
           UniFi/Climate/BCA credential forms (Phase 2) + Xero/WhatsApp
           connect/disconnect (Phase 3). `initial` is the matched hub row so
           the panel prefills state (Xero tenant/status, WhatsApp numbers) —

@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { Plus, Trash2, Bell, Check, Mail, MessageSquare, UserPlus } from 'lucide-react'
+import { Plus, Trash2, Bell, Check, Mail, UserPlus } from 'lucide-react'
 
 const DAYS = [
   { key: 'mon', label: 'Monday' },
@@ -91,27 +91,18 @@ export default function EventForm({ event, locationId }) {
   // now standalone race_events with their own /races admin UI.)
 
   // Confirmation config (mig 077 — booking confirmation flow).
-  // One-shot message sent at booking creation time. Same channel
-  // set as reminders (email + sms). Stored as columns on
-  // event_types since confirmations are singular per event_type.
+  // One-shot message sent at booking creation time. Stored as columns
+  // on event_types since confirmations are singular per event_type.
+  // Email is the only channel: SMS was retired with Twilio
+  // (TWILIO-RETIRE.1), so a save always writes confirmation_channels
+  // ['email'] and a legacy 'sms' entry falls away on the next save.
   const [confirmationEnabled, setConfirmationEnabled] = useState(!!event?.confirmation_enabled)
-  const [confirmationChannels, setConfirmationChannels] = useState(
-    Array.isArray(event?.confirmation_channels) && event.confirmation_channels.length > 0
-      ? event.confirmation_channels
-      : ['email']
-  )
   const [confirmationEmailTemplateId, setConfirmationEmailTemplateId] = useState(event?.confirmation_email_template_id || '')
   const [confirmationEmailSubject, setConfirmationEmailSubject] = useState(event?.confirmation_email_subject || '')
-  const [confirmationSmsBody, setConfirmationSmsBody] = useState(event?.confirmation_sms_body || '')
-
-  function toggleConfirmationChannel(channel) {
-    setConfirmationChannels(prev => prev.includes(channel)
-      ? prev.filter(c => c !== channel)
-      : [...prev, channel])
-  }
 
   // Reminders config (mig 076 — multi-reminder).
-  // Each reminder is { _localId|id, hours_before, channels[], email_*, sms_body, active }.
+  // Each reminder is { _localId|id, hours_before, email_*, active } — email
+  // only, same reason as the confirmation above.
   // _localId is a client-only stable key for new rows that
   // haven't been persisted yet. The PUT endpoint mints a real
   // id once the row lands.
@@ -135,10 +126,8 @@ export default function EventForm({ event, locationId }) {
           setReminders(j.data.map(r => ({
             id: r.id,
             hours_before: Math.round((r.minutes_before || 0) / 60 * 10) / 10,
-            channels: Array.isArray(r.channels) ? r.channels : [],
             email_template_id: r.email_template_id || '',
             email_subject: r.email_subject || '',
-            sms_body: r.sms_body || '',
             active: r.active !== false,
           })))
         }
@@ -148,11 +137,9 @@ export default function EventForm({ event, locationId }) {
     return () => { cancelled = true }
   }, [isEditing, event?.id])
 
-  // Email templates loaded lazily — only when at least one
-  // reminder OR the confirmation includes email.
-  const anyEmail =
-    reminders.some(r => r.channels?.includes('email'))
-    || (confirmationEnabled && confirmationChannels.includes('email'))
+  // Email templates loaded lazily — only when there is at least one
+  // reminder OR the confirmation is on.
+  const anyEmail = reminders.length > 0 || confirmationEnabled
   useEffect(() => {
     if (!anyEmail || !locationId) return
     if (emailTemplates === null) {
@@ -167,10 +154,8 @@ export default function EventForm({ event, locationId }) {
     setReminders(prev => [...prev, {
       _localId: typeof crypto !== 'undefined' ? crypto.randomUUID() : `tmp-${Date.now()}-${prev.length}`,
       hours_before: 24,
-      channels: ['email'],
       email_template_id: '',
       email_subject: '',
-      sms_body: '',
       active: true,
     }])
   }
@@ -181,17 +166,6 @@ export default function EventForm({ event, locationId }) {
 
   function removeReminder(idx) {
     setReminders(prev => prev.filter((_, i) => i !== idx))
-  }
-
-  function toggleReminderChannel(idx, channel) {
-    setReminders(prev => prev.map((r, i) => {
-      if (i !== idx) return r
-      const has = r.channels?.includes(channel)
-      const next = has
-        ? r.channels.filter(c => c !== channel)
-        : [...(r.channels || []), channel]
-      return { ...r, channels: next }
-    }))
   }
 
   function toggleDay(day) {
@@ -241,10 +215,7 @@ export default function EventForm({ event, locationId }) {
     //
     // mig 077 — confirmation lives directly on event_types
     // (singular per booking, doesn't need its own table).
-    // Channel-specific fields are nulled out when their channel
-    // isn't selected so old values don't leak through after a
-    // channel toggle.
-    const confirmationActive = confirmationEnabled && confirmationChannels.length > 0
+    const confirmationActive = confirmationEnabled
     // Coerce + clamp the string-state numeric fields on submit. The
     // raw strings allow the operator to clear+retype mid-edit; the
     // payload still gets sane numbers within the API/DB ranges.
@@ -275,16 +246,9 @@ export default function EventForm({ event, locationId }) {
       })(),
       active: true,
       confirmation_enabled: confirmationActive,
-      confirmation_channels: confirmationActive ? confirmationChannels : null,
-      confirmation_email_template_id:
-        confirmationActive && confirmationChannels.includes('email')
-          ? (confirmationEmailTemplateId || null) : null,
-      confirmation_email_subject:
-        confirmationActive && confirmationChannels.includes('email')
-          ? (confirmationEmailSubject || null) : null,
-      confirmation_sms_body:
-        confirmationActive && confirmationChannels.includes('sms')
-          ? (confirmationSmsBody || null) : null,
+      confirmation_channels: confirmationActive ? ['email'] : null,
+      confirmation_email_template_id: confirmationActive ? (confirmationEmailTemplateId || null) : null,
+      confirmation_email_subject: confirmationActive ? (confirmationEmailSubject || null) : null,
       // GLOFOX3.2 — explicit boolean so toggling off persists.
       create_in_glofox: createInGlofox === true,
       ...(locationId && !isEditing && !createdId ? { location_id: locationId } : {}),
@@ -326,17 +290,14 @@ export default function EventForm({ event, locationId }) {
     const eventId = saved?.id || rowId
     if (eventId) {
       try {
-        const reminderPayload = reminders
-          .filter(r => Array.isArray(r.channels) && r.channels.length > 0)
-          .map(r => ({
-            id: r.id,           // omitted for new rows; server treats as insert
-            hours_before: Number(r.hours_before) || 0,
-            channels: r.channels,
-            email_template_id: r.channels.includes('email') ? (r.email_template_id || null) : null,
-            email_subject: r.channels.includes('email') ? (r.email_subject || null) : null,
-            sms_body: r.channels.includes('sms') ? (r.sms_body || null) : null,
-            active: r.active !== false,
-          }))
+        const reminderPayload = reminders.map(r => ({
+          id: r.id,           // omitted for new rows; server treats as insert
+          hours_before: Number(r.hours_before) || 0,
+          channels: ['email'],
+          email_template_id: r.email_template_id || null,
+          email_subject: r.email_subject || null,
+          active: r.active !== false,
+        }))
         const resp = await fetch(`/api/bookings/event-types/${eventId}/reminders`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
@@ -619,117 +580,46 @@ export default function EventForm({ event, locationId }) {
         <p className="text-xs text-un1t-subtle">
           Sent immediately when a customer submits a booking, before any reminders fire.
           Treated as a transactional / utility message — administrative opt-out is honoured,
-          marketing opt-out isn&apos;t. Same channel set as reminders (email + SMS).
+          marketing opt-out isn&apos;t. Sent by email.
         </p>
 
         {confirmationEnabled && (
           <div className="space-y-3">
+            <div className="text-[11px] text-un1t-subtle uppercase tracking-wider flex items-center gap-1.5">
+              <Mail size={11} /> Email
+            </div>
             <div>
-              <label className="block text-sm mb-1.5">Channels</label>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => toggleConfirmationChannel('email')}
-                  className={`flex-1 px-3 py-2 rounded-lg text-sm flex items-center justify-center gap-2 transition-colors ${
-                    confirmationChannels.includes('email')
-                      ? 'bg-un1t-text text-un1t-bg border border-un1t-text'
-                      : 'border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted'
-                  }`}
-                >
-                  <Mail size={14} /> Email
-                </button>
-                <button
-                  type="button"
-                  onClick={() => toggleConfirmationChannel('sms')}
-                  className={`flex-1 px-3 py-2 rounded-lg text-sm flex items-center justify-center gap-2 transition-colors ${
-                    confirmationChannels.includes('sms')
-                      ? 'bg-un1t-text text-un1t-bg border border-un1t-text'
-                      : 'border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted'
-                  }`}
-                >
-                  <MessageSquare size={14} /> SMS
-                </button>
-              </div>
+              <label className="block text-sm mb-1.5">Email template</label>
+              <select
+                value={confirmationEmailTemplateId}
+                onChange={e => setConfirmationEmailTemplateId(e.target.value)}
+                className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+              >
+                <option value="">— Select a template —</option>
+                {(emailTemplates || []).map(t => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </select>
+              {emailTemplates && emailTemplates.length === 0 && (
+                <p className="text-[11px] text-amber-700 mt-1">
+                  No email templates yet — create one in Communications → Templates first.
+                </p>
+              )}
+            </div>
+            <div>
+              <label className="block text-sm mb-1.5">Subject (optional override)</label>
+              <input
+                type="text"
+                value={confirmationEmailSubject}
+                onChange={e => setConfirmationEmailSubject(e.target.value)}
+                maxLength={500}
+                placeholder="Defaults to the template subject, or 'Booking confirmed: <event name>'"
+                className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+              />
               <p className="text-[11px] text-un1t-muted mt-1">
-                Pick one or both. Both = a separate email and SMS go out at booking time.
+                Merge tags: {'{{first_name}}'}, {'{{event_name}}'}, {'{{event_time}}'}
               </p>
             </div>
-
-            {confirmationChannels.includes('email') && (
-              <div className="space-y-3 border-t border-un1t-border/50 pt-3">
-                <div className="text-[11px] text-un1t-subtle uppercase tracking-wider flex items-center gap-1.5">
-                  <Mail size={11} /> Email
-                </div>
-                <div>
-                  <label className="block text-sm mb-1.5">Email template</label>
-                  <select
-                    value={confirmationEmailTemplateId}
-                    onChange={e => setConfirmationEmailTemplateId(e.target.value)}
-                    className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
-                  >
-                    <option value="">— Select a template —</option>
-                    {(emailTemplates || []).map(t => (
-                      <option key={t.id} value={t.id}>{t.name}</option>
-                    ))}
-                  </select>
-                  {emailTemplates && emailTemplates.length === 0 && (
-                    <p className="text-[11px] text-amber-700 mt-1">
-                      No email templates yet — create one in Communications → Templates first.
-                    </p>
-                  )}
-                </div>
-                <div>
-                  <label className="block text-sm mb-1.5">Subject (optional override)</label>
-                  <input
-                    type="text"
-                    value={confirmationEmailSubject}
-                    onChange={e => setConfirmationEmailSubject(e.target.value)}
-                    maxLength={500}
-                    placeholder="Defaults to the template subject, or 'Booking confirmed: <event name>'"
-                    className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
-                  />
-                  <p className="text-[11px] text-un1t-muted mt-1">
-                    Merge tags: {'{{first_name}}'}, {'{{event_name}}'}, {'{{event_time}}'}
-                  </p>
-                </div>
-              </div>
-            )}
-
-            {confirmationChannels.includes('sms') && (
-              <div className="space-y-2 border-t border-un1t-border/50 pt-3">
-                <div className="text-[11px] text-un1t-subtle uppercase tracking-wider flex items-center gap-1.5">
-                  <MessageSquare size={11} /> SMS
-                </div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label className="block text-sm">SMS body</label>
-                  <span className={`text-[11px] ${confirmationSmsBody.length > 160 ? 'text-amber-700' : 'text-un1t-subtle'}`}>
-                    {confirmationSmsBody.length} chars
-                    {confirmationSmsBody.length > 0 && (
-                      <> · {confirmationSmsBody.length <= 160 ? 1 : Math.ceil(confirmationSmsBody.length / 153)} segment{confirmationSmsBody.length <= 160 ? '' : 's'}</>
-                    )}
-                  </span>
-                </div>
-                <textarea
-                  value={confirmationSmsBody}
-                  onChange={e => setConfirmationSmsBody(e.target.value)}
-                  rows={3}
-                  maxLength={1600}
-                  placeholder="Hi {{first_name}}, your {{event_name}} on {{event_time}} is confirmed. See you at {{location_name}}."
-                  className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none resize-y"
-                />
-                <p className="text-[11px] text-un1t-muted">
-                  Merge tags: <code>{'{{first_name}}'}</code>, <code>{'{{name}}'}</code>,
-                  {' '}<code>{'{{event_name}}'}</code>, <code>{'{{event_time}}'}</code>,
-                  {' '}<code>{'{{location_name}}'}</code>.
-                </p>
-              </div>
-            )}
-
-            {confirmationChannels.length === 0 && (
-              <p className="text-[11px] text-amber-700 border-t border-un1t-border/50 pt-3">
-                Pick at least one channel — confirmation won&apos;t be sent without one.
-              </p>
-            )}
           </div>
         )}
       </div>
@@ -749,9 +639,8 @@ export default function EventForm({ event, locationId }) {
           </button>
         </div>
         <p className="text-xs text-un1t-subtle">
-          Set as many reminders as you want — e.g. 24h email + 2h SMS + day-of both.
-          Each reminder picks its own channels (email, SMS, or both). Reminders are
-          treated as <span className="text-un1t-text">transactional / utility</span>
+          Set as many email reminders as you want — e.g. 24h before + 2h before.
+          Reminders are treated as <span className="text-un1t-text">transactional / utility</span>
           messages — marketing opt-outs are ignored, but contacts who've opted out of
           <em> administrative</em> messages won&apos;t receive them. The cron checks every 5
           minutes; actual send time is within ±1 hour of the configured offset.
@@ -768,9 +657,6 @@ export default function EventForm({ event, locationId }) {
         )}
 
         {remindersLoaded && reminders.map((r, idx) => {
-          const hasEmail = r.channels?.includes('email')
-          const hasSms = r.channels?.includes('sms')
-          const smsLen = (r.sms_body || '').length
           return (
             <div
               key={r.id || r._localId || idx}
@@ -806,111 +692,44 @@ export default function EventForm({ event, locationId }) {
                   </div>
                   <p className="text-[11px] text-un1t-muted mt-1">Common: 24 = day before · 2 = couple of hours before · 0.5 = 30 min before</p>
                 </div>
-                <div>
-                  <label className="block text-sm mb-1.5">Channels</label>
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => toggleReminderChannel(idx, 'email')}
-                      className={`flex-1 px-3 py-2 rounded-lg text-sm flex items-center justify-center gap-2 transition-colors ${
-                        hasEmail
-                          ? 'bg-un1t-text text-un1t-bg border border-un1t-text'
-                          : 'border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted'
-                      }`}
-                    >
-                      <Mail size={14} /> Email
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => toggleReminderChannel(idx, 'sms')}
-                      className={`flex-1 px-3 py-2 rounded-lg text-sm flex items-center justify-center gap-2 transition-colors ${
-                        hasSms
-                          ? 'bg-un1t-text text-un1t-bg border border-un1t-text'
-                          : 'border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted'
-                      }`}
-                    >
-                      <MessageSquare size={14} /> SMS
-                    </button>
-                  </div>
-                  <p className="text-[11px] text-un1t-muted mt-1">Pick one or both. Both = a separate email and SMS go out at the same offset.</p>
-                </div>
               </div>
 
-              {hasEmail && (
-                <div className="space-y-3 border-t border-un1t-border/50 pt-3">
-                  <div className="text-[11px] text-un1t-subtle uppercase tracking-wider flex items-center gap-1.5">
-                    <Mail size={11} /> Email
-                  </div>
-                  <div>
-                    <label className="block text-sm mb-1.5">Email template</label>
-                    <select
-                      value={r.email_template_id || ''}
-                      onChange={e => updateReminder(idx, { email_template_id: e.target.value })}
-                      className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
-                    >
-                      <option value="">— Select a template —</option>
-                      {(emailTemplates || []).map(t => (
-                        <option key={t.id} value={t.id}>{t.name}</option>
-                      ))}
-                    </select>
-                    {emailTemplates && emailTemplates.length === 0 && (
-                      <p className="text-[11px] text-amber-700 mt-1">
-                        No email templates yet — create one in Communications → Templates first.
-                      </p>
-                    )}
-                  </div>
-                  <div>
-                    <label className="block text-sm mb-1.5">Subject (optional override)</label>
-                    <input
-                      type="text"
-                      value={r.email_subject || ''}
-                      onChange={e => updateReminder(idx, { email_subject: e.target.value })}
-                      placeholder="Defaults to the template subject, or 'Reminder: <event name>'"
-                      className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
-                    />
-                    <p className="text-[11px] text-un1t-muted mt-1">
-                      Merge tags: {'{{first_name}}'}, {'{{event_name}}'}, {'{{event_time}}'}
-                    </p>
-                  </div>
+              <div className="space-y-3 border-t border-un1t-border/50 pt-3">
+                <div className="text-[11px] text-un1t-subtle uppercase tracking-wider flex items-center gap-1.5">
+                  <Mail size={11} /> Email
                 </div>
-              )}
-
-              {hasSms && (
-                <div className="space-y-2 border-t border-un1t-border/50 pt-3">
-                  <div className="text-[11px] text-un1t-subtle uppercase tracking-wider flex items-center gap-1.5">
-                    <MessageSquare size={11} /> SMS
-                  </div>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <label className="block text-sm">SMS body</label>
-                    <span className={`text-[11px] ${smsLen > 160 ? 'text-amber-700' : 'text-un1t-subtle'}`}>
-                      {smsLen} chars
-                      {smsLen > 0 && (
-                        <> · {smsLen <= 160 ? 1 : Math.ceil(smsLen / 153)} segment{smsLen <= 160 ? '' : 's'}</>
-                      )}
-                    </span>
-                  </div>
-                  <textarea
-                    value={r.sms_body || ''}
-                    onChange={e => updateReminder(idx, { sms_body: e.target.value })}
-                    rows={3}
-                    maxLength={1600}
-                    placeholder="Hi {{first_name}}, just a reminder for {{event_name}} at {{event_time}}. See you at {{location_name}}."
-                    className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none resize-y"
+                <div>
+                  <label className="block text-sm mb-1.5">Email template</label>
+                  <select
+                    value={r.email_template_id || ''}
+                    onChange={e => updateReminder(idx, { email_template_id: e.target.value })}
+                    className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                  >
+                    <option value="">— Select a template —</option>
+                    {(emailTemplates || []).map(t => (
+                      <option key={t.id} value={t.id}>{t.name}</option>
+                    ))}
+                  </select>
+                  {emailTemplates && emailTemplates.length === 0 && (
+                    <p className="text-[11px] text-amber-700 mt-1">
+                      No email templates yet — create one in Communications → Templates first.
+                    </p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-sm mb-1.5">Subject (optional override)</label>
+                  <input
+                    type="text"
+                    value={r.email_subject || ''}
+                    onChange={e => updateReminder(idx, { email_subject: e.target.value })}
+                    placeholder="Defaults to the template subject, or 'Reminder: <event name>'"
+                    className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
                   />
-                  <p className="text-[11px] text-un1t-muted">
-                    Merge tags: <code>{'{{first_name}}'}</code>, <code>{'{{name}}'}</code>,
-                    {' '}<code>{'{{event_name}}'}</code>, <code>{'{{event_time}}'}</code>,
-                    {' '}<code>{'{{location_name}}'}</code>.
-                    Sender ID is set per-location in <span className="text-un1t-subtle">Settings → Locations → SMS</span>.
+                  <p className="text-[11px] text-un1t-muted mt-1">
+                    Merge tags: {'{{first_name}}'}, {'{{event_name}}'}, {'{{event_time}}'}
                   </p>
                 </div>
-              )}
-
-              {!hasEmail && !hasSms && (
-                <p className="text-[11px] text-amber-700">
-                  Pick at least one channel above. A reminder with no channels is ignored on save.
-                </p>
-              )}
+              </div>
             </div>
           )
         })}

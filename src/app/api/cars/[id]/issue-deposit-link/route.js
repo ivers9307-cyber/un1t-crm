@@ -1,8 +1,10 @@
 // POST /api/cars/[id]/issue-deposit-link
 //
-// Sets up (or refreshes) a tokenised deposit link on a car and
-// delivers it to the buyer via SMS (Twilio). Stamps
-// deposit_link_sent_at + deposit_link_sent_via='sms' on success.
+// Sets up (or refreshes) a tokenised deposit link on a car and returns
+// it for the operator to share with the buyer. It used to text the
+// link via Twilio; SMS was retired in TWILIO-RETIRE.1, so nothing is
+// sent from here now. Stamps deposit_link_sent_at (the issue time) and
+// clears deposit_link_sent_via.
 //
 // Body (optional): { amount?: number }   amount in EUR (defaults to
 //   the location's car_deposit_default_amount).
@@ -19,14 +21,11 @@ import { randomUUID } from 'node:crypto'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
-import { sendLocationSms, TwilioError } from '@/lib/twilio'
 import { getDepositBaseUrl, getRequestOrigin } from '@/lib/app-url'
 import { syncOrderFromCarDeposit } from '@/lib/orders'
 import { emitEvent, EVENT_TYPES } from '@/lib/contact-events'
 import { logWarn } from '@/lib/log'
-import { buildDepositSmsBody } from '@/lib/deposit-receipts'
 import { validateBody } from '@/lib/validate'
-import { overlayConnections } from '@/lib/connection-registry'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -50,7 +49,7 @@ export async function POST(request, props) {
   const db = createServerClient()
   const { data: car } = await db
     .from('cars')
-    .select('*, locations(id, name, car_deposit_default_amount, twilio_alpha_sender_id)')
+    .select('*, locations(id, name, car_deposit_default_amount)')
     .eq('id', params.id)
     .single()
   if (!car) return NextResponse.json({ success: false, error: 'Car not found' }, { status: 404 })
@@ -59,21 +58,6 @@ export async function POST(request, props) {
   // ROLESWEEP.1b — judged at the car's location, not the caller's active studio.
   if (!hasPermissionForLocation(user, car.location_id, 'car_processing')) {
     return NextResponse.json({ success: false, error: 'Not permitted' }, { status: 403 })
-  }
-
-  // INTEG-A2 dual-read: registry twilio_sender row first.
-  if (car.locations) {
-    car.locations = await overlayConnections(db, car.locations, ['twilio_sender'])
-  }
-
-  // Hard requirement — SMS is the only channel now. No fallback to
-  // email because the operator chose to standardise on one channel
-  // (one delivery story, one receipt, one cost line).
-  if (!car.buyer_phone) {
-    return NextResponse.json({
-      success: false,
-      error: 'Add a buyer phone number before issuing a deposit link.',
-    }, { status: 400 })
   }
 
   const amount = parsed.data.amount ?? Number(car.deposit_amount) ?? Number(car.locations?.car_deposit_default_amount) ?? 500
@@ -117,31 +101,8 @@ export async function POST(request, props) {
   let baseUrl
   try { baseUrl = getDepositBaseUrl() } catch { baseUrl = getRequestOrigin(request) }
   const link = `${baseUrl}/deposit/${token}`
-  const carLabel = [car.make, car.model, car.irish_reg].filter(Boolean).join(' ').trim() || 'your car'
-  const buyerFirstName = (car.buyer_name || '').split(' ')[0] || 'there'
-
-  // SMS body — kept under 160 chars to fit a single segment where
-  // possible (varies with car name length). Twilio bills per segment;
-  // operators care about cost.
-  const smsBody = buildDepositSmsBody({ firstName: buyerFirstName, amount, carLabel, link })
-
-  // Sender is resolved from car.locations.twilio_alpha_sender_id
-  // (mig 059) — falls back to TWILIO_FROM env then the literal
-  // 'CCFautos' if neither is set. CCF Autos's location row has
-  // 'CCFautos' so behaviour is unchanged unless an admin edits it
-  // in Settings → Locations → SMS.
-  let smsResult = null
-  try {
-    smsResult = await sendLocationSms({ location: car.locations, to: car.buyer_phone, body: smsBody })
-  } catch (e) {
-    const status = e instanceof TwilioError && e.status ? Math.min(Math.max(e.status, 400), 599) : 500
-    return NextResponse.json({
-      success: false,
-      error: `SMS delivery failed: ${e.message || 'unknown'}${e.code ? ` (Twilio code ${e.code})` : ''}`,
-    }, { status })
-  }
-
-  updates.deposit_link_sent_via = 'sms'
+  // Nothing is sent — the operator shares the link themselves.
+  updates.deposit_link_sent_via = null
   await db.from('cars').update(updates).eq('id', car.id)
 
   // Project into the generic orders ledger (mig 085) so the
@@ -177,7 +138,7 @@ export async function POST(request, props) {
       location_id: car.location_id,
       kind: 'system',
       created_by: user.id,
-      content: `Deposit link issued — €${amount.toFixed(2)}. Sent via SMS to ${car.buyer_phone} (Twilio sid ${smsResult?.sid || 'unknown'}).\n${link}${expiryHint}`,
+      content: `Deposit link issued — €${amount.toFixed(2)}. Share it with the buyer:\n${link}${expiryHint}`,
     })
   } catch (e) {
     logWarn('issue-deposit-link', `failed to write car_notes entry`, { err: e })
@@ -185,10 +146,9 @@ export async function POST(request, props) {
 
   return NextResponse.json({
     success: true,
-    sent_via: ['sms'],
+    sent_via: [],
     link,
     amount,
     expires_at: expiresAt,
-    sms: { sid: smsResult?.sid, status: smsResult?.status, to: smsResult?.to },
   })
 }

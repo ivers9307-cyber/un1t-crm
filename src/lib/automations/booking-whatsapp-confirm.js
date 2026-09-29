@@ -4,7 +4,7 @@
 // the message logs to a conversation and any reply routes to Mia. Mirrors
 // the send pattern in meta-ad-whatsapp-welcome.js. Never throws.
 
-import { toE164Ireland } from '@/lib/twilio'
+import { toE164Ireland } from '@/lib/phone-validate'
 import { sendTemplateMessage, getOrCreateConversation } from '@/lib/whatsapp'
 import { logTransactionalWalletState } from '@/lib/wallet-enforcement'
 import { logWarn } from '@/lib/log'

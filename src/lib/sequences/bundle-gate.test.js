@@ -3,7 +3,8 @@
 // location whose bundle_messaging/bundle_marketing (or the plain
 // per-key email/whatsapp/sms toggle) is off stops a sequence from
 // keeps sending regardless. Closes TENANT.6's accepted gap #2 for
-// src/lib/sequences/steps.js's three send handlers.
+// src/lib/sequences/steps.js's send handlers (email + WhatsApp; the SMS
+// handler was retired with Twilio, TWILIO-RETIRE.1).
 //
 // isFeatureEnabledAtLocation itself (the per-key AND bundle-OR
 // semantics) is exhaustively tested in src/lib/shared-permissions.test.js
@@ -30,15 +31,10 @@ vi.mock('@/lib/whatsapp', () => ({
 vi.mock('@/lib/location-branding', () => ({
   getLocationBranding: vi.fn(async () => ({ companyName: 'UN1T' })),
 }))
-vi.mock('@/lib/twilio', () => ({
-  sendLocationSms: vi.fn(async () => ({ sid: 'SM123' })),
-  TwilioError: class TwilioError extends Error {},
-}))
 
-import { sendEmailStep, sendWhatsappStep, sendSmsStep } from './steps.js'
+import { sendEmailStep, sendWhatsappStep, retiredSmsStep } from './steps.js'
 import { sendMarketingEmail } from '@/lib/postmark'
 import { sendTemplateMessage } from '@/lib/whatsapp'
-import { sendLocationSms } from '@/lib/twilio'
 
 // Chainable mock db. `features` is read fresh on every `locations`
 // query so a single db instance can be reused within one test.
@@ -59,7 +55,7 @@ function makeDb({ features, activityInserts = [] } = {}) {
     rpc() { return Promise.resolve({ error: null }) },
   }
   function route(table) {
-    if (table === 'locations') return { data: features === undefined ? null : { id: 'loc-1', name: 'Stillorgan', twilio_alpha_sender_id: 'UN1T', features } }
+    if (table === 'locations') return { data: features === undefined ? null : { id: 'loc-1', name: 'Stillorgan', features } }
     if (table === 'whatsapp_templates') {
       return { data: { id: 'tpl-1', name: 'nudge', language: 'en', status: 'APPROVED', location_id: 'loc-1', components: [] } }
     }
@@ -85,10 +81,7 @@ const waContact = {
   id: 'c1', wa_phone: '+353871234567', wa_status: 'active',
   contact_location_preferences: [{ location_id: 'loc-1', email_marketing: true, whatsapp_marketing: true, sms_marketing: true }],
 }
-const smsContact = {
-  id: 'c1', phone: '+353860000000', sms_status: 'active',
-  contact_location_preferences: [{ location_id: 'loc-1', email_marketing: true, whatsapp_marketing: true, sms_marketing: true }],
-}
+const smsContact = { id: 'c1', phone: '+353860000000' }
 
 beforeEach(() => vi.clearAllMocks())
 
@@ -149,24 +142,16 @@ describe('sendWhatsappStep — location bundle/feature gate', () => {
   })
 })
 
-describe('sendSmsStep — location bundle/feature gate', () => {
-  it('SKIPS when features.sms is explicitly false', async () => {
-    const db = makeDb({ features: { sms: false } })
-    const out = await sendSmsStep(db, { step: smsStep, sequence, contact: smsContact })
+// TWILIO-RETIRE.1 — a legacy SMS step no longer sends or consults the
+// location's features at all: it records a skip and the enrolment advances.
+describe('retiredSmsStep — the SMS channel is retired', () => {
+  it.each([
+    ['features all on', {}],
+    ['features.sms explicitly false', { sms: false }],
+  ])('records a skip and resolves null (%s)', async (_label, features) => {
+    const db = makeDb({ features })
+    const out = await retiredSmsStep(db, { step: smsStep, sequence, contact: smsContact })
     expect(out).toBeNull()
-    expect(sendLocationSms).not.toHaveBeenCalled()
-  })
-
-  it('SENDS when features are all on', async () => {
-    const db = makeDb({ features: {} })
-    await sendSmsStep(db, { step: smsStep, sequence, contact: smsContact })
-    expect(sendLocationSms).toHaveBeenCalled()
-  })
-
-  it('SKIPS when every bundle owning `sms` (bundle_messaging + bundle_marketing) is explicitly off', async () => {
-    const db = makeDb({ features: { bundle_messaging: false, bundle_marketing: false } })
-    const out = await sendSmsStep(db, { step: smsStep, sequence, contact: smsContact })
-    expect(out).toBeNull()
-    expect(sendLocationSms).not.toHaveBeenCalled()
+    expect(db.activityInserts).toHaveLength(1) // the recorded skip, and nothing else
   })
 })

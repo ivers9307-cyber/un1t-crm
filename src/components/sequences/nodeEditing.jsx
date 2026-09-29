@@ -218,8 +218,10 @@ export function NodeConfig({ node, onPatch, templates, tagVocabulary }) {
     }
     case 'sms':
       return (
-        <Labeled label="Message" hint={`${(c.body || '').length} characters`}>
-          <Area value={c.body} onChange={v => onPatch({ body: v })} rows={3} placeholder="SMS text — keep it short" />
+        // RETIRED (TWILIO-RETIRE.1) — read-only so a legacy draft still shows
+        // what the step said; it cannot publish until the step is removed.
+        <Labeled label="Message" hint="SMS has been retired — remove this step">
+          <p className="text-sm text-un1t-subtle whitespace-pre-wrap">{c.body || '—'}</p>
         </Labeled>
       )
     case 'wait':

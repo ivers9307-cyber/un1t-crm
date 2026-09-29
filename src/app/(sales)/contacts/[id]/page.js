@@ -173,7 +173,7 @@ export default async function ContactDetailPage(props) {
     journey = await loadContactJourney(db, id)
   } catch { journey = null }
 
-  const [seqRes, emailRes, smsRes] = await Promise.all([
+  const [seqRes, emailRes] = await Promise.all([
     db.from('sequence_enrollments')
       .select('id, next_step_at, email_sequences(name)')
       .eq('contact_id', id)
@@ -187,22 +187,16 @@ export default async function ContactDetailPage(props) {
       .eq('contact_id', id)
       .order('sent_at', { ascending: false, nullsFirst: false })
       .limit(8),
-    // SMS broadcast sends (ad-hoc / sequence SMS aren't logged per-contact).
-    db.from('sms_broadcast_recipients')
-      .select('id, status, sent_at, delivered_at, failed_at, undelivered_at, error_message, sms_broadcasts(name)')
-      .eq('contact_id', id)
-      .order('sent_at', { ascending: false, nullsFirst: false })
-      .limit(8),
   ])
   const activeSequences = seqRes.data || []
-  const messages = buildMessageHistory(emailRes.data || [], smsRes.data || [])
+  const messages = buildMessageHistory(emailRes.data || [])
 
   // CONTACT-COMPOSER.1 — messaging context for the unified composer.
   // DRAWER.4 — ad-hoc email channel.
   // ROLESWEEP.1c — each flag is the send route's own decision: the web OR the
   // mobile toggle at the CONTACT's location, not the active studio. canWhatsApp
   // also gates the template read below.
-  const { whatsapp: canWhatsApp, sms: canSms, email: canEmail } = contactChannelFlags(user, contact.location_id)
+  const { whatsapp: canWhatsApp, email: canEmail } = contactChannelFlags(user, contact.location_id)
   const latestWaConversation = waConversations[0] || null
   const whatsappWindowOpen = latestWaConversation?.window_expires_at
     ? new Date(latestWaConversation.window_expires_at) > new Date()
@@ -407,12 +401,9 @@ export default async function ContactDetailPage(props) {
               contactLocationId={contact.location_id}
               contactEmail={contact.email || null}
               canWhatsApp={canWhatsApp}
-              canSms={canSms}
               canEmail={canEmail}
               hasWaPhone={!!(contact.wa_phone || contact.phone)}
-              hasPhone={!!contact.phone}
               hasEmail={!!contact.email}
-              smsBlocked={!!(contact.sms_status && contact.sms_status !== 'active')}
               emailBlocked={['bounced', 'complained'].includes(contact.email_status)}
               whatsappWindowOpen={whatsappWindowOpen}
               whatsappWindowExpiresAt={latestWaConversation?.window_expires_at || null}
@@ -556,21 +547,13 @@ function emailStatusPill(e) {
   return { text: 'Sent', cls: 'bg-un1t-bg text-un1t-subtle border-un1t-border' }
 }
 
-function smsStatusPill(s) {
-  if (s.failed_at || s.undelivered_at) return { text: 'Failed', cls: 'bg-red-50 text-red-700 border-red-200' }
-  if (s.delivered_at) return { text: 'Delivered', cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' }
-  return { text: 'Sent', cls: 'bg-un1t-bg text-un1t-subtle border-un1t-border' }
-}
-
-// Merge email + SMS sends into one "what we've sent + did it land"
-// list, newest first, capped.
-function buildMessageHistory(emails, smses) {
+// Email sends as one "what we've sent + did it land" list, newest
+// first, capped. (SMS broadcast sends used to merge in here until SMS
+// was retired with Twilio, TWILIO-RETIRE.1.)
+function buildMessageHistory(emails) {
   const out = []
   for (const e of emails) {
     out.push({ id: `e-${e.id}`, channel: 'email', label: e.subject || 'Email', at: e.sent_at || e.created_at, status: emailStatusPill(e) })
-  }
-  for (const s of smses) {
-    out.push({ id: `s-${s.id}`, channel: 'sms', label: s.sms_broadcasts?.name ? `SMS · ${s.sms_broadcasts.name}` : 'SMS broadcast', at: s.sent_at, status: smsStatusPill(s) })
   }
   return out
     .filter((m) => m.at)

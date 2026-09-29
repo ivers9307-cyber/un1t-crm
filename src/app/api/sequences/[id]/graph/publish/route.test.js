@@ -49,10 +49,10 @@ const waGraph = (variables) => ({
   nodes: [{ id: 'n1', type: 'whatsapp', config: { template_id: 'wt-dyn', variables } }],
   edges: [{ from: 'trigger', to: 'n1' }],
 })
-const smsGraph = () => ({
+const emailGraph = () => ({
   version: 1,
   trigger: { type: 'manual', config: {} },
-  nodes: [{ id: 'n1', type: 'sms', config: { body: 'hi' } }],
+  nodes: [{ id: 'n1', type: 'email', config: { subject: 'hi' } }],
   edges: [{ from: 'trigger', to: 'n1' }],
 })
 
@@ -149,7 +149,7 @@ describe('publish gate — dynamic URL button value', () => {
     const { db } = mockDb()
     createServerClient.mockReturnValue(db)
 
-    const res = await publish(smsGraph())
+    const res = await publish(emailGraph())
 
     expect(res.status).toBe(200)
     expect(db.from).not.toHaveBeenCalledWith('whatsapp_templates')

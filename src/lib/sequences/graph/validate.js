@@ -13,7 +13,9 @@ function requiredConfigError(node) {
     case 'whatsapp':
       return need(c.template_id || c.whatsapp_template_id, 'WhatsApp needs a template')
     case 'sms':
-      return need(typeof c.body === 'string' && c.body.trim(), 'SMS needs a body')
+      // RETIRED (TWILIO-RETIRE.1) — the step would only record a skip, so a
+      // graph that still holds one must not publish. Delete the step.
+      return 'SMS has been retired — remove this step'
     case 'wait':
       return need((c.days || c.hours || c.minutes), 'wait needs a non-zero delay')
     case 'apply_tag':

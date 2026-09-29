@@ -12,7 +12,6 @@
 // rather than by convention:
 //
 //   email    -> buildAudienceQueryAsync   (postmark.js; campaign-sender.js sends through it)
-//   sms      -> buildSmsAudienceAsync     (sms.js; fetchAllSmsAudience pages through it)
 //   whatsapp -> buildWhatsAppAudienceAsync(whatsapp.js; fetchAllWhatsAppAudience pages through it)
 //   (none)   -> raw contacts at the location — the MATCH set, not a send set.
 //              This is the sequence case: since SEQEXIT.1 a sequence audience
@@ -25,15 +24,15 @@
 // audience-filter.js resolveTagFilters for the full reasoning.
 
 import { buildAudienceQueryAsync } from '@/lib/postmark'
-import { buildSmsAudienceAsync } from '@/lib/sms'
 import { buildWhatsAppAudienceAsync } from '@/lib/whatsapp'
 import { applyAudienceFilterAsync } from '@/lib/audience-filter'
 
-export const ELIGIBILITY_CHANNELS = ['email', 'sms', 'whatsapp']
+// 'sms' left with the SMS channel (TWILIO-RETIRE.1) — it is now an unknown channel.
+export const ELIGIBILITY_CHANNELS = ['email', 'whatsapp']
 
 /**
  * @param {object} db          service-role Supabase client
- * @param {string|null} channel 'email' | 'sms' | 'whatsapp' | null (match-only)
+ * @param {string|null} channel 'email' | 'whatsapp' | null (match-only)
  * @param {object} filter      audience filter JSON
  * @param {string} locationId  tenant scope — ALWAYS applied by the delegate
  * @param {string} [columns]   columns to select
@@ -46,9 +45,6 @@ export async function buildEligibleAudienceQuery({
 }) {
   if (channel === 'email') {
     return buildAudienceQueryAsync(db, filter, locationId, { columns, selectOpts, consentField })
-  }
-  if (channel === 'sms') {
-    return buildSmsAudienceAsync(db, filter, locationId, { columns, selectOpts })
   }
   if (channel === 'whatsapp') {
     return buildWhatsAppAudienceAsync(db, filter, locationId, { columns, selectOpts })

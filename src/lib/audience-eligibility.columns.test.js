@@ -33,7 +33,6 @@ const HEAD_COUNT = { count: 'exact', head: true }
 
 describe.each([
   ['email', 'contact_location_audience', [['eq', ['loc_email_marketing', true]]]],
-  ['sms', 'contact_location_audience', [['eq', ['loc_sms_marketing', true]], ['eq', ['sms_status', 'active']]]],
   ['whatsapp', 'contact_location_audience', [['eq', ['loc_whatsapp_marketing', true]]]],
 ])('%s channel', (channel, table, expectedGates) => {
   it('passes the caller\'s columns + select options to the FIRST select()', async () => {
@@ -67,38 +66,18 @@ describe.each([
 
 // ── The send path must be BYTE-IDENTICAL to before FILTER-B.4 ────────
 //
-// smsAudienceBase and whatsAppAudienceBase are on the LIVE send path for both
-// channels (fetchAllSmsAudience / fetchAllWhatsAppAudience page through them).
+// whatsAppAudienceBase is on the LIVE send path (fetchAllWhatsAppAudience pages
+// through it).
 // Making columns overridable must not change what the SEND itself selects — a
 // dropped column there is a merge tag that renders blank in a real broadcast,
 // or a phone number the sender cannot find. These pin the no-argument shape.
 describe('the send path\'s own projection is unchanged by the override', () => {
-  it('SMS defaults to the exact column list the broadcast sender relies on', async () => {
-    const rec = chainRecorder()
-    const db = { from: vi.fn(() => rec) }
-    const { buildSmsAudienceAsync } = await import('./sms')
-    await buildSmsAudienceAsync(db, FILTER, 'loc-1')
-    expect(rec.calls[0]).toEqual(['select', [
-      'id, name, first_name, last_name, email, phone, pipeline_stage_slug, sms_status, location_id, audience_location_id, loc_sms_marketing',
-      undefined,
-    ]])
-  })
-
   it('WhatsApp defaults to * as the drip/blast path has always had', async () => {
     const rec = chainRecorder()
     const db = { from: vi.fn(() => rec) }
     const { buildWhatsAppAudienceAsync } = await import('./whatsapp')
     await buildWhatsAppAudienceAsync(db, FILTER, 'loc-1')
     expect(rec.calls[0]).toEqual(['select', ['*', undefined]])
-  })
-
-  it('SMS sync sibling (buildSmsAudience) keeps its projection too', async () => {
-    const rec = chainRecorder()
-    const db = { from: vi.fn(() => rec) }
-    const { buildSmsAudience } = await import('./sms')
-    buildSmsAudience(db, FILTER, 'loc-1')
-    expect(rec.calls[0][1][0]).toContain('phone')
-    expect(rec.calls[0][1][0]).toContain('first_name')
   })
 
   it('WhatsApp sync sibling (buildWhatsAppAudience) keeps its projection too', async () => {

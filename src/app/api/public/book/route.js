@@ -171,7 +171,7 @@ export async function POST(request) {
   }
 
   // Fire the per-event_type confirmation message (mig 077). Best-
-  // effort: a Postmark or Twilio hiccup never breaks the customer's
+  // effort: a Postmark hiccup never breaks the customer's
   // success response; the on-page confirmation still shows. The
   // helper writes its own activity row + handles channel gates.
   let confirmation = null

@@ -15,11 +15,16 @@ export const CONFIG_NODE_TYPES = [
 // stays in NODE_TYPES because draft-save shape-checks the WHOLE graph
 // (parseGraphShape → z.enum(NODE_TYPES)) — dropping it would brick the
 // legacy drafts that still contain the node.
+//
+// 'sms' is RETIRED the same way (TWILIO-RETIRE.1): the channel left with
+// Twilio, the executor records a skip and advances, and validate.js refuses
+// to publish a graph that still holds one. It stays in NODE_TYPES and
+// CHANNEL_NODE_TYPES so a legacy draft still parses and compiles.
 export const NODE_TYPES = [
   'email', 'whatsapp', 'sms', 'wait',
   'apply_tag', 'update_field', 'internal_task', 'webhook', 'branch', 'move_pipeline_stage', 'glofox_provision',
 ]
-export const RETIRED_NODE_TYPES = ['move_pipeline_stage']
+export const RETIRED_NODE_TYPES = ['move_pipeline_stage', 'sms']
 // The offer-side vocabulary: what the builder palette + the AI agent
 // may create. Valid-but-retired types are excluded.
 export const ACTIVE_NODE_TYPES = NODE_TYPES.filter((t) => !RETIRED_NODE_TYPES.includes(t))

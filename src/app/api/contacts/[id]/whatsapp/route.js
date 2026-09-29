@@ -110,7 +110,7 @@ export async function POST(request, props) {
       if (!isWindowOpen(conversation)) {
         return NextResponse.json({
           success: false,
-          error: 'The 24-hour messaging window has closed. Send an approved template to reopen the conversation, or use SMS.',
+          error: 'The 24-hour messaging window has closed. Send an approved template to reopen the conversation.',
           window_expired: true,
         }, { status: 409 })
       }
