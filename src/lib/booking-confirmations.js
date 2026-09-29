@@ -2,11 +2,12 @@
 //
 // Fires once at booking creation time, not on a cron. Same
 // channel gates as the reminder runner (email_administrative
-// opt-out, no-email) and the same merge-tag set. Email only: the
-// SMS channel was retired with Twilio (TWILIO-RETIRE.1), so a
-// legacy 'sms' entry in confirmation_channels is skipped.
+// opt-out, no-email) and the same merge-tag set. Channels: email
+// and WhatsApp (EVENTCONFIRM-WA.1, mig 666 — an approved template
+// chosen per event type). The SMS channel was retired with Twilio
+// (TWILIO-RETIRE.1), so a legacy 'sms' entry is skipped.
 //
-// Best-effort: a Postmark hiccup never breaks the
+// Best-effort: a Postmark / Meta hiccup never breaks the
 // customer's "Booking confirmed!" response. Errors land in the
 // server logs and the customer sees the on-page confirmation;
 // the operator can re-send manually or rely on the reminder
@@ -19,7 +20,8 @@
 import { sendTransactionalEmail, applyMergeTags } from './postmark'
 import { logTransactionalWalletState } from './wallet-enforcement'
 import { logWarn } from './log'
-import { transactionalEmailSuppression } from '@/lib/transactional-consent'
+import { transactionalEmailSuppression, transactionalWhatsappSuppression } from '@/lib/transactional-consent'
+import { maybeSendBookingWhatsappConfirm } from '@/lib/automations/booking-whatsapp-confirm'
 
 // BOOKING.2 — booking_date (YYYY-MM-DD) and start_time (HH:MM:SS) are
 // stored as Dublin-local wall-clock values without timezone semantics.
@@ -85,12 +87,13 @@ export async function sendBookingConfirmation(db, bookingId) {
       event_types (
         id, name, location_id,
         confirmation_enabled, confirmation_channels,
-        confirmation_email_template_id, confirmation_email_subject
+        confirmation_email_template_id, confirmation_email_subject,
+        confirmation_whatsapp_template_id
       ),
       contacts (
-        first_name, last_name, name, email, phone,
-        email_status,
-        contact_preferences ( email_administrative )
+        id, first_name, last_name, name, email, phone, wa_phone,
+        email_status, wa_status,
+        contact_preferences ( email_administrative, whatsapp_administrative )
       )
     `)
     .eq('id', bookingId)
@@ -117,6 +120,7 @@ export async function sendBookingConfirmation(db, bookingId) {
     locationId: ev.location_id,
     emailTemplateId: ev.confirmation_email_template_id,
     emailSubject: ev.confirmation_email_subject,
+    whatsappTemplateId: ev.confirmation_whatsapp_template_id,
   }
 
   // INTEG-C3 — transactional sends are NEVER blocked by billing: this
@@ -129,6 +133,7 @@ export async function sendBookingConfirmation(db, bookingId) {
     try {
       let outcome
       if (channel === 'email') outcome = await sendEmailConfirmation(db, booking, ctx)
+      else if (channel === 'whatsapp') outcome = await sendWhatsappConfirmation(db, booking, ctx)
       else outcome = { status: 'skipped', reason: `unsupported_channel:${channel}` }
 
       if (outcome.status === 'sent') result.sent.push(channel)
@@ -195,4 +200,49 @@ async function sendEmailConfirmation(db, booking, ctx) {
     tag: 'booking-confirmation',
   })
   return { status: 'sent' }
+}
+
+// EVENTCONFIRM-WA.1 — the WhatsApp leg. A booking arrives from a web form,
+// so there is no 24h window: it has to be an APPROVED template (UTILITY, since
+// Meta refuses MARKETING on transactional paths). The operator picks it per
+// event type; its body variables fill positionally — {{1}} first name,
+// {{2}} day + time, {{3}} event name — and a template with fewer variables
+// just takes the first N. The send itself (feature gate, phone
+// normalisation, APPROVED check, wa_phone backfill, inbox log) is the /start
+// funnel's helper, so the two paths cannot drift.
+async function sendWhatsappConfirmation(db, booking, ctx) {
+  if (!ctx.whatsappTemplateId) return { status: 'skipped', reason: 'no_template_configured' }
+
+  const c = booking.contacts
+  if (!c?.id) return { status: 'skipped', reason: 'no_contact' }
+  const suppression = transactionalWhatsappSuppression(c)
+  if (suppression) return { status: 'skipped', reason: suppression }
+
+  const { data: tpl, error: tplErr } = await db
+    .from('whatsapp_templates')
+    .select('name, status, components')
+    .eq('id', ctx.whatsappTemplateId)
+    .eq('location_id', ctx.locationId)
+    .maybeSingle()
+  if (tplErr) throw new Error(`template read failed: ${tplErr.message}`)
+  if (!tpl) return { status: 'skipped', reason: 'template_not_found' }
+
+  const body = (tpl.components || []).find((x) => x?.type === 'BODY')
+  const varCount = new Set(String(body?.text || '').match(/\{\{\d+\}\}/g) || []).size
+  const firstName = c.first_name || (c.name ? c.name.split(' ')[0] : '') || booking.customer_name?.split(' ')[0] || 'there'
+  const params = [firstName, fmtBookingTime(booking.booking_date, booking.start_time), ctx.eventName || '']
+    .slice(0, varCount)
+
+  const res = await maybeSendBookingWhatsappConfirm({
+    db,
+    locationId: ctx.locationId,
+    contact: { id: c.id, first_name: c.first_name, name: c.name, phone: c.wa_phone || c.phone || booking.customer_phone, wa_phone: c.wa_phone },
+    templateName: tpl.name,
+    bodyParams: params,
+  })
+  if (res.sent) return { status: 'sent' }
+  // The helper swallows its own send errors and reports them as a reason; a
+  // failed SEND is a failure, every other reason is a skip (nothing to send).
+  if (res.reason === 'send_failed') throw new Error('WhatsApp send failed')
+  return { status: 'skipped', reason: res.reason }
 }
