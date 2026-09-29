@@ -435,6 +435,28 @@ describe('Webhook secret panel after a save (SEQPAGEGATE.1 review)', () => {
     expect(some.container.textContent).toContain('Saving replaces the old one.')
   })
 
+  // N4: Remove had no way back short of reloading the page.
+  it('Keep secret undoes Remove, and the save then sends no webhook_secret', async () => {
+    const { getByText, queryByText, container } = open({ ...SEQ, has_webhook_secret: true })
+    fireEvent.click(getByText('Remove secret'))
+    expect(container.textContent).toContain('The secret is removed when you save')
+    fireEvent.click(getByText('Keep secret'))
+    expect(container.textContent).not.toContain('The secret is removed when you save')
+    expect(queryByText('Keep secret')).toBeNull()
+    expect(getByText('Remove secret')).toBeTruthy()
+    fireEvent.change(container.querySelector('input[placeholder="Sequence name"]'), { target: { value: 'Hook renamed' } })
+    fireEvent.click(getByText('Save settings'))
+    await waitFor(() => expect(puts).toHaveLength(1))
+    expect(puts[0]).not.toHaveProperty('webhook_secret')
+  })
+
+
+  it('the Keep secret link carries no em-dash', () => {
+    const { getByText } = open({ ...SEQ, has_webhook_secret: true })
+    fireEvent.click(getByText('Remove secret'))
+    expect(getByText('Keep secret').closest('div').textContent).not.toContain('\u2014')
+  })
+
   it('the saved message carries no em-dash', async () => {
     const { container, getByText } = open()
     fireEvent.click(getByText('Generate new secret'))

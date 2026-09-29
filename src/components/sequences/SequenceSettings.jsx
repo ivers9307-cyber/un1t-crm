@@ -358,6 +358,9 @@ export default function SequenceSettings({ sequence, justSetSecret = null, onJus
                   {hasSecret && secretAction !== 'clear' && (
                     <button type="button" onClick={() => { setSecretDraft(''); setSecretAction('clear'); leaveJustSet(); touch() }} className="text-rose-700 hover:underline">Remove secret</button>
                   )}
+                  {secretAction === 'clear' && (
+                    <button type="button" onClick={() => setSecretAction(null)} className="text-un1t-subtle hover:text-un1t-text underline">Keep secret</button>
+                  )}
                 </div>
                 {justSet && secretAction === null && (
                   <p className="text-[11px] text-amber-700">{SECRET_JUST_SET_MESSAGE}</p>
