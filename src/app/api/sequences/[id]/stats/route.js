@@ -25,6 +25,7 @@ import { canBuildSequencesAt, canBuildSequencesSomewhere, sequencePermissionRequ
 import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { selectAll } from '@/lib/select-all'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -91,12 +92,11 @@ export async function GET(_request, props) {
 
   // Enrolment-level totals. Paginated via selectAll (the old
   // .limit(10_000) was silently capped at the 1000-row PostgREST
-  // ceiling). Best-effort: an error here shouldn't fail the whole
-  // stats response, so swallow it and report zeroes (matches the
-  // prior un-checked behaviour).
+  // ceiling). This is the panel's only source for enrolment counts
+  // (the email_sequences.total_* counters were never maintained; mig 663).
   const enrolmentStats = { total: 0, active: 0, completed: 0, exited: 0, paused: 0 }
   const exitReasons = {}
-  let enrolments = []
+  let enrolments
   try {
     enrolments = await selectAll((from, to) => db
       .from('sequence_enrollments')
@@ -104,8 +104,11 @@ export async function GET(_request, props) {
       .eq('sequence_id', params.id)
       .order('id', { ascending: true })
       .range(from, to))
-  } catch {
-    enrolments = []
+  } catch (enrolErr) {
+    // SEQCOUNTERS.1 — a failed read is never "0 enrolled". The panel keeps
+    // its last good numbers on a non-success.
+    logError('sequences', 'stats: enrolments read failed', { sequenceId: params.id, code: enrolErr?.code || null })
+    return NextResponse.json({ success: false, error: 'Could not load enrolments' }, { status: 500 })
   }
   for (const e of (enrolments || [])) {
     enrolmentStats.total += 1

@@ -259,6 +259,9 @@ describe('GET /api/sequences and GET /api/sequences/[id] leave out webhook secre
     expect(cols).toBeTypeOf('string')
     expect(cols).not.toMatch(/\*(?!\))/) // a bare * (sequence_steps(*) is fine)
     expect(cols).not.toMatch(/webhook_token|webhook_secret/)
+    // SEQCOUNTERS.1 — the total_* counters were never maintained (mig 663
+    // marks them DEPRECATED); no caller read them from these GETs.
+    expect(cols).not.toMatch(/total_(enrolled|completed|exited)/)
   }
 
   it('the list', async () => {
