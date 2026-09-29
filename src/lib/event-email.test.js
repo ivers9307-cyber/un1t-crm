@@ -110,6 +110,12 @@ describe('confirmation email — characterization (default look)', () => {
     expect(html).toContain('€40.00')
   })
 
+  it('labels the start-time row "Time" for a non-race event (EVENT-MULTITIME.1)', () => {
+    const html = buildConfirmationEmailHtml({ ...CONFIRM_CTX, waveLabel: '08:00', waveRowLabel: 'Time' })
+    expect(html).toContain('>Time</td><td style="padding:8px 0;font-weight:600">08:00</td>')
+    expect(html).not.toContain('>Wave</td>')
+  })
+
   it('has the QR check-in grid (one <img> per member with a QR)', () => {
     const html = buildConfirmationEmailHtml(CONFIRM_CTX)
     expect(html).toContain('Check-in codes')
