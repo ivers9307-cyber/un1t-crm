@@ -6,7 +6,7 @@ vi.mock('@/lib/connection-registry', () => ({ overlayConnections: vi.fn() }))
 
 import {
   normaliseDevicePatch, buildDeviceInsert, readAcCredentials,
-  redactSecrets, publicPod, publicThinqDevice,
+  redactSecrets, publicPod, publicThinqDevice, acCredentialsConfigured,
 } from './ac-device-admin.js'
 import { overlayConnections } from '@/lib/connection-registry'
 
@@ -100,5 +100,23 @@ describe('readAcCredentials', () => {
   })
   it('a missing location is notFound', async () => {
     expect(await readAcCredentials(db({ data: null, error: null }), LOC)).toEqual({ notFound: true })
+  })
+})
+
+// ACALLOWLISTGATE.1 — "AC is set up at this studio" for the staff editor:
+// credentials for at least one vendor, by the SAME rule the control path uses
+// (ac-devices.js resolveCredentials: Sensibo needs the API key; ThinQ needs
+// the PAT and the client id). Takes a location row AFTER the registry overlay.
+describe('acCredentialsConfigured (ACALLOWLISTGATE.1)', () => {
+  it.each([
+    ['nothing', {}, false],
+    ['a Sensibo key', { sensibo_api_key: 'SYNTH-S' }, true],
+    ['a ThinQ PAT and client id', { thinq_pat: 'SYNTH-T', thinq_client_id: 'cid' }, true],
+    ['a ThinQ PAT without a client id', { thinq_pat: 'SYNTH-T' }, false],
+    ['a ThinQ client id without a PAT', { thinq_client_id: 'cid' }, false],
+    ['empty strings', { sensibo_api_key: '', thinq_pat: '', thinq_client_id: '' }, false],
+    ['null / undefined location', null, false],
+  ])('%s', (_label, loc, expected) => {
+    expect(acCredentialsConfigured(loc)).toBe(expected)
   })
 })

@@ -12,6 +12,22 @@ import { overlayConnections } from '@/lib/connection-registry'
 
 export const AC_PROVIDERS = Object.freeze(['sensibo', 'thinq'])
 
+/**
+ * ACALLOWLISTGATE.1 — is AC set up at this studio? Credentials for at least
+ * one vendor, by the rule the control path applies before switching a unit
+ * (ac-devices.js resolveCredentials): Sensibo needs the API key; LG ThinQ
+ * needs the PAT and the client id. Pass the location row AFTER the registry
+ * overlay (overlayConnections / overlayConnectionsMany with 'sensibo','thinq').
+ * Pinned to the control path by ac-credentials-parity.test.js.
+ * SERVER ONLY: the argument carries credentials; only the boolean may leave.
+ */
+export function acCredentialsConfigured(location) {
+  if (!location) return false
+  const sensibo = !!location.sensibo_api_key
+  const thinq = !!location.thinq_pat && !!location.thinq_client_id
+  return sensibo || thinq
+}
+
 // Whitelist of editable columns. provider / provider_device_id / location_id
 // are never editable: they are the unit's identity.
 const EDITABLE_KEYS = Object.freeze([

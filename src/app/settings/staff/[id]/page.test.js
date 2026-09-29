@@ -219,6 +219,11 @@ describe('/settings/staff/[id] — STAFFFORMSETTINGS.1: StaffForm gets identity 
     expect(mine).not.toHaveProperty('settings')
     expect(mine).toMatchObject({ id: LOC_MINE, name: 'Mine', unifi_configured: true })
     expect(theirs.unifi_configured).toBe(false)
+    // ACALLOWLISTGATE.1 — the AC allowlist's gate: Mine holds a Sensibo key
+    // (read on the server; the no-SYNTH- line below proves it never crosses),
+    // Theirs holds no AC credential.
+    expect(mine.ac_configured).toBe(true)
+    expect(theirs.ac_configured).toBe(false)
     expect(JSON.stringify(el.props.locations)).not.toMatch(/SYNTH-|\+353000000000|test_phones/)
     expect(el.props.callerOwnerLocationIds).toEqual([LOC_MINE, LOC_THEIRS])
     expect(el.props.locationsLoadFailed).toBe(false)
