@@ -189,18 +189,19 @@ BEGIN
     RAISE EXCEPTION 'mig 662: policies on other tables read the consent tables (a client read would now fail): %', v_list;
   END IF;
 
-  -- 7. no other view over them (it would need the same closing, or would expose them if DEFINER)
+  -- 7. no other view over them, or over contact_location_audience itself (it
+  --    would need the same closing, or would expose the rows if DEFINER)
   SELECT string_agg(DISTINCT format('%I.%I', n.nspname, v.relname), ', ') INTO v_list
     FROM pg_depend d
     JOIN pg_rewrite r ON r.oid = d.objid
     JOIN pg_class v ON v.oid = r.ev_class
     JOIN pg_namespace n ON n.oid = v.relnamespace
    WHERE d.refobjid IN ('public.contact_preferences'::regclass, 'public.contact_location_preferences'::regclass,
-                        'public.consent_log'::regclass)
+                        'public.consent_log'::regclass, 'public.contact_location_audience'::regclass)
      AND v.oid <> d.refobjid
      AND v.oid <> 'public.contact_location_audience'::regclass;
   IF v_list IS NOT NULL THEN
-    RAISE EXCEPTION 'mig 662: views other than contact_location_audience depend on the consent tables: %', v_list;
+    RAISE EXCEPTION 'mig 662: views other than contact_location_audience depend on the consent tables or on that view: %', v_list;
   END IF;
 
   RAISE NOTICE 'mig 662: contact_preferences, contact_location_preferences, consent_log and contact_location_audience are closed to anon/authenticated (no privilege, no policy, RLS on); every reader is service_role.';

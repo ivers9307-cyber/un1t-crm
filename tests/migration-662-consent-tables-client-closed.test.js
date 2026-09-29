@@ -22,7 +22,8 @@
 //     auto opt-out, contact create/delete and view read all still work;
 //   * 662 refuses to run before 660; the self-check aborts the WHOLE file on
 //     another grantor's SELECT, an inherited SELECT, a policy on another
-//     table that reads consent_log and a second view over the tables; a
+//     table that reads consent_log, a second view over the tables and a
+//     view over contact_location_audience itself; a
 //     second run passes; the plan's rollback record restores the post-660
 //     state exactly.
 // Fictional ids and values only (192.0.2.0/24 is the documentation range):
@@ -568,7 +569,12 @@ describe('order, and the self-check aborts the whole file', () => {
 
   it('when a second view reads contact_preferences', () => expectAbort(
     `CREATE VIEW public.prefs_peek WITH (security_invoker = on) AS SELECT contact_id FROM public.contact_preferences;`,
-    /mig 662: views other than contact_location_audience depend on the consent tables: public\.prefs_peek/,
+    /mig 662: views other than contact_location_audience depend on the consent tables or on that view: public\.prefs_peek/,
+  ), 60_000)
+
+  it('when a view reads contact_location_audience itself (it kept default grants; as DEFINER it would expose the rows)', () => expectAbort(
+    `CREATE VIEW public.audience_peek AS SELECT id, loc_email_marketing FROM public.contact_location_audience;`,
+    /mig 662: views other than contact_location_audience depend on the consent tables or on that view: public\.audience_peek/,
   ), 60_000)
 
   it('a second run passes its own pre-check and self-check (idempotent)', async () => {
