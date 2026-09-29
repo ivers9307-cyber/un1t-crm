@@ -183,20 +183,30 @@ export default function RaceEventForm({ race, locationId }) {
   const [description, setDescription] = useState(race?.description || '')
   const [raceDate, setRaceDate] = useState(race?.race_date || '')
 
-  // Single-slot start time + capacity for non-race kinds. On submit
-  // we turn these into a single synthetic wave so the underlying
-  // data shape (waves[], race_registrations.wave_id) stays uniform
-  // across kinds. For races, these stay null and the waves array is
-  // operator-managed.
-  const initialSingleWave = race && race.kind && race.kind !== 'race' && Array.isArray(race.waves) && race.waves[0]
-    ? race.waves[0]
-    : null
-  const [singleStartTime, setSingleStartTime] = useState(
-    initialSingleWave?.start_time ? initialSingleWave.start_time.slice(0, 5) : ''
-  )
-  const [singleCapacity, setSingleCapacity] = useState(
-    initialSingleWave?.capacity != null ? String(initialSingleWave.capacity) : ''
-  )
+  // Start times + capacity for non-race kinds. Usually one; EVENT-
+  // MULTITIME.1 lets staff add more (an 8am and a 9am class on one
+  // page). Each becomes a wave on submit so the data shape (waves[],
+  // race_registrations.wave_id) stays uniform across kinds. EVERY
+  // existing wave is loaded — reading only waves[0] would make a save
+  // delete the others (the server diff-and-applies the wave list).
+  // For races these stay unused and the waves array is operator-managed.
+  const [timeSlots, setTimeSlots] = useState(() => {
+    const incoming = race && race.kind && race.kind !== 'race' && Array.isArray(race.waves)
+      ? race.waves
+      : []
+    const rows = incoming
+      .slice()
+      .sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''))
+      .map((w) => ({
+        id: w.id,
+        start_time: (w.start_time || '').slice(0, 5),
+        capacity: w.capacity != null ? String(w.capacity) : '',
+        label: w.label || '',
+      }))
+    return rows.length > 0 ? rows : [{ start_time: '', capacity: '', label: '' }]
+  })
+  const updateTimeSlot = (i, patch) =>
+    setTimeSlots((prev) => prev.map((row, j) => (j === i ? { ...row, ...patch } : row)))
 
   const [registrationOpensAt, setRegistrationOpensAt] = useState(
     race?.registration_opens_at ? toLocalInput(race.registration_opens_at) : ''
@@ -210,8 +220,7 @@ export default function RaceEventForm({ race, locationId }) {
       : [1, 2, 4]
   )
   // Waves (mig 083) — only managed via UI for kind='race'. For other
-  // kinds we synthesise [{ start_time: singleStartTime, capacity:
-  // singleCapacity, label: null }] on submit.
+  // kinds the timeSlots rows above become the waves on submit.
   const [waves, setWaves] = useState(() => {
     const incoming = Array.isArray(race?.waves) && race.waves.length > 0
       ? race.waves
@@ -475,21 +484,24 @@ export default function RaceEventForm({ race, locationId }) {
       }
       outboundWaves = waves.slice().sort((a, b) => a.start_time.localeCompare(b.start_time))
     } else {
-      if (!singleStartTime) { setError('Start time is required.'); return }
-      const cap = singleCapacity.trim() === '' ? null : Number(singleCapacity)
-      if (cap != null && (!Number.isFinite(cap) || cap < 1)) {
-        setError('Capacity must be a positive whole number (or empty for unlimited).')
-        return
+      const seenTimes = new Set()
+      for (const slot of timeSlots) {
+        if (!slot.start_time) { setError(timeSlots.length > 1 ? 'Every time needs a start time.' : 'Start time is required.'); return }
+        if (seenTimes.has(slot.start_time)) {
+          setError(`Two times can't be the same (${slot.start_time}).`)
+          return
+        }
+        seenTimes.add(slot.start_time)
+        const cap = slot.capacity.trim() === '' ? null : Number(slot.capacity)
+        if (cap != null && (!Number.isInteger(cap) || cap < 1)) {
+          setError('Capacity must be a positive whole number (or empty for unlimited).')
+          return
+        }
       }
-      outboundWaves = [{
-        // Preserve existing wave id on edit so the diff-and-apply on
-        // the server hits update vs insert (and we don't orphan
-        // registrations whose wave_id pointed at it).
-        ...(initialSingleWave?.id ? { id: initialSingleWave.id } : {}),
-        start_time: singleStartTime,
-        capacity: cap != null ? String(cap) : '',
-        label: '',
-      }]
+      // Existing ids ride along so the server's diff-and-apply updates
+      // rather than re-inserts (and never orphans registrations whose
+      // wave_id points at a slot).
+      outboundWaves = timeSlots.slice().sort((a, b) => a.start_time.localeCompare(b.start_time))
     }
 
     // Pricing validation. Empty input → null fee (free for that
@@ -723,31 +735,60 @@ export default function RaceEventForm({ race, locationId }) {
           />
         </div>
 
-        {/* Non-race kinds: single start_time + capacity input,
-            replacing the waves UI block below. */}
+        {/* Non-race kinds: start time(s) + capacity, replacing the
+            waves UI block below. One row by default; EVENT-MULTITIME.1
+            adds more (customers then pick a time on the public page). */}
         {!meta.showWaves && (
-          <div className="grid grid-cols-2 gap-3 pt-2 border-t border-un1t-border">
-            <div>
-              <label className="block text-sm text-un1t-subtle mb-1">{meta.timeLabel} *</label>
-              <input
-                type="time"
-                required
-                value={singleStartTime}
-                onChange={e => setSingleStartTime(e.target.value)}
-                className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
-              />
+          <div className="pt-2 border-t border-un1t-border space-y-2">
+            <div className="grid grid-cols-[1fr_1fr_auto] gap-3">
+              <label className="block text-sm text-un1t-subtle">{meta.timeLabel} *</label>
+              <label className="block text-sm text-un1t-subtle">Capacity</label>
+              <span className="w-8" />
             </div>
-            <div>
-              <label className="block text-sm text-un1t-subtle mb-1">Capacity</label>
-              <input
-                type="number"
-                min={1}
-                placeholder="Unlimited"
-                value={singleCapacity}
-                onChange={e => setSingleCapacity(e.target.value)}
-                className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
-              />
-              <p className="text-[11px] text-un1t-muted mt-1">Total spots. Empty = unlimited.</p>
+            {timeSlots.map((slot, i) => (
+              <div key={slot.id || `new-${i}`} className="grid grid-cols-[1fr_1fr_auto] gap-3 items-center">
+                <input
+                  type="time"
+                  required
+                  title="Start time"
+                  value={slot.start_time}
+                  onChange={e => updateTimeSlot(i, { start_time: e.target.value })}
+                  className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+                />
+                <input
+                  type="number"
+                  min={1}
+                  placeholder="Unlimited"
+                  title="Spots at this time (empty = unlimited)"
+                  value={slot.capacity}
+                  onChange={e => updateTimeSlot(i, { capacity: e.target.value })}
+                  className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+                />
+                {timeSlots.length > 1 ? (
+                  <button
+                    type="button"
+                    onClick={() => setTimeSlots(prev => prev.filter((_, j) => j !== i))}
+                    aria-label={`Remove time ${slot.start_time || i + 1}`}
+                    className="w-8 h-8 flex items-center justify-center rounded-md text-un1t-muted hover:text-red-400 hover:bg-un1t-bg"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                ) : <span className="w-8" />}
+              </div>
+            ))}
+            <div className="flex items-start justify-between gap-3">
+              <p className="text-[11px] text-un1t-muted">
+                {timeSlots.length > 1
+                  ? 'Spots per time. Empty = unlimited. Customers choose a time when they book.'
+                  : 'Total spots. Empty = unlimited.'}
+              </p>
+              <button
+                type="button"
+                onClick={() => setTimeSlots(prev => [...prev, { start_time: '', capacity: prev[prev.length - 1]?.capacity || '', label: '' }])}
+                className="shrink-0 inline-flex items-center gap-1 text-xs text-un1t-subtle hover:text-un1t-text"
+              >
+                <Plus size={11} /> Add another time
+              </button>
             </div>
           </div>
         )}

@@ -10,6 +10,7 @@
 import { useEffect, useState, useRef } from 'react'
 import Link from 'next/link'
 import { Loader2, AlertCircle, Calendar, BadgeCheck, QrCode } from 'lucide-react'
+import { timeRowLabel } from '@/lib/event-time-slots'
 
 export default function RaceConfirmedPage({ slug, registrationId }) {
   const [data, setData] = useState(null)
@@ -219,7 +220,7 @@ export default function RaceConfirmedPage({ slug, registrationId }) {
               )}
               {wave && (
                 <div className="bg-black p-3">
-                  <dt className="text-[10px] uppercase tracking-[0.14em] text-white/45 font-semibold">Wave</dt>
+                  <dt className="text-[10px] uppercase tracking-[0.14em] text-white/45 font-semibold">{timeRowLabel(race.kind)}</dt>
                   <dd className="text-[15px] font-semibold mt-1">
                     {wave.label ? `${wave.label} · ` : ''}{(wave.start_time || '').slice(0, 5)}
                   </dd>

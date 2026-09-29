@@ -35,7 +35,7 @@ export async function GET(request, props) {
     .select(`
       id, status, registered_at, team_composition,
       race:race_event_id (
-        id, name, slug, race_date, location_id,
+        id, name, slug, kind, race_date, location_id,
         locations:location_id ( name, address )
       ),
       wave:wave_id ( id, start_time, label ),

@@ -23,6 +23,7 @@ import { overlayConnections } from '@/lib/connection-registry'
 import { resolveEventCommsLocation, pickAudienceVenueName } from './event-comms-location'
 import { checkTransactionalConsent } from './transactional-consent'
 import { logError } from './log'
+import { timeRowLabel } from './event-time-slots'
 
 function fmtRaceDate(dateStr) {
   if (!dateStr) return ''
@@ -83,7 +84,7 @@ export async function sendRaceConfirmations({ db, paymentId }) {
       confirmation_email_sent_at, confirmation_sms_sent_at,
       race_event_id, race_registration_id,
       race:race_event_id (
-        id, name, slug, race_date, location_id, host_id, sending_location_id,
+        id, name, slug, kind, race_date, location_id, host_id, sending_location_id,
         venue_name, venue_address,
         accent_hex, hero_image_url,
         confirmation_email_subject, confirmation_email_intro, confirmation_email_template_id,
@@ -187,6 +188,8 @@ export async function sendRaceConfirmations({ db, paymentId }) {
     waveLabel: wave
       ? (wave.label ? `${wave.label} · ${fmtWaveTime(wave.start_time)}` : fmtWaveTime(wave.start_time))
       : '',
+    // EVENT-MULTITIME.1 — "Wave" for races, "Time" for a class/workshop.
+    waveRowLabel: timeRowLabel(race?.kind),
     // EVENT-COPY.1 — this value reaches the customer three times: the "Where"
     // row, the `UN1T · <loc>` email footer, and the `{{location}}` merge tag
     // operators write copy against. All three are claims about WHERE THE EVENT
@@ -361,7 +364,7 @@ export function buildConfirmationDefaults(ctx) {
     : ''
 
   const infoRows = `    <tr><td style="padding:8px 0;color:#666;width:120px">Date</td><td style="padding:8px 0;font-weight:600">${escapeHtml(ctx.raceDateLabel)}</td></tr>
-    ${ctx.waveLabel ? `<tr><td style="padding:8px 0;color:#666">Wave</td><td style="padding:8px 0;font-weight:600">${escapeHtml(ctx.waveLabel)}</td></tr>` : ''}
+    ${ctx.waveLabel ? `<tr><td style="padding:8px 0;color:#666">${ctx.waveRowLabel || 'Wave'}</td><td style="padding:8px 0;font-weight:600">${escapeHtml(ctx.waveLabel)}</td></tr>` : ''}
     ${ctx.locationName ? `<tr><td style="padding:8px 0;color:#666">Where</td><td style="padding:8px 0;font-weight:600">${escapeHtml(ctx.locationName)}</td></tr>` : ''}
     <tr><td style="padding:8px 0;color:#666">Team size</td><td style="padding:8px 0;font-weight:600">${ctx.teamSize}-person</td></tr>
     <tr><td style="padding:8px 0;color:#666;vertical-align:top">Total paid</td><td style="padding:8px 0;font-weight:600">${escapeHtml(ctx.amountLabel)}${breakdownLine}</td></tr>`
@@ -537,7 +540,7 @@ async function sendSms({ db, payment, location, ctx, commsLocation }) {
 
   const lines = []
   lines.push(`UN1T: Team ${ctx.teamName} is in for ${ctx.raceName} on ${ctx.raceDateLabel}.`)
-  if (ctx.waveLabel) lines.push(`Wave: ${ctx.waveLabel}.`)
+  if (ctx.waveLabel) lines.push(`${ctx.waveRowLabel || 'Wave'}: ${ctx.waveLabel}.`)
   lines.push('Arrive 30min early. See you there!')
   const body = lines.join(' ')
 
