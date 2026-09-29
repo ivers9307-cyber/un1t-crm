@@ -26,7 +26,7 @@
  *   - 'cron'      — fires from a scheduled job. May have configurable
  *                   lead times.
  *   - 'webhook'   — fires from an inbound webhook (Postmark,
- *                   Twilio, WhatsApp, Calendly).
+ *                   WhatsApp, Calendly).
  *
  * `recipients` tells the UI who gets it:
  *   - 'assignee'              — single user the entity is assigned to

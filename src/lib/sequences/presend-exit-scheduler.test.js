@@ -19,7 +19,7 @@ vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.f
 vi.mock('./steps.js', () => ({
   sendEmailStep: vi.fn(),
   sendWhatsappStep: vi.fn(),
-  sendSmsStep: vi.fn(),
+  retiredSmsStep: vi.fn(),
   applyTagStep: vi.fn(),
   updateFieldStep: vi.fn(),
   webhookStep: vi.fn(),

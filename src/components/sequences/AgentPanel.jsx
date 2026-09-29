@@ -42,7 +42,7 @@ export default function AgentPanel({ sequenceId }) {
         <div className="border-t border-un1t-border px-4 py-3 space-y-2">
           <textarea
             value={prompt} onChange={e => setPrompt(e.target.value)} rows={3} disabled={busy}
-            placeholder="e.g. A 3-day welcome flow: email straight away, wait a day then WhatsApp, and if they still haven’t booked, send an SMS nudge."
+            placeholder="e.g. A 3-day welcome flow: email straight away, wait a day then WhatsApp, and if they still haven’t booked, send a follow-up email."
             className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-subtle/60 focus:outline-none focus:ring-1 focus:ring-un1t-text/30 resize-y disabled:opacity-60"
           />
           <p className="text-[11px] text-un1t-subtle">The AI picks a trigger, names the sequence, and builds the flow — review it all below. Nothing goes live until you Publish. <strong>This replaces the current draft + recommended settings.</strong></p>

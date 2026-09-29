@@ -60,21 +60,21 @@ describe('GLOFOX4.4 trial-lifecycle templates', () => {
     }
   })
 
-  it('engaged template fires on glofox_trial_engaged and is comms-only (wait → email → sms)', () => {
+  it('engaged template fires on glofox_trial_engaged and is comms-only (wait → email)', () => {
     expect(engagedTpl).not.toBeNull()
     expect(engagedTpl.trigger_type).toBe('tag_added')
     expect(engagedTpl.trigger_config?.tag).toBe('glofox_trial_engaged')
     // The leading 2h wait preserves the send timing the template had
     // before its move step was retired.
-    expect(engagedTpl.steps.map((s) => s.step_type)).toEqual(['wait', 'email', 'sms'])
+    expect(engagedTpl.steps.map((s) => s.step_type)).toEqual(['wait', 'email'])
     expect(engagedTpl.steps[0].delay_hours).toBe(2)
   })
 
-  it('credits-low template fires on glofox_trial_credits_low and is comms-only (sms → email)', () => {
+  it('credits-low template fires on glofox_trial_credits_low and is comms-only (email)', () => {
     expect(creditsTpl).not.toBeNull()
     expect(creditsTpl.trigger_type).toBe('tag_added')
     expect(creditsTpl.trigger_config?.tag).toBe('glofox_trial_credits_low')
-    expect(creditsTpl.steps.map((s) => s.step_type)).toEqual(['sms', 'email'])
+    expect(creditsTpl.steps.map((s) => s.step_type)).toEqual(['email'])
   })
 
   it('trial-ended template fires on glofox_trial_ended (comms-only)', () => {
@@ -127,10 +127,13 @@ describe('GLOFOX3.5 welcome template', () => {
     expect(step.html_content).toContain('{{email}}')
   })
 
-  it('also explains first login by SMS as a backup channel', () => {
-    const smsStep = tpl.steps.find((s) => s.step_type === 'sms')
-    expect(smsStep, 'no SMS step in the welcome template').toBeTruthy()
-    expect(smsStep.sms_body).toContain('Forgot password?')
+  // TWILIO-RETIRE.1 — the SMS backup of the login instructions left with the
+  // SMS channel, so no gallery template may ship an SMS step at all: the
+  // runner would only record a skip for it.
+  it('no gallery template ships an SMS step (TWILIO-RETIRE.1)', () => {
+    for (const t of SEQUENCE_TEMPLATES) {
+      expect(t.steps.some((s) => s.step_type === 'sms'), t.id).toBe(false)
+    }
   })
 
   it('never carries a password (PASSCODEREAD.1): no step of ANY template uses the retired tag', () => {
@@ -509,8 +512,8 @@ describe('PAYLINK.8b \u2014 payment_cta email copy reads cleanly with and withou
   })
 })
 
-// FLOW-DELAY.1 — the gallery is the reason this matters. 19 of the 25
-// templates carry their delays on ACTION steps (whatsapp/email/sms), not on
+// FLOW-DELAY.1 — the gallery is the reason this matters. 15 of the 25
+// templates carry their delays on ACTION steps (whatsapp/email), not on
 // `wait` rows, because the legacy runner honours the three delay columns on
 // every step_type. /api/sequences/from-template copies those delays onto
 // sequence_steps verbatim — and then the very first Publish out of the flow
@@ -548,7 +551,8 @@ describe('FLOW-DELAY.1 — every gallery template survives a builder round trip 
     const withActionDelays = SEQUENCE_TEMPLATES.filter((t) => t.steps.some(
       (s) => s.step_type !== 'wait' && ((s.delay_days || 0) || (s.delay_hours || 0) || (s.delay_minutes || 0)),
     ))
-    expect(withActionDelays.length).toBeGreaterThanOrEqual(19)
+    // Was 19; TWILIO-RETIRE.1 removed the SMS steps that carried four of them.
+    expect(withActionDelays.length).toBeGreaterThanOrEqual(15)
   })
 
   it('compile(decompile(steps)) sends every template at exactly the original times', async () => {

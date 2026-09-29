@@ -107,18 +107,26 @@ describe('event-types/[id] — cookie/manager path (SAAS-12)', () => {
     const res = await PUT(cookiePut('e1', {
       name: 'Bootcamp',
       confirmation_enabled: true,
-      confirmation_channels: ['sms'],
+      confirmation_channels: ['email'],
       confirmation_email_template_id: null,
-      confirmation_email_subject: null,
-      confirmation_sms_body: 'See you at the studio',
+      confirmation_email_subject: 'See you at the studio',
     }), props('e1'))
     expect(res.status).toBe(200)
     expect(etype('e1')).toMatchObject({
       confirmation_enabled: true,
-      confirmation_channels: ['sms'],
-      confirmation_sms_body: 'See you at the studio',
+      confirmation_channels: ['email'],
+      confirmation_email_subject: 'See you at the studio',
       slug: 'bootcamp',
     })
+  })
+
+  // TWILIO-RETIRE.1 — 'sms' is still admitted by the DB CHECK (history), but
+  // the route refuses to write it: the channel no longer sends.
+  it('PUT refuses the retired sms confirmation channel (400, row untouched)', async () => {
+    getCurrentUser.mockResolvedValue(managerAt('loc-1a'))
+    const res = await PUT(cookiePut('e1', { confirmation_channels: ['sms'] }), props('e1'))
+    expect(res.status).toBe(400)
+    expect(etype('e1').confirmation_channels).toBeUndefined()
   })
 
   it('PUT refuses a confirmation channel the DB check would refuse (400, row untouched)', async () => {

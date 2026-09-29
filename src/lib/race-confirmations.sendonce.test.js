@@ -37,12 +37,6 @@ vi.mock('./postmark', () => ({ sendTransactionalEmail: (...a) => sendTransaction
 // into a red suite here — and these seven tests are the send-then-stamp
 // regression guards, so disarming them is exactly the accident to avoid.
 // `importOriginal` keeps every other export real, so a new one cannot break us.
-vi.mock('./twilio', async (importOriginal) => ({
-  ...(await importOriginal()),
-  sendLocationSms: vi.fn(async () => ({ sid: 'SM1' })),
-  resolveSenderLocation: vi.fn(async (_db, l) => l),
-  resolveTenantSmsSender: vi.fn(async (_db, l) => ({ location: l, senderId: 'UN1T', source: 'location' })),
-}))
 vi.mock('./event-comms-location', async (importOriginal) => ({
   ...(await importOriginal()),
   resolveEventCommsLocation: (...a) => resolveEventCommsLocation(...a),
@@ -91,9 +85,7 @@ function makeWorld({ stampFails = false, alreadySent = null, onStamp = null } = 
       venue_name: null, venue_address: null, accent_hex: null, hero_image_url: null,
       confirmation_email_subject: null, confirmation_email_intro: null,
       confirmation_email_template_id: null,
-      // SMS off, so these tests exercise the email leg only.
-      confirmation_sms_enabled: false,
-      locations: { id: 'LOC', name: 'Stillorgan', twilio_alpha_sender_id: 'UN1T', organization_id: 'ORG' },
+      locations: { id: 'LOC', name: 'Stillorgan', organization_id: 'ORG' },
     },
     registration: { id: 'reg1', wave_id: null, wave: null, teams: null },
   }

@@ -2,15 +2,15 @@
 
 // CONTACT-COMPOSER.1 — the unified "Message this customer" composer.
 //
-// DRAWER.4 — channel set is now Note / WhatsApp / SMS / Email, with
-// Note FIRST and the default (Richard, 2026-07-13):
+// DRAWER.4 — channel set is now Note / WhatsApp / Email (SMS was retired
+// with Twilio, TWILIO-RETIRE.1), with Note FIRST and the default
+// (Richard, 2026-07-13):
 //   Note     — staff-visible note; POSTs /api/contacts/[id]/notes so
 //              the server attributes the author and pushes the note to
 //              Glofox (the ContactActions path — NOT the /api/notes
 //              import path, which deliberately skips the push).
 //   WhatsApp — free text while the 24h customer-service window is
 //              open; a utility-template picker once it's closed.
-//   SMS      — free text, always (SMS has no window or template rule).
 //   Email    — ad-hoc one-off from the company sender
 //              (POST /api/contacts/[id]/email; `email` permission).
 //
@@ -20,20 +20,11 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { MessageCircle, MessageSquare, Send, StickyNote, Mail } from 'lucide-react'
+import { MessageCircle, Send, StickyNote, Mail } from 'lucide-react'
 import {
   resolveContactEmailSend, contactEmailFooter, mailboxesFromListResponse, defaultMailboxId,
   MAILBOXES_UNAVAILABLE,
 } from './contact-composer-send'
-
-// SMS segment counter — single-segment GSM-7 fits 160 chars;
-// concatenated multi-segment messages count 153 chars per segment.
-function smsSegmentInfo(text) {
-  const len = text.length
-  if (len === 0) return { len: 0, segments: 0 }
-  if (len <= 160) return { len, segments: 1 }
-  return { len, segments: Math.ceil(len / 153) }
-}
 
 function formatWhen(iso) {
   if (!iso) return ''
@@ -64,12 +55,9 @@ export default function ContactComposer({
   contactLocationId = null,
   contactEmail = null,
   canWhatsApp = false,
-  canSms = false,
   canEmail = false,
   hasWaPhone = false,
-  hasPhone = false,
   hasEmail = false,
-  smsBlocked = false,
   emailBlocked = false,
   whatsappWindowOpen = false,
   whatsappWindowExpiresAt = null,
@@ -79,11 +67,10 @@ export default function ContactComposer({
 }) {
   const router = useRouter()
   const waAvailable = canWhatsApp && hasWaPhone
-  const smsAvailable = canSms && hasPhone
   const emailAvailable = canEmail && hasEmail
 
   const [channel, setChannel] = useState(() => {
-    const available = { note: true, whatsapp: waAvailable, sms: smsAvailable, email: emailAvailable }
+    const available = { note: true, whatsapp: waAvailable, email: emailAvailable }
     return available[defaultChannel] ? defaultChannel : 'note'
   })
   const [text, setText] = useState('')
@@ -96,7 +83,6 @@ export default function ContactComposer({
   const [windowClosed, setWindowClosed] = useState(!whatsappWindowOpen)
 
   const sendable = (templates || []).filter((t) => t.sendable)
-  const seg = smsSegmentInfo(text)
 
   function showFlash(msg) {
     setFlash(msg)
@@ -200,12 +186,6 @@ export default function ContactComposer({
     if (ok) { showFlash('WhatsApp template sent'); afterSave() }
   }
 
-  async function sendSms() {
-    if (!text.trim()) return
-    const ok = await post(`/api/contacts/${contactId}/sms`, { body: text.trim() })
-    if (ok) { setText(''); showFlash('SMS sent'); afterSave() }
-  }
-
   async function sendEmail() {
     if (!text.trim() || !subject.trim()) return
     // PROFILE-MAIL.1 — with a usable account, the send IS a Mail compose:
@@ -235,7 +215,6 @@ export default function ContactComposer({
   const pills = [
     { id: 'note', label: 'Note', icon: StickyNote, available: true },
     { id: 'whatsapp', label: 'WhatsApp', icon: MessageCircle, available: waAvailable },
-    { id: 'sms', label: 'SMS', icon: MessageSquare, available: smsAvailable },
     { id: 'email', label: 'Email', icon: Mail, available: emailAvailable },
   ].filter((p) => p.available)
 
@@ -297,7 +276,7 @@ export default function ContactComposer({
           <div>
             <p className="text-xs text-un1t-muted mb-2">
               The 24-hour WhatsApp window is closed. Pick a utility template to reopen the
-              conversation{smsAvailable ? ', or switch to SMS' : ''}.
+              conversation.
             </p>
             {sendable.length === 0 ? (
               <p className="text-xs text-un1t-subtle">
@@ -351,41 +330,6 @@ export default function ContactComposer({
             </div>
           </div>
         )
-      )}
-
-      {/* SMS */}
-      {channel === 'sms' && smsAvailable && (
-        <div>
-          {smsBlocked ? (
-            <p className="text-xs text-amber-400">
-              This contact has opted out of SMS or the number is marked invalid.
-            </p>
-          ) : (
-            <>
-              <textarea
-                value={text}
-                onChange={(e) => setText(e.target.value)}
-                rows={3}
-                maxLength={1600}
-                placeholder={`Text ${contactName || 'the customer'}…  (merge tags: {{first_name}})`}
-                className="w-full bg-un1t-bg border border-un1t-border rounded p-2 text-sm text-un1t-text placeholder:text-un1t-muted resize-none focus:outline-none focus:border-un1t-muted"
-              />
-              <div className="flex items-center justify-between mt-2">
-                <span className={`text-[11px] ${seg.segments > 1 ? 'text-amber-500' : 'text-un1t-muted'}`}>
-                  {seg.len} chars · {seg.segments} segment{seg.segments === 1 ? '' : 's'}
-                </span>
-                <button
-                  type="button"
-                  disabled={sending || !text.trim()}
-                  onClick={sendSms}
-                  className="inline-flex items-center gap-1 text-xs px-3 py-1 bg-un1t-text text-un1t-bg rounded font-medium hover:bg-un1t-accent disabled:opacity-50"
-                >
-                  <Send size={12} /> {sending ? 'Sending…' : 'Send SMS'}
-                </button>
-              </div>
-            </>
-          )}
-        </div>
       )}
 
       {/* Email */}

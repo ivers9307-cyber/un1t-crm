@@ -50,24 +50,24 @@ describe('contactChannelFlags', () => {
   it('judges each channel at the contact\'s location, not the active studio', () => {
     const u = person({
       [LOC_A]: { role: 'owner' },
-      [LOC_B]: { role: 'owner', permissions: { whatsapp: false, sms: false, email: false, mobile: { whatsapp: false, sms: false, email: false } } },
+      [LOC_B]: { role: 'owner', permissions: { whatsapp: false, email: false, mobile: { whatsapp: false, email: false } } },
     }, LOC_A)
     expect(hasPermission(u, 'whatsapp')).toBe(true)
-    expect(contactChannelFlags(u, LOC_B)).toEqual({ whatsapp: false, sms: false, email: false })
-    expect(contactChannelFlags(u, LOC_A)).toEqual({ whatsapp: true, sms: true, email: true })
+    expect(contactChannelFlags(u, LOC_B)).toEqual({ whatsapp: false, email: false })
+    expect(contactChannelFlags(u, LOC_A)).toEqual({ whatsapp: true, email: true })
   })
 
   it('accepts the web OR the mobile toggle at the target, like the send routes', () => {
     // Web off at B for every channel; mobile on for email only.
     const u = person({
       [LOC_A]: { role: 'staff' },
-      [LOC_B]: { role: 'staff', permissions: { whatsapp: false, sms: false, email: false, mobile: { email: true } } },
+      [LOC_B]: { role: 'staff', permissions: { whatsapp: false, email: false, mobile: { email: true } } },
     }, LOC_A)
-    expect(contactChannelFlags(u, LOC_B)).toEqual({ whatsapp: false, sms: false, email: true })
+    expect(contactChannelFlags(u, LOC_B)).toEqual({ whatsapp: false, email: true })
   })
 
   it('is all false for no user or no location', () => {
-    const none = { whatsapp: false, sms: false, email: false }
+    const none = { whatsapp: false, email: false }
     expect(contactChannelFlags(null, LOC_A)).toEqual(none)
     expect(contactChannelFlags(person({ [LOC_A]: { role: 'owner' } }, LOC_A), null)).toEqual(none)
   })

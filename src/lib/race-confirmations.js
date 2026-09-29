@@ -1,25 +1,25 @@
 // race-confirmations — race-registration receipts (mig 084).
 //
-// DELIBERATELY SEPARATE from booking-confirmations.js and
-// deposit-receipts.js. UN1T races have their own copy, branding,
+// DELIBERATELY SEPARATE from booking-confirmations.js and the
+// cars deposit flow. UN1T races have their own copy, branding,
 // and merge fields; mixing them with the gym-booking confirmations
-// or the cars deposit SMS would force compromise on all three.
+// or the cars deposit receipts would force compromise on all three.
 //
-// Channels: Postmark email + Twilio SMS. Best-effort — never throws
-// up to the webhook caller (a comms hiccup must not undo the
-// payment state change).
+// Channel: Postmark email. The SMS leg (mig 552 opt-in) was retired
+// with Twilio (TWILIO-RETIRE.1); race_events.confirmation_sms_enabled
+// and race_payments.confirmation_sms_sent_at stay on disk as history.
+// Best-effort — never throws up to the webhook caller (a comms hiccup
+// must not undo the payment state change).
 //
-// Send-once guard: race_payments.confirmation_email_sent_at +
-// confirmation_sms_sent_at. The webhook can fire repeatedly (Revolut
-// retries on non-2xx) without duplicate messages.
+// Send-once guard: race_payments.confirmation_email_sent_at. The
+// webhook can fire repeatedly (Revolut retries on non-2xx) without
+// duplicate messages.
 
 import { sendTransactionalEmail } from './postmark'
-import { sendLocationSms, TwilioError, resolveTenantSmsSender } from './twilio'
 import { formatWeekdayLongDateInTZ } from './dates'
 import { getAppUrl } from './app-url'
 import { signCheckinToken } from './event-checkin-tokens'
 import { buildEventEmailShell, resolveEventEmail } from './event-email'
-import { overlayConnections } from '@/lib/connection-registry'
 import { resolveEventCommsLocation, pickAudienceVenueName } from './event-comms-location'
 import { checkTransactionalConsent } from './transactional-consent'
 import { logError } from './log'
@@ -44,24 +44,6 @@ function fmtWaveTime(t) {
 }
 
 /**
- * Decide whether to send the race-registration SMS confirmation.
- *
- * SMS is opt-in per event (race_events.confirmation_sms_enabled, mig 552,
- * default false) — so a legacy event with no flag set never texts. The
- * EMAIL receipt is a separate path above and is never gated by this. The
- * once-only guard (confirmation_sms_sent_at) still applies on top.
- *
- * @param {{ confirmation_sms_enabled?: boolean } | null | undefined} race
- * @param {{ confirmation_sms_sent_at?: string | null } | null | undefined} payment
- * @returns {{ send: boolean, reason?: 'disabled_for_event' | 'already_sent' }}
- */
-export function shouldSendSmsConfirmation(race, payment) {
-  if (!race?.confirmation_sms_enabled) return { send: false, reason: 'disabled_for_event' }
-  if (payment?.confirmation_sms_sent_at) return { send: false, reason: 'already_sent' }
-  return { send: true }
-}
-
-/**
  * Send the race-registration confirmation. Reads the parent race
  * + registration + team_members and composes UN1T-branded copy.
  * Stamps confirmation_*_sent_at on the payment row to enforce
@@ -81,15 +63,14 @@ export async function sendRaceConfirmations({ db, paymentId }) {
       id, contact_id, contact_email, contact_phone, contact_name,
       amount_cents, currency, member_count, non_member_count,
       member_fee_cents, non_member_fee_cents, status,
-      confirmation_email_sent_at, confirmation_sms_sent_at,
+      confirmation_email_sent_at,
       race_event_id, race_registration_id,
       race:race_event_id (
         id, name, slug, kind, race_date, location_id, host_id, sending_location_id,
         venue_name, venue_address,
         accent_hex, hero_image_url,
         confirmation_email_subject, confirmation_email_intro, confirmation_email_template_id,
-        confirmation_sms_enabled,
-        locations:location_id ( id, name, is_host_anchor, twilio_alpha_sender_id, organization_id )
+        locations:location_id ( id, name, is_host_anchor, organization_id )
       ),
       registration:race_registration_id (
         id, wave_id,
@@ -110,12 +91,7 @@ export async function sendRaceConfirmations({ db, paymentId }) {
     return result
   }
 
-  // INTEG-A2 dual-read: registry twilio_sender row first.
-  if (payment.race?.locations) {
-    payment.race.locations = await overlayConnections(db, payment.race.locations, ['twilio_sender'])
-  }
-
-  // EVENT-COMMS-LOC — the real location whose SMS + email identity this event's
+  // EVENT-COMMS-LOC — the real location whose email identity this event's
   // comms use (host events resolve off their org master, not the sender-less
   // anchor). Falls back to the embedded location when unresolved.
   //
@@ -131,18 +107,15 @@ export async function sendRaceConfirmations({ db, paymentId }) {
   // their per-person check-in QR, and the only trace was a log line inside a
   // 200. BAREWRITE.3 narrowed the throw to brand-crossing events; BAREWRITE.4
   // removed it entirely, because the brand it protected cannot currently
-  // differ: email identity is resolved per ORGANISATION (structural), and no
-  // event in prod today resolves to a (target, fallback) pair with different
-  // Twilio alpha senders — although two locations in one org DO have different
-  // senders, so that second half is a fact about the DATA and has an expiry
-  // date. The measurement, the query that reproduces it and the condition that
-  // would invalidate it are all in event-comms-location.js — read them there
-  // before relying on this sentence.
+  // differ: email identity is resolved per ORGANISATION (structural). The
+  // other half of the argument — SMS alpha senders, which DID differ between
+  // two locations of one org — went away with the SMS leg itself
+  // (TWILIO-RETIRE.1). The history is in event-comms-location.js.
   //
   // The resolver now never throws; it logs and returns null. This try/catch is
   // belt-and-braces for a future hop that forgets, and it CONTINUES rather than
   // returning — the fallback on the next line is the event's own location,
-  // which is exactly what main used and what the SMS/email senders resolve to
+  // which is exactly what main used and what the email sender resolves to
   // anyway.
   let commsLocation = null
   try {
@@ -238,30 +211,6 @@ export async function sendRaceConfirmations({ db, paymentId }) {
     }
   } else {
     result.skipped.push('email:already_sent')
-  }
-
-  // SMS — opt-in per event (EVENTS-SMS-TOGGLE, mig 552). A disabled event
-  // (or any legacy event with the flag unset) skips here; the email receipt
-  // above is unaffected. Idempotent via confirmation_sms_sent_at.
-  const smsGate = shouldSendSmsConfirmation(race, payment)
-  if (smsGate.send) {
-    // Same send-then-stamp shape as the email leg above.
-    let outcome = null
-    try {
-      outcome = await sendSms({ db, payment, location, ctx, commsLocation })
-    } catch (e) {
-      outcome = { status: 'threw', reason: e?.message || 'failed' }
-    }
-    if (outcome.status === 'sent') {
-      result.sent.push('sms')
-      await stampSendOnce(db, payment.id, 'confirmation_sms_sent_at', result, 'sms')
-    } else if (outcome.status === 'threw') {
-      result.failed.push(`sms:${outcome.reason}`)
-    } else {
-      result.skipped.push(`sms:${outcome.reason}`)
-    }
-  } else {
-    result.skipped.push(`sms:${smsGate.reason}`)
   }
 
   return result
@@ -485,94 +434,6 @@ async function sendEmail({ db, payment, ctx, commsLocationId }) {
     locationId: commsLocationId,
     tag: 'race-registration-confirmation',
   })
-  return { status: 'sent' }
-}
-
-async function sendSms({ db, payment, location, ctx, commsLocation }) {
-  if (!payment.contact_phone) return { status: 'skipped', reason: 'no_phone' }
-  if (!location) return { status: 'skipped', reason: 'no_location' }
-
-  // EVENT-CONSENT.1 — the SMS half of the gate the sibling paths apply:
-  // sms_status (three-state: active / opted_out / invalid) plus
-  // sms_administrative. Unreadable → send + log, same reasoning as the email.
-  // `unrecoverable: true` for the same reason too — this leg is invoked from
-  // the same one-shot transition and nothing re-runs it either.
-  const gate = await checkTransactionalConsent({
-    db, contactId: payment.contact_id, channel: 'sms',
-    module: 'race-confirmations', meta: { paymentId: payment.id },
-    unrecoverable: true,
-  })
-  if (!gate.allowed) return { status: 'skipped', reason: gate.reason }
-
-  // SENDER-REGISTRY.1 — a hosted event can sit on a per-host ANCHOR location
-  // with no Twilio sender, so the sender comes from the org. What changed is
-  // what happens when the ORG has none either: the old `resolveSenderLocation`
-  // handed the location back untouched and `getLocationSenderId` then fell
-  // through to `TWILIO_FROM || 'CCFautos'` — CCF Autos being a different
-  // business in this estate, not a neutral default. A gym registrant getting a
-  // race confirmation from a used-car dealership's sender reads as a scam and
-  // cannot be un-sent.
-  //
-  // So this leg SKIPS rather than sends under the wrong brand — and skipping is
-  // affordable here in a way it would not be for the email: this whole leg is
-  // opt-in per event (`confirmation_sms_enabled`, false for every event in prod
-  // today), the EMAIL receipt above is a separate leg that is unaffected, and
-  // it is the email that carries the per-person check-in QR. The attendee loses
-  // a courtesy text, not their proof of entry. `result.skipped` records the
-  // reason and the log line names the location to configure.
-  //
-  // 'unreadable' is kept separate from 'none' on purpose. Both skip — the
-  // fallback is the same wrong brand either way — but they are different facts
-  // and the log has to say which, or an operator chases a configuration that
-  // was never missing.
-  const { location: senderLocation, source } = await resolveTenantSmsSender(db, commsLocation || location)
-  if (source === 'none' || source === 'unreadable') {
-    logError('race-confirmations', source === 'unreadable'
-      ? 'tenant SMS sender lookup FAILED (not "unset") — SKIPPING the confirmation text rather than sending it from another brand; retry the lookup before touching any configuration (the email receipt is unaffected)'
-      : 'no tenant SMS sender for this event — SKIPPING the confirmation text rather than sending it from another brand (the email receipt is unaffected)', {
-      paymentId: payment.id,
-      raceEventId: payment.race?.id || null,
-      senderLocationId: (commsLocation || location)?.id || null,
-      senderSource: source,
-    })
-    return { status: 'skipped', reason: source === 'unreadable' ? 'sms_sender_unreadable' : 'no_tenant_sms_sender' }
-  }
-
-  const lines = []
-  lines.push(`UN1T: Team ${ctx.teamName} is in for ${ctx.raceName} on ${ctx.raceDateLabel}.`)
-  if (ctx.waveLabel) lines.push(`${ctx.waveRowLabel || 'Wave'}: ${ctx.waveLabel}.`)
-  lines.push('Arrive 30min early. See you there!')
-  const body = lines.join(' ')
-
-  try {
-    await sendLocationSms({ location: senderLocation, to: payment.contact_phone, body })
-  } catch (e) {
-    const msg = e instanceof TwilioError
-      ? `Twilio ${e.code || e.status || ''}: ${e.message}`.trim()
-      : (e?.message || 'SMS send failed')
-    throw new Error(msg)
-  }
-
-  // Activity timeline mirror — best-effort.
-  if (payment.contact_id) {
-    try {
-      // Genuinely best-effort: a lost timeline line costs an audit row, never
-      // a customer message. The error is still READ (not discarded) so a
-      // systematic failure shows up in logs instead of nowhere.
-      const { error: logErr } = await db.from('activities').insert({
-        contact_id: payment.contact_id,
-        location_id: payment.race?.location_id || null,
-        type: 'sms_sent',
-        kind: 'event',
-        subject: `Race confirmation: ${ctx.raceName}`,
-        note: body,
-      })
-      if (logErr) console.error('[race-confirmations] activity log insert failed (non-fatal):', logErr.message)
-    } catch {
-      // Don't fail the comms because the activity insert blew up.
-    }
-  }
-
   return { status: 'sent' }
 }
 

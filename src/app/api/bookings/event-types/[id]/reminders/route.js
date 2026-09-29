@@ -35,10 +35,10 @@ const ReminderSchema = z.object({
   // too for callers who already speak the storage unit.
   hours_before: z.number().min(0).max(24 * 30).optional(),
   minutes_before: z.number().int().min(0).max(60 * 24 * 30).optional(),
-  channels: z.array(z.enum(['email', 'sms'])).min(1),
+  // TWILIO-RETIRE.1 — email only; the DB CHECK still admits 'sms' for history.
+  channels: z.array(z.enum(['email'])).min(1),
   email_template_id: uuidLike.nullable().optional(),
   email_subject: z.string().max(500).nullable().optional(),
-  sms_body: z.string().max(1600).nullable().optional(),
   display_order: z.number().int().min(0).max(1000).optional(),
   active: z.boolean().optional(),
 }).refine(r => r.hours_before != null || r.minutes_before != null, {

@@ -55,10 +55,9 @@ const FORM_BODY = {
   staff_required: 1,
   active: true,
   confirmation_enabled: true,
-  confirmation_channels: ['sms'],
+  confirmation_channels: ['email'],
   confirmation_email_template_id: null,
-  confirmation_email_subject: null,
-  confirmation_sms_body: 'See you soon',
+  confirmation_email_subject: 'See you soon',
   create_in_glofox: false,
   location_id: STUDIO_A,
 }
@@ -83,8 +82,8 @@ describe('POST /api/bookings/event-types — cookie caller (EVENTTYPERLS.1)', ()
       slug: 'free-consultation',
       location_id: STUDIO_A,
       confirmation_enabled: true,
-      confirmation_channels: ['sms'],
-      confirmation_sms_body: 'See you soon',
+      confirmation_channels: ['email'],
+      confirmation_email_subject: 'See you soon',
       active: true,
     })
   })

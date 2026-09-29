@@ -4,7 +4,8 @@
 // for its own channel.
 //
 // Three of the five hosts shipped with `audienceCount={null}`: WhatsApp
-// broadcast, SMS broadcast and sequence settings rendered the filter builder
+// broadcast, SMS broadcast (retired with Twilio, TWILIO-RETIRE.1) and sequence
+// settings rendered the filter builder
 // with no number at all, so every defect the correctness phase fixed was
 // invisible there. This pins both halves of the fix: the count is present,
 // and it is the RIGHT count (a WhatsApp broadcast must not be shown an
@@ -29,7 +30,6 @@ vi.mock('next/link', () => ({
 }))
 
 import WABroadcastEditor from '../WABroadcastEditor.jsx'
-import SMSBroadcastEditor from '../SMSBroadcastEditor.jsx'
 import SequenceSettings from '../sequences/SequenceSettings.jsx'
 
 // The component debounces its count by 400ms on REAL timers, so every
@@ -74,20 +74,6 @@ describe('WABroadcastEditor mounts the shared count (channel=whatsapp)', () => {
   })
 })
 
-describe('SMSBroadcastEditor mounts the shared count (channel=sms)', () => {
-  it('counts with channel sms and shows the will-receive split', async () => {
-    const { findByText } = render(
-      <SMSBroadcastEditor
-        broadcast={{ id: 'b1', status: 'draft', name: 'x', body: 'hi', audience_filter: FILTER }}
-        recipients={[]} locationId="loc-1" locationSenderId="s1" userId="u1"
-      />,
-    )
-    await waitFor(() => expect(countCalls.length).toBeGreaterThan(0), WAIT)
-    expect(countCalls[0].channel).toBe('sms')
-    await findByText(/will receive it/, undefined, WAIT)
-  })
-})
-
 describe('SequenceSettings mounts a MATCHING count, never a send count (SEQEXIT.1)', () => {
   function openSettings() {
     const utils = render(<SequenceSettings sequence={{ id: 's1', name: 'Seq', location_id: 'loc-1', audience_filter: FILTER }} />)
@@ -108,15 +94,11 @@ describe('SequenceSettings mounts a MATCHING count, never a send count (SEQEXIT.
 })
 
 // ── FILTER-FOUND row 1 — the re-decision ────────────────────────────
-describe('WA and SMS no longer seed Stage = member on "Add filter"', () => {
+describe('WA no longer seeds Stage = member on "Add filter"', () => {
   it.each([
     ['WhatsApp', () => render(
       <WABroadcastEditor broadcast={{ id: 'b1', status: 'draft', name: 'x', audience_filter: { logic: 'and', filters: [] } }}
         templates={[]} locationId="loc-1" userId="u1" />,
-    )],
-    ['SMS', () => render(
-      <SMSBroadcastEditor broadcast={{ id: 'b1', status: 'draft', name: 'x', body: 'hi', audience_filter: { logic: 'and', filters: [] } }}
-        recipients={[]} locationId="loc-1" locationSenderId="s1" userId="u1" />,
     )],
   ])('%s: the new row starts unset and is called out as unfinished', async (_label, mount) => {
     const { container, getByText, findByText } = mount()

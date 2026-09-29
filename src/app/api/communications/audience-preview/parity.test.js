@@ -10,7 +10,7 @@
 //
 // Only the two boundaries are stubbed: auth (the guards have their own tests)
 // and validateBody. The audience libraries — audience-eligibility, postmark,
-// sms, whatsapp, audience-filter — are all REAL.
+// whatsapp, audience-filter — are all REAL.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -124,7 +124,7 @@ const FILTERS = [
   ['stage is not member (NULL-inclusive since #1310)', { logic: 'and', filters: [{ field: 'pipeline_stage_slug', op: 'neq', value: 'member' }] }],
 ]
 
-describe.each(['email', 'sms', 'whatsapp'])('%s — preview total === count will-receive', (channel) => {
+describe.each(['email', 'whatsapp'])('%s — preview total === count will-receive', (channel) => {
   it.each(FILTERS)('%s', async (_label, audience_filter) => {
     const body = { location_id: 'loc-1', audience_filter, channel }
 
@@ -135,7 +135,7 @@ describe.each(['email', 'sms', 'whatsapp'])('%s — preview total === count will
     expect(previewJson.success).toBe(true)
 
     // The count route's sendable number per channel: `reachable` for
-    // WhatsApp, `count` (will-receive) for email and SMS.
+    // WhatsApp, `count` (will-receive) for email.
     const sendable = channel === 'whatsapp' ? countJson.reachable : countJson.count
     expect(previewJson.data.total).toBe(sendable)
     expect(previewJson.data.basis).toBe('will_receive')

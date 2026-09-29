@@ -70,6 +70,8 @@ describe('EventForm — saves through the routes (EVENTTYPERLS.1)', () => {
     })
     const event = {
       id: 'et-1', name: 'Consult', location_id: 'loc-1', duration_minutes: 45,
+      // A legacy SMS-only confirmation (TWILIO-RETIRE.1): the save rewrites it
+      // to email, the only channel left, and never echoes the SMS body back.
       confirmation_enabled: true, confirmation_channels: ['sms'], confirmation_sms_body: 'See you',
     }
     const { container } = render(<EventForm event={event} locationId="loc-1" />)
@@ -81,10 +83,10 @@ describe('EventForm — saves through the routes (EVENTTYPERLS.1)', () => {
       name: 'Consult',
       duration_minutes: 45,
       confirmation_enabled: true,
-      confirmation_channels: ['sms'],
-      confirmation_sms_body: 'See you',
+      confirmation_channels: ['email'],
       confirmation_email_subject: null,
     })
+    expect('confirmation_sms_body' in sent).toBe(false)
     expect('location_id' in sent).toBe(false)
     expect(keys()).toContain('PUT /api/bookings/event-types/et-1/reminders')
     expect(browserClient).not.toHaveBeenCalled()

@@ -42,7 +42,6 @@ const LOC = {
   thinq_pat: 'thinq-pat',
   thinq_client_id: 'client-1',
   thinq_country_code: 'IE',
-  twilio_alpha_sender_id: 'UN1T',
   bca_config: { send_from: 'a@b.ie', send_to: 'c@d.ie' },
   features: { bca_submit: true },
 }
@@ -132,7 +131,7 @@ describe('registryRowFromLegacy', () => {
     })
   })
 
-  it('sensibo / thinq / twilio_sender / bca map their columns', () => {
+  it('sensibo / thinq / bca map their columns', () => {
     expect(registryRowFromLegacy('sensibo', LOC)).toEqual({
       access_token: 'sens-key',
       config: { pod_id: 'pod-7' },
@@ -140,9 +139,6 @@ describe('registryRowFromLegacy', () => {
     expect(registryRowFromLegacy('thinq', LOC)).toEqual({
       access_token: 'thinq-pat',
       config: { client_id: 'client-1', country_code: 'IE' },
-    })
-    expect(registryRowFromLegacy('twilio_sender', LOC)).toEqual({
-      config: { sender_id: 'UN1T' },
     })
     expect(registryRowFromLegacy('bca', LOC)).toEqual({
       config: { send_from: 'a@b.ie', send_to: 'c@d.ie' },
@@ -182,7 +178,6 @@ describe('legacy → registry → overlay round trip', () => {
     expect(overlaid.thinq_pat).toBe(LOC.thinq_pat)
     expect(overlaid.thinq_client_id).toBe(LOC.thinq_client_id)
     expect(overlaid.thinq_country_code).toBe(LOC.thinq_country_code)
-    expect(overlaid.twilio_alpha_sender_id).toBe(LOC.twilio_alpha_sender_id)
     expect(overlaid.bca_config).toEqual(LOC.bca_config)
     expect(overlaid.features).toEqual(LOC.features) // never touched
   })
@@ -192,11 +187,11 @@ describe('legacy → registry → overlay round trip', () => {
 
 describe('applyConnectionOverlay', () => {
   it('registry values REPLACE legacy values for platforms with a row', () => {
-    const row = rowFor('twilio_sender', { config: { sender_id: 'NEWNAME' } })
+    const row = rowFor('sensibo', { access_token: 'NEWKEY', config: { pod_id: 'NEWPOD' } })
     const out = applyConnectionOverlay(LOC, [row])
-    expect(out.twilio_alpha_sender_id).toBe('NEWNAME')
+    expect(out.sensibo_pod_id).toBe('NEWPOD')
     // input not mutated
-    expect(LOC.twilio_alpha_sender_id).toBe('UN1T')
+    expect(LOC.sensibo_pod_id).toBe('pod-7')
   })
 
   it('platforms without a row keep legacy values', () => {
@@ -316,9 +311,9 @@ describe('overlayConnections (fail-open)', () => {
   })
 
   it('applies rows when present', async () => {
-    const db = mockDb({ rows: [rowFor('twilio_sender', { config: { sender_id: 'REGNAME' } })] })
-    const out = await overlayConnections(db, LOC, ['twilio_sender'])
-    expect(out.twilio_alpha_sender_id).toBe('REGNAME')
+    const db = mockDb({ rows: [rowFor('sensibo', { access_token: 'REGKEY', config: { pod_id: 'REGPOD' } })] })
+    const out = await overlayConnections(db, LOC, ['sensibo'])
+    expect(out.sensibo_pod_id).toBe('REGPOD')
   })
 })
 

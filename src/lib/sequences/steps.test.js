@@ -1,6 +1,6 @@
 // Step handler tests. The bug-prone surface here isn't the
-// "happy path send" — those depend on Postmark / WhatsApp /
-// Twilio mocks that mostly tell you whether you wired the SDK
+// "happy path send" — those depend on Postmark / WhatsApp
+// mocks that mostly tell you whether you wired the SDK
 // correctly. The bugs that have actually shipped (or could
 // silently ship) live in:
 //
@@ -35,12 +35,6 @@ vi.mock('@/lib/whatsapp', () => ({
 }))
 vi.mock('@/lib/location-branding', () => ({
   getLocationBranding: vi.fn(async () => ({ companyName: 'UN1T' })),
-}))
-vi.mock('@/lib/twilio', () => ({
-  sendLocationSms: vi.fn(),
-  TwilioError: class TwilioError extends Error {
-    constructor(m, opts = {}) { super(m); Object.assign(this, opts) }
-  },
 }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
 vi.mock('./triggers.js', () => ({ triggerSequencesForPipelineStageChange: vi.fn() }))
@@ -597,19 +591,6 @@ describe('send-step return ids are row uuids, never provider ids (re-send loop g
       contact: { id: 'c1', wa_phone: '353860000000', whatsapp_marketing: true, wa_status: 'active', contact_location_preferences: [{ location_id: 'loc-1', whatsapp_marketing: true, email_marketing: true, sms_marketing: true }] },
     })
     expect(out).toBeNull()
-  })
-
-  it('sms step returns the activities row id, NOT the Twilio SM sid', async () => {
-    const tw = await import('@/lib/twilio')
-    tw.sendLocationSms.mockResolvedValue({ sid: 'SM_PROVIDER' })
-    const out = await steps.sendSmsStep(sendStepDb(), {
-      step: { id: 'step-2', sms_body: 'Hi there' },
-      sequence: { id: 'seq-1', location_id: 'loc-1', name: 'Nudge' },
-      // COMMSFIX.E.1 — the SMS step now gates on the per-location consent row.
-      contact: { id: 'c1', phone: '+353860000000', sms_status: 'active', contact_location_preferences: [{ location_id: 'loc-1', sms_marketing: true, email_marketing: true, whatsapp_marketing: true }] },
-    })
-    expect(out).toBe('bbbbbbbb-0000-0000-0000-000000000002')
-    expect(String(out)).not.toContain('SM')
   })
 })
 
@@ -1209,34 +1190,23 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
 
   // PAYLINK.7c — the two tests above swap in the REAL applyMergeTags for
   // themselves only; without this, that real implementation leaks past
-  // this describe's last test into sendSmsStep below (which expects the
+  // this describe's last test into the describes below (which expect the
   // identity stub).
   afterEach(() => {
     pm.applyMergeTags.mockImplementation((s) => s)
   })
 })
 
-// ── COMMSFIX.E.1 — SMS step: per-location marketing consent + graceful
-// skips ───────────────────────────────────────────────────────────
+// ── TWILIO-RETIRE.1 — the SMS step is retired ───────────────────────
 //
-// The 2026-08-09 comms audit confirmed sendSmsStep was the ONLY send
-// step still bypassing the per-location consent model (it read global
-// contacts.sms_status only, never contact_location_preferences.
-// sms_marketing) AND still THROWING on per-contact conditions (no
-// phone / opted out), feeding error_count until MAX_ERRORS auto-
-// paused the whole enrolment — the identical wedge class already
-// fixed for email/WA after the live 2026-07-10 incident. These tests
-// pin the email/WA contract onto SMS: locationConsent() gate, row
-// absent = never send, per-contact conditions are recorded SKIPS.
-describe('sendSmsStep — per-location consent gate + graceful skips (COMMSFIX.E.1)', () => {
-  const step = { id: 'st-sms', step_order: 3, sms_body: 'Hi {{first_name}}' }
-  const sequence = { id: 'seq-sms', name: 'Dunning chase', location_id: 'loc-1' }
-  const consentedContact = {
-    id: 'c1', location_id: 'loc-1', phone: '+353860000000', sms_status: 'active',
-    contact_location_preferences: [{ location_id: 'loc-1', email_marketing: true, sms_marketing: true, whatsapp_marketing: true }],
-  }
-
-  function smsDb() {
+// SMS left with Twilio. A legacy 'sms' step row can still be reached (the DB
+// CHECK admits it), so the runner hands it to retiredSmsStep: a recorded skip
+// on the contact's timeline, then the enrolment advances like any other skip.
+// It must never send, never read the location, never bump the sent metric and
+// never throw — not even for the missing sms_body that used to be a config
+// fault, because there is nothing left for an operator to fix but deleting it.
+describe('retiredSmsStep — records a skip and advances (TWILIO-RETIRE.1)', () => {
+  function skipDb() {
     const activityInserts = []
     const rpcCalls = []
     return {
@@ -1244,115 +1214,25 @@ describe('sendSmsStep — per-location consent gate + graceful skips (COMMSFIX.E
       rpcCalls,
       from(table) {
         if (table === 'activities') {
-          return {
-            insert: (row) => {
-              activityInserts.push(row)
-              // recordStepSkip awaits the bare insert (thenable); the
-              // send path chains .select().single() — support both.
-              return {
-                select: () => ({ single: async () => ({ data: { id: 'dddddddd-0000-0000-0000-000000000004' } }) }),
-                then: (onF) => Promise.resolve({ error: null }).then(onF),
-              }
-            },
-          }
+          return { insert: (row) => { activityInserts.push(row); return Promise.resolve({ error: null }) } }
         }
-        if (table === 'locations') return { select: () => ({ eq: () => ({ single: async () => ({ data: { id: 'loc-1', name: 'Stillorgan', twilio_alpha_sender_id: 'UN1T' } }) }) }) }
         throw new Error(`unexpected table ${table}`)
       },
       rpc(name) { rpcCalls.push(name); return Promise.resolve({ data: null, error: null }) },
     }
   }
+  const sequence = { id: 'seq-sms', name: 'Dunning chase', location_id: 'loc-1' }
+  const contact = { id: 'c1', location_id: 'loc-1', phone: '+353860000000' }
 
-  let tw
-  beforeEach(async () => {
-    tw = await import('@/lib/twilio')
-    tw.sendLocationSms.mockReset()
-    tw.sendLocationSms.mockResolvedValue({ sid: 'SM_PROVIDER' })
-  })
-
-  it('per-location sms consent not true → recorded skip (no Twilio call, resolves null, no throw)', async () => {
-    for (const sms_marketing of [false, null, undefined]) {
-      const db = smsDb()
-      const out = await steps.sendSmsStep(db, {
-        step, sequence, contact: {
-          ...consentedContact,
-          contact_location_preferences: [{ location_id: 'loc-1', sms_marketing, email_marketing: true, whatsapp_marketing: true }],
-        },
-      })
-      expect(out).toBeNull()
-      expect(db.activityInserts).toHaveLength(1)
-      expect(db.activityInserts[0].subject).toMatch(/skipped/i)
-      expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toMatch(/sms marketing/i)
-    }
-    expect(tw.sendLocationSms).not.toHaveBeenCalled()
-  })
-
-  it('no preferences row for the sequence location → recorded skip (row absent = never send)', async () => {
-    const db = smsDb()
-    const out = await steps.sendSmsStep(db, {
-      step, sequence, contact: {
-        ...consentedContact,
-        contact_location_preferences: [{ location_id: 'loc-other', sms_marketing: true, email_marketing: true, whatsapp_marketing: true }],
-      },
-    })
+  it.each([
+    ['a configured legacy step', { id: 'st-sms', step_order: 3, sms_body: 'Hi {{first_name}}' }],
+    ['a legacy step with no body', { id: 'st-sms', step_order: 3, sms_body: null }],
+  ])('%s → one recorded skip, resolves null, no metric bump', async (_label, step) => {
+    const db = skipDb()
+    const out = await steps.retiredSmsStep(db, { step, sequence, contact })
     expect(out).toBeNull()
-    expect(tw.sendLocationSms).not.toHaveBeenCalled()
     expect(db.activityInserts).toHaveLength(1)
-    expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toMatch(/list/i)
-  })
-
-  it('missing phone → recorded skip, not a throw (no more MAX_ERRORS wedge)', async () => {
-    const db = smsDb()
-    const out = await steps.sendSmsStep(db, {
-      step, sequence, contact: { ...consentedContact, phone: null },
-    })
-    expect(out).toBeNull()
-    expect(tw.sendLocationSms).not.toHaveBeenCalled()
-    expect(db.activityInserts).toHaveLength(1)
-    expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toMatch(/phone/i)
-  })
-
-  it.each(['opted_out', 'invalid', 'undeliverable'])(
-    'sms_status %s → recorded skip, not a throw',
-    async (sms_status) => {
-      const db = smsDb()
-      const out = await steps.sendSmsStep(db, {
-        step, sequence, contact: { ...consentedContact, sms_status },
-      })
-      expect(out).toBeNull()
-      expect(tw.sendLocationSms).not.toHaveBeenCalled()
-      expect(db.activityInserts).toHaveLength(1)
-      expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toContain(sms_status)
-    },
-  )
-
-  it('a skip does not bump the per-step sent metric', async () => {
-    const db = smsDb()
-    await steps.sendSmsStep(db, {
-      step, sequence, contact: { ...consentedContact, phone: null },
-    })
-    expect(db.rpcCalls).not.toContain('increment_step_sent')
-  })
-
-  it('consented contact with active status sends and returns the activities row id', async () => {
-    const db = smsDb()
-    const out = await steps.sendSmsStep(db, { step, sequence, contact: consentedContact })
-    expect(tw.sendLocationSms).toHaveBeenCalledTimes(1)
-    expect(out).toBe('dddddddd-0000-0000-0000-000000000004')
-    expect(db.rpcCalls).toContain('increment_step_sent')
-  })
-
-  it('absent sms_status still sends (back-compat for pre-mig-059 contacts)', async () => {
-    const db = smsDb()
-    const { sms_status: _drop, ...noStatus } = consentedContact
-    const out = await steps.sendSmsStep(db, { step, sequence, contact: noStatus })
-    expect(tw.sendLocationSms).toHaveBeenCalledTimes(1)
-    expect(out).toBe('dddddddd-0000-0000-0000-000000000004')
-  })
-
-  it('missing sms_body still throws (sequence-config fault → operator must fix)', async () => {
-    await expect(steps.sendSmsStep(smsDb(), {
-      step: { ...step, sms_body: null }, sequence, contact: consentedContact,
-    })).rejects.toThrow(/sms_body/)
+    expect(db.activityInserts[0].subject).toBe('Sequence SMS step skipped — the SMS channel has been retired')
+    expect(db.rpcCalls).toEqual([])
   })
 })

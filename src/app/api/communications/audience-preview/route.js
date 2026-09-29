@@ -9,8 +9,8 @@
 //
 //  1. SAME QUERY PATH. The preview never builds its own query. It calls
 //     buildEligibleAudienceQuery, which delegates to the per-channel SEND
-//     builder — buildAudienceQueryAsync for email, buildSmsAudienceAsync for
-//     SMS, buildWhatsAppAudienceAsync for WhatsApp — and the count route's
+//     builder — buildAudienceQueryAsync for email, buildWhatsAppAudienceAsync
+//     for WhatsApp — and the count route's
 //     will-receive number comes from the same call. A preview that disagreed
 //     with the send would be worse than no preview: it would manufacture
 //     false confidence in the exact moment an operator is checking their work.
@@ -37,7 +37,7 @@ export const dynamic = 'force-dynamic'
 const Schema = z.object({
   location_id: uuidLike,
   audience_filter: z.unknown().optional(),
-  channel: z.enum(['sms', 'whatsapp', 'email']).optional(),
+  channel: z.enum(['whatsapp', 'email']).optional(),
   limit: z.coerce.number().int().positive().optional(),
   offset: z.coerce.number().int().min(0).optional(),
 })

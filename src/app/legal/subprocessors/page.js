@@ -28,7 +28,6 @@ const SUBPROCESSORS = [
   ['Glofox', 'Gym membership and booking platform (member records, bookings, attendance, billing sync)', 'EU', 'DPA'],
   ['Meta Platforms', 'WhatsApp Cloud API and Instagram messaging; hashed identifiers for ad conversions', 'US', 'DPA + SCCs'],
   ['Postmark (ActiveCampaign)', 'Transactional and marketing email delivery', 'US', 'DPA + SCCs'],
-  ['Twilio', 'SMS delivery', 'US', 'DPA + SCCs'],
   ['Zoom Video Communications', 'Cloud telephony. Member and lead names and phone numbers are held in a shared external-contacts directory so inbound calls to the studio are identified by name', 'EU / US', 'DPA + SCCs'],
   ['Stripe', 'Payment processing (event tickets; platform billing)', 'EU / US', 'DPA + SCCs'],
   ['Revolut Business', 'Payment processing (deposits)', 'EU', 'DPA'],
@@ -79,7 +78,7 @@ export default function SubprocessorsPage() {
       <div className="mx-auto max-w-3xl px-6 py-12">
         <header className="mb-10">
           <h1 className="text-3xl font-bold tracking-tight">Subprocessors</h1>
-          <p className="mt-2 text-sm text-gray-500">Last updated 19 July 2026</p>
+          <p className="mt-2 text-sm text-gray-500">Last updated 29 September 2026</p>
         </header>
 
         <section className="prose prose-gray max-w-none">

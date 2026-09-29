@@ -13,10 +13,6 @@
       "schedule": "30 3 * * *"
     },
     {
-      "path": "/api/cron/run-sms-broadcasts",
-      "schedule": "*/5 * * * *"
-    },
-    {
       "path": "/api/cron/run-sequences",
       "schedule": "*/5 * * * *"
     },

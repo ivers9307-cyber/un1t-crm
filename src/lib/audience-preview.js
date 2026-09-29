@@ -49,7 +49,6 @@ export function maskPhone(phone) {
 // send would show a different audience than the one Meta will message.
 const IDENTIFIER_BY_CHANNEL = {
   email: ['email', 'email'],
-  sms: ['phone', 'phone'],
   whatsapp: ['wa_phone', 'wa_phone'],
 }
 
