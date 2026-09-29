@@ -2,7 +2,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { redirect } from 'next/navigation'
 import StaffForm from '@/components/StaffForm'
-import { redactLocationSecrets } from '@/lib/location-secrets'
+import { loadStaffFormLocations } from '@/lib/staff-form-locations'
 
 export const dynamic = 'force-dynamic'
 
@@ -14,8 +14,12 @@ export default async function NewStaffPage() {
   if (!user || (!user.isMaster && user.role !== 'owner')) redirect('/')
 
   const db = createServerClient()
-  const [{ data: locations }, { data: templateRows }] = await Promise.all([
-    db.from('locations').select('*').eq('active', true).eq('is_host_anchor', false).order('name'),
+  // STAFFFORMSETTINGS.1 — identity + unifi_configured, never `settings`
+  // (it carried the customer agent's test phone numbers and every
+  // integration's config into this page). A failed read is logged inside
+  // and flagged to StaffForm, which still renders but says so.
+  const [{ locations, error: locationsError }, { data: templateRows }] = await Promise.all([
+    loadStaffFormLocations(db),
     // PERM-AUDIT.3 — role templates (mig 364) so new assignments
     // start at the role's EFFECTIVE defaults for the chosen location.
     db.from('location_role_permissions').select('location_id, role, employment_type, permissions'),
@@ -34,7 +38,7 @@ export default async function NewStaffPage() {
   // Per mig 051 — locations the caller is owner at, derived from the
   // resolved rolesByLocation map. Master gets every location.
   const callerOwnerLocationIds = user.isMaster
-    ? (locations || []).map(l => l.id)
+    ? locations.map(l => l.id)
     : Object.entries(user.rolesByLocation || {})
         .filter(([, r]) => r === 'owner')
         .map(([loc]) => loc)
@@ -44,7 +48,8 @@ export default async function NewStaffPage() {
       <h2 className="text-2xl font-bold mb-1">Add Team Member</h2>
       <p className="text-sm text-un1t-subtle mb-6">Create a login for a new staff member</p>
       <StaffForm
-        locations={(locations || []).map(redactLocationSecrets) /* SECFIX.3a */}
+        locations={locations}
+        locationsLoadFailed={!!locationsError}
         callerIsMaster={!!user.isMaster}
         callerOwnerLocationIds={callerOwnerLocationIds}
         roleTemplates={roleTemplates}
