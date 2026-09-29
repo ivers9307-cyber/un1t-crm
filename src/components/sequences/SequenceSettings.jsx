@@ -95,8 +95,17 @@ export function newWebhookSecret() {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
 }
 
-export default function SequenceSettings({ sequence }) {
-  const [open, setOpen] = useState(false)
+// Shown after a successful save of a typed or generated secret, while the
+// plaintext is still in the field. No em-dashes (operator copy).
+export const SECRET_JUST_SET_MESSAGE = 'Saved. Copy it now; it is not shown again once you leave or refresh this page.'
+
+// `justSetSecret` / `onJustSetSecret`: SequenceFlowBuilder keys this panel on
+// the sequence's saved fields, so the router.refresh() that follows a save
+// (has_webhook_secret flips, Publish changes status) REMOUNTS it. The parent
+// holds the just-saved plaintext so the remount re-seeds it instead of
+// silently dropping a secret the operator has not copied yet.
+export default function SequenceSettings({ sequence, justSetSecret = null, onJustSetSecret }) {
+  const [open, setOpen] = useState(!!justSetSecret)
   const [name, setName] = useState(sequence?.name || '')
   const [status, setStatus] = useState(sequence?.status || 'draft')
   const [description, setDescription] = useState(sequence?.description || '')
@@ -109,8 +118,10 @@ export default function SequenceSettings({ sequence }) {
   const [audienceFilter, setAudienceFilter] = useState(sequence?.audience_filter || null)
   const [webhookToken, setWebhookToken] = useState(sequence?.webhook_token || null)
   const [hasSecret, setHasSecret] = useState(sequence?.has_webhook_secret === true)
-  const [secretDraft, setSecretDraft] = useState('')
+  const [secretDraft, setSecretDraft] = useState(justSetSecret || '')
   const [secretAction, setSecretAction] = useState(null) // null | 'replace' | 'clear'
+  // true once a replace-save succeeded and the saved plaintext is still on screen
+  const [justSet, setJustSet] = useState(!!justSetSecret)
   const [origin, setOrigin] = useState('')
   const [segments, setSegments] = useState([])
   const [dirty, setDirty] = useState(false)
@@ -130,6 +141,7 @@ export default function SequenceSettings({ sequence }) {
   }, [sequence?.location_id])
 
   const touch = () => { setDirty(true); setFeedback(null) }
+  const leaveJustSet = () => { if (justSet) { setJustSet(false); onJustSetSecret?.(null) } }
   const goalType = goal?.type || ''
   // Seed a value the moment a value-bearing type is picked, so the saved
   // config is never "type set, value missing" (which the runner treats as
@@ -184,7 +196,8 @@ export default function SequenceSettings({ sequence }) {
   const save = async () => {
     setBusy('save')
     try {
-      const res = await fetch(`/api/sequences/${sequence.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(buildPayload()) })
+      const payload = buildPayload()
+      const res = await fetch(`/api/sequences/${sequence.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
       const data = await res.json()
       if (data.success) {
         setDirty(false); setFeedback({ ok: true, text: 'Settings saved' })
@@ -192,6 +205,9 @@ export default function SequenceSettings({ sequence }) {
         if (typeof data.sequence?.has_webhook_secret === 'boolean') setHasSecret(data.sequence.has_webhook_secret)
         // The typed/generated value stays visible until they leave the page
         // (they may still be copying it); a later save sends nothing.
+        const sent = payload.webhook_secret
+        if (typeof sent === 'string') { setSecretDraft(sent); setJustSet(true); onJustSetSecret?.(sent) }
+        else if ('webhook_secret' in payload) { setJustSet(false); onJustSetSecret?.(null) }
         setSecretAction(null)
       } else setFeedback({ ok: false, text: data.error || 'Could not save settings' })
     } catch { setFeedback({ ok: false, text: 'Network error saving settings' }) } finally { setBusy(null) }
@@ -325,22 +341,27 @@ export default function SequenceSettings({ sequence }) {
                 )}
                 <Labeled
                   label="Shared secret"
-                  hint={hasSecret
+                  hint={justSet
+                    ? 'The sender puts it in the X-Webhook-Secret header.'
+                    : hasSecret
                     ? 'A secret is set (hidden). Type or generate a new one to replace it.'
                     : 'Optional. The sender puts it in the X-Webhook-Secret header; leave it blank and the URL alone authenticates.'}
                 >
                   <Text
                     value={secretDraft}
-                    onChange={v => { setSecretDraft(v); setSecretAction(v.trim() ? 'replace' : null); touch() }}
+                    onChange={v => { setSecretDraft(v); setSecretAction(v.trim() ? 'replace' : null); leaveJustSet(); touch() }}
                     placeholder={hasSecret ? 'Saved (hidden). Type to replace.' : 'optional secret'}
                   />
                 </Labeled>
                 <div className="flex items-center gap-3 text-xs">
-                  <button type="button" onClick={() => { setSecretDraft(newWebhookSecret()); setSecretAction('replace'); touch() }} className="text-un1t-subtle hover:text-un1t-text underline">Generate new secret</button>
+                  <button type="button" onClick={() => { setSecretDraft(newWebhookSecret()); setSecretAction('replace'); leaveJustSet(); touch() }} className="text-un1t-subtle hover:text-un1t-text underline">Generate new secret</button>
                   {hasSecret && secretAction !== 'clear' && (
-                    <button type="button" onClick={() => { setSecretDraft(''); setSecretAction('clear'); touch() }} className="text-rose-700 hover:underline">Remove secret</button>
+                    <button type="button" onClick={() => { setSecretDraft(''); setSecretAction('clear'); leaveJustSet(); touch() }} className="text-rose-700 hover:underline">Remove secret</button>
                   )}
                 </div>
+                {justSet && secretAction === null && (
+                  <p className="text-[11px] text-amber-700">{SECRET_JUST_SET_MESSAGE}</p>
+                )}
                 {secretAction === 'replace' && (
                   <p className="text-[11px] text-amber-700">Copy this secret into the sending system now. Once you save and leave this page it is never shown again. Saving replaces the old one.</p>
                 )}

@@ -5,6 +5,7 @@
 //     reorder / delete + per-type config + save draft + publish)
 //   - re-convergent (paths merge back) → the read-only guided rail with YES/NO
 //     lanes; edit those in the classic editor. Either way classic stays available.
+import { useState } from 'react'
 import Link from 'next/link'
 import { CircleDot, CornerDownRight, GitBranch } from 'lucide-react'
 import { buildFlowLayout, describeNode, isPureTree } from '@/lib/sequences/graph'
@@ -139,6 +140,11 @@ export default function SequenceFlowBuilder({ graph, sequence, isDraft, isPublis
     wt: sequence?.webhook_token, hs: sequence?.has_webhook_secret, d: sequence?.description,
     af: sequence?.audience_filter,
   })
+  // SEQPAGEGATE.1: a secret saved from the panel stays on screen until it is
+  // copied, but the refresh after that save changes the key above (hs, and
+  // often s) and remounts the panel. Held here, it re-seeds the new panel
+  // instead of vanishing; it is gone only when the page itself unloads.
+  const [justSetSecret, setJustSetSecret] = useState(null)
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-6">
@@ -156,7 +162,7 @@ export default function SequenceFlowBuilder({ graph, sequence, isDraft, isPublis
       </p>
 
       <AgentPanel sequenceId={sequence?.id} />
-      <SequenceSettings key={settingsKey} sequence={sequence} />
+      <SequenceSettings key={settingsKey} sequence={sequence} justSetSecret={justSetSecret} onJustSetSecret={setJustSetSecret} />
 
       <DraftBanner sequenceId={sequence?.id} isDraft={isDraft} isPublished={isPublished} writeSteps={writeSteps} />
 

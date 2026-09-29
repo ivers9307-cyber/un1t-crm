@@ -344,3 +344,91 @@ describe('Webhook secret panel (SEQPAGEGATE.1)', () => {
     expect(container.innerHTML).toContain('Saved (hidden)')
   })
 })
+
+// SEQPAGEGATE.1 review S1: what the operator sees around a save. The
+// secret stays on screen after the save, so the panel must say so, and
+// a remount of the panel (SequenceFlowBuilder keys it) must not drop it.
+describe('Webhook secret panel after a save (SEQPAGEGATE.1 review)', () => {
+  let puts
+  beforeEach(() => {
+    puts = []
+    vi.stubGlobal('fetch', vi.fn((url, init) => {
+      if (init?.method === 'PUT') {
+        const body = JSON.parse(init.body)
+        puts.push(body)
+        return Promise.resolve({ json: async () => ({ success: true, sequence: { webhook_token: 'c'.repeat(32), has_webhook_secret: !('webhook_secret' in body) || body.webhook_secret !== null } }) })
+      }
+      return new Promise(() => {})
+    }))
+  })
+  afterEach(() => { cleanup(); vi.unstubAllGlobals() })
+
+  const SEQ = {
+    id: 'seq-1', location_id: 'loc-1', name: 'Hook', status: 'draft', trigger_type: 'webhook',
+    trigger_config: {}, webhook_token: 'c'.repeat(32), has_webhook_secret: false,
+  }
+  const JUST_SET = 'Saved. Copy it now; it is not shown again once you leave or refresh this page.'
+  function open(seq = SEQ, props = {}) {
+    const utils = render(<SequenceSettings sequence={seq} {...props} />)
+    fireEvent.click(utils.getByText('Settings & trigger'))
+    return utils
+  }
+  const secretInput = (container) =>
+    Array.from(container.querySelectorAll('input')).find(i => /optional secret|Saved \(hidden\)/.test(i.placeholder))
+
+  // S1: the save used to drop the warning while the plaintext stayed on
+  // screen, and the hint then claimed the secret was hidden.
+  it('after saving a typed secret it says to copy it now, and never calls it hidden', async () => {
+    const { container, getByText } = open()
+    fireEvent.change(secretInput(container), { target: { value: 'SYNTH-TYPED' } })
+    fireEvent.click(getByText('Save settings'))
+    await waitFor(() => expect(puts).toHaveLength(1))
+    await waitFor(() => expect(container.textContent).toContain(JUST_SET))
+    expect(secretInput(container).value).toBe('SYNTH-TYPED')
+    expect(container.textContent).not.toContain('(hidden)')
+    expect(container.textContent).not.toContain('Copy this secret into the sending system now')
+  })
+
+  it('typing a new value after a save leaves the saved state', async () => {
+    const { container, getByText } = open()
+    fireEvent.click(getByText('Generate new secret'))
+    fireEvent.click(getByText('Save settings'))
+    await waitFor(() => expect(container.textContent).toContain(JUST_SET))
+    fireEvent.change(secretInput(container), { target: { value: 'SYNTH-OTHER' } })
+    expect(container.textContent).not.toContain(JUST_SET)
+    expect(container.textContent).toContain('Copy this secret into the sending system now')
+  })
+
+  it('a failed save keeps the pre-save warning, not the saved message', async () => {
+    vi.stubGlobal('fetch', vi.fn((url, init) => (init?.method === 'PUT'
+      ? Promise.resolve({ json: async () => ({ success: false, error: 'Nope' }) })
+      : new Promise(() => {}))))
+    const { container, getByText } = open()
+    fireEvent.click(getByText('Generate new secret'))
+    fireEvent.click(getByText('Save settings'))
+    await waitFor(() => expect(container.textContent).toContain('Nope'))
+    expect(container.textContent).not.toContain(JUST_SET)
+    expect(container.textContent).toContain('Copy this secret into the sending system now')
+  })
+
+  it('reports the just-saved secret upward and seeds from it on a remount (open, value shown)', async () => {
+    const onJustSetSecret = vi.fn()
+    const { container, getByText } = open(SEQ, { onJustSetSecret })
+    fireEvent.change(secretInput(container), { target: { value: 'SYNTH-LIFTED' } })
+    fireEvent.click(getByText('Save settings'))
+    await waitFor(() => expect(onJustSetSecret).toHaveBeenLastCalledWith('SYNTH-LIFTED'))
+    cleanup()
+    const again = render(<SequenceSettings sequence={{ ...SEQ, has_webhook_secret: true }} justSetSecret="SYNTH-LIFTED" onJustSetSecret={onJustSetSecret} />)
+    expect(secretInput(again.container).value).toBe('SYNTH-LIFTED')
+    expect(again.container.textContent).toContain(JUST_SET)
+    expect(again.container.textContent).not.toContain('(hidden)')
+  })
+
+  it('the saved message carries no em-dash', async () => {
+    const { container, getByText } = open()
+    fireEvent.click(getByText('Generate new secret'))
+    fireEvent.click(getByText('Save settings'))
+    await waitFor(() => expect(container.textContent).toContain(JUST_SET))
+    expect(JUST_SET).not.toContain('\u2014')
+  })
+})
