@@ -105,9 +105,11 @@ export default function CustomerAgentClient() {
     const label = `${Number(dd)} ${MONTHS[Number(mm) - 1] || ''}`
     const sent = (d.freeform || 0) + (d.templates || 0)
     const runs = d.daytime_ticks || 0
-    const failed = d.failed_ticks ? ` · ${d.failed_ticks} failed run${d.failed_ticks === 1 ? '' : 's'}` : ''
+    const checks = d.candidates || 0
+    const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
+    const failed = d.failed_ticks ? ` · ${plural(d.failed_ticks, 'failed run')}` : ''
     const partial = d.carry_failed ? ' (partial: an earlier run could not be read)' : ''
-    return `${label}: ${runs} daytime run${runs === 1 ? '' : 's'} · ${d.candidates || 0} candidate checks · ${sent} sent · ${d.skipped || 0} skipped${describeCheckinReasons({ reasons: d.reasons })}${failed}${partial}`
+    return `${label}: ${plural(runs, 'daytime run')} · ${plural(checks, 'candidate check')} · ${sent} sent · ${d.skipped || 0} skipped${describeCheckinReasons({ reasons: d.reasons })}${failed}${partial}`
   }
 
   async function saveSettings() {
