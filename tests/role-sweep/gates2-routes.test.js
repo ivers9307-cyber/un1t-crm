@@ -4,7 +4,8 @@
 // "(main: …)" notes permissionCases carries are dropped: on main every one of
 // these callers passed. Each route now asks the channel the way its send
 // sibling does: at SOME studio first (a cheap 403), then at the row's studio.
-//   • /api/templates and /api/templates/[id] (email templates) → `email`
+//   • /api/templates/[id] and POST /api/templates (email templates) → `email`
+//     (GET /api/templates, the pickers' list, stays membership: see below)
 //   • /api/whatsapp/broadcasts/[id] GET/PUT/DELETE and /pause → `whatsapp`
 //     (the rule of /api/whatsapp/broadcasts/[id]/send)
 //   • /api/campaigns/[id]/resend DELETE → `email` (the rule of /send)
@@ -22,6 +23,7 @@ vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), 
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { describeGate } from '../helpers/role-gate-probe.js'
+import { makeFakeDb } from '@/lib/api-auth.test-helpers.js'
 import { permissionCases, person, LOC_A, LOC_B } from '../helpers/role-sweep-callers.js'
 import * as templates from '@/app/api/templates/route.js'
 import * as template from '@/app/api/templates/[id]/route.js'
@@ -63,10 +65,29 @@ describeGate('DELETE /api/templates/[id] (email at the template)', {
   gateReads: row({}),
   forbidden: EMAIL_FORBIDDEN, hidden: NOT_FOUND, cases: noMainNotes('email'),
 }, T)
-describeGate('GET /api/templates?location_id= (email at that studio)', {
-  call: (loc) => templates.GET(bare('GET', `?location_id=${loc}`)),
-  forbidden: EMAIL_FORBIDDEN, hidden: BODY_HIDDEN, cases: noMainNotes('email'),
-}, T)
+// GET /api/templates is the PICKER list (id, name, description, category,
+// thumbnail; no content) behind the email-template selects of the race event
+// form (`races`, which staff and reception hold by default) and the booking
+// type form. It stays membership-only: asking `email` emptied those pickers
+// for a race editor without `email`, and hid a race's saved template.
+describe('GET /api/templates?location_id= (the pickers: membership, not `email`)', () => {
+  const noEmail = person({ [LOC_A]: { role: 'staff', permissions: { races: true, email: false } } }, LOC_A)
+  const tpl = { id: 'et-1', name: 'Race confirmation', location_id: LOC_A }
+  const list = (loc) => templates.GET(bare('GET', `?location_id=${loc}`))
+  it('a race editor without `email` at the studio still gets its templates', async () => {
+    getCurrentUser.mockResolvedValue(noEmail)
+    createServerClient.mockReturnValue(makeFakeDb({ email_templates: [{ ...tpl }] }))
+    const res = await list(LOC_A)
+    expect(res.status).toBe(200)
+    expect((await res.json()).templates.map((t) => t.id)).toEqual(['et-1'])
+  })
+  it('a studio the caller does not belong to is refused (unchanged)', async () => {
+    getCurrentUser.mockResolvedValue(noEmail)
+    createServerClient.mockReturnValue(makeFakeDb({ email_templates: [] }))
+    const res = await list(LOC_B)
+    expect({ status: res.status, body: await res.json() }).toEqual(BODY_HIDDEN)
+  })
+})
 describeGate('POST /api/templates (email at the studio it creates at)', {
   call: (loc) => templates.POST(json('POST', { name: 'Welcome', location_id: loc })),
   forbidden: EMAIL_FORBIDDEN, hidden: BODY_HIDDEN, cases: noMainNotes('email'),
