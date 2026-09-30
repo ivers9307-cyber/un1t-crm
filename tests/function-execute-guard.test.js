@@ -6,7 +6,9 @@
 //
 //  1. A migration from 662 on (see SCAN_FROM) that CREATEs a non-trigger function in public
 //     states its EXECUTE decision in the same file: GRANT EXECUTE … TO
-//     authenticated (a signed-in client calls it), or REVOKE EXECUTE … FROM
+//     authenticated (a signed-in client calls it, so it must be on
+//     CLIENT_RPCS: a grant to authenticated on anything else fails), or
+//     REVOKE EXECUTE … FROM
 //     PUBLIC, anon, authenticated (server-only; still correct on a database
 //     whose defaults were reset). Trigger functions need neither: a trigger
 //     fires without the firing role holding EXECUTE.
@@ -17,8 +19,8 @@
 //     … GRANT … ON FUNCTIONS/ROUTINES to a client role, with no IN SCHEMA or
 //     IN SCHEMA public. (private and extensions keep PUBLIC on purpose.)
 //  4. Every .rpc('<name>') in client-run code (shared/, mobile/, and src/
-//     files that are 'use client', import createBrowserClient or call
-//     createAuthClient()) is in CLIENT_RPCS, and the LATEST migration that
+//     files that are 'use client', import createBrowserClient, call
+//     createAuthClient() or hold NEXT_PUBLIC_SUPABASE_ANON_KEY) is in CLIENT_RPCS, and the LATEST migration that
 //     creates each CLIENT_RPCS function also grants it EXECUTE to
 //     authenticated (DROP + CREATE resets the ACL to the closed default).
 //
@@ -222,6 +224,21 @@ export function executeDecisions(sql) {
   return { granted, revoked, clientGrants, blanket }
 }
 
+/**
+ * Public functions a migration grants to authenticated that are not on
+ * CLIENT_RPCS: such a grant re-opens a server function to every signed-in
+ * session, so it is a decision only once the function is added to the list.
+ */
+export function unlistedClientGrants(sql) {
+  return [...executeDecisions(sql).granted].filter((name) => !CLIENT_RPCS.includes(name)).sort()
+}
+
+// Decisions are matched by function NAME, not signature: a GRANT on f(uuid)
+// also satisfies a CREATE of f(text). Prod has no overloaded public function
+// (0 on 30 Sep 2026), and after 667 an overload that slips through starts
+// closed, so the loose match can only let a grant be missing, never an
+// opening be missed.
+
 /** Non-trigger public functions created with no EXECUTE decision in the same file. */
 export function missingDecisions(sql) {
   const { granted, revoked } = executeDecisions(sql)
@@ -296,7 +313,10 @@ function blankComments(text, sf) {
 
 function isClientFile(text) {
   const code = stripComments(text).trimStart()
-  return /^['"]use client['"]/.test(code) || /\bcreateBrowserClient\b/.test(code) || /\bcreateAuthClient\s*\(/.test(code)
+  // The anon key is what a browser/session client is built from; the service
+  // role key never appears next to it in a client-session file.
+  return /^['"]use client['"]/.test(code) || /\bcreateBrowserClient\b/.test(code) || /\bcreateAuthClient\s*\(/.test(code) ||
+    /\bNEXT_PUBLIC_SUPABASE_ANON_KEY\b/.test(code)
 }
 const RPC = /\.rpc\(\s*['"`]([A-Za-z_][\w]*)['"`]/g
 /** .rpc('<name>') calls in one file's code (comments excluded). */
@@ -329,6 +349,7 @@ describe('later migrations keep public functions closed by default (mig 667)', (
     expect(clientGrants, `${file}: anon/PUBLIC may not execute a public function (mig 667)`).toEqual([])
     expect(blanket, `${file}: no blanket EXECUTE on ALL FUNCTIONS IN SCHEMA public to a client role (mig 667)`).toEqual([])
     expect(defaultReopeners(sql), `${file}: the public function default stays service_role-only (mig 667)`).toEqual([])
+    expect(unlistedClientGrants(sql), `${file}: a GRANT EXECUTE … TO authenticated is for a function a client calls; add it to CLIENT_RPCS (mig 667)`).toEqual([])
   })
 })
 
@@ -457,6 +478,17 @@ describe('the scanners never let a comment marker inside a string hide code', ()
     expect(clientRpcNames("'use client'\nexport default function P() {\n  return <div><p>// x</p>{supabase.rpc('y')}</div>\n}\n")).toEqual(['y'])
     // a real JSX comment is still a comment
     expect(clientRpcNames("'use client'\nexport default function P() {\n  return <div>\n    {/* supabase.rpc('old') */}\n    <p>{supabase.rpc('now')}</p>\n  </div>\n}\n")).toEqual(['now'])
+  })
+
+  it('a GRANT to authenticated counts only for a function on CLIENT_RPCS', () => {
+    expect(unlistedClientGrants(`CREATE FUNCTION public.f() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;
+      GRANT EXECUTE ON FUNCTION public.f() TO authenticated;`)).toEqual(['f'])
+    expect(unlistedClientGrants('GRANT EXECUTE ON FUNCTION public.list_enabled_integrations() TO authenticated;')).toEqual([])
+    expect(unlistedClientGrants('GRANT EXECUTE ON FUNCTION public.f() TO service_role;')).toEqual([])
+  })
+
+  it('JS: a file holding the anon key makes a client session', () => {
+    expect(clientRpcNames("const c = createClient(url, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)\nc.rpc('as_user')\n")).toEqual(['as_user'])
   })
 
   it('JS: comments are not calls; server files are not client files', () => {
