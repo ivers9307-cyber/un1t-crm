@@ -442,6 +442,12 @@ describe('after 667 — the catalog', () => {
     expect(await newFunctionCan('extensions')).toEqual(OPEN)
   })
 
+  it('a function postgres creates in a NEW schema starts closed too (the PUBLIC revoke is global)', async () => {
+    await runSql('CREATE SCHEMA later_schema')
+    expect(await newFunctionCan('later_schema')).toEqual({ anon: false, authenticated: false, service_role: false, public: false })
+    await runSql('DROP SCHEMA later_schema')
+  })
+
   it('the private RLS helper is untouched (NULL ACL, authenticated still executes it)', async () => {
     const { rows: [r] } = await db.query(
       `SELECT proacl IS NULL AS null_acl, has_function_privilege('authenticated', oid, 'EXECUTE') AS auth
