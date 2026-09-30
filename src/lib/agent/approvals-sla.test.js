@@ -76,7 +76,7 @@ describe('runApprovalsSlaSweep', () => {
   // the read returns only the rows its filters match (a `details->>key` eq
   // reads the JSON key as Postgres does: absent/null never equals a value).
   // A fake that ignored the filter would pass with the filter deleted.
-  function sweepDb({ rows, claimMatches = true, expired = [], updateError = null, owedError = null }) {
+  function sweepDb({ rows, claimMatches = true, expired = [], updateError = null, owedError = null, rowsError = null }) {
     const updates = []
     const matches = (row, eqs) => Object.entries(eqs).every(([col, val]) => {
       if (col === 'status') return true
@@ -99,7 +99,7 @@ describe('runApprovalsSlaSweep', () => {
             let out
             if (state.patch) out = { data: null, error: updateError }
             else if (state.eqs.status === 'expired') out = owedError ? { data: null, error: owedError } : { data: expired.filter(r => matches(r, state.eqs) && before(r, state.lts)), error: null }
-            else out = { data: rows, error: null }
+            else out = rowsError ? { data: null, error: rowsError } : { data: rows, error: null }
             return Promise.resolve(out).then(res, rej)
           },
         }
@@ -122,6 +122,18 @@ describe('runApprovalsSlaSweep', () => {
   }
 
   beforeEach(() => vi.clearAllMocks())
+
+  // C31 PUSHNITS.1 — structured, never free text.
+  it('a failed candidate read is logged with logError, not console free text', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { db, updates } = sweepDb({ rows: [expiredRow], rowsError: { code: 'XX000', message: 'down' } })
+    const out = await runApprovalsSlaSweep(db, { nowMs: NOW })
+    expect(out).toMatchObject({ expired: 0, escalated: 0, candidates_unread: 1 })
+    expect(updates.filter(u => u.patch?.status === 'expired')).toEqual([])
+    expect(logError).toHaveBeenCalledWith('approvals-sla', 'candidate read failed; retried next tick', expect.objectContaining({ err: 'down' }))
+    expect(errSpy).not.toHaveBeenCalled()
+    errSpy.mockRestore()
+  })
 
   it('expires a past-start booking: atomic claim and a staff push', async () => {
     const { db, updates } = sweepDb({ rows: [expiredRow] })

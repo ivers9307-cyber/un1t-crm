@@ -8686,6 +8686,8 @@ const HyroxSettingsUpdate = z.object({
   charter: z.string().max(8000).nullish(),
   house_style: z.string().max(8000).nullish(),
   style_examples: z.array(HyroxExampleEntry).max(MAX_STORED_EXAMPLES).optional(),
+  known_example_ids: z.array(z.string().max(64)).max(200).optional()
+    .describe('Every example id the page has seen. A stored example whose id is not listed (starred after the page loaded) is kept; omit it and style_examples replaces the stored list.'),
 }).openapi('HyroxSettingsUpdate')
 
 registry.registerPath({
@@ -8716,7 +8718,7 @@ registry.registerPath({
   summary: 'Save a generated Hyrox session as a house-style example ("star as style example")',
   description:
     'Renders the session server-side via sessionToExampleText and appends it to locations.settings.hyrox.style_examples ' +
-    '(dedupe by session id, capped at MAX_STORED_EXAMPLES). Detail route: a missing session or missing ' +
+    '(dedupe by session id, capped at MAX_STORED_EXAMPLES); a new entry is returned as data.example. Detail route: a missing session or missing ' +
     'per-location approvals_hyrox_sessions grant both answer 404 (IDOR posture).',
   request: { params: z.object({ id: uuidLike }) },
   responses: {
