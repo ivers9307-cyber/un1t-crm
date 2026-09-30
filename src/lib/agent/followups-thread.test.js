@@ -55,13 +55,13 @@ describe('summariseThread', () => {
 
 // The follow-up ladder reads the same thread. A failed read used to come back
 // as an empty thread (no inbound, so a quiet skip with no reason logged); it is
-// now a named skip that stops before any further read for that conversation.
+// now a logged skip that stops before any further read for that conversation.
 describe('runAgentFollowups — a failed thread read (CHECKINSTALL.1)', () => {
   afterEach(() => vi.restoreAllMocks())
 
-  it('skips as thread_read_failed and reads nothing else for that conversation', async () => {
+  it('skips, logs it once, and reads nothing else for that conversation', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
     const NOW = Date.UTC(2026, 8, 25, 13, 0, 0) // 14:00 Dublin
     const read = []
     const db = {
@@ -82,7 +82,10 @@ describe('runAgentFollowups — a failed thread read (CHECKINSTALL.1)', () => {
     }
     const res = await runAgentFollowups(db, { nowMs: NOW })
     expect(res).toMatchObject({ nudges: 0, templates: 0, skipped: 1 })
-    expect(warn.mock.calls.some((c) => String(c[1]).includes('thread_read_failed'))).toBe(true)
+    // Logged ONCE, structurally (logError inside lastInboundFacts), not also
+    // as a free-text followup-skip warning.
+    expect(err.mock.calls.filter((c) => String(c[0]).includes('thread read failed'))).toHaveLength(1)
+    expect(warn.mock.calls.some((c) => c.map(String).join(' ').includes('thread_read_failed'))).toBe(false)
     expect(read).not.toContain('agent_membership_requests')
   })
 })

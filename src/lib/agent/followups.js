@@ -528,7 +528,8 @@ export async function runAgentFollowups(db, { nowMs = Date.now() } = {}) {
         }
 
         const facts = await lastInboundFacts(db, c.id)
-        if (facts.readFailed) { results.skipped++; skipLog(c.id, 'thread_read_failed'); continue }
+        // CHECKINSTALL.1 — logged once, inside lastInboundFacts (logError).
+        if (facts.readFailed) { results.skipped++; continue }
         const flags = await intentFlags(db, c.id, facts.lastInboundAtMs)
         const decision = classifyFollowupCandidate({
           stage: c.agent_followup_stage,
