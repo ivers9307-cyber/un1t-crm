@@ -7,6 +7,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@/lib/location-branding', () => ({ getLocationBranding: vi.fn().mockResolvedValue({ companyName: 'UN1T' }) }))
+// Only the pinned-rule test below reaches a send; these stand in for it.
+const sendTemplateMessage = vi.fn(async () => ({ messageId: 'wamid.test' }))
+vi.mock('@/lib/whatsapp', () => ({
+  sendTemplateMessage,
+  sendTextMessage: vi.fn(async () => ({ messageId: 'wamid.test' })),
+  headerComponentFor: () => null,
+  getOrCreateConversation: vi.fn(async () => 'conv1'),
+}))
+vi.mock('@/lib/radar-outreach', () => ({ extractTemplateBody: () => ({ varCount: 0 }) }))
 
 import { runFirstClassCheckins } from './followups'
 
@@ -25,7 +34,7 @@ const CONV = { id: 'conv1', agent_active: true, agent_paused_at: null, agent_han
 const BOOM = { message: 'canceling statement due to statement timeout', code: '57014' }
 
 // Thenable stub keyed by table. `errors[table]` answers that table's read with an error.
-function stubDb({ conversation = CONV, messages = [], errors = {}, prefs = { whatsapp_marketing: true } } = {}) {
+function stubDb({ conversation = CONV, messages = [], errors = {}, prefs = { whatsapp_marketing: true }, templates = [] } = {}) {
   const updates = []
   const inserts = []
   return {
@@ -39,6 +48,7 @@ function stubDb({ conversation = CONV, messages = [], errors = {}, prefs = { wha
         if (table === 'whatsapp_conversations') return { data: conversation ? [conversation] : [], error: null }
         if (table === 'whatsapp_messages') return { data: [...messages].reverse(), error: null } // runner reads newest-first
         if (table === 'contact_preferences') return { data: prefs, error: null }
+        if (table === 'whatsapp_templates') return { data: templates, error: null }
         return { data: [], error: null }
       }
       const b = {
@@ -102,5 +112,30 @@ describe('runFirstClassCheckins — reads fail closed (CHECKINSTALL.1)', () => {
     const res = await runFirstClassCheckins(db, { nowMs: NOW })
     expect(res.reasons).toEqual({ no_marketing_consent: 1 })
     expect(stamped(db)).toBe(true)
+  })
+})
+
+// PINNED on purpose: the check-in runner's CURRENT human rule. Any non-Mia
+// outbound after the customer's last message parks the check-in, and that
+// includes an automation (source 'api', no sent_by: a booking confirmation).
+// C104 (CHECKINSTALL.2, PR B) flips this test ON PURPOSE once Richard says yes
+// to D1; until then a change that makes it fail changes who gets messaged.
+describe('runFirstClassCheckins — the current human rule, pinned (CHECKINSTALL.1)', () => {
+  it('an automated outbound after the inbound is human_active, and nothing is sent', async () => {
+    const at = (hAgo) => new Date(NOW - hAgo * H).toISOString()
+    sendTemplateMessage.mockClear()
+    const db = stubDb({
+      messages: [
+        { direction: 'inbound', source: 'api', sent_by: null, created_at: at(30) },
+        { direction: 'outbound', source: 'api', sent_by: null, message_type: 'template', template_name: 'booking_class_confirmed_', created_at: at(29) },
+      ],
+      // Everything a send needs is in place, so only the human rule stops it.
+      templates: [{ name: 'agent_first_class_checkin_v1', language: 'en', status: 'APPROVED', components: [], header_media_url: null }],
+    })
+    const res = await runFirstClassCheckins(db, { nowMs: NOW })
+    expect(res.reasons).toEqual({ human_active: 1 })
+    expect(res).toMatchObject({ templates: 0, freeform: 0, skipped: 1 })
+    expect(sendTemplateMessage).not.toHaveBeenCalled()
+    expect(stamped(db)).toBe(false)
   })
 })
