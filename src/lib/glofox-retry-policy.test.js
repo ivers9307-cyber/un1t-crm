@@ -13,6 +13,7 @@ vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.f
 import { logWarn } from '@/lib/log'
 import {
   glofoxFetch, glofoxRetryPolicy, glofoxHttpStats, glofoxHttpStatsSince,
+  fetchPaymentsReport, searchGlofoxMember, getGlofoxInvoicePaymentLink, fetchBranchLeads,
 } from './glofox.js'
 
 const creds = { branchId: 'br-1', apiKey: 'k', apiToken: 't' }
@@ -148,5 +149,40 @@ describe('glofoxFetch — a verified write re-sends only after a negative dedupe
     expect(fetch).toHaveBeenCalledTimes(4)
     expect(verify).toHaveBeenCalledTimes(3)
     expect(glofoxHttpStatsSince(before)).toMatchObject({ requests: 4, retries: 3, verify_absent: 3, gave_up: 1 })
+  })
+})
+
+describe('reads that are POSTs keep their 5xx retries', () => {
+  it('fetchPaymentsReport: a 503 then a 200 → the report', async () => {
+    fetch.mockResolvedValueOnce(res(503)).mockResolvedValueOnce(res(200, { data: [] }))
+    const out = await fetchPaymentsReport(creds, { namespace: 'ns' })
+    expect(out.ok).toBe(true)
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('searchGlofoxMember (v3 namespace search): a 503 then a 200 → found', async () => {
+    fetch.mockResolvedValueOnce(res(503))
+      .mockResolvedValueOnce(res(200, { data: [{ id: 'f'.repeat(24), email: 'sam@x.com' }] }))
+    const out = await searchGlofoxMember(creds, { email: 'Sam@X.com' })
+    expect(out).toMatchObject({ found: true, error: null })
+    expect(out.member._id).toBe('f'.repeat(24))
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('getGlofoxInvoicePaymentLink: a 503 then a 200 → the link (a lost link is a lost reminder)', async () => {
+    fetch.mockResolvedValueOnce(res(503)).mockResolvedValueOnce(res(200, {
+      is_retriable: true, invoice_payment_link: 'https://pay.example.test/x', invoice_amount: 5000, invoice_currency: 'EUR',
+    }))
+    const out = await getGlofoxInvoicePaymentLink(creds, { memberId: 'a'.repeat(24), invoiceId: 'inv-1' })
+    expect(out).toMatchObject({ ok: true, link: 'https://pay.example.test/x' })
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('fetchBranchLeads (a leads filter, a POST): a 503 then a 200 → the page', async () => {
+    fetch.mockResolvedValueOnce(res(503)).mockResolvedValueOnce(res(200, { data: [{ _id: 'f'.repeat(24) }], total_count: 1 }))
+    const out = await fetchBranchLeads(creds, {})
+    expect(out).toMatchObject({ total: 1 })
+    expect(out.data).toHaveLength(1)
+    expect(fetch).toHaveBeenCalledTimes(2)
   })
 })

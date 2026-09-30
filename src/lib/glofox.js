@@ -803,6 +803,8 @@ export async function fetchBranchLeads(creds, filters = {}, pagination = { skip:
       `/2.1/branches/${encodeURIComponent(creds.branchId)}/leads/filter`,
       {
         method: 'POST',
+        // A leads filter, not a write: safe to repeat (GLOFOXPOSTRETRY.1).
+        retry: 'idempotent',
         body: JSON.stringify({ filters, pagination }),
       },
     )
@@ -926,6 +928,8 @@ export async function fetchPaymentsReport(creds, opts = {}) {
   try {
     const r = await glofoxFetch(creds, '/Analytics/report', {
       method: 'POST',
+      // A report query, not a write: safe to repeat (GLOFOXPOSTRETRY.1).
+      retry: 'idempotent',
       body: JSON.stringify(body),
     })
     let parsed
@@ -1009,6 +1013,8 @@ export async function searchGlofoxMember(creds, { email, phone } = {}) {
     if (e164) filter.phone = e164
     const r = await glofoxFetch(creds, '/v3.0/namespaces/members/retrieve', {
       method: 'POST',
+      // A search, not a write: safe to repeat (GLOFOXPOSTRETRY.1).
+      retry: 'idempotent',
       body: JSON.stringify(filter),
     })
     if (r.ok) return verdict(matches(rowsOf(await r.json())))
@@ -1897,6 +1903,9 @@ export async function getGlofoxInvoicePaymentLink(creds, args = {}) {
   try {
     const r = await glofoxFetch(creds, `/v3.0/payment-links/invoices/${encodeURIComponent(inv)}`, {
       method: 'POST',
+      // Returns a pay link for an existing invoice; nothing is charged, so a
+      // repeat is harmless and a lost link is a lost reminder (GLOFOXPOSTRETRY.1).
+      retry: 'idempotent',
       signal: AbortSignal.timeout(GLOFOX_PAYMENT_LINK_TIMEOUT_MS),
       headers: { 'Content-Type': 'application/json', 'x-glofox-impersonated-member-id': memberId },
       body: '{}',
