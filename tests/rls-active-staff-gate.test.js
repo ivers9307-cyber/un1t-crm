@@ -68,9 +68,6 @@ const POLICY_ALLOW = {
   'public.staff_allowances :: staff_allowances_ins': 'target-scoped; caller authority is private.auth_is_manager_at() (gated).',
   'public.staff_allowances :: staff_allowances_upd': 'target-scoped; caller authority is private.auth_is_manager_at() (gated).',
   'public.staff_allowances :: staff_allowances_del': 'target-scoped; caller authority is private.auth_is_manager_at() (gated).',
-  'storage.objects :: Owners can upload branding': 'file text (mig 013) is stale: prod redefined it out-of-band to call private.is_owner() (mig 549), which mig 626 gates.',
-  'storage.objects :: Owners can update branding': 'as above — prod calls private.is_owner().',
-  'storage.objects :: Owners can delete branding': 'as above — prod calls private.is_owner().',
 }
 
 // ─── every function that decides authority from a profile, classified ───────
@@ -269,8 +266,10 @@ describe('RLSACTIVE.1 — inline policies that read a profile table carry the ac
     // (gated; dropped by mig 655 AUDITRLS.1, audit_events is service-role only),
     // less car_bca_submissions_read_at_location and
     // car_bca_submission_events_read_at_location (gated; dropped by mig 674
-    // CARSCLIENTWRITE.1, both tables are service-role only).
-    expect(inline.length).toBeGreaterThanOrEqual(51)
+    // CARSCLIENTWRITE.1, both tables are service-role only),
+    // less the three allowlisted "Owners can … branding" storage policies
+    // (dropped by mig 675 BRANDINGBUCKET.1, no client writes the bucket).
+    expect(inline.length).toBeGreaterThanOrEqual(48)
     expect(inline.filter((p) => policyGated(p.body)).length).toBeGreaterThanOrEqual(44)
     expect(inline.map((p) => `${p.table} :: ${p.name}`)).toContain('public.invoices_queue :: inbound_invoices_read')
   })
