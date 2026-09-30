@@ -51,6 +51,7 @@ import { buttonClasses } from '@/components/ui'
 import AdsIntegrationTab from './integrations/AdsIntegrationTab'
 import { ConnectWhatsAppCard } from './integrations/ConnectWhatsAppCard'
 import ConnectionsSection from '@/components/customer-agent/ConnectionsSection'
+import { NO_ACTIVE_NUMBER_NOTE, BROKEN_TOKEN_HINT, removeNumberConfirm } from '@/lib/whatsapp-number-copy'
 
 // cardKey → { title, routeProvider, tabKey, masterOnly, intro, fields }.
 // `fields`: name (payload key) + label + kind. Secret fields carry has()
@@ -575,8 +576,9 @@ function WhatsAppPanel({ locationId, locationName, initial, onChanged }) {
   const [error, setError] = useState(null)
 
   async function disconnectNumber(number) {
-    // The tab's EXACT confirm copy + fallback semantics — unchanged.
-    if (!confirm(`Remove "${number.label}"? Any sends to / from this number will fall back to the location's other configured number, or the env-var default.`)) return
+    // The tab's EXACT confirm copy (shared helper). WACONFIGFALLBACK.1: no env
+    // fallback, so the last active number's confirm says WhatsApp stops here.
+    if (!confirm(removeNumberConfirm(number, numbers))) return
     setBusyId(number.id); setError(null)
     try {
       const res = await fetch(`/api/locations/${locationId}/whatsapp/numbers/${number.id}`, {
@@ -603,8 +605,8 @@ function WhatsAppPanel({ locationId, locationName, initial, onChanged }) {
     <div className="space-y-4">
       <p className="text-xs text-un1t-subtle">
         WhatsApp Cloud API. Connect onboards a number through Meta&apos;s guided signup; each
-        connected number can be disconnected below (it falls back to another number or the
-        env-var default). Editing tokens, labels and the default number stays on Manage numbers.
+        connected number can be disconnected below. {NO_ACTIVE_NUMBER_NOTE} {BROKEN_TOKEN_HINT}{' '}
+        Editing tokens, labels and the default number stays on Manage numbers.
       </p>
 
       {error && (

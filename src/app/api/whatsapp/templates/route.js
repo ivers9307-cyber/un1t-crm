@@ -6,6 +6,7 @@ import { getCurrentUser, assertLocationAccess , getUserLocationIds} from '@/lib/
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { componentsButtonsError } from '@/lib/whatsapp-template-buttons'
+import { ownNumberOrRefusal } from '@/lib/whatsapp-own-number'
 
 const WaTemplateCreateSchema = z.object({
   name: z.string().min(1).max(200),
@@ -54,9 +55,15 @@ export async function GET(request) {
   // If sync requested, fetch from Meta and update local records
   if (sync === 'true') {
     try {
-      // Fetch from THIS location's WABA (passing locationId) — not the env-default
-      // WABA — or a Meta-Manager-created template for this number is never seen.
-      const metaTemplates = await getMetaTemplates(100, { locationId })
+      // Fetch from THIS location's WABA — or a Meta-Manager-created template
+      // for this number is never seen. WACONFIGFALLBACK.1: its OWN number
+      // only. Resolving by location id fell back to the global env number at
+      // a studio with none, copying another studio's templates into this
+      // location's rows. No number (or no location) → sync_error, Meta never
+      // called, the cache is still served.
+      const own = await ownNumberOrRefusal(locationId, 'wa-templates-sync')
+      if (!own.ok) throw new Error(own.error)
+      const metaTemplates = await getMetaTemplates(100, { config: own.config })
 
       let failed = 0
       for (const mt of metaTemplates) {
@@ -136,6 +143,13 @@ export async function POST(request) {
   const buttonError = componentsButtonsError(body.components)
   if (buttonError) return NextResponse.json({ success: false, error: buttonError }, { status: 400 })
 
+  // WACONFIGFALLBACK.1 — submit on THIS location's own WABA. The create was
+  // called with no location at all, so every template went to the global env
+  // number's WABA whatever location it was saved under. No number → 409 and
+  // Meta is never called; a failed lookup → 500.
+  const own = await ownNumberOrRefusal(locationId, 'wa-templates-create')
+  if (!own.ok) return NextResponse.json({ success: false, error: own.error }, { status: own.status })
+
   const db = createServerClient()
 
   try {
@@ -146,7 +160,7 @@ export async function POST(request) {
       language: body.language || 'en',
       components: body.components || [],
       parameterFormat: body.parameter_format,
-    })
+    }, { config: own.config })
 
     // Save locally with Meta's ID and status
     const { data, error } = await db.from('whatsapp_templates').insert({

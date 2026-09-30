@@ -481,3 +481,23 @@ describe('after Meta accepted, a bookkeeping failure never reports the send as f
     expect(json).toEqual({ success: true, messageId: 'wamid.TEST' })
   })
 })
+
+// ─── WACONFIGFALLBACK.1 ──────────────────────────────────────────────────────
+
+// The conversation's location has no WhatsApp number of its own (e.g. the
+// number was removed after the thread existed). The reply used to go out on
+// the global env number (another studio's, so the customer's answer landed in
+// THAT studio's inbox and Mia). Now the resolver refuses: 409, nothing logged.
+describe('no WhatsApp number at the conversation location (WACONFIGFALLBACK.1)', () => {
+  it('a text reply → 409 with the resolver message, nothing logged', async () => {
+    const { WhatsAppNumberMissingError } = await import('@/lib/whatsapp-number-missing')
+    const insertSpy = captureInsert()
+    createServerClient.mockReturnValue(makeDb({ insertSpy }))
+    sendTextMessage.mockRejectedValue(new WhatsAppNumberMissingError(LOC_ID))
+
+    const res = await POST(postReq({ type: 'text', text: 'hello' }), props)
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ success: false, error: 'No WhatsApp number is connected at this location.' })
+    expect(insertSpy).not.toHaveBeenCalled()
+  })
+})

@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { deleteTemplate as deleteMetaTemplate } from '@/lib/whatsapp'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
+import { ownNumberOrRefusal } from '@/lib/whatsapp-own-number'
 
 const TemplateUpdateSchema = z.object({
   name: z.string().max(200).optional(),
@@ -100,11 +101,25 @@ export async function DELETE(request, props) {
   const guard = assertLocationAccessOr404(user, template.location_id)
   if (guard) return guard
 
+  // WACONFIGFALLBACK.1 — Meta deletes by NAME on a WABA, and this call named
+  // no location, so it always deleted on the global env number's WABA: a
+  // template row at any other location deleted the env studio's template of
+  // the same name. Now: the template's own location's WABA only. A location
+  // with no number has no WABA to delete from (its rows can only be copies
+  // an old env-fallback sync made), so the Meta call is skipped and the local
+  // row still goes. A failed lookup keeps the row (500), so a retry can still
+  // reach Meta; otherwise the next sync would bring the template back.
   if (template.name) {
-    try {
-      await deleteMetaTemplate(template.name)
-    } catch (err) {
-      console.error('Meta template delete error:', err)
+    const own = await ownNumberOrRefusal(template.location_id, 'wa-templates-delete')
+    if (!own.ok && own.status === 500) {
+      return NextResponse.json({ success: false, error: own.error }, { status: 500 })
+    }
+    if (own.ok) {
+      try {
+        await deleteMetaTemplate(template.name, { config: own.config })
+      } catch (err) {
+        console.error('Meta template delete error:', err)
+      }
     }
   }
 

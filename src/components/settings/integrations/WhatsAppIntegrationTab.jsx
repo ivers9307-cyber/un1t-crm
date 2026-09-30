@@ -21,6 +21,7 @@ import { createBrowserClient } from '@/lib/supabase'
 import { validateTemplateMedia } from '@/lib/template-media'
 import { normalizeUrlish } from '@/lib/urlish'
 import { effectiveHistorySyncStatus } from '@/lib/whatsapp-coexistence'
+import { NO_ACTIVE_NUMBER_NOTE, ACTIVE_CHECKBOX_LABEL, removeNumberConfirm, deactivateNumberConfirm } from '@/lib/whatsapp-number-copy'
 // INTEG hub inline #4 (Phase 3): the Connect-with-WhatsApp Embedded Signup
 // card was extracted VERBATIM into a shared module so the Integrations-hub
 // Manage drawer imports the IDENTICAL component. This tab keeps working —
@@ -103,10 +104,9 @@ export default function WhatsAppIntegrationTab({ location, canEdit }) {
               <div className="space-y-2">
                 {numbers.length === 0 && (
                   <div className="text-xs text-un1t-subtle bg-un1t-bg border border-un1t-border rounded p-3">
-                    No numbers configured. This location falls back to the global
-                    <code className="text-un1t-muted"> WHATSAPP_*</code> env vars (legacy single-number setup).
-                    Add a number below to migrate. Chat openers can only be saved once this
-                    location has its own number.
+                    No numbers configured. {NO_ACTIVE_NUMBER_NOTE} Add a number below to
+                    connect one. Chat openers can only be saved once this location has its own
+                    number.
                   </div>
                 )}
                 {numbers.map((n) => (
@@ -114,6 +114,7 @@ export default function WhatsAppIntegrationTab({ location, canEdit }) {
                     key={n.id}
                     location={location}
                     number={n}
+                    numbers={numbers}
                     canEdit={canEdit}
                     expanded={expandedId === n.id}
                     onExpand={() => setExpandedId(expandedId === n.id ? null : n.id)}
@@ -643,7 +644,7 @@ const HISTORY_SYNC_NOTES = {
   expired: 'History import window expired',
 }
 
-function NumberRow({ location, number, canEdit, expanded, onExpand, onReload, onError }) {
+function NumberRow({ location, number, numbers, canEdit, expanded, onExpand, onReload, onError }) {
   const [busy, setBusy] = useState(false)
   const isCoexistence = number.source === 'coexistence'
   const effectiveHistoryStatus = isCoexistence
@@ -668,7 +669,9 @@ function NumberRow({ location, number, canEdit, expanded, onExpand, onReload, on
 
   async function remove() {
     if (!canEdit) return
-    if (!confirm(`Remove "${number.label}"? Any sends to / from this number will fall back to the location's other configured number, or the env-var default.`)) return
+    // WACONFIGFALLBACK.1 — no env fallback: removing the last active number
+    // turns WhatsApp off at this studio, and the confirm says so.
+    if (!confirm(removeNumberConfirm(number, numbers))) return
     setBusy(true)
     try {
       const res = await fetch(`/api/locations/${location.id}/whatsapp/numbers/${number.id}`, { method: 'DELETE' })
@@ -726,7 +729,7 @@ function NumberRow({ location, number, canEdit, expanded, onExpand, onReload, on
             </button>
           )}
           {canEdit && (
-            <button type="button" onClick={remove} disabled={busy} className="text-un1t-subtle hover:text-red-500 p-1 disabled:opacity-50">
+            <button type="button" onClick={remove} disabled={busy} title="Remove this number" aria-label="Remove this number" className="text-un1t-subtle hover:text-red-500 p-1 disabled:opacity-50">
               <Trash2 size={12} />
             </button>
           )}
@@ -736,6 +739,7 @@ function NumberRow({ location, number, canEdit, expanded, onExpand, onReload, on
         <EditNumberForm
           locationId={location.id}
           number={number}
+          numbers={numbers}
           canEdit={canEdit}
           onSaved={onReload}
           onError={onError}
@@ -832,7 +836,7 @@ function AddNumberForm({ locationId, onCancel, onSaved, onError }) {
   )
 }
 
-function EditNumberForm({ locationId, number, canEdit, onSaved, onError }) {
+function EditNumberForm({ locationId, number, numbers, canEdit, onSaved, onError }) {
   const [form, setForm] = useState({
     label: number.label || '',
     display_phone: number.display_phone || '',
@@ -844,6 +848,12 @@ function EditNumberForm({ locationId, number, canEdit, onSaved, onError }) {
   const [saving, setSaving] = useState(false)
 
   async function save() {
+    // WACONFIGFALLBACK.1 — deactivating the last active number turns
+    // WhatsApp off at this studio (no env fallback): ask first.
+    if (number.is_active && !form.is_active) {
+      const warning = deactivateNumberConfirm(number, numbers)
+      if (warning && !confirm(warning)) return
+    }
     setSaving(true)
     try {
       const updates = {
@@ -900,7 +910,7 @@ function EditNumberForm({ locationId, number, canEdit, onSaved, onError }) {
       </Row>
       <label className="flex items-center gap-2 text-[11px] text-un1t-subtle">
         <input type="checkbox" disabled={!canEdit} checked={form.is_active} onChange={(e) => setForm({ ...form, is_active: e.target.checked })} />
-        Active (uncheck to disable without deleting — useful for temporary maintenance)
+        {ACTIVE_CHECKBOX_LABEL}
       </label>
       {canEdit && (
         <div className="flex items-center gap-2 pt-1">

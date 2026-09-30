@@ -2663,7 +2663,8 @@ registry.registerPath({
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — channel permission required', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Contact not found', content: { 'application/json': { schema: ErrorResponse } } },
-    409: { description: 'WhatsApp window closed and no usable template (window_expired, needs_template)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'WhatsApp window closed and no usable template (window_expired, needs_template), or no WhatsApp number is connected at the contact location (WACONFIGFALLBACK.1; checked before a thread or link is created)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: "Link could not be issued, or the location's WhatsApp number could not be looked up", content: { 'application/json': { schema: ErrorResponse } } },
     502: { description: 'Delivery failed (link revoked)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -3259,6 +3260,7 @@ registry.registerPath({
   responses: {
     200: { description: 'Carousel sent' },
     404: { description: 'Conversation or card set not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'No WhatsApp number is connected at this location (WACONFIGFALLBACK.1): nothing is sent from any other number', content: { 'application/json': { schema: ErrorResponse } } },
     502: { description: 'Meta carousel call failed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -3278,6 +3280,7 @@ registry.registerPath({
     200: { description: 'Flow sent' },
     400: { description: 'No contact linked, or no Flow configured for the location', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Conversation not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'No WhatsApp number is connected at this location (WACONFIGFALLBACK.1): nothing is sent from any other number', content: { 'application/json': { schema: ErrorResponse } } },
     502: { description: 'Meta flow send failed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -3297,6 +3300,7 @@ registry.registerPath({
   responses: {
     200: { description: 'Block state updated' },
     404: { description: 'Conversation not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'No WhatsApp number is connected at this location (WACONFIGFALLBACK.1): nothing is sent from any other number', content: { 'application/json': { schema: ErrorResponse } } },
     502: { description: 'Meta block call failed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -3316,6 +3320,7 @@ registry.registerPath({
   responses: {
     200: { description: 'Reaction sent' },
     404: { description: 'Conversation not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'No WhatsApp number is connected at this location (WACONFIGFALLBACK.1): nothing is sent from any other number', content: { 'application/json': { schema: ErrorResponse } } },
     502: { description: 'Meta reaction call failed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
