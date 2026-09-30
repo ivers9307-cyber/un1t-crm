@@ -33,6 +33,10 @@ const GONE = {
     'src/components/ScheduleCalendar.candidates.test.jsx',
     'src/lib/openapi.test.js',
   ],
+  // GLOFOXWRITEJUDGE.1 — master-only, no caller, and it sent the { user_id,
+  // event_id } body Glofox's validation rejects ("The model field is
+  // required."). Staff book through /api/glofox/classes/book.
+  '/api/glofox/bookings/create': [],
 }
 
 function walk(dir, out = []) {
@@ -76,5 +80,9 @@ describe('dead code stays deleted (D1 DEADCODE.1)', () => {
 
   it('the working-time route is gone (CANDIDATES.1 replaced it with blocks/{id}/candidates)', () => {
     expect(existsSync(join(ROOT, 'src/app/api/schedule/working-time'))).toBe(false)
+  })
+
+  it('the master Glofox booking-create route is gone (GLOFOXWRITEJUDGE.1)', () => {
+    expect(existsSync(join(ROOT, 'src/app/api/glofox/bookings/create'))).toBe(false)
   })
 })
