@@ -266,6 +266,50 @@ describe('getOpenApiSpec', () => {
     expect(checked).toBeGreaterThan(40)
   })
 
+  // WATPLPUT.1 — the six /api/whatsapp/templates* route files (8 operations)
+  // were never registered. The PUT documents that Meta's fields are refused
+  // (400) and a submitted template's content, header media included, is
+  // locked (409).
+  it('documents the six WhatsApp template routes (WATPLPUT.1)', () => {
+    const expected = {
+      '/api/whatsapp/templates': ['get', 'post'],
+      '/api/whatsapp/templates/{id}': ['get', 'put', 'delete'],
+      '/api/whatsapp/templates/{id}/resubmit': ['post'],
+      '/api/whatsapp/templates/upload-media/sign': ['post'],
+      '/api/whatsapp/templates/upload-media': ['post'],
+    }
+    let registered = 0
+    for (const [p, methods] of Object.entries(expected)) {
+      expect(spec.paths, `missing ${p}`).toHaveProperty(p)
+      for (const m of methods) {
+        const op = spec.paths[p][m]
+        expect(op, `${p} is not registered as ${m.toUpperCase()}`).toBeTruthy()
+        expect(op.tags).toContain('WhatsApp')
+        expect(op.security).toContainEqual({ CookieAuth: [] })
+        expect(op.responses, `${m} ${p} must document its 401`).toHaveProperty('401')
+        registered += 1
+      }
+    }
+    expect(registered).toBe(8)
+
+    const put = spec.paths['/api/whatsapp/templates/{id}'].put
+    expect(put.responses).toHaveProperty('400')
+    expect(put.responses).toHaveProperty('403')
+    expect(put.responses).toHaveProperty('409')
+    expect(put.responses['400'].description).toMatch(/status/)
+    expect(put.responses['409'].description).toMatch(/resubmit/i)
+    expect(put.description).not.toMatch(/replaced/)
+    expect(put.responses['409'].description).toMatch(/header media/)
+    expect(put.responses['409'].description).not.toMatch(/replaced/)
+    const putBody = spec.components.schemas.WaTemplateUpdate
+    expect(Object.keys(putBody.properties)).not.toContain('status')
+    for (const m of ['post', 'delete']) {
+      const op = m === 'post' ? spec.paths['/api/whatsapp/templates'].post : spec.paths['/api/whatsapp/templates/{id}'].delete
+      expect(op.responses).toHaveProperty('403')
+    }
+    expect(spec.paths['/api/whatsapp/templates/{id}/resubmit'].post.responses).toHaveProperty('403')
+  })
+
   it('caches the spec object across calls (same reference)', async () => {
     expect(await getOpenApiSpec()).toBe(spec)
   })

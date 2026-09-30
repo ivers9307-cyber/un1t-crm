@@ -116,7 +116,7 @@ describe('DELETE — MANAGER_ROLES at the template (WATPLROLE.1)', () => {
 
 describe('PUT — a field that drives a send needs MANAGER_ROLES at the template (WATPLROLE.1)', () => {
   const META_OWNED = [
-    ['status', { status: 'APPROVED' }],
+    ['category', { category: 'UTILITY' }],
     ['components', { components: [{ type: 'BODY', text: 'Changed' }] }],
     ['header media url', { header_media_url: 'https://example.test/other.jpg' }],
     ['name', { name: 'promo_y' }],
@@ -130,11 +130,14 @@ describe('PUT — a field that drives a send needs MANAGER_ROLES at the template
     expect(db.writes).toEqual([])
   })
 
-  it.each(ALLOWED)('%s: a Meta-owned field is saved (200)', async (_label, caller) => {
+  // WATPLPUT.1 — past the role check, an APPROVED template's content is
+  // locked (409; a draft's saves, see route.fields.test.js), and `status` is
+  // refused for everyone before the role check (400).
+  it.each(ALLOWED)('%s: passes the role check, then meets the submitted-template lock (409), nothing written', async (_label, caller) => {
     getCurrentUser.mockResolvedValue(caller)
-    const res = await put({ status: 'APPROVED' })
-    expect(res.status).toBe(200)
-    expect(db.writes).toEqual([{ table: 'whatsapp_templates', op: 'update', patch: { status: 'APPROVED' }, where: ['id', 't1'] }])
+    const res = await put({ components: [{ type: 'BODY', text: 'Changed' }] })
+    expect(res.status).toBe(409)
+    expect(db.writes).toEqual([])
   })
 
   it.each([...REFUSED, ...ALLOWED])('%s: a display_group-only edit is saved (200), the picker grouping stays open to members', async (_label, caller) => {
