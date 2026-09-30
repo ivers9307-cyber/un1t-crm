@@ -532,7 +532,7 @@ describe('migrations keep the bucket closed to clients and its limits in step (m
   it('after every migration, no client policy on storage.objects admits the bucket', () => {
     const net = netPolicyState(MIGRATIONS)
       .filter((p) => p.table === 'storage.objects' && !(ROLLBACK_FILE.test(p.file) && ROLLBACK_POLICIES.has(p.name)))
-    expect(net.length).toBeGreaterThan(3)   // not vacuous: branding, contracts, the 403 deny
+    expect(net.length).toBeGreaterThan(3)   // not vacuous: the three contracts reads, the 403 deny
     const admitting = net
       .filter((p) => admitsBucket({ permissive: p.permissive, roles: p.roles, expr: `${p.using ?? ''} ${p.check ?? ''}` }))
       .map((p) => `${p.name} (${p.file})`)
