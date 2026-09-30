@@ -3,6 +3,14 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
+
+// GATES-2 — every handler took membership only, so a member with `email`
+// switched off could read, rewrite and delete the studio's email templates.
+// Same rule as /api/campaigns/[id]/send: `email` at SOME studio first (before
+// any read, so an id is never confirmed), then at the TEMPLATE's studio.
+const EMAIL_FORBIDDEN = { success: false, error: 'No email permission at this location' }
+const emailForbidden = () => NextResponse.json(EMAIL_FORBIDDEN, { status: 403 })
 
 const TemplateUpdateSchema = z.object({
   name: z.string().min(1).max(200).optional(),
@@ -22,6 +30,7 @@ export async function GET(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (!hasPermissionAtAnyLocation(user, 'email')) return emailForbidden()
 
   const db = createServerClient()
   const { data, error } = await db.from('email_templates')
@@ -32,6 +41,7 @@ export async function GET(request, props) {
 
   const guard = assertLocationAccessOr404(user, data.location_id)
   if (guard) return guard
+  if (!hasPermissionForLocation(user, data.location_id, 'email')) return emailForbidden()
 
   return NextResponse.json({ success: true, template: data })
 }
@@ -41,12 +51,14 @@ export async function PUT(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (!hasPermissionAtAnyLocation(user, 'email')) return emailForbidden()
 
   const db = createServerClient()
   const loc = await loadTemplateLocation(db, params.id)
   if (!loc) return NextResponse.json({ success: false, error: 'Template not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, loc)
   if (guard) return guard
+  if (!hasPermissionForLocation(user, loc, 'email')) return emailForbidden()
 
   const validation = await validateBody(request, TemplateUpdateSchema)
   if (!validation.ok) return validation.response
@@ -67,12 +79,14 @@ export async function DELETE(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (!hasPermissionAtAnyLocation(user, 'email')) return emailForbidden()
 
   const db = createServerClient()
   const loc = await loadTemplateLocation(db, params.id)
   if (!loc) return NextResponse.json({ success: false, error: 'Template not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, loc)
   if (guard) return guard
+  if (!hasPermissionForLocation(user, loc, 'email')) return emailForbidden()
 
   const { error } = await db.from('email_templates').delete().eq('id', params.id)
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })

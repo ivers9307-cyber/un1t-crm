@@ -4,6 +4,13 @@ import { z } from 'zod'
 import { getCurrentUser, assertLocationAccess , getUserLocationIds} from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
+
+// GATES-2 — `email` at the studio the list or the new template is for (the
+// rule of /api/templates/[id] and /api/campaigns/[id]/send). Before, any
+// member of the studio passed.
+const emailForbidden = () => NextResponse.json(
+  { success: false, error: 'No email permission at this location' }, { status: 403 })
 
 const TemplateCreateSchema = z.object({
   name: z.string().min(1).max(200),
@@ -18,11 +25,13 @@ const TemplateCreateSchema = z.object({
 export async function GET(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (!hasPermissionAtAnyLocation(user, 'email')) return emailForbidden()
 
   const { searchParams } = new URL(request.url)
   const locationId = searchParams.get('location_id')
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
+  if (locationId && !hasPermissionForLocation(user, locationId, 'email')) return emailForbidden()
 
   const db = createServerClient()
   let query = db.from('email_templates')
@@ -32,7 +41,8 @@ export async function GET(request) {
   if (locationId) {
     query = query.eq('location_id', locationId)
   } else {
-    const userLocationIds = getUserLocationIds(user)
+    // Only the studios where the caller holds `email`.
+    const userLocationIds = getUserLocationIds(user).filter((id) => hasPermissionForLocation(user, id, 'email'))
     if (userLocationIds.length === 0) return NextResponse.json({ success: true, templates: [] })
     query = query.in('location_id', userLocationIds)
   }
@@ -47,6 +57,7 @@ export async function GET(request) {
 export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (!hasPermissionAtAnyLocation(user, 'email')) return emailForbidden()
 
   const validation = await validateBody(request, TemplateCreateSchema)
   if (!validation.ok) return validation.response
@@ -54,6 +65,7 @@ export async function POST(request) {
   const locationId = body.location_id || user.activeLocation?.id
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
+  if (!hasPermissionForLocation(user, locationId, 'email')) return emailForbidden()
 
   const db = createServerClient()
   const { data, error } = await db.from('email_templates').insert({
