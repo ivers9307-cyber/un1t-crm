@@ -17,7 +17,7 @@
 //     (neither is fenced by RLS); a new table/view/sequence opens to anon;
 //   * AFTER: anon and PUBLIC hold nothing in public (tables, views, columns,
 //     sequences); authenticated keeps exactly its SELECT/INSERT/UPDATE/DELETE
-//     (899 items) and every column grant; service_role and postgres are
+//     (893 items) and every column grant; service_role and postgres are
 //     unchanged (roster_publish_snapshots keeps its SELECT/INSERT-only shape);
 //     policies, RLS, ownership and the publication are unchanged; staff,
 //     member and service-role flows still work; new relations start
@@ -31,7 +31,7 @@
 //     option, service_role, a policy, the publication, RLS, an owner, a
 //     function or default ACL) aborts the whole file and names what moved;
 //   * every column ACL is byte-identical (raw attacl text) before and after,
-//     and C82's 676 end state (shift tables: column SELECT only) holds too.
+//     and 677 also applies on the pre-676 state (shift writes still granted).
 // Fictional ids and values only: the repo is public.
 
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest'
@@ -277,8 +277,7 @@ const LIVE_SHAPES = `
   REVOKE ALL ON ${pub(AUTH_RM)} FROM anon, authenticated;
   GRANT SELECT, MAINTAIN ON ${pub(AUTH_RM)} TO authenticated;
   REVOKE ALL ON ${pub(SHIFT)} FROM anon, authenticated;
-  GRANT INSERT, UPDATE, DELETE ON ${pub(SHIFT)} TO authenticated;
-  GRANT SELECT (id, location_id) ON ${pub(SHIFT)} TO authenticated;                                               -- 646 shape
+  GRANT SELECT (id, location_id) ON ${pub(SHIFT)} TO authenticated;                                               -- 646 shape; 676 took the writes
   REVOKE SELECT ON public.rosters FROM anon, authenticated;                                                         -- 618
   GRANT SELECT (id, location_id, status) ON public.rosters TO authenticated;
   REVOKE ALL ON public.roster_publish_snapshots FROM anon, authenticated, service_role;                             -- 634
@@ -438,11 +437,11 @@ async function boot({ migrate = false, before = '' } = {}) {
 }
 
 const BEFORE_CENSUS = {
-  anon_rels: 221, anon_items: 1754, auth_tmx_rels: 224, auth_tmx_items: 884, auth_siud_items: 899,
+  anon_rels: 221, anon_items: 1754, auth_tmx_rels: 224, auth_tmx_items: 884, auth_siud_items: 893,
   svc_missing: 6, anon_seqs: 6, auth_seqs: 6, rels: 266, seqs: 7,
 }
 
-describe('before 677 — prod, 30 Sep 2026', () => {
+describe('before 677 — prod, 30 Sep 2026 (676 applied)', () => {
   beforeAll(() => boot(), 120_000)
   afterAll(() => db?.close())
 
@@ -473,7 +472,7 @@ describe('after 677 — the catalog', () => {
   beforeAll(() => boot({ migrate: true }), 120_000)
   afterAll(() => db?.close())
 
-  it('anon nothing; authenticated keeps its 899 read/write items and loses the 884 maintenance items; sequences closed', async () => {
+  it('anon nothing; authenticated keeps its 893 read/write items and loses the 884 maintenance items; sequences closed', async () => {
     expect(await census()).toEqual({ ...BEFORE_CENSUS, anon_rels: 0, anon_items: 0, auth_tmx_rels: 0, auth_tmx_items: 0, anon_seqs: 0, auth_seqs: 0 })
   })
 
@@ -608,7 +607,7 @@ describe('the before/after compare aborts the whole file when anything else move
     // authenticated, table level: SELECT/INSERT/UPDATE/DELETE never move
     ['REVOKE SELECT ON public.challenges FROM authenticated;', 'privilege challenges authenticated SELECT: true -> false'],
     ['REVOKE INSERT ON public.notes FROM authenticated;', 'privilege notes authenticated INSERT: true -> false'],
-    ['REVOKE DELETE ON public.shift_blocks FROM authenticated;', 'privilege shift_blocks authenticated DELETE: true -> false'],
+    ['GRANT DELETE ON public.shift_blocks TO authenticated;', 'privilege shift_blocks authenticated DELETE: false -> true'],
     ['GRANT UPDATE ON public.challenges TO authenticated;', 'privilege challenges authenticated UPDATE: false -> true'],
     ['GRANT SELECT ON public.challenges TO authenticated WITH GRANT OPTION;', 'table acl challenges authenticated SELECT: postgres/false -> postgres/true'],
     // authenticated, column level (the D2 mistake: a table-level REVOKE ALL wipes the column grants)
@@ -659,19 +658,20 @@ describe('column ACLs are byte-identical; service_role and postgres keep every i
   }, 120_000)
 })
 
-describe("with C82's 676 end state (shift tables: authenticated column SELECT only)", () => {
-  // 676 (#1882) revokes authenticated's INSERT/UPDATE/DELETE on the two shift
-  // tables and keeps mig 646's column SELECT; 677 must pass on either order.
-  const MIG_676_END_STATE = `REVOKE INSERT, UPDATE, DELETE ON public.shift_blocks, public.shift_assignments FROM authenticated;`
+describe('on the pre-676 state too (the plan\'s 30 Sep read: shift writes still granted)', () => {
+  // 676 (C82, #1882) was applied on 30 Sep, after this plan's read, and took
+  // authenticated's INSERT/UPDATE/DELETE on the two shift tables; 677 must
+  // pass on either side of it and move none of those.
+  const PRE_676 = `GRANT INSERT, UPDATE, DELETE ON public.shift_blocks, public.shift_assignments TO authenticated;`
   afterAll(() => db?.close())
 
-  it('677 applies on top; the census moves by the 6 shift write items only; the column grants stay', async () => {
-    await boot({ before: MIG_676_END_STATE })
-    expect(await census()).toEqual({ ...BEFORE_CENSUS, auth_siud_items: 893 })
+  it('677 applies; authenticated keeps the 6 shift write items and the column grants', async () => {
+    await boot({ before: PRE_676 })
+    expect(await census()).toEqual({ ...BEFORE_CENSUS, auth_siud_items: 899 })
     await runSql(MIG_677)
-    expect(await census()).toEqual({ ...BEFORE_CENSUS, auth_siud_items: 893, anon_rels: 0, anon_items: 0, auth_tmx_rels: 0, auth_tmx_items: 0, anon_seqs: 0, auth_seqs: 0 })
+    expect(await census()).toEqual({ ...BEFORE_CENSUS, auth_siud_items: 899, anon_rels: 0, anon_items: 0, auth_tmx_rels: 0, auth_tmx_items: 0, anon_seqs: 0, auth_seqs: 0 })
     const acl = await aclSets()
-    expect(acl.shift_blocks).not.toMatch(/authenticated/)
+    expect(acl.shift_blocks).toContain('authenticated:DELETE,authenticated:INSERT,authenticated:UPDATE')
     expect(acl['shift_blocks.location_id']).toBe('authenticated:SELECT')
     expect(acl['shift_assignments.id']).toBe('authenticated:SELECT')
   }, 120_000)

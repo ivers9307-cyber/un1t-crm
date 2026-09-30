@@ -5,6 +5,9 @@
 --
 -- NOT APPLIED YET when this file was written. "VERIFIED LIVE" is prod BEFORE
 -- this file (read-only, Supabase MCP, 30 Sep 2026; migs up to 675 applied).
+-- Re-read later on 30 Sep with 676 (C82) applied: every number below holds;
+-- authenticated's table-level SELECT/INSERT/UPDATE/DELETE count went 899 ->
+-- 893 (676 took the shift tables' writes; this file moves none of them).
 -- Proven ahead of apply by
 -- tests/migration-677-public-tables-default-acl-closed.test.js (PGlite).
 --
