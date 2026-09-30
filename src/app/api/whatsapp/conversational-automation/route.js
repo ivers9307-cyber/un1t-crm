@@ -5,8 +5,7 @@ import { getCurrentUser, assertLocationAccessOr404, guardMasterOrOwner } from '@
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { setConversationalAutomation } from '@/lib/whatsapp'
-import { getLocationWhatsAppNumberConfig } from '@/lib/whatsapp-config'
-import { logError } from '@/lib/log'
+import { ownNumberOrRefusal } from '@/lib/whatsapp-own-number'
 import { mergeLocationSettings } from '@/lib/location-settings'
 
 const ConversationalAutomationSchema = z.object({
@@ -44,24 +43,16 @@ export async function POST(request) {
 
   // WAROLE.1 — the openers go on THIS location's own number. Passing the
   // location id to setConversationalAutomation re-resolved it through
-  // getWhatsAppConfig, which falls back to the global WHATSAPP_* env number
-  // when the location has no active whatsapp_numbers row: an owner of a
-  // studio without a number rewrote the openers on another studio's number,
-  // while the mirror below went to their own location. No number here → 409,
-  // Meta is never called; a failed lookup is a 500, never "no number".
-  let numberConfig
-  try {
-    numberConfig = await getLocationWhatsAppNumberConfig(locationId)
-  } catch (e) {
-    logError('wa-conversational-automation', 'number lookup failed', { locationId, err: e?.message })
-    return NextResponse.json({ success: false, error: "Could not check this location's WhatsApp number just now." }, { status: 500 })
-  }
-  if (!numberConfig) {
-    return NextResponse.json({ success: false, error: 'No WhatsApp number is connected at this location.' }, { status: 409 })
-  }
+  // getWhatsAppConfig, which (until WACONFIGFALLBACK.1) fell back to the
+  // global WHATSAPP_* env number when the location had no active
+  // whatsapp_numbers row: an owner of a studio without a number rewrote the
+  // openers on another studio's number. No number here → 409, Meta is never
+  // called; a failed lookup is a 500, never "no number".
+  const own = await ownNumberOrRefusal(locationId, 'wa-conversational-automation')
+  if (!own.ok) return NextResponse.json({ success: false, error: own.error }, { status: own.status })
 
   try {
-    await setConversationalAutomation({ enableWelcome, prompts }, { config: numberConfig })
+    await setConversationalAutomation({ enableWelcome, prompts }, { config: own.config })
   } catch (e) {
     return NextResponse.json({ success: false, error: e?.message || 'Meta conversational_automation call failed' }, { status: 502 })
   }
