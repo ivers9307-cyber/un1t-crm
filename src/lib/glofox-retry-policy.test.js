@@ -14,7 +14,7 @@ import { logWarn } from '@/lib/log'
 import {
   glofoxFetch, glofoxRetryPolicy, glofoxHttpStats, glofoxHttpStatsSince,
   fetchPaymentsReport, searchGlofoxMember, getGlofoxInvoicePaymentLink, fetchBranchLeads,
-  purchaseGlofoxMembership,
+  purchaseGlofoxMembership, createBooking, interpretBookingResult, findLandedBooking,
 } from './glofox.js'
 
 const creds = { branchId: 'br-1', apiKey: 'k', apiToken: 't' }
@@ -215,5 +215,105 @@ describe('purchaseGlofoxMembership — a trial is never bought twice', () => {
     expect(fetch).toHaveBeenCalledTimes(2)
     expect(out).toMatchObject({ ok: true, invoice_id: 'inv-9' })
     expect(out.outcome_unknown).toBeUndefined()
+  })
+})
+
+// Answer each fetch from a per-endpoint queue keyed "METHOD /path" (prefix
+// match; query and the /prod base dropped). An unexpected call throws, so a
+// re-send nobody queued fails the test loudly.
+const key = (url, init) => `${(init?.method || 'GET').toUpperCase()} ${new URL(url).pathname.replace(/^\/prod/, '')}`
+function route(table) {
+  fetch.mockImplementation(async (url, init) => {
+    const k = key(url, init)
+    for (const [prefix, queue] of table) {
+      if (k.startsWith(prefix) && queue.length) return queue.shift()
+    }
+    throw new Error(`unexpected ${k}`)
+  })
+}
+const sent = () => fetch.mock.calls.map(([url, init]) => key(url, init))
+
+const USER = 'a'.repeat(24)
+const EVENT = 'e'.repeat(24)
+const BOOKING = 'b'.repeat(24)
+const bookReq = { user_id: USER, model: 'event', model_id: EVENT }
+
+describe('createBooking — re-sent only after a negative dedupe read', () => {
+  it('a 503 whose booking DID land: one POST, the read, no second POST; reported booked with its id', async () => {
+    route([
+      ['POST /2.0/bookings', [res(503)]],
+      ['GET /2.0/bookings', [res(200, { data: [{ _id: BOOKING, model_id: EVENT, status: 'BOOKED' }] })]],
+    ])
+    const out = await createBooking(creds, bookReq)
+    expect(sent()).toEqual(['POST /2.0/bookings', 'GET /2.0/bookings'])
+    expect(interpretBookingResult(out)).toMatchObject({ booked: true, bookingId: BOOKING, messageCode: null })
+    expect(out.recovered).toBe('landed_after_5xx')
+  })
+
+  it('a 503 whose booking did NOT land: the read, then exactly one re-send', async () => {
+    route([
+      ['POST /2.0/bookings', [res(503), res(200, { success: true, Booking: { _id: BOOKING } })]],
+      ['GET /2.0/bookings', [res(200, { data: [] })]],
+    ])
+    const out = await createBooking(creds, bookReq)
+    expect(sent()).toEqual(['POST /2.0/bookings', 'GET /2.0/bookings', 'POST /2.0/bookings'])
+    expect(interpretBookingResult(out)).toMatchObject({ booked: true, bookingId: BOOKING })
+    expect(out.recovered).toBeUndefined()
+  })
+
+  it('a CANCELLED booking for the event, or a booking for another event, is not "landed"', async () => {
+    route([
+      ['POST /2.0/bookings', [res(503), res(200, { success: true, Booking: { _id: BOOKING } })]],
+      ['GET /2.0/bookings', [res(200, { data: [
+        { _id: 'c'.repeat(24), model_id: EVENT, status: 'CANCELED' },
+        { _id: 'd'.repeat(24), model_id: 'f'.repeat(24), status: 'BOOKED' },
+      ] })]],
+    ])
+    await createBooking(creds, bookReq)
+    expect(sent().filter((s) => s === 'POST /2.0/bookings')).toHaveLength(2)
+  })
+
+  it('the dedupe read FAILS: no re-send; the 5xx goes back to the caller as not booked', async () => {
+    route([
+      ['POST /2.0/bookings', [res(503)]],
+      ['GET /2.0/bookings', [res(500), res(500), res(500), res(500)]],
+    ])
+    const out = await createBooking(creds, bookReq)
+    expect(sent().filter((s) => s === 'POST /2.0/bookings')).toHaveLength(1)
+    expect(out.status).toBe(503)
+    expect(interpretBookingResult(out).booked).toBe(false)
+  })
+
+  it('a 429 is re-sent with no read (Glofox did not process it)', async () => {
+    route([['POST /2.0/bookings', [res(429), res(200, { success: true, Booking: { _id: BOOKING } })]]])
+    const out = await createBooking(creds, bookReq)
+    expect(sent()).toEqual(['POST /2.0/bookings', 'POST /2.0/bookings'])
+    expect(interpretBookingResult(out).booked).toBe(true)
+  })
+
+  it('no member or event id to check against → never re-sent after a 5xx', async () => {
+    route([['POST /2.0/bookings', [res(503)]]])
+    const out = await createBooking(creds, { user_id: USER })
+    expect(sent()).toEqual(['POST /2.0/bookings'])
+    expect(out.status).toBe(503)
+  })
+
+  it('the master route shape ({ user_id, event_id }) is checked on event_id', async () => {
+    route([
+      ['POST /2.0/bookings', [res(503)]],
+      ['GET /2.0/bookings', [res(200, { data: [{ _id: BOOKING, model_id: EVENT, status: 'BOOKED' }] })]],
+    ])
+    const out = await createBooking(creds, { user_id: USER, event_id: EVENT, branch_id: 'br-1' })
+    expect(out.recovered).toBe('landed_after_5xx')
+  })
+})
+
+describe('findLandedBooking', () => {
+  it("reads the member's own bookings and matches the event on model_id or event_id (a waitlist entry counts)", async () => {
+    route([['GET /2.0/bookings', [res(200, { data: [{ id: BOOKING, event_id: EVENT, status: 'WAITING' }] })]]])
+    const out = await findLandedBooking(creds, USER, EVENT)
+    expect(out.state).toBe('landed')
+    const [url] = fetch.mock.calls[0]
+    expect(new URL(url).searchParams.get('user_id')).toBe(USER)
   })
 })

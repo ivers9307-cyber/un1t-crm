@@ -1392,15 +1392,42 @@ export const GLOFOX_BOOKING_MODEL = 'event'
  *
  * Returns the parsed JSON response. status + ok hoisted onto the
  * return so the operator-facing endpoint can route on them.
+ *
+ * GLOFOXPOSTRETRY.1 — after a 5xx it re-sends only once a read of the member's
+ * bookings shows the booking did not land; a landed one comes back as
+ * { ok: true, status: 200, body: { success: true, Booking }, recovered: 'landed_after_5xx' }.
  */
 export async function createBooking(creds, bookingRequest) {
   if (!creds || !bookingRequest) return { ok: false, status: 400, body: { error: 'missing args' } }
+  // GLOFOXPOSTRETRY.1 — a 5xx can come after Glofox booked. Before a re-send,
+  // read the member's bookings: landed → report it booked (no re-send);
+  // absent → re-send (Glofox's own member+event dedupe is the second net);
+  // unknown → no re-send, the 5xx goes to the caller's failure lane. Without
+  // both ids there is nothing to check, so a 5xx is final.
+  const userId = bookingRequest.user_id
+  const eventId = bookingRequest.model_id ?? bookingRequest.event_id
+  let landed = null
+  const retry = userId && eventId
+    ? {
+        verify: async () => {
+          const v = await findLandedBooking(creds, userId, eventId)
+          if (v.state === 'landed') landed = v.booking
+          return v.state
+        },
+      }
+    : 'never'
   try {
     const r = await glofoxFetch(creds, '/2.0/bookings', {
       method: 'POST',
+      retry,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(bookingRequest),
     })
+    if (landed) {
+      // Shaped like Glofox's own success body ({ success, Booking }), so
+      // interpretBookingResult reads it as booked with the found id.
+      return { ok: true, status: 200, body: { success: true, Booking: landed }, recovered: 'landed_after_5xx' }
+    }
     let body
     try { body = await r.json() } catch { body = null }
     return { ok: r.ok, status: r.status, body }
@@ -1765,6 +1792,28 @@ export async function fetchUserBookingsResult(creds, userId, opts = {}) {
   } catch {
     return { ok: false, bookings: [] }
   }
+}
+
+/** Glofox spells a cancelled booking both ways. */
+function isCancelledBookingStatus(status) {
+  const s = String(status || '').toUpperCase()
+  return s === 'CANCELLED' || s === 'CANCELED'
+}
+
+/**
+ * GLOFOXPOSTRETRY.1 — did a booking POST that answered 5xx land anyway?
+ * Reads the member's bookings (class start in the last 7 days onward, newest
+ * first, cancelled included) and looks for a NOT-cancelled one on this event
+ * (model_id, or the older event_id). A waitlist entry counts: it landed.
+ * @returns {Promise<{ state: 'landed'|'absent'|'unknown', booking: object|null }>}
+ *   unknown = the read failed; never re-send on it.
+ */
+export async function findLandedBooking(creds, userId, eventId) {
+  const read = await fetchUserBookingsResult(creds, userId, { windowDays: 7 })
+  if (!read.ok) return { state: 'unknown', booking: null }
+  const hit = read.bookings.find((b) =>
+    String(b?.model_id ?? b?.event_id ?? '') === String(eventId) && !isCancelledBookingStatus(b?.status))
+  return hit ? { state: 'landed', booking: hit } : { state: 'absent', booking: null }
 }
 
 /**
