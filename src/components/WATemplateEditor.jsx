@@ -8,6 +8,7 @@ import { createBrowserClient } from '@/lib/supabase'
 import { validateTemplateMedia } from '@/lib/template-media'
 import { extractVariableIndexes, extractNamedVariables, buildBodyExample, buildNamedBodyExample, buildHeaderTextExample, missingSampleError, samplesFromExample, samplesFromNamedExample } from '@/lib/whatsapp-template-samples'
 import { templateButtonsError, normalizeButtonsForMeta } from '@/lib/whatsapp-template-buttons'
+import { isTemplateSubmitted } from '@/lib/whatsapp-template-fields'
 
 // Meta accepts one variable in a URL button, at the very end of the link.
 const URL_VARIABLE_AT_END = /\{\{\s*[^{}]+\s*\}\}$/
@@ -66,7 +67,9 @@ const HEADER_FORMATS = [
 export default function WATemplateEditor({ template, locationId, userId, events = [], canManage = false }) {
   const router = useRouter()
   const isEditing = !!template
-  const isSubmitted = template?.status && template.status !== 'draft'
+  // WATPLPUT.1 — the PUT route's own reading (a Meta id counts too), so Update
+  // is never offered for a template the route answers 409.
+  const isSubmitted = isTemplateSubmitted(template)
   const isRejectedOrPaused = ['REJECTED', 'PAUSED'].includes(template?.status)
   const canResubmit = canManage && isRejectedOrPaused
   const MANAGER_URL = 'https://business.facebook.com/wa/manage/message-templates/'
