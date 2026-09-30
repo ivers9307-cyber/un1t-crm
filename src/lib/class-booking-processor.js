@@ -67,7 +67,7 @@ async function readCredits(creds, memberId) {
 // exhausts its retries on a THROW lands here too, so staff get a card rather
 // than a bare needs_review nobody is shown. Also run by the cron's reaper for
 // rows stuck in 'processing' past the attempt cap.
-export async function routeToReview(db, request, reason, { personContactIds = null, executingContactId = null, electedMemberId = null, creditUnreadAccounts = null } = {}) {
+export async function routeToReview(db, request, reason, { personContactIds = null, executingContactId = null, electedMemberId = null, creditUnreadAccounts = null, trialGrant = null } = {}) {
   let approvalId = null
   // A row that ALREADY names a card keeps it while that card is still pending
   // — never file a second one for the same booking. The person-wide lookup
@@ -152,6 +152,11 @@ export async function routeToReview(db, request, reason, { personContactIds = nu
           ...(reason === 'needs_credit_grant' && request.trial_membership_id && request.trial_plan_code
             ? { trial_membership_id: request.trial_membership_id, trial_plan_code: request.trial_plan_code }
             : {}),
+          // GLOFOXPOSTRETRY.1 — a mint whose trial purchase got no clear
+          // answer: the approve route reads this as details.trial_grant (the
+          // priorGrant of grantTrialBeforeBooking), so even the FIRST approval
+          // books only if credits show and never buys a second trial.
+          ...(trialGrant ? { trial_grant: trialGrant } : {}),
         },
       }).select('id').maybeSingle()
       approvalId = amr?.id || null
@@ -266,8 +271,8 @@ export async function processClassBookingRequest(db, request) {
   // confirmation goes to the number the customer just typed).
   let executingContactId = null
   let electedMemberId = null
-  const toReview = (reason) => routeToReview(db, request, reason, {
-    personContactIds, executingContactId, electedMemberId,
+  const toReview = (reason, { trialGrant = null } = {}) => routeToReview(db, request, reason, {
+    personContactIds, executingContactId, electedMemberId, trialGrant,
   })
   // CBPCREDITREAD.1 — the retry signal carries the same account the card
   // would have named (read at throw time, like toReview above).
@@ -483,7 +488,13 @@ export async function processClassBookingRequest(db, request) {
     // the account match needs a human check and whose approve books with no
     // credit behind it.
     if (res.status === 'needs_review' && res.trial_failed === true && res.glofox_member_id) {
-      return toReview('needs_credit_grant')
+      // GLOFOXPOSTRETRY.1 review — a purchase with no clear answer (a 5xx or
+      // no reply) may have bought the trial. Without this stamp the card's
+      // first approval (priorGrant null, not a retry) would buy blind when
+      // the balance reads empty or unreadable, stacking a second trial.
+      return toReview('needs_credit_grant', res.trial_outcome_unknown === true
+        ? { trialGrant: { ok: false, code: 'TRIAL_GRANT_FAILED', outcome_unknown: true } }
+        : {})
     }
     if (!res.glofox_member_id || (res.status !== 'created' && res.status !== 'linked')) {
       return toReview(`account_${res.status || 'failed'}`)

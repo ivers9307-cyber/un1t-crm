@@ -281,6 +281,8 @@ describe('findOrCreateGlofoxMember — create-and-trial (createIfMissing=true)',
     // TRIALGRANT.1 — the processor files needs_credit_grant on this, not
     // account_needs_review.
     expect(out.trial_failed).toBe(true)
+    // A refusal Glofox answered is a known outcome: the card may buy again.
+    expect(out.trial_outcome_unknown).toBeUndefined()
   })
 
   it('a trial purchase with no clear answer (a 5xx) says it may have gone through (GLOFOXPOSTRETRY.1)', async () => {
@@ -303,6 +305,9 @@ describe('findOrCreateGlofoxMember — create-and-trial (createIfMissing=true)',
     expect(out.error).toMatch(/may have gone through/)
     expect(out.error).toMatch(/€0 trial invoice/)
     expect(purchaseGlofoxMembership).toHaveBeenCalledTimes(1)
+    // Review: the doubt must reach the card the processor files, or its
+    // first approval could buy a second trial.
+    expect(out.trial_outcome_unknown).toBe(true)
   })
 
   it('reports register failure as failed', async () => {
