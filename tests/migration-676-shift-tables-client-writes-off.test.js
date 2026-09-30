@@ -25,6 +25,7 @@
 //   * the self-check aborts the WHOLE file on a missed REVOKE, a leftover
 //     write policy, a table-level REVOKE that wipes mig 646's column grants,
 //     another grantor's write (table and column level), an inherited write,
+//     a column ACL or a SELECT policy changed mid-file (steps 6 and 5),
 //     and 646's grants already gone; a second run passes; the plan's
 //     rollback record restores the before-state exactly.
 // Fictional ids and values only: the repo is public.
@@ -601,6 +602,34 @@ describe('the self-check aborts the WHOLE file', () => {
     await expect(runSql(MIG_676)).rejects.toThrow(/mig 676: authenticated still holds DELETE on public\.shift_blocks/)
     await runSql('ROLLBACK')
     await stillOpen()
+  })
+
+  // Self-check step 6: a column ACL that changes anywhere in the file (here a
+  // column grant to a non-client role, which steps 1-4 do not look at).
+  it('when a column ACL changes mid-file (step 6, byte compare)', async () => {
+    const broken = mutate('DROP POLICY IF EXISTS shift_blocks_ins ON public.shift_blocks;\n',
+      'GRANT SELECT (id) ON public.shift_blocks TO other_grantor;\nDROP POLICY IF EXISTS shift_blocks_ins ON public.shift_blocks;\n')
+    await expect(runSql(broken)).rejects.toThrow(
+      /mig 676: column ACLs changed \(mig 646's SELECT grants must be byte-identical\): shift_blocks\.id \[\{authenticated=r\/postgres\} -> \{authenticated=r\/postgres,other_grantor=r\/postgres\}\]/)
+    await runSql('ROLLBACK')
+    await stillOpen()
+    expect((await columnAcls()).find((r) => r.t === 'shift_blocks' && r.col === 'id').acl).toBe('{authenticated=r/postgres}')
+  })
+
+  // Self-check step 5: the one policy left is the SELECT policy, but changed.
+  it.each([
+    ['its USING', 'ALTER POLICY shift_blocks_select ON public.shift_blocks USING (true);',
+      /mig 676: public\.shift_blocks should keep exactly its unchanged SELECT policy, has: shift_blocks_select SELECT$/],
+    ['its roles', 'ALTER POLICY shift_assignments_select ON public.shift_assignments TO authenticated, anon;',
+      /mig 676: public\.shift_assignments should keep exactly its unchanged SELECT policy, has: shift_assignments_select SELECT$/],
+  ])('when a SELECT policy changes mid-file: %s (step 5)', async (_, stmt, raises) => {
+    const broken = mutate('DROP POLICY IF EXISTS shift_assignments_del ON public.shift_assignments;\n',
+      `DROP POLICY IF EXISTS shift_assignments_del ON public.shift_assignments;\n${stmt}\n`)
+    await expect(runSql(broken)).rejects.toThrow(raises)
+    await runSql('ROLLBACK')
+    await stillOpen()
+    expect([...await policies('shift_blocks'), ...await policies('shift_assignments')].filter((p) => p.cmd === 'SELECT').map((p) => p.qual))
+      .toEqual(['private.auth_can_read_shift_block(location_id, roster_id)', 'private.auth_can_read_shift_assignment(block_id, profile_id)'])
   })
 
   // Last in this block: before the fix the file COMMITs here.
