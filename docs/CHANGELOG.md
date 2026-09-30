@@ -1,5 +1,7 @@
 # Changelog — shipped work (latest first)
 
+> **New entries do NOT go in this file (CHANGELOG-FILES.1, 30 Sep 2026).** Each PR adds one file, `docs/changelog/entries/<PR>.md`, holding one row in the same shape (see that folder's README). This table is frozen as of #1883. `npm run changelog` prints both, newest first.
+
 > Extracted from CLAUDE.md on 2026-06-01. Mirror of the Cowork task list, kept as the durable record so a fresh session has context even when the task list is cleared. Lessons learned from each task are rolled into the relevant CLAUDE.md section (Coding conventions, Lessons learned, etc.), not here. Forward-looking notes live in CLAUDE.md under "Roadmap & backlog".
 
 > **Row keys (CHANGELOG-PRKEY.1, 2026-09-05).** The first column is the row's key. Rows from the CHANGELOG-PRKEY.1 row onward carry the **PR number** (`#<PR>`, the GitHub PR that merged the change — a leading `#` always means a PR key) — no more guessing the "next number" and renumbering after a rebase. Rows **below** that carry the **legacy hand-numbered serial** (1–633), which is frozen: other docs, `docs/LESSONS.md` and memory cite "changelog 630" etc., so history is never renumbered. New rows go directly under the table header (latest first), one row per PR. `docs/CHANGELOG.md` is marked `merge=union` in `.gitattributes`, so two PRs that each insert a row under the same anchor merge by keeping both rows instead of conflicting — note this only removes the conflict and the renumber; the branch-protection "must be up to date" rule still forces the rebase + CI re-run.
