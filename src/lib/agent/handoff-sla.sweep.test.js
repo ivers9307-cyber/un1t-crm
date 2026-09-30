@@ -186,6 +186,33 @@ describe('a failed read is not "no reply" / "no candidates" (C31 PUSHNITS.1)', (
     expect(sendPushToRolesAtLocation).toHaveBeenCalledTimes(1)
   })
 
+  it('SLA sweep: an unconfirmed-reply escalation whose push fails gets the normal retry window, not one attempt then gave_up', async () => {
+    const thread = pastBreach(35) // past the reply-read grace, well inside HANDOFF_ALERT_RETRY_HOURS
+    const { db } = sweepDb({ convs: [thread], readErrors: { whatsapp_messages: DOWN } })
+    sendPushToRolesAtLocation.mockResolvedValueOnce({ sent: 0, skipped: 0, invalidated: 0, failed: 2 })
+
+    const first = await runHandoffSlaSweep(db, { nowMs: NOW })
+    expect(first).toMatchObject({ escalated: 0, alert_failed: 1, gave_up: 0, reply_unread: 1 })
+    expect(thread.handoff_escalated_at).toBeNull()
+    expect(logError).not.toHaveBeenCalledWith('handoff-sla', 'escalation never reached a manager; gave up', expect.anything())
+
+    const second = await runHandoffSlaSweep(db, { nowMs: NOW + 15 * M })
+    expect(second).toMatchObject({ escalated: 1, alert_failed: 0, gave_up: 0 })
+    expect(sendPushToRolesAtLocation).toHaveBeenCalledTimes(2)
+    expect(sendPushToRolesAtLocation.mock.calls[1][2].body).toMatch(/couldn't confirm whether anyone has replied/)
+    expect(thread.handoff_escalated_at).toBe(new Date(NOW + 15 * M).toISOString())
+  })
+
+  it('SLA sweep: an unconfirmed-reply escalation still failing past the push retry window gives up loudly (stamped once)', async () => {
+    const thread = pastBreach((HANDOFF_ALERT_RETRY_HOURS + 1) * 60)
+    const { db } = sweepDb({ convs: [thread], readErrors: { whatsapp_messages: DOWN } })
+    sendPushToRolesAtLocation.mockResolvedValueOnce({ sent: 0, failed: 1 })
+    const out = await runHandoffSlaSweep(db, { nowMs: NOW })
+    expect(out).toMatchObject({ escalated: 0, gave_up: 1 })
+    expect(thread.handoff_escalated_at).toBe(new Date(NOW).toISOString())
+    expect(logError).toHaveBeenCalledWith('handoff-sla', 'escalation never reached a manager; gave up', expect.objectContaining({ conversationId: 'conv-1' }))
+  })
+
   it('SLA sweep: a readable reply check that finds a human reply never escalates (unchanged)', async () => {
     const thread = pastBreach(45)
     const { db, updates } = sweepDb({ convs: [thread], replies: [{ created_at: new Date(NOW - 50 * M).toISOString() }] })
