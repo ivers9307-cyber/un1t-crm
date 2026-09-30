@@ -351,31 +351,155 @@ export function sweepReopeners(sql, { exempt = null } = {}) {
 }
 
 // ── the class detector ───────────────────────────────────────────────────
-// A permissive INSERT/UPDATE/DELETE/ALL policy whose USING and WITH CHECK
-// test studio membership and nothing narrower (no role, permission,
-// ownership or auth.uid()) is the class this sweep closed. Fail it in any
-// migration from 680 on, on ANY table. Floor, not proof: a policy built with
-// EXECUTE format(...) is invisible (the live probe at the end of the sweep
-// is the proof).
+// A permissive INSERT/UPDATE/DELETE/ALL policy that admits a caller on
+// studio membership alone is the class this sweep closed. Fail it in any
+// migration from 680 on, on ANY table, whether made by CREATE POLICY or
+// changed by ALTER POLICY.
+//
+// "On membership alone": some top-level OR branch of USING or WITH CHECK
+// tests auth_is_in_location and none of that branch's AND conjuncts is a
+// gate. A gate is a role or permission helper (any suffix), a role or
+// permissions column test, ownership (a column = auth.uid() or
+// = auth_contact_id()), or a bare `false`; an OR is a gate only when every
+// branch is one, an AND when any conjunct is. A column filter
+// (`archived = false`), `auth.uid() IS NOT NULL` and auth_is_active_staff
+// are not gates. An EXISTS / scalar subquery is judged by its WHERE clause.
+//
+// A floor, not a proof: the split is by parentheses and quotes, not a SQL
+// parser (a BETWEEN … AND … is read as two conjuncts), a hand-rolled
+// membership test (a profile_locations join) or a policy built with
+// EXECUTE format(...) is invisible, and an ALTER POLICY on a policy that no
+// replayed migration created is judged as a write. The live catalog probe at
+// the end of the sweep is the proof.
+const MEMBERSHIP = /\bauth_is_in_location\s*\(/i
 // A role or permission helper, whatever its suffix (_at, _or_manager,
 // _or_head_coach, _bridge …): auth_role, auth_is_{owner,manager,admin,
-// head_coach}*, auth_mobile_can, auth_can_*, auth_has_* (per-user grants).
-const ROLE_HELPER = /\bauth_(?:role|is_(?:owner|manager|admin|head_coach)\w*|mobile_can|can_\w+|has_\w+)\s*\(/i
-const NARROWING = new RegExp(`${ROLE_HELPER.source}|\\b(auth_contact_id|role|permissions?|has_\\w*perm\\w*)\\b|auth\\.uid\\s*\\(|\\bfalse\\b`, 'i')
-const CREATE_POLICY = /\bcreate\s+policy\s+("[^"]+"|\w+)\s+on\s+([\w."]+)([\s\S]*?)(?=;)/gi
-export function membershipOnlyWritePolicies(sql) {
+// master,head_coach}*, auth_mobile_can, auth_can_*, auth_has_* (per-user grants).
+const ROLE_HELPER = /\bauth_(?:role|is_(?:owner|manager|admin|master|head_coach)\w*|mobile_can|can_\w+|has_\w+)\s*\(/i
+const PERM_FN = /\bhas_\w*perm\w*\s*\(/i
+const ROLE_COLUMN = /\brole\s*(?:(?<![<>!])=|\bin\s*\(|<>|!=)/i
+const PERMISSIONS_COLUMN = /\bpermissions\s*(?:->|\?|@>)/i
+const OWNERSHIP = /\bauth\.uid\s*\(|\bauth_contact_id\s*\(/i
+
+/** The expression without parentheses that wrap all of it. */
+function stripParens(expr) {
+  let e = expr.trim()
+  while (e.startsWith('(')) {
+    let depth = 0
+    let q = false
+    let close = -1
+    for (let i = 0; i < e.length; i++) {
+      const c = e[i]
+      if (q) { if (c === "'") q = false; continue }
+      if (c === "'") { q = true; continue }
+      if (c === '(') depth++
+      else if (c === ')' && --depth === 0) { close = i; break }
+    }
+    if (close !== e.length - 1) break
+    e = e.slice(1, -1).trim()
+  }
+  return e
+}
+
+/** Split at top-level `kw` (OR / AND), outside parentheses and quotes. */
+function splitBool(expr, kw) {
+  const parts = []
+  let depth = 0
+  let q = false
+  let start = 0
+  const at = new RegExp(`^${kw}(?=[\\s(])`, 'i')
+  for (let i = 0; i < expr.length; i++) {
+    const c = expr[i]
+    if (q) { if (c === "'") q = false; continue }
+    if (c === "'") { q = true; continue }
+    if (c === '(') depth++
+    else if (c === ')') depth--
+    else if (depth === 0 && (i === 0 || /[\s)]/.test(expr[i - 1])) && at.test(expr.slice(i, i + kw.length + 1))) {
+      parts.push(expr.slice(start, i))
+      start = i + kw.length
+      i += kw.length - 1
+    }
+  }
+  parts.push(expr.slice(start))
+  return parts.map((p) => p.trim()).filter(Boolean)
+}
+
+/** The WHERE clause of an atom that is an EXISTS or scalar subquery, else null. */
+function subqueryWhere(atom) {
+  let e = stripParens(atom).replace(/^not\s+/i, '')
+  const ex = e.match(/^exists\s*\(/i)
+  if (ex) e = stripParens(balancedAfter(e, ex[0].length - 1))
+  if (!/^select\b/i.test(e)) return null
+  const where = splitBool(e, 'where')
+  return where.length > 1 ? where.slice(1).join(' where ') : null
+}
+
+function atomIsGate(atom) {
+  const a = stripParens(atom)
+  if (/^false$/i.test(a)) return true
+  const w = subqueryWhere(a)
+  if (w !== null) return isGate(w)
+  if (ROLE_HELPER.test(a) || PERM_FN.test(a) || ROLE_COLUMN.test(a) || PERMISSIONS_COLUMN.test(a)) return true
+  return OWNERSHIP.test(a) && /(?<![<>!])=/.test(a) && !/\bis\s+(?:not\s+)?null\b/i.test(a)
+}
+function isGate(expr) {
+  const e = stripParens(expr)
+  const ors = splitBool(e, 'or')
+  if (ors.length > 1) return ors.every(isGate)
+  const ands = splitBool(e, 'and')
+  if (ands.length > 1) return ands.some(isGate)
+  return atomIsGate(e)
+}
+/** True when some OR branch of `expr` admits a caller on studio membership alone. */
+function admitsOnMembership(expr) {
+  const e = stripParens(expr)
+  if (!MEMBERSHIP.test(e)) return false
+  const ors = splitBool(e, 'or')
+  if (ors.length > 1) return ors.some(admitsOnMembership)
+  const ands = splitBool(e, 'and')
+  if (ands.length > 1) return !ands.some(isGate)
+  const w = subqueryWhere(e)
+  if (w !== null) return admitsOnMembership(w)
+  return !atomIsGate(e)
+}
+
+const CREATE_POLICY = /\bcreate\s+policy\s+("[^"]+"|\w+)\s+on\s+([\w."]+)([\s\S]*?)(?=;|$)/gi
+const ALTER_POLICY = /\balter\s+policy\s+("[^"]+"|\w+)\s+on\s+([\w."]+)([\s\S]*?)(?=;|$)/gi
+const policyKey = (table, name) => `${tableName(table)}.${ident(name)}`
+const policyShape = (body) => ({
+  cmd: (body.match(/\bfor\s+(all|select|insert|update|delete)\b/i)?.[1] || 'all').toLowerCase(),
+  restrictive: /\bas\s+restrictive\b/i.test(body),
+})
+
+/** Replay CREATE POLICY statements into `known` (table.policy → { cmd, restrictive }). */
+export function recordPolicies(sql, known = new Map()) {
+  for (const m of sqlCode(sql).matchAll(CREATE_POLICY)) known.set(policyKey(m[2], m[1]), policyShape(m[3]))
+  return known
+}
+
+/**
+ * Every write policy in `sql` that admits on membership alone, as
+ * "table.policy". `known` = the policies earlier migrations created, so an
+ * ALTER POLICY is judged by the command its policy was created with.
+ */
+export function membershipOnlyWritePolicies(sql, known = new Map()) {
   const code = sqlCode(sql)
+  const seen = new Map(known)
   const hits = []
-  for (const m of code.matchAll(CREATE_POLICY)) {
+  const stmts = [
+    ...[...code.matchAll(CREATE_POLICY)].map((m) => ({ m, create: true })),
+    ...[...code.matchAll(ALTER_POLICY)].map((m) => ({ m, create: false })),
+  ].sort((a, b) => a.m.index - b.m.index)
+  for (const { m, create } of stmts) {
+    const key = policyKey(m[2], m[1])
     const body = m[3]
-    if (/\bas\s+restrictive\b/i.test(body)) continue
-    const cmd = (body.match(/\bfor\s+(all|select|insert|update|delete)\b/i)?.[1] || 'all').toLowerCase()
-    if (cmd === 'select') continue
+    if (create) seen.set(key, policyShape(body))
+    else if (/\brename\s+to\b/i.test(body)) continue
+    const shape = seen.get(key) ?? { cmd: 'all', restrictive: false }
+    if (shape.restrictive || shape.cmd === 'select') continue
     const exprs = [...body.matchAll(/\b(using|with\s+check)\s*\(/gi)]
       .map((x) => balancedAfter(body, x.index + x[0].length - 1))
-    if (exprs.length === 0) continue
-    const joined = exprs.join(' ')
-    if (/auth_is_in_location/i.test(joined) && !NARROWING.test(joined)) hits.push(`${tableName(m[2])}.${ident(m[1])}`)
+    if (exprs.some(admitsOnMembership)) hits.push(key)
   }
   return hits
 }
@@ -547,9 +671,20 @@ describe('no migration from 680 on writes a membership-only write policy, on any
   const later = migrationFiles().filter((f) => parseInt(f, 10) >= SCAN_FROM)
   it('scans mig 680 at least', () => expect(later.some((f) => f.startsWith('680_'))).toBe(true))
 
-  it.each(later)('%s: no permissive write policy that tests only studio membership', (file) => {
-    expect(membershipOnlyWritePolicies(readFileSync(path.join(MIGRATIONS, file), 'utf8')),
-      `${file}: a write policy that tests only auth_is_in_location admits every plain staff member at the studio. Test a role, a permission or ownership, or write through a service-role route`).toEqual([])
+  // Policies created by every migration before each scanned file, so an
+  // ALTER POLICY is judged by its policy's command (a read stays a read).
+  const knownBefore = new Map()
+  {
+    const known = new Map()
+    const ordered = migrationFiles().sort((x, y) => parseInt(x, 10) - parseInt(y, 10) || x.localeCompare(y))
+    for (const f of ordered) {
+      if (later.includes(f)) knownBefore.set(f, new Map(known))
+      recordPolicies(readFileSync(path.join(MIGRATIONS, f), 'utf8'), known)
+    }
+  }
+  it.each(later)('%s: no permissive write policy that admits on studio membership alone', (file) => {
+    expect(membershipOnlyWritePolicies(readFileSync(path.join(MIGRATIONS, file), 'utf8'), knownBefore.get(file)),
+      `${file}: a write policy that admits on auth_is_in_location alone (or in an OR branch) admits every plain staff member at the studio. Test a role, a permission or ownership, or write through a service-role route`).toEqual([])
   })
 
   it('the detector catches the membership-only write shapes', () => {
