@@ -14,7 +14,7 @@
 // read: the invoice queue's OCR takes PDF/JPEG/PNG/GIF/WebP and converts
 // HEIC/HEIF (src/lib/invoice-extraction.js).
 //
-// Plain data and two pure functions, no imports: the guard test imports this.
+// Plain data and pure functions, no imports: the guard test imports this.
 
 /** Types a car document may be. */
 export const CAR_DOCUMENT_MIME_TYPES = Object.freeze([
@@ -65,6 +65,18 @@ export function resolveCarDocumentType(declared, sniffed) {
   if (CAR_DOCUMENT_MIME_TYPES.includes(d)) return d
   if (UNLABELLED.has(d) && sniffed && CAR_DOCUMENT_MIME_TYPES.includes(sniffed)) return sniffed
   return null
+}
+
+/**
+ * Did the client send no real type (none, or application/octet-stream)?
+ * Such a file is judged by its bytes (resolveCarDocumentType's second
+ * argument); the signed-upload finalise reads the stored bytes only then.
+ *
+ * @param {string|null|undefined} declared
+ * @returns {boolean}
+ */
+export function isUnlabelledCarDocumentType(declared) {
+  return UNLABELLED.has(String(declared ?? '').split(';')[0].trim().toLowerCase())
 }
 
 // ISO-BMFF 'ftyp' brands. HEIC is HEVC-coded HEIF (the iPhone default);
