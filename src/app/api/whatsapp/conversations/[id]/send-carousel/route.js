@@ -5,6 +5,7 @@ import { getCurrentUser, assertLocationAccessOr404, requireInboxPermission } fro
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { sendCardSetToConversation } from '@/lib/whatsapp-carousel-send'
+import { whatsappErrorStatus } from '@/lib/whatsapp-number-missing'
 
 const SendCarouselSchema = z.object({ card_set_id: uuidLike })
 
@@ -46,7 +47,9 @@ export async function POST(request, props) {
   try {
     await sendCardSetToConversation(db, { set, conversation, locationId: conversation.location_id })
   } catch (e) {
-    return NextResponse.json({ success: false, error: e?.message || 'Meta carousel call failed' }, { status: 502 })
+    // WACONFIGFALLBACK.1 — a location with no WhatsApp number of its own is a
+    // 409 with the resolver's message (it used to send from the env number).
+    return NextResponse.json({ success: false, error: e?.message || 'Meta carousel call failed' }, { status: whatsappErrorStatus(e, 502) })
   }
 
   return NextResponse.json({ success: true })

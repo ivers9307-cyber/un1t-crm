@@ -7,6 +7,7 @@ import { validateBody } from '@/lib/validate'
 import { url } from '@/lib/schemas'
 import { manualTakeoverPatch } from '@/lib/agent/core'
 import { logError } from '@/lib/log'
+import { whatsappErrorStatus } from '@/lib/whatsapp-number-missing'
 import { flowButtonIndex, flowButtonComponentFor } from '@/lib/whatsapp-template-buttons'
 import { flowTokenFor } from '@/lib/whatsapp-flow/config'
 import { templateSendBlock, SEND_BLOCK_TEXT, renderSentTemplateBody } from '@shared/wa-template-send'
@@ -186,7 +187,9 @@ export async function POST(request, props) {
   try {
     result = await send()
   } catch (err) {
-    return NextResponse.json({ success: false, error: err.message }, { status: 400 })
+    // WACONFIGFALLBACK.1 — a location with no WhatsApp number of its own is a
+    // 409 with the resolver's message (it used to send from the env number).
+    return NextResponse.json({ success: false, error: err.message }, { status: whatsappErrorStatus(err, 400) })
   }
 
   // ── Meta has accepted the message: the customer has it. ─────────────────────

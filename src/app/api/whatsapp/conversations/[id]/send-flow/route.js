@@ -2,6 +2,7 @@ import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccessOr404, requireInboxPermission } from '@/lib/auth'
 import { sendFlowMessage } from '@/lib/whatsapp'
+import { whatsappErrorStatus } from '@/lib/whatsapp-number-missing'
 
 // POST /api/whatsapp/conversations/[id]/send-flow — drop the location's
 // booking Flow (settings.whatsapp_flow) into an open conversation as an
@@ -58,7 +59,9 @@ export async function POST(request, props) {
       bodyText: cfg.invite_text || undefined,
     })
   } catch (e) {
-    return NextResponse.json({ success: false, error: e?.message || 'Meta flow send failed' }, { status: 502 })
+    // WACONFIGFALLBACK.1 — a location with no WhatsApp number of its own is a
+    // 409 with the resolver's message (it used to send from the env number).
+    return NextResponse.json({ success: false, error: e?.message || 'Meta flow send failed' }, { status: whatsappErrorStatus(e, 502) })
   }
 
   // Best-effort thread row (mirrors whatsapp-carousel-send.js) — a logging
