@@ -211,9 +211,9 @@ export const EXPECTED = {
 
   // ── Broadcasts: drafting is membership, SENDING needs the whatsapp permission ──
   'POST whatsapp/broadcasts/route.js': ['membership', 'Creates a draft; nothing is sent.'],
-  'PUT whatsapp/broadcasts/[id]/route.js': ['membership', 'Edits a draft/scheduled broadcast.'],
-  'DELETE whatsapp/broadcasts/[id]/route.js': ['membership', 'Deletes a broadcast row.'],
-  'POST whatsapp/broadcasts/[id]/pause/route.js': ['membership', 'Pauses/resumes a drip (stopping sends is never the risk).'],
+  'PUT whatsapp/broadcasts/[id]/route.js': ['whatsapp-permission', 'Edits a draft/scheduled broadcast; GATES-2: /send\'s rule, at the broadcast\'s studio.'],
+  'DELETE whatsapp/broadcasts/[id]/route.js': ['whatsapp-permission', 'Deletes a broadcast row; GATES-2: /send\'s rule, at the broadcast\'s studio.'],
+  'POST whatsapp/broadcasts/[id]/pause/route.js': ['whatsapp-permission', 'Pauses/resumes a drip; resuming restarts sends, so GATES-2 gives it /send\'s rule.'],
   'POST whatsapp/broadcasts/[id]/send/route.js': ['whatsapp-permission', 'Sends to the audience.'],
 
   // ── The inbox: the whatsapp channel permission (INBOX-PERM.1), judged AT the

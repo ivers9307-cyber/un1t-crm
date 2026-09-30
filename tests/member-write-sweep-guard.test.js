@@ -18,7 +18,10 @@
 //     permission (for 680: /api/contacts/[id]/{kudos,goals,consultations,
 //     consultation-photos}*, /api/consultations/me, /api/consultation-photos/me;
 //     for 681: /api/orders*, /api/automations/[key], /api/locations/[id]/holidays*,
-//     /api/presentations*, /api/contacts/duplicates/[id] and the person-link routes).
+//     /api/presentations*, /api/contacts/duplicates/[id] and the person-link routes;
+//     for 682: /api/races*, /api/events*, /api/registrations/[id] actions,
+//     /api/team-members/[id], /api/teams/[id]/members, the public event and
+//     host routes).
 //  2. A later migration may not give anon or PUBLIC any privilege on a swept
 //     table; give authenticated anything but SELECT, or SELECT on a table
 //     without `keepRead`; do either through ALL TABLES IN SCHEMA public; hand
@@ -73,7 +76,15 @@ export const SWEEP = [
   { table: 'person_groups', mig: 681, keepRead: null, rollback: 'b' },
   { table: 'person_group_members', mig: 681, keepRead: null, rollback: 'b' },
   { table: 'person_link_suggestions', mig: 681, keepRead: null, rollback: 'b' },
-  // 1c, 1d, 1e, 1g append their rows here.
+  // 1c — mig 682
+  { table: 'race_events', mig: 682, keepRead: null, rollback: 'c' },
+  { table: 'teams', mig: 682, keepRead: null, rollback: 'c' },
+  { table: 'race_registrations', mig: 682, keepRead: null, rollback: 'c' },
+  { table: 'race_payments', mig: 682, keepRead: null, rollback: 'c' },
+  { table: 'race_penalties', mig: 682, keepRead: null, rollback: 'c' },
+  { table: 'race_waves', mig: 682, keepRead: null, rollback: 'c' },
+  { table: 'team_members', mig: 682, keepRead: null, rollback: 'c' },
+  // 1d, 1e, 1g append their rows here.
 ]
 const SCAN_FROM = 680            // the class detector: every migration from the first sweep file
 // Reopeners are scanned from 631, not 680: migration numbers are reserved
@@ -602,6 +613,29 @@ describe('client code only reads its own rows of the swept tables (MEMBERWRITESW
     expect(sweepClientUses(ok)).toEqual([])
   })
 
+  it('the 1c tables (mig 682) are closed to every client use, reads included', () => {
+    const bad = `
+      await supabase.from('race_events').select('id, slug')
+      await supabase.from('race_payments').update({ status: 'completed' }).eq('id', id)
+      await supabase.from('teams').select('id, team_members(contact_id)')
+      await supabase.from('contacts').select('id, race_registrations!race_registrations_contact_id_fkey(status)')
+      await supabase.from('race_penalties').insert({ race_registration_id: id, seconds: 30 })
+      await fetch(\`\${SUPABASE_URL}/rest/v1/race_waves?select=*\`)`
+    expect(sweepClientUses(bad)).toEqual([
+      'race_events.select', 'race_payments.update', 'teams.select', 'race_penalties.insert',
+      'team_members.embed', 'race_registrations.embed', 'race_waves.rest',
+    ])
+    const ok = `
+      const r = await fetch(\`/api/events/\${eventId}/checkin\`)
+      await api(\`/api/races/\${id}/teams\`)
+      await supabase.from('race_checkins_archive').select('*')
+      const next = { ...r, team: { ...r.team, team_members: members } }
+      r.team.team_members.map((m) => m.id)
+      const teams = []
+      const label = 'No race events yet.'`
+    expect(sweepClientUses(ok)).toEqual([])
+  })
+
   it("a '/*' in a string, a regex or JSX text hides nothing; a real JSX comment is a comment", () => {
     expect(sweepClientUses("const a = 'image/*'\nsupabase.from('coach_kudos').update(p)\nconst b = '*/'\n")).toEqual(['coach_kudos.update'])
     expect(sweepClientUses("const r = /\\/*/\nsupabase.from('consultations').delete()\nconst s = '*/'\n")).toEqual(['consultations.delete'])
@@ -644,6 +678,13 @@ describe('later migrations keep the swept tables closed to clients', () => {
       'CREATE POLICY pls_loc ON public.person_link_suggestions FOR ALL TO authenticated USING (private.auth_is_in_location(location_id));',
       'CREATE POLICY p ON public.presentations FOR SELECT TO authenticated USING (true);',
       'ALTER TABLE public.location_automations DISABLE ROW LEVEL SECURITY;',
+      'GRANT UPDATE ON public.race_events TO authenticated;',
+      'GRANT SELECT ON public.race_payments TO authenticated;',
+      'GRANT INSERT ON public.race_penalties TO anon;',
+      'GRANT SELECT (status) ON public.race_registrations TO authenticated;',
+      'CREATE POLICY team_members_location_scoped ON public.team_members FOR ALL TO authenticated USING (private.auth_is_master() OR EXISTS (SELECT 1 FROM teams t WHERE t.id = team_members.team_id AND private.auth_is_in_location(t.location_id)));',
+      'CREATE POLICY w ON public.race_waves FOR SELECT TO authenticated USING (true);',
+      'ALTER TABLE public.teams DISABLE ROW LEVEL SECURITY;',
       `DO $$ BEGIN EXECUTE 'GRANT UPDATE ON public.inbody_scans TO authenticated'; END $$;`,
       'CREATE POLICY coaching_goals_loc ON public.coaching_goals FOR ALL TO authenticated USING (private.auth_is_in_location(location_id));',
       'CREATE POLICY coach_kudos_read_own ON public.coach_kudos FOR SELECT TO authenticated USING (true);',
@@ -671,7 +712,7 @@ describe('later migrations keep the swept tables closed to clients', () => {
       'GRANT SELECT ON public.coach_kudos, public.coaching_goals, public.inbody_scans TO authenticated;',
       'GRANT SELECT (scanned_at, weight_kg) ON public.inbody_scans TO authenticated;',
       'GRANT ALL ON public.consultations TO service_role;',
-      'GRANT UPDATE ON public.race_events TO authenticated;',
+      'GRANT UPDATE ON public.class_occurrences TO authenticated;',
       'GRANT SELECT ON public.orders_archive TO authenticated;',
       'GRANT SELECT ON public.consultations_archive TO authenticated;',
       'REVOKE ALL ON public.consultations, public.consultation_photos FROM anon, authenticated, PUBLIC;',
@@ -702,6 +743,9 @@ describe('later migrations keep the swept tables closed to clients', () => {
     const reopen1b = 'GRANT SELECT, INSERT, UPDATE, DELETE ON public.orders, public.person_groups TO authenticated;'
     expect(sweepReopeners(reopen1b, { exempt: exemptOf('686_memberwritesweep1b_rollback.sql') })).toEqual([])
     expect(sweepReopeners(reopen1b, { exempt: exemptOf('686_memberwritesweep1a_rollback.sql') })).not.toEqual([])
+    const reopen1c = 'GRANT SELECT, INSERT, UPDATE, DELETE ON public.race_events, public.race_payments, public.team_members TO authenticated;'
+    expect(sweepReopeners(reopen1c, { exempt: exemptOf('686_memberwritesweep1c_rollback.sql') })).toEqual([])
+    expect(sweepReopeners(reopen1c, { exempt: exemptOf('686_memberwritesweep1b_rollback.sql') })).not.toEqual([])
     expect(exemptOf('686_memberwritesweep1a_rollback.sql')).toBe('a')
     expect(exemptOf('686_carsclientwrite1_rollback.sql')).toBe(null)
   })

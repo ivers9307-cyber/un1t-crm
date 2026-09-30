@@ -11,7 +11,8 @@
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getOwnerOrganizationIds } from '@/lib/auth'
+import { getCurrentUser } from '@/lib/auth'
+import { canManageContractsInOrg, canManageContractsSomewhere } from '@/lib/contract-gates'
 import { contractRevokeSchema } from '@/lib/schemas'
 import { canTransition } from '@/lib/contracts'
 import { sendContractRevokedEmail } from '@/lib/contracts-email'
@@ -20,15 +21,15 @@ import { validateBody } from '@/lib/validate'
 
 export const runtime = 'nodejs'
 
-function isOwnerOrMaster(user) {
-  return user?.role === 'master' || user?.role === 'owner'
-}
 
 export async function POST(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!isOwnerOrMaster(user)) {
+  // GATES-2 — coarse only (master, or owner/admin of SOME org). It asked
+  // user.role, the ACTIVE studio's role, which refused an owner of the
+  // contract's org working from another studio. The decision is below.
+  if (!canManageContractsSomewhere(user)) {
     return NextResponse.json({ success: false, error: 'Master or owner only' }, { status: 403 })
   }
 
@@ -47,7 +48,7 @@ export async function POST(request, props) {
   // Service-role read bypasses RLS — an owner must only be able to
   // revoke contracts in an org they own. 404 (not 403) so a non-owner
   // can't enumerate which contract ids exist in another tenant.
-  if (!user.isMaster && !getOwnerOrganizationIds(user).includes(contract.organization_id)) {
+  if (!canManageContractsInOrg(user, contract.organization_id)) {
     return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   }
   // CONTRACTS-DRAFT.1 — drafts are NOT revoked here even though
