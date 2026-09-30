@@ -116,6 +116,9 @@ export function classify(handlerSrc) {
   // conversation's (or contact's) studio. Above 'inbox', which judges the
   // ACTIVE studio; below the role gates.
   if (/requireWhatsAppInboxAt\(\s*user\b/.test(handlerSrc)) return 'inbox-at-location'
+  // INBOXWEBONLY3.1 — the same decision on the WEB key only, for the thread
+  // actions only the web calls.
+  if (/requireWebWhatsAppInboxAt\(\s*user\b/.test(handlerSrc)) return 'web-inbox-at-location'
   if (/requireInboxPermission\(\s*user\s*,\s*'wa'\s*\)/.test(handlerSrc)) return 'inbox'
   if (/assertLocationAccess(Or404)?\(\s*user\b/.test(handlerSrc)) return 'membership'
   if (!/getCurrentUser\(/.test(handlerSrc)) return 'no-session'
@@ -219,10 +222,10 @@ export const EXPECTED = {
   // ── The inbox: the whatsapp channel permission (INBOX-PERM.1), judged AT the
   // thread's studio since INBOXLOC.1 (web or mobile whatsapp there, after
   // membership; a coarse any-studio check runs before the row is read) ──
-  'POST whatsapp/conversations/start/route.js': ['inbox-at-location', 'Starts a thread at the contact\'s studio.'],
+  'POST whatsapp/conversations/start/route.js': ['web-inbox-at-location', 'INBOXWEBONLY3.1: starts a thread at the contact\'s studio; web only, so the WEB key there.'],
   'PATCH whatsapp/conversations/[id]/route.js': ['inbox-at-location', 'Read/resolve a thread.'],
-  'POST whatsapp/conversations/[id]/add-contact/route.js': ['inbox-at-location', 'Links a thread to a contact.'],
-  'PATCH whatsapp/conversations/[id]/agent/route.js': ['inbox-at-location', 'Mia pause / take-over.'],
+  'POST whatsapp/conversations/[id]/add-contact/route.js': ['web-inbox-at-location', 'INBOXWEBONLY3.1: links a thread to a contact; web only, so the WEB key at the thread\'s studio.'],
+  'PATCH whatsapp/conversations/[id]/agent/route.js': ['web-inbox-at-location', 'INBOXWEBONLY3.1: Mia pause / take-over; web only, so the WEB key at the thread\'s studio.'],
   'POST whatsapp/conversations/[id]/block/route.js': ['inbox-at-location', 'Blocks a sender.'],
   'POST whatsapp/conversations/[id]/react/route.js': ['inbox-at-location', 'Reacts to a message.'],
   'POST whatsapp/conversations/[id]/send/route.js': ['inbox-at-location', 'Sends a text or an approved template in the thread (WATPLSEND.1: template rows judged, Flow token minted); membership at the thread\'s location, then the whatsapp permission there.'],
@@ -244,6 +247,8 @@ describe('WhatsApp mutation handlers — each one\'s gate (WAROLE.1)', () => {
     expect(classify("const p = requireInboxPermission(user, 'wa')")).toBe('inbox')
     expect(classify("const p = requireWhatsAppInboxAt(user, conversation.location_id)\nconst q = requireInboxPermission(user, 'wa')")).toBe('inbox-at-location')
     expect(classify('getCurrentUser()\nconst p = requireWhatsAppInboxAnywhere(user)')).toBe('session-only')
+    expect(classify('const p = requireWebWhatsAppInboxAt(user, conversation.location_id)')).toBe('web-inbox-at-location')
+    expect(classify('getCurrentUser()\nconst p = requireWebWhatsAppInboxAnywhere(user)')).toBe('session-only')
     expect(classify('const g = assertLocationAccessOr404(user, loc)\ngetCurrentUser()')).toBe('membership')
     expect(classify('getCurrentUser()')).toBe('session-only')
     expect(classify('const x = 1')).toBe('no-session')

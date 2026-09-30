@@ -9,6 +9,10 @@
 // holds WhatsApp at B but not at their active studio A, and served to a
 // caller who holds it at A but not at B.
 //
+// INBOXWEBONLY3.1 (C119, Richard 30 Sep): the routes the phone calls accept
+// web OR mobile `whatsapp` there; the three only the web calls (/agent,
+// /add-contact, /start) accept the WEB key only, judged at the same studio.
+//
 // The real permission helpers run here (src/lib/auth.js, src/lib/permissions.js):
 // only getCurrentUser, the service-role client and the outbound WhatsApp
 // senders are stubbed. The caller belongs to both studios; the conversation is
@@ -57,6 +61,7 @@ const SET = '00000000-0000-4000-8000-0000000000c3'
 const OFF = { whatsapp: false, mobile: { whatsapp: false } }
 const ON = { whatsapp: true, mobile: { whatsapp: true } }
 const MOBILE_ONLY = { whatsapp: false, mobile: { whatsapp: true } }
+const WEB_ONLY = { whatsapp: true, mobile: { whatsapp: false } }
 
 function caller(atA, atB) {
   return {
@@ -108,7 +113,8 @@ const req = (method, body) => new Request('http://localhost/api/x', {
   body: body === undefined ? undefined : JSON.stringify(body),
 })
 
-const HANDLERS = [
+// The routes the phone calls: web OR mobile `whatsapp` at the thread's studio.
+const PHONE_HANDLERS = [
   ['GET /conversations/[id]', () => thread.GET(req('GET'), params)],
   ['PATCH /conversations/[id]', () => thread.PATCH(req('PATCH', { resolved: true }), params)],
   ['POST /send', () => send.POST(req('POST', { type: 'text', text: 'hi' }), params)],
@@ -116,10 +122,17 @@ const HANDLERS = [
   ['POST /send-carousel', () => sendCarousel.POST(req('POST', { card_set_id: SET }), params)],
   ['POST /react', () => react.POST(req('POST', { message_id: 'wamid.in', emoji: '👍' }), params)],
   ['POST /block', () => block.POST(req('POST', { action: 'block' }), params)],
+]
+
+// INBOXWEBONLY3.1 (C119) — the routes only the web calls (Richard, 30 Sep):
+// the WEB `whatsapp` key at the thread's (the contact's, for /start) studio.
+const WEB_ONLY_HANDLERS = [
   ['PATCH /agent', () => agent.PATCH(req('PATCH', { active: true }), params)],
   ['POST /add-contact', () => addContact.POST(req('POST', { name: 'Test' }), params)],
   ['POST /start', () => start.POST(req('POST', { contact_id: CONTACT }))],
 ]
+
+const HANDLERS = [...PHONE_HANDLERS, ...WEB_ONLY_HANDLERS]
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -133,7 +146,7 @@ describe('WhatsApp thread routes judge at the conversation\'s studio (INBOXLOC.1
     expect([401, 403, 404]).not.toContain(res.status)
   })
 
-  it.each(HANDLERS)('%s: the mobile toggle at the thread\'s studio is enough (the phone calls these)', async (_name, call) => {
+  it.each(PHONE_HANDLERS)('%s: the mobile toggle at the thread\'s studio is enough (the phone calls these)', async (_name, call) => {
     getCurrentUser.mockResolvedValue(caller(OFF, MOBILE_ONLY))
     const res = await call()
     expect([401, 403, 404]).not.toContain(res.status)
@@ -152,5 +165,47 @@ describe('WhatsApp thread routes judge at the conversation\'s studio (INBOXLOC.1
     expect(res.status).toBe(403)
     expect(from).not.toHaveBeenCalled()
     from.mockRestore()
+  })
+})
+
+describe('the web-only thread actions keep the WEB whatsapp key (INBOXWEBONLY3.1)', () => {
+  it.each(WEB_ONLY_HANDLERS)('%s: the mobile toggle alone at the thread\'s studio: 403 after the row is read', async (_name, call) => {
+    getCurrentUser.mockResolvedValue(caller(ON, MOBILE_ONLY))
+    const from = vi.spyOn(db, 'from')
+    const res = await call()
+    expect(res.status).toBe(403)
+    // judged at the record's studio, so the row was read first
+    expect(from).toHaveBeenCalled()
+    from.mockRestore()
+  })
+
+  it.each(WEB_ONLY_HANDLERS)('%s: the web key at the thread\'s studio (mobile off): passes the gate', async (_name, call) => {
+    getCurrentUser.mockResolvedValue(caller(OFF, WEB_ONLY))
+    const res = await call()
+    expect([401, 403, 404]).not.toContain(res.status)
+  })
+
+  it.each(WEB_ONLY_HANDLERS)('%s: the mobile toggle alone everywhere: 403 before any read', async (_name, call) => {
+    getCurrentUser.mockResolvedValue(caller(MOBILE_ONLY, MOBILE_ONLY))
+    const from = vi.spyOn(db, 'from')
+    const res = await call()
+    expect(res.status).toBe(403)
+    expect(from).not.toHaveBeenCalled()
+    from.mockRestore()
+  })
+
+  it.each(PHONE_HANDLERS)('%s: the mobile toggle alone everywhere still passes (the phone calls these)', async (_name, call) => {
+    getCurrentUser.mockResolvedValue(caller(MOBILE_ONLY, MOBILE_ONLY))
+    const res = await call()
+    expect([401, 403, 404]).not.toContain(res.status)
+  })
+
+  it.each(WEB_ONLY_HANDLERS)('%s: a caller who does not belong to the thread\'s studio is refused', async (_name, call) => {
+    const u = caller(ON, ON)
+    u.locations = [u.locations[0]]
+    delete u.assignmentsByLocation[B]
+    getCurrentUser.mockResolvedValue(u)
+    const res = await call()
+    expect([403, 404]).toContain(res.status)
   })
 })
