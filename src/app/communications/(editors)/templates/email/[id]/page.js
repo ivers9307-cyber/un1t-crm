@@ -3,6 +3,7 @@ import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { redirect, notFound } from 'next/navigation'
 import TemplateEditor from '@/components/TemplateEditor'
 import { canEditEmailTemplate } from '@/lib/communications-access'
+import { uuidLike } from '@/lib/schemas'
 
 export const dynamic = 'force-dynamic'
 
@@ -10,6 +11,10 @@ export default async function EditTemplatePage(props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
+
+  // A malformed id is a 404 before any read: Postgres would answer it with
+  // a 22P02, which the read below throws as an error page.
+  if (!uuidLike.safeParse(params.id).success) notFound()
 
   const db = createServerClient()
   // No rows is a legitimate answer here (a bad or deleted id → 404); a failed

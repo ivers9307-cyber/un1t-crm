@@ -77,7 +77,8 @@ const user = {
   activeLocation: { id: 'loc-mine', features: {} },
 }
 
-function props(id = 'tpl-1') {
+const TPL = '11111111-1111-4111-8111-111111111111'
+function props(id = TPL) {
   return { params: Promise.resolve({ id }) }
 }
 
@@ -131,5 +132,19 @@ describe('/communications/templates/email/[id] page', () => {
     createServerClient.mockReturnValue(mockDb({ error: { code: '57014', message: 'timeout' } }))
     await expect(EditTemplatePage(props())).rejects.toThrow(/could not be read/)
     expect(notFound).not.toHaveBeenCalled()
+  })
+})
+
+// C123 (c) review — the read became maybeSingle() + a THROWN error, so a
+// non-uuid id (a typo, a crawler, a stale link) would reach Postgres as a
+// 22P02 and render the error page instead of the 404 it got on main. The id
+// is shape-checked first (same as automations/[id]).
+describe('/communications/templates/email/[id] page: a malformed id', () => {
+  it('404s without reading the table', async () => {
+    getCurrentUser.mockResolvedValue(user)
+    const db = mockDb({ error: { code: '22P02', message: 'invalid input syntax for type uuid' } })
+    createServerClient.mockReturnValue(db)
+    await expect(EditTemplatePage(props('not-a-uuid'))).rejects.toThrow('NEXT_NOT_FOUND')
+    expect(db.from).not.toHaveBeenCalled()
   })
 })
