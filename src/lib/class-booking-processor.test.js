@@ -149,6 +149,19 @@ describe('processClassBookingRequest', () => {
     expect(r.outcome).toBe('needs_review')
     expect(maybeSendBookingWhatsappConfirm).not.toHaveBeenCalled()
   })
+  // GLOFOXWRITEJUDGE.1 — Glofox: a 200 with success:false is a bad request.
+  // With no code and no id it used to read as booked (and confirm to the lead).
+  it('HTTP 200 success:false with no code and no id → review (booking_failed:status_200), no WhatsApp confirm', async () => {
+    createBooking.mockResolvedValueOnce({ ok: true, status: 200, body: { success: false } })
+    const r = await processClassBookingRequest(makeDb({ id: 'c1', first_name: 'Sam', phone: '0871234567', glofox_member_id: 'gm1', last_attended_at: null }), req)
+    expect(r).toMatchObject({ outcome: 'needs_review', detail: 'booking_failed:status_200' })
+    expect(maybeSendBookingWhatsappConfirm).not.toHaveBeenCalled()
+  })
+  it('the live success shape { success, Booking } still books (unchanged)', async () => {
+    createBooking.mockResolvedValueOnce({ ok: true, status: 200, body: { success: true, Booking: { _id: 'gfb-9' } } })
+    const r = await processClassBookingRequest(makeDb({ id: 'c1', first_name: 'Sam', phone: '0871234567', glofox_member_id: 'gm1', last_attended_at: null }), req)
+    expect(r.outcome).toBe('booked')
+  })
   it('Glofox "already booked" (reaper re-run) → booked, not review', async () => {
     createBooking.mockResolvedValueOnce({ ok: false, status: 400, body: { message_code: 'YOU_HAVE_BOOKED_FOR_THIS_EVENT' } })
     const r = await processClassBookingRequest(makeDb({ id: 'c1', first_name: 'Sam', phone: '0871234567', glofox_member_id: 'gm1', last_attended_at: null }), req)

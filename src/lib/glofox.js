@@ -1529,7 +1529,8 @@ export const GLOFOX_ALREADY_BOOKED_CODE = 'YOU_HAVE_BOOKED_FOR_THIS_EVENT'
  * Glofox's live success body has NEVER matched the harvest shapes below
  * (0/9 historical funnel bookings captured an id; Emma Kennedy
  * 2026-07-28 booked fine on a 200 we then mislabelled a failure). So:
- *   - a 2xx WITH a message code is only booked when an id came back too
+ *   - a 2xx WITH a message code, or with `success: false`, is only booked
+ *     when an id came back too
  *     (the 200-with-error shape — the Lucinda case stays a failure);
  *   - a CLEAN 2xx (no message code) is booked, id or not — the id is a
  *     reconciliation bonus, never the success gate. When a clean 2xx has
@@ -1560,7 +1561,12 @@ export function interpretBookingResult(result) {
     || null
   const messageCode = body?.message_code || body?.message || null
   const alreadyBooked = messageCode === GLOFOX_ALREADY_BOOKED_CODE
-  const booked = !!result?.ok && (!messageCode || !!bookingId)
+  // GLOFOXWRITEJUDGE.1 — Glofox's own rule: an older endpoint's 200 with
+  // success:false is a bad request. Like a message code, it needs an id to
+  // count as booked. (Every failure body seen live also carried a code; this
+  // closes the corner the staff Book panel used to check by hand.)
+  const failureSignal = !!messageCode || body?.success === false
+  const booked = !!result?.ok && (!failureSignal || !!bookingId)
   if (booked && !bookingId) {
     console.warn(`[glofox] booking 2xx without a harvestable id — extend the harvest shapes. ${describeBodyShape(body)}`)
   }

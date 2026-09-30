@@ -137,6 +137,19 @@ describe('PATCH class_booking approval — Glofox body decides success, not HTTP
     expect(sendAgentThreadMessage).toHaveBeenCalledOnce()
     warn.mockRestore()
   })
+
+  // GLOFOXWRITEJUDGE.1 — Glofox: a 200 with success:false is a bad request,
+  // even with no code. It used to approve as booked and confirm to the member.
+  it('HTTP 200 success:false with no code and no id → row failed, NO confirmation sent', async () => {
+    createBooking.mockResolvedValueOnce({ ok: true, status: 200, body: { success: false } })
+
+    const res = await approve()
+    const json = await res.json()
+
+    expect(json.executed).toMatchObject({ ok: false, status: 200, message_code: null, glofox_booking_id: null })
+    expect(updates.at(-1).patch.status).toBe('failed')
+    expect(sendAgentThreadMessage).not.toHaveBeenCalled()
+  })
 })
 
 // APPROVALS-STUDIO.1 — a decline is never silence: the customer gets the
