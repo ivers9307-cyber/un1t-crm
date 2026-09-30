@@ -2,7 +2,8 @@ import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { deleteTemplate as deleteMetaTemplate } from '@/lib/whatsapp'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation } from '@/lib/auth'
+import { MANAGER_ROLES } from '@/lib/schemas'
 import { validateBody } from '@/lib/validate'
 import { ownNumberOrRefusal } from '@/lib/whatsapp-own-number'
 
@@ -56,7 +57,9 @@ export async function GET(request, props) {
   return NextResponse.json({ success: true, template: data, events: events || [] })
 }
 
-// PUT /api/whatsapp/templates/[id] — update local record
+// PUT /api/whatsapp/templates/[id] — update local record. A display_group-only
+// edit is open to members; any other field needs MANAGER_ROLES at the
+// template's location (WATPLROLE.1).
 export async function PUT(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
@@ -71,6 +74,15 @@ export async function PUT(request, props) {
   const validation = await validateBody(request, TemplateUpdateSchema)
   if (!validation.ok) return validation.response
   const updates = { ...validation.data }
+  // WATPLROLE.1 — status, components, header media, name and category drive
+  // what a send uses (the header URL is the media customers receive), so
+  // they take the resubmit rule: MANAGER_ROLES AT the template's location.
+  // display_group alone is the picker grouping (never sent to Meta) that the
+  // templates list saves inline for every member.
+  const groupOnly = Object.keys(updates).every((k) => k === 'display_group')
+  if (!groupOnly && !hasRoleAtLocation(user, loc, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  }
   if ('display_group' in updates) updates.display_group = updates.display_group?.trim() || null
 
   const { data, error } = await db.from('whatsapp_templates')
@@ -83,7 +95,8 @@ export async function PUT(request, props) {
   return NextResponse.json({ success: true, template: data })
 }
 
-// DELETE /api/whatsapp/templates/[id]
+// DELETE /api/whatsapp/templates/[id] — deletes AT META by name, then the row.
+// MANAGER_ROLES at the template's location, the resubmit rule (WATPLROLE.1).
 export async function DELETE(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
@@ -100,6 +113,12 @@ export async function DELETE(request, props) {
 
   const guard = assertLocationAccessOr404(user, template.location_id)
   if (guard) return guard
+  // WATPLROLE.1 — membership alone let any staff member delete a template at
+  // Meta (every automation still sending it then fails). Same rule as
+  // resubmit: MANAGER_ROLES AT the template's location, before Meta.
+  if (!hasRoleAtLocation(user, template.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  }
 
   // WACONFIGFALLBACK.1 — Meta deletes by NAME on a WABA, and this call named
   // no location, so it always deleted on the global env number's WABA: a

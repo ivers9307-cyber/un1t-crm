@@ -2,9 +2,9 @@ import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createTemplate as createMetaTemplate, getTemplates as getMetaTemplates } from '@/lib/whatsapp'
-import { getCurrentUser, assertLocationAccess , getUserLocationIds} from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess , getUserLocationIds, hasRoleAtLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { uuidLike } from '@/lib/schemas'
+import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
 import { componentsButtonsError } from '@/lib/whatsapp-template-buttons'
 import { ownNumberOrRefusal } from '@/lib/whatsapp-own-number'
 
@@ -126,7 +126,8 @@ export async function GET(request) {
   return NextResponse.json({ success: true, templates: data, ...syncField })
 }
 
-// POST /api/whatsapp/templates — create template and submit to Meta
+// POST /api/whatsapp/templates — create template and submit to Meta. MANAGER_ROLES
+// at the location created at, the resubmit rule (WATPLROLE.1).
 export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
@@ -137,6 +138,13 @@ export async function POST(request) {
   const locationId = body.location_id || user.activeLocation?.id
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
+  // WATPLROLE.1 — membership alone let any staff member submit a template to
+  // Meta under the studio's name. Same rule as resubmit: MANAGER_ROLES AT the
+  // location created at (never the active studio's role). No location at all
+  // fails closed here instead of creating a row with none.
+  if (!hasRoleAtLocation(user, locationId, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  }
 
   // Meta refuses a malformed button with a generic code-100 "Invalid parameter"
   // that names neither the button nor the rule. Fail here instead, with both.

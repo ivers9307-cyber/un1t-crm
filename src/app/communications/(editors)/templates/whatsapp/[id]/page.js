@@ -1,6 +1,8 @@
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { redirect, notFound } from 'next/navigation'
+import { hasRoleAtLocation } from '@/lib/role-at-location'
+import { MANAGER_ROLES } from '@/lib/schemas'
 import WATemplateEditor from '@/components/WATemplateEditor'
 
 export const dynamic = 'force-dynamic'
@@ -33,6 +35,9 @@ export default async function EditWATemplatePage(props) {
       locationId={user.activeLocation?.id}
       userId={user.id}
       events={events || []}
+      // WATPLROLE.1 — resubmit, edit and delete decide MANAGER_ROLES at the
+      // TEMPLATE's location (not the active studio's role); so does the editor.
+      canManage={hasRoleAtLocation(user, template.location_id, MANAGER_ROLES)}
     />
   )
 }
