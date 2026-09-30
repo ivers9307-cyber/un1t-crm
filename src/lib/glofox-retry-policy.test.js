@@ -331,6 +331,18 @@ describe('createBooking — re-sent only after a negative dedupe read', () => {
     expect(out.status).toBe(503)
   })
 
+  it('a 503 while the member sits on the waitlist from EARLIER: not "booked", not re-sent (review)', async () => {
+    route([
+      ['POST /2.0/bookings', [res(503)]],
+      ['GET /2.0/bookings', [res(200, { data: [{ _id: BOOKING, model_id: EVENT, status: 'WAITING', created: Math.floor(Date.now() / 1000) - 7200 }] })]],
+    ])
+    const out = await createBooking(creds, bookReq)
+    expect(sent()).toEqual(['POST /2.0/bookings', 'GET /2.0/bookings'])
+    expect(out.recovered).toBeUndefined()
+    expect(out.status).toBe(503)
+    expect(interpretBookingResult(out).booked).toBe(false)
+  })
+
   it('the master route shape ({ user_id, event_id }) is checked on event_id', async () => {
     route([
       ['POST /2.0/bookings', [res(503)]],
@@ -342,12 +354,57 @@ describe('createBooking — re-sent only after a negative dedupe read', () => {
 })
 
 describe('findLandedBooking', () => {
-  it("reads the member's own bookings and matches the event on model_id or event_id (a waitlist entry counts)", async () => {
-    route([['GET /2.0/bookings', [res(200, { data: [{ id: BOOKING, event_id: EVENT, status: 'WAITING' }] })]]])
-    const out = await findLandedBooking(creds, USER, EVENT)
+  const SENT = Date.parse('2026-10-01T09:00:00Z')
+  const nowSec = Math.floor(SENT / 1000)
+  const find = (rows) => {
+    route([['GET /2.0/bookings', [res(200, { data: rows })]]])
+    return findLandedBooking(creds, USER, EVENT, { sentAt: SENT })
+  }
+
+  it("reads the member's own bookings and matches the event on model_id or event_id (a NEW waitlist entry counts)", async () => {
+    const out = await find([{ id: BOOKING, event_id: EVENT, status: 'WAITING', created: nowSec + 1 }])
     expect(out.state).toBe('landed')
     const [url] = fetch.mock.calls[0]
     expect(new URL(url).searchParams.get('user_id')).toBe(USER)
+  })
+
+  // Review: a member already on the waitlist whose spot opens gets a booking
+  // POST; if that 5xx's, their OLD waiting entry must not read as "booked".
+  it('an OLD waitlist entry on the event is unknown, not landed', async () => {
+    const out = await find([{ _id: BOOKING, model_id: EVENT, status: 'WAITING', created: nowSec - 3 * 3600 }])
+    expect(out.state).toBe('unknown')
+  })
+
+  it('an old entry of any other live status, or one with no readable created, is unknown too', async () => {
+    expect((await find([{ _id: BOOKING, model_id: EVENT, status: 'RESERVED', created: nowSec - 3600 }])).state).toBe('unknown')
+    expect((await find([{ _id: BOOKING, model_id: EVENT, status: 'WAITING' }])).state).toBe('unknown')
+  })
+
+  it('a NEW booked entry is landed (epoch seconds, epoch ms, ISO, or Glofox "YYYY-MM-DD HH:MM:SS" UTC)', async () => {
+    for (const created of [nowSec + 5, SENT + 5000, '2026-10-01T09:00:05Z', '2026-10-01 09:00:05']) {
+      fetch.mockReset()
+      const out = await find([{ _id: BOOKING, model_id: EVENT, status: 'BOOKED', created }])
+      expect([created, out.state]).toEqual([created, 'landed'])
+    }
+  })
+
+  it('an OLD booked entry is still landed (the POST would have answered already-booked)', async () => {
+    const out = await find([{ _id: BOOKING, model_id: EVENT, status: 'BOOKED', created: nowSec - 86400 }])
+    expect(out).toMatchObject({ state: 'landed', booking: { _id: BOOKING } })
+  })
+
+  it('a new entry is preferred over an old one on the same event', async () => {
+    const NEW = 'd'.repeat(24)
+    const out = await find([
+      { _id: BOOKING, model_id: EVENT, status: 'WAITING', created: nowSec - 3600 },
+      { _id: NEW, model_id: EVENT, status: 'BOOKED', created: nowSec + 2 },
+    ])
+    expect(out).toMatchObject({ state: 'landed', booking: { _id: NEW } })
+  })
+
+  it("another member's booking is not a hit, whatever the query filter returned", async () => {
+    const out = await find([{ _id: BOOKING, model_id: EVENT, status: 'BOOKED', user_id: 'f'.repeat(24), created: nowSec + 1 }])
+    expect(out.state).toBe('absent')
   })
 })
 

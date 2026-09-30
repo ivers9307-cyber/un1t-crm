@@ -1442,10 +1442,12 @@ export async function createBooking(creds, bookingRequest) {
   const userId = bookingRequest.user_id
   const eventId = bookingRequest.model_id ?? bookingRequest.event_id
   let landed = null
+  // Before the first send: a booking created from here on is this call's.
+  const sentAt = Date.now()
   const retry = userId && eventId
     ? {
         verify: async () => {
-          const v = await findLandedBooking(creds, userId, eventId)
+          const v = await findLandedBooking(creds, userId, eventId, { sentAt })
           if (v.state === 'landed') landed = v.booking
           return v.state
         },
@@ -1863,20 +1865,57 @@ function isCancelledBookingStatus(status) {
   return s === 'CANCELLED' || s === 'CANCELED'
 }
 
+// Clock skew allowed between us and Glofox when asking "was this booking
+// created by the send that started at sentAt?".
+const GLOFOX_LANDED_SKEW_MS = 2 * 60 * 1000
+
+/**
+ * A Glofox timestamp as epoch ms, or NaN. The bookings GET gives `created` as
+ * epoch seconds (trimRecentBookings stores Number(b.created)); other payloads
+ * carry ISO strings, and some carry "YYYY-MM-DD HH:MM:SS" with no zone, which
+ * is read as UTC. Epoch ms is accepted too.
+ */
+function glofoxTimeMs(v) {
+  if (v === null || v === undefined || v === '') return NaN
+  const n = typeof v === 'number' ? v : (/^\d+(\.\d+)?$/.test(String(v).trim()) ? Number(v) : NaN)
+  if (Number.isFinite(n)) return n < 1e12 ? n * 1000 : n
+  const s = String(v).trim()
+  if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(s)) return Date.parse(`${s.replace(' ', 'T')}Z`)
+  return Date.parse(s)
+}
+
 /**
  * GLOFOXPOSTRETRY.1 — did a booking POST that answered 5xx land anyway?
  * Reads the member's bookings (class start in the last 7 days onward, newest
- * first, cancelled included) and looks for a NOT-cancelled one on this event
- * (model_id, or the older event_id). A waitlist entry counts: it landed.
+ * first, cancelled included, ONE attempt) and looks for a NOT-cancelled one
+ * on this event (model_id, or the older event_id) that is this member's (a
+ * row naming another user_id is ignored, whatever the query filter did).
+ *   - created at or after sentAt (less clock skew): this send made it →
+ *     'landed' (a new waitlist entry included: that is what the send did);
+ *   - otherwise an older BOOKED entry → 'landed' (the send would have been
+ *     refused as already booked, so the member IS booked);
+ *   - otherwise an older entry of any other status, e.g. the waitlist entry
+ *     a member held before a spot opened, or one with no readable created
+ *     → 'unknown': it proves nothing about this send, and reporting it as
+ *     booked would tell a waitlisted member they have a place.
  * @returns {Promise<{ state: 'landed'|'absent'|'unknown', booking: object|null }>}
- *   unknown = the read failed; never re-send on it.
+ *   unknown also = the read failed; never re-send on it.
  */
-export async function findLandedBooking(creds, userId, eventId) {
+export async function findLandedBooking(creds, userId, eventId, { sentAt = NaN } = {}) {
   const read = await fetchUserBookingsResult(creds, userId, { windowDays: 7, retry: 'never' })
   if (!read.ok) return { state: 'unknown', booking: null }
-  const hit = read.bookings.find((b) =>
-    String(b?.model_id ?? b?.event_id ?? '') === String(eventId) && !isCancelledBookingStatus(b?.status))
-  return hit ? { state: 'landed', booking: hit } : { state: 'absent', booking: null }
+  const mine = read.bookings.filter((b) =>
+    String(b?.model_id ?? b?.event_id ?? '') === String(eventId)
+    && !isCancelledBookingStatus(b?.status)
+    && (b?.user_id === undefined || b?.user_id === null || String(b.user_id) === String(userId)))
+  if (!mine.length) return { state: 'absent', booking: null }
+  const fresh = Number.isFinite(sentAt)
+    ? mine.find((b) => glofoxTimeMs(b?.created) >= sentAt - GLOFOX_LANDED_SKEW_MS)
+    : null
+  if (fresh) return { state: 'landed', booking: fresh }
+  const booked = mine.find((b) => String(b?.status || '').toUpperCase() === 'BOOKED')
+  if (booked) return { state: 'landed', booking: booked }
+  return { state: 'unknown', booking: null }
 }
 
 /**
