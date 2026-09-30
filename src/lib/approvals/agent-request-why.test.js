@@ -237,3 +237,39 @@ describe('the retry count in the copy follows the attempt cap', () => {
     }
   })
 })
+
+// TRIALGRANT.1 — the approve path's trial grant is judged; a grant that did
+// not happen lands the card on 'failed' with one of these codes, and nothing
+// was booked.
+describe('failureExplanation: the trial grant (TRIALGRANT.1)', () => {
+  const failed = (result) => failureExplanation({ status: 'failed', details: { result } })
+
+  it('TRIAL_GRANT_FAILED says nothing was booked, keeps Glofox’s code visible, and says a retry will not stack a trial', () => {
+    const out = failed({ ok: false, message_code: 'TRIAL_GRANT_FAILED', glofox_message_code: 'PURCHASE_NOT_ALLOWED' })
+    expect(out).toMatch(/would not add the trial/i)
+    expect(out).toMatch(/not attempted/i)
+    expect(out).toContain('PURCHASE_NOT_ALLOWED')
+    expect(out).toMatch(/does not add another trial/i)
+  })
+
+  it('TRIAL_GRANT_FAILED without a Glofox code still reads cleanly', () => {
+    expect(failed({ ok: false, message_code: 'TRIAL_GRANT_FAILED', glofox_message_code: null })).not.toMatch(/Glofox said/)
+  })
+
+  it('TRIAL_NOT_CONFIGURED and TRIAL_GRANT_UNVERIFIED have their own copy', () => {
+    expect(failed({ ok: false, message_code: 'TRIAL_NOT_CONFIGURED' })).toMatch(/no trial membership is set/i)
+    expect(failed({ ok: false, message_code: 'TRIAL_GRANT_UNVERIFIED' })).toMatch(/no second trial/i)
+  })
+
+  it('no-credits AFTER a trial was added says so (the trial may start later); a skipped or absent grant keeps the plain copy', () => {
+    expect(failed({ ok: false, message_code: 'YOU_HAVE_NO_CREDITS_LEFT', trial_grant: { ok: true, invoice_id: 'inv-1' } })).toMatch(/trial was added/i)
+    expect(failed({ ok: false, message_code: 'YOU_HAVE_NO_CREDITS_LEFT', trial_grant: { ok: true, skipped: 'credits_present' } })).toMatch(/grant a credit/i)
+    expect(failed({ ok: false, message_code: 'YOU_HAVE_NO_CREDITS_LEFT' })).toMatch(/grant a credit/i)
+  })
+
+  it('needs_credit_grant card copy no longer promises the booking completes', () => {
+    const out = whyFlagged({ kind: 'class_booking', details: { reason: 'needs_credit_grant' } })
+    expect(out).toMatch(/adds the trial in Glofox first/i)
+    expect(out).not.toMatch(/completes the booking automatically/i)
+  })
+})
