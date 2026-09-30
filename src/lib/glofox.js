@@ -1094,6 +1094,14 @@ export async function searchGlofoxByEmail(creds, email, { retry } = {}) {
   return searchGlofoxMember(creds, { email, ...(retry ? { retry } : {}) })
 }
 
+/** Glofox's "that email already has an account" refusal (seen live as a
+ *  200 success:false LOGIN_ALREADY_IN_USE,EMAIL_ALREADY_IN_USE). */
+function isGlofoxEmailInUse(body) {
+  if (!body || typeof body !== 'object') return false
+  return [body.message_code, body.message, body.error, body.code]
+    .some((v) => typeof v === 'string' && /EMAIL_ALREADY_IN_USE/i.test(v))
+}
+
 /**
  * Register a new Glofox member via POST /2.0/register.
  *
@@ -1139,11 +1147,13 @@ export async function registerGlofoxMember(creds, payload) {
   // anyway (EMAIL_ALREADY_IN_USE), but as a failure that left the contact
   // unlinked.
   let landedMember = null
+  let verifiedAbsent = false
   const retry = {
     verify: async () => {
       const s = await searchGlofoxByEmail(creds, body.email, { retry: 'never' })
       if (s.error) return 'unknown'
       if (s.found && s.member?._id) { landedMember = s.member; return 'landed' }
+      verifiedAbsent = true
       return 'absent'
     },
   }
@@ -1161,6 +1171,15 @@ export async function registerGlofoxMember(creds, payload) {
     if (landedMember) return { ok: true, member: landedMember, error: null, glofox_response: null, recovered: 'landed_after_5xx' }
     let parsed
     try { parsed = await r.json() } catch { parsed = null }
+    // A re-send after a read that found no account, refused because the
+    // email is now in use: the first attempt landed after that read. Search
+    // once more (one attempt) and link only an unambiguous single account.
+    if (verifiedAbsent && isGlofoxEmailInUse(parsed)) {
+      const s = await searchGlofoxByEmail(creds, body.email, { retry: 'never' })
+      if (!s.error && s.found && s.member?._id) {
+        return { ok: true, member: s.member, error: null, glofox_response: parsed, recovered: 'landed_after_5xx' }
+      }
+    }
     if (!r.ok) {
       return {
         ok: false,

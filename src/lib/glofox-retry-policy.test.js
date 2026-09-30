@@ -555,3 +555,53 @@ describe('a dedupe read is ONE attempt (review: its own retries would stall a Mi
     expect(out).toMatchObject({ ok: false, error: 'Glofox HTTP 503' })
   })
 })
+
+// The v3 namespace search 401s in prod (since 12 Sep 2026), so a live
+// register verify runs on the 2.1 users fallback. These pin that path.
+describe('registerGlofoxMember on the live search fallback (v3 401 → /2.1/branches/{id}/users)', () => {
+  const payload = { first_name: 'Sam', last_name: 'Lee', email: 'sam@x.com', password: 'Abcd-1234' }
+  const NEW = 'c'.repeat(24)
+  const USERS = 'GET /2.1/branches/br-1/users'
+  const V3 = 'POST /v3.0/namespaces/members/retrieve'
+  const inUse = () => res(200, { success: false, message_code: 'LOGIN_ALREADY_IN_USE,EMAIL_ALREADY_IN_USE' })
+
+  it('a 503 whose account WAS created is found through the fallback: linked, no re-send', async () => {
+    route([
+      ['POST /2.0/register', [res(503)]],
+      [V3, [res(401)]],
+      [USERS, [res(200, { data: [{ _id: NEW, email: 'sam@x.com' }] })]],
+    ])
+    const out = await registerGlofoxMember(creds, payload)
+    expect(sent()).toEqual(['POST /2.0/register', V3, USERS])
+    expect(out).toMatchObject({ ok: true, member: { _id: NEW }, recovered: 'landed_after_5xx' })
+  })
+
+  it('a verified re-send refused as email-in-use (the account landed after the read): one more search links it', async () => {
+    route([
+      ['POST /2.0/register', [res(503), inUse()]],
+      [V3, [res(401), res(401)]],
+      [USERS, [res(200, { data: [] }), res(200, { data: [{ _id: NEW, email: 'sam@x.com' }] })]],
+    ])
+    const out = await registerGlofoxMember(creds, payload)
+    expect(sent()).toEqual(['POST /2.0/register', V3, USERS, 'POST /2.0/register', V3, USERS])
+    expect(out).toMatchObject({ ok: true, member: { _id: NEW }, error: null, recovered: 'landed_after_5xx' })
+  })
+
+  it('email-in-use after the re-send but the last search finds two accounts: nothing is linked', async () => {
+    route([
+      ['POST /2.0/register', [res(503), inUse()]],
+      [V3, [res(401), res(401)]],
+      [USERS, [res(200, { data: [] }), res(200, { data: [{ _id: NEW, email: 'sam@x.com' }, { _id: 'd'.repeat(24), email: 'sam@x.com' }] })]],
+    ])
+    const out = await registerGlofoxMember(creds, payload)
+    expect(out.recovered).toBeUndefined()
+    expect(out.member?._id).toBeUndefined()
+  })
+
+  it('email-in-use on a FIRST send (no 5xx, no re-send) is not searched here: that is the caller\'s own search', async () => {
+    route([['POST /2.0/register', [inUse()]]])
+    const out = await registerGlofoxMember(creds, payload)
+    expect(sent()).toEqual(['POST /2.0/register'])
+    expect(out.recovered).toBeUndefined()
+  })
+})
