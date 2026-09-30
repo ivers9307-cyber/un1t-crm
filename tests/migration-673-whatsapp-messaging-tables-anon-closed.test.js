@@ -21,8 +21,9 @@
 //     exactly what they did;
 //   * the self-check aborts the WHOLE file on another grantor's anon grant, an
 //     anon grant inherited through a role, a policy that admits anon, an
-//     anon-open policy elsewhere that reads the tables, an anon-executable
-//     function that names them, a file that also changes authenticated, a
+//     anon-open policy elsewhere that reads the tables, an anon-readable view
+//     over them (not a session temp view), an anon-executable function that
+//     names them, a file that also changes authenticated, a
 //     policy or the publication, and the pre-656 state; a second run passes;
 //     the plan's rollback record restores the before-state exactly.
 // Fictional ids and values only: the repo is public.
@@ -428,6 +429,19 @@ describe('the self-check aborts the whole file', () => {
      $$;`,
     /mig 673: functions anon can execute name the WhatsApp tables: peek_unread\(\)/,
   ), 60_000)
+
+  it('when a view anon can read depends on one of the four (the default ACL gives anon ALL on a new view)', () => expectAbort(
+    `CREATE VIEW public.wa_peek WITH (security_invoker = on) AS SELECT id FROM public.whatsapp_messages;`,
+    /mig 673: views anon can read depend on the WhatsApp tables: public\.wa_peek/,
+  ), 60_000)
+
+  it('but not for a session temp view (pg_temp is skipped: no other session, anon included, can reach it)', async () => {
+    await boot({ before: `CREATE TEMP VIEW wa_tmp_peek AS SELECT id FROM public.whatsapp_messages;
+                          GRANT SELECT ON wa_tmp_peek TO anon;` })
+    await expect(runSql(MIG_673)).resolves.toBeDefined()
+    const { rows } = await db.query(`SELECT has_table_privilege('anon', 'public.whatsapp_messages', 'SELECT') AS held`)
+    expect(rows).toEqual([{ held: false }])
+  }, 60_000)
 
   it("when the file would also move authenticated's privileges (self-check 5)", () => {
     const NEEDLE = '  FROM anon, PUBLIC;\n'
