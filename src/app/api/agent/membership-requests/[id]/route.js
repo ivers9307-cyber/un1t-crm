@@ -362,50 +362,70 @@ export async function PATCH(request, { params }) {
       finalStatus = 'failed'
       console.warn(`[agent-requests] refused execution ${id}: elected account ${electedMemberId} no longer matches contact ${executingContactId}`)
     } else {
-      // If the processor sent this for a credit grant (existing account with no
-      // live credits), grant the trial class credit BEFORE booking — otherwise
-      // Glofox rejects on no-credits and staff could never complete it.
+      // TRIALGRANT.1 — a needs_credit_grant card buys the trial BEFORE
+      // booking, and the purchase is JUDGED (grantTrialBeforeBooking; Glofox
+      // 200s with success:false). It used to be fire-and-forget: a trial that
+      // did not take went straight on to createBooking and failed
+      // YOU_HAVE_NO_CREDITS_LEFT (4 of 16 in 90 days), and Fix & retry bought
+      // the trial again. Now a grant that did not happen lands the card on
+      // 'failed' with its own reason (failureExplanation) and NOTHING is
+      // booked or sent, like every other failed execution. The grant is
+      // recorded on details.trial_grant, so a retry never buys a second trial.
+      let grantFailure = null
       if (approvalGrantsTrialCredit(details)) {
-        try {
-          const { purchaseGlofoxMembership } = await import('@/lib/glofox')
-          const { getGlofoxConfig } = await import('@/lib/connection-registry')
-          // INTEG-A2 dual-read: registry config first, legacy settings.glofox otherwise.
-          const g = await getGlofoxConfig(db, row.location_id)
-          if (g.trial_membership_id && g.trial_plan_code) {
-            await purchaseGlofoxMembership(creds, contact.glofox_member_id, g.trial_membership_id, g.trial_plan_code)
-          }
-        } catch (e) { console.warn(`[agent-requests] trial grant error: ${e?.message || e}`) }
+        const { grantTrialBeforeBooking } = await import('@/lib/agent/trial-grant')
+        const grant = await grantTrialBeforeBooking(db, {
+          creds,
+          locationId: row.location_id,
+          memberId: contact.glofox_member_id,
+          priorGrant: details?.trial_grant || null,
+          isRetry: isRetry || isFailedRetry,
+          requestId: id,
+        })
+        details = { ...details, trial_grant: grant.grant }
+        if (!grant.proceed) grantFailure = grant.failure
       }
-      const result = await createBooking(creds, {
-        user_id: contact.glofox_member_id,
-        model: GLOFOX_BOOKING_MODEL,
-        model_id: details.event_id,
-      })
-      // Glofox can 200 with a failure body (YOU_HAVE_NO_CREDITS_LEFT) —
-      // success needs the created booking id, not just HTTP ok. alreadyBooked
-      // counts as success: the member IS in the class (MIA-BOOK.1 — staff may
-      // have booked them manually before approving a fallback card).
-      const { booked, bookingId, messageCode, alreadyBooked } = interpretBookingResult(result)
-      const success = booked || alreadyBooked
-      executed = { ok: success, status: result.status, message_code: messageCode, glofox_booking_id: bookingId }
-      details = { ...details, result: executed }
-      finalStatus = success ? 'actioned' : 'failed'
+      if (grantFailure) {
+        executed = { ...grantFailure, trial_grant: details.trial_grant }
+        details = { ...details, result: executed }
+        finalStatus = 'failed'
+      } else {
+        const result = await createBooking(creds, {
+          user_id: contact.glofox_member_id,
+          model: GLOFOX_BOOKING_MODEL,
+          model_id: details.event_id,
+        })
+        // Glofox can 200 with a failure body (YOU_HAVE_NO_CREDITS_LEFT) —
+        // success needs the created booking id, not just HTTP ok. alreadyBooked
+        // counts as success: the member IS in the class (MIA-BOOK.1 — staff may
+        // have booked them manually before approving a fallback card).
+        const { booked, bookingId, messageCode, alreadyBooked } = interpretBookingResult(result)
+        const success = booked || alreadyBooked
+        executed = {
+          ok: success, status: result.status, message_code: messageCode, glofox_booking_id: bookingId,
+          // TRIALGRANT.1 — the card's failure copy must know a trial was just
+          // added: a no-credits refusal then means it starts later.
+          ...(details.trial_grant ? { trial_grant: details.trial_grant } : {}),
+        }
+        details = { ...details, result: executed }
+        finalStatus = success ? 'actioned' : 'failed'
 
-      // Close the loop with the customer in-thread — best-effort.
-      if (success && row.conversation_id) {
-        try {
-          const { sendAgentThreadMessage, buildBookingConfirmationText } = await import('@/lib/agent/notify')
-          await sendAgentThreadMessage(db, {
-            channel: row.channel,
-            conversationId: row.conversation_id,
-            text: buildBookingConfirmationText({
-              className: details.class_name,
-              classTime: details.class_time,
-              template: await confirmationTemplate('booking'),
-            }),
-          })
-        } catch (e) {
-          console.warn(`[agent-requests] confirmation send error: ${e?.message || e}`)
+        // Close the loop with the customer in-thread — best-effort.
+        if (success && row.conversation_id) {
+          try {
+            const { sendAgentThreadMessage, buildBookingConfirmationText } = await import('@/lib/agent/notify')
+            await sendAgentThreadMessage(db, {
+              channel: row.channel,
+              conversationId: row.conversation_id,
+              text: buildBookingConfirmationText({
+                className: details.class_name,
+                classTime: details.class_time,
+                template: await confirmationTemplate('booking'),
+              }),
+            })
+          } catch (e) {
+            console.warn(`[agent-requests] confirmation send error: ${e?.message || e}`)
+          }
         }
       }
     }
