@@ -8,7 +8,7 @@ import { createBrowserClient } from '@/lib/supabase'
 import { validateTemplateMedia } from '@/lib/template-media'
 import { extractVariableIndexes, extractNamedVariables, buildBodyExample, buildNamedBodyExample, buildHeaderTextExample, missingSampleError, samplesFromExample, samplesFromNamedExample } from '@/lib/whatsapp-template-samples'
 import { templateButtonsError, normalizeButtonsForMeta } from '@/lib/whatsapp-template-buttons'
-import { isTemplateSubmitted, isHeaderMediaEditable } from '@/lib/whatsapp-template-fields'
+import { isTemplateSubmitted } from '@/lib/whatsapp-template-fields'
 
 // Meta accepts one variable in a URL button, at the very end of the link.
 const URL_VARIABLE_AT_END = /\{\{\s*[^{}]+\s*\}\}$/
@@ -72,11 +72,6 @@ export default function WATemplateEditor({ template, locationId, userId, events 
   const isSubmitted = isTemplateSubmitted(template)
   const isRejectedOrPaused = ['REJECTED', 'PAUSED'].includes(template?.status)
   const canResubmit = canManage && isRejectedOrPaused
-  // WATPLPUT.1 — an APPROVED template's header image is attached at send time
-  // (a link, no Meta review), so a manager may replace it. It self-saves
-  // (header fields only) through the PUT, since Update stays off.
-  const canReplaceHeader = canManage && isSubmitted && !canResubmit && isHeaderMediaEditable(template)
-  const mediaLocked = isSubmitted && !canResubmit && !canReplaceHeader
   const MANAGER_URL = 'https://business.facebook.com/wa/manage/message-templates/'
 
   const [name, setName] = useState(template?.name || '')
@@ -159,9 +154,6 @@ export default function WATemplateEditor({ template, locationId, userId, events 
   const [mediaName, setMediaName] = useState('')
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState(null)
-  // Replace mode (APPROVED): what the row holds now, restored on Cancel or a refused save.
-  const [savedMedia, setSavedMedia] = useState({ handle: mediaHandle, url: mediaUrl, path: mediaPath })
-  const [headerSaved, setHeaderSaved] = useState(false)
   const fileInputRef = useRef(null)
 
   // Three-step upload: the file bytes go DIRECTLY from the browser to
@@ -232,12 +224,6 @@ export default function WATemplateEditor({ template, locationId, userId, events 
       setMediaUrl(j.url)
       setMediaPath(j.path)
       setMediaName(j.file_name)
-      if (canReplaceHeader) {
-        // Meta's handle only matters for a review; an approved template's
-        // sends use the URL, so a missing handle is no reason to stop here.
-        await saveHeaderMedia({ handle: j.handle, url: j.url, path: j.path })
-        return
-      }
       if (j.meta_error) {
         // Storage upload worked but Meta upload didn't — surface so the
         // operator knows the template won't pass approval until they
@@ -252,30 +238,7 @@ export default function WATemplateEditor({ template, locationId, userId, events 
     }
   }
 
-  async function saveHeaderMedia(next) {
-    const result = await fetch(`/api/whatsapp/templates/${template.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ header_media_handle: next.handle, header_media_url: next.url, header_media_path: next.path }),
-    }).then(readJson)
-    if (result.success) {
-      setSavedMedia(next)
-      setHeaderSaved(true)
-    } else {
-      restoreSavedMedia()
-      setUploadError(errorMessageFrom(result, 'The header image could not be saved'))
-    }
-  }
-
-  function restoreSavedMedia() {
-    setMediaHandle(savedMedia.handle)
-    setMediaUrl(savedMedia.url)
-    setMediaPath(savedMedia.path)
-    setMediaName('')
-  }
-
   function clearMedia() {
-    setHeaderSaved(false)
     setMediaHandle(null)
     setMediaUrl(null)
     setMediaPath(null)
@@ -541,7 +504,6 @@ export default function WATemplateEditor({ template, locationId, userId, events 
       {isSubmitted && (
         <div className="bg-blue-500/10 border-b border-blue-500/30 text-blue-700 text-sm px-5 py-2">
           This template has been submitted to Meta and cannot be edited. Create a new template if you need changes.
-          {canReplaceHeader && ' Its header image can still be replaced: every send attaches it, and Meta does not review it again.'}
         </div>
       )}
 
@@ -712,13 +674,13 @@ export default function WATemplateEditor({ template, locationId, userId, events 
                         type="file"
                         accept={MEDIA_LIMITS[headerFormat].accept}
                         onChange={handleMediaUpload}
-                        disabled={mediaLocked || uploading}
+                        disabled={(isSubmitted && !canResubmit) || uploading}
                         className="hidden"
                       />
                       <button
                         type="button"
                         onClick={() => fileInputRef.current?.click()}
-                        disabled={mediaLocked || uploading}
+                        disabled={(isSubmitted && !canResubmit) || uploading}
                         className="inline-flex items-center gap-2 text-sm bg-un1t-bg border border-un1t-border hover:border-un1t-muted text-un1t-text px-3 py-2 rounded-md transition-colors disabled:opacity-50"
                       >
                         <Upload size={14} />
@@ -728,12 +690,6 @@ export default function WATemplateEditor({ template, locationId, userId, events 
                         Requirement: <span className="text-un1t-subtle">{MEDIA_LIMITS[headerFormat].label}</span>.
                         Same caps for every template category — Meta limits per file type, not per category.
                       </p>
-                      {canReplaceHeader && savedMedia.url && (
-                        <p className="text-[11px] text-un1t-muted">
-                          The current image stays until a new one is uploaded.{' '}
-                          <button type="button" onClick={restoreSavedMedia} disabled={uploading} className="underline hover:text-un1t-text">Keep the current image</button>
-                        </p>
-                      )}
                     </>
                   ) : (
                     <div className="flex items-center gap-2 p-2.5 bg-un1t-bg border border-un1t-border rounded-md">
@@ -751,15 +707,7 @@ export default function WATemplateEditor({ template, locationId, userId, events 
                           {mediaHandle ? 'Ready for Meta approval' : 'Uploaded — Meta handle missing, retry needed'}
                         </div>
                       </div>
-                      {canReplaceHeader ? (
-                        <button
-                          type="button"
-                          onClick={clearMedia}
-                          className="text-xs text-un1t-subtle hover:text-un1t-text underline px-1"
-                        >
-                          Replace the header image
-                        </button>
-                      ) : !mediaLocked && (
+                      {!(isSubmitted && !canResubmit) && (
                         <button
                           type="button"
                           onClick={clearMedia}
@@ -774,9 +722,6 @@ export default function WATemplateEditor({ template, locationId, userId, events 
 
                   {uploadError && (
                     <p className="text-xs text-red-700">{uploadError}</p>
-                  )}
-                  {headerSaved && (
-                    <p className="text-xs text-green-700">Header image saved. Sends attach it from now on.</p>
                   )}
                 </div>
               )}
