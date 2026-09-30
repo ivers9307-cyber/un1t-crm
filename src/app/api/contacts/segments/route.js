@@ -8,14 +8,20 @@
 // — same JSON: { logic, filters: [{ field, op, value }] } — so a
 // segment can later be promoted to drive an audience filter for a
 // campaign or sequence with no transformation.
+//
+// SEGMENTROUTE.1: reads need contacts, email or whatsapp at the studio; saving
+// needs contacts (src/lib/segment-access.js).
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { audienceFilterSchema } from '@/lib/schemas'
-import { validateAudienceFilter, InvalidAudienceFilterError } from '@/lib/audience-filter'
 import { validateBody, uuidLike } from '@/lib/validate'
+import {
+  canReadSegmentsAt, canWriteSegmentsAt, audienceFilterRefusal,
+  segmentReadRefused, segmentWriteRefused,
+} from '@/lib/segment-access'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -41,7 +47,9 @@ export async function GET(request) {
   const locationId = url.searchParams.get('location_id') || user.activeLocation?.id
   if (!locationId) return NextResponse.json({ success: true, segments: [] })
   const guard = assertLocationAccess(user, locationId)
-  if (guard) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  if (guard) return guard
+  // SEGMENTROUTE.1: the permission AT that studio, after membership.
+  if (!canReadSegmentsAt(user, locationId)) return segmentReadRefused()
 
   const db = createServerClient()
   const { data, error } = await db
@@ -62,23 +70,20 @@ export async function POST(request) {
   if (!validation.ok) return validation.response
   const parsed = { data: validation.data }
 
-  // FILTER-P1.5 — reject an audience filter that can never resolve at SAVE
-  // time, not when the send tries to populate. Mirrors COMMSFIX.B.7, which
-  // closed this on email-draft, the SMS/WA broadcast creates and the
-  // sequences PUT and missed these routes.
-  try {
-    validateAudienceFilter(parsed.data.filter)
-  } catch (e) {
-    if (e instanceof InvalidAudienceFilterError) {
-      return NextResponse.json({ success: false, error: e.message }, { status: 400 })
-    }
-    throw e
-  }
-
   const locationId = parsed.data.location_id || user.activeLocation?.id
   if (!locationId) return NextResponse.json({ success: false, error: 'No active location' }, { status: 400 })
   const guard = assertLocationAccess(user, locationId)
-  if (guard) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  if (guard) return guard
+  // SEGMENTROUTE.1: /contacts is the only screen that saves a segment.
+  if (!canWriteSegmentsAt(user, locationId)) return segmentWriteRefused()
+
+  // FILTER-P1.5: reject an audience filter that can never resolve at SAVE
+  // time, not when the send tries to populate. Mirrors COMMSFIX.B.7, which
+  // closed this on email-draft, the SMS/WA broadcast creates and the
+  // sequences PUT and missed these routes. After the gate, so a refused
+  // caller learns nothing about the filter rules; the PUT runs the same helper.
+  const invalid = audienceFilterRefusal(parsed.data.filter)
+  if (invalid) return invalid
 
   const db = createServerClient()
   const { data, error } = await db
