@@ -3300,19 +3300,19 @@ registry.registerPath({
   tags: ['WhatsApp'],
   security: [{ CookieAuth: [] }],
   summary: 'Edit a rejected or paused WhatsApp template at Meta and put it back into review',
-  description: "REJECTED or PAUSED only, with a Meta id. Sends category + components to Meta on the template's own number, then saves them locally with status PENDING and no rejection reason; Meta's verdict arrives later on the template webhook. MANAGER_ROLES at the template's location.",
+  description: "REJECTED or PAUSED only, with a Meta id. Sends category + components to Meta on the template's own number, then saves them locally with status PENDING and no rejection reason; Meta's verdict arrives later on the template webhook. MANAGER_ROLES at the template's location. A new header file (header_media_url/path/handle, WATPLRESUBMEDIA.1) is stored with it, judged like an upload: a path the sign route minted in this template's studio folder of the whatsapp-templates bucket, of the header's type, at the URL the bucket serves for it; media identical to what the row stores is not re-judged.",
   request: {
     params: z.object({ id: uuidLike }),
-    body: { content: { 'application/json': { schema: z.object({ category: WaTemplateCategory.optional(), components: z.array(z.unknown()) }).openapi('WaTemplateResubmit') } } },
+    body: { content: { 'application/json': { schema: z.object({ category: WaTemplateCategory.optional(), components: z.array(z.unknown()), header_media_handle: z.string().max(4000).nullable().optional(), header_media_url: z.string().url().max(2000).nullable().optional(), header_media_path: z.string().max(500).nullable().optional() }).openapi('WaTemplateResubmit') } } },
   },
   responses: {
     200: { description: 'Resubmitted; now PENDING', content: { 'application/json': { schema: z.object({ success: z.literal(true), template: WaTemplateRow }) } } },
-    400: waErr('Not REJECTED/PAUSED, no Meta id, validation failed, a malformed button, or Meta refused the edit'),
+    400: waErr('Not REJECTED/PAUSED, no Meta id, validation failed, a malformed button, header media that is not a minted file of the right type in this studio\'s folder, or Meta refused the edit'),
     401: waErr('Unauthorized'),
     403: waErr('Not MANAGER_ROLES at the template\'s location; nothing sent to Meta'),
     404: waErr('Not found, or not at one of your locations'),
     409: waErr('No WhatsApp number is connected at this location; nothing sent to Meta'),
-    500: waErr("The location's number could not be looked up; nothing sent to Meta"),
+    500: waErr("The template or the location's number could not be read; nothing sent to Meta"),
   },
 })
 
