@@ -293,7 +293,7 @@ describe('after 686', () => {
 
   it('only USING changed: same name, command, roles, no WITH CHECK; the new branch is the Dublin 14-day window', async () => {
     const after = await policies()
-    expect(after.map(({ qual, ...rest }) => rest)).toEqual(policyBefore.map(({ qual, ...rest }) => rest))
+    expect(after.map(({ qual: _qual, ...rest }) => rest)).toEqual(policyBefore.map(({ qual: _qual, ...rest }) => rest))
     expect(after[0].qual).toContain("(ends_on >= (((now() AT TIME ZONE 'Europe/Dublin'::text))::date - 14))")
     expect(after[0].qual).not.toContain("'utc'")
   })
