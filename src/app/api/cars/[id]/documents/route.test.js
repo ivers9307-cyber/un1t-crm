@@ -19,8 +19,11 @@ import { POST } from './route.js'
 
 const CAR = { id: 'c0000000-0000-0000-0000-000000000001', location_id: 'a0000000-0000-0000-0000-00000000000a' }
 const PDF = Buffer.from('%PDF-1.7\n%fake\n')
+const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10])
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0])
 const TEXT = Buffer.from('hello, not a document')
+// An iPhone HEIC's first box: size 24, 'ftyp', major 'heic', minor 0, compatible 'mif1' 'heic'.
+const HEIC = Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from('ftypheic'), Buffer.alloc(4), Buffer.from('mif1heic')])
 
 let upload, inserted
 function fakeDb() {
@@ -78,6 +81,30 @@ describe('POST /api/cars/[id]/documents — types', () => {
     expect(res.status).toBe(201)
     expect(upload.mock.calls[0][2].contentType).toBe('image/png')
     expect(inserted.mime_type).toBe('image/png')
+  })
+
+  it('stores an unlabelled HEIC (Chrome/Firefox on Windows send no type) as image/heic', async () => {
+    const res = await post(HEIC, { name: 'IMG_0001.HEIC', type: '' })
+    expect(res.status).toBe(201)
+    expect(upload.mock.calls[0][2].contentType).toBe('image/heic')
+    expect(inserted.mime_type).toBe('image/heic')
+  })
+
+  it('stores a HEIC labelled application/octet-stream as image/heic', async () => {
+    const res = await post(HEIC, { name: 'IMG_0001.HEIC', type: 'application/octet-stream' })
+    expect(res.status).toBe(201)
+    expect(upload.mock.calls[0][2].contentType).toBe('image/heic')
+  })
+
+  it.each([
+    ['image/jpg', 'image/jpeg', JPEG],
+    ['image/pjpeg', 'image/jpeg', JPEG],
+    ['application/x-pdf', 'application/pdf', PDF],
+  ])('sends Storage the listed type for the alias %s (the bucket checks the Content-Type it is sent)', async (alias, stored, bytes) => {
+    const res = await post(bytes, { name: 'x', type: alias })
+    expect(res.status).toBe(201)
+    expect(upload.mock.calls[0][2].contentType).toBe(stored)
+    expect(inserted.mime_type).toBe(stored)
   })
 
   it.each([

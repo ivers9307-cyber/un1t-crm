@@ -3,8 +3,20 @@
 import { describe, it, expect } from 'vitest'
 import {
   CAR_DOCUMENT_MIME_TYPES, CAR_DOCUMENT_MAX_BYTES, CAR_DOCUMENT_ACCEPT,
-  CAR_DOCUMENT_TYPES_LABEL, resolveCarDocumentType,
+  CAR_DOCUMENT_TYPES_LABEL, resolveCarDocumentType, sniffCarDocumentHeif,
 } from './car-document-media.js'
+
+// An ISO-BMFF 'ftyp' box: size, 'ftyp', major brand, minor version, compatible brands.
+function ftyp(major, ...compatible) {
+  const size = 16 + 4 * compatible.length
+  const b = Buffer.alloc(size + 8)
+  b.writeUInt32BE(size, 0)
+  b.write('ftyp', 4, 'ascii')
+  b.write(major, 8, 'ascii')
+  compatible.forEach((c, i) => b.write(c, 16 + 4 * i, 'ascii'))
+  b.write('meta', size + 4, 'ascii')
+  return b
+}
 
 describe('car-document-media', () => {
   it('is the seven types the car pages and the invoice pipeline can read, and 25 MiB', () => {
@@ -37,5 +49,52 @@ describe('car-document-media', () => {
       'image/svg+xml', 'text/html', 'image/tiff', 'image/avif', 'application/zip', 'text/plain']) {
       expect(resolveCarDocumentType(t, 'application/pdf'), t).toBeNull()
     }
+  })
+
+  it('maps the legacy aliases some clients still send onto the listed type', () => {
+    expect(resolveCarDocumentType('image/jpg', null)).toBe('image/jpeg')
+    expect(resolveCarDocumentType('image/pjpeg', null)).toBe('image/jpeg')
+    expect(resolveCarDocumentType('image/x-png', null)).toBe('image/png')
+    expect(resolveCarDocumentType('application/x-pdf', null)).toBe('application/pdf')
+    expect(resolveCarDocumentType('Image/JPG', 'image/jpeg')).toBe('image/jpeg')
+    expect(resolveCarDocumentType('application/pdf; charset=binary', null)).toBe('application/pdf')
+  })
+
+  it('every value it returns is one of the seven (what the bucket accepts)', () => {
+    const declared = ['', 'application/octet-stream', 'image/jpg', 'image/pjpeg', 'image/x-png', 'application/x-pdf',
+      ...CAR_DOCUMENT_MIME_TYPES, 'text/html', 'image/avif']
+    const sniffed = [null, 'image/png', 'image/heic', 'image/heif', 'text/html']
+    for (const d of declared) for (const s of sniffed) {
+      const r = resolveCarDocumentType(d, s)
+      if (r !== null) expect(CAR_DOCUMENT_MIME_TYPES, `${d} + ${s}`).toContain(r)
+    }
+  })
+})
+
+describe('sniffCarDocumentHeif — an unlabelled HEIC (Chrome/Firefox on Windows send no type)', () => {
+  it('reads the iPhone HEIC brands as image/heic', () => {
+    expect(sniffCarDocumentHeif(ftyp('heic', 'mif1', 'heic'))).toBe('image/heic')
+    for (const brand of ['heix', 'hevc', 'hevx', 'heim', 'heis', 'hevm', 'hevs']) {
+      expect(sniffCarDocumentHeif(ftyp(brand, 'mif1')), brand).toBe('image/heic')
+    }
+  })
+
+  it('reads the generic HEIF brands as image/heif', () => {
+    expect(sniffCarDocumentHeif(ftyp('mif1', 'heic'))).toBe('image/heif')
+    expect(sniffCarDocumentHeif(ftyp('msf1', 'hevc'))).toBe('image/heif')
+  })
+
+  it('does not call AVIF (also mif1-based) or other ISO-BMFF files HEIF', () => {
+    expect(sniffCarDocumentHeif(ftyp('avif', 'mif1', 'miaf'))).toBeNull()
+    expect(sniffCarDocumentHeif(ftyp('mif1', 'avif', 'miaf'))).toBeNull()
+    expect(sniffCarDocumentHeif(ftyp('isom', 'iso2', 'mp41'))).toBeNull() // an MP4
+    expect(sniffCarDocumentHeif(ftyp('qt  '))).toBeNull() // a .mov
+  })
+
+  it('returns null for short, empty or non-ftyp bytes', () => {
+    expect(sniffCarDocumentHeif(null)).toBeNull()
+    expect(sniffCarDocumentHeif(Buffer.alloc(0))).toBeNull()
+    expect(sniffCarDocumentHeif(Buffer.from('....ftyp'))).toBeNull()
+    expect(sniffCarDocumentHeif(Buffer.from('%PDF-1.7 ftypheic'))).toBeNull()
   })
 })

@@ -13,7 +13,7 @@ import { enqueueFromCarDocument } from '@/lib/invoices-queue/enqueue'
 import { logWarn } from '@/lib/log'
 import { sniffMimeFromBytes } from '@/lib/invoice-extraction'
 import {
-  CAR_DOCUMENT_MAX_BYTES, CAR_DOCUMENT_TYPES_LABEL, resolveCarDocumentType,
+  CAR_DOCUMENT_MAX_BYTES, CAR_DOCUMENT_TYPES_LABEL, resolveCarDocumentType, sniffCarDocumentHeif,
 } from '@/lib/car-document-media'
 
 export const runtime = 'nodejs'
@@ -55,9 +55,12 @@ export async function POST(request, props) {
 
   // CARDOCBUCKET.1 — the same seven types the bucket accepts (mig 687), so a
   // refused file is a clear 400 here, not a Storage error. An unlabelled
-  // file (no type, or application/octet-stream) is judged by its first bytes.
+  // file (no type, or application/octet-stream) is judged by its first bytes
+  // (a .heic from Chrome/Firefox on Windows arrives with no type). A legacy
+  // alias (image/jpg, application/x-pdf) is stored, and sent to Storage, as
+  // its canonical type, which is what the bucket's allowed_mime_types checks.
   const buffer = Buffer.from(await file.arrayBuffer())
-  const contentType = resolveCarDocumentType(file.type, sniffMimeFromBytes(buffer))
+  const contentType = resolveCarDocumentType(file.type, sniffMimeFromBytes(buffer) || sniffCarDocumentHeif(buffer))
   if (!contentType) {
     return NextResponse.json({ success: false, error: `Unsupported file type (${CAR_DOCUMENT_TYPES_LABEL})` }, { status: 400 })
   }
