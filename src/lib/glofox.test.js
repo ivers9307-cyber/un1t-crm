@@ -541,6 +541,14 @@ describe('createGlofoxInteraction', () => {
 // (message_code YOU_HAVE_NO_CREDITS_LEFT, live 2026-07-27), so booking
 // success is "HTTP ok AND a created-booking id", never HTTP ok alone.
 describe('interpretBookingResult', () => {
+  it('GLOFOXWRITEJUDGE.1: a 200 success:false with no code and no id is NOT booked (Glofox: 200 + success:false = bad request)', () => {
+    expect(interpretBookingResult({ ok: true, status: 200, body: { success: false } }))
+      .toEqual({ booked: false, bookingId: null, messageCode: null, alreadyBooked: false })
+    // the live success shape and a bare clean 2xx are unchanged
+    expect(interpretBookingResult({ ok: true, status: 200, body: { success: true, Booking: { _id: 'bk9' } } }).booked).toBe(true)
+    expect(interpretBookingResult({ ok: true, status: 200, body: {} }).booked).toBe(true)
+  })
+
   it('HTTP 200 + a booking id → booked, id harvested', () => {
     expect(interpretBookingResult({ ok: true, status: 200, body: { _id: 'bk1' } }))
       .toEqual({ booked: true, bookingId: 'bk1', messageCode: null, alreadyBooked: false })

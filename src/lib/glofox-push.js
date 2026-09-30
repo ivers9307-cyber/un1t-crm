@@ -208,13 +208,22 @@ export async function findOrCreateGlofoxMember({
     lead_status: 'LEAD',
   })
   if (!reg.ok || !reg.member?._id) {
+    // GLOFOXWRITEJUDGE.1 — Glofox refused because the email already has an
+    // account, although our search above found none (live 21 Aug 2026: an
+    // account the member search cannot see, or one made between the search
+    // and the register). Search once more: link a single account, else ask a
+    // human. Never a second account, never a trial on a found one.
+    // A string literal, not an import: glofox-push tests mock glofox.js whole.
+    if (reg.code === 'EMAIL_ALREADY_IN_USE') {
+      return resolveEmailInUse({ db, locationId, contact, source, creds, reg })
+    }
     const ev = await audit(db, {
       contact_id: contact.id, location_id: locationId, source,
       status: 'failed',
-      error_message: `Register failed: ${reg.error || 'unknown'}`,
+      error_message: `Register failed: ${reg.error || reg.code || 'no reason given by Glofox'}`,
       glofox_response: reg.glofox_response,
     })
-    return { status: 'failed', error: reg.error, push_event_id: ev?.id }
+    return { status: 'failed', error: reg.error, code: reg.code, push_event_id: ev?.id }
   }
   const newGlofoxId = String(reg.member._id)
 
@@ -345,6 +354,54 @@ export async function findOrCreateGlofoxMember({
 }
 
 /**
+ * GLOFOXWRITEJUDGE.1 — /2.0/register answered EMAIL_ALREADY_IN_USE. One more
+ * email search: exactly one account → link it like the step-1 search hit
+ * (status 'linked': no new account, no trial, no password, no welcome tag);
+ * none, several, or a failed search → needs_review with the reason in the
+ * Review tab (staff set the member ID on the contact; the tab has no link
+ * action). Never guesses between accounts, never creates on a failed search.
+ */
+async function resolveEmailInUse({ db, locationId, contact, source, creds, reg }) {
+  const again = await searchGlofoxByEmail(creds, contact.email)
+  const single = again.found && again.member?._id && again.error !== 'multiple_glofox_matches'
+  if (single) {
+    const memberId = String(again.member._id)
+    const linkResult = await linkExistingGlofoxMember({ db, locationId, contact, creds, glofoxMember: again.member })
+    if (linkResult?.link_write_failed) {
+      // Found, but the CRM could not save the link: never report it linked.
+      const message = `Glofox said this email already has an account, and a second search found it, but the CRM could not save the link (${linkResult.error}). Nothing was created. Put its member ID on the contact, then dismiss this row.`
+      const ev = await audit(db, {
+        contact_id: contact.id, location_id: locationId, source,
+        status: 'needs_review', glofox_member_id: memberId,
+        glofox_response: reg.glofox_response,
+        error_message: message,
+      })
+      return { status: 'needs_review', glofox_member_id: memberId, error: message, reason: 'email_in_use_link_failed', push_event_id: ev?.id }
+    }
+    const ev = await audit(db, {
+      contact_id: contact.id, location_id: locationId, source,
+      status: 'linked', glofox_member_id: memberId,
+      glofox_response: reg.glofox_response,
+      error_message: 'Glofox said this email already has an account, and a second search found it, so the contact was linked to it. No new account or trial was made.',
+    })
+    return { status: 'linked', glofox_member_id: memberId, error: null, push_event_id: ev?.id, sync_result: linkResult }
+  }
+  const why = again.error && !again.found
+    ? `the search to find it failed (${again.error})`
+    : again.error === 'multiple_glofox_matches'
+      ? `the search finds ${again.allMatches?.length || 'several'} accounts under it`
+      : 'the search cannot see it (it may be a staff login, or held in another way the member search does not return)'
+  const message = `Glofox says this email already has an account, but ${why}. Nothing was created or linked. Find the account in Glofox and put its member ID on the contact, then dismiss this row.`
+  const ev = await audit(db, {
+    contact_id: contact.id, location_id: locationId, source,
+    status: 'needs_review',
+    glofox_response: reg.glofox_response,
+    error_message: message,
+  })
+  return { status: 'needs_review', error: message, reason: 'email_in_use_not_linked', push_event_id: ev?.id }
+}
+
+/**
  * Link an existing Glofox member to a CRM contact (write the
  * glofox_member_id) AND immediately pull their full state via the
  * existing applyMemberSync flow. This way the contact lights up
@@ -359,7 +416,7 @@ async function linkExistingGlofoxMember({ db, locationId, contact, creds, glofox
   }).eq('id', contact.id)
   if (linkErr) {
     console.warn('[glofox-push] existing-member CRM link write failed:', linkErr.message)
-    return { error: `link write failed: ${linkErr.message}` }
+    return { error: `link write failed: ${linkErr.message}`, link_write_failed: true }
   }
   // Then fully sync from Glofox so the contact is populated.
   // Uses the canonical /2.0/members/{id} fetch via applyMemberSync

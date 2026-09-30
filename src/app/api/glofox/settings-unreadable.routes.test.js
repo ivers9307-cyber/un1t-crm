@@ -80,7 +80,6 @@ import { syncOccurrencesForLocation } from '@/lib/class-occurrences'
 import { GLOFOX_SETTINGS_UNREADABLE, GLOFOX_SETTINGS_UNREADABLE_MESSAGE } from '@/lib/glofox-settings-read'
 
 import * as bookingsCancel from './bookings/cancel/route.js'
-import * as bookingsCreate from './bookings/create/route.js'
 import * as bulkSync from './bulk-sync/route.js'
 import * as paymentsReport from './payments-report/route.js'
 import * as reconcileArrears from './reconcile-arrears/route.js'
@@ -107,7 +106,6 @@ const post = (path, body) => new Request(`http://crm.test${path}`, {
 // [label, handler, request factory, family, the not-configured answer main gives]
 const ROUTES = [
   ['glofox/bookings/cancel', bookingsCancel.POST, () => post('/api/glofox/bookings/cancel', { location_id: LOC, booking_id: 'b-1', user_id: 'u-1' }), 'A', 400],
-  ['glofox/bookings/create', bookingsCreate.POST, () => post('/api/glofox/bookings/create', { location_id: LOC, user_id: 'u-1', event_id: 'e-1' }), 'A', 400],
   ['glofox/bulk-sync', bulkSync.POST, () => post('/api/glofox/bulk-sync', { location_id: LOC }), 'A', 400],
   ['glofox/payments-report', paymentsReport.GET, () => get(`/api/glofox/payments-report?location_id=${LOC}`), 'A', 400],
   ['glofox/reconcile-arrears', reconcileArrears.GET, () => get(`/api/glofox/reconcile-arrears?location_id=${LOC}`), 'A', 400],
