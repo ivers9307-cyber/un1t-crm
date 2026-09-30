@@ -112,12 +112,16 @@ CREATE TEMP TABLE m652_table_acl ON COMMIT DROP AS
   SELECT c.oid, c.relacl::text AS acl
     FROM pg_class c WHERE c.oid IN ('public.contacts'::regclass, 'public.glofox_push_events'::regclass);
 
--- 2. The only dependent goes first (Postgres refuses DROP COLUMN under it).
-DROP VIEW public.contact_location_audience;
-
--- 3. The columns (651's single-column CHECKs go with them).
-ALTER TABLE public.contacts DROP COLUMN IF EXISTS glofox_passcode;
+-- 2. glofox_push_events first: nothing depends on its column, and taking its
+--    lock before the view's and contacts' means a slow reader there can never
+--    hold every send path's view and contacts reads behind this file.
 ALTER TABLE public.glofox_push_events DROP COLUMN IF EXISTS passcode_sent;
+
+-- 3. The view's the only dependent of contacts.glofox_passcode, so it goes
+--    before the column (Postgres refuses DROP COLUMN under it); 651's
+--    single-column CHECKs go with their columns.
+DROP VIEW public.contact_location_audience;
+ALTER TABLE public.contacts DROP COLUMN IF EXISTS glofox_passcode;
 
 -- 4. The view again: the live list (pg_get_viewdef, 29 Sep 2026) minus glofox_passcode.
 CREATE VIEW public.contact_location_audience WITH (security_invoker = on) AS
@@ -192,8 +196,9 @@ BEGIN
   -- b. the view is back, security_invoker, same owner
   IF NOT EXISTS (SELECT 1 FROM pg_class c, m652_view_meta m
                   WHERE c.oid = 'public.contact_location_audience'::regclass AND c.relkind = 'v'
-                    AND 'security_invoker=on' = ANY (c.reloptions) AND c.relowner = m.relowner) THEN
-    RAISE EXCEPTION 'mig 652: contact_location_audience is missing, lost security_invoker = on, or changed owner';
+                    AND 'security_invoker=on' = ANY (c.reloptions)
+                    AND c.reloptions IS NOT DISTINCT FROM m.reloptions AND c.relowner = m.relowner) THEN
+    RAISE EXCEPTION 'mig 652: contact_location_audience is missing, lost security_invoker = on, changed its options or changed owner';
   END IF;
 
   -- c. columns = captured minus glofox_passcode, same order, names and types
