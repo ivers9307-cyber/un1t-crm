@@ -15,6 +15,7 @@ import { extractNamedVariables } from './whatsapp-template-samples.js'
 import { formatMetaError } from './whatsapp-meta-error.js'
 import { dynamicUrlButtonIndex, urlButtonSendBlock, URL_BUTTON_MAPPING_KEY, flowButtonComponentFor } from './whatsapp-template-buttons.js'
 import { flowTokenFor } from './whatsapp-flow/config.js'
+import { bodyVariableSlots, renderSentTemplateBody } from '@shared/wa-template-send'
 import { sendPushToRolesAtLocation } from './push'
 import { MANAGER_ROLES } from './schemas'
 import { splitMessageText, WHATSAPP_TEXT_LIMIT } from './message-split.js'
@@ -1918,9 +1919,12 @@ export function buildTemplateComponents(template, contact, variableMapping, head
  * what was actually sent instead of a "[template]" placeholder).
  */
 export function resolveTemplateVariableValues(template, contact, variableMapping, opts = {}) {
-  const bodyComp = (template.components || []).find(c => c.type === 'BODY')
-  const varMatches = bodyComp?.text?.match(/\{\{\d+\}\}/g) || []
-  return varMatches.map((_, i) => resolveContactField((variableMapping || {})[String(i + 1)], contact, opts))
+  // TPLVARORDER.1 — one value per DISTINCT {{n}}, ascending, each resolved
+  // from mapping key n. Meta fills a positional template by number (parameter
+  // i is the i-th distinct slot), so mapping occurrence i to key i+1 sent the
+  // wrong value once a template repeated a variable or put {{2}} before {{1}}.
+  // Same slot order the inbox send uses (shared/wa-template-send.js).
+  return bodyVariableSlots(template).map((n) => resolveContactField((variableMapping || {})[String(n)], contact, opts))
 }
 
 /**
@@ -1944,14 +1948,21 @@ function resolveContactField(fieldName, contact, opts = {}) {
   return contact[fieldName] || fieldName // literal fallback, as today
 }
 
-/** Positionally substitute {{n}} placeholders with resolved values. */
+/**
+ * Substitute {{n}} placeholders BY NUMBER. `values` holds one value per
+ * distinct slot in ascending order (what resolveTemplateVariableValues
+ * returns and what Meta receives); every occurrence of {{n}} gets slot n's
+ * value, a missing one renders blank. TPLVARORDER.1 — fills through the same
+ * renderSentTemplateBody the inbox send route logs with, so the two cannot drift.
+ */
 export function substituteTemplateBody(bodyText, values) {
   if (!bodyText) return null
-  let i = 0
-  return bodyText.replace(/\{\{\d+\}\}/g, () => {
-    const v = values?.[i++]
-    return v == null ? '' : String(v)
-  })
+  const tpl = { components: [{ type: 'BODY', text: bodyText }] }
+  const parameters = bodyVariableSlots(tpl).map((_, i) => ({
+    type: 'text',
+    text: values?.[i] == null ? '' : String(values[i]),
+  }))
+  return renderSentTemplateBody(tpl, [{ type: 'body', parameters }])
 }
 
 /**
