@@ -62,19 +62,24 @@ describe('isMemberOfContactStudio — Task/Activity (activities RLS needs a prof
   })
 })
 
-describe('canStartWhatsAppThread — POST /api/whatsapp/conversations/start (web OR mobile `whatsapp` at the contact, after membership; INBOXLOC.1)', () => {
-  // Since INBOXLOC.1 the route judges `whatsapp` at the contact's studio
-  // (requireWhatsAppInboxAt), not the ACTIVE one, so the button follows it:
-  // the same case table as every web-or-mobile contact route.
-  it.each(webOrMobileCases(['whatsapp']))('%s', (_label, caller, target, outcome) => {
+describe('canStartWhatsAppThread — POST /api/whatsapp/conversations/start (the WEB `whatsapp` key at the contact, after membership; INBOXWEBONLY3.1)', () => {
+  // The route judges `whatsapp` at the contact's studio (INBOXLOC.1) and,
+  // since INBOXWEBONLY3.1 (Richard, 30 Sep), only the WEB key: the phone never
+  // starts a thread, and the button leads to the web inbox. So the button
+  // follows the web key there: the web-permission case table.
+  it.each(permissionCases('whatsapp'))('%s', (_label, caller, target, outcome) => {
     expect(canStartWhatsAppThread(caller, target)).toBe(shows(outcome))
   })
   it('on at both: shows', () => {
     expect(canStartWhatsAppThread(person({ [LOC_A]: { role: 'owner' }, [LOC_B]: { role: 'owner' } }, LOC_A), LOC_B)).toBe(true)
   })
-  it('off at the active studio, on at the contact\'s: shows (the route now acts there)', () => {
-    const u = person({ [LOC_A]: { role: 'owner', permissions: { whatsapp: false, mobile: { whatsapp: false } } }, [LOC_B]: { role: 'owner', permissions: { whatsapp: true } } }, LOC_A)
+  it('off at the active studio, the web key on at the contact\'s: shows (the route acts there)', () => {
+    const u = person({ [LOC_A]: { role: 'owner', permissions: { whatsapp: false, mobile: { whatsapp: false } } }, [LOC_B]: { role: 'owner', permissions: { whatsapp: true, mobile: { whatsapp: false } } } }, LOC_A)
     expect(canStartWhatsAppThread(u, LOC_B)).toBe(true)
+  })
+  it('only the mobile toggle at the contact\'s studio: hidden (the route refuses it)', () => {
+    const u = person({ [LOC_A]: { role: 'owner' }, [LOC_B]: { role: 'owner', permissions: { whatsapp: false, mobile: { whatsapp: true } } } }, LOC_A)
+    expect(canStartWhatsAppThread(u, LOC_B)).toBe(false)
   })
   it('a crossover viewer (the route 403s a non-member): hidden', () => {
     expect(canStartWhatsAppThread(OUTSIDER, LOC_B)).toBe(false)
