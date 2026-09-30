@@ -74,3 +74,20 @@ describe('WATemplateEditor — controls follow canManage (WATPLROLE.1)', () => {
     expect(screen.queryByRole('button', { name: /Submit to Meta/ })).toBeNull()
   })
 })
+
+// WATPLPUT.1 — the editor's "submitted" lock is the PUT route's
+// (isTemplateSubmitted): a Meta id counts even if the status still reads
+// 'draft', so Update is never offered where the route answers 409.
+describe('WATemplateEditor — the lock is the route\'s (WATPLPUT.1)', () => {
+  it('a Meta id on a row still reading draft: submitted, so Update is disabled and the fields read-only', () => {
+    render(<WATemplateEditor template={{ ...REJECTED, status: 'draft', rejection_reason: null, meta_template_id: 'meta-1' }} locationId="loc-1" userId="u1" canManage />)
+    expect(screen.getByRole('button', { name: /Update/ }).disabled).toBe(true)
+    expect(screen.getByDisplayValue('promo_x').disabled).toBe(true)
+  })
+
+  it('a draft with no Meta id: Update offered and the fields editable', () => {
+    render(<WATemplateEditor template={{ ...REJECTED, status: 'draft', rejection_reason: null, meta_template_id: null }} locationId="loc-1" userId="u1" canManage />)
+    expect(screen.getByRole('button', { name: /Update/ }).disabled).toBe(false)
+    expect(screen.getByDisplayValue('promo_x').disabled).toBe(false)
+  })
+})

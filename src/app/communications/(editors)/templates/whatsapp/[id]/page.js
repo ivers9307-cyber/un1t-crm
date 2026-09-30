@@ -32,7 +32,10 @@ export default async function EditWATemplatePage(props) {
   return (
     <WATemplateEditor
       template={template}
-      locationId={user.activeLocation?.id}
+      // WATPLPUT.1 — the TEMPLATE's studio, not the active one: the editor
+      // reads its group suggestions and signs header uploads (on that
+      // studio's own number) with it.
+      locationId={template.location_id}
       userId={user.id}
       events={events || []}
       // WATPLROLE.1 — resubmit, edit and delete decide MANAGER_ROLES at the

@@ -72,9 +72,12 @@ describeGate('DELETE /api/whatsapp/templates/[id] (MANAGER_ROLES at the template
   hidden: NOT_FOUND, cases: templateRoleCases(),
 }, T)
 
-describeGate('PUT /api/whatsapp/templates/[id] with a Meta-owned field (MANAGER_ROLES at the template)', {
-  call: () => waTemplate.PUT(json('PUT', { status: 'APPROVED' }), params({ id: 'wt-1' })),
-  gateReads: row({}),
+// WATPLPUT.1 — `status` is refused for everyone (400) before the role check,
+// so the role is probed with a content edit on a DRAFT (a submitted
+// template's content is locked, 409, after the role check).
+describeGate('PUT /api/whatsapp/templates/[id] with a content field (MANAGER_ROLES at the template)', {
+  call: () => waTemplate.PUT(json('PUT', { components: [{ type: 'BODY', text: 'x' }] }), params({ id: 'wt-1' })),
+  gateReads: row({ status: 'draft', meta_template_id: null }),
   forbidden: { status: 403, body: { success: false, error: 'Forbidden' } },
   hidden: NOT_FOUND, cases: templateRoleCases(),
 }, T)

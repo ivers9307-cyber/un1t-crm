@@ -153,3 +153,19 @@ describe('/communications/templates/whatsapp/[id] — canManage at the template\
     expect(el.props.canManage).toBe(expected)
   })
 })
+
+// WATPLPUT.1 — the editor gets the TEMPLATE's location, never the active
+// studio's: it loads group suggestions and signs header-media uploads (with
+// that location's own WhatsApp number) from it.
+describe('/communications/templates/whatsapp/[id] — the editor works at the template\'s location (WATPLPUT.1)', () => {
+  it.each([
+    ['active studio is another one', person({ [LOC_A]: 'manager', [LOC_B]: 'manager' }, LOC_A)],
+    ['active studio is the template\'s', person({ [LOC_B]: 'manager' }, LOC_B)],
+    ['a master with another active studio', MASTER],
+  ])('%s: locationId is the template\'s', async (_label, caller) => {
+    getCurrentUser.mockResolvedValue(caller)
+    createServerClient.mockReturnValue(mockDb({ template: { id: 'wa-tpl-1', location_id: LOC_B } }))
+    const el = await EditWATemplatePage(props())
+    expect(el.props.locationId).toBe(LOC_B)
+  })
+})
