@@ -27,6 +27,7 @@
     "check:guardrails": "eslint --config eslint.guardrails.config.mjs 'src/**/*.{js,jsx}' 'shared/**/*.js' 'tests/**/*.js'",
     "check:select-columns": "node scripts/check-select-columns.mjs",
     "check:rpc-names": "node scripts/check-rpc-names.mjs",
+    "changelog": "node scripts/changelog.mjs",
     "check:secrets": "node scripts/check-secrets.mjs",
     "postinstall": "node scripts/copy-ffmpeg-core.mjs",
     "eval:agent": "vitest run --config vitest.evals.config.mjs",
