@@ -1978,15 +1978,24 @@ export function renderTemplateBody(template, contact, variableMapping, opts = {}
 
 /**
  * Inbound consent keywords. The broadcast footer promises "Reply STOP
- * to Unsubscribe" — the webhook honours it via this parser. Twilio's
- * standard keyword set for stop; START/UNSTOP to opt back in. Only an
+ * to Unsubscribe" — the webhook honours it via this parser. Only an
  * exact (trimmed, case-insensitive) match counts — "please stop
  * texting" is a conversation, not a command.
+ *
+ * STOPWORDS.1 (Richard, 30 Sep: "unsubscribe should be the used
+ * terminology") — the opt-out words are UNSUBSCRIBE and STOP (+ STOP ALL /
+ * STOPALL) only. CANCEL, END and QUIT were dropped from Twilio's SMS set:
+ * a member who texts just "cancel" means a booking or a membership, and it
+ * silently unsubscribed them from WhatsApp marketing. Those words are now
+ * ordinary messages that reach Mia or staff. START/UNSTOP/SUBSCRIBE opt back in.
  */
+export const CONSENT_STOP_KEYWORDS = Object.freeze(['unsubscribe', 'stop', 'stop all', 'stopall'])
+export const CONSENT_START_KEYWORDS = Object.freeze(['start', 'unstop', 'subscribe'])
+
 export function parseConsentKeyword(text) {
   const t = String(text || '').trim().toLowerCase()
-  if (['stop', 'stopall', 'stop all', 'unsubscribe', 'cancel', 'end', 'quit'].includes(t)) return 'stop'
-  if (['start', 'unstop', 'subscribe'].includes(t)) return 'start'
+  if (CONSENT_STOP_KEYWORDS.includes(t)) return 'stop'
+  if (CONSENT_START_KEYWORDS.includes(t)) return 'start'
   return null
 }
 

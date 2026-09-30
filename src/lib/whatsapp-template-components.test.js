@@ -91,8 +91,17 @@ describe('renderTemplateBody / substituteTemplateBody', () => {
 
 describe('parseConsentKeyword', () => {
   it('matches stop keywords case/whitespace-insensitively', () => {
-    for (const t of ['STOP', ' stop ', 'Unsubscribe', 'stopall', 'STOP ALL', 'cancel', 'end', 'quit']) {
+    for (const t of ['STOP', 'STOP ', ' stop ', 'Unsubscribe', 'unsubscribe', 'stopall', 'stop all', 'STOP ALL']) {
       expect(parseConsentKeyword(t)).toBe('stop')
+    }
+  })
+  // STOPWORDS.1 (Richard, 30 Sep: "unsubscribe should be the used
+  // terminology") — a member who texts just "cancel" is almost always talking
+  // about a booking or a membership, not WhatsApp marketing. CANCEL/END/QUIT
+  // are ordinary messages now; they reach Mia or staff like any other text.
+  it('does NOT treat cancel / end / quit as an opt-out', () => {
+    for (const t of ['cancel', 'end', 'quit', ' CANCEL ', 'Cancel', 'END', 'Quit']) {
+      expect(parseConsentKeyword(t)).toBeNull()
     }
   })
   it('matches start keywords', () => {

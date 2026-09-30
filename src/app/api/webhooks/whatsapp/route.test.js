@@ -53,6 +53,8 @@ import { POST } from './route'
 import { createServerClient } from '@/lib/supabase'
 import { resolveWhatsAppNumberByPhoneNumberId } from '@/lib/whatsapp-config'
 import { maybeAutoReply } from '@/lib/agent/auto-reply'
+import { parseConsentKeyword, pickInboundContact } from '@/lib/whatsapp'
+import { applyWhatsappConsentKeyword } from '@/lib/whatsapp-consent'
 import { ingestCoexistenceMessage, syncContactMatchOnly } from '@/lib/whatsapp-coexistence-ingest'
 
 // Recording fake supabase client: chainable builder, thenable (matches
@@ -98,6 +100,14 @@ function inboundText(pniOrNull) {
     metadata: pniOrNull ? { phone_number_id: pniOrNull } : {},
     contacts: [{ wa_id: '353871234567', profile: { name: 'Test Sender' } }],
     messages: [{ id: 'wamid.test1', from: '353871234567', timestamp: '1770000000', type: 'text', text: { body: 'hi' } }],
+  })
+}
+
+function inboundTextBody(text) {
+  return envelope({
+    metadata: { phone_number_id: REGISTERED_PNI },
+    contacts: [{ wa_id: '353871234567', profile: { name: 'Test Sender' } }],
+    messages: [{ id: 'wamid.kw1', from: '353871234567', timestamp: '1770000000', type: 'text', text: { body: text } }],
   })
 }
 
@@ -288,5 +298,48 @@ describe('POST /api/webhooks/whatsapp — coexistence events', () => {
     expect(ingestCoexistenceMessage).not.toHaveBeenCalled()
     expect(syncContactMatchOnly).not.toHaveBeenCalled()
     expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('9999_UNKNOWN'))
+  })
+})
+
+// STOPWORDS.1 — only UNSUBSCRIBE / STOP (/STOP ALL / STOPALL) opt a member out.
+// An exact "cancel" is usually about a booking or a membership: it must write
+// no consent change and flow on to the normal inbound path (Mia or staff).
+// Uses the REAL parser so the route + keyword list pair is what is tested.
+describe('POST /api/webhooks/whatsapp — consent keywords', () => {
+  const CONSENT_TABLES = ['contact_preferences', 'contact_location_preferences', 'consent_log']
+
+  beforeEach(async () => {
+    const actual = await vi.importActual('@/lib/whatsapp')
+    parseConsentKeyword.mockImplementation(actual.parseConsentKeyword)
+    pickInboundContact.mockReturnValue({ id: 'contact-1', location_id: 'loc-still' })
+    applyWhatsappConsentKeyword.mockResolvedValue({ applied: true })
+    resolveWhatsAppNumberByPhoneNumberId.mockResolvedValue(STILLORGAN)
+  })
+
+  afterEach(() => {
+    // clearAllMocks keeps implementations; put the module defaults back.
+    parseConsentKeyword.mockImplementation(() => null)
+    pickInboundContact.mockImplementation(() => null)
+  })
+
+  it.each(['cancel', ' CANCEL ', 'end', 'quit'])('an exact %j is NOT an opt-out and reaches the normal inbound path', async (text) => {
+    const res = await POST(reqFor(inboundTextBody(text)))
+    expect(res.status).toBe(200)
+
+    expect(applyWhatsappConsentKeyword).not.toHaveBeenCalled()
+    expect(db.writes().filter((c) => CONSENT_TABLES.includes(c.table))).toEqual([])
+    // The wa_phone backfill and the undeliverable→active reset on contacts are
+    // normal inbound handling; an opt-out flip is what must not happen.
+    const consentFlips = db.writes().filter((c) => c.table === 'contacts' && c.ops.some(([m, v]) =>
+      m === 'update' && v && (v.wa_status === 'opted_out' || 'whatsapp_marketing' in v)))
+    expect(consentFlips).toEqual([])
+    expect(maybeAutoReply).toHaveBeenCalledWith(db, expect.objectContaining({ body: text, contactId: 'contact-1', messageType: 'text' }))
+  })
+
+  it.each(['unsubscribe', 'STOP'])('an exact %j still opts the member out', async (text) => {
+    const res = await POST(reqFor(inboundTextBody(text)))
+    expect(res.status).toBe(200)
+
+    expect(applyWhatsappConsentKeyword).toHaveBeenCalledWith(expect.objectContaining({ keyword: 'stop', contact: expect.objectContaining({ id: 'contact-1' }) }))
   })
 })
