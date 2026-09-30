@@ -156,6 +156,32 @@ export function dynamicUrlButtonIndex(components) {
   )
 }
 
+/**
+ * WATPLSEND.1 — position of the FLOW button inside BUTTONS, or -1. Like the
+ * dynamic URL button's, this position IS the `index` Meta wants on the
+ * per-send button parameter.
+ */
+export function flowButtonIndex(components) {
+  return buttonsOf(components).findIndex((b) => String(b?.type || '').toUpperCase() === 'FLOW')
+}
+
+/**
+ * The per-send parameter a FLOW button needs, or null when the template has no
+ * FLOW button or no token was given. Meta refuses a FLOW-button template sent
+ * without it (131009, proven live). Mint the token with flowTokenFor
+ * (src/lib/whatsapp-flow/config.js), never by hand.
+ */
+export function flowButtonComponentFor(components, flowToken) {
+  const idx = flowButtonIndex(components)
+  if (idx < 0 || !flowToken) return null
+  return {
+    type: 'button',
+    sub_type: 'flow',
+    index: String(idx),
+    parameters: [{ type: 'action', action: { flow_token: flowToken } }],
+  }
+}
+
 // The two block messages differ by ONE clause — what the operator is about to
 // do, and where they do it. Everything either side of that is shared, so it is
 // written once: a copy edit to the diagnosis or to the consequence would
