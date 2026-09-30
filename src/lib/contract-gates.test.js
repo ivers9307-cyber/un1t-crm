@@ -1,7 +1,7 @@
 // C116 GATES-2 — contract decisions judged at the contract's (or template's)
 // organisation, never at the active studio's role.
 import { describe, it, expect } from 'vitest'
-import { canManageContractsInOrg, canManageContractsSomewhere, canDownloadContractPdf } from './contract-gates'
+import { canManageContractsInOrg, canManageContractsSomewhere, canDownloadContractPdf, contractDetailActions } from './contract-gates'
 
 const ORG_X = 'org-x'
 const ORG_Y = 'org-y'
@@ -56,5 +56,25 @@ describe('canDownloadContractPdf (the /pdf route\'s rule)', () => {
   })
   it('a recipient-only caller never gets a draft', () => {
     expect(canDownloadContractPdf({ ...managerX, id: 'p1' }, { ...signed, status: 'draft' })).toBe(false)
+  })
+})
+
+describe('contractDetailActions (/contracts/[id]\'s buttons, each its route\'s rule)', () => {
+  const c = (status, extra = {}) => ({ id: 'c1', profile_id: 'p1', organization_id: ORG_Y, status, signed_pdf_path: null, ...extra })
+  it('an owner of the contract\'s org whose ACTIVE role is manager gets the actions (main: none)', () => {
+    expect(contractDetailActions(managerXOwnerY, c('issued'))).toMatchObject({ canResend: true, canRevoke: true, canManageDraft: false })
+    expect(contractDetailActions(managerXOwnerY, c('draft')).canManageDraft).toBe(true)
+  })
+  it('an owner of ANOTHER org gets none, whatever the active role', () => {
+    const ownerXActive = { ...managerXOwnerY, role: 'owner', rolesByLocation: { 'loc-x': 'owner', 'loc-y': 'manager' } }
+    expect(contractDetailActions(ownerXActive, c('issued'))).toEqual({ canResend: false, canRevoke: false, canManageDraft: false, canDownloadPdf: false })
+  })
+  it('status still decides which action applies', () => {
+    expect(contractDetailActions(master, c('signed'))).toMatchObject({ canResend: false, canRevoke: false, canManageDraft: false })
+  })
+  it('Download PDF follows the /pdf route: not for a contracts-permission manager (main: shown, then 404)', () => {
+    const signed = c('signed', { signed_pdf_path: 'contracts/c1/signed.pdf' })
+    expect(contractDetailActions(managerX, { ...signed, organization_id: ORG_X }).canDownloadPdf).toBe(false)
+    expect(contractDetailActions(adminX, { ...signed, organization_id: ORG_X }).canDownloadPdf).toBe(true)
   })
 })

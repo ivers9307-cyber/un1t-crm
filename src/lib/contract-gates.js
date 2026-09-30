@@ -50,3 +50,21 @@ export function canDownloadContractPdf(user, contract) {
   if (contract.status === 'draft' && !manages) return false
   return true
 }
+
+/**
+ * The /contracts/[id] action buttons, each shown exactly when its route would
+ * act: Resend and Revoke (issued/viewed) and Send/Discard (draft) on
+ * canManageContractsInOrg at the contract's org; Download PDF on the /pdf
+ * route's rule. (Re-issue links to /contracts/issue, which with
+ * POST /api/contracts still asks the active role; the page keeps that.)
+ */
+export function contractDetailActions(user, contract) {
+  const manages = canManageContractsInOrg(user, contract?.organization_id)
+  const status = contract?.status
+  return {
+    canResend: manages && (status === 'issued' || status === 'viewed'),
+    canRevoke: manages && (status === 'issued' || status === 'viewed'),
+    canManageDraft: manages && status === 'draft',
+    canDownloadPdf: canDownloadContractPdf(user, contract),
+  }
+}
