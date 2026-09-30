@@ -12,13 +12,16 @@ vi.mock('@/lib/glofox-sync', () => ({
 vi.mock('@/lib/connection-registry', () => ({ readGlofoxConfig: vi.fn() }))
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 
-import { grantTrialBeforeBooking, TRIAL_GRANT_FAILED, TRIAL_NOT_CONFIGURED, TRIAL_GRANT_UNVERIFIED } from './trial-grant'
+import { grantTrialBeforeBooking, TRIAL_GRANT_FAILED, TRIAL_NOT_CONFIGURED, TRIAL_GRANT_UNVERIFIED, TRIAL_GRANT_UNRECORDED } from './trial-grant'
 import { fetchUserCreditsResult, purchaseGlofoxMembership } from '@/lib/glofox'
 import { readGlofoxConfig } from '@/lib/connection-registry'
 import { logError } from '@/lib/log'
 
 const creds = { branchId: 'b', apiKey: 'k', apiToken: 't' }
-const base = { creds, locationId: 'L1', memberId: 'gm1', requestId: 'amr-1', now: () => '2026-10-01T09:00:00.000Z' }
+// The route's write-ahead: persists details.trial_grant on THIS execution
+// (a guarded update) and answers whether it landed.
+const record = vi.fn()
+const base = { creds, locationId: 'L1', memberId: 'gm1', requestId: 'amr-1', record, now: () => '2026-10-01T09:00:00.000Z' }
 const db = {}
 
 beforeEach(() => {
@@ -26,6 +29,7 @@ beforeEach(() => {
   fetchUserCreditsResult.mockResolvedValue({ ok: true, credits: [] })
   readGlofoxConfig.mockResolvedValue({ cfg: { trial_membership_id: 'tm-1', trial_plan_code: 'tp-1' }, error: null })
   purchaseGlofoxMembership.mockResolvedValue({ ok: true, http_status: 200, message_code: 'CART_LEGACY_PURCHASE_SUCCESS', purchase_status: 'SUCCESS', invoice_id: 'inv-1' })
+  record.mockReset().mockResolvedValue(true)
 })
 
 describe('grantTrialBeforeBooking (TRIALGRANT.1)', () => {
@@ -156,5 +160,137 @@ describe('grantTrialBeforeBooking (TRIALGRANT.1)', () => {
     await grantTrialBeforeBooking(db, { ...base, trialOverride: { membershipId: 'tm-funnel', planCode: null } })
 
     expect(purchaseGlofoxMembership).toHaveBeenCalledWith(creds, 'gm1', 'tm-1', 'tp-1')
+  })
+})
+
+// Review should-fix: the grant used to reach the database only in the
+// route's FINAL update. A purchase that went through, followed by a death
+// before that write (createBooking stuck in Glofox backoff until the function
+// timed out), left a stuck card with no record, and its retry could buy a
+// second trial whenever the first one's credits did not show yet (a trial
+// queued behind a membership the member already holds). Now the grant is
+// written AHEAD: a 'purchasing' marker before the purchase, the outcome
+// after it, both before any booking.
+describe('grantTrialBeforeBooking: the write-ahead grant record', () => {
+  it('records a purchasing marker BEFORE buying and the outcome AFTER', async () => {
+    await grantTrialBeforeBooking(db, base)
+
+    expect(record).toHaveBeenCalledTimes(2)
+    expect(record.mock.calls[0][0]).toEqual({ stage: 'purchasing', at: '2026-10-01T09:00:00.000Z' })
+    expect(record.mock.invocationCallOrder[0]).toBeLessThan(purchaseGlofoxMembership.mock.invocationCallOrder[0])
+    expect(record.mock.calls[1][0]).toEqual({ ok: true, at: '2026-10-01T09:00:00.000Z', purchase_status: 'SUCCESS', invoice_id: 'inv-1' })
+    expect(record.mock.invocationCallOrder[1]).toBeGreaterThan(purchaseGlofoxMembership.mock.invocationCallOrder[0])
+  })
+
+  it('the marker could not be recorded → TRIAL_GRANT_UNRECORDED, nothing bought', async () => {
+    record.mockResolvedValueOnce(false)
+
+    const out = await grantTrialBeforeBooking(db, base)
+
+    expect(out.proceed).toBe(false)
+    expect(out.failure).toEqual({ ok: false, message_code: TRIAL_GRANT_UNRECORDED })
+    expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
+  })
+
+  it('no recorder at all is treated as unrecorded (fail safe: nothing bought)', async () => {
+    const out = await grantTrialBeforeBooking(db, { ...base, record: undefined })
+
+    expect(out.failure).toEqual({ ok: false, message_code: TRIAL_GRANT_UNRECORDED })
+    expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
+  })
+
+  it('the outcome could not be recorded after a granted purchase → still proceeds (the marker already guards a retry)', async () => {
+    record.mockResolvedValueOnce(true).mockResolvedValueOnce(false)
+
+    const out = await grantTrialBeforeBooking(db, base)
+
+    expect(out.proceed).toBe(true)
+    expect(out.grant).toMatchObject({ ok: true, invoice_id: 'inv-1' })
+  })
+
+  it('a purchasing marker with no outcome and no credits → TRIAL_GRANT_UNVERIFIED, nothing bought', async () => {
+    const out = await grantTrialBeforeBooking(db, { ...base, priorGrant: { stage: 'purchasing', at: '2026-09-30T18:00:00.000Z' }, isRetry: true })
+
+    expect(out.proceed).toBe(false)
+    expect(out.failure).toMatchObject({ ok: false, message_code: TRIAL_GRANT_UNVERIFIED })
+    expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
+    expect(record).not.toHaveBeenCalled()
+  })
+
+  it('a purchasing marker is refused even when the retry flag is missing and the balance is unreadable', async () => {
+    fetchUserCreditsResult.mockResolvedValueOnce({ ok: false, credits: [] })
+
+    const out = await grantTrialBeforeBooking(db, { ...base, priorGrant: { stage: 'purchasing', at: '2026-09-30T18:00:00.000Z' } })
+
+    expect(out.failure).toMatchObject({ message_code: TRIAL_GRANT_UNVERIFIED })
+    expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
+  })
+
+  it('a purchasing marker WITH credits on the account → proceed, nothing bought (the earlier trial, or a hand-added credit)', async () => {
+    fetchUserCreditsResult.mockResolvedValueOnce({ ok: true, credits: [{ available: 1 }] })
+
+    const out = await grantTrialBeforeBooking(db, { ...base, priorGrant: { stage: 'purchasing', at: '2026-09-30T18:00:00.000Z' }, isRetry: true })
+
+    expect(out).toMatchObject({ proceed: true, grant: { ok: true, skipped: 'credits_present' } })
+    expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
+  })
+
+  it('no answer from Glofox (network) → failed with outcome_unknown, and a later retry with no credits refuses to buy', async () => {
+    purchaseGlofoxMembership.mockResolvedValueOnce({ ok: false, http_status: 0, message_code: null, purchase_status: null, error: 'socket hang up' })
+
+    const first = await grantTrialBeforeBooking(db, base)
+
+    expect(first.failure).toMatchObject({ message_code: TRIAL_GRANT_FAILED, outcome_unknown: true })
+    expect(first.grant).toMatchObject({ ok: false, outcome_unknown: true })
+
+    vi.clearAllMocks()
+    const retry = await grantTrialBeforeBooking(db, { ...base, priorGrant: first.grant, isRetry: true })
+
+    expect(retry.failure).toMatchObject({ message_code: TRIAL_GRANT_UNVERIFIED })
+    expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
+  })
+
+  it('a throw AFTER the marker is an unknown outcome too; a throw before it is not', async () => {
+    purchaseGlofoxMembership.mockRejectedValueOnce(new Error('kaboom'))
+    const after = await grantTrialBeforeBooking(db, base)
+    expect(after.grant).toMatchObject({ ok: false, outcome_unknown: true })
+
+    fetchUserCreditsResult.mockRejectedValueOnce(new Error('kaboom'))
+    const before = await grantTrialBeforeBooking(db, base)
+    expect(before.grant.outcome_unknown).toBeUndefined()
+  })
+
+  it('a REFUSED purchase (Glofox answered) is a known outcome: a retry may buy again', async () => {
+    purchaseGlofoxMembership.mockResolvedValueOnce({ ok: false, http_status: 200, message_code: 'PURCHASE_NOT_ALLOWED', purchase_status: 'ERROR' })
+    const first = await grantTrialBeforeBooking(db, base)
+    expect(first.grant.outcome_unknown).toBeUndefined()
+
+    const retry = await grantTrialBeforeBooking(db, { ...base, priorGrant: first.grant, isRetry: true })
+    expect(retry.proceed).toBe(true)
+    expect(purchaseGlofoxMembership).toHaveBeenCalledTimes(2)
+  })
+
+  // The route's final write REPLACES details.trial_grant with this attempt's
+  // grant, so the "may have been bought" state must travel with it, or the
+  // NEXT retry would read a plain failure and buy.
+  it('an unsettled purchase stays unsettled across retries (the refusal carries it forward)', async () => {
+    const first = await grantTrialBeforeBooking(db, { ...base, priorGrant: { stage: 'purchasing', at: '2026-09-30T18:00:00.000Z' }, isRetry: true })
+    expect(first.grant).toMatchObject({ ok: false, code: TRIAL_GRANT_UNVERIFIED, outcome_unknown: true })
+
+    const second = await grantTrialBeforeBooking(db, { ...base, priorGrant: first.grant, isRetry: true })
+
+    expect(second.failure).toMatchObject({ message_code: TRIAL_GRANT_UNVERIFIED })
+    expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
+  })
+
+  it('credits found after an unsettled purchase book, but the skip keeps the doubt for a later retry', async () => {
+    fetchUserCreditsResult.mockResolvedValueOnce({ ok: true, credits: [{ available: 1 }] })
+    const first = await grantTrialBeforeBooking(db, { ...base, priorGrant: { stage: 'purchasing', at: '2026-09-30T18:00:00.000Z' }, isRetry: true })
+    expect(first).toMatchObject({ proceed: true, grant: { ok: true, skipped: 'credits_present', outcome_unknown: true } })
+
+    const later = await grantTrialBeforeBooking(db, { ...base, priorGrant: first.grant, isRetry: true })
+
+    expect(later.failure).toMatchObject({ message_code: TRIAL_GRANT_UNVERIFIED })
+    expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
   })
 })

@@ -273,3 +273,30 @@ describe('failureExplanation: the trial grant (TRIALGRANT.1)', () => {
     expect(out).not.toMatch(/completes the booking automatically/i)
   })
 })
+
+// Review of TRIALGRANT.1 — the write-ahead grant record adds a code, and an
+// unfinished or unanswered purchase is a DOUBT, not a refusal: staff check
+// Glofox for the trial's €0 invoice rather than buy blind.
+describe('failureExplanation: the write-ahead trial grant (TRIALGRANT.1 review)', () => {
+  const failed = (result) => failureExplanation({ status: 'failed', details: { result } })
+
+  it('TRIAL_GRANT_UNRECORDED says nothing was bought or booked, and to retry', () => {
+    const out = failed({ ok: false, message_code: 'TRIAL_GRANT_UNRECORDED' })
+    expect(out).toMatch(/no trial was bought/i)
+    expect(out).toMatch(/nothing was booked/i)
+    expect(out).toMatch(/retry/i)
+  })
+
+  it('TRIAL_GRANT_UNVERIFIED points staff at the €0 trial invoice, and still promises no second trial', () => {
+    const out = failed({ ok: false, message_code: 'TRIAL_GRANT_UNVERIFIED', outcome_unknown: true })
+    expect(out).toMatch(/€0 trial invoice/)
+    expect(out).toMatch(/no second trial/i)
+  })
+
+  it('a purchase Glofox never answered is not "Glofox would not add the trial"', () => {
+    const out = failed({ ok: false, message_code: 'TRIAL_GRANT_FAILED', http_status: 0, outcome_unknown: true })
+    expect(out).toMatch(/did not answer/i)
+    expect(out).toMatch(/€0 trial invoice/)
+    expect(out).not.toMatch(/would not add the trial/i)
+  })
+})

@@ -14,6 +14,7 @@ import {
   finishedMarker,
 } from '@/lib/agent/request-recovery'
 import { approvalGrantsTrialCredit } from '@/lib/approvals/agent-request-why'
+import { logWarn } from '@/lib/log'
 
 // PATCH /api/agent/membership-requests/[id] — staff decides a queued
 // agent request. Decision rights follow the comms surface (any staff
@@ -370,11 +371,36 @@ export async function PATCH(request, { params }) {
       // the trial again. Now a grant that did not happen lands the card on
       // 'failed' with its own reason (failureExplanation) and NOTHING is
       // booked or sent, like every other failed execution. The grant is
-      // recorded on details.trial_grant, so a retry never buys a second trial.
+      // written ahead on details.trial_grant (below), so a retry does not buy
+      // over a recorded grant, nor over a purchase whose answer was never
+      // recorded unless credits show. glofoxFetch's own POST retry on a 5xx
+      // is not covered (C84).
       let grantFailure = null
       if (approvalGrantsTrialCredit(details)) {
         const { grantTrialBeforeBooking } = await import('@/lib/agent/trial-grant')
+        // Write-ahead (review of TRIALGRANT.1): the grant reaches the row
+        // BEFORE the purchase ({ stage: 'purchasing' }) and again with its
+        // outcome, before any booking, instead of only in the final update.
+        // Guarded on THIS execution's started_at and judged on the row it
+        // touched, so a write that lands nowhere is "not recorded" and the
+        // helper buys nothing.
+        const executionStartedAt = details?.execution?.started_at || null
+        const recordTrialGrant = async (trialGrant) => {
+          if (!executionStartedAt) return false
+          const { data, error } = await db.from('agent_membership_requests')
+            .update({ details: { ...details, trial_grant: trialGrant }, updated_at: new Date().toISOString() })
+            .eq('id', id)
+            .eq('details->execution->>started_at', executionStartedAt)
+            .select('id')
+            .maybeSingle()
+          if (error) {
+            logWarn('agent-requests', 'trial grant record write failed', { requestId: id, err: error })
+            return false
+          }
+          return !!data
+        }
         const grant = await grantTrialBeforeBooking(db, {
+          record: recordTrialGrant,
           creds,
           locationId: row.location_id,
           memberId: contact.glofox_member_id,
