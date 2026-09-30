@@ -17,20 +17,27 @@ import { useRef, useState } from 'react'
 import { Check, X, FileText, Inbox, Upload } from 'lucide-react'
 import { ALL_DOCUMENT_TYPES, REQUIRED_DOCUMENT_TYPES } from '@/lib/cars'
 import { CAR_DOCUMENT_ACCEPT } from '@/lib/car-document-media'
+import { uploadCarDocument } from '@/lib/car-document-upload-client'
 
 export default function DocumentsCard({ car, setCar, setError, disabled }) {
   const [uploadingType, setUploadingType] = useState(null)
 
+  // CARDOCUPLOAD.1 (C124) — straight to Storage through a signed slot
+  // (sign → uploadToSignedUrl → finalise), so a 5–25 MB scan never meets
+  // Vercel's ~4.5 MB body cap; every response is parsed safely and the
+  // spinner always clears.
   async function upload(type, file) {
     setUploadingType(type); setError(null)
-    const fd = new FormData()
-    fd.append('file', file)
-    fd.append('doc_type', type)
-    const res = await fetch(`/api/cars/${car.id}/documents`, { method: 'POST', body: fd })
-    const j = await res.json()
-    setUploadingType(null)
-    if (!j.success) { setError(j.error || 'Upload failed'); return }
-    setCar(c => ({ ...c, car_documents: [...(c.car_documents || []), j.data] }))
+    let r
+    try {
+      r = await uploadCarDocument({ carId: car.id, docType: type, file })
+    } catch (e) {
+      r = { success: false, error: `Upload failed: ${e?.message || e}` }
+    } finally {
+      setUploadingType(null)
+    }
+    if (!r?.success) { setError(r?.error || 'Upload failed'); return }
+    setCar(c => ({ ...c, car_documents: [...(c.car_documents || []), r.data] }))
   }
 
   async function open(docId) {
