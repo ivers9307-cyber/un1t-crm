@@ -252,11 +252,14 @@ export default function ShiftTemplateManager({ user }) {
           data.error || (active ? 'Failed to reactivate' : 'Failed to deactivate'))
         return
       }
+      // D4 UINITS.1 — re-read FIRST, then say what happened: fetchTemplates
+      // clears the banner as it starts, so a warning written before it was
+      // wiped before anyone saw it (the handleCopied order, TPLCLONE.1).
+      await fetchTemplates()
       // SHIFTTPL.1 — the DELETE route clears the empty future slots now (the
       // PUT path always did), so say what went and what was deliberately kept.
       if (!active) setNotice(deactivateNotice(data.propagation))
       if (data.warning) failWith('The template changed, but the calendar did not fully follow', data.warning)
-      await fetchTemplates()
     } catch {
       failWith(active ? 'Could not reactivate this template' : 'Could not deactivate this template', 'Network error, please try again')
     } finally {

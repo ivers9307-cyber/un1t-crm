@@ -43,6 +43,7 @@ import {
 import { listConversationApprovals } from '../../../lib/inbox-approvals-api'
 import { sendWarningsNotice } from '../../../lib/wa-send-warnings'
 import { needsReply, isAgentHandoff } from '../../../lib/inbox'
+import { threadLocationId } from '../../../lib/wa-thread-location'
 import { mergeTimeline } from 'shared/approval-cards'
 import { groupWaTemplates, UNGROUPED_LABEL, templateBodyText } from 'shared/wa-template-groups'
 import {
@@ -89,11 +90,21 @@ export default function Conversation() {
   const scrollRef = useRef(null)
   const sendingTplRef = useRef(false)
 
+  // INBOXLOC.1 (C37) — every call acts at the CONVERSATION's studio, not the
+  // active one: a thread opened from a contact at another studio is that
+  // studio's thread (its templates, card sets, Flow and number). Until the
+  // thread has loaded only the active studio is known; the thread GET judges
+  // the conversation's studio server-side either way. The ref lets refresh()
+  // read the latest without re-creating itself (and re-fetching) per load.
+  const locationId = threadLocationId(conv, activeLocation)
+  const locationRef = useRef(locationId)
+  locationRef.current = locationId
+
   // One call for conversation + messages + flow availability; the GET
   // also resets unread_count server-side (no separate mark-read).
   const refresh = useCallback(async () => {
     const [threadRes, approvalsRes] = await Promise.all([
-      getThread(conversationId, activeLocation?.id),
+      getThread(conversationId, locationRef.current),
       listConversationApprovals(conversationId),
     ])
     if (threadRes.success) {
@@ -102,7 +113,7 @@ export default function Conversation() {
       setFlowAvailable(threadRes.flowAvailable)
     }
     if (approvalsRes.success) setApprovals(approvalsRes.requests || [])
-  }, [conversationId, activeLocation])
+  }, [conversationId])
 
   useEffect(() => {
     setLoading(true)
@@ -123,18 +134,18 @@ export default function Conversation() {
   // open 24h window, load the location's card sets once and cache them
   // for the screen. [] (loaded-but-empty or failure) hides the control.
   useEffect(() => {
-    if (cardSets !== null || !activeLocation?.id || !windowOpen) return
+    if (cardSets !== null || !locationId || !windowOpen) return
     let cancelled = false
-    listCardSets(activeLocation.id).then(res => {
+    listCardSets(locationId).then(res => {
       if (!cancelled) setCardSets(res.success ? res.data : [])
     })
     return () => { cancelled = true }
-  }, [cardSets, activeLocation, windowOpen])
+  }, [cardSets, locationId, windowOpen])
 
   async function send() {
     if (!text.trim() || !windowOpen) return
     setSending(true)
-    const res = await sendText(conversationId, text.trim(), activeLocation?.id)
+    const res = await sendText(conversationId, text.trim(), locationId)
     setSending(false)
     if (!res.success) {
       Alert.alert('Couldn’t send', res.error || 'Unknown error')
@@ -150,7 +161,7 @@ export default function Conversation() {
 
   async function pickTemplate() {
     if (!templates.length) {
-      const res = await listTemplates(activeLocation?.id)
+      const res = await listTemplates(locationId)
       if (!res.success) {
         Alert.alert('Couldn’t load templates', res.error)
         return
@@ -185,7 +196,7 @@ export default function Conversation() {
     setSending(true)
     let res
     try {
-      res = await sendTemplate(conversationId, built.payload, activeLocation?.id)
+      res = await sendTemplate(conversationId, built.payload, locationId)
     } finally {
       sendingTplRef.current = false
       setSending(false)
@@ -204,7 +215,7 @@ export default function Conversation() {
   async function resolve() {
     if (resolving) return
     setResolving(true)
-    const res = await resolveConversation(conversationId, true, activeLocation?.id)
+    const res = await resolveConversation(conversationId, true, locationId)
     setResolving(false)
     if (!res.success) {
       Alert.alert('Couldn’t resolve', res.error || 'Unknown error')
@@ -230,7 +241,7 @@ export default function Conversation() {
           style: next ? 'destructive' : 'default',
           onPress: async () => {
             setBlocking(true)
-            const res = await setBlocked(conversationId, next, activeLocation?.id)
+            const res = await setBlocked(conversationId, next, locationId)
             setBlocking(false)
             if (!res.success) {
               Alert.alert('Couldn’t update block state', res.error || 'Unknown error')
@@ -248,7 +259,7 @@ export default function Conversation() {
   async function react(msg, emoji) {
     if (!msg.wa_message_id || reactingId) return
     setReactingId(msg.id)
-    const res = await reactToInboundMessage(conversationId, msg.wa_message_id, emoji, activeLocation?.id)
+    const res = await reactToInboundMessage(conversationId, msg.wa_message_id, emoji, locationId)
     setReactingId(null)
     if (!res.success) {
       Alert.alert('Couldn’t react', res.error || 'Unknown error')
@@ -261,7 +272,7 @@ export default function Conversation() {
   async function sendChosenCardSet(set) {
     setShowCardSets(false)
     setSendingCardSet(true)
-    const res = await sendCardSet(conversationId, set.id, activeLocation?.id)
+    const res = await sendCardSet(conversationId, set.id, locationId)
     setSendingCardSet(false)
     if (!res.success) {
       Alert.alert('Couldn’t send card set', res.error || 'Unknown error')
@@ -275,7 +286,7 @@ export default function Conversation() {
   async function sendFlow() {
     if (sendingFlow) return
     setSendingFlow(true)
-    const res = await sendBookingFlow(conversationId, activeLocation?.id)
+    const res = await sendBookingFlow(conversationId, locationId)
     setSendingFlow(false)
     if (!res.success) {
       Alert.alert('Couldn’t send booking Flow', res.error || 'Unknown error')
@@ -290,7 +301,7 @@ export default function Conversation() {
     const submit = async (note) => {
       setFeedback(f => ({ ...f, [msg.id]: rating }))
       const res = await rateAgentMessage({
-        messageId: msg.id, rating, note, locationId: activeLocation?.id,
+        messageId: msg.id, rating, note, locationId,
       })
       if (!res.success) {
         setFeedback(f => ({ ...f, [msg.id]: prev }))
