@@ -134,3 +134,50 @@ describe('POST /api/cars/[id]/documents — types', () => {
     expect(upload).not.toHaveBeenCalled()
   })
 })
+
+// CARDOCUPLOAD.1 — the row, rollback and queue moved into
+// src/lib/car-document-record.js (shared with …/documents/finalise); the
+// multipart route's answers are unchanged.
+describe('POST /api/cars/[id]/documents — recording (shared with finalise)', () => {
+  it('removes the stored file and answers 500 when the row insert fails', async () => {
+    const remove = vi.fn(async () => ({ error: null }))
+    const db = fakeDb()
+    db.from = (table) => table === 'cars'
+      ? { select: () => ({ eq: () => ({ single: async () => ({ data: CAR, error: null }) }) }) }
+      : { insert: () => ({ select: () => ({ single: async () => ({ data: null, error: { message: 'insert refused' } }) }) }) }
+    db.storage = { from: () => ({ upload, remove }) }
+    createServerClient.mockReturnValue(db)
+    const res = await post(PDF)
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ success: false, error: 'insert refused' })
+    expect(remove).toHaveBeenCalledWith([upload.mock.calls[0][0]])
+  })
+
+  it('still answers 201 with queue_warning when the bookkeeper queue insert fails', async () => {
+    const { enqueueFromCarDocument } = await import('@/lib/invoices-queue/enqueue')
+    enqueueFromCarDocument.mockResolvedValueOnce({ ok: false, error: 'queue down' })
+    const res = await post(PDF)
+    expect(res.status).toBe(201)
+    const body = await res.json()
+    expect(body.success).toBe(true)
+    expect(body.queue_warning).toBe('queue down')
+    expect(enqueueFromCarDocument).toHaveBeenCalledWith('d1')
+  })
+
+  it('answers 500, not 404, when the car read fails', async () => {
+    const db = fakeDb()
+    db.from = () => ({ select: () => ({ eq: () => ({ single: async () => ({ data: null, error: { code: '57014', message: 'timeout' } }) }) }) })
+    createServerClient.mockReturnValue(db)
+    const res = await post(PDF)
+    expect(res.status).toBe(500)
+    expect(upload).not.toHaveBeenCalled()
+  })
+
+  it('answers 404 for a car that does not exist', async () => {
+    const db = fakeDb()
+    db.from = () => ({ select: () => ({ eq: () => ({ single: async () => ({ data: null, error: { code: 'PGRST116', message: '0 rows' } }) }) }) })
+    createServerClient.mockReturnValue(db)
+    const res = await post(PDF)
+    expect(res.status).toBe(404)
+  })
+})
