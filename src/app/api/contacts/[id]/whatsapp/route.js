@@ -37,6 +37,8 @@ import {
 } from '@/lib/radar-outreach'
 import { manualTakeoverPatch } from '@/lib/agent/core'
 import { getOrCreateContactConversation } from '@/lib/whatsapp-conversations'
+import { ownNumberOrRefusal } from '@/lib/whatsapp-own-number'
+import { whatsappErrorStatus } from '@/lib/whatsapp-number-missing'
 
 export const runtime = 'nodejs'
 
@@ -90,6 +92,13 @@ export async function POST(request, props) {
   if (!hasPermissionForLocation(user, contact.location_id, 'whatsapp') && !hasMobilePermissionForLocation(user, contact.location_id, 'whatsapp')) {
     return NextResponse.json({ success: false, error: 'Forbidden — WhatsApp not enabled at this location for your role' }, { status: 403 })
   }
+
+  // WACONFIGFALLBACK.1 — the contact's location must have a WhatsApp number of
+  // its own BEFORE a thread is opened: the send used to go out on the global
+  // env number (another studio's), and refusing only at the send would leave
+  // an empty thread in this location's inbox. 409 no number / 500 lookup.
+  const own = await ownNumberOrRefusal(contact.location_id, 'contact-whatsapp-send')
+  if (!own.ok) return NextResponse.json({ success: false, error: own.error }, { status: own.status })
 
   // CANCEL-FORM.4 — get-or-create moved to lib/whatsapp-conversations so the
   // cancellation-form send opens the same thread this composer does.
@@ -149,7 +158,9 @@ export async function POST(request, props) {
       sentTemplateName = template.name
     }
   } catch (e) {
-    return NextResponse.json({ success: false, error: e?.message || 'Failed to send WhatsApp message' }, { status: 502 })
+    // WACONFIGFALLBACK.1 — a number removed between the check above and the
+    // send is still a 409, not a Meta failure.
+    return NextResponse.json({ success: false, error: e?.message || 'Failed to send WhatsApp message' }, { status: whatsappErrorStatus(e, 502) })
   }
 
   // ── Log ─────────────────────────────────────────────────────────

@@ -39,6 +39,9 @@ vi.mock('@/lib/permissions', () => {
 })
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+// WACONFIGFALLBACK.1 — the route checks the location's OWN number before
+// opening a thread; the default is "has one" (the no-number case is at the end).
+vi.mock('@/lib/whatsapp-config', () => ({ getLocationWhatsAppNumberConfig: vi.fn(async () => ({ source: 'db', id: 'n1' })) }))
 
 // Stub the WhatsApp transport — no real Meta call, 24h window always open.
 vi.mock('@/lib/whatsapp', () => ({
@@ -175,5 +178,28 @@ describe('POST /api/contacts/[id]/whatsapp', () => {
     // … with sent_by = the operator's profiles.id uuid, never their name.
     expect(payload.sent_by).toBe(USER_ID)
     expect(payload.sent_by).not.toBe(STAFF.full_name)
+  })
+})
+
+// WACONFIGFALLBACK.1 — the contact's location has no WhatsApp number of its
+// own. The send used to go out on the global env number (another studio's);
+// now it is refused BEFORE a thread is opened, so no empty thread lands in
+// this location's inbox.
+describe('POST /api/contacts/[id]/whatsapp — no WhatsApp number at the contact location', () => {
+  it('409 with the shared message; no thread opened, nothing sent or logged', async () => {
+    const { getLocationWhatsAppNumberConfig } = await import('@/lib/whatsapp-config')
+    const { sendTextMessage } = await import('@/lib/whatsapp')
+    getLocationWhatsAppNumberConfig.mockResolvedValueOnce(null)
+    const insertSpy = echoInsert()
+    const db = makeDb(insertSpy)
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(postReq({ text: 'Hi' }), props)
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ success: false, error: 'No WhatsApp number is connected at this location.' })
+    expect(getLocationWhatsAppNumberConfig).toHaveBeenCalledWith(LOC_ID)
+    expect(db.from.mock.calls.map((c) => c[0])).not.toContain('whatsapp_conversations')
+    expect(sendTextMessage).not.toHaveBeenCalled()
+    expect(insertSpy).not.toHaveBeenCalled()
   })
 })

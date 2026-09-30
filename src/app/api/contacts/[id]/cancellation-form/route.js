@@ -39,6 +39,8 @@ import { sendTransactionalEmail } from '@/lib/postmark'
 import { sendCtaUrlMessage, sendTemplateMessage, isWindowOpen, buildTemplateComponents, renderTemplateBody } from '@/lib/whatsapp'
 import { URL_BUTTON_MAPPING_KEY } from '@/lib/whatsapp-template-buttons'
 import { getOrCreateContactConversation } from '@/lib/whatsapp-conversations'
+import { ownNumberOrRefusal } from '@/lib/whatsapp-own-number'
+import { whatsappErrorStatus } from '@/lib/whatsapp-number-missing'
 import { manualTakeoverPatch } from '@/lib/agent/core'
 import { issueLink, revokeLink, latestLinkForContact } from '@/lib/cancellation-form/links'
 import { resolveCancellationFormCopy } from '@/lib/cancellation-form/copy'
@@ -185,6 +187,11 @@ export async function POST(request, props) {
     if (!contact.wa_phone && !contact.phone) {
       return NextResponse.json({ success: false, error: 'Contact has no phone number on file' }, { status: 400 })
     }
+    // WACONFIGFALLBACK.1 — the contact's location must have a WhatsApp number
+    // of its own before a thread is opened or a link minted: the send used to
+    // go out on the global env number (another studio's). 409 / 500.
+    const own = await ownNumberOrRefusal(contact.location_id, 'cancel-form-send')
+    if (!own.ok) return NextResponse.json({ success: false, error: own.error }, { status: own.status })
     const opened = await getOrCreateContactConversation(db, contact)
     if (!opened.ok) return NextResponse.json({ success: false, error: opened.error }, { status: opened.status })
     conversation = opened.conversation
@@ -273,7 +280,7 @@ export async function POST(request, props) {
     }
   } catch (e) {
     await revokeLink(db, issued.linkId, e?.message || 'send failed')
-    return NextResponse.json({ success: false, error: e?.message || 'Failed to send the form link' }, { status: 502 })
+    return NextResponse.json({ success: false, error: e?.message || 'Failed to send the form link' }, { status: whatsappErrorStatus(e, 502) })
   }
 
   // Timeline activity — best-effort, the link is already delivered.

@@ -26,6 +26,9 @@ vi.mock('@/lib/permissions', () => {
   }
 })
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => dbMock) }))
+// WACONFIGFALLBACK.1 — the route checks the location's OWN number before
+// opening a thread; the default is "has one" (the no-number case is below).
+vi.mock('@/lib/whatsapp-config', () => ({ getLocationWhatsAppNumberConfig: vi.fn(async () => ({ source: 'db', id: 'n1' })) }))
 vi.mock('@/lib/app-url', () => ({ getAppUrl: () => 'https://crm.example' }))
 vi.mock('@/lib/cancellation-form/links', () => ({
   issueLink: vi.fn(), revokeLink: vi.fn(), latestLinkForContact: vi.fn(async () => null),
@@ -226,5 +229,29 @@ describe('POST whatsapp', () => {
     const res = await post({ channel: 'whatsapp' })
     expect(res.status).toBe(502)
     expect(revokeLink).toHaveBeenCalledWith(expect.anything(), 'l-1', expect.stringMatching(/meta 131/))
+  })
+})
+
+// WACONFIGFALLBACK.1 — no WhatsApp number at the contact's location: refused
+// before a thread is opened or a link minted (the send used to go out on the
+// global env number). Email is unaffected.
+describe('POST whatsapp — no WhatsApp number at the contact location', () => {
+  it('409 with the shared message; no thread, no link, nothing sent', async () => {
+    const { getLocationWhatsAppNumberConfig } = await import('@/lib/whatsapp-config')
+    getLocationWhatsAppNumberConfig.mockResolvedValueOnce(null)
+    const res = await post({ channel: 'whatsapp' })
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ success: false, error: 'No WhatsApp number is connected at this location.' })
+    expect(getOrCreateContactConversation).not.toHaveBeenCalled()
+    expect(issueLink).not.toHaveBeenCalled()
+    expect(sendCtaUrlMessage).not.toHaveBeenCalled()
+  })
+
+  it('email still sends at a location with no WhatsApp number (the check is WhatsApp-only)', async () => {
+    const { getLocationWhatsAppNumberConfig } = await import('@/lib/whatsapp-config')
+    getLocationWhatsAppNumberConfig.mockResolvedValue(null)
+    const res = await post({ channel: 'email' })
+    expect(res.status).toBe(200)
+    expect(getLocationWhatsAppNumberConfig).not.toHaveBeenCalled()
   })
 })
