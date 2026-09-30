@@ -13,6 +13,10 @@
 // the editor, so gating on the write requirement is the correct mirror
 // (never looser than the strictest endpoint it drives).
 //
+// MIAROLE.1 (C80, 30 Sep 2026) — the PUT is now owner-at-the-studio (or
+// master) only. Managers and head coaches keep this page as a read-only view:
+// the client renders every settings control disabled and no Save.
+//
 // Task 1 review disclosure: this IS a deliberate tightening, not a pure
 // mirror. Before this gate existed, a non-manager holder of the `settings`
 // permission (e.g. a permission-granted staff member) could open this page
@@ -26,6 +30,7 @@
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
 import { MANAGER_ROLES } from '@/lib/schemas'
+import { canEditMiaSettings } from '@/lib/agent/settings-access'
 import CustomerAgentClient from './CustomerAgentClient'
 
 export const dynamic = 'force-dynamic'
@@ -34,5 +39,7 @@ export default async function CustomerAgentSettingsPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
   if (!MANAGER_ROLES.includes(user.role)) redirect('/settings')
-  return <CustomerAgentClient />
+  // MIAROLE.1 (C80) — reading stays manager+; changing Mia's settings is an
+  // owner at this studio (or a master), the PUT's own predicate.
+  return <CustomerAgentClient canEdit={canEditMiaSettings(user, user.activeLocation?.id)} />
 }

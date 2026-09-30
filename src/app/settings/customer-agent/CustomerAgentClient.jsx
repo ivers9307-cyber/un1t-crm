@@ -40,7 +40,11 @@ function buildCancellationFormPayload(cf) {
   return out
 }
 
-export default function CustomerAgentClient() {
+// MIAROLE.1 (C80) — `canEdit` comes from the server page (canEditMiaSettings:
+// owner at the active studio, or master), the same predicate the PUT gates
+// on. Omitted, it fails closed: the settings render read-only, with no Save.
+// The knowledge editor below is outside that rule.
+export default function CustomerAgentClient({ canEdit = false } = {}) {
   const [settings, setSettings] = useState(null)
   const [location, setLocation] = useState(null)
   const [entries, setEntries] = useState([])
@@ -307,6 +311,15 @@ export default function CustomerAgentClient() {
         </Link>
       )}
 
+      {!canEdit && (
+        <p className="text-sm text-un1t-muted border border-un1t-border rounded-lg px-4 py-3 mb-6">
+          Only an owner can change these settings.
+        </p>
+      )}
+
+      {/* MIAROLE.1 — one disabled fieldset greys every settings control for a
+          non-owner; the Save buttons are not rendered for them at all. */}
+      <fieldset disabled={!canEdit} className="m-0 min-w-0 border-0 p-0">
       {/* ── Behaviour ─────────────────────────────────────── */}
       <section className="space-y-5 border border-un1t-border rounded-lg p-5 mb-6">
         <label className="flex items-center gap-3">
@@ -598,13 +611,15 @@ export default function CustomerAgentClient() {
         </div>
 
         {error && <div className="text-sm text-red-600">{error}</div>}
-        <div>
-          <button onClick={saveSettings} disabled={saving}
-            className="bg-un1t-text text-un1t-bg px-4 py-2 rounded-md text-sm font-medium disabled:opacity-50">
-            {saving ? 'Saving…' : 'Save settings'}
-          </button>
-          {savedAt && <span className="ml-3 text-sm text-green-600">Saved ✓</span>}
-        </div>
+        {canEdit && (
+          <div>
+            <button type="button" onClick={saveSettings} disabled={saving}
+              className="bg-un1t-text text-un1t-bg px-4 py-2 rounded-md text-sm font-medium disabled:opacity-50">
+              {saving ? 'Saving…' : 'Save settings'}
+            </button>
+            {savedAt && <span className="ml-3 text-sm text-green-600">Saved ✓</span>}
+          </div>
+        )}
       </section>
 
       {/* ── Membership cancellation form (CANCEL-FORM.2) ───── */}
@@ -805,13 +820,15 @@ export default function CustomerAgentClient() {
           </p>
         </div>
 
-        <div className="mt-5">
-          <button onClick={saveSettings} disabled={saving}
-            className="bg-un1t-text text-un1t-bg px-4 py-2 rounded-md text-sm font-medium disabled:opacity-50">
-            {saving ? 'Saving…' : 'Save settings'}
-          </button>
-          {savedAt && <span className="ml-3 text-sm text-green-600">Saved ✓</span>}
-        </div>
+        {canEdit && (
+          <div className="mt-5">
+            <button type="button" onClick={saveSettings} disabled={saving}
+              className="bg-un1t-text text-un1t-bg px-4 py-2 rounded-md text-sm font-medium disabled:opacity-50">
+              {saving ? 'Saving…' : 'Save settings'}
+            </button>
+            {savedAt && <span className="ml-3 text-sm text-green-600">Saved ✓</span>}
+          </div>
+        )}
       </section>
 
       {/* ── Proactive follow-ups (AGENT-FOLLOWUP.1) ───────── */}
@@ -949,6 +966,8 @@ export default function CustomerAgentClient() {
           Enable inline suggestions
         </label>
       </section>
+
+      </fieldset>
 
       {/* ── Knowledge ─────────────────────────────────────── */}
       <section className="border border-un1t-border rounded-lg p-5 mt-6">
