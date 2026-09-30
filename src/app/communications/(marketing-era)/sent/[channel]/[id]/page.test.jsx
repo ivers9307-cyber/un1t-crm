@@ -21,7 +21,7 @@ vi.mock('@/lib/auth', () => ({
   getCurrentUser: vi.fn(),
   assertLocationAccess: vi.fn(() => null),
 }))
-vi.mock('@/lib/permissions', () => ({ hasPermission: vi.fn(() => true) }))
+vi.mock('@/lib/permissions', () => ({ hasPermissionAtAnyLocation: vi.fn(() => true), hasPermissionForLocation: vi.fn(() => true) }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('next/navigation', () => ({
   redirect: vi.fn((url) => { throw new Error(`NEXT_REDIRECT:${url}`) }),
@@ -39,7 +39,7 @@ vi.mock('@/lib/campaign-display-stats', () => ({
 
 import SendDetailPage from './page.js'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 
 // Any builder method returns the chain; awaiting it, or calling
@@ -76,7 +76,8 @@ afterEach(cleanup)
 beforeEach(() => {
   vi.clearAllMocks()
   getCurrentUser.mockResolvedValue({ id: 'u1', role: 'owner', activeLocation: { id: 'loc-1' } })
-  hasPermission.mockReturnValue(true)
+  hasPermissionAtAnyLocation.mockReturnValue(true)
+  hasPermissionForLocation.mockReturnValue(true)
   assertLocationAccess.mockReturnValue(null)
   createServerClient.mockReturnValue(dbWith({
     whatsapp_broadcasts: { data: WA_ROW },
@@ -102,7 +103,13 @@ describe('/communications/sent/[channel]/[id] — routing', () => {
 describe('/communications/sent/[channel]/[id] — per-channel gates', () => {
   for (const [channel, id, permission] of [['whatsapp', 'b1', 'whatsapp'], ['email', 'c1', 'email']]) {
     it(`${channel}: bounces to the hub without the ${permission} permission`, async () => {
-      hasPermission.mockImplementation((_u, key) => key !== permission)
+      hasPermissionAtAnyLocation.mockImplementation((_u, key) => key !== permission)
+      await expect(SendDetailPage(args(channel, id))).rejects.toThrow(/^NEXT_REDIRECT:\/communications$/)
+    })
+
+    // PAGEGATES.1 — the decision is at the row's location.
+    it(`${channel}: bounces to the hub without the ${permission} permission at the row's location`, async () => {
+      hasPermissionForLocation.mockImplementation((_u, loc, key) => !(loc === 'loc-1' && key === permission))
       await expect(SendDetailPage(args(channel, id))).rejects.toThrow(/^NEXT_REDIRECT:\/communications$/)
     })
 

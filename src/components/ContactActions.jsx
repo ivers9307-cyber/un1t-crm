@@ -12,11 +12,19 @@ import SequencePicker from './SequencePicker'
 // Messaging (WhatsApp + SMS) moved to ContactComposer in
 // CONTACT-COMPOSER.1 — the unified, window-aware "Message this
 // customer" box — so it's no longer duplicated here.
-export default function ContactActions({ contactId, locationId }) {
+//
+// ROLEUI.2 — each button follows the rule of what it calls, judged at the
+// contact's location by the page (contactWorkGates in
+// src/lib/contact-page-gates.js): canNote → POST …/notes (`contacts`),
+// canTask → the activities insert (RLS: a member there), canSequence → the
+// sequence enrol (`email`). A missing flag hides the button.
+export default function ContactActions({ contactId, locationId, canNote = false, canTask = false, canSequence = false }) {
   const [showForm, setShowForm] = useState(null) // 'note' | 'activity' | 'sequence' | null
   const [saving, setSaving] = useState(false)
   const router = useRouter()
   const db = createBrowserClient()
+
+  if (!canNote && !canTask && !canSequence) return null
 
   async function addNote(e) {
     e.preventDefault()
@@ -59,18 +67,24 @@ export default function ContactActions({ contactId, locationId }) {
   return (
     <div className="relative">
       <div className="flex gap-2 flex-wrap">
-        <button onClick={() => setShowForm(showForm === 'note' ? null : 'note')}
-          className="text-xs px-2.5 py-1 rounded border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted flex items-center gap-1">
-          <Plus size={12} /> Note
-        </button>
-        <button onClick={() => setShowForm(showForm === 'activity' ? null : 'activity')}
-          className="text-xs px-2.5 py-1 rounded border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted flex items-center gap-1">
-          <Plus size={12} /> Activity
-        </button>
-        <button onClick={() => setShowForm(showForm === 'sequence' ? null : 'sequence')}
-          className="text-xs px-2.5 py-1 rounded border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted flex items-center gap-1">
-          <Mail size={12} /> Sequence
-        </button>
+        {canNote && (
+          <button onClick={() => setShowForm(showForm === 'note' ? null : 'note')}
+            className="text-xs px-2.5 py-1 rounded border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted flex items-center gap-1">
+            <Plus size={12} /> Note
+          </button>
+        )}
+        {canTask && (
+          <button onClick={() => setShowForm(showForm === 'activity' ? null : 'activity')}
+            className="text-xs px-2.5 py-1 rounded border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted flex items-center gap-1">
+            <Plus size={12} /> Activity
+          </button>
+        )}
+        {canSequence && (
+          <button onClick={() => setShowForm(showForm === 'sequence' ? null : 'sequence')}
+            className="text-xs px-2.5 py-1 rounded border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted flex items-center gap-1">
+            <Mail size={12} /> Sequence
+          </button>
+        )}
       </div>
 
       {showForm === 'note' && (

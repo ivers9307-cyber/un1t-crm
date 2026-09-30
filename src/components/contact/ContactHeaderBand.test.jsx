@@ -38,9 +38,33 @@ const actionsOf = (html) => {
   return m ? m[1].split(',') : null
 }
 
+// ROLEUI.2 — every gate on, so the Cold tables below test the board alone.
+const ALL = { canTask: true, canSequence: true, canCancelForm: true, canCold: true }
+
 const render = (props) => renderToStaticMarkup(
-  <ContactHeaderBand contact={CONTACT} metrics={METRICS} {...props} />,
+  <ContactHeaderBand contact={CONTACT} metrics={METRICS} actionGates={ALL} {...props} />,
 )
+
+// ROLEUI.2 — the kebab's Task / Sequence / cancellation form / Cold items had
+// no gate: each is offered only where its route (or, for Task, activities RLS)
+// would act at the contact's location. Message only deep-links to the
+// composer, which gates its own channels.
+describe('ContactHeaderBand — the kebab follows the routes it calls (ROLEUI.2)', () => {
+  it('no gates passed: Message only (fails closed)', () => {
+    expect(actionsOf(render({ actionGates: undefined }))).toEqual(['message'])
+  })
+
+  it('each item follows its own flag', () => {
+    expect(actionsOf(render({ actionGates: { canTask: true } }))).toEqual(['message', 'task'])
+    expect(actionsOf(render({ actionGates: { canSequence: true } }))).toEqual(['message', 'sequence'])
+    expect(actionsOf(render({ actionGates: { canCancelForm: true } }))).toEqual(['message', 'cancel_form'])
+    expect(actionsOf(render({ actionGates: { canCold: true } }))).toEqual(['message', 'cold'])
+  })
+
+  it('Cold stays off a manual board even when the caller may set it', () => {
+    expect(actionsOf(render({ manual: true, actionGates: { canCold: true } }))).toEqual(['message'])
+  })
+})
 
 describe('ContactHeaderBand — Cold on a derived board', () => {
   it('offers Cold when manual is false', () => {
