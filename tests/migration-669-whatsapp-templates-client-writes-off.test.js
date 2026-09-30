@@ -352,7 +352,7 @@ describe('after 669 — the catalog', () => {
   })
 
   it('exactly one SELECT policy per table, TO authenticated', async () => {
-    expect((await policies()).map(({ qual, ...p }) => p)).toEqual([
+    expect((await policies()).map(({ qual: _qual, ...p }) => p)).toEqual([
       { tablename: EV, policyname: 'whatsapp_template_events_select', permissive: 'PERMISSIVE', cmd: 'SELECT', roles: '{authenticated}' },
       { tablename: TPL, policyname: 'wa_tmpl_select', permissive: 'PERMISSIVE', cmd: 'SELECT', roles: '{authenticated}' },
     ])
