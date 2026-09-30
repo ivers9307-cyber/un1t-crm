@@ -22,6 +22,7 @@ import { logError, logWarn } from '@/lib/log'
 import { GLOFOX_SETTINGS_UNREADABLE } from '@/lib/glofox-settings-read'
 import { toMobileE164 } from '@/lib/phone-validate'
 import { recordErrorEvent } from '@/lib/error-events'
+import { dublinTodayStr } from '@/lib/dublin-time'
 
 // ─────────────────────────────────────────────────────────────
 // Signature verification (HMAC-SHA256 hex)
@@ -1429,12 +1430,15 @@ export async function purchaseGlofoxMembership(creds, userId, membershipId, plan
       // second trial. A 5xx is outcome_unknown instead (below), which
       // grantTrialBeforeBooking refuses to buy over unless credits show.
       retry: 'never',
-      // Declare the JSON body's content-type (as createBooking/register do).
-      // The trial purchase is the next call after register in the booking flow;
-      // the body is empty today, but set it so Glofox can't ignore a body we
-      // later add — the exact class of bug that broke registration.
+      // Declare the JSON body's content-type (as createBooking/register do),
+      // so Glofox can't ignore the body: the exact class of bug that broke
+      // registration.
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(opts.body || {}),
+      // TRIALPURCHASE.2: the v2.3.0 spec marks start_date required; it was
+      // sent as {}. The membership starts on the studio's today, so it is the
+      // Dublin calendar day (YYYY-MM-DD), never the UTC one. A caller's body
+      // is merged over it.
+      body: JSON.stringify({ start_date: dublinTodayStr(), ...(opts.body || {}) }),
     })
     let parsed
     try { parsed = await r.json() } catch { parsed = null }

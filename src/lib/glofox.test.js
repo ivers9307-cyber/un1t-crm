@@ -772,4 +772,27 @@ describe('TRIALGRANT.1 — a membership purchase is judged on its body', () => {
     const out = await purchaseGlofoxMembership(creds, 'u1', 'm1', 'p1')
     expect(out).toMatchObject({ ok: false, http_status: 0, error: 'socket hang up' })
   })
+
+  // TRIALPURCHASE.2 (b) — the v2.3.0 spec marks start_date required on the
+  // purchase body; it was sent as {}. The trial starts on the studio's today,
+  // so it is the DUBLIN calendar day: at 23:30 UTC in BST that is tomorrow.
+  it('sends start_date as the Dublin calendar day (YYYY-MM-DD), not the UTC one', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(new Date('2026-09-30T23:30:00Z'))
+      global.fetch.mockResolvedValueOnce(res(200, SUCCESS))
+      await purchaseGlofoxMembership(creds, 'u1', 'm1', 'p1')
+      const [, init] = global.fetch.mock.calls[0]
+      expect(JSON.parse(init.body)).toEqual({ start_date: '2026-10-01' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a caller body is merged over the start_date default', async () => {
+    global.fetch.mockResolvedValueOnce(res(200, SUCCESS))
+    await purchaseGlofoxMembership(creds, 'u1', 'm1', 'p1', { body: { start_date: '2026-11-02' } })
+    const [, init] = global.fetch.mock.calls[0]
+    expect(JSON.parse(init.body)).toEqual({ start_date: '2026-11-02' })
+  })
 })
