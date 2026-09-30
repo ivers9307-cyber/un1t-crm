@@ -357,7 +357,11 @@ export function sweepReopeners(sql, { exempt = null } = {}) {
 // migration from 680 on, on ANY table. Floor, not proof: a policy built with
 // EXECUTE format(...) is invisible (the live probe at the end of the sweep
 // is the proof).
-const NARROWING = /\b(auth_role|auth_is_owner|auth_is_manager|auth_is_active_staff|auth_contact_id|role|permissions?|has_\w*perm\w*)\b|auth\.uid\s*\(|\bfalse\b/i
+// A role or permission helper, whatever its suffix (_at, _or_manager,
+// _or_head_coach, _bridge …): auth_role, auth_is_{owner,manager,admin,
+// head_coach}*, auth_mobile_can, auth_can_*, auth_has_* (per-user grants).
+const ROLE_HELPER = /\bauth_(?:role|is_(?:owner|manager|admin|head_coach)\w*|mobile_can|can_\w+|has_\w+)\s*\(/i
+const NARROWING = new RegExp(`${ROLE_HELPER.source}|\\b(auth_contact_id|role|permissions?|has_\\w*perm\\w*)\\b|auth\\.uid\\s*\\(|\\bfalse\\b`, 'i')
 const CREATE_POLICY = /\bcreate\s+policy\s+("[^"]+"|\w+)\s+on\s+([\w."]+)([\s\S]*?)(?=;)/gi
 export function membershipOnlyWritePolicies(sql) {
   const code = sqlCode(sql)
