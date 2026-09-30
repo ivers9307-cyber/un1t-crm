@@ -6,6 +6,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn() }))
+// GATES-2 — the page's area gate (the old layout rule, now per page) is
+// covered by tests/communications-pages-gate.test.js; these role-only fixtures
+// carry no per-location permission data, so it passes here.
+vi.mock('@/lib/communications-access', () => ({
+  canUseCommunicationsHere: () => true,
+  canUseCommunicationsForRecord: () => true,
+}))
 vi.mock('@/components/WATemplateEditor', () => ({ default: () => null }))
 vi.mock('next/navigation', () => ({
   redirect: vi.fn((url) => {

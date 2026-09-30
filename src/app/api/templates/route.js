@@ -4,6 +4,15 @@ import { z } from 'zod'
 import { getCurrentUser, assertLocationAccess , getUserLocationIds} from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
+
+// GATES-2 — POST: `email` at the studio the new template is for (the rule of
+// /api/templates/[id] and /api/campaigns/[id]/send). Before, any member of the
+// studio passed. GET stays membership-only: it is the picker list (no
+// content) behind the race event and booking type forms, whose editors
+// (`races`, `bookings`) need not hold `email`.
+const emailForbidden = () => NextResponse.json(
+  { success: false, error: 'No email permission at this location' }, { status: 403 })
 
 const TemplateCreateSchema = z.object({
   name: z.string().min(1).max(200),
@@ -47,6 +56,7 @@ export async function GET(request) {
 export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (!hasPermissionAtAnyLocation(user, 'email')) return emailForbidden()
 
   const validation = await validateBody(request, TemplateCreateSchema)
   if (!validation.ok) return validation.response
@@ -54,6 +64,7 @@ export async function POST(request) {
   const locationId = body.location_id || user.activeLocation?.id
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
+  if (!hasPermissionForLocation(user, locationId, 'email')) return emailForbidden()
 
   const db = createServerClient()
   const { data, error } = await db.from('email_templates').insert({

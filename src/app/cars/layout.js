@@ -5,7 +5,7 @@
 
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation } from '@/lib/permissions'
 import CarTabs from '@/components/cars/CarTabs'
 import { staffTabMetadata } from '@/lib/staff-tab-title'
 
@@ -22,7 +22,10 @@ export async function generateMetadata() {
 export default async function CarsLayout({ children }) {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  if (!hasPermission(user, 'car_processing')) redirect('/')
+  // GATES-2 — coarse: `car_processing` at SOME studio. /cars/[id] judges the
+  // car's studio and the list pages (active, completed, reports) the active
+  // one; judging the active studio here bounced a car at another studio.
+  if (!hasPermissionAtAnyLocation(user, 'car_processing')) redirect('/')
 
   return (
     <div className="p-6 max-w-6xl mx-auto">

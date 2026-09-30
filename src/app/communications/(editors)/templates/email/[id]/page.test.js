@@ -70,10 +70,14 @@ function mockDb({ template = null } = {}) {
   }
 }
 
+// GATES-2 — the page now also asks `email` at the template's studio, so the
+// caller is an owner there (owners hold `email` by default).
 const user = {
   id: 'user-1',
-  locations: [{ id: 'loc-mine' }],
-  activeLocation: { id: 'loc-mine' },
+  role: 'owner',
+  locations: [{ id: 'loc-mine', role: 'owner', features: {} }],
+  assignmentsByLocation: { 'loc-mine': { role: 'owner', permissions: {} } },
+  activeLocation: { id: 'loc-mine', features: {} },
 }
 
 function props(id = 'tpl-1') {

@@ -10,6 +10,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getOwnerOrganizationIds } from '@/lib/auth'
+import { canManageContractsInOrg } from '@/lib/contract-gates'
 import { contractTemplateSchema } from '@/lib/schemas'
 import { validateBody } from '@/lib/validate'
 
@@ -61,7 +62,11 @@ export async function GET() {
 export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!isOwnerOrMaster(user)) {
+  // GATES-2 — the template is created in the ACTIVE org (below), so that is
+  // the org the caller must manage. isOwnerOrMaster let any org admin through
+  // (an admin of X created templates in Y, where they are a manager) and
+  // refused nobody the org check would have caught.
+  if (!canManageContractsInOrg(user, user.activeOrganization?.id || null)) {
     return NextResponse.json({ success: false, error: 'Master or owner only' }, { status: 403 })
   }
 
