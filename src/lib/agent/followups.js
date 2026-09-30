@@ -26,6 +26,7 @@ import { formatHistoryForClaude, parseAgentResponse, phoneMatchesAllowlist, isSk
 import { getLocationBranding } from '@/lib/location-branding'
 import { anthropicMessages } from '@/lib/anthropic'
 import { dublinTodayStr } from '@/lib/dublin-time'
+import { logError } from '@/lib/log'
 
 // MIA-SONNET5 — kept in step with the inbound reply path so a nudge sounds
 // like the same person who answers the thread.
@@ -206,31 +207,65 @@ const NUDGE_INSTRUCTION =
 
 // ── the runner (IO) ─────────────────────────────────────────────────
 
-async function lastInboundFacts(db, conversationId) {
-  const { data } = await db.from('whatsapp_messages')
-    .select('direction, source, body, created_at, message_type')
-    .eq('conversation_id', conversationId)
-    .order('created_at', { ascending: false })
-    .limit(15)
-  const rows = (data || []).slice().reverse()
+// CHECKINSTALL.1 — who a person is, in a WhatsApp thread. Operator send
+// routes stamp sent_by (the session's profile id); the studio phone's
+// WhatsApp Business app arrives as app_echo / history_sync; 'operator' is
+// allowed by the source CHECK (mig 259). Automations — booking confirmations,
+// sequence steps, broadcasts, end-of-trial, consent prompts — insert the column
+// default source='api' with NO sent_by, so they are not a person owning the
+// thread. Same line the live reply path draws (auto-reply.js whatsappAdapter
+// .isHumanOutbound, AGENT-REARM.2), plus the phone-app sources. Pure.
+// NOT yet used by either runner: the check-in rule switch is CHECKINSTALL.2
+// (Richard's call D1), so both runners still read humanSpokeAfterInbound.
+const PERSON_SOURCES = new Set(['operator', 'app_echo', 'history_sync'])
+export function isStaffOutbound(m) {
+  if (!m || m.direction !== 'outbound' || m.source === 'agent') return false
+  return PERSON_SOURCES.has(m.source) || m.sent_by != null
+}
+
+/**
+ * Oldest-first rows → what happened since the customer's last message. Pure.
+ * humanSpokeAfterInbound — ANY non-agent outbound (the rule both runners use,
+ *   unchanged). staffSpokeAfterInbound — a PERSON (isStaffOutbound).
+ */
+export function summariseThread(rows) {
   let lastInboundAtMs = null
   let agentSpokeAfterInbound = false
   let humanSpokeAfterInbound = false
+  let staffSpokeAfterInbound = false
   const agentTexts = []
-  for (const m of rows) {
+  for (const m of rows || []) {
     if (m.direction === 'inbound') {
       lastInboundAtMs = new Date(m.created_at).getTime()
       agentSpokeAfterInbound = false
       humanSpokeAfterInbound = false
+      staffSpokeAfterInbound = false
     } else if (m.source === 'agent') {
       agentSpokeAfterInbound = true
       if (m.body) agentTexts.push(m.body)
     } else {
       // operator / api sends after the inbound = a human owns the thread
       humanSpokeAfterInbound = true
+      if (isStaffOutbound(m)) staffSpokeAfterInbound = true
     }
   }
-  return { rows, lastInboundAtMs, agentSpokeAfterInbound, humanSpokeAfterInbound, agentTexts }
+  return { lastInboundAtMs, agentSpokeAfterInbound, humanSpokeAfterInbound, staffSpokeAfterInbound, agentTexts }
+}
+
+// CHECKINSTALL.1 — a failed read is never "nobody spoke": callers skip on
+// readFailed and the next tick retries (both runners ride a 15-minute cron).
+async function lastInboundFacts(db, conversationId) {
+  const { data, error } = await db.from('whatsapp_messages')
+    .select('direction, source, sent_by, body, created_at, message_type')
+    .eq('conversation_id', conversationId)
+    .order('created_at', { ascending: false })
+    .limit(15)
+  if (error) {
+    logError('agent-followups', 'thread read failed; skipped this tick', { conversationId, err: error })
+    return { readFailed: true, rows: [], ...summariseThread([]) }
+  }
+  const rows = (data || []).slice().reverse()
+  return { readFailed: false, rows, ...summariseThread(rows) }
 }
 
 async function intentFlags(db, conversationId, lastInboundAtMs) {
@@ -493,6 +528,7 @@ export async function runAgentFollowups(db, { nowMs = Date.now() } = {}) {
         }
 
         const facts = await lastInboundFacts(db, c.id)
+        if (facts.readFailed) { results.skipped++; skipLog(c.id, 'thread_read_failed'); continue }
         const flags = await intentFlags(db, c.id, facts.lastInboundAtMs)
         const decision = classifyFollowupCandidate({
           stage: c.agent_followup_stage,
