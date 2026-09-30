@@ -200,7 +200,7 @@ export const EXPECTED = {
   // ── Templates ──
   'POST whatsapp/templates/[id]/resubmit/route.js': ['manager', 'Edits a rejected/paused template at Meta.'],
   'POST whatsapp/templates/route.js': ['manager', 'WATPLROLE.1: creates a template and submits it to Meta; MANAGER_ROLES at the location created at (the resubmit rule).'],
-  'PUT whatsapp/templates/[id]/route.js': ['manager', 'WATPLROLE.1: status, components, header media, name and category drive what is sent, so MANAGER_ROLES at the template; a display_group-only edit (picker grouping) stays membership.'],
+  'PUT whatsapp/templates/[id]/route.js': ['manager', 'WATPLROLE.1: components, header media, name and category drive what is sent, so MANAGER_ROLES at the template; a display_group-only edit (picker grouping) stays membership. WATPLPUT.1: Meta-owned fields (status, rejection_reason, quality_rating, meta_template_id) are refused (400) and a submitted template\'s content is locked (409), except an APPROVED template\'s header image, which can be replaced but not removed.'],
   'DELETE whatsapp/templates/[id]/route.js': ['manager', 'WATPLROLE.1: deletes the template AT META by name; MANAGER_ROLES at the template (the resubmit rule).'],
   'POST whatsapp/templates/upload-media/route.js': ['membership', 'Uploads header media for a template draft (no Meta state).'],
   'POST whatsapp/templates/upload-media/sign/route.js': ['membership', 'Signs a storage upload for template media (no Meta state).'],

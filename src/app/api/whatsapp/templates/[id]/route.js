@@ -6,13 +6,21 @@ import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation } from '@/
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { validateBody } from '@/lib/validate'
 import { ownNumberOrRefusal } from '@/lib/whatsapp-own-number'
+import { META_OWNED_FIELDS, HEADER_MEDIA_FIELDS, lockedFieldsIn } from '@/lib/whatsapp-template-fields'
+
+// WATPLPUT.1 — Meta's fields are never written here, in any state: the
+// webhook, ?sync=true and resubmit own them. Present in the body = 400 naming
+// the field, instead of the silent drop an unknown key gets.
+const SET_BY_META = 'is set by Meta (the template webhook, a refresh from Meta, or Edit & resubmit), never by this route'
+const metaOwned = Object.fromEntries(META_OWNED_FIELDS.map((k) => [k, z.never({ error: SET_BY_META }).optional()]))
+const HEADER_NOT_REMOVABLE = "an approved template's header image can be replaced, not removed: every send attaches it"
 
 const TemplateUpdateSchema = z.object({
   name: z.string().max(200).optional(),
   category: z.enum(['MARKETING', 'UTILITY', 'AUTHENTICATION']).optional(),
   components: z.array(z.unknown()).optional(),
   example_values: z.unknown().optional(),
-  status: z.enum(['PENDING', 'APPROVED', 'REJECTED', 'PAUSED']).optional(),
+  ...metaOwned,
   // Operator-defined picker grouping (mig 450) — local-only, editable at
   // any status (unlike the Meta-owned fields, which lock after submit).
   display_group: z.string().max(100).nullable().optional(),
@@ -26,9 +34,10 @@ const TemplateUpdateSchema = z.object({
   header_media_path: z.string().max(500).nullable().optional(),
 })
 
-async function loadTemplateLocation(db, id) {
-  const { data } = await db.from('whatsapp_templates').select('location_id').eq('id', id).single()
-  return data?.location_id
+// The row's location (the gates) and its state (the WATPLPUT.1 lock).
+async function loadTemplateState(db, id) {
+  const { data } = await db.from('whatsapp_templates').select('location_id, status, meta_template_id').eq('id', id).single()
+  return data || null
 }
 
 // GET /api/whatsapp/templates/[id]
@@ -59,14 +68,17 @@ export async function GET(request, props) {
 
 // PUT /api/whatsapp/templates/[id] — update local record. A display_group-only
 // edit is open to members; any other field needs MANAGER_ROLES at the
-// template's location (WATPLROLE.1).
+// template's location (WATPLROLE.1). Meta's fields are refused in every state
+// and a submitted template's content is locked, except an APPROVED template's
+// header image, which can be replaced (WATPLPUT.1): 400 → 403 → 409.
 export async function PUT(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
   const db = createServerClient()
-  const loc = await loadTemplateLocation(db, params.id)
+  const row = await loadTemplateState(db, params.id)
+  const loc = row?.location_id
   if (!loc) return NextResponse.json({ success: false, error: 'Template not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, loc)
   if (guard) return guard
@@ -74,7 +86,7 @@ export async function PUT(request, props) {
   const validation = await validateBody(request, TemplateUpdateSchema)
   if (!validation.ok) return validation.response
   const updates = { ...validation.data }
-  // WATPLROLE.1 — status, components, header media, name and category drive
+  // WATPLROLE.1 — components, header media, name and category drive
   // what a send uses (the header URL is the media customers receive), so
   // they take the resubmit rule: MANAGER_ROLES AT the template's location.
   // display_group alone is the picker grouping (never sent to Meta) that the
@@ -82,6 +94,25 @@ export async function PUT(request, props) {
   const groupOnly = Object.keys(updates).every((k) => k === 'display_group')
   if (!groupOnly && !hasRoleAtLocation(user, loc, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  }
+  // WATPLPUT.1 — once Meta has the template, its name, category and content
+  // change only through Edit & resubmit (REJECTED/PAUSED) or a new template.
+  // Saving them here made the row disagree with what Meta approved. The one
+  // exception: an APPROVED template's header image is attached at send time
+  // (a link, no review), so it can be replaced here, never removed.
+  const locked = lockedFieldsIn(updates, row)
+  if (locked.length) {
+    const headerOnly = locked.every((k) => HEADER_MEDIA_FIELDS.includes(k)) && row.status === 'APPROVED'
+    return NextResponse.json({
+      success: false,
+      error: headerOnly
+        ? `This template is with Meta (${row.status}): ${HEADER_NOT_REMOVABLE}.`
+        : `This template is with Meta (${row.status}), so ${locked.join(', ')} cannot change here. Use Edit & resubmit on a rejected or paused template, or create a new one.`,
+      issues: locked.map((path) => ({
+        path,
+        message: HEADER_MEDIA_FIELDS.includes(path) && row.status === 'APPROVED' ? HEADER_NOT_REMOVABLE : 'locked once the template is submitted to Meta',
+      })),
+    }, { status: 409 })
   }
   if ('display_group' in updates) updates.display_group = updates.display_group?.trim() || null
 
