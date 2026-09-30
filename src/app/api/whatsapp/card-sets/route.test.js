@@ -16,9 +16,12 @@ import { GET, PUT } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { fakeLocationsDb, BOOM } from '@/lib/location-settings.test-helpers'
+import { LOC_B, person, ownerAtTargetCases } from '../../../../../tests/helpers/owner-at-location-callers.js'
 
 const LOC = 'a0000000-0000-4000-8000-000000000001'
-const USER = { id: 'u1', role: 'manager', locations: [{ id: LOC }], activeLocation: { id: LOC } }
+// WAROLE.1 — the PUT is master/owner at the location written, so the default
+// caller is an OWNER there (it was a manager, which the PUT now refuses).
+const USER = person({ [LOC]: 'owner' }, LOC)
 const SET = {
   id: 'b0000000-0000-4000-8000-000000000001', name: 'Intro',
   cards: [{ image_url: 'https://example.test/a.jpg', title: 'A' }, { image_url: 'https://example.test/b.jpg', title: 'B' }],
@@ -67,5 +70,56 @@ describe('PUT — never wipes locations.settings', () => {
     const res = await PUT(put([SET]))
     expect(res.status).toBe(200)
     expect(db.writes[0].patch.settings).toEqual({ glofox: { branch_id: 'b1' }, wa_card_sets: [SET] })
+  })
+})
+
+// WAROLE.1 — the PUT decided on membership alone, so any staff member at a
+// studio could replace the card sets its staff and Mia send. It is now the
+// rule of the settings page the editor lives on (and of the number routes on
+// the same tab): master, or owner AT the location written. The GET stays
+// membership: the inbox composer and the phone read it to SEND a set.
+const REFUSAL = {
+  forbidden: { status: 403, body: { success: false, error: 'Master or owner role required.' } },
+  hidden: { status: 404, body: { success: false, error: 'Not found' } },
+}
+const putAt = (loc) => new Request('http://localhost/api/whatsapp/card-sets', {
+  method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location_id: loc, sets: [SET] }),
+})
+
+describe('PUT — WAROLE.1: master or owner AT the location written', () => {
+  it.each(ownerAtTargetCases())('%s', async (_label, caller, outcome) => {
+    getCurrentUser.mockResolvedValue(caller)
+    const db = fakeLocationsDb({ reads: { data: { settings: {} }, error: null } })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(putAt(LOC_B))
+    const body = await res.json()
+    if (outcome === 'pass') {
+      expect(res.status).toBe(200)
+      expect(db.writes).toHaveLength(1)
+      expect(db.writes[0].patch.settings.wa_card_sets).toEqual([SET])
+      return
+    }
+    expect({ status: res.status, body }).toEqual(REFUSAL[outcome])
+    expect(createServerClient).not.toHaveBeenCalled()
+    expect(db.writes).toEqual([])
+  })
+
+  it('a manager, head coach or staff member AT the location is refused (403), nothing written', async () => {
+    for (const role of ['manager', 'head_coach', 'staff']) {
+      getCurrentUser.mockResolvedValue(person({ [LOC_B]: role }, LOC_B))
+      const db = fakeLocationsDb({ reads: { data: { settings: {} }, error: null } })
+      createServerClient.mockReturnValue(db)
+      const res = await PUT(putAt(LOC_B))
+      expect([role, res.status, await res.json()]).toEqual([role, 403, REFUSAL.forbidden.body])
+      expect(db.writes).toEqual([])
+    }
+  })
+
+  it('GET is unchanged: plain staff at the location still list the sets (the composer sends them)', async () => {
+    getCurrentUser.mockResolvedValue(person({ [LOC_B]: 'staff' }, LOC_B))
+    createServerClient.mockReturnValue(fakeLocationsDb({ reads: { data: { settings: { wa_card_sets: [SET] } }, error: null } }))
+    const res = await GET(new Request(`http://localhost/api/whatsapp/card-sets?location_id=${LOC_B}`))
+    expect(res.status).toBe(200)
+    expect((await res.json()).sets).toEqual([SET])
   })
 })
