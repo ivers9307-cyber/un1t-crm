@@ -3333,6 +3333,44 @@ registry.registerPath({
   },
 })
 
+// TVUPLOAD.1 (C93) — the phone's TV image upload, direct to Storage.
+const tvErr = (description) => ({ description, content: { 'application/json': { schema: ErrorResponse } } })
+const TvUploadKind = z.enum(['content', 'template'])
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/admin/tv-displays/upload/sign',
+  tags: ['TV displays'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Sign a direct-to-storage upload for a TV image',
+  description: "Step 1 of 2 (TVUPLOAD.1). Checks the declared type and size against the tv-content bucket's limits (src/lib/tv-media.js), mints <location>/<uuid>.<ext> (a push image) or <location>/templates/<uuid>.<ext> (a template base image) and returns a signed-upload token; the phone uploads the bytes straight to storage. tv_displays (web or mobile) at location_id (else the active studio), after membership.",
+  request: { body: { content: { 'application/json': { schema: z.object({ kind: TvUploadKind.default('content'), location_id: uuidLike.optional(), file_name: z.string().max(300).optional(), mime: z.string().min(1).max(100), size: z.number().int().positive() }).openapi('TvUploadSign') } } } },
+  responses: {
+    200: { description: 'Upload path and token', content: { 'application/json': { schema: z.object({ success: z.literal(true), path: z.string(), token: z.string() }) } } },
+    400: tvErr('Validation failed, no location, or the image breaks the type/size limits'),
+    401: tvErr('Unauthorized'),
+    403: tvErr('Not a member of the location, or no tv_displays permission there'),
+    500: tvErr('The signed upload URL could not be created'),
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/admin/tv-displays/upload/finalise',
+  tags: ['TV displays'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Confirm a TV image uploaded against a signed slot',
+  description: 'Step 2 of 2 (TVUPLOAD.1). The path must be a slot minted for this location and kind; the size and type are read back from storage and checked against the bucket limits (an object that breaks them is removed). Returns the path to store as tv_content.source_ref or tv_templates.base_image_path. Same gate as the sign step.',
+  request: { body: { content: { 'application/json': { schema: z.object({ kind: TvUploadKind.default('content'), location_id: uuidLike.optional(), path: z.string().min(1).max(500) }).openapi('TvUploadFinalise') } } } },
+  responses: {
+    200: { description: 'Stored and within the limits', content: { 'application/json': { schema: z.object({ success: z.literal(true), path: z.string() }) } } },
+    400: tvErr('Validation failed, a path not minted for this location and kind, an upload that never arrived, or a stored image that breaks the limits'),
+    401: tvErr('Unauthorized'),
+    403: tvErr('Not a member of the location, or no tv_displays permission there'),
+    500: tvErr('Storage could not be read'),
+  },
+})
+
 registry.registerPath({
   method: 'post',
   path: '/api/whatsapp/templates/upload-media',

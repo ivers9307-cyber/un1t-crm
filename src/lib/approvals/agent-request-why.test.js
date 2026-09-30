@@ -75,6 +75,10 @@ describe('customerWords', () => {
 import { failureExplanation } from './agent-request-why'
 
 describe('failureExplanation', () => {
+  it('is the shared definition the phone uses too (C85 c)', async () => {
+    const shared = await import('@shared/agent-request-failure')
+    expect(failureExplanation).toBe(shared.failureExplanation)
+  })
   it('explains the no-credits Glofox rejection with a fix instruction', () => {
     const out = failureExplanation({ status: 'failed', details: { result: { ok: false, message_code: 'YOU_HAVE_NO_CREDITS_LEFT' } } })
     expect(out).toMatch(/grant a credit/i)

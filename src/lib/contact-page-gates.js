@@ -8,7 +8,7 @@
 // active studio and off at the contact's would have had that contact's
 // consultations, goals, photos and scans loaded into the page. Every decision
 // here is made at the contact's location instead.
-import { hasPermission, hasPermissionForLocation, hasMobilePermissionForLocation } from './permissions'
+import { hasPermissionForLocation, hasMobilePermissionForLocation } from './permissions'
 import { hasRoleAtLocation } from './role-at-location'
 import { ADMIN_ROLES, MANAGER_ROLES } from './schemas'
 
@@ -206,17 +206,13 @@ export function canLinkContacts(user, locationId) {
 }
 
 /**
- * POST /api/whatsapp/conversations/start. That route still judges `whatsapp`
- * at the ACTIVE studio (requireInboxPermission; moving it belongs to the inbox
- * follow-up, C37 INBOXLOC.1) and membership at the contact. The button shows
- * only where the route acts AND the contact's studio grants whatsapp, so it
- * never offers what the route refuses nor more than the contact's studio
- * allows. When the route moves, drop the hasPermission half.
+ * POST /api/whatsapp/conversations/start. Since INBOXLOC.1 (C37) the route
+ * judges `whatsapp` (web OR mobile) AT the contact's studio
+ * (requireWhatsAppInboxAt), after membership there, like every other
+ * WhatsApp action on a contact: contactChannelFlags is that rule.
  */
 export function canStartWhatsAppThread(user, locationId) {
-  return isMemberOfContactStudio(user, locationId)
-    && hasPermissionForLocation(user, locationId, 'whatsapp')
-    && hasPermission(user, 'whatsapp')
+  return isMemberOfContactStudio(user, locationId) && contactChannelFlags(user, locationId).whatsapp
 }
 
 /**

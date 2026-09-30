@@ -1,13 +1,14 @@
 // TVBUCKET.1 guard (mig 671). The public 'tv-content' storage bucket is
-// written only by the service role (POST /api/admin/tv-displays/upload); no
-// client policy admits it; and its size/MIME limits match src/lib/tv-media.js,
+// written only by the service role (POST /api/admin/tv-displays/upload) and by
+// a signed upload against a slot a service-role route minted (…/upload/sign,
+// TVUPLOAD.1); no client policy admits it; and its size/MIME limits match src/lib/tv-media.js,
 // the list the upload route validates against. Pinned here:
 //
 //  1. Browser and phone code calls nothing on `.storage.from('tv-content')`
-//     but getPublicUrl (the phone's tvImageUrl) and uploadToSignedUrl (none
-//     today; a server-minted token would authorise it, and the Storage API
-//     runs it as superuser, so it stays allowed for a future signed-upload
-//     move). upload, update, remove, move, copy, list, createSignedUploadUrl,
+//     but getPublicUrl (the phone's tvImageUrl) and uploadToSignedUrl (the
+//     phone's uploadTvImage since TVUPLOAD.1: a token minted by the
+//     service-role /api/admin/tv-displays/upload/sign authorises it, and the
+//     Storage API runs it as superuser within the bucket's limits). upload, update, remove, move, copy, list, createSignedUploadUrl,
 //     download… from a session are refused after 671 (or, for reads, list
 //     object names that keep the public URLs unguessable). Every mention of
 //     the bucket name in client code sits inside one of those two calls, a
@@ -453,7 +454,8 @@ describe('client code never writes the tv-content bucket (TVBUCKET.1, mig 671)',
     expect(names).not.toContain(UPLOAD_ROUTE)
     expect(names).not.toContain('src/app/api/public/tv/[token]/content/route.js')
     const seen = clientFiles().flatMap((f) => bucketCallsIn(codeOfFile(f)).map((m) => `${rel(f)}: ${m}`))
-    expect(seen).toEqual(['mobile/lib/tv-api.js: getPublicUrl'])
+    // TVUPLOAD.1 (C93) — the phone uploads TV images with a signed-upload token.
+    expect(seen).toEqual(['mobile/lib/tv-api.js: getPublicUrl', 'mobile/lib/tv-api.js: uploadToSignedUrl'])
     // TemplateEditor.jsx's bucketPublicUrl builds the public read path by hand.
     expect(codeOfFile(path.join(ROOT, 'src/app/(operations)/tv-displays/TemplateEditor.jsx')))
       .toMatch(/\/storage\/v1\/object\/public\/tv-content\//)
