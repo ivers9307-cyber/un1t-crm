@@ -17,8 +17,10 @@
 //     no column-list INSERT/UPDATE/REFERENCES); any client grant ON ALL
 //     TABLES IN SCHEMA public; any GRANT <role> TO a client role; a policy on
 //     either table that is not FOR SELECT (no FOR means ALL); DISABLE ROW
-//     LEVEL SECURITY or OWNER TO a client role on either; a CREATE TABLE or
-//     RENAME TO either name (the default ACL re-grants ALL). A GRANT run from
+//     LEVEL SECURITY or OWNER TO a client role on either; a CREATE TABLE,
+//     CREATE VIEW or RENAME TO either name (the default ACL re-grants ALL);
+//     any non-temp view (plain, materialized or recursive, security_invoker
+//     or not) whose definition names either table. A GRANT run from
 //     EXECUTE '…' or $q$…$q$ counts. The one exemption is a rollback
 //     migration named `<NNN>_shiftclientwrite1_rollback.sql`.
 //
@@ -290,6 +292,26 @@ export function shiftWriteReopeners(sql) {
   }
   const createRe = /\bcreate\s+(?:(?:global|local)\s+)?(?:temp(?:orary)?\s+|unlogged\s+)?table\s+(?:if\s+not\s+exists\s+)?(?:"?public"?\s*\.\s*)?"?([a-z_][a-z0-9_]*)"?(?![a-z0-9_$."])/gi
   for (const m of code.matchAll(createRe)) if (TABLES.includes(m[1].toLowerCase())) hits.push(m[0].trim())
+  // Views (mig 656's shapes, widened). A view created under either name, or
+  // renamed to it, gets the default ACL. A view OVER either table is flagged
+  // whatever its options: it is owned by postgres and Supabase's default
+  // privileges give authenticated ALL on it, so a simple one is
+  // auto-updatable and reads and writes the table as its owner, past RLS,
+  // mig 646's column list and 676's REVOKE (a materialized one still leaks
+  // withheld columns). security_invoker = on would make the base-table
+  // checks run as the caller, but proving that plus "no write grant on the
+  // view" from migration text (default privileges, later files) is not a
+  // floor this scan can hold, so every such view is a stop-and-look. A TEMP
+  // view is session-local and never reaches PostgREST.
+  const viewRe = /\bcreate\s+(?:or\s+replace\s+)?(temp(?:orary)?\s+)?(?:(?:materialized|recursive)\s+)*view\s+(?:if\s+not\s+exists\s+)?((?:"?[a-z_][a-z0-9_]*"?\s*\.\s*)?"?[a-z_][a-z0-9_]*"?)([^;]*)/gi
+  const namesShiftTable = /(?<![a-z0-9_$".])(?:"?public"?\s*\.\s*)?"?(?:shift_blocks|shift_assignments)"?(?![a-z0-9_$])/i
+  for (const m of code.matchAll(viewRe)) {
+    if (m[1]) continue
+    const name = m[2].replace(/["\s]/g, '').toLowerCase().replace(/^public\./, '')
+    if (TABLES.includes(name) || namesShiftTable.test(m[3])) hits.push(m[0].trim())
+  }
+  const alterViewRe = /\balter\s+(?:materialized\s+)?view\s+[^;]*?\brename\s+to\s+"?([a-z_][a-z0-9_]*)"?(?![a-z0-9_$])/gi
+  for (const m of code.matchAll(alterViewRe)) if (TABLES.includes(m[1].toLowerCase())) hits.push(m[0].trim())
   return hits
 }
 
@@ -343,6 +365,19 @@ describe('later migrations keep the shift tables write-closed (SHIFTCLIENTWRITE.
     'ALTER TABLE public.shift_assignments OWNER TO authenticated;',
     'ALTER TABLE public.shift_blocks_new RENAME TO shift_blocks;',
     'CREATE TABLE IF NOT EXISTS public.shift_assignments (id uuid);',
+    // A view under either name, or renamed to it, gets the default ACL (ALL).
+    'CREATE VIEW public.shift_blocks AS SELECT 1 AS id;',
+    'CREATE OR REPLACE VIEW "public"."shift_assignments" AS SELECT 1 AS id;',
+    'ALTER VIEW public.my_shifts RENAME TO shift_assignments;',
+    'ALTER MATERIALIZED VIEW IF EXISTS public.my_shifts RENAME TO "shift_blocks";',
+    // A view over either table: postgres-owned, default ALL to authenticated,
+    // auto-updatable, so it reads and writes past RLS, 646 and 676.
+    'CREATE VIEW public.my_shifts AS SELECT id, arrived_at FROM public.shift_assignments;',
+    'CREATE OR REPLACE VIEW public.my_shifts WITH (security_invoker = on) AS SELECT a.id FROM public.shift_blocks b JOIN shift_assignments a ON a.block_id = b.id;',
+    'CREATE MATERIALIZED VIEW public.roster_mv AS SELECT * FROM "public"."shift_blocks";',
+    'CREATE VIEW public.v AS SELECT r.id FROM public.rosters r, public.shift_blocks b WHERE b.roster_id = r.id;',
+    'CREATE VIEW public.v AS SELECT id FROM public.rosters WHERE id IN (SELECT roster_id FROM shift_blocks);',
+    'create recursive view public.v (id) as select id from public.shift_assignments;',
     // The rollback record reopens the writes: that is why it needs the name exemption.
     'GRANT INSERT, UPDATE, DELETE ON public.shift_blocks, public.shift_assignments TO authenticated;\nCREATE POLICY "shift_blocks_ins" ON public.shift_blocks FOR INSERT TO authenticated WITH CHECK (true);',
   ])('the detector flags %s', (sql) => {
@@ -366,6 +401,13 @@ describe('later migrations keep the shift tables write-closed (SHIFTCLIENTWRITE.
     'ALTER TABLE public.shift_blocks ADD COLUMN colour text;',
     'ALTER TABLE public.shift_blocks RENAME TO shift_blocks_old;',
     'CREATE TABLE public.shift_blocks_archive (id uuid);',
+    'CREATE VIEW public.shift_blocks_summary AS SELECT 1 AS n;',
+    'CREATE VIEW public.v AS SELECT * FROM public.shift_blocks_archive;',
+    'CREATE VIEW public.v AS SELECT id, shift_blocks_count FROM public.rosters;',
+    'CREATE VIEW public.v AS SELECT * FROM public.shift_offers;',
+    'ALTER VIEW public.shift_blocks_v RENAME TO shift_blocks_old;',
+    'CREATE TEMP VIEW t AS SELECT * FROM public.shift_blocks;',
+    'DROP VIEW IF EXISTS public.my_shifts;',
     'CREATE INDEX ON public.shift_assignments (block_id);',
     '-- GRANT UPDATE ON public.shift_assignments TO authenticated;',
     '/* GRANT ALL ON public.shift_blocks TO anon; */',
