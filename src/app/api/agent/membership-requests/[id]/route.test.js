@@ -58,13 +58,21 @@ const ROW = {
 // final outcome update. Every update patch is recorded for assertions.
 // MIA-BOARD.2 — parameterised so the past-start guard tests can vary
 // details.starts_at without mutating the shared ROW.
-function makeDbFor(row, updates) {
+// TRIALPURCHASE.2 — `lists` answers an AWAITED list read per table (the trial
+// grant's reads of other cards and of the queue row); empty by default.
+function makeDbFor(row, updates, lists = {}) {
   return {
     from(table) {
       let patch = null
       const b = {
         select: () => b,
         eq: () => b,
+        neq: () => b,
+        contains: () => b,
+        limit: () => b,
+        then(resolve, reject) {
+          return Promise.resolve({ data: lists[table] || [], error: null }).then(resolve, reject)
+        },
         update(p) { patch = p; updates.push({ table, patch: p }); return b },
         async maybeSingle() {
           if (patch) return { data: { id: row.id }, error: null } // claim succeeded
@@ -554,6 +562,38 @@ describe('PATCH class_booking approval — the trial grant is judged (TRIALGRANT
     expect(failureExplanation({ status: 'failed', details: final.details })).toMatch(/PURCHASE_NOT_ALLOWED/)
   })
 
+  // TRIALPURCHASE.2 (d) — the same member's trial was already bought on
+  // ANOTHER card (a second class, approved later): no second trial, no
+  // booking, no customer message; the card fails with its own reason.
+  it('another card already granted this member a trial → failed TRIAL_ALREADY_GRANTED, nothing bought or booked', async () => {
+    const otherCard = { id: 'r0', details: { trial_grant: { ok: true, at: '2026-08-23T09:00:00.000Z', glofox_member_id: 'gm1', invoice_id: 'inv-0' } } }
+    db = makeDbFor(grantRow(), updates, { agent_membership_requests: [otherCard] })
+
+    const json = await (await approve()).json()
+
+    expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
+    expect(createBooking).not.toHaveBeenCalled()
+    expect(sendAgentThreadMessage).not.toHaveBeenCalled()
+    expect(json.executed).toMatchObject({ ok: false, message_code: 'TRIAL_ALREADY_GRANTED', prior_request_id: 'r0' })
+    const final = updates.at(-1).patch
+    expect(final.status).toBe('failed')
+    expect(final.details.trial_grant).toMatchObject({ ok: false, code: 'TRIAL_ALREADY_GRANTED', glofox_member_id: 'gm1' })
+    expect(updates.find((u) => u.table === 'class_booking_requests').patch).toEqual({ status: 'failed', last_error: 'TRIAL_ALREADY_GRANTED' })
+    expect(failureExplanation({ status: 'failed', details: final.details })).toMatch(/earlier approval/i)
+  })
+
+  // TRIALPURCHASE.2 (a) — a card with no funnel stamp buys the funnel's trial
+  // from the queue row that points at it, not the location default.
+  it('a card with no trial stamp buys the funnel trial named on its queue row', async () => {
+    createBooking.mockResolvedValueOnce({ ok: true, status: 200, body: { success: true, Booking: { _id: 'gfb-8' } } })
+    db = makeDbFor(grantRow(), updates, { class_booking_requests: [{ trial_membership_id: 'tm-funnel', trial_plan_code: 'tp-funnel' }] })
+
+    await approve()
+
+    expect(purchaseGlofoxMembership).toHaveBeenCalledWith(expect.anything(), 'gm1', 'tm-funnel', 'tp-funnel')
+    expect(createBooking).toHaveBeenCalledTimes(1)
+  })
+
   it('purchase granted → books; the grant is recorded on details and on executed', async () => {
     purchaseGlofoxMembership.mockResolvedValueOnce({ ok: true, http_status: 200, purchase_status: 'SUCCESS', invoice_id: 'inv-1' })
     createBooking.mockResolvedValueOnce({ ok: true, status: 200, body: { success: true, Booking: { _id: 'gfb-7' } } })
@@ -677,6 +717,12 @@ describe('PATCH class_booking approval — the trial grant is written ahead (TRI
         const b = {
           select: () => b,
           eq: (col, val) => { eqs.push([col, val]); return b },
+          // TRIALPURCHASE.2 — the helper's list reads (other cards, the queue
+          // row) find nothing here.
+          neq: () => b,
+          contains: () => b,
+          limit: () => b,
+          then(resolve, reject) { return Promise.resolve({ data: [], error: null }).then(resolve, reject) },
           update(p) { patch = p; log.push({ table, patch: p, eqs }); return b },
           async maybeSingle() {
             if (patch) {
@@ -708,7 +754,7 @@ describe('PATCH class_booking approval — the trial grant is written ahead (TRI
 
     const recs = records(updates)
     expect(recs.map((u) => u.patch.details.trial_grant)).toEqual([
-      { stage: 'purchasing', at: expect.any(String) },
+      { stage: 'purchasing', at: expect.any(String), glofox_member_id: 'gm1' },
       expect.objectContaining({ ok: true, invoice_id: 'inv-1' }),
     ])
     const claim = updates.find((u) => u.table === 'agent_membership_requests' && u.patch.status === 'approved')
@@ -761,7 +807,7 @@ describe('PATCH class_booking approval — the trial grant is written ahead (TRI
     // Only the marker landed; the trial is queued behind a membership they
     // hold, so no credits show yet.
     const held = lastDetails(updates, (g) => g?.stage === 'purchasing')
-    expect(held.trial_grant).toEqual({ stage: 'purchasing', at: expect.any(String) })
+    expect(held.trial_grant).toEqual({ stage: 'purchasing', at: expect.any(String), glofox_member_id: 'gm1' })
     const stuck = { ...ROW, status: 'approved', details: { ...held, execution: { ...held.execution, started_at: STALE } } }
     const retryLog = []
     db = makeGrantDb(stuck, retryLog)

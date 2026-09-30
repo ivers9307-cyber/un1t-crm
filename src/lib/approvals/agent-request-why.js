@@ -180,6 +180,16 @@ const FAILURE_EXPLANATIONS = {
   // did not buy (a purchase with no record is what a retry could double).
   TRIAL_GRANT_UNRECORDED:
     'The approval could not save its progress before adding the trial (a temporary database error), so no trial was bought and nothing was booked. Retry in a minute.',
+  // TRIALPURCHASE.2 — one trial per member, not per card: another card for
+  // the same Glofox member already bought one (or may have).
+  TRIAL_ALREADY_GRANTED:
+    'An earlier approval already added a free trial for this member (or may have, if its result was unclear), so no second trial was bought and nothing was booked. Check their account in Glofox. If they should have this class, add a credit or membership by hand, then retry and it books against it.',
+  TRIAL_HISTORY_UNREADABLE:
+    'Whether this member already got a trial from an earlier approval could not be checked (a temporary database error), so no trial was bought and nothing was booked. Retry in a minute.',
+  // The card named no trial, and the booking's queue row could not be read,
+  // or its rows named different trials.
+  TRIAL_PRODUCT_UNKNOWN:
+    'Which trial this booking page offers could not be worked out (a temporary database error, or two different trials were named), so no trial was bought and nothing was booked. Retry in a minute. If it happens again, add a credit in Glofox by hand, then retry.',
 }
 
 // TRIALGRANT.1 — the trial was added a moment before, yet Glofox still
