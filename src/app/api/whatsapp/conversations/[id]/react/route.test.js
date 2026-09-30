@@ -9,7 +9,7 @@
 // those, which Richard has not approved. The consequence, pinned in
 // followups-checkin-human.test.js: a staff reaction does not park a
 // first-class check-in.
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@/lib/auth', () => ({
   getCurrentUser: vi.fn(),
@@ -35,20 +35,23 @@ const USER = { id: USER_ID, role: 'staff', locations: [{ id: LOC_ID }] }
 // Synthetic number (the 555 range): this repo is public.
 const CONVERSATION = { id: CONV_ID, location_id: LOC_ID, contact_id: 'b0000000-0000-0000-0000-000000000002', wa_phone: '15555550100' }
 
-function stubDb() {
+function stubDb({ insertError = null, readError = null } = {}) {
   const inserts = []
   return {
     inserts,
     from(table) {
       const b = {
         select: () => b, eq: () => b, maybeSingle: () => b,
-        insert: async (row) => { inserts.push({ table, row }); return { error: null } },
-        then: (ok, bad) => Promise.resolve({ data: table === 'whatsapp_conversations' ? CONVERSATION : null, error: null }).then(ok, bad),
+        insert: async (row) => { inserts.push({ table, row }); return { error: insertError } },
+        then: (ok, bad) => Promise.resolve(readError
+          ? { data: null, error: readError }
+          : { data: table === 'whatsapp_conversations' ? CONVERSATION : null, error: null }).then(ok, bad),
       }
       return b
     },
   }
 }
+const BOOM = { message: 'canceling statement due to statement timeout', code: '57014' }
 
 const post = (body) => POST(
   new Request(`http://x/api/whatsapp/conversations/${CONV_ID}/react`, { method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json' } }),
@@ -76,5 +79,39 @@ describe('POST /api/whatsapp/conversations/[id]/react', () => {
     await post({ message_id: 'wamid.IN1', emoji: '' })
     expect(db.inserts[0].row).toMatchObject({ body: 'Removed reaction' })
     expect(db.inserts[0].row.sent_by ?? null).toBeNull()
+  })
+})
+
+// CHECKINRISKS.1 (C106 e) — the thread-row insert sat in a try/catch, which
+// never fires for supabase-js: the builder RESOLVES with { error }. A failed
+// insert was therefore silent. Meta already has the reaction, so the action
+// still succeeds (a failure answer would invite a second send), but the loss
+// is logged structurally and the response says the row is missing.
+describe('POST /api/whatsapp/conversations/[id]/react — a failed thread-row insert (CHECKINRISKS.1)', () => {
+  let errSpy
+  beforeEach(() => { errSpy = vi.spyOn(console, 'error').mockImplementation(() => {}) })
+  afterEach(() => errSpy.mockRestore())
+
+  it('is logged and reported as a warning, and the reaction still stands', async () => {
+    createServerClient.mockReturnValue(stubDb({ insertError: BOOM }))
+    const res = await post({ message_id: 'wamid.IN1', emoji: '👍' })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ success: true, warning: 'thread_row_not_recorded' })
+    expect(sendReaction).toHaveBeenCalledTimes(1)
+    const logged = errSpy.mock.calls.map((c) => c.join(' ')).join('\n')
+    expect(logged).toMatch(/thread row insert failed/)
+  })
+
+  it('a clean insert carries no warning', async () => {
+    createServerClient.mockReturnValue(stubDb())
+    const res = await post({ message_id: 'wamid.IN1', emoji: '👍' })
+    expect(await res.json()).toEqual({ success: true })
+  })
+
+  it('a failed conversation read is a 500, not "Not found", and nothing is sent', async () => {
+    createServerClient.mockReturnValue(stubDb({ readError: BOOM }))
+    const res = await post({ message_id: 'wamid.IN1', emoji: '👍' })
+    expect(res.status).toBe(500)
+    expect(sendReaction).not.toHaveBeenCalled()
   })
 })

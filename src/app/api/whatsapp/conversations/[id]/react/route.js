@@ -5,6 +5,7 @@ import { getCurrentUser, assertLocationAccessOr404, requireInboxPermission } fro
 import { validateBody } from '@/lib/validate'
 import { sendReaction } from '@/lib/whatsapp'
 import { whatsappErrorStatus } from '@/lib/whatsapp-number-missing'
+import { logError } from '@/lib/log'
 
 // Empty emoji is valid — it removes an existing reaction — so no .min().
 const ReactSchema = z.object({ message_id: z.string().min(1), emoji: z.string().max(8) })
@@ -27,10 +28,15 @@ export async function POST(request, props) {
   const { message_id, emoji } = validation.data
 
   const db = createServerClient()
-  const { data: conversation } = await db.from('whatsapp_conversations')
+  const { data: conversation, error: convErr } = await db.from('whatsapp_conversations')
     .select('id, location_id, contact_id, wa_phone')
     .eq('id', params.id)
     .maybeSingle()
+  // CHECKINRISKS.1 — a failed read is not "no such conversation".
+  if (convErr) {
+    logError('wa-react', 'conversation read failed', { conversationId: params.id, err: convErr })
+    return NextResponse.json({ success: false, error: 'Could not load the conversation just now.' }, { status: 500 })
+  }
   if (!conversation) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, conversation.location_id)
   if (guard) return guard
@@ -47,22 +53,30 @@ export async function POST(request, props) {
   // Best-effort thread row — mirrors the inbound reaction style
   // (`Reacted: <emoji>`); a logging failure never fails the action.
   // wa_message_id lets the reaction's 'sent' status webhook match the row.
-  try {
-    await db.from('whatsapp_messages').insert({
-      conversation_id: conversation.id,
-      contact_id: conversation.contact_id || null,
-      location_id: conversation.location_id,
-      wa_message_id: sendResult?.messageId || null,
-      direction: 'outbound',
-      message_type: 'reaction',
-      body: emoji ? `Reacted: ${emoji}` : 'Removed reaction',
-      status: 'sent',
-      // CHECKINSTALL.2 (C104 review) — deliberately NO sent_by: a reaction is
-      // not a reply. The handoff SLA, handoff auto-resolve, and Mia's takeover
-      // and re-arm checks read sent_by as "a person replied".
-      sent_at: new Date().toISOString(),
+  // CHECKINRISKS.1 (C106 e) — supabase-js RESOLVES with { error } rather than
+  // throwing, so the try/catch that used to wrap this never saw a failed
+  // insert. Meta already has the reaction: answer success (a failure would
+  // invite a second send), log the loss structurally, and say so.
+  const { error: rowErr } = await db.from('whatsapp_messages').insert({
+    conversation_id: conversation.id,
+    contact_id: conversation.contact_id || null,
+    location_id: conversation.location_id,
+    wa_message_id: sendResult?.messageId || null,
+    direction: 'outbound',
+    message_type: 'reaction',
+    body: emoji ? `Reacted: ${emoji}` : 'Removed reaction',
+    status: 'sent',
+    // CHECKINSTALL.2 (C104 review) — deliberately NO sent_by: a reaction is
+    // not a reply. The handoff SLA, handoff auto-resolve, and Mia's takeover
+    // and re-arm checks read sent_by as "a person replied".
+    sent_at: new Date().toISOString(),
+  })
+  if (rowErr) {
+    logError('wa-react', 'thread row insert failed; the reaction was sent but is missing from the thread', {
+      conversationId: conversation.id, locationId: conversation.location_id, err: rowErr,
     })
-  } catch (e) { console.error('[wa-react] thread row insert failed:', e?.message) }
+    return NextResponse.json({ success: true, warning: 'thread_row_not_recorded' })
+  }
 
   return NextResponse.json({ success: true })
 }

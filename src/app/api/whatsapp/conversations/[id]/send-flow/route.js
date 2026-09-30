@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccessOr404, requireInboxPermission } from '@/lib/auth'
 import { sendFlowMessage } from '@/lib/whatsapp'
 import { whatsappErrorStatus } from '@/lib/whatsapp-number-missing'
+import { logError } from '@/lib/log'
 
 // POST /api/whatsapp/conversations/[id]/send-flow — drop the location's
 // booking Flow (settings.whatsapp_flow) into an open conversation as an
@@ -23,10 +24,15 @@ export async function POST(request, props) {
   if (perm) return perm
 
   const db = createServerClient()
-  const { data: conversation } = await db.from('whatsapp_conversations')
+  const { data: conversation, error: convErr } = await db.from('whatsapp_conversations')
     .select('id, location_id, contact_id, wa_phone')
     .eq('id', params.id)
     .maybeSingle()
+  // CHECKINRISKS.1 — a failed read is not "no such conversation".
+  if (convErr) {
+    logError('wa-flow-send', 'conversation read failed', { conversationId: params.id, err: convErr })
+    return NextResponse.json({ success: false, error: 'Could not load the conversation just now.' }, { status: 500 })
+  }
   if (!conversation) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, conversation.location_id)
   if (guard) return guard
@@ -38,8 +44,13 @@ export async function POST(request, props) {
     )
   }
 
-  const { data: loc } = await db.from('locations').select('settings').eq('id', conversation.location_id).single()
-  const cfg = loc?.settings?.whatsapp_flow || {}
+  const { data: loc, error: locErr } = await db.from('locations').select('settings').eq('id', conversation.location_id).single()
+  // CHECKINRISKS.1 — a failed read is not "no Flow configured".
+  if (locErr || !loc) {
+    logError('wa-flow-send', 'location settings read failed', { locationId: conversation.location_id, err: locErr || 'no row' })
+    return NextResponse.json({ success: false, error: 'Could not load the booking Flow settings just now.' }, { status: 500 })
+  }
+  const cfg = loc.settings?.whatsapp_flow || {}
   if (!cfg.flow_id) {
     return NextResponse.json({ success: false, error: 'No booking Flow is configured for this location.' }, { status: 400 })
   }
@@ -67,25 +78,32 @@ export async function POST(request, props) {
   // Best-effort thread row (mirrors whatsapp-carousel-send.js) — a logging
   // failure never fails a send Meta already accepted. wa_message_id lets the
   // status webhooks match the row.
-  try {
-    await db.from('whatsapp_messages').insert({
-      conversation_id: conversation.id,
-      contact_id: conversation.contact_id,
-      location_id: conversation.location_id,
-      wa_message_id: sendResult?.messageId || null,
-      direction: 'outbound',
-      message_type: 'flow',
-      body: `[Booking Flow] ${cfg.invite_text || 'Tap below to book your first visit.'}`,
-      status: 'sent',
-      // CHECKINSTALL.2 (C106 b) — a staff action: sent_by from the SESSION,
-      // never the body (UUID REFERENCES profiles, mig 007), same as the send
-      // route. Mia's reply path and the check-in runner read sent_by as "a
-      // person spoke"; without it this row looked like an automation.
-      sent_by: user.id,
-      sent_at: new Date().toISOString(),
+  // CHECKINRISKS.1 (C106 e) — supabase-js RESOLVES with { error } rather than
+  // throwing, so the try/catch that used to wrap this never saw a failed
+  // insert. The row's sent_by is how Mia and the check-in runner know a person
+  // acted, so its loss is logged structurally and reported as a warning; the
+  // answer stays success, because a failure would invite a second Flow.
+  const { error: rowErr } = await db.from('whatsapp_messages').insert({
+    conversation_id: conversation.id,
+    contact_id: conversation.contact_id,
+    location_id: conversation.location_id,
+    wa_message_id: sendResult?.messageId || null,
+    direction: 'outbound',
+    message_type: 'flow',
+    body: `[Booking Flow] ${cfg.invite_text || 'Tap below to book your first visit.'}`,
+    status: 'sent',
+    // CHECKINSTALL.2 (C106 b) — a staff action: sent_by from the SESSION,
+    // never the body (UUID REFERENCES profiles, mig 007), same as the send
+    // route. Mia's reply path and the check-in runner read sent_by as "a
+    // person spoke"; without it this row looked like an automation.
+    sent_by: user.id,
+    sent_at: new Date().toISOString(),
+  })
+  if (rowErr) {
+    logError('wa-flow-send', 'thread row insert failed; the Flow was sent but is missing from the thread (no sent_by for Mia or the check-in runner)', {
+      conversationId: conversation.id, locationId: conversation.location_id, err: rowErr,
     })
-  } catch (e) {
-    console.error('[wa-flow-send] thread row insert failed:', e?.message)
+    return NextResponse.json({ success: true, warning: 'thread_row_not_recorded' })
   }
 
   return NextResponse.json({ success: true })

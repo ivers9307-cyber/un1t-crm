@@ -398,6 +398,11 @@ const config = [
       // are now log-and-warn; nothing after the Meta call may fail the request.
       // `[[]id]`: files entries are minimatch globs, a bare `[id]` is a class.
       'src/app/api/whatsapp/conversations/[[]id]/send/route.js',
+      // CHECKINRISKS.1 (C106 e) — the react and send-flow thread rows were
+      // inserted inside a try/catch that could never see a resolved { error }.
+      // Now log-and-warn, never a failure after Meta has sent.
+      'src/app/api/whatsapp/conversations/[[]id]/react/route.js',
+      'src/app/api/whatsapp/conversations/[[]id]/send-flow/route.js',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },
