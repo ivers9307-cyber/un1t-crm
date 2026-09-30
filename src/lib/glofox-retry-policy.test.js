@@ -15,7 +15,7 @@ import {
   glofoxFetch, glofoxRetryPolicy, glofoxHttpStats, glofoxHttpStatsSince,
   fetchPaymentsReport, searchGlofoxMember, getGlofoxInvoicePaymentLink, fetchBranchLeads,
   purchaseGlofoxMembership, createBooking, interpretBookingResult, findLandedBooking,
-  cancelBooking, findBookingCancelState,
+  cancelBooking, findBookingCancelState, registerGlofoxMember,
 } from './glofox.js'
 
 const creds = { branchId: 'br-1', apiKey: 'k', apiToken: 't' }
@@ -361,5 +361,51 @@ describe('findBookingCancelState', () => {
     ]]])
     expect(await findBookingCancelState(creds, USER, BOOKING)).toBe('landed')
     expect(await findBookingCancelState(creds, USER, BOOKING)).toBe('absent')
+  })
+})
+
+describe('registerGlofoxMember — re-sent only when the email search finds no account', () => {
+  const payload = { first_name: 'Sam', last_name: 'Lee', email: 'Sam@X.com', password: 'Abcd-1234' }
+  const NEW = 'c'.repeat(24)
+
+  it('a 503 whose account WAS created: no re-send; the found member comes back', async () => {
+    route([
+      ['POST /2.0/register', [res(503)]],
+      ['POST /v3.0/namespaces/members/retrieve', [res(200, { data: [{ id: NEW, email: 'sam@x.com' }] })]],
+    ])
+    const out = await registerGlofoxMember(creds, payload)
+    expect(sent()).toEqual(['POST /2.0/register', 'POST /v3.0/namespaces/members/retrieve'])
+    expect(out).toMatchObject({ ok: true, error: null, recovered: 'landed_after_5xx' })
+    expect(out.member._id).toBe(NEW)
+  })
+
+  it('a 503 and no account under the email: exactly one re-send', async () => {
+    route([
+      ['POST /2.0/register', [res(503), res(200, { user: { _id: NEW } })]],
+      ['POST /v3.0/namespaces/members/retrieve', [res(200, { data: [] })]],
+    ])
+    const out = await registerGlofoxMember(creds, payload)
+    expect(sent()).toEqual(['POST /2.0/register', 'POST /v3.0/namespaces/members/retrieve', 'POST /2.0/register'])
+    expect(out).toMatchObject({ ok: true, member: { _id: NEW } })
+  })
+
+  it('the search fails: no re-send (never create on a failed search)', async () => {
+    route([
+      ['POST /2.0/register', [res(503)]],
+      ['POST /v3.0/namespaces/members/retrieve', [res(500), res(500), res(500), res(500)]],
+    ])
+    const out = await registerGlofoxMember(creds, payload)
+    expect(sent().filter((s) => s === 'POST /2.0/register')).toHaveLength(1)
+    expect(out).toMatchObject({ ok: false, error: 'Glofox HTTP 503' })
+  })
+
+  it('the search finds MORE than one account: no re-send and no guess at which one', async () => {
+    route([
+      ['POST /2.0/register', [res(503)]],
+      ['POST /v3.0/namespaces/members/retrieve', [res(200, { data: [{ id: NEW, email: 'sam@x.com' }, { id: 'd'.repeat(24), email: 'sam@x.com' }] })]],
+    ])
+    const out = await registerGlofoxMember(creds, payload)
+    expect(sent().filter((s) => s === 'POST /2.0/register')).toHaveLength(1)
+    expect(out).toMatchObject({ ok: false, member: null })
   })
 })

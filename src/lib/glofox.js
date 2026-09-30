@@ -1096,6 +1096,10 @@ export async function searchGlofoxByEmail(creds, email) {
  *
  * Best-effort: API failures return ok:false with the error
  * message; caller decides how to surface (audit row + Review tab).
+ *
+ * GLOFOXPOSTRETRY.1 — after a 5xx it re-sends only once an email search
+ * finds no account; one it finds comes back as
+ * { ok: true, member, error: null, glofox_response: null, recovered: 'landed_after_5xx' }.
  */
 export async function registerGlofoxMember(creds, payload) {
   if (!creds?.branchId) {
@@ -1116,9 +1120,27 @@ export async function registerGlofoxMember(creds, payload) {
     ...(payload.emergency_contact ? { emergency_contact: payload.emergency_contact } : {}),
     ...(payload.consent ? { consent: payload.consent } : {}),
   }
+  // GLOFOXPOSTRETRY.1 — a 5xx can come after Glofox created the account. Before
+  // a re-send, search the email (the caller already found none before this
+  // POST, so a hit now is the account we just made, with the password we
+  // sent): found → return it, no re-send; none → re-send; search failed, or
+  // more than one account (no guessing which) → the 5xx stands (never create
+  // on a failed search). Glofox would refuse a second account on the email
+  // anyway (EMAIL_ALREADY_IN_USE), but as a failure that left the contact
+  // unlinked.
+  let landedMember = null
+  const retry = {
+    verify: async () => {
+      const s = await searchGlofoxByEmail(creds, body.email)
+      if (s.error) return 'unknown'
+      if (s.found && s.member?._id) { landedMember = s.member; return 'landed' }
+      return 'absent'
+    },
+  }
   try {
     const r = await glofoxFetch(creds, '/2.0/register', {
       method: 'POST',
+      retry,
       // MUST set this: without it fetch sends the body as text/plain and Glofox
       // never parses the JSON, rejecting every field as "required" (and the new
       // member is never created → the booking dead-ends in staff review). Mirrors
@@ -1126,6 +1148,7 @@ export async function registerGlofoxMember(creds, payload) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     })
+    if (landedMember) return { ok: true, member: landedMember, error: null, glofox_response: null, recovered: 'landed_after_5xx' }
     let parsed
     try { parsed = await r.json() } catch { parsed = null }
     if (!r.ok) {
