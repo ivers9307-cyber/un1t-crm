@@ -20,7 +20,7 @@
 //   The test we care most about is the IDOR case: a user authenticated
 //   to location A trying to mutate a segment in location B.
 //
-// SEGMENTROUTE.1: the route also checks the Contacts permission at the
+// SEGMENTROUTE.1: the route also checks the Contacts and Email permissions at the
 // segment's studio (callers carry a role there), reads email_sequences to see
 // whether a sequence starts from the segment (the mock answers per table),
 // reads the row with maybeSingle, and 404s a non-uuid id before any read (ids

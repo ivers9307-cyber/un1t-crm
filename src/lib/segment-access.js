@@ -7,12 +7,17 @@
 //   read   contacts OR email OR whatsapp: the screens that list segments are
 //          /contacts (contacts), the send composer and the sequence builder
 //          (email or whatsapp) and the Communications Segments tab (Manager+).
-//   write  contacts: /contacts is the only screen that saves or deletes one,
-//          and it shows both to everyone who can open it.
+//   write  contacts AND email (DECISION R1, Richard, 30 Sep): /contacts is the
+//          only screen that saves or deletes one, and a saved segment can
+//          drive a campaign or a sequence, so it is Email Marketing work too.
+//          /contacts hides Save and delete from anyone this refuses (the page
+//          passes canWriteSegmentsAt down), so the button and the rule agree.
 //   a segment a sequence's trigger names: changing or deleting it changes who
 //          that sequence enrols (segment-sync fires segment_added for everyone
 //          a widened filter takes in), so it also needs the sequence builder's
-//          own rule (email or whatsapp, src/lib/sequence-access.js).
+//          own rule (email or whatsapp, src/lib/sequence-access.js). The write
+//          rule's Email implies it today, so that refusal cannot fire; it
+//          stays as the fence should the write rule ever be loosened.
 
 import { NextResponse } from 'next/server'
 import { hasPermissionForLocation } from '@/lib/permissions'
@@ -20,11 +25,11 @@ import { canBuildSequencesAt } from '@/lib/sequence-access'
 import { validateAudienceFilter, InvalidAudienceFilterError } from '@/lib/audience-filter'
 
 export const SEGMENT_READ_PERMISSIONS = Object.freeze(['contacts', 'email', 'whatsapp'])
-export const SEGMENT_WRITE_PERMISSION = 'contacts'
+export const SEGMENT_WRITE_PERMISSIONS = Object.freeze(['contacts', 'email'])
 export const SEGMENT_TRIGGER_TYPES = Object.freeze(['segment_added', 'segment_removed'])
 
 export const SEGMENT_READ_ERROR = 'Contacts, Email or WhatsApp permission required'
-export const SEGMENT_WRITE_ERROR = 'Contacts permission required'
+export const SEGMENT_WRITE_ERROR = 'Contacts and Email permissions required'
 export const SEGMENT_IN_USE_ERROR = 'This segment starts a sequence: changing it needs the Email or WhatsApp permission'
 
 /** Read rule at `locationId` (role, overrides, template and features there). */
@@ -33,10 +38,10 @@ export function canReadSegmentsAt(user, locationId) {
   return SEGMENT_READ_PERMISSIONS.some((key) => hasPermissionForLocation(user, locationId, key))
 }
 
-/** Write rule at `locationId`. */
+/** Write rule at `locationId`: every key in SEGMENT_WRITE_PERMISSIONS there. */
 export function canWriteSegmentsAt(user, locationId) {
   if (!user || !locationId) return false
-  return hasPermissionForLocation(user, locationId, SEGMENT_WRITE_PERMISSION)
+  return SEGMENT_WRITE_PERMISSIONS.every((key) => hasPermissionForLocation(user, locationId, key))
 }
 
 export { canBuildSequencesAt }

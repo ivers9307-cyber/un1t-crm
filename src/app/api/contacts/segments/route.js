@@ -10,7 +10,7 @@
 // campaign or sequence with no transformation.
 //
 // SEGMENTROUTE.1: reads need contacts, email or whatsapp at the studio; saving
-// needs contacts (src/lib/segment-access.js).
+// needs contacts AND email (src/lib/segment-access.js).
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -74,7 +74,7 @@ export async function POST(request) {
   if (!locationId) return NextResponse.json({ success: false, error: 'No active location' }, { status: 400 })
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
-  // SEGMENTROUTE.1: /contacts is the only screen that saves a segment.
+  // SEGMENTROUTE.1: contacts AND email at that studio (DECISION R1).
   if (!canWriteSegmentsAt(user, locationId)) return segmentWriteRefused()
 
   // FILTER-P1.5: reject an audience filter that can never resolve at SAVE

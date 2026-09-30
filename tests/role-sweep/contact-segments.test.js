@@ -10,11 +10,16 @@
 // The rules (src/lib/segment-access.js):
 //   read  (GET)               contacts OR email OR whatsapp at the studio (the
 //                             gates of the four screens that list segments);
-//   write (POST, PUT, DELETE) contacts at the studio (/contacts is the only
-//                             screen that saves or deletes one);
+//   write (POST, PUT, DELETE) contacts AND email at the studio (DECISION R1,
+//                             Richard, 30 Sep: a segment can drive a campaign
+//                             or a sequence, so saving one is Email Marketing
+//                             work; /contacts hides Save and delete without it);
 //   a segment a sequence's trigger names: PUT/DELETE also need the sequence
 //                             builder's rule (email OR whatsapp), because
 //                             rewriting it changes who that sequence enrols.
+//                             Contacts AND Email implies it, so today that
+//                             refusal cannot fire; it stays as the fence if the
+//                             write rule is ever loosened.
 // Harness: tests/helpers/role-gate-probe.js. Synthetic data only.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -32,12 +37,12 @@ import { getCurrentUser } from '@/lib/auth'
 import { logError } from '@/lib/log'
 import { describeGate, gateProbe, runProbed } from '../helpers/role-gate-probe.js'
 import {
-  person, LOC_A, LOC_B, MASTER, OUTSIDER, keyOnAtBOnly, featureOffAtA,
+  person, LOC_A, LOC_B, MASTER, OUTSIDER, keyOnAtBOnly, keyOffAtB, featureOffAtA,
 } from '../helpers/role-sweep-callers.js'
 import * as list from '@/app/api/contacts/segments/route.js'
 import * as detail from '@/app/api/contacts/segments/[id]/route.js'
 import {
-  SEGMENT_READ_PERMISSIONS, SEGMENT_WRITE_PERMISSION, canReadSegmentsAt, canWriteSegmentsAt,
+  SEGMENT_READ_PERMISSIONS, SEGMENT_WRITE_PERMISSIONS, canReadSegmentsAt, canWriteSegmentsAt,
 } from '@/lib/segment-access'
 
 const T = { getCurrentUser, createServerClient, describe, it, expect }
@@ -60,8 +65,7 @@ const UNWIRED = { data: null, count: 0, error: null }
 const WIRED = { data: null, count: 1, error: null }
 
 const NO_READ = { status: 403, body: { success: false, error: 'Contacts, Email or WhatsApp permission required' } }
-const NO_WRITE = { status: 403, body: { success: false, error: 'Contacts permission required' } }
-const WIRED_NEEDS_BUILDER = { status: 403, body: { success: false, error: 'This segment starts a sequence: changing it needs the Email or WhatsApp permission' } }
+const NO_WRITE = { status: 403, body: { success: false, error: 'Contacts and Email permissions required' } }
 const NOT_FOUND = { status: 404, body: { success: false, error: 'Not found' } }
 const NOT_MEMBER = { status: 403, body: { success: false, error: 'Forbidden — location not in your assignments' } }
 
@@ -73,6 +77,10 @@ const MANAGER_A_STAFF_B_CONTACTS_OFF = person({ [LOC_A]: { role: 'manager' }, [L
 const STAFF_B = person({ [LOC_A]: { role: 'staff' }, [LOC_B]: { role: 'staff' } }, LOC_A)
 // Stillorgan's head-coach template: Email and WhatsApp off.
 const HEAD_COACH_B_NO_MESSAGING = person({ [LOC_A]: { role: 'staff' }, [LOC_B]: { role: 'head_coach', template: { email: false, whatsapp: false } } }, LOC_A)
+// Contacts on, Email off, WhatsApp on: loses Save and delete under R1, still lists.
+const HEAD_COACH_B_NO_EMAIL = person({ [LOC_A]: { role: 'staff' }, [LOC_B]: { role: 'head_coach', template: { email: false } } }, LOC_A)
+// A staff member granted Email at B keeps Save and delete.
+const STAFF_B_WITH_EMAIL = person({ [LOC_A]: { role: 'staff' }, [LOC_B]: { role: 'staff', permissions: { email: true } } }, LOC_A)
 const OWNER_B_CONTACTS_OFF = person({ [LOC_A]: { role: 'staff' }, [LOC_B]: { role: 'owner', permissions: { contacts: false } } }, LOC_A)
 const RECEPTION_B = person({ [LOC_A]: { role: 'staff' }, [LOC_B]: { role: 'reception' } }, LOC_A)
 const MANAGER_B = person({ [LOC_A]: { role: 'staff' }, [LOC_B]: { role: 'manager' } }, LOC_A)
@@ -81,6 +89,8 @@ const READ_CASES = [
   ['staff at B with Contacts off (main: pass)', STAFF_B_CONTACTS_OFF, LOC_B, 'forbidden'],
   ['manager at A, staff at B with Contacts off, A active (main: pass)', MANAGER_A_STAFF_B_CONTACTS_OFF, LOC_B, 'forbidden'],
   ['staff at B (Contacts on by default)', STAFF_B, LOC_B, 'pass'],
+  ['head coach at B with Contacts but Email off (R1: still lists)', HEAD_COACH_B_NO_EMAIL, LOC_B, 'pass'],
+  ['head coach at B with Email and WhatsApp off (Contacts on)', HEAD_COACH_B_NO_MESSAGING, LOC_B, 'pass'],
   ['owner at B with Contacts off (Email still on: the composer lists segments)', OWNER_B_CONTACTS_OFF, LOC_B, 'pass'],
   ['Contacts off at A only, A active', keyOnAtBOnly('contacts'), LOC_B, 'pass'],
   ["feature Contacts off at A's location, A active", featureOffAtA('contacts'), LOC_B, 'pass'],
@@ -91,18 +101,29 @@ const WRITE_CASES = [
   ['staff at B with Contacts off (main: pass)', STAFF_B_CONTACTS_OFF, LOC_B, 'forbidden'],
   ['manager at A, staff at B with Contacts off, A active (main: pass)', MANAGER_A_STAFF_B_CONTACTS_OFF, LOC_B, 'forbidden'],
   ['owner at B with Contacts off (main: pass)', OWNER_B_CONTACTS_OFF, LOC_B, 'forbidden'],
-  ['staff at B (Contacts on by default: /contacts shows them Save)', STAFF_B, LOC_B, 'pass'],
-  ['head coach at B with Email and WhatsApp off', HEAD_COACH_B_NO_MESSAGING, LOC_B, 'pass'],
+  ['head coach at B with Contacts but Email off (R1; main: pass)', HEAD_COACH_B_NO_EMAIL, LOC_B, 'forbidden'],
+  ['head coach at B with Email and WhatsApp off (R1; main: pass)', HEAD_COACH_B_NO_MESSAGING, LOC_B, 'forbidden'],
+  ['staff at B, Contacts on, no Email (R1; main: pass)', STAFF_B, LOC_B, 'forbidden'],
+  ['reception at B, Contacts + WhatsApp, no Email (R1; main: pass)', RECEPTION_B, LOC_B, 'forbidden'],
+  ['Email switched off for them at B only, A active (main: pass)', keyOffAtB('email'), LOC_B, 'forbidden'],
+  ['staff at B granted Email', STAFF_B_WITH_EMAIL, LOC_B, 'pass'],
+  ['manager at B', MANAGER_B, LOC_B, 'pass'],
   ['Contacts off at A only, A active', keyOnAtBOnly('contacts'), LOC_B, 'pass'],
+  ['Email off at A only, A active', keyOnAtBOnly('email'), LOC_B, 'pass'],
   ["feature Contacts off at A's location, A active", featureOffAtA('contacts'), LOC_B, 'pass'],
+  ["feature Email off at A's location, A active", featureOffAtA('email'), LOC_B, 'pass'],
   ['a master', MASTER, LOC_B, 'pass'],
   ['an owner who does not belong to B', OUTSIDER, LOC_B, 'hidden'],
 ]
+// Contacts AND Email (the write rule) implies the builder's email-or-whatsapp,
+// so on a wired segment the write refusal comes first and nobody who passes it
+// meets the in-use refusal today.
 const WIRED_CASES = [
-  ['staff at B (Contacts only) on a segment a sequence uses (main: pass)', STAFF_B, LOC_B, 'wired'],
-  ['head coach at B with Email and WhatsApp off (main: pass)', HEAD_COACH_B_NO_MESSAGING, LOC_B, 'wired'],
+  ['staff at B (Contacts only) on a segment a sequence uses (main: pass)', STAFF_B, LOC_B, 'forbidden'],
+  ['head coach at B with Email and WhatsApp off (main: pass)', HEAD_COACH_B_NO_MESSAGING, LOC_B, 'forbidden'],
   ['staff at B with Contacts off (main: pass)', STAFF_B_CONTACTS_OFF, LOC_B, 'forbidden'],
-  ['reception at B (Contacts + WhatsApp by default)', RECEPTION_B, LOC_B, 'pass'],
+  ['reception at B (Contacts + WhatsApp, no Email; main: pass)', RECEPTION_B, LOC_B, 'forbidden'],
+  ['staff at B granted Email', STAFF_B_WITH_EMAIL, LOC_B, 'pass'],
   ['manager at B', MANAGER_B, LOC_B, 'pass'],
   ['a master', MASTER, LOC_B, 'pass'],
   ['an owner who does not belong to B', OUTSIDER, LOC_B, 'hidden'],
@@ -131,7 +152,7 @@ for (const [title, call] of ROW_ROUTES) {
     call, gateReads: (loc) => [SEG_ROW(loc), UNWIRED], forbidden: NO_WRITE, hidden: NOT_FOUND, cases: WRITE_CASES,
   }, T)
   describeGate(`${title} on a segment a sequence uses (+ email or whatsapp)`, {
-    call, gateReads: (loc) => [SEG_ROW(loc), WIRED], forbidden: NO_WRITE, wired: WIRED_NEEDS_BUILDER, hidden: NOT_FOUND, cases: WIRED_CASES,
+    call, gateReads: (loc) => [SEG_ROW(loc), WIRED], forbidden: NO_WRITE, hidden: NOT_FOUND, cases: WIRED_CASES,
   }, T)
 }
 
@@ -171,7 +192,7 @@ describe('a failed read fails closed', () => {
     expect(logError).toHaveBeenCalledWith('contacts', expect.any(String), expect.objectContaining({ segmentId: SEG_ID }))
   })
   it.each(ROW_ROUTES)('%s: the sequences read fails → 500, not "unused"', async (_title, call) => {
-    const { probe, status, body } = await probed(STAFF_B, call, [SEG_ROW(LOC_B), { data: null, count: null, error: failed.error }])
+    const { probe, status, body } = await probed(MANAGER_B, call, [SEG_ROW(LOC_B), { data: null, count: null, error: failed.error }])
     expect(probe.passed).toBe(false)
     expect(status).toBe(500)
     expect(body).toEqual({ success: false, error: 'Could not check which sequences use this segment' })
@@ -225,7 +246,7 @@ describe('PUT /api/contacts/segments/[id] validates the filter (FILTER-P1.5 miss
 describe('the sequences read is scoped to the segment', () => {
   it('filters email_sequences by the segment studio, the two segment triggers and trigger_config->>segment_id', async () => {
     let seqChain = null
-    getCurrentUser.mockResolvedValue(STAFF_B)
+    getCurrentUser.mockResolvedValue(MANAGER_B)
     const probe = gateProbe([SEG_ROW(LOC_B), (chain) => { seqChain = chain; return UNWIRED }])
     createServerClient.mockReturnValue(probe.db)
     await runProbed(probe, () => detail.DELETE(bare('DELETE'), params(id)))
@@ -239,32 +260,39 @@ describe('the sequences read is scoped to the segment', () => {
   })
 })
 
-// ── who the rules admit, pinned (nobody who can open /contacts loses Save) ─
-// /contacts opens on `contacts` at the studio and shows Save and delete to
-// everyone it lets in, so the write rule must be exactly `contacts` there.
-// Requiring Email as well (DECISION R1, not taken) would take Save and delete
-// from head coaches whose template switches Email off and from staff: that
-// change must fail here first.
+// ── who the rules admit, pinned ───────────────────────────────────────────
+// DECISION R1 (Richard, 30 Sep): saving, editing and deleting need Contacts
+// AND Email at the segment's studio; listing stays Contacts, Email or
+// WhatsApp. This knowingly takes Save and delete from people with Contacts
+// but no Email (head coaches whose template switches Email off, staff,
+// reception on the defaults); /contacts hides both for them.
 describe('who the segment rules admit (pinned)', () => {
-  it('the rule constants: write = contacts; read = contacts, email or whatsapp', () => {
-    expect(SEGMENT_WRITE_PERMISSION).toBe('contacts')
+  it('the rule constants: write = contacts AND email; read = contacts, email or whatsapp', () => {
+    expect([...SEGMENT_WRITE_PERMISSIONS]).toEqual(['contacts', 'email'])
     expect([...SEGMENT_READ_PERMISSIONS]).toEqual(['contacts', 'email', 'whatsapp'])
   })
   // Each role on the code defaults (no override, no template) at B.
-  it.each(['owner', 'manager', 'head_coach', 'staff', 'reception'])('%s at B on the defaults may list, save and delete there', (role) => {
+  it.each([
+    ['owner', true], ['manager', true], ['head_coach', true], ['staff', false], ['reception', false],
+  ])('%s at B on the defaults may list; may save and delete: %s', (role, write) => {
     const caller = person({ [LOC_A]: { role: 'staff' }, [LOC_B]: { role } }, LOC_A)
     expect(canReadSegmentsAt(caller, LOC_B)).toBe(true)
-    expect(canWriteSegmentsAt(caller, LOC_B)).toBe(true)
+    expect(canWriteSegmentsAt(caller, LOC_B)).toBe(write)
   })
   it('a master may list, save and delete anywhere', () => {
     expect(canReadSegmentsAt(MASTER, LOC_B)).toBe(true)
     expect(canWriteSegmentsAt(MASTER, LOC_B)).toBe(true)
   })
   it.each([
+    ['a head coach with Contacts but Email off', HEAD_COACH_B_NO_EMAIL],
     ['a head coach whose template switches Email and WhatsApp off', HEAD_COACH_B_NO_MESSAGING],
-    ['staff with Contacts on and no Email or WhatsApp', STAFF_B],
-  ])('%s keeps Save and delete (R1 not taken)', (_label, caller) => {
-    expect(canWriteSegmentsAt(caller, LOC_B)).toBe(true)
+    ['staff with Contacts on and no Email', STAFF_B],
+  ])('%s may list but not save or delete (R1)', (_label, caller) => {
+    expect(canReadSegmentsAt(caller, LOC_B)).toBe(true)
+    expect(canWriteSegmentsAt(caller, LOC_B)).toBe(false)
+  })
+  it('staff granted Email at B may save and delete there', () => {
+    expect(canWriteSegmentsAt(STAFF_B_WITH_EMAIL, LOC_B)).toBe(true)
   })
   it.each([
     ['staff with Contacts switched off', STAFF_B_CONTACTS_OFF],

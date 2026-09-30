@@ -7,8 +7,9 @@
 // SEGMENTROUTE.1: both handlers share one gate, in the house order:
 // 401 → uuid-shaped id (else 404) → the row (a failed read is a logged 500,
 // a missing row the same 404 another studio's gets) → membership (404) →
-// contacts at the segment's studio (403) → a segment a sequence starts from
-// also needs email or whatsapp there (403). PUT then validates its filter
+// contacts AND email at the segment's studio (403) → a segment a sequence
+// starts from also needs email or whatsapp there (403; implied by the Email
+// the write rule already demands, kept as the fence if that is loosened). PUT then validates its filter
 // with the POST's own rule (FILTER-P1.5 had missed it here).
 
 import { NextResponse } from 'next/server'
