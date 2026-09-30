@@ -44,7 +44,7 @@ function stubDb(messages) {
       const b = {
         select: (_c, o) => { if (o?.head) state.head = true; return b },
         update: () => b, insert: () => Promise.resolve({ error: null }),
-        eq: () => b, in: () => b, gte: () => b, is: () => b, not: () => b, or: () => b, order: () => b, limit: () => b,
+        eq: () => b, in: () => b, gte: () => b, lte: () => b, is: () => b, not: () => b, or: () => b, order: () => b, limit: () => b,
         maybeSingle: () => b, single: () => b,
         then: (ok, bad) => Promise.resolve(finish()).then(ok, bad),
       }

@@ -15,6 +15,8 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { validateBody, uuidLike } from '@/lib/validate'
+import { readBookChatTemplate } from '@/lib/book-chat-copy'
+import { logWarn } from '@/lib/log'
 import {
   createBooking,
   GLOFOX_BOOKING_MODEL,
@@ -152,10 +154,19 @@ export async function POST(request) {
     }, { status: 502 })
   }
 
+  // BOOKCHATCOPY.1 — the studio's editable chat confirmation for the panel.
+  // The member IS booked, so a failed read never fails this: logged, and the
+  // panel sends the default words.
+  const chat = await readBookChatTemplate(db, contact.location_id)
+  if (chat.error) {
+    logWarn('glofox-classes-book', 'chat confirmation template read failed; the default is used', { locationId: contact.location_id, err: chat.error })
+  }
+
   return NextResponse.json({
     success: true,
     glofox_booking_id: verdict.bookingId,
     glofox_body: result.body,
+    chat_template: chat.template,
     ...(result.recovered ? { recovered: result.recovered } : {}),
     ...discovered,
   })
