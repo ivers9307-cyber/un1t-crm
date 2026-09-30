@@ -266,9 +266,12 @@ describe('RLSACTIVE.1 — inline policies that read a profile table carry the ac
 
   it('finds the policies it is meant to guard (not vacuous)', () => {
     // 47 gated by mig 626 + 7 allowlisted, less audit_events_select_master_owner
-    // (gated; dropped by mig 655 AUDITRLS.1, audit_events is service-role only).
-    expect(inline.length).toBeGreaterThanOrEqual(53)
-    expect(inline.filter((p) => policyGated(p.body)).length).toBeGreaterThanOrEqual(46)
+    // (gated; dropped by mig 655 AUDITRLS.1, audit_events is service-role only),
+    // less car_bca_submissions_read_at_location and
+    // car_bca_submission_events_read_at_location (gated; dropped by mig 674
+    // CARSCLIENTWRITE.1, both tables are service-role only).
+    expect(inline.length).toBeGreaterThanOrEqual(51)
+    expect(inline.filter((p) => policyGated(p.body)).length).toBeGreaterThanOrEqual(44)
     expect(inline.map((p) => `${p.table} :: ${p.name}`)).toContain('public.invoices_queue :: inbound_invoices_read')
   })
 
