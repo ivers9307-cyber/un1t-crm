@@ -164,10 +164,12 @@ async function renderEmail(db, user, id, searchParams) {
   //
   // CAMPHIST.1 — but ONLY while the campaign's content may still change.
   // `?edit=1` used to open the full editor on any status, including 'sent'.
-  // That is not a cosmetic problem: CampaignEditor saves by writing the
-  // `campaigns` row directly from the browser Supabase client, so the 409
-  // guard on PUT /api/campaigns/[id] never runs and the mig 014 RLS policy
-  // (FOR ALL, no status predicate) permits it. The campaign's recipients,
+  // That is not a cosmetic problem: CampaignEditor then saved by writing the
+  // `campaigns` row directly from the browser Supabase client, so no route's
+  // 409 ran and the mig 014 RLS policy (FOR ALL, no status predicate)
+  // permitted it (since MEMBERWRITESWEEP.1e it saves through
+  // PUT /api/communications/campaigns/[id], which refuses a locked campaign,
+  // and mig 684 closes the table to clients). The campaign's recipients,
   // opens, clicks and monthly rollups then describe an email nobody was sent,
   // with no copy of the real one anywhere. Reuse goes through
   // POST /api/campaigns/[id]/duplicate instead.
