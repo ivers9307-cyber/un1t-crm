@@ -12,18 +12,5 @@
     "",
     "Entries cannot rot: an expired entry fails exactly like an unlisted name."
   ],
-  "entries": [
-    {
-      "file": "src/lib/sequences/enrol.js",
-      "name": "increment_sequence_enrolled",
-      "reason": "KNOWN PHANTOM, not a false positive: 0 in pg_proc (30 Sep 2026), 404 in the edge logs. The call is dead (its resolved error is dropped; email_sequences.total_enrolled never moves). Removed by C61 SEQCOUNTERS.1 (PR #1849), held for Richard's decision on the /automations chip. Delete this entry when #1849 merges.",
-      "expires": "2026-10-31"
-    },
-    {
-      "file": "src/lib/sequences/scheduler.js",
-      "name": "increment_sequence_completed",
-      "reason": "KNOWN PHANTOM, not a false positive: 0 in pg_proc (30 Sep 2026), 404 in the edge logs. Two dead calls (resolved error dropped; email_sequences.total_completed never moves). Removed by C61 SEQCOUNTERS.1 (PR #1849), held for Richard's decision on the /automations chip. Delete this entry when #1849 merges.",
-      "expires": "2026-10-31"
-    }
-  ]
+  "entries": []
 }

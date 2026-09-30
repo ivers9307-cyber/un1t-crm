@@ -12,7 +12,9 @@ vi.mock('@/lib/automations/glofox-status', () => ({ readGlofoxAutomationStatus: 
 vi.mock('@/components/automations/AutomationsView', () => ({
   default: ({ cards }) => <div data-testid="view">{cards.map((c) => `${c.key}:${c.status.available}:${c.status.unknown ? 'unknown' : 'known'}`).join('|')}</div>,
 }))
-vi.mock('@/components/automations/AutomationsFlowList', () => ({ default: () => null }))
+const seen = vi.hoisted(() => ({ flows: null }))
+vi.mock('@/components/automations/AutomationsFlowList', () => ({ default: (p) => { seen.flows = p; return null } }))
+vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 vi.mock('@/components/automations/ClassClimateCard', () => ({ default: (p) => <div>{`climate:${p.glofoxConnected}:${p.glofoxUnknown ? 'unknown' : 'known'}`}</div> }))
 vi.mock('@/components/automations/BathroomClimateCard', () => ({ default: (p) => <div>{`bathroom:${p.glofoxConnected}:${p.glofoxUnknown ? 'unknown' : 'known'}`}</div> }))
 
@@ -20,6 +22,8 @@ import AutomationsPage from './page.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { readGlofoxAutomationStatus } from '@/lib/automations/glofox-status'
+import { hasPermission } from '@/lib/permissions'
+import { logError } from '@/lib/log'
 
 const LOC = 'a0000000-0000-4000-8000-00000000000a'
 // A db whose every chain resolves to { data: [] } (location_automations, ac_devices).
@@ -36,6 +40,12 @@ beforeEach(() => {
 })
 
 describe('/automations — Glofox presence (PROFILESPREAD.1)', () => {
+  // The flows describe below switches hasPermission; restore the module
+  // mock's implementation so test order cannot leak it in here.
+  beforeEach(() => {
+    hasPermission.mockImplementation((u, k) => k === 'automations')
+  })
+
   it('reads it by the active location id and passes the booleans on', async () => {
     readGlofoxAutomationStatus.mockResolvedValue({
       known: true, connected: true,
@@ -76,5 +86,79 @@ describe('/automations — Glofox presence (PROFILESPREAD.1)', () => {
     await AutomationsPage()
     expect(order.indexOf('from:location_automations')).toBeGreaterThanOrEqual(0)
     expect(order.indexOf('from:location_automations')).toBeLessThan(order.indexOf('glofox:resolved'))
+  })
+})
+
+// SEQCOUNTERS.1 — the flow list's enrolled chip is counted from
+// sequence_enrollments (an embedded count in the same read). If that read
+// fails, the list is read again without the count (no chips); only if the
+// plain read fails too is it a notice, never an empty list.
+describe('/automations — flows (SEQCOUNTERS.1)', () => {
+  const WITH_COUNT = 'id, name, status, trigger_type, created_at, sequence_steps(id), sequence_enrollments(count)'
+  const PLAIN = 'id, name, status, trigger_type, created_at, sequence_steps(id)'
+  const ROW = { id: 'a0000000-0000-4000-8000-000000000001', name: 'Welcome', status: 'active', trigger_type: 'manual', created_at: 'T', sequence_steps: [{ id: 's1' }] }
+  // resultFor(selectString) → { data, error }; every read is recorded.
+  function flowsDb(resultFor) {
+    const reads = []
+    const from = (table) => {
+      const read = { table, select: null, eq: [] }
+      reads.push(read)
+      const chain = {
+        select: (c) => { read.select = c; return chain },
+        eq: (...a) => { read.eq.push(a); return chain },
+        order: () => chain,
+        then: (r, j) => Promise.resolve(resultFor(read.select)).then(r, j),
+      }
+      return chain
+    }
+    return { db: { from }, reads }
+  }
+  const TIMEOUT = { code: '57014', message: 'timeout' }
+  beforeEach(() => {
+    seen.flows = null
+    hasPermission.mockImplementation((_u, k) => k === 'email')
+  })
+
+  it('reads named columns with an embedded enrolment count at the active location, and passes enrolled_count', async () => {
+    const { db, reads } = flowsDb(() => ({ data: [{ ...ROW, sequence_enrollments: [{ count: 139 }] }], error: null }))
+    createServerClient.mockReturnValue(db)
+    renderToStaticMarkup(await AutomationsPage()) // the flow list mock captures its props on render
+    expect(reads.map((r) => r.select)).toEqual([WITH_COUNT])
+    expect(reads[0].eq).toEqual([['location_id', LOC]])
+    expect(seen.flows.sequences[0].enrolled_count).toBe(139)
+    expect(seen.flows.sequences[0]).not.toHaveProperty('sequence_enrollments')
+    expect(seen.flows.loadFailed).toBe(false)
+    expect(logError).not.toHaveBeenCalled()
+  })
+
+  it('a failed count read is logged and retried without the count: the list renders, with no chips', async () => {
+    const { db, reads } = flowsDb((sel) => (sel === WITH_COUNT ? { data: null, error: TIMEOUT } : { data: [ROW], error: null }))
+    createServerClient.mockReturnValue(db)
+    renderToStaticMarkup(await AutomationsPage())
+    expect(reads.map((r) => r.select)).toEqual([WITH_COUNT, PLAIN])
+    expect(reads[1].eq).toEqual([['location_id', LOC]])
+    expect(seen.flows.loadFailed).toBe(false)
+    expect(seen.flows.sequences).toEqual([{ ...ROW, enrolled_count: null }])
+    expect(logError).toHaveBeenCalledTimes(1)
+    expect(logError).toHaveBeenCalledWith('automations', expect.stringMatching(/enrolment count read failed/), { code: '57014', locationId: LOC })
+  })
+
+  it('when the plain read fails too, both are logged and the list is a notice with no rows', async () => {
+    const { db, reads } = flowsDb(() => ({ data: null, error: TIMEOUT }))
+    createServerClient.mockReturnValue(db)
+    renderToStaticMarkup(await AutomationsPage())
+    expect(reads.map((r) => r.select)).toEqual([WITH_COUNT, PLAIN])
+    expect(seen.flows.loadFailed).toBe(true)
+    expect(seen.flows.sequences).toEqual([])
+    expect(logError).toHaveBeenCalledTimes(2)
+    expect(logError).toHaveBeenLastCalledWith('automations', expect.stringMatching(/sequences read failed/), { code: '57014', locationId: LOC })
+  })
+
+  it('a user with no active location reads the nil location, like the page\'s other reads', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'owner', activeLocation: null, locations: [] })
+    const { db, reads } = flowsDb(() => ({ data: [], error: null }))
+    createServerClient.mockReturnValue(db)
+    renderToStaticMarkup(await AutomationsPage())
+    expect(reads[0].eq).toEqual([['location_id', '00000000-0000-0000-0000-000000000000']])
   })
 })

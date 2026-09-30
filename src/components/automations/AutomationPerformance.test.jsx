@@ -53,12 +53,16 @@ const run = (over = {}) => ({
 })
 
 let runs
+let statsResponses // SEQCOUNTERS.1 — per-call /stats answers; the last one repeats
 let exitCalls
 let exitStatus
 
 function stubFetch() {
   vi.stubGlobal('fetch', vi.fn(async (url, opts) => {
-    if (String(url).endsWith('/stats')) return jsonRes(STATS)
+    if (String(url).endsWith('/stats')) {
+      const [body, status] = statsResponses.length > 1 ? statsResponses.shift() : statsResponses[0]
+      return jsonRes(body, status)
+    }
     if (String(url).endsWith('/runs')) return jsonRes({ success: true, data: { runs } })
     if (String(url).endsWith('/exit')) {
       exitCalls.push({ url: String(url), method: opts?.method })
@@ -80,6 +84,7 @@ const jsonRes = (body, status = 200) => ({
 
 beforeEach(() => {
   runs = [run()]
+  statsResponses = [[STATS, 200]]
   exitCalls = []
   exitStatus = 200
   vi.stubGlobal('confirm', vi.fn(() => true))
@@ -161,5 +166,57 @@ describe('AutomationPerformance — Exit control', () => {
     runs = [run({ state: 'paused', outcome: 'Paused: send failed' })]
     await renderPanel()
     for (const b of document.querySelectorAll('button')) expect(b.getAttribute('type')).toBe('button')
+  })
+})
+
+// ── SEQCOUNTERS.1 — unknown counts are said, never shown as zeros ──
+
+const PER_STEP = { 'st-1': { sent: 4, opened: 2, clicked: 1, bounced: 0, complained: 0, failed: 0 } }
+const STEPS = [{ id: 'st-1', step_type: 'email', config: { subject: 'Hello' } }]
+const PARTIAL = {
+  success: true,
+  warning: 'Enrolment counts could not be loaded',
+  data: { enrolments: null, exit_reasons: null, per_step: PER_STEP },
+}
+const renderWithSteps = async () => {
+  render(<AutomationPerformance sequenceId="seq-1" steps={STEPS} />)
+  await screen.findByText('Aoife Byrne')
+}
+
+describe('AutomationPerformance — enrolment counts unavailable (SEQCOUNTERS.1)', () => {
+  it('shows a notice in place of the funnel numbers, and still the per-step results', async () => {
+    statsResponses = [[PARTIAL, 200]]
+    await renderWithSteps()
+    expect(screen.getByRole('alert').textContent).toMatch(/Enrolment counts couldn.t load\. Reload to try again\./)
+    expect(screen.queryByText('Enrolled (all time)')).toBeNull()
+    expect(screen.getByText('Per-step results')).toBeTruthy()
+    expect(screen.getByText(/4 sent/)).toBeTruthy()
+  })
+
+  it('a refresh that loses the counts keeps the last good numbers', async () => {
+    statsResponses = [[STATS, 200], [PARTIAL, 200]]
+    await renderWithSteps()
+    expect(screen.getByText('Enrolled (all time)')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /Refresh/ }))
+    await waitFor(() => expect(screen.getByText(/4 sent/)).toBeTruthy())
+    expect(screen.getByText('Enrolled (all time)')).toBeTruthy()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('a first /stats answer that fails is a notice, not silently missing sections', async () => {
+    statsResponses = [[{ success: false, error: 'boom' }, 500]]
+    await renderWithSteps()
+    expect(screen.getByRole('alert').textContent).toMatch(/Couldn.t load this automation.s results\. Reload to try again\./)
+    expect(screen.queryByText('Enrolled (all time)')).toBeNull()
+  })
+
+  it('a later failed refresh keeps the last good numbers and shows no notice', async () => {
+    statsResponses = [[STATS, 200], [{ success: false, error: 'boom' }, 500]]
+    await renderWithSteps()
+    fireEvent.click(screen.getByRole('button', { name: /Refresh/ }))
+    await waitFor(() => expect(globalThis.fetch.mock.calls.filter(([u]) => String(u).endsWith('/stats'))).toHaveLength(2))
+    await waitFor(() => expect(screen.getByRole('button', { name: /Refresh/ }).disabled).toBe(false))
+    expect(screen.getByText('Enrolled (all time)')).toBeTruthy()
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 })

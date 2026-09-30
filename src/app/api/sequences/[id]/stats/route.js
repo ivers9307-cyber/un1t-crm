@@ -25,6 +25,7 @@ import { canBuildSequencesAt, canBuildSequencesSomewhere, sequencePermissionRequ
 import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { selectAll } from '@/lib/select-all'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -91,12 +92,9 @@ export async function GET(_request, props) {
 
   // Enrolment-level totals. Paginated via selectAll (the old
   // .limit(10_000) was silently capped at the 1000-row PostgREST
-  // ceiling). Best-effort: an error here shouldn't fail the whole
-  // stats response, so swallow it and report zeroes (matches the
-  // prior un-checked behaviour).
-  const enrolmentStats = { total: 0, active: 0, completed: 0, exited: 0, paused: 0 }
-  const exitReasons = {}
-  let enrolments = []
+  // ceiling). This is the panel's only source for enrolment counts
+  // (the email_sequences.total_* counters were never maintained; mig 663).
+  let enrolments
   try {
     enrolments = await selectAll((from, to) => db
       .from('sequence_enrollments')
@@ -105,8 +103,19 @@ export async function GET(_request, props) {
       .order('id', { ascending: true })
       .range(from, to))
   } catch {
-    enrolments = []
+    // SEQCOUNTERS.1 — a failed read is never "0 enrolled", and it does not
+    // throw away the per-step results, which came from a read that worked.
+    // The counts are null (unknown) and the panel says so. selectAll
+    // rethrows new Error(message), so there is no PostgREST code to log.
+    logError('sequences', 'stats: enrolments read failed', { sequenceId: params.id })
+    return NextResponse.json({
+      success: true,
+      warning: 'Enrolment counts could not be loaded',
+      data: { enrolments: null, exit_reasons: null, per_step: Object.fromEntries(byStep) },
+    })
   }
+  const enrolmentStats = { total: 0, active: 0, completed: 0, exited: 0, paused: 0 }
+  const exitReasons = {}
   for (const e of (enrolments || [])) {
     enrolmentStats.total += 1
     if (e.status === 'active') enrolmentStats.active += 1
