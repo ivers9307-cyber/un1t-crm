@@ -1,8 +1,9 @@
 // ANYMEMBERWRITE.1 guard (mig 672). authenticated holds SELECT only on
 // public.challenges and public.contact_segments (each keeps its one SELECT
-// policy: challenges_read feeds the member Compete and Wrapped screens and
-// champ-app's member loaders) and NOTHING on public.car_notes (RLS on, no
-// policy); anon holds nothing on the three. Pinned here:
+// policy: challenges_read feeds the member Compete screen and champ-app's
+// member loaders; Wrapped reads nothing for members today, row C96) and
+// NOTHING on public.car_notes (RLS on, no policy); anon holds nothing on the
+// three. Pinned here:
 //
 //  1. Browser and phone code never WRITES the three tables, and never touches
 //     car_notes at all (no .from('car_notes') read, no embed of car_notes in
@@ -17,10 +18,11 @@
 //     give anon or PUBLIC anything, do either through ALL TABLES IN SCHEMA
 //     public, hand a client role another role, add a permissive
 //     INSERT/UPDATE/DELETE/ALL policy (no FOR = ALL) or any permissive policy
-//     on car_notes, disable RLS on one of them, or CREATE/RENAME a table to one
-//     of the three names (the default ACL re-grants ALL to anon and
-//     authenticated). A GRANT run from EXECUTE '…' counts. The one exemption
-//     is a rollback migration named `<NNN>_anymemberwrite1_rollback.sql`.
+//     on car_notes, disable RLS on one of them (any ALTER TABLE form), make a
+//     client role its OWNER, or CREATE/RENAME a table to one of the three
+//     names (the default ACL re-grants ALL to anon and authenticated). A
+//     GRANT run from EXECUTE '…' counts. The one exemption is a rollback
+//     migration named `<NNN>_anymemberwrite1_rollback.sql`.
 //
 // JS comments are blanked from the TypeScript parser's comment ranges (never
 // a regex; JSX text is never read as a comment), SQL comments by one quote-
