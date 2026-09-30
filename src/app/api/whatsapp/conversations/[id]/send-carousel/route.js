@@ -43,9 +43,11 @@ export async function POST(request, props) {
   if (!set) return NextResponse.json({ success: false, error: 'Card set not found' }, { status: 404 })
 
   // Shared with the agent's send_card_set tool (whatsapp-carousel-send.js):
-  // Meta call + best-effort thread row. Staff sends carry no source stamp.
+  // Meta call + best-effort thread row. Staff sends carry no source stamp;
+  // sent_by is the acting staff member from the SESSION, never the body
+  // (CHECKINSTALL.2, C106 b — same as the send route).
   try {
-    await sendCardSetToConversation(db, { set, conversation, locationId: conversation.location_id })
+    await sendCardSetToConversation(db, { set, conversation, locationId: conversation.location_id, sentBy: user.id })
   } catch (e) {
     // WACONFIGFALLBACK.1 — a location with no WhatsApp number of its own is a
     // 409 with the resolver's message (it used to send from the env number).
