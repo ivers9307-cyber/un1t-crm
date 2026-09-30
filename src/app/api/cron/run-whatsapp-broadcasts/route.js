@@ -21,6 +21,18 @@
 //     per-recipient claim-first insert (mig 331) de-dupes any concurrent pass.
 //  3. In-flight DRIPS: unchanged — one chunk each, inside the send window.
 //
+// C122 WABROADCASTKILL.1 — every arm runs only at studios where the
+// `whatsapp` FEATURE is on (tier 1 of resolvePermission, which refuses even
+// masters: switching WhatsApp off at a studio used to leave its drip sending,
+// with nobody able to open the page to pause it). The studios are read FIRST
+// and each arm's query is filtered to them, so a skipped row is never
+// touched (no status flip, no updated_at bump: it resumes on the first tick
+// after the feature is back on; a due scheduled row then starts late) and
+// never takes a per-tick slot from another studio. The skipped rows are
+// counted (`skipped_whatsapp_off`). An unreadable `locations` read sends
+// NOTHING (fail closed: a 500, like the broadcast reads below), and a
+// broadcast with no studio or at a studio missing from the read is skipped.
+//
 // Auth via Authorization: Bearer ${CRON_SECRET}.
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
@@ -30,6 +42,8 @@ import { promotionPlan, SCHEDULED_BLAST_MAX_PER_TICK, scheduledStartFailureNotif
 import { sendPushToRolesAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { logError, logInfo, logWarn } from '@/lib/log'
+import { whatsappEnabledLocationIds, notEnabledLocationFilter } from '@/lib/whatsapp-broadcast-feature-gate'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -45,33 +59,59 @@ export async function GET(request) {
   const now = new Date()
   const nowIso = now.toISOString()
 
+  // C122 — the studios where WhatsApp is on. `locations` is a handful of
+  // rows (far under the 1,000-row cap); a studio past the cap would only be
+  // skipped, never sent at wrongly.
+  const locQ = await db.from('locations').select('id, features').order('id', { ascending: true })
+  if (locQ.error) {
+    logError('cron:run-whatsapp-broadcasts', 'locations read failed; no broadcast sent this tick (the WhatsApp feature flag is unreadable)', { code: locQ.error.code || null })
+    return NextResponse.json({ success: false, error: 'Could not read the studios\' WhatsApp setting' }, { status: 500 })
+  }
+  const enabledIds = whatsappEnabledLocationIds(locQ.data)
+  const skippedFilter = notEnabledLocationFilter(enabledIds)
+
+  // Each arm's row filter, shared by its work query and its skipped count.
+  const arms = {
+    scheduled: (q) => q.eq('status', 'scheduled').lte('scheduled_at', nowIso),
+    resume: (q) => q.eq('delivery_mode', 'blast').eq('status', 'sending')
+      .not('scheduled_at', 'is', null).is('paused_at', null),
+    drip: (q) => q.eq('delivery_mode', 'drip').eq('status', 'sending').is('paused_at', null),
+  }
+  const none = Promise.resolve({ data: [], error: null })
+  const atEnabled = (q) => (enabledIds.length ? q.in('location_id', enabledIds) : null)
+  const skippedCount = (arm) => {
+    const q = arm(db.from('whatsapp_broadcasts').select('id', { count: 'exact', head: true }))
+    return skippedFilter ? q.or(skippedFilter) : q
+  }
+
   // All three arms' rows in parallel. The resume query runs alongside the
   // scheduled one, so a blast promoted THIS tick isn't double-picked here.
-  const [scheduledQ, resumeQ, dripQ] = await Promise.all([
-    db.from('whatsapp_broadcasts')
-      .select('id, name, status, location_id, delivery_mode, scheduled_at, send_window_start, send_window_end, send_window_tz')
-      .eq('status', 'scheduled')
-      .lte('scheduled_at', nowIso)
-      .order('scheduled_at', { ascending: true })
-      .limit(5),
-    db.from('whatsapp_broadcasts')
-      .select('id, name, location_id')
-      .eq('delivery_mode', 'blast')
-      .eq('status', 'sending')
-      .not('scheduled_at', 'is', null)
-      .is('paused_at', null)
-      .order('updated_at', { ascending: true })
-      .limit(5),
-    db.from('whatsapp_broadcasts')
-      .select('id, name, location_id, send_window_start, send_window_end, send_window_tz')
-      .eq('delivery_mode', 'drip')
-      .eq('status', 'sending')
-      .is('paused_at', null)
-      .order('updated_at', { ascending: true })
-      .limit(20),
+  const scheduledWork = atEnabled(arms.scheduled(db.from('whatsapp_broadcasts')
+    .select('id, name, status, location_id, delivery_mode, scheduled_at, send_window_start, send_window_end, send_window_tz')))
+  const resumeWork = atEnabled(arms.resume(db.from('whatsapp_broadcasts')
+    .select('id, name, location_id')))
+  const dripWork = atEnabled(arms.drip(db.from('whatsapp_broadcasts')
+    .select('id, name, location_id, send_window_start, send_window_end, send_window_tz')))
+  const [scheduledQ, resumeQ, dripQ, ...skippedQs] = await Promise.all([
+    scheduledWork ? scheduledWork.order('scheduled_at', { ascending: true }).limit(5) : none,
+    resumeWork ? resumeWork.order('updated_at', { ascending: true }).limit(5) : none,
+    dripWork ? dripWork.order('updated_at', { ascending: true }).limit(20) : none,
+    skippedCount(arms.scheduled),
+    skippedCount(arms.resume),
+    skippedCount(arms.drip),
   ])
   for (const q of [scheduledQ, resumeQ, dripQ]) {
     if (q.error) return NextResponse.json({ success: false, error: q.error.message }, { status: 500 })
+  }
+  // The skipped count is reporting only: a failed count is logged and reads
+  // null, it never stops the sends.
+  const countFailed = skippedQs.find((q) => q.error)
+  if (countFailed) {
+    logWarn('cron:run-whatsapp-broadcasts', 'skipped-broadcast count failed', { code: countFailed.error.code || null })
+  }
+  const skippedWhatsappOff = countFailed ? null : skippedQs.reduce((n, q) => n + (q.count || 0), 0)
+  if (skippedWhatsappOff) {
+    logInfo('cron:run-whatsapp-broadcasts', 'broadcasts skipped at studios where WhatsApp is off', { skipped: skippedWhatsappOff })
   }
 
   const stats = {
@@ -79,6 +119,7 @@ export async function GET(request) {
     resume_found: resumeQ.data.length,
     found: dripQ.data.length,
     sent: 0, failed: 0, finished: 0, in_progress: 0, outside_window: 0, errors: [],
+    skipped_whatsapp_off: skippedWhatsappOff,
   }
 
   // ── 1. Promote due scheduled broadcasts ─────────────────────────────────
@@ -87,11 +128,18 @@ export async function GET(request) {
     if (!plan) continue
     try {
       // CAS the flip — a concurrent tick that already claimed it gets 0 rows.
-      const { data: claimed } = await db.from('whatsapp_broadcasts')
+      const { data: claimed, error: claimErr } = await db.from('whatsapp_broadcasts')
         .update({ status: plan.flipTo })
         .eq('id', row.id)
         .eq('status', 'scheduled')
         .select('id')
+      // A failed flip is not a claim: the row stays 'scheduled' and the next
+      // tick tries again (it was read as "someone else claimed it", silently).
+      if (claimErr) {
+        logWarn('cron:run-whatsapp-broadcasts', 'scheduled flip failed; retried next tick', { broadcastId: row.id, code: claimErr.code || null })
+        stats.errors.push({ broadcast_id: row.id, error: `status flip failed: ${claimErr.message}` })
+        continue
+      }
       if (!claimed?.length) continue
       stats.promoted++
 

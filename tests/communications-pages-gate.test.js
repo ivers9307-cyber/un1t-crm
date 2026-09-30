@@ -32,12 +32,12 @@ const who = (a, b) => person({ [LOC_A]: { role: 'owner', permissions: { ...off, 
 const onlyAtB = who({}, on)
 const onlyAtA = who(on, {})
 
-const props = { params: Promise.resolve({ id: 'tpl-1' }) }
+const props = { params: Promise.resolve({ id: '00000000-0000-4000-8000-0000000007a1' }) }
 beforeEach(() => {
   vi.clearAllMocks()
   createServerClient.mockReturnValue(pageDb({
-    email_templates: { id: 'tpl-1', location_id: LOC_B },
-    whatsapp_templates: { id: 'tpl-1', location_id: LOC_B },
+    email_templates: { id: '00000000-0000-4000-8000-0000000007a1', location_id: LOC_B },
+    whatsapp_templates: { id: '00000000-0000-4000-8000-0000000007a1', location_id: LOC_B },
     whatsapp_template_events: [],
   }))
 })
