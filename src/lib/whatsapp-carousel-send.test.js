@@ -71,6 +71,20 @@ describe('sendCardSetToConversation', () => {
     expect(inserts[0].row.source).toBe('agent')
   })
 
+  // CHECKINSTALL.2 (C106 b) — a staff card-set send is a PERSON acting on the
+  // thread; the route threads the session's profile id through as sentBy.
+  it('stamps sent_by with the acting staff member when sentBy is given (inbox path)', async () => {
+    const { db, inserts } = makeDb()
+    await sendCardSetToConversation(db, { set: SET, conversation: CONVERSATION, locationId: 'loc1', sentBy: 'profile-1' })
+    expect(inserts[0].row.sent_by).toBe('profile-1')
+  })
+
+  it('the agent path (source, no sentBy) carries no sent_by', async () => {
+    const { db, inserts } = makeDb()
+    await sendCardSetToConversation(db, { set: SET, conversation: CONVERSATION, locationId: 'loc1', source: 'agent' })
+    expect('sent_by' in inserts[0].row).toBe(false)
+  })
+
   it('falls back to the set name as bodyText when body_text is empty', async () => {
     const { db } = makeDb()
     const { body_text: _omit, ...bare } = SET

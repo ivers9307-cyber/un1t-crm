@@ -215,8 +215,8 @@ const NUDGE_INSTRUCTION =
 // default source='api' with NO sent_by, so they are not a person owning the
 // thread. Same line the live reply path draws (auto-reply.js whatsappAdapter
 // .isHumanOutbound, AGENT-REARM.2), plus the phone-app sources. Pure.
-// NOT yet used by either runner: the check-in rule switch is CHECKINSTALL.2
-// (Richard's call D1), so both runners still read humanSpokeAfterInbound.
+// Used by the check-in runner since CHECKINSTALL.2 (Richard's call D1); the
+// follow-up ladder still reads humanSpokeAfterInbound.
 const PERSON_SOURCES = new Set(['operator', 'app_echo', 'history_sync'])
 export function isStaffOutbound(m) {
   if (!m || m.direction !== 'outbound' || m.source === 'agent') return false
@@ -225,8 +225,9 @@ export function isStaffOutbound(m) {
 
 /**
  * Oldest-first rows → what happened since the customer's last message. Pure.
- * humanSpokeAfterInbound — ANY non-agent outbound (the rule both runners use,
- *   unchanged). staffSpokeAfterInbound — a PERSON (isStaffOutbound).
+ * humanSpokeAfterInbound — ANY non-agent outbound (the follow-up ladder's
+ *   rule, unchanged). staffSpokeAfterInbound — a PERSON (isStaffOutbound), the
+ *   check-in runner's rule since CHECKINSTALL.2.
  */
 export function summariseThread(rows) {
   let lastInboundAtMs = null
@@ -739,7 +740,13 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
         // CHECKINSTALL.1 — a failed thread read is not "nobody spoke" (logged
         // inside lastInboundFacts). Skip unstamped; the next tick retries.
         if (facts.readFailed) { bump('thread_read_failed'); results.skipped++; continue }
-        if (facts.humanSpokeAfterInbound) { bump('human_active'); results.skipped++; continue }
+        // CHECKINSTALL.2 (C98, Richard's call D1) — only a PERSON parks a
+        // check-in. Every app-booked lead gets the automated
+        // booking_class_confirmed_ template (source 'api', no sent_by); counting
+        // that as "a human owns the thread" skipped every such first-timer
+        // (9 between 24 Aug and 30 Sep). The follow-up ladder keeps
+        // humanSpokeAfterInbound.
+        if (facts.staffSpokeAfterInbound) { bump('human_active'); results.skipped++; continue }
         const windowOpen = facts.lastInboundAtMs && (nowMs - facts.lastInboundAtMs) < 23 * H_MS
 
         if (windowOpen) {
