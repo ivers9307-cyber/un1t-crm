@@ -13,6 +13,8 @@ import {
   requireInboxPermission,
   requireWhatsAppInboxAnywhere,
   requireWhatsAppInboxAt,
+  requireWebWhatsAppInboxAnywhere,
+  requireWebWhatsAppInboxAt,
   hasRoleAtLocation,
   hasRoleAtAnyLocation,
 } from './auth.js'
@@ -852,5 +854,69 @@ describe('requireWhatsAppInboxAnywhere / requireWhatsAppInboxAt (INBOXLOC.1)', (
     const m = { role: 'master', locations: [{ id: B, features: {} }], assignmentsByLocation: {} }
     expect(requireWhatsAppInboxAt(m, B)).toBeNull()
     expect(requireWhatsAppInboxAnywhere(m)).toBeNull()
+  })
+})
+
+// ─── INBOXWEBONLY3.1 (C119) — the web-only thread actions keep the WEB key ──
+// Richard, 30 Sep: add-contact, pause/resume Mia and start-a-thread are only
+// ever called by the web, so they require the WEB `whatsapp` permission, still
+// judged at the thread's (or contact's) studio; the mobile toggle alone does
+// not open them. Same order and shapes as the INBOXLOC.1 pair above.
+describe('requireWebWhatsAppInboxAnywhere / requireWebWhatsAppInboxAt (INBOXWEBONLY3.1)', () => {
+  const A = 'loc-a'
+  const B = 'loc-b'
+  const person = (atA, atB) => ({
+    role: 'staff',
+    activeLocation: { id: A, features: {} },
+    activeAssignment: { role: 'staff', permissions: atA },
+    locations: [{ id: A, role: 'staff', features: {} }, { id: B, role: 'staff', features: {} }],
+    assignmentsByLocation: { [A]: { role: 'staff', permissions: atA }, [B]: { role: 'staff', permissions: atB } },
+  })
+  const OFF = { whatsapp: false, mobile: { whatsapp: false } }
+  const WEB = { whatsapp: true, mobile: { whatsapp: false } }
+  const MOBILE = { whatsapp: false, mobile: { whatsapp: true } }
+
+  it('401s a null user', () => {
+    expect(requireWebWhatsAppInboxAnywhere(null).status).toBe(401)
+    expect(requireWebWhatsAppInboxAt(null, B).status).toBe(401)
+  })
+
+  it('the web key at the thread\'s studio passes, whatever the active one', () => {
+    const u = person(OFF, WEB)
+    expect(requireWebWhatsAppInboxAnywhere(u)).toBeNull()
+    expect(requireWebWhatsAppInboxAt(u, B)).toBeNull()
+  })
+
+  it('the mobile toggle alone at the thread\'s studio: 403 at the thread', async () => {
+    const u = person(WEB, MOBILE)
+    expect(requireWebWhatsAppInboxAnywhere(u)).toBeNull()
+    const r = requireWebWhatsAppInboxAt(u, B)
+    expect(r.status).toBe(403)
+    expect((await r.json()).success).toBe(false)
+    // …where the phone's thread routes (INBOXLOC.1) still let them in
+    expect(requireWhatsAppInboxAt(u, B)).toBeNull()
+  })
+
+  it('the mobile toggle alone everywhere: the coarse check refuses before any read', () => {
+    const u = person(MOBILE, MOBILE)
+    expect(requireWebWhatsAppInboxAnywhere(u).status).toBe(403)
+    expect(requireWhatsAppInboxAnywhere(u)).toBeNull()
+  })
+
+  it('web on at the active studio, off at the thread\'s: 403 at the thread', () => {
+    expect(requireWebWhatsAppInboxAt(person(WEB, OFF), B).status).toBe(403)
+  })
+
+  it('a studio the caller does not belong to, or no studio, is refused', () => {
+    const u = person(WEB, WEB)
+    expect(requireWebWhatsAppInboxAt(u, 'loc-elsewhere').status).toBe(403)
+    expect(requireWebWhatsAppInboxAt(u, null).status).toBe(403)
+    expect(requireWebWhatsAppInboxAt(u, undefined).status).toBe(403)
+  })
+
+  it('a master passes wherever the studio\'s WhatsApp feature is on', () => {
+    const m = { role: 'master', locations: [{ id: B, features: {} }], assignmentsByLocation: {} }
+    expect(requireWebWhatsAppInboxAt(m, B)).toBeNull()
+    expect(requireWebWhatsAppInboxAnywhere(m)).toBeNull()
   })
 })
