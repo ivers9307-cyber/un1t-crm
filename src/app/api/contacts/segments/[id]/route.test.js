@@ -20,6 +20,12 @@
 //   The test we care most about is the IDOR case: a user authenticated
 //   to location A trying to mutate a segment in location B.
 //
+// SEGMENTROUTE.1: the route also checks the Contacts permission at the
+// segment's studio (callers carry a role there), reads email_sequences to see
+// whether a sequence starts from the segment (the mock answers per table),
+// reads the row with maybeSingle, and 404s a non-uuid id before any read (ids
+// are uuid-shaped).
+//
 // Co-located alongside the route file (src/app/api/.../route.test.js)
 // — vitest.config.js's `include` glob picks these up automatically.
 
@@ -82,34 +88,27 @@ import { PUT, DELETE } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 
-// Builds a Supabase chain mock for the segment lookup + the optional
-// follow-on update/delete. The lookup is `from(t).select(...).eq(...).single()`.
-// The update is `from(t).update(...).eq(...).select().single()`.
-function mockDb({ existingSegment = null, updateResult = null, deleteResult = null }) {
-  const lookupSingle = vi.fn(() => Promise.resolve(
-    existingSegment === null
-      ? { data: null, error: null }
-      : { data: existingSegment, error: null }
-  ))
-  const lookupEq = vi.fn(() => ({ single: lookupSingle }))
-  const lookupSelect = vi.fn(() => ({ eq: lookupEq }))
+const SEG = '5e000000-0000-4000-8000-0000000000d1'
 
+// The row lookup is from('contact_segments').select().eq().maybeSingle();
+// the sequence-use read is from('email_sequences').select(…, {count, head}).eq().in().eq();
+// the update is .update().eq().select().single(); the delete .delete().eq().
+function mockDb({ existingSegment = null, sequencesUsing = 0, updateResult = null, deleteResult = null }) {
+  const lookupMaybeSingle = vi.fn(() => Promise.resolve({ data: existingSegment, error: null }))
   const updateSingle = vi.fn(() => Promise.resolve(updateResult || { data: null, error: null }))
-  const updateSelect = vi.fn(() => ({ single: updateSingle }))
-  const updateEq = vi.fn(() => ({ select: updateSelect }))
-  const updateUpdate = vi.fn(() => ({ eq: updateEq }))
-
-  const deleteEq = vi.fn(() => Promise.resolve(deleteResult || { error: null }))
-  const deleteDelete = vi.fn(() => ({ eq: deleteEq }))
-
-  const db = {
-    from: vi.fn(() => ({
-      select: lookupSelect,
-      update: updateUpdate,
-      delete: deleteDelete,
-    })),
+  const updateUpdate = vi.fn(() => ({ eq: () => ({ select: () => ({ single: updateSingle }) }) }))
+  const deleteDelete = vi.fn(() => ({ eq: () => Promise.resolve(deleteResult || { error: null }) }))
+  const seqChain = {
+    eq: () => seqChain,
+    in: () => seqChain,
+    then: (res, rej) => Promise.resolve({ data: null, count: sequencesUsing, error: null }).then(res, rej),
   }
-  return { db, spies: { lookupSingle, updateUpdate, deleteDelete } }
+  const db = {
+    from: vi.fn((table) => (table === 'email_sequences'
+      ? { select: () => seqChain }
+      : { select: () => ({ eq: () => ({ maybeSingle: lookupMaybeSingle }) }), update: updateUpdate, delete: deleteDelete })),
+  }
+  return { db, spies: { lookupMaybeSingle, updateUpdate, deleteDelete } }
 }
 
 function makeRequest(body) {
@@ -127,20 +126,19 @@ beforeEach(() => {
 })
 
 describe('PUT /api/contacts/segments/[id] — location gate', () => {
-  // Body that satisfies the Zod UpdateBody schema. Filter must be
-  // a valid audienceFilterSchema shape. Empty conditions array is
-  // valid per the schema.
+  // Body that satisfies the Zod UpdateBody schema and the audience
+  // validator (PUT runs validateAudienceFilter since SEGMENTROUTE.1).
   const validBody = {
     name: 'My segment',
-    filter: { conditions: [] },
+    filter: { logic: 'and', filters: [] },
   }
 
   it('returns 401 when there is no authenticated user', async () => {
     vi.mocked(getCurrentUser).mockResolvedValue(null)
-    const { db } = mockDb({ existingSegment: { id: 's1', location_id: 'loc-a' } })
+    const { db } = mockDb({ existingSegment: { id: SEG, location_id: 'loc-a' } })
     vi.mocked(createServerClient).mockReturnValue(db)
 
-    const res = await PUT(makeRequest(validBody), { params: { id: 's1' } })
+    const res = await PUT(makeRequest(validBody), { params: { id: SEG } })
     expect(res.status).toBe(401)
     const body = await res.json()
     expect(body).toEqual({ success: false, error: 'Unauthorised' })
@@ -149,12 +147,12 @@ describe('PUT /api/contacts/segments/[id] — location gate', () => {
   it('returns 404 when the segment does not exist', async () => {
     vi.mocked(getCurrentUser).mockResolvedValue({
       id: 'p1',
-      locations: [{ id: 'loc-a' }],
+      locations: [{ id: 'loc-a', role: 'owner' }],
     })
     const { db } = mockDb({ existingSegment: null })
     vi.mocked(createServerClient).mockReturnValue(db)
 
-    const res = await PUT(makeRequest(validBody), { params: { id: 'missing' } })
+    const res = await PUT(makeRequest(validBody), { params: { id: SEG } })
     expect(res.status).toBe(404)
     const body = await res.json()
     expect(body.error).toMatch(/not found/i)
@@ -166,14 +164,14 @@ describe('PUT /api/contacts/segments/[id] — location gate', () => {
     // must reject.
     vi.mocked(getCurrentUser).mockResolvedValue({
       id: 'p1',
-      locations: [{ id: 'loc-a' }],
+      locations: [{ id: 'loc-a', role: 'owner' }],
     })
     const { db, spies } = mockDb({
-      existingSegment: { id: 's1', location_id: 'loc-b' },
+      existingSegment: { id: SEG, location_id: 'loc-b' },
     })
     vi.mocked(createServerClient).mockReturnValue(db)
 
-    const res = await PUT(makeRequest(validBody), { params: { id: 's1' } })
+    const res = await PUT(makeRequest(validBody), { params: { id: SEG } })
     expect(res.status).toBe(404)
     // No update should have been attempted.
     expect(spies.updateUpdate).not.toHaveBeenCalled()
@@ -182,22 +180,22 @@ describe('PUT /api/contacts/segments/[id] — location gate', () => {
   it('proceeds to update when the user has access to the segment’s location', async () => {
     vi.mocked(getCurrentUser).mockResolvedValue({
       id: 'p1',
-      locations: [{ id: 'loc-a' }],
+      locations: [{ id: 'loc-a', role: 'owner' }],
     })
     const { db, spies } = mockDb({
-      existingSegment: { id: 's1', location_id: 'loc-a' },
+      existingSegment: { id: SEG, location_id: 'loc-a' },
       updateResult: {
-        data: { id: 's1', location_id: 'loc-a', name: 'My segment' },
+        data: { id: SEG, location_id: 'loc-a', name: 'My segment' },
         error: null,
       },
     })
     vi.mocked(createServerClient).mockReturnValue(db)
 
-    const res = await PUT(makeRequest(validBody), { params: { id: 's1' } })
+    const res = await PUT(makeRequest(validBody), { params: { id: SEG } })
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.success).toBe(true)
-    expect(body.segment).toMatchObject({ id: 's1', name: 'My segment' })
+    expect(body.segment).toMatchObject({ id: SEG, name: 'My segment' })
     expect(spies.updateUpdate).toHaveBeenCalledTimes(1)
   })
 
@@ -212,15 +210,15 @@ describe('PUT /api/contacts/segments/[id] — location gate', () => {
       locations: [{ id: 'loc-a' }, { id: 'loc-b' }, { id: 'loc-c' }],
     })
     const { db, spies } = mockDb({
-      existingSegment: { id: 's1', location_id: 'loc-c' }, // master not formally assigned via profile_locations
+      existingSegment: { id: SEG, location_id: 'loc-c' }, // master not formally assigned via profile_locations
       updateResult: {
-        data: { id: 's1', location_id: 'loc-c', name: 'My segment' },
+        data: { id: SEG, location_id: 'loc-c', name: 'My segment' },
         error: null,
       },
     })
     vi.mocked(createServerClient).mockReturnValue(db)
 
-    const res = await PUT(makeRequest(validBody), { params: { id: 's1' } })
+    const res = await PUT(makeRequest(validBody), { params: { id: SEG } })
     expect(res.status).toBe(200)
     expect(spies.updateUpdate).toHaveBeenCalledTimes(1)
   })
@@ -230,16 +228,16 @@ describe('DELETE /api/contacts/segments/[id] — location gate', () => {
   it('returns 404 on cross-tenant delete attempt (no DELETE issued)', async () => {
     vi.mocked(getCurrentUser).mockResolvedValue({
       id: 'p1',
-      locations: [{ id: 'loc-a' }],
+      locations: [{ id: 'loc-a', role: 'owner' }],
     })
     const { db, spies } = mockDb({
-      existingSegment: { id: 's1', location_id: 'loc-b' },
+      existingSegment: { id: SEG, location_id: 'loc-b' },
     })
     vi.mocked(createServerClient).mockReturnValue(db)
 
     const res = await DELETE(
       new Request('http://test/api/contacts/segments/s1', { method: 'DELETE' }),
-      { params: { id: 's1' } }
+      { params: { id: SEG } }
     )
     expect(res.status).toBe(404)
     expect(spies.deleteDelete).not.toHaveBeenCalled()
@@ -248,17 +246,17 @@ describe('DELETE /api/contacts/segments/[id] — location gate', () => {
   it('proceeds with delete when the user has access', async () => {
     vi.mocked(getCurrentUser).mockResolvedValue({
       id: 'p1',
-      locations: [{ id: 'loc-a' }],
+      locations: [{ id: 'loc-a', role: 'owner' }],
     })
     const { db, spies } = mockDb({
-      existingSegment: { id: 's1', location_id: 'loc-a' },
+      existingSegment: { id: SEG, location_id: 'loc-a' },
       deleteResult: { error: null },
     })
     vi.mocked(createServerClient).mockReturnValue(db)
 
     const res = await DELETE(
       new Request('http://test/api/contacts/segments/s1', { method: 'DELETE' }),
-      { params: { id: 's1' } }
+      { params: { id: SEG } }
     )
     expect(res.status).toBe(200)
     expect(spies.deleteDelete).toHaveBeenCalledTimes(1)
@@ -272,7 +270,7 @@ describe('DELETE /api/contacts/segments/[id] — location gate', () => {
 
     const res = await DELETE(
       new Request('http://test/api/contacts/segments/s1', { method: 'DELETE' }),
-      { params: { id: 's1' } }
+      { params: { id: SEG } }
     )
     expect(res.status).toBe(401)
   })
