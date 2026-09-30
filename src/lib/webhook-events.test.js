@@ -47,7 +47,7 @@ describe('recordWebhookEvent', () => {
       insertResolves: { error: { code: '40001', message: 'serialization failure' } },
     })
     const r = await recordWebhookEvent({
-      db, provider: WEBHOOK_PROVIDERS.TWILIO, eventId: 'SM123:delivered',
+      db, provider: WEBHOOK_PROVIDERS.XERO, eventId: 'evt-123:UPDATE',
     })
     expect(r.seen).toBe(false)
     expect(r.error).toBe('serialization failure')

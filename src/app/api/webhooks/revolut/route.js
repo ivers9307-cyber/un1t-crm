@@ -25,12 +25,10 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { verifyWebhookSignature, getOrder } from '@/lib/revolut'
-import { sendDepositReceiptSms } from '@/lib/deposit-receipts'
 import { syncOrderFromCarDeposit } from '@/lib/orders'
 import { emitEvent, EVENT_TYPES } from '@/lib/contact-events'
 import { triggerSequencesForOrderStatus } from '@/lib/sequences'
 import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
-import { overlayConnections } from '@/lib/connection-registry'
 import { escapeLikePattern } from '@/lib/like-escape'
 
 export const runtime = 'nodejs'
@@ -105,13 +103,9 @@ export async function POST(request) {
     .from('cars')
     .select(`
       id, location_id, deposit_token, deposit_status, deposit_paid_at,
-      deposit_amount, deposit_paid_amount, deposit_receipt_sent_at,
+      deposit_amount, deposit_paid_amount,
       buyer_phone, buyer_name, make, model, irish_reg,
-      locations (
-        id, name,
-        car_deposit_receipt_sms_enabled,
-        twilio_alpha_sender_id
-      )
+      locations ( id, name )
     `)
     .eq('deposit_revolut_order_id', orderId)
     .maybeSingle()
@@ -121,11 +115,6 @@ export async function POST(request) {
     // Revolut moves on.
     console.warn(`[revolut-webhook] no car for order ${orderId} (event ${event})`)
     return NextResponse.json({ success: true, skipped: 'unknown_order' })
-  }
-
-  // INTEG-A2 dual-read: registry twilio_sender row first.
-  if (car.locations) {
-    car.locations = await overlayConnections(db, car.locations, ['twilio_sender'])
   }
 
   // Fetch the live order — gives us authoritative state + actual
@@ -161,7 +150,7 @@ export async function POST(request) {
   // Project the cars deposit state into the generic orders ledger
   // and emit a contact_events row for the matching transition.
   // Best-effort — orders/events failures must not affect the
-  // receipt-SMS step or the webhook 200.
+  // webhook 200.
   try {
     const carForOrders = { ...car, ...updates }
     await syncOrderFromCarDeposit({ db, car: carForOrders })
@@ -220,34 +209,9 @@ export async function POST(request) {
     console.warn(`[revolut-webhook] orders/events sync failed for car ${car.id}: ${e?.message || e}`)
   }
 
-  // Fire-and-forget receipt SMS to the buyer when the deposit lands.
-  // Best-effort — SMS / DB hiccups never affect the webhook response,
-  // because the deposit_status update above is the authoritative
-  // signal and the receipt is a customer-facing courtesy on top.
-  // Three gates inside sendDepositReceiptSms (location toggle,
-  // already-sent stamp, no-buyer-phone) skip cheaply; only successful
-  // sends stamp deposit_receipt_sent_at, so a Twilio outage during
-  // one webhook delivery can be picked up by the next retry.
-  let receiptResult = null
-  if (state === 'completed') {
-    try {
-      // Merge the just-applied update into the car snapshot so the
-      // body builder sees the actual captured amount even though we
-      // haven't refetched.
-      const carForReceipt = { ...car, ...updates }
-      receiptResult = await sendDepositReceiptSms({
-        db,
-        car: carForReceipt,
-        location: car.locations,
-        actorId: null, // webhook — no operator session
-      })
-    } catch (e) {
-      console.warn(`[revolut-webhook] receipt SMS error for car ${car.id}: ${e?.message || e}`)
-      receiptResult = { status: 'failed', reason: 'unhandled_exception' }
-    }
-  }
-
-  return NextResponse.json({ success: true, applied: updates, receipt: receiptResult })
+  // The buyer receipt SMS (mig 078) was retired with Twilio
+  // (TWILIO-RETIRE.1); the public deposit page shows the paid receipt.
+  return NextResponse.json({ success: true, applied: updates })
 }
 
 // Revolut dashboard hits GET on the URL when configuring the

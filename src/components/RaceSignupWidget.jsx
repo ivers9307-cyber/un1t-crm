@@ -32,7 +32,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Calendar, Clock, MapPin, AlertCircle, Loader2, Check, BadgeCheck, BadgeEuro, Info } from 'lucide-react'
-import { windowedWaves } from '@/lib/wave-window'
+import { timePickerWaves, initialWaveId, formatTimeChoices } from '@/lib/event-time-slots'
 
 // Kind-keyed copy. Adding a new kind = one entry. The 'race' entry
 // holds the original strings so the operator-visible UX for races
@@ -231,19 +231,11 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
         const sizes = j.data.allowed_team_sizes || [1]
         const initial = [...sizes].sort((a, b) => a - b)[0]
         setTeamSize(initial)
-        const waves = Array.isArray(j.data.waves) ? j.data.waves : []
-        const available = waves.filter((w) => !w.is_full)
-        // For non-race kinds we always auto-select the (single)
-        // available wave because the picker is hidden. For races
-        // we only auto-select when there's exactly one option.
-        const kind = j.data.kind || 'race'
-        if (kind !== 'race' && available.length >= 1) {
-          setWaveId(available[0].id)
-        } else if (waves.length === 1 && available.length === 1) {
-          setWaveId(waves[0].id)
-        } else if (available.length === 1) {
-          setWaveId(available[0].id)
-        }
+        // Auto-select only when exactly one time has space; with two
+        // open times (races or EVENT-MULTITIME.1 classes) the customer
+        // chooses. A single-time event is still auto-selected.
+        const initialWave = initialWaveId(j.data.waves)
+        if (initialWave) setWaveId(initialWave)
       })
       .catch(e => setLoadError(e.message || 'Network error'))
   }, [slug])
@@ -382,7 +374,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
     // a server-bound team_name from the captain so the team_id FK
     // stays satisfied.
     if (copy.showTeamName && !teamName.trim()) errors.team_name = 'Team name is required'
-    if (!copy.isLeadGen && !waveId) errors.wave_id = copy.showWavePicker ? 'Pick a wave' : 'No time slot available'
+    if (!copy.isLeadGen && !waveId) errors.wave_id = copy.showWavePicker ? 'Pick a wave' : (race?.waves?.length || 0) > 1 ? 'Pick a time' : 'No time slot available'
     if (!captainName.trim()) errors.captain_name = 'Your name is required'
     if (!validateEmail(captainEmail)) errors.captain_email = 'Valid email required'
     if (!captainPhone.trim()) errors.captain_phone = 'Phone number is required'
@@ -501,11 +493,12 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
   const showMemberNotice = !!(race.member_pricing_enabled || race.members_only)
   const showPricingCard = !!(memberPricing || nonMemberFeeCents != null)
   const wavesArr = Array.isArray(race.waves) ? race.waves : []
-  // WAVEWIN.1 — the picker only offers the immediately-available
-  // 90-minute window (earlier sold-out waves stay, greyed; later waves
-  // release as the window slides). The sidebar summary and every
-  // operator surface still see the full schedule.
-  const pickerWaves = windowedWaves(wavesArr)
+  // WAVEWIN.1 — for races the picker only offers the immediately-
+  // available 90-minute window (earlier sold-out waves stay, greyed;
+  // later waves release as the window slides). EVENT-MULTITIME.1 —
+  // other kinds show every time once there's more than one; [] = no
+  // picker. Every operator surface still sees the full schedule.
+  const pickerWaves = timePickerWaves(kind, wavesArr)
 
   // ── Render-only derived values (no behaviour change) ──────────────
   // Human label for the event kind, used in the hero eyebrow.
@@ -710,10 +703,10 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                   generated waves made this a wall of numbers) — the wave
                   picker in the form is the time surface. A single-wave
                   event (workshops etc.) still shows its start time. */}
-              {wavesArr.length === 1 && (
+              {(wavesArr.length === 1 || (!copy.showWavePicker && !isLeadGen && wavesArr.length > 1)) && (
                 <div className="flex items-start gap-3">
                   <Clock size={16} className="text-white/40 mt-0.5 shrink-0" />
-                  <span>{copy.sidebarTimeOne((wavesArr[0].start_time || '').slice(0, 5))}</span>
+                  <span>{copy.sidebarTimeOne(formatTimeChoices(wavesArr))}</span>
                 </div>
               )}
               {/* Per-person price at a glance; the Total card below still
@@ -792,12 +785,12 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
 
           <form id={formId} onSubmit={handleSubmit} className="space-y-4">
             <fieldset disabled={isClosed} className="space-y-4">
-              {/* Wave picker — race-only. Non-race kinds have a single
-                  auto-selected wave; the time is shown in the details
-                  block so the operator UX still surfaces it. */}
-              {copy.showWavePicker && pickerWaves.length > 0 && (
+              {/* Wave / time picker. Races always; other kinds only when
+                  the event has 2+ times (EVENT-MULTITIME.1) — a single
+                  time is auto-selected and shown in the details block. */}
+              {pickerWaves.length > 0 && (
                 <div>
-                  <label className={labelCls}>Pick your wave *</label>
+                  <label className={labelCls}>{copy.showWavePicker ? 'Pick your wave *' : 'Choose your time *'}</label>
                   <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-3 gap-2">
                     {pickerWaves.map((w) => {
                       const full = !!w.is_full

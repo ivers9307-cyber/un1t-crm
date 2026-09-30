@@ -16,7 +16,7 @@
 // one legitimate way to set wa_phone from phone — see the broadcast-
 // reachability note in MEMORY).
 
-import { toE164Ireland } from '@/lib/twilio'
+import { toE164Ireland } from '@/lib/phone-validate'
 import {
   sendTemplateMessage,
   buildTemplateComponents,

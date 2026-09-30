@@ -11,7 +11,7 @@
 // and may already be mid-step for this enrolment when the request lands.
 // The compare-and-set below makes the DATABASE state correct — the row is
 // exited, next_step_at is null, and no FURTHER step is ever scheduled — but
-// a step already handed to Postmark / Meta / Twilio in this tick will still
+// a step already handed to Postmark / Meta in this tick will still
 // be delivered. This route does not recall a send that has left the
 // building, and must not be described as if it does.
 //

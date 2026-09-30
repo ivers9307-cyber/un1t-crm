@@ -289,9 +289,11 @@ describe('getOpenApiSpec', () => {
   })
 
   it('documents inbound webhooks with provider auth', () => {
-    for (const p of ['/api/webhooks/glofox', '/api/webhooks/whatsapp', '/api/webhooks/postmark', '/api/webhooks/twilio/status']) {
+    for (const p of ['/api/webhooks/glofox', '/api/webhooks/whatsapp', '/api/webhooks/postmark']) {
       expect(spec.paths, `missing ${p}`).toHaveProperty(p)
     }
+    // TWILIO-RETIRE.1 — the SMS delivery-status webhook is gone.
+    expect(spec.paths).not.toHaveProperty('/api/webhooks/twilio/status')
     const glofox = spec.paths['/api/webhooks/glofox'].post
     expect(glofox.tags).toContain('Webhooks (Inbound)')
     expect(glofox.security).toContainEqual({ GlofoxHmac: [] })

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { toMobileE164, isValidMobileNumber } from './phone-validate'
+import { toMobileE164, isValidMobileNumber, toE164Ireland } from './phone-validate'
 
 describe('toMobileE164 — Irish mobiles', () => {
   it('accepts national 08X forms (spaces/dashes ignored)', () => {
@@ -16,7 +16,7 @@ describe('toMobileE164 — Irish mobiles', () => {
 
   // The trunk zero is dropped when a number is written for a +353 prefix, so
   // the bare 9-digit NSN is a normal way to hold (and type) an Irish mobile —
-  // 431 contacts are stored in exactly this shape. toE164Ireland() in twilio.js
+  // 431 contacts are stored in exactly this shape. toE164Ireland()
   // has always accepted it; this gate used to reject it outright.
   it('accepts the bare 9-digit form with no trunk zero and no country code', () => {
     expect(toMobileE164('871234567')).toBe('+353871234567')
@@ -110,5 +110,15 @@ describe('toMobileE164 — +353 landline in E.164 form', () => {
   // cost more than it saved. Pinned so it reads as a decision, not an oversight.
   it('lets an Irish landline through — measured, deliberately not narrowed', () => {
     expect(toMobileE164('+35315551234')).toBe('+35315551234')
+  })
+})
+
+describe('toE164Ireland', () => {
+  it('normalises common Irish phone shapes to E.164', () => {
+    expect(toE164Ireland('0871234567')).toBe('+353871234567')
+    expect(toE164Ireland('+353871234567')).toBe('+353871234567')
+    expect(toE164Ireland('353871234567')).toBe('+353871234567')
+    expect(toE164Ireland('00353871234567')).toBe('+353871234567')
+    expect(toE164Ireland('871234567')).toBe('+353871234567')
   })
 })

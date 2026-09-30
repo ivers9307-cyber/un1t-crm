@@ -299,13 +299,12 @@ export default function ContactDetail() {
             )}
           </View>
 
-          {/* Quick actions. Call stays a phone dial; Text / WhatsApp /
-              Email send through the platform's linked services (company
+          {/* Quick actions. Call stays a phone dial; WhatsApp / Email
+              send through the platform's linked services (company
               sender), gated per-channel by the server's per-contact flags
               (contactActionFlags, ROLEUI.1). */}
           <View className="flex-row gap-2 mt-4">
             {contact.phone && <ActionButton icon="call-outline" label="Call" onPress={() => openUrl(`tel:${digits(contact.phone)}`)} />}
-            {actions.sms && <ActionButton icon="chatbubble-outline" label="Text" onPress={() => setComposeChannel('sms')} />}
             {actions.whatsapp && <ActionButton icon="logo-whatsapp" label="WhatsApp" onPress={() => setComposeChannel('whatsapp')} />}
             {actions.email && <ActionButton icon="mail-outline" label="Email" onPress={() => setComposeChannel('email')} />}
             {/* CANCEL-FORM.6 — hand the member a single-use pause/cancel form

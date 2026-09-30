@@ -23,21 +23,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const sendTransactionalEmail = vi.fn(async () => ({ ok: true }))
-const sendLocationSms = vi.fn(async () => ({ sid: 'SM1' }))
 const logError = vi.fn()
 
 vi.mock('./postmark', () => ({ sendTransactionalEmail: (...a) => sendTransactionalEmail(...a) }))
 vi.mock('./log', () => ({ logError: (...a) => logError(...a) }))
-vi.mock('./twilio', async (importOriginal) => ({
-  ...(await importOriginal()),
-  sendLocationSms: (...a) => sendLocationSms(...a),
-  resolveTenantSmsSender: vi.fn(async (_db, l) => ({ location: l, senderId: 'UN1T', source: 'location' })),
-}))
 vi.mock('./event-comms-location', async (importOriginal) => ({
   ...(await importOriginal()),
   resolveEventCommsLocation: vi.fn(async () => ({ id: 'LOC', name: 'UN1T Stillorgan' })),
 }))
-vi.mock('@/lib/connection-registry', () => ({ overlayConnections: vi.fn(async (_db, row) => row) }))
 vi.mock('./event-email', () => ({
   resolveEventEmail: vi.fn(async () => ({ subject: 'You are in', htmlBody: '<p>hi</p>' })),
   buildEventEmailShell: vi.fn(() => '<html></html>'),
@@ -56,7 +49,7 @@ const CONTACT_ID = 'c0000000-0000-0000-0000-000000000001'
  * @param {boolean} opts.contactReadFails  make that read error
  * @param {object|null} opts.consentLogRow latest consent_log row for the channel
  * @param {boolean} opts.consentLogFails   make the provenance read error
- * @param {boolean} opts.smsEnabled        turn the SMS leg on
+ * @param {boolean} opts.smsEnabled        the retired mig 552 flag (TWILIO-RETIRE.1)
  */
 function makeWorld({
   contact = {
@@ -95,7 +88,7 @@ function makeWorld({
       confirmation_email_subject: null, confirmation_email_intro: null,
       confirmation_email_template_id: null,
       confirmation_sms_enabled: smsEnabled,
-      locations: { id: 'LOC', name: 'UN1T Stillorgan', twilio_alpha_sender_id: 'UN1T', organization_id: 'ORG' },
+      locations: { id: 'LOC', name: 'UN1T Stillorgan', organization_id: 'ORG' },
     },
     registration: { id: 'reg1', wave_id: null, wave: null, teams: { id: 't1', name: 'The Team', size: 1, team_members: [] } },
   }
@@ -253,52 +246,18 @@ describe('sendRaceConfirmations — a MACHINE-SET administrative opt-out is not 
   })
 })
 
-describe('sendRaceConfirmations — the SMS leg', () => {
-  it('skips the text on an sms opt-out while the EMAIL receipt still goes out', async () => {
-    // The legs are independent, and it is the email that carries the QR.
-    const { db } = makeWorld({
-      smsEnabled: true,
-      contact: {
-        id: CONTACT_ID,
-        email_status: 'active',
-        sms_status: 'opted_out',
-        contact_preferences: [{ email_administrative: true, sms_administrative: true }],
-      },
-    })
+// TWILIO-RETIRE.1 — the SMS leg left with Twilio. An event that still carries
+// the old opt-in flag (it stays on disk as history) sends the email receipt and
+// nothing else: no text, and no `sms:` entry in the result at all.
+describe('sendRaceConfirmations — the retired SMS leg', () => {
+  it('an event with the old SMS flag on sends ONLY the email receipt', async () => {
+    const { db, stamps } = makeWorld({ smsEnabled: true })
 
     const result = await sendRaceConfirmations({ db, paymentId: PAYMENT_ID })
 
-    expect(sendLocationSms).not.toHaveBeenCalled()
-    expect(result.skipped).toContain('sms:sms_status=opted_out')
     expect(sendTransactionalEmail).toHaveBeenCalledTimes(1)
-    expect(result.sent).toContain('email')
-  })
-
-  it('skips rather than sending under another brand when NO tenant sender resolves', async () => {
-    const twilio = await import('./twilio')
-    twilio.resolveTenantSmsSender.mockImplementationOnce(async (_db, l) => ({ location: l, senderId: null, source: 'none' }))
-
-    const { db } = makeWorld({ smsEnabled: true })
-
-    const result = await sendRaceConfirmations({ db, paymentId: PAYMENT_ID })
-
-    expect(sendLocationSms).not.toHaveBeenCalled()
-    expect(result.skipped).toContain('sms:no_tenant_sms_sender')
-    // The email leg is untouched — the attendee keeps their proof of entry.
-    expect(result.sent).toContain('email')
-  })
-
-  it('distinguishes an UNREADABLE sender lookup from an unconfigured one', async () => {
-    // "Set one in Location Settings" is false advice when the read simply
-    // failed. Same refusal, different reason, different log.
-    const twilio = await import('./twilio')
-    twilio.resolveTenantSmsSender.mockImplementationOnce(async (_db, l) => ({ location: l, senderId: null, source: 'unreadable' }))
-
-    const { db } = makeWorld({ smsEnabled: true })
-
-    const result = await sendRaceConfirmations({ db, paymentId: PAYMENT_ID })
-
-    expect(result.skipped).toContain('sms:sms_sender_unreadable')
-    expect(logError.mock.calls.some(([, msg]) => /lookup FAILED/i.test(msg))).toBe(true)
+    expect(result.sent).toEqual(['email'])
+    expect([...result.sent, ...result.skipped, ...result.failed].some((r) => r.startsWith('sms'))).toBe(false)
+    expect(stamps).toEqual(['confirmation_email_sent_at'])
   })
 })

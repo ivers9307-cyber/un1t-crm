@@ -6,19 +6,17 @@
 // today one such row exists and two ACTIVE upcoming events sit on it, so every
 // tier below is reachable with real data.
 //
-// TWO helpers, not one, and the split is the point:
-//   pickAudienceVenueName   — WHERE THE EVENT IS. Never consults the sending
-//                             identity, because that is not a venue.
-//   pickAudienceSignoffName — WHO IS MESSAGING YOU. May consult it, because
-//                             that is exactly what it is.
-// The first cut had a single helper doing both, which fixed an internal string
-// leaking into the "Where" row by putting a wrong GYM there instead.
+// pickAudienceVenueName — WHERE THE EVENT IS — never consults the sending
+// identity, because that is not a venue. (Its sibling pickAudienceSignoffName,
+// WHO IS MESSAGING YOU, signed off the payment-link SMS and left with the SMS
+// channel in TWILIO-RETIRE.1.) The first cut had a single helper doing both,
+// which fixed an internal string leaking into the "Where" row by putting a
+// wrong GYM there instead.
 
 import { describe, it, expect } from 'vitest'
 import {
   isHostAnchorLocation,
   pickAudienceVenueName,
-  pickAudienceSignoffName,
 } from './event-comms-location'
 
 const ANCHOR = { id: 'ANCHOR', name: 'Pride Training Club (host events)', is_host_anchor: true }
@@ -78,48 +76,5 @@ describe('pickAudienceVenueName — the "Where" row and {{location}}', () => {
   it('returns "" — never undefined — when nothing is usable', () => {
     expect(pickAudienceVenueName({})).toBe('')
     expect(pickAudienceVenueName()).toBe('')
-  })
-})
-
-describe('pickAudienceSignoffName — the SMS "— <name>" sign-off', () => {
-  it('prefers the venue name', () => {
-    expect(pickAudienceSignoffName({
-      venueName: 'UN1T STILLORGAN', commsLocation: STILLORGAN, eventLocation: ANCHOR,
-    })).toBe('UN1T STILLORGAN')
-  })
-
-  it('THE DEFECT: never returns the anchor label, even as the last resort', () => {
-    // The payment-link SMS signed off with exactly this string.
-    expect(pickAudienceSignoffName({
-      venueName: null, commsLocation: null, eventLocation: ANCHOR,
-    })).toBe('')
-  })
-
-  it('falls through the anchor to the RESOLVED comms location', () => {
-    // Legitimate HERE and only here: the sign-off says who is texting you, and
-    // for a host event that is the org master. A blank sign-off would also be
-    // acceptable; a real brand name is better.
-    expect(pickAudienceSignoffName({
-      venueName: null, commsLocation: STILLORGAN, eventLocation: ANCHOR,
-    })).toBe('UN1T Stillorgan')
-  })
-
-  it('skips an anchor that arrives as the COMMS location too', () => {
-    // An explicit sending_location_id can legitimately resolve to an anchor —
-    // still the right row for the Twilio sender, never for the name.
-    expect(pickAudienceSignoffName({
-      venueName: null, commsLocation: ANCHOR, eventLocation: STILLORGAN,
-    })).toBe('UN1T Stillorgan')
-  })
-
-  it('falls back to the event location for a plain (non-host) event', () => {
-    expect(pickAudienceSignoffName({
-      venueName: null, commsLocation: null, eventLocation: STILLORGAN,
-    })).toBe('UN1T Stillorgan')
-  })
-
-  it('returns "" — never undefined — when nothing is usable', () => {
-    expect(pickAudienceSignoffName({})).toBe('')
-    expect(pickAudienceSignoffName()).toBe('')
   })
 })

@@ -3,12 +3,12 @@
 // avoids the brittle embedded-resource count-under-inner-join (see CLAUDE.md
 // PostgREST lesson).
 //
-// COMMSFIX.B.5 — the email and SMS branches are SEND-PARITY: `count` is the
+// COMMSFIX.B.5 — the email branch is SEND-PARITY: `count` is the
 // number the send would actually reach (per-location consent + status +
 // suppression via contact_location_audience, exactly like populate), with
 // `matched` (filter-only) and an `excluded` breakdown alongside — the
 // WhatsApp branch has worked this way all along and is the template. The old
-// channel-agnostic email/SMS count overstated the audience ~2.5x (raw
+// channel-agnostic email count overstated the audience ~2.5x (raw
 // contacts at the location, no gates) and its email 'suppressed' sub-count
 // read the retired GLOBAL contacts.email_marketing column.
 import { z } from 'zod'
@@ -23,9 +23,8 @@ import { computeWhatsAppReachabilitySummary } from '@/lib/whatsapp'
 // shared per-channel eligibility builder, which delegates to that channel's
 // SEND builder. /api/communications/audience-preview calls the same function,
 // so the count, the preview and the send resolve one query path by
-// construction. The SMS branch previously re-spelled its three send gates
-// inline: identical to sms.js by hand, which is exactly how a preview and a
-// send drift apart later.
+// construction. (The SMS branch that lived here, and taught this lesson by
+// hand-copying its send gates, left with the SMS channel — TWILIO-RETIRE.1.)
 import { buildEligibleAudienceQuery } from '@/lib/audience-eligibility'
 
 export const runtime = 'nodejs'
@@ -33,7 +32,7 @@ export const runtime = 'nodejs'
 const Schema = z.object({
   location_id: uuidLike,
   audience_filter: z.unknown().optional(),
-  channel: z.enum(['sms', 'whatsapp', 'email']).optional(),
+  channel: z.enum(['whatsapp', 'email']).optional(),
 })
 
 export async function POST(request) {
@@ -58,7 +57,7 @@ export async function POST(request) {
       // same summary to whatsapp_broadcasts.delivery_summary, and a route-only
       // fix would have left that second consumer on the old definition.
       //
-      // Note the RESPONSE SHAPE is deliberately different from email/SMS and is
+      // Note the RESPONSE SHAPE is deliberately different from email and is
       // not being changed here: `count` is the MATCH set and `reachable` the
       // will-receive set, which AudienceCount reads channel-by-channel
       // (sendable = reachable for WhatsApp, count everywhere else). Renaming
@@ -113,32 +112,6 @@ export async function POST(request) {
         matched,                // filter-only
         suppressed,             // back-compat top-level key (pre-B5 consumers)
         excluded: { not_opted_in, bounced_or_complained, suppressed },
-      })
-    }
-
-    if (channel === 'sms') {
-      // FILTER-B.8 — the eligible number now comes from the SMS SEND builder
-      // itself (sms.js smsAudienceBase via buildEligibleAudienceQuery) rather
-      // than a hand-copy of its three gates. The excluded sub-counts below
-      // stay as view counts: they are diagnostic breakdowns, not the number
-      // anything sends on. Order matters — keep aligned with the route test's
-      // count sequence (matched → no_phone → not_opted_in → opted_out).
-      const matched = await viewCount(null)
-      const { query: eligibleQuery } = await buildEligibleAudienceQuery({
-        db, channel: 'sms', filter, locationId: location_id,
-        columns: 'id', selectOpts: { count: 'exact', head: true },
-      })
-      const { count: eligibleCount, error: eligibleErr } = await eligibleQuery
-      if (eligibleErr) return NextResponse.json({ success: false, error: eligibleErr.message }, { status: 400 })
-      const eligible = eligibleCount || 0
-      const no_phone = await viewCount((q) => q.is('phone', null))
-      const not_opted_in = await viewCount((q) => q.eq('loc_sms_marketing', false))
-      const opted_out = await viewCount((q) => q.neq('sms_status', 'active'))
-      return NextResponse.json({
-        success: true,
-        count: eligible,        // eligible / will receive (back-compat key)
-        matched,
-        excluded: { no_phone, not_opted_in, opted_out },
       })
     }
 

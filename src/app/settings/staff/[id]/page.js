@@ -6,6 +6,7 @@ import WidgetTokensCard from '@/components/WidgetTokensCard'
 import { canEditStaffMember, mapProfileLocationToAssignment } from '@/lib/staff-access'
 import { isTombstone } from '@/lib/staff-tombstone'
 import { loadStaffFormLocations } from '@/lib/staff-form-locations'
+import { STAFF_EDITOR_SELECT, pickStaffEditorProfile } from '@/lib/staff-fields'
 
 export const dynamic = 'force-dynamic'
 
@@ -40,7 +41,7 @@ export default async function EditStaffPage(props) {
   // read either.
   //
   // Deliberately NOT narrowing the profile read itself to those locations
-  // (the obvious alternative): the `*, profile_locations(*)` select below
+  // (the obvious alternative): the `profile_locations(*)` embed below
   // is load-bearing, and its own comment records TWICE that a narrowed
   // list silently dropped a column and the form then saved defaults back
   // over the operator's real values. A filtered read would hide
@@ -69,7 +70,7 @@ export default async function EditStaffPage(props) {
   }
 
   const [profileRes, staffFormLocations, templatesRes, orgsRes, orgGrantsRes] = await Promise.all([
-    // CRITICAL: select profile_locations(*) — EVERY column — so
+    // CRITICAL: profile_locations(*) — EVERY link column — so
     // mapProfileLocationToAssignment() always receives the full row.
     // History: a narrowed explicit column list silently dropped a
     // per-assignment column TWICE — first `permissions` (mig 092),
@@ -80,9 +81,16 @@ export default async function EditStaffPage(props) {
     // selection, so the saved override looked wiped on refresh. `*`
     // makes the mapper the single source of shape truth, so adding a
     // future per-assignment column can never silently drop here again.
-    // (Service-role client — no RLS column concerns.)
+    //
+    // STAFFPROFILEPICK.1 — the PROFILE columns are named (staff-fields.js
+    // STAFF_EDITOR_SELECT): exactly the fields StaffForm reads (pinned both
+    // ways by tests/staff-profile-to-client.test.js, so the same
+    // drop-then-save-defaults failure cannot happen here), + role and
+    // deleted_at, read for the gate and never passed. profiles.* used to
+    // spread the person's pin_hash, UniFi id, signatures and bookkeeping
+    // into this client component.
     db.from('profiles')
-      .select('*, profile_locations(*)')
+      .select(STAFF_EDITOR_SELECT)
       .eq('id', params.id)
       .single(),
     // STAFFFORMSETTINGS.1 — identity + unifi_configured, never `settings`
@@ -135,8 +143,11 @@ export default async function EditStaffPage(props) {
     ? staffFormLocations.locations.map(l => l.id)
     : ownedByCaller
 
+  // STAFFPROFILEPICK.1 — only what StaffForm reads, plus the two values this
+  // page computes. The raw links stay here; the form gets the mapped
+  // assignments (which carry each studio's UniFi user link for the picker).
   const staff = {
-    ...profileRes.data,
+    ...pickStaffEditorProfile(profileRes.data),
     is_master: profileRes.data.role === 'master',
     assignments,
   }

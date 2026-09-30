@@ -17,7 +17,7 @@ import { getStaffForUser } from '@/lib/staff'
 import { logAuditEvent } from '@/lib/audit'
 import { isTombstone } from '@/lib/staff-tombstone'
 import { suspendStaffLogin, restoreStaffLogin } from '@/lib/staff-login-access'
-import { redactProfileLocations } from '@/lib/location-secrets'
+import { STAFF_MANAGED_SELECT, pickManagedStaffRow } from '@/lib/staff-fields'
 
 export const runtime = 'nodejs'
 
@@ -347,7 +347,7 @@ export async function PUT(request, props) {
   // Final re-fetch for the response.
   const { data: final } = await db
     .from('profiles')
-    .select('*, profile_locations(*, locations(*))')
+    .select(STAFF_MANAGED_SELECT)
     .eq('id', id)
     .single()
 
@@ -404,10 +404,10 @@ export async function PUT(request, props) {
 
   return NextResponse.json({
     success: true,
-    // SECFIX.3a — `final` embeds whole location rows. The raw embed stays on the
-    // server (targetBefore feeds the UniFi door revoke via getUnifiConfig);
-    // only the response is redacted.
-    data: redactProfileLocations(final),
+    // STAFFPROFILEPICK.1 — the echo is the named managed shape. targetBefore
+    // and refreshed stay whole on the server (the UniFi revoke/sync and the
+    // role recompute read them); nothing from them is returned.
+    data: pickManagedStaffRow(final),
     ...login.flags,
     // Deactivating revoked every door policy and cleared the toggles, and
     // reactivating deliberately does not guess them back.

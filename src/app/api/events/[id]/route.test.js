@@ -48,21 +48,12 @@ describe('events UpdateSchema email config', () => {
   })
 })
 
-// EVENTS-SMS-TOGGLE (mig 552) — per-event opt-in for the registration SMS
-// confirmation. Optional boolean; flows through the generic scalar patch in
-// PUT (omit = leave untouched).
-describe('events UpdateSchema SMS confirmation toggle', () => {
-  it('parses clean when the flag is omitted (leave untouched)', () => {
-    expect(UpdateSchema.parse({ name: 'Renamed event' }).confirmation_sms_enabled).toBeUndefined()
-  })
-
-  it('accepts an explicit boolean either way', () => {
-    expect(UpdateSchema.parse({ confirmation_sms_enabled: true }).confirmation_sms_enabled).toBe(true)
-    expect(UpdateSchema.parse({ confirmation_sms_enabled: false }).confirmation_sms_enabled).toBe(false)
-  })
-
-  it('rejects a non-boolean', () => {
-    expect(() => UpdateSchema.parse({ confirmation_sms_enabled: 'sure' })).toThrow()
+// EVENTS-SMS-TOGGLE (mig 552) was retired with the SMS channel
+// (TWILIO-RETIRE.1): the flag is no longer on the schema, so a stale client
+// that still sends it is stripped, never written.
+describe('events UpdateSchema — the retired SMS confirmation toggle', () => {
+  it('strips confirmation_sms_enabled', () => {
+    expect(UpdateSchema.parse({ confirmation_sms_enabled: true }).confirmation_sms_enabled).toBeUndefined()
   })
 })
 

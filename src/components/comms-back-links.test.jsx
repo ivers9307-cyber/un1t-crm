@@ -11,7 +11,6 @@
 //
 //   /email/campaigns/[id]            → /communications/sent
 //   /whatsapp/broadcasts/[id]        → /communications/sent
-//   /communications/sms/broadcasts/[id] → /communications/sent
 //   /email/templates/[id]            → /communications/templates?channel=email
 //   /whatsapp/templates/[id]         → /communications/templates?channel=whatsapp
 //
@@ -44,7 +43,6 @@ vi.mock('./CampaignOutcomeReport.jsx', () => ({ default: () => <div /> }))
 import CampaignDetail from './CampaignDetail.jsx'
 import CampaignEditor from './CampaignEditor.jsx'
 import WABroadcastEditor from './WABroadcastEditor.jsx'
-import SMSBroadcastEditor from './SMSBroadcastEditor.jsx'
 import TemplateEditor from './TemplateEditor.jsx'
 import WATemplateEditor from './WATemplateEditor.jsx'
 
@@ -91,17 +89,6 @@ describe('channel detail back-links (COMMSLAYOUT.4)', () => {
       <WABroadcastEditor
         broadcast={{ id: 'b1', name: 'Blast', status: 'draft', location_id: 'loc-1', whatsapp_broadcast_recipients: [] }}
         templates={[]}
-        locationId="loc-1"
-        userId="u1"
-      />
-    )
-    expect(firstLink(container)).toBe(SENDS)
-  })
-
-  it('SMS broadcast detail goes back to the Sent list', () => {
-    const { container } = render(
-      <SMSBroadcastEditor
-        broadcast={{ id: 's1', name: 'Blast', status: 'draft', location_id: 'loc-1' }}
         locationId="loc-1"
         userId="u1"
       />

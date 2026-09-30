@@ -42,10 +42,11 @@ beforeEach(() => {
 })
 
 describe('/communications/sent subtitle (COMMSLAYOUT.1)', () => {
-  it('names all three channels the page actually lists', async () => {
+  // TWILIO-RETIRE.1 — SMS left the list with the channel.
+  it('names the two channels the page actually lists, and not SMS', async () => {
     render(await SendsHistoryPage())
     const sub = screen.getByText(/sends at this location/i).textContent
-    expect(sub).toMatch(/SMS/)
+    expect(sub).not.toMatch(/SMS/)
     expect(sub).toMatch(/WhatsApp/i)
     expect(sub).toMatch(/email/i)
   })

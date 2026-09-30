@@ -30,9 +30,6 @@ vi.mock('@/lib/whatsapp', () => ({
 vi.mock('@/lib/location-branding', () => ({
   getLocationBranding: vi.fn(async () => ({ companyName: 'UN1T' })),
 }))
-vi.mock('@/lib/twilio', () => ({
-  sendLocationSms: vi.fn(), TwilioError: class TwilioError extends Error {},
-}))
 
 import { sendEmailStep, sendWhatsappStep, isTransactionalEnrolment, TRANSACTIONAL_SOURCE_TYPES } from './steps.js'
 import { sendMarketingEmail } from '@/lib/postmark'

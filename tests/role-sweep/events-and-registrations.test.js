@@ -33,7 +33,6 @@ import * as eventTeams from '@/app/api/events/[id]/teams/route.js'
 import * as teamsExport from '@/app/api/events/[id]/teams/export/route.js'
 import * as eventReg from '@/app/api/event-registrations/[id]/route.js'
 import * as regCancel from '@/app/api/registrations/[id]/cancel/route.js'
-import * as paymentSms from '@/app/api/registrations/[id]/payment-sms/route.js'
 import * as penalties from '@/app/api/registrations/[id]/penalties/route.js'
 import * as penalty from '@/app/api/registrations/[id]/penalties/[penaltyId]/route.js'
 import * as raceEdit from '@/app/api/registrations/[id]/race-edit/route.js'
@@ -225,16 +224,6 @@ gate('POST /api/registrations/[id]/cancel — Manager+ at the registration', {
   call: () => regCancel.POST(bare('POST'), params({ id: REG })),
   gateReads: nested((loc) => ({ id: REG, race_events: { location_id: loc } })),
   forbidden: FORBIDDEN_PLAIN, hidden: NOT_FOUND, cases: roleCases(MANAGER_ROLES),
-})
-// locations: null keeps the overlayConnections read out of the gate.
-const SMS_REG = nested((loc) => ({ id: REG, status: 'pending_payment', race_events: { id: EV, name: 'Open Day', location_id: loc, host_id: null, sending_location_id: null, venue_name: null, locations: null } }))
-gate('POST /api/registrations/[id]/payment-sms — Manager+ at the registration', {
-  call: () => paymentSms.POST(bare('POST'), params({ id: REG })),
-  gateReads: SMS_REG, forbidden: FORBIDDEN_PLAIN, hidden: NOT_FOUND, cases: roleCases(MANAGER_ROLES, 'races'),
-})
-gate('POST /api/registrations/[id]/payment-sms — races at the registration', {
-  call: () => paymentSms.POST(bare('POST'), params({ id: REG })),
-  gateReads: SMS_REG, forbidden: RACES_OFF, hidden: NOT_FOUND, cases: permissionCases('races'),
 })
 
 // ── the comms-sender picker ───────────────────────────────────────────────

@@ -14,7 +14,7 @@ const StepShape = z.object({
   // following step. Defaults to 'email' for back-compat with rows
   // pre-mig 039 that didn't set step_type explicitly. Mig 087 adds
   // apply_tag / update_field / internal_task — all use `config`.
-  step_type: z.enum(['email', 'whatsapp', 'sms', 'wait', 'apply_tag', 'update_field', 'internal_task', 'webhook', 'branch']).optional(),
+  step_type: z.enum(['email', 'whatsapp', 'wait', 'apply_tag', 'update_field', 'internal_task', 'webhook', 'branch']).optional(),
   // Email step content
   subject: z.string().max(500).optional(),
   html_content: z.string().max(1_000_000).optional(),
@@ -25,7 +25,6 @@ const StepShape = z.object({
   whatsapp_variables: z.record(z.string()).nullable().optional(),
   whatsapp_header_media_url: z.string().url().max(2000).nullable().optional(),
   // SMS step content (mig 062). Same 1600-char hard cap as broadcasts.
-  sms_body: z.string().max(1600).nullable().optional(),
   // Generic config bag for non-message step types (mig 087).
   // Schema by step_type:
   //   apply_tag      → { tag }
@@ -114,8 +113,6 @@ export async function POST(request, props) {
     whatsapp_template_id: stepType === 'whatsapp' ? (body.whatsapp_template_id || null) : null,
     whatsapp_variables: stepType === 'whatsapp' ? (body.whatsapp_variables || {}) : {},
     whatsapp_header_media_url: stepType === 'whatsapp' ? (body.whatsapp_header_media_url || null) : null,
-    // SMS field (mig 062 — only meaningful when step_type=sms)
-    sms_body: stepType === 'sms' ? (body.sms_body || null) : null,
     // Mig 087+ generic config bag. Mig 091 added 'branch' which
     // also uses config (predicate + then/else_step_order). Anything
     // outside this list gets {} so a stray config payload on an
@@ -164,7 +161,6 @@ export async function PUT(request, props) {
     if (step.whatsapp_template_id !== undefined) updates.whatsapp_template_id = step.whatsapp_template_id
     if (step.whatsapp_variables !== undefined) updates.whatsapp_variables = step.whatsapp_variables
     if (step.whatsapp_header_media_url !== undefined) updates.whatsapp_header_media_url = step.whatsapp_header_media_url
-    if (step.sms_body !== undefined) updates.sms_body = step.sms_body
     if (step.config !== undefined) updates.config = step.config
 
     await db.from('sequence_steps')

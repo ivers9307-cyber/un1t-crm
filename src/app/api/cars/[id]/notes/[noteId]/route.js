@@ -21,8 +21,8 @@ export async function DELETE(_request, props) {
 
   const db = createServerClient()
   // Authz reads the note's own denormalised location_id. Every insert copies
-  // it from the car (cars/[id]/notes POST, issue-deposit-link,
-  // src/lib/deposit-receipts.js), and the car_id filter pins the note to
+  // it from the car (cars/[id]/notes POST, issue-deposit-link; the retired
+  // deposit-receipts.js did too), and the car_id filter pins the note to
   // this car.
   const { data: note } = await db
     .from('car_notes')
