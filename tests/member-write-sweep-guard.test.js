@@ -580,6 +580,31 @@ describe('no migration from 680 on writes a membership-only write policy, on any
     for (const sql of ok) expect(membershipOnlyWritePolicies(sql), sql).toEqual([])
   })
 
+  it('an OR branch or a column filter does not narrow membership; an ALTER POLICY is scanned too', () => {
+    const bad = [
+      'CREATE POLICY t_w ON public.t FOR ALL TO authenticated USING (private.auth_is_in_location(location_id) OR contact_id = private.auth_contact_id());',
+      'CREATE POLICY t_w ON public.t FOR INSERT TO authenticated WITH CHECK (contact_id = private.auth_contact_id() OR private.auth_is_in_location(location_id));',
+      'CREATE POLICY t_w ON public.t FOR UPDATE TO authenticated USING (private.auth_is_in_location(location_id) OR (SELECT auth.uid()) IS NOT NULL);',
+      'CREATE POLICY t_w ON public.t FOR DELETE TO authenticated USING (private.auth_is_in_location(location_id) AND archived = false);',
+      "CREATE POLICY t_w ON public.t FOR ALL TO authenticated USING (archived = false AND (private.auth_is_master() OR private.auth_is_in_location(location_id)));",
+      "CREATE POLICY t_w ON public.t FOR UPDATE TO authenticated USING (private.auth_role(location_id) = 'owner' OR private.auth_is_in_location(location_id));",
+      'ALTER POLICY t_w ON public.t USING (private.auth_is_in_location(location_id));',
+      'ALTER POLICY "t w" ON public.t WITH CHECK (private.auth_is_in_location(location_id) OR auth.uid() IS NOT NULL);',
+    ]
+    for (const sql of bad) expect(membershipOnlyWritePolicies(sql), sql).toHaveLength(1)
+    const ok = [
+      "CREATE POLICY t_w ON public.t FOR ALL TO authenticated USING (private.auth_is_in_location(location_id) AND (private.auth_is_master() OR private.auth_role(location_id) = 'owner'));",
+      'CREATE POLICY t_w ON public.t FOR UPDATE TO authenticated USING (private.auth_is_master() OR (private.auth_is_manager_at(location_id) AND private.auth_is_in_location(location_id)));',
+      'CREATE POLICY t_w ON public.t FOR UPDATE TO authenticated USING (contact_id = private.auth_contact_id() OR private.auth_is_admin_at(location_id));',
+      'CREATE POLICY t_w ON public.t FOR INSERT TO authenticated WITH CHECK (EXISTS (SELECT 1 FROM public.profile_locations pl WHERE pl.profile_id = (SELECT auth.uid()) AND pl.role = ANY (ARRAY[\'owner\',\'manager\']) AND private.auth_is_in_location(pl.location_id)));',
+      // An ALTER of a policy created FOR SELECT in the same file is a read.
+      'CREATE POLICY t_r ON public.t FOR SELECT TO authenticated USING (true);\nALTER POLICY t_r ON public.t USING (private.auth_is_in_location(location_id));',
+      'ALTER POLICY t_w ON public.t RENAME TO t_w2;',
+      'ALTER POLICY t_w ON public.t TO authenticated;',
+    ]
+    for (const sql of ok) expect(membershipOnlyWritePolicies(sql), sql).toEqual([])
+  })
+
   it('every role and permission helper is a gate, whatever its suffix', () => {
     const gated = [
       'private.auth_is_manager_at(location_id)',
