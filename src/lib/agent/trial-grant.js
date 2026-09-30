@@ -68,12 +68,14 @@ export const TRIAL_HISTORY_UNREADABLE = 'TRIAL_HISTORY_UNREADABLE'
 // TRIALPURCHASE.2 (a) — the funnel trial named by the class_booking_requests
 // row(s) that point at this card. { ok: false } on a failed read or when two
 // rows name different trials; { ok: true, trial: null } when none names one
-// (both ids, as everywhere else).
-async function queueRowTrial(db, approvalId) {
+// (both ids, as everywhere else). Only rows at this studio count: a queue row
+// from another location can never supply the trial.
+async function queueRowTrial(db, approvalId, locationId) {
   if (!approvalId) return { ok: true, trial: null }
   const { data, error } = await db.from('class_booking_requests')
     .select('trial_membership_id, trial_plan_code')
     .eq('approval_request_id', approvalId)
+    .eq('location_id', locationId)
     .limit(50)
   if (error) return { ok: false }
   const pairs = new Map()
@@ -208,7 +210,7 @@ export async function grantTrialBeforeBooking(db, {
     if (!trial) {
       // TRIALPURCHASE.2 (a) — a card with no stamp (reused, or filed before
       // TRIALGRANT.1): the queue row pointing at it holds the funnel's trial.
-      const fromQueue = await queueRowTrial(db, requestId)
+      const fromQueue = await queueRowTrial(db, requestId, locationId)
       if (!fromQueue.ok) return stop(TRIAL_PRODUCT_UNKNOWN)
       trial = fromQueue.trial
     }

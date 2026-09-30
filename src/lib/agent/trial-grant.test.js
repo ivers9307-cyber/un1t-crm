@@ -367,7 +367,7 @@ describe('grantTrialBeforeBooking: the write-ahead grant record', () => {
 // (class_booking_requests.trial_membership_id/trial_plan_code, captured from
 // the class_funnel block), so the approve reads it there when the card has none.
 describe('grantTrialBeforeBooking: the funnel trial when the card carries none (TRIALPURCHASE.2 a)', () => {
-  const queueRow = (over = {}) => ({ id: 'cbr-1', approval_request_id: 'amr-1', trial_membership_id: 'tm-funnel', trial_plan_code: 'tp-funnel', ...over })
+  const queueRow = (over = {}) => ({ id: 'cbr-1', location_id: 'L1', approval_request_id: 'amr-1', trial_membership_id: 'tm-funnel', trial_plan_code: 'tp-funnel', ...over })
 
   it('reads the funnel trial off the queue row that points at this card, and buys THAT (no settings read)', async () => {
     db = makeDb({ class_booking_requests: [queueRow(), queueRow({ id: 'cbr-other', approval_request_id: 'amr-9', trial_membership_id: 'tm-x', trial_plan_code: 'tp-x' })] })
@@ -385,6 +385,23 @@ describe('grantTrialBeforeBooking: the funnel trial when the card carries none (
     await grantTrialBeforeBooking(db, base)
 
     expect(purchaseGlofoxMembership).toHaveBeenCalledWith(creds, 'gm1', 'tm-1', 'tp-1')
+  })
+
+  it('a queue row at ANOTHER studio never supplies the trial (nor makes two rows disagree)', async () => {
+    db = makeDb({ class_booking_requests: [queueRow({ id: 'cbr-far', location_id: 'L2', trial_membership_id: 'tm-far', trial_plan_code: 'tp-far' })] })
+
+    const out = await grantTrialBeforeBooking(db, base)
+
+    expect(out.proceed).toBe(true)
+    expect(purchaseGlofoxMembership).toHaveBeenCalledWith(creds, 'gm1', 'tm-1', 'tp-1')
+
+    vi.clearAllMocks()
+    db = makeDb({ class_booking_requests: [queueRow(), queueRow({ id: 'cbr-far', location_id: 'L2', trial_membership_id: 'tm-far', trial_plan_code: 'tp-far' })] })
+
+    const both = await grantTrialBeforeBooking(db, base)
+
+    expect(both.proceed).toBe(true)
+    expect(purchaseGlofoxMembership).toHaveBeenCalledWith(creds, 'gm1', 'tm-funnel', 'tp-funnel')
   })
 
   it('the queue row cannot be read → TRIAL_PRODUCT_UNKNOWN, nothing bought (never a guess at the default)', async () => {
