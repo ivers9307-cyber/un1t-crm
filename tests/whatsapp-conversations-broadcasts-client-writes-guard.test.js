@@ -18,10 +18,12 @@
 //     INSERT/UPDATE/DELETE/ALL policy to them.
 //  3. (WAANONREAD.1, mig 673) anon and PUBLIC hold NOTHING on the three
 //     tables: a migration may not GRANT them any privilege (SELECT included,
-//     column lists too, by name or through ALL TABLES IN SCHEMA public), add
-//     a permissive policy that admits them (TO anon, TO public, or no TO
-//     clause at all, which means PUBLIC), or CREATE or RENAME a table to one
-//     of the names (the default ACL re-grants ALL to anon). The one
+//     column lists too, by name or through ALL TABLES IN SCHEMA public),
+//     hand anon a role (GRANT <role> TO anon: it inherits whatever the role
+//     holds), add a permissive policy that admits them (TO anon, TO public,
+//     or no TO clause at all, which means PUBLIC), re-point an existing
+//     policy at them (ALTER POLICY … TO), or CREATE or RENAME a table or view
+//     to one of the names (the default ACL re-grants ALL to anon). The one
 //     exemption, for rule 3 only, is a rollback migration named
 //     `<NNN>_waanonread1_rollback.sql`.
 //
@@ -218,7 +220,15 @@ export function waConvWriteReopeners(sql) {
 const ADP_RE = /\balter\s+default\s+privileges\b[^;]*;?/gi
 const GRANT_ON = /\bgrant\s+([^;]+?)\s+on\s+([^;]+?)\s+to\s+([^;'$]+)/gi
 const NAMES = '(?:"?public"?\\s*\\.\\s*)?"?(whatsapp_conversations|whatsapp_broadcasts|whatsapp_broadcast_recipients)"?'
-const rolesOf = (list) => splitTop(list.replace(/\s+(with\s+(grant|admin|inherit|set)\s+option|granted\s+by\b)[\s\S]*$/i, '')).map(ident)
+// A role list ends at WITH … (GRANT/ADMIN/INHERIT/SET OPTION, or PG 16's
+// WITH INHERIT TRUE) or GRANTED BY.
+const rolesOf = (list) => splitTop(list.replace(/\s+(with\s+(grant|admin|inherit|set)\b|granted\s+by\b)[\s\S]*$/i, '')).map(ident)
+const admitsAnon = (list) => rolesOf(list).some((r) => r === 'anon' || r === 'public')
+// A policy's head: everything before USING / WITH CHECK, so a literal in the
+// expression ('to customer') is never read as its TO clause.
+const policyHead = (body) => body.split(/\b(?:using|with\s+check)\b/i)[0]
+// GRANT <role>[, …] TO … (no ON): these words would make it a privilege grant.
+const PRIV_WORDS = ['all', 'select', 'insert', 'update', 'delete', 'truncate', 'references', 'trigger', 'maintain', 'usage', 'execute', 'create', 'connect', 'temporary', 'temp']
 
 /** Every statement in `sql` that would give anon or PUBLIC anything on one of the three tables again (mig 673). */
 export function waConvAnonReopeners(sql) {
@@ -232,14 +242,28 @@ export function waConvAnonReopeners(sql) {
     if (/^(sequence|function|procedure|routine|schema|database|foreign|large|language|tablespace|type|domain|all\s)/i.test(t)) continue
     if (splitTop(t.replace(/^table\s+/i, '')).map((x) => ident(x).replace(/^public\s*\.\s*/, '')).some((x) => TABLES.includes(x))) hits.push(stmt.trim())
   }
-  for (const m of code.matchAll(new RegExp(`\\bcreate\\s+policy\\s+(?:"[^"]+"|\\S+)\\s+on\\s+${NAMES}(?=[\\s;])([^;]*)`, 'gi'))) {
-    const body = m[2]
-    if (/\bas\s+restrictive\b/i.test(body)) continue   // a restrictive policy can only deny
-    const to = body.match(/\bto\s+([\s\S]+?)(?=\s+(?:using|with\s+check)\b|$)/i)
-    if (!to || rolesOf(to[1]).some((r) => r === 'anon' || r === 'public')) hits.push(m[0].trim())
+  // Role membership: anon inherits everything the granted role holds.
+  for (const [stmt, roles, to] of code.matchAll(/\bgrant\s+("?[a-z_]\w*"?(?:\s*,\s*"?[a-z_]\w*"?)*)\s+to\s+([^;'$]+)/gi)) {
+    if (splitTop(roles).map(ident).some((r) => PRIV_WORDS.includes(r))) continue
+    if (admitsAnon(to)) hits.push(stmt.trim())
   }
-  for (const m of code.matchAll(new RegExp(`\\bcreate\\s+(?:unlogged\\s+)?table\\s+(?:if\\s+not\\s+exists\\s+)?${NAMES}(?=[\\s(;])`, 'gi'))) hits.push(m[0].trim())
-  for (const m of code.matchAll(/\balter\s+table\s+[^;]*?\brename\s+to\s+"?(whatsapp_conversations|whatsapp_broadcasts|whatsapp_broadcast_recipients)"?(?=[\s;]|$)/gi)) hits.push(m[0].trim())
+  for (const m of code.matchAll(new RegExp(`\\bcreate\\s+policy\\s+(?:"[^"]+"|\\S+)\\s+on\\s+${NAMES}(?=[\\s;])([^;]*)`, 'gi'))) {
+    const head = policyHead(m[2])
+    if (/\bas\s+restrictive\b/i.test(head)) continue   // a restrictive policy can only deny
+    const to = head.match(/\bto\s+([\s\S]+)$/i)
+    if (!to || admitsAnon(to[1])) hits.push(m[0].trim())   // no TO clause means PUBLIC
+  }
+  // ALTER POLICY … TO re-points an existing policy (it cannot change its kind,
+  // so this flags a restrictive one too: a floor, stop and look).
+  for (const m of code.matchAll(new RegExp(`\\balter\\s+policy\\s+(?:"[^"]+"|\\S+)\\s+on\\s+${NAMES}(?=[\\s;])([^;]*)`, 'gi'))) {
+    const head = policyHead(m[2])
+    if (/^\s*rename\b/i.test(head)) continue
+    const to = head.match(/\bto\s+([\s\S]+)$/i)
+    if (to && admitsAnon(to[1])) hits.push(m[0].trim())
+  }
+  // A table or view created under the name gets the default ACL (anon: ALL).
+  for (const m of code.matchAll(new RegExp(`\\bcreate\\s+(?:or\\s+replace\\s+)?(?:(?:unlogged|materialized|recursive)\\s+)*(?:table|view)\\s+(?:if\\s+not\\s+exists\\s+)?${NAMES}(?=[\\s(;])`, 'gi'))) hits.push(m[0].trim())
+  for (const m of code.matchAll(/\balter\s+(?:table|view|materialized\s+view)\s+[^;]*?\brename\s+to\s+"?(whatsapp_conversations|whatsapp_broadcasts|whatsapp_broadcast_recipients)"?(?=[\s;]|$)/gi)) hits.push(m[0].trim())
   return hits
 }
 
@@ -387,6 +411,21 @@ describe('later migrations keep the three tables closed to anon (WAANONREAD.1, m
       "SELECT '/*';\nGRANT SELECT ON public.whatsapp_conversations TO anon;\nSELECT '*/';",
       // a '/*' inside a dollar body ends with that body: only $tag$ pairing sees the GRANT
       "COMMENT ON TABLE x IS $c$ /* $c$;\nGRANT SELECT ON public.whatsapp_broadcasts TO anon;\nSELECT $d$ */ $d$;",
+      // an existing policy re-pointed at anon/PUBLIC
+      'ALTER POLICY wa_conv_select ON public.whatsapp_conversations TO anon, authenticated;',
+      'alter policy "p" on whatsapp_broadcast_recipients to public using (true);',
+      `DO $$ BEGIN EXECUTE 'ALTER POLICY whatsapp_broadcasts_select ON public.whatsapp_broadcasts TO anon'; END $$;`,
+      // role membership: anon inherits whatever the role holds (no ON clause)
+      'GRANT authenticated TO anon;',
+      'grant "wa_reader" to anon;',
+      'GRANT wa_reader TO anon WITH INHERIT TRUE;',
+      // no TO clause (= PUBLIC), with a literal that reads like one
+      "CREATE POLICY p ON public.whatsapp_broadcasts FOR SELECT USING (name = 'to customer');",
+      // a view under the name inherits the default ACL (anon: ALL)
+      'CREATE VIEW public.whatsapp_conversations AS SELECT 1;',
+      'create or replace view whatsapp_broadcasts as select 1;',
+      'CREATE MATERIALIZED VIEW IF NOT EXISTS public.whatsapp_broadcast_recipients AS SELECT 1;',
+      'ALTER VIEW public.wa_conv_v RENAME TO whatsapp_conversations;',
     ]
     for (const sql of bad) expect(waConvAnonReopeners(sql), sql).not.toEqual([])
   })
@@ -410,6 +449,14 @@ describe('later migrations keep the three tables closed to anon (WAANONREAD.1, m
          -- GRANT SELECT ON public.whatsapp_broadcast_recipients TO anon;
        END $$;`,
       'ALTER TABLE public.whatsapp_messages ADD COLUMN broadcast_id uuid REFERENCES public.whatsapp_broadcasts(id);',
+      'ALTER POLICY wa_conv_select ON public.whatsapp_conversations RENAME TO wa_conv_read;',
+      "ALTER POLICY wa_conv_select ON public.whatsapp_conversations TO authenticated USING (wa_phone = 'to anon');",
+      "CREATE POLICY p ON public.whatsapp_broadcasts FOR SELECT TO authenticated USING (name = 'to public');",
+      'ALTER POLICY p ON public.whatsapp_conversations_archive TO anon;',
+      'GRANT anon TO authenticator;',
+      'GRANT authenticated TO service_role;',
+      'CREATE VIEW public.whatsapp_broadcasts_v AS SELECT 1;',
+      'ALTER VIEW public.whatsapp_broadcasts_v RENAME COLUMN a TO whatsapp_broadcasts;',
     ]
     for (const sql of ok) expect(waConvAnonReopeners(sql), sql).toEqual([])
   })
