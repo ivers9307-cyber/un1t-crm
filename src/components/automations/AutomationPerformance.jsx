@@ -91,7 +91,9 @@ function NextStepNote({ run }) {
   )
 }
 
-export default function AutomationPerformance({ sequenceId, steps = [] }) {
+// GATES-2 — `canManageEnrolments` (the page's `email`-at-the-sequence's-studio
+// decision, the resume/exit routes' rule) gates Resume and Exit. Defaults closed.
+export default function AutomationPerformance({ sequenceId, steps = [], canManageEnrolments = false }) {
   const [stats, setStats] = useState(null)
   // SEQCOUNTERS.1 — the last /stats answer failed. Shown only while there
   // are no good numbers yet; a failed refresh keeps the last good ones.
@@ -308,7 +310,7 @@ export default function AutomationPerformance({ sequenceId, steps = [] }) {
                       <span className="text-xs text-amber-700 max-w-xs truncate" title={r.outcome}>{r.outcome}</span>
                     )}
                     <div className="flex items-center gap-1.5">
-                      {r.state === 'paused' && (
+                      {canManageEnrolments && r.state === 'paused' && (
                         <button
                           type="button"
                           onClick={() => resume(r.id)}
@@ -320,7 +322,7 @@ export default function AutomationPerformance({ sequenceId, steps = [] }) {
                       )}
                       {/* SEQGAPS.1 — only a live enrolment can be exited; the
                           route CAS-es on the same two statuses. */}
-                      {(r.state === 'active' || r.state === 'paused') && (
+                      {canManageEnrolments && (r.state === 'active' || r.state === 'paused') && (
                         <button
                           type="button"
                           onClick={() => exitRun(r)}

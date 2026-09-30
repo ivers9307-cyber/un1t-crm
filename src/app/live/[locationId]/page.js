@@ -8,6 +8,7 @@ import { redirect, notFound } from 'next/navigation'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
+import { canMutateLiveAt } from '@/lib/live-access'
 import LiveClassClient from './LiveClassClient'
 
 export const dynamic = 'force-dynamic'
@@ -51,6 +52,9 @@ export default async function LiveClassPage(props) {
     <LiveClassClient
       locationId={locationId}
       locationName={location.name}
+      // GATES-2 — End, Pair, test mode and Claim call routes that also need a
+      // coach role here (LIVE_MUTATION_ROLES); nobody else is shown them.
+      canMutate={canMutateLiveAt(user, locationId)}
     />
   )
 }

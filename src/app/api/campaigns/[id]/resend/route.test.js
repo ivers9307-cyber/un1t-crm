@@ -30,6 +30,13 @@ const fakeDb = {
 }
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => fakeDb }))
+// GATES-2 — the route now asks `email` at the campaign's studio (covered in
+// tests/role-sweep/gates2-routes.test.js); these tests are about the flag, so
+// the caller holds it.
+vi.mock('@/lib/permissions', () => ({
+  hasPermissionAtAnyLocation: vi.fn(() => true),
+  hasPermissionForLocation: vi.fn(() => true),
+}))
 vi.mock('@/lib/auth', () => ({
   getCurrentUser: vi.fn(async () => ({ id: 'user-1' })),
   assertLocationAccessOr404: vi.fn(() => null),

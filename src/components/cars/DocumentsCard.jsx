@@ -16,6 +16,7 @@
 import { useRef, useState } from 'react'
 import { Check, X, FileText, Inbox, Upload } from 'lucide-react'
 import { ALL_DOCUMENT_TYPES, REQUIRED_DOCUMENT_TYPES } from '@/lib/cars'
+import { CAR_DOCUMENT_ACCEPT } from '@/lib/car-document-media'
 
 export default function DocumentsCard({ car, setCar, setError, disabled }) {
   const [uploadingType, setUploadingType] = useState(null)
@@ -150,7 +151,7 @@ function UploadOne({ disabled, loading, onPick }) {
         ref={inputRef}
         type="file"
         className="hidden"
-        accept="image/*,application/pdf"
+        accept={CAR_DOCUMENT_ACCEPT}
         onChange={e => {
           const f = e.target.files?.[0]
           if (f) onPick(f)

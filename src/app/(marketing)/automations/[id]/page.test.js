@@ -230,3 +230,33 @@ describe('/automations/[id] — what crosses into the browser (SEQPAGEGATE.1)', 
     expect(db.from).not.toHaveBeenCalled()
   })
 })
+
+// C116 GATES-2 — Resume and Exit call the enrolment routes, which require
+// `email` at the sequence's studio. The page opens on email OR whatsapp, so a
+// whatsapp-only builder was shown two buttons that always 403'd.
+describe('/automations/[id] — Resume/Exit only with email at the sequence\'s studio', () => {
+  it('whatsapp only: the panel gets canManageEnrolments=false (main: the buttons showed)', async () => {
+    getCurrentUser.mockResolvedValue(user({ perms: { whatsapp: true } }))
+    createServerClient.mockReturnValue(mockDb({ sequence: mySequence }))
+    renderToStaticMarkup(await SequenceBuilderPage(props()))
+    expect(seen.performance.canManageEnrolments).toBe(false)
+  })
+  it('email: canManageEnrolments=true', async () => {
+    getCurrentUser.mockResolvedValue(user({ perms: { email: true } }))
+    createServerClient.mockReturnValue(mockDb({ sequence: mySequence }))
+    renderToStaticMarkup(await SequenceBuilderPage(props()))
+    expect(seen.performance.canManageEnrolments).toBe(true)
+  })
+  it('email at the ACTIVE studio only, whatsapp at the sequence\'s: false', async () => {
+    const u = user({ locations: [{ id: 'loc1' }, { id: 'loc2' }], perms: {} })
+    u.assignmentsByLocation = {
+      loc1: { role: 'staff', permissions: { email: true, whatsapp: false } },
+      loc2: { role: 'staff', permissions: { email: false, whatsapp: true } },
+    }
+    u.activeAssignment = u.assignmentsByLocation.loc1
+    getCurrentUser.mockResolvedValue(u)
+    createServerClient.mockReturnValue(mockDb({ sequence: { ...mySequence, location_id: 'loc2' } }))
+    renderToStaticMarkup(await SequenceBuilderPage(props()))
+    expect(seen.performance.canManageEnrolments).toBe(false)
+  })
+})

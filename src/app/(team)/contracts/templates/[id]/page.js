@@ -12,13 +12,10 @@ import { redirect, notFound } from 'next/navigation'
 import Link from 'next/link'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { canManageContractsInOrg, canManageContractsSomewhere } from '@/lib/contract-gates'
 import ContractTemplateForm from '@/components/ContractTemplateForm'
 
 export const dynamic = 'force-dynamic'
-
-function isOwnerOrMaster(user) {
-  return user?.role === 'master' || user?.role === 'owner'
-}
 
 function fmtDate(iso) {
   if (!iso) return ''
@@ -33,7 +30,11 @@ export default async function EditTemplatePage(props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  if (!isOwnerOrMaster(user)) redirect('/')
+  // GATES-2 — coarse here (manages contracts in SOME org); the decision is at
+  // the TEMPLATE's org below, the rule GET/PATCH /api/contract-templates/[id]
+  // apply. It asked the active studio's role, refusing an org admin whose own
+  // assignment there is not owner.
+  if (!canManageContractsSomewhere(user)) redirect('/')
 
   // CONTRACTS-SCOPE.1 — service role bypasses RLS, so scope by org in app
   // code (mirrors /admin/contracts/[id] and the templates list page): a
@@ -49,6 +50,7 @@ export default async function EditTemplatePage(props) {
   if (!user.isMaster) templateQuery = templateQuery.eq('organization_id', orgId)
   const { data: template } = await templateQuery.maybeSingle()
   if (!template) notFound()
+  if (!canManageContractsInOrg(user, template.organization_id)) notFound()
 
   // CONTRACTS-TPLVER.1 — server-side fetch, same createServerClient
   // pattern as the template fetch above. This is a service-role page

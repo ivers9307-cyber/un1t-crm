@@ -9,6 +9,12 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
+
+// GATES-2 — /send's rule (email at the campaign's studio); before, any member
+// of the studio could cancel a pending resend.
+const emailForbidden = () => NextResponse.json(
+  { success: false, error: 'No email permission at this location' }, { status: 403 })
 
 export const dynamic = 'force-dynamic'
 
@@ -16,6 +22,7 @@ export async function DELETE(_request, props) {
   const params = await props.params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (!hasPermissionAtAnyLocation(user, 'email')) return emailForbidden()
 
   const db = createServerClient()
   const { data: campaign, error } = await db
@@ -28,6 +35,7 @@ export async function DELETE(_request, props) {
   }
   const guard = assertLocationAccessOr404(user, campaign.location_id)
   if (guard) return guard
+  if (!hasPermissionForLocation(user, campaign.location_id, 'email')) return emailForbidden()
 
   const { data: child } = await db
     .from('campaigns')
