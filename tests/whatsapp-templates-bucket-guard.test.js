@@ -27,7 +27,9 @@
 //     from EXECUTE '…', and for an ALTER POLICY on storage.objects that names
 //     the bucket.
 //  The one exemption from 2-4 is a rollback migration named
-//  `<NNN>_watplbucket1_rollback.sql` (it restores the 30 Sep state on purpose).
+//  `<NNN>_watplbucket1_rollback.sql`, and only for the statements that
+//  restore the 30 Sep state (mig 045's two policies with their exact text,
+//  both limits back to NULL); anything else in that file is checked.
 //  4. The LATEST migration that writes the bucket row sets file_size_limit
 //     to the largest TEMPLATE_MEDIA_LIMITS maxBytes and allowed_mime_types
 //     to the union of its mimes. And every migration from SCAN_FROM on, on
@@ -404,6 +406,29 @@ export function bucketRowProblems(sql) {
   return problems
 }
 
+// A rollback migration (`<NNN>_watplbucket1_rollback.sql`) may restore the
+// 30 Sep state and nothing more: re-create mig 045's two policies with their
+// exact text, and set both limits back to NULL. Only those statements are
+// exempt; everything else in the file is checked like any other migration.
+const ROLLBACK_POLICIES = new Set(['wa_templates_storage_insert', 'wa_templates_storage_delete'])
+const ROLLBACK_OK = [
+  /^create policy "?wa_templates_storage_insert"? on "?storage"?\."?objects"? (?:as permissive )?for insert to "?authenticated"? with check \(bucket_id = 'whatsapp-templates'\)$/,
+  /^create policy "?wa_templates_storage_delete"? on "?storage"?\."?objects"? (?:as permissive )?for delete to "?authenticated"? using \(bucket_id = 'whatsapp-templates'\)$/,
+  /^update "?storage"?\."?buckets"? set (?:file_size_limit = null, allowed_mime_types = null|allowed_mime_types = null, file_size_limit = null) where id = 'whatsapp-templates'$/,
+]
+const normStmt = (stmt) => stmt.replace(/\s+/g, ' ').trim().toLowerCase().replace(/::text\b/g, '')
+  .replace(/\s*=\s*/g, ' = ').replace(/\s*,\s*/g, ', ').replace(/\(\s*/g, '(').replace(/\s*\)/g, ')').replace(/\s*\.\s*/g, '.')
+
+/** A rollback file's SQL with only the exempt statements removed (comments blanked). */
+export function rollbackRemainder(sql) {
+  return sqlCode(sql).split(';').map((stmt) => (ROLLBACK_OK.some((re) => re.test(normStmt(stmt))) ? '' : stmt)).join(';')
+}
+/** A migration's SQL as the per-file checks read it. */
+const scanText = (file) => {
+  const sql = readFileSync(path.join(MIGRATIONS, file), 'utf8')
+  return ROLLBACK_FILE.test(file) ? rollbackRemainder(sql) : sql
+}
+
 const migrationFiles = () => readdirSync(MIGRATIONS).filter((f) => f.endsWith('.sql'))
   .sort((a, b) => (parseInt(a, 10) - parseInt(b, 10)) || a.localeCompare(b))
 
@@ -504,7 +529,7 @@ describe('migrations keep the bucket closed to clients and its limits in step (m
 
   it('after every migration, no client policy on storage.objects admits the bucket', () => {
     const net = netPolicyState(MIGRATIONS)
-      .filter((p) => p.table === 'storage.objects' && !ROLLBACK_FILE.test(p.file))
+      .filter((p) => p.table === 'storage.objects' && !(ROLLBACK_FILE.test(p.file) && ROLLBACK_POLICIES.has(p.name)))
     expect(net.length).toBeGreaterThan(3)   // not vacuous: branding, tv-content, contracts, the 403 deny
     const admitting = net
       .filter((p) => admitsBucket({ permissive: p.permissive, roles: p.roles, expr: `${p.using ?? ''} ${p.check ?? ''}` }))
@@ -515,14 +540,14 @@ describe('migrations keep the bucket closed to clients and its limits in step (m
     expect(names).not.toContain('wa_templates_storage_delete')
   })
 
-  const later = migrationFiles().filter((f) => parseInt(f, 10) >= SCAN_FROM && !ROLLBACK_FILE.test(f))
+  const later = migrationFiles().filter((f) => parseInt(f, 10) >= SCAN_FROM)
   it.each(later)('%s: no client policy that admits the bucket', (file) => {
-    expect(bucketReopeners(readFileSync(path.join(MIGRATIONS, file), 'utf8')),
+    expect(bucketReopeners(scanText(file)),
       `${file} lets a client session write or list the whatsapp-templates bucket (mig 670). Upload through a signed-upload token instead`).toEqual([])
   })
 
   it('the latest write to the bucket row keeps it public and matches TEMPLATE_MEDIA_LIMITS', () => {
-    const writes = migrationFiles().filter((f) => !ROLLBACK_FILE.test(f)).flatMap((f) => bucketRowWrites(readFileSync(path.join(MIGRATIONS, f), 'utf8')).map((s) => ({ f, s })))
+    const writes = migrationFiles().flatMap((f) => bucketRowWrites(scanText(f)).map((s) => ({ f, s })))
     expect(writes.length).toBeGreaterThan(1)   // mig 045's INSERT, mig 670's UPDATE
     const last = writes.at(-1)
     expect(bucketLimits(last.s), `${last.f} must set the bucket's limits from src/lib/template-media.js`).toEqual({
@@ -535,7 +560,7 @@ describe('migrations keep the bucket closed to clients and its limits in step (m
   it.each(later)('%s: never makes the bucket private, and any limit it sets matches template-media.js', (file) => {
     // Per file, not only the latest write: a lower-numbered file that merges
     // after 670 runs on prod AFTER it, yet sorts before it here.
-    expect(bucketRowProblems(readFileSync(path.join(MIGRATIONS, file), 'utf8')),
+    expect(bucketRowProblems(scanText(file)),
       `${file} breaks the whatsapp-templates bucket: keep it public (Meta fetches header media by URL) and set its limits from src/lib/template-media.js`).toEqual([])
   })
 
@@ -614,5 +639,39 @@ describe('migrations keep the bucket closed to clients and its limits in step (m
   it('a rollback migration is exempt only under its exact name', () => {
     expect(ROLLBACK_FILE.test('671_watplbucket1_rollback.sql')).toBe(true)
     expect(ROLLBACK_FILE.test('671_whatsapp_templates_bucket_reopen.sql')).toBe(false)
+  })
+
+  it('…and only for the three statements that restore the 30 Sep state; anything else in it is still checked', () => {
+    // The C90 plan's rollback record (Task 5 Step 7), verbatim.
+    const ROLLBACK = `BEGIN;
+SET LOCAL lock_timeout = '5s';
+CREATE POLICY wa_templates_storage_insert ON storage.objects
+  FOR INSERT TO authenticated WITH CHECK (bucket_id = 'whatsapp-templates');
+CREATE POLICY wa_templates_storage_delete ON storage.objects
+  FOR DELETE TO authenticated USING (bucket_id = 'whatsapp-templates');
+UPDATE storage.buckets SET file_size_limit = NULL, allowed_mime_types = NULL
+ WHERE id = 'whatsapp-templates';
+COMMIT;`
+    const clean = (sql) => ({ reopeners: bucketReopeners(rollbackRemainder(sql)), rows: bucketRowProblems(rollbackRemainder(sql)) })
+    expect(clean(ROLLBACK)).toEqual({ reopeners: [], rows: [] })
+    // The partial rollback (limits only), and the same statements spelt differently.
+    expect(clean("UPDATE storage.buckets SET file_size_limit = NULL, allowed_mime_types = NULL WHERE id = 'whatsapp-templates';")).toEqual({ reopeners: [], rows: [] })
+    expect(clean(`create policy "wa_templates_storage_insert" on "storage"."objects" for insert to authenticated
+      with check ( bucket_id='whatsapp-templates'::text );
+      UPDATE storage.buckets SET allowed_mime_types = NULL,file_size_limit = NULL WHERE id = 'whatsapp-templates';`)).toEqual({ reopeners: [], rows: [] })
+    // Anything beyond those three still fails.
+    const extra = [
+      "CREATE POLICY wa_templates_list ON storage.objects FOR SELECT TO authenticated USING (bucket_id = 'whatsapp-templates');",
+      "CREATE POLICY wa_templates_storage_insert ON storage.objects FOR INSERT TO authenticated WITH CHECK (true);",
+      "CREATE POLICY wa_templates_storage_insert ON storage.objects FOR INSERT TO anon, authenticated WITH CHECK (bucket_id = 'whatsapp-templates');",
+      "CREATE POLICY wa_templates_storage_update ON storage.objects FOR UPDATE TO authenticated USING (bucket_id = 'whatsapp-templates');",
+      "UPDATE storage.buckets SET public = false WHERE id = 'whatsapp-templates';",
+      "UPDATE storage.buckets SET file_size_limit = NULL, allowed_mime_types = NULL, public = false WHERE id = 'whatsapp-templates';",
+      "UPDATE storage.buckets SET file_size_limit = 1 WHERE id = 'whatsapp-templates';",
+    ]
+    for (const sql of extra) {
+      const r = clean(`${ROLLBACK}\n${sql}`)
+      expect(r.reopeners.length + r.rows.length, sql).toBeGreaterThan(0)
+    }
   })
 })
