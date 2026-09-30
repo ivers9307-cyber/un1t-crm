@@ -20,6 +20,7 @@ import { describeGate } from '../helpers/role-gate-probe.js'
 import { roleCases, permissionCases } from '../helpers/role-sweep-callers.js'
 import * as waSend from '@/app/api/whatsapp/broadcasts/[id]/send/route.js'
 import * as waResubmit from '@/app/api/whatsapp/templates/[id]/resubmit/route.js'
+import * as waTemplates from '@/app/api/whatsapp/templates/route.js'
 
 const T = { getCurrentUser, createServerClient, describe, it, expect }
 const json = (method, body) => new Request('http://localhost/api/x', {
@@ -45,4 +46,15 @@ describeGate('POST /api/whatsapp/templates/[id]/resubmit (MANAGER_ROLES at the t
   gateReads: row({ id: 'wt-1', status: 'REJECTED', meta_template_id: 'meta-1' }),
   forbidden: { status: 403, body: { success: false, error: 'Forbidden' } },
   hidden: NOT_FOUND, cases: roleCases(MANAGER_ROLES),
+}, T)
+
+// WATPLROLE.1 — template create, edit and delete judge the resubmit rule
+// (MANAGER_ROLES) at the location created at / the template's location.
+// Create takes its location from the body, so its non-member answer is
+// assertLocationAccess's 403; the two detail handlers keep their 404.
+describeGate('POST /api/whatsapp/templates (MANAGER_ROLES at the body location)', {
+  call: (target) => waTemplates.POST(json('POST', { name: 'promo_x', components: [], location_id: target })),
+  forbidden: { status: 403, body: { success: false, error: 'Forbidden' } },
+  hidden: { status: 403, body: { success: false, error: 'Forbidden — location not in your assignments' } },
+  cases: roleCases(MANAGER_ROLES),
 }, T)

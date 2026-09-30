@@ -13,6 +13,9 @@ vi.mock('@/lib/auth', () => ({
   getCurrentUser: vi.fn(async () => ({ id: 'prof-1', activeLocation: { id: 'a0000000-0000-4000-8000-000000000001' } })),
   assertLocationAccess: vi.fn(() => null),
   getUserLocationIds: vi.fn(() => ['a0000000-0000-4000-8000-000000000001']),
+  // WATPLROLE.1 (C79) — the role gate has its own tests (route.role.test.js);
+  // these pin the NUMBER, so the caller passes it.
+  hasRoleAtLocation: vi.fn(() => true),
 }))
 vi.mock('@/lib/whatsapp', () => ({ createTemplate: vi.fn(), getTemplates: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
