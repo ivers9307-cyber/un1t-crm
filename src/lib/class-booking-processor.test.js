@@ -317,6 +317,45 @@ describe('TRIALGRANT.1: a new account whose trial did not take', () => {
     expect(inserts[0].details).toMatchObject({ reason: 'needs_credit_grant', trial_membership_id: 'tm-funnel', trial_plan_code: 'tp-funnel' })
   })
 
+  // GLOFOXPOSTRETRY.1 review — the mint's purchase got no clear answer (a
+  // 5xx or no reply): the trial may be on the account. The card carries that
+  // doubt as details.trial_grant, so its FIRST approval runs the unsettled
+  // path (books only if credits show) instead of buying blind.
+  it('a mint purchase with no clear answer stamps the card with an unsettled trial grant', async () => {
+    findOrCreateGlofoxMember
+      .mockResolvedValueOnce({ status: 'skipped', glofox_member_id: null })
+      .mockResolvedValueOnce({ status: 'needs_review', glofox_member_id: 'gm-new', trial_failed: true, trial_outcome_unknown: true, error: 'x' })
+    const d = makeDb(lead)
+    const inserts = []
+    const insert = d.insert
+    d.insert = (row) => { inserts.push(row); return insert(row) }
+    d.maybeSingle = async () => ({ data: d._table === 'agent_membership_requests' ? null : lead })
+
+    const r = await processClassBookingRequest(d, req)
+
+    expect(r).toEqual({ outcome: 'needs_review', detail: 'needs_credit_grant' })
+    expect(inserts).toHaveLength(1)
+    expect(inserts[0].details).toMatchObject({
+      reason: 'needs_credit_grant',
+      trial_grant: { ok: false, code: 'TRIAL_GRANT_FAILED', outcome_unknown: true },
+    })
+  })
+
+  it('a mint purchase Glofox REFUSED leaves no trial_grant on the card (its approve may buy)', async () => {
+    findOrCreateGlofoxMember
+      .mockResolvedValueOnce({ status: 'skipped', glofox_member_id: null })
+      .mockResolvedValueOnce({ status: 'needs_review', glofox_member_id: 'gm-new', trial_failed: true, error: 'x' })
+    const d = makeDb(lead)
+    const inserts = []
+    const insert = d.insert
+    d.insert = (row) => { inserts.push(row); return insert(row) }
+    d.maybeSingle = async () => ({ data: d._table === 'agent_membership_requests' ? null : lead })
+
+    await processClassBookingRequest(d, req)
+
+    expect(inserts[0].details.trial_grant).toBeUndefined()
+  })
+
   it('no override on the request → none on the card (the approve buys the location default)', async () => {
     findOrCreateGlofoxMember
       .mockResolvedValueOnce({ status: 'skipped', glofox_member_id: null })

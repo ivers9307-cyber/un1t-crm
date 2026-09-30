@@ -554,6 +554,19 @@ describe('PATCH class_booking approval — the trial grant is judged (TRIALGRANT
     expect(updates.at(-1).patch.details.trial_grant).toMatchObject({ ok: true, invoice_id: 'inv-1' })
   })
 
+  // GLOFOXPOSTRETRY.1 review — a booking found landed after a 5xx is kept
+  // visible on the card's result, for audit.
+  it('a booking recovered after a 5xx records recovered on the result', async () => {
+    purchaseGlofoxMembership.mockResolvedValueOnce({ ok: true, http_status: 200, purchase_status: 'SUCCESS', invoice_id: 'inv-1' })
+    createBooking.mockResolvedValueOnce({ ok: true, status: 200, body: { success: true, Booking: { _id: 'gfb-r' } }, recovered: 'landed_after_5xx' })
+    db = makeDbFor(grantRow(), updates)
+
+    const json = await (await approve()).json()
+
+    expect(json.executed).toMatchObject({ ok: true, glofox_booking_id: 'gfb-r', recovered: 'landed_after_5xx' })
+    expect(updates.at(-1).patch.details.result.recovered).toBe('landed_after_5xx')
+  })
+
   it('Fix & retry on a card whose trial WAS granted buys nothing more, and books', async () => {
     createBooking.mockResolvedValueOnce({ ok: true, status: 200, body: { success: true, Booking: { _id: 'gfb-8' } } })
     db = makeDbFor({ ...grantRow({ trial_grant: { ok: true, at: '2026-09-30T18:00:00.000Z', invoice_id: 'inv-0' }, result: { ok: false, message_code: 'CLASS_IS_FULL' } }), status: 'failed' }, updates)
@@ -591,6 +604,20 @@ describe('PATCH class_booking approval — the trial grant is judged (TRIALGRANT
     expect(createBooking).not.toHaveBeenCalled()
     expect(updates.at(-1).patch.status).toBe('failed')
     expect(updates.at(-1).patch.details.result).toMatchObject({ ok: false, message_code: 'TRIAL_GRANT_UNVERIFIED' })
+  })
+
+  // GLOFOXPOSTRETRY.1 review — the /start mint's purchase got no clear
+  // answer and the processor stamped the card. Its FIRST approval must not
+  // buy a second trial: no credits showing → failed TRIAL_GRANT_UNVERIFIED.
+  it('FIRST approval of a card stamped unsettled at the mint: nothing bought, no booking, UNVERIFIED', async () => {
+    db = makeDbFor(grantRow({ trial_grant: { ok: false, code: 'TRIAL_GRANT_FAILED', outcome_unknown: true } }), updates)
+
+    await approve()
+
+    expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
+    expect(createBooking).not.toHaveBeenCalled()
+    expect(updates.at(-1).patch.status).toBe('failed')
+    expect(updates.at(-1).patch.details.result).toMatchObject({ ok: false, message_code: 'TRIAL_GRANT_UNVERIFIED', outcome_unknown: true })
   })
 
   it('a card carrying the funnel’s trial override buys that trial, not the location default', async () => {

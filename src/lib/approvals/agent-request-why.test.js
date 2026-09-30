@@ -299,4 +299,19 @@ describe('failureExplanation: the write-ahead trial grant (TRIALGRANT.1 review)'
     expect(out).toMatch(/€0 trial invoice/)
     expect(out).not.toMatch(/would not add the trial/i)
   })
+
+  it('a pending needs_credit_grant card stamped unsettled at the mint says approving will not buy a second trial', () => {
+    const out = whyFlagged({ kind: 'class_booking', details: { reason: 'needs_credit_grant', trial_grant: { ok: false, code: 'TRIAL_GRANT_FAILED', outcome_unknown: true } } })
+    expect(out).toMatch(/no clear answer/i)
+    expect(out).toMatch(/€0 trial invoice/)
+    expect(out).toMatch(/not buy a second trial/i)
+    expect(out).not.toMatch(/Approving adds the trial/)
+  })
+
+  it('a purchase that answered 5xx reads as no clear answer, not "would not add" (GLOFOXPOSTRETRY.1)', () => {
+    const out = failed({ ok: false, message_code: 'TRIAL_GRANT_FAILED', http_status: 503, outcome_unknown: true })
+    expect(out).toMatch(/server error/i)
+    expect(out).toMatch(/€0 trial invoice/)
+    expect(out).not.toMatch(/would not add the trial/i)
+  })
 })

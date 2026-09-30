@@ -262,7 +262,11 @@ export async function PATCH(request, { params }) {
     } else {
       const result = await cancelBooking(creds, details.booking_id, executingMemberId)
       const messageCode = result?.body?.message_code || result?.body?.message || null
-      executed = { ok: result.ok, status: result.status, message_code: messageCode }
+      executed = {
+        ok: result.ok, status: result.status, message_code: messageCode,
+        // GLOFOXPOSTRETRY.1 — Glofox answered 5xx and a read found it cancelled.
+        ...(result.recovered ? { recovered: result.recovered } : {}),
+      }
       details = { ...details, result: executed }
       finalStatus = result.ok ? 'actioned' : 'failed'
 
@@ -373,8 +377,8 @@ export async function PATCH(request, { params }) {
       // booked or sent, like every other failed execution. The grant is
       // written ahead on details.trial_grant (below), so a retry does not buy
       // over a recorded grant, nor over a purchase whose answer was never
-      // recorded unless credits show. glofoxFetch's own POST retry on a 5xx
-      // is not covered (C84).
+      // recorded unless credits show. glofoxFetch never re-sends the purchase
+      // after a 5xx (GLOFOXPOSTRETRY.1): a 5xx is outcome_unknown, like no reply.
       let grantFailure = null
       if (approvalGrantsTrialCredit(details)) {
         const { grantTrialBeforeBooking } = await import('@/lib/agent/trial-grant')
@@ -431,6 +435,8 @@ export async function PATCH(request, { params }) {
         const success = booked || alreadyBooked
         executed = {
           ok: success, status: result.status, message_code: messageCode, glofox_booking_id: bookingId,
+          // GLOFOXPOSTRETRY.1 — Glofox answered 5xx and a read found the booking.
+          ...(result.recovered ? { recovered: result.recovered } : {}),
           // TRIALGRANT.1 — the card's failure copy must know a trial was just
           // added: a no-credits refusal then means it starts later.
           ...(details.trial_grant ? { trial_grant: details.trial_grant } : {}),

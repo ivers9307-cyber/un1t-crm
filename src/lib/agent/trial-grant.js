@@ -135,8 +135,10 @@ export async function grantTrialBeforeBooking(db, {
       glofox_message_code: p?.message_code ?? null,
       http_status: p?.http_status ?? null,
       purchase_status: p?.purchase_status ?? null,
-      // http_status 0 = no answer (network): Glofox may have processed it.
-      ...(p?.http_status === 0 ? { outcome_unknown: true } : {}),
+      // No clear answer (a network error, http_status 0, or a 5xx, which
+      // glofoxFetch no longer re-sends: GLOFOXPOSTRETRY.1): Glofox may have
+      // processed it, so a retry must not buy blind.
+      ...((p?.outcome_unknown === true || p?.http_status === 0) ? { outcome_unknown: true } : {}),
     })
   } catch (e) {
     return stop(TRIAL_GRANT_FAILED, {

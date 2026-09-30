@@ -103,6 +103,9 @@ function bookingFailedExplanation(code) {
  * draft-mode default), or null when there is nothing mechanical to
  * explain (pause/cancel — the reason there is the customer's own words).
  */
+const TRIAL_UNSETTLED_AT_MINT =
+  'Their Glofox account was just created, but Glofox gave no clear answer when the trial was being added, so it may already be there. Approving books only if class credits show on the account, and will not buy a second trial. Check their account in Glofox for a €0 trial invoice; if there is none, add a credit by hand, then approve.'
+
 export function whyFlagged(row) {
   if (!row || row.kind !== 'class_booking') return null
   const d = row.details || {}
@@ -112,6 +115,9 @@ export function whyFlagged(row) {
       const line = creditUnreadLine(d.credit_unread_accounts)
       return line ? `${MACHINE_REASONS[reason]} ${line}` : MACHINE_REASONS[reason]
     }
+    // GLOFOXPOSTRETRY.1 review — the account was just made, but the trial
+    // purchase got no clear answer, so this card's approve will not buy one.
+    if (reason === 'needs_credit_grant' && d.trial_grant?.outcome_unknown === true) return TRIAL_UNSETTLED_AT_MINT
     if (MACHINE_REASONS[reason]) return MACHINE_REASONS[reason]
     if (reason.startsWith('booking_failed:')) {
       return bookingFailedExplanation(reason.slice('booking_failed:'.length) || 'unknown')
@@ -180,9 +186,10 @@ const FAILURE_EXPLANATIONS = {
 // refused for no credits. The purchase spec: a member with an active
 // membership gets the new one starting AFTER it ends.
 // Review of TRIALGRANT.1 — the purchase was sent but Glofox never answered
-// (network), so it may or may not have gone through.
+// clearly (network, or a 5xx: GLOFOXPOSTRETRY.1), so it may or may not have
+// gone through.
 const TRIAL_GRANT_NO_ANSWER =
-  'Glofox did not answer when the trial was being added, so it may or may not have gone through, and the booking was not attempted. Check their account in Glofox for a €0 trial invoice. If the trial is there and usable, or you add a credit by hand, retry and it books against it; retrying never buys a second trial while this is unclear.'
+  'Glofox did not answer clearly (no reply, or a server error) when the trial was being added, so it may or may not have gone through, and the booking was not attempted. Check their account in Glofox for a €0 trial invoice. If the trial is there and usable, or you add a credit by hand, retry and it books against it; retrying never buys a second trial while this is unclear.'
 
 const NO_CREDITS_AFTER_TRIAL =
   'The trial was added in Glofox, but Glofox still refused the booking for no credits. The trial may be set to start later (Glofox starts a new membership after one they already hold ends). Check their memberships in Glofox, then retry. Retrying does not add another trial.'
