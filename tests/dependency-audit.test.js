@@ -286,7 +286,7 @@ describe('the shipped allowlist files', () => {
   // Uint8Array-only) even if a patched 2.x existed. See CHANGELOG 533.
   //
   //
-  // DEPAUDIT.2 (2026-09-30) added the two brace-expansion advisories, and
+  // DEPAUDIT.5 (2026-09-30) added the two brace-expansion advisories, and
   // they are a DIFFERENT kind of accept: a patched 2.1.7 exists and
   // minimatch@9's `^2.0.2` admits it, so a mobile lockfile bump would fix
   // them. They are accepted only because mobile/package-lock.json is an OTA
@@ -302,8 +302,8 @@ describe('the shipped allowlist files', () => {
       .sort()
     expect(ids).toEqual([
       'GHSA-5p2g-fcmc-qvqq', // image-size
-      'GHSA-6j4f-fj2g-mc7p', // brace-expansion (DEPAUDIT.2)
-      'GHSA-qhr7-859c-m2p7', // brace-expansion (DEPAUDIT.2)
+      'GHSA-6j4f-fj2g-mc7p', // brace-expansion (DEPAUDIT.5)
+      'GHSA-qhr7-859c-m2p7', // brace-expansion (DEPAUDIT.5)
       'GHSA-w3rx-r6r6-pgpr', // image-size
     ])
   })

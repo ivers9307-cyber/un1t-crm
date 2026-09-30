@@ -1,4 +1,4 @@
-// DEPAUDIT.2 — smtp-send.js against the REAL nodemailer, not a fake.
+// DEPAUDIT.5 — smtp-send.js against the REAL nodemailer, not a fake.
 //
 // smtp-send.test.js drives a fake transporter, which is right for the
 // verdict envelope and the redaction, but it means nothing in the suite would

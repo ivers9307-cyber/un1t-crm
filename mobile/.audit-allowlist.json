@@ -20,7 +20,7 @@
     "`npm view image-size versions` at expiry; the moment a patched release lands, fix via override on",
     "metro's `image-size` dep and delete both entries.",
     "",
-    "The brace-expansion accepts (DEPAUDIT.2, 2026-09-30) ARE fixable, unlike image-size: minimatch@9.0.9 declares",
+    "The brace-expansion accepts (DEPAUDIT.5, 2026-09-30) ARE fixable, unlike image-size: minimatch@9.0.9 declares",
     "`brace-expansion ^2.0.2`, which admits the patched 2.1.7, so `cd mobile && npm update brace-expansion",
     "--package-lock-only` clears both. They are accepted instead because mobile/package-lock.json is an OTA publish",
     "path and the vulnerable copy is build-time only. Take the lockfile bump with the next native release and delete",
