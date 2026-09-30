@@ -75,6 +75,7 @@ const HEAD = '10000000-0000-0000-0000-000000000003'      // head_coach at A (man
 const OWNER = '10000000-0000-0000-0000-000000000005'     // owner at A
 const MASTER = '10000000-0000-0000-0000-000000000004'
 const OUTSIDER = '10000000-0000-0000-0000-000000000006'  // staff at B only
+const MANAGER = '10000000-0000-0000-0000-000000000007'   // manager at A
 const ROSTER = '20000000-0000-0000-0000-000000000001'    // published, A
 const TEMPLATE = '30000000-0000-0000-0000-000000000001'
 const BLOCK = '40000000-0000-0000-0000-000000000001'     // published roster
@@ -82,6 +83,7 @@ const DRAFT_BLOCK = '40000000-0000-0000-0000-000000000002' // no roster: manager
 const OWN = '50000000-0000-0000-0000-000000000001'       // COACH on BLOCK
 const HEADS = '50000000-0000-0000-0000-000000000002'     // HEAD on BLOCK
 const DRAFT_ASG = '50000000-0000-0000-0000-000000000003' // COACH on DRAFT_BLOCK
+const MGRS = '50000000-0000-0000-0000-000000000004'      // MANAGER on BLOCK
 const NEW_ASG = '50000000-0000-0000-0000-000000000009'
 
 const denied = (t) => new RegExp(`permission denied for (table|relation) ${t}\\b`)
@@ -211,10 +213,12 @@ const SEED = `
   INSERT INTO public.locations VALUES ('${LOC_A}', 'Studio A'), ('${LOC_B}', 'Studio B');
   INSERT INTO public.profiles (id, role, full_name) VALUES
     ('${COACH}', 'staff', 'Coach One'), ('${HEAD}', 'staff', 'Head Coach A'),
-    ('${OWNER}', 'staff', 'Owner A'), ('${MASTER}', 'master', 'Master'), ('${OUTSIDER}', 'staff', 'Coach B');
+    ('${OWNER}', 'staff', 'Owner A'), ('${MASTER}', 'master', 'Master'), ('${OUTSIDER}', 'staff', 'Coach B'),
+    ('${MANAGER}', 'staff', 'Manager A');
   INSERT INTO public.profile_locations VALUES
     ('${COACH}', '${LOC_A}', 'staff'), ('${HEAD}', '${LOC_A}', 'head_coach'),
-    ('${OWNER}', '${LOC_A}', 'owner'), ('${OUTSIDER}', '${LOC_B}', 'staff');
+    ('${OWNER}', '${LOC_A}', 'owner'), ('${OUTSIDER}', '${LOC_B}', 'staff'),
+    ('${MANAGER}', '${LOC_A}', 'manager');
   INSERT INTO public.rosters VALUES ('${ROSTER}', '${LOC_A}', 'published');
   INSERT INTO public.shift_templates VALUES ('${TEMPLATE}', '${LOC_A}', 'AM', '09:00', '10:00');
   INSERT INTO public.shift_blocks (id, location_id, template_id, block_date, start_time, end_time, roster_id, notes, briefing) VALUES
@@ -222,7 +226,7 @@ const SEED = `
     ('${DRAFT_BLOCK}', '${LOC_A}', '${TEMPLATE}', '2026-10-06', '09:00', '10:00', NULL, NULL, NULL);
   INSERT INTO public.shift_assignments (id, block_id, profile_id, partial_reason) VALUES
     ('${OWN}', '${BLOCK}', '${COACH}', NULL), ('${HEADS}', '${BLOCK}', '${HEAD}', 'PARTIAL: fictional'),
-    ('${DRAFT_ASG}', '${DRAFT_BLOCK}', '${COACH}', NULL);
+    ('${DRAFT_ASG}', '${DRAFT_BLOCK}', '${COACH}', NULL), ('${MGRS}', '${BLOCK}', '${MANAGER}', NULL);
 `
 
 // The phone's Today read (shared/dashboard-data.js fetchDashboardShifts), as
@@ -273,6 +277,8 @@ const asAnon = (sql) => as('anon', null, sql)
 const asService = (sql) => as('service_role', null, sql)
 
 const TABLES = ['shift_blocks', 'shift_assignments']
+// [name, profile, their own assignment]: who reads the phone's Today tab.
+const PHONE_READERS = [['head coach', HEAD, HEADS], ['coach', COACH, OWN], ['manager', MANAGER, MGRS]]
 const PRIVS = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER', 'MAINTAIN']
 const holds = async (role, table, priv) =>
   (await db.query(`SELECT has_table_privilege($1, $2, $3) AS v`, [role, `public.${table}`, priv])).rows[0].v
@@ -388,9 +394,14 @@ describe('after 676', () => {
       selects: await Promise.all(TABLES.map(async (t) => (await policies(t)).filter((p) => p.cmd === 'SELECT'))),
       today: await asUser(COACH, PHONE_TODAY_SQL, [COACH]),
       swap: await asUser(COACH, SWAP_EMBED_SQL, [OWN]),
+      phone: {},
       managerBlocks: await asUser(HEAD, `SELECT id FROM public.shift_blocks ORDER BY id`),
       coachBlocks: await asUser(COACH, `SELECT id FROM public.shift_blocks ORDER BY id`),
       coachAssignments: await asUser(COACH, `SELECT id FROM public.shift_assignments ORDER BY id`),
+    }
+    // One PGlite session: each read's BEGIN/ROLLBACK must not interleave.
+    for (const [name, uid, asg] of PHONE_READERS) {
+      before.phone[name] = { today: await asUser(uid, PHONE_TODAY_SQL, [uid]), swap: await asUser(uid, SWAP_EMBED_SQL, [asg]) }
     }
     await runSql(MIG_676)
   }, 60_000)
@@ -427,7 +438,7 @@ describe('after 676', () => {
   })
 
   describe('no signed-in role writes either table', () => {
-    it.each([['head coach', HEAD], ['owner', OWNER], ['master', MASTER], ['coach', COACH]])('%s is refused INSERT, UPDATE and DELETE', async (_, uid) => {
+    it.each([['head coach', HEAD], ['owner', OWNER], ['manager', MANAGER], ['master', MASTER], ['coach', COACH]])('%s is refused INSERT, UPDATE and DELETE', async (_, uid) => {
       await expect(asUser(uid, FORGE_OWN_SQL)).rejects.toThrow(denied('shift_assignments'))
       await expect(asUser(uid, PLACE_OUTSIDER_SQL)).rejects.toThrow(denied('shift_assignments'))
       await expect(asUser(uid, `DELETE FROM public.shift_assignments WHERE id = '${OWN}'`)).rejects.toThrow(denied('shift_assignments'))
@@ -458,6 +469,17 @@ describe('after 676', () => {
 
     it('the own-swaps nested embed returns the same row', async () => {
       expect(await asUser(COACH, SWAP_EMBED_SQL, [OWN])).toEqual(before.swap)
+    })
+
+    // Both phone reads as each signed-in tier that uses the phone's Today tab
+    // (the head coach and the manager pass the manager-tier read rules, the
+    // coach the published-roster one): non-empty before, identical after.
+    it.each(PHONE_READERS)("%s: the phone's Today read and own-swaps embed are unchanged", async (name, uid, asg) => {
+      const was = before.phone[name]
+      expect(was.today.map((r) => r.id)).toContain(asg)
+      expect(was.swap).toEqual([{ id: asg, shift_blocks: { block_date: '2026-10-05', start_time: '09:00:00', end_time: '10:00:00' } }])
+      expect(await asUser(uid, PHONE_TODAY_SQL, [uid])).toEqual(was.today)
+      expect(await asUser(uid, SWAP_EMBED_SQL, [asg])).toEqual(was.swap)
     })
 
     it('the SELECT policies admit the same rows (manager sees the draft block, the coach does not)', async () => {
