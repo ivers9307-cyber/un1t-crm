@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   templateButtonsError, componentsButtonsError,
   dynamicUrlButtonIndex, urlButtonSendBlock, urlButtonStepBlock, URL_BUTTON_MAPPING_KEY, normalizeButtonsForMeta,
+  flowButtonIndex, flowButtonComponentFor,
 } from './whatsapp-template-buttons.js'
 
 const quickReply = (text) => ({ type: 'QUICK_REPLY', text })
@@ -241,5 +242,36 @@ describe('urlButtonStepBlock — the sequence-step register', () => {
       expect(msg.endsWith(consequence)).toBe(true)
     }
     expect(send).not.toBe(step)
+  })
+})
+
+describe('flowButtonIndex / flowButtonComponentFor (WATPLSEND.1)', () => {
+  const flowTpl = [
+    { type: 'BODY', text: 'Book your first visit' },
+    { type: 'BUTTONS', buttons: [{ type: 'QUICK_REPLY', text: 'x' }, { type: 'FLOW', text: 'Book', flow_id: 'F1' }] },
+  ]
+
+  it('finds the FLOW button by its position inside BUTTONS (the index Meta wants)', () => {
+    expect(flowButtonIndex(flowTpl)).toBe(1)
+    expect(flowButtonIndex([{ type: 'BODY', text: 'Hi' }])).toBe(-1)
+    expect(flowButtonIndex(null)).toBe(-1)
+  })
+
+  it('builds the per-send action parameter Meta requires (131009 without it)', () => {
+    expect(flowButtonComponentFor(flowTpl, 'c1.l1')).toEqual({
+      type: 'button',
+      sub_type: 'flow',
+      index: '1',
+      parameters: [{ type: 'action', action: { flow_token: 'c1.l1' } }],
+    })
+  })
+
+  it('is null without a token, so the caller decides whether to refuse', () => {
+    expect(flowButtonComponentFor(flowTpl, null)).toBeNull()
+    expect(flowButtonComponentFor(flowTpl, '')).toBeNull()
+  })
+
+  it('is null for a template with no FLOW button', () => {
+    expect(flowButtonComponentFor([{ type: 'BUTTONS', buttons: [{ type: 'URL', text: 'Go', url: 'https://example.test' }] }], 'c1.l1')).toBeNull()
   })
 })

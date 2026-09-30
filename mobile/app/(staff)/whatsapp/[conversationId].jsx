@@ -41,6 +41,7 @@ import {
   reactToInboundMessage, listCardSets, sendCardSet, sendBookingFlow,
 } from '../../../lib/whatsapp-api'
 import { listConversationApprovals } from '../../../lib/inbox-approvals-api'
+import { sendWarningsNotice } from '../../../lib/wa-send-warnings'
 import { needsReply, isAgentHandoff } from '../../../lib/inbox'
 import { mergeTimeline } from 'shared/approval-cards'
 import { groupWaTemplates, UNGROUPED_LABEL, templateBodyText } from 'shared/wa-template-groups'
@@ -140,6 +141,10 @@ export default function Conversation() {
       return
     }
     setText('')
+    // Sent, but the thread row or the conversation update failed: say so,
+    // or a message missing from the thread gets sent twice.
+    const notice = sendWarningsNotice(res)
+    if (notice) Alert.alert(notice.title, notice.message)
     refresh()
   }
 
@@ -189,6 +194,8 @@ export default function Conversation() {
       Alert.alert('Couldn’t send template', res.error || 'Unknown error')
       return
     }
+    const notice = sendWarningsNotice(res)
+    if (notice) Alert.alert(notice.title, notice.message)
     refresh()
   }
 
