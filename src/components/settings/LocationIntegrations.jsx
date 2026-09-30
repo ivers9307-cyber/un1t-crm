@@ -24,6 +24,7 @@ import {
 import { Instagram } from '@/components/icons/InstagramIcon'
 import ConnectionsSection from '@/components/customer-agent/ConnectionsSection'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
+import { hasRoleAtLocation } from '@/lib/role-at-location'
 
 import XeroIntegrationTab from './integrations/XeroIntegrationTab'
 import GlofoxIntegrationTab from './integrations/GlofoxIntegrationTab'
@@ -44,6 +45,11 @@ export default function LocationIntegrations({ location, xeroConnection, xeroRea
   const features = location.features || {}
   const isMaster = user.role === 'master'
   const isOwnerOrMaster = user.role === 'master' || user.role === 'owner'
+  // WAROLE.1 — every write on the WhatsApp tab (numbers, Connect, chat
+  // openers, card sets) decides guardMasterOrOwner AT this location, so the
+  // tab is judged there too, never on `user.role` (the ACTIVE studio's role).
+  // The other tabs still read isOwnerOrMaster: row C38 PAGEGATES.1.
+  const ownsWhatsAppHere = hasRoleAtLocation(user, location.id, ['owner'])
 
   const tabs = []
   // Xero is a platform-wide finance integration, not a car-processing
@@ -86,7 +92,7 @@ export default function LocationIntegrations({ location, xeroConnection, xeroRea
   // the location has the whatsapp feature on, OR when the master is
   // looking (so a not-yet-enabled location still surfaces the
   // first-time setup path). Statuses come from the API on render.
-  if ((features.whatsapp !== false || isMaster) && isOwnerOrMaster) {
+  if ((features.whatsapp !== false || isMaster) && ownsWhatsAppHere) {
     tabs.push({
       key: 'whatsapp',
       label: 'WhatsApp',
@@ -218,7 +224,7 @@ export default function LocationIntegrations({ location, xeroConnection, xeroRea
             <BcaIntegrationTab location={location} canEdit={isMaster} sampleCar={sampleBcaCar} />
           )}
           {activeKey === 'whatsapp' && (
-            <WhatsAppIntegrationTab location={location} canEdit={isOwnerOrMaster} />
+            <WhatsAppIntegrationTab location={location} canEdit={ownsWhatsAppHere} />
           )}
           {activeKey === 'instagram' && (
             <ConnectionsSection locationId={location.id} locationName={location.name} embedded />
