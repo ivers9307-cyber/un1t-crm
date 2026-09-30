@@ -345,6 +345,12 @@ describe('failureExplanation: one trial per member, and the funnel trial (TRIALP
     }
   })
 
+  it('TRIAL_PRODUCT_UNKNOWN says to add a credit or membership in Glofox by hand, then retry (a bare retry fails the same way)', () => {
+    const out = failed({ ok: false, message_code: 'TRIAL_PRODUCT_UNKNOWN' })
+    expect(out).toMatch(/add a credit or membership in Glofox by hand, then retry/i)
+    expect(out).not.toMatch(/retry in a minute/i)
+  })
+
   it('none of them shows the raw code or an em-dash', () => {
     for (const code of codes) {
       const out = failed({ ok: false, message_code: code })

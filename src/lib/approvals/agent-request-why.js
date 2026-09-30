@@ -188,9 +188,10 @@ const FAILURE_EXPLANATIONS = {
   TRIAL_HISTORY_UNREADABLE:
     'Whether this member already got a trial from an earlier approval could not be checked (a temporary database error), so no trial was bought and nothing was booked. Retry in a minute.',
   // The card named no trial, and the booking's queue row could not be read,
-  // or its rows named different trials.
+  // or its rows named different trials. A bare retry re-reads the same rows,
+  // so the copy leads with the fix that works: credits added by hand.
   TRIAL_PRODUCT_UNKNOWN:
-    'Which trial this booking page offers could not be worked out (a temporary database error, or two different trials were named), so no trial was bought and nothing was booked. Retry in a minute. If it happens again, add a credit in Glofox by hand, then retry.',
+    'Which trial this booking page offers could not be worked out (its booking records name two different trials, or could not be read), so no trial was bought and nothing was booked. Retrying alone will likely stop here again. Add a credit or membership in Glofox by hand, then retry and it books against it.',
 }
 
 // TRIALGRANT.1 — the trial was added a moment before, yet Glofox still
