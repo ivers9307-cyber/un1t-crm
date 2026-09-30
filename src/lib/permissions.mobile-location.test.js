@@ -74,8 +74,8 @@ describe('hasMobilePermissionAtAnyLocation', () => {
 
   it('is true when the toggle is on only at a non-active location', () => {
     const u = person({ [LOC_A]: { role: 'staff' }, [LOC_B]: { role: 'head_coach' } }, LOC_A)
-    expect(hasMobilePermission(u, 'sms')).toBe(false)
-    expect(hasMobilePermissionAtAnyLocation(u, 'sms')).toBe(true)
+    expect(hasMobilePermission(u, 'email')).toBe(false)
+    expect(hasMobilePermissionAtAnyLocation(u, 'email')).toBe(true)
   })
 
   it('is false when the toggle is off everywhere', () => {
