@@ -5,8 +5,11 @@
 // those three or on the two mig 646 shift tables. Pinned here:
 //
 //  1. Client-run code (shared/, mobile/, and every src/ file that is
-//     'use client' or imports createBrowserClient) never reads
-//     staff_attendance_events and never writes any of the three. A select on
+//     'use client' after any header comment, or names createBrowserClient,
+//     createAuthClient() or the anon key; .js/.jsx/.ts/.tsx) never reads
+//     staff_attendance_events and never writes any of the three. Files are
+//     read through the TypeScript parser (codeOf) with comments, JSX text and
+//     regex literals blanked. A select on
 //     the three that the scanner cannot evaluate fails closed. (A read of a
 //     closed table, or any client write, is a 42501 after 668: on the phone's
 //     Today tab that is a blank list, so it is caught here, not on a handset.)
@@ -34,6 +37,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
+import ts from 'typescript'
 import {
   GRANTSWEEP_MIGRATION, CLOSED_TABLES, READ_ONLY_TABLES, SHIFT_TABLES, ANON_NONE_TABLES,
 } from './helpers/scheduling-client-grants.js'
@@ -51,21 +55,69 @@ function walk(dir, out = []) {
     if (name === 'node_modules' || name.startsWith('.')) continue
     const full = path.join(dir, name)
     if (statSync(full).isDirectory()) walk(full, out)
-    else if (/\.(m?js|jsx)$/.test(name) && !/\.test\.(m?js|jsx)$/.test(name)) out.push(full)
+    else if (/\.(m?js|jsx|ts|tsx)$/.test(name) && !/\.d\.ts$|\.test\.(m?js|jsx|ts|tsx)$/.test(name)) out.push(full)
   }
   return out
 }
 
+/**
+ * The file's CODE: comments, JSX text and regex literals blanked (newlines
+ * and offsets kept), read by the TypeScript parser, never by a regex or a
+ * hand state machine. JSX text is not trivia, but asked for comments where
+ * it starts the scanner reads `<p>/* note</p>` as one, so no comment range is
+ * taken there (tests/staff-profile-to-client.test.js, GUARDSTRIP.0). JSX text
+ * and regex literals are blanked too, because columnUses' own comment mask
+ * (check-select-columns' maskComments) would otherwise read the '/*' in
+ * `<p>files/*.csv</p>` or `/\/*\/` as a comment and hide every call up to
+ * the next '*\/'. Neither can hold a PostgREST call. A file the parser
+ * cannot read is returned raw: a false positive beats a blind spot.
+ */
+export function codeOf(text, file = 'scan.jsx') {
+  const kind = /\.tsx$/.test(file) ? ts.ScriptKind.TSX : /\.ts$/.test(file) ? ts.ScriptKind.TS : ts.ScriptKind.JSX
+  const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, kind)
+  if (sf.parseDiagnostics?.length) return text
+  const jsxTextAt = new Set()
+  const blanks = []
+  const find = (node) => {
+    if (node.kind === ts.SyntaxKind.JsxText) { jsxTextAt.add(node.pos); blanks.push([node.pos, node.end]) }
+    if (node.kind === ts.SyntaxKind.RegularExpressionLiteral) blanks.push([node.getStart(sf), node.end])
+    for (const child of node.getChildren(sf)) find(child)
+  }
+  find(sf)
+  const visit = (node) => {
+    if (!jsxTextAt.has(node.pos)) {
+      for (const r of [...(ts.getLeadingCommentRanges(text, node.pos) || []), ...(ts.getTrailingCommentRanges(text, node.pos) || [])]) blanks.push([r.pos, r.end])
+    }
+    for (const child of node.getChildren(sf)) visit(child)
+  }
+  visit(sf)
+  const out = text.split('')
+  for (const [from, to] of blanks) for (let k = from; k < to; k++) if (out[k] !== '\n') out[k] = ' '
+  return out.join('')
+}
+
+/**
+ * Is this src/ file run in a browser session? A 'use client' directive
+ * (after any header comment), createBrowserClient, createAuthClient() or the
+ * anon key (what a session client is built from), read from the code only
+ * (the same test as tests/function-execute-guard.test.js isClientFile).
+ */
+export function isClientFile(text, file) {
+  const code = codeOf(text, file).trimStart()
+  return /^['"]use client['"]/.test(code) || /\bcreateBrowserClient\b/.test(code) ||
+    /\bcreateAuthClient\s*\(/.test(code) || /\bNEXT_PUBLIC_SUPABASE_ANON_KEY\b/.test(code)
+}
+
 function clientFiles() {
   const phone = [...walk(path.join(ROOT, 'shared')), ...walk(path.join(ROOT, 'mobile'))]
-  const browser = walk(path.join(ROOT, 'src')).filter((f) => {
-    const t = readFileSync(f, 'utf8')
-    return /^\s*['"]use client['"]/.test(t) || /\bcreateBrowserClient\b/.test(t)
-  })
+  const browser = walk(path.join(ROOT, 'src')).filter((f) => isClientFile(readFileSync(f, 'utf8'), f))
   return [...phone, ...browser]
 }
 
-const uses = (src) => columnUses(src, SCANNED, FK_ALIASES)
+/** PostgREST reads/writes/unresolved selects on the three tables in one file's code. */
+export const scanUses = (text, file) => columnUses(codeOf(text, file), SCANNED, FK_ALIASES)
+const readUses = (f) => scanUses(readFileSync(f, 'utf8'), f)
+const uses = scanUses
 
 describe('client code and the scheduling tables (GRANTSWEEP.1)', () => {
   const files = clientFiles()
@@ -74,14 +126,14 @@ describe('client code and the scheduling tables (GRANTSWEEP.1)', () => {
     const names = files.map(rel)
     expect(names).toContain('shared/dashboard-data.js')
     expect(names.some((f) => f.startsWith('mobile/app/'))).toBe(true)
-    const reads = uses(readFileSync(path.join(ROOT, 'shared/dashboard-data.js'), 'utf8')).reads.map(([t, c]) => `${t}.${c}`)
+    const reads = readUses(path.join(ROOT, 'shared/dashboard-data.js')).reads.map(([t, c]) => `${t}.${c}`)
     expect(reads).toEqual(expect.arrayContaining(['shift_swap_requests.reason', 'shift_swap_requests.status', 'time_off_requests.type']))
   })
 
   it('never reads staff_attendance_events (service role only since mig 668)', () => {
     const offenders = []
     for (const f of files) {
-      for (const [t, c] of uses(readFileSync(f, 'utf8')).reads) if (CLOSED_TABLES.includes(t)) offenders.push(`${rel(f)}: ${t}.${c}`)
+      for (const [t, c] of readUses(f).reads) if (CLOSED_TABLES.includes(t)) offenders.push(`${rel(f)}: ${t}.${c}`)
     }
     expect(offenders, 'read it through a service-role /api/attendance route').toEqual([])
   })
@@ -89,7 +141,7 @@ describe('client code and the scheduling tables (GRANTSWEEP.1)', () => {
   it('never writes the three tables (mig 668 grants no client write)', () => {
     const offenders = []
     for (const f of files) {
-      for (const [t, op] of uses(readFileSync(f, 'utf8')).writes) offenders.push(`${rel(f)}: ${op} on ${t}`)
+      for (const [t, op] of readUses(f).writes) offenders.push(`${rel(f)}: ${op} on ${t}`)
     }
     expect(offenders, 'write through a service-role /api/schedule or /api/attendance route').toEqual([])
   })
@@ -100,12 +152,39 @@ describe('client code and the scheduling tables (GRANTSWEEP.1)', () => {
     const REVIEWED_DYNAMIC_SELECTS = []
     const unread = []
     for (const f of files) {
-      for (const [t, arg] of uses(readFileSync(f, 'utf8')).unresolved) {
+      for (const [t, arg] of readUses(f).unresolved) {
         const key = `${rel(f)}: ${t} ${arg}`
         if (!REVIEWED_DYNAMIC_SELECTS.includes(key)) unread.push(key)
       }
     }
     expect(unread, 'name the columns in a literal or a same-file const, or review it and list it').toEqual([])
+  })
+
+  it('finds every browser-session file: a comment header, createAuthClient, the anon key', () => {
+    expect(isClientFile("/* header */\n'use client'\nexport const x = 1\n")).toBe(true)
+    expect(isClientFile("// Header line one.\n//\n// line two\n\"use client\"\nexport const x = 1\n")).toBe(true)
+    expect(isClientFile("import { createAuthClient } from '@/lib/auth'\nconst db = await createAuthClient()\n")).toBe(true)
+    expect(isClientFile("const c = createClient(url, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)\n")).toBe(true)
+    // …and a comment is not a directive or a client.
+    expect(isClientFile("// 'use client'\nimport { createServerClient } from '@/lib/supabase'\n")).toBe(false)
+    expect(isClientFile("/* was createBrowserClient() before X */\nexport const y = 1\n")).toBe(false)
+    expect(clientFiles().map(rel)).toContain('src/components/InvoicesManager.jsx')
+  })
+
+  it('a client write behind a comment header is still caught', () => {
+    const src = "/**\n * Swap editor.\n */\n'use client'\nexport const post = (db, row) => db.from('shift_swap_requests').insert(row)\n"
+    expect(isClientFile(src)).toBe(true)
+    expect(scanUses(src).writes).toEqual([['shift_swap_requests', 'insert']])
+  })
+
+  it("JSX text or a regex holding '/*' cannot hide a call from the scanner", () => {
+    const jsx = "'use client'\nexport default function P({ db }) {\n  return <div><p>Upload files/*.csv here</p></div>\n}\n" +
+      "export const w = (db) => db.from('shift_swap_requests').insert({})\nexport const s = '*/'\n"
+    expect(scanUses(jsx).writes).toEqual([['shift_swap_requests', 'insert']])
+    const re = "export const r = /\\/*/\nexport const d = (db) => db.from('time_off_requests').delete().eq('id', 1)\nexport const s = '*/'\n"
+    expect(scanUses(re).writes).toEqual([['time_off_requests', 'delete']])
+    // a real comment is still a comment
+    expect(scanUses("// db.from('shift_swap_requests').insert({})\n/* db.from('time_off_requests').delete() */\n").writes).toEqual([])
   })
 
   it('the scanner sees the forms it must', () => {
