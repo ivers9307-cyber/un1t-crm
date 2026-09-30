@@ -18,11 +18,11 @@ function InfoRow({ label, value }) {
   )
 }
 
-export default function ContactWhoRail({ contact, person, identityEmails, identityPhones, canEditPrefs }) {
+export default function ContactWhoRail({ contact, person, identityEmails, identityPhones, canEditPrefs, canLinkAccounts = false }) {
   return (
     <>
       {/* PERSON-LINK.1 — linked accounts (or "not linked" CTA when single). */}
-      <LinkedAccountsCard person={person} contactId={contact.id} locationId={contact.location_id} />
+      <LinkedAccountsCard person={person} contactId={contact.id} locationId={contact.location_id} canManage={canLinkAccounts} />
 
       {/* Identity — emails + phones (deduped across the group when linked). */}
       <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4 space-y-3">

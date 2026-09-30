@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
-import { MANAGER_ROLES } from '@/lib/schemas'
+import { canEditMiaSettings } from '@/lib/agent/settings-access'
+import { readCheckinSendsToday, readCheckinSendsAllTime } from '@/lib/agent/checkin-counts'
 import { logError } from '@/lib/log'
 import { mergeLocationSettings, settingsSaveFailure } from '@/lib/location-settings'
 // MIA-HYGIENE.1 — schema, defaults and the persisted-object builder live in
@@ -17,7 +18,8 @@ import {
 
 // RADAR-AGENT.0 — customer agent settings. Stored on
 // locations.settings.customer_agent (jsonb), mirroring ai_assistant.
-// Manager+ at the active location may edit. Ships OFF by default — the
+// MIAROLE.1 (C80) — only an owner at the active location, or a master, may
+// edit; anyone who can open the page may read. Ships OFF by default — the
 // blob is absent until an owner saves, and `enabled` defaults false.
 
 export async function GET() {
@@ -52,24 +54,28 @@ export async function GET() {
   // sequence-engine incidents (CHANGELOG #289/#291) proved a silent
   // automation is undebuggable from the UI: surface sent-today/total, the
   // last outcome, and the last cron tick's skip-reason tally (persisted on
-  // the agent-followups heartbeat). UTC day boundary matches the daily-cap
-  // counter in lib/agent/followups.js on purpose.
-  const now = new Date()
-  const todayStartIso = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString()
+  // the agent-followups heartbeat).
+  // CHECKINRISKS.1 (C106 c) — sent-today and total count SENDS, read by the
+  // runner's own daily-cap counter (src/lib/agent/checkin-counts.js), so the
+  // card's "Sent today N/cap" is the number the cap is judged on. They used to
+  // count contacts STAMPED, and a skip stamps too. A failed read is null.
   const [todayRes, totalRes, lastRes, hbRes] = await Promise.all([
-    db.from('contacts').select('id', { count: 'exact', head: true })
-      .eq('location_id', locationId).gte('first_class_checkin_at', todayStartIso),
-    db.from('contacts').select('id', { count: 'exact', head: true })
-      .eq('location_id', locationId).not('first_class_checkin_at', 'is', null),
+    readCheckinSendsToday(db, locationId),
+    readCheckinSendsAllTime(db, locationId),
     db.from('activities').select('note, created_at, contacts!contact_id(name)')
       .eq('location_id', locationId).eq('type', 'agent_checkin')
       .order('created_at', { ascending: false }).limit(1),
     db.from('cron_heartbeats').select('last_ok_at, last_outcome').eq('name', 'agent-followups').maybeSingle(),
   ])
+  for (const [what, res] of [['sent_today', todayRes], ['total', totalRes], ['last', lastRes]]) {
+    if (res.error) logError('settings-customer-agent', 'check-in stats read failed', { locationId, what, err: res.error })
+  }
   const lastRow = lastRes.data?.[0] || null
   const checkinStats = {
-    sent_today: todayRes.count || 0,
-    total: totalRes.count || 0,
+    sent_today: todayRes.count,
+    total: totalRes.count,
+    // A failed read of the last outcome is not "none yet".
+    last_unreadable: !!lastRes.error,
     last: lastRow
       ? { at: lastRow.created_at, note: lastRow.note || null, contact_name: lastRow.contacts?.name || null }
       : null,
@@ -100,12 +106,19 @@ export async function GET() {
 export async function PUT(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!MANAGER_ROLES.includes(user.role)) {
-    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
-  }
-  const db = createServerClient()
   const locationId = user.activeLocation?.id
   if (!locationId) return NextResponse.json({ success: false, error: 'No active location' }, { status: 400 })
+  // MIAROLE.1 (C80, the owner's call 30 Sep) — membership first (404, so a
+  // caller not at the studio learns nothing), then the role AT this studio.
+  // This used to be MANAGER_ROLES off `user.role`, which let head coaches and
+  // managers switch Mia on, off or into test mode, and judged the caller's
+  // highest role anywhere rather than the one held at the studio written.
+  const guard = assertLocationAccessOr404(user, locationId)
+  if (guard) return guard
+  if (!canEditMiaSettings(user, locationId)) {
+    return NextResponse.json({ success: false, error: 'Only an owner can change the customer agent settings.' }, { status: 403 })
+  }
+  const db = createServerClient()
 
   const v = await validateBody(request, SettingsSchema)
   if (!v.ok) return v.response

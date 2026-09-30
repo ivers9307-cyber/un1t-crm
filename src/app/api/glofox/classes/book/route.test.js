@@ -18,16 +18,19 @@ const STAFF = {
 vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), getCurrentUser: vi.fn() }))
 // contactRead is swapped per test (a failed read); reset in beforeEach.
 let contactRead
+// BOOKCHATCOPY.1 — the studio's settings row (the chat confirmation template).
+let locationRead
 vi.mock('@/lib/supabase', () => ({
   createServerClient: vi.fn(() => ({
-    from: () => {
+    from: (table) => {
       const chain = {}
       for (const m of ['select', 'eq']) chain[m] = () => chain
-      chain.maybeSingle = async () => contactRead
+      chain.maybeSingle = async () => (table === 'locations' ? locationRead : contactRead)
       return chain
     },
   })),
 }))
+vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logWarn: vi.fn() }))
 vi.mock('@/lib/glofox', async (importOriginal) => ({
   ...(await importOriginal()),
   glofoxCredentialsForLocation: vi.fn(async () => ({ branchId: 'br', apiKey: 'k', apiToken: 't', readError: null })),
@@ -47,6 +50,34 @@ beforeEach(() => {
   vi.clearAllMocks()
   getCurrentUser.mockResolvedValue(STAFF)
   contactRead = { data: { id: CONTACT, name: 'Test Person', first_name: 'Test', location_id: LOC, glofox_member_id: MEMBER }, error: null }
+  locationRead = { data: { settings: {} }, error: null }
+})
+
+// BOOKCHATCOPY.1 (C111) — the panel's chat line is the studio's editable
+// booking confirmation; the route hands it over with the new booking.
+describe('POST /api/glofox/classes/book: chat confirmation template', () => {
+  const booked = () => createBooking.mockResolvedValueOnce({ ok: true, status: 200, body: { success: true, Booking: { _id: BOOKING } } })
+
+  it('a new booking carries the studio\'s booking confirmation text', async () => {
+    locationRead = { data: { settings: { customer_agent: { booking_confirmation_text: 'You are in: {class}.' } } }, error: null }
+    booked()
+    expect(await (await book()).json()).toMatchObject({ success: true, chat_template: 'You are in: {class}.' })
+  })
+
+  it('unset → chat_template null (the panel uses the default)', async () => {
+    booked()
+    expect(await (await book()).json()).toMatchObject({ success: true, chat_template: null })
+  })
+
+  it('a failed settings read never fails the booking: logged, chat_template null', async () => {
+    const { logWarn } = await import('@/lib/log')
+    locationRead = { data: null, error: { message: 'read refused' } }
+    booked()
+    const r = await book()
+    expect(r.status).toBe(200)
+    expect(await r.json()).toMatchObject({ success: true, glofox_booking_id: BOOKING, chat_template: null })
+    expect(logWarn).toHaveBeenCalledWith('glofox-classes-book', expect.any(String), expect.objectContaining({ err: 'read refused' }))
+  })
 })
 
 describe('POST /api/glofox/classes/book', () => {

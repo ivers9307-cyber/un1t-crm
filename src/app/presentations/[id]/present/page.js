@@ -1,6 +1,6 @@
 import { redirect, notFound } from 'next/navigation'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import PresenterRemote from './PresenterRemote'
 
@@ -10,11 +10,14 @@ export default async function PresentControlPage(props) {
   const params = await props.params
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  if (!hasPermission(user, 'presentations')) redirect('/')
+  // PAGEGATES.1 — coarse pre-check only; the decision is at the deck's
+  // location below, the same one POST /api/presentations/[id]/advance makes.
+  if (!hasPermissionAtAnyLocation(user, 'presentations')) redirect('/')
   const db = createServerClient()
   const { data: deck } = await db.from('presentations')
     .select('id, location_id, title, current_index').eq('id', params.id).maybeSingle()
   if (!deck || (!user.isMaster && !getUserLocationIds(user).includes(deck.location_id))) notFound()
+  if (!hasPermissionForLocation(user, deck.location_id, 'presentations')) redirect('/')
   const { data: slides } = await db.from('presentation_slides')
     .select('id, position, image_path').eq('presentation_id', params.id).order('position', { ascending: true })
   const base = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/presentation-slides`

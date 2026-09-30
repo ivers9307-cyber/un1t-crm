@@ -354,6 +354,23 @@ describe('TRIALGRANT.1: a new account whose trial did not take', () => {
     })
   })
 
+  // TRIALPURCHASE.2 (d) — the doubt names the member, so ANOTHER card for the
+  // same person (a second class) sees it and does not buy a trial over it.
+  it('the unsettled mint grant on the card names the Glofox member it was for', async () => {
+    findOrCreateGlofoxMember
+      .mockResolvedValueOnce({ status: 'skipped', glofox_member_id: null })
+      .mockResolvedValueOnce({ status: 'needs_review', glofox_member_id: 'gm-new', trial_failed: true, trial_outcome_unknown: true, error: 'x' })
+    const d = makeDb(lead)
+    const inserts = []
+    const insert = d.insert
+    d.insert = (row) => { inserts.push(row); return insert(row) }
+    d.maybeSingle = async () => ({ data: d._table === 'agent_membership_requests' ? null : lead })
+
+    await processClassBookingRequest(d, req)
+
+    expect(inserts[0].details.trial_grant).toEqual({ ok: false, code: 'TRIAL_GRANT_FAILED', outcome_unknown: true, glofox_member_id: 'gm-new' })
+  })
+
   it('a mint purchase Glofox REFUSED leaves no trial_grant on the card (its approve may buy)', async () => {
     findOrCreateGlofoxMember
       .mockResolvedValueOnce({ status: 'skipped', glofox_member_id: null })
