@@ -12,8 +12,9 @@
 // bought the trial again.
 //
 // In order:
-//   1. a grant an earlier attempt RECORDED (details.trial_grant.ok) is not
-//      bought again: a retry after a booking failure never stacks a trial;
+//   1. a grant an earlier attempt RECORDED (details.trial_grant.ok, not a
+//      skip) is not bought again: a retry after a booking failure never
+//      stacks a trial;
 //   2. credits already on the account (staff added one by hand, or an
 //      earlier grant that was never recorded) → nothing is bought;
 //   3. the trial product is read with readGlofoxConfig: a failed read is
@@ -43,7 +44,7 @@ export async function grantTrialBeforeBooking(db, {
   now = () => new Date().toISOString(),
 } = {}) {
   const at = now()
-  const stop = (messageCode, extra = {}) => {
+  const stop = (messageCode, extra = {}, err = null) => {
     // One structured line per grant that did not happen. The card id only:
     // no name, email, phone or member id.
     logError('trial-grant', 'trial grant did not happen; booking not attempted', {
@@ -52,11 +53,14 @@ export async function grantTrialBeforeBooking(db, {
       glofoxCode: extra.glofox_message_code ?? null,
       httpStatus: extra.http_status ?? null,
       purchaseStatus: extra.purchase_status ?? null,
+      ...(err ? { err } : {}),
     })
     return { proceed: false, grant: { ok: false, at, code: messageCode, ...extra }, failure: { ok: false, message_code: messageCode, ...extra } }
   }
   try {
-    if (priorGrant?.ok === true) return { proceed: true, grant: priorGrant, failure: null }
+    // A recorded SKIP (credits_present) bought nothing, so it is re-checked:
+    // the credits it found may be used or lapsed by the time of a retry.
+    if (priorGrant?.ok === true && !priorGrant.skipped) return { proceed: true, grant: priorGrant, failure: null }
 
     const read = await fetchUserCreditsResult(creds, memberId)
     if (read?.ok) {
@@ -82,7 +86,7 @@ export async function grantTrialBeforeBooking(db, {
       http_status: p?.http_status ?? null,
       purchase_status: p?.purchase_status ?? null,
     })
-  } catch {
-    return stop(TRIAL_GRANT_FAILED, { glofox_message_code: null, http_status: null, purchase_status: null, error: 'exception' })
+  } catch (e) {
+    return stop(TRIAL_GRANT_FAILED, { glofox_message_code: null, http_status: null, purchase_status: null, error: 'exception' }, e)
   }
 }

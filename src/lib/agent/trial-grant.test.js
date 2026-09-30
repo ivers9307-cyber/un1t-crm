@@ -111,4 +111,24 @@ describe('grantTrialBeforeBooking (TRIALGRANT.1)', () => {
     expect(out.proceed).toBe(false)
     expect(out.failure).toMatchObject({ ok: false, message_code: TRIAL_GRANT_FAILED, error: 'exception' })
   })
+
+  // A recorded SKIP bought nothing, so it is no reason not to buy later: the
+  // credits it found may have been used or lapsed by the time of a retry.
+  it('a recorded credits_present skip is re-checked on a retry, and buys when the credits are gone', async () => {
+    const out = await grantTrialBeforeBooking(db, { ...base, priorGrant: { ok: true, at: '2026-09-30T18:00:00.000Z', skipped: 'credits_present' }, isRetry: true })
+
+    expect(fetchUserCreditsResult).toHaveBeenCalledTimes(1)
+    expect(purchaseGlofoxMembership).toHaveBeenCalledTimes(1)
+    expect(out.proceed).toBe(true)
+    expect(out.grant).toMatchObject({ ok: true, invoice_id: 'inv-1' })
+  })
+
+  it('an exception is logged WITH the error, not discarded', async () => {
+    const boom = new Error('kaboom')
+    purchaseGlofoxMembership.mockRejectedValueOnce(boom)
+
+    await grantTrialBeforeBooking(db, base)
+
+    expect(logError).toHaveBeenCalledWith('trial-grant', expect.any(String), expect.objectContaining({ requestId: 'amr-1', code: TRIAL_GRANT_FAILED, err: boom }))
+  })
 })
