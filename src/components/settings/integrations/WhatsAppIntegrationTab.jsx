@@ -105,7 +105,8 @@ export default function WhatsAppIntegrationTab({ location, canEdit }) {
                   <div className="text-xs text-un1t-subtle bg-un1t-bg border border-un1t-border rounded p-3">
                     No numbers configured. This location falls back to the global
                     <code className="text-un1t-muted"> WHATSAPP_*</code> env vars (legacy single-number setup).
-                    Add a number below to migrate.
+                    Add a number below to migrate. Chat openers can only be saved once this
+                    location has its own number.
                   </div>
                 )}
                 {numbers.map((n) => (
