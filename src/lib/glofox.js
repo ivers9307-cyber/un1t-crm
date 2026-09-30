@@ -477,7 +477,36 @@ export function missingGlofoxCredentialsForLocation(creds) {
 // (upstream blip) those land as fetch_failed and only get retried a
 // whole tick later, slowing coverage. A bounded in-place retry that
 // honours Retry-After lets the call succeed within the same tick.
+//
+// GLOFOXPOSTRETRY.1 — but only where a repeat is safe. A 429 is Glofox
+// refusing BEFORE it processes the request, so it is retried for every
+// method. A 5xx can come AFTER Glofox processed it (a trial bought, a booking
+// made, then the answer lost), so a 5xx is retried only for a read: GET/HEAD,
+// or a call that says `retry: 'idempotent'` (the read-POSTs). Every other
+// write returns its first 5xx, unless it passes `retry: { verify }`: a dedupe
+// read that answers 'landed' | 'absent' | 'unknown' after the backoff and
+// before each re-send. Only 'absent' re-sends.
 const GLOFOX_MAX_RETRIES = 3
+const GLOFOX_RETRYABLE_METHODS = new Set(['GET', 'HEAD'])
+
+/**
+ * The retry policy of one glofoxFetch call (GLOFOXPOSTRETRY.1). Pure.
+ *   retry: 'idempotent' → 429 and 5xx retried (a read, whatever its method)
+ *   retry: 'never'      → 429 retried; a 5xx returned at once
+ *   retry: { verify }   → 429 retried; a 5xx re-sent only when verify() says 'absent'
+ *   (unset)             → 'idempotent' for GET/HEAD, 'never' for any other method
+ * An unknown value throws: it is a programming error, and guessing would
+ * either re-send a write or stop retrying a read.
+ * @returns {{ mode: 'idempotent'|'never'|'verify', verify?: () => Promise<'landed'|'absent'|'unknown'> }}
+ */
+export function glofoxRetryPolicy(options = {}) {
+  const r = options?.retry
+  if (r === 'idempotent' || r === 'never') return { mode: r }
+  if (r && typeof r === 'object' && typeof r.verify === 'function') return { mode: 'verify', verify: r.verify }
+  if (r !== undefined) throw new TypeError(`glofoxFetch: unknown retry policy ${JSON.stringify(r)}`)
+  const method = String(options?.method || 'GET').toUpperCase()
+  return { mode: GLOFOX_RETRYABLE_METHODS.has(method) ? 'idempotent' : 'never' }
+}
 
 // CREDITSREAD.1 — Glofox headroom, measured. glofoxFetch retried 429/5xx and
 // said nothing, so nobody could tell how close we run to Glofox's limit. These
@@ -492,6 +521,11 @@ const glofoxHttpCounters = {
   network_errors: 0, // fetch threw
   gave_up: 0,        // calls still 429/5xx after every retry
   aborted: 0,        // calls cancelled by the caller while 429/5xx (retries cut short)
+  // GLOFOXPOSTRETRY.1 — writes that answered 5xx:
+  unsafe_not_retried: 0, // retry 'never': returned without a re-send
+  verify_landed: 0,      // the dedupe read found the first attempt: not re-sent
+  verify_absent: 0,      // the dedupe read found nothing: re-sent
+  verify_unknown: 0,     // the dedupe read could not tell: not re-sent
 }
 
 /** A copy of the instance's Glofox HTTP counters. */
@@ -505,6 +539,24 @@ export function glofoxHttpStatsSince(before) {
   const out = {}
   for (const k of Object.keys(now)) out[k] = now[k] - (Number(before?.[k]) || 0)
   return out
+}
+
+/**
+ * Run a write's dedupe read and count its verdict. Anything but 'landed' or
+ * 'absent' (a throw included) is 'unknown', which never re-sends.
+ */
+async function runGlofoxVerify(verify) {
+  let verdict
+  try {
+    verdict = await verify()
+  } catch (err) {
+    logWarn('glofox', 'write dedupe read threw; not retried', { err })
+    verdict = 'unknown'
+  }
+  if (verdict === 'absent') { glofoxHttpCounters.verify_absent++; return 'absent' }
+  if (verdict === 'landed') { glofoxHttpCounters.verify_landed++; return 'landed' }
+  glofoxHttpCounters.verify_unknown++
+  return 'unknown'
 }
 
 const GLOFOX_ID_SEGMENT = [
@@ -561,6 +613,9 @@ export async function glofoxFetch(creds, pathOrUrl, options = {}) {
   if (!creds || !creds.branchId || !creds.apiKey || !creds.apiToken) {
     throw new Error('Glofox API credentials missing (need branchId, apiKey, apiToken on the location)')
   }
+  const policy = glofoxRetryPolicy(options)
+  // The policy is ours; fetch never sees it.
+  const { retry: _policyOption, ...fetchOptions } = options
   const url = pathOrUrl.startsWith('http')
     ? pathOrUrl
     : `${GLOFOX_API_BASE}${pathOrUrl.startsWith('/') ? '' : '/'}${pathOrUrl}`
@@ -568,16 +623,17 @@ export async function glofoxFetch(creds, pathOrUrl, options = {}) {
     'x-glofox-branch-id': creds.branchId,
     'x-api-key':          creds.apiKey,
     'x-glofox-api-token': creds.apiToken,
-    ...(options.headers || {}),
+    ...(fetchOptions.headers || {}),
   }
   let res
   let attempts = 0
   let aborted = false
+  let notResent = null // 'never' | 'landed' | 'unknown': a write's 5xx we chose not to re-send
   for (let attempt = 0; ; attempt++) {
     attempts++
     glofoxHttpCounters.requests++
     try {
-      res = await fetch(url, { ...options, headers })
+      res = await fetch(url, { ...fetchOptions, headers })
     } catch (e) {
       glofoxHttpCounters.network_errors++
       throw e
@@ -586,13 +642,26 @@ export async function glofoxFetch(creds, pathOrUrl, options = {}) {
     else if (res.status >= 500) glofoxHttpCounters.status_5xx++
     // Retry only transient statuses, and only while we have budget.
     if ((res.status === 429 || res.status >= 500) && attempt < GLOFOX_MAX_RETRIES) {
+      // GLOFOXPOSTRETRY.1 — a 5xx on a write may already have been processed.
+      const unsafe5xx = res.status >= 500 && policy.mode !== 'idempotent'
+      if (unsafe5xx && policy.mode === 'never') {
+        glofoxHttpCounters.unsafe_not_retried++
+        notResent = 'never'
+        break
+      }
       // PAYLINK.5b — an aborted caller (timed out, or otherwise cancelled)
       // stops retrying immediately and returns the last response as-is,
       // rather than sleeping out a full backoff first.
-      if (options.signal?.aborted) { aborted = true; break }
+      if (fetchOptions.signal?.aborted) { aborted = true; break }
       const retryAfter = Number(res.headers?.get?.('retry-after'))
-      await _glofoxSleep(computeGlofoxBackoffMs(attempt, Number.isFinite(retryAfter) ? retryAfter : null), options.signal)
-      if (options.signal?.aborted) { aborted = true; break }
+      await _glofoxSleep(computeGlofoxBackoffMs(attempt, Number.isFinite(retryAfter) ? retryAfter : null), fetchOptions.signal)
+      if (fetchOptions.signal?.aborted) { aborted = true; break }
+      // The dedupe read runs AFTER the backoff, so a write Glofox is still
+      // committing has had the same time to show up.
+      if (unsafe5xx) {
+        const verdict = await runGlofoxVerify(policy.verify)
+        if (verdict !== 'absent') { notResent = verdict; break }
+      }
       glofoxHttpCounters.retries++
       continue
     }
@@ -601,9 +670,15 @@ export async function glofoxFetch(creds, pathOrUrl, options = {}) {
   // CREDITSREAD.1 — one line per call that is STILL failing after its retries
   // (never per retry: a throttled minute would write thousands). No ids.
   // A call the caller cancelled mid-retry did not use its retries, so it is
-  // counted apart (aborted) and not logged as a give-up.
+  // counted apart (aborted) and not logged as a give-up. GLOFOXPOSTRETRY.1 — a
+  // write we chose not to re-send is its own line (reason: never | landed |
+  // unknown), not a give-up: it used none of its remaining retries.
   if (aborted) {
     glofoxHttpCounters.aborted++
+  } else if (notResent) {
+    logWarn('glofox', 'Glofox write answered 5xx; not retried', {
+      status: res.status, attempts, path: glofoxPathLabel(pathOrUrl), reason: notResent,
+    })
   } else if (res.status === 429 || res.status >= 500) {
     glofoxHttpCounters.gave_up++
     logWarn('glofox', 'Glofox still failing after retries', {
