@@ -235,6 +235,11 @@ describe('source scanning', () => {
     expect(collectRpcCalls(src).map((c) => c.name)).toEqual(['increment_step_sent', null])
   })
 
+  it('keeps a non-literal first argument\'s source text, so an indirection can pin it', () => {
+    const src = 'await db.rpc(fn, args); await db.rpc( rpc.fn , rpc.args); await db.rpc?.(`inc_${k}`)'
+    expect(collectRpcCalls(src).map((c) => c.arg)).toEqual(['fn', 'rpc.fn', '`inc_${k}`'])
+  })
+
   it('anything else is null (unreadable), never guessed', () => {
     const src = 'db.rpc(fn, args); db.rpc(`inc_${kind}`); db.rpc(NAME); db.rpc(pick())'
     expect(collectRpcCalls(src).map((c) => c.name)).toEqual([null, null, null, null])
@@ -276,8 +281,8 @@ describe('scanTree', () => {
     CREATE FUNCTION public.approve_drop_shift_swap(p uuid) RETURNS void LANGUAGE sql AS $$ select $$;`)
   const tree = (files) => ({ files: Object.keys(files), read: (f) => files[f] })
   const INDIRECT = [
-    { site: 'src/w.js', source: { file: 'src/w.js', callee: 'reportRpc', arg: 1 } },
-    { site: 'src/r.js', source: { file: 'src/t.js', property: 'fn' } },
+    { site: 'src/w.js', call: 'fn', source: { file: 'src/w.js', callee: 'reportRpc', arg: 1 } },
+    { site: 'src/r.js', call: 'rpc.fn', source: { file: 'src/t.js', property: 'fn' } },
   ]
 
   it('a phantom literal is a hit with file:line; a real one resolves', () => {
@@ -303,6 +308,35 @@ describe('scanTree', () => {
     expect(out.staleIndirect).toEqual([])
     expect(out.hits).toEqual([{ file: 'src/w.js', line: 3, name: 'increment_contact_openz', via: 'reportRpc()' }])
     expect(out.resolved).toBe(2)
+  })
+
+  it('an extra non-literal .rpc() in a DECLARED file still fails (review fix 1)', () => {
+    const t = tree({
+      'src/w.js': "async function reportRpc(db, fn, a) { await db.rpc(fn, a) }\nreportRpc(db, 'increment_contact_opens')\ndb.rpc(`increment_${x}_phantom`)",
+      'src/r.js': 'await db.rpc(rpc.fn, rpc.args)',
+      'src/t.js': "return { fn: 'approve_drop_shift_swap' }",
+    })
+    const out = scanTree(t.files, t.read, functions, INDIRECT)
+    expect(out.unreadable).toEqual([{ file: 'src/w.js', line: 3 }])
+    expect(out.staleIndirect).toEqual([])
+  })
+
+  it('a second call with the declared argument text is not covered either: one entry, one call', () => {
+    const t = tree({
+      'src/w.js': "async function reportRpc(db, fn, a) { await db.rpc(fn, a) }\nreportRpc(db, 'increment_contact_opens')\nasync function other(db, fn) { await db.rpc(fn) }",
+      'src/r.js': 'await db.rpc(rpc.fn, rpc.args)',
+      'src/t.js': "return { fn: 'approve_drop_shift_swap' }",
+    })
+    expect(scanTree(t.files, t.read, functions, INDIRECT).unreadable).toEqual([{ file: 'src/w.js', line: 3 }])
+  })
+
+  it('a non-literal name in a declared source table fails as unreadable (review fix 2)', () => {
+    const t = tree({
+      'src/w.js': "async function reportRpc(db, fn, a) { await db.rpc(fn, a) }\nreportRpc(db, 'increment_contact_opens')",
+      'src/r.js': 'await db.rpc(rpc.fn, rpc.args)',
+      'src/t.js': "return { fn: 'approve_drop_shift_swap' }\nreturn { fn: `approve_${kind}_phantom_swap` }",
+    })
+    expect(scanTree(t.files, t.read, functions, INDIRECT).unreadable).toEqual([{ file: 'src/t.js', line: 2 }])
   })
 
   it('an indirection whose call site became a literal (or vanished) is STALE', () => {
@@ -409,6 +443,7 @@ describe('the repository', () => {
     expect(out.unreadable).toEqual([])
     expect(out.staleIndirect).toEqual([])
     expect(RPC_INDIRECT.length).toBe(2)
+    expect(RPC_INDIRECT.map((e) => e.call)).toEqual(['fn', 'rpc.fn'])
   })
 
   it('the replay agrees with prod on the names the code calls (checked 30 Sep 2026)', () => {

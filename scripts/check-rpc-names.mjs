@@ -21,15 +21,19 @@
 //      types), so dropping one overload never deletes another. Only schema
 //      `public` is reachable through `.rpc()` (PostgREST's exposed schema); a
 //      function moved to `private` is gone as far as `.rpc()` is concerned.
-//      A CREATE FUNCTION inside a DO block (dynamic SQL) is not replayed; it
-//      is printed as a replay note instead.
+//      Function DDL inside a DO block (dynamic SQL: CREATE, DROP or ALTER
+//      FUNCTION) is never executed or guessed at; it is printed as a replay
+//      note instead.
 //   2. Scan src/, mobile/, shared/ and supabase/functions (non-test JS/TS)
-//      for `.rpc('<name>'` with a string-literal first argument, plus the
-//      declared indirections in RPC_INDIRECT (a wrapper that takes the name
-//      as an argument, or a table of names handed to `.rpc(x.fn)`).
-//   3. A `.rpc(<not a literal>)` that no RPC_INDIRECT entry covers FAILS, and
-//      so does an RPC_INDIRECT entry that no longer matches anything: the gate
-//      says what it cannot read, instead of skipping it in silence.
+//      for `.rpc('<name>'` (and `.rpc?.(`) with a string-literal first
+//      argument, plus the declared indirections in RPC_INDIRECT (a wrapper
+//      that takes the name as an argument, or a table of names handed to
+//      `.rpc(x.fn)`).
+//   3. A `.rpc(<not a literal>)` that no RPC_INDIRECT entry covers FAILS (an
+//      entry covers ONE call, pinned by its argument text, never a whole
+//      file), so does a non-literal name in a declared source, and so does an
+//      RPC_INDIRECT entry that no longer matches anything: the gate says what
+//      it cannot read, instead of skipping it in silence.
 //
 // A FLOOR, NOT A PROOF. It proves a function of that NAME exists in public.
 // It does not check argument names (PostgREST also 404s a name whose
@@ -58,19 +62,24 @@ const ALLOWLIST_PATH = '.rpc-names-allowlist.json'
 export const RPC_SCHEMA = 'public'
 
 // Non-literal `.rpc()` call sites, and where their names come from. Each entry
-// is checked both ways: its call site must still hold a non-literal `.rpc(`,
-// and its source must still yield names (else the entry is STALE and fails).
+// declares ONE call: the non-literal `.rpc(` in `site` whose first argument's
+// source text is exactly `call`; any other non-literal `.rpc(` in the same
+// file is still unreadable and fails. Each entry is checked both ways: its
+// call must still be there, and its source must still yield names (else the
+// entry is STALE and fails). A non-literal name in the source fails too.
 //   callee:   calls of `callee(` in `file` whose argument `arg` (0-based) is
 //             the function name, as a string literal;
 //   property: `property: '<name>'` literals in `file` (a table of names).
 export const RPC_INDIRECT = Object.freeze([
   {
     site: 'src/lib/postmark-webhook-processor.js',
+    call: 'fn',
     source: { file: 'src/lib/postmark-webhook-processor.js', callee: 'reportRpc', arg: 1 },
     why: 'COMMSFIX.C.3: the best-effort counter wrapper reportRpc(db, fn, args)',
   },
   {
     site: 'src/app/api/schedule/swaps/[id]/route.js',
+    call: 'rpc.fn',
     source: { file: 'src/lib/swap-lifecycle.js', property: 'fn' },
     why: 'SWAPS.2: swapApprovalRpc(effect) returns { fn, args }',
   },
@@ -258,14 +267,20 @@ export function isCallable(functions, name) {
 // "not a literal" (a variable, a template with ${}, a call).
 const LITERAL_ARG_RE = /^\s*(['"`])([^'"`$\\\n]*)\1\s*[,)]/
 
-/** `.rpc(` call sites in one file (comments masked): [{ name|null, offset }]. */
+/**
+ * `.rpc(` call sites in one file (comments masked): [{ name|null, arg, offset }].
+ * `arg` is the first argument's source text (whitespace-trimmed; null if the
+ * parens do not close), which is what an RPC_INDIRECT entry pins.
+ */
 export function collectRpcCalls(src) {
   const masked = maskComments(src)
   const out = []
   // `db.rpc(` and the optional call `db.rpc?.(`.
   for (const m of masked.matchAll(/\.\s*rpc\s*(?:\?\.\s*)?\(/g)) {
     const lit = masked.slice(m.index + m[0].length).match(LITERAL_ARG_RE)
-    out.push({ name: lit ? lit[2] : null, offset: m.index })
+    const inner = innerParens(masked, m.index + m[0].length - 1)
+    const arg = inner === null ? null : (splitTopLevel(inner)[0] ?? '').trim()
+    out.push({ name: lit ? lit[2] : null, arg, offset: m.index })
   }
   return out
 }
@@ -318,13 +333,17 @@ export function scanTree(files, readFile, functions, indirect = RPC_INDIRECT) {
   const staleIndirect = []
   let resolved = 0
   const rel = (f) => f.split(path.sep).join('/')
-  const coverage = new Map(indirect.map((e) => [e.site, 0]))
+  // One entry covers ONE call: the non-literal `.rpc(` in its site file whose
+  // first argument reads exactly `call`. Any other non-literal call in that
+  // file (a second one, or one with a different argument) is unreadable.
+  const covered = new Set()
   for (const file of files) {
     const r = rel(file)
     const src = readFile(file)
     for (const call of collectRpcCalls(src)) {
       if (call.name === null) {
-        if (coverage.has(r)) coverage.set(r, coverage.get(r) + 1)
+        const entry = indirect.find((e) => !covered.has(e) && e.site === r && e.call === call.arg)
+        if (entry) covered.add(entry)
         else unreadable.push({ file: r, line: lineOf(src, call.offset) })
         continue
       }
@@ -333,7 +352,7 @@ export function scanTree(files, readFile, functions, indirect = RPC_INDIRECT) {
     }
   }
   for (const e of indirect) {
-    if (!coverage.get(e.site)) { staleIndirect.push(e); continue }
+    if (!covered.has(e)) { staleIndirect.push(e); continue }
     const src = readFile(e.source.file)
     const names = collectIndirectNames(src, e.source)
     if (names.length === 0) { staleIndirect.push(e); continue }
@@ -434,7 +453,7 @@ function main() {
   for (const e of expired) console.error(`✗ EXPIRED ALLOWLIST ENTRY: ${e.file} ${e.name} (expired ${e.entry.expires})`)
   for (const f of failures) console.error(`✗ PHANTOM RPC: ${f.file}:${f.line}  ${f.name}  (via ${f.via})`)
   for (const u of unreadable) console.error(`✗ UNREADABLE RPC NAME: ${u.file}:${u.line}  (declare where the name comes from in RPC_INDIRECT)`)
-  for (const s of staleIndirect) console.error(`✗ STALE RPC_INDIRECT ENTRY: ${s.site} (no non-literal .rpc() there, or ${s.source.file} yields no names)`)
+  for (const s of staleIndirect) console.error(`✗ STALE RPC_INDIRECT ENTRY: ${s.site} (no non-literal .rpc(${s.call}, …) there, or ${s.source.file} yields no names)`)
   console.error(`
 A name passed to .rpc() must be a function the migrations create in schema
 ${RPC_SCHEMA}. PostgREST answers anything else with a 404, and supabase-js
