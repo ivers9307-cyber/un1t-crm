@@ -206,13 +206,15 @@ export function canLinkContacts(user, locationId) {
 }
 
 /**
- * POST /api/whatsapp/conversations/start. Since INBOXLOC.1 (C37) the route
- * judges `whatsapp` (web OR mobile) AT the contact's studio
- * (requireWhatsAppInboxAt), after membership there, like every other
- * WhatsApp action on a contact: contactChannelFlags is that rule.
+ * POST /api/whatsapp/conversations/start. The route judges `whatsapp` AT the
+ * contact's studio after membership there (INBOXLOC.1, C37) and, since
+ * INBOXWEBONLY3.1 (C119, Richard 30 Sep), only the WEB key
+ * (requireWebWhatsAppInboxAt): only the web starts a thread, and the button
+ * then opens the web inbox. So a caller with only the mobile toggle there
+ * does not see it.
  */
 export function canStartWhatsAppThread(user, locationId) {
-  return isMemberOfContactStudio(user, locationId) && contactChannelFlags(user, locationId).whatsapp
+  return isMemberOfContactStudio(user, locationId) && hasPermissionForLocation(user, locationId, 'whatsapp')
 }
 
 /**

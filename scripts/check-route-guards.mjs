@@ -225,6 +225,17 @@ const INBOX_PERMISSION_GUARDS = [
   //                            contact's) location after the row is read, and
   //                            requireWhatsAppInboxAnywhere before it.
   'requireWhatsAppInboxAt(',
+  // INBOXWEBONLY3.1 (C119) —
+  //   requireWebWhatsAppInboxAt(  src/lib/auth.js. VERIFIED: 401 with no
+  //                               user, 403 with no location, otherwise 403
+  //                               unless hasPermissionForLocation grants the
+  //                               WEB `whatsapp` key AT the location passed.
+  //                               The web-only thread actions
+  //                               (/conversations/[id]/add-contact, /agent,
+  //                               /conversations/start) call it after the row
+  //                               is read, and requireWebWhatsAppInboxAnywhere
+  //                               before it.
+  'requireWebWhatsAppInboxAt(',
   'hasPermission(',
   'hasPermissionForLocation(',
   'loadTicketForUser(',
