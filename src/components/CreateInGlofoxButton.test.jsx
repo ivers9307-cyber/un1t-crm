@@ -66,6 +66,20 @@ describe('CreateInGlofoxButton — email already has a Glofox account (GLOFOXWRI
     expect(msg.textContent).not.toMatch(/—/)
   })
 
+  // BOOKCHATCOPY.1 (C111) — the phone dup-check (glofox-push.js step 2.5)
+  // blocks the mint and never links: nothing was created, so it is not a
+  // "partial success" either, and its code was printed raw after that label.
+  it('a mobile number already on a Glofox account: says nothing was created and it needs review', async () => {
+    stubCreate({ status: 'needs_review', error: 'phone_match_no_link' })
+    render(<CreateInGlofoxButton contact={CONTACT} />)
+    fireEvent.click(screen.getByRole('button'))
+    const msg = await screen.findByText(/^Not created:/)
+    expect(msg.textContent).toBe('Not created: this mobile number is already on a Glofox account. Nothing was created or linked, because a shared number may belong to someone else. Review it on the Review tab.')
+    expect(msg.textContent).not.toMatch(/Partial success/)
+    expect(msg.textContent).not.toMatch(/phone_match_no_link/)
+    expect(msg.textContent).not.toMatch(/—/)
+  })
+
   it('any other needs_review keeps its wording (unchanged)', async () => {
     stubCreate({ status: 'needs_review', error: 'Trial membership purchase failed: X' })
     render(<CreateInGlofoxButton contact={CONTACT} />)
