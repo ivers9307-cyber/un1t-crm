@@ -46,6 +46,17 @@ describe('GET /api/cron/agent-followups — checkins_day', () => {
     expect(outcome().checkins_day.reasons).toEqual({ human_active: 2, too_soon: 1 })
   })
 
+  it('the stamp keeps every other arm alongside checkins_day', async () => {
+    createServerClient.mockReturnValue(hbDb({ data: null, error: null }))
+    await GET(req())
+    expect(stampHeartbeat).toHaveBeenCalledWith('agent-followups', expect.any(Object))
+    expect(Object.keys(outcome()).sort()).toEqual(['approvalsSla', 'autoResolve', 'checkins', 'checkins_day', 'followups', 'handoffSla'])
+    expect(outcome().followups).toEqual({ nudges: 0, templates: 0, skipped: 0 })
+    expect(outcome().handoffSla).toEqual({})
+    expect(outcome().autoResolve).toEqual({})
+    expect(outcome().approvalsSla).toEqual({})
+  })
+
   it('a failed heartbeat read restarts the day flagged carry_failed (never a silent zero)', async () => {
     createServerClient.mockReturnValue(hbDb({ data: null, error: { message: 'timeout' } }))
     await GET(req())
