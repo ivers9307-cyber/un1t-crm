@@ -386,3 +386,57 @@ describe('TRIALGRANT.1: a new account whose trial did not take', () => {
     expect(inserts[0].details).not.toHaveProperty('trial_plan_code')
   })
 })
+
+// GLOFOXWRITEJUDGE.1 review — the mint can now answer 'linked' (Glofox said the
+// email already has an account and a second search found it). That account
+// may belong to a RETURNER: attendance was read before the link, with no
+// account to read, so it must be read again on the linked account before a
+// card is chosen. A returner with nothing to book with is prior_attendance
+// (no trial offered), never needs_credit_grant (whose approve buys a trial).
+describe('GLOFOXWRITEJUDGE.1: the mint linked an existing account (email already in use)', () => {
+  const req = { id: 'r1', location_id: 'L', contact_id: 'c1', glofox_event_id: 'e1', class_name: 'S&C', starts_at: '2026-07-08T17:30:00.000Z' }
+  const lead = { id: 'c1', first_name: 'Sam', last_name: 'Lee', phone: '0871234567', glofox_member_id: null, last_attended_at: null }
+  const linked = () => findOrCreateGlofoxMember
+    .mockResolvedValueOnce({ status: 'skipped', glofox_member_id: null })
+    .mockResolvedValueOnce({ status: 'linked', glofox_member_id: 'gm-linked', error: null })
+  // No unconsumed Once-answer may leak between these cases: restore defaults.
+  beforeEach(() => {
+    fetchUserBookingsResult.mockReset(); fetchUserBookingsResult.mockResolvedValue({ ok: true, bookings: [] })
+    computeCreditsRemaining.mockReset(); computeCreditsRemaining.mockReturnValue(3)
+    findOrCreateGlofoxMember.mockReset(); findOrCreateGlofoxMember.mockResolvedValue({ status: 'created', glofox_member_id: 'gm1' })
+  })
+
+  it('a linked returner with no balance → prior_attendance, no trial offered, no booking', async () => {
+    linked()
+    fetchUserBookingsResult.mockResolvedValueOnce({ ok: true, bookings: [{ attended: true, time_start: 1700000000 }] })
+    computeCreditsRemaining.mockReturnValueOnce(0)
+    const r = await processClassBookingRequest(makeDb(lead), req)
+    expect(r).toEqual({ outcome: 'needs_review', detail: 'prior_attendance' })
+    expect(fetchUserBookingsResult).toHaveBeenCalledWith(expect.anything(), 'gm-linked', expect.anything())
+    expect(createBooking).not.toHaveBeenCalled()
+  })
+
+  it('a linked returner WITH a balance books against it', async () => {
+    linked()
+    fetchUserBookingsResult.mockResolvedValueOnce({ ok: true, bookings: [{ attended: true, time_start: 1700000000 }] })
+    const r = await processClassBookingRequest(makeDb(lead), req)
+    expect(r).toEqual({ outcome: 'booked' })
+    expect(createBooking).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ user_id: 'gm-linked' }))
+  })
+
+  it('the attendance read on the linked account FAILS → attendance_check_failed, never "no attendance"', async () => {
+    linked()
+    fetchUserBookingsResult.mockResolvedValueOnce({ ok: false, bookings: [] })
+    computeCreditsRemaining.mockReturnValueOnce(0)
+    const r = await processClassBookingRequest(makeDb(lead), req)
+    expect(r).toEqual({ outcome: 'needs_review', detail: 'attendance_check_failed' })
+    expect(createBooking).not.toHaveBeenCalled()
+  })
+
+  it('a linked account that never attended, with no balance → needs_credit_grant (unchanged)', async () => {
+    linked()
+    computeCreditsRemaining.mockReturnValueOnce(0)
+    const r = await processClassBookingRequest(makeDb(lead), req)
+    expect(r).toEqual({ outcome: 'needs_review', detail: 'needs_credit_grant' })
+  })
+})
