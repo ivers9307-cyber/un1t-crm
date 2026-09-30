@@ -10,6 +10,7 @@ import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation } from '@/
 import { validateBody } from '@/lib/validate'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { componentsButtonsError } from '@/lib/whatsapp-template-buttons'
+import { ownNumberOrRefusal } from '@/lib/whatsapp-own-number'
 
 const ResubmitSchema = z.object({
   category: z.enum(['MARKETING', 'UTILITY', 'AUTHENTICATION']).optional(),
@@ -48,8 +49,13 @@ export async function POST(request, props) {
   const buttonError = componentsButtonsError(body.components)
   if (buttonError) return NextResponse.json({ success: false, error: buttonError }, { status: 400 })
 
+  // WACONFIGFALLBACK.1 — edit with THIS template's location's own number. The
+  // call named no location, so it always used the global env token.
+  const own = await ownNumberOrRefusal(tmpl.location_id, 'wa-templates-resubmit')
+  if (!own.ok) return NextResponse.json({ success: false, error: own.error }, { status: own.status })
+
   try {
-    await editTemplate(tmpl.meta_template_id, { category: body.category, components: body.components })
+    await editTemplate(tmpl.meta_template_id, { category: body.category, components: body.components }, { config: own.config })
 
     const { data, error } = await db.from('whatsapp_templates')
       .update({
