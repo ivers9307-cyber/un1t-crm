@@ -157,6 +157,11 @@ const SCOPING_HELPERS = [
   // src/lib/auth.js — org ids the caller OWNS; used for
   // row.organization_id membership compares (contracts revoke/detail).
   'getOwnerOrganizationIds(',
+  // src/lib/contract-gates.js (GATES-2) — master, or
+  // getOwnerOrganizationIds(user).includes(row.organization_id): the same
+  // row-org membership compare, used by contracts revoke/resend/send/discard
+  // after their fetch-by-id (404 on a foreign org).
+  'canManageContractsInOrg(',
   // src/lib/hosts.js — loads an event host and returns null unless
   // host.organization_id === orgId (events review surface).
   'loadHostForOrg(',

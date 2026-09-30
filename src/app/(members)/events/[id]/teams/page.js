@@ -10,6 +10,8 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import RaceTeamsManager from '@/components/RaceTeamsManager'
+import { hasRoleAtLocation } from '@/lib/role-at-location'
+import { MANAGER_ROLES } from '@/lib/schemas'
 import { ArrowLeft } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
@@ -50,7 +52,9 @@ export default async function RaceTeamsPage(props) {
           })}
         </p>
       </header>
-      <RaceTeamsManager race={race} />
+      {/* GATES-2 — Cancel entry calls POST /api/registrations/[id]/cancel,
+          which requires MANAGER_ROLES at the event's studio. */}
+      <RaceTeamsManager race={race} canCancelEntries={hasRoleAtLocation(user, race.location_id, MANAGER_ROLES)} />
     </div>
   )
 }

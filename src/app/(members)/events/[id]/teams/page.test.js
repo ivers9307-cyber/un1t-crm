@@ -41,3 +41,21 @@ describe('/events/[id]/teams', () => {
     await expect(RaceTeamsPage(props())).resolves.toBeTruthy()
   })
 })
+
+// C116 GATES-2 — Cancel entry calls POST /api/registrations/[id]/cancel, which
+// requires MANAGER_ROLES at the event's studio; the button showed to everyone
+// with `races`.
+describe('/events/[id]/teams — canCancelEntries at the event\'s studio', () => {
+  const rolesAt = (a, b) => person({ [LOC_A]: { role: a, permissions: { races: true } }, [LOC_B]: { role: b, permissions: { races: true } } }, LOC_A)
+  it.each([
+    ['manager at the event\'s studio, staff at the active one', rolesAt('staff', 'manager'), true],
+    ['staff at the event\'s studio, manager at the active one (main: shown, route 403)', rolesAt('manager', 'staff'), false],
+    ['head coach at the event\'s studio (MANAGER_ROLES includes head_coach)', rolesAt('owner', 'head_coach'), true],
+    ['a master', MASTER, true],
+  ])('%s', async (_label, caller, expected) => {
+    getCurrentUser.mockResolvedValue(caller); at(LOC_B)
+    const el = await RaceTeamsPage(props())
+    const manager = el.props.children.find((c) => c?.props?.race)
+    expect(manager.props.canCancelEntries).toBe(expected)
+  })
+})

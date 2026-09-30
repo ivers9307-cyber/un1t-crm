@@ -1,7 +1,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404, requireInboxPermission } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404, requireWhatsAppInboxAnywhere, requireWhatsAppInboxAt } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { sendCardSetToConversation } from '@/lib/whatsapp-carousel-send'
@@ -20,8 +20,9 @@ export async function POST(request, props) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
-  // Channel permission — service-role client, so this IS the gate (INBOX-PERM.1).
-  const perm = requireInboxPermission(user, 'wa')
+  // INBOXLOC.1 — coarse pre-check (WhatsApp at any studio); the decision is
+  // requireWhatsAppInboxAt at the conversation's studio, once the row is read.
+  const perm = requireWhatsAppInboxAnywhere(user)
   if (perm) return perm
 
   const validation = await validateBody(request, SendCarouselSchema)
@@ -36,6 +37,9 @@ export async function POST(request, props) {
   if (!conversation) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, conversation.location_id)
   if (guard) return guard
+  // INBOXLOC.1 — WhatsApp (web or mobile) judged at THIS studio, not the active one.
+  const permHere = requireWhatsAppInboxAt(user, conversation.location_id)
+  if (permHere) return permHere
 
   const { data: loc } = await db.from('locations').select('settings').eq('id', conversation.location_id).single()
   const sets = Array.isArray(loc?.settings?.wa_card_sets) ? loc.settings.wa_card_sets : []

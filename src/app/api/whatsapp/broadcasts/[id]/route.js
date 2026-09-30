@@ -4,6 +4,14 @@ import { z } from 'zod'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, audienceFilterSchema, url } from '@/lib/schemas'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
+
+// GATES-2 — GET/PUT/DELETE took membership only, so a member with WhatsApp
+// switched off could read the recipient list, rewrite or delete a broadcast
+// that /send would refuse them. Same rule as /send: `whatsapp` at SOME studio
+// before any read, then at the BROADCAST's studio.
+const waForbidden = () => NextResponse.json(
+  { success: false, error: 'Forbidden — WhatsApp not enabled' }, { status: 403 })
 
 const BroadcastUpdateSchema = z.object({
   name: z.string().min(1).max(200).optional(),
@@ -30,6 +38,7 @@ export async function GET(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (!hasPermissionAtAnyLocation(user, 'whatsapp')) return waForbidden()
 
   const db = createServerClient()
   const { data, error } = await db.from('whatsapp_broadcasts')
@@ -41,6 +50,7 @@ export async function GET(request, props) {
 
   const guard = assertLocationAccessOr404(user, data.location_id)
   if (guard) return guard
+  if (!hasPermissionForLocation(user, data.location_id, 'whatsapp')) return waForbidden()
 
   return NextResponse.json({ success: true, broadcast: data })
 }
@@ -50,16 +60,33 @@ export async function PUT(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (!hasPermissionAtAnyLocation(user, 'whatsapp')) return waForbidden()
 
   const db = createServerClient()
   const row = await loadBroadcastForUpdate(db, params.id)
   if (!row) return NextResponse.json({ success: false, error: 'Broadcast not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, row.location_id)
   if (guard) return guard
+  if (!hasPermissionForLocation(user, row.location_id, 'whatsapp')) return waForbidden()
 
   const validation = await validateBody(request, BroadcastUpdateSchema)
   if (!validation.ok) return validation.response
   const updates = { ...validation.data }
+
+  // GATES-2 — a template is sent on its OWN studio's number, so a broadcast
+  // may only point at a template of the broadcast's studio (the id is
+  // caller-supplied: another studio's template would otherwise be sent to
+  // this studio's audience).
+  if (updates.template_id) {
+    const { data: tpl, error: tplErr } = await db.from('whatsapp_templates')
+      .select('id, location_id')
+      .eq('id', updates.template_id)
+      .maybeSingle()
+    if (tplErr) return NextResponse.json({ success: false, error: 'Could not check the template' }, { status: 500 })
+    if (!tpl || tpl.location_id !== row.location_id) {
+      return NextResponse.json({ success: false, error: 'Template not found at this location' }, { status: 400 })
+    }
+  }
 
   // WA-SCHEDULE — validate the scheduled transition (mirrors the SMS PATCH):
   // only a draft or an already-scheduled row may be (re)scheduled, and the
@@ -97,12 +124,14 @@ export async function DELETE(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (!hasPermissionAtAnyLocation(user, 'whatsapp')) return waForbidden()
 
   const db = createServerClient()
   const row = await loadBroadcastForUpdate(db, params.id)
   if (!row) return NextResponse.json({ success: false, error: 'Broadcast not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, row.location_id)
   if (guard) return guard
+  if (!hasPermissionForLocation(user, row.location_id, 'whatsapp')) return waForbidden()
 
   await db.from('whatsapp_broadcast_recipients').delete().eq('broadcast_id', params.id)
   const { error } = await db.from('whatsapp_broadcasts').delete().eq('id', params.id)

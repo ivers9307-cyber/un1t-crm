@@ -1,6 +1,6 @@
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { canBuildSequencesAt, canBuildSequencesSomewhere } from '@/lib/sequence-access'
+import { canBuildSequencesAt, canBuildSequencesSomewhere, canManageEnrolmentsAt } from '@/lib/sequence-access'
 import { redirect, notFound } from 'next/navigation'
 import { resolveSequenceGraph } from '@/lib/sequences/graph/persist'
 import SequenceFlowBuilder from '@/components/sequences/SequenceFlowBuilder'
@@ -70,7 +70,13 @@ export default async function SequenceBuilderPage(props) {
         isDraft={sequence.draft_graph != null}
         isPublished={sequence.graph != null}
       />
-      <AutomationPerformance sequenceId={sequence.id} steps={toPerformanceSteps(sequence.sequence_steps)} />
+      {/* GATES-2 — Resume/Exit call the enrolment routes (`email` at the
+          sequence's studio); a whatsapp-only builder is not offered them. */}
+      <AutomationPerformance
+        sequenceId={sequence.id}
+        steps={toPerformanceSteps(sequence.sequence_steps)}
+        canManageEnrolments={canManageEnrolmentsAt(user, sequence.location_id)}
+      />
     </>
   )
 }

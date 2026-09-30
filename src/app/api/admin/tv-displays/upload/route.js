@@ -10,8 +10,11 @@
 // route is the only way in: authenticate with the CRM's own session,
 // check the TV permission at the location, validate the file against
 // src/lib/tv-media.js (the same list and cap the bucket enforces),
-// then upload via the service-role client (bypasses RLS). The phone's
-// TV screen (mobile/lib/tv-api.js uploadTvImage) posts here too.
+// then upload via the service-role client (bypasses RLS). Phones on a
+// bundle older than TVUPLOAD.1 post here too (their multipart `{uri}` part
+// never arrives since Expo SDK 57); current phones upload direct to Storage
+// through …/upload/sign and …/upload/finalise (src/lib/tv-upload.js). Keep
+// this route for the web and for those old bundles.
 //
 // POST /api/admin/tv-displays/upload   (multipart/form-data)
 //   file         — the image

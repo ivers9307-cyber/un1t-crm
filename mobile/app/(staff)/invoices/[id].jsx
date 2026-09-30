@@ -13,8 +13,8 @@ import { Ionicons } from '@expo/vector-icons'
 import * as WebBrowser from 'expo-web-browser'
 import { getInvoice, getInvoicePdfUrl, revokeInvoice, approveInvoice, declineInvoice, periodLabel } from '../../../lib/invoices-api'
 import BackHeaderLeft from '../../../components/BackHeaderLeft'
-import { RosterComparison } from '../../../components/invoices/RosterComparison'
-import { invoiceStatusBadge, reviewComparisonView } from '../../../lib/invoice-review'
+import { RosterComparison, RosterUnreadable } from '../../../components/invoices/RosterComparison'
+import { invoiceStatusBadge, reviewComparisonView, rosterUnreadableNotice } from '../../../lib/invoice-review'
 
 export default function InvoiceDetailScreen() {
   const { id } = useLocalSearchParams()
@@ -127,6 +127,8 @@ export default function InvoiceDetailScreen() {
   // and the roster comparison, both computed server-side.
   const status = invoiceStatusBadge(data)
   const comparison = reviewComparisonView(data)
+  // D4 UINITS.1 — no comparison because the roster could not be read: say so.
+  const rosterNotice = rosterUnreadableNotice(data)
 
   return (
     <>
@@ -204,6 +206,7 @@ export default function InvoiceDetailScreen() {
         {/* Roster vs invoice — reviewer only (the API sends it only to
             owner/master). Snapshot as approved once approved. */}
         <RosterComparison view={comparison} />
+        <RosterUnreadable text={rosterNotice} />
 
         {/* Approver actions — owner/master reviewing a submitted invoice.
             The approve/decline routes enforce owner-at-location / master. */}

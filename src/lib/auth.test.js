@@ -11,6 +11,8 @@ import {
   getUserLocationIds,
   getOwnerOrganizationIds,
   requireInboxPermission,
+  requireWhatsAppInboxAnywhere,
+  requireWhatsAppInboxAt,
   hasRoleAtLocation,
   hasRoleAtAnyLocation,
 } from './auth.js'
@@ -785,5 +787,70 @@ describe('hasRoleAtAnyLocation', () => {
     expect(hasRoleAtAnyLocation({ profileRole: 'master', rolesByLocation: {} }, MANAGER_ROLES)).toBe(true)
     expect(hasRoleAtAnyLocation(null, MANAGER_ROLES)).toBe(false)
     expect(hasRoleAtAnyLocation({ profileRole: 'manager', rolesByLocation: { a: 'manager' } }, [])).toBe(false)
+  })
+})
+
+// ─── INBOXLOC.1 (C37) — the WhatsApp thread routes judge at the THREAD's studio ──
+// requireInboxPermission judged `whatsapp` at the ACTIVE studio (the phone's
+// x-active-location header), so a thread at another studio was refused where
+// the caller holds WhatsApp there, and allowed where they do not. These two
+// judge web OR mobile `whatsapp` (the contact routes' rule, contactChannelFlags)
+// at any studio (the coarse pre-check) and at the named studio (the decision).
+describe('requireWhatsAppInboxAnywhere / requireWhatsAppInboxAt (INBOXLOC.1)', () => {
+  const A = 'loc-a'
+  const B = 'loc-b'
+  // Active studio A. Per-location overrides (tier 2) so the REAL resolver runs.
+  const person = (atA, atB, extra = {}) => ({
+    role: 'staff',
+    activeLocation: { id: A, features: {} },
+    activeAssignment: { role: 'staff', permissions: atA },
+    locations: [{ id: A, role: 'staff', features: {} }, { id: B, role: 'staff', features: {} }],
+    assignmentsByLocation: { [A]: { role: 'staff', permissions: atA }, [B]: { role: 'staff', permissions: atB } },
+    ...extra,
+  })
+  const OFF = { whatsapp: false, mobile: { whatsapp: false } }
+  const WEB = { whatsapp: true, mobile: { whatsapp: false } }
+  const MOBILE = { whatsapp: false, mobile: { whatsapp: true } }
+
+  it('401s a null user', () => {
+    expect(requireWhatsAppInboxAnywhere(null).status).toBe(401)
+    expect(requireWhatsAppInboxAt(null, B).status).toBe(401)
+  })
+
+  it('off at the active studio, on at the thread\'s studio: passes both', () => {
+    const u = person(OFF, WEB)
+    expect(requireWhatsAppInboxAnywhere(u)).toBeNull()
+    expect(requireWhatsAppInboxAt(u, B)).toBeNull()
+  })
+
+  it('on at the active studio, off at the thread\'s studio: 403 at the thread', async () => {
+    const u = person(WEB, OFF)
+    expect(requireWhatsAppInboxAnywhere(u)).toBeNull()
+    const r = requireWhatsAppInboxAt(u, B)
+    expect(r.status).toBe(403)
+    expect((await r.json()).success).toBe(false)
+  })
+
+  it('the mobile toggle counts (the phone is the caller): mobile-only at the thread passes', () => {
+    const u = person(OFF, MOBILE)
+    expect(requireWhatsAppInboxAnywhere(u)).toBeNull()
+    expect(requireWhatsAppInboxAt(u, B)).toBeNull()
+  })
+
+  it('off everywhere: the coarse check refuses before any read', () => {
+    expect(requireWhatsAppInboxAnywhere(person(OFF, OFF)).status).toBe(403)
+  })
+
+  it('a studio the caller does not belong to, or no studio, is refused', () => {
+    const u = person(WEB, WEB)
+    expect(requireWhatsAppInboxAt(u, 'loc-elsewhere').status).toBe(403)
+    expect(requireWhatsAppInboxAt(u, null).status).toBe(403)
+    expect(requireWhatsAppInboxAt(u, undefined).status).toBe(403)
+  })
+
+  it('a master passes wherever the studio\'s WhatsApp feature is on', () => {
+    const m = { role: 'master', locations: [{ id: B, features: {} }], assignmentsByLocation: {} }
+    expect(requireWhatsAppInboxAt(m, B)).toBeNull()
+    expect(requireWhatsAppInboxAnywhere(m)).toBeNull()
   })
 })
