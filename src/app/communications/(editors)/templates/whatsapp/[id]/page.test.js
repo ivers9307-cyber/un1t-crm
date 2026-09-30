@@ -48,6 +48,7 @@ import EditWATemplatePage from './page.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { notFound } from 'next/navigation'
+import { LOC_A, LOC_B, person, MASTER } from '../../../../../../../tests/helpers/owner-at-location-callers.js'
 
 // The page hits two tables: whatsapp_templates (fetch-by-id → single) and
 // whatsapp_template_events (history list → order → limit). Dispatch on the
@@ -131,5 +132,24 @@ describe('/communications/templates/whatsapp/[id] page', () => {
     const el = await EditWATemplatePage(props())
     expect(el).toBeTruthy()
     expect(notFound).not.toHaveBeenCalled()
+  })
+})
+
+// WATPLROLE.1 — resubmit, edit and delete decide MANAGER_ROLES at the
+// TEMPLATE's location, so the editor's canManage is judged there too, never
+// on the active studio's role.
+describe('/communications/templates/whatsapp/[id] — canManage at the template\'s location (WATPLROLE.1)', () => {
+  it.each([
+    ['a manager there: can manage', person({ [LOC_B]: 'manager' }, LOC_B), true],
+    ['a head coach there: can manage', person({ [LOC_B]: 'head_coach' }, LOC_B), true],
+    ['staff at the active studio, manager at the template\'s: can manage', person({ [LOC_A]: 'staff', [LOC_B]: 'manager' }, LOC_A), true],
+    ['a master: can manage', MASTER, true],
+    ['staff there: cannot', person({ [LOC_B]: 'staff' }, LOC_B), false],
+    ['a manager at the active studio who is staff at the template\'s: cannot', person({ [LOC_A]: 'manager', [LOC_B]: 'staff' }, LOC_A), false],
+  ])('%s', async (_label, caller, expected) => {
+    getCurrentUser.mockResolvedValue(caller)
+    createServerClient.mockReturnValue(mockDb({ template: { id: 'wa-tpl-1', location_id: LOC_B } }))
+    const el = await EditWATemplatePage(props())
+    expect(el.props.canManage).toBe(expected)
   })
 })
