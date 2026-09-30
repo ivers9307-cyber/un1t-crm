@@ -25,9 +25,14 @@
 //  `<NNN>_watplbucket1_rollback.sql` (it restores the 30 Sep state on purpose).
 //  4. The LATEST migration that writes the bucket row sets file_size_limit
 //     to the largest TEMPLATE_MEDIA_LIMITS maxBytes and allowed_mime_types
-//     to the union of its mimes, and never makes it private. Change the JS
-//     limits and the bucket together, in one PR, or signed uploads of the
-//     new type are refused by Storage.
+//     to the union of its mimes. And every migration from SCAN_FROM on, on
+//     its own, never makes the bucket private (an UPDATE with no WHERE and
+//     an INSERT that omits `public` count) and sets no limit that differs
+//     from those: a lower-numbered file merged after 670 runs on prod after
+//     it but sorts before it, so "the latest" alone cannot see it. A limit
+//     written as anything but a literal (or NULL) is unreadable and fails.
+//     Change the JS limits and the bucket together, in one PR, or signed
+//     uploads of the new type are refused by Storage.
 //
 // JS comments are blanked from the TypeScript parser's comment ranges (never
 // a regex), SQL comments by one quote- and dollar-aware pass (sqlCode, both
@@ -243,22 +248,108 @@ export function bucketReopeners(sql) {
   return hits
 }
 
-/** Top-level statements that write the bucket row (DO/function bodies and comments removed). */
+const LIMITS = Object.values(TEMPLATE_MEDIA_LIMITS)
+const EXPECTED_SIZE = Math.max(...LIMITS.map((l) => l.maxBytes))
+const EXPECTED_MIMES = [...new Set(LIMITS.flatMap((l) => l.mimes))].sort()
+
+/**
+ * Top-level statements that write the bucket row (DO/function bodies and
+ * comments removed): an UPDATE or INSERT on storage.buckets that names the
+ * bucket, or an UPDATE with no WHERE (it writes every bucket, this one too).
+ */
 export function bucketRowWrites(sql) {
   const code = sqlCode(sql).replace(/\$([A-Za-z_]\w*)?\$[\s\S]*?\$\1\$/g, ' ')
   return code.split(';').map((s) => s.trim())
-    .filter((s) => /^(update\s+"?storage"?\s*\.\s*"?buckets"?|insert\s+into\s+"?storage"?\s*\.\s*"?buckets"?)\b/i.test(s) && s.includes(`'${BUCKET}'`))
+    .filter((s) => /^(update\s+"?storage"?\s*\.\s*"?buckets"?|insert\s+into\s+"?storage"?\s*\.\s*"?buckets"?)(?=[\s(]|$)/i.test(s) &&
+      (s.includes(`'${BUCKET}'`) || (/^update\b/i.test(s) && !/\bwhere\b/i.test(s))))
 }
 
-/** The limits a bucket-row write sets: { sizeLimit, mimes, makesPrivate }. */
-export function bucketLimits(stmt) {
-  const size = stmt.match(/\bfile_size_limit\s*=\s*(\d+)/i)
-  const mimes = stmt.match(/\ballowed_mime_types\s*=\s*array\s*\[([^\]]*)\]/i)
-  return {
-    sizeLimit: size ? Number(size[1]) : null,
-    mimes: mimes ? [...mimes[1].matchAll(/'([^']+)'/g)].map((x) => x[1]).sort() : null,
-    makesPrivate: /\bpublic\s*=\s*false\b/i.test(stmt) || /\bvalues\s*\(\s*'whatsapp-templates'\s*,\s*'[^']*'\s*,\s*false\b/i.test(stmt),
+/** Split on top-level commas (not inside '…', "…", (…) or […]). */
+function splitTop(text) {
+  const out = []
+  let depth = 0
+  let quote = null
+  let cur = ''
+  for (const c of text) {
+    if (quote) { if (c === quote) quote = null; cur += c; continue }
+    if (c === "'" || c === '"') quote = c
+    else if (c === '(' || c === '[') depth++
+    else if (c === ')' || c === ']') depth--
+    else if (c === ',' && depth === 0) { out.push(cur.trim()); cur = ''; continue }
+    cur += c
   }
+  if (cur.trim()) out.push(cur.trim())
+  return out
+}
+const unquote = (id) => id.trim().replace(/^"|"$/g, '').toLowerCase()
+
+/** `col = expr, …` → Map(col → expr). */
+function assignments(setClause) {
+  const out = new Map()
+  for (const a of splitTop(setClause)) {
+    const m = a.match(/^("[^"]+"|[\w$]+)\s*=\s*([\s\S]+)$/)
+    if (m) out.set(unquote(m[1]), m[2].trim())
+  }
+  return out
+}
+
+/** What a bucket-row write sets, as column → expression text. */
+function bucketColumns(stmt) {
+  const cols = new Map()
+  const ins = stmt.match(/^insert\s+into\s+\S+\s*\(([^)]*)\)\s*values\s*\(([\s\S]*?)\)\s*(on\s+conflict\b[\s\S]*)?$/i)
+  if (ins) {
+    const names = splitTop(ins[1]).map(unquote)
+    const values = splitTop(ins[2])
+    names.forEach((n, i) => cols.set(n, values[i] ?? ''))
+    // A new row takes the column default, and storage.buckets.public defaults to false.
+    if (!cols.has('public')) cols.set('public', 'false')
+    const upsert = (ins[3] || '').match(/\bdo\s+update\s+set\s+([\s\S]*?)(?=\bwhere\b|\breturning\b|$)/i)
+    if (upsert) for (const [k, v] of assignments(upsert[1])) cols.set(k, v)
+    return cols
+  }
+  const upd = stmt.match(/\bset\s+([\s\S]*?)(?=\bwhere\b|\breturning\b|\bfrom\b|$)/i)
+  if (upd) for (const [k, v] of assignments(upd[1])) cols.set(k, v)
+  if (/^insert\b/i.test(stmt) && !ins) cols.set('public', 'unreadable')
+  return cols
+}
+
+/**
+ * The limits a bucket-row write sets: { sizeLimit, mimes, makesPrivate }.
+ * undefined = not set here; null = set to NULL (no limit); 'unreadable' = set
+ * to something this cannot evaluate (which fails the check: write a literal).
+ */
+export function bucketLimits(stmt) {
+  const cols = bucketColumns(stmt)
+  const bare = (v) => v.replace(/::\s*[\w\s[\]]+$/, '').trim()
+  let sizeLimit
+  if (cols.has('file_size_limit')) {
+    const v = bare(cols.get('file_size_limit'))
+    sizeLimit = /^null$/i.test(v) ? null : /^\d+$/.test(v) ? Number(v) : 'unreadable'
+  }
+  let mimes
+  if (cols.has('allowed_mime_types')) {
+    const v = bare(cols.get('allowed_mime_types'))
+    const arr = v.match(/^array\s*\[([^\]]*)\]$/i)
+    const lit = v.match(/^'\{([^}']*)\}'$/)
+    if (/^null$/i.test(v)) mimes = null
+    else if (arr && splitTop(arr[1]).every((e) => /^'[^']+'(::\s*text)?$/i.test(e))) mimes = splitTop(arr[1]).map((e) => e.match(/^'([^']+)'/)[1]).sort()
+    else if (lit) mimes = lit[1].split(',').map((x) => x.trim().replace(/^"|"$/g, '')).filter(Boolean).sort()
+    else mimes = 'unreadable'
+  }
+  const pub = cols.has('public') ? bare(cols.get('public')) : null
+  return { sizeLimit, mimes, makesPrivate: pub !== null && !/^true$/i.test(pub) }
+}
+
+/** Every way the bucket-row writes in `sql` break the bucket (private, or limits out of step with template-media.js). */
+export function bucketRowProblems(sql) {
+  const problems = []
+  for (const s of bucketRowWrites(sql)) {
+    const l = bucketLimits(s)
+    if (l.makesPrivate) problems.push(`makes the bucket private: ${s}`)
+    if (l.sizeLimit !== undefined && l.sizeLimit !== EXPECTED_SIZE) problems.push(`file_size_limit ${l.sizeLimit}, expected ${EXPECTED_SIZE}: ${s}`)
+    if (l.mimes !== undefined && JSON.stringify(l.mimes) !== JSON.stringify(EXPECTED_MIMES)) problems.push(`allowed_mime_types ${JSON.stringify(l.mimes)}, expected ${JSON.stringify(EXPECTED_MIMES)}: ${s}`)
+  }
+  return problems
 }
 
 const migrationFiles = () => readdirSync(MIGRATIONS).filter((f) => f.endsWith('.sql'))
@@ -344,16 +435,46 @@ describe('migrations keep the bucket closed to clients and its limits in step (m
     const writes = migrationFiles().filter((f) => !ROLLBACK_FILE.test(f)).flatMap((f) => bucketRowWrites(readFileSync(path.join(MIGRATIONS, f), 'utf8')).map((s) => ({ f, s })))
     expect(writes.length).toBeGreaterThan(1)   // mig 045's INSERT, mig 670's UPDATE
     const last = writes.at(-1)
-    const limits = bucketLimits(last.s)
-    const all = Object.values(TEMPLATE_MEDIA_LIMITS)
-    expect(limits, `${last.f} must set the bucket's limits from src/lib/template-media.js`).toEqual({
-      sizeLimit: Math.max(...all.map((l) => l.maxBytes)),
-      mimes: [...new Set(all.flatMap((l) => l.mimes))].sort(),
+    expect(bucketLimits(last.s), `${last.f} must set the bucket's limits from src/lib/template-media.js`).toEqual({
+      sizeLimit: EXPECTED_SIZE,
+      mimes: EXPECTED_MIMES,
       makesPrivate: false,
     })
-    for (const { f, s } of writes.filter((w) => parseInt(w.f, 10) >= BUCKET_MIGRATION)) {
-      expect(bucketLimits(s).makesPrivate, `${f} makes the bucket private (Meta fetches header media by URL)`).toBe(false)
-    }
+  })
+
+  it.each(later)('%s: never makes the bucket private, and any limit it sets matches template-media.js', (file) => {
+    // Per file, not only the latest write: a lower-numbered file that merges
+    // after 670 runs on prod AFTER it, yet sorts before it here.
+    expect(bucketRowProblems(readFileSync(path.join(MIGRATIONS, file), 'utf8')),
+      `${file} breaks the whatsapp-templates bucket: keep it public (Meta fetches header media by URL) and set its limits from src/lib/template-media.js`).toEqual([])
+  })
+
+  it('the bucket-row check catches every form', () => {
+    const bad = [
+      "UPDATE storage.buckets SET public = false WHERE id = 'whatsapp-templates';",
+      "UPDATE \"storage\".\"buckets\" SET \"public\" = false WHERE id = 'whatsapp-templates';",
+      'UPDATE storage.buckets SET public = false;',
+      "UPDATE storage.buckets SET file_size_limit = NULL, allowed_mime_types = NULL WHERE id = 'whatsapp-templates';",
+      "UPDATE storage.buckets SET file_size_limit = 52428800 WHERE id = 'whatsapp-templates';",
+      "UPDATE storage.buckets SET file_size_limit = 100 * 1024 * 1024 WHERE id = 'whatsapp-templates';",
+      "UPDATE storage.buckets SET allowed_mime_types = ARRAY['image/png'] WHERE id = 'whatsapp-templates';",
+      "UPDATE storage.buckets SET allowed_mime_types = '{image/png}' WHERE id = 'whatsapp-templates';",
+      "INSERT INTO storage.buckets (id, name) VALUES ('whatsapp-templates', 'whatsapp-templates') ON CONFLICT (id) DO NOTHING;",
+      "INSERT INTO storage.buckets (id, public, name) VALUES ('whatsapp-templates', false, 'whatsapp-templates');",
+      "INSERT INTO storage.buckets (id, name, public) VALUES ('whatsapp-templates', 'whatsapp-templates', true) ON CONFLICT (id) DO UPDATE SET file_size_limit = NULL;",
+    ]
+    for (const sql of bad) expect(bucketRowProblems(sql), sql).not.toEqual([])
+    const mimeArray = `ARRAY[${EXPECTED_MIMES.map((m) => `'${m}'`).join(', ')}]`
+    const ok = [
+      `UPDATE storage.buckets SET public = true, file_size_limit = ${EXPECTED_SIZE}, allowed_mime_types = ${mimeArray} WHERE id = 'whatsapp-templates';`,
+      `UPDATE storage.buckets SET allowed_mime_types = ${mimeArray}::text[] WHERE id = 'whatsapp-templates';`,
+      `UPDATE storage.buckets SET allowed_mime_types = '{${[...EXPECTED_MIMES].reverse().join(',')}}' WHERE id = 'whatsapp-templates';`,
+      "UPDATE storage.buckets SET public = true WHERE id = 'whatsapp-templates';",
+      "UPDATE storage.buckets SET file_size_limit = 1 WHERE id = 'branding';",
+      "INSERT INTO storage.buckets (id, name, public) VALUES ('whatsapp-templates', 'whatsapp-templates', true) ON CONFLICT (id) DO NOTHING;",
+      "-- UPDATE storage.buckets SET public = false WHERE id = 'whatsapp-templates';",
+    ]
+    for (const sql of ok) expect(bucketRowProblems(sql), sql).toEqual([])
   })
 
   it('the policy detector catches every form', () => {
