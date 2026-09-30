@@ -550,10 +550,9 @@ export async function sendWhatsappStep(db, { enrollment, step, sequence, contact
   }
 
   // COMMS-AUDIT 2026-07-10: route from the sequence location's
-  // whatsapp_numbers row. Without { locationId } config resolution
-  // falls back to env vars — the wrong sender for any location that
-  // isn't the env default, and a dead send if the env token has
-  // rotted. The sequence's location is authoritative here (same as
+  // whatsapp_numbers row. Without { locationId } config resolution has
+  // no number to use and refuses (it used to fall back to the global env
+  // number, the wrong sender for every other location). The sequence's location is authoritative here (same as
   // broadcasts, which pass broadcast.location_id): the template,
   // branding, flow_token and conversation above are all already
   // resolved against sequence.location_id.

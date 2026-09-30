@@ -141,7 +141,7 @@ export async function POST(request) {
 
         // SAAS-2 — strict tenant routing: only an active whatsapp_numbers
         // row may own inbound traffic (messages AND statuses). A missing or
-        // unknown phone_number_id, an env-only match (no location), or a
+        // unknown phone_number_id, any config without a location, or a
         // failed lookup DROPS the whole change with a structured log — the
         // old first-locations-row fallback routed a foreign number's
         // messages (and the contact + Mia reply they spawned) into an

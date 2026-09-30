@@ -165,8 +165,8 @@ export async function POST(request, props) {
     templateVariables = clientComponents
     // WATPLLOG.1 — the text the customer read, filled by variable NUMBER.
     messageBody = renderSentTemplateBody(tplRow, components) || `[Template: ${templateName}]`
-    // Route from THIS location's WhatsApp number (whatsapp_numbers), not the
-    // env default.
+    // Route from THIS location's WhatsApp number (whatsapp_numbers); a
+    // location with none is refused (WACONFIGFALLBACK.1), never another's.
     send = () => sendTemplateMessage(phone, templateName, language, components, { locationId: conversation.location_id })
   } else if (['image', 'video', 'document', 'audio'].includes(messageType)) {
     // Media message — 24h window only

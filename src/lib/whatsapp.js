@@ -19,9 +19,9 @@ import { sendPushToRolesAtLocation } from './push'
 import { MANAGER_ROLES } from './schemas'
 import { splitMessageText, WHATSAPP_TEXT_LIMIT } from './message-split.js'
 
-// WA-MULTI.1 — config is now per-location. Resolution helper +
-// env fallback live in whatsapp-config.js; the META_API_URL +
-// version constants are re-exported from there for consistency.
+// WA-MULTI.1 — config is per-location. The resolution helper lives in
+// whatsapp-config.js; the META_API_URL + version constants are
+// re-exported from there for consistency.
 //
 // Every public function in this file takes an optional `opts`
 // object as its last argument. Supported keys:
@@ -56,8 +56,8 @@ function headersFor(config) {
 
 /**
  * Send a text message (only works within 24h window).
- * Pass `opts.locationId` to route from a specific location's WA
- * number; omit for env-fallback (legacy single-number behaviour).
+ * Pass `opts.locationId` to route from that location's own WA number
+ * (or `opts.config`); with neither it refuses (WhatsAppNumberMissingError).
  */
 export async function sendTextMessage(to, text, opts = {}) {
   const config = await resolveConfig(opts)
@@ -779,7 +779,7 @@ export const CAPPED_RETRY_HOURS = 20
 // WA-QUALITY.2 — blast preflight quality gate. A RED/FLAGGED number is one
 // strike from a Meta messaging ban; blasting the whole list into it is how a
 // number dies. Returns the operator-facing refusal, or null to proceed.
-// GREEN/YELLOW/unknown (null — env config or never polled) pass. Pure.
+// GREEN/YELLOW/unknown (null: never polled) pass. Pure.
 export function broadcastQualityBlockError(qualityRating) {
   if (qualityRating !== 'RED' && qualityRating !== 'FLAGGED') return null
   return `This location's WhatsApp number quality is ${qualityRating} — sending paused to protect the number. ` +
