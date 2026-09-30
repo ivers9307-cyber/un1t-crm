@@ -57,6 +57,11 @@ export async function POST(request, props) {
       message_type: 'reaction',
       body: emoji ? `Reacted: ${emoji}` : 'Removed reaction',
       status: 'sent',
+      // CHECKINSTALL.2 (C106 b) — a staff action: sent_by from the SESSION,
+      // never the body (UUID REFERENCES profiles, mig 007), same as the send
+      // route. Mia's reply path and the check-in runner read sent_by as "a
+      // person spoke"; without it this row looked like an automation.
+      sent_by: user.id,
       sent_at: new Date().toISOString(),
     })
   } catch (e) { console.error('[wa-react] thread row insert failed:', e?.message) }
