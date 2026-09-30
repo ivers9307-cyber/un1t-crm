@@ -39,6 +39,10 @@ export default function ContactsView({
   initialSearch = '',
   canMerge = false,
   canDelete = false,
+  // SEGMENTROUTE.1 (R1): saving and deleting a segment need Contacts AND
+  // Email at this studio; the page passes the server's canWriteSegmentsAt.
+  // Default false so a caller that forgets it offers nothing the API refuses.
+  canSaveSegments = false,
 }) {
   const [status, setStatus] = useState(initialStatus)
   const [search, setSearch] = useState(initialSearch)
@@ -384,13 +388,15 @@ export default function ContactsView({
                 >
                   {s.name}
                 </button>
-                <button
-                  onClick={() => deleteSegment(s.id)}
-                  className="pr-2 text-un1t-muted hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
-                  title="Delete segment"
-                >
-                  <Trash2 size={11} />
-                </button>
+                {canSaveSegments && (
+                  <button
+                    onClick={() => deleteSegment(s.id)}
+                    className="pr-2 text-un1t-muted hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                    title="Delete segment"
+                  >
+                    <Trash2 size={11} />
+                  </button>
+                )}
               </span>
             )
           })}
@@ -408,8 +414,9 @@ export default function ContactsView({
           />
 
           {/* Save-as-segment row. Only visible when there's at least
-              one filter row to save. */}
-          {filterRowCount > 0 && (
+              one filter row to save, and only to a caller the API lets
+              save (SEGMENTROUTE.1: Contacts AND Email here). */}
+          {canSaveSegments && filterRowCount > 0 && (
             <div className="pt-3 border-t border-un1t-border flex items-center gap-2">
               {showSaveForm ? (
                 <>
