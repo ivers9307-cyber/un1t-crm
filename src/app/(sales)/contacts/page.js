@@ -4,6 +4,7 @@ import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { hasPermission } from '@/lib/permissions'
+import { canWriteSegmentsAt } from '@/lib/segment-access'
 import ContactsView from '@/components/ContactsView'
 import ContactsHeaderActions from '@/components/ContactsHeaderActions'
 import { crossoverContactIds, fetchCrossoverContext, fetchListMembershipFlags } from '@/lib/contact-crossovers'
@@ -115,6 +116,10 @@ export default async function ContactsPage(props) {
   // many rows at once and is the obvious GDPR audit surface.
   const canDelete = MANAGER_ROLES.includes(user.role)
   const canMerge = user.role === 'owner' || user.role === 'master'
+  // SEGMENTROUTE.1 (R1): the segment routes' own write rule (Contacts AND
+  // Email) at the studio this page lists, so Save and delete show only to
+  // callers the API lets save.
+  const canSaveSegments = canWriteSegmentsAt(user, locationId)
   const canImport = user.isMaster || user.role === 'master'
 
   // Load locations the master can pick from for the import wizard.
@@ -181,6 +186,7 @@ export default async function ContactsPage(props) {
           initialSearch={search}
           canMerge={canMerge}
           canDelete={canDelete}
+          canSaveSegments={canSaveSegments}
         />
       )}
 
