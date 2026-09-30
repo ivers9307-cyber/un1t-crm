@@ -7,6 +7,7 @@ import {
   renderTemplatePreview,
   buildTemplateSend,
   templateHeaderMedia,
+  renderSentTemplateBody,
 } from './wa-template-send.js'
 
 // Row shapes are the live whatsapp_templates `components` (Meta's template
@@ -58,8 +59,8 @@ describe('templateSendBlock', () => {
   it('refuses a text header that needs a value', () => {
     expect(templateSendBlock(tpl({ components: [{ type: 'HEADER', format: 'TEXT', text: 'Hi {{1}}' }, body('x')] }))).toBe('header_value')
   })
-  it('refuses a FLOW button (Meta needs a per-send flow_token: 131009)', () => {
-    expect(templateSendBlock(tpl({ components: [body('Hi {{1}}'), { type: 'BUTTONS', buttons: [{ type: 'FLOW', text: 'Book' }] }] }))).toBe('flow_button')
+  it('lets a FLOW button through: the send route mints its flow_token (WATPLSEND.1)', () => {
+    expect(templateSendBlock(tpl({ components: [body('Hi {{1}}'), { type: 'BUTTONS', buttons: [{ type: 'FLOW', text: 'Book' }] }] }))).toBeNull()
   })
   it('refuses a dynamic URL button or a copy-code button (Meta needs a per-send value: 132012)', () => {
     expect(templateSendBlock(tpl({ components: [body('Hi {{1}}'), { type: 'BUTTONS', buttons: [{ type: 'URL', url: 'https://pay.example.com/{{1}}' }] }] }))).toBe('button_value')
@@ -70,10 +71,11 @@ describe('templateSendBlock', () => {
     expect(templateSendBlock(tpl({ components: [body('Hi {{1}} and {{3}}')] }))).toBe('named_variables')
   })
   it('has words for every reason it can return', () => {
-    for (const key of ['header_media', 'header_value', 'flow_button', 'button_value', 'named_variables']) {
+    for (const key of ['header_media', 'header_value', 'button_value', 'named_variables']) {
       expect(typeof SEND_BLOCK_TEXT[key]).toBe('string')
       expect(SEND_BLOCK_TEXT[key]).not.toMatch(/—/)
     }
+    expect(SEND_BLOCK_TEXT).not.toHaveProperty('flow_button')
   })
 })
 
@@ -95,6 +97,42 @@ describe('renderTemplatePreview', () => {
   })
   it('reads the BODY component (there is no body_text column)', () => {
     expect(renderTemplatePreview(tpl(), {})).toBe('Hi {{1}}, are you still interested?')
+  })
+})
+
+// WATPLLOG.1 (C51) — the thread row must read what the customer read. Meta
+// takes ONE value per DISTINCT {{n}}, in number order (buildTemplateSend builds
+// exactly that), and fills every occurrence of {{n}} with the n-th value.
+const sentBody = (...texts) => [{ type: 'body', parameters: texts.map((text) => ({ type: 'text', text })) }]
+
+describe('renderSentTemplateBody', () => {
+  it('fills by NUMBER, not by order of appearance: a repeat and a {{2}} before {{1}}', () => {
+    const t = tpl({ components: [body('{{2}} then {{1}} and {{2}} again')] })
+    expect(renderSentTemplateBody(t, sentBody('ALPHA', 'BETA'))).toBe('BETA then ALPHA and BETA again')
+  })
+  it('matches what buildTemplateSend actually sends for the same values', () => {
+    const t = tpl({ components: [body('{{2}} then {{1}} and {{2}} again')] })
+    const built = buildTemplateSend(t, { 1: 'ALPHA', 2: 'BETA' })
+    expect(renderSentTemplateBody(t, built.payload.template_components)).toBe('BETA then ALPHA and BETA again')
+  })
+  it('accepts spaced placeholders ({{ 1 }}) the way bodyVariableSlots does', () => {
+    expect(renderSentTemplateBody(tpl({ components: [body('Hi {{ 1 }}!')] }), sentBody('ALPHA'))).toBe('Hi ALPHA!')
+  })
+  it('ignores header and button components, and reads the body component case-insensitively', () => {
+    const comps = [
+      { type: 'header', parameters: [{ type: 'video', video: { link: 'https://example.test/v.mp4' } }] },
+      { type: 'BODY', parameters: [{ type: 'text', text: 'ALPHA' }] },
+      { type: 'button', sub_type: 'flow', index: '0', parameters: [{ type: 'action', action: { flow_token: 'c.l' } }] },
+    ]
+    expect(renderSentTemplateBody(tpl(), comps)).toBe('Hi ALPHA, are you still interested?')
+  })
+  it('leaves a slot with no value visible as {{n}} rather than silently blank', () => {
+    expect(renderSentTemplateBody(tpl(), [])).toBe('Hi {{1}}, are you still interested?')
+    expect(renderSentTemplateBody(tpl(), null)).toBe('Hi {{1}}, are you still interested?')
+  })
+  it('is null when the template has no body text; named placeholders are left as they are', () => {
+    expect(renderSentTemplateBody(tpl({ components: [] }), sentBody('ALPHA'))).toBeNull()
+    expect(renderSentTemplateBody(tpl({ components: [body('Hi {{first_name}}')] }), sentBody('ALPHA'))).toBe('Hi {{first_name}}')
   })
 })
 
@@ -124,8 +162,20 @@ describe('buildTemplateSend', () => {
     expect(buildTemplateSend(t, {})).toEqual({ ok: false, missing: [1, 2] })
   })
   it('refuses a template the picker cannot send, with the reason', () => {
-    const t = tpl({ components: [body('Hi {{1}}'), { type: 'BUTTONS', buttons: [{ type: 'FLOW' }] }] })
-    expect(buildTemplateSend(t, { 1: 'Sam' })).toEqual({ ok: false, blocked: 'flow_button' })
+    const t = tpl({ components: [body('Hi {{1}}'), { type: 'BUTTONS', buttons: [{ type: 'URL', url: 'https://pay.example.test/{{1}}' }] }] })
+    expect(buildTemplateSend(t, { 1: 'Sam' })).toEqual({ ok: false, blocked: 'button_value' })
+  })
+  it('builds a FLOW-button template like any other: only the body goes up, the route adds the button', () => {
+    const t = tpl({ name: 'book_first_visit', components: [body('Hi {{1}}'), { type: 'BUTTONS', buttons: [{ type: 'FLOW', text: 'Book' }] }] })
+    expect(buildTemplateSend(t, { 1: 'Sam' })).toEqual({
+      ok: true,
+      payload: {
+        type: 'template',
+        template_name: 'book_first_visit',
+        template_language: 'en',
+        template_components: [{ type: 'body', parameters: [{ type: 'text', text: 'Sam' }] }],
+      },
+    })
   })
   it("falls back to 'en' only when the row has no language", () => {
     expect(buildTemplateSend(tpl({ language: null }), { 1: 'Sam' }).payload.template_language).toBe('en')
