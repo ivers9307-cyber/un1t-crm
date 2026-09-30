@@ -980,8 +980,12 @@ export async function fetchPaymentsReport(creds, opts = {}) {
  * a Glofox account for this identity already exists. What that entitles
  * the caller to do is the CALLER's rule: an email match may be linked; a
  * phone-only match must not be (couples share numbers — PERSON-ACCT.9).
+ *
+ * `retry: 'never'` (GLOFOXPOSTRETRY.1) makes every request ONE attempt: a
+ * write's dedupe read (registerGlofoxMember) must answer at once, not stall
+ * behind nested backoffs. The default keeps the search's retries.
  */
-export async function searchGlofoxMember(creds, { email, phone } = {}) {
+export async function searchGlofoxMember(creds, { email, phone, retry = 'idempotent' } = {}) {
   const lc = typeof email === 'string' && email.trim() ? email.trim().toLowerCase() : null
   const e164 = typeof phone === 'string' ? toMobileE164(phone) : null
   if (!creds?.branchId || (!lc && !e164)) {
@@ -1018,8 +1022,9 @@ export async function searchGlofoxMember(creds, { email, phone } = {}) {
     if (e164) filter.phone = e164
     const r = await glofoxFetch(creds, '/v3.0/namespaces/members/retrieve', {
       method: 'POST',
-      // A search, not a write: safe to repeat (GLOFOXPOSTRETRY.1).
-      retry: 'idempotent',
+      // A search, not a write: safe to repeat (GLOFOXPOSTRETRY.1), unless a
+      // write's dedupe read asks for ONE attempt (retry: 'never').
+      retry: retry === 'never' ? 'never' : 'idempotent',
       body: JSON.stringify(filter),
     })
     if (r.ok) return verdict(matches(rowsOf(await r.json())))
@@ -1039,12 +1044,12 @@ export async function searchGlofoxMember(creds, { email, phone } = {}) {
     //           first hit. `filters[phone]` on 2.1 is ignored (returns all).
     const b = encodeURIComponent(creds.branchId)
     if (lc) {
-      const r2 = await glofoxFetch(creds, `/2.1/branches/${b}/users?${encodeURIComponent('filters[email]')}=${encodeURIComponent(lc)}`)
+      const r2 = await glofoxFetch(creds, `/2.1/branches/${b}/users?${encodeURIComponent('filters[email]')}=${encodeURIComponent(lc)}`, { retry })
       if (!r2.ok) return httpErr(r2)
       return verdict(matches(rowsOf(await r2.json())))
     }
     for (const spelling of phoneSpellingsForGlofox(e164)) {
-      const r2 = await glofoxFetch(creds, `/2.0/members?phone=${encodeURIComponent(spelling)}&limit=20`)
+      const r2 = await glofoxFetch(creds, `/2.0/members?phone=${encodeURIComponent(spelling)}&limit=20`, { retry })
       if (!r2.ok) return httpErr(r2)
       const exact = matches(rowsOf(await r2.json()))
       if (exact.length > 0) return verdict(exact)
@@ -1082,11 +1087,11 @@ export function phoneSpellingsForGlofox(e164) {
  * is untouched. Returns { found, member, error }; found=true means LINK
  * rather than create.
  */
-export async function searchGlofoxByEmail(creds, email) {
+export async function searchGlofoxByEmail(creds, email, { retry } = {}) {
   if (typeof email !== 'string' || !email.trim()) {
     return { found: false, member: null, error: 'missing args' }
   }
-  return searchGlofoxMember(creds, { email })
+  return searchGlofoxMember(creds, { email, ...(retry ? { retry } : {}) })
 }
 
 /**
@@ -1136,7 +1141,7 @@ export async function registerGlofoxMember(creds, payload) {
   let landedMember = null
   const retry = {
     verify: async () => {
-      const s = await searchGlofoxByEmail(creds, body.email)
+      const s = await searchGlofoxByEmail(creds, body.email, { retry: 'never' })
       if (s.error) return 'unknown'
       if (s.found && s.member?._id) { landedMember = s.member; return 'landed' }
       return 'absent'
@@ -1840,7 +1845,10 @@ export async function fetchUserBookingsResult(creds, userId, opts = {}) {
     exclude_cancelled: 'false',
   })
   try {
-    const r = await glofoxFetch(creds, `/2.0/bookings?${qs.toString()}`)
+    // opts.retry: a dedupe read passes 'never' (GLOFOXPOSTRETRY.1), so a
+    // failing read answers 'unknown' at once instead of stalling the write
+    // behind its own backoffs. Unset keeps the GET default (retried).
+    const r = await glofoxFetch(creds, `/2.0/bookings?${qs.toString()}`, { retry: opts.retry })
     if (!r.ok) return { ok: false, bookings: [] }
     const body = await r.json()
     return { ok: true, bookings: Array.isArray(body?.data) ? body.data : [] }
@@ -1864,7 +1872,7 @@ function isCancelledBookingStatus(status) {
  *   unknown = the read failed; never re-send on it.
  */
 export async function findLandedBooking(creds, userId, eventId) {
-  const read = await fetchUserBookingsResult(creds, userId, { windowDays: 7 })
+  const read = await fetchUserBookingsResult(creds, userId, { windowDays: 7, retry: 'never' })
   if (!read.ok) return { state: 'unknown', booking: null }
   const hit = read.bookings.find((b) =>
     String(b?.model_id ?? b?.event_id ?? '') === String(eventId) && !isCancelledBookingStatus(b?.status))
@@ -1878,7 +1886,7 @@ export async function findLandedBooking(creds, userId, eventId) {
  *   or the booking is not in it (never re-send on it).
  */
 export async function findBookingCancelState(creds, userId, bookingId) {
-  const read = await fetchUserBookingsResult(creds, userId, { windowDays: 7 })
+  const read = await fetchUserBookingsResult(creds, userId, { windowDays: 7, retry: 'never' })
   if (!read.ok) return 'unknown'
   const hit = read.bookings.find((b) => String(b?._id ?? b?.id ?? '') === String(bookingId))
   if (!hit) return 'unknown'

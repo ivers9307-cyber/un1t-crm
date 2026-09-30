@@ -464,3 +464,37 @@ describe('writes with no safe dedupe read are sent once on a 5xx', () => {
     expect(out.ok).toBe(false)
   })
 })
+
+describe('a dedupe read is ONE attempt (review: its own retries would stall a Mia turn or an approval)', () => {
+  it('createBooking: a 500 on the bookings read is not retried; unknown, no re-send', async () => {
+    route([
+      ['POST /2.0/bookings', [res(503)]],
+      ['GET /2.0/bookings', [res(500), res(200, { data: [{ _id: BOOKING, model_id: EVENT, status: 'BOOKED', created: Math.floor(Date.now() / 1000) }] })]],
+    ])
+    const out = await createBooking(creds, bookReq)
+    expect(sent()).toEqual(['POST /2.0/bookings', 'GET /2.0/bookings'])
+    expect(out.status).toBe(503)
+    expect(out.recovered).toBeUndefined()
+  })
+
+  it('cancelBooking: a 500 on the bookings read is not retried', async () => {
+    const CANCEL = `POST /booking/${BOOKING}/user/${USER}/cancel`
+    route([
+      [CANCEL, [res(503)]],
+      ['GET /2.0/bookings', [res(500), res(200, { data: [{ _id: BOOKING, status: 'CANCELLED' }] })]],
+    ])
+    const out = await cancelBooking(creds, BOOKING, USER)
+    expect(sent()).toEqual([CANCEL, 'GET /2.0/bookings'])
+    expect(out).toMatchObject({ ok: false, status: 503 })
+  })
+
+  it('registerGlofoxMember: a 500 on the email search is not retried', async () => {
+    route([
+      ['POST /2.0/register', [res(503)]],
+      ['POST /v3.0/namespaces/members/retrieve', [res(500), res(200, { data: [{ id: 'c'.repeat(24), email: 'sam@x.com' }] })]],
+    ])
+    const out = await registerGlofoxMember(creds, { first_name: 'Sam', last_name: 'Lee', email: 'sam@x.com', password: 'Abcd-1234' })
+    expect(sent()).toEqual(['POST /2.0/register', 'POST /v3.0/namespaces/members/retrieve'])
+    expect(out).toMatchObject({ ok: false, error: 'Glofox HTTP 503' })
+  })
+})
