@@ -117,7 +117,10 @@ function clientFiles() {
 const WRITE = /\.from\(\s*['"`](challenges|contact_segments|car_notes)['"`]\s*\)\s*\??\.\s*(insert|update|upsert|delete)\s*\(/g
 const CLOSED_READ = /\.from\(\s*['"`](car_notes)['"`]\s*\)\s*\??\.\s*select\s*\(/g
 // A PostgREST embed inside another table's select string: 'id, car_notes(content)' or 'car_notes!fk(*)'.
-const CLOSED_EMBED = /['"`][^'"`\n]*?\b(car_notes)\s*(?:!\s*\w+\s*)?\(/g
+// A '…' or "…" string ends at its line; a backtick template may span lines, and
+// the house style is a multi-line template select with the embed on a later
+// line (tests/consent-tables-client-closed-guard.test.js does the same).
+const CLOSED_EMBED = /(?:['"][^'"\n]*?|`[^`]*?)\b(car_notes)\s*(?:!\s*\w+\s*)?\(/g
 const CLOSED_REALTIME = /\btable\s*:\s*['"`](car_notes)['"`]/g
 const READ = /\.from\(\s*['"`](challenges|contact_segments|car_notes)['"`]\s*\)\s*\??\.\s*select\s*\(/g
 
@@ -270,7 +273,11 @@ export function anyMemberReopeners(sql) {
     const f = body.match(/\bfor\s+(all|select|insert|update|delete)\b/i)
     if (!f || f[1].toLowerCase() !== 'select') hits.push(m[0].trim())
   }
-  for (const m of code.matchAll(new RegExp(`\\balter\\s+table\\s+(?:only\\s+)?(?:if\\s+exists\\s+)?${NAMES}\\s+disable\\s+row\\s+level\\s+security`, 'gi'))) hits.push(m[0].trim())
+  // ALTER TABLE [IF EXISTS] [ONLY] <name> …: DISABLE RLS anywhere in a multi-action
+  // statement, or the table handed to a client role (an owner bypasses its grants and RLS).
+  const ALTER_ONE = `\\balter\\s+table\\s+(?:(?:only|if\\s+exists)\\s+)*${NAMES}(?=[\\s;])[^;]*?`
+  for (const m of code.matchAll(new RegExp(`${ALTER_ONE}\\bdisable\\s+row\\s+level\\s+security\\b`, 'gi'))) hits.push(m[0].trim())
+  for (const m of code.matchAll(new RegExp(`${ALTER_ONE}\\bowner\\s+to\\s+"?(anon|authenticated|public)"?(?=[\\s;]|$)`, 'gi'))) hits.push(m[0].trim())
   for (const m of code.matchAll(new RegExp(`\\bcreate\\s+(?:unlogged\\s+)?table\\s+(?:if\\s+not\\s+exists\\s+)?${NAMES}(?=[\\s(;])`, 'gi'))) hits.push(m[0].trim())
   for (const m of code.matchAll(/\balter\s+table\s+[^;]*?\brename\s+to\s+"?(challenges|contact_segments|car_notes)"?(?=[\s;]|$)/gi)) hits.push(m[0].trim())
   return hits
@@ -315,10 +322,16 @@ describe('client code never writes challenges, segments or car notes, and never 
       await supabase.from('car_notes').select('content')
       await supabase.from('cars').select('id, car_notes(content, kind)')
       await supabase.from('cars').select(\`id, car_notes!car_notes_car_id_fkey(*)\`)
+      await supabase
+        .from('cars')
+        .select(\`
+          id, make,
+          notes:car_notes!inner(content, kind)
+        \`)
       channel.on('postgres_changes', { event: '*', schema: 'public', table: 'car_notes' }, cb)`
     expect(anyMemberTableUses(bad)).toEqual([
       'challenges.insert', 'challenges.update', 'contact_segments.upsert', 'contact_segments.delete', 'car_notes.insert',
-      'car_notes.select', 'car_notes.embed', 'car_notes.embed', 'car_notes.realtime',
+      'car_notes.select', 'car_notes.embed', 'car_notes.embed', 'car_notes.embed', 'car_notes.realtime',
     ])
     const ok = `
       const { data } = await supabase.from('challenges').select('id, name, mode, metric, starts_on, ends_on, is_flagship')
@@ -389,6 +402,13 @@ describe('later migrations keep the three tables closed to clients (mig 672)', (
       'CREATE POLICY challenges_upd ON public.challenges FOR UPDATE USING (true);',
       'ALTER TABLE public.challenges DISABLE ROW LEVEL SECURITY;',
       'alter table only car_notes disable row level security;',
+      'ALTER TABLE IF EXISTS ONLY public.challenges DISABLE ROW LEVEL SECURITY;',
+      'ALTER TABLE ONLY public.contact_segments DISABLE ROW LEVEL SECURITY;',
+      'ALTER TABLE public.car_notes ADD COLUMN x int, DISABLE ROW LEVEL SECURITY;',
+      'alter table "public"."challenges"\n  alter column name set not null,\n  disable row level security;',
+      'ALTER TABLE public.car_notes OWNER TO authenticated;',
+      'alter table if exists only challenges owner to anon;',
+      'ALTER TABLE public.contact_segments OWNER TO "authenticated";',
       'GRANT challenge_writer TO authenticated;',
       'grant "some_role" to anon, authenticated;',
       'CREATE TABLE IF NOT EXISTS public.car_notes (id uuid);',
@@ -419,6 +439,10 @@ describe('later migrations keep the three tables closed to clients (mig 672)', (
       'CREATE POLICY p ON public.car_notes_archive FOR ALL TO authenticated USING (true);',
       'ALTER TABLE public.car_notes ENABLE ROW LEVEL SECURITY;',
       'ALTER TABLE public.cars DISABLE ROW LEVEL SECURITY;',
+      'ALTER TABLE public.challenges_v2 DISABLE ROW LEVEL SECURITY;',
+      'ALTER TABLE public.challenges ADD COLUMN x int; ALTER TABLE public.cars DISABLE ROW LEVEL SECURITY;',
+      'ALTER TABLE public.challenges OWNER TO postgres;',
+      'ALTER TABLE public.cars OWNER TO authenticated;',
       'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO authenticated;',
       'GRANT authenticated TO authenticator;',
       'CREATE TABLE public.challenge_participants (id uuid);',
