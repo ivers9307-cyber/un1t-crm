@@ -72,7 +72,7 @@ describe('sendWhatsappStep — no WhatsApp number at the sequence location', () 
       sequenceId: 'seq-1', stepId: 'step-1', contactId: 'c1', locationId: 'loc-1',
     })
     expect(db.messageInserts).toEqual([])
-    expect(db.rpcCalls).not.toContain('increment_step_sent')
+    expect(db.rpcCalls).toEqual([])
   })
 
   it('any other send error still throws (a Meta rejection is not a setup gap)', async () => {
