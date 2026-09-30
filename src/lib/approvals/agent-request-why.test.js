@@ -330,6 +330,12 @@ describe('failureExplanation: one trial per member, and the funnel trial (TRIALP
     expect(out).toMatch(/add a credit/i)
   })
 
+  it('TRIAL_ALREADY_GRANTED also covers a trial bought when the account was made (the /start mint)', () => {
+    const out = failed({ ok: false, message_code: 'TRIAL_ALREADY_GRANTED', prior_push_event_id: 'gpe-1' })
+    expect(out).toMatch(/when their account was made/i)
+    expect(out).toMatch(/no second trial was bought/i)
+  })
+
   it('TRIAL_HISTORY_UNREADABLE and TRIAL_PRODUCT_UNKNOWN say nothing was bought or booked, and to retry', () => {
     for (const code of ['TRIAL_HISTORY_UNREADABLE', 'TRIAL_PRODUCT_UNKNOWN']) {
       const out = failed({ ok: false, message_code: code })

@@ -518,3 +518,71 @@ describe('grantTrialBeforeBooking: one trial per member, not per card (TRIALPURC
     expect(record).not.toHaveBeenCalled()
   })
 })
+
+// A trial bought when the /start mint CREATED the account is recorded only in
+// glofox_push_events (status 'created'), never on a card. Every create path
+// attaches the trial, and a trial that did not attach lands 'needs_review'
+// instead, so a 'created' row for this member at this studio is a trial
+// already bought: a later needs_credit_grant card must not buy another.
+describe('grantTrialBeforeBooking: a trial bought when the account was minted', () => {
+  const minted = (over = {}) => ({ id: 'gpe-1', location_id: 'L1', glofox_member_id: 'gm1', status: 'created', ...over })
+
+  it('a member minted WITH a trial, then filing a needs_credit_grant card, buys no second trial', async () => {
+    db = makeDb({ glofox_push_events: [minted()] })
+
+    const out = await grantTrialBeforeBooking(db, base)
+
+    expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
+    expect(record).not.toHaveBeenCalled()
+    expect(out.proceed).toBe(false)
+    expect(out.failure).toEqual({ ok: false, message_code: TRIAL_ALREADY_GRANTED, prior_push_event_id: 'gpe-1' })
+    expect(out.grant).toMatchObject({ ok: false, code: TRIAL_ALREADY_GRANTED, glofox_member_id: 'gm1', prior_push_event_id: 'gpe-1' })
+  })
+
+  it('a member minted WITHOUT a trial (the purchase failed: needs_review) buys normally', async () => {
+    db = makeDb({ glofox_push_events: [minted({ status: 'needs_review' })] })
+
+    const out = await grantTrialBeforeBooking(db, base)
+
+    expect(out.proceed).toBe(true)
+    expect(purchaseGlofoxMembership).toHaveBeenCalledTimes(1)
+  })
+
+  it('an account that was LINKED (no mint, no trial) buys normally', async () => {
+    db = makeDb({ glofox_push_events: [minted({ status: 'linked' })] })
+
+    const out = await grantTrialBeforeBooking(db, base)
+
+    expect(out.proceed).toBe(true)
+    expect(purchaseGlofoxMembership).toHaveBeenCalledTimes(1)
+  })
+
+  it('a mint for the same member id at ANOTHER studio, or for another member, does not block', async () => {
+    db = makeDb({ glofox_push_events: [minted({ location_id: 'L2' }), minted({ id: 'gpe-2', glofox_member_id: 'gm2' })] })
+
+    const out = await grantTrialBeforeBooking(db, base)
+
+    expect(out.proceed).toBe(true)
+    expect(purchaseGlofoxMembership).toHaveBeenCalledTimes(1)
+  })
+
+  it('credits on the account still book with no purchase', async () => {
+    fetchUserCreditsResult.mockResolvedValueOnce({ ok: true, credits: [{ available: 1 }] })
+    db = makeDb({ glofox_push_events: [minted()] })
+
+    const out = await grantTrialBeforeBooking(db, base)
+
+    expect(out).toMatchObject({ proceed: true, grant: { ok: true, skipped: 'credits_present' } })
+    expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
+  })
+
+  it('the mint history cannot be read → TRIAL_HISTORY_UNREADABLE, nothing bought', async () => {
+    db = makeDb({ glofox_push_events: { error: { message: 'boom' } } })
+
+    const out = await grantTrialBeforeBooking(db, base)
+
+    expect(out.failure).toEqual({ ok: false, message_code: TRIAL_HISTORY_UNREADABLE })
+    expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
+    expect(record).not.toHaveBeenCalled()
+  })
+})

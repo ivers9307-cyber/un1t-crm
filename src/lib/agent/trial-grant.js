@@ -22,7 +22,9 @@
 //      have: a marker or no clear answer) stops the purchase with
 //      TRIAL_ALREADY_GRANTED, and the card goes to staff. Every grant this
 //      helper records carries glofox_member_id so the next card can find it;
-//      a failed read of the other cards is TRIAL_HISTORY_UNREADABLE;
+//      a failed read of the other cards is TRIAL_HISTORY_UNREADABLE. The
+//      same goes for a trial the /start mint bought when it created the
+//      account (a glofox_push_events 'created' row: prior_push_event_id);
 //   4. the trial product: the funnel block's own trial when the card carries
 //      one (details.trial_membership_id/trial_plan_code, as the mint path
 //      buys), else the one on the class_booking_requests row that points at
@@ -107,6 +109,27 @@ async function trialOnAnotherCard(db, { locationId, memberId, requestId }) {
   return { ok: true, priorId: prior?.id ?? null }
 }
 
+// A trial bought when the /start mint CREATED the account lives only in
+// glofox_push_events, never on a card. status 'created' is written only on a
+// create whose trial attached: every create path passes attachTrial (the
+// public booking page, /start, events, race payments, lead provisioning,
+// the backfill, a sequence step, the manual button, the Review-tab retry),
+// and a trial that did not attach (refused, no clear answer, settings unread
+// or unset) makes the row 'needs_review' instead. So a 'created' row for
+// this member at this studio is a trial already bought. { ok: false } on a
+// failed read.
+async function trialAtMint(db, { locationId, memberId }) {
+  if (!memberId) return { ok: true, eventId: null }
+  const { data, error } = await db.from('glofox_push_events')
+    .select('id')
+    .eq('location_id', locationId)
+    .eq('glofox_member_id', memberId)
+    .eq('status', 'created')
+    .limit(1)
+  if (error) return { ok: false }
+  return { ok: true, eventId: data?.[0]?.id ?? null }
+}
+
 export async function grantTrialBeforeBooking(db, {
   creds, locationId, memberId, priorGrant = null, isRetry = false, requestId = null,
   trialOverride = null, record = null,
@@ -172,6 +195,10 @@ export async function grantTrialBeforeBooking(db, {
     const other = await trialOnAnotherCard(db, { locationId, memberId, requestId })
     if (!other.ok) return stop(TRIAL_HISTORY_UNREADABLE)
     if (other.priorId) return stop(TRIAL_ALREADY_GRANTED, { prior_request_id: other.priorId })
+    // ...or the mint that created their account bought it.
+    const mint = await trialAtMint(db, { locationId, memberId })
+    if (!mint.ok) return stop(TRIAL_HISTORY_UNREADABLE)
+    if (mint.eventId) return stop(TRIAL_ALREADY_GRANTED, { prior_push_event_id: mint.eventId })
 
     // The funnel block's own trial (carried on the card) wins over the
     // location default, as it does on the mint path; only BOTH ids count.

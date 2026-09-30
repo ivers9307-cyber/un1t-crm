@@ -181,9 +181,10 @@ const FAILURE_EXPLANATIONS = {
   TRIAL_GRANT_UNRECORDED:
     'The approval could not save its progress before adding the trial (a temporary database error), so no trial was bought and nothing was booked. Retry in a minute.',
   // TRIALPURCHASE.2 — one trial per member, not per card: another card for
-  // the same Glofox member already bought one (or may have).
+  // the same Glofox member already bought one (or may have), or the /start
+  // mint bought it when it created the account (prior_push_event_id).
   TRIAL_ALREADY_GRANTED:
-    'An earlier approval already added a free trial for this member (or may have, if its result was unclear), so no second trial was bought and nothing was booked. Check their account in Glofox. If they should have this class, add a credit or membership by hand, then retry and it books against it.',
+    'This member already got a free trial, from an earlier approval or when their account was made (or may have, if its result was unclear), so no second trial was bought and nothing was booked. Check their account in Glofox. If they should have this class, add a credit or membership by hand, then retry and it books against it.',
   TRIAL_HISTORY_UNREADABLE:
     'Whether this member already got a trial from an earlier approval could not be checked (a temporary database error), so no trial was bought and nothing was booked. Retry in a minute.',
   // The card named no trial, and the booking's queue row could not be read,

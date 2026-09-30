@@ -582,6 +582,22 @@ describe('PATCH class_booking approval — the trial grant is judged (TRIALGRANT
     expect(failureExplanation({ status: 'failed', details: final.details })).toMatch(/earlier approval/i)
   })
 
+  // The /start mint created this member's account WITH its trial (a
+  // glofox_push_events 'created' row): a later needs_credit_grant card buys
+  // no second one.
+  it('a member minted with a trial → failed TRIAL_ALREADY_GRANTED, nothing bought or booked', async () => {
+    const mint = { id: 'gpe-1', location_id: 'L1', glofox_member_id: 'gm1', status: 'created' }
+    db = makeDbFor(grantRow(), updates, { glofox_push_events: [mint] })
+
+    const json = await (await approve()).json()
+
+    expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
+    expect(createBooking).not.toHaveBeenCalled()
+    expect(sendAgentThreadMessage).not.toHaveBeenCalled()
+    expect(json.executed).toMatchObject({ ok: false, message_code: 'TRIAL_ALREADY_GRANTED', prior_push_event_id: 'gpe-1' })
+    expect(updates.at(-1).patch.status).toBe('failed')
+  })
+
   // TRIALPURCHASE.2 (a) — a card with no funnel stamp buys the funnel's trial
   // from the queue row that points at it, not the location default.
   it('a card with no trial stamp buys the funnel trial named on its queue row', async () => {
