@@ -315,3 +315,47 @@ describe('failureExplanation: the write-ahead trial grant (TRIALGRANT.1 review)'
     expect(out).not.toMatch(/would not add the trial/i)
   })
 })
+
+// TRIALPURCHASE.2 — three more reasons the approve bought no trial and booked
+// nothing. Plain staff copy, no em-dashes, and never the raw code.
+describe('failureExplanation: one trial per member, and the funnel trial (TRIALPURCHASE.2)', () => {
+  const failed = (result) => failureExplanation({ status: 'failed', details: { result } })
+  const codes = ['TRIAL_ALREADY_GRANTED', 'TRIAL_HISTORY_UNREADABLE', 'TRIAL_PRODUCT_UNKNOWN']
+
+  it('TRIAL_ALREADY_GRANTED says an earlier approval gave this member a trial, nothing was bought or booked, and how to go on', () => {
+    const out = failed({ ok: false, message_code: 'TRIAL_ALREADY_GRANTED', prior_request_id: 'amr-A' })
+    expect(out).toMatch(/earlier approval/i)
+    expect(out).toMatch(/no second trial was bought/i)
+    expect(out).toMatch(/nothing was booked/i)
+    expect(out).toMatch(/add a credit/i)
+  })
+
+  it('TRIAL_ALREADY_GRANTED also covers a trial bought when the account was made (the /start mint)', () => {
+    const out = failed({ ok: false, message_code: 'TRIAL_ALREADY_GRANTED', prior_push_event_id: 'gpe-1' })
+    expect(out).toMatch(/when their account was made/i)
+    expect(out).toMatch(/no second trial was bought/i)
+  })
+
+  it('TRIAL_HISTORY_UNREADABLE and TRIAL_PRODUCT_UNKNOWN say nothing was bought or booked, and to retry', () => {
+    for (const code of ['TRIAL_HISTORY_UNREADABLE', 'TRIAL_PRODUCT_UNKNOWN']) {
+      const out = failed({ ok: false, message_code: code })
+      expect(out).toMatch(/no trial was bought/i)
+      expect(out).toMatch(/nothing was booked/i)
+      expect(out).toMatch(/retry/i)
+    }
+  })
+
+  it('TRIAL_PRODUCT_UNKNOWN says to add a credit or membership in Glofox by hand, then retry (a bare retry fails the same way)', () => {
+    const out = failed({ ok: false, message_code: 'TRIAL_PRODUCT_UNKNOWN' })
+    expect(out).toMatch(/add a credit or membership in Glofox by hand, then retry/i)
+    expect(out).not.toMatch(/retry in a minute/i)
+  })
+
+  it('none of them shows the raw code or an em-dash', () => {
+    for (const code of codes) {
+      const out = failed({ ok: false, message_code: code })
+      expect(out).not.toContain(code)
+      expect(out).not.toContain('—')
+    }
+  })
+})
