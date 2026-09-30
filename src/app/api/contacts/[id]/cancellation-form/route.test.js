@@ -173,7 +173,7 @@ describe('POST whatsapp', () => {
     const res = await post({ channel: 'whatsapp' })
     expect(res.status).toBe(200)
     expect(issueLink).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ channel: 'whatsapp', conversationId: 'conv-1' }))
-    expect(sendCtaUrlMessage).toHaveBeenCalledWith('353871234567', expect.objectContaining({ buttonText: 'Open form', url: 'https://crm.example/cancel/TOKEN' }), { locationId: LOC })
+    expect(sendCtaUrlMessage).toHaveBeenCalledWith('353871234567', expect.objectContaining({ buttonText: 'Open form', url: 'https://crm.example/cancel/TOKEN' }), { config: { source: 'db', id: 'n1' } })
     expect(sendTemplateMessage).not.toHaveBeenCalled()
     const msg = writes.find((w) => w.table === 'whatsapp_messages').payload
     expect(msg).toMatchObject({ conversation_id: 'conv-1', direction: 'outbound', message_type: 'interactive', sent_by: 'u-1', wa_message_id: 'wamid.cta' })
@@ -201,7 +201,7 @@ describe('POST whatsapp', () => {
     const res = await post({ channel: 'whatsapp' })
     expect(res.status).toBe(200)
     expect(buildTemplateComponents).toHaveBeenCalledWith(templateRow, expect.objectContaining({ id: 'c-1' }), { url_button: 'TOKEN' }, null, expect.objectContaining({ locationId: LOC }))
-    expect(sendTemplateMessage).toHaveBeenCalledWith('353871234567', 'cancellation_form_link', 'en', expect.any(Array), { locationId: LOC })
+    expect(sendTemplateMessage).toHaveBeenCalledWith('353871234567', 'cancellation_form_link', 'en', expect.any(Array), { config: { source: 'db', id: 'n1' } })
     const msg = writes.find((w) => w.table === 'whatsapp_messages').payload
     expect(msg).toMatchObject({ message_type: 'template', template_name: 'cancellation_form_link', body: 'Hi Aoife, here is the link.' })
   })

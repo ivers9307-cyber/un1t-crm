@@ -97,6 +97,8 @@ export async function POST(request, props) {
   // its own BEFORE a thread is opened: the send used to go out on the global
   // env number (another studio's), and refusing only at the send would leave
   // an empty thread in this location's inbox. 409 no number / 500 lookup.
+  // The send below uses this checked config ({ config }), so there is one
+  // lookup and no gap in which a different number could be resolved.
   const own = await ownNumberOrRefusal(contact.location_id, 'contact-whatsapp-send')
   if (!own.ok) return NextResponse.json({ success: false, error: own.error }, { status: own.status })
 
@@ -123,7 +125,7 @@ export async function POST(request, props) {
           window_expired: true,
         }, { status: 409 })
       }
-      result = await sendTextMessage(waPhone, text, { locationId: contact.location_id })
+      result = await sendTextMessage(waPhone, text, { config: own.config })
       messageType = 'text'
       messageBody = text
     } else {
@@ -151,15 +153,15 @@ export async function POST(request, props) {
       if (headerComponent) components.unshift(headerComponent)
       result = await sendTemplateMessage(
         waPhone, template.name, template.language || 'en', components,
-        { locationId: contact.location_id },
+        { config: own.config },
       )
       messageType = 'template'
       messageBody = `[Template: ${template.name}]`
       sentTemplateName = template.name
     }
   } catch (e) {
-    // WACONFIGFALLBACK.1 — a number removed between the check above and the
-    // send is still a 409, not a Meta failure.
+    // WACONFIGFALLBACK.1 — whatsappErrorStatus keeps a typed refusal a 409
+    // (the send carries the checked config, so none is expected here).
     return NextResponse.json({ success: false, error: e?.message || 'Failed to send WhatsApp message' }, { status: whatsappErrorStatus(e, 502) })
   }
 

@@ -203,3 +203,21 @@ describe('POST /api/contacts/[id]/whatsapp — no WhatsApp number at the contact
     expect(insertSpy).not.toHaveBeenCalled()
   })
 })
+
+// WACONFIGFALLBACK.1 review — the send uses the number the route already
+// checked ({ config }), so there is one lookup and no gap between the check
+// and the send in which a different number could be resolved.
+describe('POST /api/contacts/[id]/whatsapp — sends on the number it checked', () => {
+  it('one lookup; the send gets { config } of that number, never a second resolve by location', async () => {
+    const { getLocationWhatsAppNumberConfig } = await import('@/lib/whatsapp-config')
+    const { sendTextMessage } = await import('@/lib/whatsapp')
+    const NUMBER = { source: 'db', id: 'n-checked' }
+    getLocationWhatsAppNumberConfig.mockResolvedValueOnce(NUMBER)
+    createServerClient.mockReturnValue(makeDb(echoInsert()))
+
+    const res = await POST(postReq({ text: 'Hi' }), props)
+    expect(res.status).toBe(200)
+    expect(getLocationWhatsAppNumberConfig).toHaveBeenCalledTimes(1)
+    expect(sendTextMessage).toHaveBeenCalledWith(expect.any(String), 'Hi', { config: NUMBER })
+  })
+})

@@ -178,6 +178,8 @@ export async function POST(request, props) {
   let conversation = null
   let waPhone = null
   let template = null
+  // WACONFIGFALLBACK.1 — the number checked below; the WhatsApp send uses it.
+  let numberConfig = null
   if (channel === 'email') {
     if (!contact.email) return NextResponse.json({ success: false, error: 'Contact has no email address on file' }, { status: 400 })
     if (BLOCKED_EMAIL_STATUSES.includes(contact.email_status || '')) {
@@ -189,9 +191,11 @@ export async function POST(request, props) {
     }
     // WACONFIGFALLBACK.1 — the contact's location must have a WhatsApp number
     // of its own before a thread is opened or a link minted: the send used to
-    // go out on the global env number (another studio's). 409 / 500.
+    // go out on the global env number (another studio's). 409 / 500. The
+    // send carries this checked config: one lookup, no check-then-send gap.
     const own = await ownNumberOrRefusal(contact.location_id, 'cancel-form-send')
     if (!own.ok) return NextResponse.json({ success: false, error: own.error }, { status: own.status })
+    numberConfig = own.config
     const opened = await getOrCreateContactConversation(db, contact)
     if (!opened.ok) return NextResponse.json({ success: false, error: opened.error }, { status: opened.status })
     conversation = opened.conversation
@@ -240,14 +244,14 @@ export async function POST(request, props) {
       let body
       let templateName = null
       if (!template) {
-        result = await sendCtaUrlMessage(waPhone, { bodyText: texts.whatsappText, buttonText: texts.whatsappButtonText, url: issued.url }, { locationId: contact.location_id })
+        result = await sendCtaUrlMessage(waPhone, { bodyText: texts.whatsappText, buttonText: texts.whatsappButtonText, url: issued.url }, { config: numberConfig })
         messageType = 'interactive'
         body = `${texts.whatsappText}\n${issued.url}`
       } else {
         // The token rides the dynamic URL button; resolveContactField falls
         // through to the literal because 'TOKEN' is not a contact field.
         const components = buildTemplateComponents(template, contact, { [URL_BUTTON_MAPPING_KEY]: issued.token }, null, { locationId: contact.location_id })
-        result = await sendTemplateMessage(waPhone, template.name, template.language || 'en', components, { locationId: contact.location_id })
+        result = await sendTemplateMessage(waPhone, template.name, template.language || 'en', components, { config: numberConfig })
         messageType = 'template'
         templateName = template.name
         body = renderTemplateBody(template, contact, {}, { locationId: contact.location_id }) || `[Template: ${template.name}]`

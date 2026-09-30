@@ -127,12 +127,12 @@ const CALLERS = {
   'src/app/api/contacts/[id]/whatsapp/route.js': {
     calls: { sendTextMessage: 1, sendTemplateMessage: 1, ownNumberOrRefusal: 1 },
     decision: 'refuse-409',
-    why: 'contact composer: own number checked BEFORE a thread is opened (no empty thread); a number removed mid-send is still 409. route.test.js.',
+    why: 'contact composer: own number checked BEFORE a thread is opened (no empty thread); the send carries that checked { config } (one lookup, no check-then-send gap). route.test.js.',
   },
   'src/app/api/contacts/[id]/cancellation-form/route.js': {
     calls: { sendCtaUrlMessage: 1, sendTemplateMessage: 1, ownNumberOrRefusal: 1 },
     decision: 'refuse-409',
-    why: 'WhatsApp channel only: own number checked before a thread or a link; email unaffected. route.test.js.',
+    why: 'WhatsApp channel only: own number checked before a thread or a link, and the send carries that checked { config }; email unaffected. route.test.js.',
   },
   'src/app/api/churn-radar/action/route.js': {
     calls: { sendTextMessage: 1 },
