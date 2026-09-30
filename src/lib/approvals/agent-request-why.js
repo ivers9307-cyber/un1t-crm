@@ -147,7 +147,7 @@ export function approvalGrantsTrialCredit(details) {
 // C85 (c) — failureExplanation moved to shared/agent-request-failure.js so the
 // phone's post-approve alert can use it (it printed the raw code). One
 // definition, re-exported here for every web caller.
-export { failureExplanation } from '@shared/agent-request-failure'
+export { failureExplanation, FAILURE_CODES } from '@shared/agent-request-failure'
 
 // PERSON-ACCT.3 — states that mean the membership (whatever its status)
 // cannot book right now. glofox_membership_status is NEVER the string
