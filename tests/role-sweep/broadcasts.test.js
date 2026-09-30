@@ -53,23 +53,28 @@ describeGate('POST /api/whatsapp/templates/[id]/resubmit (MANAGER_ROLES at the t
 // (MANAGER_ROLES) at the location created at / the template's location.
 // Create takes its location from the body, so its non-member answer is
 // assertLocationAccess's 403; the two detail handlers keep their 404.
+// roleCases' "(main: …)" notes describe the old active-studio gates; these
+// three were membership-only before WATPLROLE.1 (every member passed), so
+// the notes are dropped here rather than left saying something untrue.
+const templateRoleCases = () => roleCases(MANAGER_ROLES)
+  .map(([label, ...rest]) => [label.replace(/ \(main: [a-z]+\)$/, ''), ...rest])
 describeGate('POST /api/whatsapp/templates (MANAGER_ROLES at the body location)', {
   call: (target) => waTemplates.POST(json('POST', { name: 'promo_x', components: [], location_id: target })),
   forbidden: { status: 403, body: { success: false, error: 'Forbidden' } },
   hidden: { status: 403, body: { success: false, error: 'Forbidden — location not in your assignments' } },
-  cases: roleCases(MANAGER_ROLES),
+  cases: templateRoleCases(),
 }, T)
 
 describeGate('DELETE /api/whatsapp/templates/[id] (MANAGER_ROLES at the template)', {
   call: () => waTemplate.DELETE(bare('DELETE'), params({ id: 'wt-1' })),
   gateReads: row({ name: 'promo_x' }),
   forbidden: { status: 403, body: { success: false, error: 'Forbidden' } },
-  hidden: NOT_FOUND, cases: roleCases(MANAGER_ROLES),
+  hidden: NOT_FOUND, cases: templateRoleCases(),
 }, T)
 
 describeGate('PUT /api/whatsapp/templates/[id] with a Meta-owned field (MANAGER_ROLES at the template)', {
   call: () => waTemplate.PUT(json('PUT', { status: 'APPROVED' }), params({ id: 'wt-1' })),
   gateReads: row({}),
   forbidden: { status: 403, body: { success: false, error: 'Forbidden' } },
-  hidden: NOT_FOUND, cases: roleCases(MANAGER_ROLES),
+  hidden: NOT_FOUND, cases: templateRoleCases(),
 }, T)
