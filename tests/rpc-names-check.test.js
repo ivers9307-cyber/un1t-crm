@@ -230,6 +230,11 @@ describe('source scanning', () => {
     expect(collectRpcCalls(src).map((c) => c.name)).toEqual(['a', 'b', 'c'])
   })
 
+  it('reads an optional call, db.rpc?.(\'x\') (review fix 3)', () => {
+    const src = "await db.rpc?.('increment_step_sent', {}); await db.rpc ?. (name)"
+    expect(collectRpcCalls(src).map((c) => c.name)).toEqual(['increment_step_sent', null])
+  })
+
   it('anything else is null (unreadable), never guessed', () => {
     const src = 'db.rpc(fn, args); db.rpc(`inc_${kind}`); db.rpc(NAME); db.rpc(pick())'
     expect(collectRpcCalls(src).map((c) => c.name)).toEqual([null, null, null, null])

@@ -262,7 +262,8 @@ const LITERAL_ARG_RE = /^\s*(['"`])([^'"`$\\\n]*)\1\s*[,)]/
 export function collectRpcCalls(src) {
   const masked = maskComments(src)
   const out = []
-  for (const m of masked.matchAll(/\.\s*rpc\s*\(/g)) {
+  // `db.rpc(` and the optional call `db.rpc?.(`.
+  for (const m of masked.matchAll(/\.\s*rpc\s*(?:\?\.\s*)?\(/g)) {
     const lit = masked.slice(m.index + m[0].length).match(LITERAL_ARG_RE)
     out.push({ name: lit ? lit[2] : null, offset: m.index })
   }
