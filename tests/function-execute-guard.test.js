@@ -271,9 +271,21 @@ export function stripComments(text) {
   return blankComments(text, sf)
 }
 function blankComments(text, sf) {
+  // JSX text is text: a '/*' or '//' inside it is not a comment. Any node can
+  // share a JsxText's pos (its parent's SyntaxList does), so collect the text
+  // spans first and drop every "comment" that starts inside one.
+  const jsxText = []
+  const findText = (node) => {
+    if (node.kind === ts.SyntaxKind.JsxText) jsxText.push([node.pos, node.end])
+    for (const child of node.getChildren(sf)) findText(child)
+  }
+  findText(sf)
+  const inJsxText = (pos) => jsxText.some(([a, b]) => pos >= a && pos < b)
   const ranges = new Map()
   const visit = (node) => {
-    for (const r of [...(ts.getLeadingCommentRanges(text, node.pos) || []), ...(ts.getTrailingCommentRanges(text, node.pos) || [])]) ranges.set(r.pos, r.end)
+    for (const r of [...(ts.getLeadingCommentRanges(text, node.pos) || []), ...(ts.getTrailingCommentRanges(text, node.pos) || [])]) {
+      if (!inJsxText(r.pos)) ranges.set(r.pos, r.end)
+    }
     for (const child of node.getChildren(sf)) visit(child)
   }
   visit(sf)
@@ -438,6 +450,13 @@ describe('the scanners never let a comment marker inside a string hide code', ()
   it('JS: a /* inside a regex literal or a string does not hide a client .rpc()', () => {
     expect(clientRpcNames("'use client'\nconst re = /\\/*/\nsupabase.rpc('evil')\nconst s = '*/'\n")).toEqual(['evil'])
     expect(clientRpcNames("'use client'\nconst s = '/*'\nsupabase.rpc('evil')\nconst t = '*/'\n")).toEqual(['evil'])
+  })
+
+  it('JS: JSX text that starts with /* or // is text, not a comment', () => {
+    expect(clientRpcNames("'use client'\nexport default function P() {\n  return <div><p>/* note</p>{supabase.rpc('evil')}<p>end */</p></div>\n}\n")).toEqual(['evil'])
+    expect(clientRpcNames("'use client'\nexport default function P() {\n  return <div><p>// x</p>{supabase.rpc('y')}</div>\n}\n")).toEqual(['y'])
+    // a real JSX comment is still a comment
+    expect(clientRpcNames("'use client'\nexport default function P() {\n  return <div>\n    {/* supabase.rpc('old') */}\n    <p>{supabase.rpc('now')}</p>\n  </div>\n}\n")).toEqual(['now'])
   })
 
   it('JS: comments are not calls; server files are not client files', () => {
