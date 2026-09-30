@@ -26,6 +26,8 @@ const at = (hAgo) => new Date(NOW - hAgo * H).toISOString()
 const inbound = (hAgo) => ({ direction: 'inbound', source: 'api', sent_by: null, created_at: at(hAgo) })
 const auto = (hAgo, template_name = 'booking_class_confirmed_') => ({ direction: 'outbound', source: 'api', sent_by: null, message_type: 'template', template_name, created_at: at(hAgo) })
 const staff = (hAgo) => ({ direction: 'outbound', source: 'api', sent_by: 'profile-1', message_type: 'text', created_at: at(hAgo) })
+// The react route stores no sent_by (a reaction is not a reply; see its test).
+const reaction = (hAgo) => ({ direction: 'outbound', source: 'api', sent_by: null, message_type: 'reaction', body: 'Reacted: 👍', created_at: at(hAgo) })
 const phoneApp = (hAgo) => ({ direction: 'outbound', source: 'app_echo', sent_by: null, message_type: 'text', created_at: at(hAgo) })
 
 function stubDb(messages) {
@@ -81,6 +83,14 @@ describe('runFirstClassCheckins — who parks a check-in (CHECKINSTALL.2)', () =
   it('a staff message with no inbound at all still parks it', async () => {
     const res = await runFirstClassCheckins(stubDb([auto(40), staff(20)]), { nowMs: NOW })
     expect(res.reasons).toEqual({ human_active: 1 })
+  })
+
+  // Intended consequence of the C104 review: a staff reaction is not a reply
+  // (the react route stores no sent_by), so it does not park the check-in.
+  it('a staff REACTION after the inbound does NOT park it (no sent_by, so not staff)', async () => {
+    const res = await runFirstClassCheckins(stubDb([inbound(30), reaction(29)]), { nowMs: NOW })
+    expect(res.reasons.human_active).toBeUndefined()
+    expect(res.reasons.no_template_configured).toBe(1)
   })
 
   it('a reply from the studio phone app (app_echo) still parks it', async () => {

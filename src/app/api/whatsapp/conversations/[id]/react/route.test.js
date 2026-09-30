@@ -1,10 +1,14 @@
 // Tests for POST /api/whatsapp/conversations/[id]/react.
 //
-// CHECKINSTALL.2 (C106 b) — a staff reaction is a PERSON acting on the thread.
-// The thread row carries sent_by = the acting staff member's profile id, taken
-// from the SESSION (same as the send route), so Mia's live reply path and the
-// first-class check-in runner (both read sent_by) never mistake it for an
-// automation.
+// CHECKINSTALL.2 (C104 review) — a staff reaction is NOT a reply, so its
+// thread row deliberately carries NO sent_by (unlike send, send-flow and
+// send-carousel). Several paths read sent_by as "a person replied": the
+// handoff SLA's humanFilter (a 👍 would cancel the 60-min manager
+// escalation), runHandoffAutoResolve (8h instead of 48h), and Mia's mid-reply
+// takeover and cooldown re-arm. Attributing reactions would change all of
+// those, which Richard has not approved. The consequence, pinned in
+// followups-checkin-human.test.js: a staff reaction does not park a
+// first-class check-in.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/auth', () => ({
@@ -54,7 +58,7 @@ const post = (body) => POST(
 beforeEach(() => { vi.clearAllMocks(); getCurrentUser.mockResolvedValue(USER) })
 
 describe('POST /api/whatsapp/conversations/[id]/react', () => {
-  it('records the reaction thread row with sent_by = the acting staff member', async () => {
+  it('records the reaction thread row with NO sent_by (a reaction is not a reply)', async () => {
     const db = stubDb()
     createServerClient.mockReturnValue(db)
     const res = await post({ message_id: 'wamid.IN1', emoji: '👍' })
@@ -62,13 +66,15 @@ describe('POST /api/whatsapp/conversations/[id]/react', () => {
     expect(sendReaction).toHaveBeenCalledTimes(1)
     const rows = db.inserts.filter((i) => i.table === 'whatsapp_messages')
     expect(rows).toHaveLength(1)
-    expect(rows[0].row).toMatchObject({ direction: 'outbound', message_type: 'reaction', body: 'Reacted: 👍', sent_by: USER_ID })
+    expect(rows[0].row).toMatchObject({ direction: 'outbound', message_type: 'reaction', body: 'Reacted: 👍' })
+    expect(rows[0].row.sent_by ?? null).toBeNull()
   })
 
-  it('a removed reaction is attributed too', async () => {
+  it('a removed reaction carries no sent_by either', async () => {
     const db = stubDb()
     createServerClient.mockReturnValue(db)
     await post({ message_id: 'wamid.IN1', emoji: '' })
-    expect(db.inserts[0].row).toMatchObject({ body: 'Removed reaction', sent_by: USER_ID })
+    expect(db.inserts[0].row).toMatchObject({ body: 'Removed reaction' })
+    expect(db.inserts[0].row.sent_by ?? null).toBeNull()
   })
 })
