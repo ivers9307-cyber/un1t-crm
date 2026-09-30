@@ -55,15 +55,12 @@ import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { notFound } from 'next/navigation'
 
-function mockDb({ template = null } = {}) {
+function mockDb({ template = null, error = null } = {}) {
   return {
     from: vi.fn(() => ({
       select: vi.fn(() => ({
         eq: vi.fn(() => ({
-          single: vi.fn(async () => ({
-            data: template,
-            error: template ? null : { message: 'not found' },
-          })),
+          maybeSingle: vi.fn(async () => ({ data: error ? null : template, error })),
         })),
       })),
     })),
@@ -117,13 +114,22 @@ describe('/communications/templates/email/[id] page', () => {
     expect(notFound).not.toHaveBeenCalled()
   })
 
-  it('allows a template with no location_id (parity with GET /api/templates/[id])', async () => {
+  // C123 GATES-4 (c) — a template with no location_id opened here but its
+  // save (PUT /api/templates/[id]) 404s, so the page now 404s too (0 such
+  // rows in prod; no data change). Main: rendered the editor.
+  it('404s a template with no location_id (parity with PUT /api/templates/[id])', async () => {
     getCurrentUser.mockResolvedValue(user)
     createServerClient.mockReturnValue(
       mockDb({ template: { id: 'tpl-1', location_id: null } })
     )
-    const el = await EditTemplatePage(props())
-    expect(el).toBeTruthy()
+    await expect(EditTemplatePage(props())).rejects.toThrow('NEXT_NOT_FOUND')
+    expect(notFound).toHaveBeenCalled()
+  })
+
+  it('a failed read is an error, not "not found"', async () => {
+    getCurrentUser.mockResolvedValue(user)
+    createServerClient.mockReturnValue(mockDb({ error: { code: '57014', message: 'timeout' } }))
+    await expect(EditTemplatePage(props())).rejects.toThrow(/could not be read/)
     expect(notFound).not.toHaveBeenCalled()
   })
 })
