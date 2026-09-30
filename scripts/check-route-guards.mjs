@@ -220,9 +220,11 @@ const INBOX_PERMISSION_GUARDS = [
   //                            hasPermissionForLocation OR
   //                            hasMobilePermissionForLocation grants
   //                            `whatsapp` AT the location passed. The
-  //                            /api/whatsapp/conversations/[id]* and /start
-  //                            handlers call it with the conversation's (or
-  //                            contact's) location after the row is read, and
+  //                            /api/whatsapp/conversations/[id]* handlers the
+  //                            phone calls (all but /add-contact and /agent,
+  //                            which use the web-only pair below, as does
+  //                            /start) call it with the conversation's
+  //                            location after the row is read, and
   //                            requireWhatsAppInboxAnywhere before it.
   'requireWhatsAppInboxAt(',
   // INBOXWEBONLY3.1 (C119) —

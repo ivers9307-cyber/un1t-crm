@@ -904,6 +904,8 @@ export function requireInboxPermission(user, channel) {
 // contact routes use (contactChannelFlags, /api/contacts/[id]/whatsapp): the
 // phone calls these routes, and its own reads of the same rows (RLS
 // wa_conv_select) already judge the mobile toggle at the row's studio.
+// (Since INBOXWEBONLY3.1 the three the phone never calls, /add-contact,
+// /agent and /start, use the web-only pair below instead.)
 
 const FORBIDDEN_INBOX = () =>
   NextResponse.json({ success: false, error: 'Forbidden — inbox permission required' }, { status: 403 })
