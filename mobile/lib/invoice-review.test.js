@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { invoiceStatusBadge, reviewComparisonView } from './invoice-review.js'
+import { invoiceStatusBadge, reviewComparisonView, rosterUnreadableNotice } from './invoice-review.js'
 import { selectReviewComparison, contractorInvoiceLifecycle } from 'shared/contractor-invoice-review'
 
 describe('invoiceStatusBadge', () => {
@@ -73,5 +73,36 @@ describe('reviewComparisonView', () => {
     const inv = { status: 'awaiting_accountant_review', invoice_amount: 800 }
     const v = reviewComparisonView({ ...inv, review_comparison: selectReviewComparison(inv, LIVE) })
     expect(v.note).toMatch(/before snapshots/)
+  })
+})
+
+// D4 UINITS.1 (found planning A3) — GET /api/invoices/[id] says
+// roster_unavailable when the live roster read failed; with no approval
+// snapshot to fall back on there is no comparison, and the phone used to show
+// nothing at all. Same rule and words as the web's RosterCheckNotes.
+describe('rosterUnreadableNotice', () => {
+  it('a submitted invoice with an unreadable roster and no comparison: say so, and to refresh before approving', () => {
+    expect(rosterUnreadableNotice({ status: 'submitted', roster_unavailable: true, review_comparison: null }))
+      .toBe('Could not read the roster for this period, so there is no schedule comparison. Refresh before approving.')
+  })
+
+  it('any other status: the short form (only a submitted invoice can be approved)', () => {
+    for (const status of ['awaiting_accountant_review', 'declined', 'revoked']) {
+      expect(rosterUnreadableNotice({ status, roster_unavailable: true, review_comparison: null }))
+        .toBe("Couldn't read the roster for this period.")
+    }
+  })
+
+  it('nothing to say when there IS a comparison (an approval snapshot), the read worked, or there is no invoice', () => {
+    expect(rosterUnreadableNotice({ status: 'submitted', roster_unavailable: true, review_comparison: { primary: { source: 'snapshot' } } })).toBeNull()
+    expect(rosterUnreadableNotice({ status: 'submitted', roster_unavailable: false, review_comparison: null })).toBeNull()
+    expect(rosterUnreadableNotice({ status: 'submitted', review_comparison: null })).toBeNull()
+    expect(rosterUnreadableNotice(null)).toBeNull()
+  })
+
+  it('never an em-dash', () => {
+    for (const status of ['submitted', 'declined']) {
+      expect(rosterUnreadableNotice({ status, roster_unavailable: true })).not.toMatch(/\u2014/)
+    }
   })
 })

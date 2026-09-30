@@ -112,6 +112,10 @@ export function classify(handlerSrc) {
   if (/guardMasterOrOwner\(\s*user\b/.test(handlerSrc)) return 'owner'
   if (/hasRoleAtLocation\(\s*user\b[^)]*MANAGER_ROLES/.test(handlerSrc)) return 'manager'
   if (/hasPermissionForLocation\(\s*user\b[^)]*'whatsapp'/.test(handlerSrc)) return 'whatsapp-permission'
+  // INBOXLOC.1 — the thread routes' decision: whatsapp (web or mobile) AT the
+  // conversation's (or contact's) studio. Above 'inbox', which judges the
+  // ACTIVE studio; below the role gates.
+  if (/requireWhatsAppInboxAt\(\s*user\b/.test(handlerSrc)) return 'inbox-at-location'
   if (/requireInboxPermission\(\s*user\s*,\s*'wa'\s*\)/.test(handlerSrc)) return 'inbox'
   if (/assertLocationAccess(Or404)?\(\s*user\b/.test(handlerSrc)) return 'membership'
   if (!/getCurrentUser\(/.test(handlerSrc)) return 'no-session'
@@ -212,16 +216,18 @@ export const EXPECTED = {
   'POST whatsapp/broadcasts/[id]/pause/route.js': ['membership', 'Pauses/resumes a drip (stopping sends is never the risk).'],
   'POST whatsapp/broadcasts/[id]/send/route.js': ['whatsapp-permission', 'Sends to the audience.'],
 
-  // ── The inbox: the whatsapp channel permission (INBOX-PERM.1) ──
-  'POST whatsapp/conversations/start/route.js': ['inbox', 'Starts a thread.'],
-  'PATCH whatsapp/conversations/[id]/route.js': ['inbox', 'Read/resolve a thread.'],
-  'POST whatsapp/conversations/[id]/add-contact/route.js': ['inbox', 'Links a thread to a contact.'],
-  'PATCH whatsapp/conversations/[id]/agent/route.js': ['inbox', 'Mia pause / take-over.'],
-  'POST whatsapp/conversations/[id]/block/route.js': ['inbox', 'Blocks a sender.'],
-  'POST whatsapp/conversations/[id]/react/route.js': ['inbox', 'Reacts to a message.'],
-  'POST whatsapp/conversations/[id]/send/route.js': ['inbox', 'Sends a text or an approved template in the thread (WATPLSEND.1: template rows judged, Flow token minted); membership at the thread\'s location after the inbox permission.'],
-  'POST whatsapp/conversations/[id]/send-carousel/route.js': ['inbox', 'Sends a card set.'],
-  'POST whatsapp/conversations/[id]/send-flow/route.js': ['inbox', 'Sends a Flow.'],
+  // ── The inbox: the whatsapp channel permission (INBOX-PERM.1), judged AT the
+  // thread's studio since INBOXLOC.1 (web or mobile whatsapp there, after
+  // membership; a coarse any-studio check runs before the row is read) ──
+  'POST whatsapp/conversations/start/route.js': ['inbox-at-location', 'Starts a thread at the contact\'s studio.'],
+  'PATCH whatsapp/conversations/[id]/route.js': ['inbox-at-location', 'Read/resolve a thread.'],
+  'POST whatsapp/conversations/[id]/add-contact/route.js': ['inbox-at-location', 'Links a thread to a contact.'],
+  'PATCH whatsapp/conversations/[id]/agent/route.js': ['inbox-at-location', 'Mia pause / take-over.'],
+  'POST whatsapp/conversations/[id]/block/route.js': ['inbox-at-location', 'Blocks a sender.'],
+  'POST whatsapp/conversations/[id]/react/route.js': ['inbox-at-location', 'Reacts to a message.'],
+  'POST whatsapp/conversations/[id]/send/route.js': ['inbox-at-location', 'Sends a text or an approved template in the thread (WATPLSEND.1: template rows judged, Flow token minted); membership at the thread\'s location, then the whatsapp permission there.'],
+  'POST whatsapp/conversations/[id]/send-carousel/route.js': ['inbox-at-location', 'Sends a card set.'],
+  'POST whatsapp/conversations/[id]/send-flow/route.js': ['inbox-at-location', 'Sends a Flow.'],
 
   // ── Outside the two trees ──
   'POST contacts/[id]/whatsapp/route.js': ['whatsapp-permission', 'Sends a WhatsApp to one contact: the whatsapp permission (web or mobile) at the contact\'s location, after membership.'],
@@ -236,6 +242,8 @@ describe('WhatsApp mutation handlers — each one\'s gate (WAROLE.1)', () => {
     expect(classify('if (!hasRoleAtLocation(user, t.location_id, MANAGER_ROLES)) {}')).toBe('manager')
     expect(classify("if (!hasPermissionForLocation(user, row.location_id, 'whatsapp')) {}")).toBe('whatsapp-permission')
     expect(classify("const p = requireInboxPermission(user, 'wa')")).toBe('inbox')
+    expect(classify("const p = requireWhatsAppInboxAt(user, conversation.location_id)\nconst q = requireInboxPermission(user, 'wa')")).toBe('inbox-at-location')
+    expect(classify('getCurrentUser()\nconst p = requireWhatsAppInboxAnywhere(user)')).toBe('session-only')
     expect(classify('const g = assertLocationAccessOr404(user, loc)\ngetCurrentUser()')).toBe('membership')
     expect(classify('getCurrentUser()')).toBe('session-only')
     expect(classify('const x = 1')).toBe('no-session')

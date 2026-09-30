@@ -14,7 +14,8 @@ vi.mock('@/lib/auth', () => ({
     if (ids.includes(locationId)) return null
     return new Response(JSON.stringify({ success: false, error: 'Not found' }), { status: 404 })
   },
-  requireInboxPermission: () => null,
+  requireWhatsAppInboxAnywhere: () => null,
+  requireWhatsAppInboxAt: () => null,
 }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/whatsapp', () => ({ sendFlowMessage: vi.fn(async () => ({ messageId: 'wamid.FLOW1' })) }))

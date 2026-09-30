@@ -169,6 +169,18 @@ const PAIRS = {
       'named re-export shim and keeps the one IO helper (fetchStaffingGapsThisWeek) web-only.',
   },
 
+  'agent-request-failure.js': {
+    mode: 'reexport',
+    shared: 'shared/agent-request-failure.js',
+    web: 'src/lib/approvals/agent-request-why.js',
+    webOnly: ['whyFlagged', 'approvalGrantsTrialCredit', 'accountSummaryLine', 'accountMismatchWarning', 'customerWords'],
+    why:
+      'C85 (c) moved failureExplanation (a failed approval\'s code in the operator\'s words) to shared/ so the phone\'s ' +
+      'post-approve alert and thread approval card stop printing the raw code; agent-request-why.js re-exports it for ' +
+      'every web caller and keeps its web-only helpers (they import server modules). Cross-named, so this entry is ' +
+      'what makes the identity assertion run.',
+  },
+
   // ── identical: hand-maintained twins that really are twins ─────────────────
   'challenges.js': {
     mode: 'identical',
