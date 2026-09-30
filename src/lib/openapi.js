@@ -3254,7 +3254,7 @@ registry.registerPath({
   tags: ['WhatsApp'],
   security: [{ CookieAuth: [] }],
   summary: "Edit a WhatsApp template's local fields",
-  description: "No Meta call. display_group (the picker grouping) saves in every state for any member. Any other field needs MANAGER_ROLES at the template's location (WATPLROLE.1) and is accepted only while the template is a draft (never submitted to Meta); once submitted, content changes go through POST /api/whatsapp/templates/{id}/resubmit (REJECTED or PAUSED) or a new template (WATPLPUT.1). The one exception: an APPROVED template's header image (header_media_handle/_url/_path) can be replaced, since every send attaches header_media_url as a link and Meta does not review it again; it cannot be removed. status, rejection_reason, quality_rating and meta_template_id are Meta's and are refused in every state. Checks run 404 → 400 → 403 → 409.",
+  description: "No Meta call. display_group (the picker grouping) saves in every state for any member. Any other field needs MANAGER_ROLES at the template's location (WATPLROLE.1) and is accepted only while the template is a draft (never submitted to Meta); once submitted, content changes go through POST /api/whatsapp/templates/{id}/resubmit (REJECTED or PAUSED) or a new template (WATPLPUT.1). status, rejection_reason, quality_rating and meta_template_id are Meta's and are refused in every state. Checks run 404 → 400 → 403 → 409.",
   request: {
     params: z.object({ id: uuidLike }),
     body: { content: { 'application/json': { schema: z.object({
@@ -3272,7 +3272,7 @@ registry.registerPath({
     401: waErr('Unauthorized'),
     403: waErr('A field other than display_group, and the caller is not MANAGER_ROLES at the template\'s location; nothing written'),
     404: waErr('Not found, or not at one of your locations'),
-    409: waErr("The template is with Meta, so its name, category, components, example values and header media are locked (an APPROVED template's header image may be replaced, not removed): use Edit & resubmit (REJECTED/PAUSED) or a new template; issues lists the locked fields; nothing written"),
+    409: waErr('The template is with Meta, so its name, category, components, example values and header media are locked: use Edit & resubmit (REJECTED/PAUSED) or a new template; issues lists the locked fields; nothing written'),
     500: waErr('The update failed'),
   },
 })

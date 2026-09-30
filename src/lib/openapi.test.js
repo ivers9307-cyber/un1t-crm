@@ -268,8 +268,8 @@ describe('getOpenApiSpec', () => {
 
   // WATPLPUT.1 — the six /api/whatsapp/templates* route files (8 operations)
   // were never registered. The PUT documents that Meta's fields are refused
-  // (400) and a submitted template's content is locked (409), except an
-  // APPROVED template's header image, which can be replaced.
+  // (400) and a submitted template's content, header media included, is
+  // locked (409).
   it('documents the six WhatsApp template routes (WATPLPUT.1)', () => {
     const expected = {
       '/api/whatsapp/templates': ['get', 'post'],
@@ -298,7 +298,9 @@ describe('getOpenApiSpec', () => {
     expect(put.responses).toHaveProperty('409')
     expect(put.responses['400'].description).toMatch(/status/)
     expect(put.responses['409'].description).toMatch(/resubmit/i)
-    expect(put.description).toMatch(/APPROVED template's header image/)
+    expect(put.description).not.toMatch(/replaced/)
+    expect(put.responses['409'].description).toMatch(/header media/)
+    expect(put.responses['409'].description).not.toMatch(/replaced/)
     const putBody = spec.components.schemas.WaTemplateUpdate
     expect(Object.keys(putBody.properties)).not.toContain('status')
     for (const m of ['post', 'delete']) {
