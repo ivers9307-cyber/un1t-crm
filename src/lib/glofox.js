@@ -1546,17 +1546,33 @@ export async function fetchUpcomingEvents(creds, { start, end, limit = 100 } = {
  * Cancel a booking via POST /booking/{bookingId}/user/{userId}/cancel.
  * Studios can configure "no cancellation allowed within X hours of class"
  * — Glofox returns the rule violation message in the response body.
+ *
+ * GLOFOXPOSTRETRY.1 — after a 5xx it re-sends only while a read of the
+ * member's bookings shows the booking still live; one that reads cancelled
+ * comes back as { ok: true, status: 200, body: { success: true }, recovered: 'landed_after_5xx' }.
  */
 export async function cancelBooking(creds, bookingId, userId) {
   if (!creds || !bookingId || !userId) {
     return { ok: false, status: 400, body: { error: 'missing args' } }
   }
+  // GLOFOXPOSTRETRY.1 — a 5xx can come after Glofox cancelled. Before a
+  // re-send, read the member's bookings: this booking cancelled → ok, no
+  // re-send; still live → re-send; not found or unreadable → the 5xx stands.
+  let cancelled = false
+  const retry = {
+    verify: async () => {
+      const state = await findBookingCancelState(creds, userId, bookingId)
+      if (state === 'landed') cancelled = true
+      return state
+    },
+  }
   try {
     const r = await glofoxFetch(
       creds,
       `/booking/${encodeURIComponent(bookingId)}/user/${encodeURIComponent(userId)}/cancel`,
-      { method: 'POST' },
+      { method: 'POST', retry },
     )
+    if (cancelled) return { ok: true, status: 200, body: { success: true }, recovered: 'landed_after_5xx' }
     let body
     try { body = await r.json() } catch { body = null }
     return { ok: r.ok, status: r.status, body }
@@ -1814,6 +1830,20 @@ export async function findLandedBooking(creds, userId, eventId) {
   const hit = read.bookings.find((b) =>
     String(b?.model_id ?? b?.event_id ?? '') === String(eventId) && !isCancelledBookingStatus(b?.status))
   return hit ? { state: 'landed', booking: hit } : { state: 'absent', booking: null }
+}
+
+/**
+ * GLOFOXPOSTRETRY.1 — did a booking-cancel POST that answered 5xx land anyway?
+ * @returns {Promise<'landed'|'absent'|'unknown'>} landed = the booking reads
+ *   cancelled; absent = it is still live (re-send); unknown = the read failed
+ *   or the booking is not in it (never re-send on it).
+ */
+export async function findBookingCancelState(creds, userId, bookingId) {
+  const read = await fetchUserBookingsResult(creds, userId, { windowDays: 7 })
+  if (!read.ok) return 'unknown'
+  const hit = read.bookings.find((b) => String(b?._id ?? b?.id ?? '') === String(bookingId))
+  if (!hit) return 'unknown'
+  return isCancelledBookingStatus(hit.status) ? 'landed' : 'absent'
 }
 
 /**

@@ -15,6 +15,7 @@ import {
   glofoxFetch, glofoxRetryPolicy, glofoxHttpStats, glofoxHttpStatsSince,
   fetchPaymentsReport, searchGlofoxMember, getGlofoxInvoicePaymentLink, fetchBranchLeads,
   purchaseGlofoxMembership, createBooking, interpretBookingResult, findLandedBooking,
+  cancelBooking, findBookingCancelState,
 } from './glofox.js'
 
 const creds = { branchId: 'br-1', apiKey: 'k', apiToken: 't' }
@@ -315,5 +316,50 @@ describe('findLandedBooking', () => {
     expect(out.state).toBe('landed')
     const [url] = fetch.mock.calls[0]
     expect(new URL(url).searchParams.get('user_id')).toBe(USER)
+  })
+})
+
+describe('cancelBooking — re-sent only while the booking is still live', () => {
+  const CANCEL = `POST /booking/${BOOKING}/user/${USER}/cancel`
+
+  it('a 503 whose cancel DID land: no re-send, reported ok', async () => {
+    route([
+      [CANCEL, [res(503)]],
+      ['GET /2.0/bookings', [res(200, { data: [{ _id: BOOKING, model_id: EVENT, status: 'CANCELLED' }] })]],
+    ])
+    const out = await cancelBooking(creds, BOOKING, USER)
+    expect(sent()).toEqual([CANCEL, 'GET /2.0/bookings'])
+    expect(out).toMatchObject({ ok: true, status: 200, recovered: 'landed_after_5xx' })
+  })
+
+  it('a 503 and the booking is still BOOKED: exactly one re-send', async () => {
+    route([
+      [CANCEL, [res(503), res(200, { success: true })]],
+      ['GET /2.0/bookings', [res(200, { data: [{ _id: BOOKING, model_id: EVENT, status: 'BOOKED' }] })]],
+    ])
+    const out = await cancelBooking(creds, BOOKING, USER)
+    expect(sent()).toEqual([CANCEL, 'GET /2.0/bookings', CANCEL])
+    expect(out.ok).toBe(true)
+  })
+
+  it('the booking is not in the read, or the read fails: no re-send, the 5xx comes back', async () => {
+    for (const gets of [[res(200, { data: [] })], [res(500), res(500), res(500), res(500)]]) {
+      fetch.mockReset()
+      route([[CANCEL, [res(503)]], ['GET /2.0/bookings', gets]])
+      const out = await cancelBooking(creds, BOOKING, USER)
+      expect(sent().filter((s) => s === CANCEL)).toHaveLength(1)
+      expect(out).toMatchObject({ ok: false, status: 503 })
+    }
+  })
+})
+
+describe('findBookingCancelState', () => {
+  it('matches the booking on _id or id, and reads either cancelled spelling', async () => {
+    route([['GET /2.0/bookings', [
+      res(200, { data: [{ id: BOOKING, status: 'CANCELED' }] }),
+      res(200, { data: [{ _id: BOOKING, status: 'BOOKED' }] }),
+    ]]])
+    expect(await findBookingCancelState(creds, USER, BOOKING)).toBe('landed')
+    expect(await findBookingCancelState(creds, USER, BOOKING)).toBe('absent')
   })
 })
