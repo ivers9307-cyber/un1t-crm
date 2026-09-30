@@ -93,10 +93,11 @@
 --   above, /api/campaigns and /api/campaigns/[id] (n8n, Bearer), and the
 --   /api/campaigns/[id] send, send-test, duplicate, preview, resend, links
 --   and outcomes routes, /api/communications/email-draft (the composer),
---   /api/cron/run-campaigns and src/lib/campaign-sender.js, the Postmark
---   webhook processor, /view-email/[token], campaign-display-stats, the
---   Communications server pages (the sent list and the detail page),
---   contact-merge, and un1t-sentinel (service key).
+--   /api/cron/run-campaigns and src/lib/campaign-sender.js,
+--   campaign-resend, postmark-webhook-processor, bounce-escalation-sweep,
+--   tenant-health, contact-merge (re-points campaign_recipients.contact_id),
+--   /view-email/[token], and the Communications server pages (the sent list
+--   and the detail page). No other repo names either table.
 --
 -- CONSUMERS CHECKED (un1t-crm incl. mobile/, shared/, desktop/ and
 -- supabase/functions; champ-app; un1t-sentinel; champ-bridge; un1t-platform;
