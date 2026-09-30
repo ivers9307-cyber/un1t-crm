@@ -74,7 +74,13 @@ export async function GET() {
       ? { at: lastRow.created_at, note: lastRow.note || null, contact_name: lastRow.contacts?.name || null }
       : null,
     last_run: hbRes.data
-      ? { at: hbRes.data.last_ok_at, checkins: hbRes.data.last_outcome?.checkins || null }
+      ? {
+          at: hbRes.data.last_ok_at,
+          checkins: hbRes.data.last_outcome?.checkins || null,
+          // CHECKINSTALL.1 — the per-Dublin-day rollup (and the day before),
+          // so the card still explains a quiet day after 20:00.
+          day: hbRes.data.last_outcome?.checkins_day || null,
+        }
       : null,
   }
 
