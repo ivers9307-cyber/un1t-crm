@@ -56,7 +56,7 @@ function checkinDb({ conversation, contacts = [CONTACT], onInsert = () => {} }) 
         select: (_cols, opts) => { if (opts) state.selectOpts = opts; return b },
         update: () => b,
         insert: (row) => { onInsert(table, row); return Promise.resolve({ error: null }) },
-        eq: () => b, in: () => b, gte: () => b, is: () => b, not: () => b,
+        eq: () => b, in: () => b, gte: () => b, lte: () => b, is: () => b, not: () => b,
         or: () => b, order: () => b, limit: () => b,
         maybeSingle: () => b, single: () => b,
         then: (resolve, reject) => Promise.resolve(finish()).then(resolve, reject),

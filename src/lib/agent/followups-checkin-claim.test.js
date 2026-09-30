@@ -49,7 +49,7 @@ function stubDb(answer = () => undefined) {
   return {
     log,
     from(table) {
-      const q = { table, op: 'select', patch: null, filters: [], opts: null }
+      const q = { table, op: 'select', patch: null, filters: [], opts: null, order: null, limit: null }
       const def = () => {
         if (table === 'locations') return { data: [LOCATION], error: null }
         if (table === 'contacts' && q.op === 'select') {
@@ -74,7 +74,9 @@ function stubDb(answer = () => undefined) {
         update: (patch) => { q.op = 'update'; q.patch = patch; return b },
         insert: (row) => { q.op = 'insert'; q.patch = row; return Promise.resolve(finish()) },
         eq: f('eq'), in: f('in'), gte: f('gte'), lt: f('lt'), lte: f('lte'), is: f('is'), not: f('not'), or: f('or'),
-        order: () => b, limit: () => b, maybeSingle: () => b, single: () => b,
+        order: (col, o) => { q.order = [col, o]; return b },
+        limit: (n) => { q.limit = n; return b },
+        maybeSingle: () => b, single: () => b,
         then: (ok, bad) => Promise.resolve(finish()).then(ok, bad),
       }
       return b
@@ -225,5 +227,42 @@ describe('runFirstClassCheckins — an unreadable daily cap sends nothing', () =
     const res = await runFirstClassCheckins(db, { nowMs: NOW })
     expect(sendTemplateMessage).not.toHaveBeenCalled()
     expect(res.reasons).toEqual({ daily_cap: 1 })
+  })
+})
+
+// MIANITS fix — the stale-claim scan read .limit(50) of ALL claims in the
+// window, unordered and unfiltered by age, then filtered stale ones in JS. On
+// a busy day 50 fresh claims could fill the window and a stale one never be
+// re-opened. The scan now filters stale in SQL and reads oldest first.
+describe('runFirstClassCheckins — the stale-claim scan cannot be crowded out by fresh claims', () => {
+  // A table-faithful answer for the scan: applies the gte/lte filters on
+  // first_class_checkin_at, the order, and the limit the code asked for. The
+  // stale row sits LAST, as an unordered read may well return it.
+  const fresh = Array.from({ length: 60 }, (_, i) => ({ id: `f${i}`, first_class_checkin_at: new Date(NOW - (i + 1) * 1000).toISOString() }))
+  const staleIso = new Date(NOW - CHECKIN_CLAIM_LEASE_MS - 30 * 60_000).toISOString()
+  const rows = [...fresh, { id: 'c9', first_class_checkin_at: staleIso }]
+  const scan = (q) => {
+    if (!(q.table === 'contacts' && q.op === 'select' && !q.opts?.head &&
+        q.filters.some((f) => f[0] === 'gte' && f[1] === 'first_class_checkin_at'))) return undefined
+    let out = rows.filter((r) => q.filters.every((f) => {
+      if (f[1] !== 'first_class_checkin_at') return true
+      if (f[0] === 'gte') return r.first_class_checkin_at >= f[2]
+      if (f[0] === 'lte') return r.first_class_checkin_at <= f[2]
+      return true
+    }))
+    if (q.order?.[0] === 'first_class_checkin_at') {
+      const asc = q.order[1]?.ascending !== false
+      out = [...out].sort((a, b) => (asc ? 1 : -1) * a.first_class_checkin_at.localeCompare(b.first_class_checkin_at))
+    }
+    if (q.limit != null) out = out.slice(0, q.limit)
+    return { data: out, error: null }
+  }
+
+  it('re-opens the stale claim even with more than 50 fresh claims in the window', async () => {
+    const db = stubDb(scan)
+    const res = await runFirstClassCheckins(db, { nowMs: NOW })
+    const reopened = contactUpdates(db).filter((q) => q.patch.first_class_checkin_at === null && hasFilter(q, 'eq', 'id', 'c9'))
+    expect(reopened).toHaveLength(1)
+    expect(res.reasons.claim_reopened).toBe(1)
   })
 })

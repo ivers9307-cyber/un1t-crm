@@ -705,12 +705,16 @@ async function stampCheckinSkip(db, contact, locationId, className, via) {
 async function reopenStaleCheckinClaims(db, locationId, nowMs, bump) {
   const sinceIso = new Date(nowMs - CHECKIN_MAX_AGE_H * H_MS).toISOString()
   const staleBeforeMs = nowMs - CHECKIN_CLAIM_LEASE_MS
+  // Stale is filtered in SQL, oldest first: filtering a .limit(50) of every
+  // claim in the window let 50 fresh claims crowd a stale one out for good.
   const { data: claimed, error } = await db.from('contacts')
     .select('id, first_class_checkin_at')
     .eq('location_id', locationId)
     .in('pipeline_stage_slug', [...CHECKIN_STAGES])
     .gte('last_attended_at', sinceIso)
     .gte('first_class_checkin_at', sinceIso)
+    .lte('first_class_checkin_at', new Date(staleBeforeMs).toISOString())
+    .order('first_class_checkin_at', { ascending: true })
     .limit(50)
   if (error) {
     logError('agent-followups', 'checkin stale-claim scan failed', { locationId, err: error })
