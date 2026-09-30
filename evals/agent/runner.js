@@ -14,7 +14,7 @@
 // src/lib/agent/auto-reply.js.
 
 import { buildCachedSystem } from '@/lib/agent/prompt'
-import { formatHistoryForClaude, parseAgentResponse, resolveAgentEffort } from '@/lib/agent/core'
+import { buildReplyTurnMessages, parseAgentResponse, resolveAgentEffort } from '@/lib/agent/core'
 import {
   CACHED_ACCOUNT_TOOLS,
   AGENT_MODEL,
@@ -66,7 +66,10 @@ export function buildScenarioRequest(scenario) {
     multipleAccounts: !!p.multipleAccounts,
     knownContact: p.knownContact ?? null,
   })
-  const messages = formatHistoryForClaude(scenario.history || [], { maxMessages: 20 })
+  // MIAPREFILL.1 — the same builder production uses, so a scenario can never
+  // send a shape production would refuse (the MIA-HYGIENE.7 drift lesson).
+  const { messages, reason } = buildReplyTurnMessages(scenario.history || [], { maxMessages: 20 })
+  if (reason) throw new Error(`scenario ${scenario.id || '(unnamed)'} has no turn to answer: ${reason}`)
   return { system, messages }
 }
 
