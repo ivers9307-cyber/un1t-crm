@@ -378,9 +378,10 @@ export async function sendEmailStep(db, { enrollment, step, sequence, contact, f
   // effort in the helper; stamped even while the cap is disabled).
   await stampMarketingTouch(db, [contact.id])
 
-  // Bump per-step metric.
-  // supabase-js builders don't have .catch — try/catch around await.
-  try { await db.rpc('increment_step_sent', { p_step_id: step.id }) } catch {}
+  // STEPSENTRPC.1 — no per-step counter bump. increment_step_sent never
+  // existed (no migration, not in pg_proc), so this 404'd on every send and
+  // the resolved { error } was dropped; sequence_steps.total_* never moved.
+  // Per-step email numbers are counted from email_sends (/stats).
 
   return result?.messageId || null
 }
@@ -622,9 +623,8 @@ export async function sendWhatsappStep(db, { enrollment, step, sequence, contact
   // effort in the helper; stamped even while the cap is disabled).
   await stampMarketingTouch(db, [contact.id])
 
-  // Bump per-step metric.
-  // supabase-js builders don't have .catch — try/catch around await.
-  try { await db.rpc('increment_step_sent', { p_step_id: step.id }) } catch {}
+  // STEPSENTRPC.1 — no per-step counter bump (increment_step_sent never
+  // existed; see sendEmailStep).
 
   return sendRowId
 }
