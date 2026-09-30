@@ -41,7 +41,9 @@ export async function GET(request, props) {
 
   const guard = assertLocationAccessOr404(user, data.location_id)
   if (guard) return guard
-  if (!hasPermissionForLocation(user, data.location_id, 'email')) return emailForbidden()
+  // A location-less template has no studio to judge at: the coarse check
+  // above (email somewhere) is its rule, as it is on the editor page.
+  if (data.location_id && !hasPermissionForLocation(user, data.location_id, 'email')) return emailForbidden()
 
   return NextResponse.json({ success: true, template: data })
 }

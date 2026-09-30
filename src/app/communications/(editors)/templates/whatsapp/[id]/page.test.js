@@ -23,6 +23,13 @@ vi.mock('@/lib/auth', () => ({
   },
 }))
 
+// GATES-2 — the page's area gate (the old layout rule, now per page) is
+// covered by tests/communications-pages-gate.test.js; these role-only fixtures
+// carry no per-location permission data, so it passes here.
+vi.mock('@/lib/communications-access', () => ({
+  canUseCommunicationsHere: () => true,
+  canUseCommunicationsForRecord: () => true,
+}))
 vi.mock('@/lib/supabase', () => ({
   createServerClient: vi.fn(),
 }))
