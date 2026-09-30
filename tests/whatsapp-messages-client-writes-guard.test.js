@@ -13,11 +13,22 @@
 //     level, by name or through ALL TABLES IN SCHEMA public, may not hand a
 //     client role another role, and may not add a permissive
 //     INSERT/UPDATE/DELETE/ALL policy to it.
+//  3. (WAANONREAD.1, mig 673) anon and PUBLIC hold NOTHING on
+//     whatsapp_messages: a migration may not GRANT them any privilege (SELECT
+//     and MAINTAIN included, column lists too, by name or through ALL TABLES
+//     IN SCHEMA public), add a permissive policy that admits them (TO anon,
+//     TO public, or no TO clause at all, which means PUBLIC), or CREATE or
+//     RENAME a table to the name (the default ACL re-grants ALL to anon). The
+//     one exemption, for rule 3 only, is a rollback migration named
+//     `<NNN>_waanonread1_rollback.sql`.
 //
 // A floor, not a proof: a builder held in a variable, or SQL built at
 // runtime, is invisible. Server code is not checked: service_role bypasses
 // grants. Same detector shape as tests/contacts-client-writes-guard.test.js
-// (mig 653), parameterised by table.
+// (mig 653), parameterised by table. SQL comments are blanked by one quote-
+// and dollar-aware pass that pairs each $tag$ body with its own closing tag
+// (sqlCode, tests/function-execute-guard.test.js), never by a regex; a GRANT
+// run from EXECUTE '…' counts.
 
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs'
@@ -26,8 +37,10 @@ import { stripComments } from '../scripts/lib/strip-comments.mjs'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const WA_MSG_WRITES_OFF_MIGRATION = 656
+const WA_ANON_CLOSED_MIGRATION = 673
 const TABLE = 'whatsapp_messages'
 const MIGRATIONS = path.join(ROOT, 'supabase/migrations')
+const ANON_ROLLBACK_FILE = /^\d+_waanonread1_rollback\.sql$/
 
 const WRITE = /\.from\(\s*['"`]whatsapp_messages['"`]\s*\)\s*\??\.\s*(insert|update|upsert|delete)\s*\(/g
 const rel = (f) => path.relative(ROOT, f).split(path.sep).join('/')
@@ -61,6 +74,85 @@ export function waMessageWrites(text) {
 }
 
 // ── migrations ───────────────────────────────────────────────────────────
+/**
+ * The SQL with its comments blanked (newlines kept), by a quote-aware scan:
+ * '…' (with '' doubling, and backslash escapes in E'…'), "…" identifiers and
+ * $tag$…$tag$ bodies are never read as comment markers, so a '/*' or '--'
+ * inside one cannot hide code. Block comments nest, as in Postgres. A
+ * dollar-quoted body is matched to its own closing tag first and scanned the
+ * same way on its own, so nothing inside can run past it. String contents
+ * are kept verbatim: a GRANT run from EXECUTE '…' counts.
+ * (tests/function-execute-guard.test.js sqlCode, copied verbatim rather than
+ * imported: importing a test file would re-register its tests here.)
+ */
+export function sqlCode(sql) {
+  let out = ''
+  let i = 0
+  const n = sql.length
+  const blank = (s) => s.replace(/[^\n]/g, ' ')
+  const DOLLAR = /\$([A-Za-z_\u0080-\uffff][\w\u0080-\uffff]*)?\$/y
+  while (i < n) {
+    const c = sql[i]
+    const d = sql[i + 1]
+    if (c === '-' && d === '-') {
+      const end = sql.indexOf('\n', i)
+      const stop = end === -1 ? n : end
+      out += blank(sql.slice(i, stop))
+      i = stop
+      continue
+    }
+    if (c === '/' && d === '*') {
+      let depth = 0
+      let j = i
+      while (j < n) {
+        if (sql[j] === '/' && sql[j + 1] === '*') { depth++; j += 2; continue }
+        if (sql[j] === '*' && sql[j + 1] === '/') { depth--; j += 2; if (depth === 0) break; continue }
+        j++
+      }
+      out += blank(sql.slice(i, j))
+      i = j
+      continue
+    }
+    if (c === "'") {
+      const escapes = /[eE]/.test(sql[i - 1] ?? '') && !/[\w$]/.test(sql[i - 2] ?? '')
+      let j = i + 1
+      while (j < n) {
+        if (escapes && sql[j] === '\\') { j += 2; continue }
+        if (sql[j] === "'") { if (sql[j + 1] === "'") { j += 2; continue } break }
+        j++
+      }
+      out += sql.slice(i, j + 1)
+      i = j + 1
+      continue
+    }
+    if (c === '"') {
+      let j = i + 1
+      while (j < n) {
+        if (sql[j] === '"') { if (sql[j + 1] === '"') { j += 2; continue } break }
+        j++
+      }
+      out += sql.slice(i, j + 1)
+      i = j + 1
+      continue
+    }
+    if (c === '$' && !/[\w$]/.test(sql[i - 1] ?? '')) {
+      DOLLAR.lastIndex = i
+      const m = DOLLAR.exec(sql)
+      if (m) {
+        const tag = m[0]
+        const end = sql.indexOf(tag, i + tag.length)
+        if (end === -1) { out += sql.slice(i); break }
+        out += tag + sqlCode(sql.slice(i + tag.length, end)) + tag
+        i = end + tag.length
+        continue
+      }
+    }
+    out += c
+    i++
+  }
+  return out
+}
+
 const CLIENT_ROLES = ['authenticated', 'anon', 'public']
 const ident = (s) => s.trim().replace(/["']/g, '').toLowerCase()
 function splitTop(list) {
@@ -78,7 +170,7 @@ function splitTop(list) {
 
 /** Every statement in `sql` that would let a client role write public.whatsapp_messages again. */
 export function waMessageWriteReopeners(sql) {
-  const code = sql.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--[^\n]*/g, ' ')
+  const code = sqlCode(sql)
   const hits = []
   for (const m of code.matchAll(/\bgrant\s+([\s\S]+?)\s+on\s+([\s\S]+?)\s+to\s+([\s\S]+?)(?:;|'|$)/gi)) {
     const [stmt, privs, target, to] = m
@@ -107,6 +199,37 @@ export function waMessageWriteReopeners(sql) {
     const f = body.match(/\bfor\s+(all|select|insert|update|delete)\b/i)
     if (!f || f[1].toLowerCase() !== 'select') hits.push(m[0].trim())
   }
+  return hits
+}
+
+// One statement each: no part may cross a ';', and the role list also ends
+// at a quote or a dollar sign (a GRANT run from EXECUTE '…'). ALTER DEFAULT
+// PRIVILEGES statements are removed first: they change future tables only.
+const ADP_RE = /\balter\s+default\s+privileges\b[^;]*;?/gi
+const GRANT_ON = /\bgrant\s+([^;]+?)\s+on\s+([^;]+?)\s+to\s+([^;'$]+)/gi
+const NAME = '(?:"?public"?\\s*\\.\\s*)?"?whatsapp_messages"?'
+const rolesOf = (list) => splitTop(list.replace(/\s+(with\s+(grant|admin|inherit|set)\s+option|granted\s+by\b)[\s\S]*$/i, '')).map(ident)
+
+/** Every statement in `sql` that would give anon or PUBLIC anything on public.whatsapp_messages again (mig 673). */
+export function waMessageAnonReopeners(sql) {
+  const code = sqlCode(sql).replace(ADP_RE, ' ')
+  const hits = []
+  for (const [stmt, , target, to] of code.matchAll(GRANT_ON)) {
+    if (!rolesOf(to).some((r) => r === 'anon' || r === 'public')) continue
+    const t = target.trim()
+    const all = t.match(/^all\s+tables\s+in\s+schema\s+([\s\S]+)$/i)
+    if (all) { if (splitTop(all[1]).map(ident).includes('public')) hits.push(stmt.trim()); continue }
+    if (/^(sequence|function|procedure|routine|schema|database|foreign|large|language|tablespace|type|domain|all\s)/i.test(t)) continue
+    if (splitTop(t.replace(/^table\s+/i, '')).map((x) => ident(x).replace(/^public\s*\.\s*/, '')).includes(TABLE)) hits.push(stmt.trim())
+  }
+  for (const m of code.matchAll(new RegExp(`\\bcreate\\s+policy\\s+(?:"[^"]+"|\\S+)\\s+on\\s+${NAME}(?=[\\s;])([^;]*)`, 'gi'))) {
+    const body = m[1]
+    if (/\bas\s+restrictive\b/i.test(body)) continue   // a restrictive policy can only deny
+    const to = body.match(/\bto\s+([\s\S]+?)(?=\s+(?:using|with\s+check)\b|$)/i)
+    if (!to || rolesOf(to[1]).some((r) => r === 'anon' || r === 'public')) hits.push(m[0].trim())
+  }
+  for (const m of code.matchAll(new RegExp(`\\bcreate\\s+(?:unlogged\\s+)?table\\s+(?:if\\s+not\\s+exists\\s+)?${NAME}(?=[\\s(;])`, 'gi'))) hits.push(m[0].trim())
+  for (const m of code.matchAll(/\balter\s+table\s+[^;]*?\brename\s+to\s+"?whatsapp_messages"?(?=[\s;]|$)/gi)) hits.push(m[0].trim())
   return hits
 }
 
@@ -204,5 +327,74 @@ describe('later migrations keep whatsapp_messages read-only for clients (mig 656
       'GRANT authenticated TO authenticator;',
     ]
     for (const sql of ok) expect(waMessageWriteReopeners(sql), sql).toEqual([])
+  })
+})
+
+describe('later migrations keep whatsapp_messages closed to anon (WAANONREAD.1, mig 673)', () => {
+  it('mig 673 is present', () => {
+    expect(readdirSync(MIGRATIONS).some((f) => f.startsWith(`${WA_ANON_CLOSED_MIGRATION}_`))).toBe(true)
+  })
+
+  // From 631, not 673: migration numbers are reserved ahead of time and a
+  // lower number can merge later (631 is the HELD #1774, 663 PR #1849 when
+  // 673 was written). 631-672 give anon nothing on the table (checked).
+  const ANON_SCAN_FROM = 631
+  const later = readdirSync(MIGRATIONS)
+    .filter((f) => f.endsWith('.sql') && parseInt(f, 10) >= ANON_SCAN_FROM && !ANON_ROLLBACK_FILE.test(f))
+  it.each(later)('%s: gives anon/PUBLIC nothing on whatsapp_messages', (file) => {
+    expect(waMessageAnonReopeners(readFileSync(path.join(MIGRATIONS, file), 'utf8')),
+      `${file} re-opens whatsapp_messages to anon/PUBLIC (mig 673). Nothing reads it signed out; read it signed in or through a route`).toEqual([])
+  })
+
+  it('the anon detector catches every form', () => {
+    const bad = [
+      'GRANT SELECT ON public.whatsapp_messages TO anon;',
+      'grant select on table whatsapp_messages to authenticated, anon;',
+      'GRANT MAINTAIN ON "public"."whatsapp_messages" TO PUBLIC;',
+      'GRANT SELECT (id, body) ON public.whatsapp_messages TO anon;',
+      'GRANT ALL ON public.whatsapp_conversations, public.whatsapp_messages TO anon;',
+      'GRANT SELECT ON ALL TABLES IN SCHEMA public TO anon;',
+      `DO $$ BEGIN EXECUTE 'GRANT SELECT ON public.whatsapp_messages TO anon'; END $$;`,
+      `DO $x$ BEGIN EXECUTE 'GRANT SELECT ON public.whatsapp_messages TO public'; END $x$;`,
+      'CREATE POLICY wa_msg_peek ON public.whatsapp_messages FOR SELECT TO anon USING (true);',
+      'create policy "p" on whatsapp_messages for select to authenticated, public using (true);',
+      'CREATE POLICY wa_msg_open ON public.whatsapp_messages FOR SELECT USING (true);',
+      'CREATE TABLE IF NOT EXISTS public.whatsapp_messages (id uuid);',
+      'ALTER TABLE public.whatsapp_messages_v2 RENAME TO whatsapp_messages;',
+      "SELECT '/*';\nGRANT SELECT ON public.whatsapp_messages TO anon;\nSELECT '*/';",
+      // a '/*' inside a dollar body ends with that body: only $tag$ pairing sees the GRANT
+      "COMMENT ON TABLE x IS $c$ /* $c$;\nGRANT SELECT ON public.whatsapp_messages TO anon;\nSELECT $d$ */ $d$;",
+    ]
+    for (const sql of bad) expect(waMessageAnonReopeners(sql), sql).not.toEqual([])
+  })
+
+  it('…and passes the safe ones', () => {
+    const ok = [
+      'GRANT SELECT ON public.whatsapp_messages TO authenticated;',
+      'GRANT ALL ON public.whatsapp_messages TO service_role;',
+      'GRANT SELECT ON public.whatsapp_messages_archive TO anon;',
+      'GRANT SELECT ON public.public_things TO anon;',
+      'REVOKE ALL ON public.whatsapp_messages FROM anon, PUBLIC;',
+      'CREATE POLICY wa_msg_select ON public.whatsapp_messages FOR SELECT TO authenticated USING (true);',
+      'CREATE POLICY wa_msg_deny ON public.whatsapp_messages AS RESTRICTIVE FOR ALL TO anon USING (false);',
+      'CREATE POLICY p ON public.whatsapp_messages_archive FOR SELECT TO anon USING (true);',
+      'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO anon;',
+      'ALTER TABLE public.whatsapp_messages RENAME COLUMN body TO text_body;',
+      'CREATE TABLE public.whatsapp_messages_archive (id uuid);',
+      '-- rollback: GRANT SELECT ON public.whatsapp_messages TO anon;',
+      '/* GRANT ALL ON public.whatsapp_messages TO anon; */',
+      `CREATE FUNCTION f() RETURNS void LANGUAGE plpgsql AS $$ BEGIN
+         -- GRANT SELECT ON public.whatsapp_messages TO anon;
+       END $$;`,
+      "SELECT has_table_privilege('anon', 'public.whatsapp_messages', 'SELECT');",
+    ]
+    for (const sql of ok) expect(waMessageAnonReopeners(sql), sql).toEqual([])
+  })
+
+  it('the rollback exemption is by exact name, and covers the anon rule only', () => {
+    expect(ANON_ROLLBACK_FILE.test('674_waanonread1_rollback.sql')).toBe(true)
+    expect(ANON_ROLLBACK_FILE.test('674_whatsapp_messages_anon_regrant.sql')).toBe(false)
+    // the write rule still reads a rollback file
+    expect(waMessageWriteReopeners('GRANT INSERT ON public.whatsapp_messages TO anon;')).not.toEqual([])
   })
 })
