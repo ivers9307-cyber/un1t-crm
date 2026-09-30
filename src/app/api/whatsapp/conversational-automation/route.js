@@ -1,7 +1,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404, guardMasterOrOwner } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { setConversationalAutomation } from '@/lib/whatsapp'
@@ -19,7 +19,8 @@ const ConversationalAutomationSchema = z.object({
 // greeting) plus up to 4 ice-breaker prompts shown to users opening a
 // fresh chat. The applied config is mirrored into
 // locations.settings.conversational_automation so the settings UI can
-// re-hydrate it. Registered in src/lib/openapi.js.
+// re-hydrate it. Master or owner at the location (WAROLE.1). Registered in
+// src/lib/openapi.js.
 export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
@@ -32,6 +33,12 @@ export async function POST(request) {
 
   const guard = assertLocationAccessOr404(user, locationId)
   if (guard) return guard
+  // WAROLE.1 — membership alone let any staff member change what Meta shows
+  // a customer opening a chat with this number. Master, or owner AT this
+  // location: the rule of the settings page this card lives on and of the
+  // number routes on the same tab. Decided BEFORE the Meta call.
+  const roleGuard = guardMasterOrOwner(user, locationId)
+  if (roleGuard) return roleGuard
 
   try {
     await setConversationalAutomation({ enableWelcome, prompts }, { locationId })

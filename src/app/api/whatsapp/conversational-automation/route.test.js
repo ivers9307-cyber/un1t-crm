@@ -18,9 +18,12 @@ import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { setConversationalAutomation } from '@/lib/whatsapp'
 import { fakeLocationsDb, BOOM } from '@/lib/location-settings.test-helpers'
+import { LOC_B, person, ownerAtTargetCases } from '../../../../../tests/helpers/owner-at-location-callers.js'
 
 const LOC = 'a0000000-0000-4000-8000-000000000001'
-const USER = { id: 'u1', role: 'manager', locations: [{ id: LOC }], activeLocation: { id: LOC } }
+// WAROLE.1 — the POST is master/owner at the location written, so the default
+// caller is an OWNER there (it was a manager, which the POST now refuses).
+const USER = person({ [LOC]: 'owner' }, LOC)
 const post = () => new Request('http://localhost/api/whatsapp/conversational-automation', {
   method: 'POST', headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({ location_id: LOC, enable_welcome: true, prompts: ['Book a class'] }),
@@ -71,5 +74,50 @@ describe('the mirror never wipes locations.settings', () => {
     const res = await POST(post())
     expect(res.status).toBe(502)
     expect(db.writes).toEqual([])
+  })
+})
+
+// WAROLE.1 — the POST decided on membership alone, so any staff member at a
+// studio could change what Meta shows a customer opening a chat with the
+// studio's number (the greeting event and the ice breakers). It is now the
+// rule of the settings page the card lives on (and of the number routes on
+// the same tab): master, or owner AT the location. A refused caller never
+// reaches Meta.
+const REFUSAL = {
+  forbidden: { status: 403, body: { success: false, error: 'Master or owner role required.' } },
+  hidden: { status: 404, body: { success: false, error: 'Not found' } },
+}
+const postAt = (loc) => new Request('http://localhost/api/whatsapp/conversational-automation', {
+  method: 'POST', headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ location_id: loc, enable_welcome: true, prompts: ['Book a class'] }),
+})
+
+describe('POST — WAROLE.1: master or owner AT the location', () => {
+  it.each(ownerAtTargetCases())('%s', async (_label, caller, outcome) => {
+    getCurrentUser.mockResolvedValue(caller)
+    const db = fakeLocationsDb({ reads: { data: { settings: {} }, error: null } })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(postAt(LOC_B))
+    const body = await res.json()
+    if (outcome === 'pass') {
+      expect(res.status).toBe(200)
+      expect(setConversationalAutomation).toHaveBeenCalledWith({ enableWelcome: true, prompts: ['Book a class'] }, { locationId: LOC_B })
+      expect(db.writes).toHaveLength(1)
+      return
+    }
+    expect({ status: res.status, body }).toEqual(REFUSAL[outcome])
+    expect(setConversationalAutomation).not.toHaveBeenCalled()
+    expect(createServerClient).not.toHaveBeenCalled()
+  })
+
+  it('a manager, head coach or staff member AT the location is refused before Meta', async () => {
+    for (const role of ['manager', 'head_coach', 'staff']) {
+      vi.clearAllMocks()
+      getCurrentUser.mockResolvedValue(person({ [LOC_B]: role }, LOC_B))
+      const res = await POST(postAt(LOC_B))
+      expect([role, res.status, await res.json()]).toEqual([role, 403, REFUSAL.forbidden.body])
+      expect(setConversationalAutomation).not.toHaveBeenCalled()
+      expect(createServerClient).not.toHaveBeenCalled()
+    }
   })
 })
