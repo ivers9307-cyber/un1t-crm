@@ -1,6 +1,6 @@
-// PASSCODEREAD.1 guard (mig 651). Glofox member passwords are never stored:
-// contacts.glofox_passcode and glofox_push_events.passcode_sent are DEPRECATED,
-// CHECK-constrained NULL, and dropped by a later migration; glofox_push_events
+// PASSCODEREAD.1/.2 guard (migs 651, 652). Glofox member passwords are never
+// stored: contacts.glofox_passcode and glofox_push_events.passcode_sent were
+// CHECK-constrained NULL (651) and then DROPPED (652); glofox_push_events
 // holds no client grant. Four ways that could come back, all pinned here:
 //
 //  (a) app code names either column again (a write fails at the CHECK — a
@@ -14,17 +14,32 @@
 //      client role, by name or through ALL TABLES IN SCHEMA public.
 //  (d) a migration after 651 drops a *_passcode_retired CHECK without
 //      dropping its column in the same file (the only legitimate reason).
+//  (e) the columns do not exist: the migration replay check:select-columns
+//      uses (scripts/check-select-columns.mjs) must not have either column,
+//      nor contact_location_audience.glofox_passcode, so a later ADD COLUMN
+//      or a view that selects it fails here.
 //
 // A floor, not a proof: a column name assembled at runtime is invisible here.
 
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs'
 import path from 'node:path'
+import { collectSchema, applyMigrationSql } from '../scripts/check-select-columns.mjs'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const PASSCODE_RETIRE_MIGRATION = 651
 
 const PASSCODE_RETIRE_FILE = '651_retire_glofox_passcodes.sql'
+const PASSCODE_DROP_FILE = '652_drop_glofox_passcode_columns.sql'
+
+/** The retired passcode columns present in a replayed schema (Map<table, Set<column>>). */
+export function retiredColumnsPresent(schema) {
+  const out = []
+  if (schema.get('contacts')?.has('glofox_passcode')) out.push('contacts.glofox_passcode')
+  if (schema.get('glofox_push_events')?.has('passcode_sent')) out.push('glofox_push_events.passcode_sent')
+  if (schema.get('contact_location_audience')?.has('glofox_passcode')) out.push('contact_location_audience.glofox_passcode')
+  return out
+}
 
 /**
  * A migration that can run after 651: a numeric prefix >= 651, except the 651
@@ -74,7 +89,7 @@ describe('(a) no app code names a retired passcode column', () => {
     for (const file of files) {
       for (const col of retiredColumnUses(readFileSync(file, 'utf8'))) offenders.push(`${path.relative(ROOT, file)}: ${col}`)
     }
-    expect(offenders, 'Glofox passwords are not stored (PASSCODEREAD.1, mig 651) — do not read or write these columns').toEqual([])
+    expect(offenders, 'Glofox passwords are not stored; these columns were dropped (PASSCODEREAD.1/.2, migs 651/652)').toEqual([])
   })
 
   it('the detector catches writes and selects, and ignores comments and the retired tag', () => {
@@ -198,5 +213,36 @@ describe('(c)(d) later migrations keep the passcode retired', () => {
       'GRANT EXECUTE ON FUNCTION public.glofox_push_events_x() TO authenticated;',
     ]
     for (const sql of ok) expect(pushEventClientGrants(sql), sql).toEqual([])
+  })
+})
+
+describe('(e) the retired columns no longer exist (mig 652)', () => {
+  const dir = path.join(ROOT, 'supabase/migrations')
+  const { schema, skippedViews } = collectSchema(dir)
+
+  it('mig 652 is present', () => {
+    expect(existsSync(path.join(dir, PASSCODE_DROP_FILE))).toBe(true)
+  })
+
+  it('the replay knows all three relations (not vacuous)', () => {
+    expect(schema.has('contacts')).toBe(true)
+    expect(schema.has('glofox_push_events')).toBe(true)
+    expect(schema.has('contact_location_audience')).toBe(true)
+    expect(skippedViews.has('contact_location_audience')).toBe(false)
+    expect(schema.get('contact_location_audience').has('audience_location_id')).toBe(true)
+  })
+
+  it('no migration leaves or brings back a retired column', () => {
+    expect(retiredColumnsPresent(schema), 'the passcode columns were dropped by mig 652; do not re-add them').toEqual([])
+  })
+
+  it('the detector sees a re-add and a view that selects it', () => {
+    const s = new Map([['contacts', new Set(['id', 'location_id'])], ['glofox_push_events', new Set(['id'])]])
+    applyMigrationSql('ALTER TABLE public.contacts ADD COLUMN glofox_passcode text;', s)
+    applyMigrationSql('ALTER TABLE public.glofox_push_events ADD COLUMN IF NOT EXISTS passcode_sent text;', s)
+    applyMigrationSql('CREATE VIEW public.contact_location_audience AS SELECT c.id, c.glofox_passcode FROM public.contacts c;', s)
+    expect(retiredColumnsPresent(s)).toEqual([
+      'contacts.glofox_passcode', 'glofox_push_events.passcode_sent', 'contact_location_audience.glofox_passcode',
+    ])
   })
 })
