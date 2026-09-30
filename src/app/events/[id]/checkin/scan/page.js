@@ -28,7 +28,8 @@ export default async function ScanCheckinPage(props) {
     .select('id, location_id')
     .eq('id', params.id)
     .maybeSingle()
-  if (raceErr || !race) notFound()
+  if (raceErr) throw raceErr
+  if (!race) notFound()
   if (assertLocationAccess(user, race.location_id)) notFound()
   if (!hasPermissionForLocation(user, race.location_id, 'races')) redirect('/')
 

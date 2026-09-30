@@ -49,4 +49,11 @@ describe('/orders/[id]', () => {
     getCurrentUser.mockResolvedValue(MASTER); at(LOC_B)
     await expect(OrderDetailPage(props())).resolves.toBeTruthy()
   })
+  it('a failed read is a 500, not a 404 (a DB blip must not look like a missing row)', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const failing = { select() { return this }, eq() { return this }, maybeSingle: async () => ({ data: null, error: { message: 'boom' } }) }
+    createServerClient.mockReturnValue({ from: () => failing })
+    await expect(OrderDetailPage(props())).rejects.not.toThrow(/NEXT_NOT_FOUND/)
+    await expect(OrderDetailPage(props())).rejects.toBeTruthy()
+  })
 })

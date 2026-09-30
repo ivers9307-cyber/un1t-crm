@@ -44,4 +44,11 @@ describe('/events/[id]/checkin/scan', () => {
     getCurrentUser.mockResolvedValue(MASTER); at(LOC_B)
     await expect(ScanCheckinPage(props())).resolves.toBeTruthy()
   })
+  it('a failed read is a 500, not a 404 (a DB blip at the door must not look like a missing event)', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const failing = { select() { return this }, eq() { return this }, maybeSingle: async () => ({ data: null, error: { message: 'boom' } }) }
+    createServerClient.mockReturnValue({ from: () => failing })
+    await expect(ScanCheckinPage(props())).rejects.not.toThrow(/NEXT_NOT_FOUND/)
+    await expect(ScanCheckinPage(props())).rejects.toBeTruthy()
+  })
 })

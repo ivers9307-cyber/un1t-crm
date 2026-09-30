@@ -27,7 +27,8 @@ export default async function OrderDetailPage(props) {
     .select('id, location_id')
     .eq('id', params.id)
     .maybeSingle()
-  if (error || !order) notFound()
+  if (error) throw error
+  if (!order) notFound()
   if (assertLocationAccess(user, order.location_id)) notFound()
   if (!hasRoleAtLocation(user, order.location_id, MANAGER_ROLES)) redirect('/')
   if (!hasPermissionForLocation(user, order.location_id, 'orders')) redirect('/')
