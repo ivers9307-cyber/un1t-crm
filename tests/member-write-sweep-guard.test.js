@@ -16,7 +16,9 @@
 //     Anything else is a 42501 once the table's migration has applied. Act
 //     through the service-role routes that check the caller's role or
 //     permission (for 680: /api/contacts/[id]/{kudos,goals,consultations,
-//     consultation-photos}*, /api/consultations/me, /api/consultation-photos/me).
+//     consultation-photos}*, /api/consultations/me, /api/consultation-photos/me;
+//     for 681: /api/orders*, /api/automations/[key], /api/locations/[id]/holidays*,
+//     /api/presentations*, /api/contacts/duplicates/[id] and the person-link routes).
 //  2. A later migration may not give anon or PUBLIC any privilege on a swept
 //     table; give authenticated anything but SELECT, or SELECT on a table
 //     without `keepRead`; do either through ALL TABLES IN SCHEMA public; hand
@@ -62,7 +64,16 @@ export const SWEEP = [
   { table: 'inbody_scans', mig: 680, keepRead: 'inbody_scans_read_own', rollback: 'a' },
   { table: 'consultation_photos', mig: 680, keepRead: null, rollback: 'a' },
   { table: 'consultations', mig: 680, keepRead: null, rollback: 'a' },
-  // 1b, 1c, 1d, 1e, 1g append their rows here.
+  // 1b — mig 681
+  { table: 'presentations', mig: 681, keepRead: null, rollback: 'b' },
+  { table: 'presentation_slides', mig: 681, keepRead: null, rollback: 'b' },
+  { table: 'orders', mig: 681, keepRead: null, rollback: 'b' },
+  { table: 'location_automations', mig: 681, keepRead: null, rollback: 'b' },
+  { table: 'location_holidays', mig: 681, keepRead: null, rollback: 'b' },
+  { table: 'person_groups', mig: 681, keepRead: null, rollback: 'b' },
+  { table: 'person_group_members', mig: 681, keepRead: null, rollback: 'b' },
+  { table: 'person_link_suggestions', mig: 681, keepRead: null, rollback: 'b' },
+  // 1c, 1d, 1e, 1g append their rows here.
 ]
 const SCAN_FROM = 680            // the class detector: every migration from the first sweep file
 // Reopeners are scanned from 631, not 680: migration numbers are reserved
@@ -572,6 +583,25 @@ describe('client code only reads its own rows of the swept tables (MEMBERWRITESW
     expect(sweepClientUses(ok)).toEqual([])
   })
 
+  it('the 1b tables (mig 681) are closed to every client use, reads included', () => {
+    const bad = `
+      await supabase.from('orders').select('id, status')
+      await supabase.from('location_automations').update({ enabled: true }).eq('id', id)
+      await supabase.from('person_groups').select('id, person_group_members(contact_id)')
+      await fetch(\`\${SUPABASE_URL}/rest/v1/person_link_suggestions?select=*\`)`
+    expect(sweepClientUses(bad)).toEqual([
+      'orders.select', 'location_automations.update', 'person_groups.select', 'person_group_members.embed',
+      'person_link_suggestions.rest',
+    ])
+    const ok = `
+      const r = await fetch('/api/orders?status=paid')
+      await api(\`/api/locations/\${id}/holidays\`)
+      await supabase.from('orders_archive').select('*')
+      const orders = []
+      const label = 'No presentations yet.'`
+    expect(sweepClientUses(ok)).toEqual([])
+  })
+
   it("a '/*' in a string, a regex or JSX text hides nothing; a real JSX comment is a comment", () => {
     expect(sweepClientUses("const a = 'image/*'\nsupabase.from('coach_kudos').update(p)\nconst b = '*/'\n")).toEqual(['coach_kudos.update'])
     expect(sweepClientUses("const r = /\\/*/\nsupabase.from('consultations').delete()\nconst s = '*/'\n")).toEqual(['consultations.delete'])
@@ -608,6 +638,12 @@ describe('later migrations keep the swept tables closed to clients', () => {
       'GRANT MAINTAIN ON public.coaching_goals TO authenticated;',
       'GRANT SELECT ON ALL TABLES IN SCHEMA public TO authenticated;',
       'GRANT DELETE ON public.orders, public.consultations TO authenticated;',
+      'GRANT UPDATE ON public.orders TO authenticated;',
+      'GRANT SELECT ON public.person_group_members TO authenticated;',
+      'GRANT SELECT ON public.location_holidays TO anon;',
+      'CREATE POLICY pls_loc ON public.person_link_suggestions FOR ALL TO authenticated USING (private.auth_is_in_location(location_id));',
+      'CREATE POLICY p ON public.presentations FOR SELECT TO authenticated USING (true);',
+      'ALTER TABLE public.location_automations DISABLE ROW LEVEL SECURITY;',
       `DO $$ BEGIN EXECUTE 'GRANT UPDATE ON public.inbody_scans TO authenticated'; END $$;`,
       'CREATE POLICY coaching_goals_loc ON public.coaching_goals FOR ALL TO authenticated USING (private.auth_is_in_location(location_id));',
       'CREATE POLICY coach_kudos_read_own ON public.coach_kudos FOR SELECT TO authenticated USING (true);',
@@ -635,7 +671,8 @@ describe('later migrations keep the swept tables closed to clients', () => {
       'GRANT SELECT ON public.coach_kudos, public.coaching_goals, public.inbody_scans TO authenticated;',
       'GRANT SELECT (scanned_at, weight_kg) ON public.inbody_scans TO authenticated;',
       'GRANT ALL ON public.consultations TO service_role;',
-      'GRANT UPDATE ON public.orders TO authenticated;',
+      'GRANT UPDATE ON public.race_events TO authenticated;',
+      'GRANT SELECT ON public.orders_archive TO authenticated;',
       'GRANT SELECT ON public.consultations_archive TO authenticated;',
       'REVOKE ALL ON public.consultations, public.consultation_photos FROM anon, authenticated, PUBLIC;',
       'CREATE POLICY coach_kudos_read_own ON public.coach_kudos FOR SELECT TO authenticated USING (contact_id = private.auth_contact_id());',
@@ -662,6 +699,9 @@ describe('later migrations keep the swept tables closed to clients', () => {
     expect(sweepReopeners(reopen, { exempt: exemptOf('686_memberwritesweep1a_rollback.sql') })).toEqual([])
     expect(sweepReopeners(reopen, { exempt: exemptOf('686_memberwritesweep1b_rollback.sql') })).not.toEqual([])
     expect(sweepReopeners(reopen, { exempt: exemptOf('686_coaching_regrant.sql') })).not.toEqual([])
+    const reopen1b = 'GRANT SELECT, INSERT, UPDATE, DELETE ON public.orders, public.person_groups TO authenticated;'
+    expect(sweepReopeners(reopen1b, { exempt: exemptOf('686_memberwritesweep1b_rollback.sql') })).toEqual([])
+    expect(sweepReopeners(reopen1b, { exempt: exemptOf('686_memberwritesweep1a_rollback.sql') })).not.toEqual([])
     expect(exemptOf('686_memberwritesweep1a_rollback.sql')).toBe('a')
     expect(exemptOf('686_carsclientwrite1_rollback.sql')).toBe(null)
   })
