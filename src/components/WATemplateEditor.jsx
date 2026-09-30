@@ -67,7 +67,8 @@ export default function WATemplateEditor({ template, locationId, userId, events 
   const router = useRouter()
   const isEditing = !!template
   const isSubmitted = template?.status && template.status !== 'draft'
-  const canResubmit = canManage && ['REJECTED', 'PAUSED'].includes(template?.status)
+  const isRejectedOrPaused = ['REJECTED', 'PAUSED'].includes(template?.status)
+  const canResubmit = canManage && isRejectedOrPaused
   const MANAGER_URL = 'https://business.facebook.com/wa/manage/message-templates/'
 
   const [name, setName] = useState(template?.name || '')
@@ -508,19 +509,23 @@ export default function WATemplateEditor({ template, locationId, userId, events 
         <div className="flex gap-6 p-6 max-w-6xl">
           {/* Left: Form */}
           <div className="flex-1 space-y-5">
-            {template && (canResubmit || events.length > 0) && (
+            {template && (isRejectedOrPaused || events.length > 0) && (
               <div className="mb-4 rounded-lg border border-un1t-border bg-un1t-surface p-4 space-y-3">
-                {canResubmit && (
+                {isRejectedOrPaused && (
                   <div className="flex items-center justify-between gap-3">
                     <div className="text-sm">
                       <span className="font-medium text-amber-700">{template.status}</span>
                       {template.rejection_reason ? <span className="text-un1t-subtle"> — {template.rejection_reason}</span> : null}
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
-                      <button type="button" onClick={handleResubmit} disabled={resubmitting}
-                        className="text-sm bg-green-600 text-white px-3 py-1.5 rounded-md hover:bg-green-700 disabled:opacity-50">
-                        {resubmitting ? 'Resubmitting…' : 'Edit & resubmit'}
-                      </button>
+                      {/* WATPLROLE.1 — resubmit is MANAGER_ROLES only; the appeal
+                          link (Meta's own page) stays for everyone, as in the list. */}
+                      {canResubmit && (
+                        <button type="button" onClick={handleResubmit} disabled={resubmitting}
+                          className="text-sm bg-green-600 text-white px-3 py-1.5 rounded-md hover:bg-green-700 disabled:opacity-50">
+                          {resubmitting ? 'Resubmitting…' : 'Edit & resubmit'}
+                        </button>
+                      )}
                       <a href={MANAGER_URL} target="_blank" rel="noopener noreferrer"
                         className="text-sm text-un1t-subtle hover:text-un1t-text underline">Appeal in WhatsApp Manager ↗</a>
                     </div>

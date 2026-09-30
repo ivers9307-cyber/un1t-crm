@@ -47,10 +47,21 @@ describe('WATemplateEditor — controls follow canManage (WATPLROLE.1)', () => {
     expect(screen.getByText(NOTE)).toBeTruthy()
   })
 
+  it('a rejected or paused template without canManage still offers the appeal link at Meta (parity with the list)', () => {
+    for (const status of ['REJECTED', 'PAUSED']) {
+      render(<WATemplateEditor template={{ ...REJECTED, status }} locationId="loc-1" userId="u1" />)
+      expect(screen.getByRole('link', { name: /Appeal in WhatsApp Manager/ })).toBeTruthy()
+      cleanup()
+    }
+    render(<WATemplateEditor template={{ ...REJECTED, status: 'APPROVED', rejection_reason: null }} locationId="loc-1" userId="u1" />)
+    expect(screen.queryByRole('link', { name: /Appeal in WhatsApp Manager/ })).toBeNull()
+  })
+
   it('a rejected template with canManage: Delete and "Edit & resubmit" offered, fields editable, no note', () => {
     render(<WATemplateEditor template={REJECTED} locationId="loc-1" userId="u1" canManage />)
     expect(screen.getByRole('button', { name: /Delete/ })).toBeTruthy()
     expect(screen.getByRole('button', { name: /Edit & resubmit/ })).toBeTruthy()
+    expect(screen.getByRole('link', { name: /Appeal in WhatsApp Manager/ })).toBeTruthy()
     expect(screen.getByDisplayValue('promo_x').disabled).toBe(false)
     expect(screen.queryByText(NOTE)).toBeNull()
   })
