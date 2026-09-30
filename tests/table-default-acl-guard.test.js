@@ -13,7 +13,9 @@
 //     TABLES/SEQUENCES IN SCHEMA public.
 //  2. Nothing gives authenticated TRUNCATE, REFERENCES, TRIGGER, MAINTAIN or
 //     ALL on a public relation (name the privileges a client needs), or any
-//     privilege on a sequence (use an identity column or a uuid default).
+//     privilege on a sequence (use an identity column or a uuid default), save
+//     exactly USAGE on the sequence of a table the same file lets it INSERT
+//     into (rule 8).
 //  3. No blanket grant to a client role on ALL TABLES/SEQUENCES IN SCHEMA
 //     public.
 //  4. No ALTER DEFAULT PRIVILEGES re-opens TABLES or SEQUENCES to a client
@@ -28,6 +30,13 @@
 //  7. A table first created from TABLE_ACL_MIGRATION on that client-run code
 //     reads (.from('<t>') in shared/, mobile/, or a src/ client file) is
 //     granted to authenticated by a migration.
+//  8. A GRANT of INSERT (or ALL) to a client role on a table whose column
+//     default calls nextval() (a serial/bigserial/smallserial column, or an
+//     explicit DEFAULT nextval('…'), made in this file or an earlier one) comes
+//     with GRANT USAGE ON SEQUENCE … TO that role in the same file: after 677
+//     a new sequence gives the client nothing, and the first client INSERT
+//     fails with "permission denied for sequence". An identity column needs
+//     no sequence privilege; prefer it.
 //
 // Comments are blanked by the quote-aware, $tag$-pairing scan
 // (tests/helpers/sql-code.js) and by the TypeScript parser's comment ranges
@@ -85,8 +94,9 @@ export function targetOf(target) {
 }
 
 /** Every client-role GRANT in one migration that breaks rules 1-3. */
-export function clientGrantViolations(sql) {
+export function clientGrantViolations(sql, prior = new Map()) {
   const code = sqlCode(sql).replace(ADP_RE, ' ')
+  const insertSeqs = insertSequences(sql, prior).get('authenticated') ?? new Set()
   const out = []
   for (const [stmt, privs, target, to] of code.matchAll(GRANT_RE)) {
     const roles = rolesOf(to).filter((r) => CLIENT_ROLES.includes(r))
@@ -101,7 +111,9 @@ export function clientGrantViolations(sql) {
       if (!tgt.names.every((n) => ANON_ALLOWED.includes(n))) out.push(`anon/PUBLIC: ${s}`)
     }
     if (roles.includes('authenticated')) {
-      if (tgt.kind === 'sequence') out.push(`sequence to authenticated: ${s}`)
+      const usageForInsert = tgt.kind === 'sequence' && privNames(privs).every((p) => p === 'usage') &&
+        tgt.names.every((n) => insertSeqs.has(n))
+      if (tgt.kind === 'sequence' && !usageForInsert) out.push(`sequence to authenticated: ${s}`)
       else if (privNames(privs).some((p) => MAINTENANCE.includes(p))) out.push(`TRUNCATE/REFERENCES/TRIGGER/MAINTAIN/ALL to authenticated: ${s}`)
     }
   }
@@ -155,6 +167,111 @@ export function undeclared(sql) {
   return [...new Set(createdRelations(sql).filter((r) => !granted.has(r.name) && !revoked.has(r.name)).map((r) => `${r.kind} ${r.name}`))]
 }
 
+// ── rule 8: sequences behind client INSERTs ──────────────────────────────
+const SERIAL_TYPE = /^(small|big)?serial[248]?$/i
+const IDENTITY = /\bgenerated\s+(always|by\s+default)\s+as\s+identity\b/i
+const NEXTVAL = /\bnextval\s*\(\s*'([^']+)'/i
+const NOT_A_COLUMN = /^(constraint|primary|unique|check|foreign|exclude|like)\b/i
+const INSERTING = ['insert', 'all', 'all privileges']
+const SEQUENCE_USE = ['usage', 'update', 'all', 'all privileges']
+const CREATE_TABLE_BODY_RE = new RegExp(String.raw`\bcreate\s+(?:(?:global\s+|local\s+)?(temp|temporary|unlogged)\s+)?table\s+(?:if\s+not\s+exists\s+)?${NAME}\s*\(`, 'gi')
+const ALTER_TABLE_RE = new RegExp(String.raw`\balter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?${NAME}\s+([^;]+)`, 'gi')
+const DROP_TABLE_RE = /\bdrop\s+table\s+(?:if\s+exists\s+)?([^;]+)/gi
+
+/** The sequence a column definition's default draws from, or null (identity columns: none). */
+function columnSequence(table, def) {
+  const d = def.trim()
+  if (NOT_A_COLUMN.test(d) || IDENTITY.test(d)) return null
+  const m = d.match(/^("[^"]+"|[a-z_]\w*)\s+([a-z_]\w*)/i)
+  if (!m) return null
+  if (SERIAL_TYPE.test(m[2])) return `${table}_${ident(m[1])}_seq`.slice(0, 63)
+  const nv = d.match(NEXTVAL)
+  return nv ? splitName(nv[1].trim()).name : null
+}
+
+/** The body of a parenthesised list starting just after its '(' (strings/comments already handled by sqlCode). */
+function parenBody(code, from) {
+  let depth = 1
+  for (let i = from; i < code.length; i++) {
+    if (code[i] === '(') depth++
+    else if (code[i] === ')' && --depth === 0) return code.slice(from, i)
+  }
+  return code.slice(from)
+}
+
+/**
+ * Public tables whose column defaults call nextval(), after running these
+ * migrations in order: Map<table, Set<sequence>>. CREATE TABLE (serial types,
+ * DEFAULT nextval('…')) sets a table's list, ALTER TABLE … ADD COLUMN and
+ * ALTER COLUMN … SET DEFAULT nextval add to it, DROP TABLE clears it. A copy
+ * of `start` is extended; it is never changed.
+ */
+export function tableSequences(sqls, start = new Map()) {
+  const seqs = new Map([...start].map(([t, s]) => [t, new Set(s)]))
+  for (const sql of sqls) {
+    const code = sqlCode(sql)
+    const events = []
+    for (const m of code.matchAll(CREATE_TABLE_BODY_RE)) {
+      if (m[1] && !/unlogged/i.test(m[1])) continue
+      const { schema, name } = splitName(m[2])
+      if (schema !== 'public') continue
+      const found = splitTop(parenBody(code, m.index + m[0].length)).map((d) => columnSequence(name, d)).filter(Boolean)
+      events.push([m.index, () => seqs.set(name, new Set(found))])
+    }
+    for (const m of code.matchAll(ALTER_TABLE_RE)) {
+      const { schema, name } = splitName(m[1])
+      if (schema !== 'public') continue
+      const found = []
+      for (const action of splitTop(m[2])) {
+        const add = action.match(/^add\s+(?:column\s+)?(?:if\s+not\s+exists\s+)?([\s\S]+)$/i)
+        const setDefault = action.match(/^alter\s+(?:column\s+)?\S+\s+set\s+default\s+([\s\S]+)$/i)
+        const seq = add ? columnSequence(name, add[1]) : setDefault?.[1].match(NEXTVAL) ? splitName(setDefault[1].match(NEXTVAL)[1].trim()).name : null
+        if (seq) found.push(seq)
+      }
+      if (found.length) events.push([m.index, () => seqs.set(name, new Set([...(seqs.get(name) ?? []), ...found]))])
+    }
+    for (const m of code.matchAll(DROP_TABLE_RE)) {
+      const names = splitTop(m[1].replace(/\s+(cascade|restrict)\s*$/i, '')).map((n) => splitName(n)).filter((n) => n.schema === 'public')
+      events.push([m.index, () => names.forEach((n) => seqs.delete(n.name))])
+    }
+    for (const [, apply] of events.sort((a, b) => a[0] - b[0])) apply()
+  }
+  for (const [t, s] of seqs) if (!s.size) seqs.delete(t)
+  return seqs
+}
+
+/** Map<client role, Set<sequence>>: sequences behind tables this file grants that role INSERT (or ALL) on. */
+function insertSequences(sql, prior = new Map()) {
+  const seqs = tableSequences([sql], prior)
+  const out = new Map()
+  for (const [, privs, target, to] of sqlCode(sql).replace(ADP_RE, ' ').matchAll(GRANT_RE)) {
+    const tgt = targetOf(target)
+    if (tgt.kind !== 'relation' || !privNames(privs).some((p) => INSERTING.includes(p))) continue
+    for (const role of rolesOf(to).filter((r) => CLIENT_ROLES.includes(r))) {
+      for (const n of tgt.names) for (const seq of seqs.get(n) ?? []) {
+        if (!out.has(role)) out.set(role, new Map())
+        out.get(role).set(seq, n)
+      }
+    }
+  }
+  return new Map([...out].map(([role, m]) => [role, Object.assign(new Set(m.keys()), { tableOf: m })]))
+}
+
+/** Client INSERT grants on nextval-fed tables with no USAGE on the sequence for that role in the same file (rule 8). */
+export function serialInsertGaps(sql, prior = new Map()) {
+  const usage = new Set()
+  for (const [, privs, target, to] of sqlCode(sql).replace(ADP_RE, ' ').matchAll(GRANT_RE)) {
+    const tgt = targetOf(target)
+    if (tgt.kind !== 'sequence' || !privNames(privs).some((p) => SEQUENCE_USE.includes(p))) continue
+    for (const role of rolesOf(to)) for (const n of tgt.names) usage.add(`${role} ${n}`)
+  }
+  const out = []
+  for (const [role, seqs] of insertSequences(sql, prior)) {
+    for (const seq of seqs) if (!usage.has(`${role} ${seq}`)) out.push(`${seqs.tableOf.get(seq)}: GRANT USAGE ON SEQUENCE public.${seq} TO ${role}`)
+  }
+  return [...new Set(out)]
+}
+
 /** Role memberships into a client role, and client-role owners (rule 6). */
 export function roleLeaks(sql) {
   const code = sqlCode(sql).replace(ADP_RE, ' ')
@@ -172,6 +289,19 @@ const migrationFiles = () => readdirSync(MIGRATIONS)
   .filter((f) => f.endsWith('.sql'))
   .sort((a, b) => (parseInt(a, 10) - parseInt(b, 10)) || a.localeCompare(b))
 const readMig = (f) => readFileSync(path.join(MIGRATIONS, f), 'utf8')
+let sequencesByFile
+/** tableSequences() of every migration before `file`. */
+function sequencesBefore(file) {
+  if (!sequencesByFile) {
+    sequencesByFile = new Map()
+    let acc = new Map()
+    for (const f of migrationFiles()) {
+      sequencesByFile.set(f, acc)
+      acc = tableSequences([readMig(f)], acc)
+    }
+  }
+  return sequencesByFile.get(file) ?? new Map()
+}
 
 describe('later migrations keep public relations closed by default (mig 677)', () => {
   it('mig 677 is present', () => {
@@ -181,7 +311,7 @@ describe('later migrations keep public relations closed by default (mig 677)', (
   const later = migrationFiles().filter((f) => parseInt(f, 10) >= SCAN_FROM)
   it.each(later)('%s: no client re-grant, no re-opened default, every new relation declared', (file) => {
     const sql = readMig(file)
-    expect(clientGrantViolations(sql), `${file}: anon holds nothing in public, and authenticated gets named read/write privileges only (mig 677)`).toEqual([])
+    expect(clientGrantViolations(sql, sequencesBefore(file)), `${file}: anon holds nothing in public, and authenticated gets named read/write privileges only (mig 677)`).toEqual([])
     expect(defaultReopeners(sql), `${file}: the public table/sequence default stays postgres + service_role (mig 677)`).toEqual([])
     expect(undeclared(sql), `${file}: add GRANT <privileges> ON public.<name> TO authenticated (a client reads it) or REVOKE ALL ON public.<name> FROM anon, authenticated (server-only)`).toEqual([])
     expect(roleLeaks(sql), `${file}: no role membership into, or ownership by, a client role`).toEqual([])
@@ -328,7 +458,7 @@ describe('the detectors', () => {
       [X + 'GRANT SELECT, INSERT ON public.x TO authenticated;', missing('authenticated')],
       ['create table if not exists x (id serial primary key);\ngrant insert on x to authenticated;', missing('authenticated')],
       ['CREATE TABLE public.x (n text, seq_no smallserial);\nGRANT INSERT ON public.x TO authenticated;', missing('authenticated', 'x_seq_no_seq')],
-      ['CREATE TABLE public.x ("Id" serial8);\nGRANT INSERT ON public.x TO authenticated;', missing('authenticated')],
+      ['CREATE TABLE public.x (id serial8);\nGRANT INSERT ON public.x TO authenticated;', missing('authenticated')],
       [X + 'GRANT INSERT (n) ON public.x TO authenticated;', missing('authenticated')],
       [X + 'GRANT ALL ON public.x TO authenticated;', missing('authenticated')],
       [X + 'GRANT INSERT ON public.x TO anon;', missing('anon')],

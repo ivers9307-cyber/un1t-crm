@@ -536,6 +536,20 @@ describe('after 677 — people', () => {
     expect(await asUser(STAFF_A, 'LOCK TABLE public.notes IN ACCESS EXCLUSIVE MODE', 'SELECT 1 AS ok')).toEqual([{ ok: 1 }])
   })
 
+  it('a NEW serial table granted INSERT needs USAGE on its sequence; an identity column does not (guard rule 8)', async () => {
+    await runSql(`CREATE TABLE public._t_serial (id bigserial PRIMARY KEY, n text);
+                  CREATE TABLE public._t_identity (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, n text);
+                  GRANT SELECT, INSERT ON public._t_serial, public._t_identity TO authenticated;`)
+    try {
+      await expect(asUser(STAFF_A, `INSERT INTO public._t_serial (n) VALUES ('x')`)).rejects.toThrow(/permission denied for sequence _t_serial_id_seq/)
+      expect(await asUser(STAFF_A, `INSERT INTO public._t_identity (n) VALUES ('x') RETURNING id > 0 AS ok`)).toEqual([{ ok: true }])
+      await runSql('GRANT USAGE ON SEQUENCE public._t_serial_id_seq TO authenticated')
+      expect(await asUser(STAFF_A, `INSERT INTO public._t_serial (n) VALUES ('x') RETURNING id > 0 AS ok`)).toEqual([{ ok: true }])
+    } finally {
+      await runSql('DROP TABLE public._t_serial; DROP TABLE public._t_identity;')
+    }
+  })
+
   it('service_role: a serial insert into the Postmark queue still works', async () => {
     expect(await asRole('service_role', `INSERT INTO public.postmark_webhook_queue (payload) VALUES ('{}') RETURNING id > 0 AS ok`))
       .toEqual([{ ok: true }])
