@@ -14,7 +14,7 @@
 //   - a per-week "approve all drafts" batch action
 // Deep-links from the approvals inbox (?focus=<sessionId>) auto-open the drawer.
 
-import { useState, useCallback, useEffect, useMemo } from 'react'
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { createBrowserClient } from '@/lib/supabase'
 import { Dumbbell, AlertCircle, Check, RotateCcw, RefreshCw, ChevronRight, X, Plus, Star, Tv, Cast } from 'lucide-react'
@@ -67,6 +67,10 @@ export default function HyroxPlanner({ initialBlock, initialSessions, initialSet
   const [houseStyle, setHouseStyle] = useState(initialSettings?.houseStyle || '')
   const [settingsCharter, setSettingsCharter] = useState(initialSettings?.charter || '')
   const [examples, setExamples] = useState(initialSettings?.styleExamples || [])
+  // C32 HYROXSTAR.1 — every example id this page has seen (loaded, added,
+  // starred, or removed). Sent with Save so the server keeps a stored example
+  // the page never saw instead of deleting it with a whole-array write.
+  const knownExampleIds = useRef(new Set((initialSettings?.styleExamples || []).map((e) => e?.id).filter(Boolean)))
   const [addingExample, setAddingExample] = useState(false)
   const [newExampleLabel, setNewExampleLabel] = useState('')
   const [newExampleText, setNewExampleText] = useState('')
@@ -76,10 +80,12 @@ export default function HyroxPlanner({ initialBlock, initialSessions, initialSet
 
   function addExample() {
     if (!newExampleText.trim()) return
+    const id = crypto.randomUUID()
+    knownExampleIds.current.add(id)
     setExamples((rows) => [
       ...rows,
       {
-        id: crypto.randomUUID(),
+        id,
         source: 'pasted',
         label: newExampleLabel.trim() || undefined,
         text: newExampleText.trim(),
@@ -108,10 +114,18 @@ export default function HyroxPlanner({ initialBlock, initialSessions, initialSet
           charter: settingsCharter,
           house_style: houseStyle,
           style_examples: examples,
+          known_example_ids: [...knownExampleIds.current],
         }),
       })
       const json = await res.json().catch(() => ({}))
       if (!res.ok || !json.success) throw new Error((json.error || 'Failed to save settings.') + (Array.isArray(json.issues) && json.issues.length ? ': ' + json.issues.map((i) => i.message || (i.path || []).join('.')).join('; ') : ''))
+      // Show what was stored: it can include an example starred elsewhere
+      // since this page loaded, which the server kept.
+      const stored = json.data?.hyrox?.style_examples
+      if (Array.isArray(stored)) {
+        for (const e of stored) if (e?.id) knownExampleIds.current.add(e.id)
+        setExamples(stored)
+      }
       setSettingsSaved(true)
     } catch (err) {
       setSettingsError(err.message)
@@ -399,6 +413,13 @@ export default function HyroxPlanner({ initialBlock, initialSessions, initialSet
       const res = await fetch(`/api/hyrox/sessions/${focusedSession.id}/exemplar`, { method: 'POST' })
       const json = await res.json().catch(() => ({}))
       if (!res.ok || !json.success) throw new Error(json.error || 'Failed to save example.')
+      // C32 HYROXSTAR.1 — add it to this page's list too, so a house-style
+      // Save in the same page load keeps it rather than deleting it.
+      const example = json.data?.example
+      if (example?.id) {
+        knownExampleIds.current.add(example.id)
+        setExamples((rows) => (rows.some((r) => r?.id === example.id) ? rows : [example, ...rows]))
+      }
       setExemplarNote(json.data?.added ? 'Saved as example' : 'Already saved')
     } catch (err) {
       setDrawerError(err.message)

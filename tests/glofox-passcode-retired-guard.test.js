@@ -49,6 +49,10 @@ export function retiredColumnsPresent(schema) {
 const isLaterMigration = (f) =>
   f.endsWith('.sql') && f !== PASSCODE_RETIRE_FILE && parseInt(f, 10) >= PASSCODE_RETIRE_MIGRATION
 
+// (a) and (b) walk the whole repo, which outruns vitest's 5s default on a
+// loaded machine; the same budget as the other whole-repo guards.
+const WHOLE_REPO_TIMEOUT_MS = 120_000
+
 function walk(dir, out = []) {
   if (!existsSync(dir)) return out
   for (const name of readdirSync(dir)) {
@@ -76,7 +80,7 @@ const isClientRun = (rel, text) =>
   rel.startsWith('shared/') || rel.startsWith('mobile/')
   || /^\s*['"]use client['"]/m.test(text) || /\bcreateBrowserClient\b/.test(text)
 
-describe('(a) no app code names a retired passcode column', () => {
+describe('(a) no app code names a retired passcode column', { timeout: WHOLE_REPO_TIMEOUT_MS }, () => {
   const files = ['src', 'shared', 'mobile', 'scripts', 'supabase/functions'].flatMap((d) => walk(path.join(ROOT, d)))
 
   it('scans a real tree (not vacuous)', () => {
@@ -107,7 +111,7 @@ describe('(a) no app code names a retired passcode column', () => {
   })
 })
 
-describe('(b) client-run code never reads glofox_push_events (it has no client grant)', () => {
+describe('(b) client-run code never reads glofox_push_events (it has no client grant)', { timeout: WHOLE_REPO_TIMEOUT_MS }, () => {
   it('finds none', () => {
     const offenders = []
     for (const file of ['src', 'shared', 'mobile'].flatMap((d) => walk(path.join(ROOT, d)))) {

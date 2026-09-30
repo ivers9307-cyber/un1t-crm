@@ -190,3 +190,38 @@ describe('ConnectionsSection — real answers are unchanged (pins)', () => {
     expect(screen.queryByRole('button', { name: 'Disconnect' })).toBeNull()
   })
 })
+
+// MIANITS (Richard's call, 30 Sep) — switching Mia on or off for a channel is
+// owner-only. The GET says whether this caller may (can_edit_agent); anyone
+// else sees the switch disabled with the reason, and it fails closed when the
+// flag is missing.
+describe('ConnectionsSection — Mia per-channel switch is owner-only (MIANITS)', () => {
+  const miaSwitch = () => screen.getByRole('checkbox', { name: /Mia auto-replies on Instagram/ })
+
+  it('disabled, with the reason, when the caller may not change it', async () => {
+    mockFetch({ gets: [reply(200, { success: true, connections: [LIVE_IG], can_edit_agent: false })] })
+    render(<ConnectionsSection locationId={LOC} embedded />)
+    await screen.findByRole('button', { name: 'Update Instagram' })
+    expect(miaSwitch().disabled).toBe(true)
+    expect(screen.getByText(/Only an owner can switch Mia on or off/)).toBeTruthy()
+  })
+
+  it('fails closed when the flag is missing', async () => {
+    mockFetch({ gets: [ok([LIVE_IG])] })
+    render(<ConnectionsSection locationId={LOC} embedded />)
+    await screen.findByRole('button', { name: 'Update Instagram' })
+    expect(miaSwitch().disabled).toBe(true)
+  })
+
+  it('enabled for an owner or master, and the change is sent', async () => {
+    mockFetch({ gets: [reply(200, { success: true, connections: [LIVE_IG], can_edit_agent: true })] })
+    render(<ConnectionsSection locationId={LOC} embedded />)
+    await screen.findByRole('button', { name: 'Update Instagram' })
+    expect(miaSwitch().disabled).toBe(false)
+    expect(screen.queryByText(/Only an owner can switch Mia on or off/)).toBeNull()
+    fireEvent.click(miaSwitch())
+    fireEvent.click(screen.getByRole('button', { name: 'Update Instagram' }))
+    await screen.findByText('Saved ✓')
+    expect(JSON.parse(calls('PATCH')[0][1].body).agent_enabled).toBe(true)
+  })
+})

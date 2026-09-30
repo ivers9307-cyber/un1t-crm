@@ -3,6 +3,16 @@ import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccessOr404, requireInboxPermission } from '@/lib/auth'
 import { sendFlowMessage } from '@/lib/whatsapp'
 import { whatsappErrorStatus } from '@/lib/whatsapp-number-missing'
+import { flowTokenFor } from '@/lib/whatsapp-flow/config'
+import { logError } from '@/lib/log'
+
+const LOG = 'wa-flow-send'
+// Plain words, no em-dashes. Same wording as the inbox send route's.
+const TEXT = Object.freeze({
+  readFailed: 'Could not load this conversation, so nothing was sent. Try again.',
+  settingsReadFailed: "Could not read this studio's booking Flow settings, so nothing was sent. Try again.",
+  notLogged: 'Sent to the customer, but it could not be saved to this thread. Do not send it again.',
+})
 
 // POST /api/whatsapp/conversations/[id]/send-flow — drop the location's
 // booking Flow (settings.whatsapp_flow) into an open conversation as an
@@ -23,10 +33,15 @@ export async function POST(request, props) {
   if (perm) return perm
 
   const db = createServerClient()
-  const { data: conversation } = await db.from('whatsapp_conversations')
+  const { data: conversation, error: convError } = await db.from('whatsapp_conversations')
     .select('id, location_id, contact_id, wa_phone')
     .eq('id', params.id)
     .maybeSingle()
+  // A failed read is never an empty answer: not a 404, a retryable 500.
+  if (convError) {
+    logError(LOG, 'conversation read failed; nothing sent', { conversationId: params.id, err: convError.message })
+    return NextResponse.json({ success: false, error: TEXT.readFailed }, { status: 500 })
+  }
   if (!conversation) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, conversation.location_id)
   if (guard) return guard
@@ -38,7 +53,12 @@ export async function POST(request, props) {
     )
   }
 
-  const { data: loc } = await db.from('locations').select('settings').eq('id', conversation.location_id).single()
+  const { data: loc, error: locError } = await db.from('locations').select('settings').eq('id', conversation.location_id).single()
+  // Unreadable settings are not "no Flow configured".
+  if (locError) {
+    logError(LOG, 'location settings read failed; nothing sent', { conversationId: conversation.id, locationId: conversation.location_id, err: locError.message })
+    return NextResponse.json({ success: false, error: TEXT.settingsReadFailed }, { status: 500 })
+  }
   const cfg = loc?.settings?.whatsapp_flow || {}
   if (!cfg.flow_id) {
     return NextResponse.json({ success: false, error: 'No booking Flow is configured for this location.' }, { status: 400 })
@@ -54,7 +74,9 @@ export async function POST(request, props) {
     sendResult = await sendFlowMessage(conversation.wa_phone, {
       locationId: conversation.location_id,
       flowId: cfg.flow_id,
-      flowToken: `${conversation.contact_id}.${conversation.location_id}`,
+      // FLOWTOKENDEDUP.1 — THE token format lives in flowTokenFor. contact_id
+      // is checked above, so this is never null here.
+      flowToken: flowTokenFor(conversation.contact_id, conversation.location_id),
       flowCta: cfg.cta_text || undefined,
       bodyText: cfg.invite_text || undefined,
     })
@@ -64,11 +86,14 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: e?.message || 'Meta flow send failed' }, { status: whatsappErrorStatus(e, 502) })
   }
 
-  // Best-effort thread row (mirrors whatsapp-carousel-send.js) — a logging
-  // failure never fails a send Meta already accepted. wa_message_id lets the
-  // status webhooks match the row.
+  // Meta has accepted the Flow: the customer has it. A lost thread row never
+  // fails the request (CLAUDE.md: removing a silent failure must never create
+  // a louder one); it is logged structurally and returned as a WARNING so staff
+  // don't send it twice. wa_message_id lets the status webhooks match the row.
+  const warnings = []
+  let insertError = null
   try {
-    await db.from('whatsapp_messages').insert({
+    const { error: err } = await db.from('whatsapp_messages').insert({
       conversation_id: conversation.id,
       contact_id: conversation.contact_id,
       location_id: conversation.location_id,
@@ -84,9 +109,16 @@ export async function POST(request, props) {
       sent_by: user.id,
       sent_at: new Date().toISOString(),
     })
-  } catch (e) {
-    console.error('[wa-flow-send] thread row insert failed:', e?.message)
+    insertError = err
+  } catch (err) {
+    insertError = err
+  }
+  if (insertError) {
+    logError(LOG, 'thread row insert failed after Meta accepted the Flow', {
+      conversationId: conversation.id, locationId: conversation.location_id, waMessageId: sendResult?.messageId || null, err: insertError.message,
+    })
+    warnings.push(TEXT.notLogged)
   }
 
-  return NextResponse.json({ success: true })
+  return NextResponse.json({ success: true, ...(warnings.length ? { warnings } : {}) })
 }

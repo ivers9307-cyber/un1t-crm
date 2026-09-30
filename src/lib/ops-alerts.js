@@ -4,7 +4,8 @@
 // token-expiring / queue-backlog events) route to the ORG's configured
 // recipient emails (org_settings.ops_alert_emails, mig 424 — editable
 // beside the hard caps on /settings/usage). No recipients configured →
-// the pre-O2 behaviour stays: a master-only push. So shipping this
+// the pre-O2 behaviour stays: an uncategorised push to the location's
+// masters, owners and managers with push on. So shipping this
 // changes nothing until a tenant sets recipients.
 //
 // Design note: the plan sketched this on locations.notification_config,
@@ -35,8 +36,8 @@ export function parseOpsAlertEmails(input) {
 }
 
 /**
- * Deliver one ops alert for an org. Email to configured recipients;
- * master push fallback when none. Never throws.
+ * Deliver one ops alert for an org. Email to configured recipients; when
+ * none, an uncategorised push to the location's admins (see below). Never throws.
  *
  * @param {{ organizationId: string, locationId?: string|null,
  *           subject: string, htmlBody: string, pushBody?: string }} alert
@@ -59,8 +60,11 @@ export async function sendOpsAlert(alert, { db, sendEmail, sendPush } = {}) {
     const recipients = parseOpsAlertEmails(settings?.ops_alert_emails)
 
     if (recipients.length === 0) {
-      // Pre-O2 behaviour: master-only push (no notify_* category fits an
-      // ops notice — omitting the category routes to master per push.js).
+      // Pre-O2 behaviour: a push fallback. No notify_* category fits an ops
+      // notice, so it is sent UNCATEGORISED, which does NOT mean master-only:
+      // readPushAllowedIds then gates only on the master switch
+      // (push_notifications), so it reaches every active master, owner and
+      // manager (ADMIN_ROLES) at the location who has push on (C31 PUSHNITS.1).
       if (alert.locationId) {
         await push(alert.locationId, ADMIN_ROLES, {
           title: alert.subject,

@@ -503,7 +503,9 @@ export async function processClassBookingRequest(db, request) {
       // first approval (priorGrant null, not a retry) would buy blind when
       // the balance reads empty or unreadable, stacking a second trial.
       return toReview('needs_credit_grant', res.trial_outcome_unknown === true
-        ? { trialGrant: { ok: false, code: 'TRIAL_GRANT_FAILED', outcome_unknown: true } }
+        // TRIALPURCHASE.2 (d): named by member, so another card for the same
+        // person finds the doubt (grantTrialBeforeBooking) and buys nothing.
+        ? { trialGrant: { ok: false, code: 'TRIAL_GRANT_FAILED', outcome_unknown: true, glofox_member_id: res.glofox_member_id } }
         : {})
     }
     if (!res.glofox_member_id || (res.status !== 'created' && res.status !== 'linked')) {

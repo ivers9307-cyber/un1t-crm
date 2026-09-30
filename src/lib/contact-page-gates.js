@@ -8,7 +8,7 @@
 // active studio and off at the contact's would have had that contact's
 // consultations, goals, photos and scans loaded into the page. Every decision
 // here is made at the contact's location instead.
-import { hasPermissionForLocation, hasMobilePermissionForLocation } from './permissions'
+import { hasPermission, hasPermissionForLocation, hasMobilePermissionForLocation } from './permissions'
 import { hasRoleAtLocation } from './role-at-location'
 import { ADMIN_ROLES, MANAGER_ROLES } from './schemas'
 
@@ -148,5 +148,94 @@ export function contactActionGates(user, contact) {
       canEditDevices: canEditContactDevices(user, loc),
       canLinkAccount: canLinkAppAccount(user, loc),
     },
+  }
+}
+
+// ── ROLEUI.2 — the buttons that had NO gate ───────────────────────────────
+// Rendered for every viewer until now and refused by their routes for anyone
+// the route's rule excludes, a crossover viewer included (canViewContact opens
+// a contact with a deal at the caller's studio to someone who belongs to none
+// of the contact's). Each helper is the route's decision at the contact's
+// location; src/lib/contact-page-gates-roleui2.test.js runs each over the
+// route's own sweep table.
+
+/**
+ * A member of the contact's studio (masters are members everywhere). The
+ * whole rule for: the Task/Activity writes (browser insert; activities RLS,
+ * mig 219, needs a profile_locations row there), the Book card
+ * (/api/bookings/create, /api/glofox/classes/*: assertLocationAccess) and the
+ * consent history card (/api/contacts/[id]/consent-log: assertLocationAccessOr404).
+ * Membership only, never a role or key: those paths judge nothing more, and
+ * the RLS half resolves mobile toggles in SQL without role templates, so a JS
+ * permission gate on Task could hide a write RLS would accept.
+ */
+export function isMemberOfContactStudio(user, locationId) {
+  if (!user || !locationId) return false
+  return Boolean(user.isMaster) || (user.locations || []).some((l) => l?.id === locationId)
+}
+
+/** POST /api/contacts/[id]/pipeline-status (the Cold item): `pipeline` at the contact. */
+export function canSetPipelineStatus(user, locationId) {
+  return hasPermissionForLocation(user, locationId, 'pipeline')
+}
+
+/** POST /api/contacts/[id]/notes (the Note button): `contacts` at the contact. */
+export function canAddContactNote(user, locationId) {
+  return hasPermissionForLocation(user, locationId, 'contacts')
+}
+
+/**
+ * The Sequence buttons: the picker lists sequences AT the contact's location
+ * (GET /api/sequences: email or whatsapp there) and enrols through
+ * POST /api/sequences/[id]/enrol (`email` at the sequence's location), so the
+ * button works exactly when the caller holds `email` at the contact's.
+ */
+export function canEnrolContactInSequence(user, locationId) {
+  return hasPermissionForLocation(user, locationId, 'email')
+}
+
+/** GET/POST /api/contacts/[id]/cancellation-form: email OR whatsapp, web OR mobile, at the contact. */
+export function canSendCancellationForm(user, locationId) {
+  const f = contactChannelFlags(user, locationId)
+  return f.whatsapp || f.email
+}
+
+/** POST/DELETE /api/contacts/[id]/link (Linked accounts): `contact_linking` at the contact. */
+export function canLinkContacts(user, locationId) {
+  return hasPermissionForLocation(user, locationId, 'contact_linking')
+}
+
+/**
+ * POST /api/whatsapp/conversations/start. That route still judges `whatsapp`
+ * at the ACTIVE studio (requireInboxPermission; moving it belongs to the inbox
+ * follow-up, C37 INBOXLOC.1) and membership at the contact. The button shows
+ * only where the route acts AND the contact's studio grants whatsapp, so it
+ * never offers what the route refuses nor more than the contact's studio
+ * allows. When the route moves, drop the hasPermission half.
+ */
+export function canStartWhatsAppThread(user, locationId) {
+  return isMemberOfContactStudio(user, locationId)
+    && hasPermissionForLocation(user, locationId, 'whatsapp')
+    && hasPermission(user, 'whatsapp')
+}
+
+/**
+ * The flags the contact page hands the components whose buttons had no gate.
+ *
+ * @param {object|null} user
+ * @param {object|null} contact  the contacts row (location_id)
+ */
+export function contactWorkGates(user, contact) {
+  const loc = contact?.location_id || null
+  return {
+    canNote: canAddContactNote(user, loc),
+    canTask: isMemberOfContactStudio(user, loc),
+    canSequence: canEnrolContactInSequence(user, loc),
+    canCancelForm: canSendCancellationForm(user, loc),
+    canCold: canSetPipelineStatus(user, loc),
+    canLinkAccounts: canLinkContacts(user, loc),
+    canStartWhatsApp: canStartWhatsAppThread(user, loc),
+    canBook: isMemberOfContactStudio(user, loc),
+    canReadConsent: isMemberOfContactStudio(user, loc),
   }
 }

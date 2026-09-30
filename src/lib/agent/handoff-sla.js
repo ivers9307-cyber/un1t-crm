@@ -46,6 +46,12 @@ export const HANDOFF_SLA_DEFAULT_MINUTES = 60
 // C21 PUSHDONE.1 — how long past the breach a failed escalation keeps being
 // retried (every 15-minute tick) before it is stamped and given up, loudly.
 export const HANDOFF_ALERT_RETRY_HOURS = 24
+// OPSNITS review — how long past the breach a FAILING human-reply read may
+// hold an escalation back: two 15-minute ticks. It used to share the 24h push
+// retry window, so a read that kept failing delayed the manager escalation by
+// a day (main escalated at the breach). Past the grace the thread escalates
+// anyway, with a push that says the reply could not be confirmed.
+export const HANDOFF_REPLY_UNREAD_GRACE_MINUTES = 30
 const MIN_MS = 60_000
 // The manual-takeover patch stamps agent_handed_off_at in the same request
 // as the operator's own message — tolerate small write-order skew so their
@@ -191,12 +197,10 @@ export function classifyAutoResolve({
  * throws. First real run drains the accumulated backlog; that is the point.
  */
 export async function runHandoffAutoResolve(db, { nowMs = Date.now() } = {}) {
-  const results = { resolved: 0, skipped: 0 }
+  const results = { resolved: 0, skipped: 0, reply_unread: 0, locations_unread: 0 }
   const nowIso = new Date(nowMs).toISOString()
 
-  const { data: locations } = await db.from('locations')
-    .select('id, name, settings')
-    .eq('active', true)
+  const locations = await readActiveLocations(db, 'auto-resolve', results)
 
   for (const location of locations || []) {
     const settings = location?.settings?.customer_agent || null
@@ -218,20 +222,33 @@ export async function runHandoffAutoResolve(db, { nowMs = Date.now() } = {}) {
         .order('agent_handed_off_at', { ascending: true })
         .limit(200)
       if (error) {
-        console.error(`[radar-agent] auto-resolve candidate query failed (${channel.name}):`, error.message)
+        logError('handoff-sla', 'auto-resolve candidate read failed; retried next tick', {
+          channel: channel.name, locationId: location.id, err: error.message || String(error),
+        })
         continue
       }
 
       for (const c of convs || []) {
         try {
           const handedOffAtMs = new Date(c.agent_handed_off_at).getTime()
+          // C31 PUSHNITS.1 — an unreadable reply check is not "no reply":
+          // leave the thread alone this tick (housekeeping; the next tick retries).
+          const reply = await readHumanRepliedAtMs(db, channel, c.id, handedOffAtMs)
+          if (reply.error) {
+            results.reply_unread++
+            results.skipped++
+            logError('handoff-sla', 'human-reply read failed; not auto-resolved, retried next tick', {
+              channel: channel.name, conversationId: c.id, err: reply.error.message || String(reply.error),
+            })
+            continue
+          }
           const decision = classifyAutoResolve({
             handedOffAtMs,
             pausedAt: c.agent_paused_at || null,
             agentActive: c.agent_active === true,
             resolvedAtMs: c.resolved_at ? new Date(c.resolved_at).getTime() : null,
             lastMessageAtMs: c.last_message_at ? new Date(c.last_message_at).getTime() : null,
-            humanRepliedAtMs: await humanRepliedAtMs(db, channel, c.id, handedOffAtMs),
+            humanRepliedAtMs: reply.atMs,
             nowMs,
             afterReplyHours,
             staleHours,
@@ -259,7 +276,7 @@ export async function runHandoffAutoResolve(db, { nowMs = Date.now() } = {}) {
           results.resolved++
         } catch (e) {
           results.skipped++
-          console.error(`[radar-agent] auto-resolve error (${channel.name}):`, e?.message || e)
+          logError('handoff-sla', 'auto-resolve row threw; retried next tick', { channel: channel.name, conversationId: c.id, err: e?.message || String(e) })
         }
       }
     }
@@ -289,7 +306,13 @@ const CHANNELS = [
   },
 ]
 
-async function humanRepliedAtMs(db, channel, conversationId, handedOffAtMs) {
+/**
+ * The first human reply since the handoff, WITH the read error (C31
+ * PUSHNITS.1): it used to discard the error, so a failed read answered "no
+ * reply" and the SLA sweep escalated a thread a human may have answered.
+ * @returns {Promise<{ atMs: number|null, error: object|null }>}
+ */
+async function readHumanRepliedAtMs(db, channel, conversationId, handedOffAtMs) {
   const sinceIso = new Date(handedOffAtMs - TAKEOVER_SKEW_MS).toISOString()
   let q = db.from(channel.messagesTable)
     .select('created_at')
@@ -299,9 +322,23 @@ async function humanRepliedAtMs(db, channel, conversationId, handedOffAtMs) {
     .order('created_at', { ascending: true })
     .limit(1)
   q = channel.humanFilter(q)
-  const { data } = await q
+  const { data, error } = await q
+  if (error) return { atMs: null, error }
   const row = Array.isArray(data) ? data[0] : null
-  return row ? new Date(row.created_at).getTime() : null
+  return { atMs: row ? new Date(row.created_at).getTime() : null, error: null }
+}
+
+/** Active locations, or [] with the failure logged and counted (never a quiet run). */
+async function readActiveLocations(db, sweep, results) {
+  const { data, error } = await db.from('locations')
+    .select('id, name, settings')
+    .eq('active', true)
+  if (error) {
+    results.locations_unread = 1
+    logError('handoff-sla', `${sweep} locations read failed; nothing swept this tick`, { err: error.message || String(error) })
+    return []
+  }
+  return data || []
 }
 
 /**
@@ -309,11 +346,9 @@ async function humanRepliedAtMs(db, channel, conversationId, handedOffAtMs) {
  * conversation exactly once. Never throws.
  */
 export async function runHandoffSlaSweep(db, { nowMs = Date.now() } = {}) {
-  const results = { escalated: 0, skipped: 0, alert_failed: 0, gave_up: 0 }
+  const results = { escalated: 0, skipped: 0, alert_failed: 0, gave_up: 0, reply_unread: 0, locations_unread: 0 }
 
-  const { data: locations } = await db.from('locations')
-    .select('id, name, settings')
-    .eq('active', true)
+  const locations = await readActiveLocations(db, 'sla', results)
 
   for (const location of locations || []) {
     const settings = location?.settings?.customer_agent || null
@@ -331,18 +366,39 @@ export async function runHandoffSlaSweep(db, { nowMs = Date.now() } = {}) {
         .lt('agent_handed_off_at', cutoffIso)
         .limit(50)
       if (error) {
-        console.error(`[radar-agent] handoff-sla candidate query failed (${channel.name}):`, error.message)
+        logError('handoff-sla', 'sla candidate read failed; retried next tick', {
+          channel: channel.name, locationId: location.id, err: error.message || String(error),
+        })
         continue
       }
 
       for (const c of convs || []) {
         try {
           const handedOffAtMs = new Date(c.agent_handed_off_at).getTime()
+          // C31 PUSHNITS.1 — an unreadable reply check is not "no reply". Skip
+          // the thread for a short grace (HANDOFF_REPLY_UNREAD_GRACE_MINUTES,
+          // two ticks) so a blip does not push managers about a thread a human
+          // may have answered; past it, escalate anyway, saying the reply could
+          // not be confirmed: a possibly-needless manager push beats a customer
+          // left waiting. The push itself then gets the normal retry window.
+          const reply = await readHumanRepliedAtMs(db, channel, c.id, handedOffAtMs)
+          const replyUnconfirmed = !!reply.error
+          if (replyUnconfirmed) {
+            results.reply_unread++
+            const pastBreachMs = nowMs - handedOffAtMs - slaMinutes * MIN_MS
+            const logCtx = { channel: channel.name, conversationId: c.id, err: reply.error.message || String(reply.error) }
+            if (pastBreachMs < HANDOFF_REPLY_UNREAD_GRACE_MINUTES * MIN_MS) {
+              results.skipped++
+              logError('handoff-sla', 'human-reply read failed; not escalated, retried next tick', logCtx)
+              continue
+            }
+            logError('handoff-sla', 'human-reply read still failing past the grace; escalating unconfirmed', logCtx)
+          }
           const decision = classifyHandoffBreach({
             handedOffAtMs,
             escalatedAt: c.handoff_escalated_at,
             resolvedAtMs: c.resolved_at ? new Date(c.resolved_at).getTime() : null,
-            humanRepliedAtMs: await humanRepliedAtMs(db, channel, c.id, handedOffAtMs),
+            humanRepliedAtMs: reply.atMs,
             nowMs,
             slaMinutes,
           })
@@ -355,7 +411,9 @@ export async function runHandoffSlaSweep(db, { nowMs = Date.now() } = {}) {
           try {
             pushResult = await sendPushToRolesAtLocation(location.id, MANAGER_ROLES, {
               title: `${channel.label} · still waiting after handoff`,
-              body: `${who} has been waiting ${waitingLabel(handedOffAtMs, nowMs)} since Mia handed off — nobody has replied yet.`,
+              body: replyUnconfirmed
+                ? `${who} has been waiting ${waitingLabel(handedOffAtMs, nowMs)} since Mia handed off. We couldn't confirm whether anyone has replied, so please check the conversation.`
+                : `${who} has been waiting ${waitingLabel(handedOffAtMs, nowMs)} since Mia handed off — nobody has replied yet.`,
               category: channel.pushCategory,
               data: { type: channel.handoffType, conversation_id: c.id },
             })
@@ -393,7 +451,7 @@ export async function runHandoffSlaSweep(db, { nowMs = Date.now() } = {}) {
           results.escalated++
         } catch (e) {
           results.skipped++
-          console.error(`[radar-agent] handoff-sla error (${channel.name}):`, e?.message || e)
+          logError('handoff-sla', 'sla row threw; retried next tick', { channel: channel.name, conversationId: c.id, err: e?.message || String(e) })
         }
       }
     }
