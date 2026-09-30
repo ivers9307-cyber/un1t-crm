@@ -393,14 +393,17 @@ export function formatHistoryForClaude(rows, opts = {}) {
 /**
  * MIAPREFILL.1 — is this stored inbound row one Mia would answer? The same
  * content gate shouldAgentReply applies to the live message: a text or a
- * tapped button with something in it. Reactions, media, stickers and empty
- * rows are not. Pure.
+ * tapped button with something in it, and a text that does not read like a
+ * business auto-responder (AGENT-BOTLOOP.1). Reactions, media, stickers,
+ * empty rows and auto-responders are not. Pure.
  */
 export function isReplyWorthyInbound(row) {
   if (!row || row.direction !== 'inbound') return false
   const type = row.message_type || 'text'
   if (type !== 'text' && type !== 'interactive') return false
-  return !!String(row.body || '').trim()
+  if (!String(row.body || '').trim()) return false
+  if (type === 'text' && isLikelyBusinessAutoReply(row.body)) return false
+  return true
 }
 
 // created_at strings from one column. Compare as instants; fall back to the
@@ -424,27 +427,55 @@ function isAfterIso(a, b) {
  * answeredThroughIso — set only on a missed-inbound rerun: the newest inbound
  * the previous pass saw. A reply-worthy inbound AFTER it arrived while Mia was
  * composing, so it sits BEFORE her reply in time although she never read it.
- * Those rows move after the newest outbound, so the model sees its reply and
- * then the message it still owes an answer to. Without this the rerun's
- * history ended on Mia's own reply: 3 of 3 reruns since 22 Aug got the 400.
+ * Those rows move to right after the previous pass's own reply, so the model
+ * sees that reply and then the message it still owes an answer to. Without
+ * this the rerun's history ended on Mia's own reply: 3 of 3 reruns since
+ * 22 Aug got the 400.
  *
- * @param {Array<{direction:string,body?:string,message_type?:string,created_at?:string}>} rows ascending by time
+ * The previous pass's reply is the FIRST agent-sourced outbound after
+ * answeredThroughIso: that pass replied only because nothing outbound followed
+ * its newest inbound, the claim keeps any other agent turn out while it runs,
+ * and a reply pass records exactly one agent row. Anchoring there, not after
+ * the newest outbound, matters when a later row already follows the missed
+ * message ([A, B, R, R2]: R2 came after B), which then ends the request on
+ * R2 and returns nothing_to_answer instead of answering B a second time.
+ * With no agent row in view (an unrecorded reply, a row without `source`),
+ * the late rows go last, as before.
+ *
+ * @param {Array<{direction:string,body?:string,message_type?:string,created_at?:string,source?:string|null}>} rows ascending by time
  * @param {{ maxMessages?: number, answeredThroughIso?: string|null }} [opts]
- * @returns {{ messages: Array<{role:string,content:string}>, reason: null|'no_history'|'nothing_to_answer' }}
+ * @returns {{ messages: Array<{role:string,content:string}>, reason: null|'no_history'|'nothing_to_answer', trailing?: {source:string|null,message_type:string|null} }}
+ *   `trailing` (only with nothing_to_answer) names the newest row by source
+ *   and type, never its body, so a cause other than STOP is measurable.
  */
 export function buildReplyTurnMessages(rows, opts = {}) {
   const { maxMessages = 20, answeredThroughIso = null } = opts
   let ordered = rows || []
   if (answeredThroughIso) {
     const late = ordered.filter((r) => isReplyWorthyInbound(r) && r.created_at && isAfterIso(r.created_at, answeredThroughIso))
-    if (late.length) ordered = [...ordered.filter((r) => !late.includes(r)), ...late]
+    if (late.length) {
+      const rest = ordered.filter((r) => !late.includes(r))
+      const anchor = rest.findIndex((r) => r.direction === 'outbound' && r.source === AGENT_MESSAGE_SOURCE &&
+        r.created_at && isAfterIso(r.created_at, answeredThroughIso))
+      ordered = anchor === -1
+        ? [...rest, ...late]
+        : [...rest.slice(0, anchor + 1), ...late, ...rest.slice(anchor + 1)]
+    }
   }
   const messages = formatHistoryForClaude(ordered, { maxMessages })
   if (messages.length === 0) return { messages: [], reason: 'no_history' }
   // The newest turn is the studio's (a STOP/START acknowledgement, a staff
-  // send, a template) and nothing after it needs an answer. Calling the API
-  // anyway is the prefill 400.
-  if (messages[messages.length - 1].role !== 'user') return { messages: [], reason: 'nothing_to_answer' }
+  // send, a template, a Mia reply that already followed the missed message)
+  // and nothing after it needs an answer. Calling the API anyway is the
+  // prefill 400.
+  if (messages[messages.length - 1].role !== 'user') {
+    const last = ordered[ordered.length - 1] || {}
+    return {
+      messages: [],
+      reason: 'nothing_to_answer',
+      trailing: { source: last.source ?? null, message_type: last.message_type ?? null },
+    }
+  }
   return { messages, reason: null }
 }
 
