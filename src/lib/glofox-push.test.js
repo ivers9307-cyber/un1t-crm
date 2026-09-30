@@ -241,6 +241,7 @@ describe('findOrCreateGlofoxMember — create-and-trial (createIfMissing=true)',
     expect(out.status).toBe('created')
     expect(purchaseGlofoxMembership).toHaveBeenCalledWith(VALID_CREDS, 'gx-new', 'mem-trial', 999)
     expect(out.error).toBeNull()
+    expect(out.trial_failed).toBe(false)
   })
 
   it('marks needs_review when trial config missing', async () => {
@@ -257,6 +258,7 @@ describe('findOrCreateGlofoxMember — create-and-trial (createIfMissing=true)',
     expect(out.status).toBe('needs_review')
     expect(out.error).toMatch(/Trial membership not configured/)
     expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
+    expect(out.trial_failed).toBe(true)
   })
 
   it('marks needs_review when trial purchase fails', async () => {
@@ -276,6 +278,9 @@ describe('findOrCreateGlofoxMember — create-and-trial (createIfMissing=true)',
     })
     expect(out.status).toBe('needs_review')
     expect(out.error).toMatch(/Glofox 422/)
+    // TRIALGRANT.1 — the processor files needs_credit_grant on this, not
+    // account_needs_review.
+    expect(out.trial_failed).toBe(true)
   })
 
   it('reports register failure as failed', async () => {

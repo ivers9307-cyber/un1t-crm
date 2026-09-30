@@ -633,28 +633,13 @@ export async function glofoxFetch(creds, pathOrUrl, options = {}) {
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Fetch the active + historical credit packs for a Glofox member.
- * Returns the data array (Credits[]) or [] on failure / no data.
- *
- * Used to drive credit_member detection — a paying customer with
- * an active class-pack credit pack qualifies as a Credit Member
- * (separate audience from subscription members). See
- * src/lib/glofox-sync.js:detectCreditMember.
- *
- * Best-effort: a network/API failure here returns [] so the
- * containing sync can still proceed (member contact gets synced,
- * credit_member detection is skipped, next sync gets it right).
+ * The active + historical credit packs for a Glofox member, as
+ * { ok, credits }. `ok: false` is a read that FAILED (429/5xx after
+ * glofoxFetch's retries, any other non-2xx, a network throw): "unknown",
+ * never "no packs" (MIA-CREDITS.1, CREDITSREAD.1). The old fetchUserCredits,
+ * which collapsed a failure into [], is gone (TRIALGRANT.1: no callers were
+ * left after CBPCREDITREAD.1).
  */
-export async function fetchUserCredits(creds, userId) {
-  const { credits } = await fetchUserCreditsResult(creds, userId)
-  return credits
-}
-
-// MIA-CREDITS.1 — ok-aware variant (the fetchUserBookingsResult pattern):
-// fetchUserCredits collapses "the read failed" and "genuinely no credit
-// records" into the same [], which is fine for callers that fail toward
-// staff review, but a caller that ESCALATES on empty (Mia's booking
-// pre-flight) must not escalate every booking during a Glofox blip.
 export async function fetchUserCreditsResult(creds, userId) {
   if (!creds || !userId) return { ok: false, credits: [] }
   try {
@@ -1109,20 +1094,64 @@ export async function updateGlofoxMember(creds, userId, patch) {
 }
 
 /**
+ * TRIALGRANT.1 — judge a membership purchase
+ * (POST /2.2/branches/{b}/users/{u}/memberships/{m}/plans/{p}/purchase).
+ *
+ * Glofox's spec (v2.3.0) answers 200 with { success, message, message_code,
+ * status: 'SUCCESS' | 'PENDING-INTENT' | 'ERROR', invoice_id }, and its own
+ * guidance says older endpoints 200 with success:false for a bad request.
+ * So HTTP ok alone is not a purchase. Granted = a 2xx whose body does not
+ * say success:false and whose status is neither ERROR nor PENDING-INTENT (a
+ * payment still awaiting action is not a usable credit yet; any case, `_` or
+ * `-`).
+ *
+ * A clean 2xx with neither field is granted: the /start mint path has run on
+ * this call for months (27/27 new accounts in the 90 days to 30 Sep 2026 got
+ * their €0 trial invoice). Its body shape is logged so the real success shape
+ * can be pinned: MIA-BOOK.3's lesson, where the booking id sat one level
+ * down for fourteen months because nobody printed the shape.
+ *
+ * Pure apart from that one log line.
+ * @returns {{ granted: boolean, messageCode: string|null, purchaseStatus: string|null, invoiceId: string|null, message: string|null }}
+ */
+export function interpretPurchaseResult({ httpOk, httpStatus = null, body } = {}) {
+  const b = body && typeof body === 'object' ? body : {}
+  const str = (v) => (typeof v === 'string' && v ? v : null)
+  const messageCode = str(b.message_code)
+  const purchaseStatus = str(b.status)
+  const invoiceId = str(b.invoice_id)
+  const message = str(b.message)
+  // Compared normalised: Glofox spells the pending state both PENDING-INTENT
+  // (this endpoint's spec) and PENDING_INTENT (invoices). purchaseStatus
+  // itself stays as Glofox sent it, for the card and the logs.
+  const statusKey = purchaseStatus ? purchaseStatus.toUpperCase().replace(/_/g, '-') : null
+  const refused = b.success === false || statusKey === 'ERROR' || statusKey === 'PENDING-INTENT'
+  const granted = !!httpOk && !refused
+  if (granted && b.success === undefined && purchaseStatus === null) {
+    logWarn('glofox', 'membership purchase 2xx without success/status; extend interpretPurchaseResult', { httpStatus, shape: describeBodyShape(body) })
+  }
+  return { granted, messageCode, purchaseStatus, invoiceId, message }
+}
+
+/**
  * Purchase a membership for a member via the cart-less direct
  * purchase endpoint:
  *   POST /2.2/branches/{branchId}/users/{userId}/memberships/{membershipId}/plans/{planCode}/purchase
  *
- * Used immediately after registerGlofoxMember to attach the
- * studio's trial membership to a fresh account. Per-location
- * trial config lives at locations.settings.glofox.trial_membership_id
- * + trial_plan_code.
+ * Used right after registerGlofoxMember to attach the studio's trial
+ * membership to a fresh account (glofox-push.js), and by the approve path
+ * of a needs_credit_grant card (agent/trial-grant.js). Per-location trial
+ * config: the glofox connection's trial_membership_id + trial_plan_code.
  *
- * Returns { ok, error, glofox_response }.
+ * Returns { ok, error?, http_status, message_code, purchase_status,
+ * invoice_id, glofox_response }. TRIALGRANT.1: `ok` is the PURCHASE
+ * (interpretPurchaseResult), not the HTTP status; `error` is set only when
+ * !ok.
  */
 export async function purchaseGlofoxMembership(creds, userId, membershipId, planCode, opts = {}) {
+  const none = { http_status: null, message_code: null, purchase_status: null, invoice_id: null }
   if (!creds?.branchId || !userId || !membershipId || !planCode) {
-    return { ok: false, error: 'missing args' }
+    return { ok: false, error: 'missing args', ...none }
   }
   const path = `/2.2/branches/${encodeURIComponent(creds.branchId)}/users/${encodeURIComponent(userId)}/memberships/${encodeURIComponent(membershipId)}/plans/${encodeURIComponent(planCode)}/purchase`
   try {
@@ -1137,12 +1166,19 @@ export async function purchaseGlofoxMembership(creds, userId, membershipId, plan
     })
     let parsed
     try { parsed = await r.json() } catch { parsed = null }
-    if (!r.ok) {
-      return { ok: false, error: parsed?.message || `Glofox HTTP ${r.status}`, glofox_response: parsed }
+    const v = interpretPurchaseResult({ httpOk: r.ok, httpStatus: r.status, body: parsed })
+    const out = {
+      ok: v.granted,
+      http_status: r.status,
+      message_code: v.messageCode,
+      purchase_status: v.purchaseStatus,
+      invoice_id: v.invoiceId,
+      glofox_response: parsed,
     }
-    return { ok: true, glofox_response: parsed }
+    if (!v.granted) out.error = v.message || v.messageCode || (v.purchaseStatus ? `purchase ${v.purchaseStatus}` : `Glofox HTTP ${r.status}`)
+    return out
   } catch (e) {
-    return { ok: false, error: e?.message || 'network error' }
+    return { ok: false, error: e?.message || 'network error', ...none, http_status: 0 }
   }
 }
 

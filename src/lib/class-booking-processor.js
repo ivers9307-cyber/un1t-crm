@@ -145,6 +145,13 @@ export async function routeToReview(db, request, reason, { personContactIds = nu
           ...(request.payment_status === 'paid'
             ? { paid: true, amount_cents: request.amount_cents, currency: request.currency || 'EUR' }
             : {}),
+          // TRIALGRANT.1 — approving needs_credit_grant buys a trial
+          // (agent/trial-grant.js). The funnel block may name its own trial,
+          // which the mint path buys; carry it so the approve buys the same
+          // one instead of the location default.
+          ...(reason === 'needs_credit_grant' && request.trial_membership_id && request.trial_plan_code
+            ? { trial_membership_id: request.trial_membership_id, trial_plan_code: request.trial_plan_code }
+            : {}),
         },
       }).select('id').maybeSingle()
       approvalId = amr?.id || null
@@ -470,6 +477,14 @@ export async function processClassBookingRequest(db, request) {
       ? { membershipId: request.trial_membership_id, planCode: request.trial_plan_code }
       : null
     const res = await findOrCreateGlofoxMember({ db, locationId: request.location_id, contact, source: 'booking_form', createIfMissing: true, attachTrial: true, trialOverride })
+    // TRIALGRANT.1 — the account WAS created and linked, but its trial did not
+    // take. That is exactly the card whose approve buys the trial and then
+    // books (needs_credit_grant), not account_needs_review, whose copy says
+    // the account match needs a human check and whose approve books with no
+    // credit behind it.
+    if (res.status === 'needs_review' && res.trial_failed === true && res.glofox_member_id) {
+      return toReview('needs_credit_grant')
+    }
     if (!res.glofox_member_id || (res.status !== 'created' && res.status !== 'linked')) {
       return toReview(`account_${res.status || 'failed'}`)
     }
