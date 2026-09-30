@@ -1148,19 +1148,17 @@ export async function registerGlofoxMember(creds, payload) {
   // unlinked.
   let landedMember = null
   let verifiedAbsent = false
-  const retry = {
-    verify: async () => {
-      const s = await searchGlofoxByEmail(creds, body.email, { retry: 'never' })
-      if (s.error) return 'unknown'
-      if (s.found && s.member?._id) { landedMember = s.member; return 'landed' }
-      verifiedAbsent = true
-      return 'absent'
-    },
+  const verifyRegistered = async () => {
+    const s = await searchGlofoxByEmail(creds, body.email, { retry: 'never' })
+    if (s.error) return 'unknown'
+    if (s.found && s.member?._id) { landedMember = s.member; return 'landed' }
+    verifiedAbsent = true
+    return 'absent'
   }
   try {
     const r = await glofoxFetch(creds, '/2.0/register', {
       method: 'POST',
-      retry,
+      retry: { verify: verifyRegistered },
       // MUST set this: without it fetch sends the body as text/plain and Glofox
       // never parses the JSON, rejecting every field as "required" (and the new
       // member is never created → the booking dead-ends in staff review). Mirrors
@@ -1463,19 +1461,15 @@ export async function createBooking(creds, bookingRequest) {
   let landed = null
   // Before the first send: a booking created from here on is this call's.
   const sentAt = Date.now()
-  const retry = userId && eventId
-    ? {
-        verify: async () => {
-          const v = await findLandedBooking(creds, userId, eventId, { sentAt })
-          if (v.state === 'landed') landed = v.booking
-          return v.state
-        },
-      }
-    : 'never'
+  const verifyBooked = async () => {
+    const v = await findLandedBooking(creds, userId, eventId, { sentAt })
+    if (v.state === 'landed') landed = v.booking
+    return v.state
+  }
   try {
     const r = await glofoxFetch(creds, '/2.0/bookings', {
       method: 'POST',
-      retry,
+      retry: userId && eventId ? { verify: verifyBooked } : 'never',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(bookingRequest),
     })
@@ -1615,18 +1609,16 @@ export async function cancelBooking(creds, bookingId, userId) {
   // re-send, read the member's bookings: this booking cancelled → ok, no
   // re-send; still live → re-send; not found or unreadable → the 5xx stands.
   let cancelled = false
-  const retry = {
-    verify: async () => {
-      const state = await findBookingCancelState(creds, userId, bookingId)
-      if (state === 'landed') cancelled = true
-      return state
-    },
+  const verifyCancelled = async () => {
+    const state = await findBookingCancelState(creds, userId, bookingId)
+    if (state === 'landed') cancelled = true
+    return state
   }
   try {
     const r = await glofoxFetch(
       creds,
       `/booking/${encodeURIComponent(bookingId)}/user/${encodeURIComponent(userId)}/cancel`,
-      { method: 'POST', retry },
+      { method: 'POST', retry: { verify: verifyCancelled } },
     )
     if (cancelled) return { ok: true, status: 200, body: { success: true }, recovered: 'landed_after_5xx' }
     let body
