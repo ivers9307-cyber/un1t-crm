@@ -14,6 +14,7 @@ import { logWarn } from '@/lib/log'
 import {
   glofoxFetch, glofoxRetryPolicy, glofoxHttpStats, glofoxHttpStatsSince,
   fetchPaymentsReport, searchGlofoxMember, getGlofoxInvoicePaymentLink, fetchBranchLeads,
+  purchaseGlofoxMembership,
 } from './glofox.js'
 
 const creds = { branchId: 'br-1', apiKey: 'k', apiToken: 't' }
@@ -184,5 +185,35 @@ describe('reads that are POSTs keep their 5xx retries', () => {
     expect(out).toMatchObject({ total: 1 })
     expect(out.data).toHaveLength(1)
     expect(fetch).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('purchaseGlofoxMembership — a trial is never bought twice', () => {
+  it('a 503 then a 200: the purchase is sent exactly ONCE, not granted, outcome unknown', async () => {
+    fetch.mockResolvedValueOnce(res(503)).mockResolvedValueOnce(res(200, { success: true, status: 'SUCCESS' }))
+    const out = await purchaseGlofoxMembership(creds, 'u1', 'm1', 'p1')
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(out).toMatchObject({ ok: false, http_status: 503, outcome_unknown: true })
+  })
+
+  it('a refusal Glofox answered is a KNOWN outcome', async () => {
+    fetch.mockResolvedValueOnce(res(200, { success: false, message_code: 'PURCHASE_NOT_ALLOWED', status: 'ERROR' }))
+    const out = await purchaseGlofoxMembership(creds, 'u1', 'm1', 'p1')
+    expect(out.ok).toBe(false)
+    expect(out.outcome_unknown).toBeUndefined()
+  })
+
+  it('a network throw is an unknown outcome', async () => {
+    fetch.mockRejectedValueOnce(new Error('socket hang up'))
+    const out = await purchaseGlofoxMembership(creds, 'u1', 'm1', 'p1')
+    expect(out).toMatchObject({ ok: false, http_status: 0, outcome_unknown: true })
+  })
+
+  it('a 429 is retried (Glofox did not process it) and the purchase then goes through', async () => {
+    fetch.mockResolvedValueOnce(res(429)).mockResolvedValueOnce(res(200, { success: true, status: 'SUCCESS', invoice_id: 'inv-9' }))
+    const out = await purchaseGlofoxMembership(creds, 'u1', 'm1', 'p1')
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(out).toMatchObject({ ok: true, invoice_id: 'inv-9' })
+    expect(out.outcome_unknown).toBeUndefined()
   })
 })

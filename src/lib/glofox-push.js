@@ -272,7 +272,12 @@ export async function findOrCreateGlofoxMember({
     } else {
       const purchase = await purchaseGlofoxMembership(creds, newGlofoxId, trial.membershipId, trial.planCode)
       if (!purchase.ok) {
-        trialPurchaseError = `Trial membership purchase failed: ${purchase.error}`
+        // GLOFOXPOSTRETRY.1 — a 5xx or no reply is not a refusal: Glofox may
+        // have bought it. The needs_credit_grant card this becomes reads the
+        // new account's credits before buying again.
+        trialPurchaseError = purchase.outcome_unknown === true
+          ? `Trial membership purchase got no clear answer from Glofox (${purchase.error}); it may have gone through. Check Glofox for a €0 trial invoice before adding one by hand.`
+          : `Trial membership purchase failed: ${purchase.error}`
       }
     }
   }

@@ -180,9 +180,10 @@ const FAILURE_EXPLANATIONS = {
 // refused for no credits. The purchase spec: a member with an active
 // membership gets the new one starting AFTER it ends.
 // Review of TRIALGRANT.1 — the purchase was sent but Glofox never answered
-// (network), so it may or may not have gone through.
+// clearly (network, or a 5xx: GLOFOXPOSTRETRY.1), so it may or may not have
+// gone through.
 const TRIAL_GRANT_NO_ANSWER =
-  'Glofox did not answer when the trial was being added, so it may or may not have gone through, and the booking was not attempted. Check their account in Glofox for a €0 trial invoice. If the trial is there and usable, or you add a credit by hand, retry and it books against it; retrying never buys a second trial while this is unclear.'
+  'Glofox did not answer clearly (no reply, or a server error) when the trial was being added, so it may or may not have gone through, and the booking was not attempted. Check their account in Glofox for a €0 trial invoice. If the trial is there and usable, or you add a credit by hand, retry and it books against it; retrying never buys a second trial while this is unclear.'
 
 const NO_CREDITS_AFTER_TRIAL =
   'The trial was added in Glofox, but Glofox still refused the booking for no credits. The trial may be set to start later (Glofox starts a new membership after one they already hold ends). Check their memberships in Glofox, then retry. Retrying does not add another trial.'

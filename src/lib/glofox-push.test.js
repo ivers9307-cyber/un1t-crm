@@ -283,6 +283,28 @@ describe('findOrCreateGlofoxMember — create-and-trial (createIfMissing=true)',
     expect(out.trial_failed).toBe(true)
   })
 
+  it('a trial purchase with no clear answer (a 5xx) says it may have gone through (GLOFOXPOSTRETRY.1)', async () => {
+    registerGlofoxMember.mockResolvedValueOnce({ ok: true, member: { _id: 'gx-new' } })
+    purchaseGlofoxMembership.mockResolvedValueOnce({ ok: false, error: 'Glofox HTTP 503', http_status: 503, outcome_unknown: true })
+    const db = makeFakeDb({
+      locationSelect: {
+        data: { settings: { glofox: { trial_membership_id: 'mem-trial', trial_plan_code: 999 } } },
+        error: null,
+      },
+    })
+    const out = await findOrCreateGlofoxMember({
+      db, locationId: 'loc1', source: 'booking_form',
+      contact: { id: 'c1', email: 'a@b.com', first_name: 'Alice', last_name: 'Smith' },
+      createIfMissing: true,
+      attachTrial: true,
+    })
+    expect(out.status).toBe('needs_review')
+    expect(out.trial_failed).toBe(true)
+    expect(out.error).toMatch(/may have gone through/)
+    expect(out.error).toMatch(/€0 trial invoice/)
+    expect(purchaseGlofoxMembership).toHaveBeenCalledTimes(1)
+  })
+
   it('reports register failure as failed', async () => {
     registerGlofoxMember.mockResolvedValueOnce({ ok: false, error: 'Glofox 400 — duplicate email' })
     const db = makeFakeDb()

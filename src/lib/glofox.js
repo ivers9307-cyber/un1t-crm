@@ -1228,6 +1228,8 @@ export function interpretPurchaseResult({ httpOk, httpStatus = null, body } = {}
  * invoice_id, glofox_response }. TRIALGRANT.1: `ok` is the PURCHASE
  * (interpretPurchaseResult), not the HTTP status; `error` is set only when
  * !ok.
+ * GLOFOXPOSTRETRY.1: outcome_unknown: true when Glofox gave no clear answer
+ * (a network error or a 5xx); the purchase is never re-sent after a 5xx.
  */
 export async function purchaseGlofoxMembership(creds, userId, membershipId, planCode, opts = {}) {
   const none = { http_status: null, message_code: null, purchase_status: null, invoice_id: null }
@@ -1238,6 +1240,11 @@ export async function purchaseGlofoxMembership(creds, userId, membershipId, plan
   try {
     const r = await glofoxFetch(creds, path, {
       method: 'POST',
+      // GLOFOXPOSTRETRY.1 — NEVER re-sent after a 5xx. Glofox has no dedupe on
+      // a purchase, and a 5xx can come after it has bought: a re-send stacks a
+      // second trial. A 5xx is outcome_unknown instead (below), which
+      // grantTrialBeforeBooking refuses to buy over unless credits show.
+      retry: 'never',
       // Declare the JSON body's content-type (as createBooking/register do).
       // The trial purchase is the next call after register in the booking flow;
       // the body is empty today, but set it so Glofox can't ignore a body we
@@ -1257,9 +1264,12 @@ export async function purchaseGlofoxMembership(creds, userId, membershipId, plan
       glofox_response: parsed,
     }
     if (!v.granted) out.error = v.message || v.messageCode || (v.purchaseStatus ? `purchase ${v.purchaseStatus}` : `Glofox HTTP ${r.status}`)
+    // A 5xx may come after Glofox processed the purchase: like no reply at
+    // all, it says nothing about whether the trial was bought.
+    if (r.status >= 500) out.outcome_unknown = true
     return out
   } catch (e) {
-    return { ok: false, error: e?.message || 'network error', ...none, http_status: 0 }
+    return { ok: false, error: e?.message || 'network error', ...none, http_status: 0, outcome_unknown: true }
   }
 }
 

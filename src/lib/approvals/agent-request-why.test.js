@@ -299,4 +299,11 @@ describe('failureExplanation: the write-ahead trial grant (TRIALGRANT.1 review)'
     expect(out).toMatch(/€0 trial invoice/)
     expect(out).not.toMatch(/would not add the trial/i)
   })
+
+  it('a purchase that answered 5xx reads as no clear answer, not "would not add" (GLOFOXPOSTRETRY.1)', () => {
+    const out = failed({ ok: false, message_code: 'TRIAL_GRANT_FAILED', http_status: 503, outcome_unknown: true })
+    expect(out).toMatch(/server error/i)
+    expect(out).toMatch(/€0 trial invoice/)
+    expect(out).not.toMatch(/would not add the trial/i)
+  })
 })
