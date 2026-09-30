@@ -26,6 +26,12 @@
 //     DELETE, or no FOR, which means ALL) on the two read-only tables; or
 //     when it CREATE TABLEs any of the five names in public (the default ACL
 //     re-grants ALL to anon and authenticated). No exemption for the table.
+//  4. A migration after 668 fails when it takes a privilege off a
+//     column-granted table (COLUMN_GRANTED: rosters, the two shift tables,
+//     locations, contact_external_integrations, email_sequences) with a
+//     table-level REVOKE SELECT/UPDATE/ALL FROM authenticated: that revokes
+//     it on every column too, unless the same file re-grants the column list
+//     after it.
 //
 // SQL comments are blanked by ONE left-to-right, quote- and dollar-aware
 // pass (stripSqlComments), never by a regex that removes /* */ first: a '/*'
@@ -324,6 +330,65 @@ export function grantsweepReopeners(sql) {
   return hits
 }
 
+/**
+ * Tables whose authenticated privileges are COLUMN-level, and which ones
+ * (migs 618, 646, 648, 654). A table-level REVOKE of one of these (or of
+ * ALL) from authenticated also revokes it on every column, which silently
+ * wipes the column grants (on the shift tables: the phone's Today tab 42501s).
+ */
+export const COLUMN_GRANTED = Object.freeze({
+  rosters: Object.freeze(['select']),
+  shift_blocks: Object.freeze(['select']),
+  shift_assignments: Object.freeze(['select']),
+  locations: Object.freeze(['select', 'update']),
+  contact_external_integrations: Object.freeze(['select', 'update']),
+  email_sequences: Object.freeze(['select']),
+})
+
+const NOT_A_TABLE = /^(sequence|function|procedure|routine|schema|database|foreign|large|language|tablespace|type|domain)\s/i
+const escapeRe = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/** Does `code` grant `priv` on a column list of `table` to authenticated? */
+function grantsColumns(code, priv, table) {
+  const re = new RegExp(`\\bgrant\\s+[^;'$]*?\\b${priv}\\s*\\([^)]*\\)[^;'$]*?\\s+on\\s+(?:table\\s+)?(?:"?public"?\\s*\\.\\s*)?"?${escapeRe(table)}"?\\s+to\\s+[^;'$]*\\bauthenticated\\b`, 'i')
+  return re.test(code)
+}
+
+/**
+ * Every table-level REVOKE (no column list) of a privilege authenticated
+ * holds by COLUMN on that table (COLUMN_GRANTED), or of ALL, from
+ * authenticated, unless the same file re-grants a column list of each such
+ * privilege on that table to authenticated AFTER it (the 618/646/648/654
+ * shape). REVOKE GRANT OPTION FOR only drops the grant option: not counted.
+ */
+export function columnGrantWipers(sql) {
+  const code = stripSqlComments(sql)
+  const hits = []
+  const revokeRe = /\brevoke\s+(?!grant\s+option\s+for\b)([^;'$]+?)\s+on\s+([^;'$]+?)\s+from\s+([^;'$]+?)(?:;|'|\$|$)/gi
+  for (const m of code.matchAll(revokeRe)) {
+    const [stmt, privs, target, from] = m
+    const grantees = splitTop(from.replace(/\s+(granted\s+by\b|cascade\b|restrict\b)[\s\S]*$/i, '')).map(ident)
+    if (!grantees.includes('authenticated')) continue
+    const names = splitTop(privs).filter((p) => !p.includes('(')).map((p) => p.toLowerCase().replace(/\s+/g, ' ').trim())
+    const revokesAll = names.some((p) => p === 'all' || p === 'all privileges')
+    const schemaWide = target.trim().match(/^all\s+tables\s+in\s+schema\s+([\s\S]+)$/i)
+    let tables
+    if (schemaWide) {
+      if (!splitTop(schemaWide[1]).map(ident).includes('public')) continue
+      tables = Object.keys(COLUMN_GRANTED)
+    } else {
+      if (NOT_A_TABLE.test(target.trim())) continue
+      tables = splitTop(target.replace(/^\s*table\s+/i, '')).map(tableName).filter((t) => t in COLUMN_GRANTED)
+    }
+    const after = code.slice(m.index + stmt.length)
+    for (const t of tables) {
+      const wiped = COLUMN_GRANTED[t].filter((p) => revokesAll || names.includes(p))
+      if (wiped.length && !wiped.every((p) => grantsColumns(after, p, t))) hits.push(`${stmt.trim()} [wipes ${wiped.join('/')} column grants on ${t}]`)
+    }
+  }
+  return hits
+}
+
 // ROLLING BACK mig 668: forward-only, so the rollback is a NEW migration named
 // `<NNN>_grantsweep1_rollback.sql` (NNN > 668), whose body is the plan's
 // rollback record. That exact name is exempt from the check below.
@@ -337,7 +402,14 @@ describe('later migrations keep the scheduling grants (GRANTSWEEP.1)', () => {
   it('mig 668 itself is on disk and reopens nothing', () => {
     const file = all.find((f) => Number.parseInt(f, 10) === GRANTSWEEP_MIGRATION && /scheduling_tables_client_grants/.test(f))
     expect(file).toBe('668_scheduling_tables_client_grants.sql')
-    expect(grantsweepReopeners(readFileSync(path.join(MIG_DIR, file), 'utf8'))).toEqual([])
+    const sql = readFileSync(path.join(MIG_DIR, file), 'utf8')
+    expect(grantsweepReopeners(sql)).toEqual([])
+    expect(columnGrantWipers(sql)).toEqual([])
+    // …and the D4 mistake (a table-level REVOKE on the shift tables) would be caught.
+    const wiping = sql.replace('REVOKE TRUNCATE, REFERENCES, TRIGGER, MAINTAIN\n  ON public.shift_blocks, public.shift_assignments FROM authenticated;',
+      'REVOKE ALL ON public.shift_blocks, public.shift_assignments FROM authenticated;')
+    expect(wiping).not.toBe(sql)
+    expect(columnGrantWipers(wiping)).toHaveLength(2)
   })
 
   it.each(later.length ? later : ['(none yet)'])('%s: gives no client back what mig 668 took', (file) => {
@@ -345,6 +417,64 @@ describe('later migrations keep the scheduling grants (GRANTSWEEP.1)', () => {
     expect(grantsweepReopeners(readFileSync(path.join(MIG_DIR, file), 'utf8')),
       `${file}: this reopens a scheduling table to a browser or phone (mig 668). Serve it through a service-role /api route`).toEqual([])
   })
+
+  it.each(later.length ? later : ['(none yet)'])('%s: wipes no column grant with a table-level REVOKE', (file) => {
+    if (file === '(none yet)') return
+    expect(columnGrantWipers(readFileSync(path.join(MIG_DIR, file), 'utf8')),
+      `${file}: a table-level REVOKE of SELECT/UPDATE/ALL from authenticated also revokes it on every column. ` +
+      'Revoke only the privileges you mean (e.g. INSERT, UPDATE, DELETE), or re-grant the column list after it in the same file (CLAUDE.md)').toEqual([])
+  })
+
+  it('the column-granted tables are the ones the migrations grant by column (not a stale list)', () => {
+    const found = {}
+    for (const f of all) {
+      const code = stripSqlComments(readFileSync(path.join(MIG_DIR, f), 'utf8'))
+      for (const m of code.matchAll(/\bgrant\s+(select|update)\s*\([^)]*\)[^;]*?\bon\s+(?:table\s+)?(?:public\.)?"?([a-z_]+)"?\s+to\s+[^;]*\bauthenticated\b/gi)) {
+        (found[m[2]] ??= new Set()).add(m[1].toLowerCase())
+      }
+    }
+    expect(Object.fromEntries(Object.entries(found).map(([t, p]) => [t, [...p].sort()]))).toEqual(
+      Object.fromEntries(Object.entries(COLUMN_GRANTED).map(([t, p]) => [t, [...p].sort()])))
+  })
+
+  it.each([
+    'REVOKE SELECT ON public.shift_blocks FROM authenticated;',
+    'REVOKE ALL ON public.shift_assignments FROM anon, authenticated;',
+    'REVOKE ALL PRIVILEGES ON TABLE public.rosters FROM authenticated;',
+    'REVOKE UPDATE ON public.locations FROM authenticated;',
+    'revoke select, insert on "public"."email_sequences" from "authenticated" cascade;',
+    'REVOKE SELECT ON ALL TABLES IN SCHEMA public FROM authenticated;',
+    `DO $$ BEGIN EXECUTE 'REVOKE ALL ON public.contact_external_integrations FROM authenticated'; END $$;`,
+    // ALL takes UPDATE too, and only SELECT is re-made
+    'REVOKE ALL ON public.locations FROM authenticated;\nGRANT SELECT (id, name) ON public.locations TO authenticated;',
+    // the column grant comes BEFORE the revoke, which then wipes it
+    'GRANT SELECT (id) ON public.shift_blocks TO authenticated;\nREVOKE SELECT ON public.shift_blocks FROM authenticated;',
+  ])('the column-grant wiper detector flags %s', (sql) => {
+    expect(columnGrantWipers(sql)).not.toEqual([])
+  })
+
+  it.each([
+    'REVOKE SELECT ON public.shift_blocks FROM anon;',
+    'REVOKE INSERT, UPDATE, DELETE ON public.shift_blocks, public.shift_assignments FROM authenticated;',
+    'REVOKE TRUNCATE, REFERENCES, TRIGGER, MAINTAIN ON public.shift_blocks FROM authenticated;',
+    'REVOKE UPDATE ON public.shift_blocks FROM authenticated;',
+    'REVOKE SELECT (notes) ON public.shift_blocks FROM authenticated;',
+    'REVOKE GRANT OPTION FOR SELECT ON public.rosters FROM authenticated;',
+    'REVOKE SELECT ON public.shift_swap_requests FROM authenticated;',
+    'REVOKE SELECT ON ALL TABLES IN SCHEMA private FROM authenticated;',
+    // the 646 shape: a table-level revoke, then the column list re-made
+    'REVOKE ALL ON public.shift_blocks FROM authenticated;\nGRANT SELECT (id, block_date) ON public.shift_blocks TO authenticated;\nGRANT INSERT, UPDATE, DELETE ON public.shift_blocks TO authenticated;',
+    'REVOKE SELECT, UPDATE ON public.locations FROM anon, authenticated;\nGRANT SELECT (id, name), UPDATE (name) ON public.locations TO authenticated;',
+    '-- REVOKE ALL ON public.locations FROM authenticated;',
+  ])('the column-grant wiper detector passes %s', (sql) => {
+    expect(columnGrantWipers(sql)).toEqual([])
+  })
+
+  it.each(['618_coach_budget_and_role_scope.sql', '646_shift_notes_column_grants.sql',
+    '648_credential_column_grants.sql', '654_email_sequences_column_grants.sql'])(
+    'the migration that made the column grants (%s) passes: it re-grants after its revoke', (file) => {
+      expect(columnGrantWipers(readFileSync(path.join(MIG_DIR, file), 'utf8'))).toEqual([])
+    })
 
   it('a GRANTSWEEP.1 rollback migration is allow-listed by its file name, and nothing else is', () => {
     expect(isGrantsweepRollback('669_grantsweep1_rollback.sql')).toBe(true)
