@@ -46,6 +46,12 @@ export const HANDOFF_SLA_DEFAULT_MINUTES = 60
 // C21 PUSHDONE.1 — how long past the breach a failed escalation keeps being
 // retried (every 15-minute tick) before it is stamped and given up, loudly.
 export const HANDOFF_ALERT_RETRY_HOURS = 24
+// OPSNITS review — how long past the breach a FAILING human-reply read may
+// hold an escalation back: two 15-minute ticks. It used to share the 24h push
+// retry window, so a read that kept failing delayed the manager escalation by
+// a day (main escalated at the breach). Past the grace the thread escalates
+// anyway, with a push that says the reply could not be confirmed.
+export const HANDOFF_REPLY_UNREAD_GRACE_MINUTES = 30
 const MIN_MS = 60_000
 // The manual-takeover patch stamps agent_handed_off_at in the same request
 // as the operator's own message — tolerate small write-order skew so their
@@ -370,23 +376,23 @@ export async function runHandoffSlaSweep(db, { nowMs = Date.now() } = {}) {
         try {
           const handedOffAtMs = new Date(c.agent_handed_off_at).getTime()
           // C31 PUSHNITS.1 — an unreadable reply check is not "no reply". Skip
-          // the thread this tick (the next retries) while inside the same
-          // retry window a failed push gets; past it, escalate anyway: a
-          // possibly-needless manager push beats a customer left waiting.
+          // the thread for a short grace (HANDOFF_REPLY_UNREAD_GRACE_MINUTES,
+          // two ticks) so a blip does not push managers about a thread a human
+          // may have answered; past it, escalate anyway, saying the reply could
+          // not be confirmed: a possibly-needless manager push beats a customer
+          // left waiting. The push itself then gets the normal retry window.
           const reply = await readHumanRepliedAtMs(db, channel, c.id, handedOffAtMs)
-          if (reply.error) {
+          const replyUnconfirmed = !!reply.error
+          if (replyUnconfirmed) {
             results.reply_unread++
             const pastBreachMs = nowMs - handedOffAtMs - slaMinutes * MIN_MS
-            if (pastBreachMs <= HANDOFF_ALERT_RETRY_HOURS * 60 * MIN_MS) {
+            const logCtx = { channel: channel.name, conversationId: c.id, err: reply.error.message || String(reply.error) }
+            if (pastBreachMs < HANDOFF_REPLY_UNREAD_GRACE_MINUTES * MIN_MS) {
               results.skipped++
-              logError('handoff-sla', 'human-reply read failed; not escalated, retried next tick', {
-                channel: channel.name, conversationId: c.id, err: reply.error.message || String(reply.error),
-              })
+              logError('handoff-sla', 'human-reply read failed; not escalated, retried next tick', logCtx)
               continue
             }
-            logError('handoff-sla', 'human-reply read still failing past the retry window; escalating unread', {
-              channel: channel.name, conversationId: c.id, err: reply.error.message || String(reply.error),
-            })
+            logError('handoff-sla', 'human-reply read still failing past the grace; escalating unconfirmed', logCtx)
           }
           const decision = classifyHandoffBreach({
             handedOffAtMs,
@@ -405,7 +411,9 @@ export async function runHandoffSlaSweep(db, { nowMs = Date.now() } = {}) {
           try {
             pushResult = await sendPushToRolesAtLocation(location.id, MANAGER_ROLES, {
               title: `${channel.label} · still waiting after handoff`,
-              body: `${who} has been waiting ${waitingLabel(handedOffAtMs, nowMs)} since Mia handed off — nobody has replied yet.`,
+              body: replyUnconfirmed
+                ? `${who} has been waiting ${waitingLabel(handedOffAtMs, nowMs)} since Mia handed off. We couldn't confirm whether anyone has replied, so please check the conversation.`
+                : `${who} has been waiting ${waitingLabel(handedOffAtMs, nowMs)} since Mia handed off — nobody has replied yet.`,
               category: channel.pushCategory,
               data: { type: channel.handoffType, conversation_id: c.id },
             })

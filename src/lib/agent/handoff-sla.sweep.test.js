@@ -8,7 +8,7 @@ vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.f
 
 const { sendPushToRolesAtLocation } = await import('@/lib/push')
 const { logWarn, logError } = await import('@/lib/log')
-const { runHandoffSlaSweep, runHandoffAutoResolve, HANDOFF_ALERT_RETRY_HOURS } = await import('./handoff-sla')
+const { runHandoffSlaSweep, runHandoffAutoResolve, HANDOFF_ALERT_RETRY_HOURS, HANDOFF_REPLY_UNREAD_GRACE_MINUTES } = await import('./handoff-sla')
 
 const H = 3_600_000
 const NOW = Date.parse('2026-09-28T12:00:00Z')
@@ -16,7 +16,11 @@ const NOW = Date.parse('2026-09-28T12:00:00Z')
 // One WhatsApp conversation handed off 2h ago (SLA 60 min), nobody replied.
 // `updates` records every UPDATE with its filters, in order.
 // `readErrors` fails the SELECT on the named table (C31 PUSHNITS.1).
-function sweepDb({ convs, updateError = null, readErrors = {} } = {}) {
+// `replies` is what the human-reply read returns (default: nobody replied).
+// The conversations read honours `.is('handoff_escalated_at', null)`, and a
+// successful UPDATE applies to the in-memory row only when its `.is()` CAS
+// still holds, so several ticks can run against the same fake.
+function sweepDb({ convs, updateError = null, readErrors = {}, replies = [] } = {}) {
   const updates = []
   const db = {
     from(table) {
@@ -29,11 +33,17 @@ function sweepDb({ convs, updateError = null, readErrors = {} } = {}) {
         update(patch) { state.patch = patch; updates.push({ table, patch, eqs: state.eqs, is: state.is }); return b },
         then(res, rej) {
           let out
-          if (state.patch) out = { data: null, error: updateError }
-          else if (readErrors[table]) out = { data: null, error: readErrors[table] }
+          const casHolds = (row) => Object.entries(state.is).every(([c, v]) => (row[c] ?? null) === v)
+          if (state.patch) {
+            out = { data: null, error: updateError }
+            if (!updateError && table === 'whatsapp_conversations') {
+              for (const row of convs || []) if (row.id === state.eqs.id && casHolds(row)) Object.assign(row, state.patch)
+            }
+          } else if (readErrors[table]) out = { data: null, error: readErrors[table] }
           else if (table === 'locations') out = { data: [{ id: 'loc-1', name: 'Studio', settings: { customer_agent: { enabled: true } } }], error: null }
-          else if (table === 'whatsapp_conversations') out = { data: convs, error: null }
-          else out = { data: [], error: null } // no human reply; no Instagram threads
+          else if (table === 'whatsapp_conversations') out = { data: (convs || []).filter(casHolds), error: null }
+          else if (table === 'whatsapp_messages') out = { data: replies, error: null }
+          else out = { data: [], error: null } // no Instagram threads
           return Promise.resolve(out).then(res, rej)
         },
       }
@@ -131,8 +141,12 @@ describe('runHandoffAutoResolve — a failed resolve write is not counted as res
 describe('a failed read is not "no reply" / "no candidates" (C31 PUSHNITS.1)', () => {
   const DOWN = { code: 'XX000', message: 'down' }
 
-  it('SLA sweep: an unreadable human-reply check skips the thread this tick (no push, no stamp)', async () => {
-    const { db, updates } = sweepDb({ convs: [conv()], readErrors: { whatsapp_messages: DOWN } })
+  // SLA is 60 min in these fixtures, so "handed off 60 + n minutes ago" is n minutes past the breach.
+  const M = 60_000
+  const pastBreach = (mins) => conv(60 * M + mins * M)
+
+  it('SLA sweep: at the breach an unreadable human-reply check skips the thread this tick (no push, no stamp)', async () => {
+    const { db, updates } = sweepDb({ convs: [pastBreach(5)], readErrors: { whatsapp_messages: DOWN } })
     const out = await runHandoffSlaSweep(db, { nowMs: NOW })
     expect(sendPushToRolesAtLocation).not.toHaveBeenCalled()
     expect(stampOf(updates)).toBeUndefined()
@@ -141,12 +155,51 @@ describe('a failed read is not "no reply" / "no candidates" (C31 PUSHNITS.1)', (
       expect.objectContaining({ channel: 'whatsapp', conversationId: 'conv-1', err: 'down' }))
   })
 
-  it('SLA sweep: past the retry window an unreadable reply check escalates anyway (a waiting customer is never dropped)', async () => {
-    const { db, updates } = sweepDb({ convs: [conv((HANDOFF_ALERT_RETRY_HOURS + 2) * H)], readErrors: { whatsapp_messages: DOWN } })
-    const out = await runHandoffSlaSweep(db, { nowMs: NOW })
+  it('SLA sweep: the grace for an unreadable reply check is two 15-minute ticks, not the push retry window', () => {
+    expect(HANDOFF_REPLY_UNREAD_GRACE_MINUTES).toBe(30)
+    expect(HANDOFF_REPLY_UNREAD_GRACE_MINUTES * M).toBeLessThan(HANDOFF_ALERT_RETRY_HOURS * H)
+  })
+
+  it('SLA sweep: a reply read failing every tick escalates once the grace is spent, saying the reply could not be confirmed', async () => {
+    // Handed off 60 + 5 minutes before the first tick: ticks land 5, 20, 35 and 50 minutes past the breach.
+    const thread = pastBreach(5)
+    const { db } = sweepDb({ convs: [thread], readErrors: { whatsapp_messages: DOWN } })
+    const tick = (n) => runHandoffSlaSweep(db, { nowMs: NOW + n * 15 * M })
+
+    expect(await tick(0)).toMatchObject({ escalated: 0, reply_unread: 1 })
+    expect(await tick(1)).toMatchObject({ escalated: 0, reply_unread: 1 })
+    expect(sendPushToRolesAtLocation).not.toHaveBeenCalled()
+
+    const third = await tick(2)
+    expect(third).toMatchObject({ escalated: 1, reply_unread: 1 })
     expect(sendPushToRolesAtLocation).toHaveBeenCalledTimes(1)
-    expect(stampOf(updates)).toBeTruthy()
-    expect(out).toMatchObject({ escalated: 1, reply_unread: 1 })
+    const [, , payload] = sendPushToRolesAtLocation.mock.calls[0]
+    expect(payload.body).toMatch(/couldn't confirm whether anyone has replied/)
+    expect(payload.body).not.toMatch(/nobody has replied/)
+    expect(payload.body).not.toMatch(/\u2014/) // staff copy: no em-dash
+    expect(logError).toHaveBeenCalledWith('handoff-sla', 'human-reply read still failing past the grace; escalating unconfirmed',
+      expect.objectContaining({ channel: 'whatsapp', conversationId: 'conv-1', err: 'down' }))
+    expect(thread.handoff_escalated_at).toBe(new Date(NOW + 30 * M).toISOString())
+
+    // One escalation per thread: the CAS stamp takes it out of the candidate read.
+    expect(await tick(3)).toMatchObject({ escalated: 0, reply_unread: 0 })
+    expect(sendPushToRolesAtLocation).toHaveBeenCalledTimes(1)
+  })
+
+  it('SLA sweep: a readable reply check that finds a human reply never escalates (unchanged)', async () => {
+    const thread = pastBreach(45)
+    const { db, updates } = sweepDb({ convs: [thread], replies: [{ created_at: new Date(NOW - 50 * M).toISOString() }] })
+    const out = await runHandoffSlaSweep(db, { nowMs: NOW })
+    expect(sendPushToRolesAtLocation).not.toHaveBeenCalled()
+    expect(stampOf(updates)).toBeUndefined()
+    expect(out).toMatchObject({ escalated: 0, skipped: 1, reply_unread: 0 })
+  })
+
+  it('SLA sweep: a readable check with no reply keeps the normal wording', async () => {
+    const { db } = sweepDb({ convs: [pastBreach(5)] })
+    await runHandoffSlaSweep(db, { nowMs: NOW })
+    const [, , payload] = sendPushToRolesAtLocation.mock.calls[0]
+    expect(payload.body).toMatch(/nobody has replied yet/)
   })
 
   it('auto-resolve: an unreadable human-reply check leaves the thread alone this tick', async () => {
