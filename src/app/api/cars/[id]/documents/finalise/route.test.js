@@ -239,6 +239,18 @@ describe('POST /api/cars/[id]/documents/finalise — refusals', () => {
     expect(calls.inserted).toBeNull()
   })
 
+  it('removes an upload stored as a type other than the one its slot was minted for', async () => {
+    // Sign minted a .pdf slot; the token does not pin the Content-Type, so a
+    // PNG uploaded there and declared as PNG agrees with Storage but not with
+    // the slot: the row would say PNG under a .pdf name.
+    createServerClient.mockReturnValue(fakeDb({ stored: { size: MB, mimetype: 'image/png', bytes: PNG } }))
+    const res = await finalise({ ...good, mime: 'image/png' })
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toBe("The uploaded file's type does not match. Pick it again.")
+    expect(calls.remove).toEqual([[slot()]])
+    expect(calls.inserted).toBeNull()
+  })
+
   it('removes the object and answers 500 when the stored bytes cannot be read', async () => {
     createServerClient.mockReturnValue(fakeDb({ stored: { size: MB, mimetype: 'image/heic', bytes: HEIC }, downloadError: { message: 'gone' } }))
     const res = await finalise({ ...good, path: slot('heic'), mime: '' })

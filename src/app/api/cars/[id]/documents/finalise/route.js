@@ -28,7 +28,7 @@ import { recordCarDocument } from '@/lib/car-document-record'
 import { sniffMimeFromBytes } from '@/lib/invoice-extraction'
 import { resolveCarDocumentType, sniffCarDocumentHeif, isUnlabelledCarDocumentType } from '@/lib/car-document-media'
 import {
-  isCarDocumentUploadPath, checkCarDocumentSize, CAR_DOCUMENT_TYPE_ERROR, CAR_DOCUMENT_HEAD_BYTES,
+  isCarDocumentUploadPath, carDocumentExtension, checkCarDocumentSize, CAR_DOCUMENT_TYPE_ERROR, CAR_DOCUMENT_HEAD_BYTES,
 } from '@/lib/car-document-upload'
 import { logWarn } from '@/lib/log'
 
@@ -119,8 +119,11 @@ export async function POST(request, props) {
   }
   if (!contentType) return refuse(CAR_DOCUMENT_TYPE_ERROR)
 
+  // What Storage holds must be the type judged here AND the type the slot was
+  // minted for (its extension): the token does not pin the Content-Type.
   const storedType = String(hit.metadata?.mimetype || '').split(';')[0].trim().toLowerCase()
   if (storedType !== contentType) return refuse(MISMATCH_ERROR)
+  if (name.slice(name.lastIndexOf('.') + 1) !== carDocumentExtension(contentType)) return refuse(MISMATCH_ERROR)
 
   const rec = await recordCarDocument(db, {
     car,

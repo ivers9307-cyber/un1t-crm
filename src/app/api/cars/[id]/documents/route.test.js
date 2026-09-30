@@ -173,6 +173,15 @@ describe('POST /api/cars/[id]/documents — recording (shared with finalise)', (
     expect(upload).not.toHaveBeenCalled()
   })
 
+  it('answers 404, not 500, for a malformed car id (PostgREST 22P02 is not a failed read)', async () => {
+    const db = fakeDb()
+    db.from = () => ({ select: () => ({ eq: () => ({ single: async () => ({ data: null, error: { code: '22P02', message: 'invalid input syntax for type uuid: "abc"' } }) }) }) })
+    createServerClient.mockReturnValue(db)
+    const res = await post(PDF)
+    expect(res.status).toBe(404)
+    expect(upload).not.toHaveBeenCalled()
+  })
+
   it('answers 404 for a car that does not exist', async () => {
     const db = fakeDb()
     db.from = () => ({ select: () => ({ eq: () => ({ single: async () => ({ data: null, error: { code: 'PGRST116', message: '0 rows' } }) }) }) })
