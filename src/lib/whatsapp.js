@@ -1,6 +1,7 @@
 import { createServerClient } from './supabase'
 import { applyAudienceFilter, applyAudienceFilterAsync } from './audience-filter'
 import { getWhatsAppConfig, META_API_URL } from './whatsapp-config'
+import { isWhatsAppNumberMissing } from './whatsapp-number-missing'
 import {
   PER_TICK_MAX, AUTO_PAUSE_CONSECUTIVE_FAILURES,
   rollingHeadroom, selectDripRecipients, dripOutcome,
@@ -26,16 +27,16 @@ import { splitMessageText, WHATSAPP_TEXT_LIMIT } from './message-split.js'
 // object as its last argument. Supported keys:
 //
 //   opts.locationId  — resolve credentials from whatsapp_numbers
-//                       for this location. If no row exists, falls
-//                       back to env vars (transitional backwards-
-//                       compat). New callers should always pass.
+//                       for this location (its default active row).
 //   opts.config      — pre-resolved config object (the caller
 //                       already did the lookup, e.g. to send from
 //                       a specific non-default number). When set,
 //                       locationId is ignored.
 //
-// Calling with no opts → env vars only. Existing callers that
-// haven't been updated yet keep working unchanged.
+// WACONFIGFALLBACK.1 — there is no env fallback any more. A location with
+// no active number, or a call with neither key, throws
+// WhatsAppNumberMissingError BEFORE any Meta call; every caller's handling
+// of that refusal is tabled in tests/whatsapp-config-callers.test.js.
 
 async function resolveConfig(opts = {}) {
   if (opts.config) return opts.config
@@ -1575,7 +1576,20 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
   // Resolve the location's WA config once for the whole tick (as the blast
   // does). Resolved up here (moved from below the recipient selection) because
   // the tier-budget layer needs config.messagingLimitTier before sizing the tick.
-  const config = await getWhatsAppConfig(broadcast.location_id)
+  // WACONFIGFALLBACK.1 — a location with no number of its own (it used to send
+  // from the global env number) PAUSES the drip like an unapproved template:
+  // a throw would error-loop every cron tick, and the operator sees a paused
+  // broadcast they can resume once a number is connected.
+  let config
+  try {
+    config = await getWhatsAppConfig(broadcast.location_id)
+  } catch (e) {
+    if (!isWhatsAppNumberMissing(e)) throw e
+    await db.from('whatsapp_broadcasts')
+      .update({ paused_at: new Date().toISOString() })
+      .eq('id', broadcastId)
+    return { status: 'sending', skipped: 'no_whatsapp_number', paused: true, sent: 0, failed: 0 }
+  }
 
   // Rolling-24h headroom. head:true count — the .select() is the first one off
   // .from() so it reads the count option (see CLAUDE.md postgrest two-overload lesson).
