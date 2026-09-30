@@ -1094,12 +1094,45 @@ export async function searchGlofoxByEmail(creds, email, { retry } = {}) {
   return searchGlofoxMember(creds, { email, ...(retry ? { retry } : {}) })
 }
 
+export const GLOFOX_EMAIL_IN_USE = 'EMAIL_ALREADY_IN_USE'
+
 /** Glofox's "that email already has an account" refusal (seen live as a
- *  200 success:false LOGIN_ALREADY_IN_USE,EMAIL_ALREADY_IN_USE). */
+ *  200 success:false LOGIN_ALREADY_IN_USE,EMAIL_ALREADY_IN_USE, with
+ *  message_code null and the same words in message and errors[]). */
 function isGlofoxEmailInUse(body) {
   if (!body || typeof body !== 'object') return false
-  return [body.message_code, body.message, body.error, body.code]
+  const errs = Array.isArray(body.errors) ? body.errors : []
+  return [body.message_code, body.message, body.error, body.code, ...errs]
     .some((v) => typeof v === 'string' && /EMAIL_ALREADY_IN_USE/i.test(v))
+}
+
+/**
+ * GLOFOXWRITEJUDGE.1 — judge a POST /2.0/register answer. Pure.
+ *
+ * Glofox: "older endpoints sometimes return a 200 with success:false; that is
+ * a bad request". Seen live on register (June 2026: the content-type bug's
+ * "The first name field is required., …"; August: EMAIL_ALREADY_IN_USE). The
+ * live success shape is { success: true, user: { _id } } (27/27 prod rows).
+ * A success therefore needs a 2xx, success !== false AND a member id; anything
+ * else is { ok: false, code, error } with Glofox's own words in `error`.
+ *   code: 'EMAIL_ALREADY_IN_USE' | Glofox's message_code | 'REGISTER_REFUSED'
+ *         | 'HTTP_<status>' | 'NO_MEMBER_ID'
+ */
+export function interpretRegisterResult({ httpOk, httpStatus = null, body } = {}) {
+  const b = body && typeof body === 'object' ? body : null
+  const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null)
+  if (!httpOk || b?.success === false) {
+    const errs = Array.isArray(b?.errors) ? b.errors.map(str).filter(Boolean) : []
+    const words = str(b?.error) || str(b?.message) || str(b?.message_code) || (errs.length ? errs.join('; ') : null)
+    const code = isGlofoxEmailInUse(b)
+      ? GLOFOX_EMAIL_IN_USE
+      : (str(b?.message_code) || (httpOk ? 'REGISTER_REFUSED' : `HTTP_${httpStatus}`))
+    return { ok: false, member: null, code, error: (words || (httpOk ? 'Glofox refused the registration without saying why' : `Glofox HTTP ${httpStatus}`)).slice(0, 300) }
+  }
+  const member = b?.user || b?.data || b
+  const id = member?._id || member?.id
+  if (!id) return { ok: false, member: null, code: 'NO_MEMBER_ID', error: 'Glofox answered without a member id' }
+  return { ok: true, member: member._id ? member : { ...member, _id: String(id) }, code: null, error: null }
 }
 
 /**
@@ -1109,7 +1142,8 @@ function isGlofoxEmailInUse(body) {
  * type='MEMBER', lead_status, password. Optional: phone, birth,
  * emergency_contact, consent.
  *
- * Returns { ok, member, error }. member._id is the new
+ * Returns { ok, member, error, code?, glofox_response? }; ok needs a member
+ * id (interpretRegisterResult). member._id is the new
  * glofox_member_id we write to the CRM contact row.
  *
  * Best-effort: API failures return ok:false with the error
@@ -1178,17 +1212,14 @@ export async function registerGlofoxMember(creds, payload) {
         return { ok: true, member: s.member, error: null, glofox_response: parsed, recovered: 'landed_after_5xx' }
       }
     }
-    if (!r.ok) {
-      return {
-        ok: false,
-        member: null,
-        error: parsed?.error || parsed?.message || `Glofox HTTP ${r.status}`,
-        glofox_response: parsed,
-      }
+    // GLOFOXWRITEJUDGE.1 — judged on the body, not the HTTP status: a 200
+    // success:false is Glofox refusing. `code` lets the caller act on
+    // EMAIL_ALREADY_IN_USE (search and link) instead of filing "unknown".
+    const verdict = interpretRegisterResult({ httpOk: r.ok, httpStatus: r.status, body: parsed })
+    if (!verdict.ok) {
+      return { ok: false, member: null, code: verdict.code, error: verdict.error, glofox_response: parsed }
     }
-    // Glofox wraps the new user under various shapes — try them.
-    const member = parsed?.user || parsed?.data || parsed
-    return { ok: true, member, error: null, glofox_response: parsed }
+    return { ok: true, member: verdict.member, error: null, glofox_response: parsed }
   } catch (e) {
     return { ok: false, member: null, error: e?.message || 'network error' }
   }
