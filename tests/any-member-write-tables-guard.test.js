@@ -1,7 +1,8 @@
 // ANYMEMBERWRITE.1 guard (mig 672). authenticated holds SELECT only on
 // public.challenges and public.contact_segments (each keeps its one SELECT
-// policy: challenges_read feeds the member Compete screen and champ-app's
-// member loaders; Wrapped reads nothing for members today, row C96) and
+// policy: challenges_read feeds the member Compete screen, champ-app's
+// member loaders and, since mig 686, Challenge Wrapped for 14 Dublin days
+// after a challenge ends) and
 // NOTHING on public.car_notes (RLS on, no policy); anon holds nothing on the
 // three. Pinned here:
 //
