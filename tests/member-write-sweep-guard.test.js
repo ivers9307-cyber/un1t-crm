@@ -575,4 +575,28 @@ describe('no migration from 680 on writes a membership-only write policy, on any
     ]
     for (const sql of ok) expect(membershipOnlyWritePolicies(sql), sql).toEqual([])
   })
+
+  it('every role and permission helper is a gate, whatever its suffix', () => {
+    const gated = [
+      'private.auth_is_manager_at(location_id)',
+      'private.auth_is_owner_at(location_id)',
+      'public.auth_is_owner_or_manager()',
+      'private.auth_is_admin_at(location_id)',
+      '(SELECT private.auth_is_admin_or_head_coach())',
+      "private.auth_mobile_can(location_id, 'inbox')",
+      "private.auth_role(location_id) = 'owner'",
+      'private.auth_is_manager_at_bridge(location_id)',
+    ]
+    for (const g of gated) {
+      const sql = `CREATE POLICY t_w ON public.t FOR ALL TO authenticated USING (${g} AND private.auth_is_in_location(location_id)) WITH CHECK (${g} AND private.auth_is_in_location(location_id));`
+      expect(membershipOnlyWritePolicies(sql), sql).toEqual([])
+    }
+  })
+
+  it("mig 014's pipeline_stages_admin_write (owner/manager AND membership) passes, read from the file", () => {
+    const text = readFileSync(path.join(MIGRATIONS, '014_rls_location_scoping.sql'), 'utf8')
+    const stmt = text.match(/CREATE POLICY pipeline_stages_admin_write[\s\S]*?;/)?.[0]
+    expect(stmt).toMatch(/auth_is_owner_or_manager\(\)[\s\S]*auth_is_in_location/)
+    expect(membershipOnlyWritePolicies(stmt)).toEqual([])
+  })
 })
