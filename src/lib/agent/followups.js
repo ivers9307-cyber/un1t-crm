@@ -606,14 +606,23 @@ export { countCheckinSends }
 // genuine check-ins early. The activities row carries the via label, so count
 // those; if that read fails we fall back to the old stamp count (over-counting
 // under-sends, which is the safe direction).
+//
+// Returns null when BOTH reads fail: the cap is unknown, and the caller skips
+// the location this tick. Reading that as 0 let the tick send past the cap.
 async function checkinsSentToday(db, locationId, nowMs) {
   const sends = await readCheckinSendsToday(db, locationId, nowMs)
   if (sends.count !== null) return sends.count
-  const { count } = await db.from('contacts')
+  const { count, error } = await db.from('contacts')
     .select('id', { count: 'exact', head: true })
     .eq('location_id', locationId)
     .gte('first_class_checkin_at', checkinDayStartIso(nowMs))
-  return count || 0
+  if (error || typeof count !== 'number') {
+    logError('agent-followups', 'checkin daily cap unreadable; location skipped this tick', {
+      locationId, err: error || { message: 'no count returned' }, activitiesErr: sends.error,
+    })
+    return null
+  }
+  return count
 }
 
 // CHECKINRISKS.1 (C106 a) — the once-ever stamp is now a CLAIM taken before
@@ -821,7 +830,9 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
             !phoneMatchesAllowlist(to, settings?.test_phones)) {
           bump('test_allowlist'); results.skipped++; continue
         }
-        if ((await checkinsSentToday(db, location.id, nowMs)) >= checkin.daily_cap) {
+        const sentToday = await checkinsSentToday(db, location.id, nowMs)
+        if (sentToday === null) { bump('cap_read_failed'); break } // unknown is not 0: skip this location
+        if (sentToday >= checkin.daily_cap) {
           console.warn('[radar-agent] checkin-skip', JSON.stringify({ locationId: location.id, reason: 'daily_cap' }))
           bump('daily_cap')
           break

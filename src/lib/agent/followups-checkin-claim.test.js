@@ -197,3 +197,33 @@ describe('runFirstClassCheckins — a stale claim is re-opened by a later tick (
     expect(res.reasons.claim_reopen_read_failed).toBe(1)
   })
 })
+
+// MIANITS fix — the daily cap reads today's sends from activities and falls
+// back to a stamp count. If BOTH reads fail, the cap is unknown: reading it as
+// 0 let the tick keep sending past the cap. The location is skipped this tick.
+describe('runFirstClassCheckins — an unreadable daily cap sends nothing', () => {
+  const capReads = (q) => {
+    if (q.table === 'activities' && q.op === 'select' && hasFilter(q, 'eq', 'type', 'agent_checkin') && hasFilter(q, 'eq', 'location_id', 'loc1')) {
+      return { data: null, error: BOOM }
+    }
+    if (q.table === 'contacts' && q.op === 'select' && q.opts?.head) return { count: null, error: BOOM }
+    return undefined
+  }
+
+  it('skips the location with cap_read_failed, logs it, and never claims or sends', async () => {
+    const db = stubDb(capReads)
+    const res = await runFirstClassCheckins(db, { nowMs: NOW })
+    expect(sendTemplateMessage).not.toHaveBeenCalled()
+    expect(contactUpdates(db)).toHaveLength(0)
+    expect(res.reasons).toEqual({ cap_read_failed: 1 })
+    const logged = errSpy.mock.calls.map((c) => c.join(' ')).join('\n')
+    expect(logged).toMatch(/daily cap/)
+  })
+
+  it('a failed activities read with a working fallback still judges the cap on the fallback', async () => {
+    const db = stubDb((q) => (q.table === 'contacts' && q.op === 'select' && q.opts?.head ? { count: 999, error: null } : capReads(q)))
+    const res = await runFirstClassCheckins(db, { nowMs: NOW })
+    expect(sendTemplateMessage).not.toHaveBeenCalled()
+    expect(res.reasons).toEqual({ daily_cap: 1 })
+  })
+})
