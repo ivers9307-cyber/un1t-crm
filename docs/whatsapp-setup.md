@@ -4,8 +4,9 @@ Configures the Meta WhatsApp integration for un1t-crm. The platform code is alre
 complete: webhook handler at `src/app/api/webhooks/whatsapp/route.js`, sending via
 Graph API v21.0 (`src/lib/whatsapp.js`), template management against
 `{WABA_ID}/message_templates`, and per-location number config
-(`whatsapp_numbers` table, mig 176) with global env-var fallback
-(`src/lib/whatsapp-config.js`).
+(`whatsapp_numbers` table, mig 176; `src/lib/whatsapp-config.js`). There is no
+global env-var fallback any more (WACONFIGFALLBACK.1): a location with no row of
+its own cannot send WhatsApp.
 
 This runbook covers everything outside the codebase: Meta portal tasks, Vercel
 env vars, and verification.
@@ -77,8 +78,8 @@ The number can still be used for normal calls/SMS after registration.
 3. Set a new **two-step verification PIN** when prompted (Cloud API requires
    one at registration) — store it in your password manager.
 4. Record from this page:
-   - **Phone Number ID** → `WHATSAPP_PHONE_NUMBER_ID`
-   - **WhatsApp Business Account ID (WABA ID)** → `WHATSAPP_BUSINESS_ACCOUNT_ID`
+   - **Phone Number ID** → the number's `whatsapp_numbers` row
+   - **WhatsApp Business Account ID (WABA ID)** → the same row
 4. Set the **display name** (e.g. "UN1T Dublin") — Meta reviews it; usually fast for verified businesses.
 
 ### 1.5 Create a System User + permanent token
@@ -96,8 +97,9 @@ shown on the API Setup page.
    - Permissions (Meta docs specify three — search "business" in the picker):
      `whatsapp_business_messaging`, `whatsapp_business_management`,
      `business_management`
-4. Copy the token once → `WHATSAPP_ACCESS_TOKEN`. Store it only in Vercel env /
-   the `whatsapp_numbers` row — never in the repo.
+4. Copy the token once → the number's `whatsapp_numbers` row (Settings →
+   Locations → Integrations → WhatsApp). Never in the repo, and no longer in
+   Vercel env: the global env number was retired (WACONFIGFALLBACK.1).
 
 ### 1.6 Add a payment method
 WhatsApp Manager → the WABA → **Payment settings** → add card.
@@ -134,9 +136,6 @@ window) are unlimited. Monitor in WhatsApp Manager → Phone numbers → Insight
 Project → Settings → Environment Variables (Production), then **redeploy**:
 
 ```bash
-WHATSAPP_ACCESS_TOKEN=         # 1.5 — permanent system-user token
-WHATSAPP_PHONE_NUMBER_ID=      # 1.4
-WHATSAPP_BUSINESS_ACCOUNT_ID=  # 1.4 — WABA ID
 WHATSAPP_APP_ID=               # 1.2
 WHATSAPP_APP_SECRET=           # 1.2
 WHATSAPP_WEBHOOK_VERIFY_TOKEN= # generated below
@@ -164,7 +163,9 @@ CRM → **Settings → Locations → [location] → Integrations → WhatsApp �
 | Default | ✓ |
 
 Notes:
-- Locations with zero rows fall back to the global `WHATSAPP_*` env vars.
+- Locations with zero rows cannot send WhatsApp (no fallback to another studio's
+  number; WACONFIGFALLBACK.1). Deactivating a row turns WhatsApp off at that
+  studio; to fix a broken token, PATCH the row's token instead.
 - `WHATSAPP_WEBHOOK_VERIFY_TOKEN` and `WHATSAPP_APP_SECRET` are **env-only**
   (webhook-level, not per-number) — set them in Vercel regardless.
 - Inbound routing: the webhook maps Meta's `phone_number_id` → owning location

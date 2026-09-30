@@ -15,9 +15,7 @@ POSTMARK_WEBHOOK_TOKEN_PREVIOUS= # optional — old token kept live during rotat
 POSTMARK_EMAIL_INBOX_SERVER_TOKEN= # server token for the SUPPORT INBOX's own Postmark server. Ticket reply/compose only; no fallback — unset = those two routes 503 (EMAIL-OUTBOUND-SERVER.1)
 POSTMARK_EMAIL_INBOX_STREAM=     # Postmark message stream id on that server. Defaults to 'email-send'. Postmark's vocabulary, NOT this app's broadcast/outbound
 POSTMARK_EMAIL_INBOX_WEBHOOK_TOKEN= # token-in-URL secret for the support inbox's INBOUND webhook. ⚠️ Postmark points at the SUPABASE EDGE SHIM, not Vercel: https://iyvtbjjxdggiadzwwvdj.supabase.co/functions/v1/postmark-inbound-shim/<token> (EMAIL-INBOUND-SHIM.1, cut over 2026-08-07). The shim re-hosts attachments to Storage and forwards slim JSON to /api/webhooks/postmark-inbound/<same token> — repointing Postmark at the Vercel URL directly "works" but silently reinstates the ~3.3 MB inbound ceiling (Vercel 413s bodies over ~4.5 MB BEFORE the handler runs; Postmark base64-inlines attachments). Same token value as Edge Function secret + Vercel env. Probe from outside: POST a bogus token to the shim URL — 404 = secrets set and healthy, 500 missing_secret = secrets lost (same trick on the Vercel URL; the 404 is the healthy answer). Revert path in an emergency = paste the Vercel URL back into Postmark, accepting the size ceiling until the shim is restored.
-WHATSAPP_ACCESS_TOKEN=
-WHATSAPP_PHONE_NUMBER_ID=
-WHATSAPP_BUSINESS_ACCOUNT_ID=    # optional
+# WHATSAPP_ACCESS_TOKEN / _PHONE_NUMBER_ID / _BUSINESS_ACCOUNT_ID: RETIRED (WACONFIGFALLBACK.1). Numbers live on whatsapp_numbers rows; a location without one cannot send.
 WHATSAPP_WEBHOOK_VERIFY_TOKEN=   # for Meta GET subscription handshake
 WHATSAPP_APP_SECRET=             # for X-Hub-Signature-256 verification on POST
 WHATSAPP_ES_CONFIG_ID=           # Facebook Login for Business configuration id driving Embedded Signup v4 ("Connect with WhatsApp" in Settings → Locations → Integrations). Unset = the connect button renders a not-configured state; the exchange route 500s.
