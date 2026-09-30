@@ -96,3 +96,47 @@ describe('WhatsAppIntegrationTab — the stored token is never shown (N8NECHO.1)
     expect(screen.getByText(/No token is saved/i)).toBeTruthy()
   })
 })
+
+// WAROLE.1 — the two editors whose routes are now master/owner at the
+// location follow `canEdit`, which LocationIntegrations computes with the same
+// rule. Without it: no Save, no Add/Edit/Delete, inputs read-only, and no
+// write is ever attempted. (A pin: the cards already honoured canEdit.)
+describe('WhatsAppIntegrationTab — chat openers and card sets follow canEdit (WAROLE.1)', () => {
+  const SET = {
+    id: 'b0000000-0000-4000-8000-000000000001', name: 'Intro',
+    cards: [{ image_url: 'https://example.test/a.jpg', title: 'A' }, { image_url: 'https://example.test/b.jpg', title: 'B' }],
+  }
+  // Both cards hydrate from the location's settings (no GET of their own).
+  const withSaved = { ...LOC, settings: { conversational_automation: { enable_welcome: true, prompts: ['Book a class'] }, wa_card_sets: [SET] } }
+  const mockAll = () => {
+    global.fetch = vi.fn(async (url) => {
+      const u = String(url)
+      if (u.endsWith('/whatsapp/numbers')) return reply(200, { success: true, numbers: [] })
+      if (u.endsWith('/whatsapp/embedded-signup')) return reply(200, { success: true, data: { configured: false } })
+      return reply(200, { success: true })
+    })
+  }
+
+  it('canEdit=false: openers read-only with no Save; card sets listed with no Add, Edit or Delete', async () => {
+    mockAll()
+    render(<WhatsAppIntegrationTab location={withSaved} canEdit={false} />)
+    expect(await screen.findByText('Intro')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Save chat openers/ })).toBeNull()
+    expect(screen.getByDisplayValue('Book a class').disabled).toBe(true)
+    expect(screen.queryByRole('button', { name: /Add card set/ })).toBeNull()
+    expect(screen.queryByTitle('Edit this card set')).toBeNull()
+    expect(screen.queryByTitle('Delete this card set')).toBeNull()
+    const writes = global.fetch.mock.calls.filter(([, init]) => init && init.method && init.method !== 'GET')
+    expect(writes).toEqual([])
+  })
+
+  it('canEdit=true: Save, Add, Edit and Delete are offered (unchanged)', async () => {
+    mockAll()
+    render(<WhatsAppIntegrationTab location={withSaved} canEdit />)
+    expect(await screen.findByText('Intro')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Save chat openers/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Add card set/ })).toBeTruthy()
+    expect(screen.getByTitle('Edit this card set')).toBeTruthy()
+    expect(screen.getByTitle('Delete this card set')).toBeTruthy()
+  })
+})
