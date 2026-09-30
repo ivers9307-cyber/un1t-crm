@@ -24,6 +24,7 @@ import {
   finalizeTurn,
   encodeClientEvent,
 } from '@/lib/assistant-stream'
+import { normaliseChatTurns } from '@/lib/assistant-turns'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -532,11 +533,21 @@ export async function POST(request) {
   // server-trusted role, not the client-supplied one.
   const allowedTools = TOOLS.filter(tool => checkToolPermission(tool.name, userContext.role))
 
-  // Call Claude API
-  let claudeMessages = messages.map(m => ({
-    role: m.role,
-    content: m.content,
-  }))
+  // STAFFASSISTPREFILL.1 (C108) — the list is client-sent. The API refuses a
+  // request that opens on an assistant turn or ends on one (the "assistant
+  // message prefill" 400), so normalise it before any call: open and end on a
+  // user turn, alternate. A list ending on the assistant has nothing new to
+  // answer; refuse it here rather than re-answer (and maybe re-run a write
+  // tool for) the previous question.
+  const turns = normaliseChatTurns(messages)
+  if (turns.reason) {
+    return NextResponse.json({
+      success: false,
+      code: turns.reason,
+      error: 'Nothing to answer: the conversation must end on your message.',
+    }, { status: 400 })
+  }
+  let claudeMessages = turns.messages
 
   const toolContext = {
     locationId: userContext.locationId,
