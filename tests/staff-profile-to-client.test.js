@@ -59,9 +59,21 @@ function walk(dir, out = []) {
 export function stripComments(text) {
   const sf = ts.createSourceFile('scan.jsx', text, ts.ScriptTarget.Latest, false, ts.ScriptKind.JSX)
   if (sf.parseDiagnostics?.length) return text
+  // JSX text is not trivia, but asked for comments at its start the scanner
+  // reads `<p>/* note</p>` or `<p>// x</p>` as one and would blank the code
+  // after it, so no range is taken at a position where JSX text begins (a
+  // wrapper node can share that position, hence the set, not a kind check).
+  const jsxTextAt = new Set()
+  const findJsxText = (node) => {
+    if (node.kind === ts.SyntaxKind.JsxText) jsxTextAt.add(node.pos)
+    for (const child of node.getChildren(sf)) findJsxText(child)
+  }
+  findJsxText(sf)
   const ranges = new Map()
   const visit = (node) => {
-    for (const r of [...(ts.getLeadingCommentRanges(text, node.pos) || []), ...(ts.getTrailingCommentRanges(text, node.pos) || [])]) ranges.set(r.pos, r.end)
+    if (!jsxTextAt.has(node.pos)) {
+      for (const r of [...(ts.getLeadingCommentRanges(text, node.pos) || []), ...(ts.getTrailingCommentRanges(text, node.pos) || [])]) ranges.set(r.pos, r.end)
+    }
     for (const child of node.getChildren(sf)) visit(child)
   }
   visit(sf)
@@ -138,6 +150,12 @@ describe('every star-read of profiles is reviewed (STAFFPROFILEPICK.1)', () => {
     expect(countProfileStarReads(`// the /api/* routes\ndb.from('profiles').select('*')\n/* later */`)).toBe(1)
     expect(countProfileStarReads(`const u = 'https://x.test/a' // tail\ndb.from('profiles').select('*')`)).toBe(1)
     expect(countProfileStarReads(`/* db.from('profiles').select('*') */\nconst a = <div>{/* db.from('profiles').select('*') */}</div>`)).toBe(0)
+  })
+
+  it('JSX text that starts like a comment hides nothing', () => {
+    expect(countProfileStarReads(`const a = <><p>/* note</p>{db.from('profiles').select('*')}<p>end */</p></>`)).toBe(1)
+    expect(countProfileStarReads(`const a = <><p>// x</p>{db.from('profiles').select('*')}</>`)).toBe(1)
+    expect(staffPropReads(`const a = <><p>/* note</p>{staff.pin_hash}<p>end */</p></>`)).toEqual(['pin_hash'])
   })
 })
 
