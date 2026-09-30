@@ -175,3 +175,27 @@ describe('/live/[locationId] page', () => {
     expect(html).toContain('Stillorgan')
   })
 })
+
+// C116 GATES-2 — End, Pair, test mode and Claim call routes that also need a
+// coach role (LIVE_MUTATION_ROLES) at this location. The page decides it
+// where the routes do and hands the client `canMutate`; the board itself
+// stays open to everyone with studio_management.
+describe('/live/[locationId] — canMutate', () => {
+  const withRole = (role) => {
+    const u = user({ locations: [{ id: 'loc1' }], perms: { studio_management: true } })
+    u.role = role
+    u.assignmentsByLocation.loc1.role = role
+    u.activeAssignment.role = role
+    return u
+  }
+  it.each([
+    ['staff (main: End/Pair shown, then 403)', 'staff', false],
+    ['head coach', 'head_coach', true],
+    ['manager', 'manager', true],
+  ])('%s', async (_label, role, expected) => {
+    getCurrentUser.mockResolvedValue(withRole(role))
+    createServerClient.mockReturnValue(mockDb({ location: { id: 'loc1', name: 'Stillorgan' } }))
+    const el = await LiveClassPage(props('loc1'))
+    expect(el.props.canMutate).toBe(expected)
+  })
+})

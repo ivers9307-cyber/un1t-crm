@@ -29,6 +29,16 @@ export function canBuildSequencesSomewhere(user) {
   return SEQUENCE_BUILDER_PERMISSIONS.some((key) => hasPermissionAtAnyLocation(user, key))
 }
 
+/**
+ * C116 GATES-2 — the enrolment routes' own rule (resume, exit; also enrol,
+ * clone, audience/seed): `email` at the sequence's studio. The builder page
+ * opens on email OR whatsapp, so its Resume/Exit buttons ask this instead.
+ */
+export function canManageEnrolmentsAt(user, locationId) {
+  if (!user || !locationId) return false
+  return hasPermissionForLocation(user, locationId, 'email')
+}
+
 export function sequencePermissionRequired() {
   return NextResponse.json({ success: false, error: SEQUENCE_PERMISSION_ERROR }, { status: 403 })
 }
