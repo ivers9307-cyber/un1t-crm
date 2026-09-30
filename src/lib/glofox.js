@@ -633,28 +633,13 @@ export async function glofoxFetch(creds, pathOrUrl, options = {}) {
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Fetch the active + historical credit packs for a Glofox member.
- * Returns the data array (Credits[]) or [] on failure / no data.
- *
- * Used to drive credit_member detection — a paying customer with
- * an active class-pack credit pack qualifies as a Credit Member
- * (separate audience from subscription members). See
- * src/lib/glofox-sync.js:detectCreditMember.
- *
- * Best-effort: a network/API failure here returns [] so the
- * containing sync can still proceed (member contact gets synced,
- * credit_member detection is skipped, next sync gets it right).
+ * The active + historical credit packs for a Glofox member, as
+ * { ok, credits }. `ok: false` is a read that FAILED (429/5xx after
+ * glofoxFetch's retries, any other non-2xx, a network throw): "unknown",
+ * never "no packs" (MIA-CREDITS.1, CREDITSREAD.1). The old fetchUserCredits,
+ * which collapsed a failure into [], is gone (TRIALGRANT.1: no callers were
+ * left after CBPCREDITREAD.1).
  */
-export async function fetchUserCredits(creds, userId) {
-  const { credits } = await fetchUserCreditsResult(creds, userId)
-  return credits
-}
-
-// MIA-CREDITS.1 — ok-aware variant (the fetchUserBookingsResult pattern):
-// fetchUserCredits collapses "the read failed" and "genuinely no credit
-// records" into the same [], which is fine for callers that fail toward
-// staff review, but a caller that ESCALATES on empty (Mia's booking
-// pre-flight) must not escalate every booking during a Glofox blip.
 export async function fetchUserCreditsResult(creds, userId) {
   if (!creds || !userId) return { ok: false, credits: [] }
   try {
