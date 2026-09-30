@@ -65,6 +65,15 @@ describe('WhatsAppIntegrationTab — real answers are unchanged (pin)', () => {
     expect(await screen.findByText(/No numbers configured/)).toBeTruthy()
     expect(screen.getByRole('button', { name: /Add WhatsApp number/ })).toBeTruthy()
   })
+
+  // WAROLE.1 — the chat openers now need the location's own number (the
+  // route answers 409 without one instead of using the global env number),
+  // so the empty state says so rather than promising the env fallback.
+  it('the empty state says chat openers need a number here', async () => {
+    mockFetch(reply(200, { success: true, numbers: [] }))
+    render(<WhatsAppIntegrationTab location={LOC} canEdit />)
+    expect(await screen.findByText(/Chat openers can only be saved once this location has its own number/)).toBeTruthy()
+  })
 })
 
 describe('WhatsAppIntegrationTab — the stored token is never shown (N8NECHO.1)', () => {

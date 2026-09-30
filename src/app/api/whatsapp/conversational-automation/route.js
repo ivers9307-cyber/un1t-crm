@@ -5,6 +5,8 @@ import { getCurrentUser, assertLocationAccessOr404, guardMasterOrOwner } from '@
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { setConversationalAutomation } from '@/lib/whatsapp'
+import { getLocationWhatsAppNumberConfig } from '@/lib/whatsapp-config'
+import { logError } from '@/lib/log'
 import { mergeLocationSettings } from '@/lib/location-settings'
 
 const ConversationalAutomationSchema = z.object({
@@ -40,8 +42,26 @@ export async function POST(request) {
   const roleGuard = guardMasterOrOwner(user, locationId)
   if (roleGuard) return roleGuard
 
+  // WAROLE.1 — the openers go on THIS location's own number. Passing the
+  // location id to setConversationalAutomation re-resolved it through
+  // getWhatsAppConfig, which falls back to the global WHATSAPP_* env number
+  // when the location has no active whatsapp_numbers row: an owner of a
+  // studio without a number rewrote the openers on another studio's number,
+  // while the mirror below went to their own location. No number here → 409,
+  // Meta is never called; a failed lookup is a 500, never "no number".
+  let numberConfig
   try {
-    await setConversationalAutomation({ enableWelcome, prompts }, { locationId })
+    numberConfig = await getLocationWhatsAppNumberConfig(locationId)
+  } catch (e) {
+    logError('wa-conversational-automation', 'number lookup failed', { locationId, err: e?.message })
+    return NextResponse.json({ success: false, error: "Could not check this location's WhatsApp number just now." }, { status: 500 })
+  }
+  if (!numberConfig) {
+    return NextResponse.json({ success: false, error: 'No WhatsApp number is connected at this location.' }, { status: 409 })
+  }
+
+  try {
+    await setConversationalAutomation({ enableWelcome, prompts }, { config: numberConfig })
   } catch (e) {
     return NextResponse.json({ success: false, error: e?.message || 'Meta conversational_automation call failed' }, { status: 502 })
   }

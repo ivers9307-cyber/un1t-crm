@@ -78,6 +78,37 @@ function rowToConfig(row) {
 }
 
 /**
+ * WAROLE.1 — the location's OWN number (tiers 1-2 only), never the env
+ * fallback. Returns null when the location has no active whatsapp_numbers
+ * row (or no location id is given); throws when the lookup itself fails, so
+ * a DB blip is never read as "no number".
+ *
+ * For writes that change what Meta shows on "this studio's number" (chat
+ * openers): re-resolving through getWhatsAppConfig would land them on the
+ * legacy global number whenever the studio has none of its own.
+ *
+ * @param {string | null | undefined} locationId
+ * @returns {Promise<object | null>}
+ */
+export async function getLocationWhatsAppNumberConfig(locationId) {
+  if (!locationId) return null
+  const db = createServerClient()
+  const { data: rows, error } = await db
+    .from('whatsapp_numbers')
+    .select('*')
+    .eq('location_id', locationId)
+    .eq('is_active', true)
+    .order('is_default', { ascending: false })   // default first
+    .order('updated_at', { ascending: false })   // then newest
+    .limit(1)
+
+  if (error) {
+    throw new Error(`Failed to load WhatsApp config for location ${locationId}: ${error.message}`)
+  }
+  return rows && rows.length > 0 ? rowToConfig(rows[0]) : null
+}
+
+/**
  * Resolve the WhatsApp config to use for outbound sends from
  * `locationId`. Walks the three tiers above and returns the first
  * hit, or throws with a clear message naming what's missing.
@@ -89,25 +120,9 @@ function rowToConfig(row) {
  *   at minimum.
  */
 export async function getWhatsAppConfig(locationId) {
-  // Tier 1: explicit DB row for this location, default-flagged.
-  if (locationId) {
-    const db = createServerClient()
-    const { data: rows, error } = await db
-      .from('whatsapp_numbers')
-      .select('*')
-      .eq('location_id', locationId)
-      .eq('is_active', true)
-      .order('is_default', { ascending: false })   // default first
-      .order('updated_at', { ascending: false })   // then newest
-      .limit(1)
-
-    if (error) {
-      throw new Error(`Failed to load WhatsApp config for location ${locationId}: ${error.message}`)
-    }
-    if (rows && rows.length > 0) {
-      return rowToConfig(rows[0])
-    }
-  }
+  // Tiers 1-2: this location's own active row, default first.
+  const own = await getLocationWhatsAppNumberConfig(locationId)
+  if (own) return own
 
   // Tier 3: env fallback.
   const env = envConfig()

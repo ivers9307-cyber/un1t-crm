@@ -20,6 +20,7 @@ const { createServerClient } = await import('@/lib/supabase')
 const {
   getWhatsAppConfig,
   getWhatsAppConfigById,
+  getLocationWhatsAppNumberConfig,
   resolveWhatsAppNumberByPhoneNumberId,
   classifyInboundOwner,
 } = await import('./whatsapp-config.js')
@@ -122,6 +123,39 @@ describe('getWhatsAppConfig — no config anywhere', () => {
   it('surfaces the location id in the error message for debugging', async () => {
     createServerClient.mockReturnValue(mockDb({ rows: [] }))
     await expect(getWhatsAppConfig('loc-abc-123')).rejects.toThrow(/loc-abc-123/)
+  })
+})
+
+// WAROLE.1 — the location's OWN number, never the env tier. A write that
+// changes what Meta shows on "this studio's number" (chat openers) must not
+// land on the legacy global number when the studio has none of its own.
+describe('getLocationWhatsAppNumberConfig — the location tier only (WAROLE.1)', () => {
+  it("returns the location's active row, default first", async () => {
+    const db = mockDb({ rows: [{ id: 'n1', location_id: 'loc-1', label: 'Main', phone_number_id: 'PNI-123', access_token: 'tok-default', source: 'cloud_api', is_default: true, is_active: true }] })
+    createServerClient.mockReturnValue(db)
+    const cfg = await getLocationWhatsAppNumberConfig('loc-1')
+    expect(cfg).toMatchObject({ source: 'db', id: 'n1', locationId: 'loc-1', phoneNumberId: 'PNI-123', token: 'tok-default' })
+  })
+
+  it('no row at the location → null, even with the global env number set (never the env tier)', async () => {
+    createServerClient.mockReturnValue(mockDb({ rows: [] }))
+    process.env.WHATSAPP_ACCESS_TOKEN = 'env-token'
+    process.env.WHATSAPP_PHONE_NUMBER_ID = 'env-pni'
+    expect(await getLocationWhatsAppNumberConfig('loc-with-no-rows')).toBeNull()
+  })
+
+  it('a failed lookup throws (never read as "no number")', async () => {
+    createServerClient.mockReturnValue(mockDb({ error: { message: 'boom' } }))
+    process.env.WHATSAPP_ACCESS_TOKEN = 'env-token'
+    process.env.WHATSAPP_PHONE_NUMBER_ID = 'env-pni'
+    await expect(getLocationWhatsAppNumberConfig('loc-1')).rejects.toThrow(/boom/)
+  })
+
+  it('no location id → null without a query (there is no "this location")', async () => {
+    process.env.WHATSAPP_ACCESS_TOKEN = 'env-token'
+    process.env.WHATSAPP_PHONE_NUMBER_ID = 'env-pni'
+    expect(await getLocationWhatsAppNumberConfig(null)).toBeNull()
+    expect(createServerClient).not.toHaveBeenCalled()
   })
 })
 
