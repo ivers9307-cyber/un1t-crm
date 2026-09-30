@@ -350,6 +350,9 @@ export async function runChannelAgent(db, adapter, ctx) {
       channel: adapter.name,
       conversationId: ctx?.conversationId || null,
       reason: result.reason || 'unknown',
+      // MIAPREFILL.1 — nothing_to_answer names the newest row (source + type,
+      // never its body) so a cause other than a STOP acknowledgement shows.
+      ...(result.trailing ? { trailing: result.trailing } : {}),
     }))
   }
 
@@ -582,11 +585,38 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
   // sending, whether a human took the thread over WHILE the model was thinking.
   const turnStartIso = new Date().toISOString()
 
-  // The agent WILL run a turn now — let the channel show read + typing while
-  // Claude thinks. Best-effort; never blocks or fails the turn.
-  try { await adapter.onEngage?.(ctx) } catch { /* cosmetic only */ }
-
   try {
+    // Newest rows first then reversed — ascending+limit returns the OLDEST
+    // rows, which would freeze the agent's view at the start of the
+    // conversation once a thread outgrows the cap (latent amnesia v2).
+    // `source` lets the builder find the previous pass's own reply on a rerun
+    // (both message tables carry it).
+    const { data: historyDesc } = await db.from(adapter.messagesTable)
+      .select('direction, body, message_type, created_at, source')
+      .eq('conversation_id', conversationId)
+      .order('created_at', { ascending: false })
+      .limit(MAX_HISTORY * 2)
+    const history = (historyDesc || []).slice().reverse()
+    // Newest inbound this turn will have seen — the wrapper's missed-inbound
+    // sweep compares against it after the reply goes out.
+    const lastInboundSeenIso = (historyDesc || []).find((m) => m.direction === 'inbound')?.created_at || null
+
+    // MIAPREFILL.1 — never a request that ends on an assistant turn (Sonnet 5
+    // 400s it as prefill). 'nothing_to_answer' = the newest turn is the
+    // studio's own (e.g. the STOP acknowledgement): stay silent, no API call.
+    // Decided from history alone, BEFORE onEngage, so a silent turn never
+    // shows the customer a read receipt and "typing…" followed by nothing.
+    // `trailing` (source + type, no body) goes to the wrapper's no-reply line.
+    const { messages, reason: historyReason, trailing } = buildReplyTurnMessages(history || [], {
+      maxMessages: MAX_HISTORY,
+      answeredThroughIso,
+    })
+    if (historyReason) return { handled: false, reason: historyReason, ...(trailing ? { trailing } : {}) }
+
+    // The agent WILL run a turn now — let the channel show read + typing while
+    // Claude thinks. Best-effort; never blocks or fails the turn.
+    try { await adapter.onEngage?.(ctx) } catch { /* cosmetic only */ }
+
     // Cost / abuse ceilings, cheapest check first. The per-location daily
     // cap stops a runaway across all threads; the per-conversation hourly
     // cap catches a single chatty/looping sender.
@@ -682,19 +712,6 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       .eq('enabled', true)
       .order('sort_order', { ascending: true })
 
-    // Newest rows first then reversed — ascending+limit returns the OLDEST
-    // rows, which would freeze the agent's view at the start of the
-    // conversation once a thread outgrows the cap (latent amnesia v2).
-    const { data: historyDesc } = await db.from(adapter.messagesTable)
-      .select('direction, body, message_type, created_at')
-      .eq('conversation_id', conversationId)
-      .order('created_at', { ascending: false })
-      .limit(MAX_HISTORY * 2)
-    const history = (historyDesc || []).slice().reverse()
-    // Newest inbound this turn will have seen — the wrapper's missed-inbound
-    // sweep compares against it after the reply goes out.
-    const lastInboundSeenIso = (historyDesc || []).find((m) => m.direction === 'inbound')?.created_at || null
-
     // A still-fresh prior verification, re-read from the stamp.
     // PERSON-ACCT.6 — used AS STAMPED (no primary remap; see the phone lane
     // above), but only once we know the contact still exists: a merge deletes
@@ -783,15 +800,6 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     // notch below the API's `high` default) for this short transactional turn.
     const agentEffort = resolveAgentEffort(settings?.effort)
     const verifyFailThreshold = resolveVerifyFailHandoff(settings)
-
-    // MIAPREFILL.1 — never a request that ends on an assistant turn (Sonnet 5
-    // 400s it as prefill). 'nothing_to_answer' = the newest turn is the
-    // studio's own (e.g. the STOP acknowledgement): stay silent, no API call.
-    const { messages, reason: historyReason } = buildReplyTurnMessages(history || [], {
-      maxMessages: MAX_HISTORY,
-      answeredThroughIso,
-    })
-    if (historyReason) return { handled: false, reason: historyReason }
 
     // Tool-execution context. verifiedContactId is mutable: verify_identity
     // both stamps the DB and updates this so later tools in the same turn
