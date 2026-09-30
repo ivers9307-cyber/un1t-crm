@@ -283,7 +283,9 @@ export function admitsBucket({ permissive, roles, expr }) {
   return expr.includes(BUCKET) || !BUCKET_LITERAL.test(expr)
 }
 
-const OBJECTS = String.raw`(?:"?storage"?\s*\.\s*)"?objects"?`
+// storage.objects, or bare `objects` (resolved through a search_path that
+// includes storage); another schema's `objects` is not matched.
+const OBJECTS = String.raw`(?:"?storage"?\s*\.\s*)?"?objects"?`
 const CREATE_RE = new RegExp(String.raw`\bcreate\s+policy\s+(?:"[^"]+"|\S+)\s+on\s+(?:table\s+)?${OBJECTS}(?=[\s;'])([^;]*)`, 'gi')
 const ALTER_RE = new RegExp(String.raw`\balter\s+policy\s+(?:"[^"]+"|\S+)\s+on\s+${OBJECTS}(?=[\s;'])([^;]*)`, 'gi')
 
@@ -605,6 +607,9 @@ describe('migrations keep the bucket closed to clients and its limits in step (m
       "ALTER POLICY tv_content_storage_write ON storage.objects WITH CHECK (bucket_id IN ('tv-content', 'whatsapp-templates'));",
       "SELECT '/*';\nCREATE POLICY p ON storage.objects FOR INSERT TO authenticated WITH CHECK (bucket_id = 'whatsapp-templates');\nSELECT '*/';",
       "-- a note with /* in it\nCREATE POLICY p ON storage.objects FOR INSERT TO authenticated WITH CHECK (true);\n-- */",
+      // Unqualified: storage.objects under a search_path that includes storage.
+      "SET search_path = storage, public;\nCREATE POLICY p ON objects FOR INSERT TO authenticated WITH CHECK (bucket_id = 'whatsapp-templates');",
+      "ALTER POLICY tv_content_storage_write ON \"objects\" WITH CHECK (bucket_id IN ('tv-content', 'whatsapp-templates'));",
     ]
     for (const sql of bad) expect(bucketReopeners(sql), sql).not.toEqual([])
   })
@@ -620,6 +625,8 @@ describe('migrations keep the bucket closed to clients and its limits in step (m
       "-- CREATE POLICY p ON storage.objects FOR INSERT TO authenticated WITH CHECK (bucket_id = 'whatsapp-templates');",
       "/* CREATE POLICY p ON storage.objects FOR INSERT TO authenticated WITH CHECK (true); */",
       "ALTER POLICY tv_content_storage_write ON storage.objects TO authenticated;",
+      'CREATE POLICY x ON public.objects FOR INSERT TO authenticated WITH CHECK (true);',
+      'CREATE POLICY x ON objects_log FOR INSERT TO authenticated WITH CHECK (true);',
     ]
     for (const sql of ok) expect(bucketReopeners(sql), sql).toEqual([])
   })
