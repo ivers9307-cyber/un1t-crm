@@ -286,8 +286,12 @@ export function collectIndirectNames(src, source) {
     }
   }
   if (source.property) {
-    for (const m of masked.matchAll(new RegExp(`\\b${source.property}\\s*:\\s*(['"\`])(\\w+)\\1`, 'g'))) {
-      out.push({ name: m[2], offset: m.index })
+    // EVERY `property:` in the source file is a name: a literal resolves, and
+    // anything else (a template with ${}, a variable) is null, i.e. unreadable,
+    // never skipped.
+    for (const m of masked.matchAll(new RegExp(`(?<![\\w.$])${source.property}\\s*:\\s*`, 'g'))) {
+      const lit = masked.slice(m.index + m[0].length).match(/^(['"`])(\w+)\1(?=\s*[,}\n)])/)
+      out.push({ name: lit ? lit[2] : null, offset: m.index })
     }
   }
   return out

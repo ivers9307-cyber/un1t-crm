@@ -257,6 +257,12 @@ describe('source scanning', () => {
     expect(out.map((n) => n.name)).toEqual(['increment_contact_opens', null])
   })
 
+  it('a non-literal value in a table of names is null (unreadable), never skipped (review fix 2)', () => {
+    const src = "return { fn: 'approve_drop_shift_swap' }\nreturn { fn: `approve_${kind}_phantom_swap` }\nreturn { fn: NAME }\nreturn { fn: 'approve_' + kind }"
+    expect(collectIndirectNames(src, { property: 'fn' }).map((n) => n.name))
+      .toEqual(['approve_drop_shift_swap', null, null, null])
+  })
+
   it('reads a table of names by property', () => {
     const src = "return { fn: 'approve_drop_shift_swap', args }\nreturn { fn: \"approve_reassign_shift_swap\" }"
     expect(collectIndirectNames(src, { property: 'fn' }).map((n) => n.name))
