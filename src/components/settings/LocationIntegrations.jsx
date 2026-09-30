@@ -44,11 +44,16 @@ export default function LocationIntegrations({ location, xeroConnection, xeroRea
   // can't be deep-linked to a tab that doesn't apply here.
   const features = location.features || {}
   const isMaster = user.role === 'master'
-  const isOwnerOrMaster = user.role === 'master' || user.role === 'owner'
+  // PAGEGATES.1 — master or owner AT this location (hasRoleAtLocation's
+  // master bypass is profileRole), the page's own gate (guardMasterOrOwner)
+  // and at least what every route behind these tabs asks of this location.
+  // It read `user.role`, the ACTIVE studio's role, so an owner here whose
+  // active studio is one where they manage lost the Xero, Payments,
+  // Instagram, Ads, AC and BCA tabs on a page that is theirs.
+  const isOwnerOrMaster = isMaster || hasRoleAtLocation(user, location.id, ['owner'])
   // WAROLE.1 — every write on the WhatsApp tab (numbers, Connect, chat
   // openers, card sets) decides guardMasterOrOwner AT this location, so the
   // tab is judged there too, never on `user.role` (the ACTIVE studio's role).
-  // The other tabs still read isOwnerOrMaster: row C38 PAGEGATES.1.
   const ownsWhatsAppHere = hasRoleAtLocation(user, location.id, ['owner'])
 
   const tabs = []
