@@ -8,20 +8,36 @@
 // Both now decide with guardMasterOrOwner at the location written, the rule
 // of the settings page they live on.
 //
-// How it works: each src/app/api/whatsapp/** and
-// src/app/api/locations/[id]/whatsapp/** route file is cut into its exported
-// handlers; every non-GET handler is classified by the strongest gate CALL in
-// its own body (comments blanked first, so a comment naming a guard does not
-// count). The table below is EXACT: a new handler, a removed one, or a
-// handler whose gate changed fails until the table says so, with a reason.
-// This is a floor, not a proof: a gate inside a helper the handler calls is
-// invisible (it would read as 'membership').
+// What it covers: every route file under src/app/api/whatsapp/** and
+// src/app/api/locations/[id]/whatsapp/**, plus
+// src/app/api/contacts/[id]/whatsapp (the one session route outside those
+// trees that writes to WhatsApp). The WhatsApp crons and Meta's webhook are
+// not session routes; check:route-guards covers them.
 //
-// Comments come from the TypeScript parser, not a regex: a regex that removes
+// How it works: each file is parsed with the TypeScript parser. Its exported
+// handlers are taken from the AST (an `export async function`, or an
+// exported const arrow / function expression), each one's text sliced from
+// its own node, so a helper after the last handler is never folded in.
+// Comments and the contents of string, template and regex literals are
+// blanked first, so a guard NAMED in a comment or a string does not count;
+// code inside a template's ${…} is still code. Every non-GET handler is then
+// classified by the strongest gate CALL in that text. The table below is
+// EXACT: a new handler, a removed one, or a handler whose gate changed fails
+// until the table says so, with a reason. A handler exported in any other
+// shape (`export const POST = withAuth(h)`, `export { h as POST }`) fails
+// its own test, since its body cannot be judged here.
+//
+// A FLOOR, NOT A PROOF. Not detected: a gate whose result is ignored
+// (`guardMasterOrOwner(user, loc)` with no `if (g) return g`), a gate called
+// with the wrong location, a gate reached only on some paths or inside a
+// callback, and a gate inside a helper the handler calls (it reads as the
+// next gate down, usually 'membership'). The route tests are the proof for
+// the rows this PR changed.
+//
+// Why a parser and not a regex (C74 GUARDSTRIP.1): a regex that removes
 // /* … */ first reads `accept="image/*"` or `// the /api/* routes` as the
-// start of a comment and hides everything up to the next */ (C74
-// GUARDSTRIP.1). A route file the parser cannot read would be scanned raw, so
-// a test below requires every one of them to parse.
+// start of a comment and hides everything up to the next */. A test below
+// requires every scanned file to parse without errors.
 
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
@@ -31,6 +47,7 @@ import ts from 'typescript'
 const ROOT = path.resolve(import.meta.dirname, '..')
 const API = path.join(ROOT, 'src/app/api')
 const DIRS = [path.join(API, 'whatsapp'), path.join(API, 'locations/[id]/whatsapp')]
+const EXTRA = [path.join(API, 'contacts/[id]/whatsapp/route.js')]
 
 function routeFiles(dir) {
   const out = []
@@ -42,37 +59,52 @@ function routeFiles(dir) {
   return out
 }
 
+const FILES = () => [...DIRS.flatMap(routeFiles), ...EXTRA]
+
 const rel = (file) => path.relative(API, file).split(path.sep).join('/')
 
-const parse = (text) => ts.createSourceFile('scan.jsx', text, ts.ScriptTarget.Latest, false, ts.ScriptKind.JSX)
+const parse = (text) => ts.createSourceFile('scan.jsx', text, ts.ScriptTarget.Latest, true, ts.ScriptKind.JSX)
 
-// Copied from tests/staff-profile-to-client.test.js (GUARDSTRIP.0): comment
-// ranges from the parser, JSX text excluded, each comment blanked to spaces
-// (newlines kept, so the `^export` split below still sees line starts).
-export function stripComments(text) {
-  const sf = parse(text)
-  if (sf.parseDiagnostics?.length) return text
+const METHODS = new Set(['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE'])
+
+// Literal kinds whose TEXT is data, never a call. A template's ${…}
+// expressions are separate nodes, so they stay code.
+const LITERALS = new Set([
+  ts.SyntaxKind.StringLiteral,
+  ts.SyntaxKind.NoSubstitutionTemplateLiteral,
+  ts.SyntaxKind.TemplateHead,
+  ts.SyntaxKind.TemplateMiddle,
+  ts.SyntaxKind.TemplateTail,
+  ts.SyntaxKind.RegularExpressionLiteral,
+  ts.SyntaxKind.JsxText,
+])
+
+// Comment ranges as in tests/staff-profile-to-client.test.js (GUARDSTRIP.0),
+// JSX text excluded from the comment scan, plus every literal's text. Each
+// range is blanked to spaces with newlines kept, so node offsets still hold.
+export function blankNonCode(text, sf = parse(text)) {
   // JSX text is not trivia, but asked for comments at its start the scanner
   // reads `<p>/* note</p>` or `<p>// x</p>` as one and would blank the code
-  // after it, so no range is taken at a position where JSX text begins (a
-  // wrapper node can share that position, hence the set, not a kind check).
+  // after it, so no comment range is taken at a position where JSX text
+  // begins (a wrapper node can share that position, hence the set).
   const jsxTextAt = new Set()
   const findJsxText = (node) => {
     if (node.kind === ts.SyntaxKind.JsxText) jsxTextAt.add(node.pos)
     for (const child of node.getChildren(sf)) findJsxText(child)
   }
   findJsxText(sf)
-  const ranges = new Map()
+  const ranges = []
   const visit = (node) => {
     if (!jsxTextAt.has(node.pos)) {
-      for (const r of [...(ts.getLeadingCommentRanges(text, node.pos) || []), ...(ts.getTrailingCommentRanges(text, node.pos) || [])]) ranges.set(r.pos, r.end)
+      for (const r of [...(ts.getLeadingCommentRanges(text, node.pos) || []), ...(ts.getTrailingCommentRanges(text, node.pos) || [])]) ranges.push([r.pos, r.end])
     }
+    if (LITERALS.has(node.kind)) ranges.push([node.getStart(sf), node.end])
     for (const child of node.getChildren(sf)) visit(child)
   }
   visit(sf)
-  let out = text
-  for (const [pos, end] of ranges) out = out.slice(0, pos) + out.slice(pos, end).replace(/[^\n]/g, ' ') + out.slice(end)
-  return out
+  const chars = text.split('')
+  for (const [pos, end] of ranges) for (let i = pos; i < end; i++) if (chars[i] !== '\n') chars[i] = ' '
+  return chars.join('')
 }
 
 // Strongest first. Each test is a CALL shape, not a bare name.
@@ -86,17 +118,66 @@ export function classify(handlerSrc) {
   return 'session-only'
 }
 
+const isExported = (node) => !!node.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)
+const isFunctionInit = (init) => !!init && (ts.isArrowFunction(init) || ts.isFunctionExpression(init))
+
+// Classifying reads literal CONTENT as blank, so the gate regexes need their
+// own quoted arguments back: 'whatsapp' / 'wa' are restored where they are
+// the argument of the permission calls the classifier matches.
+function restoreGateArgs(code, text, sf) {
+  const chars = code.split('')
+  const visit = (node) => {
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)
+      && ['hasPermissionForLocation', 'requireInboxPermission'].includes(node.expression.text)) {
+      for (const a of node.arguments) {
+        if (ts.isStringLiteral(a)) for (let i = a.getStart(sf); i < a.end; i++) chars[i] = text[i]
+      }
+    }
+    node.forEachChild(visit)
+  }
+  visit(sf)
+  return chars.join('')
+}
+
+// Each exported HTTP handler with its OWN text (comments/literals blanked).
 export function handlers(src) {
-  return stripComments(src)
-    .split(/(?=^export async function )/m)
-    .map((body) => ({ body, m: body.match(/^export async function (\w+)/) }))
-    .filter((x) => x.m)
-    .map(({ body, m }) => ({ method: m[1], body }))
+  const sf = parse(src)
+  const code = restoreGateArgs(blankNonCode(src, sf), src, sf)
+  const out = []
+  for (const st of sf.statements) {
+    if (!isExported(st)) continue
+    if (ts.isFunctionDeclaration(st) && st.name && METHODS.has(st.name.text)) {
+      out.push({ method: st.name.text, body: code.slice(st.getStart(sf), st.end) })
+    } else if (ts.isVariableStatement(st)) {
+      for (const d of st.declarationList.declarations) {
+        if (ts.isIdentifier(d.name) && METHODS.has(d.name.text) && isFunctionInit(d.initializer)) {
+          out.push({ method: d.name.text, body: code.slice(d.getStart(sf), d.end) })
+        }
+      }
+    }
+  }
+  return out
+}
+
+// HTTP handlers exported in a shape handlers() cannot judge.
+export function unjudgedExports(src) {
+  const sf = parse(src)
+  const out = []
+  for (const st of sf.statements) {
+    if (ts.isVariableStatement(st) && isExported(st)) {
+      for (const d of st.declarationList.declarations) {
+        if (ts.isIdentifier(d.name) && METHODS.has(d.name.text) && !isFunctionInit(d.initializer)) out.push(d.name.text)
+      }
+    } else if (ts.isExportDeclaration(st) && st.exportClause && ts.isNamedExports(st.exportClause)) {
+      for (const el of st.exportClause.elements) if (METHODS.has(el.name.text)) out.push(el.name.text)
+    }
+  }
+  return out
 }
 
 function actual() {
   const out = {}
-  for (const file of DIRS.flatMap(routeFiles)) {
+  for (const file of FILES()) {
     for (const h of handlers(fs.readFileSync(file, 'utf8'))) {
       if (h.method === 'GET') continue
       out[`${h.method} ${rel(file)}`] = classify(h.body)
@@ -142,6 +223,9 @@ export const EXPECTED = {
   'POST whatsapp/conversations/[id]/send-carousel/route.js': ['inbox', 'Sends a card set.'],
   'POST whatsapp/conversations/[id]/send-flow/route.js': ['inbox', 'Sends a Flow.'],
 
+  // ── Outside the two trees ──
+  'POST contacts/[id]/whatsapp/route.js': ['whatsapp-permission', 'Sends a WhatsApp to one contact: the whatsapp permission (web or mobile) at the contact\'s location, after membership.'],
+
   // ── Meta's own callback ──
   'POST whatsapp/flow/route.js': ['no-session', 'Flow data exchange: the RSA/AES envelope is the credential (check:route-guards EXEMPT).'],
 }
@@ -175,13 +259,77 @@ describe('WhatsApp mutation handlers — each one\'s gate (WAROLE.1)', () => {
     }
   })
 
+  // Review probes: a gate NAMED in a string, a template or a regex is not a
+  // gate; a helper after the last handler is not part of it; an exported
+  // const arrow is a handler like any other.
+  it('a guard named in a string, template or regex literal is not a gate', () => {
+    const body = (lead) => `export async function PUT() {\n  const user = await getCurrentUser()\n  ${lead}\n  const g = assertLocationAccessOr404(user, loc)\n}\n`
+    for (const lead of [
+      "const note = 'call guardMasterOrOwner(user, loc) first'",
+      'const note = "call guardMasterOrOwner(user, loc) first"',
+      'const note = `call guardMasterOrOwner(user, loc) first`',
+      'const note = `${a} guardMasterOrOwner(user, loc) ${b} guardMasterOrOwner(user, x)`',
+      'const re = /guardMasterOrOwner\\(user, loc\\)/',
+    ]) expect([lead, handlers(body(lead)).map((h) => classify(h.body))]).toEqual([lead, ['membership']])
+  })
+
+  it("the permission calls keep their quoted argument ('whatsapp', 'wa') through the blanking", () => {
+    const src = (call) => `export async function POST() {\n  const user = await getCurrentUser()\n  const g = assertLocationAccessOr404(user, loc)\n  ${call}\n}\n`
+    expect(handlers(src("if (!hasPermissionForLocation(user, loc, 'whatsapp')) return no")).map((h) => classify(h.body))).toEqual(['whatsapp-permission'])
+    expect(handlers(src("const p = requireInboxPermission(user, 'wa')")).map((h) => classify(h.body))).toEqual(['inbox'])
+    expect(handlers(src("const p = requireInboxPermission(user, 'email')")).map((h) => classify(h.body))).toEqual(['membership'])
+  })
+
+  it('a real call inside a template substitution still counts', () => {
+    const src = 'export async function PUT() {\n  const g = `${guardMasterOrOwner(user, loc)}`\n}\n'
+    expect(handlers(src).map((h) => classify(h.body))).toEqual(['owner'])
+  })
+
+  it('a helper after the last handler is not folded into it', () => {
+    const src = [
+      'export async function PUT() {',
+      '  const user = await getCurrentUser()',
+      '  const g = assertLocationAccessOr404(user, loc)',
+      '}',
+      '',
+      'function unused(user, loc) {',
+      '  return guardMasterOrOwner(user, loc)',
+      '}',
+      '',
+      'const alsoUnused = () => guardMasterOrOwner(user, loc)',
+    ].join('\n')
+    expect(handlers(src).map((h) => [h.method, classify(h.body)])).toEqual([['PUT', 'membership']])
+  })
+
+  it('an exported const arrow or function expression is a handler, judged on its own body', () => {
+    const src = [
+      'export const PUT = async (request) => {',
+      '  const user = await getCurrentUser()',
+      '  const g = guardMasterOrOwner(user, loc)',
+      '}',
+      'export const DELETE = async function (request) {',
+      '  const user = await getCurrentUser()',
+      '  const g = assertLocationAccessOr404(user, loc)',
+      '}',
+      "export const dynamic = 'force-dynamic'",
+    ].join('\n')
+    expect(handlers(src).map((h) => [h.method, classify(h.body)])).toEqual([['PUT', 'owner'], ['DELETE', 'membership']])
+  })
+
+  it('a handler exported in a shape the scan cannot judge is reported', () => {
+    expect(unjudgedExports('export const POST = withAuth(handler)')).toEqual(['POST'])
+    expect(unjudgedExports('async function POST() {}\nexport { POST }')).toEqual(['POST'])
+    expect(unjudgedExports('async function h() {}\nexport { h as DELETE }')).toEqual(['DELETE'])
+    expect(unjudgedExports("export async function POST() {}\nexport const PUT = async () => {}\nexport const runtime = 'nodejs'")).toEqual([])
+  })
+
   it('handlers() splits a file per exported handler', () => {
     const src = 'export async function GET() { a() }\nexport async function PUT() { guardMasterOrOwner(user, x) }\n'
     expect(handlers(src).map((h) => [h.method, classify(h.body)])).toEqual([['GET', 'no-session'], ['PUT', 'owner']])
   })
 
   it('every route file parses (an unparseable file would be scanned with its comments)', () => {
-    const broken = DIRS.flatMap(routeFiles).filter((f) => parse(fs.readFileSync(f, 'utf8')).parseDiagnostics?.length).map(rel)
+    const broken = FILES().filter((f) => parse(fs.readFileSync(f, 'utf8')).parseDiagnostics?.length).map(rel)
     expect(broken).toEqual([])
   })
 
@@ -191,11 +339,8 @@ describe('WhatsApp mutation handlers — each one\'s gate (WAROLE.1)', () => {
     expect(got).toEqual(want)
   })
 
-  it('every handler is an `export async function` (any other export shape would be skipped)', () => {
-    const odd = DIRS.flatMap(routeFiles)
-      .filter((f) => /^export\s+(const|let|var|function|\{)|^export\s+async\s+(?!function\b)/m.test(stripComments(fs.readFileSync(f, 'utf8'))
-        .replace(/^export\s+const\s+(dynamic|runtime|revalidate|maxDuration|fetchCache|preferredRegion)\s*=.*$/gm, '')))
-      .map(rel)
+  it('no handler is exported in a shape the scan cannot judge', () => {
+    const odd = FILES().flatMap((f) => unjudgedExports(fs.readFileSync(f, 'utf8')).map((m) => `${m} ${rel(f)}`))
     expect(odd).toEqual([])
   })
 
