@@ -269,3 +269,48 @@ describe('PUT /api/settings/customer-agent — who may change Mia (MIAROLE.1)', 
     expect(db.writes).toEqual([])
   })
 })
+
+// CHECKINRISKS.1 (C106 c) — the card's "Sent today" counted contacts STAMPED
+// today (first_class_checkin_at), and the runner stamps non-sends too
+// ('skipped — already discussed', 'skipped — no marketing consent'). It now
+// counts the day's agent_checkin activity rows that were sends, with the
+// runner's own daily-cap counter, so the card and the cap agree. A failed read
+// is unknown (null), never 0.
+describe('GET /api/settings/customer-agent — check-in counts are sends (CHECKINRISKS.1)', () => {
+  const manager = { id: 'u', role: 'manager', activeLocation: { id: 'loc1' }, locations: [{ id: 'loc1' }] }
+  const LOC = { data: { name: 'Stillorgan', settings: { customer_agent: {} } }, error: null }
+  const ROWS = [
+    { note: 'Spin (template)', created_at: '2026-09-30T10:00:00Z', contacts: { name: 'A' } },
+    { note: 'Spin (in-window)', created_at: '2026-09-30T09:00:00Z', contacts: { name: 'B' } },
+    { note: 'Spin (skipped — no marketing consent)', created_at: '2026-09-30T08:00:00Z', contacts: { name: 'C' } },
+  ]
+
+  it('sent_today counts sends, not stamps; total is the all-time send count', async () => {
+    getCurrentUser.mockResolvedValue(manager)
+    createServerClient.mockReturnValue(fakeLocationsDb({
+      reads: LOC,
+      tables: {
+        // three contacts were STAMPED today; only two were sends
+        contacts: { data: null, count: 3, error: null },
+        activities: { data: ROWS, count: 7, error: null },
+      },
+    }))
+    const body = await (await GET()).json()
+    expect(body.checkin_stats.sent_today).toBe(2)
+    expect(body.checkin_stats.total).toBe(7)
+  })
+
+  it('a failed activities read is unknown (null), never 0', async () => {
+    getCurrentUser.mockResolvedValue(manager)
+    createServerClient.mockReturnValue(fakeLocationsDb({
+      reads: LOC,
+      tables: { contacts: { data: null, count: 0, error: null }, activities: { data: null, error: BOOM } },
+    }))
+    const res = await GET()
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.checkin_stats.sent_today).toBeNull()
+    expect(body.checkin_stats.total).toBeNull()
+    expect(body.checkin_stats.last_unreadable).toBe(true)
+  })
+})

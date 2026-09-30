@@ -146,3 +146,29 @@ describe('CustomerAgentClient — read-only for a non-owner (MIAROLE.1)', () => 
     expect(screen.queryByText('Only an owner can change these settings.')).toBeNull()
   })
 })
+
+// CHECKINRISKS.1 (C106 c) — the counts are SENDS; a failed read (null) says
+// so and is never shown as 0.
+describe('CustomerAgentClient — check-in counts (CHECKINRISKS.1)', () => {
+  const withStats = (checkin_stats) => reply(200, {
+    success: true,
+    settings: { ...DEFAULTS, enabled: true, social_enabled: false, glofox_auto_cancel: false, first_class_checkin: { enabled: true, daily_cap: 20 } },
+    location: { id: 'loc1', name: 'Test Studio' },
+    checkin_stats,
+  })
+
+  it('shows the sends', async () => {
+    mockFetch([withStats({ sent_today: 2, total: 7, last: null, last_run: null })])
+    render(<CustomerAgentClient canEdit />)
+    await waitFor(() => expect(screen.getByText('Sent today 2/20')).toBeTruthy())
+    expect(screen.getByText(/Sent all time 7/)).toBeTruthy()
+  })
+
+  it('an unreadable count reads "could not be read", never 0', async () => {
+    mockFetch([withStats({ sent_today: null, total: null, last: null, last_unreadable: true, last_run: null })])
+    render(<CustomerAgentClient canEdit />)
+    await waitFor(() => expect(screen.getByText('Sent today: could not be read')).toBeTruthy())
+    expect(screen.getByText(/Sent all time could not be read/)).toBeTruthy()
+    expect(screen.queryByText(/none yet/)).toBeNull()
+  })
+})

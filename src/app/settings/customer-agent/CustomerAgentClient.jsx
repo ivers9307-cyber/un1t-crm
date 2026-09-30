@@ -896,14 +896,20 @@ export default function CustomerAgentClient({ canEdit = false } = {}) {
         {checkinStats && (
           <div className="mb-4 rounded-md border border-un1t-border bg-un1t-bg/40 px-3 py-2 text-xs text-un1t-subtle space-y-1">
             <p>
+              {/* CHECKINRISKS.1 — both counts are SENDS (the cap's own counter);
+                  null means the read failed, which is never shown as 0. */}
               <span className="font-semibold text-un1t-text">
-                Sent today {checkinStats.sent_today}/{settings.first_class_checkin?.daily_cap ?? 20}
+                {checkinStats.sent_today == null
+                  ? 'Sent today: could not be read'
+                  : `Sent today ${checkinStats.sent_today}/${settings.first_class_checkin?.daily_cap ?? 20}`}
               </span>
-              {' · '}All time {checkinStats.total}
+              {' · '}Sent all time {checkinStats.total == null ? 'could not be read' : checkinStats.total}
               {' · '}Last:{' '}
-              {checkinStats.last
-                ? `${checkinStats.last.contact_name || 'contact'} — ${checkinStats.last.note || 'sent'} (${new Date(checkinStats.last.at).toLocaleString('en-IE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })})`
-                : 'none yet'}
+              {checkinStats.last_unreadable
+                ? 'could not be read'
+                : checkinStats.last
+                  ? `${checkinStats.last.contact_name || 'contact'} — ${checkinStats.last.note || 'sent'} (${new Date(checkinStats.last.at).toLocaleString('en-IE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })})`
+                  : 'none yet'}
             </p>
             {checkinStats.last_run && (
               <p>

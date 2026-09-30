@@ -27,6 +27,7 @@ import { getLocationBranding } from '@/lib/location-branding'
 import { anthropicMessages } from '@/lib/anthropic'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { logError } from '@/lib/log'
+import { countCheckinSends, readCheckinSendsToday, checkinDayStartIso } from './checkin-counts'
 
 // MIA-SONNET5 — kept in step with the inbound reply path so a nudge sounds
 // like the same person who answers the thread.
@@ -582,14 +583,10 @@ function checkinInstruction(className) {
   )
 }
 
-/**
- * How many of today's check-in activity rows were actual SENDS. Pure.
- * stampCheckin writes the `via` label into the note ('in-window' / 'template'
- * for a send, 'skipped — …' for a non-send).
- */
-export function countCheckinSends(rows) {
-  return (rows || []).filter((r) => !/skipped/i.test(String(r?.note || ''))).length
-}
+// How many of today's check-in activity rows were actual SENDS. Moved to
+// ./checkin-counts.js (CHECKINRISKS.1) so the settings card counts with the
+// same rule; re-exported for existing callers.
+export { countCheckinSends }
 
 // MIA-REVIEW.3 — the daily cap must measure SENDS. contacts
 // .first_class_checkin_at is the once-ever marker and stampCheckin stamps it
@@ -599,19 +596,12 @@ export function countCheckinSends(rows) {
 // those; if that read fails we fall back to the old stamp count (over-counting
 // under-sends, which is the safe direction).
 async function checkinsSentToday(db, locationId, nowMs) {
-  const d = new Date(nowMs)
-  const dayStart = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())).toISOString()
-  const { data, error } = await db.from('activities')
-    .select('note')
-    .eq('location_id', locationId)
-    .eq('type', 'agent_checkin')
-    .gte('created_at', dayStart)
-    .limit(500)
-  if (!error && Array.isArray(data)) return countCheckinSends(data)
+  const sends = await readCheckinSendsToday(db, locationId, nowMs)
+  if (sends.count !== null) return sends.count
   const { count } = await db.from('contacts')
     .select('id', { count: 'exact', head: true })
     .eq('location_id', locationId)
-    .gte('first_class_checkin_at', dayStart)
+    .gte('first_class_checkin_at', checkinDayStartIso(nowMs))
   return count || 0
 }
 
