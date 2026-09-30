@@ -391,6 +391,64 @@ export function formatHistoryForClaude(rows, opts = {}) {
 }
 
 /**
+ * MIAPREFILL.1 — is this stored inbound row one Mia would answer? The same
+ * content gate shouldAgentReply applies to the live message: a text or a
+ * tapped button with something in it. Reactions, media, stickers and empty
+ * rows are not. Pure.
+ */
+export function isReplyWorthyInbound(row) {
+  if (!row || row.direction !== 'inbound') return false
+  const type = row.message_type || 'text'
+  if (type !== 'text' && type !== 'interactive') return false
+  return !!String(row.body || '').trim()
+}
+
+// created_at strings from one column. Compare as instants; fall back to the
+// string when both land in the same millisecond (PostgREST keeps
+// microseconds, Date.parse drops them). Pure.
+function isAfterIso(a, b) {
+  const ta = Date.parse(a)
+  const tb = Date.parse(b)
+  if (Number.isFinite(ta) && Number.isFinite(tb) && ta !== tb) return ta > tb
+  return String(a) > String(b)
+}
+
+/**
+ * MIAPREFILL.1 — the `messages` array for one reply turn. Pure.
+ *
+ * Guarantee: `messages` is either empty or starts on a user turn, alternates
+ * roles, has no empty content, and ENDS ON A USER TURN. Sonnet 5 rejects a
+ * request whose last message is an assistant turn ("assistant message
+ * prefill", HTTP 400), and so does every newer model.
+ *
+ * answeredThroughIso — set only on a missed-inbound rerun: the newest inbound
+ * the previous pass saw. A reply-worthy inbound AFTER it arrived while Mia was
+ * composing, so it sits BEFORE her reply in time although she never read it.
+ * Those rows move after the newest outbound, so the model sees its reply and
+ * then the message it still owes an answer to. Without this the rerun's
+ * history ended on Mia's own reply: 3 of 3 reruns since 22 Aug got the 400.
+ *
+ * @param {Array<{direction:string,body?:string,message_type?:string,created_at?:string}>} rows ascending by time
+ * @param {{ maxMessages?: number, answeredThroughIso?: string|null }} [opts]
+ * @returns {{ messages: Array<{role:string,content:string}>, reason: null|'no_history'|'nothing_to_answer' }}
+ */
+export function buildReplyTurnMessages(rows, opts = {}) {
+  const { maxMessages = 20, answeredThroughIso = null } = opts
+  let ordered = rows || []
+  if (answeredThroughIso) {
+    const late = ordered.filter((r) => isReplyWorthyInbound(r) && r.created_at && isAfterIso(r.created_at, answeredThroughIso))
+    if (late.length) ordered = [...ordered.filter((r) => !late.includes(r)), ...late]
+  }
+  const messages = formatHistoryForClaude(ordered, { maxMessages })
+  if (messages.length === 0) return { messages: [], reason: 'no_history' }
+  // The newest turn is the studio's (a STOP/START acknowledgement, a staff
+  // send, a template) and nothing after it needs an answer. Calling the API
+  // anyway is the prefill 400.
+  if (messages[messages.length - 1].role !== 'user') return { messages: [], reason: 'nothing_to_answer' }
+  return { messages, reason: null }
+}
+
+/**
  * Interpret the model's raw reply text. Pure.
  * Returns { action: 'reply'|'handoff', text, reason }.
  *  - handoff: model emitted the HANDOFF sentinel → reason carries the
