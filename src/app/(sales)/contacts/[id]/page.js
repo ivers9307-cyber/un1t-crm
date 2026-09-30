@@ -6,7 +6,7 @@ import { ArrowLeft, Mail, MessageSquare, MessageCircle } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { canViewContact } from '@/lib/contact-crossovers'
-import { canLoadContactConsultations, contactChannelFlags, contactActionGates } from '@/lib/contact-page-gates'
+import { canLoadContactConsultations, contactChannelFlags, contactActionGates, contactWorkGates } from '@/lib/contact-page-gates'
 import { classifyContact, scoreMember } from '@/lib/churn-radar'
 import { loadContactArrears } from '@/lib/churn-radar-data'
 import { loadContactJourney } from '@/lib/onboarding-journey-data'
@@ -235,6 +235,8 @@ export default async function ContactDetailPage(props) {
   // ROLEUI.1 — the action buttons, each the decision of the route it calls,
   // judged at the CONTACT's location (never user.role, the active studio's).
   const actions = contactActionGates(user, contact)
+  // ROLEUI.2 — the buttons that had no gate at all: same rule, same place.
+  const work = contactWorkGates(user, contact)
   let consultationsTab = null
   if (canConsultations) {
     const [consultsRes, goalsRes, photosRes, scansRes, coachLinksRes] = await Promise.all([
@@ -364,6 +366,7 @@ export default async function ContactDetailPage(props) {
         attention={attention}
         nextClassAt={nextClassAt}
         canToggleExempt={actions.canToggleExempt}
+        actionGates={work}
         cancellationLink={cancellationLink}
         // WAITLIST.6 — a location with no readable primary board resolves null
         // here, which is FALSE, which is today's behaviour (Cold shown).
@@ -386,6 +389,7 @@ export default async function ContactDetailPage(props) {
             identityEmails={identityEmails}
             identityPhones={identityPhones}
             canEditPrefs={actions.canEditPrefs}
+            canLinkAccounts={work.canLinkAccounts}
           />
         </div>
 
@@ -419,6 +423,9 @@ export default async function ContactDetailPage(props) {
               <ContactActions
                 contactId={contact.id}
                 locationId={contact.location_id}
+                canNote={work.canNote}
+                canTask={work.canTask}
+                canSequence={work.canSequence}
               />
             </div>
             <ContactTimeline timeline={timeline} person={person} showFilters />
@@ -455,11 +462,13 @@ export default async function ContactDetailPage(props) {
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle flex items-center gap-1.5">
                   <MessageCircle size={12} /> WhatsApp
                 </h3>
-                <StartWhatsAppButton
-                  contactId={contact.id}
-                  contactPhone={contact.phone}
-                  waPhone={contact.wa_phone}
-                />
+                {work.canStartWhatsApp && (
+                  <StartWhatsAppButton
+                    contactId={contact.id}
+                    contactPhone={contact.phone}
+                    waPhone={contact.wa_phone}
+                  />
+                )}
               </div>
               {contact.wa_phone && (
                 <p className="text-xs text-un1t-muted mb-2">{contact.wa_phone}</p>
@@ -508,14 +517,16 @@ export default async function ContactDetailPage(props) {
 
           {/* BOOK-ON-PROFILE.1 — book this contact into a consultation or
               Glofox class, same engine as the inbox Book tab. */}
-          <ContactBookingCard
-            contactId={contact.id}
-            locationId={contact.location_id}
-            glofoxMemberId={contact.glofox_member_id || null}
-            eventTypes={bookableEventTypes}
-            waConversationId={latestWaConversation?.id || null}
-            waWindowOpen={whatsappWindowOpen}
-          />
+          {work.canBook && (
+            <ContactBookingCard
+              contactId={contact.id}
+              locationId={contact.location_id}
+              glofoxMemberId={contact.glofox_member_id || null}
+              eventTypes={bookableEventTypes}
+              waConversationId={latestWaConversation?.id || null}
+              waWindowOpen={whatsappWindowOpen}
+            />
+          )}
         </div>
       </div>
 
@@ -529,9 +540,11 @@ export default async function ContactDetailPage(props) {
 
       {/* CONSENT.3 — full-width consent history table (collapsed +
           lazy-loading, as before). */}
-      <div className="mt-8">
-        <ContactConsentHistoryCard contactId={contact.id} />
-      </div>
+      {work.canReadConsent && (
+        <div className="mt-8">
+          <ContactConsentHistoryCard contactId={contact.id} />
+        </div>
+      )}
     </div>
   )
 }

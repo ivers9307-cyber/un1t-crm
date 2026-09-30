@@ -163,7 +163,7 @@ async function retryOwedExpireNotices(db, { nowMs, nowIso, results }) {
  * PATCH route), so a staff decision racing the sweep can't double-run.
  */
 export async function runApprovalsSlaSweep(db, { nowMs = Date.now() } = {}) {
-  const results = { expired: 0, escalated: 0, skipped: 0, notice_failed: 0, notices_retried: 0, gave_up: 0 }
+  const results = { expired: 0, escalated: 0, skipped: 0, notice_failed: 0, notices_retried: 0, gave_up: 0, candidates_unread: 0 }
   const nowIso = new Date(nowMs).toISOString()
 
   try {
@@ -178,7 +178,9 @@ export async function runApprovalsSlaSweep(db, { nowMs = Date.now() } = {}) {
     .order('created_at', { ascending: true })
     .limit(200)
   if (error) {
-    console.error('[radar-agent] approvals-sla candidate query failed:', error.message)
+    // C31 PUSHNITS.1 — structured, never free text; counted, never a quiet run.
+    results.candidates_unread = 1
+    logError('approvals-sla', 'candidate read failed; retried next tick', { err: error.message || String(error) })
     return results
   }
 
@@ -268,7 +270,7 @@ export async function runApprovalsSlaSweep(db, { nowMs = Date.now() } = {}) {
       if (outcome !== 'failed') results.escalated++
     } catch (e) {
       results.skipped++
-      console.error('[radar-agent] approvals-sla row error:', e?.message || e)
+      logError('approvals-sla', 'row threw; retried next tick', { id: row?.id, err: e?.message || String(e) })
     }
   }
   return results

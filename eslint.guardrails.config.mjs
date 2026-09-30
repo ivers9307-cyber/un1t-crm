@@ -371,14 +371,15 @@ const config = [
       // PUSHDONE.1b — the member engagement pushes and their claim helper.
       // Measured on main 4c991179: run-challenge-events 3 (the three
       // announced_* stamps), the four nudge crons 0; 0 after. live-class.js
-      // is NOT armed: it keeps three unrelated bare writes (session and
-      // achievement stamps), a follow-up in the C21 plan.
+      // was left out with three bare writes (session patch, strap close,
+      // achievement stamp); C31 PUSHNITS.1 judged all three and armed it.
       'src/lib/customer-nudge-claim.js',
       'src/app/api/cron/notify-streak-at-risk/route.js',
       'src/app/api/cron/notify-winback/route.js',
       'src/app/api/cron/notify-onboarding-pace/route.js',
       'src/app/api/cron/send-class-booking-reminders/route.js',
       'src/app/api/cron/run-challenge-events/route.js',
+      'src/lib/live-class.js',
       // SETTINGSWIPE.1 — the one writer of locations.settings and the seven
       // routes that used to wipe it (three of them with bare or discarded
       // writes that answered success). Measured on main 6c6775ee: 3 findings
@@ -398,6 +399,10 @@ const config = [
       // are now log-and-warn; nothing after the Meta call may fail the request.
       // `[[]id]`: files entries are minimatch globs, a bare `[id]` is a class.
       'src/app/api/whatsapp/conversations/[[]id]/send/route.js',
+      // CHECKINRISKS.1 (C106 e) — the react and send-flow thread rows were
+      // inserted inside a try/catch that could never see a resolved { error }.
+      // Now log-and-warn, never a failure after Meta has sent.
+      'src/app/api/whatsapp/conversations/[[]id]/react/route.js',
       // FLOWTOKENDEDUP.1 (C73) — the inbox booking-Flow send. Its thread-row
       // insert ran after Meta had accepted the Flow, inside a try whose catch
       // could never fire for it: a lost row was silent. Now log-and-warn, like

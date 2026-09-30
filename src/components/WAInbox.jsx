@@ -93,11 +93,14 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
     if (!conversation?.id || !msg.wa_message_id) return
     setReactingId(msg.id)
     try {
-      await fetch(`/api/whatsapp/conversations/${conversation.id}/react`, {
+      const res = await fetch(`/api/whatsapp/conversations/${conversation.id}/react`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message_id: msg.wa_message_id, emoji }),
       })
+      const data = await res.json()
+      // Sent, but the thread row was lost: say so rather than show nothing.
+      if (data.success && data.warnings?.length) alert(data.warnings.join('\n\n'))
     } catch {} finally {
       setReactingId(null)
     }
