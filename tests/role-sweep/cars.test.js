@@ -28,6 +28,8 @@ import * as cancelDeposit from '@/app/api/cars/[id]/cancel-deposit/route.js'
 import * as doc from '@/app/api/cars/[id]/documents/[docId]/route.js'
 import * as sendToXero from '@/app/api/cars/[id]/documents/[docId]/send-to-xero/route.js'
 import * as docs from '@/app/api/cars/[id]/documents/route.js'
+import * as docSign from '@/app/api/cars/[id]/documents/sign/route.js'
+import * as docFinalise from '@/app/api/cars/[id]/documents/finalise/route.js'
 import * as depositLink from '@/app/api/cars/[id]/issue-deposit-link/route.js'
 import * as issueInvoice from '@/app/api/cars/[id]/issue-xero-invoice/route.js'
 import * as note from '@/app/api/cars/[id]/notes/[noteId]/route.js'
@@ -109,6 +111,9 @@ const DETAIL = [
   ['DELETE /api/cars/[id]/documents/[docId]', () => doc.DELETE(bare('DELETE'), params({ id: 'car-1', docId: 'doc-1' })), DOC, FORBIDDEN_PLAIN],
   ['POST /api/cars/[id]/documents/[docId]/send-to-xero', () => sendToXero.POST(bare('POST'), params({ id: 'car-1', docId: 'doc-1' })), DOC, NOT_PERMITTED],
   ['POST /api/cars/[id]/documents', () => docs.POST(form(), params(CAR_ID)), CAR, FORBIDDEN_PLAIN],
+  // CARDOCUPLOAD.1 (C124) — the picker's signed upload shares the multipart route's gate.
+  ['POST /api/cars/[id]/documents/sign', () => docSign.POST(json('POST', {}), params(CAR_ID)), CAR, FORBIDDEN_PLAIN],
+  ['POST /api/cars/[id]/documents/finalise', () => docFinalise.POST(json('POST', {}), params(CAR_ID)), CAR, FORBIDDEN_PLAIN],
   ['POST /api/cars/[id]/issue-deposit-link', () => depositLink.POST(json('POST', {}), params(CAR_ID)), CAR, NOT_PERMITTED],
   ['POST /api/cars/[id]/issue-xero-invoice', () => issueInvoice.POST(bare('POST'), params(CAR_ID)), CAR, NOT_PERMITTED],
   ['DELETE /api/cars/[id]/notes/[noteId]', () => note.DELETE(bare('DELETE'), params({ id: 'car-1', noteId: 'note-1' })), row({ id: 'note-1' }), NOT_PERMITTED],

@@ -12,6 +12,12 @@
 //     writer, and each literal contentType it sends is on the list. A new
 //     writer must be added to WRITERS with its type.
 //  4. DocumentsCard's picker offers CAR_DOCUMENT_ACCEPT, not a literal list.
+//  5. CARDOCUPLOAD.1 (C124): the signed-upload path — the only file that
+//     mints a signed upload into the bucket is …/documents/sign, the only
+//     one that uploads against one is the browser flow, and sign, finalise
+//     and the flow judge size and type with the shared helpers (no size
+//     literal of their own). A new signed writer must be added to
+//     SIGNED_WRITERS.
 //
 // Comments are blanked first (tests/helpers/js-code.js stripComments, the
 // TypeScript parser's ranges; tests/helpers/sql-code.js sqlCode, $tag$-paired).
@@ -35,6 +41,15 @@ const BUCKET_MIGRATION = 687
 const MIGRATIONS = path.join(ROOT, 'supabase/migrations')
 const UPLOAD_ROUTE = 'src/app/api/cars/[id]/documents/route.js'
 const PICKER = 'src/components/cars/DocumentsCard.jsx'
+const SIGN_ROUTE = 'src/app/api/cars/[id]/documents/sign/route.js'
+const FINALISE_ROUTE = 'src/app/api/cars/[id]/documents/finalise/route.js'
+const UPLOAD_CLIENT = 'src/lib/car-document-upload-client.js'
+const UPLOAD_RULES = 'src/lib/car-document-upload.js'
+// file → the signed-upload call it makes on the bucket.
+const SIGNED_WRITERS = {
+  [SIGN_ROUTE]: 'createSignedUploadUrl',
+  [UPLOAD_CLIENT]: 'uploadToSignedUrl',
+}
 // file → how it sends its type. 'resolved' = the route's contentType variable.
 const WRITERS = {
   [UPLOAD_ROUTE]: 'resolved',
@@ -129,6 +144,42 @@ describe('car-documents bucket guard (CARDOCBUCKET.1, mig 687)', { timeout: 120_
     const code = stripComments(read(PICKER))
     expect(code).toMatch(/accept=\{CAR_DOCUMENT_ACCEPT\}/)
     expect(code).not.toMatch(/accept="/)
+  })
+
+  it('5. the signed-upload path is known and judges with the shared rules (CARDOCUPLOAD.1)', () => {
+    const found = {}
+    for (const f of walk(path.join(ROOT, 'src'))) {
+      const text = readFileSync(f, 'utf8')
+      if (!text.includes('car-documents') || !/(createSignedUploadUrl|uploadToSignedUrl)\s*\(/.test(text)) continue
+      const code = stripComments(text)
+      if (!/'car-documents'/.test(code)) continue
+      const calls = [...code.matchAll(/\.(createSignedUploadUrl|uploadToSignedUrl)\s*\(/g)].map((m) => m[1])
+      if (calls.length) found[rel(f)] = [...new Set(calls)].join(',')
+    }
+    expect(found, 'a new signed-upload writer of car-documents: add it to SIGNED_WRITERS').toEqual(SIGNED_WRITERS)
+
+    const rules = stripComments(read(UPLOAD_RULES))
+    expect(rules).toMatch(/from\s+'\.\/car-document-media'/)
+    expect(rules).toMatch(/bytes\s*>\s*CAR_DOCUMENT_MAX_BYTES/)
+
+    for (const f of [SIGN_ROUTE, FINALISE_ROUTE]) {
+      const code = stripComments(read(f))
+      expect(code, f).toMatch(/resolveCarDocumentType\(/)
+      expect(code, f).toMatch(/checkCarDocumentSize\(/)
+      expect(code, f).toMatch(/carDocumentsGate\(/)
+      expect(code, f).not.toMatch(/\d+\s*\*\s*1024\s*\*\s*1024/)
+    }
+    // Finalise judges what Storage holds, at a slot minted for this car.
+    const fin = stripComments(read(FINALISE_ROUTE))
+    expect(fin).toMatch(/isCarDocumentUploadPath\(/)
+    expect(fin).toMatch(/sniffCarDocumentHeif\(/)
+    expect(fin).toMatch(/metadata\?\.size/)
+    expect(fin).toMatch(/metadata\?\.mimetype/)
+    // The browser uploads under the type sign decided (the bucket checks it).
+    const client = stripComments(read(UPLOAD_CLIENT))
+    expect(client).toMatch(/uploadToSignedUrl\(path,\s*token,\s*blob,\s*\{\s*contentType\s*\}\)/)
+    expect(client).toMatch(/new Blob\(\[file\],\s*\{\s*type:\s*contentType\s*\}\)/)
+    expect(client).toMatch(/checkCarDocumentSize\(/)
   })
 
   it('the detectors read what they must', () => {
