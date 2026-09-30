@@ -32,9 +32,13 @@
 --     service-role-only tables; the others are identity columns or unused).
 --   * No PUBLIC item on any relation, no anon column grant.
 -- What anon ACTUALLY reads: nothing. Edge logs 24 Sep 12:00 -> 30 Sep 12:00
--- UTC (six 24 h windows): 0 anon (or JWT-less) requests to /rest/v1/<table>
--- or /graphql/v1 (one anon GET /rest/v1/ = the OpenAPI root, one JWT-less
--- 401). Every signed-out page (/welcome, /start, public bookings, events,
+-- UTC (six 24 h windows): 0 anon requests to /rest/v1/<table> or
+-- /graphql/v1 but one anon GET /rest/v1/ (the OpenAPI root) and one GET
+-- /rest/v1/time_off_requests with NO JWT role that returned 200 (24 Sep
+-- 23:31: a new-format sb_publishable_ key over curl, limit=0, so no rows).
+-- New-format keys carry no JWT role in the edge logs, so a watch for the
+-- public key must count role = '' as well as 'anon', never 'anon' alone.
+-- Every signed-out page (/welcome, /start, public bookings, events,
 -- the class widget, the deposit page) reads through createServerClient()
 -- (service_role). A rolled-back anon probe on prod: 190 relations return 0
 -- rows, 27 raise 42501 inside a policy helper, and exactly two return rows
