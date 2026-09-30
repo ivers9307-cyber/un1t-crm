@@ -149,3 +149,79 @@ describe('WhatsAppIntegrationTab — chat openers and card sets follow canEdit (
     expect(screen.getByTitle('Delete this card set')).toBeTruthy()
   })
 })
+
+// WACONFIGFALLBACK.1 — there is no env fallback any more: a studio with no
+// active number sends and receives no WhatsApp. The copy used to promise
+// "falls back to the global WHATSAPP_* env vars", and the Remove confirm "the
+// env-var default". Removing or deactivating the LAST active number now says
+// WhatsApp stops at this studio, and how to fix a token instead.
+describe('WhatsAppIntegrationTab — no env fallback in the copy (WACONFIGFALLBACK.1)', () => {
+  const NUM = (over) => ({
+    id: 'n1', location_id: LOC.id, label: 'Front desk', phone_number_id: '100', business_account_id: '200',
+    app_id: '300', display_phone: null, source: 'cloud_api', token_type: 'system_user', connected_via: 'manual',
+    is_default: true, is_active: true, access_token_redacted: null, history_sync_status: null,
+    coex_link_status: null, created_at: null, updated_at: null, ...over,
+  })
+  const STOPS = /WhatsApp stops at this studio: Mia stops replying, and booking confirmations and reminders are no longer sent/
+  afterEach(() => { vi.restoreAllMocks() })
+
+  it('the empty state says WhatsApp is off here, never the env vars', async () => {
+    mockFetch(reply(200, { success: true, numbers: [] }))
+    render(<WhatsAppIntegrationTab location={LOC} canEdit />)
+    expect(await screen.findByText(/will not send or receive WhatsApp while it has no active number/)).toBeTruthy()
+    expect(screen.queryByText(/WHATSAPP_\*/)).toBeNull()
+    expect(screen.queryByText(/falls back/)).toBeNull()
+  })
+
+  it('removing the LAST active number warns that WhatsApp stops here; cancel sends nothing', async () => {
+    mockFetch(reply(200, { success: true, numbers: [NUM()] }))
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    render(<WhatsAppIntegrationTab location={LOC} canEdit />)
+    fireEvent.click(await screen.findByTitle('Remove this number'))
+    expect(confirmSpy).toHaveBeenCalledTimes(1)
+    expect(confirmSpy.mock.calls[0][0]).toMatch(STOPS)
+    expect(confirmSpy.mock.calls[0][0]).not.toMatch(/env/i)
+    expect(global.fetch.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false)
+  })
+
+  it('removing one of two active numbers says the other keeps working (no stop warning)', async () => {
+    mockFetch(reply(200, { success: true, numbers: [NUM(), NUM({ id: 'n2', label: 'Back office', is_default: false })] }))
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    render(<WhatsAppIntegrationTab location={LOC} canEdit />)
+    fireEvent.click((await screen.findAllByTitle('Remove this number'))[0])
+    expect(confirmSpy.mock.calls[0][0]).toMatch(/keeps using its other active number/)
+    expect(confirmSpy.mock.calls[0][0]).not.toMatch(STOPS)
+  })
+
+  it('the Active checkbox no longer calls deactivating "temporary maintenance"', async () => {
+    mockFetch(reply(200, { success: true, numbers: [NUM()] }))
+    render(<WhatsAppIntegrationTab location={LOC} canEdit />)
+    fireEvent.click(await screen.findByText('Front desk'))
+    expect(await screen.findByText(/inactive number sends and receives no WhatsApp/)).toBeTruthy()
+    expect(screen.queryByText(/temporary maintenance/)).toBeNull()
+  })
+
+  it('deactivating the LAST active number asks first; cancel saves nothing', async () => {
+    mockFetch(reply(200, { success: true, numbers: [NUM()] }))
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    render(<WhatsAppIntegrationTab location={LOC} canEdit />)
+    fireEvent.click(await screen.findByText('Front desk'))
+    fireEvent.click(await screen.findByRole('checkbox', { name: /inactive number sends and receives no WhatsApp/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(confirmSpy).toHaveBeenCalledTimes(1)
+    expect(confirmSpy.mock.calls[0][0]).toMatch(/^Deactivate "Front desk"\?/)
+    expect(confirmSpy.mock.calls[0][0]).toMatch(STOPS)
+    expect(global.fetch.mock.calls.some(([, init]) => init?.method === 'PATCH')).toBe(false)
+  })
+
+  it('deactivating one of two active numbers saves without a confirm', async () => {
+    mockFetch(reply(200, { success: true, numbers: [NUM(), NUM({ id: 'n2', label: 'Back office', is_default: false })] }))
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    render(<WhatsAppIntegrationTab location={LOC} canEdit />)
+    fireEvent.click(await screen.findByText('Front desk'))
+    fireEvent.click(await screen.findByRole('checkbox', { name: /inactive number sends and receives no WhatsApp/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(confirmSpy).not.toHaveBeenCalled()
+    expect(global.fetch.mock.calls.some(([, init]) => init?.method === 'PATCH')).toBe(true)
+  })
+})
