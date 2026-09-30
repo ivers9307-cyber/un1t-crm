@@ -17,12 +17,17 @@ vi.mock('@/lib/glofox', async (importOriginal) => ({
   createBooking: vi.fn(),
   cancelBooking: vi.fn(),
   purchaseGlofoxMembership: vi.fn(async () => ({ ok: true })),
+  // TRIALGRANT.1 — the grant re-reads credits first; by default the account
+  // is empty, so a needs_credit_grant approval buys the trial.
+  fetchUserCreditsResult: vi.fn(async () => ({ ok: true, credits: [] })),
 }))
-// CBPCREDITREAD.1 — the trial-grant call site reads the location's trial
-// plan; configured here so only the card's reason decides whether it fires.
+// CBPCREDITREAD.1 / TRIALGRANT.1 — the trial grant reads the location's trial
+// plan with readGlofoxConfig (a failed read is its own failure, never "not
+// configured"); configured here so only the card's reason decides whether it
+// fires.
 vi.mock('@/lib/connection-registry', async (importOriginal) => ({
   ...(await importOriginal()),
-  getGlofoxConfig: vi.fn(async () => ({ trial_membership_id: 'tm-1', trial_plan_code: 'tp-1' })),
+  readGlofoxConfig: vi.fn(async () => ({ cfg: { trial_membership_id: 'tm-1', trial_plan_code: 'tp-1' }, error: null })),
 }))
 vi.mock('@/lib/agent/notify', () => ({
   sendAgentThreadMessage: vi.fn(async () => ({ ok: true })),
@@ -32,7 +37,9 @@ vi.mock('@/lib/agent/notify', () => ({
   agentConfirmationTemplates: vi.fn(async () => ({})),
 }))
 
-import { createBooking, cancelBooking, glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, purchaseGlofoxMembership } from '@/lib/glofox'
+import { createBooking, cancelBooking, glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, purchaseGlofoxMembership, fetchUserCreditsResult } from '@/lib/glofox'
+import { readGlofoxConfig } from '@/lib/connection-registry'
+import { failureExplanation } from '@/lib/approvals/agent-request-why'
 import { sendAgentThreadMessage } from '@/lib/agent/notify'
 import { PATCH } from './route.js'
 
@@ -506,5 +513,223 @@ describe('PATCH class_booking approval — trial grant only on needs_credit_gran
     expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
     expect(createBooking).toHaveBeenCalledTimes(1)
     expect(createBooking.mock.calls[0][1]).toMatchObject({ user_id: 'gm1' })
+  })
+})
+
+// TRIALGRANT.1 — the trial purchase is JUDGED before the booking. It used to
+// be fire-and-forget: a refusal (Glofox 200s with success:false) went
+// straight on to createBooking, failed YOU_HAVE_NO_CREDITS_LEFT, and a
+// Fix & retry bought the trial again.
+describe('PATCH class_booking approval — the trial grant is judged (TRIALGRANT.1)', () => {
+  const grantRow = (extra = {}) => ({ ...ROW, details: { ...ROW.details, reason: 'needs_credit_grant', source: 'start_funnel', ...extra } })
+
+  it('purchase refused → failed TRIAL_GRANT_FAILED, NO booking attempt, NO confirmation, queue row synced', async () => {
+    purchaseGlofoxMembership.mockResolvedValueOnce({ ok: false, http_status: 200, message_code: 'PURCHASE_NOT_ALLOWED', purchase_status: 'ERROR', error: 'Membership cannot be purchased' })
+    db = makeDbFor(grantRow(), updates)
+
+    const json = await (await approve()).json()
+
+    expect(createBooking).not.toHaveBeenCalled()
+    expect(sendAgentThreadMessage).not.toHaveBeenCalled()
+    expect(json.executed).toMatchObject({ ok: false, message_code: 'TRIAL_GRANT_FAILED', glofox_message_code: 'PURCHASE_NOT_ALLOWED' })
+    const final = updates.at(-1).patch
+    expect(final.status).toBe('failed')
+    expect(final.details.trial_grant).toMatchObject({ ok: false, code: 'TRIAL_GRANT_FAILED' })
+    expect(final.details.execution.stage).toBe('done')
+    const cbr = updates.find((u) => u.table === 'class_booking_requests')
+    expect(cbr.patch).toEqual({ status: 'failed', last_error: 'TRIAL_GRANT_FAILED' })
+    expect(failureExplanation({ status: 'failed', details: final.details })).toMatch(/PURCHASE_NOT_ALLOWED/)
+  })
+
+  it('purchase granted → books; the grant is recorded on details and on executed', async () => {
+    purchaseGlofoxMembership.mockResolvedValueOnce({ ok: true, http_status: 200, purchase_status: 'SUCCESS', invoice_id: 'inv-1' })
+    createBooking.mockResolvedValueOnce({ ok: true, status: 200, body: { success: true, Booking: { _id: 'gfb-7' } } })
+    db = makeDbFor(grantRow(), updates)
+
+    const json = await (await approve()).json()
+
+    expect(createBooking).toHaveBeenCalledTimes(1)
+    expect(json.executed).toMatchObject({ ok: true, glofox_booking_id: 'gfb-7', trial_grant: { ok: true, invoice_id: 'inv-1' } })
+    expect(updates.at(-1).patch.status).toBe('actioned')
+    expect(updates.at(-1).patch.details.trial_grant).toMatchObject({ ok: true, invoice_id: 'inv-1' })
+  })
+
+  it('Fix & retry on a card whose trial WAS granted buys nothing more, and books', async () => {
+    createBooking.mockResolvedValueOnce({ ok: true, status: 200, body: { success: true, Booking: { _id: 'gfb-8' } } })
+    db = makeDbFor({ ...grantRow({ trial_grant: { ok: true, at: '2026-09-30T18:00:00.000Z', invoice_id: 'inv-0' }, result: { ok: false, message_code: 'CLASS_IS_FULL' } }), status: 'failed' }, updates)
+
+    await approve()
+
+    expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
+    expect(fetchUserCreditsResult).not.toHaveBeenCalled()
+    expect(createBooking).toHaveBeenCalledTimes(1)
+    expect(updates.at(-1).patch.status).toBe('actioned')
+  })
+
+  it('trial granted but Glofox still refuses no-credits → failed, and the card says the trial was added', async () => {
+    purchaseGlofoxMembership.mockResolvedValueOnce({ ok: true, http_status: 200, purchase_status: 'SUCCESS', invoice_id: 'inv-1' })
+    createBooking.mockResolvedValueOnce({ ok: true, status: 200, body: { message_code: 'YOU_HAVE_NO_CREDITS_LEFT' } })
+    db = makeDbFor(grantRow(), updates)
+
+    const json = await (await approve()).json()
+
+    expect(updates.at(-1).patch.status).toBe('failed')
+    expect(json.executed.trial_grant).toMatchObject({ ok: true })
+    expect(failureExplanation({ status: 'failed', details: { result: json.executed } })).toMatch(/trial was added/i)
+  })
+
+  // The route must tell the helper this is a retry: an earlier attempt may
+  // have bought the trial without recording it, so an unreadable balance on
+  // a retry buys nothing (a first approval still buys, as before).
+  it('Fix & retry with an unreadable balance → failed TRIAL_GRANT_UNVERIFIED, nothing bought, no booking', async () => {
+    fetchUserCreditsResult.mockResolvedValueOnce({ ok: false, credits: [] })
+    db = makeDbFor({ ...grantRow({ trial_grant: { ok: false, code: 'TRIAL_GRANT_FAILED' }, result: { ok: false, message_code: 'TRIAL_GRANT_FAILED' } }), status: 'failed' }, updates)
+
+    await approve()
+
+    expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
+    expect(createBooking).not.toHaveBeenCalled()
+    expect(updates.at(-1).patch.status).toBe('failed')
+    expect(updates.at(-1).patch.details.result).toMatchObject({ ok: false, message_code: 'TRIAL_GRANT_UNVERIFIED' })
+  })
+
+  it('a card carrying the funnel’s trial override buys that trial, not the location default', async () => {
+    createBooking.mockResolvedValueOnce({ ok: true, status: 200, body: { success: true, Booking: { _id: 'gfb-9' } } })
+    db = makeDbFor(grantRow({ trial_membership_id: 'tm-funnel', trial_plan_code: 'tp-funnel' }), updates)
+
+    await approve()
+
+    expect(purchaseGlofoxMembership).toHaveBeenCalledWith(expect.anything(), 'gm1', 'tm-funnel', 'tp-funnel')
+    expect(readGlofoxConfig).not.toHaveBeenCalled()
+    expect(updates.at(-1).patch.status).toBe('actioned')
+  })
+
+  it('unreadable trial settings → failed GLOFOX_SETTINGS_UNREADABLE, no booking (was: silently "not configured", then booked)', async () => {
+    readGlofoxConfig.mockResolvedValueOnce({ cfg: {}, error: { message: 'boom' } })
+    db = makeDbFor(grantRow(), updates)
+
+    await approve()
+
+    expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
+    expect(createBooking).not.toHaveBeenCalled()
+    expect(updates.at(-1).patch.details.result).toMatchObject({ ok: false, message_code: 'GLOFOX_SETTINGS_UNREADABLE' })
+  })
+})
+
+// Review should-fix — the write-ahead grant record. The grant used to reach
+// the row only in the FINAL update, so a purchase that went through followed
+// by a death before that write (createBooking stuck in Glofox backoff until
+// the function timed out) left a stuck card with no record, and its retry
+// could buy a second trial. These drive the real helper through a double
+// that records every update WITH its filters.
+describe('PATCH class_booking approval — the trial grant is written ahead (TRIALGRANT.1)', () => {
+  const STALE = '2026-01-01T00:00:00.000Z' // long past EXECUTION_STALE_MS
+  const grantRow = (extra = {}) => ({ ...ROW, details: { ...ROW.details, reason: 'needs_credit_grant', source: 'start_funnel', ...extra } })
+
+  // A record write is an agent_membership_requests update with no `status`
+  // (the claim and the final write both carry one). `failRecord` decides
+  // which of them the database "loses".
+  function makeGrantDb(row, log, { failRecord = () => false } = {}) {
+    return {
+      from(table) {
+        let patch = null
+        const eqs = []
+        const b = {
+          select: () => b,
+          eq: (col, val) => { eqs.push([col, val]); return b },
+          update(p) { patch = p; log.push({ table, patch: p, eqs }); return b },
+          async maybeSingle() {
+            if (patch) {
+              const isRecord = table === 'agent_membership_requests' && !('status' in patch)
+              if (isRecord && failRecord(patch.details?.trial_grant)) return { data: null, error: null }
+              return { data: { id: row.id }, error: null }
+            }
+            if (table === 'contacts') return { data: { glofox_member_id: 'gm1' }, error: null }
+            return { data: row, error: null }
+          },
+          async single() {
+            return { data: { id: row.id, status: patch?.status, decided_at: null, decision_note: null, details: patch?.details }, error: null }
+          },
+        }
+        return b
+      },
+    }
+  }
+  const records = (log) => log.filter((u) => u.table === 'agent_membership_requests' && !('status' in u.patch))
+  // What the row holds after the run: the last write that landed.
+  const lastDetails = (log, landed = () => true) => records(log).filter((u) => landed(u.patch.details.trial_grant)).at(-1).patch.details
+
+  it('writes the purchasing marker, then the outcome, on THIS execution only, before booking', async () => {
+    purchaseGlofoxMembership.mockResolvedValueOnce({ ok: true, http_status: 200, purchase_status: 'SUCCESS', invoice_id: 'inv-1' })
+    createBooking.mockResolvedValueOnce({ ok: true, status: 200, body: { success: true, Booking: { _id: 'gfb-1' } } })
+    db = makeGrantDb(grantRow(), updates)
+
+    await approve()
+
+    const recs = records(updates)
+    expect(recs.map((u) => u.patch.details.trial_grant)).toEqual([
+      { stage: 'purchasing', at: expect.any(String) },
+      expect.objectContaining({ ok: true, invoice_id: 'inv-1' }),
+    ])
+    const claim = updates.find((u) => u.table === 'agent_membership_requests' && u.patch.status === 'approved')
+    const startedAt = claim.patch.details.execution.started_at
+    for (const u of recs) {
+      expect(u.eqs).toEqual(expect.arrayContaining([['id', 'r1'], ['details->execution->>started_at', startedAt]]))
+      expect(u.patch.details.execution).toMatchObject({ stage: 'executing', started_at: startedAt })
+    }
+    expect(purchaseGlofoxMembership.mock.invocationCallOrder[0]).toBeLessThan(createBooking.mock.invocationCallOrder[0])
+    expect(updates.at(-1).patch.status).toBe('actioned')
+  })
+
+  it('the marker cannot be written → failed TRIAL_GRANT_UNRECORDED; nothing bought, nothing booked', async () => {
+    db = makeGrantDb(grantRow(), updates, { failRecord: (g) => g?.stage === 'purchasing' })
+
+    await approve()
+
+    expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
+    expect(createBooking).not.toHaveBeenCalled()
+    expect(updates.at(-1).patch.status).toBe('failed')
+    expect(updates.at(-1).patch.details.result).toMatchObject({ ok: false, message_code: 'TRIAL_GRANT_UNRECORDED' })
+  })
+
+  it('crash AFTER a recorded purchase (booking dies, no final write) → the stuck retry buys nothing more, and books', async () => {
+    purchaseGlofoxMembership.mockResolvedValueOnce({ ok: true, http_status: 200, purchase_status: 'SUCCESS', invoice_id: 'inv-1' })
+    createBooking.mockRejectedValueOnce(new Error('function timed out'))
+    db = makeGrantDb(grantRow(), updates)
+    await expect(approve()).rejects.toThrow('function timed out')
+    expect(updates.some((u) => u.patch.status === 'actioned' || u.patch.status === 'failed')).toBe(false)
+
+    // The row as the database now holds it: approved, executing, stale.
+    const held = lastDetails(updates)
+    const stuck = { ...ROW, status: 'approved', details: { ...held, execution: { ...held.execution, started_at: STALE } } }
+    createBooking.mockResolvedValueOnce({ ok: true, status: 200, body: { success: true, Booking: { _id: 'gfb-2' } } })
+    const retryLog = []
+    db = makeGrantDb(stuck, retryLog)
+    await approve()
+
+    expect(purchaseGlofoxMembership).toHaveBeenCalledTimes(1)
+    expect(createBooking).toHaveBeenCalledTimes(2)
+    expect(retryLog.at(-1).patch.status).toBe('actioned')
+  })
+
+  it('crash between the purchase and its outcome write → the retry, with no credits showing, refuses (TRIAL_GRANT_UNVERIFIED)', async () => {
+    purchaseGlofoxMembership.mockResolvedValueOnce({ ok: true, http_status: 200, purchase_status: 'SUCCESS', invoice_id: 'inv-1' })
+    createBooking.mockRejectedValueOnce(new Error('function timed out'))
+    db = makeGrantDb(grantRow(), updates, { failRecord: (g) => g?.ok === true })
+    await expect(approve()).rejects.toThrow('function timed out')
+
+    // Only the marker landed; the trial is queued behind a membership they
+    // hold, so no credits show yet.
+    const held = lastDetails(updates, (g) => g?.stage === 'purchasing')
+    expect(held.trial_grant).toEqual({ stage: 'purchasing', at: expect.any(String) })
+    const stuck = { ...ROW, status: 'approved', details: { ...held, execution: { ...held.execution, started_at: STALE } } }
+    const retryLog = []
+    db = makeGrantDb(stuck, retryLog)
+    await approve()
+
+    expect(purchaseGlofoxMembership).toHaveBeenCalledTimes(1)
+    expect(createBooking).toHaveBeenCalledTimes(1)
+    expect(retryLog.at(-1).patch.status).toBe('failed')
+    expect(retryLog.at(-1).patch.details.result).toMatchObject({ ok: false, message_code: 'TRIAL_GRANT_UNVERIFIED' })
   })
 })
