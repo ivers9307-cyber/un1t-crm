@@ -1,8 +1,7 @@
 // WATPLPUT.1 — the field policy for PUT /api/whatsapp/templates/[id].
 import { describe, it, expect } from 'vitest'
 import {
-  META_OWNED_FIELDS, CONTENT_FIELDS, LOCAL_FIELDS, HEADER_MEDIA_FIELDS,
-  isTemplateSubmitted, isHeaderMediaEditable, lockedFieldsIn,
+  META_OWNED_FIELDS, CONTENT_FIELDS, LOCAL_FIELDS, isTemplateSubmitted, lockedFieldsIn,
 } from './whatsapp-template-fields.js'
 
 describe('isTemplateSubmitted', () => {
@@ -21,21 +20,6 @@ describe('isTemplateSubmitted', () => {
   })
 })
 
-// The header media of an APPROVED template is supplied at SEND time (the send
-// attaches header_media_url as a link), so swapping it needs no Meta review.
-describe('isHeaderMediaEditable', () => {
-  it.each([
-    ['no row', null, false],
-    ['a draft (the main save carries it)', { status: 'draft', meta_template_id: null }, false],
-    ['APPROVED', { status: 'APPROVED', meta_template_id: 'm1' }, true],
-    ['PENDING (in review)', { status: 'PENDING', meta_template_id: 'm1' }, false],
-    ['REJECTED (resubmit is the path)', { status: 'REJECTED', meta_template_id: 'm1' }, false],
-    ['PAUSED (resubmit is the path)', { status: 'PAUSED', meta_template_id: 'm1' }, false],
-  ])('%s → %s', (_label, row, expected) => {
-    expect(isHeaderMediaEditable(row)).toBe(expected)
-  })
-})
-
 describe('lockedFieldsIn', () => {
   const APPROVED = { status: 'APPROVED', meta_template_id: 'm1' }
   const PENDING = { status: 'PENDING', meta_template_id: 'm1' }
@@ -51,15 +35,10 @@ describe('lockedFieldsIn', () => {
       .toEqual(['name', 'components', 'header_media_url'])
   })
 
-  it('an APPROVED template: content is locked but a new header image is not', () => {
+  it('an APPROVED template: the header media is locked like the rest of the content', () => {
     expect(lockedFieldsIn({ header_media_url: 'u', header_media_path: 'p', header_media_handle: 'h', components: [], name: 'n' }, APPROVED))
-      .toEqual(['name', 'components'])
-    expect(lockedFieldsIn({ header_media_url: 'u', header_media_path: 'p', header_media_handle: 'h' }, APPROVED)).toEqual([])
-  })
-
-  it('an APPROVED template: clearing the header image is locked (every send attaches it)', () => {
+      .toEqual(['name', 'components', 'header_media_handle', 'header_media_url', 'header_media_path'])
     expect(lockedFieldsIn({ header_media_url: null }, APPROVED)).toEqual(['header_media_url'])
-    expect(lockedFieldsIn({ header_media_url: '', header_media_path: null }, APPROVED)).toEqual(['header_media_url'])
   })
 
   it('a submitted template: display_group alone is not locked', () => {
@@ -74,6 +53,6 @@ describe('lockedFieldsIn', () => {
     const all = [...META_OWNED_FIELDS, ...CONTENT_FIELDS, ...LOCAL_FIELDS]
     expect(new Set(all).size).toBe(all.length)
     expect(META_OWNED_FIELDS).toContain('status')
-    for (const k of HEADER_MEDIA_FIELDS) expect(CONTENT_FIELDS).toContain(k)
+    for (const k of ['header_media_handle', 'header_media_url', 'header_media_path']) expect(CONTENT_FIELDS).toContain(k)
   })
 })

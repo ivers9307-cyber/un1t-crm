@@ -2,13 +2,12 @@
 //
 // It accepted `status`, so a manager could mark a REJECTED template APPROVED
 // locally: every picker then offered it and every send failed at Meta. And it
-// let a manager rewrite the name, category or components of a template Meta
-// had already approved, so the row said one thing and Meta held another.
-// After: the Meta-owned fields are refused in every state (400), a submitted
-// template's content is refused (409, "use Edit & resubmit"), a draft's
-// content still saves, and display_group saves in every state. The header
-// image of an APPROVED template can still be replaced (sends attach it as a
-// link, no Meta review), but not removed. Ids are synthetic.
+// let a manager rewrite the name, category, components or header media of a
+// template Meta had already approved, so the row said one thing and Meta held
+// another. After: the Meta-owned fields are refused in every state (400), a
+// submitted template's content, header media included, is refused (409, "use
+// Edit & resubmit"), a draft's content still saves, and display_group saves in
+// every state. Ids are synthetic.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -90,7 +89,9 @@ describe('PUT refuses a submitted template\'s content (WATPLPUT.1)', () => {
   it.each([
     ['APPROVED', APPROVED, { components: [{ type: 'BODY', text: 'Changed' }] }, ['components']],
     ['APPROVED', APPROVED, { name: 'promo_y', category: 'UTILITY' }, ['name', 'category']],
-    ['APPROVED, content alongside a new header image', APPROVED, { components: [], header_media_url: 'https://example.test/other.jpg' }, ['components']],
+    ['APPROVED, a new header image', APPROVED, { header_media_handle: 'h:new', header_media_url: 'https://example.test/new.jpg', header_media_path: 'p' }, ['header_media_handle', 'header_media_url', 'header_media_path']],
+    ['APPROVED, the header image removed', APPROVED, { header_media_url: null }, ['header_media_url']],
+    ['APPROVED, content alongside a new header image', APPROVED, { components: [], header_media_url: 'https://example.test/other.jpg' }, ['components', 'header_media_url']],
     ['PENDING (in review)', PENDING, { header_media_url: 'https://example.test/other.jpg' }, ['header_media_url']],
     ['PENDING', PENDING, { example_values: { 1: 'Sam' } }, ['example_values']],
     ['REJECTED (resubmit is the path)', REJECTED, { components: [] }, ['components']],
@@ -105,17 +106,6 @@ describe('PUT refuses a submitted template\'s content (WATPLPUT.1)', () => {
     expect(json.success).toBe(false)
     expect(json.error).toMatch(/Edit & resubmit/)
     expect(json.issues.map((i) => i.path)).toEqual(locked)
-    expect(db.writes).toEqual([])
-  })
-
-  it('APPROVED, a manager removes the header image: 409 (every send attaches it), nothing written', async () => {
-    getCurrentUser.mockResolvedValue(MANAGER)
-    withRow(APPROVED)
-    const res = await put({ header_media_url: null, header_media_path: null, header_media_handle: null })
-    const json = await res.json()
-    expect(res.status).toBe(409)
-    expect(json.error).toMatch(/replaced, not removed/)
-    expect(json.issues).toEqual([{ path: 'header_media_url', message: expect.stringMatching(/replaced, not removed/) }])
     expect(db.writes).toEqual([])
   })
 
@@ -138,16 +128,7 @@ describe('what still saves (WATPLPUT.1)', () => {
       expect(db.writes).toEqual([{ table: 'whatsapp_templates', op: 'update', patch: { display_group: 'Offers' }, where: ['id', 't1'] }])
     })
 
-  it('a new header image on an APPROVED template, a manager: 200, exactly the three header fields', async () => {
-    getCurrentUser.mockResolvedValue(MANAGER)
-    withRow(APPROVED)
-    const body = { header_media_handle: 'h:new', header_media_url: 'https://example.test/new.jpg', header_media_path: `${LOC_B}/new.jpg` }
-    const res = await put(body)
-    expect(res.status).toBe(200)
-    expect(db.writes).toEqual([{ table: 'whatsapp_templates', op: 'update', patch: body, where: ['id', 't1'] }])
-  })
-
-  it('a new header image on an APPROVED template, staff: the role 403, nothing written', async () => {
+  it('a new header image on an APPROVED template, staff: the role 403 first, nothing written', async () => {
     getCurrentUser.mockResolvedValue(STAFF)
     withRow(APPROVED)
     const res = await put({ header_media_url: 'https://example.test/new.jpg' })
