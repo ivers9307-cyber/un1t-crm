@@ -88,7 +88,42 @@ describe('maybeSendCampaignWhatsappWelcome — Flow toggle', () => {
       },
     }
   }
-  const FLOW_TPL = { name: 'book_first_visit', status: 'APPROVED', language: 'en', header_media_url: null, components: [{ type: 'BODY', text: 'Hi {{1}}!' }] }
+  const FLOW_TPL = {
+    name: 'book_first_visit', status: 'APPROVED', language: 'en', header_media_url: null,
+    components: [{ type: 'BODY', text: 'Hi {{1}}!' }, { type: 'BUTTONS', buttons: [{ type: 'FLOW', text: 'Book' }] }],
+  }
+
+  // FLOWTOKENDEDUP.1 — the token comes from flowTokenFor and the button from
+  // flowButtonComponentFor, so the index is the FLOW button's real position.
+  it('puts the flow_token on the FLOW button at its real index', async () => {
+    const tpl = { ...FLOW_TPL, components: [FLOW_TPL.components[0], { type: 'BUTTONS', buttons: [{ type: 'QUICK_REPLY', text: 'Later' }, { type: 'FLOW', text: 'Book' }] }] }
+    await maybeSendCampaignWhatsappWelcome({
+      db: makeFlowDb(tpl, { whatsapp_flow: { enabled: true, template_name: 'book_first_visit' } }),
+      locationId: 'loc1', contact: { id: 'c1', first_name: 'Sarah', phone: '0871234567', wa_phone: null }, templateName: 'meta_ad_whatsapp_lead',
+    })
+    const [, , , components] = sendTemplateMessage.mock.calls[0]
+    const flowBtn = components.find((c) => c.sub_type === 'flow')
+    expect(flowBtn).toEqual({ type: 'button', sub_type: 'flow', index: '1', parameters: [{ type: 'action', action: { flow_token: 'c1.loc1' } }] })
+  })
+
+  // A contact with no id cannot get a token the Flow endpoint can resolve
+  // (the hand-built string was "undefined.loc1"), so the lead gets the
+  // classic welcome instead of a Flow that could never book them.
+  it('with no contact id → keeps the classic welcome instead of minting a dead token', async () => {
+    const db = makeFlowDb(null, { whatsapp_flow: { enabled: true, template_name: 'book_first_visit' } })
+    const base = db.from
+    // Templates resolve BY NAME here, so the name the code asked for is what is sent.
+    db.from = (tbl) => tbl !== 'whatsapp_templates' ? base(tbl) : {
+      select: () => ({ eq: (_c, name) => ({ eq: () => ({ maybeSingle: async () => ({ data: name === 'book_first_visit' ? FLOW_TPL : APPROVED }) }) }) }),
+    }
+    const r = await maybeSendCampaignWhatsappWelcome({
+      db, locationId: 'loc1', contact: { first_name: 'Sarah', phone: '0871234567', wa_phone: null }, templateName: 'meta_ad_whatsapp_lead',
+    })
+    expect(r.sent).toBe(true)
+    const [, tplName, , components] = sendTemplateMessage.mock.calls[0]
+    expect(tplName).toBe('meta_ad_whatsapp_lead')
+    expect(components.find((c) => c.sub_type === 'flow')).toBeUndefined()
+  })
 
   it('when whatsapp_flow.enabled → sends the FLOW template with a flow_token button', async () => {
     const r = await maybeSendCampaignWhatsappWelcome({

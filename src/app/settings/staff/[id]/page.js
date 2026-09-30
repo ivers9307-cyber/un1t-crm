@@ -1,5 +1,5 @@
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, hasRoleAtAnyLocation } from '@/lib/auth'
 import { redirect, notFound } from 'next/navigation'
 import StaffForm from '@/components/StaffForm'
 import WidgetTokensCard from '@/components/WidgetTokensCard'
@@ -13,7 +13,9 @@ export const dynamic = 'force-dynamic'
 export default async function EditStaffPage(props) {
   const params = await props.params;
   const user = await getCurrentUser()
-  if (!user || (!user.isMaster && user.role !== 'owner')) redirect('/')
+  // PAGEGATES.1 — "owner SOMEWHERE" (the routes' own coarse pre-check), not
+  // the ACTIVE studio's role; which record is theirs is decided below.
+  if (!user || (!user.isMaster && !hasRoleAtAnyLocation(user, ['owner']))) redirect('/')
 
   // The locations this caller is OWNER at — the page's own definition of
   // what an owner may administer (it already used this below to decide

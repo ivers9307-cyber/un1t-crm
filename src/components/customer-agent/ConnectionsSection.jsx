@@ -66,6 +66,9 @@ export default function ConnectionsSection({ locationId, locationName, embedded 
   const [saving, setSaving] = useState(false)
   const [savedAt, setSavedAt] = useState(null)
   const [error, setError] = useState(null)
+  // MIANITS — Mia's per-channel switch is owner-only (owner at this studio, or
+  // master); the GET says whether this caller may flip it. Fails closed.
+  const [canEditAgent, setCanEditAgent] = useState(false)
 
   // `keep` (optional): fields the operator typed, laid over the re-read row.
   // Used after a 409, where the card learns a connection exists and switches
@@ -79,11 +82,13 @@ export default function ConnectionsSection({ locationId, locationName, embedded 
         throw new Error(j?.error || `HTTP ${res.status}`)
       }
       setConnections(j.connections)
+      setCanEditAgent(j.can_edit_agent === true)
       const { active, previous } = pickInstagram(j.connections)
       setDraft({ ...(active ? { ...active } : reconnectPrefill(previous)), ...(keep || {}) })
       setReadState('ready')
     } catch {
       setConnections([])
+      setCanEditAgent(false)
       setDraft({})
       setReadState('unknown')
     }
@@ -204,10 +209,11 @@ export default function ConnectionsSection({ locationId, locationName, embedded 
           ))}
         </div>
 
-        <label className="flex items-center gap-2 mt-4 cursor-pointer">
+        <label className={`flex items-center gap-2 mt-4 ${canEditAgent ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}>
           <input
             type="checkbox"
             checked={!!draft.agent_enabled}
+            disabled={!canEditAgent}
             onChange={e => setField('agent_enabled', e.target.checked)}
           />
           <span className="text-sm text-un1t-text">Mia auto-replies on Instagram</span>
@@ -215,6 +221,9 @@ export default function ConnectionsSection({ locationId, locationName, embedded 
         <p className="text-xs text-un1t-muted mt-1">
           Off by default. Inbound DMs still land in the inbox and notify staff — Mia only answers when this is on.
         </p>
+        {!canEditAgent && (
+          <p className="text-xs text-un1t-muted mt-1">Only an owner can switch Mia on or off.</p>
+        )}
 
         {error && <div className="text-sm text-red-600 mt-3">{error}</div>}
         <div className="mt-4">

@@ -37,7 +37,8 @@ describe('LocationIntegrations — AC tab (ACDEVLOC.1)', () => {
     render(<LocationIntegrations location={LOC} xeroConnection={null} user={{ role: 'master' }} />)
     expect(await screen.findByRole('button', { name: 'Save credentials' })).toBeTruthy()
     cleanup()
-    render(<LocationIntegrations location={LOC} xeroConnection={null} user={{ role: 'owner' }} />)
+    // PAGEGATES.1 — an owner AT this location (the tabs judge here, not user.role).
+    render(<LocationIntegrations location={LOC} xeroConnection={null} user={{ role: 'owner', profileRole: 'staff', rolesByLocation: { [LOC.id]: 'owner' } }} />)
     expect(await screen.findByText(/No devices configured/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Save credentials' })).toBeNull()
   })

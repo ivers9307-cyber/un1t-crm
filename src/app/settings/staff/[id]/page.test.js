@@ -167,8 +167,28 @@ describe('/settings/staff/[id] — the target must be the caller’s to see', ()
   it('refuses an owner-role caller who owns no location at all, before any query', async () => {
     getCurrentUser.mockResolvedValue(user({ role: 'owner', rolesByLocation: { [LOC_MINE]: 'manager' } }))
 
-    await expect(call()).rejects.toThrow('NEXT_NOT_FOUND')
+    // PAGEGATES.1 — the entry gate now reads rolesByLocation ("owner
+    // somewhere"), so this caller is bounced there, with the same answer for
+    // every id (nothing to enumerate), instead of one step later.
+    await expect(call()).rejects.toThrow(/^NEXT_REDIRECT:\/$/)
     expect(db.touched).toEqual([])
+  })
+
+  // PAGEGATES.1 — the entry gate was user.role (the ACTIVE studio's). PUT and
+  // DELETE /api/staff/[id] pre-check "owner somewhere" and then judge the
+  // target's studios, so an owner at the target's studio whose active studio
+  // is one where they are a manager was bounced from a record the routes let
+  // them edit.
+  it('opens for an owner at the target\'s studio whose ACTIVE studio is one where they are a manager (main: redirected)', async () => {
+    db = makeDb({ targetLocationIds: [LOC_THEIRS] })
+    createServerClient.mockReturnValue(db)
+    getCurrentUser.mockResolvedValue(user({ role: 'manager', rolesByLocation: { [LOC_MINE]: 'manager', [LOC_THEIRS]: 'owner' } }))
+
+    await call()
+
+    expect(notFound).not.toHaveBeenCalled()
+    expect(redirect).not.toHaveBeenCalled()
+    expect(db.touched).toContain('profiles')
   })
 
   it('still bounces a non-owner outright', async () => {
