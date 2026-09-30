@@ -5,15 +5,13 @@
 // The TV admin (TVAdmin.jsx, TemplateEditor.jsx) does its table
 // writes straight from the browser Supabase client, which is fine
 // for tv_displays / tv_content / tv_templates rows. Storage is the
-// exception: the browser client can't satisfy the 'tv-content'
-// bucket's INSERT policy, so `db.storage.upload()` fails with
-// "new row violates row-level security policy". Every other bucket
-// in this app (branding, car-documents, contractor-invoices) is
-// written server-side with the service-role client for exactly
-// this reason — TV uploads were the odd ones out and never worked.
-//
-// This route restores the pattern: authenticate with the CRM's own
-// session, then upload via the service-role client (bypasses RLS).
+// exception: the 'tv-content' bucket takes NO client session write
+// (mig 671, TVBUCKET.1: no storage.objects policy admits it). This
+// route is the only way in: authenticate with the CRM's own session,
+// check the TV permission at the location, validate the file against
+// src/lib/tv-media.js (the same list and cap the bucket enforces),
+// then upload via the service-role client (bypasses RLS). The phone's
+// TV screen (mobile/lib/tv-api.js uploadTvImage) posts here too.
 //
 // POST /api/admin/tv-displays/upload   (multipart/form-data)
 //   file         — the image
@@ -29,9 +27,7 @@ import {
   hasPermissionAtAnyLocation, hasPermissionForLocation,
   hasMobilePermissionAtAnyLocation, hasMobilePermissionForLocation,
 } from '@/lib/permissions'
-
-const ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/avif']
-const MAX_BYTES = 15 * 1024 * 1024   // 15MB — TV art is full-bleed 1920×1080+
+import { TV_IMAGE_MIME_TYPES, TV_IMAGE_MAX_BYTES } from '@/lib/tv-media'
 
 export async function POST(request) {
   const user = await getCurrentUser()
@@ -66,10 +62,10 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'Not authorised for TV displays' }, { status: 403 })
   }
 
-  if (!ALLOWED_TYPES.includes(file.type)) {
+  if (!TV_IMAGE_MIME_TYPES.includes(file.type)) {
     return NextResponse.json({ success: false, error: 'File must be a PNG, JPEG, WebP, GIF or AVIF image.' }, { status: 400 })
   }
-  if (file.size > MAX_BYTES) {
+  if (file.size > TV_IMAGE_MAX_BYTES) {
     return NextResponse.json({ success: false, error: 'Image must be under 15MB.' }, { status: 400 })
   }
 
