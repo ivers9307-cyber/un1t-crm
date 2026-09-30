@@ -28,7 +28,8 @@ import { buildCachedSystem } from './prompt'
 import { getLocationBranding } from '@/lib/location-branding'
 import {
   shouldAgentReply,
-  formatHistoryForClaude,
+  buildReplyTurnMessages,
+  isReplyWorthyInbound,
   parseAgentResponse,
   isVerificationFresh,
   resolveAgentEffort,
@@ -332,13 +333,16 @@ export async function runChannelAgent(db, adapter, ctx) {
     reruns < MAX_MISSED_INBOUND_RERUNS &&
     result?.handled === true && result.action === 'reply' && result.lastInboundSeenIso
   ) {
-    const missed = await hasInboundAfter(db, adapter, ctx?.conversationId, result.lastInboundSeenIso)
+    const answeredThroughIso = result.lastInboundSeenIso
+    const missed = await hasInboundAfter(db, adapter, ctx?.conversationId, answeredThroughIso)
     if (!missed) break
     reruns++
     console.warn('[radar-agent] missed-inbound rerun', JSON.stringify({
       channel: adapter.name, conversationId: ctx?.conversationId || null, rerun: reruns,
     }))
-    result = await runChannelAgentInner(db, adapter, ctx, trace)
+    // MIAPREFILL.1 — tell the rerun what the last pass already answered, so
+    // the missed message is placed after Mia's reply, not before it.
+    result = await runChannelAgentInner(db, adapter, { ...ctx, answeredThroughIso }, trace)
   }
 
   if (result?.handled === false) {
@@ -367,16 +371,19 @@ export async function runChannelAgent(db, adapter, ctx) {
   return result
 }
 
-// Any inbound row newer than the last one the just-finished turn saw?
+// Any REPLY-WORTHY inbound row newer than the last one the just-finished turn
+// saw? MIAPREFILL.1 — a reaction or a photo landing mid-turn is not a reason
+// to run again: a reaction is never answered (MIA-REVIEW.2), and media takes
+// its own soft-handoff path in its own webhook, never the in_flight bail.
 async function hasInboundAfter(db, adapter, conversationId, sinceIso) {
   if (!conversationId || !sinceIso) return false
   const { data } = await db.from(adapter.messagesTable)
-    .select('id')
+    .select('message_type, body')
     .eq('conversation_id', conversationId)
     .eq('direction', 'inbound')
     .gt('created_at', sinceIso)
-    .limit(1)
-  return Array.isArray(data) && data.length > 0
+    .limit(20)
+  return Array.isArray(data) && data.some((r) => isReplyWorthyInbound({ ...r, direction: 'inbound' }))
 }
 
 // AGENT-REARM.3 — did a human take this thread over since the turn began?
@@ -446,7 +453,7 @@ function takeoverCheckFailed(adapter, conversationId, stage, err) {
 }
 
 async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
-  const { conversationId, locationId, recipient, contactId, messageType, body, connection } = ctx
+  const { conversationId, locationId, recipient, contactId, messageType, body, connection, answeredThroughIso = null } = ctx
 
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) return { handled: false, reason: 'no_api_key' }
@@ -777,8 +784,14 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     const agentEffort = resolveAgentEffort(settings?.effort)
     const verifyFailThreshold = resolveVerifyFailHandoff(settings)
 
-    const messages = formatHistoryForClaude(history || [], { maxMessages: MAX_HISTORY })
-    if (messages.length === 0) return { handled: false, reason: 'no_history' }
+    // MIAPREFILL.1 — never a request that ends on an assistant turn (Sonnet 5
+    // 400s it as prefill). 'nothing_to_answer' = the newest turn is the
+    // studio's own (e.g. the STOP acknowledgement): stay silent, no API call.
+    const { messages, reason: historyReason } = buildReplyTurnMessages(history || [], {
+      maxMessages: MAX_HISTORY,
+      answeredThroughIso,
+    })
+    if (historyReason) return { handled: false, reason: historyReason }
 
     // Tool-execution context. verifiedContactId is mutable: verify_identity
     // both stamps the DB and updates this so later tools in the same turn
