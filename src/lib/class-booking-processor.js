@@ -145,6 +145,13 @@ export async function routeToReview(db, request, reason, { personContactIds = nu
           ...(request.payment_status === 'paid'
             ? { paid: true, amount_cents: request.amount_cents, currency: request.currency || 'EUR' }
             : {}),
+          // TRIALGRANT.1 — approving needs_credit_grant buys a trial
+          // (agent/trial-grant.js). The funnel block may name its own trial,
+          // which the mint path buys; carry it so the approve buys the same
+          // one instead of the location default.
+          ...(reason === 'needs_credit_grant' && request.trial_membership_id && request.trial_plan_code
+            ? { trial_membership_id: request.trial_membership_id, trial_plan_code: request.trial_plan_code }
+            : {}),
         },
       }).select('id').maybeSingle()
       approvalId = amr?.id || null

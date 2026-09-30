@@ -297,4 +297,40 @@ describe('TRIALGRANT.1: a new account whose trial did not take', () => {
 
     expect(r).toEqual({ outcome: 'needs_review', detail: 'account_needs_review' })
   })
+
+  // The card must carry the funnel's own trial, so its approve buys what the
+  // mint would have bought (not the location default).
+  it('the needs_credit_grant card carries the funnel block’s trial override', async () => {
+    findOrCreateGlofoxMember
+      .mockResolvedValueOnce({ status: 'skipped', glofox_member_id: null })
+      .mockResolvedValueOnce({ status: 'needs_review', glofox_member_id: 'gm-new', trial_failed: true, error: 'x' })
+    const d = makeDb(lead)
+    const inserts = []
+    const insert = d.insert
+    d.insert = (row) => { inserts.push(row); return insert(row) }
+    // No pending card to reuse, so the card is INSERTED (and inspectable).
+    d.maybeSingle = async () => ({ data: d._table === 'agent_membership_requests' ? null : lead })
+
+    await processClassBookingRequest(d, { ...req, trial_membership_id: 'tm-funnel', trial_plan_code: 'tp-funnel' })
+
+    expect(inserts).toHaveLength(1)
+    expect(inserts[0].details).toMatchObject({ reason: 'needs_credit_grant', trial_membership_id: 'tm-funnel', trial_plan_code: 'tp-funnel' })
+  })
+
+  it('no override on the request → none on the card (the approve buys the location default)', async () => {
+    findOrCreateGlofoxMember
+      .mockResolvedValueOnce({ status: 'skipped', glofox_member_id: null })
+      .mockResolvedValueOnce({ status: 'needs_review', glofox_member_id: 'gm-new', trial_failed: true, error: 'x' })
+    const d = makeDb(lead)
+    const inserts = []
+    const insert = d.insert
+    d.insert = (row) => { inserts.push(row); return insert(row) }
+    // No pending card to reuse, so the card is INSERTED (and inspectable).
+    d.maybeSingle = async () => ({ data: d._table === 'agent_membership_requests' ? null : lead })
+
+    await processClassBookingRequest(d, req)
+
+    expect(inserts[0].details).not.toHaveProperty('trial_membership_id')
+    expect(inserts[0].details).not.toHaveProperty('trial_plan_code')
+  })
 })

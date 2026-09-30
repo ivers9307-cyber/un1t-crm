@@ -17,8 +17,10 @@
 //      stacks a trial;
 //   2. credits already on the account (staff added one by hand, or an
 //      earlier grant that was never recorded) → nothing is bought;
-//   3. the trial product is read with readGlofoxConfig: a failed read is
-//      GLOFOX_SETTINGS_UNREADABLE, never "not configured";
+//   3. the trial product: the funnel block's own trial when the card carries
+//      one (details.trial_membership_id/trial_plan_code, as the mint path
+//      buys), else the location default via readGlofoxConfig, where a failed
+//      read is GLOFOX_SETTINGS_UNREADABLE, never "not configured";
 //   4. the purchase is judged on its body (purchaseGlofoxMembership().ok).
 // A credits read that FAILS on a first approval still buys (the behaviour
 // before; the card itself rests on a read that worked, CBPCREDITREAD.1). On a
@@ -41,6 +43,7 @@ export const TRIAL_GRANT_UNVERIFIED = 'TRIAL_GRANT_UNVERIFIED'
 
 export async function grantTrialBeforeBooking(db, {
   creds, locationId, memberId, priorGrant = null, isRetry = false, requestId = null,
+  trialOverride = null,
   now = () => new Date().toISOString(),
 } = {}) {
   const at = now()
@@ -73,11 +76,19 @@ export async function grantTrialBeforeBooking(db, {
       logWarn('trial-grant', 'credits unreadable before the trial grant; buying as before', { requestId })
     }
 
-    const { cfg, error } = await readGlofoxConfig(db, locationId)
-    if (error) return stop('GLOFOX_SETTINGS_UNREADABLE')
-    if (!cfg?.trial_membership_id || !cfg?.trial_plan_code) return stop(TRIAL_NOT_CONFIGURED)
+    // The funnel block's own trial (carried on the card) wins over the
+    // location default, as it does on the mint path; only BOTH ids count.
+    let trial = trialOverride?.membershipId && trialOverride?.planCode
+      ? { membershipId: trialOverride.membershipId, planCode: trialOverride.planCode }
+      : null
+    if (!trial) {
+      const { cfg, error } = await readGlofoxConfig(db, locationId)
+      if (error) return stop('GLOFOX_SETTINGS_UNREADABLE')
+      if (!cfg?.trial_membership_id || !cfg?.trial_plan_code) return stop(TRIAL_NOT_CONFIGURED)
+      trial = { membershipId: cfg.trial_membership_id, planCode: cfg.trial_plan_code }
+    }
 
-    const p = await purchaseGlofoxMembership(creds, memberId, cfg.trial_membership_id, cfg.trial_plan_code)
+    const p = await purchaseGlofoxMembership(creds, memberId, trial.membershipId, trial.planCode)
     if (p?.ok) {
       return { proceed: true, grant: { ok: true, at, purchase_status: p.purchase_status ?? null, invoice_id: p.invoice_id ?? null }, failure: null }
     }

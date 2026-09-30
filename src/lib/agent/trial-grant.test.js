@@ -131,4 +131,30 @@ describe('grantTrialBeforeBooking (TRIALGRANT.1)', () => {
 
     expect(logError).toHaveBeenCalledWith('trial-grant', expect.any(String), expect.objectContaining({ requestId: 'amr-1', code: TRIAL_GRANT_FAILED, err: boom }))
   })
+
+  // The /start funnel block can name its own trial (class_booking_requests
+  // .trial_membership_id/trial_plan_code, which the mint path buys); the card
+  // carries it, and the approve buys THAT, not the location default.
+  it('a funnel trial override on the card wins over the location default (no settings read)', async () => {
+    const out = await grantTrialBeforeBooking(db, { ...base, trialOverride: { membershipId: 'tm-funnel', planCode: 'tp-funnel' } })
+
+    expect(readGlofoxConfig).not.toHaveBeenCalled()
+    expect(purchaseGlofoxMembership).toHaveBeenCalledWith(creds, 'gm1', 'tm-funnel', 'tp-funnel')
+    expect(out.proceed).toBe(true)
+  })
+
+  it('an override buys even where the location sets no default trial (was TRIAL_NOT_CONFIGURED)', async () => {
+    readGlofoxConfig.mockResolvedValue({ cfg: {}, error: null })
+
+    const out = await grantTrialBeforeBooking(db, { ...base, trialOverride: { membershipId: 'tm-funnel', planCode: 'tp-funnel' } })
+
+    expect(out.proceed).toBe(true)
+    expect(purchaseGlofoxMembership).toHaveBeenCalledWith(creds, 'gm1', 'tm-funnel', 'tp-funnel')
+  })
+
+  it('a half override (one id only) is ignored: the location default is bought', async () => {
+    await grantTrialBeforeBooking(db, { ...base, trialOverride: { membershipId: 'tm-funnel', planCode: null } })
+
+    expect(purchaseGlofoxMembership).toHaveBeenCalledWith(creds, 'gm1', 'tm-1', 'tp-1')
+  })
 })

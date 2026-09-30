@@ -381,6 +381,8 @@ export async function PATCH(request, { params }) {
           priorGrant: details?.trial_grant || null,
           isRetry: isRetry || isFailedRetry,
           requestId: id,
+          // The funnel block's own trial, stamped on the card by routeToReview.
+          trialOverride: { membershipId: details?.trial_membership_id || null, planCode: details?.trial_plan_code || null },
         })
         details = { ...details, trial_grant: grant.grant }
         if (!grant.proceed) grantFailure = grant.failure
