@@ -12,7 +12,8 @@ import { getLocationFrequencyCap, isFrequencyCapped, stampMarketingTouch } from 
 import { getLocationBranding } from './location-branding'
 import { extractNamedVariables } from './whatsapp-template-samples.js'
 import { formatMetaError } from './whatsapp-meta-error.js'
-import { dynamicUrlButtonIndex, urlButtonSendBlock, URL_BUTTON_MAPPING_KEY } from './whatsapp-template-buttons.js'
+import { dynamicUrlButtonIndex, urlButtonSendBlock, URL_BUTTON_MAPPING_KEY, flowButtonComponentFor } from './whatsapp-template-buttons.js'
+import { flowTokenFor } from './whatsapp-flow/config.js'
 import { sendPushToRolesAtLocation } from './push'
 import { MANAGER_ROLES } from './schemas'
 import { splitMessageText, WHATSAPP_TEXT_LIMIT } from './message-split.js'
@@ -1871,14 +1872,11 @@ export function buildTemplateComponents(template, contact, variableMapping, head
   // flow_token when the caller supplies locationId (broadcast/drip paths);
   // callers that mint their own token (the welcome path) pass no locationId
   // and keep appending their own component.
-  const buttonsComp = templateComponents.find(c => c.type === 'BUTTONS')
-  const flowIdx = (buttonsComp?.buttons || []).findIndex(b => String(b.type || '').toUpperCase() === 'FLOW')
-  if (flowIdx >= 0) {
-    const flowToken = opts.flowToken || (contact?.id && opts.locationId ? `${contact.id}.${opts.locationId}` : null)
-    if (flowToken) {
-      components.push({ type: 'button', sub_type: 'flow', index: String(flowIdx), parameters: [{ type: 'action', action: { flow_token: flowToken } }] })
-    }
-  }
+  // WATPLSEND.1 — the token format and the button parameter each live in ONE
+  // place (flowTokenFor / flowButtonComponentFor), shared with the inbox send.
+  const flowToken = opts.flowToken || (opts.locationId ? flowTokenFor(contact?.id, opts.locationId) : null)
+  const flowComponent = flowButtonComponentFor(templateComponents, flowToken)
+  if (flowComponent) components.push(flowComponent)
 
   // Dynamic URL buttons: the approved template's link ends in a variable, so
   // every send must carry its value or Meta rejects the message (132012). The
