@@ -402,6 +402,10 @@ const config = [
       // inserted inside a try/catch that could never see a resolved { error }.
       // Now log-and-warn, never a failure after Meta has sent.
       'src/app/api/whatsapp/conversations/[[]id]/react/route.js',
+      // FLOWTOKENDEDUP.1 (C73) — the inbox booking-Flow send. Its thread-row
+      // insert ran after Meta had accepted the Flow, inside a try whose catch
+      // could never fire for it: a lost row was silent. Now log-and-warn, like
+      // the send route above.
       'src/app/api/whatsapp/conversations/[[]id]/send-flow/route.js',
     ],
     ignores: NO_TESTS,

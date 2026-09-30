@@ -39,6 +39,15 @@ describe('web WhatsApp inbox: template picker', () => {
   it('shows the route\'s warnings when a send succeeded but its bookkeeping did not', () => {
     expect((INBOX.match(/data\.warnings\?\.length/g) || []).length).toBeGreaterThanOrEqual(2)
   })
+
+  // FLOWTOKENDEDUP.1 (C73) — the booking-Flow send route now returns a warning
+  // when Meta took the Flow but the thread row was lost.
+  it('shows the booking-Flow send\'s warnings too', () => {
+    const start = INBOX.indexOf('async function handleSendFlow(')
+    expect(start).toBeGreaterThan(-1)
+    const fn = INBOX.slice(start, INBOX.indexOf('\n  }\n', start))
+    expect(fn).toMatch(/data\.warnings\?\.length/)
+  })
 })
 
 // MIANITS fix — send-flow and react answer `{ success: true, warnings: [...] }`

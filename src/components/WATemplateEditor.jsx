@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, Save, Send, Trash2, Upload, FileText, Video, X } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
-import { validateTemplateMedia } from '@/lib/template-media'
+import { validateTemplateMedia, resubmitMediaFields } from '@/lib/template-media'
 import { extractVariableIndexes, extractNamedVariables, buildBodyExample, buildNamedBodyExample, buildHeaderTextExample, missingSampleError, samplesFromExample, samplesFromNamedExample } from '@/lib/whatsapp-template-samples'
 import { templateButtonsError, normalizeButtonsForMeta } from '@/lib/whatsapp-template-buttons'
 import { isTemplateSubmitted } from '@/lib/whatsapp-template-fields'
@@ -385,7 +385,13 @@ export default function WATemplateEditor({ template, locationId, userId, events 
       const result = await fetch(`/api/whatsapp/templates/${template.id}/resubmit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ category, components: buildComponents() }),
+        // WATPLRESUBMEDIA.1 — a newly uploaded header file goes too, or the
+        // row keeps the old header_media_url and every send the old picture.
+        body: JSON.stringify({
+          category,
+          components: buildComponents(),
+          ...resubmitMediaFields(template, { handle: mediaHandle, url: mediaUrl, path: mediaPath }, headerFormat),
+        }),
       }).then(readJson)
       if (!result.success) throw new Error(errorMessageFrom(result, 'Resubmit failed'))
       router.push('/communications/templates?channel=whatsapp')

@@ -556,7 +556,7 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
       const res = await fetch(`/api/whatsapp/conversations/${selectedId}/send-flow`, { method: 'POST' })
       const data = await res.json()
       if (data.success) {
-        // Sent, but the thread row was lost: tell staff so they do not send a second Flow.
+        // FLOWTOKENDEDUP.1 — sent, but the thread row could not be saved.
         if (data.warnings?.length) alert(data.warnings.join('\n\n'))
         await fetchMessages(selectedId)
         await fetchApprovals(selectedId)

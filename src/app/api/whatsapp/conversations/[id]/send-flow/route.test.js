@@ -18,8 +18,10 @@ vi.mock('@/lib/auth', () => ({
 }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/whatsapp', () => ({ sendFlowMessage: vi.fn(async () => ({ messageId: 'wamid.FLOW1' })) }))
+vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn() }))
 
 import { POST } from './route.js'
+import { logError } from '@/lib/log'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { sendFlowMessage } from '@/lib/whatsapp'
@@ -69,6 +71,65 @@ describe('POST /api/whatsapp/conversations/[id]/send-flow', () => {
     const rows = db.inserts.filter((i) => i.table === 'whatsapp_messages')
     expect(rows).toHaveLength(1)
     expect(rows[0].row).toMatchObject({ direction: 'outbound', message_type: 'flow', contact_id: CONTACT_ID, sent_by: USER_ID })
+    expect((await res.json()).warnings).toBeUndefined()
+  })
+
+  // FLOWTOKENDEDUP.1 (C73) — the token comes from flowTokenFor.
+  it('mints the flow_token as <contactId>.<locationId>', async () => {
+    createServerClient.mockReturnValue(stubDb())
+    await post()
+    expect(sendFlowMessage.mock.calls[0][1].flowToken).toBe(`${CONTACT_ID}.${LOC_ID}`)
+  })
+
+  // FLOWTOKENDEDUP.1 (C73) — supabase-js RESOLVES a failed insert with
+  // { error }; the old try/catch could never see it. Meta already has the
+  // Flow, so the send still succeeds (never a louder failure), but the loss is
+  // logged structurally and staff are told not to send it again.
+  it('a failed thread-row insert is logged and returned as a warning, not a failure', async () => {
+    const db = stubDb()
+    const base = db.from.bind(db)
+    db.from = (table) => {
+      const b = base(table)
+      if (table === 'whatsapp_messages') b.insert = async () => ({ error: { message: 'insert refused' } })
+      return b
+    }
+    createServerClient.mockReturnValue(db)
+    const res = await post()
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.success).toBe(true)
+    expect(body.warnings).toHaveLength(1)
+    expect(body.warnings[0]).toMatch(/Sent to the customer, but it could not be saved to this thread/)
+    expect(body.warnings[0]).not.toMatch(/—/)
+    expect(logError).toHaveBeenCalledWith('wa-flow-send', expect.any(String), expect.objectContaining({ conversationId: CONV_ID, err: 'insert refused' }))
+  })
+
+  // A failed read is never an empty answer: an unreadable conversation is not
+  // a 404, and unreadable settings are not "no Flow configured".
+  function failingRead(failTable) {
+    const db = stubDb()
+    const base = db.from.bind(db)
+    db.from = (table) => {
+      const b = base(table)
+      if (table === failTable) b.then = (ok, bad) => Promise.resolve({ data: null, error: { message: 'read refused' } }).then(ok, bad)
+      return b
+    }
+    return db
+  }
+
+  it('a failed conversation read is a 500 and sends nothing', async () => {
+    createServerClient.mockReturnValue(failingRead('whatsapp_conversations'))
+    const res = await post()
+    expect(res.status).toBe(500)
+    expect(sendFlowMessage).not.toHaveBeenCalled()
+  })
+
+  it('a failed settings read is a 500, not "no Flow configured", and sends nothing', async () => {
+    createServerClient.mockReturnValue(failingRead('locations'))
+    const res = await post()
+    expect(res.status).toBe(500)
+    expect((await res.json()).error).not.toMatch(/No booking Flow is configured/)
+    expect(sendFlowMessage).not.toHaveBeenCalled()
   })
 })
 
@@ -91,12 +152,11 @@ describe('POST /api/whatsapp/conversations/[id]/send-flow — failures are not s
     // the Flow WENT and do not send a second one. Plain text, no em-dash.
     const body = await res.json()
     expect(body).toEqual({ success: true, warnings: [expect.any(String)] })
-    expect(body.warnings[0]).toMatch(/Flow was sent/)
+    expect(body.warnings[0]).toMatch(/Sent to the customer/)
     expect(body.warnings[0]).toMatch(/Do not send it again/)
     expect(body.warnings[0]).not.toMatch(/\u2014/)
     expect(sendFlowMessage).toHaveBeenCalledTimes(1)
-    const logged = errSpy.mock.calls.map((c) => c.join(' ')).join('\n')
-    expect(logged).toMatch(/thread row insert failed/)
+    expect(logError).toHaveBeenCalledWith(expect.any(String), expect.stringMatching(/thread row insert failed/), expect.anything())
   })
 
   it('a clean insert carries no warning', async () => {

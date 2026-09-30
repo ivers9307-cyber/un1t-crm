@@ -513,7 +513,8 @@ export default function CustomerAgentClient({ canEdit = false } = {}) {
           <input className={inputCls} maxLength={500} value={settings.booking_confirmation_text || ''}
             onChange={e => setField('booking_confirmation_text', e.target.value)}
             placeholder="Good news, you're booked in for {class}. See you there." />
-          <p className="text-xs text-un1t-muted mt-1">Sent to the customer when you approve a booking the agent drafted. <code>{'{class}'}</code> becomes the class name and time. Leave blank to use the default shown.</p>
+          {/* BOOKCHATCOPY.1 — the staff Book panel's chat confirmation uses this text too (src/lib/book-chat-copy.js). */}
+          <p className="text-xs text-un1t-muted mt-1">Sent to the customer when you approve a booking the agent drafted, and when staff book them from the Book panel with the chat confirmation ticked. <code>{'{class}'}</code> becomes what was booked and when. Leave blank to use the default shown.</p>
         </div>
 
         <div>
