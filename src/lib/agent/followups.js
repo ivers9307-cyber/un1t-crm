@@ -26,6 +26,7 @@ import { formatHistoryForClaude, parseAgentResponse, phoneMatchesAllowlist, isSk
 import { getLocationBranding } from '@/lib/location-branding'
 import { anthropicMessages } from '@/lib/anthropic'
 import { dublinTodayStr } from '@/lib/dublin-time'
+import { logError } from '@/lib/log'
 
 // MIA-SONNET5 — kept in step with the inbound reply path so a nudge sounds
 // like the same person who answers the thread.
@@ -206,31 +207,66 @@ const NUDGE_INSTRUCTION =
 
 // ── the runner (IO) ─────────────────────────────────────────────────
 
-async function lastInboundFacts(db, conversationId) {
-  const { data } = await db.from('whatsapp_messages')
-    .select('direction, source, body, created_at, message_type')
-    .eq('conversation_id', conversationId)
-    .order('created_at', { ascending: false })
-    .limit(15)
-  const rows = (data || []).slice().reverse()
+// CHECKINSTALL.1 — who a person is, in a WhatsApp thread. Operator send
+// routes stamp sent_by (the session's profile id); the studio phone's
+// WhatsApp Business app arrives as app_echo / history_sync; 'operator' is
+// allowed by the source CHECK (mig 259). Automations — booking confirmations,
+// sequence steps, broadcasts, end-of-trial, consent prompts — insert the column
+// default source='api' with NO sent_by, so they are not a person owning the
+// thread. Same line the live reply path draws (auto-reply.js whatsappAdapter
+// .isHumanOutbound, AGENT-REARM.2), plus the phone-app sources. Pure.
+// Used by the check-in runner since CHECKINSTALL.2 (Richard's call D1); the
+// follow-up ladder still reads humanSpokeAfterInbound.
+const PERSON_SOURCES = new Set(['operator', 'app_echo', 'history_sync'])
+export function isStaffOutbound(m) {
+  if (!m || m.direction !== 'outbound' || m.source === 'agent') return false
+  return PERSON_SOURCES.has(m.source) || m.sent_by != null
+}
+
+/**
+ * Oldest-first rows → what happened since the customer's last message. Pure.
+ * humanSpokeAfterInbound — ANY non-agent outbound (the follow-up ladder's
+ *   rule, unchanged). staffSpokeAfterInbound — a PERSON (isStaffOutbound), the
+ *   check-in runner's rule since CHECKINSTALL.2.
+ */
+export function summariseThread(rows) {
   let lastInboundAtMs = null
   let agentSpokeAfterInbound = false
   let humanSpokeAfterInbound = false
+  let staffSpokeAfterInbound = false
   const agentTexts = []
-  for (const m of rows) {
+  for (const m of rows || []) {
     if (m.direction === 'inbound') {
       lastInboundAtMs = new Date(m.created_at).getTime()
       agentSpokeAfterInbound = false
       humanSpokeAfterInbound = false
+      staffSpokeAfterInbound = false
     } else if (m.source === 'agent') {
       agentSpokeAfterInbound = true
       if (m.body) agentTexts.push(m.body)
     } else {
       // operator / api sends after the inbound = a human owns the thread
       humanSpokeAfterInbound = true
+      if (isStaffOutbound(m)) staffSpokeAfterInbound = true
     }
   }
-  return { rows, lastInboundAtMs, agentSpokeAfterInbound, humanSpokeAfterInbound, agentTexts }
+  return { lastInboundAtMs, agentSpokeAfterInbound, humanSpokeAfterInbound, staffSpokeAfterInbound, agentTexts }
+}
+
+// CHECKINSTALL.1 — a failed read is never "nobody spoke": callers skip on
+// readFailed and the next tick retries (both runners ride a 15-minute cron).
+async function lastInboundFacts(db, conversationId) {
+  const { data, error } = await db.from('whatsapp_messages')
+    .select('direction, source, sent_by, body, created_at, message_type')
+    .eq('conversation_id', conversationId)
+    .order('created_at', { ascending: false })
+    .limit(15)
+  if (error) {
+    logError('agent-followups', 'thread read failed; skipped this tick', { conversationId, err: error })
+    return { readFailed: true, rows: [], ...summariseThread([]) }
+  }
+  const rows = (data || []).slice().reverse()
+  return { readFailed: false, rows, ...summariseThread(rows) }
 }
 
 async function intentFlags(db, conversationId, lastInboundAtMs) {
@@ -493,6 +529,8 @@ export async function runAgentFollowups(db, { nowMs = Date.now() } = {}) {
         }
 
         const facts = await lastInboundFacts(db, c.id)
+        // CHECKINSTALL.1 — logged once, inside lastInboundFacts (logError).
+        if (facts.readFailed) { results.skipped++; continue }
         const flags = await intentFlags(db, c.id, facts.lastInboundAtMs)
         const decision = classifyFollowupCandidate({
           stage: c.agent_followup_stage,
@@ -602,7 +640,7 @@ async function stampCheckin(db, contact, locationId, className, via) {
  * Once ever per contact via contacts.first_class_checkin_at.
  */
 export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
-  const results = { freeform: 0, templates: 0, skipped: 0, reasons: {} }
+  const results = { freeform: 0, templates: 0, skipped: 0, candidates: 0, reasons: {} }
   // Per-tick skip-reason tally — persisted on the cron heartbeat so the
   // settings card can answer "why didn't it send?" without server logs
   // (lesson from the sequence-engine incidents, CHANGELOG #289/#291).
@@ -637,6 +675,9 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
       bump('candidate_query_failed')
       continue
     }
+    // CHECKINSTALL.1 — how many the query handed us, so a day of 0 candidates
+    // reads differently from a day of candidates all skipped.
+    results.candidates += (contacts || []).length
 
     const branding = await getLocationBranding(db, location.id)
     const knowledge = await loadAgentKnowledge(db, location.id)
@@ -676,20 +717,36 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
         // that a paused thread stays FULLY silent. Skipping only on
         // agent_handed_off_at let Mia send a proactive check-in into a thread
         // an operator had explicitly paused or switched off.
-        const { data: convRows } = await db.from('whatsapp_conversations')
+        const { data: convRows, error: convError } = await db.from('whatsapp_conversations')
           .select('id, contact_id, location_id, agent_active, agent_paused_at, agent_handed_off_at')
           .eq('location_id', location.id)
           .eq('contact_id', contact.id)
           .order('last_message_at', { ascending: false })
           .limit(1)
+        // CHECKINSTALL.1 — a failed read is not "no thread" (that path sends a
+        // template into a thread we could not see). Skip unstamped; the next
+        // tick retries.
+        if (convError) {
+          logError('agent-followups', 'checkin conversation read failed; skipped this tick', { contactId: contact.id, err: convError })
+          bump('conversation_read_failed'); results.skipped++; continue
+        }
         const existingConv = convRows?.[0] || null
         if (existingConv?.agent_handed_off_at) { bump('handed_off'); results.skipped++; continue }
         if (existingConv?.agent_paused_at) { bump('agent_paused'); results.skipped++; continue }
         if (existingConv && existingConv.agent_active === false) { bump('agent_inactive'); results.skipped++; continue }
 
-        let facts = { rows: [], lastInboundAtMs: null, humanSpokeAfterInbound: false }
+        let facts = { rows: [], lastInboundAtMs: null, humanSpokeAfterInbound: false, staffSpokeAfterInbound: false, readFailed: false }
         if (existingConv) facts = await lastInboundFacts(db, existingConv.id)
-        if (facts.humanSpokeAfterInbound) { bump('human_active'); results.skipped++; continue }
+        // CHECKINSTALL.1 — a failed thread read is not "nobody spoke" (logged
+        // inside lastInboundFacts). Skip unstamped; the next tick retries.
+        if (facts.readFailed) { bump('thread_read_failed'); results.skipped++; continue }
+        // CHECKINSTALL.2 (C98, Richard's call D1) — only a PERSON parks a
+        // check-in. Every app-booked lead gets the automated
+        // booking_class_confirmed_ template (source 'api', no sent_by); counting
+        // that as "a human owns the thread" skipped every such first-timer
+        // (9 between 24 Aug and 30 Sep). The follow-up ladder keeps
+        // humanSpokeAfterInbound.
+        if (facts.staffSpokeAfterInbound) { bump('human_active'); results.skipped++; continue }
         const windowOpen = facts.lastInboundAtMs && (nowMs - facts.lastInboundAtMs) < 23 * H_MS
 
         if (windowOpen) {
@@ -725,20 +782,32 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
           console.warn('[radar-agent] checkin-skip', JSON.stringify({ contactId: contact.id, reason: 'no_template_configured' }))
           bump('no_template_configured'); results.skipped++; continue
         }
-        const { data: prefs } = await db.from('contact_preferences')
+        const { data: prefs, error: prefsError } = await db.from('contact_preferences')
           .select('whatsapp_marketing')
           .eq('contact_id', contact.id)
           .maybeSingle()
+        // CHECKINSTALL.1 — a failed read is not "no consent": the branch below
+        // STAMPS the contact once-ever, so a blip used to cost them the check-in
+        // for good. Skip unstamped; the next tick retries.
+        if (prefsError) {
+          logError('agent-followups', 'checkin consent read failed; skipped this tick', { contactId: contact.id, err: prefsError })
+          bump('consent_read_failed'); results.skipped++; continue
+        }
         if (prefs?.whatsapp_marketing !== true) {
           await stampCheckin(db, contact, location.id, className, 'skipped — no marketing consent')
           bump('no_marketing_consent'); results.skipped++; continue
         }
-        const { data: tRows } = await db.from('whatsapp_templates')
+        const { data: tRows, error: tError } = await db.from('whatsapp_templates')
           .select('name, language, status, components, header_media_url')
           .eq('location_id', location.id)
           .eq('name', checkin.template_name)
           .order('created_at', { ascending: false })
           .limit(1)
+        // CHECKINSTALL.1 — a failed read is not "not approved". Skip unstamped.
+        if (tError) {
+          logError('agent-followups', 'checkin template read failed; skipped this tick', { locationId: location.id, err: tError })
+          bump('template_read_failed'); results.skipped++; continue
+        }
         const template = tRows?.[0]
         if (!template || String(template.status || '').toUpperCase() !== 'APPROVED') {
           console.warn('[radar-agent] checkin-skip', JSON.stringify({ contactId: contact.id, reason: 'template_not_approved' }))

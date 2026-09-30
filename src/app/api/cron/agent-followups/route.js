@@ -4,6 +4,9 @@ import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { runAgentFollowups, runFirstClassCheckins } from '@/lib/agent/followups'
 import { runHandoffSlaSweep, runHandoffAutoResolve } from '@/lib/agent/handoff-sla'
 import { runApprovalsSlaSweep } from '@/lib/agent/approvals-sla'
+import { rollupCheckinDay } from '@/lib/agent/checkin-day-rollup'
+import { dublinDayStr } from '@/lib/dublin-time'
+import { logError } from '@/lib/log'
 
 // AGENT-FOLLOWUP.1 — every 15 min (vercel.json): run Mia's proactive
 // follow-up ladder for every location that enabled it. Stage 1 =
@@ -65,6 +68,25 @@ export async function GET(request) {
   // Persist the tick summary on the heartbeat (last_outcome jsonb) — the
   // customer-agent settings card reads it to show WHY check-ins were
   // skipped, so a silent tick is diagnosable without server logs.
-  await stampHeartbeat('agent-followups', { followups: results, checkins, handoffSla, autoResolve, approvalsSla })
+  // CHECKINSTALL.1 — `checkins` is only THIS tick and reads quiet_hours all
+  // night, so a whole day of skips vanished (C98). Fold the tick into a
+  // per-Dublin-day rollup carried on the same row. The previous row is READ
+  // first; a failed read restarts the day flagged carry_failed, never a zero.
+  // A failed read never stops the stamp: the heartbeat still says we ran.
+  let prevDay = null
+  let carryFailed = false
+  try {
+    const { data: hb, error: hbError } = await db.from('cron_heartbeats')
+      .select('last_outcome')
+      .eq('name', 'agent-followups')
+      .maybeSingle()
+    if (hbError) throw hbError
+    prevDay = hb?.last_outcome?.checkins_day ?? null
+  } catch (e) {
+    carryFailed = true
+    logError('cron-agent-followups', 'checkins_day read failed; today restarts flagged carry_failed', { err: e })
+  }
+  const checkinsDay = rollupCheckinDay(prevDay, checkins, { day: dublinDayStr(Date.now()), carryFailed })
+  await stampHeartbeat('agent-followups', { followups: results, checkins, checkins_day: checkinsDay, handoffSla, autoResolve, approvalsSla })
   return NextResponse.json({ success: true, results, checkins, handoffSla, autoResolve, approvalsSla })
 }

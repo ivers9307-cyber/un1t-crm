@@ -95,6 +95,23 @@ export default function CustomerAgentClient() {
     return parts.length ? ` (${parts.join(', ')})` : ''
   }
 
+  // CHECKINSTALL.1 — one line per Dublin day from last_outcome.checkins_day.
+  // Counts are per 15-minute run, not per person (one lead skipped all
+  // afternoon shows ×20). Staff copy, not customer-facing.
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  function describeCheckinDay(d) {
+    if (!d?.day) return null
+    const [, mm, dd] = d.day.split('-')
+    const label = `${Number(dd)} ${MONTHS[Number(mm) - 1] || ''}`
+    const sent = (d.freeform || 0) + (d.templates || 0)
+    const runs = d.daytime_ticks || 0
+    const checks = d.candidates || 0
+    const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
+    const failed = d.failed_ticks ? ` · ${plural(d.failed_ticks, 'failed run')}` : ''
+    const partial = d.carry_failed ? ' (partial: an earlier run could not be read)' : ''
+    return `${label}: ${plural(runs, 'daytime run')} · ${plural(checks, 'candidate check')} · ${sent} sent · ${d.skipped || 0} skipped${describeCheckinReasons({ reasons: d.reasons })}${failed}${partial}`
+  }
+
   async function saveSettings() {
     setSaving(true); setError(null)
     try {
@@ -878,6 +895,12 @@ export default function CustomerAgentClient() {
                   ? ` — ${(checkinStats.last_run.checkins.freeform || 0) + (checkinStats.last_run.checkins.templates || 0)} sent · ${checkinStats.last_run.checkins.skipped || 0} skipped${describeCheckinReasons(checkinStats.last_run.checkins)}`
                   : ' — no check-in summary yet (runs every 15 min, 9:00–20:00 Dublin)'}
               </p>
+            )}
+            {checkinStats.last_run?.day && (
+              <p>{describeCheckinDay(checkinStats.last_run.day)}</p>
+            )}
+            {checkinStats.last_run?.day?.previous && (
+              <p>{describeCheckinDay(checkinStats.last_run.day.previous)}</p>
             )}
           </div>
         )}

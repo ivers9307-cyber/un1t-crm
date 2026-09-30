@@ -187,3 +187,16 @@ describe('SETTINGSWIPE.1 — a failed read is never the defaults, and never a wi
     expect(patch.glofox_auto_cancel_memberships).toBe(true)
   })
 })
+
+describe('GET /api/settings/customer-agent — CHECKINSTALL.1 day rollup', () => {
+  it('passes last_outcome.checkins_day through as checkin_stats.last_run.day', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'u', role: 'manager', activeLocation: { id: 'loc1' } })
+    const day = { day: '2026-09-30', ticks: 5, daytime_ticks: 5, failed_ticks: 0, candidates: 8, freeform: 0, templates: 1, skipped: 7, reasons: { human_active: 7 }, previous: null }
+    createServerClient.mockReturnValue(fakeLocationsDb({
+      reads: { data: { name: 'Stillorgan', settings: { customer_agent: {} } }, error: null },
+      tables: { cron_heartbeats: { data: { last_ok_at: '2026-09-30T09:00:00Z', last_outcome: { checkins: { skipped: 1 }, checkins_day: day } }, error: null } },
+    }))
+    const body = await (await GET()).json()
+    expect(body.checkin_stats.last_run).toEqual({ at: '2026-09-30T09:00:00Z', checkins: { skipped: 1 }, day })
+  })
+})

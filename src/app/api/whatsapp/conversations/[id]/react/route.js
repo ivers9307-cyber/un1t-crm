@@ -57,6 +57,9 @@ export async function POST(request, props) {
       message_type: 'reaction',
       body: emoji ? `Reacted: ${emoji}` : 'Removed reaction',
       status: 'sent',
+      // CHECKINSTALL.2 (C104 review) — deliberately NO sent_by: a reaction is
+      // not a reply. The handoff SLA, handoff auto-resolve, and Mia's takeover
+      // and re-arm checks read sent_by as "a person replied".
       sent_at: new Date().toISOString(),
     })
   } catch (e) { console.error('[wa-react] thread row insert failed:', e?.message) }

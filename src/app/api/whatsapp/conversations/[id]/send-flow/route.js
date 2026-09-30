@@ -77,6 +77,11 @@ export async function POST(request, props) {
       message_type: 'flow',
       body: `[Booking Flow] ${cfg.invite_text || 'Tap below to book your first visit.'}`,
       status: 'sent',
+      // CHECKINSTALL.2 (C106 b) — a staff action: sent_by from the SESSION,
+      // never the body (UUID REFERENCES profiles, mig 007), same as the send
+      // route. Mia's reply path and the check-in runner read sent_by as "a
+      // person spoke"; without it this row looked like an automation.
+      sent_by: user.id,
       sent_at: new Date().toISOString(),
     })
   } catch (e) {
