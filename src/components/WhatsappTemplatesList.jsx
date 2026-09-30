@@ -22,7 +22,12 @@ const QUALITY_CHIP = {
 }
 const MANAGER_URL = 'https://business.facebook.com/wa/manage/message-templates/'
 
-export default function WhatsappTemplatesList({ locationId }) {
+// WATPLROLE.1 — `canManage` (MANAGER_ROLES at this location, computed by the
+// page with the routes' rule) decides whether Delete and "Edit & resubmit" are
+// offered. The group box stays for every member: a display_group-only save is
+// open to them. Defaults to false so a new caller cannot forget it and offer a
+// control the route refuses.
+export default function WhatsappTemplatesList({ locationId, canManage = false }) {
   const [templates, setTemplates] = useState([])
   const [deletingId, setDeletingId] = useState(null)
   const [deleteError, setDeleteError] = useState(null)
@@ -187,21 +192,25 @@ export default function WhatsappTemplatesList({ locationId }) {
                   />
                   {['REJECTED', 'PAUSED'].includes(t.status) && (
                     <>
-                      <Link href={`/communications/templates/whatsapp/${t.id}`} className="text-xs text-blue-600 hover:underline">Edit &amp; resubmit</Link>
+                      {canManage && (
+                        <Link href={`/communications/templates/whatsapp/${t.id}`} className="text-xs text-blue-600 hover:underline">Edit &amp; resubmit</Link>
+                      )}
                       <a href={MANAGER_URL} target="_blank" rel="noopener noreferrer" className="text-xs text-un1t-subtle hover:underline">Appeal ↗</a>
                     </>
                   )}
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    icon={Trash2}
-                    loading={deletingId === t.id}
-                    onClick={() => handleDelete(t)}
-                    title="Delete template"
-                    // COMMSLAYOUT.5 — light surface: the destructive hover needs
-                    // the -700 ramp, same as every other red on this page.
-                    className="text-un1t-muted hover:text-red-700"
-                  />
+                  {canManage && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      icon={Trash2}
+                      loading={deletingId === t.id}
+                      onClick={() => handleDelete(t)}
+                      title="Delete template"
+                      // COMMSLAYOUT.5 — light surface: the destructive hover needs
+                      // the -700 ramp, same as every other red on this page.
+                      className="text-un1t-muted hover:text-red-700"
+                    />
+                  )}
                 </div>
               </div>
             ))}
