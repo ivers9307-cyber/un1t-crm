@@ -150,8 +150,39 @@ describe('glofoxFetch — a verified write re-sends only after a negative dedupe
     const r = await glofoxFetch(creds, '/2.0/things', { method: 'POST', retry: { verify } })
     expect(r.status).toBe(503)
     expect(fetch).toHaveBeenCalledTimes(4)
-    expect(verify).toHaveBeenCalledTimes(3)
-    expect(glofoxHttpStatsSince(before)).toMatchObject({ requests: 4, retries: 3, verify_absent: 3, gave_up: 1 })
+    // The last 5xx is read too (review, GLOFOXPOSTRETRY.1), but only to report
+    // a landing: an 'absent' there re-sends nothing.
+    expect(verify).toHaveBeenCalledTimes(4)
+    expect(glofoxHttpStatsSince(before)).toMatchObject({ requests: 4, retries: 3, verify_absent: 4, gave_up: 1 })
+  })
+
+  it('the LAST 5xx of the budget is still checked: a landing there is reported, never re-sent', async () => {
+    fetch.mockResolvedValue(res(503))
+    const verify = vi.fn()
+      .mockResolvedValueOnce('absent').mockResolvedValueOnce('absent').mockResolvedValueOnce('absent')
+      .mockResolvedValueOnce('landed')
+    const before = glofoxHttpStats()
+    const r = await glofoxFetch(creds, '/2.0/things', { method: 'POST', retry: { verify } })
+    expect(r.status).toBe(503)
+    expect(fetch).toHaveBeenCalledTimes(4)
+    expect(verify).toHaveBeenCalledTimes(4)
+    expect(glofoxHttpStatsSince(before)).toMatchObject({ requests: 4, retries: 3, verify_landed: 1, gave_up: 0 })
+    expect(logWarn).toHaveBeenCalledWith('glofox', 'Glofox write answered 5xx; not retried', {
+      status: 503, attempts: 4, path: '/2.0/things', reason: 'landed',
+    })
+  })
+
+  it("a 'never' write whose 5xx comes on the last attempt (after 429s) is counted as not re-sent, not as a give-up", async () => {
+    fetch.mockResolvedValueOnce(res(429)).mockResolvedValueOnce(res(429)).mockResolvedValueOnce(res(429))
+      .mockResolvedValueOnce(res(503))
+    const before = glofoxHttpStats()
+    const r = await glofoxFetch(creds, '/2.0/things', { method: 'POST', retry: 'never' })
+    expect(r.status).toBe(503)
+    expect(fetch).toHaveBeenCalledTimes(4)
+    expect(glofoxHttpStatsSince(before)).toMatchObject({ requests: 4, retries: 3, unsafe_not_retried: 1, gave_up: 0 })
+    expect(logWarn).toHaveBeenCalledWith('glofox', 'Glofox write answered 5xx; not retried', {
+      status: 503, attempts: 4, path: '/2.0/things', reason: 'never',
+    })
   })
 })
 

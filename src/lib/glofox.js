@@ -524,7 +524,7 @@ const glofoxHttpCounters = {
   // GLOFOXPOSTRETRY.1 — writes that answered 5xx:
   unsafe_not_retried: 0, // retry 'never': returned without a re-send
   verify_landed: 0,      // the dedupe read found the first attempt: not re-sent
-  verify_absent: 0,      // the dedupe read found nothing: re-sent
+  verify_absent: 0,      // the dedupe read found nothing: re-sent (a give-up on the last attempt)
   verify_unknown: 0,     // the dedupe read could not tell: not re-sent
 }
 
@@ -641,31 +641,36 @@ export async function glofoxFetch(creds, pathOrUrl, options = {}) {
     if (res.status === 429) glofoxHttpCounters.status_429++
     else if (res.status >= 500) glofoxHttpCounters.status_5xx++
     // Retry only transient statuses, and only while we have budget.
-    if ((res.status === 429 || res.status >= 500) && attempt < GLOFOX_MAX_RETRIES) {
-      // GLOFOXPOSTRETRY.1 — a 5xx on a write may already have been processed.
-      const unsafe5xx = res.status >= 500 && policy.mode !== 'idempotent'
-      if (unsafe5xx && policy.mode === 'never') {
-        glofoxHttpCounters.unsafe_not_retried++
-        notResent = 'never'
-        break
-      }
-      // PAYLINK.5b — an aborted caller (timed out, or otherwise cancelled)
-      // stops retrying immediately and returns the last response as-is,
-      // rather than sleeping out a full backoff first.
-      if (fetchOptions.signal?.aborted) { aborted = true; break }
-      const retryAfter = Number(res.headers?.get?.('retry-after'))
-      await _glofoxSleep(computeGlofoxBackoffMs(attempt, Number.isFinite(retryAfter) ? retryAfter : null), fetchOptions.signal)
-      if (fetchOptions.signal?.aborted) { aborted = true; break }
-      // The dedupe read runs AFTER the backoff, so a write Glofox is still
-      // committing has had the same time to show up.
-      if (unsafe5xx) {
-        const verdict = await runGlofoxVerify(policy.verify)
-        if (verdict !== 'absent') { notResent = verdict; break }
-      }
-      glofoxHttpCounters.retries++
-      continue
+    if (res.status !== 429 && res.status < 500) break
+    const budgetLeft = attempt < GLOFOX_MAX_RETRIES
+    // GLOFOXPOSTRETRY.1 — a 5xx on a write may already have been processed.
+    // A 'never' write is counted as not re-sent whether or not budget is left
+    // (a 5xx after three 429s is still an answer we chose not to repeat).
+    const unsafe5xx = res.status >= 500 && policy.mode !== 'idempotent'
+    if (unsafe5xx && policy.mode === 'never') {
+      glofoxHttpCounters.unsafe_not_retried++
+      notResent = 'never'
+      break
     }
-    break
+    // Out of budget: give up, except that a verified write still reads once
+    // after its LAST 5xx, only to report a landing (never to re-send).
+    if (!budgetLeft && !unsafe5xx) break
+    // PAYLINK.5b — an aborted caller (timed out, or otherwise cancelled)
+    // stops retrying immediately and returns the last response as-is,
+    // rather than sleeping out a full backoff first.
+    if (fetchOptions.signal?.aborted) { aborted = true; break }
+    const retryAfter = Number(res.headers?.get?.('retry-after'))
+    await _glofoxSleep(computeGlofoxBackoffMs(attempt, Number.isFinite(retryAfter) ? retryAfter : null), fetchOptions.signal)
+    if (fetchOptions.signal?.aborted) { aborted = true; break }
+    // The dedupe read runs AFTER the backoff, so a write Glofox is still
+    // committing has had the same time to show up.
+    if (unsafe5xx) {
+      const verdict = await runGlofoxVerify(policy.verify)
+      if (verdict === 'landed') { notResent = 'landed'; break }
+      if (!budgetLeft) break // absent or unknown on the last 5xx: a give-up
+      if (verdict !== 'absent') { notResent = verdict; break }
+    }
+    glofoxHttpCounters.retries++
   }
   // CREDITSREAD.1 — one line per call that is STILL failing after its retries
   // (never per retry: a throttled minute would write thousands). No ids.
