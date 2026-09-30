@@ -1,7 +1,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404, requireInboxPermission } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404, requireWhatsAppInboxAnywhere, requireWhatsAppInboxAt } from '@/lib/auth'
 import { resolveRearmPatch } from '@/lib/agent/core'
 import { validateBody } from '@/lib/validate'
 
@@ -15,8 +15,9 @@ export async function GET(request, props) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
-  // Channel permission — service-role client, so this IS the gate (INBOX-PERM.1).
-  const perm = requireInboxPermission(user, 'wa')
+  // INBOXLOC.1 — coarse pre-check (WhatsApp at any studio); the decision is
+  // requireWhatsAppInboxAt at the conversation's studio, once the row is read.
+  const perm = requireWhatsAppInboxAnywhere(user)
   if (perm) return perm
 
   const db = createServerClient()
@@ -35,6 +36,9 @@ export async function GET(request, props) {
   // guard, exposing thread bodies + contact PII to any principal).
   const guard = assertLocationAccessOr404(user, conversation.location_id)
   if (guard) return guard
+  // INBOXLOC.1 — WhatsApp (web or mobile) judged at THIS studio, not the active one.
+  const permHere = requireWhatsAppInboxAt(user, conversation.location_id)
+  if (permHere) return permHere
 
   // Get messages
   // Newest rows first then reversed for display — ascending+limit returns
@@ -77,8 +81,9 @@ export async function PATCH(request, props) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
-  // Channel permission — service-role client, so this IS the gate (INBOX-PERM.1).
-  const perm = requireInboxPermission(user, 'wa')
+  // INBOXLOC.1 — coarse pre-check (WhatsApp at any studio); the decision is
+  // requireWhatsAppInboxAt at the conversation's studio, once the row is read.
+  const perm = requireWhatsAppInboxAnywhere(user)
   if (perm) return perm
 
   const validation = await validateBody(request, ConversationPatchSchema)
@@ -95,6 +100,9 @@ export async function PATCH(request, props) {
   }
   const guard = assertLocationAccessOr404(user, conversation.location_id)
   if (guard) return guard
+  // INBOXLOC.1 — WhatsApp (web or mobile) judged at THIS studio, not the active one.
+  const permHere = requireWhatsAppInboxAt(user, conversation.location_id)
+  if (permHere) return permHere
 
   // AGENT-REARM.1 — resolving a handed-off thread hands it straight back
   // to the agent: the human engagement is closed, the agent is on duty

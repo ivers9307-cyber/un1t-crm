@@ -1,7 +1,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccess, requireInboxPermission } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, requireWhatsAppInboxAnywhere, requireWhatsAppInboxAt } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 
@@ -15,8 +15,9 @@ export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
-  // Channel permission — service-role client, so this IS the gate (INBOX-PERM.1).
-  const perm = requireInboxPermission(user, 'wa')
+  // INBOXLOC.1 — coarse pre-check (WhatsApp at any studio); the decision is
+  // requireWhatsAppInboxAt at the contact's studio (where the thread is made).
+  const perm = requireWhatsAppInboxAnywhere(user)
   if (perm) return perm
 
   const validation = await validateBody(request, StartConvoSchema)
@@ -38,6 +39,9 @@ export async function POST(request) {
     // Caller must belong to the contact's location.
     const guard = assertLocationAccess(user, contact.location_id)
     if (guard) return guard
+    // INBOXLOC.1 — WhatsApp (web or mobile) judged at THIS studio, not the active one.
+    const permHere = requireWhatsAppInboxAt(user, contact.location_id)
+    if (permHere) return permHere
 
     const phone = contact.wa_phone || contact.phone
     if (!phone) {

@@ -10,7 +10,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('@/lib/auth', () => ({
   getCurrentUser: vi.fn(async () => ({ id: 'u1' })),
   assertLocationAccessOr404: vi.fn(() => null),
-  requireInboxPermission: vi.fn(() => null),
+  requireWhatsAppInboxAnywhere: vi.fn(() => null),
+  requireWhatsAppInboxAt: vi.fn(() => null),
 }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/whatsapp', () => ({ sendReaction: vi.fn(), setWhatsAppUserBlockState: vi.fn(), sendFlowMessage: vi.fn() }))
