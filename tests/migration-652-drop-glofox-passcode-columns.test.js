@@ -166,6 +166,7 @@ const BASE_SCHEMA = `
     SELECT clp.contact_id, clp.location_id, c.email
       FROM contact_location_preferences clp JOIN contacts c ON c.id = clp.contact_id
   $fn$;
+  GRANT EXECUTE ON FUNCTION public.consent_drift_rows() TO PUBLIC, anon, authenticated, service_role;
 
   -- Live contacts policies BEFORE mig 653 (653 drops the three write ones).
   ALTER TABLE public.contacts ENABLE ROW LEVEL SECURITY;
