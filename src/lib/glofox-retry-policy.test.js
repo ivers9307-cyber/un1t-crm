@@ -16,6 +16,7 @@ import {
   fetchPaymentsReport, searchGlofoxMember, getGlofoxInvoicePaymentLink, fetchBranchLeads,
   purchaseGlofoxMembership, createBooking, interpretBookingResult, findLandedBooking,
   cancelBooking, findBookingCancelState, registerGlofoxMember,
+  createGlofoxInteraction, cancelGlofoxMembership, updateGlofoxMember,
 } from './glofox.js'
 
 const creds = { branchId: 'br-1', apiKey: 'k', apiToken: 't' }
@@ -407,5 +408,28 @@ describe('registerGlofoxMember — re-sent only when the email search finds no a
     const out = await registerGlofoxMember(creds, payload)
     expect(sent().filter((s) => s === 'POST /2.0/register')).toHaveLength(1)
     expect(out).toMatchObject({ ok: false, member: null })
+  })
+})
+
+describe('writes with no safe dedupe read are sent once on a 5xx', () => {
+  it('createGlofoxInteraction: one send, ok:false (a duplicate note is worse than a push marked failed)', async () => {
+    fetch.mockResolvedValueOnce(res(503)).mockResolvedValueOnce(res(200))
+    const out = await createGlofoxInteraction(creds, USER, { type: 'NOTE', description: 'hi' })
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(out).toEqual({ ok: false, status: 503 })
+  })
+
+  it('cancelGlofoxMembership: one send, ok:false', async () => {
+    fetch.mockResolvedValueOnce(res(503)).mockResolvedValueOnce(res(200))
+    const out = await cancelGlofoxMembership(creds, { userMembershipId: 'd'.repeat(24), memberId: USER, localDate: '2026-11-01', reason: '' })
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(out).toMatchObject({ ok: false, status: 503 })
+  })
+
+  it('updateGlofoxMember: one send, ok:false', async () => {
+    fetch.mockResolvedValueOnce(res(503)).mockResolvedValueOnce(res(200))
+    const out = await updateGlofoxMember(creds, USER, { phone: '+353870000000' })
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(out.ok).toBe(false)
   })
 })

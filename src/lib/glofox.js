@@ -1184,6 +1184,8 @@ export async function updateGlofoxMember(creds, userId, patch) {
   try {
     const r = await glofoxFetch(creds, `/2.0/members/${encodeURIComponent(userId)}`, {
       method: 'PUT',
+      // GLOFOXPOSTRETRY.1 — explicit, like every write. No callers today.
+      retry: 'never',
       body: JSON.stringify(patch),
     })
     let parsed
@@ -1687,6 +1689,10 @@ export async function cancelGlofoxMembership(creds, { userMembershipId, memberId
   try {
     const r = await glofoxFetch(creds, `/v3.0/memberships/${userMembershipId}/cancel`, {
       method: 'POST',
+      // GLOFOXPOSTRETRY.1 — never re-sent after a 5xx: Glofox's answer to a
+      // second ON_DATE cancel is unverified, and the approval card's Fix &
+      // retry is the recovery (auto-cancel is off at every location).
+      retry: 'never',
       headers: {
         'Content-Type': 'application/json',
         'x-glofox-impersonated-member-id': memberId,
@@ -1751,6 +1757,11 @@ export async function createGlofoxInteraction(creds, userId, { type, description
       `/2.1/branches/${encodeURIComponent(creds.branchId)}/leads/${encodeURIComponent(userId)}/interactions`,
       {
         method: 'POST',
+        // GLOFOXPOSTRETRY.1 — never re-sent after a 5xx: a repeat is a
+        // duplicate note in Glofox, the response has no id to check against,
+        // and a lost copy is recorded 'failed' in glofox_note_pushes while the
+        // CRM note itself is untouched.
+        retry: 'never',
         // Required: without it fetch sends the body as text/plain, Glofox never
         // parses the JSON and rejects every field as "required" (the exact bug
         // that broke registration). Mirrors registerGlofoxMember/createBooking.
