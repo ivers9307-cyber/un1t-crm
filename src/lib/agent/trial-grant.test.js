@@ -250,6 +250,31 @@ describe('grantTrialBeforeBooking: the write-ahead grant record', () => {
     expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
   })
 
+  it('a 5xx from the purchase is an unknown outcome too (GLOFOXPOSTRETRY.1): a retry with no credits refuses to buy', async () => {
+    purchaseGlofoxMembership.mockResolvedValueOnce({ ok: false, http_status: 503, message_code: null, purchase_status: null, outcome_unknown: true, error: 'Glofox HTTP 503' })
+
+    const first = await grantTrialBeforeBooking(db, base)
+
+    expect(first.failure).toMatchObject({ message_code: TRIAL_GRANT_FAILED, http_status: 503, outcome_unknown: true })
+    expect(first.grant).toMatchObject({ ok: false, outcome_unknown: true })
+
+    vi.clearAllMocks()
+    const retry = await grantTrialBeforeBooking(db, { ...base, priorGrant: first.grant, isRetry: true })
+
+    expect(retry.failure).toMatchObject({ message_code: TRIAL_GRANT_UNVERIFIED })
+    expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
+  })
+
+  // GLOFOXPOSTRETRY.1 review — the mint path's purchase got no clear answer,
+  // and the processor stamped that on the card: its FIRST approval (not a
+  // retry) must not buy blind either.
+  it('a FIRST approval of a card stamped unsettled at the mint: no credits → refuses, nothing bought', async () => {
+    const stamped = { ok: false, code: TRIAL_GRANT_FAILED, outcome_unknown: true }
+    const out = await grantTrialBeforeBooking(db, { ...base, priorGrant: stamped, isRetry: false })
+    expect(out.failure).toMatchObject({ message_code: TRIAL_GRANT_UNVERIFIED, outcome_unknown: true })
+    expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
+  })
+
   it('a throw AFTER the marker is an unknown outcome too; a throw before it is not', async () => {
     purchaseGlofoxMembership.mockRejectedValueOnce(new Error('kaboom'))
     const after = await grantTrialBeforeBooking(db, base)

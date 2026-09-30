@@ -248,6 +248,7 @@ export async function findOrCreateGlofoxMember({
   // Step 5 — optional trial-membership purchase. Per-location
   // config; if not set, skip with a warning.
   let trialPurchaseError = null
+  let trialOutcomeUnknown = false
   if (attachTrial) {
     // INTEG-A2 dual-read: registry row first, legacy settings.glofox
     // otherwise — same settings-shaped object either way.
@@ -272,7 +273,15 @@ export async function findOrCreateGlofoxMember({
     } else {
       const purchase = await purchaseGlofoxMembership(creds, newGlofoxId, trial.membershipId, trial.planCode)
       if (!purchase.ok) {
-        trialPurchaseError = `Trial membership purchase failed: ${purchase.error}`
+        // GLOFOXPOSTRETRY.1 — a 5xx or no reply is not a refusal: Glofox may
+        // have bought it. The doubt is returned (trial_outcome_unknown) so the
+        // /start processor stamps it on the needs_credit_grant card, whose
+        // approval then books only if credits show and never buys a second
+        // trial over it (grantTrialBeforeBooking's unsettled path).
+        trialOutcomeUnknown = purchase.outcome_unknown === true
+        trialPurchaseError = purchase.outcome_unknown === true
+          ? `Trial membership purchase got no clear answer from Glofox (${purchase.error}); it may have gone through. Check Glofox for a €0 trial invoice before adding one by hand.`
+          : `Trial membership purchase failed: ${purchase.error}`
       }
     }
   }
@@ -328,6 +337,9 @@ export async function findOrCreateGlofoxMember({
     // The /start processor files needs_credit_grant on it: approving that card
     // buys the trial (judged) and books.
     trial_failed: !!trialPurchaseError,
+    // GLOFOXPOSTRETRY.1 — the purchase got no clear answer (a 5xx or no
+    // reply): the trial may be on the account. Set only then.
+    ...(trialOutcomeUnknown ? { trial_outcome_unknown: true } : {}),
     sync_result: syncResult,
   }
 }

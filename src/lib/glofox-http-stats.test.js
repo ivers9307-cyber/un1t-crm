@@ -47,6 +47,7 @@ describe('glofoxFetch counters', () => {
     expect(r.status).toBe(200)
     expect(glofoxHttpStatsSince(before)).toEqual({
       requests: 2, retries: 1, status_429: 1, status_5xx: 0, network_errors: 0, gave_up: 0, aborted: 0,
+      unsafe_not_retried: 0, verify_landed: 0, verify_absent: 0, verify_unknown: 0,
     })
     expect(logWarn).not.toHaveBeenCalled()
   })
@@ -58,6 +59,7 @@ describe('glofoxFetch counters', () => {
     expect(r.status).toBe(503)
     expect(glofoxHttpStatsSince(before)).toEqual({
       requests: 4, retries: 3, status_429: 0, status_5xx: 4, network_errors: 0, gave_up: 1, aborted: 0,
+      unsafe_not_retried: 0, verify_landed: 0, verify_absent: 0, verify_unknown: 0,
     })
     expect(logWarn).toHaveBeenCalledTimes(1)
     expect(logWarn).toHaveBeenCalledWith('glofox', 'Glofox still failing after retries', {
@@ -71,6 +73,7 @@ describe('glofoxFetch counters', () => {
     await glofoxFetch(creds, '/2.0/members/abc')
     expect(glofoxHttpStatsSince(before)).toEqual({
       requests: 1, retries: 0, status_429: 0, status_5xx: 0, network_errors: 0, gave_up: 0, aborted: 0,
+      unsafe_not_retried: 0, verify_landed: 0, verify_absent: 0, verify_unknown: 0,
     })
     expect(logWarn).not.toHaveBeenCalled()
   })
@@ -84,6 +87,7 @@ describe('glofoxFetch counters', () => {
     expect(r.status).toBe(503)
     expect(glofoxHttpStatsSince(before)).toEqual({
       requests: 1, retries: 0, status_429: 0, status_5xx: 1, network_errors: 0, gave_up: 0, aborted: 1,
+      unsafe_not_retried: 0, verify_landed: 0, verify_absent: 0, verify_unknown: 0,
     })
     expect(logWarn).not.toHaveBeenCalled()
   })
