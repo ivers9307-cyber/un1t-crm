@@ -9,10 +9,15 @@
 //     Storage API runs it as superuser) and getPublicUrl. upload, update,
 //     remove, move, copy, list, createSignedUploadUrl, download… from a
 //     session are refused after 670 (or, for reads, list object names that
-//     keep the public URLs unguessable). Client-bound code = shared/,
-//     mobile/, and every src/ file that is 'use client' (after any header
-//     comment), names createBrowserClient, calls createAuthClient() or holds
-//     the anon key.
+//     keep the public URLs unguessable). And every mention of the bucket
+//     name in client code sits inside one of those two calls, so a handle in
+//     a variable, a destructured `storage`, bracket access, a TS generic
+//     (`.upload<T>(`) or a raw Storage REST path cannot hide a write; a
+//     constant holding the name (defined anywhere in the app) never reaches
+//     `.from(…)` in client code. Client-bound code = shared/, mobile/,
+//     desktop/src, and every src/ file that is 'use client' (after any
+//     header comment), names createBrowserClient, calls createAuthClient()
+//     or holds the anon key.
 //  2. After replaying every migration (scripts/check-rls-restrictive.mjs
 //     netPolicyState), no PERMISSIVE storage.objects policy of any command
 //     that reaches anon, authenticated or PUBLIC admits the bucket: it names
@@ -37,7 +42,8 @@
 // JS comments are blanked from the TypeScript parser's comment ranges (never
 // a regex), SQL comments by one quote- and dollar-aware pass (sqlCode, both
 // copied from tests/whatsapp-templates-client-writes-guard.test.js). A floor,
-// not a proof: a bucket name held in a variable, SQL built at runtime or a
+// not a proof: a bucket name built at runtime (`whatsapp-${x}`, a join, an
+// object property defined outside client code), SQL built at runtime or a
 // policy created by hand on prod is invisible; mig 670's self-check covers
 // the live catalog at apply time. Server code is not checked: the service
 // role bypasses RLS. champ-app never names the bucket (C90 plan §3).
@@ -117,10 +123,17 @@ const codeOfFile = (f) => {
   if (!CODE.has(f)) CODE.set(f, stripComments(readFileSync(f, 'utf8'), f))
   return CODE.get(f)
 }
+// The desktop (Tauri) shell's own pages are client code too; an .html file
+// is read raw (the TypeScript parser cannot read it, so nothing is stripped).
+const DESKTOP = path.join(ROOT, 'desktop/src')
+const desktopFiles = () => (existsSync(DESKTOP) ? readdirSync(DESKTOP, { recursive: true }) : [])
+  .map((f) => path.join(DESKTOP, f))
+  .filter((f) => !f.split(path.sep).includes('node_modules') && statSync(f).isFile() &&
+    /\.(html?|m?js|jsx|ts|tsx)$/.test(f) && !/\.test\.(m?js|jsx|ts|tsx)$/.test(f))
 let CLIENT_FILES = null
 function clientFiles() {
   if (CLIENT_FILES) return CLIENT_FILES
-  const phone = [...walk(path.join(ROOT, 'shared')), ...walk(path.join(ROOT, 'mobile'))]
+  const phone = [...walk(path.join(ROOT, 'shared')), ...walk(path.join(ROOT, 'mobile')), ...desktopFiles()]
   const browser = walk(path.join(ROOT, 'src')).filter((f) => isClientCode(codeOfFile(f)))
   CLIENT_FILES = [...phone, ...browser]
   return CLIENT_FILES
@@ -133,6 +146,45 @@ const bucketCallsIn = (code) => [...code.matchAll(STORAGE_CALL)].map((m) => m[1]
 /** Every bucket call a client may not make, in `text` (comments excluded). */
 export const forbiddenBucketCalls = (text, file) =>
   bucketCallsIn(stripComments(text, file)).filter((m) => !CLIENT_OK.has(m))
+
+// The call detector above only sees `.storage.from('<bucket>').<method>(`.
+// A bucket handle kept in a variable, a destructured `storage`, bracket
+// access, a TypeScript generic (`.upload<T>(`), a constant, or a raw
+// Storage REST path are invisible to it. So every mention of the bucket
+// name in client code must sit inside an allowed call, and a constant that
+// holds the name (defined anywhere in src/, shared/, mobile/, desktop/src)
+// must never reach `.from(…)` in client code.
+const BUCKET_TOKEN = /(?<![\w-])whatsapp-templates(?![\w-])/g
+const ALLOWED_USE = /\.\s*from\(\s*(['"`])whatsapp-templates\1\s*\)\s*\??\.\s*(?:uploadToSignedUrl|getPublicUrl)\s*\(/g
+const reEscape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/** Names of variables initialised to the bucket name, in already-stripped code. */
+export function bucketConstantsIn(code) {
+  return [...code.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(['"`])whatsapp-templates\2/g)].map((m) => m[1])
+}
+
+let BUCKET_CONSTS = null
+function bucketConstants() {
+  if (BUCKET_CONSTS) return BUCKET_CONSTS
+  const all = [...walk(path.join(ROOT, 'src')), ...walk(path.join(ROOT, 'shared')), ...walk(path.join(ROOT, 'mobile')), ...desktopFiles()]
+  BUCKET_CONSTS = [...new Set(all.flatMap((f) => bucketConstantsIn(codeOfFile(f))))]
+  return BUCKET_CONSTS
+}
+
+/** Every mention of the bucket in already-stripped client code that is not an allowed call. */
+export function strayBucketUses(code, consts = []) {
+  const allowed = [...code.matchAll(ALLOWED_USE)].map((m) => [m.index, m.index + m[0].length])
+  const line = (i) => code.slice(0, i).split('\n').length
+  const out = []
+  for (const m of code.matchAll(BUCKET_TOKEN)) {
+    if (!allowed.some(([a, b]) => m.index >= a && m.index < b)) out.push(`line ${line(m.index)}: the bucket name outside uploadToSignedUrl/getPublicUrl`)
+  }
+  for (const name of new Set(consts)) {
+    const re = new RegExp(String.raw`\.\s*from\(\s*(?:[\w$]+\s*\??\.\s*)*${reEscape(name)}\s*\)`, 'g')
+    for (const m of code.matchAll(re)) out.push(`line ${line(m.index)}: .from(${name}), a constant holding the bucket name`)
+  }
+  return out
+}
 
 // ── migrations ───────────────────────────────────────────────────────────
 /**
@@ -362,6 +414,7 @@ describe('client code never writes the whatsapp-templates bucket (WATPLBUCKET.1,
       'src/components/WATemplateEditor.jsx',
       'src/components/settings/integrations/WhatsAppIntegrationTab.jsx',
     ]))
+    if (existsSync(DESKTOP)) expect(names).toContain('desktop/src/index.html')
     expect(names).not.toContain('src/app/api/whatsapp/templates/upload-media/route.js')
     expect(names).not.toContain('src/app/api/whatsapp/templates/upload-media/sign/route.js')
     const seen = clientFiles().flatMap((f) => bucketCallsIn(codeOfFile(f)).map((m) => `${rel(f)}: ${m}`))
@@ -397,6 +450,43 @@ describe('client code never writes the whatsapp-templates bucket (WATPLBUCKET.1,
       await supabase.storage.from('whatsapp-media').upload(p, f)
       await supabase.from('whatsapp_templates').select('id')`
     expect(forbiddenBucketCalls(ok)).toEqual([])
+  })
+
+  it('every mention of the bucket in browser or phone code is an allowed call (no handle, constant, bracket or generic hides a write)', () => {
+    const consts = bucketConstants()
+    const offenders = clientFiles().flatMap((f) => strayBucketUses(codeOfFile(f), consts).map((u) => `${rel(f)}: ${u}`))
+    expect(offenders, 'name the bucket only as .storage.from(\'whatsapp-templates\').uploadToSignedUrl(…) / .getPublicUrl(…) in client code (mig 670)').toEqual([])
+  })
+
+  it('the stray-use detector catches the shapes the call detector cannot see', () => {
+    const sneaky = [
+      ["const b = supabase.storage.from('whatsapp-templates')\nawait b.remove([p])", 'x.js'],
+      ["const { storage } = supabase\nawait storage.from('whatsapp-templates').remove([p])", 'x.js'],
+      ["await supabase.storage.from('whatsapp-templates')['remove']([p])", 'x.js'],
+      ["await supabase.storage.from('whatsapp-templates').upload<Blob>(p, f)", 'x.ts'],
+      ["const BUCKET = 'whatsapp-templates'\nawait supabase.storage.from(BUCKET).remove([p])", 'x.js'],
+      ["await fetch(`${url}/storage/v1/object/whatsapp-templates/${p}`, { method: 'POST', body: f })", 'x.js'],
+      ["await supabase.storage.from(`whatsapp-templates`).uploadToSignedUrl(p, t, f)\nawait supabase.storage.from('whatsapp-templates').move(a, b)", 'x.js'],
+    ]
+    for (const [text, file] of sneaky) {
+      expect(strayBucketUses(stripComments(text, file)), text).not.toEqual([])
+    }
+    // A constant defined elsewhere (a server lib, a shared config) and used here.
+    const imported = "import { WA_BUCKET } from '@/lib/wa'\nawait supabase.storage.from(WA_BUCKET).remove([p])\nawait supabase.storage.from(cfg.WA_BUCKET).list('')"
+    expect(strayBucketUses(stripComments(imported, 'x.js'), ['WA_BUCKET'])).toHaveLength(2)
+    expect(bucketConstantsIn("export const WA_BUCKET = 'whatsapp-templates'\nlet b2 = `whatsapp-templates`\nconst other = 'branding'"))
+      .toEqual(['WA_BUCKET', 'b2'])
+    const ok = [
+      "await supabase.storage.from('whatsapp-templates').uploadToSignedUrl(p, t, f)",
+      "const { error } = await supabase.storage\n  .from('whatsapp-templates')\n  .uploadToSignedUrl(p, t, f, { contentType: f.type })",
+      'const { data } = supabase.storage.from("whatsapp-templates")?.getPublicUrl(p)',
+      "// await supabase.storage.from('whatsapp-templates').remove([p])",
+      "await fetch('/api/whatsapp/templates/upload-media/sign', { method: 'POST' })",
+      "await supabase.from('whatsapp_templates').select('id')",
+      "const cls = 'whatsapp-templates-list'",
+      "await supabase.storage.from(OTHER_BUCKET).remove([p])",
+    ]
+    for (const text of ok) expect(strayBucketUses(stripComments(text, 'x.js'), ['WA_BUCKET']), text).toEqual([])
   })
 
   it("a '/*' in a string or JSX text hides nothing", () => {
