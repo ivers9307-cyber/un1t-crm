@@ -21,6 +21,7 @@ import { roleCases, permissionCases } from '../helpers/role-sweep-callers.js'
 import * as waSend from '@/app/api/whatsapp/broadcasts/[id]/send/route.js'
 import * as waResubmit from '@/app/api/whatsapp/templates/[id]/resubmit/route.js'
 import * as waTemplates from '@/app/api/whatsapp/templates/route.js'
+import * as waTemplate from '@/app/api/whatsapp/templates/[id]/route.js'
 
 const T = { getCurrentUser, createServerClient, describe, it, expect }
 const json = (method, body) => new Request('http://localhost/api/x', {
@@ -57,4 +58,18 @@ describeGate('POST /api/whatsapp/templates (MANAGER_ROLES at the body location)'
   forbidden: { status: 403, body: { success: false, error: 'Forbidden' } },
   hidden: { status: 403, body: { success: false, error: 'Forbidden — location not in your assignments' } },
   cases: roleCases(MANAGER_ROLES),
+}, T)
+
+describeGate('DELETE /api/whatsapp/templates/[id] (MANAGER_ROLES at the template)', {
+  call: () => waTemplate.DELETE(bare('DELETE'), params({ id: 'wt-1' })),
+  gateReads: row({ name: 'promo_x' }),
+  forbidden: { status: 403, body: { success: false, error: 'Forbidden' } },
+  hidden: NOT_FOUND, cases: roleCases(MANAGER_ROLES),
+}, T)
+
+describeGate('PUT /api/whatsapp/templates/[id] with a Meta-owned field (MANAGER_ROLES at the template)', {
+  call: () => waTemplate.PUT(json('PUT', { status: 'APPROVED' }), params({ id: 'wt-1' })),
+  gateReads: row({}),
+  forbidden: { status: 403, body: { success: false, error: 'Forbidden' } },
+  hidden: NOT_FOUND, cases: roleCases(MANAGER_ROLES),
 }, T)
