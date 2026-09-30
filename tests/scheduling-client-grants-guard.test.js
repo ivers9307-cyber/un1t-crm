@@ -111,23 +111,40 @@ export function codeOf(text, file = 'scan.jsx') {
  * (the same test as tests/function-execute-guard.test.js isClientFile).
  */
 export function isClientFile(text, file) {
-  const code = codeOf(text, file).trimStart()
+  return isClientCode(codeOf(text, file).trimStart())
+}
+function isClientCode(code) {
   return /^['"]use client['"]/.test(code) || /\bcreateBrowserClient\b/.test(code) ||
     /\bcreateAuthClient\s*\(/.test(code) || /\bNEXT_PUBLIC_SUPABASE_ANON_KEY\b/.test(code)
 }
 
+// Every file is parsed once per run (the TypeScript parse is the slow part:
+// a full repo scan per test ran past vitest's 5 s budget on the CI runner).
+const CODE = new Map()
+const codeOfFile = (f) => {
+  if (!CODE.has(f)) CODE.set(f, codeOf(readFileSync(f, 'utf8'), f))
+  return CODE.get(f)
+}
+let CLIENT_FILES = null
 function clientFiles() {
+  if (CLIENT_FILES) return CLIENT_FILES
   const phone = [...walk(path.join(ROOT, 'shared')), ...walk(path.join(ROOT, 'mobile'))]
-  const browser = walk(path.join(ROOT, 'src')).filter((f) => isClientFile(readFileSync(f, 'utf8'), f))
-  return [...phone, ...browser]
+  const browser = walk(path.join(ROOT, 'src')).filter((f) => isClientCode(codeOfFile(f).trimStart()))
+  CLIENT_FILES = [...phone, ...browser]
+  return CLIENT_FILES
 }
 
 /** PostgREST reads/writes/unresolved selects on the three tables in one file's code. */
 export const scanUses = (text, file) => columnUses(codeOf(text, file), SCANNED, FK_ALIASES)
-const readUses = (f) => scanUses(readFileSync(f, 'utf8'), f)
+const USES = new Map()
+const readUses = (f) => {
+  if (!USES.has(f)) USES.set(f, columnUses(codeOfFile(f), SCANNED, FK_ALIASES))
+  return USES.get(f)
+}
 const uses = scanUses
 
-describe('client code and the scheduling tables (GRANTSWEEP.1)', () => {
+// The whole-repo scans are parse-bound; give them room on a slow runner.
+describe('client code and the scheduling tables (GRANTSWEEP.1)', { timeout: 120_000 }, () => {
   const files = clientFiles()
 
   it('scans the client files and finds the phone reads it is meant to police (not vacuous)', () => {
