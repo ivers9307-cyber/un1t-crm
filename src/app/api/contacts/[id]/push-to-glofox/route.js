@@ -105,8 +105,11 @@ export async function POST(_request, { params }) {
   })
 
   const httpStatus = (result.status === 'failed') ? 502 : 200
+  // GLOFOXWRITEJUDGE.1 — the button shows `error`; without it a failure read
+  // "Push failed (502)". result.error is Glofox's own words (staff-facing).
   return NextResponse.json({
     success: result.status !== 'failed',
+    ...(result.status === 'failed' ? { error: result.error || 'The Glofox push failed.' } : {}),
     result,
   }, { status: httpStatus })
 }
