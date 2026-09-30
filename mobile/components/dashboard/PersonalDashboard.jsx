@@ -36,6 +36,8 @@ import { myLeaveCancelOutcome } from '../../lib/my-leave'
 import CoachPickerSheet from '../schedule/CoachPickerSheet'
 // CANDIDATES.1 — colleagues ranked free-first for the shift being covered.
 import { NO_CANDIDATES, candidatesStarted, candidatesSettled, candidatesFor } from '../../lib/candidates-view'
+// D4 UINITS.1 — the staff read settles the way Manage mode's does.
+import { staffLoadOutcome } from '../../lib/schedule-manage'
 // COVERLOOP.2 — the confirm step, and every swap-card decision (pure, tested).
 import SwapConfirmSheet from '../schedule/SwapConfirmSheet'
 import {
@@ -429,6 +431,11 @@ export default function PersonalDashboard({ refreshKey }) {
   const [swapPickerShift, setSwapPickerShift] = useState(null)
   const [swapStaff, setSwapStaff] = useState(null) // null = not loaded
   const [swapStaffLoading, setSwapStaffLoading] = useState(false)
+  // D4 UINITS.1 — why the staff read failed (null = it did not). The sheet
+  // shows it only when the picker has nothing else to show: no ranked
+  // answer and no row (candidatePickerView). It used to be an Alert that
+  // fired even when the ranked colleagues had arrived.
+  const [swapStaffError, setSwapStaffError] = useState(null)
   // CANDIDATES.1 — the ranked colleagues for the shift the picker is open on
   // (the server gives a coach free/working only).
   const [swapCandidates, setSwapCandidates] = useState(NO_CANDIDATES)
@@ -687,13 +694,24 @@ export default function PersonalDashboard({ refreshKey }) {
     swapFlowRef.current.dispatch('start')
     setSwapPickerShift(shift)
     loadSwapCandidates(shift) // not awaited: the staff list below is the fallback
-    if (swapStaff === null && !swapStaffLoading) {
-      setSwapStaffLoading(true)
-      const res = await getLocationStaff({ locationId: activeLocation?.id })
-      setSwapStaffLoading(false)
-      setSwapStaff(res.success ? (res.data || []) : [])
-      if (!res.success) Alert.alert('Could not load staff', res.error || 'Unknown error')
+    if (swapStaff === null && !swapStaffLoading) await loadSwapStaff()
+  }
+
+  // D4 UINITS.1 — a failed first read keeps the pool null (the next open, or
+  // the sheet's Try again, retries) and hands the sheet a reason; see
+  // staffLoadOutcome (lib/schedule-manage.js) and candidatePickerView.
+  async function loadSwapStaff() {
+    setSwapStaffLoading(true)
+    let res
+    try {
+      res = await getLocationStaff({ locationId: activeLocation?.id })
+    } catch (e) {
+      res = { success: false, error: e?.message }
     }
+    setSwapStaffLoading(false)
+    const out = staffLoadOutcome({ res, current: swapStaff })
+    setSwapStaff(out.staff)
+    setSwapStaffError(out.error)
   }
 
   // COVERLOOP.2 — picking a colleague used to POST on that one tap. It now
@@ -1170,6 +1188,8 @@ export default function PersonalDashboard({ refreshKey }) {
         locationId={activeLocation?.id}
         staff={swapStaff}
         loading={swapStaffLoading}
+        error={swapStaff === null ? swapStaffError : null}
+        onRetry={loadSwapStaff}
         {...candidatesFor(swapCandidates, swapPickerShift?.block_id)}
         onPick={pickSwapCoach}
         onClose={cancelSwapPicker}

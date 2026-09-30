@@ -11,7 +11,7 @@ import { useEffect, useState } from 'react'
 import { View, Text, ActivityIndicator } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { getInvoice } from '../../lib/invoices-api'
-import { reviewComparisonView } from '../../lib/invoice-review'
+import { reviewComparisonView, rosterUnreadableNotice } from '../../lib/invoice-review'
 
 function Rows({ rows }) {
   return rows.map((r) => (
@@ -54,8 +54,20 @@ export function RosterComparison({ view, compact = false }) {
   )
 }
 
+// D4 UINITS.1 — the roster could not be read and there is no comparison to
+// show (rosterUnreadableNotice decides, tested). Said plainly, not blank.
+export function RosterUnreadable({ text, compact = false }) {
+  if (!text) return null
+  return (
+    <View className={`flex-row items-start rounded-xl bg-amber-500/10 border border-amber-500/30 ${compact ? 'mt-2 p-2' : 'p-3 mb-4'}`}>
+      <Ionicons name="alert-circle-outline" size={14} color="#B45309" style={{ marginTop: 1 }} />
+      <Text className="text-xs text-amber-700 ml-1.5 flex-1">{text}</Text>
+    </View>
+  )
+}
+
 export function InvoiceRosterCheck({ invoiceId }) {
-  const [state, setState] = useState({ loading: true, view: null, error: null })
+  const [state, setState] = useState({ loading: true, view: null, error: null, notice: null })
 
   useEffect(() => {
     let alive = true
@@ -65,12 +77,12 @@ export function InvoiceRosterCheck({ invoiceId }) {
         if (r?.success === false || !r?.data) {
           // Don't echo the server text: the detail route 404s a caller who
           // holds the approvals permission without being owner/master.
-          setState({ loading: false, view: null, error: 'Roster check unavailable.' })
+          setState({ loading: false, view: null, error: 'Roster check unavailable.', notice: null })
         } else {
-          setState({ loading: false, view: reviewComparisonView(r.data), error: null })
+          setState({ loading: false, view: reviewComparisonView(r.data), error: null, notice: rosterUnreadableNotice(r.data) })
         }
       }, () => {
-        if (alive) setState({ loading: false, view: null, error: 'Roster check unavailable.' })
+        if (alive) setState({ loading: false, view: null, error: 'Roster check unavailable.', notice: null })
       })
     return () => { alive = false }
   }, [invoiceId])
@@ -83,6 +95,7 @@ export function InvoiceRosterCheck({ invoiceId }) {
       </View>
     )
   }
+  if (!state.view && state.notice) return <RosterUnreadable text={state.notice} compact />
   if (!state.view) {
     return <Text className="text-[11px] text-un1t-subtle mt-2">{state.error || 'No roster comparison available.'}</Text>
   }
