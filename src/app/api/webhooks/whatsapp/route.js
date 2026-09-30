@@ -479,7 +479,9 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId) {
   }
 
   // Consent keywords — the broadcast footer promises "Reply STOP to
-  // Unsubscribe", so honour an exact STOP/START text reply: flip
+  // Unsubscribe", so honour an exact UNSUBSCRIBE/STOP or START text reply
+  // (the list lives in parseConsentKeyword; CANCEL/END/QUIT are NOT opt-outs
+  // since STOPWORDS.1 and fall through to the agent below): flip
   // whatsapp_marketing + wa_status, write the consent_log audit row,
   // and acknowledge in-thread. The helper never throws, and the webhook still
   // 200s either way (Meta disables a subscription on non-2xx) — but a REFUSED
