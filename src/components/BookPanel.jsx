@@ -8,6 +8,7 @@
 // its context (inbox chat vs profile WhatsApp).
 import { useState, useEffect } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
+import { classBookResultView } from '@/lib/glofox-class-book-result'
 
 function fmtDay(d) {
   return d.toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short' })
@@ -203,17 +204,21 @@ function BookPanel({ contactId, locationId, glofoxMemberId, eventTypes, channel,
         body: JSON.stringify({ contact_id: contactId, event_id: cls.id }),
       })
       const data = await res.json().catch(() => ({}))
-      if (!data.success) {
-        setClassResult({ ok: false, message: data.error || 'Glofox booking failed' })
+      // GLOFOXWRITEJUDGE.1 — already booked is shown as done, not as an error.
+      const view = classBookResultView(data, cls.name)
+      if (!view.ok) {
+        setClassResult({ ok: false, message: view.message })
         return
       }
-      const threadNote = await sendThreadText(
-        `✅ Booked into ${cls.name}${cls.time_start_ms ? ` — ${fmtClassTime(cls.time_start_ms)}` : ''}`
-      )
+      const threadNote = view.sendChat
+        ? await sendThreadText(
+          `✅ Booked into ${cls.name}${cls.time_start_ms ? ` — ${fmtClassTime(cls.time_start_ms)}` : ''}`
+        )
+        : ''
       setClassResult({
         ok: true,
-        message: `Booked into ${cls.name}.${threadNote ? ` ${threadNote}` : ''}`,
-        bookingId: data.glofox_booking_id || null,
+        message: `${view.message}${threadNote ? ` ${threadNote}` : ''}`,
+        bookingId: view.bookingId,
       })
       onBooked?.()
     } finally {

@@ -434,10 +434,11 @@ export async function processClassBookingRequest(db, request) {
     return false
   }
 
-  let grantedTrial = false
-  if (attended) {
-    // Attended before with no Glofox account at all → nothing to book with.
-    if (!memberId) return toReview('prior_attendance')
+  // The returner's balance gate: book against an existing balance, never a
+  // fresh trial. Returns the review outcome when there is nothing to book
+  // with, null to go on and book. Run where attendance is known: below, and
+  // again after the mint LINKED an existing account (GLOFOXWRITEJUDGE.1).
+  async function returnerBalanceGate() {
     // computeCreditsRemaining is null for BOTH "no credits" and "membership
     // without per-class credit records" — the CRM's synced membership status
     // breaks the tie: a bookable membership is bookable (Glofox arbitrates,
@@ -461,6 +462,15 @@ export async function processClassBookingRequest(db, request) {
     } else if (!(read.remaining > 0) && !activeMembership && !(await rescueSiblingBalance())) {
       return toReview('prior_attendance')
     }
+    return null
+  }
+
+  let grantedTrial = false
+  if (attended) {
+    // Attended before with no Glofox account at all → nothing to book with.
+    if (!memberId) return toReview('prior_attendance')
+    const gate = await returnerBalanceGate()
+    if (gate) return gate
     // Fall through to the booking — consuming the EXISTING balance, never a
     // fresh trial.
   } else if (!memberId) {
@@ -501,6 +511,21 @@ export async function processClassBookingRequest(db, request) {
     }
     memberId = res.glofox_member_id
     grantedTrial = res.status === 'created'
+    // GLOFOXWRITEJUDGE.1 — 'linked' means Glofox already held an account for
+    // this email (EMAIL_ALREADY_IN_USE, found on a second search). Attendance
+    // was read above with no account to read, so read it now on the linked
+    // one: a returner must reach the returner gate (prior_attendance), never
+    // needs_credit_grant, whose approve buys a trial. A failed read is not
+    // "never attended": it goes to review like the read above.
+    if (res.status === 'linked') {
+      const { ok: attendOk, bookings } = await fetchUserBookingsResult(creds, memberId, { windowDays: 365 * 5 })
+      if (!attendOk) return toReview('attendance_check_failed')
+      if (bookings.some((b) => b.attended === true)) {
+        attended = true
+        const gate = await returnerBalanceGate()
+        if (gate) return gate
+      }
+    }
   }
   // Existing never-attended account, no live credit → review (staff grant the
   // trial + approve); an unreadable credit read is retried (CBPCREDITREAD.1).

@@ -51,9 +51,18 @@ function passwordNote(passcode) {
     : ''
 }
 
+// GLOFOXWRITEJUDGE.1 — Glofox refused a new account because the email already
+// has one, and the push could not link it: nothing was created, so this is not
+// a "partial success". Staff-facing; the details are on the Review tab row.
+const EMAIL_IN_USE_TEXT = {
+  email_in_use_not_linked: 'Not created: this email already has a Glofox account we could not match. Check the Review tab.',
+  email_in_use_link_failed: 'Not created: this email already has a Glofox account, but saving the link to it failed. Check the Review tab.',
+}
+
 function CreateInGlofoxResult({ result, onDismiss }) {
   if (!result) return null
-  const meta = {
+  const emailInUse = result.status === 'needs_review' ? EMAIL_IN_USE_TEXT[result.reason] : null
+  const meta = emailInUse ? { Icon: AlertTriangle, cls: 'text-amber-400', text: emailInUse } : {
     linked:        { Icon: CheckCircle2, cls: 'text-emerald-400', text: 'Linked to an existing Glofox account.' },
     created:       { Icon: CheckCircle2, cls: 'text-emerald-400', text: `Created in Glofox.${passwordNote(result.passcode)}` },
     needs_review:  { Icon: AlertTriangle, cls: 'text-amber-400', text: `Partial success, operator review required. ${result.error || ''}`.trim() + passwordNote(result.passcode) },

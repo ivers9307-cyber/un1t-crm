@@ -21,6 +21,7 @@ import { readGlofoxConfig, findGlofoxConfigByBranchId } from '@/lib/connection-r
 import { logError, logWarn } from '@/lib/log'
 import { GLOFOX_SETTINGS_UNREADABLE } from '@/lib/glofox-settings-read'
 import { toMobileE164 } from '@/lib/phone-validate'
+import { recordErrorEvent } from '@/lib/error-events'
 
 // ─────────────────────────────────────────────────────────────
 // Signature verification (HMAC-SHA256 hex)
@@ -559,6 +560,93 @@ async function runGlofoxVerify(verify) {
   return 'unknown'
 }
 
+// GLOFOXWRITEJUDGE.1 — the counters above are per instance and only the crons
+// (which only read) write them down, so a request-path WRITE's 5xx / 429 /
+// no-reply lived only in a log line Vercel keeps for 24 h. A write call that
+// ends that way now leaves ONE error_events row (mig 435; storm-guarded,
+// never throws; Sentinel's crm.error-events check reads it). Reads never do.
+const GLOFOX_WRITE_FAILURE_TEXT = {
+  never: 'not re-sent, because Glofox may already have done it',
+  unknown: 'not re-sent: the check read could not tell whether it went through',
+  gave_up: 'still failing after every retry',
+  aborted: 'the caller gave up while Glofox was failing',
+  no_reply: 'no reply from Glofox (network error), so the outcome is unknown',
+}
+
+/**
+ * Is this glofoxFetch call a write? A method other than GET/HEAD whose policy
+ * is not 'idempotent' (the read-POSTs), unless the caller marks it readOnly
+ * (a read-POST sent once as a write's dedupe read). Pure.
+ */
+export function isGlofoxWrite(options = {}) {
+  if (options?.readOnly === true) return false
+  const method = String(options?.method || 'GET').toUpperCase()
+  if (GLOFOX_RETRYABLE_METHODS.has(method)) return false
+  return glofoxRetryPolicy(options).mode !== 'idempotent'
+}
+
+/** The error_events row for a failed Glofox write. Pure; no ids (path label). */
+export function glofoxWriteFailureEvent({ method, pathOrUrl, status, attempts, reason }) {
+  const m = String(method || 'POST').toUpperCase()
+  const path = glofoxPathLabel(pathOrUrl)
+  const name = reason === 'no_reply' ? 'glofox_write_no_reply' : status === 429 ? 'glofox_write_429' : 'glofox_write_5xx'
+  const answer = reason === 'no_reply' ? 'no reply' : `HTTP ${status}`
+  return {
+    vercel_id: null,
+    runtime: process.env.NEXT_RUNTIME || null,
+    route_path: `glofox:${m} ${path}`,
+    route_type: 'glofox_write',
+    method: m,
+    name,
+    message: `Glofox ${m} ${path} answered ${answer} after ${attempts} attempt(s); ${GLOFOX_WRITE_FAILURE_TEXT[reason] || reason}`.slice(0, 500),
+    digest: null,
+  }
+}
+
+// error_events' storm guard (30 rows a minute per instance) is shared with
+// every unhandled and handled route error. A Glofox outage fails every write,
+// so its rows get their own smaller cap and can never use up that budget: past
+// it, a minute's further failures are dropped with ONE summary warn (each
+// failure still has its own glofox warn line).
+export const GLOFOX_WRITE_FAILURE_ROWS_PER_MIN = 5
+let glofoxFailureWindowStart = 0
+let glofoxFailureWindowCount = 0
+let glofoxFailureWindowWarned = false
+
+function mayRecordGlofoxWriteFailure() {
+  const now = Date.now()
+  if (now - glofoxFailureWindowStart > 60_000) {
+    glofoxFailureWindowStart = now
+    glofoxFailureWindowCount = 0
+    glofoxFailureWindowWarned = false
+  }
+  if (glofoxFailureWindowCount < GLOFOX_WRITE_FAILURE_ROWS_PER_MIN) {
+    glofoxFailureWindowCount++
+    return true
+  }
+  if (!glofoxFailureWindowWarned) {
+    glofoxFailureWindowWarned = true
+    logWarn('glofox', 'Glofox write-failure rows capped this minute; further failures are only logged', {
+      cap: GLOFOX_WRITE_FAILURE_ROWS_PER_MIN,
+    })
+  }
+  return false
+}
+
+// Test seam only: the cap is module-level state.
+export function _resetGlofoxWriteFailureCapForTests() {
+  glofoxFailureWindowStart = 0
+  glofoxFailureWindowCount = 0
+  glofoxFailureWindowWarned = false
+}
+
+async function recordGlofoxWriteFailure(args) {
+  try {
+    if (!mayRecordGlofoxWriteFailure()) return
+    await recordErrorEvent(glofoxWriteFailureEvent(args))
+  } catch { /* recordErrorEvent never throws; observability must not change the call's answer */ }
+}
+
 const GLOFOX_ID_SEGMENT = [
   /^[0-9a-f]{16,}$/i,                                              // Mongo-style ids
   /^\d{6,}$/,                                                      // numeric ids
@@ -614,8 +702,10 @@ export async function glofoxFetch(creds, pathOrUrl, options = {}) {
     throw new Error('Glofox API credentials missing (need branchId, apiKey, apiToken on the location)')
   }
   const policy = glofoxRetryPolicy(options)
-  // The policy is ours; fetch never sees it.
-  const { retry: _policyOption, ...fetchOptions } = options
+  // The policy and the read marker are ours; fetch never sees them.
+  const { retry: _policyOption, readOnly: _readOnlyOption, ...fetchOptions } = options
+  const write = isGlofoxWrite(options)
+  const method = String(fetchOptions.method || 'GET').toUpperCase()
   const url = pathOrUrl.startsWith('http')
     ? pathOrUrl
     : `${GLOFOX_API_BASE}${pathOrUrl.startsWith('/') ? '' : '/'}${pathOrUrl}`
@@ -636,6 +726,7 @@ export async function glofoxFetch(creds, pathOrUrl, options = {}) {
       res = await fetch(url, { ...fetchOptions, headers })
     } catch (e) {
       glofoxHttpCounters.network_errors++
+      if (write) await recordGlofoxWriteFailure({ method, pathOrUrl, status: 0, attempts, reason: 'no_reply' })
       throw e
     }
     if (res.status === 429) glofoxHttpCounters.status_429++
@@ -678,18 +769,26 @@ export async function glofoxFetch(creds, pathOrUrl, options = {}) {
   // counted apart (aborted) and not logged as a give-up. GLOFOXPOSTRETRY.1 — a
   // write we chose not to re-send is its own line (reason: never | landed |
   // unknown), not a give-up: it used none of its remaining retries.
+  let failure = null
   if (aborted) {
     glofoxHttpCounters.aborted++
+    failure = 'aborted'
   } else if (notResent) {
     logWarn('glofox', 'Glofox write answered 5xx; not retried', {
       status: res.status, attempts, path: glofoxPathLabel(pathOrUrl), reason: notResent,
     })
+    failure = notResent
   } else if (res.status === 429 || res.status >= 500) {
     glofoxHttpCounters.gave_up++
     logWarn('glofox', 'Glofox still failing after retries', {
       status: res.status, attempts, path: glofoxPathLabel(pathOrUrl),
     })
+    failure = 'gave_up'
   }
+  // GLOFOXWRITEJUDGE.1 — a write's failure outlives the 24 h log window. A
+  // write whose check read found it went through ('landed') is a success the
+  // caller reports as recovered, so it leaves no failure row.
+  if (failure && failure !== 'landed' && write) await recordGlofoxWriteFailure({ method, pathOrUrl, status: res.status, attempts, reason: failure })
   // GLOFOX-SPEC-2026-09 — Glofox's own guidance: "Older endpoints sometimes
   // return a 200 status code with a success field set to false. That
   // indicates a bad request." Each caller judges that per endpoint
@@ -1025,6 +1124,8 @@ export async function searchGlofoxMember(creds, { email, phone, retry = 'idempot
       // A search, not a write: safe to repeat (GLOFOXPOSTRETRY.1), unless a
       // write's dedupe read asks for ONE attempt (retry: 'never').
       retry: retry === 'never' ? 'never' : 'idempotent',
+      // A search even when sent once: never recorded as a failed write.
+      readOnly: true,
       body: JSON.stringify(filter),
     })
     if (r.ok) return verdict(matches(rowsOf(await r.json())))
@@ -1094,12 +1195,45 @@ export async function searchGlofoxByEmail(creds, email, { retry } = {}) {
   return searchGlofoxMember(creds, { email, ...(retry ? { retry } : {}) })
 }
 
+export const GLOFOX_EMAIL_IN_USE = 'EMAIL_ALREADY_IN_USE'
+
 /** Glofox's "that email already has an account" refusal (seen live as a
- *  200 success:false LOGIN_ALREADY_IN_USE,EMAIL_ALREADY_IN_USE). */
+ *  200 success:false LOGIN_ALREADY_IN_USE,EMAIL_ALREADY_IN_USE, with
+ *  message_code null and the same words in message and errors[]). */
 function isGlofoxEmailInUse(body) {
   if (!body || typeof body !== 'object') return false
-  return [body.message_code, body.message, body.error, body.code]
+  const errs = Array.isArray(body.errors) ? body.errors : []
+  return [body.message_code, body.message, body.error, body.code, ...errs]
     .some((v) => typeof v === 'string' && /EMAIL_ALREADY_IN_USE/i.test(v))
+}
+
+/**
+ * GLOFOXWRITEJUDGE.1 — judge a POST /2.0/register answer. Pure.
+ *
+ * Glofox: "older endpoints sometimes return a 200 with success:false; that is
+ * a bad request". Seen live on register (June 2026: the content-type bug's
+ * "The first name field is required., …"; August: EMAIL_ALREADY_IN_USE). The
+ * live success shape is { success: true, user: { _id } } (27/27 prod rows).
+ * A success therefore needs a 2xx, success !== false AND a member id; anything
+ * else is { ok: false, code, error } with Glofox's own words in `error`.
+ *   code: 'EMAIL_ALREADY_IN_USE' | Glofox's message_code | 'REGISTER_REFUSED'
+ *         | 'HTTP_<status>' | 'NO_MEMBER_ID'
+ */
+export function interpretRegisterResult({ httpOk, httpStatus = null, body } = {}) {
+  const b = body && typeof body === 'object' ? body : null
+  const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null)
+  if (!httpOk || b?.success === false) {
+    const errs = Array.isArray(b?.errors) ? b.errors.map(str).filter(Boolean) : []
+    const words = str(b?.error) || str(b?.message) || str(b?.message_code) || (errs.length ? errs.join('; ') : null)
+    const code = isGlofoxEmailInUse(b)
+      ? GLOFOX_EMAIL_IN_USE
+      : (str(b?.message_code) || (httpOk ? 'REGISTER_REFUSED' : `HTTP_${httpStatus}`))
+    return { ok: false, member: null, code, error: (words || (httpOk ? 'Glofox refused the registration without saying why' : `Glofox HTTP ${httpStatus}`)).slice(0, 300) }
+  }
+  const member = b?.user || b?.data || b
+  const id = member?._id || member?.id
+  if (!id) return { ok: false, member: null, code: 'NO_MEMBER_ID', error: 'Glofox answered without a member id' }
+  return { ok: true, member: member._id ? member : { ...member, _id: String(id) }, code: null, error: null }
 }
 
 /**
@@ -1109,7 +1243,8 @@ function isGlofoxEmailInUse(body) {
  * type='MEMBER', lead_status, password. Optional: phone, birth,
  * emergency_contact, consent.
  *
- * Returns { ok, member, error }. member._id is the new
+ * Returns { ok, member, error, code?, glofox_response? }; ok needs a member
+ * id (interpretRegisterResult). member._id is the new
  * glofox_member_id we write to the CRM contact row.
  *
  * Best-effort: API failures return ok:false with the error
@@ -1178,17 +1313,14 @@ export async function registerGlofoxMember(creds, payload) {
         return { ok: true, member: s.member, error: null, glofox_response: parsed, recovered: 'landed_after_5xx' }
       }
     }
-    if (!r.ok) {
-      return {
-        ok: false,
-        member: null,
-        error: parsed?.error || parsed?.message || `Glofox HTTP ${r.status}`,
-        glofox_response: parsed,
-      }
+    // GLOFOXWRITEJUDGE.1 — judged on the body, not the HTTP status: a 200
+    // success:false is Glofox refusing. `code` lets the caller act on
+    // EMAIL_ALREADY_IN_USE (search and link) instead of filing "unknown".
+    const verdict = interpretRegisterResult({ httpOk: r.ok, httpStatus: r.status, body: parsed })
+    if (!verdict.ok) {
+      return { ok: false, member: null, code: verdict.code, error: verdict.error, glofox_response: parsed }
     }
-    // Glofox wraps the new user under various shapes — try them.
-    const member = parsed?.user || parsed?.data || parsed
-    return { ok: true, member, error: null, glofox_response: parsed }
+    return { ok: true, member: verdict.member, error: null, glofox_response: parsed }
   } catch (e) {
     return { ok: false, member: null, error: e?.message || 'network error' }
   }
@@ -1498,7 +1630,8 @@ export const GLOFOX_ALREADY_BOOKED_CODE = 'YOU_HAVE_BOOKED_FOR_THIS_EVENT'
  * Glofox's live success body has NEVER matched the harvest shapes below
  * (0/9 historical funnel bookings captured an id; Emma Kennedy
  * 2026-07-28 booked fine on a 200 we then mislabelled a failure). So:
- *   - a 2xx WITH a message code is only booked when an id came back too
+ *   - a 2xx WITH a message code, or with `success: false`, is only booked
+ *     when an id came back too
  *     (the 200-with-error shape — the Lucinda case stays a failure);
  *   - a CLEAN 2xx (no message code) is booked, id or not — the id is a
  *     reconciliation bonus, never the success gate. When a clean 2xx has
@@ -1529,7 +1662,12 @@ export function interpretBookingResult(result) {
     || null
   const messageCode = body?.message_code || body?.message || null
   const alreadyBooked = messageCode === GLOFOX_ALREADY_BOOKED_CODE
-  const booked = !!result?.ok && (!messageCode || !!bookingId)
+  // GLOFOXWRITEJUDGE.1 — Glofox's own rule: an older endpoint's 200 with
+  // success:false is a bad request. Like a message code, it needs an id to
+  // count as booked. (Every failure body seen live also carried a code; this
+  // closes the corner the staff Book panel used to check by hand.)
+  const failureSignal = !!messageCode || body?.success === false
+  const booked = !!result?.ok && (!failureSignal || !!bookingId)
   if (booked && !bookingId) {
     console.warn(`[glofox] booking 2xx without a harvestable id — extend the harvest shapes. ${describeBodyShape(body)}`)
   }
