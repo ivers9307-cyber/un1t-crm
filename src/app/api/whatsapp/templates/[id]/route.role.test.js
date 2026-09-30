@@ -101,6 +101,8 @@ describe('DELETE — MANAGER_ROLES at the template (WATPLROLE.1)', () => {
     expect({ status: res.status, body: await res.json() }).toEqual({ status: 403, body: FORBIDDEN })
     expect(deleteMetaTemplate).not.toHaveBeenCalled()
     expect(db.writes).toEqual([])
+    // The role 403 comes before the location's number lookup (C81).
+    expect(getLocationWhatsAppNumberConfig).not.toHaveBeenCalled()
   })
 
   it('a caller who does not belong to the template\'s location: 404, as before', async () => {

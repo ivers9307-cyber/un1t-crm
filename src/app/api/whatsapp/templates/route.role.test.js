@@ -87,6 +87,8 @@ describe('POST /api/whatsapp/templates — MANAGER_ROLES at the location created
     expect({ status: res.status, body: await res.json() }).toEqual({ status: 403, body: FORBIDDEN })
     expect(createMetaTemplate).not.toHaveBeenCalled()
     expect(createServerClient).not.toHaveBeenCalled()
+    // The role 403 comes before the location's number lookup (C81).
+    expect(getLocationWhatsAppNumberConfig).not.toHaveBeenCalled()
   })
 
   it('no location_id: judged at the active studio (a manager there is allowed, staff is not)', async () => {
