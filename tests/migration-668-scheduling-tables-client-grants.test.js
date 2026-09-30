@@ -579,6 +579,15 @@ describe('the self-check aborts the WHOLE file', () => {
     await runSql('ROLLBACK')
     expect(await grantedColumns('shift_blocks', 'authenticated')).toEqual([...SHIFT_COLUMN_GRANTS.shift_blocks.granted].sort())
   })
+
+  // Last in this block: before the fix the file COMMITs here.
+  it("when mig 646's column grants on a shift table are already gone (an empty before-list proves nothing)", async () => {
+    await runSql(`BEGIN;
+      REVOKE SELECT ON public.shift_blocks FROM authenticated;`)
+    await expect(runSql(MIG_668)).rejects.toThrow(/mig 646's authenticated column SELECT grants are missing on public\.shift_blocks/)
+    await runSql('ROLLBACK')
+    expect(await grantedColumns('shift_blocks', 'authenticated')).toEqual([...SHIFT_COLUMN_GRANTS.shift_blocks.granted].sort())
+  })
 })
 
 describe("the plan's rollback record restores the before-state exactly", () => {

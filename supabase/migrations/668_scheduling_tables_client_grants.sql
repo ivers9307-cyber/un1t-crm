@@ -254,8 +254,15 @@ BEGIN
     END IF;
   END LOOP;
 
-  -- 5. The shift tables: mig 646's column list unchanged, still no table
-  --    SELECT, and the manager-policy writes untouched.
+  -- 5. The shift tables: mig 646's column list present before and unchanged
+  --    after (an empty before-list would compare equal to an empty after-list
+  --    and prove nothing), still no table SELECT, and the manager-policy
+  --    writes untouched.
+  FOREACH v_tbl IN ARRAY ARRAY['shift_blocks', 'shift_assignments'] LOOP
+    IF NOT EXISTS (SELECT 1 FROM mig668_shift_columns WHERE table_name = v_tbl AND column_name = 'id') THEN
+      RAISE EXCEPTION 'GRANTSWEEP.1: mig 646''s authenticated column SELECT grants are missing on public.% (apply 646 first, or restore them)', v_tbl;
+    END IF;
+  END LOOP;
   SELECT string_agg(coalesce(b.table_name, a.table_name) || '.' || coalesce(b.column_name, a.column_name), ', ')
     INTO v_diff
     FROM mig668_shift_columns b
