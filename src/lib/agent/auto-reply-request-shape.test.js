@@ -122,7 +122,7 @@ const CONV = { agent_active: true, contact_id: null, agent_last_reply_at: null }
 // The 25 Sep shape: A (seen by turn 1), B (landed mid-turn), R (Mia's reply to A).
 const A = { direction: 'inbound', body: 'Is there a class at 6pm?', message_type: 'text', created_at: '2026-09-25T08:41:36.100+00:00' }
 const B = { direction: 'inbound', body: 'And one tomorrow?', message_type: 'text', created_at: '2026-09-25T08:41:38.200+00:00' }
-const R = { direction: 'outbound', body: 'Yes, 6pm has space.', message_type: 'text', created_at: '2026-09-25T08:41:42.300+00:00' }
+const R = { direction: 'outbound', body: 'Yes, 6pm has space.', message_type: 'text', source: 'agent', created_at: '2026-09-25T08:41:42.300+00:00' }
 
 const okText = (text) => ({ ok: true, status: 200, json: async () => ({ stop_reason: 'end_turn', content: [{ type: 'text', text }] }) })
 const prefill400 = () => ({
@@ -161,8 +161,10 @@ describe('MIAPREFILL.1 — every request Mia sends ends on a user turn', () => {
       calls,
     })
 
+    adapter.onEngage = vi.fn()
     const result = await runChannelAgent(db, adapter, ctx)
 
+    expect(adapter.onEngage).toHaveBeenCalled()
     const bodies = sentBodies()
     expect(bodies).toHaveLength(2)
     for (const body of bodies) {
@@ -174,6 +176,39 @@ describe('MIAPREFILL.1 — every request Mia sends ends on a user turn', () => {
     expect(recordErrorEvent).not.toHaveBeenCalled()
     expect(adapter.send).toHaveBeenCalledTimes(2)
     expect(result).toMatchObject({ handled: true, action: 'reply' })
+  })
+
+  it('a second Mia reply that already followed the missed message: the rerun makes no API call ([A, B, R, R2], no double answer)', async () => {
+    vi.stubGlobal('fetch', apiLike('Yes, 6pm has space.'))
+    const adapter = makeAdapter()
+    const R2 = { direction: 'outbound', body: 'Tomorrow at 7am too.', message_type: 'text', source: 'agent', created_at: '2026-09-25T08:41:47.000+00:00' }
+    const db = shapeDb({
+      conv: CONV,
+      historyReads: [[A], [R2, R, B, A]],
+      lateReads: [[{ id: 'm-b', message_type: 'text', body: B.body }], []],
+      calls: [],
+    })
+
+    await runChannelAgent(db, adapter, ctx)
+
+    expect(global.fetch).toHaveBeenCalledTimes(1)
+    expect(adapter.send).toHaveBeenCalledTimes(1)
+  })
+
+  it('a business auto-responder that lands mid-turn does not start a rerun', async () => {
+    vi.stubGlobal('fetch', apiLike('Yes, 6pm has space.'))
+    const adapter = makeAdapter()
+    const db = shapeDb({
+      conv: CONV,
+      historyReads: [[A]],
+      lateReads: [[{ id: 'm-auto', message_type: 'text', body: 'Thanks for your message. This is an automated reply: we are closed right now and will get back to you as soon as we can.' }], []],
+      calls: [],
+    })
+
+    await runChannelAgent(db, adapter, ctx)
+
+    expect(global.fetch).toHaveBeenCalledTimes(1)
+    expect(adapter.send).toHaveBeenCalledTimes(1)
   })
 
   it('a reaction that lands mid-turn does not start a rerun (reactions are never answered)', async () => {
@@ -197,6 +232,7 @@ describe('MIAPREFILL.1 — every request Mia sends ends on a user turn', () => {
     vi.stubGlobal('fetch', apiLike('unused'))
     const calls = []
     const adapter = makeAdapter()
+    adapter.onEngage = vi.fn()
     const stop = { direction: 'inbound', body: 'STOP', message_type: 'text', created_at: '2026-09-25T09:00:00.000+00:00' }
     const ack = { direction: 'outbound', body: 'You have been unsubscribed.', message_type: 'text', created_at: '2026-09-25T09:00:01.000+00:00' }
     const db = shapeDb({ conv: CONV, historyReads: [[ack, stop, R, A]], calls })
@@ -207,6 +243,13 @@ describe('MIAPREFILL.1 — every request Mia sends ends on a user turn', () => {
     expect(adapter.send).not.toHaveBeenCalled()
     expect(recordErrorEvent).not.toHaveBeenCalled()
     expect(result).toMatchObject({ handled: false, reason: 'nothing_to_answer' })
+    // No read receipt or "typing…" for a turn that will say nothing.
+    expect(adapter.onEngage).not.toHaveBeenCalled()
+    // The structured no-reply line names the trailing row (source + type, no body).
+    const line = warnSpy.mock.calls.find(([tag]) => tag === '[radar-agent] no-reply')
+    expect(line).toBeTruthy()
+    expect(JSON.parse(line[1])).toMatchObject({ reason: 'nothing_to_answer', trailing: { source: null, message_type: 'text' } })
+    expect(line[1]).not.toContain('unsubscribed')
   })
 
   it('tool loop: every request in a multi-call turn ends on a user turn (tool_result)', async () => {
