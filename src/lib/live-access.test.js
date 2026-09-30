@@ -222,3 +222,11 @@ describe('canMutateLiveAt', () => {
     expect(canMutateLiveAt(null, LOC)).toBe(false)
   })
 })
+
+describe('canMutateLiveAt agrees with the mutation guards', () => {
+  it.each(['owner', 'manager', 'head_coach', 'staff', 'reception'])('%s', (role) => {
+    const u = userAt(LOC, role) // member, studio_management on
+    expect(guardLiveLocation(u, LOC, { roles: LIVE_MUTATION_ROLES }) === null).toBe(canMutateLiveAt(u, LOC))
+    expect(guardLiveSession(u, { location_id: LOC }, { roles: LIVE_MUTATION_ROLES }) === null).toBe(canMutateLiveAt(u, LOC))
+  })
+})

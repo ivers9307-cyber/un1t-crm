@@ -140,6 +140,27 @@ export function roleAtLocation(user, locationId) {
 }
 
 /**
+ * C116 GATES-2 — may the caller MUTATE live state at `locationId` (end a
+ * session, pair a strap, switch test mode, claim a strap)? The role half of
+ * the mutation guards: master, or a LIVE_MUTATION_ROLES role AT the location.
+ * The /live page passes it to the client so a button shows only when its
+ * route would act. It is the test both guards below make when a route passes
+ * `roles: LIVE_MUTATION_ROLES` (every mutation route does);
+ * src/lib/live-access.test.js pins the two to the same cases.
+ * (Membership and the studio_management permission are the guards' other
+ * checks, and the page already requires both.)
+ *
+ * @param {object|null} user
+ * @param {string|null} locationId
+ * @returns {boolean}
+ */
+export function canMutateLiveAt(user, locationId) {
+  if (!user || !locationId) return false
+  if (user.isMaster || user.role === 'master') return true
+  return LIVE_MUTATION_ROLES.includes(roleAtLocation(user, locationId))
+}
+
+/**
  * Guard for every /api/live/[locationId]/** route.
  *
  * Order is deliberate: 401 → location scope → role → permission. The first
