@@ -21,6 +21,7 @@ import { readGlofoxConfig, findGlofoxConfigByBranchId } from '@/lib/connection-r
 import { logError, logWarn } from '@/lib/log'
 import { GLOFOX_SETTINGS_UNREADABLE } from '@/lib/glofox-settings-read'
 import { toMobileE164 } from '@/lib/phone-validate'
+import { recordErrorEvent } from '@/lib/error-events'
 
 // ─────────────────────────────────────────────────────────────
 // Signature verification (HMAC-SHA256 hex)
@@ -559,6 +560,56 @@ async function runGlofoxVerify(verify) {
   return 'unknown'
 }
 
+// GLOFOXWRITEJUDGE.1 — the counters above are per instance and only the crons
+// (which only read) write them down, so a request-path WRITE's 5xx / 429 /
+// no-reply lived only in a log line Vercel keeps for 24 h. A write call that
+// ends that way now leaves ONE error_events row (mig 435; storm-guarded,
+// never throws; Sentinel's crm.error-events check reads it). Reads never do.
+const GLOFOX_WRITE_FAILURE_TEXT = {
+  never: 'not re-sent, because Glofox may already have done it',
+  landed: 'not re-sent: a check read found it had gone through',
+  unknown: 'not re-sent: the check read could not tell whether it went through',
+  gave_up: 'still failing after every retry',
+  aborted: 'the caller gave up while Glofox was failing',
+  no_reply: 'no reply from Glofox (network error), so the outcome is unknown',
+}
+
+/**
+ * Is this glofoxFetch call a write? A method other than GET/HEAD whose policy
+ * is not 'idempotent' (the read-POSTs), unless the caller marks it readOnly
+ * (a read-POST sent once as a write's dedupe read). Pure.
+ */
+export function isGlofoxWrite(options = {}) {
+  if (options?.readOnly === true) return false
+  const method = String(options?.method || 'GET').toUpperCase()
+  if (GLOFOX_RETRYABLE_METHODS.has(method)) return false
+  return glofoxRetryPolicy(options).mode !== 'idempotent'
+}
+
+/** The error_events row for a failed Glofox write. Pure; no ids (path label). */
+export function glofoxWriteFailureEvent({ method, pathOrUrl, status, attempts, reason }) {
+  const m = String(method || 'POST').toUpperCase()
+  const path = glofoxPathLabel(pathOrUrl)
+  const name = reason === 'no_reply' ? 'glofox_write_no_reply' : status === 429 ? 'glofox_write_429' : 'glofox_write_5xx'
+  const answer = reason === 'no_reply' ? 'no reply' : `HTTP ${status}`
+  return {
+    vercel_id: null,
+    runtime: process.env.NEXT_RUNTIME || null,
+    route_path: `glofox:${m} ${path}`,
+    route_type: 'glofox_write',
+    method: m,
+    name,
+    message: `Glofox ${m} ${path} answered ${answer} after ${attempts} attempt(s); ${GLOFOX_WRITE_FAILURE_TEXT[reason] || reason}`.slice(0, 500),
+    digest: null,
+  }
+}
+
+async function recordGlofoxWriteFailure(args) {
+  try {
+    await recordErrorEvent(glofoxWriteFailureEvent(args))
+  } catch { /* recordErrorEvent never throws; observability must not change the call's answer */ }
+}
+
 const GLOFOX_ID_SEGMENT = [
   /^[0-9a-f]{16,}$/i,                                              // Mongo-style ids
   /^\d{6,}$/,                                                      // numeric ids
@@ -614,8 +665,10 @@ export async function glofoxFetch(creds, pathOrUrl, options = {}) {
     throw new Error('Glofox API credentials missing (need branchId, apiKey, apiToken on the location)')
   }
   const policy = glofoxRetryPolicy(options)
-  // The policy is ours; fetch never sees it.
-  const { retry: _policyOption, ...fetchOptions } = options
+  // The policy and the read marker are ours; fetch never sees them.
+  const { retry: _policyOption, readOnly: _readOnlyOption, ...fetchOptions } = options
+  const write = isGlofoxWrite(options)
+  const method = String(fetchOptions.method || 'GET').toUpperCase()
   const url = pathOrUrl.startsWith('http')
     ? pathOrUrl
     : `${GLOFOX_API_BASE}${pathOrUrl.startsWith('/') ? '' : '/'}${pathOrUrl}`
@@ -636,6 +689,7 @@ export async function glofoxFetch(creds, pathOrUrl, options = {}) {
       res = await fetch(url, { ...fetchOptions, headers })
     } catch (e) {
       glofoxHttpCounters.network_errors++
+      if (write) await recordGlofoxWriteFailure({ method, pathOrUrl, status: 0, attempts, reason: 'no_reply' })
       throw e
     }
     if (res.status === 429) glofoxHttpCounters.status_429++
@@ -678,18 +732,24 @@ export async function glofoxFetch(creds, pathOrUrl, options = {}) {
   // counted apart (aborted) and not logged as a give-up. GLOFOXPOSTRETRY.1 — a
   // write we chose not to re-send is its own line (reason: never | landed |
   // unknown), not a give-up: it used none of its remaining retries.
+  let failure = null
   if (aborted) {
     glofoxHttpCounters.aborted++
+    failure = 'aborted'
   } else if (notResent) {
     logWarn('glofox', 'Glofox write answered 5xx; not retried', {
       status: res.status, attempts, path: glofoxPathLabel(pathOrUrl), reason: notResent,
     })
+    failure = notResent
   } else if (res.status === 429 || res.status >= 500) {
     glofoxHttpCounters.gave_up++
     logWarn('glofox', 'Glofox still failing after retries', {
       status: res.status, attempts, path: glofoxPathLabel(pathOrUrl),
     })
+    failure = 'gave_up'
   }
+  // GLOFOXWRITEJUDGE.1 — a write's failure outlives the 24 h log window.
+  if (failure && write) await recordGlofoxWriteFailure({ method, pathOrUrl, status: res.status, attempts, reason: failure })
   // GLOFOX-SPEC-2026-09 — Glofox's own guidance: "Older endpoints sometimes
   // return a 200 status code with a success field set to false. That
   // indicates a bad request." Each caller judges that per endpoint
@@ -1025,6 +1085,8 @@ export async function searchGlofoxMember(creds, { email, phone, retry = 'idempot
       // A search, not a write: safe to repeat (GLOFOXPOSTRETRY.1), unless a
       // write's dedupe read asks for ONE attempt (retry: 'never').
       retry: retry === 'never' ? 'never' : 'idempotent',
+      // A search even when sent once: never recorded as a failed write.
+      readOnly: true,
       body: JSON.stringify(filter),
     })
     if (r.ok) return verdict(matches(rowsOf(await r.json())))
