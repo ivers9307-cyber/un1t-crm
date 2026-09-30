@@ -11,9 +11,12 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 
+// The open tab, per test (xero by default, so the WhatsApp tab's editors are
+// not mounted unless a test asks for them).
+const nav = vi.hoisted(() => ({ tab: 'xero' }))
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ replace: vi.fn(), push: vi.fn(), refresh: vi.fn() }),
-  useSearchParams: () => new URLSearchParams('tab=xero'),
+  useSearchParams: () => new URLSearchParams(`tab=${nav.tab}`),
   usePathname: () => '/settings/locations/loc-1',
 }))
 
@@ -27,7 +30,7 @@ const MASTER = { role: 'master', profileRole: 'master', rolesByLocation: {}, act
 
 const whatsappTab = () => screen.queryByRole('button', { name: /WhatsApp/ })
 
-afterEach(() => cleanup())
+afterEach(() => { cleanup(); nav.tab = 'xero'; delete global.fetch })
 
 describe('LocationIntegrations — the WhatsApp tab is judged at this location (WAROLE.1)', () => {
   it('owner here, manager at the active studio: shown (was hidden)', () => {
@@ -62,5 +65,34 @@ describe('LocationIntegrations — the WhatsApp tab is judged at this location (
     cleanup()
     render(<LocationIntegrations location={off} xeroConnection={null} user={MASTER} />)
     expect(whatsappTab()).not.toBeNull()
+  })
+})
+
+// WAROLE.1 (review) — the tab's editors get canEdit from the same rule as the
+// tab itself. Reverting that prop to the active-studio role (isOwnerOrMaster)
+// would show this owner the tab but hide every Save on it.
+describe('LocationIntegrations — the WhatsApp tab\'s canEdit is judged at this location (WAROLE.1)', () => {
+  const reply = (status, body) => ({ ok: status < 400, status, json: async () => body })
+  const stubFetch = () => {
+    global.fetch = vi.fn(async (url) => {
+      const u = String(url)
+      if (u.endsWith('/whatsapp/numbers')) return reply(200, { success: true, numbers: [] })
+      if (u.endsWith('/whatsapp/embedded-signup')) return reply(200, { success: true, data: { configured: false } })
+      return reply(200, { success: true })
+    })
+  }
+
+  it('owner here, manager at the active studio: the chat openers offer Save', async () => {
+    nav.tab = 'whatsapp'
+    stubFetch()
+    render(<LocationIntegrations location={LOC} xeroConnection={null} user={caller({ [HERE]: 'owner', [OTHER]: 'manager' }, OTHER)} />)
+    expect(await screen.findByRole('button', { name: /Save chat openers/ })).toBeTruthy()
+  })
+
+  it('a master: Save is offered too (unchanged)', async () => {
+    nav.tab = 'whatsapp'
+    stubFetch()
+    render(<LocationIntegrations location={LOC} xeroConnection={null} user={MASTER} />)
+    expect(await screen.findByRole('button', { name: /Save chat openers/ })).toBeTruthy()
   })
 })
