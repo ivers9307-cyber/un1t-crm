@@ -10,7 +10,11 @@ vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.f
 vi.mock('@/lib/error-events', () => ({ recordErrorEvent: vi.fn(async () => {}) }))
 
 import { recordErrorEvent } from '@/lib/error-events'
-import { glofoxFetch, isGlofoxWrite, glofoxWriteFailureEvent, searchGlofoxMember } from './glofox.js'
+import { logWarn } from '@/lib/log'
+import {
+  glofoxFetch, isGlofoxWrite, glofoxWriteFailureEvent, searchGlofoxMember,
+  createBooking, cancelBooking, _resetGlofoxWriteFailureCapForTests, GLOFOX_WRITE_FAILURE_ROWS_PER_MIN,
+} from './glofox.js'
 
 const creds = { branchId: 'br-1', apiKey: 'k', apiToken: 't' }
 const ID = 'a'.repeat(24)
@@ -23,7 +27,7 @@ const res = (status, body = {}) => ({
 })
 const post = (retry) => ({ method: 'POST', body: '{}', ...(retry ? { retry } : {}) })
 
-beforeEach(() => { vi.clearAllMocks(); vi.stubGlobal('fetch', vi.fn()) })
+beforeEach(() => { vi.clearAllMocks(); vi.stubGlobal('fetch', vi.fn()); _resetGlofoxWriteFailureCapForTests() })
 afterEach(() => { vi.unstubAllGlobals() })
 
 describe('isGlofoxWrite', () => {
@@ -83,11 +87,25 @@ describe('glofoxFetch records a failed write once', () => {
     expect(recordErrorEvent.mock.calls[0][0].message).toMatch(/after 4 attempt/)
   })
 
-  it('a verified write whose dedupe read found it landed → one row (reason landed)', async () => {
+  it('a verified write whose dedupe read found it landed → NO row (it went through)', async () => {
     fetch.mockResolvedValueOnce(res(503))
     await glofoxFetch(creds, '/2.0/bookings', post({ verify: async () => 'landed' }))
+    expect(recordErrorEvent).not.toHaveBeenCalled()
+  })
+
+  it('…also when the landing is only found after the LAST 5xx', async () => {
+    let reads = 0
+    fetch.mockResolvedValue(res(503))
+    await glofoxFetch(creds, '/2.0/bookings', post({ verify: async () => (++reads < 4 ? 'absent' : 'landed') }))
+    expect(fetch).toHaveBeenCalledTimes(4)
+    expect(recordErrorEvent).not.toHaveBeenCalled()
+  })
+
+  it('a verified write the read could NOT settle → one row (reason unknown)', async () => {
+    fetch.mockResolvedValueOnce(res(503))
+    await glofoxFetch(creds, '/2.0/bookings', post({ verify: async () => 'unknown' }))
     expect(recordErrorEvent).toHaveBeenCalledTimes(1)
-    expect(recordErrorEvent.mock.calls[0][0].message).toMatch(/found it had gone through/)
+    expect(recordErrorEvent.mock.calls[0][0].message).toMatch(/could not tell/)
   })
 
   it('a POST that throws (no reply) → one row, and the error is still thrown', async () => {
@@ -131,5 +149,71 @@ describe('glofoxFetch records a failed write once', () => {
     await glofoxFetch(creds, '/v3.0/namespaces/members/retrieve', { method: 'POST', body: '{}', retry: 'never', readOnly: true })
     expect(fetch.mock.calls[0][1]).not.toHaveProperty('readOnly')
     expect(fetch.mock.calls[0][1]).not.toHaveProperty('retry')
+  })
+})
+
+// Recovered writes, end to end on the recorded shapes: a 5xx whose check read
+// finds the booking made (or the cancel done) is a success, not a failure row.
+const key = (url, init) => `${(init?.method || 'GET').toUpperCase()} ${new URL(url).pathname.replace(/^\/prod/, '')}`
+function route(table) {
+  fetch.mockImplementation(async (url, init) => {
+    const k = key(url, init)
+    for (const [prefix, queue] of table) {
+      if (k.startsWith(prefix) && queue.length) return queue.shift()
+    }
+    throw new Error(`unexpected ${k}`)
+  })
+}
+const USER = 'a'.repeat(24)
+const EVENT = 'e'.repeat(24)
+const BOOKING = 'b'.repeat(24)
+
+describe('a recovered write leaves no failure row', () => {
+  it('createBooking: 503, then the read finds the booking → booked, no row', async () => {
+    route([
+      ['POST /2.0/bookings', [res(503)]],
+      ['GET /2.0/bookings', [res(200, { data: [{ _id: BOOKING, model_id: EVENT, status: 'BOOKED' }] })]],
+    ])
+    const out = await createBooking(creds, { user_id: USER, model: 'event', model_id: EVENT })
+    expect(out.recovered).toBe('landed_after_5xx')
+    expect(recordErrorEvent).not.toHaveBeenCalled()
+  })
+
+  it('cancelBooking: 503, then the read finds it CANCELLED → ok, no row', async () => {
+    route([
+      [`POST /booking/${BOOKING}/user/${USER}/cancel`, [res(503)]],
+      ['GET /2.0/bookings', [res(200, { data: [{ _id: BOOKING, model_id: EVENT, status: 'CANCELLED' }] })]],
+    ])
+    const out = await cancelBooking(creds, BOOKING, USER)
+    expect(out).toMatchObject({ ok: true, recovered: 'landed_after_5xx' })
+    expect(recordErrorEvent).not.toHaveBeenCalled()
+  })
+
+  it('createBooking: 503 and the read finds nothing on the last try → one row', async () => {
+    route([
+      ['POST /2.0/bookings', [res(503), res(503), res(503), res(503)]],
+      ['GET /2.0/bookings', [res(200, { data: [] }), res(200, { data: [] }), res(200, { data: [] }), res(200, { data: [] })]],
+    ])
+    await createBooking(creds, { user_id: USER, model: 'event', model_id: EVENT })
+    expect(recordErrorEvent).toHaveBeenCalledTimes(1)
+    expect(recordErrorEvent.mock.calls[0][0]).toMatchObject({ name: 'glofox_write_5xx', route_path: 'glofox:POST /2.0/bookings' })
+  })
+})
+
+// error_events' storm guard (30 rows a minute per instance) is SHARED with
+// unhandled and handled route errors. A Glofox outage must not use it all up.
+describe('Glofox write-failure rows have their own small cap', () => {
+  it('at most GLOFOX_WRITE_FAILURE_ROWS_PER_MIN rows a minute per instance; the rest dropped with ONE summary line', async () => {
+    expect(GLOFOX_WRITE_FAILURE_ROWS_PER_MIN).toBeGreaterThan(0)
+    expect(GLOFOX_WRITE_FAILURE_ROWS_PER_MIN).toBeLessThan(30)
+    fetch.mockResolvedValue(res(503))
+    const calls = GLOFOX_WRITE_FAILURE_ROWS_PER_MIN + 3
+    for (let i = 0; i < calls; i++) {
+      const r = await glofoxFetch(creds, '/2.0/bookings', post())
+      expect(r.status).toBe(503) // the answer never changes
+    }
+    expect(recordErrorEvent).toHaveBeenCalledTimes(GLOFOX_WRITE_FAILURE_ROWS_PER_MIN)
+    const summaries = logWarn.mock.calls.filter(([, msg]) => /write-failure rows capped/.test(msg))
+    expect(summaries).toHaveLength(1)
   })
 })

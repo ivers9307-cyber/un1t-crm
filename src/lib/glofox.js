@@ -567,7 +567,6 @@ async function runGlofoxVerify(verify) {
 // never throws; Sentinel's crm.error-events check reads it). Reads never do.
 const GLOFOX_WRITE_FAILURE_TEXT = {
   never: 'not re-sent, because Glofox may already have done it',
-  landed: 'not re-sent: a check read found it had gone through',
   unknown: 'not re-sent: the check read could not tell whether it went through',
   gave_up: 'still failing after every retry',
   aborted: 'the caller gave up while Glofox was failing',
@@ -604,8 +603,46 @@ export function glofoxWriteFailureEvent({ method, pathOrUrl, status, attempts, r
   }
 }
 
+// error_events' storm guard (30 rows a minute per instance) is shared with
+// every unhandled and handled route error. A Glofox outage fails every write,
+// so its rows get their own smaller cap and can never use up that budget: past
+// it, a minute's further failures are dropped with ONE summary warn (each
+// failure still has its own glofox warn line).
+export const GLOFOX_WRITE_FAILURE_ROWS_PER_MIN = 5
+let glofoxFailureWindowStart = 0
+let glofoxFailureWindowCount = 0
+let glofoxFailureWindowWarned = false
+
+function mayRecordGlofoxWriteFailure() {
+  const now = Date.now()
+  if (now - glofoxFailureWindowStart > 60_000) {
+    glofoxFailureWindowStart = now
+    glofoxFailureWindowCount = 0
+    glofoxFailureWindowWarned = false
+  }
+  if (glofoxFailureWindowCount < GLOFOX_WRITE_FAILURE_ROWS_PER_MIN) {
+    glofoxFailureWindowCount++
+    return true
+  }
+  if (!glofoxFailureWindowWarned) {
+    glofoxFailureWindowWarned = true
+    logWarn('glofox', 'Glofox write-failure rows capped this minute; further failures are only logged', {
+      cap: GLOFOX_WRITE_FAILURE_ROWS_PER_MIN,
+    })
+  }
+  return false
+}
+
+// Test seam only: the cap is module-level state.
+export function _resetGlofoxWriteFailureCapForTests() {
+  glofoxFailureWindowStart = 0
+  glofoxFailureWindowCount = 0
+  glofoxFailureWindowWarned = false
+}
+
 async function recordGlofoxWriteFailure(args) {
   try {
+    if (!mayRecordGlofoxWriteFailure()) return
     await recordErrorEvent(glofoxWriteFailureEvent(args))
   } catch { /* recordErrorEvent never throws; observability must not change the call's answer */ }
 }
@@ -748,8 +785,10 @@ export async function glofoxFetch(creds, pathOrUrl, options = {}) {
     })
     failure = 'gave_up'
   }
-  // GLOFOXWRITEJUDGE.1 — a write's failure outlives the 24 h log window.
-  if (failure && write) await recordGlofoxWriteFailure({ method, pathOrUrl, status: res.status, attempts, reason: failure })
+  // GLOFOXWRITEJUDGE.1 — a write's failure outlives the 24 h log window. A
+  // write whose check read found it went through ('landed') is a success the
+  // caller reports as recovered, so it leaves no failure row.
+  if (failure && failure !== 'landed' && write) await recordGlofoxWriteFailure({ method, pathOrUrl, status: res.status, attempts, reason: failure })
   // GLOFOX-SPEC-2026-09 — Glofox's own guidance: "Older endpoints sometimes
   // return a 200 status code with a success field set to false. That
   // indicates a bad request." Each caller judges that per endpoint
