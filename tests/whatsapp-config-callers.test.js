@@ -30,7 +30,10 @@
 // positions excluded) and the contents of string / template / regex literals
 // blanked (as tests/whatsapp-config-route-gates.test.js does), so a name in a
 // comment or a string never counts. A namespace import (`import * as wa`) or
-// an `import()` of these modules in any other shape fails its own test.
+// an `import()` of these modules in any other shape fails its own test, and
+// so does a re-export of one (`export { … } from`, `export * from`), which
+// would let a barrel hide its callers. A destructured `process.env` read of a
+// retired var counts as a read.
 //
 // A FLOOR, NOT A PROOF. Not detected: a call through a variable
 // (`const f = sendTextMessage; f()`), a caller that passes the wrong location,
@@ -293,6 +296,12 @@ export function importBindings(file, text, sf = parse(text)) {
         else for (const el of nb.elements) take(mod, (el.propertyName || el.name).text, el.name.text)
       }
     }
+    // A re-export (`export { x as y } from …`, `export * from …`) would let a
+    // barrel's callers reach a resolver under a name this table never binds.
+    if (ts.isExportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
+      const mod = target(node.moduleSpecifier.text)
+      if (mod) problems.push(`re-export of ${mod}: import the names where they are called`)
+    }
     if (ts.isVariableDeclaration(node) && node.initializer && ts.isAwaitExpression(node.initializer)
       && isDynamicImport(node.initializer.expression)) {
       const call = node.initializer.expression
@@ -417,6 +426,13 @@ describe('WACONFIGFALLBACK.1 — the env tier is retired', { timeout: WHOLE_REPO
     const visit = (node) => {
       if (ts.isPropertyAccessExpression(node) && isProcessEnv(node.expression)) out.push(node.name.text)
       if (ts.isElementAccessExpression(node) && isProcessEnv(node.expression) && ts.isStringLiteralLike(node.argumentExpression)) out.push(node.argumentExpression.text)
+      // const { WHATSAPP_ACCESS_TOKEN } = process.env (renamed or not)
+      if (ts.isVariableDeclaration(node) && node.initializer && isProcessEnv(node.initializer) && ts.isObjectBindingPattern(node.name)) {
+        for (const el of node.name.elements) {
+          const key = el.propertyName || el.name
+          if (ts.isIdentifier(key) || ts.isStringLiteralLike(key)) out.push(key.text)
+        }
+      }
       ts.forEachChild(node, visit)
     }
     visit(sf)
@@ -436,6 +452,11 @@ describe('WACONFIGFALLBACK.1 — the env tier is retired', { timeout: WHOLE_REPO
     expect(envReads("const a = process.env.WHATSAPP_ACCESS_TOKEN; const b = process.env['WHATSAPP_PHONE_NUMBER_ID']"))
       .toEqual(['WHATSAPP_ACCESS_TOKEN', 'WHATSAPP_PHONE_NUMBER_ID'])
     expect(envReads('// process.env.WHATSAPP_ACCESS_TOKEN\nconst s = "process.env.WHATSAPP_ACCESS_TOKEN"')).toEqual([])
+  })
+
+  it('the scanner sees a destructured env read, renamed or not (canary)', () => {
+    expect(envReads('const { WHATSAPP_ACCESS_TOKEN } = process.env')).toEqual(['WHATSAPP_ACCESS_TOKEN'])
+    expect(envReads('const { WHATSAPP_PHONE_NUMBER_ID: pni, OTHER } = process.env')).toEqual(['WHATSAPP_PHONE_NUMBER_ID', 'OTHER'])
   })
 })
 
@@ -465,6 +486,12 @@ describe('the scanner itself (canaries)', () => {
     expect(importBindings(F, "import * as wa from '@/lib/whatsapp'").problems).toHaveLength(1)
     expect(importBindings(F, "const wa = await import('@/lib/whatsapp')").problems).toHaveLength(1)
     expect(importBindings(F, "(await import('@/lib/whatsapp-config')).getWhatsAppConfig(x)").problems).toHaveLength(1)
+  })
+
+  it('fails a re-export of a resolver module (a barrel would hide its callers)', () => {
+    expect(importBindings(F, "export { sendTextMessage as sendWa } from '@/lib/whatsapp'").problems).toHaveLength(1)
+    expect(importBindings(F, "export * from '@/lib/whatsapp-config'").problems).toHaveLength(1)
+    expect(importBindings(F, "export { thing } from '@/lib/other'").problems).toEqual([])
   })
 
   it('a method of the same name on another object is not a call of the import', () => {
