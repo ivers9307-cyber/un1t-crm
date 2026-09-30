@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { getCurrentUser, assertLocationAccessOr404, requireInboxPermission } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { sendReaction } from '@/lib/whatsapp'
+import { whatsappErrorStatus } from '@/lib/whatsapp-number-missing'
 
 // Empty emoji is valid — it removes an existing reaction — so no .min().
 const ReactSchema = z.object({ message_id: z.string().min(1), emoji: z.string().max(8) })
@@ -38,7 +39,9 @@ export async function POST(request, props) {
   try {
     sendResult = await sendReaction(conversation.wa_phone, message_id, emoji, { locationId: conversation.location_id })
   } catch (e) {
-    return NextResponse.json({ success: false, error: e?.message || 'Meta reaction call failed' }, { status: 502 })
+    // WACONFIGFALLBACK.1 — a location with no WhatsApp number of its own is a
+    // 409 with the resolver's message (it used to send from the env number).
+    return NextResponse.json({ success: false, error: e?.message || 'Meta reaction call failed' }, { status: whatsappErrorStatus(e, 502) })
   }
 
   // Best-effort thread row — mirrors the inbound reaction style

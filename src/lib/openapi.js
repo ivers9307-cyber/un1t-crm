@@ -257,7 +257,7 @@ registry.registerComponent('securitySchemes', 'MetaSignature', {
 })
 registry.registerComponent('securitySchemes', 'WebhookToken', {
   type: 'apiKey', in: 'header', name: 'X-Webhook-Token',
-  description: 'Shared-secret / signature header. Postmark, UniFi and InBody use `X-Webhook-Token`; Twilio uses `X-Twilio-Signature`; Revolut uses `Revolut-Signature`; Xero uses `X-Xero-Signature`. Tokenised receivers (`invoices-inbound`, `sequence`) instead authenticate via the path token.',
+  description: 'Shared-secret / signature header. Postmark, UniFi and InBody use `X-Webhook-Token`; Revolut uses `Revolut-Signature`; Xero uses `X-Xero-Signature`. Tokenised receivers (`invoices-inbound`, `sequence`) instead authenticate via the path token.',
 })
 registry.registerComponent('securitySchemes', 'BridgeAuth', {
   type: 'http', scheme: 'bearer',
@@ -1192,20 +1192,6 @@ registry.registerPath({
   responses: {
     200: { description: 'Accepted' },
     401: { description: 'Bad signature', content: { 'application/json': { schema: ErrorResponse } } },
-  },
-})
-
-registry.registerPath({
-  method: 'post',
-  path: '/api/webhooks/twilio/status',
-  tags: ['Webhooks (Inbound)'],
-  security: [{ WebhookToken: [] }],
-  summary: 'Twilio SMS delivery status',
-  description: 'Twilio → CRM. Carries SMS delivery status callbacks (delivered/failed/undelivered).',
-  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('TwilioStatusEvent') } } } },
-  responses: {
-    200: { description: 'Accepted' },
-    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -2677,7 +2663,8 @@ registry.registerPath({
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — channel permission required', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Contact not found', content: { 'application/json': { schema: ErrorResponse } } },
-    409: { description: 'WhatsApp window closed and no usable template (window_expired, needs_template)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'WhatsApp window closed and no usable template (window_expired, needs_template), or no WhatsApp number is connected at the contact location (WACONFIGFALLBACK.1; checked before a thread or link is created)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: "Link could not be issued, or the location's WhatsApp number could not be looked up", content: { 'application/json': { schema: ErrorResponse } } },
     502: { description: 'Delivery failed (link revoked)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -3040,7 +3027,7 @@ registry.registerPath({
             composer_templates: z.array(z.object({
               name: z.string(), language: z.string(), bodyText: z.string(), sendable: z.boolean(),
             })).optional(),
-            permissions: z.object({ whatsapp: z.boolean(), sms: z.boolean(), email: z.boolean(), kudos: z.boolean() }).optional(),
+            permissions: z.object({ whatsapp: z.boolean(), email: z.boolean(), kudos: z.boolean() }).optional(),
           }).openapi('ContactCommandCentreBundle'),
         },
       },
@@ -3181,7 +3168,7 @@ registry.registerPath({
   tags: ['WhatsApp'],
   security: [{ CookieAuth: [] }],
   summary: 'Configure WhatsApp chat openers (welcome event + ice breakers)',
-  description: "Sets Meta conversational components on the location's WhatsApp number: enable the welcome-message event (fires the request_welcome webhook so a fresh chat open gets an instant greeting) and up to 4 ice-breaker prompts (80 chars each). The applied config is mirrored into locations.settings.conversational_automation.",
+  description: "Sets Meta conversational components on the location's WhatsApp number: enable the welcome-message event (fires the request_welcome webhook so a fresh chat open gets an instant greeting) and up to 4 ice-breaker prompts (80 chars each). The applied config is mirrored into locations.settings.conversational_automation. Master, or owner at the location; applied only to the location's own active number, never the global env number.",
   request: {
     body: {
       content: {
@@ -3197,10 +3184,13 @@ registry.registerPath({
   },
   responses: {
     200: { description: 'Chat openers updated at Meta and mirrored locally' },
+    400: { description: 'Validation failed', content: { 'application/json': { schema: ErrorResponse } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Master or owner role required at this location (WAROLE.1); nothing is sent to Meta', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Location not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'No WhatsApp number is connected at this location (WAROLE.1): the openers are never applied to the global env number; nothing is sent to Meta', content: { 'application/json': { schema: ErrorResponse } } },
     502: { description: 'Meta conversational_automation call failed', content: { 'application/json': { schema: ErrorResponse } } },
-    500: { description: 'Applied at Meta, but the locations.settings mirror could not be read or written (applied_at_meta: true); nothing else changed. Save again.', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: "The location's number could not be looked up (nothing sent to Meta), or: applied at Meta, but the locations.settings mirror could not be read or written (applied_at_meta: true); nothing else changed. Save again.", content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -3241,7 +3231,7 @@ registry.registerPath({
   tags: ['WhatsApp'],
   security: [{ CookieAuth: [] }],
   summary: "Replace a location's WhatsApp card sets",
-  description: 'Replaces the whole locations.settings.wa_card_sets array (ids minted client-side). Meta requires consistent button config across carousel cards, so each set must have links on all cards or none.',
+  description: 'Replaces the whole locations.settings.wa_card_sets array (ids minted client-side). Meta requires consistent button config across carousel cards, so each set must have links on all cards or none. Master, or owner at the location; the GET stays open to every member.',
   request: {
     body: { content: { 'application/json': { schema: z.object({ location_id: uuidLike, sets: z.array(WaCardSet).max(20) }).openapi('WaCardSetsPut') } } },
   },
@@ -3249,6 +3239,7 @@ registry.registerPath({
     200: { description: 'Card sets saved' },
     400: { description: 'Validation failed', content: { 'application/json': { schema: ErrorResponse } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Master or owner role required at this location (WAROLE.1); nothing written', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Location not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'settings_unreadable (the location settings could not be read, so nothing was written) or settings_write_failed', content: { 'application/json': { schema: ErrorResponse } } },
   },
@@ -3269,6 +3260,7 @@ registry.registerPath({
   responses: {
     200: { description: 'Carousel sent' },
     404: { description: 'Conversation or card set not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'No WhatsApp number is connected at this location (WACONFIGFALLBACK.1): nothing is sent from any other number', content: { 'application/json': { schema: ErrorResponse } } },
     502: { description: 'Meta carousel call failed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -3288,6 +3280,7 @@ registry.registerPath({
     200: { description: 'Flow sent' },
     400: { description: 'No contact linked, or no Flow configured for the location', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Conversation not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'No WhatsApp number is connected at this location (WACONFIGFALLBACK.1): nothing is sent from any other number', content: { 'application/json': { schema: ErrorResponse } } },
     502: { description: 'Meta flow send failed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -3307,6 +3300,7 @@ registry.registerPath({
   responses: {
     200: { description: 'Block state updated' },
     404: { description: 'Conversation not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'No WhatsApp number is connected at this location (WACONFIGFALLBACK.1): nothing is sent from any other number', content: { 'application/json': { schema: ErrorResponse } } },
     502: { description: 'Meta block call failed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -3326,6 +3320,7 @@ registry.registerPath({
   responses: {
     200: { description: 'Reaction sent' },
     404: { description: 'Conversation not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'No WhatsApp number is connected at this location (WACONFIGFALLBACK.1): nothing is sent from any other number', content: { 'application/json': { schema: ErrorResponse } } },
     502: { description: 'Meta reaction call failed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -3753,7 +3748,7 @@ registry.registerPath({
   tags: ['Locations'],
   security: [{ CookieAuth: [] }],
   summary: 'Re-sync channel_connections registry rows from the location\'s legacy config (admin)',
-  description: 'INTEG-A2 dual-write bridge: re-reads the location\'s legacy integration fields (settings.glofox, settings.unifi, sensibo/thinq columns, twilio_alpha_sender_id, bca_config) and upserts/deactivates the matching active channel_connections rows using the mig 419 mapping. Fired by the integration settings tabs after a legacy save. Idempotent. Returns { results: { platform: action } }.',
+  description: 'INTEG-A2 dual-write bridge: re-reads the location\'s legacy integration fields (settings.glofox, settings.unifi, sensibo/thinq columns, bca_config) and upserts/deactivates the matching active channel_connections rows using the mig 419 mapping. Fired by the integration settings tabs after a legacy save. Idempotent. Returns { results: { platform: action } }.',
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: 'Per-platform sync results' },
@@ -5396,7 +5391,7 @@ registry.registerPath({
     + 'deliverability gate — which is the only honest answer for a sequence, whose audience is a continuing '
     + 'condition rather than a recipient list (SEQEXIT.1). WITH a channel the will-receive number comes from that '
     + "channel's own SEND builder, so the count, the preview and the send resolve one query path by construction. "
-    + 'Response shape differs per channel and this is deliberate: for email and SMS, `count` is the will-receive '
+    + 'Response shape differs per channel and this is deliberate: for email, `count` is the will-receive '
     + 'number and `matched` the filter-only total; for WhatsApp, `count` is the match set and `reachable` the '
     + 'will-receive number. `excluded` breaks down WHY contacts fell out — the reasons are INDEPENDENT counts that '
     + 'may overlap, so never sum them; the true excluded total is matched minus will-receive. An invalid filter '
@@ -5409,7 +5404,7 @@ registry.registerPath({
           schema: z.object({
             location_id: uuidLike,
             audience_filter: audienceFilterSchema.optional(),
-            channel: z.enum(['sms', 'whatsapp', 'email']).optional()
+            channel: z.enum(['whatsapp', 'email']).optional()
               .describe('Omit for a channel-agnostic match count (the sequence case).'),
           }).openapi('AudienceCountRequest'),
         },
@@ -5421,8 +5416,8 @@ registry.registerPath({
       description: 'Audience counts',
       content: { 'application/json': { schema: z.object({
         success: z.literal(true),
-        count: z.number().int().describe('Will-receive for email/SMS; the match set for WhatsApp and for no channel.'),
-        matched: z.number().int().optional().describe('Filter-only total (email + SMS branches).'),
+        count: z.number().int().describe('Will-receive for email; the match set for WhatsApp and for no channel.'),
+        matched: z.number().int().optional().describe('Filter-only total (email branch).'),
         reachable: z.number().int().optional().describe('Will-receive total (WhatsApp branch).'),
         suppressed: z.number().int().optional().describe('Back-compat top-level key, email only.'),
         excluded: z.record(z.string(), z.number().int()).optional()
@@ -5456,7 +5451,7 @@ registry.registerPath({
           schema: z.object({
             location_id: uuidLike,
             audience_filter: audienceFilterSchema.optional(),
-            channel: z.enum(['sms', 'whatsapp', 'email']).optional(),
+            channel: z.enum(['whatsapp', 'email']).optional(),
             limit: z.number().int().positive().optional().describe('Clamped to the 200-row maximum.'),
             offset: z.number().int().min(0).optional(),
           }).openapi('AudiencePreviewRequest'),
@@ -5477,7 +5472,7 @@ registry.registerPath({
         total: z.number().int(),
         offset: z.number().int(),
         limit: z.number().int(),
-        channel: z.enum(['sms', 'whatsapp', 'email']).nullable(),
+        channel: z.enum(['whatsapp', 'email']).nullable(),
         basis: z.enum(['will_receive', 'matching']),
       }).openapi('AudiencePreview')) } },
     },
@@ -5745,7 +5740,7 @@ registry.registerPath({
     + "exit_reason='manual_exit' and next_step_at=null, so the scheduler never picks it up again. "
     + 'IRREVERSIBLE — there is no un-exit; re-entry means enrolling the contact again. '
     + 'Bounded honesty: the scheduler ticks every ~5 minutes and may already be mid-step for this '
-    + 'enrolment, so a step already handed to the email/WhatsApp/SMS provider will still be delivered. '
+    + 'enrolment, so a step already handed to the email/WhatsApp provider will still be delivered. '
     + 'This makes the database state correct; it does not recall a send in flight. '
     + 'Requires the email permission and access to the parent sequence’s location.',
   request: { params: z.object({ id: uuidLike, enrollmentId: uuidLike }) },
@@ -8037,7 +8032,7 @@ registry.registerPath({
   summary: 'Integrations hub card states (owner+/master)',
   description:
     'Assembled connection state for the caller\'s locations, powering /settings/integrations-hub: ' +
-    'channel_connections registry rows (glofox/unifi/sensibo/thinq/twilio_sender/bca/instagram, ' +
+    'channel_connections registry rows (glofox/unifi/sensibo/thinq/bca/instagram, ' +
     'with legacy location-field fallback), xero_connections, whatsapp_numbers (read-only), ' +
     'ad_accounts presence, the customer-agent live signal, and a derived "needs attention" list ' +
     '(errors first, then tokens expiring within 10 days, then incomplete setups). ' +
@@ -8054,7 +8049,7 @@ registry.registerPath({
     'Secrets are never returned — no token columns are selected. ' +
     'HUBREAD.1: a row whose underlying read FAILED carries status `unknown` (never `not_connected` or ' +
     '`connected`) and offers no action; each failed read adds ONE `attention` entry with `unreadable: true`. ' +
-    '`sms` rows carry `senderKnown`; `billing` rows carry `unreadable: true` when the plan reads failed. ' +
+    '`billing` rows carry `unreadable: true` when the plan reads failed. ' +
     'B4 access: master sees every location; owner/org-admin (SAAS-4) sees ONLY their own ' +
     'organisation(s)\' locations (payload hard-scoped via getOwnerOrganizationIds → ' +
     '.in(organization_id)); managers/head_coach/staff get 403.',
@@ -8124,16 +8119,16 @@ registry.registerPath({
   summary: 'Save a location integration inline (write-only secrets)',
   description:
     'Service-role save behind the Integrations-hub Manage drawer for the providers stored on the ' +
-    '`locations` row: glofox, twilio, unifi, ac (Sensibo + LG ThinQ creds only), bca. ' +
+    '`locations` row: glofox, unifi, ac (Sensibo + LG ThinQ creds only), bca. ' +
     'Secrets are WRITE-ONLY — a blank or masked-echo secret KEEPS the stored value, a fresh value ' +
     'overwrites, non-secret fields set normally (src/lib/integration-secret-merge.js). The whole ' +
     'slice is NEVER collapsed to null on a blank save (the Glofox null-collapse guard), so a no-op ' +
     'save can\'t wipe a live connection. JSONB slices are read-merge-write (sibling slices untouched); ' +
-    'channel_connections is re-synced IN-HANDLER via syncConnectionFromLegacy. Role gate: glofox/twilio = ' +
+    'channel_connections is re-synced IN-HANDLER via syncConnectionFromLegacy. Role gate: glofox = ' +
     'ADMIN_ROLES; unifi/ac/bca = master-only. Plus assertLocationAccess. The response is a MASKED echo ' +
     '(has_* booleans + non-secret values) — a token is never returned.',
   request: {
-    params: z.object({ id: uuidLike, provider: z.enum(['glofox', 'twilio', 'unifi', 'ac', 'bca']) }),
+    params: z.object({ id: uuidLike, provider: z.enum(['glofox', 'unifi', 'ac', 'bca']) }),
     body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('IntegrationSaveBody') } } },
   },
   responses: {
@@ -8154,7 +8149,7 @@ registry.registerPath({
     'Explicit disconnect for the same providers: clears the legacy `locations` slice and, via ' +
     'syncConnectionFromLegacy, DEACTIVATES the channel_connections registry row (is_active=false). ' +
     'Deactivate — never a hard delete, and no provider-side revoke. Same role/location gate as PUT.',
-  request: { params: z.object({ id: uuidLike, provider: z.enum(['glofox', 'twilio', 'unifi', 'ac', 'bca']) }) },
+  request: { params: z.object({ id: uuidLike, provider: z.enum(['glofox', 'unifi', 'ac', 'bca']) }) },
   responses: {
     200: { description: 'Disconnected (deactivated)', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },

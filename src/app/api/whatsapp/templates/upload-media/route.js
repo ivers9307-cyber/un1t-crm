@@ -29,6 +29,7 @@ import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { validateTemplateMedia, isMintedMediaPath } from '@/lib/template-media'
 import { uploadMediaForTemplate } from '@/lib/whatsapp'
+import { ownNumberOrRefusal } from '@/lib/whatsapp-own-number'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -111,13 +112,22 @@ export async function POST(request) {
   const publicUrl = pub?.publicUrl
 
   // Meta resumable upload → header handle for template approval.
+  // WACONFIGFALLBACK.1 — with THIS location's own number (its app id + token).
+  // The call named no location, so it always used the global env number's
+  // app. No number / a failed lookup keeps this route's soft contract: the
+  // storage URL comes back, handle null, and meta_error says why.
   let handle = null
   let metaError = null
-  try {
-    handle = await uploadMediaForTemplate(bytes, body.mime)
-  } catch (e) {
-    metaError = e.message || String(e)
-    console.warn(`[wa-template upload] Meta resumable upload failed: ${metaError}`)
+  const own = await ownNumberOrRefusal(locationId, 'wa-template-upload')
+  if (!own.ok) {
+    metaError = own.error
+  } else {
+    try {
+      handle = await uploadMediaForTemplate(bytes, body.mime, { config: own.config })
+    } catch (e) {
+      metaError = e.message || String(e)
+      console.warn(`[wa-template upload] Meta resumable upload failed: ${metaError}`)
+    }
   }
 
   return NextResponse.json({

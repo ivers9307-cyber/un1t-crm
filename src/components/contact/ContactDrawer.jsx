@@ -236,12 +236,9 @@ export default function ContactDrawer({ contactId, columnContactIds = [], locati
                 contactLocationId={contact.location_id}
                 contactEmail={contact.email || null}
                 canWhatsApp={bundle.permissions?.whatsapp}
-                canSms={bundle.permissions?.sms}
                 canEmail={bundle.permissions?.email}
                 hasWaPhone={!!(contact.wa_phone || contact.phone)}
-                hasPhone={!!contact.phone}
                 hasEmail={!!contact.email}
-                smsBlocked={!!(contact.sms_status && contact.sms_status !== 'active')}
                 emailBlocked={['bounced', 'complained'].includes(contact.email_status)}
                 whatsappWindowOpen={bundle.wa?.window_open}
                 whatsappWindowExpiresAt={bundle.wa?.window_expires_at}

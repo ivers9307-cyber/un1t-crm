@@ -20,7 +20,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { collectSchema } from '../scripts/check-select-columns.mjs'
-import { USER_PROFILE_COLUMNS } from '../src/lib/user-profile.js'
+import { USER_PROFILE_COLUMNS, AUTH_USER_FIELDS } from '../src/lib/user-profile.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const PROFILE_COLUMNS = [...collectSchema(path.join(ROOT, 'supabase/migrations')).schema.get('profiles')]
@@ -142,5 +142,50 @@ describe('the user object\'s locations carry no settings, and nothing reads them
     expect(locationSettingsReads('activeLocation.settingsVersion')).toEqual([])
     expect(glofoxPresenceCalls('glofoxConnected(location) && automationStatus(k, l)')).toEqual(['glofoxConnected', 'automationStatus'])
     expect(glofoxPresenceCalls('import { glofoxConnected } from "x"')).toEqual([])
+  })
+})
+
+// AUTHUSERPICK.1 — `user.user` is { id, email } (AUTH_USER_FIELDS). A read of
+// any other auth-user field off it would silently get undefined, and a whole
+// hand-off of it would let a reader elsewhere do the same. The census for
+// this was 0 reads (plan C58 §2).
+const AUTH_USER_ALLOWED = new Set(AUTH_USER_FIELDS)
+
+function authUserReads(text) {
+  const re = new RegExp(
+    `\\b${USER_IDENT}\\??\\.user\\b(?:\\??\\.(\\w+)|(?:\\?\\.)?\\[\\s*(['"\`])(\\w+)\\2\\s*\\])?`,
+    'g',
+  )
+  const out = []
+  for (const m of text.matchAll(re)) {
+    const field = m[1] || m[3] || null
+    if (field === null) out.push('(whole)')
+    else if (!AUTH_USER_ALLOWED.has(field)) out.push(field)
+  }
+  return out
+}
+
+describe('only id/email are read off user.user (AUTHUSERPICK.1)', () => {
+  const files = [...walk(path.join(ROOT, 'src')), ...walk(path.join(ROOT, 'shared')), ...walk(path.join(ROOT, 'mobile'))]
+
+  it('no file reads another auth-user field, or hands user.user on whole', () => {
+    const hits = []
+    for (const f of files) for (const r of authUserReads(readFileSync(f, 'utf8'))) hits.push(`${path.relative(ROOT, f)}: .user.${r}`)
+    expect(hits, 'user.user is { id, email } (src/lib/user-profile.js AUTH_USER_FIELDS): read the field another way, or add it on purpose').toEqual([])
+  })
+
+  it('the matcher sees each form', () => {
+    expect(authUserReads('user.user.email')).toEqual([])
+    expect(authUserReads('currentUser?.user?.id')).toEqual([])
+    expect(authUserReads('user.user.app_metadata.provider')).toEqual(['app_metadata'])
+    expect(authUserReads('me.user?.identities')).toEqual(['identities'])
+    expect(authUserReads(`viewer.user['phone']`)).toEqual(['phone'])
+    expect(authUserReads('send(user.user)')).toEqual(['(whole)'])
+    expect(authUserReads('const x = { ...user.user }')).toEqual(['(whole)'])
+    // not the auth user: other objects' `.user`, and user_id-style names
+    expect(authUserReads('data.user.email')).toEqual([])
+    expect(authUserReads('session?.user?.id')).toEqual([])
+    expect(authUserReads('user.user_id')).toEqual([])
+    expect(authUserReads('row.user_metadata')).toEqual([])
   })
 })

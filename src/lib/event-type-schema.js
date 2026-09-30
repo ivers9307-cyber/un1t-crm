@@ -32,14 +32,16 @@ const fields = {
   // customer to Glofox (search-and-link OR create + attach trial). Default
   // false; the operator opts in per booking type (/api/public/book).
   create_in_glofox: z.boolean(),
-  // Mig 077: the one-shot booking confirmation. Channels match the DB CHECK
-  // (event_types_confirmation_channels_check: NULL, or a non-empty subset of
-  // {email, sms}); text limits match event_type_reminders'.
+  // Mig 077: the one-shot booking confirmation. Channels: email and/or
+  // whatsapp (mig 666, EVENTCONFIRM-WA.1 — the approved template is
+  // confirmation_whatsapp_template_id). The DB CHECK also still admits 'sms'
+  // for rows written before TWILIO-RETIRE.1, but SMS no longer sends, so the
+  // route refuses it. Text limits match event_type_reminders'.
   confirmation_enabled: z.boolean(),
-  confirmation_channels: z.array(z.enum(['email', 'sms'])).min(1).nullable(),
+  confirmation_channels: z.array(z.enum(['email', 'whatsapp'])).min(1).nullable(),
   confirmation_email_template_id: uuidLike.nullable(),
   confirmation_email_subject: z.string().max(500).nullable(),
-  confirmation_sms_body: z.string().max(1600).nullable(),
+  confirmation_whatsapp_template_id: uuidLike.nullable(),
 }
 
 const optional = Object.fromEntries(Object.entries(fields).map(([k, v]) => [k, v.optional()]))
@@ -60,7 +62,7 @@ export const CONFIRMATION_FIELDS = Object.freeze([
   'confirmation_channels',
   'confirmation_email_template_id',
   'confirmation_email_subject',
-  'confirmation_sms_body',
+  'confirmation_whatsapp_template_id',
 ])
 
 /** The slug both routes derive from a name (the form used to compute the same thing client-side). */

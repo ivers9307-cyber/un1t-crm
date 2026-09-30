@@ -100,3 +100,24 @@ describe('maybeSendBookingWhatsappConfirm', () => {
     })
   })
 })
+
+// WACONFIGFALLBACK.1 — a booking at a location with no WhatsApp number of its
+// own. The confirmation used to go out on the global env number (another
+// studio's, so a reply reached THAT studio's inbox and Mia). The resolver now
+// refuses; this helper's contract (never throws) turns that into a quiet
+// sent:false with a structured warning. No thread is opened, and the
+// booking itself is untouched (its email confirmation is a separate path).
+describe('maybeSendBookingWhatsappConfirm — no WhatsApp number at the location', () => {
+  it('sent:false (send_failed), never throws, no thread opened', async () => {
+    const { WhatsAppNumberMissingError } = await import('@/lib/whatsapp-number-missing')
+    const { getOrCreateConversation } = await import('@/lib/whatsapp')
+    sendTemplateMessage.mockRejectedValueOnce(new WhatsAppNumberMissingError('L'))
+    const r = await maybeSendBookingWhatsappConfirm({
+      db: makeDb(APPROVED), locationId: 'L',
+      contact: { id: 'c1', phone: '0871234567', wa_phone: null },
+      templateName: 'booking_consult_confirmed', bodyParams: ['Sarah'],
+    })
+    expect(r).toEqual({ sent: false, reason: 'send_failed' })
+    expect(getOrCreateConversation).not.toHaveBeenCalled()
+  })
+})

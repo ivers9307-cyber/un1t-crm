@@ -25,11 +25,9 @@ const ROOT = path.resolve(import.meta.dirname, '..')
 // src/lib/auth.js is NOT here: after Task 3a-2 getCurrentUser names
 // USER_LOCATION_COLUMNS, so a star-read reappearing there fails this guard.
 // The two /settings/staff pages are NOT here: STAFFFORMSETTINGS.1 names their columns (loadStaffFormLocations).
+// The staff API, its POST echo and /admin/matrix are NOT here: STAFFPROFILEPICK.1 names their columns (src/lib/staff-fields.js, USER_LOCATION_COLUMNS).
 export const STAR_READS = {
-  'src/lib/staff.js': { count: 1, disposition: 'redacted' },
-  'src/app/api/staff/route.js': { count: 1, disposition: 'redacted' },
-  'src/app/api/staff/[id]/route.js': { count: 4, disposition: 'redacted' },
-  'src/app/admin/matrix/page.js': { count: 1, disposition: 'redacted' },
+  'src/app/api/staff/[id]/route.js': { count: 3, disposition: 'server-only', why: 'PUT targetBefore (UniFi revoke/sync via getUnifiConfig) and refreshed (role recompute), and the DELETE read (UniFi revoke); the PUT response re-reads STAFF_MANAGED_SELECT (CLIENT_LOCATION_COLUMNS embed)' },
   'src/app/api/staff/[id]/permanent/route.js': { count: 1, disposition: 'server-only', why: 'master-only; the embed feeds the UniFi revoke; the response is the tombstone RPC result' },
   'src/app/settings/page.js': { count: 1, disposition: 'server-only', why: 'server-rendered list (name, address, slug, active); no client component receives the rows' },
   'src/app/settings/locations/[id]/page.js': { count: 1, disposition: 'redacted' },

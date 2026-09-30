@@ -18,19 +18,19 @@
 
 import { useRouter, useSearchParams } from 'next/navigation'
 import {
-  Plug, Zap, DoorOpen, Snowflake, FileCheck, MessageSquare, MessageCircle,
+  Plug, Zap, DoorOpen, Snowflake, FileCheck, MessageCircle,
   AlertCircle, CheckCircle2, Megaphone, CreditCard,
 } from 'lucide-react'
 import { Instagram } from '@/components/icons/InstagramIcon'
 import ConnectionsSection from '@/components/customer-agent/ConnectionsSection'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
+import { hasRoleAtLocation } from '@/lib/role-at-location'
 
 import XeroIntegrationTab from './integrations/XeroIntegrationTab'
 import GlofoxIntegrationTab from './integrations/GlofoxIntegrationTab'
 import UnifiIntegrationTab from './integrations/UnifiIntegrationTab'
 import AcDevicesIntegrationTab from './integrations/AcDevicesIntegrationTab'
 import BcaIntegrationTab from './integrations/BcaIntegrationTab'
-import TwilioIntegrationTab from './integrations/TwilioIntegrationTab'
 import WhatsAppIntegrationTab from './integrations/WhatsAppIntegrationTab'
 import AdsIntegrationTab from './integrations/AdsIntegrationTab'
 import PaymentsIntegrationTab from './integrations/PaymentsIntegrationTab'
@@ -45,6 +45,11 @@ export default function LocationIntegrations({ location, xeroConnection, xeroRea
   const features = location.features || {}
   const isMaster = user.role === 'master'
   const isOwnerOrMaster = user.role === 'master' || user.role === 'owner'
+  // WAROLE.1 — every write on the WhatsApp tab (numbers, Connect, chat
+  // openers, card sets) decides guardMasterOrOwner AT this location, so the
+  // tab is judged there too, never on `user.role` (the ACTIVE studio's role).
+  // The other tabs still read isOwnerOrMaster: row C38 PAGEGATES.1.
+  const ownsWhatsAppHere = hasRoleAtLocation(user, location.id, ['owner'])
 
   const tabs = []
   // Xero is a platform-wide finance integration, not a car-processing
@@ -83,22 +88,11 @@ export default function LocationIntegrations({ location, xeroConnection, xeroRea
         : 'connected',
     })
   }
-  // Twilio (SMS) — alpha sender ID. Twilio account creds are global
-  // env vars; this tab is only useful when SMS feature is on at the
-  // location AND the operator wants a per-location branded sender.
-  if (isOwnerOrMaster && (features.sms !== false || location.twilio_alpha_sender_id)) {
-    tabs.push({
-      key: 'twilio',
-      label: 'Twilio (SMS)',
-      Icon: MessageSquare,
-      status: location.twilio_alpha_sender_id ? 'connected' : 'not-configured',
-    })
-  }
   // WA-MULTI.1 — WhatsApp per-location numbers. Tab is visible when
   // the location has the whatsapp feature on, OR when the master is
   // looking (so a not-yet-enabled location still surfaces the
   // first-time setup path). Statuses come from the API on render.
-  if ((features.whatsapp !== false || isMaster) && isOwnerOrMaster) {
+  if ((features.whatsapp !== false || isMaster) && ownsWhatsAppHere) {
     tabs.push({
       key: 'whatsapp',
       label: 'WhatsApp',
@@ -229,11 +223,8 @@ export default function LocationIntegrations({ location, xeroConnection, xeroRea
           {activeKey === 'bca' && (
             <BcaIntegrationTab location={location} canEdit={isMaster} sampleCar={sampleBcaCar} />
           )}
-          {activeKey === 'twilio' && (
-            <TwilioIntegrationTab location={location} canEdit={isOwnerOrMaster} />
-          )}
           {activeKey === 'whatsapp' && (
-            <WhatsAppIntegrationTab location={location} canEdit={isOwnerOrMaster} />
+            <WhatsAppIntegrationTab location={location} canEdit={ownsWhatsAppHere} />
           )}
           {activeKey === 'instagram' && (
             <ConnectionsSection locationId={location.id} locationName={location.name} embedded />

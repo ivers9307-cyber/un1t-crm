@@ -144,3 +144,25 @@ describe('POST /api/whatsapp/broadcasts/[id]/send — authz gate', () => {
     expect(sendBroadcast).toHaveBeenCalledWith('b1', { force: false })
   })
 })
+
+// WACONFIGFALLBACK.1 — sendBroadcast refuses (before any status flip) at a
+// location with no WhatsApp number of its own; the route says so with a 409.
+describe('POST /api/whatsapp/broadcasts/[id]/send — no WhatsApp number', () => {
+  it('409 with the resolver message', async () => {
+    const { WhatsAppNumberMissingError } = await import('@/lib/whatsapp-number-missing')
+    getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-1' }] })
+    createServerClient.mockReturnValue(mockDb({ broadcast: { location_id: 'loc-1' } }))
+    sendBroadcast.mockRejectedValueOnce(new WhatsAppNumberMissingError('loc-1'))
+    const res = await POST(req(), props)
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ success: false, error: 'No WhatsApp number is connected at this location.' })
+  })
+
+  it('any other refusal keeps its 400', async () => {
+    getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-1' }] })
+    createServerClient.mockReturnValue(mockDb({ broadcast: { location_id: 'loc-1' } }))
+    sendBroadcast.mockRejectedValueOnce(new Error('Template not approved by Meta'))
+    const res = await POST(req(), props)
+    expect(res.status).toBe(400)
+  })
+})

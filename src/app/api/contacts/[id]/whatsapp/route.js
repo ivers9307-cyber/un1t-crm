@@ -37,6 +37,8 @@ import {
 } from '@/lib/radar-outreach'
 import { manualTakeoverPatch } from '@/lib/agent/core'
 import { getOrCreateContactConversation } from '@/lib/whatsapp-conversations'
+import { ownNumberOrRefusal } from '@/lib/whatsapp-own-number'
+import { whatsappErrorStatus } from '@/lib/whatsapp-number-missing'
 
 export const runtime = 'nodejs'
 
@@ -91,6 +93,15 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: 'Forbidden — WhatsApp not enabled at this location for your role' }, { status: 403 })
   }
 
+  // WACONFIGFALLBACK.1 — the contact's location must have a WhatsApp number of
+  // its own BEFORE a thread is opened: the send used to go out on the global
+  // env number (another studio's), and refusing only at the send would leave
+  // an empty thread in this location's inbox. 409 no number / 500 lookup.
+  // The send below uses this checked config ({ config }), so there is one
+  // lookup and no gap in which a different number could be resolved.
+  const own = await ownNumberOrRefusal(contact.location_id, 'contact-whatsapp-send')
+  if (!own.ok) return NextResponse.json({ success: false, error: own.error }, { status: own.status })
+
   // CANCEL-FORM.4 — get-or-create moved to lib/whatsapp-conversations so the
   // cancellation-form send opens the same thread this composer does.
   const opened = await getOrCreateContactConversation(db, contact)
@@ -110,11 +121,11 @@ export async function POST(request, props) {
       if (!isWindowOpen(conversation)) {
         return NextResponse.json({
           success: false,
-          error: 'The 24-hour messaging window has closed. Send an approved template to reopen the conversation, or use SMS.',
+          error: 'The 24-hour messaging window has closed. Send an approved template to reopen the conversation.',
           window_expired: true,
         }, { status: 409 })
       }
-      result = await sendTextMessage(waPhone, text, { locationId: contact.location_id })
+      result = await sendTextMessage(waPhone, text, { config: own.config })
       messageType = 'text'
       messageBody = text
     } else {
@@ -142,14 +153,16 @@ export async function POST(request, props) {
       if (headerComponent) components.unshift(headerComponent)
       result = await sendTemplateMessage(
         waPhone, template.name, template.language || 'en', components,
-        { locationId: contact.location_id },
+        { config: own.config },
       )
       messageType = 'template'
       messageBody = `[Template: ${template.name}]`
       sentTemplateName = template.name
     }
   } catch (e) {
-    return NextResponse.json({ success: false, error: e?.message || 'Failed to send WhatsApp message' }, { status: 502 })
+    // WACONFIGFALLBACK.1 — whatsappErrorStatus keeps a typed refusal a 409
+    // (the send carries the checked config, so none is expected here).
+    return NextResponse.json({ success: false, error: e?.message || 'Failed to send WhatsApp message' }, { status: whatsappErrorStatus(e, 502) })
   }
 
   // ── Log ─────────────────────────────────────────────────────────

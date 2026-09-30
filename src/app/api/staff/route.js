@@ -11,7 +11,7 @@ import {
   OWNER_ASSIGNABLE_ROLES, MASTER_ASSIGNABLE_ROLES,
 } from '@/lib/schemas'
 import { sparsifyAssignmentPermissions } from '@/lib/staff-write'
-import { redactProfileLocations } from '@/lib/location-secrets'
+import { STAFF_MANAGED_SELECT, pickManagedStaffRow } from '@/lib/staff-fields'
 
 export const runtime = 'nodejs'
 
@@ -315,13 +315,13 @@ export async function POST(request) {
     }
   }
 
-  // Fetch the complete profile
+  // Fetch the complete profile. STAFFPROFILEPICK.1 — the named managed shape
+  // (staff-fields.js): the caller is owner/master at the new person's studio.
   const { data: profile } = await db
     .from('profiles')
-    .select('*, profile_locations(*, locations(*))')
+    .select(STAFF_MANAGED_SELECT)
     .eq('id', newUserId)
     .single()
 
-  // SECFIX.3a — the echo embeds whole location rows; never ship their credentials.
-  return NextResponse.json({ success: true, data: redactProfileLocations(profile) }, { status: 201 })
+  return NextResponse.json({ success: true, data: pickManagedStaffRow(profile) }, { status: 201 })
 }

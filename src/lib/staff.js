@@ -6,7 +6,8 @@
 // CONTRACTVIS.1 — WHAT of each row leaves is decided PER ROW, by whether the
 // caller MANAGES that person: master, or ADMIN_ROLES (owner / manager) at a
 // location the person is linked to, among the locations in scope. A managed
-// row gets the full profile (HR fields); any other row gets the slim public
+// row gets the named managed shape (src/lib/staff-fields.js: identity + HR
+// fields; STAFFPROFILEPICK.1); any other row gets the slim public
 // shape. The caller's own row always keeps its contract. This replaced
 // `ADMIN_ROLES.includes(user.role)` — the ACTIVE studio's role — which handed a
 // manager at A who is a head coach at B the HR fields of people only at B.
@@ -16,7 +17,7 @@ import { ADMIN_ROLES } from '@/lib/schemas'
 import { hasRoleAtLocation } from '@/lib/role-at-location'
 import { logError } from '@/lib/log'
 import { mergeTemplates } from '@shared/permissions'
-import { redactProfileLocations } from '@/lib/location-secrets'
+import { STAFF_MANAGED_SELECT, pickManagedStaffRow } from '@/lib/staff-fields'
 
 // CONTRACTVIS.1 (Richard, 27 Sep 2026) — neither shape below carries
 // contracted_hours_per_week. A colleague's contract goes to a master, or to an
@@ -40,7 +41,6 @@ export const STAFF_PICKER_FIELDS =
 export const STAFF_CONTRACT_FIELD = 'contracted_hours_per_week'
 
 const PUBLIC_LINKS = 'profile_locations(location_id, role, locations(id, name, slug))'
-const FULL_SELECT = '*, profile_locations(*, locations(*))'
 const keysOf = (fields) => fields.split(',').map((k) => k.trim())
 const PUBLIC_KEYS = keysOf(STAFF_PUBLIC_FIELDS)
 const PICKER_KEYS = keysOf(STAFF_PICKER_FIELDS)
@@ -110,7 +110,7 @@ export async function listStaffForUser({ db, user, fields, locationId = null, in
     const readContract = includeContract && profileIds.some(mayContract)
     select = `${STAFF_PICKER_FIELDS}${readContract ? `, ${STAFF_CONTRACT_FIELD}` : ''}, ${PUBLIC_LINKS}`
   } else if (managed.size > 0) {
-    select = FULL_SELECT
+    select = STAFF_MANAGED_SELECT
   } else {
     const readContract = selfId !== null && profileIds.includes(selfId)
     select = `${STAFF_PUBLIC_FIELDS}${readContract ? `, ${STAFF_CONTRACT_FIELD}` : ''}, ${PUBLIC_LINKS}`
@@ -124,8 +124,9 @@ export async function listStaffForUser({ db, user, fields, locationId = null, in
   if (error) return { ok: false, error: error.message }
 
   const rows = (data || []).map((row) => {
-    // SECFIX.3a — FULL rows embed whole location rows; the credentials stop here.
-    if (!picker && managed.has(row.id)) return redactProfileLocations(row)
+    // STAFFPROFILEPICK.1 — a managed row is the named shape (staff-fields.js):
+    // no PIN hash, UniFi id, signature, bookkeeping or studio settings.
+    if (!picker && managed.has(row.id)) return pickManagedStaffRow(row)
     return slimRow(row, picker ? PICKER_KEYS : PUBLIC_KEYS, (picker ? includeContract : true) && mayContract(row.id))
   })
   return { ok: true, data: rows }
@@ -154,7 +155,7 @@ export async function getStaffForUser({ db, user, id }) {
   const managed = links.some((l) => managesAt(user, l.location_id))
   const self = (user?.id ?? null) === id
   const select = managed
-    ? FULL_SELECT
+    ? STAFF_MANAGED_SELECT
     : `${STAFF_PUBLIC_FIELDS}${self ? `, ${STAFF_CONTRACT_FIELD}` : ''}, ${PUBLIC_LINKS}`
   const { data, error } = await db
     .from('profiles')
@@ -202,6 +203,6 @@ export async function getStaffForUser({ db, user, id }) {
       // degrade to code defaults
     }
   }
-  // SECFIX.3a — the FULL row embeds whole location rows; the credentials stop here.
-  return { ok: true, data: { ...redactProfileLocations(data), role_templates: roleTemplates } }
+  // STAFFPROFILEPICK.1 — the named managed shape (staff-fields.js).
+  return { ok: true, data: { ...pickManagedStaffRow(data), role_templates: roleTemplates } }
 }

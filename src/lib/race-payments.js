@@ -1,7 +1,6 @@
 // race-payments — UN1T race payment lifecycle (mig 084).
 //
-// DELIBERATELY SEPARATE from src/lib/deposit-receipts.js and the
-// cars deposit flow. UN1T (gym + races) and CCF Autos (cars) are
+// DELIBERATELY SEPARATE from the cars deposit flow. UN1T (gym + races) and CCF Autos (cars) are
 // different businesses; their payment surfaces and receipts should
 // not share code paths even though they both happen to use Revolut
 // Merchant under the hood.
@@ -14,7 +13,7 @@
 //
 // What this module deliberately does NOT do:
 //   - Talk to cars.* tables. Ever.
-//   - Reuse deposit-receipts templates. Race confirmations live in
+//   - Reuse cars-deposit copy. Race confirmations live in
 //     src/lib/race-confirmations.js with their own copy + branding.
 //
 // The Revolut HTTP client (src/lib/revolut.js) is the only shared
@@ -36,7 +35,6 @@ import { emitEvent, applyTagRules, EVENT_TYPES } from './contact-events'
 import { triggerSequencesForOrderStatus } from './sequences'
 import { addEventAttendeesToHostList } from './host-contact-list'
 import { logWarn, logError } from './log'
-import { overlayConnections } from '@/lib/connection-registry'
 
 /**
  * Resolve which Revolut credentials to use for race payments. For
@@ -272,14 +270,10 @@ export async function resolveRacePaymentByProviderRef(db, providerRef) {
     .select(`
       *,
       race:race_event_id ( id, name, slug, location_id, race_date, payment_currency,
-        locations:location_id ( id, name, twilio_alpha_sender_id ) )
+        locations:location_id ( id, name ) )
     `)
     .eq('payment_provider_ref', providerRef)
     .maybeSingle()
-  // INTEG-A2 dual-read: registry twilio_sender row first.
-  if (data?.race?.locations) {
-    data.race.locations = await overlayConnections(db, data.race.locations, ['twilio_sender'])
-  }
   return data || null
 }
 

@@ -8,8 +8,7 @@
 // the box, no extra setup). Stripe = a direct charge on THIS location's
 // own Stripe Connect account — onboarding must finish (charges_enabled)
 // before the location can be switched over. Follows the same
-// read-merge-write-into-locations.settings pattern as GlofoxIntegrationTab
-// and TwilioIntegrationTab.
+// read-merge-write-into-locations.settings pattern as GlofoxIntegrationTab.
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'

@@ -391,6 +391,13 @@ const config = [
       'src/app/api/settings/status-page/route.js',
       'src/app/api/hyrox/settings/route.js',
       'src/app/api/hyrox/sessions/*/exemplar/route.js',
+      // WATPLSEND.1 — the inbox send route. Its message insert and conversation
+      // update ran AFTER Meta had delivered the message, as bare awaits inside a
+      // try whose catch answered 400 "failed": a lost write was either silent or
+      // told staff a delivered message had failed (inviting a duplicate). Both
+      // are now log-and-warn; nothing after the Meta call may fail the request.
+      // `[[]id]`: files entries are minimatch globs, a bare `[id]` is a class.
+      'src/app/api/whatsapp/conversations/[[]id]/send/route.js',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },

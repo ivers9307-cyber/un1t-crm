@@ -70,10 +70,6 @@ export const UpdateSchema = z.object({
   // EVENT-COMMS-LOC (mig 553) — flows through the generic scalar patch; in-org
   // non-anchor validated in PUT.
   sending_location_id: uuidLike.nullable().optional(),
-  // EVENTS-SMS-TOGGLE (mig 552) — per-event opt-in for the registration SMS
-  // confirmation. Flows through the generic scalar patch in PUT (omit = leave
-  // untouched). The email receipt is separate and unaffected.
-  confirmation_sms_enabled: z.boolean().optional(),
   // When provided, replaces the wave set entirely (diff-and-apply).
   // Omitting leaves waves untouched. At least one wave required if set.
   waves: z.array(WaveInputSchema).min(1).max(50).optional(),
@@ -92,7 +88,7 @@ async function loadRace(db, id) {
       confirmation_email_subject, confirmation_email_intro,
       reminder_email_subject, reminder_email_intro,
       confirmation_email_template_id, reminder_email_template_id,
-      confirmation_sms_enabled, sending_location_id,
+      sending_location_id,
       waves:race_waves ( id, start_time, capacity, label, display_order ),
       registrations:race_registrations (
         id, status, race_started_at, race_finished_at, registered_at, wave_id,

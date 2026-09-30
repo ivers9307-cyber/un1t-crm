@@ -477,7 +477,36 @@ export function missingGlofoxCredentialsForLocation(creds) {
 // (upstream blip) those land as fetch_failed and only get retried a
 // whole tick later, slowing coverage. A bounded in-place retry that
 // honours Retry-After lets the call succeed within the same tick.
+//
+// GLOFOXPOSTRETRY.1 — but only where a repeat is safe. A 429 is Glofox
+// refusing BEFORE it processes the request, so it is retried for every
+// method. A 5xx can come AFTER Glofox processed it (a trial bought, a booking
+// made, then the answer lost), so a 5xx is retried only for a read: GET/HEAD,
+// or a call that says `retry: 'idempotent'` (the read-POSTs). Every other
+// write returns its first 5xx, unless it passes `retry: { verify }`: a dedupe
+// read that answers 'landed' | 'absent' | 'unknown' after the backoff and
+// before each re-send. Only 'absent' re-sends.
 const GLOFOX_MAX_RETRIES = 3
+const GLOFOX_RETRYABLE_METHODS = new Set(['GET', 'HEAD'])
+
+/**
+ * The retry policy of one glofoxFetch call (GLOFOXPOSTRETRY.1). Pure.
+ *   retry: 'idempotent' → 429 and 5xx retried (a read, whatever its method)
+ *   retry: 'never'      → 429 retried; a 5xx returned at once
+ *   retry: { verify }   → 429 retried; a 5xx re-sent only when verify() says 'absent'
+ *   (unset)             → 'idempotent' for GET/HEAD, 'never' for any other method
+ * An unknown value throws: it is a programming error, and guessing would
+ * either re-send a write or stop retrying a read.
+ * @returns {{ mode: 'idempotent'|'never'|'verify', verify?: () => Promise<'landed'|'absent'|'unknown'> }}
+ */
+export function glofoxRetryPolicy(options = {}) {
+  const r = options?.retry
+  if (r === 'idempotent' || r === 'never') return { mode: r }
+  if (r && typeof r === 'object' && typeof r.verify === 'function') return { mode: 'verify', verify: r.verify }
+  if (r !== undefined) throw new TypeError(`glofoxFetch: unknown retry policy ${JSON.stringify(r)}`)
+  const method = String(options?.method || 'GET').toUpperCase()
+  return { mode: GLOFOX_RETRYABLE_METHODS.has(method) ? 'idempotent' : 'never' }
+}
 
 // CREDITSREAD.1 — Glofox headroom, measured. glofoxFetch retried 429/5xx and
 // said nothing, so nobody could tell how close we run to Glofox's limit. These
@@ -492,6 +521,11 @@ const glofoxHttpCounters = {
   network_errors: 0, // fetch threw
   gave_up: 0,        // calls still 429/5xx after every retry
   aborted: 0,        // calls cancelled by the caller while 429/5xx (retries cut short)
+  // GLOFOXPOSTRETRY.1 — writes that answered 5xx:
+  unsafe_not_retried: 0, // retry 'never': returned without a re-send
+  verify_landed: 0,      // the dedupe read found the first attempt: not re-sent
+  verify_absent: 0,      // the dedupe read found nothing: re-sent (a give-up on the last attempt)
+  verify_unknown: 0,     // the dedupe read could not tell: not re-sent
 }
 
 /** A copy of the instance's Glofox HTTP counters. */
@@ -505,6 +539,24 @@ export function glofoxHttpStatsSince(before) {
   const out = {}
   for (const k of Object.keys(now)) out[k] = now[k] - (Number(before?.[k]) || 0)
   return out
+}
+
+/**
+ * Run a write's dedupe read and count its verdict. Anything but 'landed' or
+ * 'absent' (a throw included) is 'unknown', which never re-sends.
+ */
+async function runGlofoxVerify(verify) {
+  let verdict
+  try {
+    verdict = await verify()
+  } catch (err) {
+    logWarn('glofox', 'write dedupe read threw; not retried', { err })
+    verdict = 'unknown'
+  }
+  if (verdict === 'absent') { glofoxHttpCounters.verify_absent++; return 'absent' }
+  if (verdict === 'landed') { glofoxHttpCounters.verify_landed++; return 'landed' }
+  glofoxHttpCounters.verify_unknown++
+  return 'unknown'
 }
 
 const GLOFOX_ID_SEGMENT = [
@@ -561,6 +613,9 @@ export async function glofoxFetch(creds, pathOrUrl, options = {}) {
   if (!creds || !creds.branchId || !creds.apiKey || !creds.apiToken) {
     throw new Error('Glofox API credentials missing (need branchId, apiKey, apiToken on the location)')
   }
+  const policy = glofoxRetryPolicy(options)
+  // The policy is ours; fetch never sees it.
+  const { retry: _policyOption, ...fetchOptions } = options
   const url = pathOrUrl.startsWith('http')
     ? pathOrUrl
     : `${GLOFOX_API_BASE}${pathOrUrl.startsWith('/') ? '' : '/'}${pathOrUrl}`
@@ -568,16 +623,17 @@ export async function glofoxFetch(creds, pathOrUrl, options = {}) {
     'x-glofox-branch-id': creds.branchId,
     'x-api-key':          creds.apiKey,
     'x-glofox-api-token': creds.apiToken,
-    ...(options.headers || {}),
+    ...(fetchOptions.headers || {}),
   }
   let res
   let attempts = 0
   let aborted = false
+  let notResent = null // 'never' | 'landed' | 'unknown': a write's 5xx we chose not to re-send
   for (let attempt = 0; ; attempt++) {
     attempts++
     glofoxHttpCounters.requests++
     try {
-      res = await fetch(url, { ...options, headers })
+      res = await fetch(url, { ...fetchOptions, headers })
     } catch (e) {
       glofoxHttpCounters.network_errors++
       throw e
@@ -585,25 +641,49 @@ export async function glofoxFetch(creds, pathOrUrl, options = {}) {
     if (res.status === 429) glofoxHttpCounters.status_429++
     else if (res.status >= 500) glofoxHttpCounters.status_5xx++
     // Retry only transient statuses, and only while we have budget.
-    if ((res.status === 429 || res.status >= 500) && attempt < GLOFOX_MAX_RETRIES) {
-      // PAYLINK.5b — an aborted caller (timed out, or otherwise cancelled)
-      // stops retrying immediately and returns the last response as-is,
-      // rather than sleeping out a full backoff first.
-      if (options.signal?.aborted) { aborted = true; break }
-      const retryAfter = Number(res.headers?.get?.('retry-after'))
-      await _glofoxSleep(computeGlofoxBackoffMs(attempt, Number.isFinite(retryAfter) ? retryAfter : null), options.signal)
-      if (options.signal?.aborted) { aborted = true; break }
-      glofoxHttpCounters.retries++
-      continue
+    if (res.status !== 429 && res.status < 500) break
+    const budgetLeft = attempt < GLOFOX_MAX_RETRIES
+    // GLOFOXPOSTRETRY.1 — a 5xx on a write may already have been processed.
+    // A 'never' write is counted as not re-sent whether or not budget is left
+    // (a 5xx after three 429s is still an answer we chose not to repeat).
+    const unsafe5xx = res.status >= 500 && policy.mode !== 'idempotent'
+    if (unsafe5xx && policy.mode === 'never') {
+      glofoxHttpCounters.unsafe_not_retried++
+      notResent = 'never'
+      break
     }
-    break
+    // Out of budget: give up, except that a verified write still reads once
+    // after its LAST 5xx, only to report a landing (never to re-send).
+    if (!budgetLeft && !unsafe5xx) break
+    // PAYLINK.5b — an aborted caller (timed out, or otherwise cancelled)
+    // stops retrying immediately and returns the last response as-is,
+    // rather than sleeping out a full backoff first.
+    if (fetchOptions.signal?.aborted) { aborted = true; break }
+    const retryAfter = Number(res.headers?.get?.('retry-after'))
+    await _glofoxSleep(computeGlofoxBackoffMs(attempt, Number.isFinite(retryAfter) ? retryAfter : null), fetchOptions.signal)
+    if (fetchOptions.signal?.aborted) { aborted = true; break }
+    // The dedupe read runs AFTER the backoff, so a write Glofox is still
+    // committing has had the same time to show up.
+    if (unsafe5xx) {
+      const verdict = await runGlofoxVerify(policy.verify)
+      if (verdict === 'landed') { notResent = 'landed'; break }
+      if (!budgetLeft) break // absent or unknown on the last 5xx: a give-up
+      if (verdict !== 'absent') { notResent = verdict; break }
+    }
+    glofoxHttpCounters.retries++
   }
   // CREDITSREAD.1 — one line per call that is STILL failing after its retries
   // (never per retry: a throttled minute would write thousands). No ids.
   // A call the caller cancelled mid-retry did not use its retries, so it is
-  // counted apart (aborted) and not logged as a give-up.
+  // counted apart (aborted) and not logged as a give-up. GLOFOXPOSTRETRY.1 — a
+  // write we chose not to re-send is its own line (reason: never | landed |
+  // unknown), not a give-up: it used none of its remaining retries.
   if (aborted) {
     glofoxHttpCounters.aborted++
+  } else if (notResent) {
+    logWarn('glofox', 'Glofox write answered 5xx; not retried', {
+      status: res.status, attempts, path: glofoxPathLabel(pathOrUrl), reason: notResent,
+    })
   } else if (res.status === 429 || res.status >= 500) {
     glofoxHttpCounters.gave_up++
     logWarn('glofox', 'Glofox still failing after retries', {
@@ -633,28 +713,13 @@ export async function glofoxFetch(creds, pathOrUrl, options = {}) {
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Fetch the active + historical credit packs for a Glofox member.
- * Returns the data array (Credits[]) or [] on failure / no data.
- *
- * Used to drive credit_member detection — a paying customer with
- * an active class-pack credit pack qualifies as a Credit Member
- * (separate audience from subscription members). See
- * src/lib/glofox-sync.js:detectCreditMember.
- *
- * Best-effort: a network/API failure here returns [] so the
- * containing sync can still proceed (member contact gets synced,
- * credit_member detection is skipped, next sync gets it right).
+ * The active + historical credit packs for a Glofox member, as
+ * { ok, credits }. `ok: false` is a read that FAILED (429/5xx after
+ * glofoxFetch's retries, any other non-2xx, a network throw): "unknown",
+ * never "no packs" (MIA-CREDITS.1, CREDITSREAD.1). The old fetchUserCredits,
+ * which collapsed a failure into [], is gone (TRIALGRANT.1: no callers were
+ * left after CBPCREDITREAD.1).
  */
-export async function fetchUserCredits(creds, userId) {
-  const { credits } = await fetchUserCreditsResult(creds, userId)
-  return credits
-}
-
-// MIA-CREDITS.1 — ok-aware variant (the fetchUserBookingsResult pattern):
-// fetchUserCredits collapses "the read failed" and "genuinely no credit
-// records" into the same [], which is fine for callers that fail toward
-// staff review, but a caller that ESCALATES on empty (Mia's booking
-// pre-flight) must not escalate every booking during a Glofox blip.
 export async function fetchUserCreditsResult(creds, userId) {
   if (!creds || !userId) return { ok: false, credits: [] }
   try {
@@ -743,6 +808,8 @@ export async function fetchBranchLeads(creds, filters = {}, pagination = { skip:
       `/2.1/branches/${encodeURIComponent(creds.branchId)}/leads/filter`,
       {
         method: 'POST',
+        // A leads filter, not a write: safe to repeat (GLOFOXPOSTRETRY.1).
+        retry: 'idempotent',
         body: JSON.stringify({ filters, pagination }),
       },
     )
@@ -866,6 +933,8 @@ export async function fetchPaymentsReport(creds, opts = {}) {
   try {
     const r = await glofoxFetch(creds, '/Analytics/report', {
       method: 'POST',
+      // A report query, not a write: safe to repeat (GLOFOXPOSTRETRY.1).
+      retry: 'idempotent',
       body: JSON.stringify(body),
     })
     let parsed
@@ -911,8 +980,12 @@ export async function fetchPaymentsReport(creds, opts = {}) {
  * a Glofox account for this identity already exists. What that entitles
  * the caller to do is the CALLER's rule: an email match may be linked; a
  * phone-only match must not be (couples share numbers — PERSON-ACCT.9).
+ *
+ * `retry: 'never'` (GLOFOXPOSTRETRY.1) makes every request ONE attempt: a
+ * write's dedupe read (registerGlofoxMember) must answer at once, not stall
+ * behind nested backoffs. The default keeps the search's retries.
  */
-export async function searchGlofoxMember(creds, { email, phone } = {}) {
+export async function searchGlofoxMember(creds, { email, phone, retry = 'idempotent' } = {}) {
   const lc = typeof email === 'string' && email.trim() ? email.trim().toLowerCase() : null
   const e164 = typeof phone === 'string' ? toMobileE164(phone) : null
   if (!creds?.branchId || (!lc && !e164)) {
@@ -949,6 +1022,9 @@ export async function searchGlofoxMember(creds, { email, phone } = {}) {
     if (e164) filter.phone = e164
     const r = await glofoxFetch(creds, '/v3.0/namespaces/members/retrieve', {
       method: 'POST',
+      // A search, not a write: safe to repeat (GLOFOXPOSTRETRY.1), unless a
+      // write's dedupe read asks for ONE attempt (retry: 'never').
+      retry: retry === 'never' ? 'never' : 'idempotent',
       body: JSON.stringify(filter),
     })
     if (r.ok) return verdict(matches(rowsOf(await r.json())))
@@ -968,12 +1044,12 @@ export async function searchGlofoxMember(creds, { email, phone } = {}) {
     //           first hit. `filters[phone]` on 2.1 is ignored (returns all).
     const b = encodeURIComponent(creds.branchId)
     if (lc) {
-      const r2 = await glofoxFetch(creds, `/2.1/branches/${b}/users?${encodeURIComponent('filters[email]')}=${encodeURIComponent(lc)}`)
+      const r2 = await glofoxFetch(creds, `/2.1/branches/${b}/users?${encodeURIComponent('filters[email]')}=${encodeURIComponent(lc)}`, { retry })
       if (!r2.ok) return httpErr(r2)
       return verdict(matches(rowsOf(await r2.json())))
     }
     for (const spelling of phoneSpellingsForGlofox(e164)) {
-      const r2 = await glofoxFetch(creds, `/2.0/members?phone=${encodeURIComponent(spelling)}&limit=20`)
+      const r2 = await glofoxFetch(creds, `/2.0/members?phone=${encodeURIComponent(spelling)}&limit=20`, { retry })
       if (!r2.ok) return httpErr(r2)
       const exact = matches(rowsOf(await r2.json()))
       if (exact.length > 0) return verdict(exact)
@@ -1011,11 +1087,19 @@ export function phoneSpellingsForGlofox(e164) {
  * is untouched. Returns { found, member, error }; found=true means LINK
  * rather than create.
  */
-export async function searchGlofoxByEmail(creds, email) {
+export async function searchGlofoxByEmail(creds, email, { retry } = {}) {
   if (typeof email !== 'string' || !email.trim()) {
     return { found: false, member: null, error: 'missing args' }
   }
-  return searchGlofoxMember(creds, { email })
+  return searchGlofoxMember(creds, { email, ...(retry ? { retry } : {}) })
+}
+
+/** Glofox's "that email already has an account" refusal (seen live as a
+ *  200 success:false LOGIN_ALREADY_IN_USE,EMAIL_ALREADY_IN_USE). */
+function isGlofoxEmailInUse(body) {
+  if (!body || typeof body !== 'object') return false
+  return [body.message_code, body.message, body.error, body.code]
+    .some((v) => typeof v === 'string' && /EMAIL_ALREADY_IN_USE/i.test(v))
 }
 
 /**
@@ -1030,6 +1114,10 @@ export async function searchGlofoxByEmail(creds, email) {
  *
  * Best-effort: API failures return ok:false with the error
  * message; caller decides how to surface (audit row + Review tab).
+ *
+ * GLOFOXPOSTRETRY.1 — after a 5xx it re-sends only once an email search
+ * finds no account; one it finds comes back as
+ * { ok: true, member, error: null, glofox_response: null, recovered: 'landed_after_5xx' }.
  */
 export async function registerGlofoxMember(creds, payload) {
   if (!creds?.branchId) {
@@ -1050,9 +1138,27 @@ export async function registerGlofoxMember(creds, payload) {
     ...(payload.emergency_contact ? { emergency_contact: payload.emergency_contact } : {}),
     ...(payload.consent ? { consent: payload.consent } : {}),
   }
+  // GLOFOXPOSTRETRY.1 — a 5xx can come after Glofox created the account. Before
+  // a re-send, search the email (the caller already found none before this
+  // POST, so a hit now is the account we just made, with the password we
+  // sent): found → return it, no re-send; none → re-send; search failed, or
+  // more than one account (no guessing which) → the 5xx stands (never create
+  // on a failed search). Glofox would refuse a second account on the email
+  // anyway (EMAIL_ALREADY_IN_USE), but as a failure that left the contact
+  // unlinked.
+  let landedMember = null
+  let verifiedAbsent = false
+  const verifyRegistered = async () => {
+    const s = await searchGlofoxByEmail(creds, body.email, { retry: 'never' })
+    if (s.error) return 'unknown'
+    if (s.found && s.member?._id) { landedMember = s.member; return 'landed' }
+    verifiedAbsent = true
+    return 'absent'
+  }
   try {
     const r = await glofoxFetch(creds, '/2.0/register', {
       method: 'POST',
+      retry: { verify: verifyRegistered },
       // MUST set this: without it fetch sends the body as text/plain and Glofox
       // never parses the JSON, rejecting every field as "required" (and the new
       // member is never created → the booking dead-ends in staff review). Mirrors
@@ -1060,8 +1166,18 @@ export async function registerGlofoxMember(creds, payload) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     })
+    if (landedMember) return { ok: true, member: landedMember, error: null, glofox_response: null, recovered: 'landed_after_5xx' }
     let parsed
     try { parsed = await r.json() } catch { parsed = null }
+    // A re-send after a read that found no account, refused because the
+    // email is now in use: the first attempt landed after that read. Search
+    // once more (one attempt) and link only an unambiguous single account.
+    if (verifiedAbsent && isGlofoxEmailInUse(parsed)) {
+      const s = await searchGlofoxByEmail(creds, body.email, { retry: 'never' })
+      if (!s.error && s.found && s.member?._id) {
+        return { ok: true, member: s.member, error: null, glofox_response: parsed, recovered: 'landed_after_5xx' }
+      }
+    }
     if (!r.ok) {
       return {
         ok: false,
@@ -1095,6 +1211,8 @@ export async function updateGlofoxMember(creds, userId, patch) {
   try {
     const r = await glofoxFetch(creds, `/2.0/members/${encodeURIComponent(userId)}`, {
       method: 'PUT',
+      // GLOFOXPOSTRETRY.1 — explicit, like every write. No callers today.
+      retry: 'never',
       body: JSON.stringify(patch),
     })
     let parsed
@@ -1109,25 +1227,76 @@ export async function updateGlofoxMember(creds, userId, patch) {
 }
 
 /**
+ * TRIALGRANT.1 — judge a membership purchase
+ * (POST /2.2/branches/{b}/users/{u}/memberships/{m}/plans/{p}/purchase).
+ *
+ * Glofox's spec (v2.3.0) answers 200 with { success, message, message_code,
+ * status: 'SUCCESS' | 'PENDING-INTENT' | 'ERROR', invoice_id }, and its own
+ * guidance says older endpoints 200 with success:false for a bad request.
+ * So HTTP ok alone is not a purchase. Granted = a 2xx whose body does not
+ * say success:false and whose status is neither ERROR nor PENDING-INTENT (a
+ * payment still awaiting action is not a usable credit yet; any case, `_` or
+ * `-`).
+ *
+ * A clean 2xx with neither field is granted: the /start mint path has run on
+ * this call for months (27/27 new accounts in the 90 days to 30 Sep 2026 got
+ * their €0 trial invoice). Its body shape is logged so the real success shape
+ * can be pinned: MIA-BOOK.3's lesson, where the booking id sat one level
+ * down for fourteen months because nobody printed the shape.
+ *
+ * Pure apart from that one log line.
+ * @returns {{ granted: boolean, messageCode: string|null, purchaseStatus: string|null, invoiceId: string|null, message: string|null }}
+ */
+export function interpretPurchaseResult({ httpOk, httpStatus = null, body } = {}) {
+  const b = body && typeof body === 'object' ? body : {}
+  const str = (v) => (typeof v === 'string' && v ? v : null)
+  const messageCode = str(b.message_code)
+  const purchaseStatus = str(b.status)
+  const invoiceId = str(b.invoice_id)
+  const message = str(b.message)
+  // Compared normalised: Glofox spells the pending state both PENDING-INTENT
+  // (this endpoint's spec) and PENDING_INTENT (invoices). purchaseStatus
+  // itself stays as Glofox sent it, for the card and the logs.
+  const statusKey = purchaseStatus ? purchaseStatus.toUpperCase().replace(/_/g, '-') : null
+  const refused = b.success === false || statusKey === 'ERROR' || statusKey === 'PENDING-INTENT'
+  const granted = !!httpOk && !refused
+  if (granted && b.success === undefined && purchaseStatus === null) {
+    logWarn('glofox', 'membership purchase 2xx without success/status; extend interpretPurchaseResult', { httpStatus, shape: describeBodyShape(body) })
+  }
+  return { granted, messageCode, purchaseStatus, invoiceId, message }
+}
+
+/**
  * Purchase a membership for a member via the cart-less direct
  * purchase endpoint:
  *   POST /2.2/branches/{branchId}/users/{userId}/memberships/{membershipId}/plans/{planCode}/purchase
  *
- * Used immediately after registerGlofoxMember to attach the
- * studio's trial membership to a fresh account. Per-location
- * trial config lives at locations.settings.glofox.trial_membership_id
- * + trial_plan_code.
+ * Used right after registerGlofoxMember to attach the studio's trial
+ * membership to a fresh account (glofox-push.js), and by the approve path
+ * of a needs_credit_grant card (agent/trial-grant.js). Per-location trial
+ * config: the glofox connection's trial_membership_id + trial_plan_code.
  *
- * Returns { ok, error, glofox_response }.
+ * Returns { ok, error?, http_status, message_code, purchase_status,
+ * invoice_id, glofox_response }. TRIALGRANT.1: `ok` is the PURCHASE
+ * (interpretPurchaseResult), not the HTTP status; `error` is set only when
+ * !ok.
+ * GLOFOXPOSTRETRY.1: outcome_unknown: true when Glofox gave no clear answer
+ * (a network error or a 5xx); the purchase is never re-sent after a 5xx.
  */
 export async function purchaseGlofoxMembership(creds, userId, membershipId, planCode, opts = {}) {
+  const none = { http_status: null, message_code: null, purchase_status: null, invoice_id: null }
   if (!creds?.branchId || !userId || !membershipId || !planCode) {
-    return { ok: false, error: 'missing args' }
+    return { ok: false, error: 'missing args', ...none }
   }
   const path = `/2.2/branches/${encodeURIComponent(creds.branchId)}/users/${encodeURIComponent(userId)}/memberships/${encodeURIComponent(membershipId)}/plans/${encodeURIComponent(planCode)}/purchase`
   try {
     const r = await glofoxFetch(creds, path, {
       method: 'POST',
+      // GLOFOXPOSTRETRY.1 — NEVER re-sent after a 5xx. Glofox has no dedupe on
+      // a purchase, and a 5xx can come after it has bought: a re-send stacks a
+      // second trial. A 5xx is outcome_unknown instead (below), which
+      // grantTrialBeforeBooking refuses to buy over unless credits show.
+      retry: 'never',
       // Declare the JSON body's content-type (as createBooking/register do).
       // The trial purchase is the next call after register in the booking flow;
       // the body is empty today, but set it so Glofox can't ignore a body we
@@ -1137,12 +1306,22 @@ export async function purchaseGlofoxMembership(creds, userId, membershipId, plan
     })
     let parsed
     try { parsed = await r.json() } catch { parsed = null }
-    if (!r.ok) {
-      return { ok: false, error: parsed?.message || `Glofox HTTP ${r.status}`, glofox_response: parsed }
+    const v = interpretPurchaseResult({ httpOk: r.ok, httpStatus: r.status, body: parsed })
+    const out = {
+      ok: v.granted,
+      http_status: r.status,
+      message_code: v.messageCode,
+      purchase_status: v.purchaseStatus,
+      invoice_id: v.invoiceId,
+      glofox_response: parsed,
     }
-    return { ok: true, glofox_response: parsed }
+    if (!v.granted) out.error = v.message || v.messageCode || (v.purchaseStatus ? `purchase ${v.purchaseStatus}` : `Glofox HTTP ${r.status}`)
+    // A 5xx may come after Glofox processed the purchase: like no reply at
+    // all, it says nothing about whether the trial was bought.
+    if (r.status >= 500) out.outcome_unknown = true
+    return out
   } catch (e) {
-    return { ok: false, error: e?.message || 'network error' }
+    return { ok: false, error: e?.message || 'network error', ...none, http_status: 0, outcome_unknown: true }
   }
 }
 
@@ -1265,15 +1444,40 @@ export const GLOFOX_BOOKING_MODEL = 'event'
  *
  * Returns the parsed JSON response. status + ok hoisted onto the
  * return so the operator-facing endpoint can route on them.
+ *
+ * GLOFOXPOSTRETRY.1 — after a 5xx it re-sends only once a read of the member's
+ * bookings shows the booking did not land; a landed one comes back as
+ * { ok: true, status: 200, body: { success: true, Booking }, recovered: 'landed_after_5xx' }.
  */
 export async function createBooking(creds, bookingRequest) {
   if (!creds || !bookingRequest) return { ok: false, status: 400, body: { error: 'missing args' } }
+  // GLOFOXPOSTRETRY.1 — a 5xx can come after Glofox booked. Before a re-send,
+  // read the member's bookings: landed → report it booked (no re-send);
+  // absent → re-send (Glofox's own member+event dedupe is the second net);
+  // unknown → no re-send, the 5xx goes to the caller's failure lane. Without
+  // both ids there is nothing to check, so a 5xx is final.
+  const userId = bookingRequest.user_id
+  const eventId = bookingRequest.model_id ?? bookingRequest.event_id
+  let landed = null
+  // Before the first send: a booking created from here on is this call's.
+  const sentAt = Date.now()
+  const verifyBooked = async () => {
+    const v = await findLandedBooking(creds, userId, eventId, { sentAt })
+    if (v.state === 'landed') landed = v.booking
+    return v.state
+  }
   try {
     const r = await glofoxFetch(creds, '/2.0/bookings', {
       method: 'POST',
+      retry: userId && eventId ? { verify: verifyBooked } : 'never',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(bookingRequest),
     })
+    if (landed) {
+      // Shaped like Glofox's own success body ({ success, Booking }), so
+      // interpretBookingResult reads it as booked with the found id.
+      return { ok: true, status: 200, body: { success: true, Booking: landed }, recovered: 'landed_after_5xx' }
+    }
     let body
     try { body = await r.json() } catch { body = null }
     return { ok: r.ok, status: r.status, body }
@@ -1392,17 +1596,31 @@ export async function fetchUpcomingEvents(creds, { start, end, limit = 100 } = {
  * Cancel a booking via POST /booking/{bookingId}/user/{userId}/cancel.
  * Studios can configure "no cancellation allowed within X hours of class"
  * — Glofox returns the rule violation message in the response body.
+ *
+ * GLOFOXPOSTRETRY.1 — after a 5xx it re-sends only while a read of the
+ * member's bookings shows the booking still live; one that reads cancelled
+ * comes back as { ok: true, status: 200, body: { success: true }, recovered: 'landed_after_5xx' }.
  */
 export async function cancelBooking(creds, bookingId, userId) {
   if (!creds || !bookingId || !userId) {
     return { ok: false, status: 400, body: { error: 'missing args' } }
   }
+  // GLOFOXPOSTRETRY.1 — a 5xx can come after Glofox cancelled. Before a
+  // re-send, read the member's bookings: this booking cancelled → ok, no
+  // re-send; still live → re-send; not found or unreadable → the 5xx stands.
+  let cancelled = false
+  const verifyCancelled = async () => {
+    const state = await findBookingCancelState(creds, userId, bookingId)
+    if (state === 'landed') cancelled = true
+    return state
+  }
   try {
     const r = await glofoxFetch(
       creds,
       `/booking/${encodeURIComponent(bookingId)}/user/${encodeURIComponent(userId)}/cancel`,
-      { method: 'POST' },
+      { method: 'POST', retry: { verify: verifyCancelled } },
     )
+    if (cancelled) return { ok: true, status: 200, body: { success: true }, recovered: 'landed_after_5xx' }
     let body
     try { body = await r.json() } catch { body = null }
     return { ok: r.ok, status: r.status, body }
@@ -1494,6 +1712,10 @@ export async function cancelGlofoxMembership(creds, { userMembershipId, memberId
   try {
     const r = await glofoxFetch(creds, `/v3.0/memberships/${userMembershipId}/cancel`, {
       method: 'POST',
+      // GLOFOXPOSTRETRY.1 — never re-sent after a 5xx: Glofox's answer to a
+      // second ON_DATE cancel is unverified, and the approval card's Fix &
+      // retry is the recovery (auto-cancel is off at every location).
+      retry: 'never',
       headers: {
         'Content-Type': 'application/json',
         'x-glofox-impersonated-member-id': memberId,
@@ -1558,6 +1780,11 @@ export async function createGlofoxInteraction(creds, userId, { type, description
       `/2.1/branches/${encodeURIComponent(creds.branchId)}/leads/${encodeURIComponent(userId)}/interactions`,
       {
         method: 'POST',
+        // GLOFOXPOSTRETRY.1 — never re-sent after a 5xx: a repeat is a
+        // duplicate note in Glofox, the response has no id to check against,
+        // and a lost copy is recorded 'failed' in glofox_note_pushes while the
+        // CRM note itself is untouched.
+        retry: 'never',
         // Required: without it fetch sends the body as text/plain, Glofox never
         // parses the JSON and rejects every field as "required" (the exact bug
         // that broke registration). Mirrors registerGlofoxMember/createBooking.
@@ -1631,13 +1858,89 @@ export async function fetchUserBookingsResult(creds, userId, opts = {}) {
     exclude_cancelled: 'false',
   })
   try {
-    const r = await glofoxFetch(creds, `/2.0/bookings?${qs.toString()}`)
+    // opts.retry: a dedupe read passes 'never' (GLOFOXPOSTRETRY.1), so a
+    // failing read answers 'unknown' at once instead of stalling the write
+    // behind its own backoffs. Unset keeps the GET default (retried).
+    const r = await glofoxFetch(creds, `/2.0/bookings?${qs.toString()}`, { retry: opts.retry })
     if (!r.ok) return { ok: false, bookings: [] }
     const body = await r.json()
     return { ok: true, bookings: Array.isArray(body?.data) ? body.data : [] }
   } catch {
     return { ok: false, bookings: [] }
   }
+}
+
+/** Glofox spells a cancelled booking both ways. */
+function isCancelledBookingStatus(status) {
+  const s = String(status || '').toUpperCase()
+  return s === 'CANCELLED' || s === 'CANCELED'
+}
+
+// Clock skew allowed between us and Glofox when asking "was this booking
+// created by the send that started at sentAt?".
+const GLOFOX_LANDED_SKEW_MS = 2 * 60 * 1000
+
+/**
+ * A Glofox timestamp as epoch ms, or NaN. The bookings GET gives `created` as
+ * epoch seconds (trimRecentBookings stores Number(b.created)); other payloads
+ * carry ISO strings, and some carry "YYYY-MM-DD HH:MM:SS" with no zone, which
+ * is read as UTC. Epoch ms is accepted too.
+ */
+function glofoxTimeMs(v) {
+  if (v === null || v === undefined || v === '') return NaN
+  const n = typeof v === 'number' ? v : (/^\d+(\.\d+)?$/.test(String(v).trim()) ? Number(v) : NaN)
+  if (Number.isFinite(n)) return n < 1e12 ? n * 1000 : n
+  const s = String(v).trim()
+  if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(s)) return Date.parse(`${s.replace(' ', 'T')}Z`)
+  return Date.parse(s)
+}
+
+/**
+ * GLOFOXPOSTRETRY.1 — did a booking POST that answered 5xx land anyway?
+ * Reads the member's bookings (class start in the last 7 days onward, newest
+ * first, cancelled included, ONE attempt) and looks for a NOT-cancelled one
+ * on this event (model_id, or the older event_id) that is this member's (a
+ * row naming another user_id is ignored, whatever the query filter did).
+ *   - created at or after sentAt (less clock skew): this send made it →
+ *     'landed' (a new waitlist entry included: that is what the send did);
+ *   - otherwise an older BOOKED entry → 'landed' (the send would have been
+ *     refused as already booked, so the member IS booked);
+ *   - otherwise an older entry of any other status, e.g. the waitlist entry
+ *     a member held before a spot opened, or one with no readable created
+ *     → 'unknown': it proves nothing about this send, and reporting it as
+ *     booked would tell a waitlisted member they have a place.
+ * @returns {Promise<{ state: 'landed'|'absent'|'unknown', booking: object|null }>}
+ *   unknown also = the read failed; never re-send on it.
+ */
+export async function findLandedBooking(creds, userId, eventId, { sentAt = NaN } = {}) {
+  const read = await fetchUserBookingsResult(creds, userId, { windowDays: 7, retry: 'never' })
+  if (!read.ok) return { state: 'unknown', booking: null }
+  const mine = read.bookings.filter((b) =>
+    String(b?.model_id ?? b?.event_id ?? '') === String(eventId)
+    && !isCancelledBookingStatus(b?.status)
+    && (b?.user_id === undefined || b?.user_id === null || String(b.user_id) === String(userId)))
+  if (!mine.length) return { state: 'absent', booking: null }
+  const fresh = Number.isFinite(sentAt)
+    ? mine.find((b) => glofoxTimeMs(b?.created) >= sentAt - GLOFOX_LANDED_SKEW_MS)
+    : null
+  if (fresh) return { state: 'landed', booking: fresh }
+  const booked = mine.find((b) => String(b?.status || '').toUpperCase() === 'BOOKED')
+  if (booked) return { state: 'landed', booking: booked }
+  return { state: 'unknown', booking: null }
+}
+
+/**
+ * GLOFOXPOSTRETRY.1 — did a booking-cancel POST that answered 5xx land anyway?
+ * @returns {Promise<'landed'|'absent'|'unknown'>} landed = the booking reads
+ *   cancelled; absent = it is still live (re-send); unknown = the read failed
+ *   or the booking is not in it (never re-send on it).
+ */
+export async function findBookingCancelState(creds, userId, bookingId) {
+  const read = await fetchUserBookingsResult(creds, userId, { windowDays: 7, retry: 'never' })
+  if (!read.ok) return 'unknown'
+  const hit = read.bookings.find((b) => String(b?._id ?? b?.id ?? '') === String(bookingId))
+  if (!hit) return 'unknown'
+  return isCancelledBookingStatus(hit.status) ? 'landed' : 'absent'
 }
 
 /**
@@ -1786,6 +2089,9 @@ export async function getGlofoxInvoicePaymentLink(creds, args = {}) {
   try {
     const r = await glofoxFetch(creds, `/v3.0/payment-links/invoices/${encodeURIComponent(inv)}`, {
       method: 'POST',
+      // Returns a pay link for an existing invoice; nothing is charged, so a
+      // repeat is harmless and a lost link is a lost reminder (GLOFOXPOSTRETRY.1).
+      retry: 'idempotent',
       signal: AbortSignal.timeout(GLOFOX_PAYMENT_LINK_TIMEOUT_MS),
       headers: { 'Content-Type': 'application/json', 'x-glofox-impersonated-member-id': memberId },
       body: '{}',

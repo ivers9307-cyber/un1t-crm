@@ -1,25 +1,25 @@
 // WA-MULTI.1 — config resolver contract tests.
 //
-// Three tiers in priority order:
+// Resolution order:
 //   1. whatsapp_numbers row for location, is_default=true (or any
 //      is_active row if no default exists)
 //   2. n/a — tier 1 fall-through into "any active row, newest first"
 //      is in the same Supabase query (is_default DESC, updated_at DESC)
-//   3. Global env vars (WHATSAPP_ACCESS_TOKEN, WHATSAPP_PHONE_NUMBER_ID, …)
-//
-// We mock @/lib/supabase and the env vars to lock the priority
-// ordering. The fallback to env vars is the most security-sensitive
-// path — every test asserts the resolver doesn't silently fall
-// through when it shouldn't.
+//   Nothing else: WACONFIGFALLBACK.1 retired the global env tier. A
+//   location with no row gets a WhatsAppNumberMissingError, never the
+//   WHATSAPP_* env number, even when those env vars are set (the tests
+//   below set them to prove they are ignored).
 
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 
 const { createServerClient } = await import('@/lib/supabase')
+const { WhatsAppNumberMissingError, isWhatsAppNumberMissing } = await import('./whatsapp-number-missing.js')
 const {
   getWhatsAppConfig,
   getWhatsAppConfigById,
+  getLocationWhatsAppNumberConfig,
   resolveWhatsAppNumberByPhoneNumberId,
   classifyInboundOwner,
 } = await import('./whatsapp-config.js')
@@ -87,41 +87,71 @@ describe('getWhatsAppConfig — tier 1 (db row)', () => {
   })
 })
 
-describe('getWhatsAppConfig — tier 3 (env fallback)', () => {
-  it('falls back to env vars when no rows exist for the location', async () => {
+// WACONFIGFALLBACK.1 — the env tier is retired. With the env vars SET, a
+// location with no row still refuses: the old fallback sent from another
+// studio's number (and replies routed to that studio's inbox and Mia).
+describe('getWhatsAppConfig — no own number → typed refusal, never the env number', () => {
+  it('no rows for the location → WhatsAppNumberMissingError, env vars ignored', async () => {
     createServerClient.mockReturnValue(mockDb({ rows: [] }))
     process.env.WHATSAPP_ACCESS_TOKEN = 'env-token'
     process.env.WHATSAPP_PHONE_NUMBER_ID = 'env-pni'
     process.env.WHATSAPP_BUSINESS_ACCOUNT_ID = 'env-waba'
 
-    const cfg = await getWhatsAppConfig('loc-with-no-rows')
-    expect(cfg.source).toBe('env')
-    expect(cfg.token).toBe('env-token')
-    expect(cfg.phoneNumberId).toBe('env-pni')
-    expect(cfg.businessAccountId).toBe('env-waba')
+    const err = await getWhatsAppConfig('loc-with-no-rows').catch((e) => e)
+    expect(err).toBeInstanceOf(WhatsAppNumberMissingError)
+    expect(isWhatsAppNumberMissing(err)).toBe(true)
+    expect(err.locationId).toBe('loc-with-no-rows')
+    expect(err.message).toBe('No WhatsApp number is connected at this location.')
   })
 
-  it('falls back to env even when locationId is null/undefined (legacy callers)', async () => {
+  it('no location id → WhatsAppNumberMissingError without a query (a caller that named no location)', async () => {
     process.env.WHATSAPP_ACCESS_TOKEN = 'env-token'
     process.env.WHATSAPP_PHONE_NUMBER_ID = 'env-pni'
 
-    const cfg = await getWhatsAppConfig(null)
-    expect(cfg.source).toBe('env')
-    expect(cfg.phoneNumberId).toBe('env-pni')
-    // createServerClient should not even be called when locationId is null
+    const err = await getWhatsAppConfig(null).catch((e) => e)
+    expect(isWhatsAppNumberMissing(err)).toBe(true)
+    expect(err.locationId).toBeNull()
     expect(createServerClient).not.toHaveBeenCalled()
+  })
+
+  it('a failed lookup throws a plain error, never the typed refusal (a blip is not "no number")', async () => {
+    createServerClient.mockReturnValue(mockDb({ error: { message: 'db down' } }))
+    const err = await getWhatsAppConfig('loc-1').catch((e) => e)
+    expect(err.message).toMatch(/Failed to load WhatsApp config for location loc-1: db down/)
+    expect(isWhatsAppNumberMissing(err)).toBe(false)
   })
 })
 
-describe('getWhatsAppConfig — no config anywhere', () => {
-  it('throws a precise error when both DB + env are empty', async () => {
-    createServerClient.mockReturnValue(mockDb({ rows: [] }))
-    await expect(getWhatsAppConfig('loc-1')).rejects.toThrow(/WhatsApp not configured/)
+// WAROLE.1 — the location's OWN number, never the env tier. A write that
+// changes what Meta shows on "this studio's number" (chat openers) must not
+// land on the legacy global number when the studio has none of its own.
+describe('getLocationWhatsAppNumberConfig — the location tier only (WAROLE.1)', () => {
+  it("returns the location's active row, default first", async () => {
+    const db = mockDb({ rows: [{ id: 'n1', location_id: 'loc-1', label: 'Main', phone_number_id: 'PNI-123', access_token: 'tok-default', source: 'cloud_api', is_default: true, is_active: true }] })
+    createServerClient.mockReturnValue(db)
+    const cfg = await getLocationWhatsAppNumberConfig('loc-1')
+    expect(cfg).toMatchObject({ source: 'db', id: 'n1', locationId: 'loc-1', phoneNumberId: 'PNI-123', token: 'tok-default' })
   })
 
-  it('surfaces the location id in the error message for debugging', async () => {
+  it('no row at the location → null, even with the global env number set (never the env tier)', async () => {
     createServerClient.mockReturnValue(mockDb({ rows: [] }))
-    await expect(getWhatsAppConfig('loc-abc-123')).rejects.toThrow(/loc-abc-123/)
+    process.env.WHATSAPP_ACCESS_TOKEN = 'env-token'
+    process.env.WHATSAPP_PHONE_NUMBER_ID = 'env-pni'
+    expect(await getLocationWhatsAppNumberConfig('loc-with-no-rows')).toBeNull()
+  })
+
+  it('a failed lookup throws (never read as "no number")', async () => {
+    createServerClient.mockReturnValue(mockDb({ error: { message: 'boom' } }))
+    process.env.WHATSAPP_ACCESS_TOKEN = 'env-token'
+    process.env.WHATSAPP_PHONE_NUMBER_ID = 'env-pni'
+    await expect(getLocationWhatsAppNumberConfig('loc-1')).rejects.toThrow(/boom/)
+  })
+
+  it('no location id → null without a query (there is no "this location")', async () => {
+    process.env.WHATSAPP_ACCESS_TOKEN = 'env-token'
+    process.env.WHATSAPP_PHONE_NUMBER_ID = 'env-pni'
+    expect(await getLocationWhatsAppNumberConfig(null)).toBeNull()
+    expect(createServerClient).not.toHaveBeenCalled()
   })
 })
 
@@ -162,13 +192,12 @@ describe('resolveWhatsAppNumberByPhoneNumberId — inbound webhook routing', () 
     expect(cfg?.locationId).toBe('loc-1')
   })
 
-  it('falls back to env config when phone_number_id matches env\'s', async () => {
+  it('WACONFIGFALLBACK.1 — an id equal to the (ignored) env number with no row → null (unknown), never an env config', async () => {
     createServerClient.mockReturnValue(mockDb({ rows: [] }))
     process.env.WHATSAPP_ACCESS_TOKEN = 'env-token'
     process.env.WHATSAPP_PHONE_NUMBER_ID = 'env-pni-routed'
 
-    const cfg = await resolveWhatsAppNumberByPhoneNumberId('env-pni-routed')
-    expect(cfg?.source).toBe('env')
+    expect(await resolveWhatsAppNumberByPhoneNumberId('env-pni-routed')).toBe(null)
   })
 
   it('returns null when the phone_number_id is unknown', async () => {
@@ -192,22 +221,12 @@ describe('resolveWhatsAppNumberByPhoneNumberId — inbound webhook routing', () 
 // genuinely unregistered number. The webhook drops BOTH (SAAS-2), but
 // the throw keeps the two cases separately loggable.
 describe('resolveWhatsAppNumberByPhoneNumberId — lookup errors (WA-TECHPROV.4b)', () => {
-  it('lookup error + phone_number_id matches env → returns env config (live number survives a DB blip)', async () => {
+  it('lookup error → THROWS even when the id equals the (ignored) env number (webhook catch → drop + structured log)', async () => {
     createServerClient.mockReturnValue(mockDb({ error: { message: 'boom' } }))
     process.env.WHATSAPP_ACCESS_TOKEN = 'env-token'
     process.env.WHATSAPP_PHONE_NUMBER_ID = 'env-pni-live'
 
-    const cfg = await resolveWhatsAppNumberByPhoneNumberId('env-pni-live')
-    expect(cfg?.source).toBe('env')
-    expect(cfg?.phoneNumberId).toBe('env-pni-live')
-  })
-
-  it('lookup error + phone_number_id does NOT match env → THROWS (webhook catch → drop + structured log)', async () => {
-    createServerClient.mockReturnValue(mockDb({ error: { message: 'boom' } }))
-    process.env.WHATSAPP_ACCESS_TOKEN = 'env-token'
-    process.env.WHATSAPP_PHONE_NUMBER_ID = 'env-pni-other'
-
-    await expect(resolveWhatsAppNumberByPhoneNumberId('client-pni-123'))
+    await expect(resolveWhatsAppNumberByPhoneNumberId('env-pni-live'))
       .rejects.toThrow(/lookup failed/)
   })
 
@@ -226,8 +245,8 @@ describe('classifyInboundOwner — SAAS-2 strict tenant routing', () => {
   it('unknown phone_number_id (resolver returned null) → drop', () => {
     expect(classifyInboundOwner(null)).toEqual({ action: 'drop' })
   })
-  it('env config → drop (an env config carries no tenant to route into)', () => {
-    expect(classifyInboundOwner({ source: 'env', phoneNumberId: '1233588839827698' }))
+  it('a config with no location (the retired env shape) → drop, never a guessed tenant', () => {
+    expect(classifyInboundOwner({ source: 'env', phoneNumberId: 'PNI-SYNTH' }))
       .toEqual({ action: 'drop' })
   })
   it('db row with a location → route to that location', () => {

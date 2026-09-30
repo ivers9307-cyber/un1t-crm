@@ -2,10 +2,11 @@ import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createTemplate as createMetaTemplate, getTemplates as getMetaTemplates } from '@/lib/whatsapp'
-import { getCurrentUser, assertLocationAccess , getUserLocationIds} from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess , getUserLocationIds, hasRoleAtLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { uuidLike } from '@/lib/schemas'
+import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
 import { componentsButtonsError } from '@/lib/whatsapp-template-buttons'
+import { ownNumberOrRefusal } from '@/lib/whatsapp-own-number'
 
 const WaTemplateCreateSchema = z.object({
   name: z.string().min(1).max(200),
@@ -54,9 +55,15 @@ export async function GET(request) {
   // If sync requested, fetch from Meta and update local records
   if (sync === 'true') {
     try {
-      // Fetch from THIS location's WABA (passing locationId) — not the env-default
-      // WABA — or a Meta-Manager-created template for this number is never seen.
-      const metaTemplates = await getMetaTemplates(100, { locationId })
+      // Fetch from THIS location's WABA — or a Meta-Manager-created template
+      // for this number is never seen. WACONFIGFALLBACK.1: its OWN number
+      // only. Resolving by location id fell back to the global env number at
+      // a studio with none, copying another studio's templates into this
+      // location's rows. No number (or no location) → sync_error, Meta never
+      // called, the cache is still served.
+      const own = await ownNumberOrRefusal(locationId, 'wa-templates-sync')
+      if (!own.ok) throw new Error(own.error)
+      const metaTemplates = await getMetaTemplates(100, { config: own.config })
 
       let failed = 0
       for (const mt of metaTemplates) {
@@ -119,7 +126,8 @@ export async function GET(request) {
   return NextResponse.json({ success: true, templates: data, ...syncField })
 }
 
-// POST /api/whatsapp/templates — create template and submit to Meta
+// POST /api/whatsapp/templates — create template and submit to Meta. MANAGER_ROLES
+// at the location created at, the resubmit rule (WATPLROLE.1).
 export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
@@ -130,11 +138,25 @@ export async function POST(request) {
   const locationId = body.location_id || user.activeLocation?.id
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
+  // WATPLROLE.1 — membership alone let any staff member submit a template to
+  // Meta under the studio's name. Same rule as resubmit: MANAGER_ROLES AT the
+  // location created at (never the active studio's role). No location at all
+  // fails closed here instead of creating a row with none.
+  if (!hasRoleAtLocation(user, locationId, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  }
 
   // Meta refuses a malformed button with a generic code-100 "Invalid parameter"
   // that names neither the button nor the rule. Fail here instead, with both.
   const buttonError = componentsButtonsError(body.components)
   if (buttonError) return NextResponse.json({ success: false, error: buttonError }, { status: 400 })
+
+  // WACONFIGFALLBACK.1 — submit on THIS location's own WABA. The create was
+  // called with no location at all, so every template went to the global env
+  // number's WABA whatever location it was saved under. No number → 409 and
+  // Meta is never called; a failed lookup → 500.
+  const own = await ownNumberOrRefusal(locationId, 'wa-templates-create')
+  if (!own.ok) return NextResponse.json({ success: false, error: own.error }, { status: own.status })
 
   const db = createServerClient()
 
@@ -146,7 +168,7 @@ export async function POST(request) {
       language: body.language || 'en',
       components: body.components || [],
       parameterFormat: body.parameter_format,
-    })
+    }, { config: own.config })
 
     // Save locally with Meta's ID and status
     const { data, error } = await db.from('whatsapp_templates').insert({

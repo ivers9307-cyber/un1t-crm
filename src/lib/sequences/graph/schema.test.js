@@ -16,10 +16,13 @@ describe('graph schema constants', () => {
     // FUNNEL.1 — stage placement is classifier-derived. The type stays
     // in NODE_TYPES so legacy drafts pass the whole-graph shape check
     // on save; ACTIVE_NODE_TYPES (palette + AI vocabulary) excludes it.
-    expect(RETIRED_NODE_TYPES).toEqual(['move_pipeline_stage'])
+    // TWILIO-RETIRE.1 retired `sms` the same way.
+    expect(RETIRED_NODE_TYPES).toEqual(['move_pipeline_stage', 'sms'])
     expect(NODE_TYPES).toContain('move_pipeline_stage')
+    expect(NODE_TYPES).toContain('sms')
     expect(ACTIVE_NODE_TYPES).not.toContain('move_pipeline_stage')
-    expect(ACTIVE_NODE_TYPES).toEqual(NODE_TYPES.filter((t) => t !== 'move_pipeline_stage'))
+    expect(ACTIVE_NODE_TYPES).not.toContain('sms')
+    expect(ACTIVE_NODE_TYPES).toEqual(NODE_TYPES.filter((t) => !['move_pipeline_stage', 'sms'].includes(t)))
     // A legacy graph containing the retired node must still parse.
     const legacy = {
       version: 1,

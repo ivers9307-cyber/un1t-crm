@@ -14,7 +14,7 @@
 // abort signal, a tracing tag) doesn't break the call sites.
 //
 // Step types covered (mig 087 / 089 / 091):
-//   email, whatsapp, sms                — message sends
+//   email, whatsapp                     — message sends (sms retired)
 //   apply_tag, update_field             — contact mutations
 //   branch                              — picks a continuation
 //   webhook                             — outbound HTTP
@@ -36,12 +36,11 @@ import {
   getOrCreateConversation,
   renderTemplateBody,
 } from '@/lib/whatsapp'
-import { sendLocationSms, TwilioError } from '@/lib/twilio'
 import { logWarn } from '@/lib/log'
+import { isWhatsAppNumberMissing } from '@/lib/whatsapp-number-missing'
 import { signStartPrefillToken } from '@/lib/start-prefill-token'
 import { getLocationBranding } from '@/lib/location-branding'
 import { isFrequencyCapped, frequencyCapDeferUntil, FrequencyCapDeferral, stampMarketingTouch } from '@/lib/frequency-cap'
-import { overlayConnections } from '@/lib/connection-registry'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
 import { paymentFromEnrollment, paymentCtaHtml, payAmountPhrase, dunningPresendGate } from '@/lib/dunning-payment'
 import { URL_BUTTON_MAPPING_KEY, dynamicUrlButtonIndex } from '@/lib/whatsapp-template-buttons'
@@ -81,9 +80,8 @@ export function isTransactionalEnrolment(enrollment) {
 // hygiene gates above it — a suppressed contact is a recorded skip
 // (excluded anyway) and must be neither deferred nor stamped.
 //
-// SMS steps are deliberately NOT gated or stamped in this slice (the
-// cap covers email + WhatsApp, the two channels campaigns/broadcasts
-// share) — extend here if SMS marketing volume ever warrants it.
+// The cap covers email + WhatsApp, the two channels campaigns/broadcasts
+// share (SMS was retired with Twilio, TWILIO-RETIRE.1).
 // LOCCOMMS.5 — resolve the contact's consent row for the SEQUENCE'S location.
 //
 // Sequences do not go through buildAudienceQuery, so the PR 3 cutover missed
@@ -380,9 +378,10 @@ export async function sendEmailStep(db, { enrollment, step, sequence, contact, f
   // effort in the helper; stamped even while the cap is disabled).
   await stampMarketingTouch(db, [contact.id])
 
-  // Bump per-step metric.
-  // supabase-js builders don't have .catch — try/catch around await.
-  try { await db.rpc('increment_step_sent', { p_step_id: step.id }) } catch {}
+  // STEPSENTRPC.1 — no per-step counter bump. increment_step_sent never
+  // existed (no migration, not in pg_proc), so this 404'd on every send and
+  // the resolved { error } was dropped; sequence_steps.total_* never moved.
+  // Per-step email numbers are counted from email_sends (/stats).
 
   return result?.messageId || null
 }
@@ -552,20 +551,36 @@ export async function sendWhatsappStep(db, { enrollment, step, sequence, contact
   }
 
   // COMMS-AUDIT 2026-07-10: route from the sequence location's
-  // whatsapp_numbers row. Without { locationId } config resolution
-  // falls back to env vars — the wrong sender for any location that
-  // isn't the env default, and a dead send if the env token has
-  // rotted. The sequence's location is authoritative here (same as
+  // whatsapp_numbers row. Without { locationId } config resolution has
+  // no number to use and refuses (it used to fall back to the global env
+  // number, the wrong sender for every other location). The sequence's location is authoritative here (same as
   // broadcasts, which pass broadcast.location_id): the template,
   // branding, flow_token and conversation above are all already
   // resolved against sequence.location_id.
-  const result = await sendTemplateMessage(
-    contact.wa_phone,
-    template.name,
-    template.language,
-    components,
-    { locationId: sequence.location_id },
-  )
+  //
+  // WACONFIGFALLBACK.1 — a sequence location with no WhatsApp number of its
+  // own used to send from the global env number. It is now refused, and the
+  // refusal is a RECORDED SKIP, not a throw: a throw feeds error_count and
+  // can auto-pause the whole enrolment, killing its email steps too (a
+  // dunning or trial run losing its emails over a WhatsApp setup gap). Logged
+  // structurally, like PAYLINK.7, so whoever watches the logs sees the gap.
+  let result
+  try {
+    result = await sendTemplateMessage(
+      contact.wa_phone,
+      template.name,
+      template.language,
+      components,
+      { locationId: sequence.location_id },
+    )
+  } catch (e) {
+    if (!isWhatsAppNumberMissing(e)) throw e
+    logWarn('sequences', 'WhatsApp step skipped: no WhatsApp number at the sequence location', {
+      sequenceId: sequence.id, stepId: step.id, contactId: contact.id, locationId: sequence.location_id,
+    })
+    await recordStepSkip(db, { contact, sequence, step, channel: 'WhatsApp', reason: 'no WhatsApp number at this location' })
+    return null
+  }
 
   // Log to whatsapp_messages so the inbox + analytics see it.
   // Conversation is upserted via the helper to attribute correctly.
@@ -608,133 +623,24 @@ export async function sendWhatsappStep(db, { enrollment, step, sequence, contact
   // effort in the helper; stamped even while the cap is disabled).
   await stampMarketingTouch(db, [contact.id])
 
-  // Bump per-step metric.
-  // supabase-js builders don't have .catch — try/catch around await.
-  try { await db.rpc('increment_step_sent', { p_step_id: step.id }) } catch {}
+  // STEPSENTRPC.1 — no per-step counter bump (increment_step_sent never
+  // existed; see sendEmailStep).
 
   return sendRowId
 }
 
-// ── sms (mig 062) ───────────────────────────────────────────────
+// ── sms (mig 062) — RETIRED (TWILIO-RETIRE.1) ───────────────────
+//
+// SMS left with Twilio. A legacy step row can still exist (the DB
+// CHECK admits 'sms' and the rows stay on disk as history), so the
+// runner keeps a branch for it — same reasoning as the retired
+// move_pipeline_stage: an unknown step_type throws and would wedge the
+// enrolment on this step forever. The step records a skip on the
+// contact's timeline and the enrolment advances normally.
 
-export async function sendSmsStep(db, { enrollment, step, sequence, contact }) {
-  if (!step.sms_body) {
-    throw new Error('SMS step has no sms_body.')
-  }
-
-  // Resolve the sequence's location up front — needed both for the
-  // TENANT.8 (item 3b) bundle/feature gate below AND (already, before
-  // this change) the alpha sender ID (mig 059). Sequences are pinned
-  // to one location, so every enrolment in this sequence sends from
-  // the same sender. Config fault (no location row at all) still
-  // throws — that needs an operator fix, unlike a per-contact skip.
-  let { data: smsLocation } = await db
-    .from('locations')
-    .select('id, name, twilio_alpha_sender_id, features')
-    .eq('id', sequence.location_id)
-    .single()
-  if (!smsLocation) {
-    throw new Error('Sequence location not found — cannot resolve SMS sender.')
-  }
-  if (!(await channelEnabledOrSkip(db, {
-    location: smsLocation, sequence, step, contact, channel: 'SMS', featureKey: 'sms',
-  }))) {
-    return null
-  }
-
-  // Per-contact gates — recorded SKIPS, never errors (COMMSFIX.E.1).
-  // These used to THROW, feeding error_count until MAX_ERRORS auto-
-  // paused the whole enrolment — the identical wedge class fixed for
-  // email/WA after the live 2026-07-10 incident (see recordStepSkip).
-  if (!contact?.phone) {
-    await recordStepSkip(db, { contact, sequence, step, channel: 'SMS', reason: 'contact has no phone number' })
-    return null
-  }
-  // Send-time consent gate — the per-location model every other send
-  // path already enforces (LOCCOMMS.5): resolve the row for the
-  // SEQUENCE'S location; row absent = that location may never send.
-  // sendSmsStep was the last step still bypassing it (it only read
-  // the global sms_status), so a contact who opted out of SMS
-  // marketing for this location via the preference centre still got
-  // dunning SMS — the exact consent breach this programme prevents.
-  const smsConsent = locationConsent(contact, sequence)
-  if (smsConsent?.sms_marketing !== true) {
-    await recordStepSkip(db, {
-      contact, sequence, step, channel: 'SMS',
-      reason: smsConsent
-        ? 'no SMS marketing consent for this location'
-        : 'not on this location’s list',
-    })
-    return null
-  }
-  // Global channel-status gate (STOP replies, carrier invalidation).
-  // Mirrors the broadcast reachability predicate; absent = active
-  // (back-compat for pre-mig-059 contacts).
-  if (contact.sms_status && contact.sms_status !== 'active') {
-    await recordStepSkip(db, { contact, sequence, step, channel: 'SMS', reason: `sms_status is '${contact.sms_status}'` })
-    return null
-  }
-
-  // PRESEND.1 — belt and braces on the dunning exit. The invoice webhook
-  // (PAID / FORGIVEN -> exitDunningForContact) is the only thing that stops a
-  // reminder run today; if it is late or down, someone who has already paid
-  // gets chased anyway. Re-ask Glofox whether this run's invoice is still
-  // overdue, immediately before the send. No-ops (and costs nothing) for every
-  // non-dunning enrolment, and fails open on any Glofox trouble.
-  {
-    const presend = await dunningPresendGate(db, { enrollment, contact, sequence })
-    if (!presend.proceed) {
-      await recordStepSkip(db, { contact, sequence, step, channel: 'SMS', reason: presend.reason })
-      return null
-    }
-  }
-
-  // INTEG-A2 dual-read: registry twilio_sender row first. Reuses the
-  // location row fetched above for the bundle gate.
-  const location = await overlayConnections(db, smsLocation, ['twilio_sender'])
-
-  // Apply merge tags. Same set as email + ad-hoc SMS (first_name,
-  // name, location_name, etc.).
-  const renderedBody = applyMergeTags(step.sms_body, contact, {
-    location_name: location.name || '',
-  })
-
-  let result
-  try {
-    result = await sendLocationSms({ location, to: contact.phone, body: renderedBody })
-  } catch (e) {
-    const msg = e instanceof TwilioError
-      ? `Twilio ${e.code || e.status || ''}: ${e.message}`.trim()
-      : (e?.message || 'SMS send failed')
-    throw new Error(msg)
-  }
-
-  // Activity timeline entry. Same shape as the broadcast + ad-hoc
-  // send paths (type='sms_sent', cyan chip in the contact page's
-  // activityIcons map). Its id doubles as the step's send id — a Twilio
-  // "SM…" sid is NOT a uuid and would hit the same 22P02 re-send loop
-  // the WhatsApp step did (last_step_send_id is a uuid column).
-  const { data: activityRow, error: activityErr } = await db.from('activities').insert({
-    contact_id: contact.id,
-    location_id: sequence.location_id,
-    type: 'sms_sent',
-    subject: `SMS sequence step: ${sequence.name || 'Untitled sequence'}`,
-    note: renderedBody,
-  }).select('id').single()
-  // SINGLEERR.1 — same as the WhatsApp step: this id doubles as the step's send
-  // id, so a rejected insert returned null and said nothing. The SMS is already
-  // out, so log rather than throw.
-  if (activityErr) {
-    logWarn('sequences', 'sms activity insert failed after a successful send', {
-      err: activityErr.message, stepId: step.id, contactId: contact.id,
-    })
-  }
-
-  // Bump per-step metric.
-  // supabase-js builders don't have .catch — try/catch around await.
-  try { await db.rpc('increment_step_sent', { p_step_id: step.id }) } catch {}
-
-  return activityRow?.id || null
+export async function retiredSmsStep(db, { step, sequence, contact }) {
+  await recordStepSkip(db, { contact, sequence, step, channel: 'SMS', reason: 'the SMS channel has been retired' })
+  return null
 }
 
 // ── apply_tag (Tier 1B / mig 087) ───────────────────────────────

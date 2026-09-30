@@ -27,9 +27,6 @@ vi.mock('@/lib/whatsapp', () => ({
 vi.mock('@/lib/location-branding', () => ({
   getLocationBranding: vi.fn(async () => ({ companyName: 'UN1T' })),
 }))
-vi.mock('@/lib/twilio', () => ({
-  sendLocationSms: vi.fn(async () => ({ sid: 'SM1' })), TwilioError: class TwilioError extends Error {},
-}))
 vi.mock('@/lib/glofox', () => ({
   glofoxCredentialsForLocation: vi.fn(),
   getGlofoxInvoicePaymentLink: vi.fn(),
@@ -38,10 +35,9 @@ vi.mock('@/lib/glofox', () => ({
 }))
 vi.mock('@/lib/sequences/enrollment-status', () => ({ setEnrollmentStatus: vi.fn() }))
 
-import { sendEmailStep, sendWhatsappStep, sendSmsStep } from './steps.js'
+import { sendEmailStep, sendWhatsappStep } from './steps.js'
 import { sendMarketingEmail } from '@/lib/postmark'
 import { sendTemplateMessage } from '@/lib/whatsapp'
-import { sendLocationSms } from '@/lib/twilio'
 import { glofoxCredentialsForLocation, getGlofoxOverdueInvoices } from '@/lib/glofox'
 import { setEnrollmentStatus } from '@/lib/sequences/enrollment-status'
 
@@ -76,14 +72,13 @@ const route = (state) => {
     return { data: { id: 'tpl-1', name: 'outstanding_payment_link_', language: 'en', status: 'APPROVED', category: 'UTILITY', location_id: 'loc-1', components: [] } }
   }
   if (state.table === 'whatsapp_messages') return { data: { id: 'msg-row-1' } }
-  if (state.table === 'locations') return { data: { id: 'loc-1', name: 'Stillorgan', twilio_alpha_sender_id: null, features: null, settings: {} } }
+  if (state.table === 'locations') return { data: { id: 'loc-1', name: 'Stillorgan', features: null, settings: {} } }
   return {}
 }
 
 const sequence = { id: 'seq-1', name: 'Overdue membership payment', location_id: 'loc-1' }
 const emailStep = { id: 'st-1', step_order: 3, subject: 'Still outstanding', html_content: '<p>hi</p>' }
 const waStep = { id: 'st-2', step_order: 2, whatsapp_template_id: 'tpl-1', whatsapp_variables: {} }
-const smsStep = { id: 'st-3', step_order: 4, sms_body: 'hi' }
 
 const contact = {
   id: 'c1', email: 'a@x.ie', phone: '+353871234567', wa_phone: '+353871234567',
@@ -127,13 +122,6 @@ describe('PRESEND.1 — a settled invoice stops the send on every channel', () =
     expect(sendMarketingEmail).not.toHaveBeenCalled()
     expect(skipRows(statements).some(a => /no longer overdue/.test(a.subject))).toBe(true)
   })
-
-  it('SMS: nothing is sent', async () => {
-    const { db } = makeDb(route)
-    const r = await sendSmsStep(db, { enrollment: dunningRun, step: smsStep, sequence, contact })
-    expect(r).toBeNull()
-    expect(sendLocationSms).not.toHaveBeenCalled()
-  })
 })
 
 describe('PRESEND.1 — a still-overdue invoice sends exactly as before', () => {
@@ -161,11 +149,9 @@ describe('PRESEND.1 — non-dunning sequences are untouched', () => {
     const { db } = makeDb(route)
     await sendEmailStep(db, { enrollment: marketingRun, step: emailStep, sequence, contact, frequencyCap: { enabled: false } })
     await sendWhatsappStep(db, { enrollment: marketingRun, step: waStep, sequence, contact, frequencyCap: { enabled: false } })
-    await sendSmsStep(db, { enrollment: marketingRun, step: smsStep, sequence, contact })
     expect(getGlofoxOverdueInvoices).not.toHaveBeenCalled()
     expect(sendMarketingEmail).toHaveBeenCalled()
     expect(sendTemplateMessage).toHaveBeenCalled()
-    expect(sendLocationSms).toHaveBeenCalled()
   })
 })
 

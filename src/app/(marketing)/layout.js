@@ -61,8 +61,8 @@ const TABS = [
   // on it alone, so a device_control-only holder needs the tab to show too.
   { id: 'automations', label: 'Automations',  href: '/automations', perms: ['automations', 'email', 'whatsapp', 'device_control'] },
   { id: 'landing',     label: 'Landing page', href: '/welcome',     perms: ['landing_page'], newTab: true },
-  { id: 'send',        label: 'Send',         href: '/communications/send',        perms: ['email', 'whatsapp', 'sms'] },
-  { id: 'sent',        label: 'Sent',         href: '/communications/sent',        perms: ['email', 'whatsapp', 'sms'] },
+  { id: 'send',        label: 'Send',         href: '/communications/send',        perms: ['email', 'whatsapp'] },
+  { id: 'sent',        label: 'Sent',         href: '/communications/sent',        perms: ['email', 'whatsapp'] },
   { id: 'templates',   label: 'Templates',    href: '/communications/templates',   perms: ['email', 'whatsapp'] },
   { id: 'segments',    label: 'Segments',     href: '/communications/segments',    perms: ['email', 'whatsapp'], roles: MANAGER_ROLES },
   { id: 'list-health', label: 'List health',  href: '/communications/list-health', perms: ['email'] },

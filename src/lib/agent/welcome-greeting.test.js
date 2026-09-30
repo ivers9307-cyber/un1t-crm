@@ -165,3 +165,18 @@ describe('maybeSendWelcomeGreeting', () => {
     errSpy.mockRestore()
   })
 })
+
+// WACONFIGFALLBACK.1 — the greeting only fires for inbound, which only lands at
+// a location that owns the receiving number, so a refusal here means the
+// number was removed between receipt and reply. It used to go out on the
+// global env number; now it is a quiet { sent:false }, nothing logged.
+describe('maybeSendWelcomeGreeting — no WhatsApp number (WACONFIGFALLBACK.1)', () => {
+  it('sent:false, never throws, nothing logged to the thread', async () => {
+    const { WhatsAppNumberMissingError } = await import('@/lib/whatsapp-number-missing')
+    sendTextMessage.mockRejectedValueOnce(new WhatsAppNumberMissingError('loc1'))
+    const db = fakeDb({ customerAgent: { enabled: true } })
+    const r = await maybeSendWelcomeGreeting(db, CTX)
+    expect(r).toEqual({ sent: false, reason: 'exception' })
+    expect(db.inserted).toEqual([])
+  })
+})

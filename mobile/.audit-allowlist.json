@@ -18,7 +18,16 @@
     "2.0.2 is the LATEST published version — no patched release exists to bump or override to (upstream's",
     "last release is 2025-04-02; verified against the GitHub advisories and the npm registry). Re-check",
     "`npm view image-size versions` at expiry; the moment a patched release lands, fix via override on",
-    "metro's `image-size` dep and delete both entries."
+    "metro's `image-size` dep and delete both entries.",
+    "",
+    "The brace-expansion accepts (DEPAUDIT.5, 2026-09-30) ARE fixable, unlike image-size. TWO vulnerable copies sit in",
+    "mobile/package-lock.json and both accepts cover both (the allowlist gates by advisory id, not by copy): 2.1.4 via",
+    "@bacons/apple-targets > glob@10 > minimatch@9 (declares ^2.0.2, admits 2.1.7), and the root 5.0.9 via expo's",
+    "build tooling (@expo/cli, @expo/metro-config, @expo/fingerprint, @expo/config, expo-updates) > glob@13 > minimatch@10",
+    "(admits 5.0.12). `cd mobile && npm update brace-expansion --package-lock-only` moves both (a 12-line lockfile diff,",
+    "verified 30 Sep). They are accepted instead because mobile/package-lock.json is an OTA publish path and neither copy",
+    "is imported by app code (nothing under mobile/app, components or lib imports glob, minimatch or brace-expansion).",
+    "Take the lockfile bump with the next native release and delete both entries then."
   ],
   "accepted": [
     {
@@ -32,6 +41,18 @@
       "package": "image-size",
       "reason": "Same code path and posture as GHSA-w3rx-r6r6-pgpr: metro's build-time asset dimension probe over repo-owned images; JXL/HEIF infinite-loop variant. Not runtime-reachable in the app; worst case is a hung CI build from a malicious committed image. No patched version exists (vulnerable range <= 2.0.2 = every published release).",
       "expires": "2026-11-15"
+    },
+    {
+      "id": "GHSA-6j4f-fj2g-mc7p",
+      "package": "brace-expansion",
+      "reason": "Build-time only, first-party input only. Two vulnerable copies, both covered: (a) 2.1.4 via @bacons/apple-targets (the WIDGET.1 Expo config plugin) > glob@10 > minimatch@9, whose only globSync calls use patterns hard-coded in the plugin (`./targets/*/expo-target.config.@(json|js)`, `preview/*.xcassets`, `_shared/*`, `*.entitlements`; app.config.js passes no root/match options); (b) the root 5.0.9 via expo's build tooling (@expo/cli, @expo/metro-config, @expo/fingerprint, @expo/config, expo-updates) > glob@13 > minimatch@10, globbing repo paths with patterns the tooling and this repo write. Both run on the build machine (config evaluation, prebuild, bundling, fingerprinting); nothing under mobile/app, mobile/components or mobile/lib imports glob, minimatch or brace-expansion, so no attacker-supplied pattern ever reaches brace expansion; the worst case is a hung build from a pattern we wrote ourselves. Variant: recursion in parseCommaParts (fixed in 2.1.5 / 5.0.10).",
+      "expires": "2026-12-15"
+    },
+    {
+      "id": "GHSA-qhr7-859c-m2p7",
+      "package": "brace-expansion",
+      "reason": "Build-time only, first-party input only. Two vulnerable copies, both covered: (a) 2.1.4 via @bacons/apple-targets (the WIDGET.1 Expo config plugin) > glob@10 > minimatch@9, whose only globSync calls use patterns hard-coded in the plugin (`./targets/*/expo-target.config.@(json|js)`, `preview/*.xcassets`, `_shared/*`, `*.entitlements`; app.config.js passes no root/match options); (b) the root 5.0.9 via expo's build tooling (@expo/cli, @expo/metro-config, @expo/fingerprint, @expo/config, expo-updates) > glob@13 > minimatch@10, globbing repo paths with patterns the tooling and this repo write. Both run on the build machine (config evaluation, prebuild, bundling, fingerprinting); nothing under mobile/app, mobile/components or mobile/lib imports glob, minimatch or brace-expansion, so no attacker-supplied pattern ever reaches brace expansion; the worst case is a hung build from a pattern we wrote ourselves. Variant: recursion on nested brace groups (fixed in 2.1.6 / 5.0.11).",
+      "expires": "2026-12-15"
     }
   ]
 }

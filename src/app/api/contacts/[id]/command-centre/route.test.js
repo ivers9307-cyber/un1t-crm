@@ -228,7 +228,7 @@ describe('GET /api/contacts/[id]/command-centre', () => {
     expect(j.notes).toHaveLength(1)
     expect(j.sequences).toHaveLength(1)
     expect(j.wa).toMatchObject({ window_open: true, window_expires_at: future })
-    expect(j.permissions).toEqual({ whatsapp: false, sms: false, email: false, kudos: false })
+    expect(j.permissions).toEqual({ whatsapp: false, email: false, kudos: false })
     // no `whatsapp` permission → template table never touched
     expect(db.__queried).not.toContain('whatsapp_templates')
     expect(j.composer_templates).toEqual([])
@@ -248,7 +248,7 @@ describe('GET /api/contacts/[id]/command-centre', () => {
     createServerClient.mockReturnValue(db)
     const res = await GET(req('?scope=drawer'), props)
     const j = await res.json()
-    expect(j.permissions).toEqual({ whatsapp: false, sms: false, email: false, kudos: true })
+    expect(j.permissions).toEqual({ whatsapp: false, email: false, kudos: true })
   })
 
   it('drawer scope loads composer templates when the caller can WhatsApp', async () => {

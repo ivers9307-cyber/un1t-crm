@@ -1,6 +1,7 @@
-// CONSENTCLIENTWRITE.1 guard (mig 660). anon/authenticated hold SELECT only on
-// public.contact_preferences, public.contact_location_preferences and
-// public.consent_log, and each keeps one policy, <table>_select FOR SELECT.
+// CONSENTCLIENTWRITE.1 guard (mig 660). anon/authenticated hold no write
+// privilege on public.contact_preferences, public.contact_location_preferences
+// and public.consent_log. (Since mig 662, CONSENTREAD.1, they hold no privilege
+// at all and the tables have no policy: tests/consent-tables-client-closed-guard.test.js.)
 // Pinned here:
 //
 //  1. Browser and phone code never WRITES these tables. Client-run code =

@@ -237,3 +237,81 @@ describe('the retry count in the copy follows the attempt cap', () => {
     }
   })
 })
+
+// TRIALGRANT.1 — the approve path's trial grant is judged; a grant that did
+// not happen lands the card on 'failed' with one of these codes, and nothing
+// was booked.
+describe('failureExplanation: the trial grant (TRIALGRANT.1)', () => {
+  const failed = (result) => failureExplanation({ status: 'failed', details: { result } })
+
+  it('TRIAL_GRANT_FAILED says nothing was booked, keeps Glofox’s code visible, and says a retry will not stack a trial', () => {
+    const out = failed({ ok: false, message_code: 'TRIAL_GRANT_FAILED', glofox_message_code: 'PURCHASE_NOT_ALLOWED' })
+    expect(out).toMatch(/would not add the trial/i)
+    expect(out).toMatch(/not attempted/i)
+    expect(out).toContain('PURCHASE_NOT_ALLOWED')
+    expect(out).toMatch(/does not add another trial/i)
+  })
+
+  it('TRIAL_GRANT_FAILED without a Glofox code still reads cleanly', () => {
+    expect(failed({ ok: false, message_code: 'TRIAL_GRANT_FAILED', glofox_message_code: null })).not.toMatch(/Glofox said/)
+  })
+
+  it('TRIAL_NOT_CONFIGURED and TRIAL_GRANT_UNVERIFIED have their own copy', () => {
+    expect(failed({ ok: false, message_code: 'TRIAL_NOT_CONFIGURED' })).toMatch(/no trial membership is set/i)
+    expect(failed({ ok: false, message_code: 'TRIAL_GRANT_UNVERIFIED' })).toMatch(/no second trial/i)
+  })
+
+  it('no-credits AFTER a trial was added says so (the trial may start later); a skipped or absent grant keeps the plain copy', () => {
+    expect(failed({ ok: false, message_code: 'YOU_HAVE_NO_CREDITS_LEFT', trial_grant: { ok: true, invoice_id: 'inv-1' } })).toMatch(/trial was added/i)
+    expect(failed({ ok: false, message_code: 'YOU_HAVE_NO_CREDITS_LEFT', trial_grant: { ok: true, skipped: 'credits_present' } })).toMatch(/grant a credit/i)
+    expect(failed({ ok: false, message_code: 'YOU_HAVE_NO_CREDITS_LEFT' })).toMatch(/grant a credit/i)
+  })
+
+  it('needs_credit_grant card copy no longer promises the booking completes', () => {
+    const out = whyFlagged({ kind: 'class_booking', details: { reason: 'needs_credit_grant' } })
+    expect(out).toMatch(/adds the trial in Glofox first/i)
+    expect(out).not.toMatch(/completes the booking automatically/i)
+  })
+})
+
+// Review of TRIALGRANT.1 — the write-ahead grant record adds a code, and an
+// unfinished or unanswered purchase is a DOUBT, not a refusal: staff check
+// Glofox for the trial's €0 invoice rather than buy blind.
+describe('failureExplanation: the write-ahead trial grant (TRIALGRANT.1 review)', () => {
+  const failed = (result) => failureExplanation({ status: 'failed', details: { result } })
+
+  it('TRIAL_GRANT_UNRECORDED says nothing was bought or booked, and to retry', () => {
+    const out = failed({ ok: false, message_code: 'TRIAL_GRANT_UNRECORDED' })
+    expect(out).toMatch(/no trial was bought/i)
+    expect(out).toMatch(/nothing was booked/i)
+    expect(out).toMatch(/retry/i)
+  })
+
+  it('TRIAL_GRANT_UNVERIFIED points staff at the €0 trial invoice, and still promises no second trial', () => {
+    const out = failed({ ok: false, message_code: 'TRIAL_GRANT_UNVERIFIED', outcome_unknown: true })
+    expect(out).toMatch(/€0 trial invoice/)
+    expect(out).toMatch(/no second trial/i)
+  })
+
+  it('a purchase Glofox never answered is not "Glofox would not add the trial"', () => {
+    const out = failed({ ok: false, message_code: 'TRIAL_GRANT_FAILED', http_status: 0, outcome_unknown: true })
+    expect(out).toMatch(/did not answer/i)
+    expect(out).toMatch(/€0 trial invoice/)
+    expect(out).not.toMatch(/would not add the trial/i)
+  })
+
+  it('a pending needs_credit_grant card stamped unsettled at the mint says approving will not buy a second trial', () => {
+    const out = whyFlagged({ kind: 'class_booking', details: { reason: 'needs_credit_grant', trial_grant: { ok: false, code: 'TRIAL_GRANT_FAILED', outcome_unknown: true } } })
+    expect(out).toMatch(/no clear answer/i)
+    expect(out).toMatch(/€0 trial invoice/)
+    expect(out).toMatch(/not buy a second trial/i)
+    expect(out).not.toMatch(/Approving adds the trial/)
+  })
+
+  it('a purchase that answered 5xx reads as no clear answer, not "would not add" (GLOFOXPOSTRETRY.1)', () => {
+    const out = failed({ ok: false, message_code: 'TRIAL_GRANT_FAILED', http_status: 503, outcome_unknown: true })
+    expect(out).toMatch(/server error/i)
+    expect(out).toMatch(/€0 trial invoice/)
+    expect(out).not.toMatch(/would not add the trial/i)
+  })
+})

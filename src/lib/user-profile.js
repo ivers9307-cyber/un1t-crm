@@ -34,3 +34,22 @@ export function pickUserProfile(row) {
   }
   return out
 }
+
+// AUTHUSERPICK.1 — the Supabase auth user as the user object carries it.
+//
+// getCurrentUser() used to put the whole auth user on the `user` key: identities
+// (each with the provider's identity_data), app_metadata, user_metadata,
+// phone, factors, confirmation and sign-in timestamps. The object is
+// serialised into every page (AppShell, and ~30 page → client-component
+// hand-offs). Nothing reads any of it (census: plan C58 §2;
+// tests/user-profile-consumers.test.js keeps it true). id + email is the shape
+// the studio-PIN path has always produced (getUserFromStudioSession), so every
+// auth source now yields the same two fields. Under "View as" this is still
+// the MASTER's auth user (the profile fields are the target's).
+export const AUTH_USER_FIELDS = Object.freeze(['id', 'email'])
+
+/** `{ id, email }` of an auth user (null for a missing field); null for a non-object. */
+export function pickAuthUser(authUser) {
+  if (authUser === null || typeof authUser !== 'object') return null
+  return { id: authUser.id ?? null, email: authUser.email ?? null }
+}

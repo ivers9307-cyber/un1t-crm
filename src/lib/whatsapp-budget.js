@@ -32,7 +32,7 @@
 // inbox template sends) COUNT toward usage but are NOT gated: they are
 // conversation-level and low-volume, and blocking a booking confirmation to
 // protect a marketing budget would be backwards. Null/unknown/UNLIMITED tier
-// (or an env-fallback config with no location) = no gate.
+// (or a config with no location) = no gate.
 
 import { tierLabel } from './whatsapp-number-health'
 
@@ -114,8 +114,8 @@ export async function countBusinessInitiatedContactsLast24h(db, locationId) {
 
 /**
  * The location's current send budget against `tier`, or null when there is no
- * gate (UNLIMITED / unknown tier, or an env-fallback config with no location —
- * matching the quality gate's "env configs carry no rating" posture).
+ * gate (UNLIMITED / unknown tier, or a config with no location, which no
+ * resolver produces since WACONFIGFALLBACK.1 retired the env number).
  */
 export async function getSendBudget(db, { locationId, tier } = {}) {
   if (!locationId || tierDailyLimit(tier) == null) return null

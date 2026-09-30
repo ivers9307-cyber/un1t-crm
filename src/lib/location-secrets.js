@@ -17,7 +17,7 @@
 // rule's depth cap of 12. So a credential added to `settings` later (a new
 // integration slice, a key inside an array) is hidden without anyone
 // remembering this file. That also masks the `bca_config` COLUMN whole where
-// a row carries it (the /api/staff embeds and /admin/matrix read '*'): no
+// a row carries it (/settings/locations/[id] reads '*'): no
 // consumer of a redacted row reads it (the BCA routes and the integrations
 // tab read it fresh, not off these rows), and the user object never loads it
 // (USER_LOCATION_COLUMNS). Booleans and blank values are left as they are.

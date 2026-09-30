@@ -21,7 +21,6 @@
 //   thinq          thinq_pat                      ⇄ access_token
 //                  thinq_client_id                ⇄ config.client_id
 //                  thinq_country_code             ⇄ config.country_code
-//   twilio_sender  twilio_alpha_sender_id         ⇄ config.sender_id
 //   bca            bca_config                     ⇄ config
 //
 // Design notes:
@@ -45,8 +44,10 @@
 import { logError, logWarn } from './log'
 
 export const DUAL_READ_PLATFORMS = Object.freeze([
-  'glofox', 'unifi', 'sensibo', 'thinq', 'twilio_sender', 'bca',
+  'glofox', 'unifi', 'sensibo', 'thinq', 'bca',
 ])
+// 'twilio_sender' left this list with the SMS channel (TWILIO-RETIRE.1); its
+// registry rows are deactivated by mig 664 and nothing reads them.
 
 const ROW_COLUMNS =
   'id, location_id, platform, status, is_active, label, display_name, ' +
@@ -174,20 +175,6 @@ const PROVIDERS = {
         thinq_pat: row.access_token ?? null,
         thinq_client_id: row.config?.client_id ?? null,
         thinq_country_code: row.config?.country_code ?? null,
-      }
-    },
-  },
-
-  twilio_sender: {
-    legacySelect: 'id, twilio_alpha_sender_id',
-    rowFromLegacy(location) {
-      if (!location?.twilio_alpha_sender_id) return null
-      return { config: { sender_id: location.twilio_alpha_sender_id } }
-    },
-    applyRow(location, row) {
-      return {
-        ...location,
-        twilio_alpha_sender_id: row.config?.sender_id ?? null,
       }
     },
   },

@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { getCurrentUser, assertLocationAccessOr404, requireInboxPermission } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { setWhatsAppUserBlockState } from '@/lib/whatsapp'
+import { whatsappErrorStatus } from '@/lib/whatsapp-number-missing'
 
 const BlockSchema = z.object({ action: z.enum(['block', 'unblock']) })
 
@@ -36,7 +37,10 @@ export async function POST(request, props) {
   try {
     await setWhatsAppUserBlockState(conversation.wa_phone, blocked, { locationId: conversation.location_id })
   } catch (e) {
-    return NextResponse.json({ success: false, error: e?.message || 'Meta block call failed' }, { status: 502 })
+    // WACONFIGFALLBACK.1 — a location with no WhatsApp number of its own is a
+    // 409: the Block API on the env number blocked the sender on ANOTHER
+    // studio's number. Nothing is mirrored locally.
+    return NextResponse.json({ success: false, error: e?.message || 'Meta block call failed' }, { status: whatsappErrorStatus(e, 502) })
   }
 
   await db.from('whatsapp_conversations').update({ is_blocked: blocked }).eq('id', conversation.id)
