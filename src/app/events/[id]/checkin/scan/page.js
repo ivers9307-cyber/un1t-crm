@@ -3,10 +3,11 @@
 // a staff session (so a member opening their own QR can't self-check-in), then
 // the client posts the token to the scan endpoint and shows the result.
 
-import { redirect } from 'next/navigation'
+import { redirect, notFound } from 'next/navigation'
 import Link from 'next/link'
-import { getCurrentUser } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { createServerClient } from '@/lib/supabase'
+import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import ScanCheckinClient from '@/components/ScanCheckinClient'
 import { ArrowLeft } from 'lucide-react'
 
@@ -17,7 +18,19 @@ export default async function ScanCheckinPage(props) {
   const searchParams = await props.searchParams
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  if (!hasPermission(user, 'races')) redirect('/')
+  // PAGEGATES.1 — coarse pre-check, then the event's own location: the same
+  // decision POST /api/events/[id]/checkin/scan makes (membership 404, then
+  // `races` there), so the scanner never opens where the scan would 403.
+  if (!hasPermissionAtAnyLocation(user, 'races')) redirect('/')
+  const db = createServerClient()
+  const { data: race, error: raceErr } = await db
+    .from('race_events')
+    .select('id, location_id')
+    .eq('id', params.id)
+    .maybeSingle()
+  if (raceErr || !race) notFound()
+  if (assertLocationAccess(user, race.location_id)) notFound()
+  if (!hasPermissionForLocation(user, race.location_id, 'races')) redirect('/')
 
   const token = typeof searchParams?.t === 'string' ? searchParams.t : ''
 
