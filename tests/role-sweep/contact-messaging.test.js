@@ -24,6 +24,8 @@ import * as whatsapp from '@/app/api/contacts/[id]/whatsapp/route.js'
 import * as messaging from '@/app/api/contacts/[id]/messaging/route.js'
 import * as commandCentre from '@/app/api/contacts/[id]/command-centre/route.js'
 import * as tvUpload from '@/app/api/admin/tv-displays/upload/route.js'
+import * as tvUploadSign from '@/app/api/admin/tv-displays/upload/sign/route.js'
+import * as tvUploadFinalise from '@/app/api/admin/tv-displays/upload/finalise/route.js'
 
 const T = { getCurrentUser, createServerClient, describe, it, expect }
 const json = (method, body) => new Request('http://localhost/api/x', {
@@ -95,6 +97,18 @@ const upload = (loc) => {
 }
 describeGate('POST /api/admin/tv-displays/upload (tv_displays, web OR mobile, at location_id)', {
   call: upload,
+  forbidden: { status: 403, body: { success: false, error: 'Not authorised for TV displays' } },
+  hidden: NOT_MEMBER, cases: webOrMobileCases(['tv_displays']),
+}, T)
+// TVUPLOAD.1 (C93) — the phone's signed-upload pair: the same gate as the
+// multipart route above (src/lib/tv-upload-gate.js), on the same case table.
+describeGate('POST /api/admin/tv-displays/upload/sign (tv_displays, web OR mobile, at location_id)', {
+  call: (loc) => tvUploadSign.POST(json('POST', { kind: 'content', location_id: loc, file_name: 'art.png', mime: 'image/png', size: 4 })),
+  forbidden: { status: 403, body: { success: false, error: 'Not authorised for TV displays' } },
+  hidden: NOT_MEMBER, cases: webOrMobileCases(['tv_displays']),
+}, T)
+describeGate('POST /api/admin/tv-displays/upload/finalise (tv_displays, web OR mobile, at location_id)', {
+  call: (loc) => tvUploadFinalise.POST(json('POST', { kind: 'content', location_id: loc, path: `${loc}/1c000000-0000-4000-8000-000000000003.png` })),
   forbidden: { status: 403, body: { success: false, error: 'Not authorised for TV displays' } },
   hidden: NOT_MEMBER, cases: webOrMobileCases(['tv_displays']),
 }, T)
