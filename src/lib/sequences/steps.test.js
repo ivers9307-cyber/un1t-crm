@@ -713,7 +713,7 @@ describe('sendWhatsappStep — send-time consent gate + graceful skips (COMMS-AU
     await steps.sendWhatsappStep(db, {
       step, sequence, contact: { ...consentedContact, wa_phone: null },
     })
-    expect(db.rpcCalls).not.toContain('increment_step_sent')
+    expect(db.rpcCalls).toEqual([])
   })
 
   it('a skip still resolves even when the activities insert fails (never wedge the runner)', async () => {
@@ -734,7 +734,8 @@ describe('sendWhatsappStep — send-time consent gate + graceful skips (COMMS-AU
       [],
       { locationId: 'loc-1' },
     )
-    expect(db.rpcCalls).toContain('increment_step_sent')
+    // STEPSENTRPC.1 — no per-step counter RPC (increment_step_sent never existed).
+    expect(db.rpcCalls).toEqual([])
   })
 
   it('a missing template still throws (sequence-config fault → operator must fix; error path is correct)', async () => {
@@ -1024,7 +1025,8 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
       sequenceId: 'seq-9',
       sequenceStepId: 'st-9',
     }))
-    expect(db.rpcCalls).toContain('increment_step_sent')
+    // STEPSENTRPC.1 — no per-step counter RPC (increment_step_sent never existed).
+    expect(db.rpcCalls).toEqual([])
   })
 
   it('per-location email consent not true → recorded skip (broadcast and sequence paths must agree)', async () => {
@@ -1041,7 +1043,7 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
       expect(out).toBeNull()
       expect(db.activityInserts).toHaveLength(1)
       expect(db.activityInserts[0].subject).toMatch(/skipped/i)
-      expect(db.rpcCalls).not.toContain('increment_step_sent')
+      expect(db.rpcCalls).toEqual([])
     }
     expect(pm.sendMarketingEmail).not.toHaveBeenCalled()
   })
@@ -1085,7 +1087,7 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
     expect(pm.sendMarketingEmail).not.toHaveBeenCalled()
     expect(db.activityInserts).toHaveLength(1)
     expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toMatch(/repeat bounces/i)
-    expect(db.rpcCalls).not.toContain('increment_step_sent')
+    expect(db.rpcCalls).toEqual([])
   })
 
   it('email_suppressed_at null → sends normally (suppression is the exception, not the rule)', async () => {
@@ -1120,7 +1122,7 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
     expect(pm.sendMarketingEmail).not.toHaveBeenCalled()
     expect(db.activityInserts).toHaveLength(1)
     expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toMatch(/unsubscribe/i)
-    expect(db.rpcCalls).not.toContain('increment_step_sent')
+    expect(db.rpcCalls).toEqual([])
   })
 
   it('the skip does not crash on the preference URL derivation', async () => {
