@@ -5,6 +5,9 @@ import { sendFlowMessage } from '@/lib/whatsapp'
 import { whatsappErrorStatus } from '@/lib/whatsapp-number-missing'
 import { logError } from '@/lib/log'
 
+// Shown to staff by the inbox when Meta sent the Flow but its thread row was lost.
+const THREAD_ROW_NOT_RECORDED = 'The booking Flow was sent to the customer, but it could not be saved to this thread. Do not send it again.'
+
 // POST /api/whatsapp/conversations/[id]/send-flow — drop the location's
 // booking Flow (settings.whatsapp_flow) into an open conversation as an
 // in-session interactive flow message. No template/approval needed inside
@@ -103,7 +106,8 @@ export async function POST(request, props) {
     logError('wa-flow-send', 'thread row insert failed; the Flow was sent but is missing from the thread (no sent_by for Mia or the check-in runner)', {
       conversationId: conversation.id, locationId: conversation.location_id, err: rowErr,
     })
-    return NextResponse.json({ success: true, warning: 'thread_row_not_recorded' })
+    // `warnings` is the send route's convention, which the inbox alerts.
+    return NextResponse.json({ success: true, warnings: [THREAD_ROW_NOT_RECORDED] })
   }
 
   return NextResponse.json({ success: true })

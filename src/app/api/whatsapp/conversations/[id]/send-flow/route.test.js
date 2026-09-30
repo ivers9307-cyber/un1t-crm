@@ -87,7 +87,13 @@ describe('POST /api/whatsapp/conversations/[id]/send-flow — failures are not s
     createServerClient.mockReturnValue(stubDb({ insertError: BOOM }))
     const res = await post()
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ success: true, warning: 'thread_row_not_recorded' })
+    // The inbox alerts `warnings` (the send route's convention), so staff learn
+    // the Flow WENT and do not send a second one. Plain text, no em-dash.
+    const body = await res.json()
+    expect(body).toEqual({ success: true, warnings: [expect.any(String)] })
+    expect(body.warnings[0]).toMatch(/Flow was sent/)
+    expect(body.warnings[0]).toMatch(/Do not send it again/)
+    expect(body.warnings[0]).not.toMatch(/\u2014/)
     expect(sendFlowMessage).toHaveBeenCalledTimes(1)
     const logged = errSpy.mock.calls.map((c) => c.join(' ')).join('\n')
     expect(logged).toMatch(/thread row insert failed/)

@@ -40,3 +40,26 @@ describe('web WhatsApp inbox: template picker', () => {
     expect((INBOX.match(/data\.warnings\?\.length/g) || []).length).toBeGreaterThanOrEqual(2)
   })
 })
+
+// MIANITS fix — send-flow and react answer `{ success: true, warnings: [...] }`
+// when Meta took the action but the thread row was lost. The Flow handler
+// must show it, or staff see nothing in the thread and send a second Flow.
+// Pinned as source (no harness for this component): the handler's body.
+const handlerBody = (name) => {
+  const start = INBOX.indexOf(`async function ${name}(`)
+  expect(start).toBeGreaterThan(-1)
+  const next = INBOX.indexOf('\n  async function ', start + 1)
+  return INBOX.slice(start, next === -1 ? undefined : next)
+}
+
+describe('web WhatsApp inbox: send-flow and react warnings', () => {
+  it('handleSendFlow alerts the route\'s warnings on a successful send', () => {
+    expect(handlerBody('handleSendFlow')).toMatch(/if \(data\.warnings\?\.length\) alert\(data\.warnings\.join\('\\n\\n'\)\)/)
+  })
+
+  it('reactToMessage reads the response and alerts its warnings', () => {
+    const body = handlerBody('reactToMessage')
+    expect(body).toMatch(/await res\.json\(\)/)
+    expect(body).toMatch(/data\.warnings\?\.length/)
+  })
+})

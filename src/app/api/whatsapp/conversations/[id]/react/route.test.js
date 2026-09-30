@@ -96,7 +96,11 @@ describe('POST /api/whatsapp/conversations/[id]/react — a failed thread-row in
     createServerClient.mockReturnValue(stubDb({ insertError: BOOM }))
     const res = await post({ message_id: 'wamid.IN1', emoji: '👍' })
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ success: true, warning: 'thread_row_not_recorded' })
+    // The inbox alerts `warnings` (the send route's convention). Plain text, no em-dash.
+    const body = await res.json()
+    expect(body).toEqual({ success: true, warnings: [expect.any(String)] })
+    expect(body.warnings[0]).toMatch(/reaction was sent/)
+    expect(body.warnings[0]).not.toMatch(/\u2014/)
     expect(sendReaction).toHaveBeenCalledTimes(1)
     const logged = errSpy.mock.calls.map((c) => c.join(' ')).join('\n')
     expect(logged).toMatch(/thread row insert failed/)

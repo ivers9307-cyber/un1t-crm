@@ -7,6 +7,9 @@ import { sendReaction } from '@/lib/whatsapp'
 import { whatsappErrorStatus } from '@/lib/whatsapp-number-missing'
 import { logError } from '@/lib/log'
 
+// Shown to staff by the inbox when Meta took the reaction but its thread row was lost.
+const THREAD_ROW_NOT_RECORDED = 'The reaction was sent to the customer, but it could not be saved to this thread, so it will not show here.'
+
 // Empty emoji is valid — it removes an existing reaction — so no .min().
 const ReactSchema = z.object({ message_id: z.string().min(1), emoji: z.string().max(8) })
 
@@ -75,7 +78,8 @@ export async function POST(request, props) {
     logError('wa-react', 'thread row insert failed; the reaction was sent but is missing from the thread', {
       conversationId: conversation.id, locationId: conversation.location_id, err: rowErr,
     })
-    return NextResponse.json({ success: true, warning: 'thread_row_not_recorded' })
+    // `warnings` is the send route's convention, which the inbox alerts.
+    return NextResponse.json({ success: true, warnings: [THREAD_ROW_NOT_RECORDED] })
   }
 
   return NextResponse.json({ success: true })
