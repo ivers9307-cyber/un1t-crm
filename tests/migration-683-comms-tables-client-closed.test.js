@@ -5,9 +5,10 @@
 // sweep.js (Supabase's default privileges, the three private helpers verbatim
 // with prod EXECUTE) and adds email_sends, email_templates, sms_broadcasts,
 // sms_broadcast_recipients and agent_message_feedback, reduced to the columns
-// the policies, the foreign keys, the unique key and the service paths need
-// (prod's column names and FK actions), with the 9 live policies written so
-// they deparse to prod's pg_policies text (30 Sep 2026; pinned by a test).
+// the policies, the foreign keys, the unique key, the rating CHECK and the
+// service paths need (prod's column names, FK actions and rating values),
+// with the 9 live policies written so they deparse to prod's pg_policies
+// text (30 Sep 2026; pinned by a test).
 // Two of prod's three triggers stand in: email_send_activity_trigger (AFTER
 // INSERT on email_sends, SECURITY DEFINER, writes activities) and
 // email_templates_updated_at (BEFORE UPDATE, INVOKER): neither needs a client
@@ -75,7 +76,8 @@ const TABLE_SQL = `
     contact_id uuid NOT NULL REFERENCES public.contacts (id) ON DELETE CASCADE,
     status text NOT NULL DEFAULT 'pending');
   CREATE TABLE public.agent_message_feedback (id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    location_id uuid NOT NULL, message_id uuid NOT NULL, rating text NOT NULL, note text,
+    location_id uuid NOT NULL, message_id uuid NOT NULL,
+    rating text NOT NULL CHECK (rating = ANY (ARRAY['up'::text, 'down'::text])), note text,
     created_by uuid NOT NULL REFERENCES public.profiles (id) ON DELETE CASCADE,
     UNIQUE (message_id, created_by));
 
@@ -155,9 +157,9 @@ const SEED = `
     ('${rowOf('sms_broadcast_recipients', 2)}', '${SB2}', '${IDS.C_MEMBER2}'),
     ('${rowOf('sms_broadcast_recipients', 'b')}', '${SBB}', '${IDS.C_B}');
   INSERT INTO public.agent_message_feedback (id, location_id, message_id, rating, created_by) VALUES
-    ('${rowOf('agent_message_feedback', 1)}', '${IDS.LOC_A}', '${MSG(1)}', 'good', '${IDS.STAFF_A}'),
-    ('${rowOf('agent_message_feedback', 2)}', '${IDS.LOC_A}', '${MSG(2)}', 'bad', '${IDS.OWNER_A}'),
-    ('${rowOf('agent_message_feedback', 'b')}', '${IDS.LOC_B}', '${MSG('b')}', 'good', '${IDS.STAFF_B}');`
+    ('${rowOf('agent_message_feedback', 1)}', '${IDS.LOC_A}', '${MSG(1)}', 'up', '${IDS.STAFF_A}'),
+    ('${rowOf('agent_message_feedback', 2)}', '${IDS.LOC_A}', '${MSG(2)}', 'down', '${IDS.OWNER_A}'),
+    ('${rowOf('agent_message_feedback', 'b')}', '${IDS.LOC_B}', '${MSG('b')}', 'up', '${IDS.STAFF_B}');`
 
 // The rollback record (plan Task 1d-5). Prod is in 677's end state (pre-probe
 // 30 Sep: authenticated=arwd/postgres, no anon, on all five), so the
@@ -208,7 +210,7 @@ const INSERT = {
   email_templates: `INSERT INTO public.email_templates (location_id, name, html_content) VALUES ('${IDS.LOC_A}', 'n', '<p>x</p>')`,
   sms_broadcasts: `INSERT INTO public.sms_broadcasts (location_id) VALUES ('${IDS.LOC_A}')`,
   sms_broadcast_recipients: `INSERT INTO public.sms_broadcast_recipients (broadcast_id, contact_id) VALUES ('${SB2}', '${IDS.C_MEMBER}')`,
-  agent_message_feedback: `INSERT INTO public.agent_message_feedback (location_id, message_id, rating, created_by) VALUES ('${IDS.LOC_A}', '${MSG(3)}', 'good', '${IDS.STAFF_A}')`,
+  agent_message_feedback: `INSERT INTO public.agent_message_feedback (location_id, message_id, rating, created_by) VALUES ('${IDS.LOC_A}', '${MSG(3)}', 'up', '${IDS.STAFF_A}')`,
 }
 const UPDATE = (t) => `UPDATE public.${t} SET id = id WHERE id = '${rowOf(t, 1)}'`
 const DELETE = (t) => `DELETE FROM public.${t} WHERE id = '${rowOf(t, 2)}'`
@@ -258,7 +260,7 @@ describe.each(PROD_STATES)('before 683: the holes (prod on 30 Sep 2026), $label'
       `DELETE FROM public.email_sends WHERE id = '${rowOf('email_sends', 1)}' RETURNING id::text`)).toEqual([{ id: rowOf('email_sends', 1) }])
     expect(await asUser(db, IDS.STAFF_A,
       `INSERT INTO public.agent_message_feedback (location_id, message_id, rating, created_by)
-         VALUES ('${IDS.LOC_A}', '${MSG(3)}', 'bad', '${IDS.OWNER_A}') RETURNING created_by::text`)).toEqual([{ created_by: IDS.OWNER_A }])
+         VALUES ('${IDS.LOC_A}', '${MSG(3)}', 'down', '${IDS.OWNER_A}') RETURNING created_by::text`)).toEqual([{ created_by: IDS.OWNER_A }])
     expect(await asUser(db, IDS.STAFF_A, `${INSERT.sms_broadcast_recipients} RETURNING status`)).toEqual([{ status: 'pending' }])
   })
 
@@ -304,7 +306,7 @@ describe.each(PROD_STATES)('after 683: the catalog, $label', ({ after677 }) => {
     expect(await policiesOf(db, [t])).toEqual([])
   })
 
-  it('the three triggers are untouched (the file changes grants and policies only)', async () => {
+  it('the two replayed triggers are untouched (the file changes grants and policies only)', async () => {
     const { rows } = await db.query(`SELECT tgname::text FROM pg_trigger WHERE NOT tgisinternal
       AND tgrelid IN ('public.email_sends'::regclass, 'public.email_templates'::regclass) ORDER BY 1`)
     expect(rows.map((r) => r.tgname)).toEqual(['email_send_activity_trigger', 'email_templates_updated_at'])
@@ -354,7 +356,7 @@ describe.each(PROD_STATES)('after 683: people, $label', ({ after677 }) => {
         RETURNING html_content, updated_at > '2000-01-01 00:00:00+00' AS touched`)).toEqual([{ html_content: '<p>New</p>', touched: true }])
     expect(await asRole(db, 'service_role',
       `INSERT INTO public.agent_message_feedback (location_id, message_id, rating, created_by)
-         VALUES ('${IDS.LOC_A}', '${MSG(1)}', 'bad', '${IDS.STAFF_A}')
+         VALUES ('${IDS.LOC_A}', '${MSG(1)}', 'down', '${IDS.STAFF_A}')
          ON CONFLICT (message_id, created_by) DO UPDATE SET rating = EXCLUDED.rating RETURNING rating`,
       count('agent_message_feedback'))).toEqual([{ n: 3 }])
     for (const t of TABLES) {
