@@ -3466,10 +3466,11 @@ registry.registerPath({
     params: z.object({ id: uuidLike }),
   },
   responses: {
-    200: { description: 'Flow sent' },
+    200: { description: 'Flow sent. A `warnings` array is present when Meta accepted the Flow but the thread row could not be saved (FLOWTOKENDEDUP.1)' },
     400: { description: 'No contact linked, or no Flow configured for the location', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Conversation not found', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'No WhatsApp number is connected at this location (WACONFIGFALLBACK.1): nothing is sent from any other number', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The conversation or the location settings could not be read; nothing was sent', content: { 'application/json': { schema: ErrorResponse } } },
     502: { description: 'Meta flow send failed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })

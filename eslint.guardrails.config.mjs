@@ -398,6 +398,11 @@ const config = [
       // are now log-and-warn; nothing after the Meta call may fail the request.
       // `[[]id]`: files entries are minimatch globs, a bare `[id]` is a class.
       'src/app/api/whatsapp/conversations/[[]id]/send/route.js',
+      // FLOWTOKENDEDUP.1 (C73) — the inbox booking-Flow send. Its thread-row
+      // insert ran after Meta had accepted the Flow, inside a try whose catch
+      // could never fire for it: a lost row was silent. Now log-and-warn, like
+      // the send route above.
+      'src/app/api/whatsapp/conversations/[[]id]/send-flow/route.js',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },

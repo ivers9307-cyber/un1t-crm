@@ -1,8 +1,8 @@
 /**
- * WATPLSEND.1 — THE flow_token format: `<contactId>.<locationId>`. New code
- * mints tokens with this (the inbox template send, broadcasts, sequences); two
- * older sites still build the same string by hand (send-flow/route.js and
- * meta-ad-whatsapp-welcome.js, row C73). resolveFlowConfigByToken below is
+ * WATPLSEND.1 — THE flow_token format: `<contactId>.<locationId>`. Every
+ * minter uses this (the inbox template send, broadcasts, sequences, and since
+ * FLOWTOKENDEDUP.1 the inbox Flow send and the paid-ad welcome); config.test.js
+ * fails on a token built by hand anywhere in src/. resolveFlowConfigByToken below is
  * its only reader. null when either half is missing, so a caller can
  * refuse the send rather than hand Meta a token the endpoint cannot resolve.
  */
