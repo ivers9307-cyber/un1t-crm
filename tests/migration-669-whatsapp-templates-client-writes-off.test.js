@@ -480,6 +480,16 @@ describe('the self-check aborts the whole file', () => {
       MIG_669.replace(NEEDLE, 'AND t.location_id IS NOT NULL));'))
   }, 60_000)
 
+  it('when wa_tmpl_select would read different rows (self-check 6 compares it with its captured copy)', () => {
+    const NEEDLE = 'DROP POLICY IF EXISTS wa_tmpl_delete ON public.whatsapp_templates;\n'
+    expect(MIG_669.split(NEEDLE).length).toBe(2)
+    return expectAbort('', /mig 669: wa_tmpl_select does not read the same rows as the policy it replaces/,
+      MIG_669.replace(NEEDLE, `${NEEDLE}DROP POLICY wa_tmpl_select ON public.whatsapp_templates;
+CREATE POLICY wa_tmpl_select ON public.whatsapp_templates FOR SELECT TO authenticated
+  USING (private.auth_is_in_location(location_id));
+`))
+  }, 60_000)
+
   it('a second run passes its own self-check (idempotent)', async () => {
     await boot({ migrate: true })
     await expect(runSql(MIG_669)).resolves.toBeDefined()
