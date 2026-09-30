@@ -152,6 +152,12 @@ const DROP_ITEM_RE = new RegExp(`^${FN_NAME}\\s*(\\(([\\s\\S]*)\\))?$`, 'i')
 const ALTER_RE = new RegExp(
   `^ALTER\\s+FUNCTION\\s+${FN_NAME}\\s*(\\(([\\s\\S]*?)\\))?\\s+(?:RENAME\\s+TO\\s+("[^"]+"|\\w+)|SET\\s+SCHEMA\\s+("[^"]+"|\\w+))`, 'i')
 
+const DYNAMIC_DDL = [
+  ['dynamic-create', /\bCREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\b/i],
+  ['dynamic-drop', /\bDROP\s+FUNCTION\b/i],
+  ['dynamic-alter', /\bALTER\s+FUNCTION\b/i],
+]
+
 /**
  * Apply one migration's function DDL. `functions`: Map<"schema.name",
  * Set<signature>>. `notes` collects what the replay could not apply exactly.
@@ -175,8 +181,13 @@ export function applyFunctionDdl(sqlText, functions = new Map(), notes = []) {
   for (const stmt of splitSqlStatements(sqlText)) {
     const flat = stmt.replace(/\s+/g, ' ').trim()
 
+    // Dynamic SQL is never executed or guessed at: a DO block's function DDL
+    // (CREATE, DROP or ALTER, one note per kind) is printed as a replay note,
+    // so whoever reads the gate's output knows the replay may be off there.
     if (/^DO\b/i.test(flat)) {
-      if (/\bCREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\b/i.test(flat)) notes.push({ kind: 'dynamic-create', text: flat.slice(0, 100) })
+      for (const [kind, re] of DYNAMIC_DDL) {
+        if (re.test(flat)) notes.push({ kind, text: flat.slice(0, 100) })
+      }
       continue
     }
 

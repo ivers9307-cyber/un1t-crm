@@ -149,6 +149,28 @@ describe('function replay', () => {
     expect(notes.map((n) => n.kind)).toEqual(['dynamic-create'])
   })
 
+  it('a DROP FUNCTION inside a DO block is not replayed either, and is noted (review fix 4)', () => {
+    const { functions, notes } = fnsOf(
+      'CREATE FUNCTION public.merge_contacts(p_survivor uuid, p_loser uuid) RETURNS void LANGUAGE sql AS $$ select $$;',
+      `DO $$ BEGIN EXECUTE 'DROP FUNCTION public.merge_contacts(uuid, uuid)'; END $$;`)
+    expect(isCallable(functions, 'merge_contacts')).toBe(true)
+    expect(notes.map((n) => n.kind)).toEqual(['dynamic-drop'])
+  })
+
+  it('an ALTER FUNCTION inside a DO block is noted, and one DO with several kinds notes each', () => {
+    const { notes } = fnsOf(`
+      DO $$ BEGIN
+        EXECUTE 'ALTER FUNCTION public.f() SET SCHEMA private';
+        EXECUTE 'CREATE FUNCTION public.g() RETURNS void LANGUAGE sql AS ''select''';
+        EXECUTE 'DROP FUNCTION public.h()';
+      END $$;`)
+    expect(notes.map((n) => n.kind)).toEqual(['dynamic-create', 'dynamic-drop', 'dynamic-alter'])
+  })
+
+  it('a DO block with no function DDL is silent', () => {
+    expect(fnsOf(`DO $$ BEGIN EXECUTE 'ALTER TABLE public.t ENABLE ROW LEVEL SECURITY'; END $$;`).notes).toEqual([])
+  })
+
   it('a function body that mentions another CREATE FUNCTION does not shred the replay', () => {
     const { functions } = fnsOf(`
       CREATE FUNCTION public.outer_fn() RETURNS text LANGUAGE sql AS $$ select 'create function public.fake() ; drop function public.real_one' $$;
