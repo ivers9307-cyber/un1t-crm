@@ -727,6 +727,15 @@ describe('TRIALGRANT.1 — a membership purchase is judged on its body', () => {
     expect(out.purchaseStatus).toBe('PENDING-INTENT')
   })
 
+  // Glofox spells the pending state both ways (the spec's PENDING-INTENT, and
+  // PENDING_INTENT on invoices); either is not granted, in any case.
+  it('status is compared normalised: PENDING_INTENT, pending-intent and error are refusals too', () => {
+    expect(interpretPurchaseResult({ httpOk: true, body: { success: true, status: 'PENDING_INTENT' } }).granted).toBe(false)
+    expect(interpretPurchaseResult({ httpOk: true, body: { success: true, status: 'pending-intent' } }).granted).toBe(false)
+    expect(interpretPurchaseResult({ httpOk: true, body: { success: true, status: 'error' } }).granted).toBe(false)
+    expect(interpretPurchaseResult({ httpOk: true, body: { success: true, status: 'success' } }).granted).toBe(true)
+  })
+
   it('a non-2xx is never granted', () => {
     expect(interpretPurchaseResult({ httpOk: false, httpStatus: 400, body: { message: 'Invalid plan', message_code: 'INVALID_PLAN' } }).granted).toBe(false)
     expect(interpretPurchaseResult({ httpOk: false, httpStatus: 500, body: null }).granted).toBe(false)

@@ -1102,7 +1102,8 @@ export async function updateGlofoxMember(creds, userId, patch) {
  * guidance says older endpoints 200 with success:false for a bad request.
  * So HTTP ok alone is not a purchase. Granted = a 2xx whose body does not
  * say success:false and whose status is neither ERROR nor PENDING-INTENT (a
- * payment still awaiting action is not a usable credit yet).
+ * payment still awaiting action is not a usable credit yet; any case, `_` or
+ * `-`).
  *
  * A clean 2xx with neither field is granted: the /start mint path has run on
  * this call for months (27/27 new accounts in the 90 days to 30 Sep 2026 got
@@ -1120,7 +1121,11 @@ export function interpretPurchaseResult({ httpOk, httpStatus = null, body } = {}
   const purchaseStatus = str(b.status)
   const invoiceId = str(b.invoice_id)
   const message = str(b.message)
-  const refused = b.success === false || purchaseStatus === 'ERROR' || purchaseStatus === 'PENDING-INTENT'
+  // Compared normalised: Glofox spells the pending state both PENDING-INTENT
+  // (this endpoint's spec) and PENDING_INTENT (invoices). purchaseStatus
+  // itself stays as Glofox sent it, for the card and the logs.
+  const statusKey = purchaseStatus ? purchaseStatus.toUpperCase().replace(/_/g, '-') : null
+  const refused = b.success === false || statusKey === 'ERROR' || statusKey === 'PENDING-INTENT'
   const granted = !!httpOk && !refused
   if (granted && b.success === undefined && purchaseStatus === null) {
     logWarn('glofox', 'membership purchase 2xx without success/status; extend interpretPurchaseResult', { httpStatus, shape: describeBodyShape(body) })
