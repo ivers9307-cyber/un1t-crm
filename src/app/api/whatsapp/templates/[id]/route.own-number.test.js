@@ -11,6 +11,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('@/lib/auth', () => ({
   getCurrentUser: vi.fn(async () => ({ id: 'prof-1' })),
   assertLocationAccessOr404: vi.fn(() => null),
+  // WATPLROLE.1 (C79) — the role gate has its own tests (route.role.test.js);
+  // these pin the NUMBER, so the caller passes it.
+  hasRoleAtLocation: vi.fn(() => true),
 }))
 vi.mock('@/lib/whatsapp', () => ({ deleteTemplate: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))

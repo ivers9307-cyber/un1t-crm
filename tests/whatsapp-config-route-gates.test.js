@@ -199,9 +199,9 @@ export const EXPECTED = {
 
   // ── Templates ──
   'POST whatsapp/templates/[id]/resubmit/route.js': ['manager', 'Edits a rejected/paused template at Meta.'],
-  'POST whatsapp/templates/route.js': ['membership', 'Creates a template and submits it to Meta. Not tightened here (row C79 WATPLROLE.1).'],
-  'PUT whatsapp/templates/[id]/route.js': ['membership', 'Local fields only (name, category, display group). Not tightened here (row C79 WATPLROLE.1).'],
-  'DELETE whatsapp/templates/[id]/route.js': ['membership', 'Deletes the template AT META by name. Not tightened here (row C79 WATPLROLE.1).'],
+  'POST whatsapp/templates/route.js': ['manager', 'WATPLROLE.1: creates a template and submits it to Meta; MANAGER_ROLES at the location created at (the resubmit rule).'],
+  'PUT whatsapp/templates/[id]/route.js': ['manager', 'WATPLROLE.1: status, components, header media, name and category drive what is sent, so MANAGER_ROLES at the template; a display_group-only edit (picker grouping) stays membership.'],
+  'DELETE whatsapp/templates/[id]/route.js': ['manager', 'WATPLROLE.1: deletes the template AT META by name; MANAGER_ROLES at the template (the resubmit rule).'],
   'POST whatsapp/templates/upload-media/route.js': ['membership', 'Uploads header media for a template draft (no Meta state).'],
   'POST whatsapp/templates/upload-media/sign/route.js': ['membership', 'Signs a storage upload for template media (no Meta state).'],
 
@@ -352,6 +352,20 @@ describe('WhatsApp mutation handlers — each one\'s gate (WAROLE.1)', () => {
       'POST locations/[id]/whatsapp/numbers/route.js',
       'POST locations/[id]/whatsapp/embedded-signup/route.js',
     ]) expect([k, got[k]]).toEqual([k, 'owner'])
+  })
+
+  // WATPLROLE.1 — every template handler that changes what Meta holds or what
+  // is sent decides with the resubmit rule: MANAGER_ROLES at the template's
+  // (or, on create, the target) location. Header-media upload stays
+  // membership: it changes nothing at Meta until a create or resubmit uses it.
+  it('template create, edit, delete and resubmit decide with the resubmit rule (MANAGER_ROLES at the location)', () => {
+    const got = actual()
+    for (const k of [
+      'POST whatsapp/templates/route.js',
+      'PUT whatsapp/templates/[id]/route.js',
+      'DELETE whatsapp/templates/[id]/route.js',
+      'POST whatsapp/templates/[id]/resubmit/route.js',
+    ]) expect([k, got[k]]).toEqual([k, 'manager'])
   })
 
   it('every row carries a reason', () => {
