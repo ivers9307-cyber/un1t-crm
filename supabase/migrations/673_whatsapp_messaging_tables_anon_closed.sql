@@ -50,6 +50,14 @@
 -- them (/api/webhooks/whatsapp, /api/cron/run-whatsapp-broadcasts) is
 -- service_role.
 --
+-- REALTIME EDGE (accepted): after this file, a postgres_changes binding
+-- that joins as anon (a browser channel created before its session
+-- attaches) gets a 401 payload per change if it is unfiltered; a FILTERED
+-- binding fails at join (realtime.subscription_check_filters needs a column
+-- privilege anon no longer holds), which errors the whole channel. No
+-- current listener on these tables uses a filter (WAInbox, UnifiedInbox:
+-- event + schema + table only), and both join signed in.
+--
 -- Guards: tests/whatsapp-messages-client-writes-guard.test.js and
 -- tests/whatsapp-conversations-broadcasts-client-writes-guard.test.js
 -- (both extended: no later migration may give anon or PUBLIC anything on
