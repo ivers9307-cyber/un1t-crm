@@ -3161,6 +3161,195 @@ registry.registerPath({
   },
 })
 
+// WhatsApp message templates (cookie auth). WATPLPUT.1 — the six
+// /api/whatsapp/templates* route files were never registered. Meta owns a
+// template's review state and, once submitted, its content: those fields
+// change only through the webhook, ?sync=true and resubmit.
+const WaTemplateCategory = z.enum(['MARKETING', 'UTILITY', 'AUTHENTICATION'])
+const WaTemplateRow = z.object({
+  id: uuidLike,
+  location_id: uuidLike.nullable(),
+  name: z.string(),
+  meta_template_id: z.string().nullable(),
+  language: z.string(),
+  category: WaTemplateCategory,
+  components: z.array(z.unknown()),
+  status: z.string().openapi({ description: "Meta's review state (APPROVED, PENDING, REJECTED, PAUSED, …); 'draft' = never submitted. Written only by the template webhook, ?sync=true and resubmit." }),
+  rejection_reason: z.string().nullable(),
+  quality_rating: z.string().nullable(),
+  display_group: z.string().nullable(),
+  header_media_url: z.string().nullable(),
+}).passthrough().openapi('WaTemplate')
+const WaTemplateHeaderMedia = {
+  header_media_handle: z.string().max(4000).nullable().optional(),
+  header_media_url: z.string().url().max(2000).nullable().optional(),
+  header_media_path: z.string().max(500).nullable().optional(),
+}
+const waErr = (description) => ({ description, content: { 'application/json': { schema: ErrorResponse } } })
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/whatsapp/templates',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: "List a location's WhatsApp templates (optionally refreshing from Meta)",
+  description: "Lists the cached templates for location_id (else every location the caller belongs to). sync=true first refreshes the cache from the location's OWN number's WABA (never the global env number); the cache is served whether or not that worked, and sync_error (present only when sync was asked for; null = it worked) is the only signal the rows may be stale. status filters, e.g. APPROVED for send pickers. Membership.",
+  request: { query: z.object({ location_id: uuidLike.optional(), sync: z.enum(['true']).optional(), status: z.string().optional() }) },
+  responses: {
+    200: { description: 'Templates', content: { 'application/json': { schema: z.object({ success: z.literal(true), templates: z.array(WaTemplateRow), sync_error: z.string().nullable().optional() }) } } },
+    401: waErr('Unauthorized'),
+    403: waErr('location_id is not one of your locations'),
+    500: waErr('The template list could not be read'),
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/whatsapp/templates',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Create a WhatsApp template and submit it to Meta for review',
+  description: "Submits on the location's own WABA (body location_id, else the active studio), then saves the row with Meta's id and status. MANAGER_ROLES (master, owner, manager, head coach) at that location (WATPLROLE.1).",
+  request: {
+    body: { content: { 'application/json': { schema: z.object({
+      name: z.string().min(1).max(200),
+      category: WaTemplateCategory.optional(),
+      language: z.string().max(20).optional(),
+      components: z.array(z.unknown()),
+      parameter_format: z.enum(['POSITIONAL', 'NAMED']).optional(),
+      example_values: z.unknown().optional(),
+      location_id: uuidLike.optional(),
+      ...WaTemplateHeaderMedia,
+      display_group: z.string().max(100).nullable().optional(),
+    }).openapi('WaTemplateCreate') } } },
+  },
+  responses: {
+    200: { description: 'Submitted to Meta and saved', content: { 'application/json': { schema: z.object({ success: z.literal(true), template: WaTemplateRow }) } } },
+    400: waErr('Validation failed, a malformed button, or Meta refused the template'),
+    401: waErr('Unauthorized'),
+    403: waErr('Not a member of the location, or not MANAGER_ROLES there; nothing sent to Meta'),
+    409: waErr('No WhatsApp number is connected at this location; nothing sent to Meta'),
+    500: waErr("The location's number could not be looked up; nothing sent to Meta"),
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/whatsapp/templates/{id}',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Read one WhatsApp template and its Meta event history',
+  description: 'The row plus up to 50 whatsapp_template_events (status, quality and category changes Meta reported), newest first. Membership at the template\'s location; another location\'s template answers 404.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Template and events', content: { 'application/json': { schema: z.object({ success: z.literal(true), template: WaTemplateRow, events: z.array(z.object({ kind: z.string(), from_value: z.string().nullable(), to_value: z.string().nullable(), reason: z.string().nullable(), created_at: z.string() })) }) } } },
+    401: waErr('Unauthorized'),
+    404: waErr('Not found, or not at one of your locations'),
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/whatsapp/templates/{id}',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: "Edit a WhatsApp template's local fields",
+  description: "No Meta call. display_group (the picker grouping) saves in every state for any member. Any other field needs MANAGER_ROLES at the template's location (WATPLROLE.1) and is accepted only while the template is a draft (never submitted to Meta); once submitted, content changes go through POST /api/whatsapp/templates/{id}/resubmit (REJECTED or PAUSED) or a new template (WATPLPUT.1). The one exception: an APPROVED template's header image (header_media_handle/_url/_path) can be replaced, since every send attaches header_media_url as a link and Meta does not review it again; it cannot be removed. status, rejection_reason, quality_rating and meta_template_id are Meta's and are refused in every state. Checks run 404 → 400 → 403 → 409.",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      name: z.string().max(200).optional(),
+      category: WaTemplateCategory.optional(),
+      components: z.array(z.unknown()).optional(),
+      example_values: z.unknown().optional(),
+      display_group: z.string().max(100).nullable().optional(),
+      ...WaTemplateHeaderMedia,
+    }).openapi('WaTemplateUpdate') } } },
+  },
+  responses: {
+    200: { description: 'Saved', content: { 'application/json': { schema: z.object({ success: z.literal(true), template: WaTemplateRow }) } } },
+    400: waErr('Validation failed; includes a body carrying status, rejection_reason, quality_rating or meta_template_id (set by Meta, never by this route); issues names the field; nothing written'),
+    401: waErr('Unauthorized'),
+    403: waErr('A field other than display_group, and the caller is not MANAGER_ROLES at the template\'s location; nothing written'),
+    404: waErr('Not found, or not at one of your locations'),
+    409: waErr("The template is with Meta, so its name, category, components, example values and header media are locked (an APPROVED template's header image may be replaced, not removed): use Edit & resubmit (REJECTED/PAUSED) or a new template; issues lists the locked fields; nothing written"),
+    500: waErr('The update failed'),
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/whatsapp/templates/{id}',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Delete a WhatsApp template at Meta and locally',
+  description: "Deletes by NAME on the template's own location's WABA (a Meta error is logged, not returned), then the row. A location with no number skips Meta. MANAGER_ROLES at the template's location (WATPLROLE.1).",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Deleted' },
+    401: waErr('Unauthorized'),
+    403: waErr('Not MANAGER_ROLES at the template\'s location; nothing deleted'),
+    404: waErr('Not found, or not at one of your locations'),
+    500: waErr("The location's number could not be looked up (row kept so a retry still reaches Meta), or the row delete failed"),
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/whatsapp/templates/{id}/resubmit',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Edit a rejected or paused WhatsApp template at Meta and put it back into review',
+  description: "REJECTED or PAUSED only, with a Meta id. Sends category + components to Meta on the template's own number, then saves them locally with status PENDING and no rejection reason; Meta's verdict arrives later on the template webhook. MANAGER_ROLES at the template's location.",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ category: WaTemplateCategory.optional(), components: z.array(z.unknown()) }).openapi('WaTemplateResubmit') } } },
+  },
+  responses: {
+    200: { description: 'Resubmitted; now PENDING', content: { 'application/json': { schema: z.object({ success: z.literal(true), template: WaTemplateRow }) } } },
+    400: waErr('Not REJECTED/PAUSED, no Meta id, validation failed, a malformed button, or Meta refused the edit'),
+    401: waErr('Unauthorized'),
+    403: waErr('Not MANAGER_ROLES at the template\'s location; nothing sent to Meta'),
+    404: waErr('Not found, or not at one of your locations'),
+    409: waErr('No WhatsApp number is connected at this location; nothing sent to Meta'),
+    500: waErr("The location's number could not be looked up; nothing sent to Meta"),
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/whatsapp/templates/upload-media/sign',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Sign a direct-to-storage upload for template header media',
+  description: "Step 1 of 2. Checks the file against Meta's media caps, mints a path in the location's folder of the public whatsapp-templates bucket and returns a signed-upload token; the browser uploads the bytes straight to storage (they never transit Vercel). Membership at location_id (else the active studio).",
+  request: { body: { content: { 'application/json': { schema: z.object({ format: z.string().min(1), mime: z.string().min(1), size: z.number().int().positive(), file_name: z.string().min(1).max(300), location_id: uuidLike.optional() }).openapi('WaTemplateMediaSign') } } } },
+  responses: {
+    200: { description: 'Upload path and token', content: { 'application/json': { schema: z.object({ success: z.literal(true), path: z.string(), token: z.string() }) } } },
+    400: waErr("Validation failed, or the file breaks Meta's type/size caps"),
+    401: waErr('Unauthorised'),
+    403: waErr('Not a member of the location'),
+    500: waErr('The signed upload URL could not be created'),
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/whatsapp/templates/upload-media',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Finalise a template header-media upload and get a Meta upload handle',
+  description: "Step 2 of 2. Takes the minted path (own folder only), re-checks the REAL size (an oversize object is deleted), and pushes it to Meta's resumable upload with the location's own number for the header_handle a submission needs. A Meta failure is soft: 200 with handle null and meta_error. Multipart bodies (pre-fix tabs) get a 400 asking for a refresh. Membership at location_id (else the active studio).",
+  request: { body: { content: { 'application/json': { schema: z.object({ path: z.string().min(1).max(300), format: z.string().min(1), mime: z.string().min(1), file_name: z.string().min(1).max(300), location_id: uuidLike.optional() }).openapi('WaTemplateMediaFinalise') } } } },
+  responses: {
+    200: { description: 'Stored; handle is null when Meta refused (meta_error says why)', content: { 'application/json': { schema: z.object({ success: z.literal(true), handle: z.string().nullable(), url: z.string(), path: z.string(), file_name: z.string(), file_size: z.number().int(), meta_error: z.string().nullable() }) } } },
+    400: waErr("Validation failed, a multipart body, a path not minted for this location, or the file breaks Meta's caps"),
+    401: waErr('Unauthorised'),
+    403: waErr('Not a member of the location'),
+    404: waErr('The uploaded file is not in storage; upload again'),
+  },
+})
+
 // WhatsApp chat openers — Meta conversational components (cookie auth)
 registry.registerPath({
   method: 'post',
