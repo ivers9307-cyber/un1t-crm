@@ -25,13 +25,17 @@
 //     drifted read policy, a policy elsewhere that reads a closed table as
 //     the caller, and RLS off; a second run passes; the plan's rollback
 //     record restores the before-state.
+//
+// Every describe runs in BOTH prod states: before mig 677 (as planned) and
+// after it (prod since 30 Sep 2026, 13:13 UTC: no anon, authenticated arwd),
+// with 677 replayed from its real file. 677 on top of 680 is replayed too.
 // Fictional ids only: the repo is public.
 
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { boot, asUser, asRole, policiesOf, clientPrivileges, rlsOn, serviceRoleDml, abortMessage,
-  IDS, ALL_PRIVS, denied, rlsRefused } from './helpers/member-write-sweep.js'
+  IDS, ALL_PRIVS, denied, rlsRefused, MIG_677, PROD_STATES } from './helpers/member-write-sweep.js'
 
 const MIG = readFileSync(path.resolve(import.meta.dirname,
   '../supabase/migrations/680_coaching_tables_client_writes_off.sql'), 'utf8')
@@ -70,13 +74,21 @@ const SEED = TABLES.map((t, ti) => `
     ('${rowId(ti, 5)}', '${IDS.LOC_A}', '${IDS.C_STAFF_MEMBER}'), ('${rowId(ti, 'b')}', '${IDS.LOC_B}', '${IDS.C_B}');`).join('\n')
 const rowOf = (t, k) => rowId(TABLES.indexOf(t), k)
 
-// The rollback record, plan Task 1a-6 Step 7, verbatim.
-const ROLLBACK_680 = `
+// The rollback record, plan Task 1a-6 Step 7, verbatim. Its first statement
+// depends on the state 680 was applied to (the plan: "If (a) showed 677's
+// end state ... replace the first statement"). Prod is in 677's end state, so
+// the POST_677 form is the one to use; the pre-677 form would hand anon all
+// eight privileges back and authenticated the four 677 removed.
+const ROLLBACK_GRANT_PRE_677 = `GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER, MAINTAIN
+  ON public.coach_kudos, public.coaching_goals, public.inbody_scans, public.consultation_photos, public.consultations
+  TO anon, authenticated;`
+const ROLLBACK_GRANT_POST_677 = `GRANT SELECT, INSERT, UPDATE, DELETE
+  ON public.coach_kudos, public.coaching_goals, public.inbody_scans, public.consultation_photos, public.consultations
+  TO authenticated;`
+const rollback680 = (grant) => `
 BEGIN;
 SET LOCAL lock_timeout = '5s';
-GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER, MAINTAIN
-  ON public.coach_kudos, public.coaching_goals, public.inbody_scans, public.consultation_photos, public.consultations
-  TO anon, authenticated;
+${grant}
 DROP POLICY IF EXISTS coach_kudos_read_own ON public.coach_kudos;
 DROP POLICY IF EXISTS coaching_goals_read_own ON public.coaching_goals;
 DROP POLICY IF EXISTS inbody_scans_read_own ON public.inbody_scans;
@@ -108,19 +120,28 @@ CREATE POLICY consultations_loc ON public.consultations FOR ALL TO authenticated
   USING (private.auth_is_in_location(location_id)) WITH CHECK (private.auth_is_in_location(location_id));
 COMMIT;
 `
-const spec = { tables: TABLE_SQL, policies: POLICY_SQL, seed: SEED }
+const ROLLBACK_680 = { false: rollback680(ROLLBACK_GRANT_PRE_677), true: rollback680(ROLLBACK_GRANT_POST_677) }
+const baseSpec = { tables: TABLE_SQL, policies: POLICY_SQL, seed: SEED }
 const ids = (t) => `SELECT id::text FROM public.${t} ORDER BY id`
 const count = (t) => `SELECT count(*)::int AS n FROM public.${t}`
 const idList = (rows) => rows.map((r) => r.id)
 
-describe('before 680: the holes (prod on 30 Sep 2026)', () => {
+// What authenticated holds on each table before 680 in each state.
+const AUTH_BEFORE = { false: ALL_PRIVS, true: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] }
+
+describe.each(PROD_STATES)('before 680: the holes (prod on 30 Sep 2026), $label', ({ after677 }) => {
+  const spec = { ...baseSpec, after677 }
   let db
-  beforeAll(async () => { db = await boot(spec) }, 60_000)
+  beforeAll(async () => { db = await boot(spec) }, 120_000)
   afterAll(() => db?.close())
 
-  it.each(TABLES)('the default privileges gave anon and authenticated all eight privileges on %s', async (t) => {
-    const held = await clientPrivileges(db, t)
-    for (const r of ['anon', 'authenticated']) for (const p of ALL_PRIVS) expect(held).toContain(`${r}:${p}`)
+  it.each(TABLES)('the client grants on %s are the state\'s (default privileges, or 677\'s arwd for authenticated and nothing for anon)', async (t) => {
+    const held = (await clientPrivileges(db, t)).filter((h) => !h.includes(':col-'))
+    const expected = [
+      ...(after677 ? [] : ALL_PRIVS.map((p) => `anon:${p}`)),
+      ...AUTH_BEFORE[after677].map((p) => `authenticated:${p}`),
+    ]
+    expect(held.sort()).toEqual(expected.sort())
   })
 
   it("the replay's 17 policies read exactly as prod's pg_policies", async () => {
@@ -168,17 +189,24 @@ describe('before 680: the holes (prod on 30 Sep 2026)', () => {
 
   // Either helper can be the first one the executor checks (PGlite reaches
   // the argument-less auth_contact_id first); anon may execute neither.
-  it('anon: a read of the four TO-public tables raises on a helper it may not execute; consultations returns 0 rows', async () => {
+  // After 677 the planner can still reach a helper's EXECUTE check (it
+  // pre-evaluates the STABLE auth_contact_id() for estimates) before the
+  // executor's table check, so either refusal is accepted there.
+  it('anon: a read of the four TO-public tables is refused; consultations returns 0 rows before 677 and is refused by the grant after it', async () => {
     for (const t of PER_CMD_TABLES) {
-      await expect(asRole(db, 'anon', count(t)), t).rejects.toThrow(/permission denied for function auth_(is_in_location|contact_id)\b/)
+      await expect(asRole(db, 'anon', count(t)), t).rejects.toThrow(after677
+        ? new RegExp(`permission denied for (function auth_(is_in_location|contact_id)|(table|relation) ${t})\\b`)
+        : /permission denied for function auth_(is_in_location|contact_id)\b/)
     }
-    expect(await asRole(db, 'anon', count('consultations'))).toEqual([{ n: 0 }])
+    if (after677) await expect(asRole(db, 'anon', count('consultations'))).rejects.toThrow(denied('consultations'))
+    else expect(await asRole(db, 'anon', count('consultations'))).toEqual([{ n: 0 }])
   })
 })
 
-describe('after 680: the catalog', () => {
+describe.each(PROD_STATES)('after 680: the catalog, $label', ({ after677 }) => {
+  const spec = { ...baseSpec, after677 }
   let db
-  beforeAll(async () => { db = await boot({ ...spec, migrate: [MIG] }) }, 60_000)
+  beforeAll(async () => { db = await boot({ ...spec, migrate: [MIG] }) }, 120_000)
   afterAll(() => db?.close())
 
   it.each(OWN_READ)('%s: authenticated SELECT only, RLS on, service_role DML, one own-row read policy', async (t) => {
@@ -199,13 +227,14 @@ describe('after 680: the catalog', () => {
   })
 })
 
-describe('after 680: people', () => {
+describe.each(PROD_STATES)('after 680: people, $label', ({ after677 }) => {
+  const spec = { ...baseSpec, after677 }
   let before
   let db
   beforeAll(async () => {
     before = await boot(spec)
     db = await boot({ ...spec, migrate: [MIG] })
-  }, 60_000)
+  }, 120_000)
   afterAll(async () => { await before?.close(); await db?.close() })
 
   it('a member reads EXACTLY the rows they read before, table by table (a real member session: no profile, own contact)', async () => {
@@ -286,7 +315,8 @@ describe('after 680: people', () => {
   })
 })
 
-describe('the self-check aborts the whole file', () => {
+describe.each(PROD_STATES)('the self-check aborts the whole file, $label', ({ after677 }) => {
+  const spec = { ...baseSpec, after677 }
   let db
   afterEach(async () => { await db?.close() })
 
@@ -304,42 +334,43 @@ describe('the self-check aborts the whole file', () => {
     `GRANT ALL ON public.inbody_scans TO other_grantor WITH GRANT OPTION;
      SET ROLE other_grantor; GRANT UPDATE ON public.inbody_scans TO authenticated; RESET ROLE;`,
     /mig 680: (client roles still hold privileges on public\.inbody_scans: authenticated:UPDATE \(from other_grantor\)|authenticated still holds UPDATE on public\.inbody_scans)/,
-  ), 60_000)
+  ), 120_000)
 
   it('when INSERT on coaching_goals is inherited through role membership (information_schema cannot see it)', () => expectAbort(
     `GRANT INSERT ON public.coaching_goals TO sneaky; GRANT sneaky TO authenticated;`,
     /mig 680: authenticated still holds INSERT on public\.coaching_goals/,
-  ), 60_000)
+  ), 120_000)
 
   it("when another grantor's column-level UPDATE (body) on consultation_photos survives", () => expectAbort(
     `GRANT UPDATE (body) ON public.consultation_photos TO other_grantor WITH GRANT OPTION;
      SET ROLE other_grantor; GRANT UPDATE (body) ON public.consultation_photos TO authenticated; RESET ROLE;`,
     /column-level UPDATE on public\.consultation_photos|client roles still hold privileges on public\.consultation_photos/,
-  ), 60_000)
+  ), 120_000)
 
   it('when a policy the file does not know about is left on coach_kudos', () => expectAbort(
     `CREATE POLICY stray_write ON public.coach_kudos FOR INSERT TO authenticated WITH CHECK (true);`,
     /mig 680: public\.coach_kudos should keep exactly one policy/,
-  ), 60_000)
+  ), 120_000)
 
   it('when the read policy it replaces has drifted from the one it was written against (the pre-check)', () => expectAbort(
     `ALTER POLICY coaching_goals_read ON public.coaching_goals USING (true);`,
     /mig 680: public\.coaching_goals\.coaching_goals_read is not the policy this file was written against/,
-  ), 60_000)
+  ), 120_000)
 
   it('when a policy on another table still reads a closed table as the caller', () => expectAbort(
     `CREATE TABLE public.x (id uuid); ALTER TABLE public.x ENABLE ROW LEVEL SECURITY;
      CREATE POLICY x_via ON public.x FOR SELECT TO authenticated USING (EXISTS (SELECT 1 FROM public.consultations));`,
     /mig 680: policies on other tables still read a closed table as the caller: public\.x\.x_via/,
-  ), 60_000)
+  ), 120_000)
 
   it('when RLS is off on consultations (the grant would then be its only fence)', () => expectAbort(
     `ALTER TABLE public.consultations DISABLE ROW LEVEL SECURITY;`,
     /mig 680: row level security is off on public\.consultations/,
-  ), 60_000)
+  ), 120_000)
 })
 
-describe('idempotent and reversible', () => {
+describe.each(PROD_STATES)('idempotent and reversible, $label', ({ after677 }) => {
+  const spec = { ...baseSpec, after677 }
   let db
   afterEach(async () => { await db?.close() })
 
@@ -348,16 +379,38 @@ describe('idempotent and reversible', () => {
     expect(await abortMessage(db, MIG)).toBeNull()
     expect((await policiesOf(db, TABLES)).map((p) => p.policyname))
       .toEqual(['coach_kudos_read_own', 'coaching_goals_read_own', 'inbody_scans_read_own'])
-  }, 60_000)
+  }, 120_000)
 
   it("the plan's rollback record restores the 17 policies and the before privileges (and so the holes)", async () => {
     db = await boot(spec)
     const policiesBefore = await policiesOf(db, TABLES)
     const privsBefore = await Promise.all(TABLES.map((t) => clientPrivileges(db, t)))
     expect(await abortMessage(db, MIG)).toBeNull()
-    expect(await abortMessage(db, ROLLBACK_680)).toBeNull()
+    expect(await abortMessage(db, ROLLBACK_680[after677])).toBeNull()
     expect(await policiesOf(db, TABLES)).toEqual(policiesBefore)
     expect(await Promise.all(TABLES.map((t) => clientPrivileges(db, t)))).toEqual(privsBefore)
     expect(await asUser(db, IDS.STAFF_A, count('inbody_scans'))).toEqual([{ n: 3 }])
-  }, 60_000)
+  }, 120_000)
+
+  if (after677) {
+    it('the pre-677 rollback text would reopen what 677 closed (anon, and authenticated TRUNCATE/REFERENCES/TRIGGER/MAINTAIN): use the POST_677 form on prod', async () => {
+      db = await boot(spec)
+      expect(await abortMessage(db, MIG)).toBeNull()
+      expect(await abortMessage(db, ROLLBACK_680[false])).toBeNull()
+      const held = await clientPrivileges(db, 'consultations')
+      expect(held).toContain('anon:SELECT')
+      expect(held).toContain('authenticated:MAINTAIN')
+    }, 120_000)
+  } else {
+    it('677 applied on top of 680 still passes its own self-check and leaves 680\'s end state', async () => {
+      db = await boot({ ...spec, migrate: [MIG] })
+      const policiesAfter680 = await policiesOf(db, TABLES)
+      const privsAfter680 = await Promise.all(TABLES.map((t) => clientPrivileges(db, t)))
+      expect(await abortMessage(db, `CREATE FUNCTION public.list_enabled_integrations() RETURNS integer LANGUAGE sql AS 'SELECT 1';
+        REVOKE ALL ON FUNCTION public.list_enabled_integrations() FROM PUBLIC, anon;`)).toBeNull()
+      expect(await abortMessage(db, MIG_677)).toBeNull()
+      expect(await policiesOf(db, TABLES)).toEqual(policiesAfter680)
+      expect(await Promise.all(TABLES.map((t) => clientPrivileges(db, t)))).toEqual(privsAfter680)
+    }, 120_000)
+  }
 })

@@ -12,6 +12,8 @@
 // Fictional ids only: the repo is public.
 
 import { PGlite } from '@electric-sql/pglite'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 
 export const ALL_PRIVS = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER', 'MAINTAIN']
 export const COLUMN_PRIVS = ['SELECT', 'INSERT', 'UPDATE', 'REFERENCES']
@@ -45,6 +47,7 @@ export const BASE_SCHEMA = `
   CREATE SCHEMA private;
   GRANT USAGE ON SCHEMA auth, public, private TO anon, authenticated, service_role;
   ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;
+  ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
 
   CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$
     SELECT nullif(current_setting('request.jwt.claims', true)::json->>'sub', '')::uuid
@@ -117,17 +120,41 @@ export const BASE_SEED = `
     ('${IDS.C_B}', '${IDS.LOC_B}', NULL);
 `
 
+// Mig 677 (TABLEDEFAULTACL.1) is applied in prod (30 Sep 2026, 13:13 UTC):
+// anon and PUBLIC hold nothing in public, and authenticated lost TRUNCATE,
+// REFERENCES, TRIGGER and MAINTAIN (the swept tables read
+// authenticated=arwd/postgres, no anon). Replays run in BOTH orders:
+// boot({ after677: true }) replays 677 itself (the real file) on top of the
+// seed, before the caller's `before` SQL and the sweep migration.
+export const MIG_677 = readFileSync(path.resolve(import.meta.dirname,
+  '../../supabase/migrations/677_public_tables_default_acl_closed.sql'), 'utf8')
+// 677's own precondition reads the post-667 member RPC.
+const MIG_677_PREREQS = `
+  CREATE FUNCTION public.list_enabled_integrations() RETURNS integer LANGUAGE sql STABLE SECURITY DEFINER AS 'SELECT 1';
+  REVOKE ALL ON FUNCTION public.list_enabled_integrations() FROM PUBLIC, anon;
+  GRANT EXECUTE ON FUNCTION public.list_enabled_integrations() TO authenticated;
+`
+/** The two prod states a sweep migration must apply to. */
+export const PROD_STATES = [
+  { label: 'before 677 (as planned)', after677: false },
+  { label: 'after 677 (prod since 30 Sep)', after677: true },
+]
+
 // PGlite's multi-statement SQL runner (an in-process SQL call, no shell).
 const run = (db, sql) => db['exec'](sql)
 
-/** Boot: base schema, the replay's tables + policies, seed, then (optionally) SQL files in order. */
-export async function boot({ tables, policies, seed = '', before = '', migrate = [] }) {
+/** Boot: base schema, the replay's tables + policies, seed, (optionally) mig 677, then `before` and SQL files in order. */
+export async function boot({ tables, policies, seed = '', after677 = false, before = '', migrate = [] }) {
   const db = new PGlite()
   await run(db, BASE_SCHEMA)
   await run(db, tables)
   await run(db, policies)
   await run(db, BASE_SEED)
   if (seed) await run(db, seed)
+  if (after677) {
+    await run(db, MIG_677_PREREQS)
+    await run(db, MIG_677)
+  }
   if (before) await run(db, before)
   for (const sql of migrate) await run(db, sql)
   return db
