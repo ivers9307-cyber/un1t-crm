@@ -268,3 +268,33 @@ describe('CBPCREDITREAD.1: a failed credits read is a retry, never "no credits"'
     expect(fetchUserCreditsResult).not.toHaveBeenCalled()
   })
 })
+
+// TRIALGRANT.1 — the mint path created the Glofox account but its trial did
+// not take (the purchase is judged on its body now). That is the card whose
+// approve buys the trial and books: needs_credit_grant, not
+// account_needs_review.
+describe('TRIALGRANT.1: a new account whose trial did not take', () => {
+  const req = { id: 'r1', location_id: 'L', contact_id: 'c1', glofox_event_id: 'e1', class_name: 'S&C', starts_at: '2026-07-08T17:30:00.000Z' }
+  const lead = { id: 'c1', first_name: 'Sam', last_name: 'Lee', phone: '0871234567', glofox_member_id: null, last_attended_at: null }
+
+  it('created, trial failed → needs_credit_grant card, no booking', async () => {
+    findOrCreateGlofoxMember
+      .mockResolvedValueOnce({ status: 'skipped', glofox_member_id: null })
+      .mockResolvedValueOnce({ status: 'needs_review', glofox_member_id: 'gm-new', trial_failed: true, error: 'Trial membership purchase failed: Membership cannot be purchased' })
+
+    const r = await processClassBookingRequest(makeDb(lead), req)
+
+    expect(r).toEqual({ outcome: 'needs_review', detail: 'needs_credit_grant' })
+    expect(createBooking).not.toHaveBeenCalled()
+  })
+
+  it('any other needs_review from the mint is still account_needs_review (unchanged)', async () => {
+    findOrCreateGlofoxMember
+      .mockResolvedValueOnce({ status: 'skipped', glofox_member_id: null })
+      .mockResolvedValueOnce({ status: 'needs_review', glofox_member_id: 'gm-new', error: 'Glofox member created but CRM link write failed: x' })
+
+    const r = await processClassBookingRequest(makeDb(lead), req)
+
+    expect(r).toEqual({ outcome: 'needs_review', detail: 'account_needs_review' })
+  })
+})

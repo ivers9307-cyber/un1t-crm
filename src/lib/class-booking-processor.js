@@ -470,6 +470,14 @@ export async function processClassBookingRequest(db, request) {
       ? { membershipId: request.trial_membership_id, planCode: request.trial_plan_code }
       : null
     const res = await findOrCreateGlofoxMember({ db, locationId: request.location_id, contact, source: 'booking_form', createIfMissing: true, attachTrial: true, trialOverride })
+    // TRIALGRANT.1 — the account WAS created and linked, but its trial did not
+    // take. That is exactly the card whose approve buys the trial and then
+    // books (needs_credit_grant), not account_needs_review, whose copy says
+    // the account match needs a human check and whose approve books with no
+    // credit behind it.
+    if (res.status === 'needs_review' && res.trial_failed === true && res.glofox_member_id) {
+      return toReview('needs_credit_grant')
+    }
     if (!res.glofox_member_id || (res.status !== 'created' && res.status !== 'linked')) {
       return toReview(`account_${res.status || 'failed'}`)
     }

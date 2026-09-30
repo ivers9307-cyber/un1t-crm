@@ -323,6 +323,11 @@ export async function findOrCreateGlofoxMember({
     passcode,
     push_event_id: ev?.id,
     error: trialPurchaseError,
+    // TRIALGRANT.1 — the account exists but its trial did not attach (the
+    // purchase was refused, or the trial settings were unreadable / unset).
+    // The /start processor files needs_credit_grant on it: approving that card
+    // buys the trial (judged) and books.
+    trial_failed: !!trialPurchaseError,
     sync_result: syncResult,
   }
 }
