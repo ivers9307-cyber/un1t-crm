@@ -18,8 +18,10 @@
 //     authenticated on staff_attendance_events; any privilege but SELECT to
 //     authenticated on the two read-only tables; TRUNCATE, REFERENCES,
 //     TRIGGER, MAINTAIN or ALL to authenticated on the shift tables; any
-//     client grant on ALL TABLES IN SCHEMA public. A GRANT inside EXECUTE
-//     '…' counts. The one exemption is a rollback migration named
+//     client grant on ALL TABLES IN SCHEMA public; any role-membership
+//     GRANT <role> TO a client role; an ALTER TABLE … RENAME TO one of the
+//     five names. A GRANT inside EXECUTE '…' or $q$…$q$ counts. The one
+//     exemption is a rollback migration named
 //     `<NNN>_grantsweep1_rollback.sql`.
 //  3. A migration after 668 fails when it creates a policy on
 //     staff_attendance_events, or a write policy (FOR ALL/INSERT/UPDATE/
@@ -301,7 +303,9 @@ const SHIFT_FORBIDDEN = ['truncate', 'references', 'trigger', 'maintain', 'all',
 export function grantsweepReopeners(sql) {
   const code = stripSqlComments(sql)
   const hits = []
-  for (const m of code.matchAll(/\bgrant\s+([^;']+?)\s+on\s+([^;']+?)\s+to\s+([^;']+?)(?:;|'|$)/gi)) {
+  // Each part stops at ; ' or $, so a GRANT run from EXECUTE '…' or
+  // EXECUTE $q$…$q$ ends at its quote.
+  for (const m of code.matchAll(/\bgrant\s+([^;'$]+?)\s+on\s+([^;'$]+?)\s+to\s+([^;'$]+?)(?:;|'|\$|$)/gi)) {
     const [stmt, privs, target, to] = m
     const grantees = splitTop(to.replace(/\s+(with\s+grant\s+option|granted\s+by\b)[\s\S]*$/i, '')).map(ident)
     if (!grantees.some((g) => CLIENT.includes(g))) continue
@@ -325,6 +329,18 @@ export function grantsweepReopeners(sql) {
     const cmd = (m[2].match(/\bfor\s+(all|select|insert|update|delete)\b/i)?.[1] || 'all').toLowerCase()
     if (CLOSED_TABLES.includes(t) || (READ_ONLY_TABLES.includes(t) && cmd !== 'select')) hits.push(m[0].trim())
   }
+  // Role membership: a client role that inherits another role gets every
+  // privilege that role holds, on these tables too, and nothing here can see
+  // what the role will hold later. So any GRANT <role> TO a client role fails.
+  for (const m of code.matchAll(/\bgrant\s+([^;'$]+?)\s+to\s+([^;'$]+?)(?:;|'|\$|$)/gi)) {
+    const [stmt, roles, to] = m
+    if (/\bon\b/i.test(roles)) continue
+    const grantees = splitTop(to.replace(/\s+(with\s+\w+\s+option|granted\s+by\b)[\s\S]*$/i, '')).map(ident)
+    if (grantees.some((g) => CLIENT.includes(g))) hits.push(stmt.trim())
+  }
+  // A table renamed INTO one of the five names inherits the old table's ACL.
+  const renameRe = /\balter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?[^;'$]+?\s+rename\s+to\s+"?([a-z_][a-z0-9_]*)"?/gi
+  for (const m of code.matchAll(renameRe)) if (ANON_NONE_TABLES.includes(m[1].toLowerCase())) hits.push(m[0].trim())
   const createRe = /\bcreate\s+(?:(?:global|local)\s+)?(?:temp(?:orary)?\s+|unlogged\s+)?table\s+(?:if\s+not\s+exists\s+)?(?:"?public"?\s*\.\s*)?"?([a-z_][a-z0-9_]*)"?(?![a-z0-9_$."])/gi
   for (const m of code.matchAll(createRe)) if (ANON_NONE_TABLES.includes(m[1].toLowerCase())) hits.push(m[0].trim())
   return hits
@@ -507,6 +523,11 @@ describe('later migrations keep the scheduling grants (GRANTSWEEP.1)', () => {
     'CREATE POLICY p ON public.time_off_requests TO authenticated USING (true);',
     'CREATE TABLE public.staff_attendance_events (id uuid);',
     'create table if not exists "public"."shift_swap_requests" (id uuid);',
+    `DO $$ BEGIN EXECUTE $q$GRANT INSERT ON public.shift_swap_requests TO authenticated$q$; END $$;`,
+    'ALTER TABLE public.staff_attendance_events_new RENAME TO staff_attendance_events;',
+    'alter table if exists tmp_swaps rename to "shift_swap_requests";',
+    'GRANT sneaky TO authenticated;',
+    'GRANT some_role TO other_role, anon;',
     // The plan's rollback record reopens everything: that is why it needs the name exemption.
     'GRANT ALL ON public.staff_attendance_events TO anon, authenticated;',
   ])('the detector flags %s', (sql) => {
@@ -530,6 +551,10 @@ describe('later migrations keep the scheduling grants (GRANTSWEEP.1)', () => {
     'CREATE INDEX ON public.staff_attendance_events (event_at);',
     '-- GRANT ALL ON public.staff_attendance_events TO anon;',
     '/* GRANT INSERT ON public.shift_swap_requests TO authenticated; */',
+    'ALTER TABLE public.shift_swap_requests RENAME TO shift_swap_requests_old;',
+    'ALTER TABLE public.shift_swap_requests RENAME COLUMN reason TO note;',
+    'GRANT authenticated TO some_role;',
+    'GRANT USAGE ON SCHEMA public TO authenticated;',
   ])('the detector passes %s', (sql) => {
     expect(grantsweepReopeners(sql)).toEqual([])
   })
