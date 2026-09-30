@@ -7,7 +7,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@/lib/location-branding', () => ({ getLocationBranding: vi.fn().mockResolvedValue({ companyName: 'UN1T' }) }))
-// Only the pinned-rule test below reaches a send; these stand in for it.
+// Only the human-rule tests below reach a send; these stand in for it.
 const sendTemplateMessage = vi.fn(async () => ({ messageId: 'wamid.test' }))
 vi.mock('@/lib/whatsapp', () => ({
   sendTemplateMessage,
@@ -115,22 +115,42 @@ describe('runFirstClassCheckins — reads fail closed (CHECKINSTALL.1)', () => {
   })
 })
 
-// PINNED on purpose: the check-in runner's CURRENT human rule. Any non-Mia
-// outbound after the customer's last message parks the check-in, and that
-// includes an automation (source 'api', no sent_by: a booking confirmation).
-// C104 (CHECKINSTALL.2, PR B) flips this test ON PURPOSE once Richard says yes
-// to D1; until then a change that makes it fail changes who gets messaged.
-describe('runFirstClassCheckins — the current human rule, pinned (CHECKINSTALL.1)', () => {
-  it('an automated outbound after the inbound is human_active, and nothing is sent', async () => {
-    const at = (hAgo) => new Date(NOW - hAgo * H).toISOString()
+// The check-in runner's human rule, end to end. CHECKINSTALL.1 pinned the OLD
+// rule here (an automation after the customer's last message parked the
+// check-in). CHECKINSTALL.2 (C104, Richard's yes to D1 on 30 Sep) flipped it ON
+// PURPOSE: only a PERSON parks it (sent_by set, or the studio phone app), so an
+// automated booking confirmation no longer stops the send. Everything a send
+// needs is in place in both tests, so only the human rule decides.
+describe('runFirstClassCheckins — the human rule, end to end (CHECKINSTALL.2)', () => {
+  const at = (hAgo) => new Date(NOW - hAgo * H).toISOString()
+  const APPROVED = [{ name: 'agent_first_class_checkin_v1', language: 'en', status: 'APPROVED', components: [], header_media_url: null }]
+  const inbound = { direction: 'inbound', source: 'api', sent_by: null, created_at: at(30) }
+
+  it('an automated outbound (api, no sent_by) after the inbound no longer parks it: the check-in is sent', async () => {
     sendTemplateMessage.mockClear()
     const db = stubDb({
       messages: [
-        { direction: 'inbound', source: 'api', sent_by: null, created_at: at(30) },
+        inbound,
         { direction: 'outbound', source: 'api', sent_by: null, message_type: 'template', template_name: 'booking_class_confirmed_', created_at: at(29) },
       ],
-      // Everything a send needs is in place, so only the human rule stops it.
-      templates: [{ name: 'agent_first_class_checkin_v1', language: 'en', status: 'APPROVED', components: [], header_media_url: null }],
+      templates: APPROVED,
+    })
+    const res = await runFirstClassCheckins(db, { nowMs: NOW })
+    expect(res.reasons).toEqual({})
+    expect(res).toMatchObject({ templates: 1, freeform: 0, skipped: 0 })
+    expect(sendTemplateMessage).toHaveBeenCalledTimes(1)
+    expect(sendTemplateMessage.mock.calls[0][1]).toBe('agent_first_class_checkin_v1')
+    expect(stamped(db)).toBe(true)
+  })
+
+  it('a staff message (sent_by set) after the inbound still parks it: human_active, nothing sent', async () => {
+    sendTemplateMessage.mockClear()
+    const db = stubDb({
+      messages: [
+        inbound,
+        { direction: 'outbound', source: 'api', sent_by: 'profile-1', message_type: 'text', created_at: at(29) },
+      ],
+      templates: APPROVED,
     })
     const res = await runFirstClassCheckins(db, { nowMs: NOW })
     expect(res.reasons).toEqual({ human_active: 1 })
