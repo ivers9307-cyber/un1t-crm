@@ -139,6 +139,21 @@ describe('runFirstClassCheckins — the send is claimed first (CHECKINRISKS.1)',
     expect(hasFilter(release, 'eq', 'first_class_checkin_at', claim.patch.first_class_checkin_at)).toBe(true)
   })
 
+  // A throw is an UNKNOWN outcome (a timeout may have been delivered), so the
+  // claim must stand and the lease re-opens it later. Releasing it in the
+  // catch would let the next tick send the check-in a second time.
+  it('a send that THROWS keeps its claim (no release); the lease handles it', async () => {
+    sendTemplateMessage.mockImplementationOnce(async () => { events.push('send'); throw new Error('socket hang up') })
+    const db = stubDb()
+    const res = await runFirstClassCheckins(db, { nowMs: NOW })
+    expect(events).toEqual(['stamp', 'send'])
+    expect(res.reasons).toEqual({ error: 1 })
+    const updates = contactUpdates(db)
+    expect(updates).toHaveLength(1)
+    expect(updates[0].patch.first_class_checkin_at).toEqual(expect.any(String))
+    expect(updates.some((q) => q.patch.first_class_checkin_at === null)).toBe(false)
+  })
+
   it('a lost outcome record after a real send is logged, and the claim stands (no release)', async () => {
     const db = stubDb((q) => (q.table === 'activities' && q.op === 'insert' ? { error: BOOM } : undefined))
     const res = await runFirstClassCheckins(db, { nowMs: NOW })
