@@ -343,8 +343,9 @@ describe.each(PROD_STATES)('after 683: people, $label', ({ after677 }) => {
   })
 
   it('service_role: a send insert fires the DEFINER activity trigger; a status update, a template update (its updated_at trigger fires) and a feedback upsert succeed; every table takes an insert and an update', async () => {
+    // The seed's three sends logged three activities; the new send logs a fourth.
     expect(await asRole(db, 'service_role', `${INSERT.email_sends} RETURNING status`,
-      `SELECT count(*)::int AS n FROM public.activities WHERE kind = 'email_sent'`)).toEqual([{ n: 1 }])
+      `SELECT count(*)::int AS n FROM public.activities WHERE kind = 'email_sent'`)).toEqual([{ n: 4 }])
     expect(await asRole(db, 'service_role',
       `UPDATE public.email_sends SET status = 'delivered' WHERE id = '${rowOf('email_sends', 1)}' RETURNING status`))
       .toEqual([{ status: 'delivered' }])
