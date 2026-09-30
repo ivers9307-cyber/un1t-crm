@@ -25,7 +25,11 @@ const statusConfig = {
   paused: { label: 'Paused', color: 'bg-amber-500/15 text-amber-700', icon: Pause },
 }
 
-export default function AutomationsFlowList({ sequences, loadFailed = false }) {
+// C123 GATES-4 (b) — `canClone` is the clone route's rule at the listed
+// studio (canCloneSequenceAt, computed by the page): the list opens on email
+// OR whatsapp, and /clone needs email, so a WhatsApp-only builder saw a
+// Clone button that always refused.
+export default function AutomationsFlowList({ sequences, loadFailed = false, canClone = false }) {
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
@@ -84,7 +88,7 @@ export default function AutomationsFlowList({ sequences, loadFailed = false }) {
                   <span className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded-full ${config.color}`}>
                     <StatusIcon size={10} />{config.label}
                   </span>
-                  <CloneSequenceButton sequenceId={seq.id} sequenceName={seq.name} />
+                  {canClone && <CloneSequenceButton sequenceId={seq.id} sequenceName={seq.name} />}
                   <DeleteSequenceButton sequenceId={seq.id} sequenceName={seq.name} />
                 </div>
               </div>
