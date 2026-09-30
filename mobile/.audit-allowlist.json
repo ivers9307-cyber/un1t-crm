@@ -20,11 +20,14 @@
     "`npm view image-size versions` at expiry; the moment a patched release lands, fix via override on",
     "metro's `image-size` dep and delete both entries.",
     "",
-    "The brace-expansion accepts (DEPAUDIT.5, 2026-09-30) ARE fixable, unlike image-size: minimatch@9.0.9 declares",
-    "`brace-expansion ^2.0.2`, which admits the patched 2.1.7, so `cd mobile && npm update brace-expansion",
-    "--package-lock-only` clears both. They are accepted instead because mobile/package-lock.json is an OTA publish",
-    "path and the vulnerable copy is build-time only. Take the lockfile bump with the next native release and delete",
-    "both entries then."
+    "The brace-expansion accepts (DEPAUDIT.5, 2026-09-30) ARE fixable, unlike image-size. TWO vulnerable copies sit in",
+    "mobile/package-lock.json and both accepts cover both (the allowlist gates by advisory id, not by copy): 2.1.4 via",
+    "@bacons/apple-targets > glob@10 > minimatch@9 (declares ^2.0.2, admits 2.1.7), and the root 5.0.9 via expo's",
+    "build tooling (@expo/cli, @expo/metro-config, @expo/fingerprint, @expo/config, expo-updates) > glob@13 > minimatch@10",
+    "(admits 5.0.12). `cd mobile && npm update brace-expansion --package-lock-only` moves both (a 12-line lockfile diff,",
+    "verified 30 Sep). They are accepted instead because mobile/package-lock.json is an OTA publish path and neither copy",
+    "is imported by app code (nothing under mobile/app, components or lib imports glob, minimatch or brace-expansion).",
+    "Take the lockfile bump with the next native release and delete both entries then."
   ],
   "accepted": [
     {
@@ -42,13 +45,13 @@
     {
       "id": "GHSA-6j4f-fj2g-mc7p",
       "package": "brace-expansion",
-      "reason": "Build-time only, first-party input only. The vulnerable copy (2.1.4) is reached solely via @bacons/apple-targets (the WIDGET.1 Expo config plugin) > glob@10 > minimatch@9. The plugin runs on the build machine at config evaluation / prebuild and is not in the shipped JS bundle. Its only globSync calls use patterns hard-coded in the plugin (`./targets/*/expo-target.config.@(json|js)`, `preview/*.xcassets`, `_shared/*`, `*.entitlements`; app.config.js passes no root/match options), so no attacker-supplied pattern ever reaches brace expansion; the worst case is a hung build from a pattern we wrote ourselves. Variant: recursion in parseCommaParts (fixed in 2.1.5).",
+      "reason": "Build-time only, first-party input only. Two vulnerable copies, both covered: (a) 2.1.4 via @bacons/apple-targets (the WIDGET.1 Expo config plugin) > glob@10 > minimatch@9, whose only globSync calls use patterns hard-coded in the plugin (`./targets/*/expo-target.config.@(json|js)`, `preview/*.xcassets`, `_shared/*`, `*.entitlements`; app.config.js passes no root/match options); (b) the root 5.0.9 via expo's build tooling (@expo/cli, @expo/metro-config, @expo/fingerprint, @expo/config, expo-updates) > glob@13 > minimatch@10, globbing repo paths with patterns the tooling and this repo write. Both run on the build machine (config evaluation, prebuild, bundling, fingerprinting); nothing under mobile/app, mobile/components or mobile/lib imports glob, minimatch or brace-expansion, so no attacker-supplied pattern ever reaches brace expansion; the worst case is a hung build from a pattern we wrote ourselves. Variant: recursion in parseCommaParts (fixed in 2.1.5 / 5.0.10).",
       "expires": "2026-12-15"
     },
     {
       "id": "GHSA-qhr7-859c-m2p7",
       "package": "brace-expansion",
-      "reason": "Build-time only, first-party input only. The vulnerable copy (2.1.4) is reached solely via @bacons/apple-targets (the WIDGET.1 Expo config plugin) > glob@10 > minimatch@9. The plugin runs on the build machine at config evaluation / prebuild and is not in the shipped JS bundle. Its only globSync calls use patterns hard-coded in the plugin (`./targets/*/expo-target.config.@(json|js)`, `preview/*.xcassets`, `_shared/*`, `*.entitlements`; app.config.js passes no root/match options), so no attacker-supplied pattern ever reaches brace expansion; the worst case is a hung build from a pattern we wrote ourselves. Variant: recursion on nested brace groups (fixed in 2.1.6).",
+      "reason": "Build-time only, first-party input only. Two vulnerable copies, both covered: (a) 2.1.4 via @bacons/apple-targets (the WIDGET.1 Expo config plugin) > glob@10 > minimatch@9, whose only globSync calls use patterns hard-coded in the plugin (`./targets/*/expo-target.config.@(json|js)`, `preview/*.xcassets`, `_shared/*`, `*.entitlements`; app.config.js passes no root/match options); (b) the root 5.0.9 via expo's build tooling (@expo/cli, @expo/metro-config, @expo/fingerprint, @expo/config, expo-updates) > glob@13 > minimatch@10, globbing repo paths with patterns the tooling and this repo write. Both run on the build machine (config evaluation, prebuild, bundling, fingerprinting); nothing under mobile/app, mobile/components or mobile/lib imports glob, minimatch or brace-expansion, so no attacker-supplied pattern ever reaches brace expansion; the worst case is a hung build from a pattern we wrote ourselves. Variant: recursion on nested brace groups (fixed in 2.1.6 / 5.0.11).",
       "expires": "2026-12-15"
     }
   ]
