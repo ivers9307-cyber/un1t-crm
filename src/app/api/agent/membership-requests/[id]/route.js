@@ -373,8 +373,8 @@ export async function PATCH(request, { params }) {
       // booked or sent, like every other failed execution. The grant is
       // written ahead on details.trial_grant (below), so a retry does not buy
       // over a recorded grant, nor over a purchase whose answer was never
-      // recorded unless credits show. glofoxFetch's own POST retry on a 5xx
-      // is not covered (C84).
+      // recorded unless credits show. glofoxFetch never re-sends the purchase
+      // after a 5xx (GLOFOXPOSTRETRY.1): a 5xx is outcome_unknown, like no reply.
       let grantFailure = null
       if (approvalGrantsTrialCredit(details)) {
         const { grantTrialBeforeBooking } = await import('@/lib/agent/trial-grant')
