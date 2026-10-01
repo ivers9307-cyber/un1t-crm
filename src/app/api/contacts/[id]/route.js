@@ -72,11 +72,21 @@ export async function PUT(request, props) {
   // CLASSIFY.2: status_change triggers now fire from deal stage moves
   // (where pipeline_stage_slug is the source of truth), not from
   // contact PUTs. Contact PUTs no longer accept a status field.
-  const { data: oldRow } = await db
+  const { data: oldRow, error: oldErr } = await db
     .from('contacts')
     .select('tags, location_id, email, email_status, glofox_member_id')
     .eq('id', id)
     .single()
+  // REVIEWNITS.1 (D5): a failed read is not "no contact". Writing anyway
+  // skipped the tag-added sequence trigger in silence and judged the
+  // address-change reset without the old address. Nothing is written yet, so
+  // refusing loses nothing and the caller (n8n included) can retry. No row at
+  // all is a 404 for every caller (detail routes answer 404, not 400).
+  if (oldErr && oldErr.code !== 'PGRST116') {
+    logError('contacts.PUT', 'old-row read failed; nothing written', { id, err: oldErr.message })
+    return NextResponse.json({ success: false, error: 'Could not read the contact just now; nothing was changed. Try again.' }, { status: 503 })
+  }
+  if (!oldRow) return NextResponse.json({ success: false, error: 'not_found' }, { status: 404 })
 
   // SECURITY (audit 2026-06-10): the cookie path must be location-
   // scoped. assertRowInOrg above only guards per-org API keys (it

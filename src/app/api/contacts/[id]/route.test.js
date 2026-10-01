@@ -37,7 +37,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { redactWhatsAppForContact, redactInBodyForContact, getContactImpact } from '@/lib/contact-merge'
 import { redactMailForContact } from '@/lib/contact-mail-erasure'
 
-function mockDb({ oldRow, updated } = {}) {
+function mockDb({ oldRow, updated, oldErr } = {}) {
   const updateSingle = vi.fn(() =>
     Promise.resolve({ data: updated ?? { id: 'c1', ...oldRow }, error: null })
   )
@@ -51,9 +51,11 @@ function mockDb({ oldRow, updated } = {}) {
         eq: vi.fn(() => ({
           single: vi.fn(() =>
             Promise.resolve(
-              oldRow
-                ? { data: oldRow, error: null }
-                : { data: null, error: { message: 'no rows' } }
+              oldErr
+                ? { data: null, error: oldErr }
+                : oldRow
+                  ? { data: oldRow, error: null }
+                  : { data: null, error: { code: 'PGRST116', message: 'no rows' } }
             )
           ),
         })),
@@ -138,6 +140,33 @@ describe('PUT /api/contacts/[id] — cookie-path location gate', () => {
     const res = await PUT(req(), props)
     expect(res.status).toBe(200)
     expect(db.update).toHaveBeenCalled()
+  })
+
+  // REVIEWNITS.1 (D5): the old-row read's error was dropped. A master or an
+  // API key then wrote anyway: the tag-added sequence trigger was skipped in
+  // silence, the address-change reset read no old address, and a missing id
+  // came back as PostgREST's 400.
+  it('a failed old-row read writes nothing and answers 503 (retryable)', async () => {
+    requireApiKeyOrManager.mockResolvedValue({ ok: true, orgId: null, user: null })
+    const db = mockDb({ oldErr: { code: 'XX000', message: 'connection reset' } })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(req(), props)
+    expect(res.status).toBe(503)
+    expect(db.update).not.toHaveBeenCalled()
+  })
+
+  it('a contact that does not exist is a 404 for every caller, before any write', async () => {
+    for (const auth of [
+      { ok: true, orgId: null, user: null },
+      { ok: true, orgId: null, user: { id: 'm', role: 'master', locations: [] } },
+    ]) {
+      requireApiKeyOrManager.mockResolvedValue(auth)
+      const db = mockDb({})
+      createServerClient.mockReturnValue(db)
+      const res = await PUT(req(), props)
+      expect(res.status, JSON.stringify(auth.user)).toBe(404)
+      expect(db.update).not.toHaveBeenCalled()
+    }
   })
 
   it('401 passthrough when auth fails', async () => {
