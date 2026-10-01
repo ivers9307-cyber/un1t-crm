@@ -1,6 +1,8 @@
-// MEMBERWRITESWEEP.1 guard (migs 680-685). The sweep closes every table whose
-// write policies tested studio MEMBERSHIP and nothing narrower
-// (private.auth_is_in_location, optionally OR auth_is_master): no client role
+// MEMBERWRITESWEEP.1 guard (migs 680-685; .2 and .3 = mig 692). The sweep
+// closes every table whose write policies tested studio MEMBERSHIP and
+// nothing narrower (private.auth_is_in_location, optionally OR
+// auth_is_master), and, from mig 692, tables a manager wrote straight from
+// the browser past the routes or that kept arwd with no policy: no client role
 // (anon, authenticated, PUBLIC) writes any of them, and a client may read one
 // only where its registry row names an own-row read policy (`keepRead`,
 // `FOR SELECT TO authenticated USING (contact_id = private.auth_contact_id())`,
@@ -22,7 +24,10 @@
 //     for 682: /api/races*, /api/events*, /api/registrations/[id] actions,
 //     /api/team-members/[id], /api/teams/[id]/members, the public event and
 //     host routes; for 683: /api/templates*, /api/agent/feedback, the email
-//     senders, stats and Postmark webhooks; the SMS tables have no code).
+//     senders, stats and Postmark webhooks; the SMS tables have no code; for
+//     692: /api/schedule/{blocks,allowances,reports/scheduled}*,
+//     /api/bookings/event-types/[id]/reminders, /api/events/[id]/checkin*,
+//     /api/promo-codes*, /api/host/*, and the contact tag/event writers).
 //  2. A later migration may not give anon or PUBLIC any privilege on a swept
 //     table; give authenticated anything but SELECT, or SELECT on a table
 //     without `keepRead`; do either through ALL TABLES IN SCHEMA public; hand
@@ -60,7 +65,9 @@ const ROOT = path.resolve(import.meta.dirname, '..')
 // One row per table this sweep closed. `keepRead` names the ONE permissive
 // SELECT policy a client may still use (own-row, TO authenticated); null =
 // no client privilege at all. `rollback` = the rollback file letter that may
-// reopen it (<NNN>_memberwritesweep1<letter>_rollback.sql).
+// reopen it: 'a'-'g' = <NNN>_memberwritesweep1<letter>_rollback.sql (C101's
+// 1a-1g); '2' / '3' = <NNN>_memberwritesweep2_rollback.sql /
+// <NNN>_memberwritesweep3_rollback.sql (C112, C121).
 export const SWEEP = [
   // 1a — mig 680
   { table: 'coach_kudos', mig: 680, keepRead: 'coach_kudos_read_own', rollback: 'a' },
@@ -96,6 +103,23 @@ export const SWEEP = [
   { table: 'sms_broadcast_recipients', mig: 683, keepRead: null, rollback: 'd' },
   { table: 'agent_message_feedback', mig: 683, keepRead: null, rollback: 'd' },
   // 1e, 1g append their rows here.
+  // MEMBERWRITESWEEP.2 (C112) — mig 692, rollback file <NNN>_memberwritesweep2_rollback.sql
+  { table: 'blocked_times', mig: 692, keepRead: null, rollback: '2' },
+  { table: 'contact_events', mig: 692, keepRead: null, rollback: '2' },
+  { table: 'contact_tags', mig: 692, keepRead: null, rollback: '2' },
+  { table: 'shift_block_removals', mig: 692, keepRead: null, rollback: '2' },
+  { table: 'staff_allowances', mig: 692, keepRead: null, rollback: '2' },
+  { table: 'scheduled_reports', mig: 692, keepRead: null, rollback: '2' },
+  // MEMBERWRITESWEEP.3 (C121) — mig 692, rollback file <NNN>_memberwritesweep3_rollback.sql.
+  // event_types is NOT a row: it keeps a studio (membership) read the phone
+  // embeds from bookings, which this registry's own-row keepRead cannot
+  // express; mig 692's self-check pins it to authenticated SELECT only.
+  { table: 'race_checkins', mig: 692, keepRead: null, rollback: '3' },
+  { table: 'event_type_reminders', mig: 692, keepRead: null, rollback: '3' },
+  { table: 'promo_codes', mig: 692, keepRead: null, rollback: '3' },
+  { table: 'event_reminder_sends', mig: 692, keepRead: null, rollback: '3' },
+  { table: 'host_contacts', mig: 692, keepRead: null, rollback: '3' },
+  { table: 'host_campaigns', mig: 692, keepRead: null, rollback: '3' },
 ]
 const SCAN_FROM = 680            // the class detector: every migration from the first sweep file
 // Reopeners are scanned from 631, not 680: migration numbers are reserved
@@ -104,7 +128,8 @@ const SCAN_FROM = 680            // the class detector: every migration from the
 // nothing the detector flags on the swept tables (checked).
 const REOPEN_SCAN_FROM = 631
 const MIGRATIONS = path.join(ROOT, 'supabase/migrations')
-const ROLLBACK_FILE = /^\d+_memberwritesweep1([a-g])_rollback\.sql$/
+const ROLLBACK_FILE = /^\d+_memberwritesweep(?:1([a-g])|([23]))_rollback\.sql$/
+const rollbackLetter = (file) => { const m = file.match(ROLLBACK_FILE); return m ? (m[1] ?? m[2]) : null }
 const ALL_T = SWEEP.map((r) => r.table)
 const CLOSED_T = SWEEP.filter((r) => !r.keepRead).map((r) => r.table)
 const OWN_READ_T = SWEEP.filter((r) => r.keepRead).map((r) => r.table)
@@ -545,7 +570,7 @@ const MEMBER_READS = [
 ]
 
 // The whole-repo scans are parse-bound; give them room on a slow runner.
-describe('client code only reads its own rows of the swept tables (MEMBERWRITESWEEP.1, migs 680-685)', { timeout: 120_000 }, () => {
+describe('client code only reads its own rows of the swept tables (MEMBERWRITESWEEP.1-.3, migs 680-685, 692)', { timeout: 120_000 }, () => {
   it('scans the files it is meant to police (not vacuous): the member reads are seen, and allowed', () => {
     const names = clientFiles().map(rel)
     expect(names).toEqual(expect.arrayContaining(MEMBER_READS))
@@ -671,6 +696,29 @@ describe('client code only reads its own rows of the swept tables (MEMBERWRITESW
     expect(sweepClientUses(ok)).toEqual([])
   })
 
+  it('the C112/C121 tables (mig 692) are closed to every client use, reads included; event_types is not swept', () => {
+    const bad = `
+      await supabase.from('contact_tags').insert({ contact_id: id, tag: 'vip' })
+      await supabase.from('contact_events').select('id, kind')
+      await supabase.from('contacts').select('id, contact_tags(tag)')
+      await supabase.from('scheduled_reports').update({ recipients }).eq('id', id)
+      await supabase.from('event_types').select('id, event_type_reminders(offset_minutes)')
+      channel.on('postgres_changes', { event: '*', schema: 'public', table: 'race_checkins' }, cb)
+      await fetch(\`\${SUPABASE_URL}/rest/v1/host_campaigns?select=*\`)`
+    expect(sweepClientUses(bad)).toEqual([
+      'contact_tags.insert', 'contact_events.select', 'scheduled_reports.update',
+      'contact_tags.embed', 'event_type_reminders.embed', 'race_checkins.realtime', 'host_campaigns.rest',
+    ])
+    const ok = `
+      await supabase.from('bookings').select('id, event_type:event_types(id, name, duration_minutes, color)')
+      await supabase.from('event_types').select('id, name')
+      await fetch('/api/schedule/reports/scheduled', { method: 'POST', body })
+      await api(\`/api/events/\${eventId}/checkin\`)
+      const contact_tags = []
+      const label = 'No promo codes yet.'`
+    expect(sweepClientUses(ok)).toEqual([])
+  })
+
   it("a '/*' in a string, a regex or JSX text hides nothing; a real JSX comment is a comment", () => {
     expect(sweepClientUses("const a = 'image/*'\nsupabase.from('coach_kudos').update(p)\nconst b = '*/'\n")).toEqual(['coach_kudos.update'])
     expect(sweepClientUses("const r = /\\/*/\nsupabase.from('consultations').delete()\nconst s = '*/'\n")).toEqual(['consultations.delete'])
@@ -688,7 +736,7 @@ describe('later migrations keep the swept tables closed to clients', () => {
 
   const later = migrationFiles().filter((f) => parseInt(f, 10) >= REOPEN_SCAN_FROM)
   it.each(later)('%s: no client write, no client role, no reopening policy, RLS kept on the swept tables', (file) => {
-    const exempt = file.match(ROLLBACK_FILE)?.[1] ?? null
+    const exempt = rollbackLetter(file)
     expect(sweepReopeners(readFileSync(path.join(MIGRATIONS, file), 'utf8'), { exempt }),
       `${file} re-opens a MEMBERWRITESWEEP table to a client role. Go through a service-role route instead`).toEqual([])
   })
@@ -728,6 +776,13 @@ describe('later migrations keep the swept tables closed to clients', () => {
       'CREATE POLICY email_templates_location_scoped ON public.email_templates FOR ALL TO authenticated USING (private.auth_is_in_location(location_id));',
       'CREATE POLICY sms_broadcast_recipients_select_at_location ON public.sms_broadcast_recipients FOR SELECT TO authenticated USING (EXISTS (SELECT 1 FROM sms_broadcasts b WHERE b.id = sms_broadcast_recipients.broadcast_id AND private.auth_is_in_location(b.location_id)));',
       'ALTER TABLE public.email_sends DISABLE ROW LEVEL SECURITY;',
+      'GRANT INSERT ON public.contact_tags TO authenticated;',
+      'GRANT SELECT ON public.staff_allowances TO authenticated;',
+      'GRANT SELECT ON public.host_contacts TO anon;',
+      "CREATE POLICY contact_tags_location_scoped ON public.contact_tags FOR ALL TO authenticated USING (private.auth_is_master() OR location_id IS NULL OR private.auth_is_in_location(location_id));",
+      'CREATE POLICY scheduled_reports_upd ON public.scheduled_reports FOR UPDATE TO authenticated USING (private.auth_is_manager_at(location_id));',
+      'CREATE POLICY "event_type_reminders readable in-location" ON public.event_type_reminders FOR SELECT TO authenticated USING (true);',
+      'ALTER TABLE public.promo_codes DISABLE ROW LEVEL SECURITY;',
       `DO $$ BEGIN EXECUTE 'GRANT UPDATE ON public.inbody_scans TO authenticated'; END $$;`,
       'CREATE POLICY coaching_goals_loc ON public.coaching_goals FOR ALL TO authenticated USING (private.auth_is_in_location(location_id));',
       'CREATE POLICY coach_kudos_read_own ON public.coach_kudos FOR SELECT TO authenticated USING (true);',
@@ -755,6 +810,8 @@ describe('later migrations keep the swept tables closed to clients', () => {
       'GRANT SELECT ON public.coach_kudos, public.coaching_goals, public.inbody_scans TO authenticated;',
       'GRANT SELECT (scanned_at, weight_kg) ON public.inbody_scans TO authenticated;',
       'GRANT ALL ON public.consultations TO service_role;',
+      'GRANT SELECT ON public.event_types TO authenticated;',
+      'CREATE POLICY event_types_select ON public.event_types FOR SELECT TO authenticated USING (private.auth_is_in_location(location_id));',
       'GRANT UPDATE ON public.class_occurrences TO authenticated;',
       'GRANT SELECT ON public.orders_archive TO authenticated;',
       'GRANT SELECT ON public.consultations_archive TO authenticated;',
@@ -779,7 +836,7 @@ describe('later migrations keep the swept tables closed to clients', () => {
 
   it('a rollback migration is exempt only under its exact name and letter', () => {
     const reopen = 'GRANT UPDATE ON public.coaching_goals TO authenticated;'
-    const exemptOf = (f) => f.match(ROLLBACK_FILE)?.[1] ?? null
+    const exemptOf = rollbackLetter
     expect(sweepReopeners(reopen, { exempt: exemptOf('686_memberwritesweep1a_rollback.sql') })).toEqual([])
     expect(sweepReopeners(reopen, { exempt: exemptOf('686_memberwritesweep1b_rollback.sql') })).not.toEqual([])
     expect(sweepReopeners(reopen, { exempt: exemptOf('686_coaching_regrant.sql') })).not.toEqual([])
@@ -792,6 +849,15 @@ describe('later migrations keep the swept tables closed to clients', () => {
     const reopen1d = 'GRANT SELECT, INSERT, UPDATE, DELETE ON public.email_sends, public.email_templates, public.agent_message_feedback TO authenticated;'
     expect(sweepReopeners(reopen1d, { exempt: exemptOf('686_memberwritesweep1d_rollback.sql') })).toEqual([])
     expect(sweepReopeners(reopen1d, { exempt: exemptOf('686_memberwritesweep1c_rollback.sql') })).not.toEqual([])
+    const reopen2 = 'GRANT SELECT, INSERT, UPDATE, DELETE ON public.contact_tags, public.scheduled_reports TO authenticated;'
+    expect(sweepReopeners(reopen2, { exempt: exemptOf('693_memberwritesweep2_rollback.sql') })).toEqual([])
+    expect(sweepReopeners(reopen2, { exempt: exemptOf('693_memberwritesweep3_rollback.sql') })).not.toEqual([])
+    expect(sweepReopeners(reopen2, { exempt: exemptOf('693_memberwritesweep1d_rollback.sql') })).not.toEqual([])
+    const reopen3 = 'GRANT SELECT, INSERT, UPDATE, DELETE ON public.race_checkins, public.host_campaigns TO authenticated;'
+    expect(sweepReopeners(reopen3, { exempt: exemptOf('693_memberwritesweep3_rollback.sql') })).toEqual([])
+    expect(sweepReopeners(reopen3, { exempt: exemptOf('693_memberwritesweep2_rollback.sql') })).not.toEqual([])
+    expect(exemptOf('693_memberwritesweep12_rollback.sql')).toBe(null)
+    expect(exemptOf('693_memberwritesweep4_rollback.sql')).toBe(null)
     expect(exemptOf('686_memberwritesweep1a_rollback.sql')).toBe('a')
     expect(exemptOf('686_carsclientwrite1_rollback.sql')).toBe(null)
   })
