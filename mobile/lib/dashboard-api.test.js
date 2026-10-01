@@ -18,14 +18,18 @@ vi.mock('shared/dashboard-data', () => ({
 
 const { api } = await import('./api')
 const shared = await import('shared/dashboard-data')
-const { fetchStudioDashboard, fetchRosterRunway, swapRowTitle } = await import('./dashboard-api')
+const { fetchStudioDashboard, fetchRosterRunway, swapRowTitle, fetchStudioContactCounts, studioContactNumbers } = await import('./dashboard-api')
 
 const LOC = 'a0000000-0000-0000-0000-000000000001'
-const BASE = { newLeadsThisWeek: 3, funnel: { new_lead: 3 }, totalContacts: 3, totalUnreadWhatsapp: 0 }
+// CONTACTREADSCOPE.1a — the shared fetcher no longer returns the contact
+// numbers; they come from /api/dashboard/studio-contacts.
+const BASE = { totalUnreadWhatsapp: 0 }
+const COUNTS = { newLeadsThisWeek: 3, funnel: { new_lead: 3, converted: 1 }, totalContacts: 9 }
 
 // `swaps` is one envelope for both status calls, or { pending, awaiting_approval }.
-function routeApi({ timeOff, swaps, runway = { success: true, data: { runway: null } } }) {
+function routeApi({ timeOff, swaps, runway = { success: true, data: { runway: null } }, contacts = { success: true, data: COUNTS } }) {
   api.mockImplementation((path) => {
+    if (path.startsWith('/api/dashboard/studio-contacts')) return contacts instanceof Error ? Promise.reject(contacts) : Promise.resolve(contacts)
     if (path.startsWith('/api/schedule/runway')) return runway instanceof Error ? Promise.reject(runway) : Promise.resolve(runway)
     if (path.startsWith('/api/schedule/time-off')) return Promise.resolve(timeOff)
     if (path.startsWith('/api/schedule/swaps')) {
@@ -103,7 +107,7 @@ describe('fetchStudioDashboard', () => {
     } })
 
     const res = await fetchStudioDashboard(LOC)
-    expect(res).toEqual({ success: true, data: { ...BASE, pendingTimeOff: timeOff, pendingSwaps: [swap], rosterRunway: null } })
+    expect(res).toEqual({ success: true, data: { ...BASE, contactCounts: COUNTS, pendingTimeOff: timeOff, pendingSwaps: [swap], rosterRunway: null } })
   })
 
   it('a failed list is null, not an empty list — "nothing waiting" must never stand in for "could not read"', async () => {
@@ -170,7 +174,7 @@ describe('fetchStudioDashboard — roster runway', () => {
       routeApi({ timeOff: OK_EMPTY, swaps: OK_EMPTY, runway })
       await expect(fetchRosterRunway(LOC)).resolves.toBeNull()
       const res = await fetchStudioDashboard(LOC)
-      expect(res).toEqual({ success: true, data: { ...BASE, pendingTimeOff: [], pendingSwaps: [], rosterRunway: null } })
+      expect(res).toEqual({ success: true, data: { ...BASE, contactCounts: COUNTS, pendingTimeOff: [], pendingSwaps: [], rosterRunway: null } })
     }
   })
 
@@ -210,5 +214,61 @@ describe('shared fetchStudioDashboardData never embeds profiles', () => {
     // Strip comments so the explanation of the old bug doesn't trip it.
     const code = body.replace(/\/\/.*$/gm, '')
     expect(code).not.toMatch(/profiles/)
+  })
+})
+
+describe('CONTACTREADSCOPE.1a — contact numbers come from the route', () => {
+  const HEADLINE = ['new_lead', 'first_class', 'trial_done', 'converted']
+
+  it('reads /api/dashboard/studio-contacts for the studio, never the phone session', async () => {
+    routeApi({ timeOff: OK_EMPTY, swaps: OK_EMPTY })
+    shared.fetchStudioDashboardData.mockResolvedValue({ success: true, data: BASE })
+    const res = await fetchStudioDashboard(LOC)
+    expect(res.data.contactCounts).toEqual(COUNTS)
+    expect(api).toHaveBeenCalledWith(`/api/dashboard/studio-contacts?location_id=${LOC}`, { locationId: LOC })
+  })
+
+  it('a failed, thrown, 404-HTML or malformed answer is null, never zeros', async () => {
+    for (const bad of [
+      { success: false, error: 'boom' },
+      new Error('network'),
+      { success: false, transport: true, status: 404, error: 'Non-JSON response (404)' },
+      { success: false, error: 'Unexpected token <' },
+      { success: true, data: { newLeadsThisWeek: 'x', funnel: {}, totalContacts: 1 } },
+      { success: true, data: { newLeadsThisWeek: 1, funnel: null, totalContacts: 1 } },
+      { success: true, data: { newLeadsThisWeek: 1, funnel: {} } },
+      { success: true, data: null },
+      { success: true },
+      null,
+    ]) {
+      routeApi({ timeOff: OK_EMPTY, swaps: OK_EMPTY, contacts: bad })
+      expect(await fetchStudioContactCounts(LOC)).toBeNull()
+    }
+  })
+
+  it('a failed contact read does not blank the rest of the tab', async () => {
+    routeApi({ timeOff: OK_EMPTY, swaps: OK_EMPTY, contacts: new Error('offline') })
+    const res = await fetchStudioDashboard(LOC)
+    expect(res).toEqual({ success: true, data: { ...BASE, contactCounts: null, pendingTimeOff: [], pendingSwaps: [], rosterRunway: null } })
+  })
+
+  it('studioContactNumbers: dashes and a failed flag for null; the numbers otherwise', () => {
+    expect(studioContactNumbers(null, HEADLINE)).toEqual({
+      failed: true, newLeads: '—', newLeadsSublabel: null, total: null,
+      headline: HEADLINE.map((key) => ({ key, count: '—' })),
+    })
+    expect(studioContactNumbers(undefined, HEADLINE).failed).toBe(true)
+    expect(studioContactNumbers({ ...COUNTS, newLeadsThisWeek: 1 }, HEADLINE).newLeadsSublabel).toBe('contact added')
+    expect(studioContactNumbers(COUNTS, HEADLINE)).toEqual({
+      failed: false, newLeads: 3, newLeadsSublabel: 'contacts added', total: 9,
+      headline: [{ key: 'new_lead', count: 3 }, { key: 'first_class', count: 0 },
+        { key: 'trial_done', count: 0 }, { key: 'converted', count: 1 }],
+    })
+  })
+
+  it('a real zero stays a zero (a studio with no contacts is not a failure)', () => {
+    expect(studioContactNumbers({ newLeadsThisWeek: 0, funnel: {}, totalContacts: 0 }, HEADLINE)).toEqual({
+      failed: false, newLeads: 0, newLeadsSublabel: 'contacts added', total: 0, headline: HEADLINE.map((key) => ({ key, count: 0 })),
+    })
   })
 })
