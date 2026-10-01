@@ -86,7 +86,11 @@ const FUNCTIONS = {
   'private.auth_role': { class: 'predicate' },
   'private.get_user_role': { class: 'predicate' },
   'private.get_user_role_at': { class: 'predicate' },
-  'private.mobile_can_for': { class: 'predicate' },
+  // MOBILECANTEMPLATES.1 (mig 691): the phone resolver lives in the core;
+  // the old per-row entry points and the policies' wrapper delegate to it.
+  'private.mobile_can_location_ids_for': { class: 'predicate' },
+  'private.mobile_can_for': { class: 'delegates', to: ['private.mobile_can_location_ids_for'] },
+  'private.auth_mobile_can_location_ids': { class: 'delegates', to: ['private.mobile_can_location_ids_for'] },
   'private.auth_can_view_all_profiles': { class: 'predicate' },
   'private.auth_is_admin_or_head_coach': { class: 'predicate' },
   'private.is_owner': { class: 'predicate' },
@@ -94,7 +98,7 @@ const FUNCTIONS = {
   'private.auth_has_ticket_mailbox_grant': { class: 'predicate' },
   'private.auth_is_owner': { class: 'delegates', to: ['private.auth_role'] },
   'private.auth_is_owner_or_manager': { class: 'delegates', to: ['private.auth_role'] },
-  'private.auth_mobile_can': { class: 'delegates', to: ['private.mobile_can_for'] },
+  'private.auth_mobile_can': { class: 'delegates', to: ['private.mobile_can_location_ids_for'] },
   'private.auth_is_manager_at_bridge': { class: 'delegates', to: ['private.auth_is_manager_at'] },
   'private.auth_can_read_shift_block': { class: 'delegates', to: ['private.auth_is_manager_at', 'private.auth_is_in_location'] },
   'private.auth_can_read_shift_assignment': { class: 'delegates', to: ['private.auth_is_manager_at', 'private.auth_is_in_location'] },
