@@ -702,6 +702,36 @@ describe('client code only reads its own rows of the swept tables (MEMBERWRITESW
     expect(sweepClientUses(ok)).toEqual([])
   })
 
+  // 1f (#1917) left the phone a pre-1f direct path, mobile/lib/tv-api-legacy.js,
+  // for an older server without the TV routes (an HTML 404). Once mig 685
+  // closes tv_displays / tv_content / tv_templates those calls can only fail,
+  // so 1g deletes the file. This pins it even if 1g forgets its SWEEP rows:
+  // a 685_*.sql beside the file is a failure, and until then only
+  // mobile/lib/tv-api.js may import it.
+  const TV_LEGACY = 'mobile/lib/tv-api-legacy.js'
+  const tvLegacyOffenders = ({ migrations, files }) => {
+    const out = []
+    const mig685 = migrations.some((f) => /^685_.*\.sql$/.test(f))
+    if (mig685 && files.has(TV_LEGACY)) out.push(`${TV_LEGACY} outlived mig 685 (1g must delete it)`)
+    for (const [file, code] of files) {
+      if (file === TV_LEGACY || file === 'mobile/lib/tv-api.js') continue
+      if (/tv-api-legacy/.test(code)) out.push(`${file} imports ${TV_LEGACY} (only mobile/lib/tv-api.js may, until 1g)`)
+    }
+    return out
+  }
+
+  it("1f's old-server fallback (mobile/lib/tv-api-legacy.js) is gone once mig 685 lands, and only tv-api.js imports it", () => {
+    const legacy = new Map([[TV_LEGACY, "supabase.from('tv_displays')"], ['mobile/lib/tv-api.js', "import * as legacy from './tv-api-legacy'"]])
+    expect(tvLegacyOffenders({ migrations: ['684_campaigns_client_closed.sql'], files: legacy })).toEqual([])
+    expect(tvLegacyOffenders({ migrations: ['685_tv_tables_client_closed.sql'], files: legacy })).toEqual([`${TV_LEGACY} outlived mig 685 (1g must delete it)`])
+    expect(tvLegacyOffenders({ migrations: ['685_tv_tables_client_closed.sql'], files: new Map([['mobile/lib/tv-api.js', '']]) })).toEqual([])
+    expect(tvLegacyOffenders({ migrations: [], files: new Map([['mobile/components/X.jsx', "import { listTvDisplays } from '../lib/tv-api-legacy'"]]) }))
+      .toEqual([`mobile/components/X.jsx imports ${TV_LEGACY} (only mobile/lib/tv-api.js may, until 1g)`])
+
+    const files = new Map(walk(path.join(ROOT, 'mobile')).map((f) => [rel(f), codeOfFile(f)]))
+    expect(tvLegacyOffenders({ migrations: readdirSync(MIGRATIONS), files })).toEqual([])
+  })
+
   it("a '/*' in a string, a regex or JSX text hides nothing; a real JSX comment is a comment", () => {
     expect(sweepClientUses("const a = 'image/*'\nsupabase.from('coach_kudos').update(p)\nconst b = '*/'\n")).toEqual(['coach_kudos.update'])
     expect(sweepClientUses("const r = /\\/*/\nsupabase.from('consultations').delete()\nconst s = '*/'\n")).toEqual(['consultations.delete'])
