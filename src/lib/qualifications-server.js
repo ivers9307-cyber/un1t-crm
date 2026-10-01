@@ -169,7 +169,9 @@ export async function loadQualificationsPage(db, { user, locationId, today }) {
       audience: manager ? 'manager' : 'self',
       today,
       organization_id: org.organizationId,
-      can_edit_types: manager && hasRoleAtLocation(user, locationId, QUAL_CATALOGUE_ROLES),
+      // The catalogue is the organisation's: owner at ANY of its studios, the
+      // rule PATCH and POST judge (canEditCatalogue), not just the active one.
+      can_edit_types: manager && (hasRoleAtLocation(user, locationId, QUAL_CATALOGUE_ROLES) || canEditCatalogue(user, org.organizationId)),
       types,
       people: people.map((p) => ({ ...p, records: byPerson.get(p.profile_id) || [] })),
     },
