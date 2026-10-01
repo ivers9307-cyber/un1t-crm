@@ -75,10 +75,13 @@ describe('resolveAdminOrgId', () => {
   })
   it('falls back to the first admin org only when there is no active one', () => {
     expect(resolveAdminOrgId({ ...ADMIN_ELSEWHERE, activeOrganization: null }, null)).toEqual({ orgId: OTHER })
-    expect(resolveAdminOrgId(ADMIN_ELSEWHERE, null)).toEqual({ notFound: true })
+    // Working in an org they do not administer: no access (403), not a 404.
+    expect(resolveAdminOrgId(ADMIN_ELSEWHERE, null)).toEqual({ orgId: null })
+    expect(resolveAdminOrgId(ADMIN_ELSEWHERE, OTHER)).toEqual({ orgId: OTHER })
   })
   it('a studio owner with no grant resolves nothing', () => {
-    expect(resolveAdminOrgId(OWNER_EVERYWHERE, null)).toEqual({ notFound: true })
+    expect(resolveAdminOrgId(OWNER_EVERYWHERE, null)).toEqual({ orgId: null })
+    expect(resolveAdminOrgId(OWNER_EVERYWHERE, ORG)).toEqual({ notFound: true })
     expect(resolveAdminOrgId({ ...OWNER_EVERYWHERE, activeOrganization: null }, null)).toEqual({ orgId: null })
   })
 })

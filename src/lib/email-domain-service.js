@@ -3,13 +3,13 @@
 // resolver, which must not import auth/next) — this module is imported only
 // by the /api/settings/email-domain routes, so it may pull in auth.
 //
-// It owns: org-target resolution (owner-of-org / master, cross-org 404),
+// It owns: org-target resolution (organisation admin / master, cross-org 404),
 // the raw row load (service-role — the row carries the SECRET server token,
 // callers redact via tenantEmailStatePayload before returning), and the
 // Postmark provisioning + verify orchestration (idempotent, persists ids +
 // token the moment they are minted).
 
-import { getOwnerOrganizationIds } from '@/lib/auth'
+import { resolveAdminOrgId } from '@/lib/org-admin'
 import { logWarn, logError } from '@/lib/log'
 import {
   createTenantServer,
@@ -22,22 +22,18 @@ import {
 
 /**
  * Resolve the target org for a caller (mirrors resolveBillingOrgId):
- *   - master:  any org (?organization_id, defaults to active)
- *   - owner:   orgs they own ONLY (getOwnerOrganizationIds — includes
- *              SAAS-4 org admins); a foreign organization_id resolves to
- *              { notFound: true } so ids can't be existence-probed.
- * Role gating (owner/master) is done by the route BEFORE calling this.
+ *   - master:     any org (?organization_id, defaults to active)
+ *   - org admin:  their admin orgs ONLY (org_admin grant, mig 417; C18
+ *                 ORGROLE.1 — a studio owner is not an org admin); a foreign
+ *                 organization_id resolves to { notFound: true } so ids
+ *                 can't be existence-probed; nothing to act on is
+ *                 { orgId: null }.
+ * The routes' coarse gate (isOrgAdminSomewhere) runs BEFORE calling this.
  * @returns {{ orgId?: string|null, notFound?: boolean }}
  */
 export function resolveEmailDomainOrgId(user, requested) {
-  if (user.role === 'master') {
-    return { orgId: requested || user.activeOrganization?.id || null }
-  }
-  const owned = getOwnerOrganizationIds(user)
-  const target = requested || user.activeOrganization?.id || owned[0] || null
-  if (!target) return { orgId: null }
-  if (!owned.includes(target)) return { notFound: true }
-  return { orgId: target }
+  // C18 ORGROLE.1 — organisation admins only (master or an org_admin grant).
+  return resolveAdminOrgId(user, requested)
 }
 
 // CHANNELREAD.1 — what a failed tenant_email_domains read says to operators.

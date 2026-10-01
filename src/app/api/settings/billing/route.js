@@ -1,13 +1,13 @@
 // INTEG-D1 — GET /api/settings/billing: the tenant Billing & usage
 // assembler for /settings/billing.
 //
-// Access (mirrors the SAAS4-M3 /api/settings/org-usage WRITE tier —
-// billing is an ownership surface, not an operations number):
+// Access (C18 ORGROLE.1 — organisation admins only, Richard 1 Oct 2026):
 //   - master: any org (?organization_id, defaults to active)
-//   - owner: orgs they own ONLY (getOwnerOrganizationIds — includes
-//     SAAS-4 org admins); a foreign organization_id returns 404, not
-//     403, so org ids can't be existence-probed cross-tenant.
-//   - everyone else: 403.
+//   - an org admin (org_admin grant, mig 417): their admin orgs ONLY; a
+//     foreign organization_id returns 404, not 403, so org ids can't be
+//     existence-probed cross-tenant.
+//   - everyone else, a studio owner included: 403. (It used to ask the
+//     ACTIVE studio's role and getOwnerOrganizationIds.)
 //
 // READ-ONLY: aggregation lives in src/lib/billing-page.js. Location
 // scoping: every tenant-table query in the lib filters by the org's
@@ -16,7 +16,8 @@
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getOwnerOrganizationIds } from '@/lib/auth'
+import { getCurrentUser } from '@/lib/auth'
+import { isOrgAdminSomewhere, resolveAdminOrgId } from '@/lib/org-admin'
 import { getBillingPageData } from '@/lib/billing-page'
 
 export const runtime = 'nodejs'
@@ -26,14 +27,7 @@ export const dynamic = 'force-dynamic'
 // resolve to { notFound: true } — the route answers 404 (identical to
 // a nonexistent org), never 403.
 export function resolveBillingOrgId(user, requested) {
-  if (user.role === 'master') {
-    return { orgId: requested || user.activeOrganization?.id || null }
-  }
-  const owned = getOwnerOrganizationIds(user)
-  const target = requested || user.activeOrganization?.id || owned[0] || null
-  if (!target) return { orgId: null }
-  if (!owned.includes(target)) return { notFound: true }
-  return { orgId: target }
+  return resolveAdminOrgId(user, requested)
 }
 
 // GET /api/settings/billing?organization_id=xxx
@@ -42,9 +36,9 @@ export async function GET(request) {
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   }
-  if (user.role !== 'owner' && user.role !== 'master') {
+  if (!isOrgAdminSomewhere(user)) {
     return NextResponse.json(
-      { success: false, error: 'Billing is visible to owners only' },
+      { success: false, error: 'Billing is visible to organisation admins only' },
       { status: 403 }
     )
   }

@@ -30,7 +30,7 @@ const ownerA = {
   activeOrganization: { id: 'org-a', name: 'Gym A' },
   organizationsById: { 'org-a': { id: 'org-a', name: 'Gym A' } },
   rolesByLocation: { 'loc-a1': 'owner' },
-  orgAdminOrgIds: [],
+  orgAdminOrgIds: ['org-a'], // C18 ORGROLE.1: an org admin of org A
   locations: [{ id: 'loc-a1', organization_id: 'org-a' }],
 }
 const master = {
@@ -64,6 +64,11 @@ describe('GET /api/settings/email-domain', () => {
 
   it('403 for staff', async () => {
     getCurrentUser.mockResolvedValue(staff)
+    expect((await GET(getReq())).status).toBe(403)
+  })
+
+  it('403 for a studio owner with no org_admin grant (C18 ORGROLE.1)', async () => {
+    getCurrentUser.mockResolvedValue({ ...ownerA, orgAdminOrgIds: [] })
     expect((await GET(getReq())).status).toBe(403)
   })
 

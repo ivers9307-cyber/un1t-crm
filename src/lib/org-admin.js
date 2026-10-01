@@ -57,10 +57,11 @@ export function isActiveOrgAdmin(user) {
 /**
  * Resolve the organisation an org-level settings surface acts on.
  *   - master: the requested org, else the active one (null when neither).
- *   - else:   the requested org, else the active one, else their first admin
- *             org; anything they are not an admin of is { notFound: true }
- *             (callers answer 404 on an explicit foreign id, so org ids
- *             cannot be probed, or 403/redirect when nothing was asked for).
+ *   - else, an explicit request: that org when they are an admin of it, else
+ *     { notFound: true } (callers answer 404, so org ids cannot be probed).
+ *   - else, nothing requested: the active org when they are an admin of it;
+ *     with no active org, their first admin org; otherwise { orgId: null }
+ *     (callers answer 403 / redirect: "no organisation access").
  * @returns {{ orgId: string|null } | { notFound: true }}
  */
 export function resolveAdminOrgId(user, requested) {
@@ -68,8 +69,8 @@ export function resolveAdminOrgId(user, requested) {
     return { orgId: requested || activeOrganizationId(user) || null }
   }
   const admin = adminOrganizationIds(user)
-  const target = requested || activeOrganizationId(user) || admin[0] || null
-  if (!target) return { orgId: null }
-  if (!admin.includes(target)) return { notFound: true }
-  return { orgId: target }
+  if (requested) return admin.includes(requested) ? { orgId: requested } : { notFound: true }
+  const active = activeOrganizationId(user)
+  if (active) return { orgId: admin.includes(active) ? active : null }
+  return { orgId: admin[0] || null }
 }
