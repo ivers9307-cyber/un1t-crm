@@ -37,6 +37,14 @@ vi.mock('@/lib/agent/notify', () => ({
   agentConfirmationTemplates: vi.fn(async () => ({})),
 }))
 
+// MANUALSCHEDULE.1 — only the HTTP send is mocked; the manual-booking tests
+// assert what the route hands it.
+vi.mock('@/lib/meta-capi', async (importOriginal) => ({
+  ...(await importOriginal()),
+  sendWebsiteConversion: vi.fn(async () => ({ sent: true })),
+}))
+import { sendWebsiteConversion } from '@/lib/meta-capi'
+
 import { createBooking, cancelBooking, glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, purchaseGlofoxMembership, fetchUserCreditsResult } from '@/lib/glofox'
 import { readGlofoxConfig } from '@/lib/connection-registry'
 import { failureExplanation } from '@/lib/approvals/agent-request-why'
@@ -882,5 +890,108 @@ describe('PATCH class_booking approval — manual timetable booking', () => {
     await approve()
     expect(updates.at(-1).patch.status).toBe('actioned')
     expect(updates.find((u) => u.table === 'class_booking_requests').patch).toEqual({ status: 'booked', last_error: null })
+  })
+})
+
+// MANUALSCHEDULE.1 — approving a manual-timetable booking tells Meta the
+// booking was made (a website Schedule event), as the Glofox path does when
+// its booking lands.
+describe('PATCH class_booking approval — manual booking sends Schedule to Meta', () => {
+  const manualRow = (over = {}, rowOver = {}) => ({
+    ...ROW,
+    conversation_id: null,
+    channel: null,
+    ...rowOver,
+    details: {
+      event_id: 'manual-20261005-0615-strength', class_name: 'Strength', class_time: 'Mon 5 Oct, 06:15',
+      starts_at: new Date(Date.now() + 86_400_000).toISOString(),
+      mode: 'draft', source: 'start_funnel', reason: 'manual_booking',
+      ...over,
+    },
+  })
+
+  // A double that answers each table: the card, the contact's email + phone,
+  // the studio's landing row, and the queue row the sync returns.
+  function manualDb(row, log, { contact = { email: 'sam@example.com', phone: '0871234567' }, page = { public_path: 'hatch-street', blocks: [{ type: 'class_funnel', event_source_url: 'https://www.un1tdublin.com/start/hatch-street' }] }, queueRows = [{ id: 'cbr-9' }] } = {}) {
+    return {
+      from(table) {
+        let patch = null
+        const b = {
+          select: () => b, eq: () => b, neq: () => b, contains: () => b, limit: () => b,
+          update(p) { patch = p; log.push({ table, patch: p }); return b },
+          then(resolve, reject) {
+            const data = table === 'class_booking_requests' ? queueRows : []
+            return Promise.resolve({ data, error: null }).then(resolve, reject)
+          },
+          async maybeSingle() {
+            if (patch) return { data: { id: row.id }, error: null }
+            if (table === 'contacts') return { data: contact, error: null }
+            if (table === 'landing_page_settings') return { data: page, error: null }
+            return { data: row, error: null }
+          },
+          async single() {
+            return { data: { id: row.id, status: patch?.status, decided_at: null, decision_note: null, details: patch?.details }, error: null }
+          },
+        }
+        return b
+      },
+    }
+  }
+
+  it('approve → one Schedule with the contact, the class, the funnel URL and a per-booking event id', async () => {
+    db = manualDb(manualRow(), updates)
+    const res = await approve()
+    expect(res.status).toBe(200)
+    expect(sendWebsiteConversion).toHaveBeenCalledTimes(1)
+    expect(sendWebsiteConversion.mock.calls[0][1]).toEqual({
+      locationId: 'L1', eventName: 'Schedule',
+      email: 'sam@example.com', phone: '0871234567',
+      eventSourceUrl: 'https://www.un1tdublin.com/start/hatch-street',
+      eventId: 'classbooking-cbr-9',
+      contentName: 'Strength',
+    })
+    expect(updates.at(-1).patch.status).toBe('actioned')
+  })
+
+  it('no queue row came back → still sent, keyed on the card instead', async () => {
+    db = manualDb(manualRow(), updates, { queueRows: [] })
+    await approve()
+    expect(sendWebsiteConversion.mock.calls[0][1].eventId).toBe('classbooking-approval-r1')
+  })
+
+  it('a contact with neither email nor phone sends nothing, and the approval still lands', async () => {
+    db = manualDb(manualRow(), updates, { contact: { email: null, phone: null } })
+    const res = await approve()
+    expect(res.status).toBe(200)
+    expect(sendWebsiteConversion).not.toHaveBeenCalled()
+    expect(updates.at(-1).patch.status).toBe('actioned')
+  })
+
+  it('a send that throws never fails the decision', async () => {
+    sendWebsiteConversion.mockRejectedValueOnce(new Error('meta down'))
+    db = manualDb(manualRow(), updates)
+    const res = await approve()
+    expect(res.status).toBe(200)
+    expect((await res.json()).executed).toEqual({ ok: true, manual: true })
+    expect(updates.at(-1).patch.status).toBe('actioned')
+  })
+
+  it('declining a manual card sends nothing', async () => {
+    db = manualDb(manualRow(), updates)
+    const res = await PATCH(
+      new Request('http://localhost/api/agent/membership-requests/r1', {
+        method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ status: 'declined' }),
+      }),
+      { params: Promise.resolve({ id: 'r1' }) },
+    )
+    expect(res.status).toBe(200)
+    expect(sendWebsiteConversion).not.toHaveBeenCalled()
+  })
+
+  it('a Glofox booking approval sends nothing from here (its Schedule is the processor\'s)', async () => {
+    createBooking.mockResolvedValueOnce({ ok: true, status: 200, body: { _id: 'gfb-9' } })
+    db = makeDbFor(ROW, updates)
+    await approve()
+    expect(sendWebsiteConversion).not.toHaveBeenCalled()
   })
 })

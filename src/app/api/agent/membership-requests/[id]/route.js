@@ -338,14 +338,43 @@ export async function PATCH(request, { params }) {
     executed = { ok: true, manual: true }
     details = { ...details, result: executed }
     finalStatus = 'actioned'
+    let queueRowId = null
     if (details?.source === 'start_funnel') {
       // Keep the funnel's queue row in step, or it sits in needs_review for
       // good. Best-effort: the card is the record staff act on.
-      const { error: cbrErr } = await db.from('class_booking_requests')
+      const { data: synced, error: cbrErr } = await db.from('class_booking_requests')
         .update({ status: 'booked', last_error: null })
         .eq('approval_request_id', id)
+        .select('id')
       if (cbrErr) logWarn('agent-requests', 'manual booking: queue row sync failed', { requestId: id, err: cbrErr })
+      queueRowId = Array.isArray(synced) && synced[0]?.id ? synced[0].id : null
     }
+    // MANUALSCHEDULE.1 — tell Meta the booking was really made. The funnel
+    // already sent a Lead when the customer asked for the class; this is the
+    // Schedule that the Glofox path sends when ITS booking lands
+    // (class-booking-processor.js), with the same event id shape, so an ad
+    // campaign can be pointed at people who end up booked rather than anyone
+    // who fills the form. Sent only on approve: a declined or expired card
+    // sends nothing. Best-effort and gated inside the helper on the
+    // location's settings.meta_ads.dataset_id; it never fails the decision.
+    try {
+      const [{ data: c }, { data: page }] = await Promise.all([
+        db.from('contacts').select('email, phone').eq('id', row.contact_id).maybeSingle(),
+        db.from('landing_page_settings').select('public_path, blocks').eq('location_id', row.location_id).maybeSingle(),
+      ])
+      if (c && (c.email || c.phone)) {
+        const { sendWebsiteConversion } = await import('@/lib/meta-capi')
+        const { classFunnelConfigFromBlocks } = await import('@/lib/public-landing')
+        await sendWebsiteConversion(db, {
+          locationId: row.location_id, eventName: 'Schedule',
+          email: c.email, phone: c.phone,
+          eventSourceUrl: page?.public_path ? classFunnelConfigFromBlocks(page.blocks, page.public_path).eventSourceUrl : undefined,
+          // Stable per booking, so a re-run of this approval is deduped by Meta.
+          eventId: queueRowId ? `classbooking-${queueRowId}` : `classbooking-approval-${id}`,
+          contentName: details?.class_name || 'Class',
+        })
+      }
+    } catch (e) { logWarn('agent-requests', 'manual booking: Schedule event failed', { requestId: id, err: e }) }
   }
 
   // AGENT-HANDS.1 — approving a drafted class booking executes it.
