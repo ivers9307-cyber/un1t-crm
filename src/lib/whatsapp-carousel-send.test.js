@@ -43,7 +43,8 @@ describe('sendCardSetToConversation', () => {
     expect(sendMediaCarousel).toHaveBeenCalledWith(
       '353871234567',
       { bodyText: 'Our membership options', cards: SET.cards },
-      { locationId: 'loc1' },
+      // WAREPLYNUMBER.1 (C86) — from the number this thread was written to.
+      { locationId: 'loc1', replyInConversation: 'conv1' },
     )
     expect(inserts).toHaveLength(1)
     expect(inserts[0].table).toBe('whatsapp_messages')
@@ -92,7 +93,7 @@ describe('sendCardSetToConversation', () => {
     expect(sendMediaCarousel).toHaveBeenCalledWith(
       '353871234567',
       { bodyText: 'Membership', cards: SET.cards },
-      { locationId: 'loc1' },
+      { locationId: 'loc1', replyInConversation: 'conv1' },
     )
   })
 

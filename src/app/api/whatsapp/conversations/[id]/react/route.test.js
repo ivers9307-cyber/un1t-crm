@@ -74,6 +74,14 @@ describe('POST /api/whatsapp/conversations/[id]/react', () => {
     expect(rows[0].row.sent_by ?? null).toBeNull()
   })
 
+  // WAREPLYNUMBER.1 (C86) — Meta takes a reaction only from the number that
+  // holds the message: the one this thread was written to.
+  it('reacts from the thread number: names the conversation', async () => {
+    createServerClient.mockReturnValue(stubDb())
+    await post({ message_id: 'wamid.IN1', emoji: '👍' })
+    expect(sendReaction.mock.calls[0][3]).toEqual({ locationId: LOC_ID, replyInConversation: CONV_ID })
+  })
+
   it('a removed reaction carries no sent_by either', async () => {
     const db = stubDb()
     createServerClient.mockReturnValue(db)

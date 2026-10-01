@@ -1,6 +1,6 @@
 import { createServerClient } from './supabase'
 import { applyAudienceFilter, applyAudienceFilterAsync } from './audience-filter'
-import { getWhatsAppConfig, META_API_URL } from './whatsapp-config'
+import { getWhatsAppConfig, getConversationReplyConfig, META_API_URL } from './whatsapp-config'
 import { isWhatsAppNumberMissing } from './whatsapp-number-missing'
 import {
   PER_TICK_MAX, AUTO_PAUSE_CONSECUTIVE_FAILURES,
@@ -39,8 +39,15 @@ import { splitMessageText, WHATSAPP_TEXT_LIMIT } from './message-split.js'
 // WhatsAppNumberMissingError BEFORE any Meta call; every caller's handling
 // of that refusal is tabled in tests/whatsapp-config-callers.test.js.
 
-async function resolveConfig(opts = {}) {
+//   opts.replyInConversation — WAREPLYNUMBER.1 (C86): a reply into this
+//                       whatsapp_conversations id goes from the number the
+//                       customer wrote to (getConversationReplyConfig), else
+//                       the location default. Needs opts.locationId.
+async function resolveConfig(opts = {}, { template = false } = {}) {
   if (opts.config) return opts.config
+  if (opts.replyInConversation) {
+    return await getConversationReplyConfig(opts.locationId || null, opts.replyInConversation, { template })
+  }
   return await getWhatsAppConfig(opts.locationId || null)
 }
 
@@ -296,7 +303,7 @@ export async function sendMediaCarousel(to, { bodyText, cards }, opts = {}) {
  * Send a template message (works anytime — no 24h window needed)
  */
 export async function sendTemplateMessage(to, templateName, language = 'en', components = [], opts = {}) {
-  const config = await resolveConfig(opts)
+  const config = await resolveConfig(opts, { template: true })
 
   const body = {
     messaging_product: 'whatsapp',

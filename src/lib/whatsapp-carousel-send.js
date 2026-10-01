@@ -28,7 +28,9 @@ export async function sendCardSetToConversation(db, { set, conversation, locatio
   const sendResult = await sendMediaCarousel(
     conversation.wa_phone,
     { bodyText: set.body_text || set.name, cards: set.cards },
-    { locationId }
+    // WAREPLYNUMBER.1 (C86) — from the number this thread was written to
+    // (staff's send-carousel and Mia's send_card_set both come through here).
+    { locationId, replyInConversation: conversation.id }
   )
 
   // Best-effort thread row — a logging failure never fails the send.
