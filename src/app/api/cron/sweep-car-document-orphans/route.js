@@ -23,6 +23,8 @@ export const HEARTBEAT_NAME = 'sweep-car-document-orphans'
 const LIST_PAGE = 100
 /** Paths per `.in()` reference read: about 90 characters each, so the URL stays short. */
 const REF_CHUNK = 50
+/** PostgREST returns at most 1,000 rows per read; reference reads page at that. */
+const REF_PAGE = 1000
 /** Runaway guard on Storage list calls in one run. */
 const MAX_LIST_CALLS = 2000
 
@@ -60,7 +62,9 @@ const DOC_TYPE_KEYS = new Set(ALL_DOCUMENT_TYPES.map((t) => t.key))
  * `<car uuid>` folder, then each `<doc_type>` folder in it (paged by
  * LIST_PAGE), keep the files that pass 1 and 2, read references in chunks of
  * REF_CHUNK, then remove the oldest MAX_REMOVE_PER_RUN orphans in chunks of
- * REMOVE_CHUNK. The count comes from what Storage says it removed.
+ * REMOVE_CHUNK. The count comes from what Storage says it removed. Each
+ * reference read is paged past PostgREST's 1,000-row cap (neither column is
+ * unique).
  *
  * FAIL CLOSED. Every list and every reference read is checked; any failure
  * stops the run BEFORE anything is removed (an unreadable folder or table
@@ -180,7 +184,10 @@ function makeLister(bucket) {
 
 /**
  * The subset of `paths` that car_documents.storage_path or an invoices_queue
- * car-documents attachment names. Chunked; never throws on a PostgREST error.
+ * car-documents attachment names. Chunked, and each read PAGED: neither
+ * column is unique, so one chunk can match more than the 1,000 rows
+ * PostgREST returns, and a reference behind the cap would read as an orphan.
+ * Never throws on a PostgREST error.
  *
  * @returns {Promise<{ paths: Set<string>, error: string|null, step?: string }>}
  */
@@ -188,18 +195,35 @@ async function referencedPaths(db, paths) {
   const found = new Set()
   for (let i = 0; i < paths.length; i += REF_CHUNK) {
     const chunk = paths.slice(i, i + REF_CHUNK)
-    const { data: docs, error: docErr } = await db.from('car_documents')
-      .select('storage_path')
-      .in('storage_path', chunk)
-    if (docErr) return { paths: found, error: docErr.message, step: 'car_documents read' }
-    for (const d of docs || []) if (d?.storage_path) found.add(d.storage_path)
 
-    const { data: queued, error: qErr } = await db.from('invoices_queue')
-      .select('attachment_path')
+    const docs = await readAllPages((from, to) => db.from('car_documents')
+      .select('id, storage_path')
+      .in('storage_path', chunk)
+      .order('id', { ascending: true })
+      .range(from, to))
+    if (docs.error) return { paths: found, error: docs.error, step: 'car_documents read' }
+    for (const d of docs.rows) if (d?.storage_path) found.add(d.storage_path)
+
+    const queued = await readAllPages((from, to) => db.from('invoices_queue')
+      .select('id, attachment_path')
       .eq('attachment_bucket', BUCKET)
       .in('attachment_path', chunk)
-    if (qErr) return { paths: found, error: qErr.message, step: 'invoices_queue read' }
-    for (const q of queued || []) if (q?.attachment_path) found.add(q.attachment_path)
+      .order('id', { ascending: true })
+      .range(from, to))
+    if (queued.error) return { paths: found, error: queued.error, step: 'invoices_queue read' }
+    for (const q of queued.rows) if (q?.attachment_path) found.add(q.attachment_path)
   }
   return { paths: found, error: null }
+}
+
+/** Every row of a ranged read, paged at the PostgREST cap. Returns the first error. */
+async function readAllPages(page) {
+  const rows = []
+  for (let from = 0; ; from += REF_PAGE) {
+    const { data, error } = await page(from, from + REF_PAGE - 1)
+    if (error) return { rows, error: error.message || String(error) }
+    const got = Array.isArray(data) ? data : []
+    rows.push(...got)
+    if (got.length < REF_PAGE) return { rows, error: null }
+  }
 }

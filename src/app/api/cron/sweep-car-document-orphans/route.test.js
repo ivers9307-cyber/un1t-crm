@@ -181,6 +181,28 @@ describe('batching and paging', () => {
     expect(lists.length).toBeGreaterThan(1)
   })
 
+  it('pages each reference read past the 1,000-row select cap (storage_path is not unique)', async () => {
+    // Neither car_documents.storage_path nor invoices_queue.attachment_path
+    // carries a unique index, so one chunk's read can return more than
+    // 1,000 rows. An unpaged read stops at 1,000 and a reference behind the
+    // cap is lost, so a REFERENCED object would be removed. The reference to
+    // b sorts LAST by id and by insertion, so only a paged read reaches it.
+    const a = slot(1)
+    const b = slot(2)
+    const pad = (i) => String(i).padStart(5, '0')
+    for (const table of ['car_documents', 'invoices_queue']) {
+      setup({ objects: [obj(a), obj(b)] })
+      const rows = [...Array.from({ length: 1000 }, () => a), b]
+      db.tables[table] = table === 'car_documents'
+        ? rows.map((p, i) => ({ id: `doc-${pad(i)}`, car_id: CAR, storage_path: p }))
+        : rows.map((p, i) => ({ id: `q-${pad(i)}`, attachment_bucket: BUCKET, attachment_path: p }))
+      const res = await GET(req())
+      expect(res.status).toBe(200)
+      expect(db.removed).toEqual([])
+      expect(left()).toEqual([a, b].sort())
+    }
+  })
+
   it('chunks the reference reads so the .in() list stays short', async () => {
     const objects = Array.from({ length: 180 }, (_, i) => obj(slot(i + 1)))
     setup({ objects, carDocs: objects.map((o) => o.name) })
