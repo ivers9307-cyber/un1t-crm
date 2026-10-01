@@ -213,7 +213,7 @@ export const EXPECTED = {
   'POST whatsapp/templates/upload-media/sign/route.js': ['membership', 'Signs a storage upload for template media (no Meta state).'],
 
   // ── Broadcasts: drafting is membership, SENDING needs the whatsapp permission ──
-  'POST whatsapp/broadcasts/route.js': ['membership', 'Creates a draft; nothing is sent.'],
+  'POST whatsapp/broadcasts/route.js': ['whatsapp-permission', 'Creates a draft or scheduled broadcast; GATES-3: the [id] routes\' rule, at the studio it creates at.'],
   'PUT whatsapp/broadcasts/[id]/route.js': ['whatsapp-permission', 'Edits a draft/scheduled broadcast; GATES-2: /send\'s rule, at the broadcast\'s studio.'],
   'DELETE whatsapp/broadcasts/[id]/route.js': ['whatsapp-permission', 'Deletes a broadcast row; GATES-2: /send\'s rule, at the broadcast\'s studio.'],
   'POST whatsapp/broadcasts/[id]/pause/route.js': ['whatsapp-permission', 'Pauses/resumes a drip; resuming restarts sends, so GATES-2 gives it /send\'s rule.'],

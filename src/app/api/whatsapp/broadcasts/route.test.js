@@ -5,7 +5,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 let inserted = []
 const fakeDb = {
-  from: () => ({
+  // GATES-3 (a) — the create reads the template first (same-studio check).
+  from: (table) => table === 'whatsapp_templates' ? ({
+    select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { id: 't', location_id: 'loc-1' }, error: null }) }) }),
+  }) : ({
     insert: (row) => {
       inserted.push(row)
       return { select: () => ({ single: () => Promise.resolve({ data: { id: 'wa-new', ...row }, error: null }) }) }
@@ -18,6 +21,10 @@ vi.mock('@/lib/auth', () => ({
   getCurrentUser: vi.fn(async () => ({ id: 'u1', activeLocation: { id: 'loc-1' } })),
   assertLocationAccess: vi.fn(() => null),
   getUserLocationIds: vi.fn(() => ['loc-1']),
+}))
+vi.mock('@/lib/permissions', () => ({
+  hasPermissionAtAnyLocation: () => true,
+  hasPermissionForLocation: () => true,
 }))
 vi.mock('@/lib/validate', () => ({
   validateBody: vi.fn(async (req) => ({ ok: true, data: await req.json() })),
