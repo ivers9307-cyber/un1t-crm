@@ -79,6 +79,7 @@ const FUNCTIONS = {
   'private.auth_is_active_staff': { class: 'predicate' },
   'private.auth_is_master': { class: 'predicate' },
   'private.auth_is_in_location': { class: 'predicate' },
+  'private.auth_contact_read_location_ids': { class: 'predicate' }, // mig 690: studios where the caller holds Contacts; reads profiles with the predicate
   'private.auth_is_owner_at': { class: 'predicate' },
   'private.auth_is_admin_at': { class: 'predicate' },
   'private.auth_is_manager_at': { class: 'predicate' },
@@ -87,7 +88,6 @@ const FUNCTIONS = {
   'private.get_user_role': { class: 'predicate' },
   'private.get_user_role_at': { class: 'predicate' },
   'private.mobile_can_for': { class: 'predicate' },
-  'private.auth_contact_read_location_ids': { class: 'predicate' }, // mig 690: studios where the caller holds Contacts; reads profiles with the predicate
   'private.auth_can_view_all_profiles': { class: 'predicate' },
   'private.auth_is_admin_or_head_coach': { class: 'predicate' },
   'private.is_owner': { class: 'predicate' },
