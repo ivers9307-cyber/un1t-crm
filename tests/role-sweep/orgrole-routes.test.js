@@ -39,6 +39,12 @@ vi.mock('@/lib/email-domain-service', async (importOriginal) => ({
   provisionEmailDomain: vi.fn(async () => ({ status: 'pending', sending_domain: 'mail.example.com' })),
   verifyEmailDomain: vi.fn(async () => ({ row: { status: 'live', sending_domain: 'mail.example.com' } })),
 }))
+vi.mock('@/lib/org-event-fees', () => ({ getOrgEventFees: vi.fn(async () => ({ total_cents: 0 })) }))
+vi.mock('@/lib/host-contact-list', () => ({ addEventAttendeesToHostList: vi.fn(async () => 0) }))
+vi.mock('@/lib/host-campaign-backfill', () => ({
+  backfillHostCampaignEvents: vi.fn(async () => ({ scanned: 0, matched: 0, stamped: 0, updated: 0, skipped: 0, errors: [] })),
+}))
+vi.mock('@/lib/push', () => ({ sendPush: vi.fn(async () => ({ sent: 0 })) }))
 
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
@@ -53,6 +59,11 @@ import * as emailDomain from '@/app/api/settings/email-domain/route.js'
 import * as emailDomainVerify from '@/app/api/settings/email-domain/verify/route.js'
 import * as orgBranding from '@/app/api/settings/org-branding/route.js'
 import * as orgUsage from '@/app/api/settings/org-usage/route.js'
+import * as eventFees from '@/app/api/accounting/event-fees/route.js'
+import * as backfillHostContacts from '@/app/api/admin/backfill-host-contacts/route.js'
+import * as hostBackfill from '@/app/api/hosts/[id]/backfill-campaign-events/route.js'
+import * as staffDevices from '@/app/api/staff-devices/route.js'
+import * as nudge from '@/app/api/staff-devices/nudge/route.js'
 
 export const OTHER_ORG = 'e0000000-0000-4000-8000-0000000000e0'
 const inOrg = { activeOrganization: { id: ORG, name: 'Org' } }
@@ -86,6 +97,8 @@ export function fakeDb(tables) {
         b[op] = (...args) => { writes.push({ table, op }); return orig(...args) }
       }
       b.upsert = (row) => { writes.push({ table, op: 'upsert' }); return b.insert(row) }
+      // `.not(col, 'is', null)` only (the back-fill's hosted-event filter).
+      b.not = (col, op, val) => (op === 'is' ? b.neq(col, val) : b)
       return b
     },
   }
@@ -176,4 +189,24 @@ describe('an explicit foreign organisation id is not found (no existence probe)'
     const res = await call()
     expect(res.status).toBe(404)
   })
+})
+
+// ── the org event-fee report, the host back-fill jobs, the staff device fleet ─
+const orgTables = () => ({
+  ...settingsTables(),
+  event_hosts: [{ id: 'host-1', organization_id: ORG, name: 'Host One' }],
+  race_events: [{ id: 'ev-1', name: 'Hosted run', host_id: 'host-1' }],
+  profile_locations: [{ profile_id: 'user-1', location_id: LOC_A }],
+  profile_organizations: [],
+  profiles: [{ id: 'user-1', full_name: 'Coach One', email: 'coach.one@example.com', role: 'staff', active: true }],
+  device_tokens: [],
+})
+describeOrgAdminRoute('GET /api/accounting/event-fees', { call: () => eventFees.GET(), tables: orgTables })
+describeOrgAdminRoute('POST /api/admin/backfill-host-contacts', { call: () => backfillHostContacts.POST(), tables: orgTables })
+describeOrgAdminRoute('POST /api/hosts/[id]/backfill-campaign-events', {
+  call: () => hostBackfill.POST(bare('POST', '?dry=1'), params({ id: 'host-1' })), tables: orgTables,
+})
+describeOrgAdminRoute('GET /api/staff-devices', { call: () => staffDevices.GET(), tables: orgTables })
+describeOrgAdminRoute('POST /api/staff-devices/nudge', {
+  call: () => nudge.POST(json('POST', { profile_ids: ['c0000000-0000-4000-8000-0000000000c0'] })), tables: orgTables,
 })
