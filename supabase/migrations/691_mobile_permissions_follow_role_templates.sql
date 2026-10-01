@@ -5,7 +5,7 @@
 -- this file (read-only, Supabase MCP, 1-2 Oct 2026, with mig 678 applied).
 -- Proven ahead of apply by tests/migration-691-mobile-can-templates.test.js
 -- (PGlite; it checks the SQL against the real hasMobilePermissionForLocation
--- over 18,000 cases).
+-- over 37,500 cases).
 --
 -- ===========================================================================
 -- THE DEFECT (follow-ups C131, found planning C53)

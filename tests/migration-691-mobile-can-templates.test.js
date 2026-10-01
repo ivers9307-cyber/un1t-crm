@@ -15,7 +15,7 @@
 //     phone Bookings ON (nothing before, the studio's bookings after);
 //   * reception gets the JS defaults; owners, masters and members unchanged;
 //     writes follow reads (WITH CHECK);
-//   * THE PARITY MATRIX: 75 profiles x 60 studios x 4 keys = 18,000 cases, SQL
+//   * THE PARITY MATRIX: 75 profiles x 125 studios x 4 keys = 37,500 cases, SQL
 //     (the array wrapper AND the kept per-row entry points) === the real
 //     hasMobilePermissionForLocation;
 //   * the policies call the wrapper once per statement (InitPlan, no SubPlan);
@@ -353,7 +353,7 @@ describe('after 691', () => {
   })
 })
 
-describe('THE PARITY MATRIX: SQL === hasMobilePermissionForLocation (75 profiles x 60 studios x 4 keys)', () => {
+describe('THE PARITY MATRIX: SQL === hasMobilePermissionForLocation (75 profiles x 125 studios x 4 keys)', () => {
   let db
   const mismatches = []
   let cases = 0
@@ -365,8 +365,12 @@ describe('THE PARITY MATRIX: SQL === hasMobilePermissionForLocation (75 profiles
     { ...all4(true), bundle_sales: false, bundle_members: false, bundle_messaging: false, bundle_marketing: false },
     { bundle_messaging: false },
   ]
-  const TPL_ALL = [null, { mobile: all4(true) }, { mobile: all4(false) }, all4(false)]   // last: web-level only
-  const TPL_VAR = [null, { mobile: all4(true) }, { mobile: all4(false) }]
+  // TPL_ALL: none, all on, all off, web-level only, a non-object mobile that
+  // names every key (JS skips it; jsonb ? would match an array element).
+  // TPL_VAR: none, all on, all off, partial (unstated keys fall through to
+  // 'all'; a JSON null counts as stated-and-not-true), a non-object string.
+  const TPL_ALL = [null, { mobile: all4(true) }, { mobile: all4(false) }, all4(false), { mobile: KEYS }]
+  const TPL_VAR = [null, { mobile: all4(true) }, { mobile: all4(false) }, { mobile: { tasks: false, whatsapp: null } }, { mobile: 'bookings' }]
   const ROLES = ['owner', 'manager', 'head_coach', 'staff', 'reception']
   const OVERRIDES = [{}, { mobile: all4(true) }, { mobile: all4(false) }, all4(false),
     { mobile: 'tasks' }, { mobile: ['tasks', 'whatsapp'] }, { mobile: { tasks: 'true', whatsapp: null } }]
@@ -435,7 +439,7 @@ describe('THE PARITY MATRIX: SQL === hasMobilePermissionForLocation (75 profiles
   afterAll(() => db?.close())
 
   it('covers the matrix (not vacuous)', () => {
-    expect(cases).toBe((5 * 7 * 2 + 5) * (5 * 4 * 3) * 4)   // 75 x 60 x 4 = 18,000
+    expect(cases).toBe((5 * 7 * 2 + 5) * (5 * 5 * 5) * 4)   // 75 x 125 x 4 = 37,500
   })
 
   it('agrees on every combination', () => {
