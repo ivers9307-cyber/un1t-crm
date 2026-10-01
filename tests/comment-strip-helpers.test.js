@@ -10,7 +10,7 @@ import { describe, it, expect } from 'vitest'
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { stripComments, codeOf, stripCommentsOfFile, codeOfFile } from './helpers/js-code.js'
+import { stripComments, codeOf, stripCommentsOfFile, codeOfFile, HELPER_SOURCES, staleCacheDirs } from './helpers/js-code.js'
 import { sqlCode as sqlCodeFromTests } from './helpers/sql-code.js'
 import { sqlCode } from '../scripts/lib/sql-code.mjs'
 
@@ -88,6 +88,30 @@ describe('js-code file readers parse a file once and agree with the text helpers
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+
+  // The cache key is the scanned text; the directory is the code that turned
+  // text into output. The fallback stripper is part of that code: a fix to it
+  // must not leave its old output served from the cache.
+  it('the cache directory is keyed by every source that computes an entry', () => {
+    expect(HELPER_SOURCES.map(String)).toEqual(expect.arrayContaining([
+      expect.stringMatching(/tests\/helpers\/js-code\.js$/),
+      expect.stringMatching(/scripts\/lib\/strip-comments\.mjs$/),
+    ]))
+  })
+
+  // Worktrees run guards side by side, and one on another helper version has
+  // its own cache directory in the same tmpdir: deleting it mid-run makes
+  // every later test file there re-parse the repo (the C15 timeout class).
+  it('prunes only the caches of other versions that have gone a day unused', () => {
+    const now = Date.parse('2026-10-02T12:00:00Z')
+    const mtimes = {
+      'un1t-js-code-current': now - 3 * 86_400_000,
+      'un1t-js-code-busy': now - 60_000,
+      'un1t-js-code-old': now - 2 * 86_400_000,
+      'unrelated-dir': now - 9 * 86_400_000,
+    }
+    expect(staleCacheDirs(Object.keys(mtimes), 'un1t-js-code-current', (n) => mtimes[n], now)).toEqual(['un1t-js-code-old'])
   })
 })
 

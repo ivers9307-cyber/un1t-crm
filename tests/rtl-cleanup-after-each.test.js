@@ -71,7 +71,7 @@ export function cleansUpAfterEach(rawSource) {
   return false
 }
 
-describe('the detector itself', () => {
+describe('the detector itself', { timeout: 120_000 }, () => {
   it('accepts the house idioms', () => {
     expect(cleansUpAfterEach('afterEach(cleanup)')).toBe(true)
     expect(cleansUpAfterEach('afterEach(() => cleanup())')).toBe(true)
@@ -107,7 +107,7 @@ describe('the detector itself', () => {
   })
 })
 
-describe('every RTL test file unmounts after each test', () => {
+describe('every RTL test file unmounts after each test', { timeout: 120_000 }, () => {
   const files = rtlTestFiles()
 
   it('finds the RTL test files (the scan is not empty)', () => {

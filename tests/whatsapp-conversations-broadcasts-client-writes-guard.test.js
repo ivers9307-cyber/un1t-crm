@@ -190,7 +190,7 @@ export function waConvAnonReopeners(sql) {
   return hits
 }
 
-describe('client code never writes WhatsApp conversations or broadcasts (WACONVCLIENTWRITE.1, mig 661)', () => {
+describe('client code never writes WhatsApp conversations or broadcasts (WACONVCLIENTWRITE.1, mig 661)', { timeout: 120_000 }, () => {
   const files = clientFiles()
 
   it('scans the files it is meant to police (not vacuous)', () => {
@@ -245,7 +245,7 @@ describe('client code never writes WhatsApp conversations or broadcasts (WACONVC
   })
 })
 
-describe('later migrations keep the three tables read-only for clients (mig 661)', () => {
+describe('later migrations keep the three tables read-only for clients (mig 661)', { timeout: 120_000 }, () => {
   it('mig 661 is present', () => {
     expect(readdirSync(MIGRATIONS).some((f) => f.startsWith(`${WA_CONV_WRITES_OFF_MIGRATION}_`))).toBe(true)
   })
@@ -300,7 +300,7 @@ describe('later migrations keep the three tables read-only for clients (mig 661)
   })
 })
 
-describe('later migrations keep the three tables closed to anon (WAANONREAD.1, mig 673)', () => {
+describe('later migrations keep the three tables closed to anon (WAANONREAD.1, mig 673)', { timeout: 120_000 }, () => {
   it('mig 673 is present', () => {
     expect(readdirSync(MIGRATIONS).some((f) => f.startsWith(`${WA_ANON_CLOSED_MIGRATION}_`))).toBe(true)
   })

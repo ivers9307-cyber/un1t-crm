@@ -73,7 +73,7 @@ function clientOffenders() {
     .sort()
 }
 
-describe('the patterns', () => {
+describe('the patterns', { timeout: 120_000 }, () => {
   it('see a credential param and not its look-alikes', () => {
     expect(SERVER_RE.test("let apiKey = searchParams.get('api_key')")).toBe(true)
     expect(SERVER_RE.test("searchParams.get('pat')")).toBe(true)
@@ -110,7 +110,7 @@ describe('the patterns', () => {
   })
 })
 
-describe('no credential in a URL', () => {
+describe('no credential in a URL', { timeout: 120_000 }, () => {
   it('finds the trees (a wrong root finds nothing)', () => {
     expect(walk('src/app/api', (f) => f.endsWith('route.js')).length).toBeGreaterThan(500)
     expect(CLIENT_ROOTS.flatMap((r) => walk(r, isSource)).length).toBeGreaterThan(1000)

@@ -86,7 +86,7 @@ const isBrowserFile = (text) => {
   return /^['"]use client['"]/.test(code) || /\bcreateBrowserClient\b/.test(code)
 }
 
-describe('later migrations keep anon off contacts and consent_drift_rows server-only (mig 657)', () => {
+describe('later migrations keep anon off contacts and consent_drift_rows server-only (mig 657)', { timeout: 120_000 }, () => {
   it('mig 657 is present', () => {
     expect(readdirSync(MIGRATIONS).some((f) => f.startsWith(`${ANON_CONTACTS_MIGRATION}_`))).toBe(true)
   })
@@ -140,7 +140,7 @@ describe('later migrations keep anon off contacts and consent_drift_rows server-
   })
 })
 
-describe('no client-run code calls consent_drift_rows (mig 657)', () => {
+describe('no client-run code calls consent_drift_rows (mig 657)', { timeout: 120_000 }, () => {
   it('finds none, and the one real caller is a server route', () => {
     const phone = [...walk(path.join(ROOT, 'shared')), ...walk(path.join(ROOT, 'mobile'))]
     const src = walk(path.join(ROOT, 'src'))

@@ -59,7 +59,7 @@ export function undecidedCallers(root = repo) {
   return out.sort()
 }
 
-describe('every glofoxCredentialsForLocation caller decides what a failed settings read means', () => {
+describe('every glofoxCredentialsForLocation caller decides what a failed settings read means', { timeout: 120_000 }, () => {
   it('handles readError, or is LOG_ONLY with a reason', () => {
     expect(
       undecidedCallers(),

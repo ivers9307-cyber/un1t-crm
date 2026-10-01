@@ -81,8 +81,10 @@ export async function PUT(request, props) {
   // skipped the tag-added sequence trigger in silence and judged the
   // address-change reset without the old address. Nothing is written yet, so
   // refusing loses nothing and the caller (n8n included) can retry. No row at
-  // all is a 404 for every caller (detail routes answer 404, not 400).
-  if (oldErr && oldErr.code !== 'PGRST116') {
+  // all is a 404 for every caller (detail routes answer 404, not 400), and so
+  // is a malformed id (22P02: no such row can exist; a 503 would invite an
+  // endless retry).
+  if (oldErr && oldErr.code !== 'PGRST116' && oldErr.code !== '22P02') {
     logError('contacts.PUT', 'old-row read failed; nothing written', { id, err: oldErr.message })
     return NextResponse.json({ success: false, error: 'Could not read the contact just now; nothing was changed. Try again.' }, { status: 503 })
   }

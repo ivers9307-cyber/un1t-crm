@@ -180,7 +180,7 @@ export function waMessageAnonReopeners(sql) {
   return hits
 }
 
-describe('client code never writes whatsapp_messages (WAMSGCLIENTWRITE.1, mig 656)', () => {
+describe('client code never writes whatsapp_messages (WAMSGCLIENTWRITE.1, mig 656)', { timeout: 120_000 }, () => {
   const files = clientFiles()
 
   it('scans the files it is meant to police (not vacuous)', () => {
@@ -226,7 +226,7 @@ describe('client code never writes whatsapp_messages (WAMSGCLIENTWRITE.1, mig 65
   })
 })
 
-describe('later migrations keep whatsapp_messages read-only for clients (mig 656)', () => {
+describe('later migrations keep whatsapp_messages read-only for clients (mig 656)', { timeout: 120_000 }, () => {
   it('mig 656 is present', () => {
     expect(readdirSync(MIGRATIONS).some((f) => f.startsWith(`${WA_MSG_WRITES_OFF_MIGRATION}_`))).toBe(true)
   })
@@ -277,7 +277,7 @@ describe('later migrations keep whatsapp_messages read-only for clients (mig 656
   })
 })
 
-describe('later migrations keep whatsapp_messages closed to anon (WAANONREAD.1, mig 673)', () => {
+describe('later migrations keep whatsapp_messages closed to anon (WAANONREAD.1, mig 673)', { timeout: 120_000 }, () => {
   it('mig 673 is present', () => {
     expect(readdirSync(MIGRATIONS).some((f) => f.startsWith(`${WA_ANON_CLOSED_MIGRATION}_`))).toBe(true)
   })

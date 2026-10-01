@@ -43,7 +43,7 @@ function writers(dirs) {
   return out.sort()
 }
 
-describe('EVENTTYPERLS.1 — event_types writers', () => {
+describe('EVENTTYPERLS.1 — event_types writers', { timeout: 120_000 }, () => {
   it('only the two booking-type routes write event_types (service role, judged at the studio)', () => {
     expect(writers(['src', 'shared', 'scripts', 'supabase/functions'])).toEqual([
       'src/app/api/bookings/event-types/[id]/route.js update', // PUT

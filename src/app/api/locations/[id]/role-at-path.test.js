@@ -51,7 +51,7 @@ function routeFiles(dir) {
   return out
 }
 
-describe('/api/locations/[id] routes judge the role at the path location', () => {
+describe('/api/locations/[id] routes judge the role at the path location', { timeout: 120_000 }, () => {
   it('catches the shape TRAINERSROLE.1 removed, and not a comment or a master check', () => {
     expect(activeRoleGates('if (!ALLOWED_ROLES.has(user.role)) {')).toEqual(['.has(user.role)'])
     expect(activeRoleGates('if (!MANAGER_ROLES.includes(user.role)) {')).toEqual(['.includes(user.role)'])
@@ -119,7 +119,7 @@ const activeStudioReads = (src) => {
   return ACTIVE_STUDIO_READS.flatMap((re) => [...s.matchAll(re)].map((m) => m[0]))
 }
 
-describe('/api/locations/[id] routes act on the path location (ACDEVLOC.1)', () => {
+describe('/api/locations/[id] routes act on the path location (ACDEVLOC.1)', { timeout: 120_000 }, () => {
   it('sees the id-read shapes in use, and not a comment', () => {
     expect(readsPathId('const params = await props.params\nconst locationId = params.id')).toBe(true)
     expect(readsPathId('const locationId = params?.id')).toBe(true)

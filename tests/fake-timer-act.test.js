@@ -105,7 +105,7 @@ export function bareClockMoves(rawSource) {
   return found
 }
 
-describe('the detector itself', () => {
+describe('the detector itself', { timeout: 120_000 }, () => {
   it('sees a bare advance', () => {
     expect(bareClockMoves('await vi.advanceTimersByTimeAsync(0)\nscreen.getByRole("button")'))
       .toEqual([{ line: 1, snippet: 'advanceTimersByTimeAsync(0)' }])
@@ -141,7 +141,7 @@ describe('the detector itself', () => {
   })
 })
 
-describe('a component test never moves the fake clock outside act()', () => {
+describe('a component test never moves the fake clock outside act()', { timeout: 120_000 }, () => {
   const files = componentTestFiles()
 
   it('finds the component tests at all', () => {

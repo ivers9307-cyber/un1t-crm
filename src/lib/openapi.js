@@ -2533,7 +2533,7 @@ registry.registerPath({
     200: { description: 'Contact updated', content: { 'application/json': { schema: SuccessResponse(Contact) } } },
     400: { description: 'Validation failed', content: { 'application/json': { schema: ErrorResponse } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
-    404: { description: 'No such contact, or (cookie caller) not Manager+ at its location; per-organisation keys: not in your organisation', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such contact (or a malformed id), or (cookie caller) not Manager+ at its location; per-organisation keys: not in your organisation', content: { 'application/json': { schema: ErrorResponse } } },
     503: { description: 'The contact could not be read just now; nothing was changed. Retry.', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })

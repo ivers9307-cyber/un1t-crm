@@ -70,7 +70,7 @@ export function countStarReads(text) {
   return PATTERNS.reduce((n, p) => n + [...text.matchAll(p)].length, 0)
 }
 
-describe('every star-read of locations is reviewed (SECFIX.3a)', () => {
+describe('every star-read of locations is reviewed (SECFIX.3a)', { timeout: 120_000 }, () => {
   const found = {}
   for (const file of ['src', 'shared', 'mobile'].flatMap((d) => walk(path.join(ROOT, d)))) {
     const n = countStarReads(readFileSync(file, 'utf8'))

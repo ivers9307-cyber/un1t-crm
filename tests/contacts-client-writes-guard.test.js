@@ -107,7 +107,7 @@ export function contactsWriteReopeners(sql) {
   return hits
 }
 
-describe('client code never writes contacts (CONTACTSELFWRITE.1, mig 653)', () => {
+describe('client code never writes contacts (CONTACTSELFWRITE.1, mig 653)', { timeout: 120_000 }, () => {
   const files = clientFiles()
 
   it('scans the files it is meant to police (not vacuous)', () => {
@@ -146,7 +146,7 @@ describe('client code never writes contacts (CONTACTSELFWRITE.1, mig 653)', () =
   })
 })
 
-describe('later migrations keep contacts read-only for clients (mig 653)', () => {
+describe('later migrations keep contacts read-only for clients (mig 653)', { timeout: 120_000 }, () => {
   it('a server file that queries with the signed-in user\'s session is client-bound', () => {
     expect(isBrowserFile(`import { createAuthClient } from '@/lib/supabase'\nconst db = createAuthClient()`)).toBe(true)
     expect(isBrowserFile(`import { createServerClient } from '@/lib/supabase'`)).toBe(false)

@@ -163,7 +163,7 @@ export function consentReopeners(sql) {
   return hits
 }
 
-describe('client code never reads consent (CONSENTREAD.1, mig 662)', () => {
+describe('client code never reads consent (CONSENTREAD.1, mig 662)', { timeout: 120_000 }, () => {
   const files = clientFiles()
 
   it('scans the files it is meant to police (not vacuous)', () => {
@@ -210,7 +210,7 @@ describe('client code never reads consent (CONSENTREAD.1, mig 662)', () => {
   })
 })
 
-describe('migrations keep the consent relations closed to clients (mig 662)', () => {
+describe('migrations keep the consent relations closed to clients (mig 662)', { timeout: 120_000 }, () => {
   it('mig 662 is present', () => {
     expect(readdirSync(MIGRATIONS).some((f) => f.startsWith(`${CONSENT_CLOSED_MIGRATION}_`))).toBe(true)
   })

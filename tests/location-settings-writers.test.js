@@ -71,7 +71,7 @@ export function undecidedWriters(root = repo) {
   return out.sort()
 }
 
-describe('every writer of locations.settings goes through mergeLocationSettings', () => {
+describe('every writer of locations.settings goes through mergeLocationSettings', { timeout: 120_000 }, () => {
   it('no unreviewed whole-column writer', () => {
     expect(
       undecidedWriters(),

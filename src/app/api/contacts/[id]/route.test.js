@@ -169,6 +169,18 @@ describe('PUT /api/contacts/[id] — cookie-path location gate', () => {
     }
   })
 
+  // A malformed id (PostgREST 22P02, invalid uuid) is a contact that cannot
+  // exist, not an outage: a 503 "try again" would have n8n retry forever and
+  // log an error per call.
+  it('a malformed id is a 404, not a retryable 503', async () => {
+    requireApiKeyOrManager.mockResolvedValue({ ok: true, orgId: null, user: null })
+    const db = mockDb({ oldErr: { code: '22P02', message: 'invalid input syntax for type uuid: "undefined"' } })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(req(), props)
+    expect(res.status).toBe(404)
+    expect(db.update).not.toHaveBeenCalled()
+  })
+
   it('401 passthrough when auth fails', async () => {
     requireApiKeyOrManager.mockResolvedValue({
       ok: false,

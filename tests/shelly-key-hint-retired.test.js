@@ -28,7 +28,7 @@ function walk(dir, out = []) {
 // never a regex: a '/*' in a string hid the rest of a file from the old one.
 export const codeOnly = (text, file) => stripComments(text, file)
 
-describe('no code names the retired Shelly key hint (SECRETTAILS.1)', () => {
+describe('no code names the retired Shelly key hint (SECRETTAILS.1)', { timeout: 120_000 }, () => {
   it('no source file under src/, shared/ or mobile/ reads, writes or selects it', () => {
     const hits = []
     for (const dir of ['src', 'shared', 'mobile']) {
