@@ -12,7 +12,7 @@ import { makeFakeDb } from './api-auth.test-helpers.js'
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 
 const { createServerClient } = await import('@/lib/supabase')
-const { listVersionViewers } = await import('./policies.js')
+const { listVersionViewers, currentVersionOpenCounts } = await import('./policies.js')
 
 const ORG = 'org-own'
 const FOREIGN = 'org-foreign'
@@ -114,5 +114,56 @@ describe('listVersionViewers — the caller\'s organisation only', () => {
     }
     createServerClient.mockReturnValue(db)
     await expect(listVersionViewers(VERSION, OWNER)).rejects.toThrow(/boom/)
+  })
+})
+
+// The /policies/manage list's "N / M opened" column counts the same people
+// the per-version page lists. Before, it counted every viewer and every active
+// profile in the estate, so the list read "2 / 6" while the version page an
+// owner opened said 1 opened, 2 outstanding (and it told one tenant another's
+// headcount).
+describe('currentVersionOpenCounts — the same people as listVersionViewers', () => {
+  it('an owner counts their organisation\'s completed viewers and active people only', async () => {
+    createServerClient.mockReturnValue(makeFakeDb(fixture()))
+    const { viewerCount, activeStaffCount } = await currentVersionOpenCounts([VERSION], OWNER)
+    expect(viewerCount.get(VERSION)).toBe(1)
+    expect(activeStaffCount).toBe(3)
+  })
+
+  it('a master keeps the estate', async () => {
+    createServerClient.mockReturnValue(makeFakeDb(fixture()))
+    const { viewerCount, activeStaffCount } = await currentVersionOpenCounts([VERSION], MASTER)
+    expect(viewerCount.get(VERSION)).toBe(2)
+    expect(activeStaffCount).toBe(6)
+  })
+
+  it('an owner with no active organisation counts nobody', async () => {
+    createServerClient.mockReturnValue(makeFakeDb(fixture()))
+    const { viewerCount, activeStaffCount } = await currentVersionOpenCounts([VERSION], { ...OWNER, activeOrganization: null })
+    expect(viewerCount.get(VERSION) || 0).toBe(0)
+    expect(activeStaffCount).toBe(0)
+  })
+
+  it('an unfinished view is not counted, and a person is counted once', async () => {
+    const t = fixture()
+    t.policy_views.push(
+      { ...t.policy_views[0], started_at: '2026-09-03T10:00:00Z' },
+      { ...t.policy_views[0], profile_id: 'own-pending', ended_at: null },
+    )
+    createServerClient.mockReturnValue(makeFakeDb(t))
+    const { viewerCount } = await currentVersionOpenCounts([VERSION], OWNER)
+    expect(viewerCount.get(VERSION)).toBe(1)
+  })
+
+  it('a failed read throws, never a zero passed off as the answer', async () => {
+    const db = makeFakeDb(fixture())
+    const realFrom = db.from
+    db.from = (table) => {
+      const b = realFrom(table)
+      if (table === 'policy_views') b.then = (resolve) => Promise.resolve({ data: null, error: { message: 'boom' } }).then(resolve)
+      return b
+    }
+    createServerClient.mockReturnValue(db)
+    await expect(currentVersionOpenCounts([VERSION], OWNER)).rejects.toThrow(/boom/)
   })
 })
