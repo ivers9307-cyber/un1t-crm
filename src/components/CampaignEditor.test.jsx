@@ -36,16 +36,9 @@ vi.mock('./AudienceBuilder', () => ({
   },
 }))
 
-let deleteError = null
-vi.mock('@/lib/supabase', () => ({
-  createBrowserClient: () => ({
-    from: () => ({
-      select: () => ({ eq: () => ({ single: async () => ({ data: null, error: null }) }) }),
-      update: () => ({ eq: () => ({ select: () => ({ single: async () => ({ data: { id: 'camp-1' }, error: null }) }) }) }),
-      delete: () => ({ eq: async () => ({ error: deleteError }) }),
-    }),
-  }),
-}))
+// MEMBERWRITESWEEP.1e — the editor holds no database client any more: every
+// read and write goes through /api/communications/campaigns* (fetch, stubbed
+// below). Route-by-route coverage: CampaignEditor.routes.test.jsx.
 
 import CampaignEditor from './CampaignEditor.jsx'
 
@@ -63,7 +56,6 @@ const CODE_HTML = '<html><body><h1>UN1T branded email</h1></body></html>'
 beforeEach(() => {
   vi.clearAllMocks()
   builderProps = null
-  deleteError = null
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ success: true, audience_count: 10 }) })))
 })
 afterEach(() => {

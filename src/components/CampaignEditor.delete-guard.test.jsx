@@ -2,24 +2,15 @@
 //
 // CAMPDEL.1 — the editor's delete must not be the way round the delete guard.
 //
-// CAMPHIST.1 already learned this about SAVE: CampaignEditor persists by
-// writing the `campaigns` row DIRECTLY from the browser Supabase client, so the
-// 409 on PUT /api/campaigns/[id] never runs, and campaigns_location_scoped
-// (mig 014) is `FOR ALL ... USING auth_is_in_location(location_id)` with no
-// status predicate, so the database allows it too. `handleDelete` had exactly
-// the same shape: a `db.from('campaigns').delete()` whose only check was a
-// hard-coded ['queued','sending'] refusal.
-//
-// It cannot simply call the API route instead: DELETE /api/campaigns/[id]
-// authenticates with `authenticateApiKey`, which is Bearer-only, so an
-// operator's session cookie would just get a 401.
-//
-// So the editor re-reads the status from the database immediately before
-// deleting and applies the SAME predicate the route does. That also closes a
-// race the local state cannot see: an operator sitting on a 'scheduled'
-// campaign while the run-campaigns cron sends it still holds `campaignStatus
-// === 'scheduled'` in React, and the old code would have deleted a campaign
-// that had just gone out to thousands of people.
+// The editor used to delete with `db.from('campaigns').delete()` straight from
+// the browser, after re-reading the status itself, because the n8n route
+// (DELETE /api/campaigns/[id]) is Bearer-only. MEMBERWRITESWEEP.1e moved it to
+// DELETE /api/communications/campaigns/[id] (session auth, email at the
+// campaign's studio), which re-reads the status on the SERVER and applies the
+// same predicate: the race the local React state cannot see (an operator
+// sitting on a 'scheduled' campaign while the run-campaigns cron sends it)
+// is now the route's 409, shown in the editor. Mig 684 closes `campaigns` to
+// every client session, so there is no browser path left to guard.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/react'
@@ -28,20 +19,6 @@ const push = vi.fn()
 const refresh = vi.fn()
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push, refresh }) }))
 vi.mock('./AudienceBuilder', () => ({ default: () => <div data-testid="audience-builder" /> }))
-
-// What the pre-delete re-read of `campaigns.status` returns.
-let freshStatus = { data: null, error: null }
-const deleteCalls = []
-
-vi.mock('@/lib/supabase', () => ({
-  createBrowserClient: () => ({
-    from: () => ({
-      select: () => ({ eq: () => ({ single: async () => freshStatus }) }),
-      update: () => ({ eq: () => ({ select: () => ({ single: async () => ({ data: { id: 'camp-1' }, error: null }) }) }) }),
-      delete: () => ({ eq: async (col, val) => { deleteCalls.push({ col, val }); return { error: null } } }),
-    }),
-  }),
-}))
 
 import CampaignEditor from './CampaignEditor.jsx'
 
@@ -58,12 +35,21 @@ const BASE = {
 const renderEditor = (overrides = {}) =>
   render(<CampaignEditor campaign={{ ...BASE, ...overrides }} locationId="loc-1" userId="user-1" />)
 
+// What DELETE /api/communications/campaigns/camp-1 answers.
+let deleteAnswer
+const deleteCalls = () => fetch.mock.calls.filter(([url, init]) =>
+  url === '/api/communications/campaigns/camp-1' && init?.method === 'DELETE')
+
 beforeEach(() => {
   vi.clearAllMocks()
-  deleteCalls.length = 0
-  freshStatus = { data: null, error: null }
+  deleteAnswer = { status: 200, body: { success: true } }
   vi.stubGlobal('confirm', vi.fn(() => true))
-  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ success: true, audience_count: 10 }) })))
+  vi.stubGlobal('fetch', vi.fn(async (url, init = {}) => {
+    if (init.method === 'DELETE') {
+      return { ok: deleteAnswer.status < 400, status: deleteAnswer.status, json: async () => deleteAnswer.body }
+    }
+    return { ok: true, status: 200, json: async () => ({ success: true, audience_count: 10 }) }
+  }))
 })
 afterEach(() => {
   cleanup()
@@ -71,38 +57,39 @@ afterEach(() => {
 })
 
 describe('CampaignEditor delete guard', () => {
-  it('deletes a draft whose stored status is still a draft', async () => {
-    freshStatus = { data: { status: 'draft' }, error: null }
+  it('deletes a draft through the route and lands on the sends list', async () => {
     renderEditor()
     fireEvent.click(screen.getByTitle('Delete this draft'))
-    await waitFor(() => expect(deleteCalls).toHaveLength(1))
-    expect(push).toHaveBeenCalledWith('/communications/sent')
+    await waitFor(() => expect(deleteCalls()).toHaveLength(1))
+    await waitFor(() => expect(push).toHaveBeenCalledWith('/communications/sent'))
   })
 
-  // The race the local React state cannot see.
-  it('refuses when the campaign has been sent since the editor loaded', async () => {
-    freshStatus = { data: { status: 'sent' }, error: null }
+  // The race the local React state cannot see: the route re-reads and refuses.
+  it('shows the route\'s refusal when the campaign has been sent since the editor loaded, and adopts the real status', async () => {
+    deleteAnswer = {
+      status: 409,
+      body: { success: false, error: 'This campaign is sent, so it cannot be deleted. Its recipients, opens and clicks are the record of what was actually sent, and deleting it would take them with it.', data: { status: 'sent' } },
+    }
     renderEditor({ status: 'scheduled' })
     fireEvent.click(screen.getByTestId('campaign-delete'))
-    await waitFor(() => expect(screen.getByText(/cannot be deleted/i)).toBeTruthy())
-    expect(deleteCalls).toHaveLength(0)
+    await screen.findByText(/cannot be deleted/i)
+    expect(push).not.toHaveBeenCalled()
+    await waitFor(() => expect(screen.getByTestId('campaign-status-pill').textContent).toMatch(/sent/i))
   })
 
-  it('never issues the delete for a stored status past scheduled', async () => {
-    for (const status of ['queued', 'sending', 'sent', 'cancelled', 'failed']) {
-      cleanup()
-      deleteCalls.length = 0
-      freshStatus = { data: { status }, error: null }
-      renderEditor({ status: 'draft' })
-      fireEvent.click(screen.getByTestId('campaign-delete'))
-      await waitFor(() => expect(deleteCalls).toHaveLength(0))
-    }
+  it('shows the sending text the route returns for a queued or sending campaign', async () => {
+    deleteAnswer = { status: 409, body: { success: false, error: 'This campaign is sending. Cancel the send first, then delete.', data: { status: 'sending' } } }
+    renderEditor()
+    fireEvent.click(screen.getByTestId('campaign-delete'))
+    await screen.findByText('This campaign is sending. Cancel the send first, then delete.')
+    expect(push).not.toHaveBeenCalled()
   })
 
-  it('falls back to the loaded status when the re-read returns nothing', async () => {
-    freshStatus = { data: null, error: null }
-    renderEditor({ status: 'draft' })
-    fireEvent.click(screen.getByTitle('Delete this draft'))
-    await waitFor(() => expect(deleteCalls).toHaveLength(1))
+  it('asks first, and deletes nothing when declined', async () => {
+    vi.stubGlobal('confirm', vi.fn(() => false))
+    renderEditor()
+    fireEvent.click(screen.getByTestId('campaign-delete'))
+    await Promise.resolve()
+    expect(deleteCalls()).toHaveLength(0)
   })
 })
