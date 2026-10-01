@@ -259,6 +259,17 @@ describe('POST /api/cars/[id]/documents/finalise — refusals', () => {
     expect(calls.inserted).toBeNull()
   })
 
+  it('the losing insert of a concurrent finalise (23505 on the unique path, mig 693) answers 409 and keeps the object', async () => {
+    createServerClient.mockReturnValue(fakeDb({ insertError: {
+      code: '23505', message: 'duplicate key value violates unique constraint "car_documents_storage_path_key"',
+    } }))
+    const res = await finalise(good)
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ success: false, error: 'This upload is already saved.' })
+    expect(calls.remove).toEqual([])
+    expect(enqueueFromCarDocument).not.toHaveBeenCalled()
+  })
+
   it('removes the object and answers 500 when the row insert fails', async () => {
     createServerClient.mockReturnValue(fakeDb({ insertError: { message: 'insert refused' } }))
     const res = await finalise(good)
