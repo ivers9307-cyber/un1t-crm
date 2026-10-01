@@ -4,12 +4,12 @@
 // email_sends.sequence_step_id is ON DELETE SET NULL (mig 005), so each publish
 // orphaned the step of every earlier send and the Performance panel (which keys
 // on the step row id) emptied. Now a row is matched to the graph node it was
-// compiled from and updated IN PLACE (mig 695's publish_sequence_steps): kept
+// compiled from and updated IN PLACE (mig 698's publish_sequence_steps): kept
 // nodes keep their row, new nodes insert, removed nodes are deleted (their
 // sends SET NULL, as before). Forward only (Richard, 1 Oct 2026): nothing here
 // re-attributes a send that already lost its step.
 //
-// The identity is sequence_steps.graph_node_id. Rows written before mig 695
+// The identity is sequence_steps.graph_node_id. Rows written before mig 698
 // carry NULL; they are ADOPTED at their sequence's next publish when the
 // stored published graph, compiled, reproduces them at their step_order (the
 // fingerprint below). A row that does not match (edited by a legacy step
@@ -48,7 +48,7 @@ function reproduces(compiled, row) {
   return canonical(compiled.config ?? {}) === canonical(row.config ?? {})
 }
 
-/** node id → existing row, for rows from before mig 695 (graph_node_id NULL). */
+/** node id → existing row, for rows from before mig 698 (graph_node_id NULL). */
 function adoptLegacyRows(existingRows, previousGraph, taken) {
   const adopted = new Map()
   if (!previousGraph) return adopted

@@ -22,7 +22,7 @@ const PublishSchema = z.object({
 // an in-flight enrolment on step k runs step k+1 of the new graph.
 //
 // STEPATTRIB.1 — the steps are applied IN PLACE, keyed by graph node id
-// (sequence_steps.graph_node_id, mig 695): a kept node keeps its row id, a new
+// (sequence_steps.graph_node_id, mig 698): a kept node keeps its row id, a new
 // node inserts, only a removed node's row is deleted. It used to delete every
 // row and insert the compiled ones, and email_sends.sequence_step_id is ON
 // DELETE SET NULL, so each publish orphaned every earlier send's step (22,771
@@ -101,7 +101,7 @@ export async function POST(request, props) {
   }
 
   // STEPATTRIB.1 — which existing row each compiled node updates in place.
-  // Rows from before mig 695 carry no node id; the stored PUBLISHED graph
+  // Rows from before mig 698 carry no node id; the stored PUBLISHED graph
   // (not the draft) is what they were compiled from, so it identifies them.
   const { data: existingRows, error: rowsError } = await db.from('sequence_steps')
     .select(STEP_ROW_SELECT)

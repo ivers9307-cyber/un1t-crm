@@ -1,9 +1,9 @@
-// STEPATTRIB.1 (follow-ups C99) — behavioural test for migration 695.
+// STEPATTRIB.1 (follow-ups C99) — behavioural test for migration 698.
 //
 // A graph publish used to delete every sequence_steps row and insert the
 // compiled ones. email_sends.sequence_step_id is ON DELETE SET NULL, so each
 // publish orphaned every earlier send's step (22,771 of 22,793 on 30 Sep).
-// 695 adds the identity (sequence_steps.graph_node_id, unique per sequence)
+// 698 adds the identity (sequence_steps.graph_node_id, unique per sequence)
 // and public.publish_sequence_steps(uuid, jsonb), which applies a publish in
 // ONE transaction: delete the rows not kept, update the kept rows in place,
 // insert the new ones. Forward only (Richard, 1 Oct 2026): no history is
@@ -33,12 +33,12 @@ import path from 'node:path'
 import { PGlite } from '@electric-sql/pglite'
 
 const MIG = readFileSync(path.resolve(import.meta.dirname,
-  '../supabase/migrations/695_sequence_step_identity.sql'), 'utf8')
+  '../supabase/migrations/698_sequence_step_identity.sql'), 'utf8')
 
 /** The rollback record: the commented block between its two markers, uncommented. */
 function rollbackOf(sql) {
   const m = sql.match(/-- ROLLBACK BEGIN\n([\s\S]*?)-- ROLLBACK END/)
-  if (!m) throw new Error('695 has no rollback record')
+  if (!m) throw new Error('698 has no rollback record')
   return m[1].split('\n').map((l) => l.replace(/^-- ?/, '')).join('\n')
 }
 
@@ -98,7 +98,7 @@ const BASE = `
   CREATE TABLE public.sequence_enrollments (id uuid PRIMARY KEY, sequence_id uuid, current_step_order integer);
 `
 
-// The live 3-Class-Trial shape, rows as a pre-695 publish wrote them.
+// The live 3-Class-Trial shape, rows as a pre-698 publish wrote them.
 const SEED = `
   INSERT INTO public.email_sequences (id) VALUES ('${SEQ}'), ('${SEQ2}');
   INSERT INTO public.sequence_steps (id, sequence_id, step_order, step_type, subject, html_content, delay_days, config) VALUES
@@ -150,7 +150,7 @@ beforeEach(async () => {
 })
 afterEach(async () => { await db.close() })
 
-describe('695 — the objects', () => {
+describe('698 — the objects', () => {
   it('adds graph_node_id (text, nullable) and a partial unique index per sequence', async () => {
     const { rows: [col] } = await db.query(`SELECT data_type, is_nullable FROM information_schema.columns
       WHERE table_schema = 'public' AND table_name = 'sequence_steps' AND column_name = 'graph_node_id'`)
@@ -184,7 +184,7 @@ describe('695 — the objects', () => {
   })
 })
 
-describe('695 — publish_sequence_steps', () => {
+describe('698 — publish_sequence_steps', () => {
   it('a republish keeps every row id, so every send keeps its step', async () => {
     const before = await sends()
     const { rows: [{ r }] } = await publish(republish())
@@ -284,7 +284,7 @@ describe('695 — publish_sequence_steps', () => {
   })
 })
 
-describe('695 — re-run and rollback', () => {
+describe('698 — re-run and rollback', () => {
   it('a second run is a no-op', async () => {
     await publish(republish())
     await runSql(MIG)

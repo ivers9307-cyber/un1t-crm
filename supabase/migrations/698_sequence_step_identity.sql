@@ -1,15 +1,15 @@
--- 695 — STEPATTRIB.1 (follow-ups C99): sequence steps keep their identity
+-- 698 — STEPATTRIB.1 (follow-ups C99): sequence steps keep their identity
 -- across a graph publish. FORWARD ONLY (Richard, 1 Oct 2026): this file
 -- writes no row and re-attributes no send.
 --
 -- APPLY BEFORE THE STEPATTRIB.1 CODE DEPLOYS. The new publish route calls
--- publish_sequence_steps; before 695 that call 404s and the route answers 500
+-- publish_sequence_steps; before 698 that call 404s and the route answers 500
 -- without writing anything (the live steps stay as they are), so publishing
 -- is down until this lands. Applying it early changes nothing: the old route
 -- never names the column or the function.
 --
 -- NOT APPLIED YET when this file was written. Behaviour is proven ahead of
--- apply by tests/migration-695-sequence-step-identity.test.js (PGlite).
+-- apply by tests/migration-698-sequence-step-identity.test.js (PGlite).
 --
 -- ===========================================================================
 -- WHY
@@ -78,7 +78,7 @@ SET LOCAL lock_timeout = '5s';
 -- 1. The identity.
 ALTER TABLE public.sequence_steps ADD COLUMN IF NOT EXISTS graph_node_id text;
 COMMENT ON COLUMN public.sequence_steps.graph_node_id IS
-  'STEPATTRIB.1 (mig 695): the flow-graph node this row was compiled from. A graph publish updates the row in place by this key, so its id (and email_sends.sequence_step_id) survives. NULL on rows not yet republished since 695.';
+  'STEPATTRIB.1 (mig 698): the flow-graph node this row was compiled from. A graph publish updates the row in place by this key, so its id (and email_sends.sequence_step_id) survives. NULL on rows not yet republished since 698.';
 
 -- 2. One row per node per sequence.
 CREATE UNIQUE INDEX IF NOT EXISTS sequence_steps_graph_node_uniq
@@ -178,7 +178,7 @@ END
 $$;
 
 COMMENT ON FUNCTION public.publish_sequence_steps(uuid, jsonb) IS
-  'STEPATTRIB.1 (mig 695): apply a compiled flow-graph publish to sequence_steps in one transaction. Rows named by id are updated in place (ids survive, so email_sends keep their step), others inserted, the rest deleted. Service role only.';
+  'STEPATTRIB.1 (mig 698): apply a compiled flow-graph publish to sequence_steps in one transaction. Rows named by id are updated in place (ids survive, so email_sends keep their step), others inserted, the rest deleted. Service role only.';
 
 -- 4. Server-only (the publish route runs as service_role).
 REVOKE EXECUTE ON FUNCTION public.publish_sequence_steps(uuid, jsonb) FROM PUBLIC, anon, authenticated;
@@ -189,20 +189,20 @@ DO $check$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM information_schema.columns
                   WHERE table_schema = 'public' AND table_name = 'sequence_steps' AND column_name = 'graph_node_id') THEN
-    RAISE EXCEPTION '695: sequence_steps.graph_node_id missing';
+    RAISE EXCEPTION '698: sequence_steps.graph_node_id missing';
   END IF;
   IF to_regclass('public.sequence_steps_graph_node_uniq') IS NULL THEN
-    RAISE EXCEPTION '695: sequence_steps_graph_node_uniq missing';
+    RAISE EXCEPTION '698: sequence_steps_graph_node_uniq missing';
   END IF;
   IF (SELECT prosecdef FROM pg_proc WHERE oid = 'public.publish_sequence_steps(uuid, jsonb)'::regprocedure) THEN
-    RAISE EXCEPTION '695: publish_sequence_steps must be SECURITY INVOKER';
+    RAISE EXCEPTION '698: publish_sequence_steps must be SECURITY INVOKER';
   END IF;
   IF has_function_privilege('anon', 'public.publish_sequence_steps(uuid, jsonb)', 'EXECUTE')
      OR has_function_privilege('authenticated', 'public.publish_sequence_steps(uuid, jsonb)', 'EXECUTE') THEN
-    RAISE EXCEPTION '695: a client role can execute publish_sequence_steps';
+    RAISE EXCEPTION '698: a client role can execute publish_sequence_steps';
   END IF;
   IF NOT has_function_privilege('service_role', 'public.publish_sequence_steps(uuid, jsonb)', 'EXECUTE') THEN
-    RAISE EXCEPTION '695: service_role cannot execute publish_sequence_steps';
+    RAISE EXCEPTION '698: service_role cannot execute publish_sequence_steps';
   END IF;
 END
 $check$;

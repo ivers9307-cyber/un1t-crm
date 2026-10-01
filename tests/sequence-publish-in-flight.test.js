@@ -1,10 +1,10 @@
 // STEPATTRIB.1 — republishing a LIVE graph with an enrolment in flight.
 //
 // End to end across the real pieces: the publish route (real planner) calls
-// the REAL publish_sequence_steps from migration 695 running in PGlite, and
+// the REAL publish_sequence_steps from migration 698 running in PGlite, and
 // then the real runner (runSequences) reads its next step from the same
 // database. The shape is the live 3-Class Trial (email, wait, email, wait,
-// email) whose rows predate 695 (graph_node_id NULL), with an enrolment
+// email) whose rows predate 698 (graph_node_id NULL), with an enrolment
 // sitting on step 2 and sends attributed to steps 1 and 3.
 //
 // It proves what an in-flight enrolment sees after a publish that edits a
@@ -48,8 +48,8 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { compileGraphToSteps } from '@/lib/sequences/graph/compile'
 
-const MIG_695 = readFileSync(path.resolve(import.meta.dirname,
-  '../supabase/migrations/695_sequence_step_identity.sql'), 'utf8')
+const MIG_698 = readFileSync(path.resolve(import.meta.dirname,
+  '../supabase/migrations/698_sequence_step_identity.sql'), 'utf8')
 
 const SEQ = 'a0000000-0000-0000-0000-000000000001'
 const LOC = 'c0000000-0000-0000-0000-000000000003'
@@ -110,7 +110,7 @@ const SCHEMA = `
 let pg
 const q = async (sql, params = []) => (await pg.query(sql, params)).rows
 
-/** Seed rows exactly as a pre-695 publish of trial() wrote them. */
+/** Seed rows exactly as a pre-698 publish of trial() wrote them. */
 async function seedLivePublishedTrial() {
   await q('INSERT INTO public.email_sequences (id, location_id, graph) VALUES ($1, $2, $3)', [SEQ, LOC, JSON.stringify(trial())])
   const rows = compileGraphToSteps(trial())
@@ -222,7 +222,7 @@ beforeEach(async () => {
   getCurrentUser.mockResolvedValue(OWNER)
   pg = new PGlite()
   await pg['exec'](SCHEMA)
-  await pg['exec'](MIG_695)
+  await pg['exec'](MIG_698)
   await seedLivePublishedTrial()
 })
 afterEach(async () => { await pg.close() })

@@ -206,7 +206,7 @@ describe('publish gate — dynamic URL button value', () => {
 // NULL, so every earlier send lost its step (22,771 of 22,793 on 30 Sep) and a
 // runner tick between the two calls found no step and completed the enrolment.
 // Now the route plans which row each node updates in place and hands the whole
-// publish to publish_sequence_steps (mig 695), one transaction.
+// publish to publish_sequence_steps (mig 698), one transaction.
 describe('publish keeps step identity (STEPATTRIB.1)', () => {
   const rid = (n) => `d0000000-0000-0000-0000-${String(n).padStart(12, '0')}`
   const trial = (subject3 = 'Last one') => ({
@@ -245,7 +245,7 @@ describe('publish keeps step identity (STEPATTRIB.1)', () => {
     expect(args.p_steps[2].subject).toBe('Last one, edited')
   })
 
-  it('adopts rows written before mig 695 when the stored published graph reproduces them', async () => {
+  it('adopts rows written before mig 698 when the stored published graph reproduces them', async () => {
     const m = mockDb({ stored: storedWith(trial()), stepRows: rowsOf(trial(), { withNodeIds: false }) })
     createServerClient.mockReturnValue(m.db)
 
