@@ -159,11 +159,12 @@ BEGIN
     RAISE EXCEPTION 'mig 688: objects outside the dropped set depend on it: %', v_bad;
   END IF;
 
-  -- Function bodies are not in pg_depend (except BEGIN ATOMIC): read them.
+  -- Function bodies are not in pg_depend (except BEGIN ATOMIC): read them,
+  -- ignoring case (unquoted identifiers fold: SMS_BROADCASTS is the table).
   SELECT string_agg(p.oid::regprocedure::text, ', ' ORDER BY p.oid::regprocedure::text) INTO v_bad
     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
    WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
-     AND p.prosrc ~ '\msms_broadcast'
+     AND p.prosrc ~* '\msms_broadcast'
      AND NOT (p.oid = ANY (v_fns));
   IF v_bad IS NOT NULL THEN
     RAISE EXCEPTION 'mig 688: functions outside the dropped set name sms_broadcast: %', v_bad;

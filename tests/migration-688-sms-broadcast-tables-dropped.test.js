@@ -23,9 +23,10 @@
 //   * the preflight aborts the WHOLE file (nothing dropped, the 7 rows still
 //     there) when: a second broadcast or a seventh recipient appeared
 //     (something still writes); a view, an FK from another table, a
-//     BEGIN ATOMIC function, a plpgsql function naming them, a trigger on
-//     another table using the updated_at function, an extra trigger on
-//     sms_broadcasts, or a policy on another table depends on or names them;
+//     BEGIN ATOMIC function, a plpgsql function naming them (in any case),
+//     a trigger on another table using the updated_at function, an extra
+//     trigger on sms_broadcasts, a publication member, or a policy on another
+//     table depends on or names them;
 //   * NO CASCADE: the file's code holds no CASCADE, and its DROP statements
 //     run alone (preflight bypassed) refuse to drop past a foreign view;
 //   * the post-check aborts the file on a collateral change (a mutation that
@@ -299,6 +300,11 @@ describe('688 aborts the whole file, dropping nothing', () => {
     /mig 688: functions outside the dropped set name sms_broadcast: sms_purge\(\)/,
   ), 120_000)
 
+  it('when a plpgsql function names them in UPPER case (identifiers fold: the text match ignores case)', () => expectAbort(
+    `CREATE FUNCTION public.sms_purge_upper() RETURNS void LANGUAGE plpgsql AS $f$ BEGIN DELETE FROM PUBLIC.SMS_BROADCAST_RECIPIENTS; END $f$;`,
+    /mig 688: functions outside the dropped set name sms_broadcast: sms_purge_upper\(\)/,
+  ), 120_000)
+
   it('when a trigger on another table uses sms_broadcasts_set_updated_at()', () => expectAbort(
     `CREATE TABLE public.other_stamped (id uuid PRIMARY KEY, updated_at timestamptz);
      CREATE TRIGGER other_stamped_updated_at BEFORE UPDATE ON public.other_stamped
@@ -321,6 +327,11 @@ describe('688 aborts the whole file, dropping nothing', () => {
   it('when a policy sits on sms_broadcasts itself (683 dropped them all)', () => expectAbort(
     `CREATE POLICY sms_broadcasts_stray ON public.sms_broadcasts FOR SELECT TO service_role USING (true);`,
     /mig 688: (objects outside the dropped set depend on it: .*policy sms_broadcasts_stray|policies name or sit on the SMS broadcast tables: public\.sms_broadcasts\.sms_broadcasts_stray)/,
+  ), 120_000)
+
+  it('when a publication (e.g. supabase_realtime) carries sms_broadcast_recipients (a RESTRICT drop would remove it silently)', () => expectAbort(
+    `CREATE PUBLICATION sms_pub FOR TABLE public.sms_broadcast_recipients;`,
+    /mig 688: objects outside the dropped set depend on it: .*publication of table sms_broadcast_recipients in publication sms_pub/,
   ), 120_000)
 
   it('when a counter function is missing (the schema is not the one the file was written against)', () => expectAbort(
