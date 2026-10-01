@@ -9,7 +9,7 @@
 
 import ts from 'typescript'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { stripComments as stripCommentsNoRegex } from '../../scripts/lib/strip-comments.mjs'
@@ -95,20 +95,47 @@ function blank(text, spans) {
 // repo in every guard (C15's guard ran past vitest's 5 s budget on the CI
 // runner). Results are kept in memory and on disk, keyed by a hash of the
 // text (and whether it parses as TS), in a directory named after this file's
-// own source and the TypeScript version, so editing the helper starts a fresh
-// cache. Writes are atomic (temp file + rename): parallel workers may race to
-// write the same entry, never read half of one.
+// own source, the fallback stripper's source and the TypeScript version, so
+// editing any code that computes an entry starts a fresh cache. Writes are
+// atomic (temp file + rename): parallel workers may race to write the same
+// entry, never read half of one.
 // ---------------------------------------------------------------------------
 
-const HELPER_HASH = createHash('sha1').update(readFileSync(new URL(import.meta.url))).update(ts.version).digest('hex').slice(0, 12)
+/** Every source whose code turns a text into a cached output. */
+export const HELPER_SOURCES = Object.freeze([
+  new URL(import.meta.url),
+  new URL('../../scripts/lib/strip-comments.mjs', import.meta.url),
+])
+const HELPER_HASH = HELPER_SOURCES.reduce((h, src) => h.update(readFileSync(src)), createHash('sha1')).update(ts.version).digest('hex').slice(0, 12)
 const CACHE_DIR = path.join(tmpdir(), `un1t-js-code-${HELPER_HASH}`)
+const CACHE_PREFIX = 'un1t-js-code-'
+const CACHE_UNUSED_MS = 24 * 60 * 60 * 1000
+
+/**
+ * Other helper versions' cache directories that may go: unused for a day.
+ * A worktree on another version may be mid-run beside this one (the estate
+ * runs guards in parallel worktrees), and deleting its directory makes every
+ * later test file there re-parse the whole repo.
+ */
+export function staleCacheDirs(names, current, mtimeMsOf, now = Date.now()) {
+  return names.filter((name) => {
+    if (!name.startsWith(CACHE_PREFIX) || name === current) return false
+    const mtime = mtimeMsOf(name)
+    return mtime != null && now - mtime > CACHE_UNUSED_MS
+  })
+}
+
 let cacheReady = null
 function cacheDir() {
   if (cacheReady !== null) return cacheReady
   try {
     mkdirSync(CACHE_DIR, { recursive: true })
-    for (const name of readdirSync(tmpdir())) {
-      if (name.startsWith('un1t-js-code-') && name !== path.basename(CACHE_DIR)) rmSync(path.join(tmpdir(), name), { recursive: true, force: true })
+    // Mark this version's cache as in use (a warm cache only reads, which
+    // would leave its mtime old enough for another version to prune it).
+    try { const now = new Date(); utimesSync(CACHE_DIR, now, now) } catch { /* best effort */ }
+    const mtimeMsOf = (name) => { try { return statSync(path.join(tmpdir(), name)).mtimeMs } catch { return null } }
+    for (const name of staleCacheDirs(readdirSync(tmpdir()), path.basename(CACHE_DIR), mtimeMsOf)) {
+      rmSync(path.join(tmpdir(), name), { recursive: true, force: true })
     }
     cacheReady = CACHE_DIR
   } catch {
