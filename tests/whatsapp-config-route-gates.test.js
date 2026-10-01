@@ -110,6 +110,8 @@ export function blankNonCode(text, sf = parse(text)) {
 // Strongest first. Each test is a CALL shape, not a bare name.
 export function classify(handlerSrc) {
   if (/guardMasterOrOwner\(\s*user\b/.test(handlerSrc)) return 'owner'
+  // GATES-3 (b) — MANAGER_ROLES AND `whatsapp` at the template's studio.
+  if (/canManageWaTemplatesAt\(\s*user\b/.test(handlerSrc)) return 'manager-whatsapp'
   if (/hasRoleAtLocation\(\s*user\b[^)]*MANAGER_ROLES/.test(handlerSrc)) return 'manager'
   if (/hasPermissionForLocation\(\s*user\b[^)]*'whatsapp'/.test(handlerSrc)) return 'whatsapp-permission'
   // INBOXLOC.1 — the thread routes' decision: whatsapp (web or mobile) AT the
@@ -205,10 +207,10 @@ export const EXPECTED = {
   'PUT whatsapp/card-sets/route.js': ['owner', 'WAROLE.1: replaces the carousel card sets staff and Mia send.'],
 
   // ── Templates ──
-  'POST whatsapp/templates/[id]/resubmit/route.js': ['manager', 'Edits a rejected/paused template at Meta.'],
-  'POST whatsapp/templates/route.js': ['manager', 'WATPLROLE.1: creates a template and submits it to Meta; MANAGER_ROLES at the location created at (the resubmit rule).'],
-  'PUT whatsapp/templates/[id]/route.js': ['manager', 'WATPLROLE.1: components, header media, name and category drive what is sent, so MANAGER_ROLES at the template; a display_group-only edit (picker grouping) stays membership. WATPLPUT.1: Meta-owned fields (status, rejection_reason, quality_rating, meta_template_id) are refused (400) and a submitted template\'s content is locked (409).'],
-  'DELETE whatsapp/templates/[id]/route.js': ['manager', 'WATPLROLE.1: deletes the template AT META by name; MANAGER_ROLES at the template (the resubmit rule).'],
+  'POST whatsapp/templates/[id]/resubmit/route.js': ['manager-whatsapp', 'Edits a rejected/paused template at Meta; GATES-3: MANAGER_ROLES and whatsapp at the template.'],
+  'POST whatsapp/templates/route.js': ['manager-whatsapp', 'WATPLROLE.1: creates a template and submits it to Meta; MANAGER_ROLES at the location created at (the resubmit rule); GATES-3: whatsapp there too.'],
+  'PUT whatsapp/templates/[id]/route.js': ['manager-whatsapp', 'GATES-3: whatsapp at the template beside the role. WATPLROLE.1: components, header media, name and category drive what is sent, so MANAGER_ROLES at the template; a display_group-only edit (picker grouping) stays membership. WATPLPUT.1: Meta-owned fields (status, rejection_reason, quality_rating, meta_template_id) are refused (400) and a submitted template\'s content is locked (409).'],
+  'DELETE whatsapp/templates/[id]/route.js': ['manager-whatsapp', 'WATPLROLE.1: deletes the template AT META by name; MANAGER_ROLES at the template (the resubmit rule); GATES-3: whatsapp there too.'],
   'POST whatsapp/templates/upload-media/route.js': ['membership', 'Uploads header media for a template draft (no Meta state).'],
   'POST whatsapp/templates/upload-media/sign/route.js': ['membership', 'Signs a storage upload for template media (no Meta state).'],
 
@@ -243,6 +245,7 @@ describe('WhatsApp mutation handlers — each one\'s gate (WAROLE.1)', () => {
   it('the classifier reads call shapes, strongest first', () => {
     expect(classify('const g = guardMasterOrOwner(user, id)\nassertLocationAccess(user, id)')).toBe('owner')
     expect(classify('if (!hasRoleAtLocation(user, t.location_id, MANAGER_ROLES)) {}')).toBe('manager')
+    expect(classify('if (!canManageWaTemplatesAt(user, t.location_id)) {}')).toBe('manager-whatsapp')
     expect(classify("if (!hasPermissionForLocation(user, row.location_id, 'whatsapp')) {}")).toBe('whatsapp-permission')
     expect(classify("const p = requireInboxPermission(user, 'wa')")).toBe('inbox')
     expect(classify("const p = requireWhatsAppInboxAt(user, conversation.location_id)\nconst q = requireInboxPermission(user, 'wa')")).toBe('inbox-at-location')
@@ -371,14 +374,15 @@ describe('WhatsApp mutation handlers — each one\'s gate (WAROLE.1)', () => {
   // is sent decides with the resubmit rule: MANAGER_ROLES at the template's
   // (or, on create, the target) location. Header-media upload stays
   // membership: it changes nothing at Meta until a create or resubmit uses it.
-  it('template create, edit, delete and resubmit decide with the resubmit rule (MANAGER_ROLES at the location)', () => {
+  // GATES-3 (b) — and the `whatsapp` permission there (canManageWaTemplatesAt).
+  it('template create, edit, delete and resubmit decide with the resubmit rule (MANAGER_ROLES and whatsapp at the location)', () => {
     const got = actual()
     for (const k of [
       'POST whatsapp/templates/route.js',
       'PUT whatsapp/templates/[id]/route.js',
       'DELETE whatsapp/templates/[id]/route.js',
       'POST whatsapp/templates/[id]/resubmit/route.js',
-    ]) expect([k, got[k]]).toEqual([k, 'manager'])
+    ]) expect([k, got[k]]).toEqual([k, 'manager-whatsapp'])
   })
 
   it('every row carries a reason', () => {
