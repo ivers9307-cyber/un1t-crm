@@ -46,7 +46,6 @@ export default async function TVDisplaysAdmin() {
       initialDisplays={displays || []}
       initialTemplates={templates || []}
       locationId={locationId}
-      currentUserId={user.id}
     />
   )
 }

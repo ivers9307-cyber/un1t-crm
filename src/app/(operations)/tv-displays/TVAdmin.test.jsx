@@ -93,7 +93,7 @@ describe('TVAdmin — every action goes through a session route', () => {
     fireEvent.click(screen.getByText('Push image'))
     fireEvent.click(screen.getByText('URL'))
     fireEvent.change(screen.getByPlaceholderText('https://…image.jpg'), { target: { value: 'https://example.invalid/a.png' } })
-    fireEvent.click(screen.getByText('Push to TV'))
+    fireEvent.click(screen.getByRole('button', { name: 'Push to TV' }))
     await waitFor(() => expect(callsTo('PUT', '/api/admin/tv-displays/tv-1/content')).toHaveLength(1))
     const body = JSON.parse(callsTo('PUT', '/api/admin/tv-displays/tv-1/content')[0][1].body)
     expect(body).toEqual({ source_type: 'url', source_ref: 'https://example.invalid/a.png', label: null })
@@ -105,9 +105,9 @@ describe('TVAdmin — every action goes through a session route', () => {
     fireEvent.click(screen.getByText('Push image'))
     fireEvent.click(screen.getByText('URL'))
     fireEvent.change(screen.getByPlaceholderText('https://…image.jpg'), { target: { value: 'javascript:alert(1)' } })
-    fireEvent.click(screen.getByText('Push to TV'))
+    fireEvent.click(screen.getByRole('button', { name: 'Push to TV' }))
     expect(await screen.findByText('The URL must start with http:// or https://.')).toBeTruthy()
-    expect(screen.getByText('Push to TV')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Push to TV' })).toBeTruthy()
   })
 
   it('delete template: DELETE /api/admin/tv-templates/[id], then the template list reloads from the route', async () => {
