@@ -80,7 +80,7 @@ export async function POST(request, props) {
   const rec = await recordCarDocument(db, {
     car, docType, storagePath, filename: file.name, mimeType: contentType, sizeBytes: file.size, userId: user.id, notes,
   })
-  if (!rec.ok) return NextResponse.json({ success: false, error: rec.error }, { status: 500 })
+  if (!rec.ok) return NextResponse.json({ success: false, error: rec.error }, { status: rec.conflict ? 409 : 500 })
 
   return NextResponse.json({ success: true, data: rec.doc, queue_warning: rec.queueWarning }, { status: 201 })
 }
