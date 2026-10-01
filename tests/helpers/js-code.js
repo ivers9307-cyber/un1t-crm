@@ -1,34 +1,66 @@
-// Shared JS helpers for the client-code guards (TABLEDEFAULTACL.1; C74 moves
-// the other guards' private copies onto this file). stripComments and
-// isClientFile are copied verbatim from tests/function-execute-guard.test.js
-// (the GRANTSTRIP.0 / #1857 version: never a comment range at a JSX text).
+// Shared JS helpers for every guard that reads source code (TABLEDEFAULTACL.1;
+// GUARDSTRIP.1, C74, moved the other guards onto this file). Never strip JS
+// comments with a regex: `/\/\*[\s\S]*?\*\//` reads the '/*' in
+// accept="image/*", in `// the /api/* routes` or in JSX text as a comment and
+// hides real code up to the next '*/' (tests/comment-strip-meta-guard.test.js
+// fails on one). stripComments and isClientFile are the GUARDSTRIP.0 / #1857
+// version from tests/function-execute-guard.test.js (never a comment range at
+// a JSX text).
 
 import ts from 'typescript'
+import { createHash } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { stripComments as stripCommentsNoRegex } from '../../scripts/lib/strip-comments.mjs'
 
 /**
- * JS/TS with comments blanked, from the TypeScript parser's own comment
- * ranges, so a '/*' or '//' inside a string, template or regex literal is
- * never read as a comment. A file the parser rejects falls back to the
- * repo's quote-aware state machine (scripts/lib/strip-comments.mjs), never
- * to a regex.
+ * JS/TS with comments blanked (same length, same line numbers), from the
+ * TypeScript parser's own comment ranges, so a '/*' or '//' inside a string,
+ * template or regex literal, or in JSX text, is never read as a comment. A
+ * file the parser rejects falls back to the repo's quote-aware state machine
+ * (scripts/lib/strip-comments.mjs), never to a regex.
  */
 export function stripComments(text) {
-  const sf = ts.createSourceFile('scan.tsx', text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
-  if (sf.parseDiagnostics?.length) {
-    const js = ts.createSourceFile('scan.jsx', text, ts.ScriptTarget.Latest, true, ts.ScriptKind.JSX)
-    if (js.parseDiagnostics?.length) return stripCommentsNoRegex(text)
-    return blankComments(text, js)
-  }
-  return blankComments(text, sf)
+  const sf = parse(text, 'scan.tsx')
+  if (!sf) return stripCommentsNoRegex(text)
+  return blank(text, commentRanges(text, sf).ranges)
 }
-function blankComments(text, sf) {
+
+/**
+ * Code for a token scan: comments, JSX text and regex-literal bodies blanked
+ * (same length). JSX text and regex literals cannot hold a call, and a '/*'
+ * in either would fool a later comment-aware scanner (check-select-columns'
+ * maskComments, which tests/helpers/postgrest-column-uses.js used to run on
+ * raw text). A file the parser rejects is returned raw: a false positive
+ * beats a blind spot.
+ */
+export function codeOf(text, file = 'scan.jsx') {
+  const sf = parse(text, file)
+  if (!sf) return text
+  const { ranges, jsxText, regexes } = commentRanges(text, sf)
+  return blank(text, [...ranges, ...jsxText, ...regexes])
+}
+
+function parse(text, file) {
+  // TSX first (a superset that also reads the repo's .js JSX), then JSX.
+  const kinds = /\.ts$/.test(file) ? [ts.ScriptKind.TS] : [ts.ScriptKind.TSX, ts.ScriptKind.JSX]
+  for (const kind of kinds) {
+    const sf = ts.createSourceFile(kind === ts.ScriptKind.JSX ? 'scan.jsx' : 'scan.tsx', text, ts.ScriptTarget.Latest, true, kind)
+    if (!sf.parseDiagnostics?.length) return sf
+  }
+  return null
+}
+
+function commentRanges(text, sf) {
   // JSX text is text: a '/*' or '//' inside it is not a comment. Any node can
   // share a JsxText's pos (its parent's SyntaxList does), so collect the text
   // spans first and drop every "comment" that starts inside one.
   const jsxText = []
+  const regexes = []
   const findText = (node) => {
     if (node.kind === ts.SyntaxKind.JsxText) jsxText.push([node.pos, node.end])
+    if (node.kind === ts.SyntaxKind.RegularExpressionLiteral) regexes.push([node.getStart(sf), node.end])
     for (const child of node.getChildren(sf)) findText(child)
   }
   findText(sf)
@@ -41,13 +73,83 @@ function blankComments(text, sf) {
     for (const child of node.getChildren(sf)) visit(child)
   }
   visit(sf)
-  let out = text
-  for (const [pos, end] of ranges) out = out.slice(0, pos) + out.slice(pos, end).replace(/[^\n]/g, ' ') + out.slice(end)
+  return { ranges: [...ranges], jsxText, regexes }
+}
+
+function blank(text, spans) {
+  if (!spans.length) return text
+  const out = text.split('')
+  for (const [from, to] of spans) for (let k = from; k < to; k++) if (out[k] !== '\n') out[k] = ' '
+  return out.join('')
+}
+
+// ---------------------------------------------------------------------------
+// Parse each file once. The TypeScript parse is the slow part (the whole repo
+// is ~6 s to parse and ~10 s to walk for comments), and vitest gives every
+// test file its own module registry, so an in-memory map alone re-parses the
+// repo in every guard (C15's guard ran past vitest's 5 s budget on the CI
+// runner). Results are kept in memory by path and on disk by content hash, in
+// a directory named after this file's own source, so editing the helper
+// starts a fresh cache. Writes are atomic (temp file + rename): parallel
+// workers may race to write the same entry, never to read half of one.
+// ---------------------------------------------------------------------------
+
+const HELPER_HASH = createHash('sha1').update(readFileSync(new URL(import.meta.url))).update(ts.version).digest('hex').slice(0, 12)
+const CACHE_DIR = path.join(tmpdir(), `un1t-js-code-${HELPER_HASH}`)
+let cacheReady = null
+function cacheDir() {
+  if (cacheReady !== null) return cacheReady
+  try {
+    mkdirSync(CACHE_DIR, { recursive: true })
+    for (const name of readdirSync(tmpdir())) {
+      if (name.startsWith('un1t-js-code-') && name !== path.basename(CACHE_DIR)) rmSync(path.join(tmpdir(), name), { recursive: true, force: true })
+    }
+    cacheReady = CACHE_DIR
+  } catch {
+    cacheReady = '' // no disk cache; memory only
+  }
+  return cacheReady
+}
+
+function cached(mode, file, text, compute) {
+  const dir = cacheDir()
+  const key = createHash('sha1').update(mode).update('\0').update(path.extname(file)).update('\0').update(text).digest('hex')
+  const entry = dir && path.join(dir, `${key}.txt`)
+  if (entry && existsSync(entry)) {
+    try { return readFileSync(entry, 'utf8') } catch { /* fall through and recompute */ }
+  }
+  const out = compute()
+  if (entry) {
+    try {
+      const tmp = `${entry}.${process.pid}.${Math.random().toString(36).slice(2)}`
+      writeFileSync(tmp, out)
+      renameSync(tmp, entry)
+    } catch { /* a cache miss next time, nothing worse */ }
+  }
   return out
 }
 
+const MEMO = new Map()
+function memo(mode, file, compute) {
+  const k = `${mode}\0${file}`
+  if (!MEMO.has(k)) {
+    const text = readFileSync(file, 'utf8')
+    MEMO.set(k, cached(mode, file, text, () => compute(text)))
+  }
+  return MEMO.get(k)
+}
+
+/** stripComments of a file, parsed once per run. */
+export const stripCommentsOfFile = (file) => memo('strip', file, (text) => stripComments(text))
+/** codeOf of a file, parsed once per run. */
+export const codeOfFile = (file) => memo('code', file, (text) => codeOf(text, file))
+
 export function isClientFile(text) {
-  const code = stripComments(text).trimStart()
+  return isClientCode(stripComments(text).trimStart())
+}
+/** isClientFile for a file on disk, from the per-run cache. */
+export const isClientPath = (file) => isClientCode(stripCommentsOfFile(file).trimStart())
+function isClientCode(code) {
   // The anon key is what a browser/session client is built from; the service
   // role key never appears next to it in a client-session file.
   return /^['"]use client['"]/.test(code) || /\bcreateBrowserClient\b/.test(code) || /\bcreateAuthClient\s*\(/.test(code) ||
