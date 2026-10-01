@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { normalizeEmailForMeta, normalizePhoneForMeta, sha256Hex, buildWebsiteEvent, sendWebsiteConversion } from './meta-capi.js'
+import { normalizeEmailForMeta, normalizePhoneForMeta, sha256Hex, buildWebsiteEvent, sendWebsiteConversion, fbcFromFbclid } from './meta-capi.js'
 
 describe('normalizeEmailForMeta', () => {
   it('trims and lowercases', () => {
@@ -165,5 +165,77 @@ describe('sendWebsiteConversion', () => {
     })
     const r = await sendWebsiteConversion(db, args)
     expect(r).toEqual({ sent: false, reason: 'exception' })
+  })
+})
+
+// METADATASET.1 — a dataset's own token, and the click/browser details.
+describe('fbcFromFbclid', () => {
+  it('builds Meta\'s click id value from the landing URL\'s fbclid', () => {
+    expect(fbcFromFbclid('IwAR0abc-DEF_123', 1700000000000)).toBe('fb.1.1700000000000.IwAR0abc-DEF_123')
+  })
+  it('is null for anything that is not a plausible fbclid', () => {
+    for (const bad of ['', '  ', null, undefined, 42, 'has space', 'a<script>', 'x'.repeat(501)]) {
+      expect(fbcFromFbclid(bad, 1)).toBeNull()
+    }
+  })
+})
+
+describe('buildWebsiteEvent — click and browser details', () => {
+  const base = { eventName: 'Lead', eventTime: 1, email: 'a@b.ie' }
+  it('adds fbc, client IP and user agent unhashed when given', () => {
+    const ev = buildWebsiteEvent({ ...base, fbc: 'fb.1.1.abc', clientIp: '203.0.113.9', userAgent: 'Mozilla/5.0 Test' })
+    expect(ev.user_data).toMatchObject({ fbc: 'fb.1.1.abc', client_ip_address: '203.0.113.9', client_user_agent: 'Mozilla/5.0 Test' })
+  })
+  it('leaves them out when absent, null or the rate limiter\'s "unknown"', () => {
+    const ev = buildWebsiteEvent({ ...base, fbc: null, clientIp: 'unknown', userAgent: undefined })
+    expect(Object.keys(ev.user_data)).toEqual(['em'])
+  })
+})
+
+describe('sendWebsiteConversion — the dataset\'s own token', () => {
+  beforeEach(() => { global.fetch = vi.fn() })
+  afterEach(() => { vi.restoreAllMocks() })
+  const args = { locationId: 'loc1', eventName: 'Lead', email: 'a@b.ie', phone: '0871234567', eventId: 'classlead-1' }
+
+  function tracedDb(state) {
+    const tables = []
+    function builder(table) {
+      tables.push(table)
+      const b = { select: () => b, eq: () => b, is: () => b, limit: () => b, maybeSingle: () => Promise.resolve({ data: state[table] ?? null }) }
+      return b
+    }
+    return { from: builder, tables }
+  }
+
+  it('a location with its own token and NO WhatsApp number still sends (Hatch Street)', async () => {
+    global.fetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({}) })
+    const db = tracedDb({ locations: { settings: { meta_ads: { dataset_id: 'ds-hatch', capi_access_token: 'SYNTH-OWN-TOKEN' } } }, whatsapp_numbers: null })
+    const r = await sendWebsiteConversion(db, { ...args, fbc: 'fb.1.1.abc', clientIp: '203.0.113.9', userAgent: 'UA' })
+    expect(r).toEqual({ sent: true })
+    const [url, opts] = global.fetch.mock.calls[0]
+    expect(url).toBe('https://graph.facebook.com/v21.0/ds-hatch/events')
+    const body = JSON.parse(opts.body)
+    expect(body.access_token).toBe('SYNTH-OWN-TOKEN')
+    expect(body.data[0].user_data).toMatchObject({ fbc: 'fb.1.1.abc', client_ip_address: '203.0.113.9', client_user_agent: 'UA' })
+    // The WhatsApp number is not even read when the dataset has its own token.
+    expect(db.tables).toEqual(['locations'])
+  })
+
+  it('its own token wins over the WhatsApp number token', async () => {
+    global.fetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({}) })
+    const db = tracedDb({
+      locations: { settings: { meta_ads: { dataset_id: 'ds1', capi_access_token: 'SYNTH-OWN-TOKEN' } } },
+      whatsapp_numbers: { access_token: 'WA-TOKEN' },
+    })
+    await sendWebsiteConversion(db, args)
+    expect(JSON.parse(global.fetch.mock.calls[0][1].body).access_token).toBe('SYNTH-OWN-TOKEN')
+  })
+
+  it('pin: with no token of its own, the WhatsApp number token is used exactly as before', async () => {
+    global.fetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({}) })
+    const db = tracedDb({ locations: { settings: { meta_ads: { dataset_id: 'ds1' } } }, whatsapp_numbers: { access_token: 'WA-TOKEN' } })
+    await sendWebsiteConversion(db, args)
+    expect(JSON.parse(global.fetch.mock.calls[0][1].body).access_token).toBe('WA-TOKEN')
+    expect(db.tables).toEqual(['locations', 'whatsapp_numbers'])
   })
 })
