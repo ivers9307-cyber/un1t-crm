@@ -8,7 +8,8 @@
 //       (canManageWaTemplatesAt). roleCases for these live in broadcasts.test.js.
 //   (c) POST /api/contracts and GET /api/contract-templates (the issue
 //       wizard's list) → canManageContractsSomewhere, then the template's org;
-//       never the ACTIVE studio's role (`user.role`).
+//       never the ACTIVE studio's role (`user.role`). Since C18 ORGROLE.1 both
+//       mean an ORGANISATION ADMIN (master or an org_admin grant).
 // And C134 WEBBOOKINGWRITES.1: the two web booking writes (status, skip
 // reminder) moved off the browser client, whose RLS judged the PHONE
 // `bookings` key, onto service-role routes that judge the WEB `bookings` key
@@ -120,6 +121,7 @@ describe('POST /api/contracts and GET /api/contract-templates judge the org, not
   const adminStaffActive = person({ [LOC_A]: { role: 'staff' } }, LOC_A, { orgAdminOrgIds: [ORG] })
   const managerBoth = person({ [LOC_A]: { role: 'manager' }, [LOC_B]: { role: 'manager' } }, LOC_A)
   const ownerOtherActive = person({ [LOC_A]: { role: 'owner' } }, LOC_A)
+  const adminOwnerActive = person({ [LOC_A]: { role: 'owner' } }, LOC_A, { orgAdminOrgIds: [ORG] })
   const template = (org) => ({ data: { id: TPL, organization_id: org, body_markdown: '', variables_schema: [], employment_type: 'both', active: true }, error: null })
   const issue = () => contracts.POST(json('POST', {
     template_id: TPL, profile_id: '00000000-0000-4000-8000-0000000000a1', variables: {}, issuer_signature: 'A Name',
@@ -127,11 +129,15 @@ describe('POST /api/contracts and GET /api/contract-templates judge the org, not
   const FORBIDDEN = { status: 403, body: { success: false, error: 'Master or owner only' } }
   const TEMPLATE_NOT_FOUND = { status: 404, body: { success: false, error: 'Template not found' } }
 
+  // C18 ORGROLE.1 (Richard, 1 Oct 2026): contracts are managed by
+  // ORGANISATION ADMINS (master or an org_admin grant); a studio owner, at
+  // the active studio or another, is not one.
   it.each([
-    ['an owner of the org whose ACTIVE role is manager (main: forbidden)', ownerBManagerAActive, ORG, 'pass'],
+    ['an owner of the org whose ACTIVE role is manager, no org_admin grant (C18: not an org admin)', ownerBManagerAActive, ORG, 'forbidden'],
+    ['an owner at the active studio, no org_admin grant (C18: not an org admin)', ownerOtherActive, ORG, 'forbidden'],
     ['an org admin whose own role at the active studio is staff (main: forbidden)', adminStaffActive, ORG, 'pass'],
     ['a master', MASTER, ORG, 'pass'],
-    ['an owner at the active studio, template of ANOTHER org', ownerOtherActive, OTHER_ORG, 'hidden'],
+    ['an org admin, template of ANOTHER org', adminOwnerActive, OTHER_ORG, 'hidden'],
     ['a manager who owns no org', managerBoth, ORG, 'forbidden'],
   ])('POST /api/contracts: %s', async (_label, caller, org, outcome) => {
     getCurrentUser.mockResolvedValue(caller)
@@ -149,7 +155,8 @@ describe('POST /api/contracts and GET /api/contract-templates judge the org, not
   })
 
   it.each([
-    ['an owner of the org whose ACTIVE role is manager (main: forbidden)', ownerBManagerAActive, 'pass'],
+    ['an owner of the org whose ACTIVE role is manager, no org_admin grant (C18: not an org admin)', ownerBManagerAActive, 'forbidden'],
+    ['an owner at the active studio, no org_admin grant (C18: not an org admin)', ownerOtherActive, 'forbidden'],
     ['an org admin whose own role at the active studio is staff', adminStaffActive, 'pass'],
     ['a manager who owns no org', managerBoth, 'forbidden'],
   ])('GET /api/contract-templates: %s', async (_label, caller, outcome) => {

@@ -84,13 +84,18 @@ describe('contractDetailActions (/contracts/[id]\'s buttons, each its route\'s r
 
 // C120 GATES-3 (c) — Re-issue opens /contracts/issue?from=<id>, whose prefill
 // GET /api/contracts/[id] and POST /api/contracts decide at the contract's
-// (template's) org: an owner/admin of it, or a master. Not the active role.
+// (template's) org: an org admin of it, or a master (C18 ORGROLE.1). Not the
+// active role, and not a studio owner role.
 describe('contractDetailActions.canReissue (GATES-3)', () => {
   const c = (status) => ({ id: 'c1', profile_id: 'p1', organization_id: ORG_Y, status, signed_pdf_path: null })
-  it('a revoked or declined contract, for an owner of its org whose ACTIVE role is manager (main: none)', () => {
-    expect(contractDetailActions(managerXOwnerY, c('revoked')).canReissue).toBe(true)
-    expect(contractDetailActions(managerXOwnerY, c('declined')).canReissue).toBe(true)
+  it('a revoked or declined contract, for an org admin of its org whose ACTIVE role is manager (main: none)', () => {
+    const adminY = { ...managerXOwnerY, orgAdminOrgIds: [ORG_Y] }
+    expect(contractDetailActions(adminY, c('revoked')).canReissue).toBe(true)
+    expect(contractDetailActions(adminY, c('declined')).canReissue).toBe(true)
     expect(contractDetailActions(master, c('declined')).canReissue).toBe(true)
+  })
+  it('not for a studio owner of its org with no org_admin grant (C18 ORGROLE.1)', () => {
+    expect(contractDetailActions(managerXOwnerY, c('revoked')).canReissue).toBe(false)
   })
   it('never for another status', () => {
     for (const s of ['draft', 'issued', 'viewed', 'signed']) expect(contractDetailActions(master, c(s)).canReissue).toBe(false)

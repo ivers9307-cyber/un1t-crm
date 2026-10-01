@@ -154,9 +154,11 @@ const SESSION_SPECS = [
     call: () => contractTemplatesRoute.GET(),
     ids: (json) => idsOf(json?.data),
     cases: [
-      { title: 'owner of A sees only org-A templates', persona: 'ownerA1', expectIds: [TPL_A] },
-      { title: 'owner of B sees only org-B templates (mirror)', persona: 'ownerB1', expectIds: [TPL_B] },
-      { title: 'org admin of A sees org-A templates', persona: 'orgAdminA', expectIds: [TPL_A] },
+      // C18 ORGROLE.1 — the issue wizard's list is for organisation admins
+      // only, scoped to the orgs they administer.
+      { title: 'org admin of A sees only org-A templates', persona: 'orgAdminA', expectIds: [TPL_A] },
+      { title: 'a studio owner of A with no org_admin grant is refused (403)', persona: 'ownerA1', expectStatus: 403 },
+      { title: 'a studio owner of B with no org_admin grant is refused (403, mirror)', persona: 'ownerB1', expectStatus: 403 },
       { title: 'master sees every org’s templates', persona: 'master', expectIds: [TPL_A, TPL_B] },
       { title: 'staff is refused outright (403)', persona: 'staffA1', expectStatus: 403 },
     ],
