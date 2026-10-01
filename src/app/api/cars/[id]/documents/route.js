@@ -1,16 +1,18 @@
 // /api/cars/[id]/documents — multipart upload of an invoice or
-// supporting image. Stored in the private 'car-documents' Supabase
+// supporting image. CARDOCUPLOAD.1 (C124): the web picker no longer posts
+// here (Vercel refuses a body over ~4.5 MB before this runs); it uploads
+// through …/documents/sign + …/documents/finalise. This stays for other
+// callers and keeps the same rules. Stored in the private 'car-documents' Supabase
 // bucket; access goes only through this API which uses the service
 // role client (RLS doesn't apply to that path, but we re-check
 // location ownership manually before returning anything).
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
+import { getCurrentUser } from '@/lib/auth'
 import { ALL_DOCUMENT_TYPES } from '@/lib/cars'
-import { enqueueFromCarDocument } from '@/lib/invoices-queue/enqueue'
-import { logWarn } from '@/lib/log'
+import { carDocumentsGate } from '@/lib/car-documents-gate'
+import { recordCarDocument } from '@/lib/car-document-record'
 import { sniffMimeFromBytes } from '@/lib/invoice-extraction'
 import {
   CAR_DOCUMENT_MAX_BYTES, CAR_DOCUMENT_TYPES_LABEL, resolveCarDocumentType, sniffCarDocumentHeif,
@@ -23,20 +25,11 @@ const VALID_TYPES = new Set(ALL_DOCUMENT_TYPES.map(t => t.key))
 export async function POST(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!hasPermissionAtAnyLocation(user, 'car_processing')) {
-    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
-  }
-
   const db = createServerClient()
-  const { data: car } = await db.from('cars').select('id, location_id').eq('id', params.id).single()
-  if (!car) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
-  const guard = assertLocationAccessOr404(user, car.location_id)
-  if (guard) return guard
-  // ROLESWEEP.1b — judged at the car's location, not the caller's active studio.
-  if (!hasPermissionForLocation(user, car.location_id, 'car_processing')) {
-    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
-  }
+  // CARDOCUPLOAD.1 — the gate is shared with …/documents/sign and …/finalise.
+  const gate = await carDocumentsGate(user, db, params.id)
+  if (gate.response) return gate.response
+  const { car } = gate
 
   const formData = await request.formData()
   const file = formData.get('file')
@@ -82,32 +75,12 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: `Upload failed: ${uploadErr.message}` }, { status: 500 })
   }
 
-  const { data: doc, error: insertErr } = await db.from('car_documents').insert({
-    car_id: car.id,
-    doc_type: docType,
-    storage_path: storagePath,
-    filename: file.name,
-    mime_type: contentType,
-    size_bytes: file.size,
-    uploaded_by: user.id,
-    notes,
-  }).select().single()
+  // CARDOCUPLOAD.1 — the row, the orphan rollback and the bookkeeper queue
+  // (INVOICES-QUEUE.1) are shared with …/documents/finalise.
+  const rec = await recordCarDocument(db, {
+    car, docType, storagePath, filename: file.name, mimeType: contentType, sizeBytes: file.size, userId: user.id, notes,
+  })
+  if (!rec.ok) return NextResponse.json({ success: false, error: rec.error }, { status: 500 })
 
-  if (insertErr) {
-    // Roll back the storage upload so we don't leak orphan files.
-    await db.storage.from('car-documents').remove([storagePath]).catch(() => {})
-    return NextResponse.json({ success: false, error: insertErr.message }, { status: 500 })
-  }
-
-  // INVOICES-QUEUE.1 — car documents auto-queue on upload (no
-  // explicit approval step; same shape as supplier emails).
-  // Bookkeeper reviews in /invoices before Xero forward. Best-
-  // effort — upload succeeded, queue insert failure shouldn't
-  // un-do that; ops can retry from PR 2's queue UI.
-  const enq = await enqueueFromCarDocument(doc.id)
-  if (!enq.ok) {
-    logWarn('car-documents-upload', 'enqueue failed', { err: enq.error, documentId: doc.id })
-  }
-
-  return NextResponse.json({ success: true, data: doc, queue_warning: enq.ok ? undefined : enq.error }, { status: 201 })
+  return NextResponse.json({ success: true, data: rec.doc, queue_warning: rec.queueWarning }, { status: 201 })
 }
