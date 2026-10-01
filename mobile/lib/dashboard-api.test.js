@@ -18,7 +18,7 @@ vi.mock('shared/dashboard-data', () => ({
 
 const { api } = await import('./api')
 const shared = await import('shared/dashboard-data')
-const { fetchStudioDashboard, fetchRosterRunway, swapRowTitle, fetchStudioContactCounts, studioContactNumbers } = await import('./dashboard-api')
+const { fetchStudioDashboard, fetchRosterRunway, swapRowTitle, fetchStudioContactCountsFromRoute, studioContactNumbers } = await import('./dashboard-api')
 
 const LOC = 'a0000000-0000-0000-0000-000000000001'
 // CONTACTREADSCOPE.1a — the shared fetcher no longer returns the contact
@@ -243,7 +243,7 @@ describe('CONTACTREADSCOPE.1a — contact numbers come from the route', () => {
       null,
     ]) {
       routeApi({ timeOff: OK_EMPTY, swaps: OK_EMPTY, contacts: bad })
-      expect(await fetchStudioContactCounts(LOC)).toBeNull()
+      expect(await fetchStudioContactCountsFromRoute(LOC)).toBeNull()
     }
   })
 

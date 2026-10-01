@@ -141,11 +141,44 @@ describe('(b) the phone never reads contacts through the shared fetchers', () =>
   })
 
   it('mobile/ never imports the server-only readers', () => {
-    const offenders = walk(path.join(ROOT, 'mobile')).filter((f) => {
-      const code = stripComments(readFileSync(f, 'utf8'))
-      return /import\s*\{[^}]*\bfetch(StudioContactCounts|FunnelCounts|AdsSummary)\b[^}]*\}\s*from\s*['"]shared\/dashboard-data['"]/.test(code)
-        || /from\s*['"]shared\/studio-kpis['"]/.test(code)
-    }).map(rel)
+    const offenders = walk(path.join(ROOT, 'mobile')).filter((f) => importsServerOnlyReader(stripComments(readFileSync(f, 'utf8')))).map(rel)
     expect(offenders).toEqual([])
   })
+
+  // REVIEWNITS.1 (D5): the named-import regex missed `import * as dd` then
+  // `dd.fetchStudioContactCounts(…)`, a dynamic import or require, a relative
+  // specifier and a re-export. The rule is now by file: one that reaches
+  // shared/dashboard-data in any form names none of the three readers (the
+  // phone's own route caller is fetchStudioContactCountsFromRoute), and none
+  // reaches shared/studio-kpis at all.
+  it('the import detector sees every spelling', () => {
+    const SPECS = ["'shared/dashboard-data'", '"shared/dashboard-data.js"', "'../../shared/dashboard-data'"]
+    for (const spec of SPECS) {
+      for (const code of [
+        `import { fetchStudioDashboardData, fetchStudioContactCounts } from ${spec}`,
+        `import * as dd from ${spec}\nconst r = await dd.fetchFunnelCounts(db, loc)`,
+        `import * as dd from ${spec}\nconst f = dd['fetchAdsSummary']`,
+        `const dd = await import(${spec})\nawait dd?.fetchStudioContactCounts(db, loc)`,
+        `const { fetchAdsSummary: ads } = require(${spec})`,
+        `export { fetchFunnelCounts } from ${spec}`,
+        `import(${spec}).then((m) => m.fetchStudioContactCounts(db, loc))`,
+      ]) expect(importsServerOnlyReader(code), code).toBe(true)
+    }
+    expect(importsServerOnlyReader("import { x } from 'shared/studio-kpis'")).toBe(true)
+    expect(importsServerOnlyReader("const k = await import('../../shared/studio-kpis.js')")).toBe(true)
+    for (const code of [
+      "import { fetchStudioDashboardData } from 'shared/dashboard-data'\nexport async function fetchStudioContactCountsFromRoute() {}",
+      "export async function fetchStudioContactCounts() {} // no shared import: a local name",
+      "import { fetchFunnelCounts } from './funnel'",
+    ]) expect(importsServerOnlyReader(code), code).toBe(false)
+  })
 })
+
+const DASHBOARD_DATA = String.raw`['"\x60](?:shared|(?:\.\.?\/)+shared)\/dashboard-data(?:\.js)?['"\x60]`
+const STUDIO_KPIS = String.raw`['"\x60](?:shared|(?:\.\.?\/)+shared)\/studio-kpis(?:\.js)?['"\x60]`
+const REACHES = (spec) => new RegExp(String.raw`\bfrom\s*${spec}|\b(?:import|require)\s*\(\s*${spec}`)
+/** Does this phone file's code reach a server-only reader of shared/dashboard-data or shared/studio-kpis? */
+export function importsServerOnlyReader(code) {
+  if (REACHES(STUDIO_KPIS).test(code)) return true
+  return REACHES(DASHBOARD_DATA).test(code) && /\bfetch(StudioContactCounts|FunnelCounts|AdsSummary)\b/.test(code)
+}
