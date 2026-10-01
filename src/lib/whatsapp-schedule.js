@@ -16,6 +16,19 @@
 // Operator-fired blasts (the /send route) pass no cap and are unchanged.
 export const SCHEDULED_BLAST_MAX_PER_TICK = 500
 
+// C127 LATEBLAST.1 (DECIDED by Richard, 30 Sep) — a scheduled BLAST more than
+// this many hours past its scheduled_at is never sent: it returns to draft and
+// the studio's managers are told, so they re-schedule. The realistic way a
+// blast gets that late is its studio's WhatsApp feature being off when it fell
+// due (C122 holds such rows untouched until the feature is back on); a cron
+// outage would be the other, and gets the same treatment. The cron runs every
+// 15 minutes, so 3 hours is never a slow tick. Drips are exempt: they pace
+// themselves inside their own daily window.
+export const LATE_SCHEDULED_BLAST_HOURS = 3
+export const LATE_SCHEDULED_BLAST_REASON =
+  `it was more than ${LATE_SCHEDULED_BLAST_HOURS} hours late by the time it could be sent ` +
+  '(for example, WhatsApp was switched off at the studio when it fell due), so it was not sent late'
+
 // How the cron promotes a due scheduled broadcast, or null when the row is
 // not promotable (already claimed by a concurrent tick, cancelled, …).
 //
@@ -29,9 +42,18 @@ export const SCHEDULED_BLAST_MAX_PER_TICK = 500
 //    before the flip; the budget gate reverts sending→draft; the circuit
 //    breaker parks at draft via blastAbortPatch). A refused scheduled blast
 //    is therefore always a re-sendable draft, never a stranded row.
-export function promotionPlan(broadcast) {
+//  - stale → (C127, needs `now`) a blast more than LATE_SCHEDULED_BLAST_HOURS
+//    past scheduled_at: flip scheduled→draft with scheduled_at cleared and
+//    send NOTHING; the cron tells the managers. No `now`, or an unreadable
+//    scheduled_at, keeps the blast plan.
+export function promotionPlan(broadcast, now) {
   if (!broadcast || broadcast.status !== 'scheduled') return null
   if (broadcast.delivery_mode === 'drip') return { mode: 'drip', flipTo: 'sending' }
+  const due = Date.parse(broadcast.scheduled_at ?? '')
+  const at = now instanceof Date ? now.getTime() : NaN
+  if (Number.isFinite(due) && Number.isFinite(at) && at - due > LATE_SCHEDULED_BLAST_HOURS * 3600 * 1000) {
+    return { mode: 'stale', flipTo: 'draft' }
+  }
   return { mode: 'blast', flipTo: 'draft' }
 }
 
