@@ -8,7 +8,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
-import { fetchIncompletePayProfiles, fetchPendingRosterApprovalsCount, paginatedSumCents, fetchAdsSummary, fetchStudioDashboardData, fetchPersonalDashboardData, fetchTodayOps, fetchRevenueMTD, fetchFunnelCounts } from './dashboard-data'
+import { fetchIncompletePayProfiles, fetchPendingRosterApprovalsCount, paginatedSumCents, fetchAdsSummary, fetchStudioDashboardData, fetchStudioContactCounts, fetchPersonalDashboardData, fetchTodayOps, fetchRevenueMTD, fetchFunnelCounts } from './dashboard-data'
 
 function mockSupabaseFor(rows) {
   return {
@@ -303,24 +303,42 @@ describe('fetchAdsSummary', () => {
   })
 })
 
-describe('fetchStudioDashboardData', () => {
-  // `contacts` is queried twice: first the head:true "new leads this
-  // week" count, then the funnel page loop. Hand out a builder per
-  // from() call so the test can inspect which column each filtered on.
-  function studioSupabase({ leadCount = 0, funnelRows = [] } = {}) {
+describe('fetchStudioDashboardData (the phone Studio tab, the phone session)', () => {
+  // CONTACTREADSCOPE.1a — never reads contacts: from mig 690 the phone's own
+  // session reads contacts only while holding Contacts, and this screen is
+  // gated by dashboard_studio. The contact numbers come from the route.
+  it('reads only the WhatsApp unread total, never contacts', async () => {
+    const tables = []
+    const supabase = {
+      from: (table) => {
+        tables.push(table)
+        return chainableBuilder({ data: [{ unread_count: 2 }, { unread_count: 3 }], error: null })
+      },
+    }
+    const res = await fetchStudioDashboardData(supabase, 'loc1')
+    expect(res).toEqual({ success: true, data: { totalUnreadWhatsapp: 5 } })
+    expect(tables).toEqual(['whatsapp_conversations'])
+  })
+
+  it('refuses without a location', async () => {
+    const res = await fetchStudioDashboardData({ from: vi.fn() }, null)
+    expect(res).toEqual({ success: false, error: 'No location' })
+  })
+})
+
+describe('fetchStudioContactCounts (server, service role)', () => {
+  const WEEK = '2026-09-28T00:00:00.000Z'
+  // `contacts` is queried twice: the head:true "new leads this week" count,
+  // then the funnel page loop. One builder per from() call.
+  function studioSupabase({ leadCount = 0, leadError = null, funnelRows = [], pageError = null } = {}) {
     const builders = []
     let contactsCall = 0
     const supabase = {
       from: (table) => {
-        let b
-        if (table === 'contacts') {
-          contactsCall += 1
-          b = contactsCall === 1
-            ? chainableBuilder({ count: leadCount, error: null })
-            : chainableBuilder({ data: funnelRows, error: null })
-        } else {
-          b = chainableBuilder({ data: [], error: null })
-        }
+        contactsCall += 1
+        const b = contactsCall === 1
+          ? chainableBuilder({ count: leadCount, error: leadError })
+          : chainableBuilder({ data: pageError ? null : funnelRows, error: pageError })
         b.table = table
         builders.push(b)
         return b
@@ -329,42 +347,77 @@ describe('fetchStudioDashboardData', () => {
     return { supabase, builders }
   }
 
-  it('counts new leads on joined_at, never the import-poisoned lead_created_at', async () => {
+  it('counts new leads on joined_at since the given week start, never lead_created_at', async () => {
     const { supabase, builders } = studioSupabase({ leadCount: 7 })
-    const res = await fetchStudioDashboardData(supabase, 'loc1')
-
+    const res = await fetchStudioContactCounts(supabase, 'loc1', { weekStartIso: WEEK })
     expect(res.success).toBe(true)
     expect(res.data.newLeadsThisWeek).toBe(7)
-
-    const countBuilder = builders.find(b => b.table === 'contacts')
-    const gte = countBuilder.calls.find(c => c[0] === 'gte')
-    expect(gte[1]).toBe('joined_at')
-
-    // lead_created_at defaults to NOW() at insert, so a bulk import
-    // would spike this count — it must not appear anywhere.
-    const everyArg = builders.flatMap(b => b.calls.flat())
-    expect(everyArg).not.toContain('lead_created_at')
+    expect(builders.every((b) => b.table === 'contacts')).toBe(true)
+    const gte = builders[0].calls.find((c) => c[0] === 'gte')
+    expect(gte).toEqual(['gte', 'joined_at', WEEK])
+    expect(builders.flatMap((b) => b.calls.flat())).not.toContain('lead_created_at')
   })
 
-  it('still shapes the funnel and total from the paged contacts scan', async () => {
+  it('scopes every read to the one studio', async () => {
+    const { supabase, builders } = studioSupabase({ leadCount: 1, funnelRows: [{ pipeline_stage_slug: 'new_lead' }] })
+    await fetchStudioContactCounts(supabase, 'loc1', { weekStartIso: WEEK })
+    expect(builders.length).toBe(2)
+    for (const b of builders) expect(b.calls).toContainEqual(['eq', 'location_id', 'loc1'])
+  })
+
+  it('shapes the funnel and the total from the paged scan', async () => {
     const { supabase } = studioSupabase({
       leadCount: 2,
       funnelRows: [
-        { pipeline_stage_slug: 'new_lead' },
-        { pipeline_stage_slug: 'new_lead' },
-        { pipeline_stage_slug: 'converted' },
-        { pipeline_stage_slug: null },
+        { pipeline_stage_slug: 'new_lead' }, { pipeline_stage_slug: 'new_lead' },
+        { pipeline_stage_slug: 'converted' }, { pipeline_stage_slug: null },
       ],
     })
-    const res = await fetchStudioDashboardData(supabase, 'loc1')
-
+    const res = await fetchStudioContactCounts(supabase, 'loc1', { weekStartIso: WEEK })
     expect(res.data.funnel).toEqual({ new_lead: 2, converted: 1, unknown: 1 })
     expect(res.data.totalContacts).toBe(4)
   })
 
-  it('refuses without a location', async () => {
-    const res = await fetchStudioDashboardData({ from: vi.fn() }, null)
-    expect(res).toEqual({ success: false, error: 'No location' })
+  it('pages past the 1000-row cap with an explicit order', async () => {
+    const rows = Array.from({ length: 2500 }, (_, i) => ({ pipeline_stage_slug: i % 2 ? 'new_lead' : 'converted' }))
+    const builders = []
+    let n = 0
+    const supabase = {
+      from: () => {
+        n += 1
+        const b = n === 1
+          ? chainableBuilder({ count: 0, error: null })
+          : chainableBuilder((calls) => {
+            const r = calls.find((c) => c[0] === 'range')
+            return { data: rows.slice(r[1], r[2] + 1), error: null }
+          })
+        builders.push(b)
+        return b
+      },
+    }
+    const res = await fetchStudioContactCounts(supabase, 'loc1', { weekStartIso: WEEK })
+    expect(res.data.totalContacts).toBe(2500)
+    expect(res.data.funnel).toEqual({ new_lead: 1250, converted: 1250 })
+    expect(builders.slice(1).every((b) => b.calls.some((c) => c[0] === 'order' && c[1] === 'id'))).toBe(true)
+  })
+
+  it('a failed count is a failure, never a zero', async () => {
+    const { supabase } = studioSupabase({ leadError: { message: 'count down' } })
+    expect(await fetchStudioContactCounts(supabase, 'loc1', { weekStartIso: WEEK }))
+      .toEqual({ success: false, error: 'count down' })
+  })
+
+  it('a failed page is a failure, never a partial funnel', async () => {
+    const { supabase } = studioSupabase({ leadCount: 1, pageError: { message: 'page down' } })
+    expect(await fetchStudioContactCounts(supabase, 'loc1', { weekStartIso: WEEK }))
+      .toEqual({ success: false, error: 'page down' })
+  })
+
+  it('refuses without a location or a week start', async () => {
+    expect(await fetchStudioContactCounts({ from: vi.fn() }, null, { weekStartIso: WEEK }))
+      .toEqual({ success: false, error: 'No location' })
+    expect(await fetchStudioContactCounts({ from: vi.fn() }, 'loc1', {}))
+      .toEqual({ success: false, error: 'No week start' })
   })
 })
 

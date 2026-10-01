@@ -7945,6 +7945,23 @@ registry.registerPath({
 })
 
 registry.registerPath({
+  method: 'get',
+  path: '/api/dashboard/studio-contacts',
+  tags: ['Dashboard'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Studio dashboard contact numbers for one studio',
+  description: 'CONTACTREADSCOPE.1a — new leads this week (joined_at since the Europe/Dublin Monday), the funnel by pipeline_stage_slug and the contact total, for the phone Studio dashboard. Requires dashboard_studio AT location_id (not Contacts: these are counts). Scoped by assertLocationAccess. A failed read is a logged 500, never zeros or a partial funnel. Session cookie (web) or Supabase JWT Bearer + x-active-location (mobile app).',
+  request: { query: z.object({ location_id: uuidLike }) },
+  responses: {
+    200: { description: 'Contact numbers: { newLeadsThisWeek, funnel, totalContacts }', content: { 'application/json': { schema: z.object({}).passthrough().openapi('StudioContactNumbersResponse') } } },
+    400: { description: 'location_id missing or malformed', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'No access to the studio, or no dashboard_studio there', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The read failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
   method: 'post',
   path: '/api/dashboard/ads/refresh',
   tags: ['Dashboard'],
