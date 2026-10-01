@@ -507,6 +507,50 @@ registry.registerPath({
   },
 })
 
+// C134 WEBBOOKINGWRITES.1 — the /bookings pill and bell, off the browser client.
+const bookingWriteErr = (description) => ({ description, content: { 'application/json': { schema: ErrorResponse } } })
+registry.registerPath({
+  method: 'post',
+  path: '/api/bookings/{id}/status',
+  tags: ['Bookings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Mark a booking confirmed, completed or no-show',
+  description: "The web bookings permission at the booking's studio (its location_id, else its booking type's); membership first (404). Cancelling is POST /api/bookings/{id}/cancel; a cancelled booking is not re-opened (409). The write is a compare-and-swap on the status it was judged against (409 if it changed).",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ status: z.enum(['confirmed', 'completed', 'no_show']) }) } } },
+  },
+  responses: {
+    200: { description: 'Changed', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ id: uuidLike, status: z.string() }) }) } } },
+    400: bookingWriteErr('Validation failed (cancelled is not accepted here)'),
+    401: bookingWriteErr('Unauthorized'),
+    403: bookingWriteErr('No web bookings permission at the booking\'s studio (or at any studio)'),
+    404: bookingWriteErr('No such booking, or not at a studio of yours'),
+    409: bookingWriteErr('The booking is cancelled, or changed while you were looking at it'),
+    500: bookingWriteErr('The booking could not be read or written'),
+  },
+})
+registry.registerPath({
+  method: 'post',
+  path: '/api/bookings/{id}/skip-reminder',
+  tags: ['Bookings'],
+  security: [{ CookieAuth: [] }],
+  summary: "Skip (or re-enable) one booking's reminders",
+  description: "Sets bookings.skip_reminder (mig 075). The web bookings permission at the booking's studio (its location_id, else its booking type's); membership first (404).",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ skip_reminder: z.boolean() }) } } },
+  },
+  responses: {
+    200: { description: 'Saved', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ id: uuidLike, skip_reminder: z.boolean() }) }) } } },
+    400: bookingWriteErr('Validation failed'),
+    401: bookingWriteErr('Unauthorized'),
+    403: bookingWriteErr('No web bookings permission at the booking\'s studio (or at any studio)'),
+    404: bookingWriteErr('No such booking, or not at a studio of yours'),
+    500: bookingWriteErr('The booking could not be read or written'),
+  },
+})
+
 registry.registerPath({
   method: 'get',
   path: '/api/public/challenges/{locationId}',

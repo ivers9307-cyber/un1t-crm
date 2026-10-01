@@ -2,9 +2,9 @@
 
 // Booking status pill on /bookings. Three flows:
 //
-//   confirmed → completed   straight DB write (low-stakes; the
-//                           customer turned up)
-//   confirmed → no_show     same — operator marking a no-show
+//   confirmed → completed   POST /api/bookings/[id]/status (low-stakes;
+//                           the customer turned up)
+//   confirmed → no_show     same, operator marking a no-show
 //   confirmed → cancelled   goes through POST /api/bookings/[id]/cancel
 //                           with a confirm dialog + optional
 //                           customer email. Cancel is the one
@@ -13,10 +13,18 @@
 //
 // Status pill colours use the un1t light-theme ramp: -700 text on
 // /20 tinted background reads cleanly without washing out.
+//
+// C134 WEBBOOKINGWRITES.1 — completed/no_show/confirmed used to be a
+// browser-client write (RLS judged the PHONE `bookings` key, and the answer
+// was never read, so a refused write looked done). It is the service-role
+// route now, judged on the WEB key at the booking's studio; a failure puts
+// the old status back and shows the route's error. `canEdit` false renders a
+// plain label (the page passes the route's rule).
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { createBrowserClient } from '@/lib/supabase'
+
+const STATUS_FAILED = 'Could not change the booking status. Try again.'
 
 const statusColors = {
   confirmed: 'bg-blue-500/20 text-blue-700',
@@ -27,18 +35,43 @@ const statusColors = {
 
 const statusOptions = ['confirmed', 'completed', 'cancelled', 'no_show']
 
-export default function BookingStatusToggle({ bookingId, currentStatus }) {
+export default function BookingStatusToggle({ bookingId, currentStatus, canEdit = true }) {
   const [status, setStatus] = useState(currentStatus)
   const [open, setOpen] = useState(false)
   const [cancelModal, setCancelModal] = useState(false)
+  const [error, setError] = useState(null)
   const router = useRouter()
 
   async function setNonCancelStatus(newStatus) {
+    const previous = status
     setStatus(newStatus)
     setOpen(false)
-    const db = createBrowserClient()
-    await db.from('bookings').update({ status: newStatus }).eq('id', bookingId)
-    router.refresh()
+    setError(null)
+    try {
+      const res = await fetch(`/api/bookings/${bookingId}/status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: newStatus }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data?.success) {
+        setStatus(previous)
+        setError(data?.error || STATUS_FAILED)
+        return
+      }
+      router.refresh()
+    } catch {
+      setStatus(previous)
+      setError(STATUS_FAILED)
+    }
+  }
+
+  if (!canEdit) {
+    return (
+      <span className={`text-xs px-2.5 py-1 rounded-full ${statusColors[status] || statusColors.confirmed}`}>
+        {status.replace('_', ' ')}
+      </span>
+    )
   }
 
   function handlePick(newStatus) {
@@ -58,6 +91,9 @@ export default function BookingStatusToggle({ bookingId, currentStatus }) {
       >
         {status.replace('_', ' ')}
       </button>
+      {error && (
+        <p role="alert" className="absolute right-0 top-full mt-1 z-10 w-56 text-right text-[11px] text-red-700 bg-un1t-surface">{error}</p>
+      )}
       {open && (
         <div className="absolute right-0 top-full mt-1 bg-un1t-surface border border-un1t-border rounded-lg shadow-lg z-10 py-1 min-w-[120px]">
           {statusOptions.map(opt => (

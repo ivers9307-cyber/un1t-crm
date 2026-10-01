@@ -9,6 +9,10 @@
 //   (c) POST /api/contracts and GET /api/contract-templates (the issue
 //       wizard's list) → canManageContractsSomewhere, then the template's org;
 //       never the ACTIVE studio's role (`user.role`).
+// And C134 WEBBOOKINGWRITES.1: the two web booking writes (status, skip
+// reminder) moved off the browser client, whose RLS judged the PHONE
+// `bookings` key, onto service-role routes that judge the WEB `bookings` key
+// at the booking's studio.
 // Harness: tests/helpers/role-gate-probe.js.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -30,6 +34,8 @@ import * as waTemplate from '@/app/api/whatsapp/templates/[id]/route.js'
 import * as waResubmit from '@/app/api/whatsapp/templates/[id]/resubmit/route.js'
 import * as contracts from '@/app/api/contracts/route.js'
 import * as contractTemplates from '@/app/api/contract-templates/route.js'
+import * as bookingStatus from '@/app/api/bookings/[id]/status/route.js'
+import * as bookingSkip from '@/app/api/bookings/[id]/skip-reminder/route.js'
 
 const T = { getCurrentUser, createServerClient, describe, it, expect }
 const json = (method, body) => new Request('http://localhost/api/x', {
@@ -158,5 +164,50 @@ describe('POST /api/contracts and GET /api/contract-templates judge the org, not
     }
     expect(probe.passed).toBe(false)
     expect({ status, body }).toEqual(FORBIDDEN)
+  })
+})
+
+// ── C134 web booking writes: the WEB `bookings` key at the booking's studio ─
+// On main these were browser-client writes whose RLS judged the PHONE key.
+const BOOKINGS_FORBIDDEN = { status: 403, body: { success: false, error: 'No bookings permission at this location' } }
+describeGate('POST /api/bookings/[id]/status (web bookings at the booking)', {
+  call: () => bookingStatus.POST(json('POST', { status: 'completed' }), params({ id: 'bk-1' })),
+  gateReads: row({ id: 'bk-1', status: 'confirmed', event_types: null }),
+  forbidden: BOOKINGS_FORBIDDEN, hidden: NOT_FOUND, cases: noMainNotes('bookings'),
+}, T)
+describeGate('POST /api/bookings/[id]/skip-reminder (web bookings at the booking)', {
+  call: () => bookingSkip.POST(json('POST', { skip_reminder: true }), params({ id: 'bk-1' })),
+  gateReads: row({ id: 'bk-1', status: 'confirmed', event_types: null }),
+  forbidden: BOOKINGS_FORBIDDEN, hidden: NOT_FOUND, cases: noMainNotes('bookings'),
+}, T)
+
+describe('C134: web bookings without the phone key is enough; the phone key alone is not', () => {
+  const webOnly = person({ [LOC_B]: { role: 'manager', permissions: { bookings: true, mobile: { bookings: false } } } }, LOC_B)
+  const phoneOnly = person({ [LOC_B]: { role: 'manager', permissions: { bookings: false, mobile: { bookings: true } } } }, LOC_B)
+  const answer = [{ data: { id: 'bk-1', status: 'confirmed', location_id: LOC_B, event_types: null }, error: null }]
+  it.each([
+    ['status', () => bookingStatus.POST(json('POST', { status: 'no_show' }), params({ id: 'bk-1' }))],
+    ['skip-reminder', () => bookingSkip.POST(json('POST', { skip_reminder: false }), params({ id: 'bk-1' }))],
+  ])('%s', async (_label, call) => {
+    getCurrentUser.mockResolvedValue(webOnly)
+    let probe = gateProbe([...answer])
+    createServerClient.mockReturnValue(probe.db)
+    await runProbed(probe, call)
+    expect(probe.passed).toBe(true)
+
+    getCurrentUser.mockResolvedValue(phoneOnly)
+    probe = gateProbe([...answer])
+    createServerClient.mockReturnValue(probe.db)
+    const { status, body } = await runProbed(probe, call)
+    expect(probe.passed).toBe(false)
+    expect({ status, body }).toEqual(BOOKINGS_FORBIDDEN)
+  })
+
+  it('a booking with no studio of its own is judged at its booking type\'s', async () => {
+    getCurrentUser.mockResolvedValue(webOnly)
+    const probe = gateProbe([{ data: { id: 'bk-1', status: 'confirmed', location_id: null, event_types: { location_id: LOC_B } }, error: null }])
+    createServerClient.mockReturnValue(probe.db)
+    await runProbed(probe, () => bookingSkip.POST(json('POST', { skip_reminder: true }), params({ id: 'bk-1' })))
+    expect(probe.passed).toBe(true)
   })
 })
