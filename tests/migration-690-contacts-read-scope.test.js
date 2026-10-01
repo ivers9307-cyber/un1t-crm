@@ -46,7 +46,7 @@ const OLD_QUAL = '(private.auth_is_in_location(location_id) OR (user_id = ( SELE
 // `x = ANY ((SELECT f()))` parses as `x = ANY (subquery)` (a set of uuid[]
 // rows; "operator does not exist: uuid = uuid[]"), so the file casts the
 // scalar subquery, and the deparse keeps the cast for the same reason.
-const NEW_QUAL = '((location_id = ANY ((( SELECT private.auth_contact_read_location_ids() AS auth_contact_read_location_ids))::uuid[])) OR (user_id = ( SELECT auth.uid() AS uid)))'
+const NEW_QUAL = '((location_id = ANY (( SELECT private.auth_contact_read_location_ids() AS auth_contact_read_location_ids)::uuid[])) OR (user_id = ( SELECT auth.uid() AS uid)))'
 
 // The rollback record (plan Task 1b-5 Step 6), POST-677 form: 690 changes no
 // privilege, so the rollback re-issues none.
@@ -129,6 +129,12 @@ const visible = async (db, uid) => (await asUser(db, uid, 'SELECT count(*)::int 
 const ownRows = async (db, uid) => (await asUser(db, uid,
   'SELECT count(*)::int AS n FROM public.contacts WHERE user_id = (SELECT auth.uid())'))[0].n
 const countOf = async (db, uid, table) => (await asUser(db, uid, `SELECT count(*)::int AS n FROM public.${table}`))[0].n
+// The harness's auth.uid() casts request.jwt.claims straight to json, and a
+// claims GUC first set inside asUser's rolled-back transaction reads '' (not
+// NULL) afterwards, which that cast refuses (prod's auth.uid() nullifies '').
+// Re-running the file after a signed-in read therefore starts from an
+// explicit signed-out session, as the MCP apply session is.
+const signedOut = (db) => db.query(`SELECT set_config('request.jwt.claims', '{}', false)`)
 const bootProd = (opts = {}) => boot({ tables: TABLES, policies: POLICIES, seed: SEED, after677: true, ...opts })
 
 describe('before 690: prod on 2 Oct 2026', () => {
@@ -226,13 +232,14 @@ describe('after 690', () => {
     const rows = await asUser(db, IDS.OWNER_A,
       `EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF) SELECT id FROM public.contacts WHERE location_id = '${LOC_A}'`)
     const plan = rows.map((r) => r['QUERY PLAN']).join('\n')
-    expect(plan).toMatch(/InitPlan/)
     expect(plan).not.toMatch(/SubPlan/)
     expect(plan).not.toMatch(/auth_is_in_location/)
-    // the InitPlan node under the helper ran once
+    // the policy's array is an InitPlan's output, and that InitPlan ran once
+    const n = plan.match(/location_id = ANY \(\(InitPlan (\d+)\)\.col1\)/)?.[1]
+    expect(n, plan).toBeTruthy()
     const lines = plan.split('\n')
-    const i = lines.findIndex((l) => /InitPlan/.test(l))
-    expect(lines.slice(i + 1, i + 3).join('\n')).toMatch(/loops=1\b/)
+    const i = lines.findIndex((l) => l.trim() === `InitPlan ${n}`)
+    expect(lines[i + 1], plan).toMatch(/\bloops=1\b/)
   })
 
   it('EXECUTE: authenticated and service_role only; anon still holds nothing on contacts', async () => {
@@ -258,6 +265,7 @@ describe('after 690', () => {
   })
 
   it('a second run passes and changes nothing', async () => {
+    await signedOut(db)
     await expect(db['exec'](MIG_690)).resolves.toBeDefined()
     expect(await visible(db, IDS.STAFF_A)).toBe(0)
     expect(await visible(db, IDS.OWNER_A)).toBe(5)
@@ -269,6 +277,7 @@ describe('THE PARITY MATRIX: SQL helper === real JS resolver (web OR phone Conta
   let db
   const mismatches = []
   let cases = 0
+  const answers = { true: 0, false: 0 }
   beforeAll(async () => {
     db = await bootProd({ migrate: [MIG_690] })
     // 'guest' stands for any role the JS maps do not know: default no.
@@ -313,6 +322,7 @@ describe('THE PARITY MATRIX: SQL helper === real JS resolver (web OR phone Conta
       const js = hasPermissionForLocation(user, LOC_P, 'contacts') || hasMobilePermissionForLocation(user, LOC_P, 'contacts')
       const [row] = await asUser(db, PROBE, `SELECT '${LOC_P}'::uuid = ANY (private.auth_contact_read_location_ids()) AS ok`)
       cases += 1
+      answers[js] += 1
       if (row.ok !== js) mismatches.push({ ...c, js, sql: row.ok })
     }
   }, 600_000)
@@ -324,7 +334,8 @@ describe('THE PARITY MATRIX: SQL helper === real JS resolver (web OR phone Conta
 
   it('both answers occur (the matrix is not one-sided)', () => {
     // a one-sided matrix would pass with a helper that always says yes or no
-    expect(cases - mismatches.length).toBeGreaterThan(0)
+    expect(answers.true).toBeGreaterThan(500)
+    expect(answers.false).toBeGreaterThan(500)
   })
 
   it('agrees on every combination', () => {
@@ -379,6 +390,7 @@ describe("the plan's rollback record (POST-677 form)", () => {
     expect(r).toEqual({ fn: null, acl: before.acl })
     expect(await visible(db, IDS.STAFF_A)).toBe(5)
     // and 690 applies again on top of the rollback
+    await signedOut(db)
     await db['exec'](MIG_690)
     expect(await visible(db, IDS.STAFF_A)).toBe(0)
   }, 60_000)
