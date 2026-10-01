@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { createBrowserClient } from '@/lib/supabase'
+import { campaignPath, campaignRequest } from '@/lib/campaign-route-client'
 import {
   Mail, Eye, MousePointerClick, AlertTriangle,
   Ban, Send, CheckCircle2, XCircle, Users, RotateCcw, X, Clock, SkipForward, Loader2, Copy
@@ -98,7 +98,6 @@ function AbVariantRow({ label, subject, stats, isWinner }) {
 
 export default function CampaignDetail({ campaign, recipients = [], stats = null, abStats = null, resendChild = null, resendParent = null, locationId: _locationId, userId: _userId }) {
   const router = useRouter()
-  const db = createBrowserClient()
   const [tab, setTab] = useState('overview')  // overview, recipients, preview
   // COMMSFIX.D.1b — stop/resend state. `status` is local so the header
   // reflects the write immediately, before router.refresh() lands.
@@ -130,7 +129,8 @@ export default function CampaignDetail({ campaign, recipients = [], stats = null
 
   // COMMSFIX.D.1b — stop a scheduled/queued/sending campaign from the page the
   // composer actually links to. Same mechanism CampaignEditor.handleCancel
-  // uses (browser client, direct campaigns write): 'scheduled' flips back to
+  // uses (POST /api/communications/campaigns/[id]/stop since
+  // MEMBERWRITESWEEP.1e; a direct browser write before): 'scheduled' flips back to
   // draft so the cron stops treating it as a promotion candidate; 'queued' /
   // 'sending' stamp cancel_requested_at, which the run-campaigns cron sees
   // between chunks. Until this existed the ONLY cancel control lived behind
@@ -180,12 +180,13 @@ export default function CampaignDetail({ campaign, recipients = [], stats = null
     setStopBusy(true)
     setActionError(null)
     try {
-      const payload = status === 'scheduled'
-        ? { status: 'draft', scheduled_at: null }
-        : { cancel_requested_at: new Date().toISOString() }
-      const { error } = await db.from('campaigns').update(payload).eq('id', campaign.id)
-      if (error) throw new Error(error.message)
-      if (status === 'scheduled') setStatus('draft')
+      // MEMBERWRITESWEEP.1e — through the stop route (session auth, email at
+      // the campaign's studio; mig 684 closes campaigns to the browser). The
+      // server picks the branch from the CURRENT status: scheduled → back to
+      // draft, queued/sending → cancel_requested_at for the cron.
+      const result = await campaignRequest(campaignPath(campaign.id, 'stop'), { method: 'POST' })
+      if (!result.ok) throw new Error(result.error)
+      if (result.data?.status) setStatus(result.data.status)
       router.refresh()
     } catch (err) {
       setActionError(err?.message || 'Could not stop this campaign')

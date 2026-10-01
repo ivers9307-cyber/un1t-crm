@@ -139,6 +139,12 @@ const SCOPING_HELPERS = [
   // src/app/api/invoices-inbox/_helpers.js — getCurrentUser + master/owner-
   // at-location + invoice fetched via its location (401/403/404).
   'loadInvoiceForUser(',
+  // src/lib/campaign-session-access.js (MEMBERWRITESWEEP.1e) — reads the
+  // campaign by pk, 404s a campaign with no location_id, then runs
+  // assertLocationAccessOr404 at the CAMPAIGN's location_id and
+  // hasPermissionForLocation(…, 'email') there; the handlers then write only
+  // by that campaign's id (/api/communications/campaigns/[id]*).
+  'loadCampaignForUser(',
   // src/app/api/accounting/coverage/[id]/_line.js — permission check +
   // active-location scoping + 404-not-403 line lookup.
   'loadLineForUser(',
