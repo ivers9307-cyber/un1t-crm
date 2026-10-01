@@ -33,6 +33,11 @@ import {
   QualificationTypeCreateSchema, QualificationTypePatchSchema, TemplateQualificationsPutSchema,
 } from '@/lib/qualifications-schemas'
 import { ROSTER_CHANGE_LOG_MAX_ROWS } from '@/lib/roster-change-format'
+import {
+  CampaignCreateSchema as CampaignCreateSessionSchema,
+  CampaignContentSchema as CampaignContentSessionSchema,
+  CampaignScheduleSchema as CampaignScheduleSessionSchema,
+} from '@/lib/campaign-session-schemas'
 // SHELLY-UI.9 — the /api/shelly/* request vocabulary. Aliased on import so
 // the .openapi()-decorated re-derivations below can carry the canonical
 // names; see the Shelly block for why .extend({}) is required.
@@ -201,6 +206,12 @@ const CampaignCreate = z.object({
   ab_wait_hours: z.number().int().min(1).max(24).nullable().optional()
     .openapi({ description: 'Hours to wait before auto-picking the winner by open rate (default 4)' }),
 }).openapi('CampaignCreate')
+
+// MEMBERWRITESWEEP.1e — the campaign editor's session routes (schemas from
+// src/lib/campaign-session-schemas.js, the ones the routes validate with).
+const SessionCampaignCreate = CampaignCreateSessionSchema.extend({}).openapi('SessionCampaignCreate')
+const SessionCampaignContent = CampaignContentSessionSchema.extend({}).openapi('SessionCampaignContent')
+const SessionCampaignSchedule = CampaignScheduleSessionSchema.extend({}).openapi('SessionCampaignSchedule')
 
 // GAPS-P8 — copy assist input. Deliberately narrow: the operator's own brief
 // and their own draft, nothing about the audience or its contacts.
@@ -5583,6 +5594,96 @@ registry.registerPath({
   },
 })
 
+// MEMBERWRITESWEEP.1e — the campaign editor's session routes. They replace
+// CampaignEditor/CampaignDetail's browser-direct writes on `campaigns`, which
+// mig 684 closes to every client session. Gate: `email` at the campaign's
+// studio (404 for a campaign outside the caller's studios).
+const CampaignConflict = ErrorResponse.extend({ data: z.object({ status: z.string().nullable() }).optional() })
+const campaignGateResponses = {
+  401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+  403: { description: 'No email permission at the campaign location', content: { 'application/json': { schema: ErrorResponse } } },
+  404: { description: 'Campaign not found or not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+}
+registry.registerPath({
+  method: 'post',
+  path: '/api/communications/campaigns',
+  tags: ['Marketing'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Create a draft email campaign (campaign editor)',
+  description: 'created_by is the caller and status is draft; neither is read from the body.',
+  request: { body: { content: { 'application/json': { schema: SessionCampaignCreate } } } },
+  responses: {
+    200: { description: 'Draft created: { id, status, location_id }' },
+    400: { description: 'Invalid body or audience filter', content: { 'application/json': { schema: ErrorResponse } } },
+    ...campaignGateResponses,
+  },
+})
+registry.registerPath({
+  method: 'get',
+  path: '/api/communications/campaigns/{id}',
+  tags: ['Marketing'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Send progress of a campaign (status, total_sent, total_recipients, cancel_requested_at)',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: { 200: { description: 'Progress' }, ...campaignGateResponses },
+})
+registry.registerPath({
+  method: 'put',
+  path: '/api/communications/campaigns/{id}',
+  tags: ['Marketing'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Save the content of a draft or scheduled campaign',
+  description: 'Writes only the content fields sent; never created_by, status, scheduled_at or location_id.',
+  request: { params: z.object({ id: uuidLike }), body: { content: { 'application/json': { schema: SessionCampaignContent } } } },
+  responses: {
+    200: { description: 'Saved' },
+    400: { description: 'Invalid body or audience filter', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Content locked (queued or later), or the status changed', content: { 'application/json': { schema: CampaignConflict } } },
+    ...campaignGateResponses,
+  },
+})
+registry.registerPath({
+  method: 'delete',
+  path: '/api/communications/campaigns/{id}',
+  tags: ['Marketing'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Delete a draft or scheduled campaign',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Deleted' },
+    409: { description: 'Sending, sent or otherwise a record; or the status changed', content: { 'application/json': { schema: CampaignConflict } } },
+    ...campaignGateResponses,
+  },
+})
+registry.registerPath({
+  method: 'post',
+  path: '/api/communications/campaigns/{id}/schedule',
+  tags: ['Marketing'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Schedule a campaign to send at a future time',
+  description: 'The send route\'s rules: status draft, scheduled or failed; a subject and a body are required.',
+  request: { params: z.object({ id: uuidLike }), body: { content: { 'application/json': { schema: SessionCampaignSchedule } } } },
+  responses: {
+    200: { description: 'Scheduled: { status, scheduled_at }' },
+    400: { description: 'scheduled_at missing, unreadable or not in the future; no subject; no body', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Not schedulable in its status, or the status changed', content: { 'application/json': { schema: CampaignConflict } } },
+    ...campaignGateResponses,
+  },
+})
+registry.registerPath({
+  method: 'post',
+  path: '/api/communications/campaigns/{id}/stop',
+  tags: ['Marketing'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Stop a campaign: unschedule a scheduled one, or request a cancel of a queued or sending one',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Stopped: { status, cancel_requested_at }' },
+    409: { description: 'Nothing to stop in its status, or the status changed', content: { 'application/json': { schema: CampaignConflict } } },
+    ...campaignGateResponses,
+  },
+})
+
 // GAPS-P8 — AI copy assist for the composer. Session-only (it costs money per
 // call), rate-limited per user and per location, capped by the per-location
 // prepaid wallet (COPYCAP.1), and it fails soft: no API key, an exhausted
@@ -7884,6 +7985,23 @@ registry.registerPath({
     200: { description: 'Dashboard blocks', content: { 'application/json': { schema: z.object({}).passthrough().openapi('BusinessDashboardResponse') } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Missing dashboard_business permission', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/dashboard/studio-contacts',
+  tags: ['Dashboard'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Studio dashboard contact numbers for one studio',
+  description: 'CONTACTREADSCOPE.1a — new leads this week (joined_at since the Europe/Dublin Monday), the funnel by pipeline_stage_slug and the contact total, for the phone Studio dashboard. Requires dashboard_studio AT location_id (not Contacts: these are counts). Scoped by assertLocationAccess. A failed read is a logged 500, never zeros or a partial funnel. Session cookie (web) or Supabase JWT Bearer + x-active-location (mobile app).',
+  request: { query: z.object({ location_id: uuidLike }) },
+  responses: {
+    200: { description: 'Contact numbers: { newLeadsThisWeek, funnel, totalContacts }', content: { 'application/json': { schema: z.object({}).passthrough().openapi('StudioContactNumbersResponse') } } },
+    400: { description: 'location_id missing or malformed', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'No access to the studio, or no dashboard_studio there', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The read failed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
