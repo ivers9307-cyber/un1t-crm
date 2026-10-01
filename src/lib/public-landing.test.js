@@ -3,6 +3,9 @@ import {
   resolveLandingPath,
   classFunnelConfigFromBlocks,
   classFunnelTimetableUnavailableMessage,
+  classFunnelCtaLabel,
+  classFunnelShownOnLanding,
+  DEFAULT_CLASS_FUNNEL_CTA_LABEL,
   DEFAULT_TIMETABLE_UNAVAILABLE_MESSAGE,
 } from './public-landing'
 
@@ -188,5 +191,31 @@ describe('classFunnelTimetableUnavailableMessage', () => {
   it('a blank or non-string field falls back to the default', () => {
     expect(classFunnelTimetableUnavailableMessage([{ type: 'class_funnel', timetable_unavailable_message: '   ' }])).toBe(DEFAULT_TIMETABLE_UNAVAILABLE_MESSAGE)
     expect(classFunnelTimetableUnavailableMessage([{ type: 'class_funnel', timetable_unavailable_message: 42 }])).toBe(DEFAULT_TIMETABLE_UNAVAILABLE_MESSAGE)
+  })
+})
+
+// MANUALFUNNEL.1
+describe('classFunnelCtaLabel', () => {
+  it('is the block cta_label, trimmed', () => {
+    expect(classFunnelCtaLabel([{ type: 'class_funnel', cta_label: '  Book your free class ' }])).toBe('Book your free class')
+  })
+  it('falls back to the default for a blank, absent or non-text label, and for no block', () => {
+    for (const blocks of [[{ type: 'class_funnel', cta_label: '  ' }], [{ type: 'class_funnel' }], [{ type: 'class_funnel', cta_label: 7 }], [{ type: 'hero' }], null]) {
+      expect(classFunnelCtaLabel(blocks)).toBe(DEFAULT_CLASS_FUNNEL_CTA_LABEL)
+    }
+    expect(DEFAULT_CLASS_FUNNEL_CTA_LABEL).toBe('Claim 3 free classes')
+  })
+})
+
+describe('classFunnelShownOnLanding', () => {
+  it('is true for every class_funnel block except an explicit show_on_landing: false', () => {
+    expect(classFunnelShownOnLanding({ type: 'class_funnel' })).toBe(true)
+    expect(classFunnelShownOnLanding({ type: 'class_funnel', show_on_landing: true })).toBe(true)
+    expect(classFunnelShownOnLanding({ type: 'class_funnel', show_on_landing: null })).toBe(true)
+    expect(classFunnelShownOnLanding({ type: 'class_funnel', show_on_landing: false })).toBe(false)
+  })
+  it('is false for any other block', () => {
+    expect(classFunnelShownOnLanding({ type: 'lead_form' })).toBe(false)
+    expect(classFunnelShownOnLanding(null)).toBe(false)
   })
 })

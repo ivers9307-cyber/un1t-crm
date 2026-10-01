@@ -82,3 +82,25 @@ export function classFunnelTimetableUnavailableMessage(blocks) {
   const v = cf?.timetable_unavailable_message
   return (typeof v === 'string' && v.trim()) ? v.trim() : DEFAULT_TIMETABLE_UNAVAILABLE_MESSAGE
 }
+
+// MANUALFUNNEL.1 — the label on every "scroll to the funnel" button (the
+// sticky header, the section CTAs, the footer) for a page whose capture is a
+// class funnel. Operator-editable: the class_funnel block's `cta_label`,
+// edited in the landing-page editor. The default is the label /stillorgan
+// has always shown, so a block nobody has customised renders as before.
+export const DEFAULT_CLASS_FUNNEL_CTA_LABEL = 'Claim 3 free classes'
+
+export function classFunnelCtaLabel(blocks) {
+  const list = Array.isArray(blocks) ? blocks : []
+  const cf = list.find((b) => b && typeof b === 'object' && b.type === 'class_funnel')
+  const v = cf?.cta_label
+  return (typeof v === 'string' && v.trim()) ? v.trim() : DEFAULT_CLASS_FUNNEL_CTA_LABEL
+}
+
+// MANUALFUNNEL.1 — a class_funnel block can be kept OFF the studio's main
+// landing page (`show_on_landing: false`) while still configuring its
+// dedicated page at /start/{path}. Absent or anything but an explicit false
+// shows it, which is every block saved before the switch existed.
+export function classFunnelShownOnLanding(block) {
+  return !!block && block.type === 'class_funnel' && block.show_on_landing !== false
+}

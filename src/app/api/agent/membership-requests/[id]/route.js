@@ -15,6 +15,7 @@ import {
 } from '@/lib/agent/request-recovery'
 import { approvalGrantsTrialCredit } from '@/lib/approvals/agent-request-why'
 import { logWarn } from '@/lib/log'
+import { isManualEventId } from '@/lib/manual-timetable'
 
 // PATCH /api/agent/membership-requests/[id] — staff decides a queued
 // agent request. Decision rights follow the comms surface (any staff
@@ -298,8 +299,14 @@ export async function PATCH(request, { params }) {
   // Only rows carrying a machine-readable details.starts_at are guardable;
   // funnel rows always have one, legacy Mia-thread rows may not. Expiring is
   // SILENT to the member (MIA-EXPIRY-QUIET.1) — staff follow up by hand.
+  //
+  // MANUALFUNNEL.1 — a class off a studio's hand-written timetable (no Glofox
+  // there: staff book it on the studio's own platform) is exempt. Approving
+  // it executes nothing and messages nobody, it only records that staff did
+  // the booking, so recording it after the class has run is still true.
+  const manualBooking = row.kind === 'class_booking' && isManualEventId(details?.event_id)
   let expiredBeforeExecution = false
-  if (executing && row.kind === 'class_booking') {
+  if (executing && row.kind === 'class_booking' && !manualBooking) {
     const startsAtMs = Date.parse(row.details?.starts_at || '')
     if (Number.isFinite(startsAtMs) && startsAtMs < Date.now()) {
       expiredBeforeExecution = true
@@ -323,8 +330,26 @@ export async function PATCH(request, { params }) {
     }
   }
 
+  // MANUALFUNNEL.1 — approving a manual-timetable booking records it as done.
+  // Nothing is sent to Glofox (the studio has none) and no trial is bought.
+  // Judged on the event id, never on details.reason: a request that reached
+  // its card through the queue's retry path carries 'processing_error'.
+  if (executing && manualBooking) {
+    executed = { ok: true, manual: true }
+    details = { ...details, result: executed }
+    finalStatus = 'actioned'
+    if (details?.source === 'start_funnel') {
+      // Keep the funnel's queue row in step, or it sits in needs_review for
+      // good. Best-effort: the card is the record staff act on.
+      const { error: cbrErr } = await db.from('class_booking_requests')
+        .update({ status: 'booked', last_error: null })
+        .eq('approval_request_id', id)
+      if (cbrErr) logWarn('agent-requests', 'manual booking: queue row sync failed', { requestId: id, err: cbrErr })
+    }
+  }
+
   // AGENT-HANDS.1 — approving a drafted class booking executes it.
-  if (executing && row.kind === 'class_booking' && !expiredBeforeExecution) {
+  if (executing && row.kind === 'class_booking' && !expiredBeforeExecution && !manualBooking) {
     const { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, createBooking, interpretBookingResult, GLOFOX_BOOKING_MODEL } =
       await import('@/lib/glofox')
     // PERSON-ACCT.9 — the row is FILED against the contact this booking

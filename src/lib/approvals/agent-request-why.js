@@ -1,5 +1,6 @@
 import { hasBookableMembership } from '@/lib/person-accounts'
 import { CLASS_BOOKING_MAX_ATTEMPTS } from '@/lib/class-booking-attempts'
+import { isManualEventId } from '@/lib/manual-timetable'
 
 // AGENT-REQ-UX.1 — operator-readable explanations for agent requests.
 //
@@ -103,6 +104,13 @@ function bookingFailedExplanation(code) {
  * draft-mode default), or null when there is nothing mechanical to
  * explain (pause/cancel — the reason there is the customer's own words).
  */
+// MANUALFUNNEL.1 — a class off a studio's hand-written timetable (no Glofox
+// there). Judged on the event id, not on `reason`: a request that reached
+// the card through the retry path carries 'processing_error', and its
+// approve still books nothing.
+const MANUAL_BOOKING =
+  'This studio books by hand. Create their account on the booking platform and book them into this class, using the contact details on this card, and let them know they are booked. Then approve to record it as done. Approving does not book anything.'
+
 const TRIAL_UNSETTLED_AT_MINT =
   'Their Glofox account was just created, but Glofox gave no clear answer when the trial was being added, so it may already be there. Approving books only if class credits show on the account, and will not buy a second trial. Check their account in Glofox for a €0 trial invoice; if there is none, add a credit by hand, then approve.'
 
@@ -110,6 +118,7 @@ export function whyFlagged(row) {
   if (!row || row.kind !== 'class_booking') return null
   const d = row.details || {}
   const reason = typeof d.reason === 'string' ? d.reason : null
+  if (isManualEventId(d.event_id)) return MANUAL_BOOKING
   if (reason) {
     if (reason === 'credit_check_failed') {
       const line = creditUnreadLine(d.credit_unread_accounts)
