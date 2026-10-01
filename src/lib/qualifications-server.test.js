@@ -350,6 +350,14 @@ describe('template requirements', () => {
       { user: manager, input: { template_id: 't1', qualification_type_ids: ['fa', 'ins'] } })
     expect(out.status).toBe(400)
   })
+
+  // REVIEWNITS.1 (D5): mig 695's count trigger is the cap two concurrent PUTs
+  // cannot get past; its refusal is the same 400 as the API's own check.
+  it('the database\'s cap refusal (mig 695) is a 400 "At most 5 qualifications", not a 500', async () => {
+    const out = await replaceTemplateRequirements(reqDb({ add: { data: null, error: { code: 'P0001', message: 'qualification_requirements_cap: template t1 would ask for 6 (max 5)' } } }),
+      { user: manager, input: { template_id: 't1', qualification_type_ids: ['fa', 'ins'] } })
+    expect(out).toMatchObject({ status: 400, body: { error: 'At most 5 qualifications' } })
+  })
 })
 
 describe('readBlockQualificationFacts (the ranked picker\'s read)', () => {

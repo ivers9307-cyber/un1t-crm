@@ -65,6 +65,8 @@ function writeFailed(error) {
     return fail(400, 'That value is not allowed.')
   }
   if (/^qualification_requirement_other_org/.test(String(error?.message || ''))) return fail(400, 'Unknown qualification type')
+  // Mig 695's count trigger: the cap two concurrent saves cannot get past.
+  if (/^qualification_requirements_cap/.test(String(error?.message || ''))) return fail(400, `At most ${MAX_TEMPLATE_REQUIREMENTS} qualifications`)
   logWarn('qualifications', 'write failed', { code: error?.code, err: error?.message })
   return fail(500, 'Could not save the change')
 }
