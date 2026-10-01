@@ -7,12 +7,13 @@
 // user's locations, and the active-location header only applies to the
 // /api/* routes (not direct Supabase calls).
 //
-// Read + clear only on mobile. Content authoring (templates / image
-// uploads, which need the canvas editor) stays on web.
+// Reads, clears, pushes and template edits run here; image bytes go through
+// the signed-upload routes (uploadTvImage below, TVUPLOAD.1).
 
 import Constants from 'expo-constants'
 import { supabase } from './supabase'
 import { authHeaders } from './api'
+import { readPickedFiles, withTimeout, mimeResolver } from './upload-slots'
 
 const API_BASE = Constants.expoConfig?.extra?.apiBaseUrl || ''
 
@@ -181,28 +182,73 @@ export function seedTemplateValues(template, priorValues) {
   return seed
 }
 
+// TVUPLOAD.1 (C93) — the image types a TV takes (the tv-content bucket's
+// list, src/lib/tv-media.js, which the phone cannot import). The picker's own
+// type is trusted first; this is the fallback from the file name.
+const resolveTvImageMime = mimeResolver({
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
+  webp: 'image/webp', gif: 'image/gif', avif: 'image/avif',
+}, 'image/jpeg')
+
+async function postJson(path, body, locationId, label) {
+  const headers = await authHeaders({ locationId, json: true })
+  const res = await withTimeout(fetch(`${API_BASE}${path}`, {
+    method: 'POST', headers, body: JSON.stringify(body),
+  }), label)
+  const json = await res.json().catch(() => ({ success: false, error: `Upload failed (${res.status})` }))
+  return json || { success: false, error: `Upload failed (${res.status})` }
+}
+
 /**
- * Upload a picked image to the tv-content bucket via the (service-role)
- * upload route — the browser/mobile client can't write that bucket
- * directly. Multipart, so it bypasses api() (JSON-only) and uses
- * authHeaders() with no json flag (RN sets the FormData boundary).
- * Returns { success, path } — the storage path for a 'storage' push.
+ * Upload a picked image for a TV: a push image (kind 'content') or a
+ * template's base image (kind 'template'). Returns { success, path }, the
+ * storage path for a 'storage' push or tv_templates.base_image_path, or
+ * { success: false, error }. Never throws.
+ *
+ * TVUPLOAD.1 (C93) — the bytes go straight to Storage. The old multipart
+ * post to /api/admin/tv-displays/upload carried a `{uri}` file part, which
+ * has not left the phone since Expo SDK 57 (the fetch rejects on the device,
+ * no request is made). Now, as for issue photos and invoices:
+ *   1. /api/admin/tv-displays/upload/sign mints a path + token (tv_displays
+ *      at the TV's studio, the declared type and size checked);
+ *   2. the ArrayBuffer (never a Blob: a zero-byte object on RN, see
+ *      upload-bytes.js) is uploaded with that token, which is the only
+ *      write a client may make on the bucket (tests/tv-content-bucket-guard);
+ *   3. /api/admin/tv-displays/upload/finalise checks what Storage holds.
+ * Each network step is time-boxed (withTimeout), so the caller's spinner
+ * always clears.
  */
 export async function uploadTvImage({ uri, name, mimeType }, locationId, kind = 'content') {
-  const headers = await authHeaders({ locationId })
-  const form = new FormData()
-  form.append('file', { uri, name: name || 'tv-image.jpg', type: mimeType || 'image/jpeg' })
-  form.append('kind', kind === 'template' ? 'template' : 'content')
-  form.append('location_id', locationId)
-  let res
+  const k = kind === 'template' ? 'template' : 'content'
   try {
-    res = await fetch(`${API_BASE}/api/admin/tv-displays/upload`, { method: 'POST', headers, body: form })
+    const read = await readPickedFiles(
+      [{ uri, name: name || 'tv-image.jpg', mimeType }],
+      { resolveMime: resolveTvImageMime, label: 'image' },
+    )
+    if (!read.ok) return { success: false, error: read.error }
+    const file = read.files[0]
+
+    const sign = await postJson('/api/admin/tv-displays/upload/sign', {
+      kind: k, location_id: locationId, file_name: file.name, mime: file.mime, size: file.bytes.byteLength,
+    }, locationId, 'Preparing the upload')
+    if (sign.success !== true || !sign.path || !sign.token) {
+      return { success: false, error: sign.error || 'Could not start the upload.' }
+    }
+
+    const { error: upErr } = await withTimeout(
+      supabase.storage.from('tv-content').uploadToSignedUrl(sign.path, sign.token, file.bytes, { contentType: file.mime }),
+      'Uploading the image',
+    )
+    if (upErr) return { success: false, error: `Upload failed: ${upErr.message || upErr}` }
+
+    const fin = await postJson('/api/admin/tv-displays/upload/finalise', {
+      kind: k, location_id: locationId, path: sign.path,
+    }, locationId, 'Saving the upload')
+    if (fin.success !== true || !fin.path) return { success: false, error: fin.error || 'Upload failed.' }
+    return { success: true, path: fin.path }
   } catch (e) {
-    return { success: false, error: `Network error: ${e.message || e}` }
+    return { success: false, error: `Network error: ${e?.message || e}` }
   }
-  const json = await res.json().catch(() => ({}))
-  if (!res.ok || !json.success) return { success: false, error: json.error || `Upload failed (${res.status})` }
-  return { success: true, path: json.path }
 }
 
 /**

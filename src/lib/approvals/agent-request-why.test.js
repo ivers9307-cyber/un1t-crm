@@ -75,6 +75,10 @@ describe('customerWords', () => {
 import { failureExplanation } from './agent-request-why'
 
 describe('failureExplanation', () => {
+  it('is the shared definition the phone uses too (C85 c)', async () => {
+    const shared = await import('@shared/agent-request-failure')
+    expect(failureExplanation).toBe(shared.failureExplanation)
+  })
   it('explains the no-credits Glofox rejection with a fix instruction', () => {
     const out = failureExplanation({ status: 'failed', details: { result: { ok: false, message_code: 'YOU_HAVE_NO_CREDITS_LEFT' } } })
     expect(out).toMatch(/grant a credit/i)
@@ -357,5 +361,26 @@ describe('failureExplanation: one trial per member, and the funnel trial (TRIALP
       expect(out).not.toContain(code)
       expect(out).not.toContain('—')
     }
+  })
+})
+
+// MANUALFUNNEL.1 — a class off a studio's hand-written timetable.
+describe('whyFlagged: a manual-timetable booking', () => {
+  const row = (reason) => ({ kind: 'class_booking', details: { event_id: 'manual-20261005-0615-strength', reason, mode: 'draft', source: 'start_funnel' } })
+
+  it('tells staff to book it by hand and that approving books nothing', () => {
+    const why = whyFlagged(row('manual_booking'))
+    expect(why).toMatch(/books by hand/)
+    expect(why).toMatch(/Approving does not book anything/)
+    expect(why).not.toMatch(/Glofox/)
+  })
+
+  it('says the same whatever reason the card carries (the retry path files processing_error)', () => {
+    expect(whyFlagged(row('processing_error'))).toBe(whyFlagged(row('manual_booking')))
+    expect(whyFlagged(row(undefined))).toBe(whyFlagged(row('manual_booking')))
+  })
+
+  it('never offers to buy a trial', () => {
+    expect(approvalGrantsTrialCredit(row('manual_booking').details)).toBe(false)
   })
 })

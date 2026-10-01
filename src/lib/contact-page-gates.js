@@ -8,7 +8,7 @@
 // active studio and off at the contact's would have had that contact's
 // consultations, goals, photos and scans loaded into the page. Every decision
 // here is made at the contact's location instead.
-import { hasPermission, hasPermissionForLocation, hasMobilePermissionForLocation } from './permissions'
+import { hasPermissionForLocation, hasMobilePermissionForLocation } from './permissions'
 import { hasRoleAtLocation } from './role-at-location'
 import { ADMIN_ROLES, MANAGER_ROLES } from './schemas'
 
@@ -206,17 +206,15 @@ export function canLinkContacts(user, locationId) {
 }
 
 /**
- * POST /api/whatsapp/conversations/start. That route still judges `whatsapp`
- * at the ACTIVE studio (requireInboxPermission; moving it belongs to the inbox
- * follow-up, C37 INBOXLOC.1) and membership at the contact. The button shows
- * only where the route acts AND the contact's studio grants whatsapp, so it
- * never offers what the route refuses nor more than the contact's studio
- * allows. When the route moves, drop the hasPermission half.
+ * POST /api/whatsapp/conversations/start. The route judges `whatsapp` AT the
+ * contact's studio after membership there (INBOXLOC.1, C37) and, since
+ * INBOXWEBONLY3.1 (C119, Richard 30 Sep), only the WEB key
+ * (requireWebWhatsAppInboxAt): only the web starts a thread, and the button
+ * then opens the web inbox. So a caller with only the mobile toggle there
+ * does not see it.
  */
 export function canStartWhatsAppThread(user, locationId) {
-  return isMemberOfContactStudio(user, locationId)
-    && hasPermissionForLocation(user, locationId, 'whatsapp')
-    && hasPermission(user, 'whatsapp')
+  return isMemberOfContactStudio(user, locationId) && hasPermissionForLocation(user, locationId, 'whatsapp')
 }
 
 /**

@@ -33,3 +33,17 @@ describe('AutomationsFlowList (SEQCOUNTERS.1)', () => {
     expect(html).not.toContain('No automations yet')
   })
 })
+
+// C123 GATES-4 (b) — the Clone button shows only when POST
+// /api/sequences/[id]/clone would act (canCloneSequenceAt: `email` at the
+// studio); the list opens on email OR whatsapp.
+describe('AutomationsFlowList Clone button (C123 b)', () => {
+  it('shown when the page says the caller can clone', () => {
+    const html = renderToStaticMarkup(<AutomationsFlowList sequences={[seq()]} canClone />)
+    expect(html).toContain('aria-label="Clone Welcome flow"')
+  })
+  it('hidden otherwise (a WhatsApp-only builder), and by default', () => {
+    expect(renderToStaticMarkup(<AutomationsFlowList sequences={[seq()]} canClone={false} />)).not.toContain('Clone Welcome flow')
+    expect(renderToStaticMarkup(<AutomationsFlowList sequences={[seq()]} />)).not.toContain('Clone Welcome flow')
+  })
+})

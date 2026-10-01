@@ -116,3 +116,21 @@ export function reviewComparisonView(data) {
       : null,
   }
 }
+
+/**
+ * D4 UINITS.1 (found planning A3) — what to say when the roster comparison
+ * could not be read. GET /api/invoices/[id] sets `roster_unavailable` when
+ * the live roster read failed; with no approval snapshot there is then no
+ * `review_comparison` at all, and the phone showed nothing. Same rule and
+ * words as the web's RosterCheckNotes (InvoicesManager.jsx): only a
+ * 'submitted' invoice can be approved, so only it is told to refresh first
+ * (the approve route also refuses until the read works).
+ *
+ * @returns {string|null}
+ */
+export function rosterUnreadableNotice(data) {
+  if (!data?.roster_unavailable || data.review_comparison) return null
+  return data.status === 'submitted'
+    ? 'Could not read the roster for this period, so there is no schedule comparison. Refresh before approving.'
+    : "Couldn't read the roster for this period."
+}

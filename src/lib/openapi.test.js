@@ -578,5 +578,10 @@ describe('getOpenApiSpec', () => {
     const create = spec.paths['/api/sequences']?.post
     if (create) expect(create.responses['400'].description).toMatch(/location_id required/)
   })
-})
 
+  it('documents the car Documents signed upload (CARDOCUPLOAD.1)', () => {
+    expect(spec.paths['/api/cars/{id}/documents/sign']).toHaveProperty('post')
+    expect(spec.paths['/api/cars/{id}/documents/finalise']).toHaveProperty('post')
+    expect(spec.paths['/api/cars/{id}/documents/finalise'].post.responses).toHaveProperty('409')
+  })
+})

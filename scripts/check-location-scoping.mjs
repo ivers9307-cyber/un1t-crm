@@ -157,6 +157,11 @@ const SCOPING_HELPERS = [
   // src/lib/auth.js — org ids the caller OWNS; used for
   // row.organization_id membership compares (contracts revoke/detail).
   'getOwnerOrganizationIds(',
+  // src/lib/contract-gates.js (GATES-2) — master, or
+  // getOwnerOrganizationIds(user).includes(row.organization_id): the same
+  // row-org membership compare, used by contracts revoke/resend/send/discard
+  // after their fetch-by-id (404 on a foreign org).
+  'canManageContractsInOrg(',
   // src/lib/hosts.js — loads an event host and returns null unless
   // host.organization_id === orgId (events review surface).
   'loadHostForOrg(',
@@ -351,6 +356,10 @@ export const EXEMPT = {
   'src/app/offers/[slug]/page.js': {
     sale_offers:
       'Public sale product page: row resolved by its globally-unique slug; price is rendered server-side from the row so the client can never supply an amount.',
+  },
+  'src/app/start/[path]/page.js': {
+    landing_page_settings:
+      "Public per-studio class-booking page (proxy publicPaths via '/start'): resolves ONE row by its sanitised public_path and renders only its published blocks + logo — public marketing content; the public_path IS the tenant selector (same rationale as /start and /welcome/[location]). MANUALFUNNEL.1.",
   },
   'src/app/start/page.js': {
     landing_page_settings:

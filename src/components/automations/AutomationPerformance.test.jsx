@@ -96,10 +96,26 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-const renderPanel = async () => {
-  render(<AutomationPerformance sequenceId="seq-1" steps={[]} />)
+// GATES-2 — Resume and Exit are offered only to callers the enrolment routes
+// accept (`email` at the sequence's studio), which the page passes in.
+const renderPanel = async (canManageEnrolments = true) => {
+  render(<AutomationPerformance sequenceId="seq-1" steps={[]} canManageEnrolments={canManageEnrolments} />)
   await screen.findByText('Aoife Byrne')
 }
+
+describe('AutomationPerformance — Resume and Exit follow the enrolment routes (GATES-2)', () => {
+  it('without canManageEnrolments: no Resume, no Exit (main: shown, then 403)', async () => {
+    runs = [run({ state: 'paused', outcome: 'Paused: send failed' })]
+    await renderPanel(false)
+    expect(screen.queryByRole('button', { name: /Resume/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /^Exit$/ })).toBeNull()
+  })
+  it('the prop defaults to closed', async () => {
+    render(<AutomationPerformance sequenceId="seq-1" steps={[]} />)
+    await screen.findByText('Aoife Byrne')
+    expect(screen.queryByRole('button', { name: /^Exit$/ })).toBeNull()
+  })
+})
 
 describe('AutomationPerformance — Exit control', () => {
   it('offers Exit on an active row', async () => {

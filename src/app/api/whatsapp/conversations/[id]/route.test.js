@@ -25,12 +25,15 @@ vi.mock('@/lib/auth', () => ({
   // channel permission is explicitly off, null otherwise. Real resolver
   // behaviour is pinned in src/lib/auth.test.js; here we only need the
   // route to HONOUR the guard's verdict.
-  requireInboxPermission: (user, _channel) => {
+  requireWhatsAppInboxAnywhere: (user) => {
     if (user?.permissions?.whatsapp === false) {
       return new Response(JSON.stringify({ success: false, error: 'forbidden' }), { status: 403 })
     }
     return null
   },
+  // INBOXLOC.1 — the decision at the conversation's studio; its real
+  // behaviour is pinned in src/lib/auth.test.js and inbox-location.test.js.
+  requireWhatsAppInboxAt: () => null,
 }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 

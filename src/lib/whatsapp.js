@@ -1055,7 +1055,8 @@ export async function fetchDripDoneContactIds(db, broadcastId) {
  * what makes the CAS exclusive: a second tick arriving after the first has
  * re-claimed no longer matches `created_at < cutoff`. Nothing reads
  * `created_at` on this table for any other purpose (checked across src/ —
- * the only recipient-row ordering is on `sms_broadcast_recipients`).
+ * the only other recipient-row ordering was on `sms_broadcast_recipients`,
+ * dropped with SMS in mig 688).
  *
  * Any other existing status ('sent' / 'delivered' / 'read' / 'failed', or a
  * 'pending' still inside its lease) means somebody else holds it — skip,

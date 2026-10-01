@@ -2,6 +2,8 @@
 // GET  ?locationId=…  → masked ad_accounts rows + report_recipients for a location
 // PUT  { locationId, provider, external_account_id, access_token, is_active }  → upsert one account
 // PUT  { locationId, report_recipients: [email,…] }                            → save report recipients
+// PUT  { locationId, conversions: { dataset_id, capi_access_token } }           → save the Meta dataset website events go to
+//      (METADATASET.1; the token is write-only: GET answers has_token, never the value)
 // Owner/manager/master only. Service-role DB; access enforced in app code.
 import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
@@ -9,6 +11,7 @@ import { createServerClient } from '@/lib/supabase'
 import { maskAccountRow, buildAccountPatch } from '@/lib/ads/accounts'
 import { ADMIN_ROLES } from '@/lib/schemas'
 import { logError } from '@/lib/log'
+import { conversionsView, mergeConversionsSettings } from '@/lib/meta-conversions-settings'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -51,7 +54,13 @@ export async function GET(request) {
   }
   const existing = locRow?.settings?.ads?.report_recipients
   const report_recipients = Array.isArray(existing) && existing.length ? existing : (user.email ? [user.email] : [])
-  return NextResponse.json({ success: true, data: (accounts || []).map(maskAccountRow), report_recipients })
+  return NextResponse.json({
+    success: true,
+    data: (accounts || []).map(maskAccountRow),
+    report_recipients,
+    // METADATASET.1 — the dataset id and WHETHER a token is stored.
+    conversions: conversionsView(locRow?.settings),
+  })
 }
 
 export async function PUT(request) {
@@ -83,6 +92,27 @@ export async function PUT(request) {
     const { error } = await db.from('locations').update({ settings: nextSettings, updated_at: new Date().toISOString() }).eq('id', locationId)
     if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
     return NextResponse.json({ success: true, report_recipients: recipients })
+  }
+
+  // METADATASET.1 — conversions-save mode: the Meta dataset this location's
+  // website events (Lead, Schedule) are sent to, and that dataset's token.
+  if (body.conversions && typeof body.conversions === 'object' && !Array.isArray(body.conversions)) {
+    // Same rule as the recipients save above: this writes the WHOLE settings
+    // column back, so a failed read writes nothing.
+    const { data: locRow, error: readErr } = await db.from('locations').select('settings').eq('id', locationId).maybeSingle()
+    if (readErr) {
+      logError('settings-ads', 'settings read before conversions save failed', { locationId, err: readErr.message })
+      return NextResponse.json({ success: false, error: 'Could not read this location\'s settings just now, so nothing was saved. Try again.' }, { status: 500 })
+    }
+    if (!locRow) return NextResponse.json({ success: false, error: 'Location not found' }, { status: 404 })
+    const merged = mergeConversionsSettings(locRow.settings || {}, body.conversions)
+    if (!merged.ok) return NextResponse.json({ success: false, error: merged.error }, { status: 400 })
+    const { error } = await db.from('locations').update({ settings: merged.settings, updated_at: new Date().toISOString() }).eq('id', locationId)
+    if (error) {
+      logError('settings-ads', 'conversions save failed', { locationId, err: error.message })
+      return NextResponse.json({ success: false, error: 'Could not save just now. Try again.' }, { status: 500 })
+    }
+    return NextResponse.json({ success: true, conversions: conversionsView(merged.settings) })
   }
 
   // Account-upsert mode.

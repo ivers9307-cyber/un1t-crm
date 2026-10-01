@@ -12,6 +12,7 @@
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
 import { MANAGER_ROLES } from '@/lib/schemas'
+import { canUseCommunicationsHere } from '@/lib/communications-access'
 import SegmentsGrid from '@/components/SegmentsGrid'
 import SavedSegmentsList from '@/components/SavedSegmentsList'
 
@@ -26,6 +27,8 @@ export default async function SegmentsTabPage() {
   // direct hit by someone who slipped past still has to be turned away, but it
   // lands back on the Communications hub rather than `/`, which threw the user
   // out of the section they were working in.
+  // GATES-2 — the active studio's page: keep the layout's old rule here.
+  if (!canUseCommunicationsHere(user)) redirect('/')
   if (!MANAGER_ROLES.includes(user.role)) redirect('/communications')
 
   const locationId = user.activeLocation?.id

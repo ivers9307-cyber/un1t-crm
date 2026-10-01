@@ -15,7 +15,10 @@ import DetectedTab from './DetectedTab'
 // Poll cadence (active few-seconds vs idle back-off) lives in @/lib/live-poll.
 const STALE_MS = 2 * 60 * 1000  // strap silent for 2min → "stale"
 
-export default function LiveClassClient({ locationId, locationName }) {
+// GATES-2 — `canMutate` (from the page: a LIVE_MUTATION_ROLES role at this
+// location) gates every control whose route would otherwise 403: End all,
+// End, Pair, HR test mode and the Detected tab's Claim. Defaults closed.
+export default function LiveClassClient({ locationId, locationName, canMutate = false }) {
   const [data, setData] = useState({ sessions: [], available_straps: [], roster: [], occurrence: null })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -128,7 +131,7 @@ export default function LiveClassClient({ locationId, locationName }) {
           >
             <Tv size={14} /> TV display
           </Link>
-          {data.sessions.length > 0 && (
+          {canMutate && data.sessions.length > 0 && (
             <button
               type="button"
               onClick={endAll}
@@ -167,26 +170,26 @@ export default function LiveClassClient({ locationId, locationName }) {
       </div>
 
       {tab === 'detected' ? (
-        <DetectedTab locationId={locationId} />
+        <DetectedTab locationId={locationId} canClaim={canMutate} />
       ) : loading && data.sessions.length === 0 ? (
         <p className="mt-10 text-center text-sm text-un1t-subtle">Loading live class…</p>
       ) : (
         <>
-          <TestModeControl locationId={locationId} testModeUntil={testModeUntil} onChange={setTestModeUntil} />
+          <TestModeControl locationId={locationId} testModeUntil={testModeUntil} onChange={setTestModeUntil} canMutate={canMutate} />
 
           <SessionGrid
             sessions={data.sessions}
-            onEndOne={endOne}
+            onEndOne={canMutate ? endOne : null}
           />
 
           <ClassRosterPanel roster={data.roster} occurrence={data.occurrence} />
 
           <AvailableStrapsPanel
             straps={data.available_straps}
-            onStartPair={(strap) => setPairing(strap)}
+            onStartPair={canMutate ? (strap) => setPairing(strap) : null}
           />
 
-          {pairing && (
+          {canMutate && pairing && (
             <PairModal
               strap={pairing}
               locationId={locationId}
@@ -202,7 +205,7 @@ export default function LiveClassClient({ locationId, locationName }) {
 
 // ── components ───────────────────────────────────────────────────
 
-function TestModeControl({ locationId, testModeUntil, onChange }) {
+function TestModeControl({ locationId, testModeUntil, onChange, canMutate = false }) {
   const [busy, setBusy] = useState(false)
   const activeMs = testModeUntil ? new Date(testModeUntil).getTime() : 0
   const active = activeMs > Date.now()
@@ -232,10 +235,11 @@ function TestModeControl({ locationId, testModeUntil, onChange }) {
       <div className="mb-4 flex items-center gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-2 text-sm">
         <span className="font-semibold text-amber-800">HR test mode on</span>
         <span className="text-amber-700">registered straps route for ~{minsLeft} min</span>
-        <button type="button" onClick={disable} disabled={busy} className="ml-auto rounded-md bg-amber-600 px-2 py-0.5 text-xs font-medium text-white hover:bg-amber-500 disabled:opacity-50">Turn off</button>
+        {canMutate && <button type="button" onClick={disable} disabled={busy} className="ml-auto rounded-md bg-amber-600 px-2 py-0.5 text-xs font-medium text-white hover:bg-amber-500 disabled:opacity-50">Turn off</button>}
       </div>
     )
   }
+  if (!canMutate) return null
   return (
     <button type="button" onClick={enable} disabled={busy} className="mb-4 rounded-md border border-un1t-border px-3 py-1.5 text-sm font-medium hover:bg-un1t-surface disabled:opacity-50">
       Enable HR test mode (2h)
@@ -259,7 +263,7 @@ function SessionGrid({ sessions, onEndOne }) {
   return (
     <section className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
       {sessions.map((s) => (
-        <SessionTile key={s.id} session={s} onEnd={() => onEndOne(s.id)} />
+        <SessionTile key={s.id} session={s} onEnd={onEndOne ? () => onEndOne(s.id) : null} />
       ))}
     </section>
   )
@@ -292,14 +296,16 @@ function SessionTile({ session, onEnd }) {
             <p className="truncate text-sm font-semibold">{session.contactFirstName}</p>
             <p className="truncate text-xs text-un1t-subtle">{session.contactName}</p>
           </div>
-          <button
-            type="button"
-            onClick={onEnd}
-            className="rounded p-1 text-un1t-subtle hover:bg-un1t-border"
-            title="End this session"
-          >
-            <Square size={12} />
-          </button>
+          {onEnd && (
+            <button
+              type="button"
+              onClick={onEnd}
+              className="rounded p-1 text-un1t-subtle hover:bg-un1t-border"
+              title="End this session"
+            >
+              <Square size={12} />
+            </button>
+          )}
         </div>
 
         <div className="mt-3 flex items-baseline justify-between">
@@ -422,13 +428,15 @@ function AvailableStrapsPanel({ straps, onStartPair }) {
               {s.lastBpm != null && (
                 <p className="text-sm font-semibold tabular-nums">{s.lastBpm}<span className="ml-0.5 text-[10px] text-un1t-subtle">bpm</span></p>
               )}
-              <button
-                type="button"
-                onClick={() => onStartPair(s)}
-                className="mt-1 inline-flex items-center rounded-md bg-indigo-600 px-2 py-0.5 text-xs font-medium text-white hover:bg-indigo-500"
-              >
-                Pair
-              </button>
+              {onStartPair && (
+                <button
+                  type="button"
+                  onClick={() => onStartPair(s)}
+                  className="mt-1 inline-flex items-center rounded-md bg-indigo-600 px-2 py-0.5 text-xs font-medium text-white hover:bg-indigo-500"
+                >
+                  Pair
+                </button>
+              )}
             </div>
           </li>
         ))}

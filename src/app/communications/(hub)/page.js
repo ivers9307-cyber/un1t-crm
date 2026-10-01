@@ -16,7 +16,9 @@
 // surface.
 
 import Link from 'next/link'
+import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
+import { canUseCommunicationsHere } from '@/lib/communications-access'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { tierLabel, qualityAccent } from '@/lib/whatsapp-number-health'
@@ -58,6 +60,10 @@ function ActionCard({ href, icon: Icon, color, title, desc }) {
 
 export default async function CommunicationsHub() {
   const user = await getCurrentUser()
+  if (!user) redirect('/login')
+  // GATES-2 — the hub is about the ACTIVE studio; the layout is only the
+  // coarse gate now, so this keeps the layout's old rule here.
+  if (!canUseCommunicationsHere(user)) redirect('/')
   const canEmail = hasPermission(user, 'email')
   const canWhatsapp = hasPermission(user, 'whatsapp')
   // EMAIL-TICKET.4 key — the studio email surface, not the marketing `email`

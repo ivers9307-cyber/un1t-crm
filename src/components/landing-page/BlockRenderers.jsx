@@ -26,6 +26,7 @@ import BookingWidget from '@/components/BookingWidget'
 import RaceSignupWidget from '@/components/RaceSignupWidget'
 import WaitlistWidget from '@/components/WaitlistWidget'
 import ClassFunnel from '@/components/ClassFunnel'
+import { classFunnelShownOnLanding } from '@/lib/public-landing'
 import VideoTestimonials from './VideoTestimonials'
 import CountUp from './CountUp'
 import { parseEmbed } from '@/lib/landing-page-embed'
@@ -68,7 +69,11 @@ export default function BlockRenderer({ block, onEdit, locationId, publicPath, c
     case 'gallery':     return <GalleryBlock     block={block} {...editProps} />
     case 'event':       return <EventBlock       block={block} />
     case 'lead_form':   return <LeadFormBlock    block={block} onEdit={localOnEdit} publicPath={publicPath} campaign={campaign} />
-    case 'class_funnel': return <ClassFunnelBlock block={block} onEdit={localOnEdit} publicPath={publicPath} />
+    // MANUALFUNNEL.1 — a funnel switched off the main page still renders in
+    // the editor (so its copy and timetable stay editable) and at /start/{path}.
+    case 'class_funnel': return (localOnEdit || classFunnelShownOnLanding(block))
+      ? <ClassFunnelBlock block={block} onEdit={localOnEdit} publicPath={publicPath} />
+      : null
     case 'embed':       return <EmbedBlock       block={block} onEdit={localOnEdit} />
     case 'stats':       return <StatsBlock       block={block} onEdit={localOnEdit} />
     case 'testimonial': return <TestimonialBlock block={block} onEdit={localOnEdit} />
@@ -404,7 +409,11 @@ export function ClassFunnelBlock({ block, onEdit, publicPath }) {
         {onEdit ? (
           <div className="w-full max-w-lg rounded-3xl border border-white/12 bg-black/45 backdrop-blur-xl px-6 py-8 text-center">
             <div className="font-display font-extrabold uppercase text-2xl mb-2">{block.heading || 'Glofox Class Booking Funnel'}</div>
-            <p className="text-white/60 text-sm">Live class-booking funnel — shown to visitors on the published page. Edit copy and the consult upsell in the panel.</p>
+            <p className="text-white/60 text-sm">
+              {classFunnelShownOnLanding(block)
+                ? 'Live class-booking funnel — shown to visitors on the published page. Edit copy and the consult upsell in the panel.'
+                : 'Class-booking funnel — hidden on this page, shown on its own booking page. Edit copy and the timetable in the panel.'}
+            </p>
           </div>
         ) : (
           <ClassFunnel
