@@ -6,6 +6,9 @@
 //   (b) WhatsApp template create / content edit / delete / resubmit →
 //       `whatsapp` at the template's studio, beside MANAGER_ROLES there
 //       (canManageWaTemplatesAt). roleCases for these live in broadcasts.test.js.
+//   (c) POST /api/contracts and GET /api/contract-templates (the issue
+//       wizard's list) → canManageContractsSomewhere, then the template's org;
+//       never the ACTIVE studio's role (`user.role`).
 // Harness: tests/helpers/role-gate-probe.js.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -20,11 +23,13 @@ vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), 
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { describeGate, gateProbe, runProbed } from '../helpers/role-gate-probe.js'
-import { permissionCases, keyOnAtBOnly, LOC_A, LOC_B } from '../helpers/role-sweep-callers.js'
+import { permissionCases, keyOnAtBOnly, person, MASTER, ORG, LOC_A, LOC_B } from '../helpers/role-sweep-callers.js'
 import * as broadcasts from '@/app/api/whatsapp/broadcasts/route.js'
 import * as waTemplates from '@/app/api/whatsapp/templates/route.js'
 import * as waTemplate from '@/app/api/whatsapp/templates/[id]/route.js'
 import * as waResubmit from '@/app/api/whatsapp/templates/[id]/resubmit/route.js'
+import * as contracts from '@/app/api/contracts/route.js'
+import * as contractTemplates from '@/app/api/contract-templates/route.js'
 
 const T = { getCurrentUser, createServerClient, describe, it, expect }
 const json = (method, body) => new Request('http://localhost/api/x', {
@@ -101,3 +106,57 @@ describeGate('POST /api/whatsapp/templates/[id]/resubmit (whatsapp at the templa
   gateReads: row({ id: 'wt-1', status: 'REJECTED', meta_template_id: 'meta-1' }),
   forbidden: TPL_FORBIDDEN, hidden: NOT_FOUND, cases: noMainNotes('whatsapp'),
 }, T)
+
+// ── (c) contracts: the org, never the active role ──────────────────────────
+describe('POST /api/contracts and GET /api/contract-templates judge the org, not the active role', () => {
+  const OTHER_ORG = 'e0000000-0000-4000-8000-0000000000e0'
+  const ownerBManagerAActive = person({ [LOC_A]: { role: 'manager' }, [LOC_B]: { role: 'owner' } }, LOC_A)
+  const adminStaffActive = person({ [LOC_A]: { role: 'staff' } }, LOC_A, { orgAdminOrgIds: [ORG] })
+  const managerBoth = person({ [LOC_A]: { role: 'manager' }, [LOC_B]: { role: 'manager' } }, LOC_A)
+  const ownerOtherActive = person({ [LOC_A]: { role: 'owner' } }, LOC_A)
+  const template = (org) => ({ data: { id: TPL, organization_id: org, body_markdown: '', variables_schema: [], employment_type: 'both', active: true }, error: null })
+  const issue = () => contracts.POST(json('POST', {
+    template_id: TPL, profile_id: '00000000-0000-4000-8000-0000000000a1', variables: {}, issuer_signature: 'A Name',
+  }))
+  const FORBIDDEN = { status: 403, body: { success: false, error: 'Master or owner only' } }
+  const TEMPLATE_NOT_FOUND = { status: 404, body: { success: false, error: 'Template not found' } }
+
+  it.each([
+    ['an owner of the org whose ACTIVE role is manager (main: forbidden)', ownerBManagerAActive, ORG, 'pass'],
+    ['an org admin whose own role at the active studio is staff (main: forbidden)', adminStaffActive, ORG, 'pass'],
+    ['a master', MASTER, ORG, 'pass'],
+    ['an owner at the active studio, template of ANOTHER org', ownerOtherActive, OTHER_ORG, 'hidden'],
+    ['a manager who owns no org', managerBoth, ORG, 'forbidden'],
+  ])('POST /api/contracts: %s', async (_label, caller, org, outcome) => {
+    getCurrentUser.mockResolvedValue(caller)
+    const probe = gateProbe([template(org)])
+    createServerClient.mockReturnValue(probe.db)
+    const { status, body } = await runProbed(probe, issue)
+    if (outcome === 'pass') {
+      expect(probe.passed, `refused: ${status} ${JSON.stringify(body)}`).toBe(true)
+      expect(probe.tripped.table).toBe('profiles')
+      return
+    }
+    expect(probe.passed).toBe(false)
+    expect({ status, body }).toEqual(outcome === 'hidden' ? TEMPLATE_NOT_FOUND : FORBIDDEN)
+    if (outcome === 'forbidden') expect(probe.reads).toEqual([])
+  })
+
+  it.each([
+    ['an owner of the org whose ACTIVE role is manager (main: forbidden)', ownerBManagerAActive, 'pass'],
+    ['an org admin whose own role at the active studio is staff', adminStaffActive, 'pass'],
+    ['a manager who owns no org', managerBoth, 'forbidden'],
+  ])('GET /api/contract-templates: %s', async (_label, caller, outcome) => {
+    getCurrentUser.mockResolvedValue(caller)
+    const probe = gateProbe()
+    createServerClient.mockReturnValue(probe.db)
+    const { status, body } = await runProbed(probe, () => contractTemplates.GET(bare('GET')))
+    if (outcome === 'pass') {
+      expect(probe.passed, `refused: ${status} ${JSON.stringify(body)}`).toBe(true)
+      expect(probe.tripped.chain).toContainEqual(['in', 'organization_id', [ORG]])
+      return
+    }
+    expect(probe.passed).toBe(false)
+    expect({ status, body }).toEqual(FORBIDDEN)
+  })
+})
