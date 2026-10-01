@@ -54,9 +54,7 @@ import { POST } from './route'
 import { createServerClient } from '@/lib/supabase'
 import { resolveWhatsAppNumberByPhoneNumberId } from '@/lib/whatsapp-config'
 import { maybeAutoReply } from '@/lib/agent/auto-reply'
-import { parseConsentKeyword, pickInboundContact } from '@/lib/whatsapp'
-import { applyWhatsappConsentKeyword } from '@/lib/whatsapp-consent'
-import { ingestCoexistenceMessage, syncContactMatchOnly } from '@/lib/whatsapp-coexistence-ingest'
+import { pickInboundContact } from '@/lib/whatsapp'
 
 // Recording fake supabase client: chainable builder, thenable (matches
 // supabase-js), with per-table response handlers. Every terminal call is
@@ -101,21 +99,6 @@ function inboundText(pniOrNull) {
     metadata: pniOrNull ? { phone_number_id: pniOrNull } : {},
     contacts: [{ wa_id: '353871234567', profile: { name: 'Test Sender' } }],
     messages: [{ id: 'wamid.test1', from: '353871234567', timestamp: '1770000000', type: 'text', text: { body: 'hi' } }],
-  })
-}
-
-function inboundTextBody(text) {
-  return envelope({
-    metadata: { phone_number_id: REGISTERED_PNI },
-    contacts: [{ wa_id: '353871234567', profile: { name: 'Test Sender' } }],
-    messages: [{ id: 'wamid.kw1', from: '353871234567', timestamp: '1770000000', type: 'text', text: { body: text } }],
-  })
-}
-
-function statusUpdate(pniOrNull) {
-  return envelope({
-    metadata: pniOrNull ? { phone_number_id: pniOrNull } : {},
-    statuses: [{ id: 'wamid.out1', status: 'delivered', timestamp: '1770000000' }],
   })
 }
 

@@ -113,7 +113,7 @@ export async function POST(request, props) {
       return NextResponse.json({ success: false, error }, { status })
     }
     if (recorded?.length) {
-      return NextResponse.json({ success: false, error: 'This upload is already saved.' }, { status: 409 })
+      return NextResponse.json({ success: false, error: CAR_DOCUMENT_ALREADY_SAVED }, { status: 409 })
     }
     try {
       const { error: rmErr } = await bucket.remove([body.path])
