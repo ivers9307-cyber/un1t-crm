@@ -357,6 +357,10 @@ export const EXEMPT = {
     sale_offers:
       'Public sale product page: row resolved by its globally-unique slug; price is rendered server-side from the row so the client can never supply an amount.',
   },
+  'src/app/start/[path]/page.js': {
+    landing_page_settings:
+      "Public per-studio class-booking page (proxy publicPaths via '/start'): resolves ONE row by its sanitised public_path and renders only its published blocks + logo — public marketing content; the public_path IS the tenant selector (same rationale as /start and /welcome/[location]). MANUALFUNNEL.1.",
+  },
   'src/app/start/page.js': {
     landing_page_settings:
       "Public Meta-ads landing (proxy publicPaths): reads the fixed hatch-street row's published blocks + the landing logo — public marketing content; the public_path IS the tenant selector (same rationale as /api/public/classes).",

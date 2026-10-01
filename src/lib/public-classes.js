@@ -7,6 +7,7 @@
 // judged on the RAW Glofox event before shaping, and a full class is simply
 // left out of the list.
 import { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, fetchUpcomingEvents } from '@/lib/glofox'
+import { parseManualTimetable, manualClassOccurrences, manualTimetableConfigFromBlocks } from '@/lib/manual-timetable'
 
 const DUBLIN = 'Europe/Dublin'
 const dayFmt = new Intl.DateTimeFormat('en-CA', { timeZone: DUBLIN, year: 'numeric', month: '2-digit', day: '2-digit' })
@@ -60,12 +61,15 @@ export function isClassHidden(name, keywords) {
  *   error 'glofox_settings_unreadable' — the studio's Glofox settings could
  *     not be READ (a DB blip): not "no classes", not "not configured".
  *   error 'glofox_unreachable' — Glofox did not answer.
- *   A studio with no Glofox is { classes: [], error: null }.
+ *   error 'manual_timetable_unreadable' — a studio with no Glofox whose
+ *     landing row (where its hand-written timetable lives) could not be read.
+ *   A studio with no Glofox lists the timetable written on its class_funnel
+ *   block (MANUALFUNNEL.1), or { classes: [], error: null } when it has none.
  */
 export async function readPublicClasses(db, locationId, days = 7) {
   const creds = await glofoxCredentialsForLocation(db, locationId)
   if (creds.readError) return { classes: [], error: creds.readError }
-  if (missingGlofoxCredentialsForLocation(creds).length) return { classes: [], error: null }
+  if (missingGlofoxCredentialsForLocation(creds).length) return readManualClasses(db, locationId, days)
   // REGISTRYREAD.1a: the deny-list rides on the SAME read as the credentials.
   // A second read used to fail OPEN — a blip answered {} and listed (and let
   // the funnel book) every hidden class.
@@ -81,6 +85,23 @@ export async function readPublicClasses(db, locationId, days = 7) {
     .map(shapePublicClass)
     .filter((c) => !isClassHidden(c.name, hidden))
     .sort((a, b) => a.starts_at.localeCompare(b.starts_at))
+  return { classes, error: null }
+}
+
+// MANUALFUNNEL.1 — a studio with no Glofox (Hatch Street) lists the weekly
+// timetable its operator wrote on the class_funnel block. Same shape as a
+// Glofox class, and the booking route validates against this same read, so a
+// time the operator removed can be neither seen nor requested. A landing row
+// that could not be READ is an error, never "no classes": the booking route
+// then answers timetable_unavailable and keeps what the customer typed.
+async function readManualClasses(db, locationId, days) {
+  const { data, error } = await db.from('landing_page_settings')
+    .select('blocks').eq('location_id', locationId).maybeSingle()
+  if (error) return { classes: [], error: 'manual_timetable_unreadable' }
+  const cfg = manualTimetableConfigFromBlocks(data?.blocks)
+  if (!cfg) return { classes: [], error: null }
+  const { slots } = parseManualTimetable(cfg.text)
+  const classes = manualClassOccurrences({ slots, startDate: cfg.startDate, minNoticeHours: cfg.minNoticeHours, days })
   return { classes, error: null }
 }
 

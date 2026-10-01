@@ -363,3 +363,24 @@ describe('failureExplanation: one trial per member, and the funnel trial (TRIALP
     }
   })
 })
+
+// MANUALFUNNEL.1 — a class off a studio's hand-written timetable.
+describe('whyFlagged: a manual-timetable booking', () => {
+  const row = (reason) => ({ kind: 'class_booking', details: { event_id: 'manual-20261005-0615-strength', reason, mode: 'draft', source: 'start_funnel' } })
+
+  it('tells staff to book it by hand and that approving books nothing', () => {
+    const why = whyFlagged(row('manual_booking'))
+    expect(why).toMatch(/books by hand/)
+    expect(why).toMatch(/Approving does not book anything/)
+    expect(why).not.toMatch(/Glofox/)
+  })
+
+  it('says the same whatever reason the card carries (the retry path files processing_error)', () => {
+    expect(whyFlagged(row('processing_error'))).toBe(whyFlagged(row('manual_booking')))
+    expect(whyFlagged(row(undefined))).toBe(whyFlagged(row('manual_booking')))
+  })
+
+  it('never offers to buy a trial', () => {
+    expect(approvalGrantsTrialCredit(row('manual_booking').details)).toBe(false)
+  })
+})

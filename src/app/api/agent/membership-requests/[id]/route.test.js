@@ -835,3 +835,52 @@ describe('PATCH class_booking approval — the trial grant is written ahead (TRI
     expect(retryLog.at(-1).patch.details.result).toMatchObject({ ok: false, message_code: 'TRIAL_GRANT_UNVERIFIED' })
   })
 })
+
+// MANUALFUNNEL.1 — a class off a studio's hand-written timetable (no Glofox
+// there). Approving records that staff booked it by hand; nothing executes.
+describe('PATCH class_booking approval — manual timetable booking', () => {
+  const manualRow = (over = {}) => ({
+    ...ROW,
+    conversation_id: null,
+    channel: null,
+    details: {
+      event_id: 'manual-20261005-0615-strength', class_name: 'Strength', class_time: 'Mon 5 Oct, 06:15',
+      starts_at: new Date(Date.now() + 86_400_000).toISOString(),
+      mode: 'draft', source: 'start_funnel', reason: 'manual_booking',
+      ...over,
+    },
+  })
+
+  it('approve → actioned with a manual result; no Glofox read or write, no trial, no message; queue row booked', async () => {
+    db = makeDbFor(manualRow(), updates)
+    const res = await approve()
+    const json = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(json.executed).toEqual({ ok: true, manual: true })
+    const final = updates.at(-1)
+    expect(final.table).toBe('agent_membership_requests')
+    expect(final.patch.status).toBe('actioned')
+    expect(final.patch.details.result).toEqual({ ok: true, manual: true })
+    expect(updates.find((u) => u.table === 'class_booking_requests').patch).toEqual({ status: 'booked', last_error: null })
+    expect(glofoxCredentialsForLocation).not.toHaveBeenCalled()
+    expect(createBooking).not.toHaveBeenCalled()
+    expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
+    expect(sendAgentThreadMessage).not.toHaveBeenCalled()
+  })
+
+  it('is judged on the event id, not the reason: a card filed by the retry path records the same way', async () => {
+    db = makeDbFor(manualRow({ reason: 'processing_error' }), updates)
+    const json = await (await approve()).json()
+    expect(json.executed).toEqual({ ok: true, manual: true })
+    expect(updates.at(-1).patch.status).toBe('actioned')
+    expect(createBooking).not.toHaveBeenCalled()
+  })
+
+  it('recording it after the class has run is still actioned, never expired', async () => {
+    db = makeDbFor(manualRow({ starts_at: new Date(Date.now() - 3_600_000).toISOString() }), updates)
+    await approve()
+    expect(updates.at(-1).patch.status).toBe('actioned')
+    expect(updates.find((u) => u.table === 'class_booking_requests').patch).toEqual({ status: 'booked', last_error: null })
+  })
+})
