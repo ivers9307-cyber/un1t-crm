@@ -94,7 +94,8 @@ export function retentionCutoff(nowMs = Date.now()) {
  *   glofox_webhook_attempts (WEBHOOKAUDIT.1, mig 649) — one PII-free row per
  *   processed Glofox webhook delivery, written after processing, so every row
  *   is finished: `processed_at < cutoff`, nothing else. (glofox_webhook_events
- *   itself is NOT purged here — follow-up C47.)
+ *   itself is NOT purged here: /api/cron/purge-glofox-webhook-events does it,
+ *   C47 GLOFOXEVENTRETENTION.1, mig 694.)
  *
  * PAGING: delete-as-you-go. Each iteration reads the OLDEST PURGE_PAGE_SIZE
  * candidate ids with .range(0, n-1) ordered by the table's finished clock;
