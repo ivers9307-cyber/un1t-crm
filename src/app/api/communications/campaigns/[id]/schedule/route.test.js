@@ -7,7 +7,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
-  userWith, hasPermissionForLocationImpl, campaignDb, writesOf, jsonRequest, paramsOf,
+  userWith, hasPermissionForLocationImpl, campaignDb, campaignDbSequence, writesOf, jsonRequest, paramsOf,
   LOC_A, LOC_B, CAMPAIGN_ID,
 } from '@/lib/campaign-session-access.test-helpers.js'
 
@@ -102,6 +102,13 @@ describe('POST /api/communications/campaigns/[id]/schedule', () => {
   it('normalises an offset instant to UTC', async () => {
     await schedule({ scheduled_at: '2026-10-02T10:00:00+01:00' })
     expect(writesOf(db)[0].payload.scheduled_at).toBe(LATER)
+  })
+
+  it('a 409 after zero rows carries the CURRENT status', async () => {
+    db = campaignDbSequence([row(), row({ status: 'sending' })], () => ({ data: [], error: null }))
+    const res = await schedule({ scheduled_at: LATER })
+    expect(res.status).toBe(409)
+    expect((await res.json()).data).toEqual({ status: 'sending' })
   })
 
   it('409 when zero rows were updated (the status changed under it); 500 on a write error', async () => {

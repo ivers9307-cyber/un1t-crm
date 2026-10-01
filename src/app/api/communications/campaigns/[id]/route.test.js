@@ -7,7 +7,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
-  userWith, hasPermissionForLocationImpl, campaignDb, makeFakeDb, writesOf, jsonRequest, paramsOf,
+  userWith, hasPermissionForLocationImpl, campaignDb, campaignDbSequence, makeFakeDb, writesOf, jsonRequest, paramsOf,
   LOC_A, LOC_B, CAMPAIGN_ID,
 } from '@/lib/campaign-session-access.test-helpers.js'
 import { campaignLockedReason, campaignUndeletableReason } from '@/lib/campaign-editability'
@@ -147,6 +147,17 @@ describe('PUT [id] — save an existing campaign', () => {
     expect((await put(CONTENT)).status).toBe(409)
   })
 
+  it('a 409 after the write carries the CURRENT status and its reason (never null, never the stale one)', async () => {
+    db = campaignDbSequence([row(), row({ status: 'queued' })], () => ({ data: [], error: null }))
+    let res = await put(CONTENT)
+    expect(res.status).toBe(409)
+    expect((await res.json()).data).toEqual({ status: 'queued' })
+    db = campaignDbSequence([row(), row({ status: 'sent' })], () => ({ data: null, error: { code: '23514', message: 'Campaign is sent' } }))
+    res = await put(CONTENT)
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ success: false, error: campaignLockedReason('sent'), data: { status: 'sent' } })
+  })
+
   it('500 on any other write error', async () => {
     db = campaignDb(row(), () => ({ data: null, error: { code: 'XX000', message: 'boom' } }))
     expect((await put(CONTENT)).status).toBe(500)
@@ -187,6 +198,19 @@ describe('DELETE [id]', () => {
   it('409 when nothing was deleted (the status changed under it)', async () => {
     db = campaignDb(row(), () => ({ data: [], error: null }))
     expect((await del()).status).toBe(409)
+  })
+
+  it('a 409 after the delete carries the CURRENT status and its reason', async () => {
+    db = campaignDbSequence([row(), row({ status: 'sending' })], () => ({ data: [], error: null }))
+    let res = await del()
+    expect(res.status).toBe(409)
+    expect((await res.json()).data).toEqual({ status: 'sending' })
+    db = campaignDbSequence([row(), row({ status: 'sent' })], () => ({ data: null, error: { code: '23514', message: 'cannot be deleted' } }))
+    res = await del()
+    expect(await res.json()).toEqual({ success: false, error: campaignUndeletableReason('sent'), data: { status: 'sent' } })
+    db = campaignDbSequence([row(), row({ status: 'queued' })], () => ({ data: null, error: { code: '23514', message: 'cannot be deleted' } }))
+    res = await del()
+    expect((await res.json()).error).toBe('This campaign is sending. Cancel the send first, then delete.')
   })
 
   it('409 when the block-sent-delete trigger refuses it; 500 on another error', async () => {

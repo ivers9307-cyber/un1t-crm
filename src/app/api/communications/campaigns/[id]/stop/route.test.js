@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
-  userWith, hasPermissionForLocationImpl, campaignDb, writesOf, jsonRequest, paramsOf,
+  userWith, hasPermissionForLocationImpl, campaignDb, campaignDbSequence, writesOf, jsonRequest, paramsOf,
   LOC_A, LOC_B, CAMPAIGN_ID,
 } from '@/lib/campaign-session-access.test-helpers.js'
 
@@ -90,5 +90,28 @@ describe('POST /api/communications/campaigns/[id]/stop', () => {
     expect((await res.json()).error).toBe("The campaign's status changed; reload.")
     db = campaignDb(row(), () => ({ data: null, error: { message: 'boom' } }))
     expect((await stop()).status).toBe(500)
+  })
+  it('the cron promoted it between the read and the write: the stop still lands, as a cancel request', async () => {
+    // Unschedule clicked as run-campaigns promotes scheduled -> queued. The
+    // operator asked to STOP; a 409 "reload" here would leave the send running.
+    let n = 0
+    db = campaignDbSequence([row(), row({ status: 'queued' })], () => (n++ === 0
+      ? { data: [], error: null }
+      : { data: [{ id: CAMPAIGN_ID }], error: null }))
+    const res = await stop()
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ success: true, data: { status: 'queued', cancel_requested_at: NOW.toISOString() } })
+    const [first, second] = writesOf(db)
+    expect(first.filters).toEqual([['eq', 'id', CAMPAIGN_ID], ['eq', 'status', 'scheduled']])
+    expect(second.payload).toEqual({ cancel_requested_at: NOW.toISOString() })
+    expect(second.filters).toEqual([['eq', 'id', CAMPAIGN_ID], ['in', 'status', ['queued', 'sending']]])
+  })
+
+  it('a 409 after zero rows carries the CURRENT status, not the one judged before the write', async () => {
+    db = campaignDbSequence([row(), row({ status: 'draft' })], () => ({ data: [], error: null }))
+    const res = await stop()
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ success: false, error: "The campaign's status changed; reload.", data: { status: 'draft' } })
+    expect(writesOf(db)).toHaveLength(1)
   })
 })

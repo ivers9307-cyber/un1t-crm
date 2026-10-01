@@ -83,3 +83,21 @@ export function jsonRequest(url, method, body) {
 }
 
 export const paramsOf = (id = CAMPAIGN_ID) => ({ params: Promise.resolve({ id }) })
+
+/**
+ * Like campaignDb, but successive by-id reads answer with successive rows
+ * (the last one repeats): the loader's read first, then the route's re-read
+ * after a write that touched nothing. Models the run-campaigns cron moving
+ * the campaign between the two.
+ */
+export function campaignDbSequence(rows, write = () => ({ data: [{ id: CAMPAIGN_ID }], error: null })) {
+  let reads = 0
+  return makeFakeDb((call) => {
+    if (call.op === 'select') {
+      const r = rows[Math.min(reads, rows.length - 1)]
+      reads += 1
+      return { data: r, error: null }
+    }
+    return write(call)
+  })
+}

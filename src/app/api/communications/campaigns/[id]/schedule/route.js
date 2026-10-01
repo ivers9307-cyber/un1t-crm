@@ -14,7 +14,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import {
-  loadCampaignForUser, CampaignScheduleSchema, conflict, serverError, STATUS_CHANGED,
+  loadCampaignForUser, CampaignScheduleSchema, conflict, serverError, STATUS_CHANGED, currentStatus,
 } from '@/lib/campaign-session-access'
 
 export const dynamic = 'force-dynamic'
@@ -55,7 +55,7 @@ export async function POST(request, props) {
     .in('status', SCHEDULABLE)
     .select('id')
   if (error) return serverError(error.message)
-  if (!data || data.length === 0) return conflict(STATUS_CHANGED, campaign.status)
+  if (!data || data.length === 0) return conflict(STATUS_CHANGED, await currentStatus(db, campaign.id, campaign.status))
 
   return NextResponse.json({ success: true, data: { status: 'scheduled', scheduled_at: scheduledAt } })
 }

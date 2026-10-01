@@ -22,6 +22,7 @@ import { assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { uuidLike } from '@/lib/schemas'
 import { validateAudienceFilter, InvalidAudienceFilterError } from '@/lib/audience-filter'
+import { campaignUndeletableReason } from '@/lib/campaign-editability'
 
 export {
   CampaignContentSchema, CampaignCreateSchema, CampaignScheduleSchema, CONTENT_FIELDS, contentPatch,
@@ -54,6 +55,27 @@ export async function loadCampaignForUser(db, user, id, columns) {
   if (guard) return { response: guard }
   if (!hasPermissionForLocation(user, campaign.location_id, 'email')) return { response: NO_EMAIL() }
   return { campaign }
+}
+
+/**
+ * The campaign's status as it is NOW. Used after a write that touched no row
+ * or that a guard trigger refused: the run-campaigns cron moved the campaign
+ * between our read and our write, so the status we judged is stale. The 409
+ * carries this one, and the editor redraws its pill and buttons from it
+ * (a stale or null status there left the wrong buttons, or none). A failed
+ * re-read answers `fallback`.
+ */
+export async function currentStatus(db, id, fallback = null) {
+  const { data, error } = await db.from('campaigns').select('status').eq('id', id).maybeSingle()
+  if (error) return fallback
+  return data?.status ?? null
+}
+
+/** The delete refusal an operator reads for `status` (CAMPDEL.1's two texts). */
+export function undeletableMessage(status) {
+  return ['queued', 'sending'].includes(status)
+    ? 'This campaign is sending. Cancel the send first, then delete.'
+    : (campaignUndeletableReason(status) || STATUS_CHANGED)
 }
 
 /** 400 for an audience filter that can never resolve (COMMSFIX.B.7 / FILTER-P1.5), else null. */

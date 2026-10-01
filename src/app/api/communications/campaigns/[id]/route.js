@@ -19,11 +19,11 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import {
-  EDITABLE_CAMPAIGN_STATUSES, isCampaignContentEditable, campaignLockedReason, campaignUndeletableReason,
+  EDITABLE_CAMPAIGN_STATUSES, isCampaignContentEditable, campaignLockedReason,
 } from '@/lib/campaign-editability'
 import {
   loadCampaignForUser, CampaignContentSchema, contentPatch, audienceFilterRefusal,
-  conflict, serverError, STATUS_CHANGED, CHECK_VIOLATION,
+  conflict, serverError, STATUS_CHANGED, CHECK_VIOLATION, currentStatus, undeletableMessage,
 } from '@/lib/campaign-session-access'
 
 export const dynamic = 'force-dynamic'
@@ -69,10 +69,13 @@ export async function PUT(request, props) {
     .in('status', [...EDITABLE_CAMPAIGN_STATUSES])
     .select('id, status, updated_at')
   if (error) {
-    if (error.code === CHECK_VIOLATION) return conflict(campaignLockedReason(null), null)
+    if (error.code === CHECK_VIOLATION) {
+      const now = await currentStatus(db, campaign.id, null)
+      return conflict(campaignLockedReason(now) || STATUS_CHANGED, now)
+    }
     return serverError(error.message)
   }
-  if (!data || data.length === 0) return conflict(STATUS_CHANGED, campaign.status)
+  if (!data || data.length === 0) return conflict(STATUS_CHANGED, await currentStatus(db, campaign.id, campaign.status))
 
   return NextResponse.json({ success: true, data: data[0] })
 }
@@ -87,10 +90,7 @@ export async function DELETE(_request, props) {
   if (response) return response
 
   if (!isCampaignContentEditable(campaign.status)) {
-    const message = ['queued', 'sending'].includes(campaign.status)
-      ? 'This campaign is sending. Cancel the send first, then delete.'
-      : campaignUndeletableReason(campaign.status)
-    return conflict(message, campaign.status)
+    return conflict(undeletableMessage(campaign.status), campaign.status)
   }
 
   const { data, error } = await db.from('campaigns')
@@ -99,10 +99,13 @@ export async function DELETE(_request, props) {
     .in('status', [...EDITABLE_CAMPAIGN_STATUSES])
     .select('id')
   if (error) {
-    if (error.code === CHECK_VIOLATION) return conflict(campaignUndeletableReason(null), null)
+    if (error.code === CHECK_VIOLATION) {
+      const now = await currentStatus(db, campaign.id, null)
+      return conflict(undeletableMessage(now), now)
+    }
     return serverError(error.message)
   }
-  if (!data || data.length === 0) return conflict(STATUS_CHANGED, campaign.status)
+  if (!data || data.length === 0) return conflict(STATUS_CHANGED, await currentStatus(db, campaign.id, campaign.status))
 
   return NextResponse.json({ success: true })
 }
