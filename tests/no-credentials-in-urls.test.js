@@ -31,7 +31,7 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { stripComments } from '../scripts/lib/strip-comments.mjs'
+import { stripComments } from './helpers/js-code.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const CRED_PARAMS = ['api_key', 'apiKey', 'pat', 'access_token', 'api_token', 'client_secret', 'password', 'webhook_secret']
@@ -82,6 +82,12 @@ describe('the patterns', () => {
     expect(CLIENT_RE.test('`/api/x?api_key=${k}`')).toBe(true)
     expect(CLIENT_RE.test('`/api/x?a=1&access_token=${t}`')).toBe(true)
     expect(CLIENT_RE.test('`/api/x?path=${p}`')).toBe(false)
+  })
+
+  // GUARDSTRIP.1 (C74): the state-machine stripper read the '//' inside a
+  // regex literal as a line comment and dropped the URL after it.
+  it('a // inside a regex literal hides no URL', () => {
+    expect(CLIENT_RE.test(stripComments('const re = /\\/\\//; const u = `/api/x?api_key=${k}`\n'))).toBe(true)
   })
 
   it('see URLSearchParams and .set/.append forms (N4)', () => {

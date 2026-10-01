@@ -14,7 +14,7 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { stripComments } from '../scripts/lib/strip-comments.mjs'
+import { stripComments } from './helpers/js-code.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const WRITE = /\.from\(\s*['"]event_types['"]\s*\)\s*\.\s*(insert|update|upsert|delete)\s*\(/g

@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { collectSchema, parseSelect } from '../../scripts/check-select-columns.mjs'
+import { stripComments } from '../../tests/helpers/js-code.js'
 
 vi.mock('./log.js', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 vi.mock('./connection-registry.js', async (importOriginal) => ({
@@ -178,7 +179,8 @@ describe('loadStaffFormLocations (STAFFFORMSETTINGS.1)', () => {
 describe('StaffForm reads no location settings (STAFFFORMSETTINGS.1 D4)', () => {
   it('names .settings nowhere in code', () => {
     const src = readFileSync(path.resolve(import.meta.dirname, '../components/StaffForm.jsx'), 'utf8')
-    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1')
+    // Comments blanked by the TypeScript parser's ranges, never a regex (GUARDSTRIP.1).
+    const code = stripComments(src)
     expect(code).not.toMatch(/\.settings\b/)
     expect(code).toMatch(/unifi_configured/)
   })

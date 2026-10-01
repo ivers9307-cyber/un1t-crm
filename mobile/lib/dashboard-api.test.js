@@ -206,13 +206,14 @@ describe('swapRowTitle — same wording as the web approvals queue', () => {
 describe('shared fetchStudioDashboardData never embeds profiles', () => {
   it('its selects carry no profiles embed (mobile calls it on the authenticated client)', async () => {
     const { readFileSync } = await import('node:fs')
-    const src = readFileSync(new URL('../../shared/dashboard-data.js', import.meta.url), 'utf8')
+    const { stripComments } = await import('../../tests/helpers/js-code.js')
+    // Comments blanked (the explanation of the old bug must not trip it) by
+    // the TypeScript parser's ranges, never a regex (GUARDSTRIP.1).
+    const src = stripComments(readFileSync(new URL('../../shared/dashboard-data.js', import.meta.url), 'utf8'))
     const start = src.indexOf('export async function fetchStudioDashboardData')
     const end = src.indexOf('\nexport ', start + 1)
-    const body = src.slice(start, end)
+    const code = src.slice(start, end)
     expect(start).toBeGreaterThan(-1)
-    // Strip comments so the explanation of the old bug doesn't trip it.
-    const code = body.replace(/\/\/.*$/gm, '')
     expect(code).not.toMatch(/profiles/)
   })
 })

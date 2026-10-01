@@ -19,6 +19,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
+import { stripComments } from './helpers/js-code.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 
@@ -49,9 +50,8 @@ const REDACTORS = /\b(redactLocationSecrets|redactProfileLocations|toClientLocat
 // A redactor must be USED, not merely imported or named in a comment: both
 // of those survive deleting the call that does the work.
 export function usesRedactor(text) {
-  const code = text
-    .replace(/\/\*[\s\S]*?\*\//g, '') // block comments
-    .replace(/(^|[^:'"`])\/\/.*$/gm, '$1') // line comments (not a URL's //)
+  // Comments blanked by the TypeScript parser's ranges (GUARDSTRIP.1), never a regex.
+  const code = stripComments(text)
     .replace(/^\s*import\b[\s\S]*?\bfrom\s*['"][^'"]+['"];?/gm, '') // import statements
   return REDACTORS.test(code)
 }
@@ -129,5 +129,13 @@ describe('every star-read of locations is reviewed (SECFIX.3a)', () => {
     expect(usesRedactor(`import {\n  redactLocationSecrets,\n} from '@/lib/location-secrets'\nconst rows = data`)).toBe(false)
     expect(usesRedactor(`// rows go through redactLocationSecrets\nconst rows = data`)).toBe(false)
     expect(usesRedactor(`/* toClientLocation */ const u = 'https://x.example'`)).toBe(false)
+  })
+
+  // GUARDSTRIP.1 (C74): the old regex stripper kept a line comment right after
+  // a quote (so a comment counted as a redaction) and read a '/*' in a string
+  // as a comment (hiding the real call).
+  it('a comment after a quote is still a comment; a /* in a string hides nothing', () => {
+    expect(usesRedactor(`const s = 'x'// redactLocationSecrets(rows)`)).toBe(false)
+    expect(usesRedactor(`const a = 'image/*'\nconst rows = data.map(redactLocationSecrets)\n/* note */`)).toBe(true)
   })
 })

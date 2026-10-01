@@ -19,7 +19,8 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs'
 import path from 'node:path'
-import { stripComments } from '../scripts/lib/strip-comments.mjs'
+import { stripComments } from './helpers/js-code.js'
+import { sqlCode } from './helpers/sql-code.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const CONTACTS_WRITES_OFF_MIGRATION = 653
@@ -74,7 +75,7 @@ function splitTop(list) {
 
 /** Every statement in `sql` that would let a client role write public.contacts again. */
 export function contactsWriteReopeners(sql) {
-  const code = sql.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--[^\n]*/g, ' ')
+  const code = sqlCode(sql)
   const hits = []
   for (const m of code.matchAll(/\bgrant\s+([\s\S]+?)\s+on\s+([\s\S]+?)\s+to\s+([\s\S]+?)(?:;|'|$)/gi)) {
     const [stmt, privs, target, to] = m
@@ -163,6 +164,13 @@ describe('later migrations keep contacts read-only for clients (mig 653)', () =>
   it.each(later)('%s: no client write grant and no permissive write policy on contacts', (file) => {
     expect(contactsWriteReopeners(readFileSync(path.join(MIGRATIONS, file), 'utf8')),
       `${file} reopens client writes on contacts (mig 653). Write through a service-role route instead`).toEqual([])
+  })
+
+  // GUARDSTRIP.1 (C74): a '/*' inside a string, or after a DO block's $$, hid
+  // the GRANT from the old regex / unpaired stripper.
+  it('a /* inside a string or a later $$ literal hides no GRANT (GUARDSTRIP.1)', () => {
+    expect(contactsWriteReopeners("SELECT '/*';\nGRANT UPDATE ON public.contacts TO authenticated;\nSELECT '*/';"), 'string').not.toEqual([])
+    expect(contactsWriteReopeners("DO $$ BEGIN PERFORM 1; END $$;\nSELECT $$ /* $$;\nGRANT UPDATE ON public.contacts TO authenticated;\nSELECT $$ */ $$;"), 'dollar').not.toEqual([])
   })
 
   it('the migration detector catches every form and passes the safe ones', () => {

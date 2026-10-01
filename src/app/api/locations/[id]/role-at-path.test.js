@@ -37,7 +37,7 @@ import { fileURLToPath } from 'node:url'
 // tests/role-at-target.test.js (the repo-wide guard) scans the same tokens.
 import { activeRoleGates } from '../../../../../scripts/lib/active-role-gates.mjs'
 // ACDEVLOC.1 — the path-id rule below uses the same comment stripper.
-import { stripComments } from '../../../../../scripts/lib/strip-comments.mjs'
+import { stripComments } from '../../../../../tests/helpers/js-code.js'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 

@@ -40,6 +40,7 @@ import {
 } from './helpers/sequence-column-grants.js'
 import { columnUses, fkAliasesInto } from './helpers/postgrest-column-uses.js'
 import { collectSchema } from '../scripts/check-select-columns.mjs'
+import { sqlCode } from './helpers/sql-code.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const MIG_DIR = path.join(ROOT, 'supabase/migrations')
@@ -151,7 +152,8 @@ function splitTop(list) {
   return out.map((s) => s.trim()).filter(Boolean)
 }
 
-const stripComments = (sql) => sql.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--[^\n]*/g, ' ')
+// SQL comments blanked by the quote-aware $tag$-pairing scan, never a regex (GUARDSTRIP.1).
+const stripComments = sqlCode
 const CLIENT_ROLES = ['authenticated', 'anon', 'public']
 
 /**
@@ -276,6 +278,13 @@ describe('later migrations keep the sequence grants (PROFILESPREAD.1b)', () => {
     expect(decided(undecided, 'signing_key')).toBe(false)
     expect(decided(`${undecided}\n-- column-grant: withheld email_sequences.signing_key`, 'signing_key')).toBe(true)
     expect(decided(`${undecided}\nGRANT SELECT (signing_key) ON public.email_sequences TO authenticated;`, 'signing_key')).toBe(true)
+  })
+
+  // GUARDSTRIP.1 (C74): a '/*' inside a string, or after a DO block's $$, hid
+  // the GRANT from the old regex / unpaired stripper.
+  it('a /* inside a string or a later $$ literal hides no GRANT (GUARDSTRIP.1)', () => {
+    expect(clientTableGrants("SELECT '/*';\nGRANT SELECT ON public.email_sequences TO authenticated;\nSELECT '*/';"), 'string').not.toEqual([])
+    expect(clientTableGrants("DO $$ BEGIN PERFORM 1; END $$;\nSELECT $$ /* $$;\nGRANT SELECT ON public.email_sequences TO authenticated;\nSELECT $$ */ $$;"), 'dollar').not.toEqual([])
   })
 
   it('the table-level detector catches every reopening form and passes the safe ones', () => {

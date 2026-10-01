@@ -26,9 +26,11 @@
 //     run from EXECUTE '…' or $q$…$q$ counts. The one exemption is a
 //     rollback migration named `<NNN>_rosterclientwrite1_rollback.sql`.
 //
-// codeOf, isClientCode and stripSqlComments are copied verbatim from
-// tests/shift-client-writes-guard.test.js (importing a test file would run
-// its suites here too). A floor, not a proof: `.from(<variable>)`, a chain
+// Code is read with tests/helpers/js-code.js codeOf (comments, JSX text and
+// regex literals blanked by the TypeScript parser) and SQL with
+// tests/helpers/sql-code.js sqlCode (one quote-aware, $tag$-pairing pass;
+// GUARDSTRIP.1). isClientCode is the same test as
+// tests/shift-client-writes-guard.test.js. A floor, not a proof: `.from(<variable>)`, a chain
 // split across statements and SQL built at runtime are invisible. Server
 // code is not checked: service_role bypasses grants. No other repo on this
 // project names either table (C110 plan §3).
@@ -36,7 +38,8 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs'
 import path from 'node:path'
-import ts from 'typescript'
+import { codeOfFile } from './helpers/js-code.js'
+import { sqlCode } from './helpers/sql-code.js'
 import { columnUses, fkAliasesInto } from './helpers/postgrest-column-uses.js'
 import { collectSchema } from '../scripts/check-select-columns.mjs'
 
@@ -69,53 +72,11 @@ function walk(dir, out = []) {
   return out
 }
 
-/**
- * The file's CODE: comments, JSX text and regex literals blanked (newlines
- * and offsets kept), read by the TypeScript parser, never by a regex or a
- * hand state machine. JSX text is not trivia, but asked for comments where
- * it starts the scanner reads `<p>/* note</p>` as one, so no comment range is
- * taken there (tests/staff-profile-to-client.test.js, GUARDSTRIP.0). JSX text
- * and regex literals are blanked too, because columnUses' own comment mask
- * (check-select-columns' maskComments) would otherwise read the '/*' in
- * `<p>files/*.csv</p>` or `/\/*\/` as a comment and hide every call up to
- * the next '*\/'. Neither can hold a PostgREST call. A file the parser
- * cannot read is returned raw: a false positive beats a blind spot.
- */
-export function codeOf(text, file = 'scan.jsx') {
-  const kind = /\.tsx$/.test(file) ? ts.ScriptKind.TSX : /\.ts$/.test(file) ? ts.ScriptKind.TS : ts.ScriptKind.JSX
-  const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, kind)
-  if (sf.parseDiagnostics?.length) return text
-  const jsxTextAt = new Set()
-  const blanks = []
-  const find = (node) => {
-    if (node.kind === ts.SyntaxKind.JsxText) { jsxTextAt.add(node.pos); blanks.push([node.pos, node.end]) }
-    if (node.kind === ts.SyntaxKind.RegularExpressionLiteral) blanks.push([node.getStart(sf), node.end])
-    for (const child of node.getChildren(sf)) find(child)
-  }
-  find(sf)
-  const visit = (node) => {
-    if (!jsxTextAt.has(node.pos)) {
-      for (const r of [...(ts.getLeadingCommentRanges(text, node.pos) || []), ...(ts.getTrailingCommentRanges(text, node.pos) || [])]) blanks.push([r.pos, r.end])
-    }
-    for (const child of node.getChildren(sf)) visit(child)
-  }
-  visit(sf)
-  const out = text.split('')
-  for (const [from, to] of blanks) for (let k = from; k < to; k++) if (out[k] !== '\n') out[k] = ' '
-  return out.join('')
-}
-
 function isClientCode(code) {
   return /^['"]use client['"]/.test(code) || /\bcreateBrowserClient\b/.test(code) ||
     /\bcreateAuthClient\s*\(/.test(code) || /\bNEXT_PUBLIC_SUPABASE_ANON_KEY\b/.test(code)
 }
 
-// Every file is parsed once per run (the TypeScript parse is the slow part).
-const CODE = new Map()
-const codeOfFile = (f) => {
-  if (!CODE.has(f)) CODE.set(f, codeOf(readFileSync(f, 'utf8'), f))
-  return CODE.get(f)
-}
 let CLIENT_FILES = null
 function clientFiles() {
   if (CLIENT_FILES) return CLIENT_FILES
@@ -126,10 +87,10 @@ function clientFiles() {
 }
 
 /** PostgREST reads/writes on the two tables in one file's code. */
-export const scanUses = (text, file) => columnUses(codeOf(text, file), TABLES, FK_ALIASES)
+export const scanUses = (text) => columnUses(text, TABLES, FK_ALIASES)
 const USES = new Map()
 const usesOf = (f) => {
-  if (!USES.has(f)) USES.set(f, columnUses(codeOfFile(f), TABLES, FK_ALIASES))
+  if (!USES.has(f)) USES.set(f, columnUses(readFileSync(f, 'utf8'), TABLES, FK_ALIASES))
   return USES.get(f)
 }
 const RAW_URL = /\/rest\/v1\/(rosters|shift_templates)\b/
@@ -169,72 +130,6 @@ describe('client code never writes rosters or shift_templates (ROSTERCLIENTWRITE
 })
 
 // ── migrations ───────────────────────────────────────────────────────────
-/**
- * SQL with its comments blanked, strings and code kept, in ONE left-to-right
- * pass: a "--" or "/*" inside a '…' string or a "…" identifier is not a
- * comment, and a "/*" inside a line comment does not open a block comment.
- * Block comments nest, as in Postgres. Each dollar-quoted body is matched to
- * its own closing tag before anything inside it is read; a body after DO or
- * AS is code (its comments are stripped, recursively), any other is a
- * literal and is kept verbatim. (CONSENTREAD.1's algorithm, with the dollar
- * body closed first as in tests/function-execute-guard.test.js sqlCode.)
- */
-export function stripSqlComments(sql) {
-  let out = ''
-  let i = 0
-  const n = sql.length
-  while (i < n) {
-    const c = sql[i]
-    const d = sql[i + 1]
-    if (c === '-' && d === '-') {
-      while (i < n && sql[i] !== '\n') i++
-      out += ' '
-      continue
-    }
-    if (c === '/' && d === '*') {
-      let depth = 1
-      i += 2
-      while (i < n && depth) {
-        if (sql[i] === '/' && sql[i + 1] === '*') { depth++; i += 2 } else if (sql[i] === '*' && sql[i + 1] === '/') { depth--; i += 2 } else i++
-      }
-      out += ' '
-      continue
-    }
-    if (c === "'") {
-      const escapes = /(^|[^\w])[eE]$/.test(sql.slice(Math.max(0, i - 2), i))
-      let j = i + 1
-      while (j < n) {
-        if (escapes && sql[j] === '\\') { j += 2; continue }
-        if (sql[j] === "'") { if (sql[j + 1] === "'") { j += 2; continue } break }
-        j++
-      }
-      out += sql.slice(i, j + 1)
-      i = j + 1
-      continue
-    }
-    if (c === '"') {
-      const j = sql.indexOf('"', i + 1)
-      const end = j < 0 ? n : j
-      out += sql.slice(i, end + 1)
-      i = end + 1
-      continue
-    }
-    const tag = c === '$' ? sql.slice(i).match(/^\$([A-Za-z_]\w*)?\$/) : null
-    if (tag && !/[\w$]$/.test(sql.slice(0, i))) {
-      const open = tag[0]
-      const j = sql.indexOf(open, i + open.length)
-      const end = j < 0 ? n : j
-      const body = sql.slice(i + open.length, end)
-      const isCode = /\b(do|as)\s*$/i.test(out)
-      out += open + (isCode ? stripSqlComments(body) : body) + (j < 0 ? '' : open)
-      i = j < 0 ? n : j + open.length
-      continue
-    }
-    out += c
-    i++
-  }
-  return out
-}
 
 const ident = (s) => s.trim().replace(/["']/g, '').toLowerCase()
 function splitTop(list) {
@@ -255,7 +150,7 @@ const NOT_A_TABLE = /^(sequence|function|procedure|routine|schema|database|forei
 
 /** Every statement in `sql` that gives a client role a write (or rosters' withheld columns) on the two tables. */
 export function rosterWriteReopeners(sql) {
-  const code = stripSqlComments(sql)
+  const code = sqlCode(sql)
   const hits = []
   // Each part stops at ; ' or $, so a GRANT run from EXECUTE '…' or
   // EXECUTE $q$…$q$ ends at its quote.

@@ -33,7 +33,8 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs'
 import path from 'node:path'
-import { stripComments } from '../scripts/lib/strip-comments.mjs'
+import { stripComments } from './helpers/js-code.js'
+import { sqlCode } from './helpers/sql-code.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const CONSENT_CLOSED_MIGRATION = 662
@@ -98,73 +99,6 @@ function splitTop(list) {
   return out.map((s) => s.trim()).filter(Boolean)
 }
 
-/**
- * SQL with its comments blanked, strings and code kept, in ONE left-to-right
- * pass: a "--" or "/*" inside a '…' string or a "…" identifier is not a
- * comment, and a "/*" inside a line comment does not open a block comment
- * (the two-regex version swallowed the code between `-- see migrations/*.sql`
- * and a later block comment). Block comments nest, as in Postgres. A
- * dollar-quoted body after DO or AS is code (its comments are stripped); any
- * other dollar-quoted body is a literal and is kept verbatim.
- */
-export function stripSqlComments(sql) {
-  let out = ''
-  let i = 0
-  const n = sql.length
-  while (i < n) {
-    const c = sql[i]
-    const d = sql[i + 1]
-    if (c === '-' && d === '-') {
-      while (i < n && sql[i] !== '\n') i++
-      out += ' '
-      continue
-    }
-    if (c === '/' && d === '*') {
-      let depth = 1
-      i += 2
-      while (i < n && depth) {
-        if (sql[i] === '/' && sql[i + 1] === '*') { depth++; i += 2 } else if (sql[i] === '*' && sql[i + 1] === '/') { depth--; i += 2 } else i++
-      }
-      out += ' '
-      continue
-    }
-    if (c === "'") {
-      const escapes = /(^|[^\w])[eE]$/.test(sql.slice(Math.max(0, i - 2), i))
-      let j = i + 1
-      while (j < n) {
-        if (escapes && sql[j] === '\\') { j += 2; continue }
-        if (sql[j] === "'") { if (sql[j + 1] === "'") { j += 2; continue } break }
-        j++
-      }
-      out += sql.slice(i, j + 1)
-      i = j + 1
-      continue
-    }
-    if (c === '"') {
-      const j = sql.indexOf('"', i + 1)
-      const end = j < 0 ? n : j
-      out += sql.slice(i, end + 1)
-      i = end + 1
-      continue
-    }
-    const tag = c === '$' ? sql.slice(i).match(/^\$([A-Za-z_]\w*)?\$/) : null
-    if (tag && !/\w$/.test(sql.slice(0, i))) {
-      out += tag[0]
-      i += tag[0].length
-      if (!/\b(do|as)\s*$/i.test(out.slice(0, -tag[0].length))) {
-        const j = sql.indexOf(tag[0], i)
-        const end = j < 0 ? n : j + tag[0].length
-        out += sql.slice(i, end)
-        i = end
-      }
-      continue
-    }
-    out += c
-    i++
-  }
-  return out
-}
-
 // Applied history that opened these relations before 662 closed them. All five
 // are applied on prod and superseded; migrations are forward-only, so none
 // runs again. `hits` is exact: a new reopener added to one of them still fails.
@@ -181,7 +115,7 @@ const INVOKER_ON = /\bsecurity_invoker\b(?!\s*=\s*(?:off|false|0|no)\b)(?:\s*=\s
 
 /** Every statement in `sql` that would give a client role access to a consent relation again. */
 export function consentReopeners(sql) {
-  const code = stripSqlComments(sql)
+  const code = sqlCode(sql)
   const hits = []
   for (const m of code.matchAll(/\bgrant\s+([\s\S]+?)\s+on\s+([\s\S]+?)\s+to\s+([\s\S]+?)(?:;|'|$)/gi)) {
     const [stmt, , target, to] = m
@@ -368,9 +302,16 @@ describe('migrations keep the consent relations closed to clients (mig 662)', ()
     for (const sql of ok) expect(consentReopeners(sql), sql).toEqual([])
   })
 
-  it('the SQL comment stripper keeps strings and code, drops only comments', () => {
-    expect(stripSqlComments("a -- x /* y\nb /* c -- d */ e '--f' \"/*g*/\"")).toBe("a  \nb   e '--f' \"/*g*/\"")
-    expect(stripSqlComments('x /* a /* b */ c */ y')).toBe('x   y')
-    expect(stripSqlComments("E'it\\'s -- here' z")).toBe("E'it\\'s -- here' z")
+  it('the SQL comment stripper keeps strings and code, drops only comments (shared sqlCode)', () => {
+    // tests/helpers/sql-code.js blanks comments (offsets kept); squash the spaces to compare.
+    const squash = (s) => s.replace(/[ ]+/g, ' ').replace(/ *\n */g, '\n').trim()
+    expect(squash(sqlCode("a -- x /* y\nb /* c -- d */ e '--f' \"/*g*/\""))).toBe("a\nb e '--f' \"/*g*/\"")
+    expect(squash(sqlCode('x /* a /* b */ c */ y'))).toBe('x y')
+    expect(sqlCode("E'it\\'s -- here' z")).toBe("E'it\\'s -- here' z")
+    // GUARDSTRIP.1 (C74): the old one-pass stripper here read a DO body's
+    // closing $$ as a new literal's opening, so a '/*' in a later $$ literal
+    // hid a real GRANT. Each body is now paired with its own closing tag.
+    expect(sqlCode('DO $$ BEGIN PERFORM 1; END $$;\nSELECT $$ /* $$;\nGRANT UPDATE ON public.consent_log TO authenticated;\nSELECT $$ */ $$;'))
+      .toContain('GRANT UPDATE ON public.consent_log TO authenticated;')
   })
 })

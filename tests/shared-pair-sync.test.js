@@ -103,7 +103,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, existsSync } from 'node:fs'
 import { dirname, join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { stripComments } from '../scripts/lib/strip-comments.mjs'
+import { stripComments } from './helpers/js-code.js'
 import { exportBodies, collectExportNames } from '../scripts/lib/export-bodies.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
