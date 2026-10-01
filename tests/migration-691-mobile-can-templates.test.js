@@ -46,8 +46,9 @@ const KEPT_ACL = '{postgres=X/postgres,authenticated=X/postgres,service_role=X/p
 // The 15 policies, verbatim (pg_policies, 1-2 Oct 2026). Old text per key:
 const OLD = (k) => `private.auth_mobile_can(location_id, '${k}'::text)`
 const OLD_ACT = `(${OLD('tasks')} OR ${OLD('pipeline')})`
-// New text per key: PostgreSQL 17's deparse of the file's expression.
-const NEW = (k) => `(location_id = ANY (( SELECT private.auth_mobile_can_location_ids('${k}'::text) AS auth_mobile_can_location_ids)))`
+// New text per key: PostgreSQL 17's deparse of the file's expression,
+// location_id = ANY ((SELECT private.auth_mobile_can_location_ids('<k>'))::uuid[]).
+const NEW = (k) => `(location_id = ANY (( SELECT private.auth_mobile_can_location_ids('${k}'::text) AS auth_mobile_can_location_ids)::uuid[]))`
 const NEW_ACT = `(${NEW('tasks')} OR ${NEW('pipeline')})`
 const POLICY_KEYS = {
   activities: 'act', bookings: 'bookings', deals: 'pipeline', notes: 'pipeline',
@@ -341,6 +342,11 @@ describe('after 691', () => {
   })
 
   it('a second run passes and changes nothing', async () => {
+    // The earlier asUser calls leave request.jwt.claims defined as '' once
+    // their transactions roll back. Prod's auth.uid() reads '' as no user
+    // (nullif); the harness's reduced one would try ''::json, so the
+    // self-check's no-user probe gets an explicit empty claim set instead.
+    await db.query(`SELECT set_config('request.jwt.claims', '{}', false)`)
     await expect(db['exec'](MIG_691)).resolves.toBeDefined()
     expect(await reads(db, HC_A)).toEqual(only(1, ['activities', 'bookings', 'deals', 'notes']))
     expect(await reads(db, REC_A)).toEqual(only(1, ['activities', 'bookings', ...WA]))
