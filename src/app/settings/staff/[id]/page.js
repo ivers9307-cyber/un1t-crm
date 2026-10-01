@@ -3,6 +3,7 @@ import { getCurrentUser, hasRoleAtAnyLocation } from '@/lib/auth'
 import { redirect, notFound } from 'next/navigation'
 import StaffForm from '@/components/StaffForm'
 import WidgetTokensCard from '@/components/WidgetTokensCard'
+import { isActiveOrgAdmin } from '@/lib/org-admin'
 import { canEditStaffMember, mapProfileLocationToAssignment } from '@/lib/staff-access'
 import { isTombstone } from '@/lib/staff-tombstone'
 import { loadStaffFormLocations } from '@/lib/staff-form-locations'
@@ -178,6 +179,7 @@ export default async function EditStaffPage(props) {
         roleTemplates={roleTemplates}
         organizations={orgsRes?.data || []}
         orgAdminOrgIds={(orgGrantsRes?.data || []).map(g => g.organization_id)}
+        canSeeDevices={isActiveOrgAdmin(user)}
       />
       <div className="mt-8">
         <WidgetTokensCard profileId={staff.id} />

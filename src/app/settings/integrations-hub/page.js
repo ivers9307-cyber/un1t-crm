@@ -26,6 +26,7 @@ import { createServerClient } from '@/lib/supabase'
 import { assembleIntegrationsHub } from '@/lib/integrations-hub'
 import { logError } from '@/lib/log'
 import IntegrationsHub from '@/components/settings/IntegrationsHub'
+import { isActiveOrgAdmin } from '@/lib/org-admin'
 
 export const dynamic = 'force-dynamic'
 
@@ -62,7 +63,7 @@ export default async function IntegrationsHubPage() {
 
   const data = await assembleIntegrationsHub(db, locations || [])
 
-  return <IntegrationsHub data={data} isMaster={user.isMaster} />
+  return <IntegrationsHub data={data} isMaster={user.isMaster} canManageBilling={isActiveOrgAdmin(user)} />
 }
 
 function HubUnavailable() {
