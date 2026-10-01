@@ -14,6 +14,7 @@
 // attribution must never break a webhook or a booking.
 
 import { createHash } from 'crypto'
+import { websiteEventToken } from './meta-conversions-settings.js'
 
 export function buildBusinessMessagingEvent({ eventName, ctwaClid, wabaId, eventTime, contentName }) {
   const event = {
@@ -113,17 +114,36 @@ export function sha256Hex(value) {
 }
 
 /**
+ * METADATASET.1 — Meta's click id cookie value for an ad click, built from the
+ * `fbclid` the landing URL carried: `fb.1.<ms>.<fbclid>`. It is what lets
+ * Meta credit a server-side event to the ad that was clicked, and the funnel
+ * needs no pixel cookie (and so no cookie consent) to have it. Null for
+ * anything that is not a plausible fbclid.
+ */
+export function fbcFromFbclid(fbclid, nowMs = Date.now()) {
+  const v = typeof fbclid === 'string' ? fbclid.trim() : ''
+  if (!v || v.length > 500 || !/^[A-Za-z0-9_-]+$/.test(v)) return null
+  return `fb.1.${nowMs}.${v}`
+}
+
+/**
  * Build a website-channel conversion event with hashed identifiers.
  * Returns null when neither email nor phone normalizes — an event Meta
  * can't match is not worth sending.
  */
-export function buildWebsiteEvent({ eventName, eventTime, email, phone, eventSourceUrl, eventId, contentName }) {
+export function buildWebsiteEvent({ eventName, eventTime, email, phone, eventSourceUrl, eventId, contentName, fbc, clientIp, userAgent }) {
   const em = normalizeEmailForMeta(email)
   const ph = normalizePhoneForMeta(phone)
   if (!em && !ph) return null
   const user_data = {}
   if (em) user_data.em = [sha256Hex(em)]
   if (ph) user_data.ph = [sha256Hex(ph)]
+  // METADATASET.1 — the three things that tie a server event back to the ad
+  // click and the browser it came from. All optional and sent as given (Meta
+  // does not want these hashed); an event without them is still sent.
+  if (typeof fbc === 'string' && fbc) user_data.fbc = fbc
+  if (typeof clientIp === 'string' && clientIp && clientIp !== 'unknown') user_data.client_ip_address = clientIp
+  if (typeof userAgent === 'string' && userAgent) user_data.client_user_agent = userAgent.slice(0, 512)
   const event = {
     event_name: eventName,
     event_time: eventTime,
@@ -140,13 +160,13 @@ export function buildWebsiteEvent({ eventName, eventTime, email, phone, eventSou
  * Fire a website conversion event for a lead/booking. Same gates as the CTWA
  * path: no dataset_id or no number token → clean no-op. Never throws.
  */
-export async function sendWebsiteConversion(db, { locationId, eventName, email, phone, eventSourceUrl, eventId, contentName }) {
+export async function sendWebsiteConversion(db, { locationId, eventName, email, phone, eventSourceUrl, eventId, contentName, fbc, clientIp, userAgent }) {
   try {
     if (!locationId) return { sent: false, reason: 'no_location' }
     const event = buildWebsiteEvent({
       eventName,
       eventTime: Math.floor(Date.now() / 1000),
-      email, phone, eventSourceUrl, eventId, contentName,
+      email, phone, eventSourceUrl, eventId, contentName, fbc, clientIp, userAgent,
     })
     if (!event) return { sent: false, reason: 'no_identifiers' }
 
@@ -154,18 +174,26 @@ export async function sendWebsiteConversion(db, { locationId, eventName, email, 
     const datasetId = loc?.settings?.meta_ads?.dataset_id
     if (!datasetId) return { sent: false, reason: 'no_dataset' }
 
-    const { data: num } = await db.from('whatsapp_numbers')
-      .select('access_token, business_account_id')
-      .eq('location_id', locationId)
-      .eq('is_active', true)
-      .limit(1)
-      .maybeSingle()
-    if (!num?.access_token) return { sent: false, reason: 'no_token' }
+    // METADATASET.1 — the dataset's own token when the location stores one
+    // (a studio whose dataset sits in a different Meta business from any
+    // WhatsApp account, or that has no WhatsApp number at all). Otherwise
+    // the WhatsApp number token, as before.
+    let accessToken = websiteEventToken(loc?.settings, null)
+    if (!accessToken) {
+      const { data: num } = await db.from('whatsapp_numbers')
+        .select('access_token, business_account_id')
+        .eq('location_id', locationId)
+        .eq('is_active', true)
+        .limit(1)
+        .maybeSingle()
+      accessToken = websiteEventToken(null, num?.access_token)
+    }
+    if (!accessToken) return { sent: false, reason: 'no_token' }
 
     const res = await fetch(`https://graph.facebook.com/v21.0/${datasetId}/events`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ data: [event], access_token: num.access_token }),
+      body: JSON.stringify({ data: [event], access_token: accessToken }),
     })
     const json = await res.json().catch(() => ({}))
     if (!res.ok || json.error) {

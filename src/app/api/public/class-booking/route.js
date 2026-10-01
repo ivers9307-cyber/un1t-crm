@@ -42,6 +42,9 @@ const Schema = z.object({
     utm_term: z.string().max(200).optional(),
     ad_provider: z.string().max(50).optional(),
     ad_external_id: z.string().max(200).optional(),
+    // METADATASET.1 — the ad click id off the landing URL. Never stored: it
+    // only rides on the Lead event sent to Meta below.
+    fbclid: z.string().max(500).optional(),
   }).optional(),
 })
 
@@ -244,12 +247,16 @@ export async function POST(request) {
   // class-keyed event_id makes double-submits dedupe at Meta; gated on
   // settings.meta_ads.dataset_id inside the helper. Never blocks the response.
   try {
-    const { sendWebsiteConversion } = await import('@/lib/meta-capi')
+    const { sendWebsiteConversion, fbcFromFbclid } = await import('@/lib/meta-capi')
     await sendWebsiteConversion(db, {
       locationId, eventName: 'Lead', email: b.email, phone: b.phone,
       eventSourceUrl,
       eventId: `classlead-${contactId}-${b.event_id}`,
       contentName: chosen.name,
+      // METADATASET.1 — what lets Meta credit this lead to the ad click.
+      fbc: fbcFromFbclid(b.attribution?.fbclid),
+      clientIp: ip,
+      userAgent: request.headers.get('user-agent') || undefined,
     })
   } catch (e) { logWarn('classbook', 'capi lead failed', { err: e }) }
 

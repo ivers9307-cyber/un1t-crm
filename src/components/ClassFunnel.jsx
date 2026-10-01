@@ -90,10 +90,11 @@ export default function ClassFunnel(props) {
   // props). Function declarations hoist, so order is presentational only.
   function buildAttribution() {
     const p = attributionRef.current || {}
-    const hasSignal = p.meta_ad_id || p.utm_campaign || p.utm_content || p.utm_term
+    const hasSignal = p.meta_ad_id || p.utm_campaign || p.utm_content || p.utm_term || p.fbclid
     return hasSignal ? {
       utm_campaign: p.utm_campaign, utm_content: p.utm_content, utm_term: p.utm_term,
       ad_provider: 'meta', ad_external_id: p.meta_ad_id,
+      fbclid: p.fbclid,
     } : undefined
   }
 
@@ -132,6 +133,8 @@ export default function ClassFunnel(props) {
       utm_content: p.get('utm_content') || undefined,
       utm_term: p.get('utm_term') || undefined,
       meta_ad_id: p.get('meta_ad_id') || undefined,
+      // METADATASET.1 — Meta's click id, appended to every ad link.
+      fbclid: p.get('fbclid') || undefined,
     }
     // Stable per-visit id so a visitor's steps group into one funnel journey.
     let sid = null
