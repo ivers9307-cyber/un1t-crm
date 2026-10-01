@@ -63,12 +63,9 @@ const PREDICATE_ACTIVE = /\bactive\s+is\s+not\s+false\b/i
 const PREDICATE_DELETED = /\bdeleted_at\s+is\s+null\b/i
 
 // ─── policies that read a profile table inline and legitimately carry no gate
-const POLICY_ALLOW = {
-  'public.staff_allowances :: staff_allowances_select': 'reads the TARGET\'s profile_locations; caller authority is private.auth_is_manager_at() (gated, mig 626). Own-row branch = subject.',
-  'public.staff_allowances :: staff_allowances_ins': 'target-scoped; caller authority is private.auth_is_manager_at() (gated).',
-  'public.staff_allowances :: staff_allowances_upd': 'target-scoped; caller authority is private.auth_is_manager_at() (gated).',
-  'public.staff_allowances :: staff_allowances_del': 'target-scoped; caller authority is private.auth_is_manager_at() (gated).',
-}
+// (The four staff_allowances policies that lived here were dropped by mig 692
+// MEMBERWRITESWEEP.2: staff_allowances is service-role only.)
+const POLICY_ALLOW = {}
 
 // ─── every function that decides authority from a profile, classified ───────
 // predicate  = its own body carries `active IS NOT FALSE` + `deleted_at IS NULL`
@@ -268,8 +265,10 @@ describe('RLSACTIVE.1 — inline policies that read a profile table carry the ac
     // car_bca_submission_events_read_at_location (gated; dropped by mig 674
     // CARSCLIENTWRITE.1, both tables are service-role only),
     // less the three allowlisted "Owners can … branding" storage policies
-    // (dropped by mig 675 BRANDINGBUCKET.1, no client writes the bucket).
-    expect(inline.length).toBeGreaterThanOrEqual(48)
+    // (dropped by mig 675 BRANDINGBUCKET.1, no client writes the bucket),
+    // less the four allowlisted staff_allowances policies (dropped by mig 692
+    // MEMBERWRITESWEEP.2, staff_allowances is service-role only).
+    expect(inline.length).toBeGreaterThanOrEqual(44)
     expect(inline.filter((p) => policyGated(p.body)).length).toBeGreaterThanOrEqual(44)
     expect(inline.map((p) => `${p.table} :: ${p.name}`)).toContain('public.invoices_queue :: inbound_invoices_read')
   })
