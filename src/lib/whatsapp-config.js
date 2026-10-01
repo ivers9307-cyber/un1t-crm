@@ -130,37 +130,63 @@ export async function getWhatsAppConfig(locationId) {
  * @param {{ template?: boolean }} [opts]
  */
 export async function getConversationReplyConfig(locationId, conversationId, { template = false } = {}) {
-  if (!conversationId || !locationId) return getWhatsAppConfig(locationId)
-  const db = createServerClient()
-  let row = null
+  const thread = await getConversationNumberConfig(locationId, conversationId)
+  if (!thread) return getWhatsAppConfig(locationId)
+  if (!template) return thread
+  return pickReplyConfig(thread, await getWhatsAppConfig(locationId), { template: true })
+}
+
+/**
+ * WAREPLYNUMBER.1 — the number recorded on the thread
+ * (whatsapp_conversations.whatsapp_number_id) while it is an ACTIVE row AT
+ * this location, as a config; null when none is recorded, it is inactive,
+ * gone or another studio's. Never throws: a failed read (the column missing
+ * before mig 696 included) is null, logged, so the caller replies from the
+ * default as it did before.
+ *
+ * @param {string|null|undefined} locationId
+ * @param {string|null|undefined} conversationId
+ * @returns {Promise<object|null>}
+ */
+export async function getConversationNumberConfig(locationId, conversationId) {
+  if (!conversationId || !locationId) return null
   try {
+    const db = createServerClient()
     const { data: conv, error: convErr } = await db.from('whatsapp_conversations')
       .select('whatsapp_number_id')
       .eq('id', conversationId)
       .eq('location_id', locationId)
       .maybeSingle()
     if (convErr) throw convErr
-    if (conv?.whatsapp_number_id) {
-      const { data: num, error: numErr } = await db.from('whatsapp_numbers')
-        .select('*')
-        .eq('id', conv.whatsapp_number_id)
-        .eq('location_id', locationId)
-        .eq('is_active', true)
-        .maybeSingle()
-      if (numErr) throw numErr
-      row = num || null
-    }
+    if (!conv?.whatsapp_number_id) return null
+    const { data: num, error: numErr } = await db.from('whatsapp_numbers')
+      .select('*')
+      .eq('id', conv.whatsapp_number_id)
+      .eq('location_id', locationId)
+      .eq('is_active', true)
+      .maybeSingle()
+    if (numErr) throw numErr
+    return num ? rowToConfig(num) : null
   } catch (e) {
     logWarn('wa-config', 'reply number unreadable; replying from the default number', { conversationId, err: e?.message || String(e) })
-    row = null
+    return null
   }
-  if (!row) return getWhatsAppConfig(locationId)
-  const own = rowToConfig(row)
-  if (!template) return own
-  const fallback = await getWhatsAppConfig(locationId)
-  if (fallback.id === own.id) return fallback
-  if (own.businessAccountId && own.businessAccountId === fallback.businessAccountId) return own
-  return fallback
+}
+
+/**
+ * WAREPLYNUMBER.1 — pure: the config a reply goes from, given the thread's
+ * own number (or null) and the location default. Free text/media/interactive
+ * → the thread number. A TEMPLATE → the thread number only when it shares the
+ * default's WABA (templates are synced per location from the default's
+ * account, and Meta sends only a number's own-WABA templates); else the
+ * default.
+ */
+export function pickReplyConfig(threadConfig, defaultConfig, { template = false } = {}) {
+  if (!threadConfig) return defaultConfig
+  if (!template) return threadConfig
+  if (defaultConfig && threadConfig.id === defaultConfig.id) return defaultConfig
+  if (threadConfig.businessAccountId && threadConfig.businessAccountId === defaultConfig?.businessAccountId) return threadConfig
+  return defaultConfig
 }
 
 /**

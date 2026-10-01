@@ -46,7 +46,7 @@ vi.mock('./supabase', () => ({
 vi.mock('./log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 
 const wa = await import('./whatsapp.js')
-const { getConversationReplyConfig, classifyInboundOwner } = await import('./whatsapp-config.js')
+const { getConversationReplyConfig, getConversationNumberConfig, classifyInboundOwner } = await import('./whatsapp-config.js')
 const { isWhatsAppNumberMissing } = await import('./whatsapp-number-missing.js')
 const { logWarn } = await import('./log')
 
@@ -181,5 +181,24 @@ describe('classifyInboundOwner names the receiving number', () => {
   it('returns the owning row id with the location', () => {
     expect(classifyInboundOwner({ source: 'db', id: 'n-second', locationId: LOC })).toEqual({ action: 'location', locationId: LOC, numberId: 'n-second' })
     expect(classifyInboundOwner(null)).toEqual({ action: 'drop' })
+  })
+})
+
+// The contact composer reads the thread number on its own (it already holds
+// the checked default), so this half never throws and never resolves by
+// location.
+describe('getConversationNumberConfig', () => {
+  it('the thread number while active at this studio; null otherwise; null on a failed read', async () => {
+    state.conversations = [conv('n-second')]
+    expect((await getConversationNumberConfig(LOC, CONV))?.id).toBe('n-second')
+    expect(await getConversationNumberConfig(LOC2, CONV)).toBeNull()
+    state.numbers = [DEFAULT, num('n-second', { is_active: false })]
+    expect(await getConversationNumberConfig(LOC, CONV)).toBeNull()
+    state.conversations = [conv(null)]
+    expect(await getConversationNumberConfig(LOC, CONV)).toBeNull()
+    state.conversations = [conv('n-second')]
+    state.faults.whatsapp_numbers = { message: 'boom' }
+    await expect(getConversationNumberConfig(LOC, CONV)).resolves.toBeNull()
+    expect(logWarn).toHaveBeenCalled()
   })
 })

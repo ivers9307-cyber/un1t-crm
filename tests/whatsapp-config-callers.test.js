@@ -61,7 +61,7 @@ const RESOLVING = {
   ],
   'src/lib/whatsapp-config': [
     'getWhatsAppConfig', 'getLocationWhatsAppNumberConfig', 'getWhatsAppConfigById', 'resolveWhatsAppNumberByPhoneNumberId',
-    'getConversationReplyConfig',
+    'getConversationReplyConfig', 'getConversationNumberConfig',
   ],
   'src/lib/whatsapp-own-number': ['ownNumberOrRefusal'],
 }
@@ -126,9 +126,9 @@ const CALLERS = {
     why: 'header upload with the location’s own app + token (it always used the env app). Soft contract kept: URL returned, handle null, meta_error says why. route.own-number.test.js.',
   },
   'src/app/api/contacts/[id]/whatsapp/route.js': {
-    calls: { sendTextMessage: 1, sendTemplateMessage: 1, ownNumberOrRefusal: 1 },
+    calls: { sendTextMessage: 1, sendTemplateMessage: 1, ownNumberOrRefusal: 1, getConversationNumberConfig: 1 },
     decision: 'refuse-409',
-    why: 'contact composer: own number checked BEFORE a thread is opened (no empty thread); the send carries that checked { config } (one lookup, no check-then-send gap). route.test.js.',
+    why: 'contact composer: own number checked BEFORE a thread is opened (no empty thread); the send carries that checked { config } (one lookup, no check-then-send gap), or the thread\'s own number while it is active here (WAREPLYNUMBER.1: getConversationNumberConfig never throws, null → the checked default; a template only within the default\'s WABA). route.test.js.',
   },
   'src/app/api/contacts/[id]/cancellation-form/route.js': {
     calls: { sendCtaUrlMessage: 1, sendTemplateMessage: 1, ownNumberOrRefusal: 1 },
