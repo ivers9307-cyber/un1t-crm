@@ -66,7 +66,9 @@ export default function BookingStatusToggle({ bookingId, currentStatus, canEdit 
     }
   }
 
-  if (!canEdit) {
+  // A cancelled booking is a label too: cancel is one-way (the route answers
+  // 409), so a menu of writes that can only fail is not offered.
+  if (!canEdit || status === 'cancelled') {
     return (
       <span className={`text-xs px-2.5 py-1 rounded-full ${statusColors[status] || statusColors.confirmed}`}>
         {status.replace('_', ' ')}

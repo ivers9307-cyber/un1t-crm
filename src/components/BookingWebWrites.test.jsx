@@ -66,6 +66,15 @@ describe('BookingStatusToggle (C134)', () => {
     expect(screen.queryByRole('button')).toBeNull()
     expect(screen.getByText('confirmed')).toBeTruthy()
   })
+
+  // Cancel is one-way (the route answers 409), so a cancelled booking offers
+  // no menu of writes that can only fail.
+  it('a cancelled booking is a plain label: no menu, no write', () => {
+    render(<BookingStatusToggle bookingId="bk-1" currentStatus="cancelled" />)
+    expect(screen.queryByRole('button')).toBeNull()
+    expect(screen.getByText('cancelled')).toBeTruthy()
+    expect(calls).toEqual([])
+  })
 })
 
 describe('BookingSkipReminderToggle (C134)', () => {
