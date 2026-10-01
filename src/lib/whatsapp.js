@@ -1177,6 +1177,17 @@ export async function sendBroadcast(broadcastId, { force = false, maxRecipients 
     throw new Error(`Broadcast is in '${broadcast.status}' state — only draft / sending can be sent`)
   }
 
+  // C120 GATES-3 (e) — a DRIP is STARTED here, never blasted: the operator's
+  // Send (and the composer's send-now drip, created as a draft since GATES-3)
+  // runs the entry checks below, flips draft→sending, and returns; the
+  // run-whatsapp-broadcasts cron paces it inside its window from there
+  // (sendDripChunk). One already 'sending' belongs to the cron: return without
+  // touching it (this used to blast the whole remaining audience at once).
+  const isDrip = broadcast.delivery_mode === 'drip'
+  if (isDrip && broadcast.status === 'sending') {
+    return { status: 'sending', mode: 'drip', sent: 0, failed: 0, total: 0, skipped: 'already-sending' }
+  }
+
   // WA-MULTI.1 — resolve the location's WA config ONCE upfront and
   // reuse for every recipient. Cheaper than re-resolving per-send;
   // also ensures the whole broadcast goes from one consistent
@@ -1218,15 +1229,21 @@ export async function sendBroadcast(broadcastId, { force = false, maxRecipients 
   // claim below de-dupes that path), so fall through. Clearing paused_at here
   // re-opens a breaker-aborted broadcast the operator re-sends (WA-QUALITY.3).
   if (broadcast.status !== 'sending') {
-    const { data: claimed } = await db.from('whatsapp_broadcasts')
+    const { data: claimed, error: claimErr } = await db.from('whatsapp_broadcasts')
       .update({ status: 'sending', paused_at: null })
       .eq('id', broadcastId)
       .eq('status', broadcast.status)
       .select('id')
+    // GATES-3 (e) — a failed flip is not "someone else claimed it": throw
+    // (the row is still in its entry state, like every refusal above).
+    if (claimErr) throw new Error(`Could not start the broadcast: ${claimErr.message}`)
     if (!claimed?.length) {
       return { sent: 0, failed: 0, total: 0, skipped: 'already-sending' }
     }
   }
+
+  // GATES-3 (e) — the drip is started; the cron sends it.
+  if (isDrip) return { status: 'sending', mode: 'drip', sent: 0, failed: 0, total: 0 }
 
   // Get audience — AUDIT P1-2: route the blast through the paginated
   // fetchAllWhatsAppAudience (the drip path already does) instead of awaiting

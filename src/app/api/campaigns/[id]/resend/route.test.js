@@ -10,6 +10,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 let campaignRow = null
 let childRow = null
 let updates = []
+// GATES-3 (d) — injectable failures for the three reads/writes.
+let campaignErr = null
+let childErr = null
+let updateErr = null
 
 const fakeDb = {
   from: () => {
@@ -19,11 +23,12 @@ const fakeDb = {
     b.eq = (col, val) => { state.filters[col] = val; return b }
     b.update = (patch) => { state.op = 'update'; state.patch = patch; return b }
     b.single = () => Promise.resolve(
-      campaignRow ? { data: campaignRow, error: null } : { data: null, error: { message: 'not found' } })
-    b.maybeSingle = () => Promise.resolve({ data: childRow, error: null })
+      campaignErr ? { data: null, error: campaignErr }
+        : campaignRow ? { data: campaignRow, error: null } : { data: null, error: { code: 'PGRST116', message: 'not found' } })
+    b.maybeSingle = () => Promise.resolve(childErr ? { data: null, error: childErr } : { data: childRow, error: null })
     b.then = (resolve, reject) => {
       if (state.op === 'update') updates.push({ patch: state.patch, filters: state.filters })
-      return Promise.resolve({ data: null, error: null }).then(resolve, reject)
+      return Promise.resolve({ data: null, error: state.op === 'update' ? updateErr : null }).then(resolve, reject)
     }
     return b
   },
@@ -53,6 +58,9 @@ beforeEach(() => {
   campaignRow = { id: 'camp-1', location_id: 'loc-1', resend_enabled: true }
   childRow = null
   updates = []
+  campaignErr = null
+  childErr = null
+  updateErr = null
 })
 
 describe('DELETE /api/campaigns/[id]/resend', () => {
@@ -90,5 +98,29 @@ describe('DELETE /api/campaigns/[id]/resend', () => {
     campaignRow = { ...campaignRow, resend_enabled: false }
     const res = await call()
     expect(res.status).toBe(200)
+  })
+
+  // GATES-3 (d) — every error is read (the discarded-error class).
+  it('a failed flag write is a 500, never a success', async () => {
+    updateErr = { code: '57014', message: 'canceling statement due to statement timeout' }
+    const res = await call()
+    expect(res.status).toBe(500)
+    expect((await res.json()).success).toBe(false)
+  })
+
+  it('a failed child read is a 500 and the flag is left alone (never read as "no child")', async () => {
+    childErr = { code: '57014', message: 'timeout' }
+    const res = await call()
+    expect(res.status).toBe(500)
+    expect(updates).toHaveLength(0)
+  })
+
+  it('a failed campaign read is a 500, a missing one a 404', async () => {
+    campaignErr = { code: '57014', message: 'timeout' }
+    expect((await call()).status).toBe(500)
+    campaignErr = null
+    campaignRow = null
+    expect((await call()).status).toBe(404)
+    expect(updates).toHaveLength(0)
   })
 })

@@ -69,7 +69,8 @@ describe('contractDetailActions (/contracts/[id]\'s buttons, each its route\'s r
   })
   it('an owner of ANOTHER org gets none, whatever the active role', () => {
     const ownerXActive = { ...managerXOwnerY, role: 'owner', rolesByLocation: { 'loc-x': 'owner', 'loc-y': 'manager' } }
-    expect(contractDetailActions(ownerXActive, c('issued'))).toEqual({ canResend: false, canRevoke: false, canManageDraft: false, canDownloadPdf: false })
+    expect(contractDetailActions(ownerXActive, c('issued'))).toEqual({ canResend: false, canRevoke: false, canManageDraft: false, canDownloadPdf: false, canReissue: false })
+    expect(contractDetailActions(ownerXActive, c('revoked')).canReissue).toBe(false)
   })
   it('status still decides which action applies', () => {
     expect(contractDetailActions(master, c('signed'))).toMatchObject({ canResend: false, canRevoke: false, canManageDraft: false })
@@ -78,5 +79,25 @@ describe('contractDetailActions (/contracts/[id]\'s buttons, each its route\'s r
     const signed = c('signed', { signed_pdf_path: 'contracts/c1/signed.pdf' })
     expect(contractDetailActions(managerX, { ...signed, organization_id: ORG_X }).canDownloadPdf).toBe(false)
     expect(contractDetailActions(adminX, { ...signed, organization_id: ORG_X }).canDownloadPdf).toBe(true)
+  })
+})
+
+// C120 GATES-3 (c) — Re-issue opens /contracts/issue?from=<id>, whose prefill
+// GET /api/contracts/[id] and POST /api/contracts decide at the contract's
+// (template's) org: an owner/admin of it, or a master. Not the active role.
+describe('contractDetailActions.canReissue (GATES-3)', () => {
+  const c = (status) => ({ id: 'c1', profile_id: 'p1', organization_id: ORG_Y, status, signed_pdf_path: null })
+  it('a revoked or declined contract, for an owner of its org whose ACTIVE role is manager (main: none)', () => {
+    expect(contractDetailActions(managerXOwnerY, c('revoked')).canReissue).toBe(true)
+    expect(contractDetailActions(managerXOwnerY, c('declined')).canReissue).toBe(true)
+    expect(contractDetailActions(master, c('declined')).canReissue).toBe(true)
+  })
+  it('never for another status', () => {
+    for (const s of ['draft', 'issued', 'viewed', 'signed']) expect(contractDetailActions(master, c(s)).canReissue).toBe(false)
+  })
+  it('never for a caller who does not manage the contract\'s org, even an owner at the active studio', () => {
+    const ownerXActive = { ...managerXOwnerY, role: 'owner', rolesByLocation: { 'loc-x': 'owner', 'loc-y': 'manager' } }
+    expect(contractDetailActions(ownerXActive, c('revoked')).canReissue).toBe(false)
+    expect(contractDetailActions(managerX, c('revoked')).canReissue).toBe(false)
   })
 })

@@ -2,8 +2,8 @@ import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { deleteTemplate as deleteMetaTemplate } from '@/lib/whatsapp'
-import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation } from '@/lib/auth'
-import { MANAGER_ROLES } from '@/lib/schemas'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { canManageWaTemplatesAt } from '@/lib/wa-template-access'
 import { validateBody } from '@/lib/validate'
 import { ownNumberOrRefusal } from '@/lib/whatsapp-own-number'
 import { META_OWNED_FIELDS, lockedFieldsIn } from '@/lib/whatsapp-template-fields'
@@ -88,9 +88,10 @@ export async function PUT(request, props) {
   // what a send uses (the header URL is the media customers receive), so
   // they take the resubmit rule: MANAGER_ROLES AT the template's location.
   // display_group alone is the picker grouping (never sent to Meta) that the
-  // templates list saves inline for every member.
+  // templates list saves inline for every member. GATES-3 (b): the content
+  // fields also need `whatsapp` at the template's location.
   const groupOnly = Object.keys(updates).every((k) => k === 'display_group')
-  if (!groupOnly && !hasRoleAtLocation(user, loc, MANAGER_ROLES)) {
+  if (!groupOnly && !canManageWaTemplatesAt(user, loc)) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
   // WATPLPUT.1 — once Meta has the template, its name, category and content
@@ -117,7 +118,8 @@ export async function PUT(request, props) {
 }
 
 // DELETE /api/whatsapp/templates/[id] — deletes AT META by name, then the row.
-// MANAGER_ROLES at the template's location, the resubmit rule (WATPLROLE.1).
+// MANAGER_ROLES and `whatsapp` at the template's location, the resubmit rule
+// (WATPLROLE.1, GATES-3).
 export async function DELETE(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
@@ -137,7 +139,8 @@ export async function DELETE(request, props) {
   // WATPLROLE.1 — membership alone let any staff member delete a template at
   // Meta (every automation still sending it then fails). Same rule as
   // resubmit: MANAGER_ROLES AT the template's location, before Meta.
-  if (!hasRoleAtLocation(user, template.location_id, MANAGER_ROLES)) {
+  // GATES-3 (b) — and `whatsapp` there.
+  if (!canManageWaTemplatesAt(user, template.location_id)) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 

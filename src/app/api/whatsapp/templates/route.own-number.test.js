@@ -17,6 +17,9 @@ vi.mock('@/lib/auth', () => ({
   // these pin the NUMBER, so the caller passes it.
   hasRoleAtLocation: vi.fn(() => true),
 }))
+// GATES-3 (b) — the gate (role AND `whatsapp` at the template's studio) has its
+// own tests (route.role.test.js, tests/role-sweep/gates3-routes.test.js).
+vi.mock('@/lib/wa-template-access', () => ({ canManageWaTemplatesAt: vi.fn(() => true) }))
 vi.mock('@/lib/whatsapp', () => ({ createTemplate: vi.fn(), getTemplates: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/whatsapp-config', () => ({ getLocationWhatsAppNumberConfig: vi.fn() }))

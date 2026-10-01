@@ -153,6 +153,14 @@ describe('/communications/templates/whatsapp/[id] — canManage at the template\
     ['a master: can manage', MASTER, true],
     ['staff there: cannot', person({ [LOC_B]: 'staff' }, LOC_B), false],
     ['a manager at the active studio who is staff at the template\'s: cannot', person({ [LOC_A]: 'manager', [LOC_B]: 'staff' }, LOC_A), false],
+    // GATES-3 (b) — the routes also ask `whatsapp` at the template's studio.
+    ['a manager there with WhatsApp switched off for them there: cannot', {
+      ...person({ [LOC_A]: 'manager', [LOC_B]: 'manager' }, LOC_A),
+      assignmentsByLocation: {
+        [LOC_A]: { role: 'manager', permissions: {} },
+        [LOC_B]: { role: 'manager', permissions: { whatsapp: false } },
+      },
+    }, false],
   ])('%s', async (_label, caller, expected) => {
     getCurrentUser.mockResolvedValue(caller)
     createServerClient.mockReturnValue(mockDb({ template: { id: 'wa-tpl-1', location_id: LOC_B } }))

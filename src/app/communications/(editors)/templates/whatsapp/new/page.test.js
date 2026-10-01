@@ -40,6 +40,11 @@ describe('/communications/templates/whatsapp/new (WATPLROLE.1)', () => {
     ['staff at the active studio', person({ [LOC_B]: 'staff' }, LOC_B)],
     ['reception at the active studio', person({ [LOC_B]: 'reception' }, LOC_B)],
     ['a manager elsewhere who is staff at the active studio', person({ [LOC_A]: 'manager', [LOC_B]: 'staff' }, LOC_B)],
+    // GATES-3 (b) — the route also asks `whatsapp` at the studio.
+    ['a manager with WhatsApp switched off for them at the active studio', {
+      ...person({ [LOC_B]: 'manager' }, LOC_B),
+      assignmentsByLocation: { [LOC_B]: { role: 'manager', permissions: { whatsapp: false } } },
+    }],
   ])('%s: sent back to the list', async (_label, caller) => {
     getCurrentUser.mockResolvedValue(caller)
     await expect(NewWATemplatePage()).rejects.toThrow(BACK)

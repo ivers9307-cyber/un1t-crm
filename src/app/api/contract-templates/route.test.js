@@ -114,7 +114,10 @@ describe('GET /api/contract-templates — list scoping', () => {
     expect(calls.in).toContainEqual(['organization_id', [ORG_A]])
   })
 
-  it('owner of NO org gets an empty result set (no unscoped query)', async () => {
+  // GATES-3 (c) — the gate is now canManageContractsSomewhere (the org set
+  // itself), so a caller who owns no org is refused before any query instead
+  // of being answered an empty list; still never an unscoped query.
+  it('owner of NO org is refused before any query (no unscoped query)', async () => {
     getCurrentUser.mockResolvedValue({
       id: 'mgr-1', isMaster: false, role: 'owner',
       // owner role string but no owner assignment → owns no org
@@ -126,8 +129,8 @@ describe('GET /api/contract-templates — list scoping', () => {
 
     const res = await GET()
     const body = await res.json()
-    expect(res.status).toBe(200)
-    expect(body.data).toEqual([])
+    expect(res.status).toBe(403)
+    expect(body.data).toBeUndefined()
     // Never ran a DB query — short-circuited before createServerClient use.
     expect(calls.in).toHaveLength(0)
   })

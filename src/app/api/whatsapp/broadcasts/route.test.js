@@ -5,7 +5,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 let inserted = []
 const fakeDb = {
-  from: () => ({
+  // GATES-3 (a) — the create reads the template first (same-studio check).
+  from: (table) => table === 'whatsapp_templates' ? ({
+    select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { id: 't', location_id: 'loc-1' }, error: null }) }) }),
+  }) : ({
     insert: (row) => {
       inserted.push(row)
       return { select: () => ({ single: () => Promise.resolve({ data: { id: 'wa-new', ...row }, error: null }) }) }
@@ -18,6 +21,10 @@ vi.mock('@/lib/auth', () => ({
   getCurrentUser: vi.fn(async () => ({ id: 'u1', activeLocation: { id: 'loc-1' } })),
   assertLocationAccess: vi.fn(() => null),
   getUserLocationIds: vi.fn(() => ['loc-1']),
+}))
+vi.mock('@/lib/permissions', () => ({
+  hasPermissionAtAnyLocation: () => true,
+  hasPermissionForLocation: () => true,
 }))
 vi.mock('@/lib/validate', () => ({
   validateBody: vi.fn(async (req) => ({ ok: true, data: await req.json() })),
@@ -68,5 +75,18 @@ describe('whatsapp broadcasts POST — audience filter validated at save time (B
     const json = await res.json()
     expect(json.success).toBe(true)
     expect(inserted).toHaveLength(1)
+  })
+
+  // C120 GATES-3 (e) — a send-now drip is a draft; /send starts it.
+  it('creates an unscheduled drip as a draft, never straight into sending', async () => {
+    const res = await post({ ...base, audience_filter: { logic: 'and', filters: [] }, delivery_mode: 'drip' })
+    expect((await res.json()).success).toBe(true)
+    expect(inserted[0]).toMatchObject({ status: 'draft', delivery_mode: 'drip', daily_cap: 500 })
+  })
+
+  it('a scheduled drip is still created as scheduled', async () => {
+    const at = new Date(Date.now() + 3600e3).toISOString()
+    await post({ ...base, audience_filter: { logic: 'and', filters: [] }, delivery_mode: 'drip', status: 'scheduled', scheduled_at: at })
+    expect(inserted[0]).toMatchObject({ status: 'scheduled', scheduled_at: at })
   })
 })

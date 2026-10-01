@@ -6,9 +6,9 @@ import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { editTemplate } from '@/lib/whatsapp'
-import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { canManageWaTemplatesAt } from '@/lib/wa-template-access'
 import { validateBody } from '@/lib/validate'
-import { MANAGER_ROLES } from '@/lib/schemas'
 import { componentsButtonsError } from '@/lib/whatsapp-template-buttons'
 import { ownNumberOrRefusal } from '@/lib/whatsapp-own-number'
 import { templateHeaderMediaError } from '@/lib/template-media'
@@ -48,7 +48,8 @@ export async function POST(request, props) {
 
   const guard = assertLocationAccessOr404(user, tmpl.location_id)
   if (guard) return guard
-  if (!hasRoleAtLocation(user, tmpl.location_id, MANAGER_ROLES)) {
+  // GATES-3 (b) — MANAGER_ROLES AND `whatsapp` at the template's studio.
+  if (!canManageWaTemplatesAt(user, tmpl.location_id)) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
   if (!['REJECTED', 'PAUSED'].includes(tmpl.status)) {
