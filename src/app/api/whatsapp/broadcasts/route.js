@@ -118,7 +118,11 @@ export async function POST(request) {
   // WA-SCHEDULE — 'scheduled' requires a scheduled_at; otherwise it'd sit
   // invisible to the cron (which picks up status='scheduled' AND
   // scheduled_at <= now). A scheduled drip starts (status→'sending') when the
-  // cron promotes it; an unscheduled drip starts immediately as before.
+  // cron promotes it.
+  // C120 GATES-3 (e) — an UNSCHEDULED drip is a draft too. It used to be
+  // created straight into 'sending', which the cron then sent with none of
+  // /send's checks; the composer now calls /send, whose sendBroadcast runs
+  // them and starts the drip (draft→sending) without sending anything itself.
   const isScheduled = body.status === 'scheduled' && !!body.scheduled_at
   const { data, error } = await db.from('whatsapp_broadcasts').insert({
     name: body.name || 'Untitled Broadcast',
@@ -126,9 +130,9 @@ export async function POST(request) {
     variable_mapping: body.variable_mapping || {},
     header_media_url: body.header_media_url || null,
     audience_filter: body.audience_filter || { filters: [], logic: 'and' },
-    // A drip starts immediately — the run-whatsapp-broadcasts cron drives it during
-    // the send window. A blast stays 'draft' until the operator fires /send.
-    status: isScheduled ? 'scheduled' : isDrip ? 'sending' : 'draft',
+    // A blast or a drip stays 'draft' until /send starts it (GATES-3 e); the
+    // run-whatsapp-broadcasts cron then drives a drip during its window.
+    status: isScheduled ? 'scheduled' : 'draft',
     scheduled_at: body.scheduled_at || null,
     delivery_mode: body.delivery_mode || 'blast',
     handle_replies_manually: body.handle_replies_manually === true,

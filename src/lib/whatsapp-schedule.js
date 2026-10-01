@@ -19,9 +19,10 @@ export const SCHEDULED_BLAST_MAX_PER_TICK = 500
 // How the cron promotes a due scheduled broadcast, or null when the row is
 // not promotable (already claimed by a concurrent tick, cancelled, …).
 //
-//  - drip  → flip scheduled→sending: that is exactly the state a freshly
-//    created drip starts in, so the existing drip machinery (window gate,
-//    daily cap, tier budget, auto-pause) takes over untouched.
+//  - drip  → flip scheduled→sending: the state /send starts a drip in
+//    (GATES-3 e), so the existing drip machinery (window gate, daily cap,
+//    tier budget, auto-pause, the template and number checks each tick)
+//    takes over untouched.
 //  - blast → flip scheduled→draft: 'draft' is the ONE entry state the blast
 //    engine owns end-to-end — sendBroadcast performs its own draft→sending
 //    CAS, and every refusal path lands back there (quality preflight throws

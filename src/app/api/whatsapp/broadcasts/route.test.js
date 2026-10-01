@@ -76,4 +76,17 @@ describe('whatsapp broadcasts POST — audience filter validated at save time (B
     expect(json.success).toBe(true)
     expect(inserted).toHaveLength(1)
   })
+
+  // C120 GATES-3 (e) — a send-now drip is a draft; /send starts it.
+  it('creates an unscheduled drip as a draft, never straight into sending', async () => {
+    const res = await post({ ...base, audience_filter: { logic: 'and', filters: [] }, delivery_mode: 'drip' })
+    expect((await res.json()).success).toBe(true)
+    expect(inserted[0]).toMatchObject({ status: 'draft', delivery_mode: 'drip', daily_cap: 500 })
+  })
+
+  it('a scheduled drip is still created as scheduled', async () => {
+    const at = new Date(Date.now() + 3600e3).toISOString()
+    await post({ ...base, audience_filter: { logic: 'and', filters: [] }, delivery_mode: 'drip', status: 'scheduled', scheduled_at: at })
+    expect(inserted[0]).toMatchObject({ status: 'scheduled', scheduled_at: at })
+  })
 })
