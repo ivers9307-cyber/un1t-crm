@@ -121,6 +121,13 @@ export function studioContactNumbers(counts, headlineStatuses) {
   }
 }
 
+// What the Studio dashboard's WhatsApp unread card shows. null = the read
+// failed (shared fetchStudioDashboardData): a dash and no tap, never "0".
+export function studioWhatsappUnread(total) {
+  if (total == null) return { value: '—', sublabel: "Couldn't load", accent: 'text-un1t-muted', pressable: false }
+  return { value: total, sublabel: 'across the inbox', accent: total > 0 ? 'text-un1t-text' : 'text-un1t-muted', pressable: total > 0 }
+}
+
 export async function fetchStudioDashboard(locationId) {
   const [base, contactCounts, pendingTimeOff, pendingSwaps, rosterRunway] = await Promise.all([
     fetchStudioDashboardData(supabase, locationId),

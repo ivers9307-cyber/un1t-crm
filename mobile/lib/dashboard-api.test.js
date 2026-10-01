@@ -18,7 +18,7 @@ vi.mock('shared/dashboard-data', () => ({
 
 const { api } = await import('./api')
 const shared = await import('shared/dashboard-data')
-const { fetchStudioDashboard, fetchRosterRunway, swapRowTitle, fetchStudioContactCountsFromRoute, studioContactNumbers } = await import('./dashboard-api')
+const { fetchStudioDashboard, fetchRosterRunway, swapRowTitle, fetchStudioContactCountsFromRoute, studioContactNumbers, studioWhatsappUnread } = await import('./dashboard-api')
 
 const LOC = 'a0000000-0000-0000-0000-000000000001'
 // CONTACTREADSCOPE.1a — the shared fetcher no longer returns the contact
@@ -265,6 +265,15 @@ describe('CONTACTREADSCOPE.1a — contact numbers come from the route', () => {
       headline: [{ key: 'new_lead', count: 3 }, { key: 'first_class', count: 0 },
         { key: 'trial_done', count: 0 }, { key: 'converted', count: 1 }],
     })
+  })
+
+  // REVIEWNITS.1 (D5): a failed unread read arrives as null and shows a dash,
+  // not "0 across the inbox".
+  it('studioWhatsappUnread: a dash and no tap for null; the count otherwise', () => {
+    expect(studioWhatsappUnread(null)).toEqual({ value: '—', sublabel: "Couldn't load", accent: 'text-un1t-muted', pressable: false })
+    expect(studioWhatsappUnread(undefined).value).toBe('—')
+    expect(studioWhatsappUnread(0)).toEqual({ value: 0, sublabel: 'across the inbox', accent: 'text-un1t-muted', pressable: false })
+    expect(studioWhatsappUnread(4)).toEqual({ value: 4, sublabel: 'across the inbox', accent: 'text-un1t-text', pressable: true })
   })
 
   it('a real zero stays a zero (a studio with no contacts is not a failure)', () => {
