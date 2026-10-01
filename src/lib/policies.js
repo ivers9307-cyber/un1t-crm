@@ -11,9 +11,11 @@
 //   - listVersions(policyId)         for the admin version list
 //   - publishVersion(...)            admin publish flow
 //   - sectionDwellAggregate(versionId)  admin "hot sections" report
-//   - listVersionViewers(versionId)   admin per-version viewer list
+//   - listVersionViewers(versionId, user)  admin per-version viewer list
+//                                    (the caller's organisation only, C115)
 
 import { createServerClient } from '@/lib/supabase'
+import { loadFleetScope, inFleetScope } from '@/lib/staff-fleet-scope'
 
 /**
  * Returns all active policies with their current version metadata
@@ -184,25 +186,52 @@ export async function listVersions(policyId) {
  * who's viewed at least once, with their session count, total time
  * across sessions, and most-recent view timestamp. Plus the list of
  * staff who haven't viewed.
+ *
+ * C115 POLICYVIEWERS.1 — scoped to the caller's ACTIVE organisation's
+ * people (members of its studios plus its org admins, the same set
+ * loadFleetScope gives the staff device fleet). Policies are estate-wide
+ * documents, so every member of that organisation could see this version;
+ * nobody outside it is listed. Before, the "haven't opened" list was every
+ * active profile in the estate, so an owner at one gym read the name and
+ * email of every other tenant's staff. A master keeps the estate (the
+ * platform view). No caller, or no active organisation, lists nobody. Every
+ * read's error throws (the page's error boundary), never an unscoped or
+ * empty list passed off as the answer.
+ *
+ * @param {string} versionId
+ * @param {object|null} user  getCurrentUser() result
  */
-export async function listVersionViewers(versionId) {
+export async function listVersionViewers(versionId, user) {
+  const empty = { viewers: [], outstanding: [], all_views: [] }
+  if (!user) return empty
   const db = createServerClient()
-  const [viewsRes, staffRes] = await Promise.all([
-    db.from('policy_views')
-      .select(`
-        profile_id, started_at, ended_at, total_duration_seconds,
-        section_dwell, viewed_via,
-        profiles!profile_id ( full_name, email )
-      `)
-      .eq('policy_version_id', versionId)
-      .order('started_at', { ascending: false }),
-    db.from('profiles')
-      .select('id, full_name, email')
-      .eq('active', true)
-      .order('full_name'),
-  ])
+  const scope = await loadFleetScope(db, user)
+  if (!scope.all && scope.profileIds.size === 0) return empty
 
-  const views = viewsRes.data || []
+  let viewsQuery = db.from('policy_views')
+    .select(`
+      profile_id, started_at, ended_at, total_duration_seconds,
+      section_dwell, viewed_via,
+      profiles!profile_id ( full_name, email )
+    `)
+    .eq('policy_version_id', versionId)
+  let staffQuery = db.from('profiles')
+    .select('id, full_name, email')
+    .eq('active', true)
+  if (!scope.all) {
+    const memberIds = [...scope.profileIds]
+    viewsQuery = viewsQuery.in('profile_id', memberIds)
+    staffQuery = staffQuery.in('id', memberIds)
+  }
+  const [viewsRes, staffRes] = await Promise.all([
+    viewsQuery.order('started_at', { ascending: false }),
+    staffQuery.order('full_name'),
+  ])
+  if (viewsRes.error) throw new Error(`policy viewers: policy_views read failed: ${viewsRes.error.message}`)
+  if (staffRes.error) throw new Error(`policy viewers: profiles read failed: ${staffRes.error.message}`)
+
+  // Belt and braces: the reads above are already scoped.
+  const views = (viewsRes.data || []).filter((v) => inFleetScope(scope, v.profile_id))
   const completed = views.filter((v) => v.ended_at)
 
   // Group by profile.
@@ -230,7 +259,9 @@ export async function listVersionViewers(versionId) {
     (b.latest_at || '').localeCompare(a.latest_at || ''))
 
   const viewedIds = new Set(viewers.map((v) => v.profile_id))
-  const outstanding = (staffRes.data || []).filter((s) => !viewedIds.has(s.id))
+  const outstanding = (staffRes.data || [])
+    .filter((s) => inFleetScope(scope, s.id))
+    .filter((s) => !viewedIds.has(s.id))
 
   return { viewers, outstanding, all_views: views }
 }
