@@ -153,6 +153,22 @@ describe('POST /api/cars/[id]/documents — recording (shared with finalise)', (
     expect(remove).toHaveBeenCalledWith([upload.mock.calls[0][0]])
   })
 
+  it('answers 409 and keeps the stored file when the path is already recorded (23505, mig 693)', async () => {
+    const remove = vi.fn(async () => ({ error: null }))
+    const db = fakeDb()
+    db.from = (table) => table === 'cars'
+      ? { select: () => ({ eq: () => ({ single: async () => ({ data: CAR, error: null }) }) }) }
+      : { insert: () => ({ select: () => ({ single: async () => ({ data: null, error: {
+        code: '23505', message: 'duplicate key value violates unique constraint "car_documents_storage_path_key"',
+      } }) }) }) }
+    db.storage = { from: () => ({ upload, remove }) }
+    createServerClient.mockReturnValue(db)
+    const res = await post(PDF)
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ success: false, error: 'This upload is already saved.' })
+    expect(remove).not.toHaveBeenCalled()
+  })
+
   it('still answers 201 with queue_warning when the bookkeeper queue insert fails', async () => {
     const { enqueueFromCarDocument } = await import('@/lib/invoices-queue/enqueue')
     enqueueFromCarDocument.mockResolvedValueOnce({ ok: false, error: 'queue down' })
