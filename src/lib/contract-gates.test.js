@@ -19,8 +19,8 @@ describe('canManageContractsInOrg', () => {
     expect(canManageContractsInOrg(master, ORG_X)).toBe(true)
     expect(canManageContractsInOrg(master, null)).toBe(true)
   })
-  it('an owner of the org, whatever the active studio', () => {
-    expect(canManageContractsInOrg(managerXOwnerY, ORG_Y)).toBe(true)
+  it('a studio owner in the org is not an organisation admin (C18 ORGROLE.1; GATES-2: yes)', () => {
+    expect(canManageContractsInOrg(managerXOwnerY, ORG_Y)).toBe(false)
     expect(canManageContractsInOrg(managerXOwnerY, ORG_X)).toBe(false)
   })
   it('an org admin of the org', () => expect(canManageContractsInOrg(adminX, ORG_X)).toBe(true))
@@ -32,10 +32,10 @@ describe('canManageContractsInOrg', () => {
 })
 
 describe('canManageContractsSomewhere', () => {
-  it('master, an owner or an org admin anywhere', () => {
+  it('master or an org admin anywhere; a studio owner is not one (C18 ORGROLE.1)', () => {
     expect(canManageContractsSomewhere(master)).toBe(true)
-    expect(canManageContractsSomewhere(managerXOwnerY)).toBe(true)
     expect(canManageContractsSomewhere(adminX)).toBe(true)
+    expect(canManageContractsSomewhere(managerXOwnerY)).toBe(false)
   })
   it('nobody else', () => {
     expect(canManageContractsSomewhere(managerX)).toBe(false)
@@ -61,9 +61,11 @@ describe('canDownloadContractPdf (the /pdf route\'s rule)', () => {
 
 describe('contractDetailActions (/contracts/[id]\'s buttons, each its route\'s rule)', () => {
   const c = (status, extra = {}) => ({ id: 'c1', profile_id: 'p1', organization_id: ORG_Y, status, signed_pdf_path: null, ...extra })
-  it('an owner of the contract\'s org whose ACTIVE role is manager gets the actions (main: none)', () => {
-    expect(contractDetailActions(managerXOwnerY, c('issued'))).toMatchObject({ canResend: true, canRevoke: true, canManageDraft: false })
-    expect(contractDetailActions(managerXOwnerY, c('draft')).canManageDraft).toBe(true)
+  it('an org admin of the contract\'s org whose ACTIVE role is manager gets the actions (C18: the grant, not a studio owner role)', () => {
+    const adminY = { ...managerXOwnerY, orgAdminOrgIds: [ORG_Y] }
+    expect(contractDetailActions(adminY, c('issued'))).toMatchObject({ canResend: true, canRevoke: true, canManageDraft: false })
+    expect(contractDetailActions(adminY, c('draft')).canManageDraft).toBe(true)
+    expect(contractDetailActions(managerXOwnerY, c('issued'))).toMatchObject({ canResend: false, canRevoke: false })
   })
   it('an owner of ANOTHER org gets none, whatever the active role', () => {
     const ownerXActive = { ...managerXOwnerY, role: 'owner', rolesByLocation: { 'loc-x': 'owner', 'loc-y': 'manager' } }
