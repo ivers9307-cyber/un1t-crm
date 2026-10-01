@@ -26,6 +26,7 @@
 // The limits are src/lib/car-document-media.js, the bucket's own.
 
 import { CAR_DOCUMENT_MAX_BYTES, CAR_DOCUMENT_TYPES_LABEL } from './car-document-media'
+import { ALL_DOCUMENT_TYPES } from './cars'
 
 // Staff-facing words.
 export const CAR_DOCUMENT_SIZE_ERROR = `File too large (max ${CAR_DOCUMENT_MAX_BYTES / 1024 / 1024} MB)`
@@ -72,6 +73,28 @@ export function isCarDocumentUploadPath(path, carId, docType) {
   const prefix = `${carId}/${docType}/`
   if (!path.startsWith(prefix)) return false
   return NAME_RE.test(path.slice(prefix.length))
+}
+
+const DOC_TYPE_KEYS = new Set(ALL_DOCUMENT_TYPES.map((t) => t.key))
+const SLOT_RE = new RegExp(`^(${UUID})/([a-z_]+)/(${UUID}\\.[a-z]+)$`)
+
+/**
+ * CARDOCORPHANS.1 (C130) — the slot shape WITHOUT knowing the car: is `path`
+ * exactly `<car uuid>/<doc_type>/<uuid>.<ext>` for a doc type in
+ * ALL_DOCUMENT_TYPES and an extension the sign route mints? Returns
+ * `{ carId, docType }` (and isCarDocumentUploadPath(path, carId, docType) is
+ * then true), else null. The daily orphan sweep deletes nothing that fails
+ * this, so the Xero PDFs under `cars/` and the multipart route's
+ * `<ts>-<rand>-<name>` files can never be swept.
+ */
+export function parseCarDocumentUploadPath(path) {
+  if (typeof path !== 'string') return null
+  const m = path.match(SLOT_RE)
+  if (!m) return null
+  const [, carId, docType] = m
+  if (!DOC_TYPE_KEYS.has(docType)) return null
+  if (!isCarDocumentUploadPath(path, carId, docType)) return null
+  return { carId, docType }
 }
 
 /** null when `size` is within the bucket's limit, else the staff-facing error. */
