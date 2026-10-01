@@ -2,6 +2,7 @@
 // and picker share.
 import { describe, it, expect } from 'vitest'
 import {
+  isUnlabelledCarDocumentType,
   CAR_DOCUMENT_MIME_TYPES, CAR_DOCUMENT_MAX_BYTES, CAR_DOCUMENT_ACCEPT,
   CAR_DOCUMENT_TYPES_LABEL, resolveCarDocumentType, sniffCarDocumentHeif,
 } from './car-document-media.js'
@@ -96,5 +97,14 @@ describe('sniffCarDocumentHeif — an unlabelled HEIC (Chrome/Firefox on Windows
     expect(sniffCarDocumentHeif(Buffer.alloc(0))).toBeNull()
     expect(sniffCarDocumentHeif(Buffer.from('....ftyp'))).toBeNull()
     expect(sniffCarDocumentHeif(Buffer.from('%PDF-1.7 ftypheic'))).toBeNull()
+  })
+})
+
+describe('isUnlabelledCarDocumentType (CARDOCUPLOAD.1)', () => {
+  it('is true for no type and application/octet-stream only', () => {
+    for (const t of ['', null, undefined, 'application/octet-stream', ' Application/Octet-Stream; x=1']) {
+      expect(isUnlabelledCarDocumentType(t), String(t)).toBe(true)
+    }
+    for (const t of ['application/pdf', 'image/jpg', 'text/html']) expect(isUnlabelledCarDocumentType(t), t).toBe(false)
   })
 })

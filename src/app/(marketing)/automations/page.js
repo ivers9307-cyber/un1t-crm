@@ -6,6 +6,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { logError } from '@/lib/log'
+import { canCloneSequenceAt } from '@/lib/sequence-access'
 import { AUTOMATIONS } from '@/lib/automations/registry'
 import { readGlofoxAutomationStatus } from '@/lib/automations/glofox-status'
 import AutomationsView from '@/components/automations/AutomationsView'
@@ -113,6 +114,10 @@ export default async function AutomationsPage() {
     }
   }
 
+  // C123 GATES-4 (b) — the list is the ACTIVE studio's sequences, so the
+  // clone route's rule is asked there.
+  const canClone = canFlows && canCloneSequenceAt(user, location?.id || null)
+
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-10">
       <div>
@@ -167,7 +172,9 @@ export default async function AutomationsPage() {
           </Link>
         </div>
       )}
-      {canFlows && <AutomationsFlowList sequences={sequences} loadFailed={flowsLoadFailed} />}
+      {canFlows && (
+        <AutomationsFlowList sequences={sequences} loadFailed={flowsLoadFailed} canClone={canClone} />
+      )}
     </div>
   )
 }

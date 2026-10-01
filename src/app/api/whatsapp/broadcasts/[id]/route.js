@@ -19,7 +19,13 @@ const BroadcastUpdateSchema = z.object({
   variable_mapping: z.unknown().optional(),
   header_media_url: url.nullable().optional(),
   audience_filter: audienceFilterSchema,
-  status: z.enum(['draft', 'scheduled', 'sending', 'sent', 'cancelled']).optional(),
+  // C123 GATES-4 (a) — 'sending' and 'sent' are owned by /send and the send
+  // engines + cron (same rule as the POST schema): a PUT to 'sending' started
+  // a drip with none of /send's checks. The web editor PUTs only 'draft'
+  // (unschedule) and 'cancelled' (tests/wa-broadcast-editor-put-statuses.test.js).
+  status: z.enum(['draft', 'scheduled', 'cancelled'], {
+    error: "status may be 'draft', 'scheduled' or 'cancelled'; use Send to start sending",
+  }).optional(),
   // WA-SCHEDULE — set/clear the scheduled send time. Going to 'scheduled'
   // requires a future scheduled_at (in the same request or already on the row).
   scheduled_at: z.string().datetime({ offset: true }).nullable().optional(),

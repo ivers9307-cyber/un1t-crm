@@ -12,6 +12,7 @@ import { useState } from 'react'
 import { Sparkles } from 'lucide-react'
 import { getNextSteps, buildDeclineDraft, DECLINE_REASONS, BOOKING_KINDS } from '@shared/approvals-next-steps'
 import { approvalCardSummary, APPROVAL_KIND_LABELS } from '@shared/approval-cards'
+import { failureExplanation } from '@/lib/approvals/agent-request-why'
 import SequencePicker from '@/components/SequencePicker'
 
 const STATUS_CHIP = {
@@ -110,6 +111,11 @@ export default function ApprovalActionCard({
   const decided = status !== 'pending'
   const steps = decided ? getNextSteps(request.kind, status, ctx) : []
   const kindLabel = APPROVAL_KIND_LABELS[request.kind] || 'Agent request'
+  // C117 APPROVALCODEWEB.1 — a failed card explains its code in the
+  // operator's words (it printed the raw code, e.g. TRIAL_GRANT_FAILED).
+  // Same rule as the phone's failedCardExplanation (mobile/lib/approval-outcome.js):
+  // only a FAILED card whose execution recorded a result gets a line.
+  const failedLine = status === 'failed' && request.details?.result ? failureExplanation(request) : null
   // class_full / already_booked only make sense for booking-shaped requests.
   const reasonOptions = BOOKING_KINDS.has(request.kind)
     ? DECLINE_REASONS
@@ -179,9 +185,7 @@ export default function ApprovalActionCard({
         {decided && (
           <div className="mt-1.5 text-xs text-un1t-muted">
             {request.decision_note && <span>{request.decision_note}</span>}
-            {request.details?.result?.message_code && status === 'failed' && (
-              <span className="text-red-700"> ({request.details.result.message_code})</span>
-            )}
+            {failedLine && <span className="text-red-700"> {failedLine}</span>}
             {notified && (
               <span className={notified.sent ? ' text-green-700' : ' text-amber-700'}>
                 {notified.sent

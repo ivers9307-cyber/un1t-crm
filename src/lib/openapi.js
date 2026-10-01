@@ -3371,6 +3371,53 @@ registry.registerPath({
   },
 })
 
+// CARDOCUPLOAD.1 (C124) — the car Documents picker's upload, direct to Storage.
+const carDocErr = (description) => ({ description, content: { 'application/json': { schema: ErrorResponse } } })
+const CarDocType = z.string().min(1).max(64).openapi({ description: 'A car document type key (src/lib/cars.js ALL_DOCUMENT_TYPES)' })
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/cars/{id}/documents/sign',
+  tags: ['Cars'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Sign a direct-to-storage upload for a car document',
+  description: "Step 1 of 2 (CARDOCUPLOAD.1). The multipart POST /api/cars/{id}/documents is capped at ~4.5 MB by Vercel; this lets the browser put up to 25 MiB straight into the private car-documents bucket. Checks the doc type and the declared size and type against the bucket's limits (src/lib/car-document-media.js: 25 MiB; PDF, JPEG, PNG, GIF, WebP, HEIC, HEIF; aliases normalised); an unlabelled file (no type or application/octet-stream) is judged by head, its first bytes in base64. Mints <car>/<doc_type>/<uuid>.<ext> and returns a signed-upload token plus content_type, the type to upload the bytes as (the bucket checks it). car_processing at the car's studio, after membership (the multipart route's gate).",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ doc_type: CarDocType, file_name: z.string().min(1).max(300), mime: z.string().max(200).default(''), size: z.number().int(), head: z.string().max(344).optional() }).openapi('CarDocumentSign') } } },
+  },
+  responses: {
+    200: { description: 'Upload path, token and the type to upload as', content: { 'application/json': { schema: z.object({ success: z.literal(true), path: z.string(), token: z.string(), content_type: z.string() }) } } },
+    400: carDocErr('Validation failed, an unknown doc_type, an empty file or one over 25 MiB, or a type the bucket does not take'),
+    401: carDocErr('Unauthorized'),
+    403: carDocErr("No car_processing permission at the car's studio"),
+    404: carDocErr('No such car, or not at one of your studios'),
+    500: carDocErr('The car could not be read, or the signed upload URL could not be created'),
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/cars/{id}/documents/finalise',
+  tags: ['Cars'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Record a car document uploaded against a signed slot',
+  description: "Step 2 of 2 (CARDOCUPLOAD.1). The path must be a slot sign minted for this car and doc type, not yet recorded (else 409). The size and Content-Type are read back from storage; the declared mime is judged as the multipart route judges a file's type (an unlabelled one by the stored bytes) and must match the stored Content-Type. An object that breaks a rule is removed. A good one becomes the multipart route's car_documents row and auto-enters the bookkeeper queue (queue_warning if that failed). Same gate as the sign step.",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ doc_type: CarDocType, path: z.string().min(1).max(500), file_name: z.string().min(1).max(300), mime: z.string().max(200).default(''), notes: z.string().max(2000).nullable().optional() }).openapi('CarDocumentFinalise') } } },
+  },
+  responses: {
+    201: { description: 'Recorded', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.record(z.string(), z.unknown()), queue_warning: z.string().optional() }) } } },
+    400: carDocErr('Validation failed, a path not minted for this car and doc type, an upload that never arrived, or a stored file that breaks the size/type rules (removed)'),
+    401: carDocErr('Unauthorized'),
+    403: carDocErr("No car_processing permission at the car's studio"),
+    404: carDocErr('No such car, or not at one of your studios'),
+    409: carDocErr('This slot is already recorded'),
+    500: carDocErr('The car, the stored file or the duplicate check could not be read, or the row insert failed (the file is removed)'),
+  },
+})
+
 registry.registerPath({
   method: 'post',
   path: '/api/whatsapp/templates/upload-media',
