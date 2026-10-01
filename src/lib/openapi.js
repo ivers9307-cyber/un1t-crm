@@ -3428,7 +3428,7 @@ registry.registerPath({
     401: carDocErr('Unauthorized'),
     403: carDocErr("No car_processing permission at the car's studio"),
     404: carDocErr('No such car, or not at one of your studios'),
-    409: carDocErr('This slot is already recorded'),
+    409: carDocErr('This slot is already recorded (a replay, or the loser of two concurrent calls: the unique storage_path, mig 693; the file is kept)'),
     500: carDocErr('The car, the stored file or the duplicate check could not be read, or the row insert failed (the file is removed)'),
   },
 })

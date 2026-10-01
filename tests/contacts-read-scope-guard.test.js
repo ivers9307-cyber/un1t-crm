@@ -1,6 +1,6 @@
 // CONTACTREADSCOPE.1 guard (mig 690). A signed-in staff session reads a
 // studio's contacts directly only while holding Contacts (web OR phone) at
-// that studio; members read their own row. Pinned here:
+// that studio; members read their own row. Pinned here (the client half):
 //
 //  (a) CLIENT CODE (shared/, mobile/, and src/ files that run with a user
 //      session): every direct .from('contacts') read and every contacts embed
@@ -12,9 +12,10 @@
 //      /api/dashboard/studio-contacts, 1a).
 //  (b) The phone-called shared fetchers never read contacts, and the phone
 //      never imports the server-only shared readers.
-//  (c) (1b) later migrations keep contacts_select on the helper, never back
-//      on membership; (d) (1b) the helper's inline role defaults equal
-//      DEFAULT_WEB/MOBILE_PERMISSIONS_BY_ROLE.contacts.
+// The migration half lives in tests/contacts-read-scope-migration-guard.test.js
+// (1b, #1915): (c) later migrations keep contacts_select on the helper, never
+// back on membership; (d) the helper's inline role defaults equal
+// DEFAULT_WEB/MOBILE_PERMISSIONS_BY_ROLE.contacts.
 //
 // A floor, not a proof: a select string built at runtime or a builder held
 // in a variable is invisible; the migration and its replay are the fence.
