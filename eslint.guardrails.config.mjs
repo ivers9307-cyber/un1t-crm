@@ -408,6 +408,11 @@ const config = [
       // could never fire for it: a lost row was silent. Now log-and-warn, like
       // the send route above.
       'src/app/api/whatsapp/conversations/[[]id]/send-flow/route.js',
+      // MEMBERWRITESWEEP.1e — the campaign editor's session routes, new in this
+      // PR (they replace browser-direct writes on campaigns): born clean, every
+      // write reads its error and the rows it touched.
+      'src/app/api/communications/campaigns/**',
+      'src/lib/campaign-session-access.js',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },

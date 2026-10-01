@@ -22,7 +22,9 @@
 //     for 682: /api/races*, /api/events*, /api/registrations/[id] actions,
 //     /api/team-members/[id], /api/teams/[id]/members, the public event and
 //     host routes; for 683: /api/templates*, /api/agent/feedback, the email
-//     senders, stats and Postmark webhooks; the SMS tables have no code).
+//     senders, stats and Postmark webhooks; the SMS tables have no code; for
+//     684: /api/communications/campaigns* (the editor and detail page),
+//     /api/campaigns/[id]/send and the other campaign routes, the sender).
 //  2. A later migration may not give anon or PUBLIC any privilege on a swept
 //     table; give authenticated anything but SELECT, or SELECT on a table
 //     without `keepRead`; do either through ALL TABLES IN SCHEMA public; hand
@@ -95,7 +97,10 @@ export const SWEEP = [
   { table: 'sms_broadcasts', mig: 683, keepRead: null, rollback: 'd' },
   { table: 'sms_broadcast_recipients', mig: 683, keepRead: null, rollback: 'd' },
   { table: 'agent_message_feedback', mig: 683, keepRead: null, rollback: 'd' },
-  // 1e, 1g append their rows here.
+  // 1e — mig 684
+  { table: 'campaigns', mig: 684, keepRead: null, rollback: 'e' },
+  { table: 'campaign_recipients', mig: 684, keepRead: null, rollback: 'e' },
+  // 1g appends its rows here.
 ]
 const SCAN_FROM = 680            // the class detector: every migration from the first sweep file
 // Reopeners are scanned from 631, not 680: migration numbers are reserved
@@ -671,6 +676,32 @@ describe('client code only reads its own rows of the swept tables (MEMBERWRITESW
     expect(sweepClientUses(ok)).toEqual([])
   })
 
+  it('the 1e tables (mig 684) are closed to every client use, reads included', () => {
+    const bad = `
+      await db.from('campaigns').update({ status: 'scheduled', scheduled_at: iso }).eq('id', campaignId)
+      await db.from('campaigns').insert({ ...payload, status: 'draft' }).select().single()
+      await db.from('campaigns').select('status, total_sent, total_recipients, cancel_requested_at')
+      await supabase.from('campaign_link_clicks').select('url, campaigns(name, subject)')
+      await supabase.from('contacts').select('id, campaign_recipients(status, opened_at)')
+      channel.on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'campaigns' }, cb)
+      await fetch(\`\${SUPABASE_URL}/rest/v1/campaign_recipients?select=*\`)`
+    expect(sweepClientUses(bad)).toEqual([
+      'campaigns.update', 'campaigns.insert', 'campaigns.select',
+      'campaigns.embed', 'campaign_recipients.embed', 'campaigns.realtime', 'campaign_recipients.rest',
+    ])
+    const ok = `
+      const result = await campaignRequest(campaignPath(campaignId, 'schedule'), { method: 'POST', body })
+      await fetch(\`/api/communications/campaigns/\${id}\`, { method: 'DELETE' })
+      await fetch(\`/api/campaigns/\${campaign.id}/send\`, { method: 'POST' })
+      await supabase.from('campaign_link_clicks').select('url, clicked_at')
+      await supabase.from('campaigns_archive').select('*')
+      const campaigns = []
+      campaigns.map((c) => c.id)
+      const label = 'No campaigns yet.'
+      router.push('/communications/sent')`
+    expect(sweepClientUses(ok)).toEqual([])
+  })
+
   it("a '/*' in a string, a regex or JSX text hides nothing; a real JSX comment is a comment", () => {
     expect(sweepClientUses("const a = 'image/*'\nsupabase.from('coach_kudos').update(p)\nconst b = '*/'\n")).toEqual(['coach_kudos.update'])
     expect(sweepClientUses("const r = /\\/*/\nsupabase.from('consultations').delete()\nconst s = '*/'\n")).toEqual(['consultations.delete'])
@@ -728,6 +759,13 @@ describe('later migrations keep the swept tables closed to clients', () => {
       'CREATE POLICY email_templates_location_scoped ON public.email_templates FOR ALL TO authenticated USING (private.auth_is_in_location(location_id));',
       'CREATE POLICY sms_broadcast_recipients_select_at_location ON public.sms_broadcast_recipients FOR SELECT TO authenticated USING (EXISTS (SELECT 1 FROM sms_broadcasts b WHERE b.id = sms_broadcast_recipients.broadcast_id AND private.auth_is_in_location(b.location_id)));',
       'ALTER TABLE public.email_sends DISABLE ROW LEVEL SECURITY;',
+      'GRANT UPDATE ON public.campaigns TO authenticated;',
+      'GRANT SELECT ON public.campaign_recipients TO authenticated;',
+      'GRANT UPDATE (status, scheduled_at) ON public.campaigns TO authenticated;',
+      'GRANT SELECT ON public.campaigns TO anon;',
+      'CREATE POLICY campaigns_location_scoped ON public.campaigns FOR ALL TO authenticated USING (private.auth_is_in_location(location_id));',
+      'CREATE POLICY campaign_recipients_via_campaign ON public.campaign_recipients FOR ALL TO authenticated USING (EXISTS (SELECT 1 FROM campaigns ca WHERE ca.id = campaign_recipients.campaign_id AND private.auth_is_in_location(ca.location_id)));',
+      'ALTER TABLE public.campaign_recipients DISABLE ROW LEVEL SECURITY;',
       `DO $$ BEGIN EXECUTE 'GRANT UPDATE ON public.inbody_scans TO authenticated'; END $$;`,
       'CREATE POLICY coaching_goals_loc ON public.coaching_goals FOR ALL TO authenticated USING (private.auth_is_in_location(location_id));',
       'CREATE POLICY coach_kudos_read_own ON public.coach_kudos FOR SELECT TO authenticated USING (true);',
@@ -792,6 +830,9 @@ describe('later migrations keep the swept tables closed to clients', () => {
     const reopen1d = 'GRANT SELECT, INSERT, UPDATE, DELETE ON public.email_sends, public.email_templates, public.agent_message_feedback TO authenticated;'
     expect(sweepReopeners(reopen1d, { exempt: exemptOf('686_memberwritesweep1d_rollback.sql') })).toEqual([])
     expect(sweepReopeners(reopen1d, { exempt: exemptOf('686_memberwritesweep1c_rollback.sql') })).not.toEqual([])
+    const reopen1e = 'GRANT SELECT, INSERT, UPDATE, DELETE ON public.campaigns, public.campaign_recipients TO authenticated;'
+    expect(sweepReopeners(reopen1e, { exempt: exemptOf('686_memberwritesweep1e_rollback.sql') })).toEqual([])
+    expect(sweepReopeners(reopen1e, { exempt: exemptOf('686_memberwritesweep1d_rollback.sql') })).not.toEqual([])
     expect(exemptOf('686_memberwritesweep1a_rollback.sql')).toBe('a')
     expect(exemptOf('686_carsclientwrite1_rollback.sql')).toBe(null)
   })

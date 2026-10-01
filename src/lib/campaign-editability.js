@@ -5,10 +5,11 @@
 // for a campaign in ANY status. On a campaign that had already gone out that
 // was a silent history corruption, three ways over:
 //
-//   • CampaignEditor persists by writing `campaigns` DIRECTLY from the browser
+//   • CampaignEditor persisted by writing `campaigns` DIRECTLY from the browser
 //     Supabase client (`db.from('campaigns').update(payload)`), so the 409
-//     status guard on `PUT /api/campaigns/[id]` never ran — the UI does not
-//     call that route.
+//     status guard on `PUT /api/campaigns/[id]` never ran — the UI did not
+//     call that route. (MEMBERWRITESWEEP.1e: it now saves through
+//     PUT /api/communications/campaigns/[id], which applies this predicate.)
 //   • The RLS policy is `FOR ALL TO authenticated USING auth_is_in_location(...)`
 //     (mig 014) with no status predicate, so the database allowed it too.
 //   • The editor's header pill is hard-coded to read "Draft", so a sent
