@@ -5,6 +5,8 @@ import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { canBuildSequencesAt, canBuildSequencesSomewhere, sequencePermissionRequired, sequenceNotFound } from '@/lib/sequence-access'
 import { compileForPublish } from '@/lib/sequences/graph/persist'
 import { parseGraphShape } from '@/lib/sequences/graph/schema'
+import { compileGraphToSteps } from '@/lib/sequences/graph/compile'
+import { planStepPublish } from '@/lib/sequences/graph/step-identity'
 import { validateBody } from '@/lib/validate'
 import { logWarn } from '@/lib/log'
 
@@ -14,18 +16,27 @@ const PublishSchema = z.object({
 }).passthrough()
 
 // FLOW-GRAPH Phase 2 — POST /api/sequences/[id]/graph/publish
-// Promote a graph to the live sequence: validate → compile → replace
-// sequence_steps → store the published graph + clear the draft. The runner is
+// Promote a graph to the live sequence: validate → compile → apply the steps
+// → store the published graph + clear the draft. The runner is
 // step_order-driven (scheduler.js: targetOrder = current_step_order + 1), so
-// replacing the rows is safe for in-flight enrollments and matches how the
-// legacy per-step editor already saves.
+// an in-flight enrolment on step k runs step k+1 of the new graph.
 //
-// Atomicity note: the step replace is delete-then-batch-insert, not a single
-// transaction (Supabase-js has no multi-statement tx). The window is one round
-// trip and the insert is one all-or-nothing call; an insert failure returns 500
-// and the operator republishes. If this ever needs to be bulletproof, move the
-// replace into a SECURITY DEFINER RPC. Trigger columns are intentionally left
-// to PUT /api/sequences/[id] (it owns webhook-token generation).
+// STEPATTRIB.1 — the steps are applied IN PLACE, keyed by graph node id
+// (sequence_steps.graph_node_id, mig 695): a kept node keeps its row id, a new
+// node inserts, only a removed node's row is deleted. It used to delete every
+// row and insert the compiled ones, and email_sends.sequence_step_id is ON
+// DELETE SET NULL, so each publish orphaned every earlier send's step (22,771
+// of 22,793 on 30 Sep) and the Performance panel's per-step table emptied.
+// Forward only (Richard, 1 Oct 2026): sends that already lost their step stay
+// NULL. publish_sequence_steps applies the plan in ONE transaction, so a
+// runner tick sees the old steps or the new ones, never none (a missing next
+// step COMPLETES an enrolment), and a failure changes nothing. Trigger columns
+// are intentionally left to PUT /api/sequences/[id] (it owns webhook-token
+// generation).
+
+// Same-file literal so check:select-columns resolves it; the route test pins
+// it to STEP_IDENTITY_COLUMNS (what the plan compares).
+const STEP_ROW_SELECT = 'id, step_order, step_type, graph_node_id, subject, html_content, template_id, whatsapp_template_id, whatsapp_variables, whatsapp_header_media_url, sms_body, delay_days, delay_hours, delay_minutes, config'
 
 export async function POST(request, props) {
   const params = await props.params
@@ -89,15 +100,24 @@ export async function POST(request, props) {
     )
   }
 
-  // Replace the runner's steps. delete-all → batch insert the compiled rows.
-  const { error: delError } = await db.from('sequence_steps').delete().eq('sequence_id', params.id)
-  if (delError) return NextResponse.json({ success: false, error: delError.message }, { status: 500 })
+  // STEPATTRIB.1 — which existing row each compiled node updates in place.
+  // Rows from before mig 695 carry no node id; the stored PUBLISHED graph
+  // (not the draft) is what they were compiled from, so it identifies them.
+  const { data: existingRows, error: rowsError } = await db.from('sequence_steps')
+    .select(STEP_ROW_SELECT)
+    .eq('sequence_id', params.id)
+  if (rowsError) return NextResponse.json({ success: false, error: rowsError.message }, { status: 500 })
 
-  if (result.steps.length) {
-    const rows = result.steps.map(s => ({ ...s, sequence_id: params.id }))
-    const { error: insError } = await db.from('sequence_steps').insert(rows)
-    if (insError) return NextResponse.json({ success: false, error: insError.message }, { status: 500 })
-  }
+  const plan = planStepPublish({
+    compiled: compileGraphToSteps(graph, { withNodeIds: true }),
+    existingRows: existingRows || [],
+    previousGraph: existing.graph,
+  })
+  const { error: stepsError } = await db.rpc('publish_sequence_steps', {
+    p_sequence_id: params.id,
+    p_steps: plan.steps,
+  })
+  if (stepsError) return NextResponse.json({ success: false, error: stepsError.message }, { status: 500 })
 
   // Promote the graph to canonical + clear the draft + GO LIVE. Setting
   // status='active' is what actually makes the sequence run: both the

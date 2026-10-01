@@ -16,7 +16,8 @@
 // route, or hand-patched) is replaced exactly as before. Pure: no IO.
 import { compileGraphToSteps } from './compile.js'
 
-/** The step-row columns the plan reads. The publish route selects these. */
+/** The step-row columns the plan reads. The publish route selects these (as a
+ *  literal, so check:select-columns can read it; its test pins the two equal). */
 export const STEP_IDENTITY_COLUMNS = [
   'id', 'step_order', 'step_type', 'graph_node_id',
   'subject', 'html_content', 'template_id', 'whatsapp_template_id',
