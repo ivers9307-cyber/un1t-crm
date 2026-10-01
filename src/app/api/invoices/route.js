@@ -46,10 +46,11 @@ const ALLOWED_MIME = RECEIPT_MIME_TYPES
 
 // The 409 for "this period already has an active invoice". `status` is
 // null when the unique index (23505) refused the insert and the row's
-// status is unknown.
+// status is unknown. Approval writes awaiting_accountant_review (the
+// accountant's step comes after it), so that status reads as approved too.
 function activeInvoiceConflict(period, status) {
   let error
-  if (status === 'approved') error = `An invoice for ${period.label} has already been approved.`
+  if (status === 'approved' || status === 'awaiting_accountant_review') error = `An invoice for ${period.label} has already been approved.`
   else if (status) error = `You already have a submission pending review for ${period.label}.`
   else error = `You already have an invoice for ${period.label} that is pending review or approved.`
   return NextResponse.json({ success: false, error }, { status: 409 })
