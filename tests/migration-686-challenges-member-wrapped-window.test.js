@@ -10,9 +10,18 @@
 // private.auth_contact_id verbatim with their prod EXECUTE. (Same model as
 // tests/migration-672-challenges-segments-car-notes-client-writes-off
 // .test.js; copied, not imported: importing a test file would re-register its
-// tests.) Challenge dates are seeded relative to the Europe/Dublin date of
-// now(), so the window edges are exact (a run that straddles Dublin midnight
-// between seed and read could be off by one day; it takes milliseconds).
+// tests.)
+// THE CLOCK: PGlite's now() reads the JS clock (its WASM libc calls
+// Date.now()), so the file fakes Date and pins every boot, seed and read to a
+// fixed instant; nothing here reads the wall clock (a guard proves the pin
+// reaches PGlite). Challenge dates are seeded relative to the date the policy
+// under test uses: the UTC date for the 30 Sep policy, the Europe/Dublin date
+// for 686's. Until 1 Oct 2026 every state was seeded on the Dublin date, so
+// between 23:00 and 00:00 UTC in Irish summer time (Dublin already tomorrow,
+// UTC still today) "ended yesterday" was today on the old policy's clock, the
+// member read it, and the two BEFORE assertions failed on whatever clock CI
+// ran. The before/after/rollback assertions now run at pinned instants,
+// 23:30 UTC in summer and winter included.
 // It proves:
 //   * BEFORE: a member reads only their studio's running and upcoming
 //     challenges (nothing ended, so Challenge Wrapped reads nothing);
@@ -30,7 +39,7 @@
 //     record restores the 30 Sep policy exactly.
 // Fictional ids only: the repo is public.
 
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { PGlite } from '@electric-sql/pglite'
@@ -165,19 +174,44 @@ const PROD_POLICIES = `
                      WHERE c.id = (SELECT private.auth_contact_id()) AND c.location_id = challenges.location_id)));
 `
 
-const D = (n) => `((now() AT TIME ZONE 'Europe/Dublin')::date + ${n})`
-const SEED = `
+// The clock each policy reads its "today" on.
+const UTC = 'utc'                // the 30 Sep policy (and the rollback record)
+const DUBLIN = 'Europe/Dublin'   // mig 686
+
+// Instants the before/after/rollback assertions run at. In Irish summer time
+// (IST, UTC+1) the UTC and Dublin dates differ from 23:00 to 00:00 UTC.
+const INSTANTS = [
+  '2026-09-30T23:30:00Z',   // the hour the file failed on main (IST: UTC 30 Sep, Dublin 1 Oct)
+  '2026-07-01T22:59:59Z',   // summer, the last second both dates agree
+  '2026-07-01T23:00:00Z',   // summer, Dublin midnight: the dates differ
+  '2026-12-01T23:30:00Z',   // winter (GMT): 23:30 UTC, the dates agree
+]
+// (Each instant boots three databases, so the list stays short; the window
+// arithmetic around both DST changes is the phone-parity test's, below.)
+// Everything outside those describes runs here (the old failing hour).
+const DEFAULT_AT = INSTANTS[0]
+
+/** Pin the clock PGlite reads: now() is this instant until the next pin. */
+const pinClock = (iso) => vi.setSystemTime(new Date(iso))
+beforeAll(() => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  pinClock(DEFAULT_AT)
+})
+afterAll(() => { vi.useRealTimers() })
+
+const D = (n, zone) => `((now() AT TIME ZONE '${zone}')::date + ${n})`
+const seed = (zone) => `
   INSERT INTO public.locations VALUES ('${LOC_A}'), ('${LOC_B}');
   INSERT INTO public.profiles (id, role) VALUES ('${STAFF_A}', 'staff'), ('${MASTER}', 'master');
   INSERT INTO public.profile_locations VALUES ('${STAFF_A}', '${LOC_A}', 'staff');
   INSERT INTO public.contacts VALUES ('${CONTACT_M}', '${MEMBER_UID}', '${LOC_A}');
   INSERT INTO public.challenges (id, location_id, name, mode, metric, starts_on, ends_on, is_flagship) VALUES
-    ('${CH.RUN}',    '${LOC_A}', 'Running',        'individual', 'points', ${D(-3)},  ${D(5)},   false),
-    ('${CH.UP}',     '${LOC_A}', 'Upcoming',       'collective', 'classes', ${D(3)},  ${D(10)},  false),
-    ('${CH.END1}',   '${LOC_A}', 'Ended 1 day',    'individual', 'points', ${D(-30)}, ${D(-1)},  true),
-    ('${CH.END14}',  '${LOC_A}', 'Ended 14 days',  'individual', 'points', ${D(-45)}, ${D(-14)}, true),
-    ('${CH.END15}',  '${LOC_A}', 'Ended 15 days',  'individual', 'points', ${D(-45)}, ${D(-15)}, true),
-    ('${CH.B_END1}', '${LOC_B}', 'B ended 1 day',  'individual', 'points', ${D(-30)}, ${D(-1)},  true);
+    ('${CH.RUN}',    '${LOC_A}', 'Running',        'individual', 'points', ${D(-3, zone)},  ${D(5, zone)},   false),
+    ('${CH.UP}',     '${LOC_A}', 'Upcoming',       'collective', 'classes', ${D(3, zone)},  ${D(10, zone)},  false),
+    ('${CH.END1}',   '${LOC_A}', 'Ended 1 day',    'individual', 'points', ${D(-30, zone)}, ${D(-1, zone)},  true),
+    ('${CH.END14}',  '${LOC_A}', 'Ended 14 days',  'individual', 'points', ${D(-45, zone)}, ${D(-14, zone)}, true),
+    ('${CH.END15}',  '${LOC_A}', 'Ended 15 days',  'individual', 'points', ${D(-45, zone)}, ${D(-15, zone)}, true),
+    ('${CH.B_END1}', '${LOC_B}', 'B ended 1 day',  'individual', 'points', ${D(-30, zone)}, ${D(-1, zone)},  true);
 `
 
 let db
@@ -209,11 +243,12 @@ async function policies() {
       WHERE schemaname = 'public' AND tablename = 'challenges' ORDER BY policyname`)).rows
 }
 
-async function boot({ migrate = false, before = '' } = {}) {
+/** Boot prod's 30 Sep state, its rows dated on `clock` (the policy under test's day). */
+async function boot({ migrate = false, before = '', clock = DUBLIN } = {}) {
   db = new PGlite()
   await runSql(BASE_SCHEMA)
   await runSql(PROD_POLICIES)
-  await runSql(SEED)
+  await runSql(seed(clock))
   if (before) await runSql(before)
   if (migrate) await runSql(MIG_686)
 }
@@ -234,9 +269,35 @@ describe('PGlite knows Europe/Dublin (the window depends on it)', () => {
   })
 })
 
-describe('before 686 — the gap (prod on 30 Sep 2026)', () => {
-  beforeAll(() => boot(), 60_000)
-  afterAll(() => db?.close())
+describe('the clock is pinned, so no assertion depends on when the suite runs', () => {
+  beforeAll(async () => { db = new PGlite() }, 60_000)
+  afterAll(async () => { pinClock(DEFAULT_AT); await db?.close() })
+
+  it("every pinned instant is PGlite's now() (else rows would be seeded off the wall clock)", async () => {
+    for (const at of INSTANTS) {
+      pinClock(at)
+      const { rows } = await db.query(`SELECT now() = $1::timestamptz AS pinned, now()::text AS now`, [at])
+      expect(rows[0].pinned, `${at} read as ${rows[0].now}`).toBe(true)
+    }
+  })
+
+  // Why the file failed on main between 23:00 and 00:00 UTC (30 Sep 2026):
+  // rows dated on the Dublin day, read through the UTC policy.
+  it('at 23:30 UTC in summer a row that ended yesterday in Dublin ends today in UTC; in winter it does not', async () => {
+    const endedYesterdayDublin = async (at) => {
+      pinClock(at)
+      const { rows } = await db.query(`SELECT ${D(-1, DUBLIN)} >= (now() AT TIME ZONE 'utc')::date AS old_policy_reads_it`)
+      return rows[0].old_policy_reads_it
+    }
+    expect(await endedYesterdayDublin('2026-09-30T23:30:00Z')).toBe(true)
+    expect(await endedYesterdayDublin('2026-12-01T23:30:00Z')).toBe(false)
+    expect(await endedYesterdayDublin('2026-09-30T22:59:59Z')).toBe(false)
+  })
+})
+
+describe.each(INSTANTS)('before 686 — the gap (prod on 30 Sep 2026), at %s', (at) => {
+  beforeAll(() => { pinClock(at); return boot({ clock: UTC }) }, 60_000)
+  afterAll(async () => { pinClock(DEFAULT_AT); await db?.close() })
 
   it('a member reads only running and upcoming challenges: nothing ended, so Wrapped reads nothing', async () => {
     expect(await ids(member)).toEqual(MEMBER_BEFORE)
@@ -249,14 +310,15 @@ describe('before 686 — the gap (prod on 30 Sep 2026)', () => {
   })
 })
 
-describe('after 686', () => {
+describe.each(INSTANTS)('after 686, at %s', (at) => {
   let policyBefore
   beforeAll(async () => {
-    await boot()
+    pinClock(at)
+    await boot({ clock: DUBLIN })
     policyBefore = await policies()
     await runSql(MIG_686)
   }, 60_000)
-  afterAll(() => db?.close())
+  afterAll(async () => { pinClock(DEFAULT_AT); await db?.close() })
 
   it('a member also reads challenges that ended up to 14 Dublin days ago, at their studio only', async () => {
     expect(await ids(member)).toEqual(MEMBER_AFTER)
@@ -389,11 +451,12 @@ describe('the self-check aborts the whole file', () => {
   }, 60_000)
 })
 
-describe("the plan's rollback record", () => {
-  afterAll(() => db?.close())
+describe.each(INSTANTS)("the plan's rollback record, at %s", (at) => {
+  beforeAll(() => { pinClock(at) })
+  afterAll(async () => { pinClock(DEFAULT_AT); await db?.close() })
 
   it('restores the 30 Sep policy exactly (and so the gap)', async () => {
-    await boot()
+    await boot({ clock: UTC })
     const before = await policies()
     await runSql(MIG_686)
     await runSql(ROLLBACK_686)
