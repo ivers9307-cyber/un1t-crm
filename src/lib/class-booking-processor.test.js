@@ -207,6 +207,37 @@ describe('processClassBookingRequest', () => {
     expect(r).toEqual({ outcome: 'failed', detail: 'glofox_not_configured' })
     expect(statusWrites).toEqual([{ status: 'failed', last_error: 'glofox_not_configured' }])
   })
+
+  // MANUALFUNNEL.1 — a class off a hand-written timetable at a studio with no
+  // Glofox goes to staff, who book it by hand.
+  it('a manual-timetable class at a studio with no Glofox → staff card manual_booking; nothing is booked, minted or sent', async () => {
+    glofoxCredentialsForLocation.mockResolvedValueOnce({ branchId: null, apiKey: null, apiToken: null, readError: null })
+    missingGlofoxCredentialsForLocation.mockReturnValueOnce(['Branch ID', 'API Key', 'API Token'])
+    const db = makeDb(null) // no pending card to reuse
+    const inserts = []
+    const statusWrites = []
+    db.insert = (row) => { inserts.push(row); return { select: () => ({ maybeSingle: async () => ({ data: { id: 'amr1' } }) }) } }
+    db.update = (patch) => { statusWrites.push(patch); return { eq: async () => ({}), is: async () => ({}) } }
+    const manualReq = { ...req, glofox_event_id: 'manual-20261005-0615-strength', class_name: 'Strength', starts_at: '2026-10-05T05:15:00.000Z', customer_name: 'Sam Byrne' }
+    const r = await processClassBookingRequest(db, manualReq)
+    expect(r).toEqual({ outcome: 'needs_review', detail: 'manual_booking' })
+    expect(inserts).toHaveLength(1)
+    expect(inserts[0]).toMatchObject({
+      location_id: 'L', contact_id: 'c1', kind: 'class_booking', status: 'pending',
+      details: { event_id: 'manual-20261005-0615-strength', class_name: 'Strength', starts_at: '2026-10-05T05:15:00.000Z', source: 'start_funnel', reason: 'manual_booking' },
+    })
+    expect(statusWrites).toEqual([{ status: 'needs_review', last_error: 'manual_booking', approval_request_id: 'amr1' }])
+    expect(createBooking).not.toHaveBeenCalled()
+    expect(findOrCreateGlofoxMember).not.toHaveBeenCalled()
+    expect(maybeSendBookingWhatsappConfirm).not.toHaveBeenCalled()
+  })
+
+  it('a manual-looking id at a studio WITH Glofox is not special: it takes the normal path', async () => {
+    createBooking.mockResolvedValueOnce({ ok: false, status: 404, body: { message_code: 'EVENT_NOT_FOUND' } })
+    const db = makeDb({ id: 'c1', first_name: 'Sam', last_name: 'Byrne', phone: '0871234567', glofox_member_id: null, last_attended_at: null })
+    const r = await processClassBookingRequest(db, { ...req, glofox_event_id: 'manual-20261005-0615-strength' })
+    expect(r.detail).not.toBe('manual_booking')
+  })
 })
 
 // CBPCREDITREAD.1 — a credits read that FAILED is "unknown", never "no

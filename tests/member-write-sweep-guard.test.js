@@ -90,6 +90,10 @@ export const SWEEP = [
   // 1d — mig 683
   { table: 'email_sends', mig: 683, keepRead: null, rollback: 'd' },
   { table: 'email_templates', mig: 683, keepRead: null, rollback: 'd' },
+  // The two SMS tables were DROPPED by mig 688 (SMSTABLESDROP.1, 1 Oct 2026).
+  // Their rows stay on purpose: no client code may name them, and a later
+  // migration that re-creates either (the default ACL once re-granted ALL to
+  // clients) still fails here; 688's rollback record lives in a comment.
   { table: 'sms_broadcasts', mig: 683, keepRead: null, rollback: 'd' },
   { table: 'sms_broadcast_recipients', mig: 683, keepRead: null, rollback: 'd' },
   { table: 'agent_message_feedback', mig: 683, keepRead: null, rollback: 'd' },

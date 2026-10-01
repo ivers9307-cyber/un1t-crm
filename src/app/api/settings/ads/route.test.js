@@ -163,3 +163,75 @@ describe('PUT /api/settings/ads (recipients) — a failed settings read writes N
     expect(db.writes[0].patch.settings).toEqual({ glofox: { branch_id: 'b1' }, ads: { report_recipients: ['ops@example.test'] } })
   })
 })
+
+// METADATASET.1 — the Meta dataset website events go to, and its token.
+describe('METADATASET.1: conversions (dataset + write-only token)', () => {
+  const TOKEN = 'SYNTH-DATASET-TOKEN-1'
+  const SETTINGS = {
+    glofox: { api_key: 'SYNTH-GLOFOX', branch_id: 'b1' },
+    ads: { report_recipients: ['ops@example.test'] },
+    meta_ads: { dataset_id: '1111111111', capi_access_token: TOKEN },
+  }
+
+  it('GET answers the dataset id and has_token, never the token', async () => {
+    createServerClient.mockReturnValue(makeDb({ ad_accounts: { data: [], error: null }, locations: { data: { settings: SETTINGS }, error: null } }))
+    const res = await GET(get())
+    const text = await res.text()
+    expect(JSON.parse(text).conversions).toEqual({ dataset_id: '1111111111', has_token: true })
+    expect(text).not.toContain(TOKEN)
+  })
+
+  it('GET on a location with nothing configured answers an empty view', async () => {
+    createServerClient.mockReturnValue(makeDb({ ad_accounts: { data: [], error: null }, locations: { data: { settings: {} }, error: null } }))
+    expect((await (await GET(get())).json()).conversions).toEqual({ dataset_id: '', has_token: false })
+  })
+
+  it('PUT saves the dataset id and a new token, keeping every other settings key', async () => {
+    const db = makeDb({ locations: { data: { settings: SETTINGS }, error: null } })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(put({ locationId: LOC, conversions: { dataset_id: '2222222222', capi_access_token: 'SYNTH-NEW-TOKEN' } }))
+    const text = await res.text()
+    expect(res.status).toBe(200)
+    expect(JSON.parse(text)).toEqual({ success: true, conversions: { dataset_id: '2222222222', has_token: true } })
+    expect(text).not.toContain('SYNTH-NEW-TOKEN')
+    expect(db.writes).toHaveLength(1)
+    const written = db.writes[0].patch.settings
+    expect(written.glofox).toEqual(SETTINGS.glofox)
+    expect(written.ads).toEqual(SETTINGS.ads)
+    expect(written.meta_ads).toEqual({ dataset_id: '2222222222', capi_access_token: 'SYNTH-NEW-TOKEN' })
+  })
+
+  it('PUT with a blank or masked token keeps the stored token', async () => {
+    for (const echoed of ['', SECRET_MASK, undefined]) {
+      const db = makeDb({ locations: { data: { settings: SETTINGS }, error: null } })
+      createServerClient.mockReturnValue(db)
+      await PUT(put({ locationId: LOC, conversions: { dataset_id: '1111111111', capi_access_token: echoed } }))
+      expect(db.writes[0].patch.settings.meta_ads.capi_access_token).toBe(TOKEN)
+    }
+  })
+
+  it('PUT refuses a non-numeric dataset id and writes nothing', async () => {
+    const db = makeDb({ locations: { data: { settings: SETTINGS }, error: null } })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(put({ locationId: LOC, conversions: { dataset_id: 'act_123' } }))
+    expect(res.status).toBe(400)
+    expect(db.writes).toEqual([])
+  })
+
+  it('a failed settings read writes nothing (the whole column would be overwritten)', async () => {
+    const db = makeDb({ locations: { data: null, error: BOOM } })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(put({ locationId: LOC, conversions: { dataset_id: '2222222222' } }))
+    expect(res.status).toBe(500)
+    expect(db.writes).toEqual([])
+  })
+
+  it('a plain staff member cannot save it', async () => {
+    getCurrentUser.mockResolvedValue({ ...OWNER, role: 'staff', profileRole: 'staff', rolesByLocation: { [LOC]: 'staff' } })
+    const db = makeDb({ locations: { data: { settings: SETTINGS }, error: null } })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(put({ locationId: LOC, conversions: { dataset_id: '2222222222' } }))
+    expect(res.status).toBe(403)
+    expect(db.writes).toEqual([])
+  })
+})
