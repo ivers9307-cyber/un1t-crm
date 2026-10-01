@@ -1,7 +1,7 @@
 // CARDOCUPLOAD.1 (C124) — the car-document signed-upload slot rules.
 import { describe, it, expect } from 'vitest'
 import {
-  carDocumentExtension, buildCarDocumentUploadPath, isCarDocumentUploadPath, checkCarDocumentSize,
+  carDocumentExtension, buildCarDocumentUploadPath, isCarDocumentUploadPath, parseCarDocumentUploadPath, checkCarDocumentSize,
   CAR_DOCUMENT_SIZE_ERROR, CAR_DOCUMENT_EMPTY_ERROR, CAR_DOCUMENT_HEAD_BYTES,
 } from './car-document-upload.js'
 import { CAR_DOCUMENT_MIME_TYPES, CAR_DOCUMENT_MAX_BYTES } from './car-document-media.js'
@@ -45,6 +45,39 @@ describe('isCarDocumentUploadPath', () => {
     expect(isCarDocumentUploadPath(`cars/${CAR}/invoice.pdf`, CAR, 'other')).toBe(false)
     expect(isCarDocumentUploadPath(null, CAR, 'other')).toBe(false)
     expect(isCarDocumentUploadPath(good, '', 'other')).toBe(false)
+  })
+})
+
+describe('parseCarDocumentUploadPath (CARDOCORPHANS.1: the orphan sweep\'s shape test)', () => {
+  it('reads the car and doc type out of any slot the sign route can mint', () => {
+    expect(parseCarDocumentUploadPath(`${CAR}/other/${ID}.pdf`)).toEqual({ carId: CAR, docType: 'other' })
+    expect(parseCarDocumentUploadPath(`${CAR}/ferry_invoice/${ID}.heif`)).toEqual({ carId: CAR, docType: 'ferry_invoice' })
+    for (const t of ['nct_invoice', 'irish_customs', 'bca_invoice', 'transporter', 'ferry_invoice', 'other']) {
+      expect(parseCarDocumentUploadPath(`${CAR}/${t}/${ID}.jpg`)).toEqual({ carId: CAR, docType: t })
+    }
+  })
+  it('agrees with isCarDocumentUploadPath for the car and doc type it returns', () => {
+    const p = `${CAR}/bca_invoice/${ID}.png`
+    const parsed = parseCarDocumentUploadPath(p)
+    expect(isCarDocumentUploadPath(p, parsed.carId, parsed.docType)).toBe(true)
+  })
+  it('refuses the Xero cars/ folder, legacy multipart names, unknown doc types and anything else', () => {
+    expect(parseCarDocumentUploadPath(`cars/${CAR}/xero-invoice-1.pdf`)).toBeNull()
+    expect(parseCarDocumentUploadPath(`cars/${CAR}/${ID}.pdf`)).toBeNull()
+    expect(parseCarDocumentUploadPath(`cars/other/${ID}.pdf`)).toBeNull()
+    expect(parseCarDocumentUploadPath(`${CAR}/other/1727000000000-abc123-invoice.pdf`)).toBeNull()
+    expect(parseCarDocumentUploadPath(`${CAR}/receipts/${ID}.pdf`)).toBeNull()
+    expect(parseCarDocumentUploadPath(`${CAR}/other/${ID}.exe`)).toBeNull()
+    expect(parseCarDocumentUploadPath(`${CAR}/other/${ID}.PDF`)).toBeNull()
+    expect(parseCarDocumentUploadPath(`${CAR}/other/${ID}.pdf/x`)).toBeNull()
+    expect(parseCarDocumentUploadPath(`${CAR}/other/../other/${ID}.pdf`)).toBeNull()
+    expect(parseCarDocumentUploadPath(`x/${CAR}/other/${ID}.pdf`)).toBeNull()
+    expect(parseCarDocumentUploadPath(`${CAR.toUpperCase()}/other/${ID}.pdf`)).toBeNull()
+    expect(parseCarDocumentUploadPath(`not-a-uuid/other/${ID}.pdf`)).toBeNull()
+    expect(parseCarDocumentUploadPath(`${CAR}/other/`)).toBeNull()
+    expect(parseCarDocumentUploadPath('')).toBeNull()
+    expect(parseCarDocumentUploadPath(null)).toBeNull()
+    expect(parseCarDocumentUploadPath(42)).toBeNull()
   })
 })
 
