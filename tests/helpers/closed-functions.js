@@ -134,9 +134,20 @@ export function walkFunction(sql, fn, state = { present: true, open: [] }) {
   return { present, open: CLIENT_ROLES.filter((r) => open.has(r)) }
 }
 
-/** Functions one migration REVOKEs EXECUTE (or ALL) on, by name, from authenticated. */
+/**
+ * Functions one migration REVOKEs EXECUTE (or ALL) on, by name, from
+ * authenticated, and leaves closed to it at the end of the file: a function it
+ * revokes from every client role and then grants back to authenticated (the
+ * "REVOKE ALL … FROM PUBLIC, anon, authenticated; GRANT EXECUTE … TO
+ * authenticated" idiom for a client-callable function) is not closed.
+ */
 export function closedToAuthenticated(sql) {
-  return [...new Set(privilegeEvents(sql)
+  const named = [...new Set(privilegeEvents(sql)
     .filter((e) => e.kind === 'revoke' && e.roles.includes('authenticated'))
     .flatMap((e) => e.fns.filter((f) => !f.startsWith('schema:'))))]
+  const allOpen = { present: true, open: CLIENT_ROLES }
+  return named.filter((fn) => {
+    const after = walkFunction(sql, fn, allOpen)
+    return after.present && !after.open.includes('authenticated')
+  })
 }

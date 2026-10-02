@@ -146,6 +146,11 @@ describe('the detector', () => {
     expect(closedToAuthenticated('REVOKE ALL ON FUNCTION private.a() FROM PUBLIC, anon;')).toEqual([])
     expect(closedToAuthenticated('REVOKE ALL ON ALL FUNCTIONS IN SCHEMA private FROM authenticated;')).toEqual([])
     expect(closedToAuthenticated('REVOKE SELECT ON public.t FROM authenticated;')).toEqual([])
+    // a revoke that is granted back in the file closes nothing (client-callable idiom)
+    expect(closedToAuthenticated('REVOKE ALL ON FUNCTION private.a() FROM PUBLIC, anon, authenticated;\nGRANT EXECUTE ON FUNCTION private.a() TO authenticated, service_role;')).toEqual([])
+    expect(closedToAuthenticated('REVOKE ALL ON FUNCTION private.a(), private.b() FROM PUBLIC, anon, authenticated;\nGRANT EXECUTE ON FUNCTION private.a() TO authenticated;')).toEqual(['private.b'])
+    // table-level REVOKEs (mig 701, 702) are not function closes
+    expect(closedToAuthenticated('REVOKE ALL ON TABLE private.t FROM PUBLIC, anon, authenticated;\nREVOKE INSERT, UPDATE ON public.bookings FROM authenticated;')).toEqual([])
     expect(fnName('"Private"."Get_User_Role"(uuid)')).toBe('private.get_user_role')
     expect(fnName('get_user_role(uuid)')).toBe('public.get_user_role')
   })
