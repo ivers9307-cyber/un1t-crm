@@ -5,6 +5,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
+import { sqlCode } from './helpers/sql-code.js'
 import { PGlite } from '@electric-sql/pglite'
 
 const MIG_622 = readFileSync(path.resolve(import.meta.dirname, '../supabase/migrations/622_staff_tombstone.sql'), 'utf8')
@@ -258,7 +259,7 @@ afterAll(async () => { await db?.close() })
 // as one implicit transaction.
 describe('mig 622 — all or nothing', () => {
   it('wraps itself in one explicit transaction', () => {
-    const sql = MIG_622.replace(/--.*$/gm, '')
+    const sql = sqlCode(MIG_622)
     expect(sql.match(/^\s*BEGIN;\s*$/gm)).toHaveLength(1)
     expect(sql.match(/^\s*COMMIT;\s*$/gm)).toHaveLength(1)
     expect(sql.trimStart().startsWith('BEGIN;')).toBe(true)
@@ -738,7 +739,7 @@ describe('mig 622 — tombstone_staff_profile', () => {
       }
     })
     it('the migration TEXT revokes every write privilege from both roles, and self-checks', () => {
-      const sql = MIG_622.replace(/--.*$/gm, '')
+      const sql = sqlCode(MIG_622)
       expect(sql).toMatch(/REVOKE\s+INSERT,\s*UPDATE,\s*DELETE,\s*TRUNCATE,\s*REFERENCES,\s*TRIGGER\s+ON\s+public\.profiles\s+FROM\s+anon,\s*authenticated/)
       expect(sql).not.toMatch(/REVOKE[^;]*\bSELECT\b[^;]*ON\s+public\.profiles/)   // SELECT is migs 153/153b's business
       expect(sql).toMatch(/information_schema\.column_privileges/)                    // verified against the catalog, not the text

@@ -7,7 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn() }))
-vi.mock('@/lib/permissions', () => ({ hasPermission: vi.fn() }))
+vi.mock('@/lib/permissions', () => ({ hasPermission: vi.fn(), hasPermissionForLocation: vi.fn() }))
 // The email list (read only when the email permission is on) answers empty.
 vi.mock('@/lib/supabase', () => {
   const chain = { select: () => chain, eq: () => chain, order: async () => ({ data: [], error: null }) }
@@ -20,7 +20,7 @@ vi.mock('next/navigation', () => ({
 
 import TemplatesListPage from './page.js'
 import { getCurrentUser } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermission, hasPermissionForLocation } from '@/lib/permissions'
 import WhatsappTemplatesList from '@/components/WhatsappTemplatesList'
 import { LOC_A, LOC_B, person, MASTER } from '../../../../../tests/helpers/owner-at-location-callers.js'
 
@@ -41,6 +41,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   // WhatsApp on, email off: the page locks to the WhatsApp channel.
   hasPermission.mockImplementation((_user, key) => key === 'whatsapp')
+  // GATES-3 (b) — the manage controls also ask `whatsapp` AT the studio.
+  hasPermissionForLocation.mockImplementation((_user, _loc, key) => key === 'whatsapp')
 })
 
 describe('/communications/templates — WhatsApp template controls (WATPLROLE.1)', () => {
@@ -72,5 +74,13 @@ describe('/communications/templates — WhatsApp template controls (WATPLROLE.1)
     const tree = await render()
     expect(findAll(tree, NEW_WA)).toEqual([])
     expect(findAll(tree, LIST)).toEqual([])
+  })
+
+  it('GATES-3 (b): a manager whose `whatsapp` does not resolve AT the studio gets no manage controls', async () => {
+    hasPermissionForLocation.mockImplementation(() => false)
+    getCurrentUser.mockResolvedValue(person({ [LOC_B]: 'manager' }, LOC_B))
+    const tree = await render()
+    expect(findAll(tree, NEW_WA)).toEqual([])
+    expect(findAll(tree, LIST).map((n) => n.props)).toEqual([{ locationId: LOC_B, canManage: false }])
   })
 })

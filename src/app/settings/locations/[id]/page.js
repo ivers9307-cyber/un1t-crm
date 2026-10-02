@@ -27,6 +27,7 @@ import RolePermissions from '@/components/RolePermissions'
 import CarDepositSettings from '@/components/CarDepositSettings'
 import BrandingSettings from '@/components/BrandingSettings'
 import OrgBrandingSettings from '@/components/OrgBrandingSettings'
+import { isOrgAdmin } from '@/lib/org-admin'
 import LocationIntegrations from '@/components/settings/LocationIntegrations'
 import NotificationConfigCard from '@/components/settings/NotificationConfigCard'
 import EmailMailboxesCard from '@/components/settings/EmailMailboxesCard'
@@ -36,6 +37,7 @@ import GeofenceAttendanceCard from '@/components/settings/GeofenceAttendanceCard
 import SendQuietHoursCard from '@/components/settings/SendQuietHoursCard'
 import EmailCopyCard from '@/components/settings/EmailCopyCard'
 import EmailSpamFilterCard from '@/components/settings/EmailSpamFilterCard'
+import ReadFailedNote from '@/components/settings/ReadFailedNote'
 
 export const dynamic = 'force-dynamic'
 
@@ -80,8 +82,20 @@ export default async function EditLocationPage(props) {
   if (guardMasterOrOwner(user, params.id)) redirect('/')
 
   const db = createServerClient()
-  const { data: locationRow } = await db.from('locations').select('*').eq('id', params.id).single()
+  const { data: locationRow, error: locationErr } = await db.from('locations').select('*').eq('id', params.id).single()
 
+  // REVIEWNITS.1 (D5, from CHANNELREAD.1): a failed read is not "no such
+  // location". Say so, with Try again, and render nothing that could act on
+  // the unread state. No row at all is still a 404.
+  if (locationErr && locationErr.code !== 'PGRST116') {
+    logError('settings/locations/[id]', 'location read failed', { locationId: params.id, err: locationErr.message })
+    return (
+      <div className="p-8 max-w-3xl">
+        <h2 className="text-2xl font-bold mb-4">Edit Location</h2>
+        <ReadFailedNote what="this location" href={`/settings/locations/${params.id}`} />
+      </div>
+    )
+  }
   if (!locationRow) notFound()
 
   // ACDEVLOC.1 — every component below is a CLIENT component, so whatever
@@ -296,7 +310,12 @@ export default async function EditLocationPage(props) {
             <ImageIcon size={16} className="text-un1t-subtle" />
             <h3 className="text-lg font-semibold">Branding</h3>
           </div>
-          <OrgBrandingSettings orgId={location.organization_id} orgName={org?.name} />
+          {/* C18 ORGROLE.1 — organisation branding is for organisation admins of
+              this studio's org (the /api/settings/org-branding rule); a studio
+              owner keeps the studio branding below. */}
+          {isOrgAdmin(user, location.organization_id) && (
+            <OrgBrandingSettings orgId={location.organization_id} orgName={org?.name} />
+          )}
           <BrandingSettings user={user} locationId={location.id} />
         </section>
       )}

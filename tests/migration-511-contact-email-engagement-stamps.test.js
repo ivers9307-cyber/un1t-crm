@@ -22,6 +22,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, existsSync } from 'node:fs'
 import path from 'node:path'
+import { sqlCode } from './helpers/sql-code.js'
 
 const FILE = path.resolve(
   import.meta.dirname,
@@ -32,7 +33,7 @@ const FILE = path.resolve(
 // above discusses the very shapes being asserted. `COMMENT ON` is a statement,
 // not a `--` comment, so it survives stripping.
 const sql = existsSync(FILE)
-  ? readFileSync(FILE, 'utf8').replace(/--[^\n]*/g, '').toLowerCase()
+  ? sqlCode(readFileSync(FILE, 'utf8')).toLowerCase()
   : ''
 
 describe('migration 511 — contact email engagement stamps', () => {

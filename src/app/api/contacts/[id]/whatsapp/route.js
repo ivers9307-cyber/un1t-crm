@@ -38,6 +38,7 @@ import {
 import { manualTakeoverPatch } from '@/lib/agent/core'
 import { getOrCreateContactConversation } from '@/lib/whatsapp-conversations'
 import { ownNumberOrRefusal } from '@/lib/whatsapp-own-number'
+import { getConversationNumberConfig, pickReplyConfig } from '@/lib/whatsapp-config'
 import { whatsappErrorStatus } from '@/lib/whatsapp-number-missing'
 
 export const runtime = 'nodejs'
@@ -109,6 +110,11 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: opened.error }, { status: opened.status })
   }
   const { conversation, waPhone } = opened
+  // WAREPLYNUMBER.1 (C86) — a reply into this thread goes from the number the
+  // customer wrote to (stamped by the webhook) while it is active here, like
+  // the inbox send; else the checked default. Read by its id: the location is
+  // still resolved once (own, above). null on any failed read → the default.
+  const threadNumber = await getConversationNumberConfig(contact.location_id, conversation.id)
 
   // ── Send ────────────────────────────────────────────────────────
   let result
@@ -125,7 +131,7 @@ export async function POST(request, props) {
           window_expired: true,
         }, { status: 409 })
       }
-      result = await sendTextMessage(waPhone, text, { config: own.config })
+      result = await sendTextMessage(waPhone, text, { config: pickReplyConfig(threadNumber, own.config) })
       messageType = 'text'
       messageBody = text
     } else {
@@ -153,7 +159,7 @@ export async function POST(request, props) {
       if (headerComponent) components.unshift(headerComponent)
       result = await sendTemplateMessage(
         waPhone, template.name, template.language || 'en', components,
-        { config: own.config },
+        { config: pickReplyConfig(threadNumber, own.config, { template: true }) },
       )
       messageType = 'template'
       messageBody = `[Template: ${template.name}]`

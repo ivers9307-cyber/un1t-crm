@@ -9,6 +9,7 @@
 
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
+import { isOrgAdminSomewhere } from '@/lib/org-admin'
 import { isPostmarkAccountConfigured } from '@/lib/postmark-account'
 import { orgHasEmailDomainAddon, tenantEmailStatePayload } from '@/lib/tenant-email'
 import { resolveEmailDomainOrgId, loadEmailDomainRow } from '@/lib/email-domain-service'
@@ -24,8 +25,9 @@ export const dynamic = 'force-dynamic'
 export default async function EmailDomainSettingsPage({ searchParams }) {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  // Owner/master only — the sending domain holds a live sending credential.
-  if (user.role !== 'owner' && user.role !== 'master') redirect('/settings')
+  // Organisation admins only (C18 ORGROLE.1) — the sending domain holds a live
+  // sending credential. The org itself is judged by resolveEmailDomainOrgId.
+  if (!isOrgAdminSomewhere(user)) redirect('/settings')
 
   const params = await searchParams
   const requestedOrg = user.role === 'master' ? (params?.organization_id || null) : null

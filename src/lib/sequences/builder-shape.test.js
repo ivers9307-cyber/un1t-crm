@@ -5,6 +5,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
+import { stripComments } from '../../../tests/helpers/js-code.js'
 import {
   SEQUENCE_BUILDER_ROW_SELECT, SEQUENCE_BUILDER_PAGE_SELECT, toBuilderSequence, toPerformanceSteps,
 } from './builder-shape.js'
@@ -79,8 +80,8 @@ describe('the selects name real columns and no *', () => {
 })
 
 describe('no client component reads the stored secret off the sequence', () => {
-  const read = (rel) => readFileSync(path.resolve(import.meta.dirname, '../../components/sequences', rel), 'utf8')
-    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1')
+  // Comments blanked by the TypeScript parser's ranges, never a regex (GUARDSTRIP.1).
+  const read = (rel) => stripComments(readFileSync(path.resolve(import.meta.dirname, '../../components/sequences', rel), 'utf8'))
 
   it.each(['SequenceSettings.jsx', 'SequenceFlowBuilder.jsx'])('%s', (file) => {
     const code = read(file)

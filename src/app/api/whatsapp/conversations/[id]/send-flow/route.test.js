@@ -82,6 +82,14 @@ describe('POST /api/whatsapp/conversations/[id]/send-flow', () => {
     expect(sendFlowMessage.mock.calls[0][1].flowToken).toBe(`${CONTACT_ID}.${LOC_ID}`)
   })
 
+  // WAREPLYNUMBER.1 (C86) — the Flow goes from the number this thread was
+  // written to (else the studio default).
+  it('sends from the thread number: names the conversation', async () => {
+    createServerClient.mockReturnValue(stubDb())
+    await post()
+    expect(sendFlowMessage.mock.calls[0][1]).toMatchObject({ locationId: LOC_ID, replyInConversation: CONV_ID })
+  })
+
   // FLOWTOKENDEDUP.1 (C73) — supabase-js RESOLVES a failed insert with
   // { error }; the old try/catch could never see it. Meta already has the
   // Flow, so the send still succeeds (never a louder failure), but the loss is

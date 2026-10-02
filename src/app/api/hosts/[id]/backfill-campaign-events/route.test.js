@@ -1,6 +1,7 @@
 // HOST-METRICS.1 — POST /api/hosts/[id]/backfill-campaign-events
 //
-// Manager+, org-scoped (gate() copied from ../route.js), 404 on a cross-org
+// Organisation admins only (C18 ORGROLE.1: master or an org_admin grant on
+// the active org; it used to be manager+), org-scoped, 404 on a cross-org
 // id. Dry-run by default; ?dry=0 opts into writes. The route itself does no
 // Postmark I/O — it just resolves the host and calls
 // backfillHostCampaignEvents, so this test mocks that lib entirely.
@@ -22,6 +23,8 @@ import { logInfo } from '@/lib/log'
 
 const HOST_ID = 'h-1'
 const ORG_ID = 'org-1'
+// An org admin of ORG_ID whose own role at the active studio is staff.
+const ORG_ADMIN = { role: 'staff', orgAdminOrgIds: [ORG_ID], activeOrganization: { id: ORG_ID } }
 const SUMMARY = { dry: true, scanned: 0, matched: 0, stamped: 0, updated: 0, skipped: 0, errors: [] }
 
 function makeRequest(qs = '') {
@@ -50,8 +53,18 @@ describe('POST /api/hosts/[id]/backfill-campaign-events', () => {
     expect(backfillHostCampaignEvents).not.toHaveBeenCalled()
   })
 
+  it('403s a manager or a studio owner with no org_admin grant (C18 ORGROLE.1)', async () => {
+    for (const role of ['manager', 'owner']) {
+      getCurrentUser.mockResolvedValue({ role, orgAdminOrgIds: [], activeOrganization: { id: ORG_ID } })
+      const res = await POST(makeRequest(), props)
+      expect(res.status).toBe(403)
+    }
+    expect(loadHostForOrg).not.toHaveBeenCalled()
+    expect(backfillHostCampaignEvents).not.toHaveBeenCalled()
+  })
+
   it('404s a host in another org (no IDOR enumeration)', async () => {
-    getCurrentUser.mockResolvedValue({ role: 'manager', activeOrganization: { id: ORG_ID } })
+    getCurrentUser.mockResolvedValue(ORG_ADMIN)
     loadHostForOrg.mockResolvedValue(null)
     const res = await POST(makeRequest(), props)
     expect(res.status).toBe(404)
@@ -59,7 +72,7 @@ describe('POST /api/hosts/[id]/backfill-campaign-events', () => {
   })
 
   it('defaults to a dry run', async () => {
-    getCurrentUser.mockResolvedValue({ role: 'manager', activeOrganization: { id: ORG_ID } })
+    getCurrentUser.mockResolvedValue(ORG_ADMIN)
     loadHostForOrg.mockResolvedValue({ id: HOST_ID, organization_id: ORG_ID })
     const res = await POST(makeRequest(), props)
     expect(res.status).toBe(200)
@@ -72,7 +85,7 @@ describe('POST /api/hosts/[id]/backfill-campaign-events', () => {
   })
 
   it('?dry=0 opts into a live run', async () => {
-    getCurrentUser.mockResolvedValue({ role: 'manager', activeOrganization: { id: ORG_ID } })
+    getCurrentUser.mockResolvedValue(ORG_ADMIN)
     loadHostForOrg.mockResolvedValue({ id: HOST_ID, organization_id: ORG_ID })
     const res = await POST(makeRequest('?dry=0'), props)
     expect(res.status).toBe(200)
@@ -81,7 +94,7 @@ describe('POST /api/hosts/[id]/backfill-campaign-events', () => {
   })
 
   it('passes the loaded host id (org-scoped, not the raw param) and a from/to window', async () => {
-    getCurrentUser.mockResolvedValue({ role: 'owner', activeOrganization: { id: ORG_ID } })
+    getCurrentUser.mockResolvedValue(ORG_ADMIN)
     loadHostForOrg.mockResolvedValue({ id: HOST_ID, organization_id: ORG_ID })
     await POST(makeRequest(), props)
     const call = backfillHostCampaignEvents.mock.calls[0]
@@ -91,7 +104,7 @@ describe('POST /api/hosts/[id]/backfill-campaign-events', () => {
   })
 
   it('no active organization -> 400', async () => {
-    getCurrentUser.mockResolvedValue({ role: 'manager', activeOrganization: null, activeLocation: null })
+    getCurrentUser.mockResolvedValue({ role: 'master', isMaster: true, activeOrganization: null, activeLocation: null })
     const res = await POST(makeRequest(), props)
     expect(res.status).toBe(400)
     expect(backfillHostCampaignEvents).not.toHaveBeenCalled()

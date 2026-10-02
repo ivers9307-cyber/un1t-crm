@@ -2,9 +2,10 @@ import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createTemplate as createMetaTemplate, getTemplates as getMetaTemplates } from '@/lib/whatsapp'
-import { getCurrentUser, assertLocationAccess , getUserLocationIds, hasRoleAtLocation } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess , getUserLocationIds } from '@/lib/auth'
+import { canManageWaTemplatesAt } from '@/lib/wa-template-access'
 import { validateBody } from '@/lib/validate'
-import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
+import { uuidLike } from '@/lib/schemas'
 import { componentsButtonsError } from '@/lib/whatsapp-template-buttons'
 import { ownNumberOrRefusal } from '@/lib/whatsapp-own-number'
 
@@ -127,7 +128,8 @@ export async function GET(request) {
 }
 
 // POST /api/whatsapp/templates — create template and submit to Meta. MANAGER_ROLES
-// at the location created at, the resubmit rule (WATPLROLE.1).
+// and `whatsapp` at the location created at, the resubmit rule (WATPLROLE.1,
+// GATES-3).
 export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
@@ -142,7 +144,8 @@ export async function POST(request) {
   // Meta under the studio's name. Same rule as resubmit: MANAGER_ROLES AT the
   // location created at (never the active studio's role). No location at all
   // fails closed here instead of creating a row with none.
-  if (!hasRoleAtLocation(user, locationId, MANAGER_ROLES)) {
+  // GATES-3 (b) — and the `whatsapp` permission there (canManageWaTemplatesAt).
+  if (!canManageWaTemplatesAt(user, locationId)) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 

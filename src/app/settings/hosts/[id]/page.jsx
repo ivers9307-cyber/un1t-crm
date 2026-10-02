@@ -8,6 +8,7 @@
 
 import { getCurrentUser } from '@/lib/auth'
 import { ADMIN_ROLES } from '@/lib/schemas'
+import { isActiveOrgAdmin } from '@/lib/org-admin'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { ChevronLeft } from 'lucide-react'
@@ -30,7 +31,9 @@ export default async function HostDetailPage(props) {
       >
         <ChevronLeft size={14} /> Event hosts
       </Link>
-      <HostDetail hostId={params.id} />
+      {/* C18 ORGROLE.1 — the Postmark back-fill shows only to an organisation
+          admin (its route's rule). */}
+      <HostDetail hostId={params.id} canBackfill={isActiveOrgAdmin(user)} />
     </div>
   )
 }

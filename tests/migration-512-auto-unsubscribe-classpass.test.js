@@ -26,6 +26,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, existsSync } from 'node:fs'
 import path from 'node:path'
+import { sqlCode } from './helpers/sql-code.js'
 
 const FILE = path.resolve(
   import.meta.dirname,
@@ -35,7 +36,7 @@ const FILE = path.resolve(
 // Assertions run against the STATEMENTS, not the prose — this migration has to
 // discuss the write it is removing in order to explain itself.
 const sql = existsSync(FILE)
-  ? readFileSync(FILE, 'utf8').replace(/--[^\n]*/g, '').toLowerCase()
+  ? sqlCode(readFileSync(FILE, 'utf8')).toLowerCase()
   : ''
 
 describe('migration 512 — auto_unsubscribe_classpass drops the email_status write', () => {

@@ -77,6 +77,10 @@ function makeDbFor(row, updates, lists = {}) {
         eq: () => b,
         neq: () => b,
         contains: () => b,
+        // TRIALCLAIM.1 — the trial claim's insert (answered by single()
+        // below, so it lands) and its release's .is() filter.
+        insert: () => b,
+        is: () => b,
         limit: () => b,
         then(resolve, reject) {
           return Promise.resolve({ data: lists[table] || [], error: null }).then(resolve, reject)
@@ -745,6 +749,9 @@ describe('PATCH class_booking approval — the trial grant is written ahead (TRI
           // row) find nothing here.
           neq: () => b,
           contains: () => b,
+          // TRIALCLAIM.1 — the claim insert lands (single() answers an id).
+          insert: () => b,
+          is: () => b,
           limit: () => b,
           then(resolve, reject) { return Promise.resolve({ data: [], error: null }).then(resolve, reject) },
           update(p) { patch = p; log.push({ table, patch: p, eqs }); return b },

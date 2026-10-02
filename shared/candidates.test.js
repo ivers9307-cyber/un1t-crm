@@ -252,6 +252,25 @@ describe('buildCandidates — manager', () => {
     expect(untimed).toBe(1)
     expect(JSON.stringify(candidates)).not.toMatch(/rate|salary|overtime|cost/)
   })
+
+  // REVIEWNITS.1 (D5): untimed counted every row of the 9-day read (the
+  // padding Sunday before, next Monday) although no fact reads those days.
+  it('counts only untimed shifts on days a fact reads (the block\'s week and the day either side)', () => {
+    const untimedRow = (who, date) => S(who, date, null, null, { shift_templates: { start_time: null, end_time: null } })
+    const { untimed } = build({ shifts: [...SHIFTS, untimedRow('ann', '2026-09-24'), untimedRow('hal', '2026-09-28'), untimedRow('gus', '2026-09-20')] })
+    expect(untimed).toBe(1)
+    const monday = { ...BLOCK, block_date: '2026-09-21' }
+    expect(build({ block: monday, shifts: [...SHIFTS, untimedRow('hal', '2026-09-20')] }).untimed).toBe(1)
+  })
+
+  // REVIEWNITS.1 (D5): on_site read only shifts dated the block's day, so a
+  // shift here the night before that ran past midnight was missed.
+  it('a shift here the night before that runs past midnight is on site', () => {
+    const { candidates } = build({ members: [M('ivy', 'Ivy Night')], shifts: [S('ivy', '2026-09-22', '22:00:00', '02:00:00')] })
+    expect(candidates[0].on_site).toMatchObject({ start: '22:00', end: '02:00', gap_minutes: 480 })
+    const ended = build({ members: [M('ivy', 'Ivy Night')], shifts: [S('ivy', '2026-09-22', '20:00:00', '23:00:00')] })
+    expect(ended.candidates[0].on_site).toBeNull()
+  })
 })
 
 // CANDIDATES.1 review 2 — when the other studios could not be read, "free"

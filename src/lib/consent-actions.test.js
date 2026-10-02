@@ -22,6 +22,8 @@
 import { describe, it, expect } from 'vitest'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
+import { stripComments as jsCode } from '../../tests/helpers/js-code.js'
+import { sqlCode } from '../../tests/helpers/sql-code.js'
 
 import {
   CONSENT_ACTIONS,
@@ -154,9 +156,11 @@ describe('every consent_log writer in src/ uses the constants module', () => {
       //   * the CSV import route accepts 'opted_out' as an INBOUND column
       //     value (that is Mailchimp's vocabulary, arriving from outside) —
       //     those lines never name `action`, which is what we key on.
-      const offending = readFileSync(file, 'utf8')
+      // Comments blanked by the TypeScript parser's ranges (same lines), never
+      // a regex: a '//' inside a string ended the old per-line strip (GUARDSTRIP.1).
+      const offending = jsCode(readFileSync(file, 'utf8'))
         .split('\n')
-        .map((line, i) => [i + 1, line.replace(/\/\/.*$/, '')])
+        .map((line, i) => [i + 1, line])
         .filter(([, line]) =>
           /['"]opted_(in|out)['"]/.test(line) && /\baction\b/.test(line) && !/wa_status/.test(line))
         .map(([n, line]) => `${n}: ${line.trim()}`)
@@ -205,9 +209,9 @@ describe('K6 — no new migration copies the mig 488 dual-spelling workaround', 
   const MIGRATIONS = path.resolve(process.cwd(), 'supabase/migrations')
 
   // Executed SQL only: `--` line comments and /* */ blocks are prose, and the
-  // prose in 005/516/517 legitimately discusses the legacy spellings.
-  const stripComments = (sql) =>
-    sql.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--[^\n]*/g, ' ')
+  // prose in 005/516/517 legitimately discusses the legacy spellings. Blanked
+  // by the quote-aware $tag$-pairing scan, never a regex (GUARDSTRIP.1).
+  const stripComments = sqlCode
 
   // Grandfathered, by name and with the reason. Nothing else may join this.
   const HISTORICAL = {

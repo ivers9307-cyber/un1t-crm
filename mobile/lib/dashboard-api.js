@@ -83,8 +83,10 @@ export async function fetchRosterRunway(locationId) {
 // contacts only while holding Contacts there, and this screen is gated by
 // dashboard_studio. null = the route did not answer (failed, thrown, an HTML
 // 404 while the web deploy lags the OTA, or a malformed body). The screen
-// shows dashes and says so: a failed read is never zeros.
-export async function fetchStudioContactCounts(locationId) {
+// shows dashes and says so: a failed read is never zeros. (Not named
+// fetchStudioContactCounts: that is shared/dashboard-data's service-role
+// reader, which the phone must never call.)
+export async function fetchStudioContactCountsFromRoute(locationId) {
   const qs = new URLSearchParams({ location_id: locationId })
   try {
     const res = await api(`/api/dashboard/studio-contacts?${qs.toString()}`, { locationId })
@@ -119,10 +121,17 @@ export function studioContactNumbers(counts, headlineStatuses) {
   }
 }
 
+// What the Studio dashboard's WhatsApp unread card shows. null = the read
+// failed (shared fetchStudioDashboardData): a dash and no tap, never "0".
+export function studioWhatsappUnread(total) {
+  if (total == null) return { value: '—', sublabel: "Couldn't load", accent: 'text-un1t-muted', pressable: false }
+  return { value: total, sublabel: 'across the inbox', accent: total > 0 ? 'text-un1t-text' : 'text-un1t-muted', pressable: total > 0 }
+}
+
 export async function fetchStudioDashboard(locationId) {
   const [base, contactCounts, pendingTimeOff, pendingSwaps, rosterRunway] = await Promise.all([
     fetchStudioDashboardData(supabase, locationId),
-    fetchStudioContactCounts(locationId),
+    fetchStudioContactCountsFromRoute(locationId),
     // Manager scope (incl. LEAVE.2's "leave taken by anyone who belongs
     // here") and the expired-pending cut are the route's, not ours.
     pendingList('/api/schedule/time-off', locationId),
