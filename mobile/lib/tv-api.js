@@ -10,9 +10,10 @@
 // keeps its old { success, data | id | error } shape, so the screens are
 // unchanged.
 //
-// Old server: an OTA can land before the web deploy that adds the routes.
-// The server then answers an HTML 404 (routeNotDeployed), and only then the
-// old direct path runs (./tv-api-legacy.js, deleted in 1g).
+// MEMBERWRITESWEEP.1g — the old-server fallback 1f kept (the direct path on
+// an HTML 404, ./tv-api-legacy.js) is gone: mig 685 closes the three tables
+// to client sessions, so a direct read or write could only fail. An HTML 404
+// is now an error like any other.
 //
 // Image bytes go through the signed-upload routes (uploadTvImage below,
 // TVUPLOAD.1); public image URLs are the bucket's public read (tvImageUrl).
@@ -21,25 +22,8 @@ import Constants from 'expo-constants'
 import { supabase } from './supabase'
 import { api, authHeaders } from './api'
 import { readPickedFiles, withTimeout, mimeResolver } from './upload-slots'
-import * as legacy from './tv-api-legacy'
 
 const API_BASE = Constants.expoConfig?.extra?.apiBaseUrl || ''
-
-/**
- * Is this api() answer "the route does not exist on this server"? Only the
- * transport envelope api() mints for a non-JSON body with status 404 (an
- * older deploy's HTML 404 page). A route's own JSON 404 ("TV not found") is
- * an answer, and a dropped connection has no status: neither falls back.
- */
-export function routeNotDeployed(res) {
-  return res?.transport === true && res?.status === 404
-}
-
-// The route's answer, or (older server only) the old direct path's.
-async function viaRoute(path, options, legacyCall) {
-  const res = await api(path, options)
-  return routeNotDeployed(res) ? legacyCall() : res
-}
 
 const failed = (res, fallback) => ({ success: false, error: res?.error || fallback })
 const done = (res, fallback) => (res?.success ? { success: true } : failed(res, fallback))
@@ -78,15 +62,13 @@ export function orientationLabel(rotation) {
  */
 export async function listTvDisplays(locationId) {
   if (!locationId) return { success: true, data: [] }
-  const res = await viaRoute(`/api/admin/tv-displays?location_id=${enc(locationId)}`, { locationId },
-    () => legacy.listTvDisplays(locationId))
+  const res = await api(`/api/admin/tv-displays?location_id=${enc(locationId)}`, { locationId })
   return res?.success ? { success: true, data: res.data || [] } : failed(res, 'Could not load the TVs.')
 }
 
 /** Clear a TV back to the idle screen. */
 export async function clearTvContent(tvDisplayId) {
-  const res = await viaRoute(`/api/admin/tv-displays/${enc(tvDisplayId)}/content`, { method: 'DELETE' },
-    () => legacy.clearTvContent(tvDisplayId))
+  const res = await api(`/api/admin/tv-displays/${enc(tvDisplayId)}/content`, { method: 'DELETE' })
   return done(res, 'Could not clear the TV.')
 }
 
@@ -96,22 +78,19 @@ export async function clearTvContent(tvDisplayId) {
 export async function registerTvDisplay(locationId, label) {
   if (!locationId || !label?.trim()) return { success: false, error: 'A label is required.' }
   const trimmed = label.trim()
-  const res = await viaRoute('/api/admin/tv-displays', { method: 'POST', body: { location_id: locationId, label: trimmed }, locationId },
-    () => legacy.registerTvDisplay(locationId, trimmed))
+  const res = await api('/api/admin/tv-displays', { method: 'POST', body: { location_id: locationId, label: trimmed }, locationId })
   return done(res, 'Could not register the TV.')
 }
 
 /** Delete a TV. Its cast URL stops working (idempotent if already gone). */
 export async function deleteTvDisplay(id) {
-  const res = await viaRoute(`/api/admin/tv-displays/${enc(id)}`, { method: 'DELETE' },
-    () => legacy.deleteTvDisplay(id))
+  const res = await api(`/api/admin/tv-displays/${enc(id)}`, { method: 'DELETE' })
   return deleted(res, 'Could not delete the TV.')
 }
 
 /** Set how the panel is physically hung — the cast picks it up on its next poll. */
 export async function setTvRotation(id, rotation) {
-  const res = await viaRoute(`/api/admin/tv-displays/${enc(id)}`, { method: 'PATCH', body: { rotation } },
-    () => legacy.setTvRotation(id, rotation))
+  const res = await api(`/api/admin/tv-displays/${enc(id)}`, { method: 'PATCH', body: { rotation } })
   return done(res, 'Could not change the orientation.')
 }
 
@@ -120,8 +99,7 @@ export async function setTvRotation(id, rotation) {
 /** The location's reusable templates (base image + fixed text zones). */
 export async function listTvTemplates(locationId) {
   if (!locationId) return { success: true, data: [] }
-  const res = await viaRoute(`/api/admin/tv-templates?location_id=${enc(locationId)}`, { locationId },
-    () => legacy.listTvTemplates(locationId))
+  const res = await api(`/api/admin/tv-templates?location_id=${enc(locationId)}`, { locationId })
   return res?.success ? { success: true, data: res.data || [] } : failed(res, 'Could not load the templates.')
 }
 
@@ -255,18 +233,17 @@ export async function uploadTvImage({ uri, name, mimeType }, locationId, kind = 
  * source_type: 'url' | 'storage' | 'template'. template_values carries the
  * per-zone text for a template push. The server stamps pushed_at, pushed_by
  * and triggered_by from the session and refuses a push the cast page may not
- * show (DECISION 4); `pushedBy` is kept for the call sites and used only by
- * the old-server fallback.
+ * show (DECISION 4). A third argument (the caller's id, still passed by the
+ * call sites) is ignored.
  */
-export async function pushTvContent(tvDisplayId, { source_type, source_ref, label, template_values } = {}, pushedBy) {
+export async function pushTvContent(tvDisplayId, { source_type, source_ref, label, template_values } = {}) {
   const body = {
     source_type,
     source_ref,
     label: label || null,
     ...(template_values === undefined ? {} : { template_values }),
   }
-  const res = await viaRoute(`/api/admin/tv-displays/${enc(tvDisplayId)}/content`, { method: 'PUT', body },
-    () => legacy.pushTvContent(tvDisplayId, { source_type, source_ref, label, template_values }, pushedBy))
+  const res = await api(`/api/admin/tv-displays/${enc(tvDisplayId)}/content`, { method: 'PUT', body })
   return done(res, 'Push failed.')
 }
 
@@ -274,33 +251,30 @@ export async function pushTvContent(tvDisplayId, { source_type, source_ref, labe
 
 /** A single template by id (for the editor), with its studio (`location_id`). */
 export async function getTvTemplate(id) {
-  const res = await viaRoute(`/api/admin/tv-templates/${enc(id)}`, {}, () => legacy.getTvTemplate(id))
+  const res = await api(`/api/admin/tv-templates/${enc(id)}`, {})
   return res?.success ? { success: true, data: res.data } : failed(res, 'Could not load the template.')
 }
 
 /**
  * Create or update a template. Pass `id` to update, omit to insert at
- * `locationId`. The server sets created_by from the session; `createdBy` is
- * kept for the call site and used only by the old-server fallback.
+ * `locationId`. The server sets created_by from the session; a `createdBy`
+ * the call site still passes is ignored.
  */
-export async function saveTvTemplate({ id, locationId, name, base_image_path, zones, createdBy } = {}) {
+export async function saveTvTemplate({ id, locationId, name, base_image_path, zones } = {}) {
   if (!name?.trim()) return { success: false, error: 'A template name is required.' }
   if (!base_image_path) return { success: false, error: 'A base image is required.' }
   const fields = { name: name.trim(), base_image_path, zones: zones || [] }
   if (id) {
-    const res = await viaRoute(`/api/admin/tv-templates/${enc(id)}`, { method: 'PUT', body: fields },
-      () => legacy.saveTvTemplate({ id, ...fields }))
+    const res = await api(`/api/admin/tv-templates/${enc(id)}`, { method: 'PUT', body: fields })
     return res?.success ? { success: true, id } : failed(res, 'Could not save the template.')
   }
-  const res = await viaRoute('/api/admin/tv-templates', { method: 'POST', body: { location_id: locationId, ...fields }, locationId },
-    () => legacy.saveTvTemplate({ locationId, ...fields, createdBy }))
+  const res = await api('/api/admin/tv-templates', { method: 'POST', body: { location_id: locationId, ...fields }, locationId })
   if (!res?.success) return failed(res, 'Could not save the template.')
   return { success: true, id: res.id ?? res.data?.id }
 }
 
 /** Delete a template. Any TV showing it falls back to idle (idempotent if already gone). */
 export async function deleteTvTemplate(id) {
-  const res = await viaRoute(`/api/admin/tv-templates/${enc(id)}`, { method: 'DELETE' },
-    () => legacy.deleteTvTemplate(id))
+  const res = await api(`/api/admin/tv-templates/${enc(id)}`, { method: 'DELETE' })
   return deleted(res, 'Could not delete the template.')
 }
