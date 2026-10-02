@@ -109,11 +109,13 @@ describe('(c) no policy goes back to the per-row form', () => {
     expect(offenders).toEqual([])
   })
 
-  it('the 15 phone-gated policies all use the wrapper (not vacuous)', () => {
+  // Mig 701 (C138 e) dropped bookings_insert / bookings_update: no client writes
+  // bookings, the phone only reads (bookings_select stays).
+  it('the 13 phone-gated policies all use the wrapper (not vacuous)', () => {
     const users = netPolicies().filter((p) => /\bauth_mobile_can_location_ids\s*\(/.test(exprOf(p)))
     expect(users.map((p) => `${p.table}.${p.name}`).sort()).toEqual([
       'public.activities.activities_insert', 'public.activities.activities_select', 'public.activities.activities_update',
-      'public.bookings.bookings_insert', 'public.bookings.bookings_select', 'public.bookings.bookings_update',
+      'public.bookings.bookings_select',
       'public.deals.deals_insert', 'public.deals.deals_select', 'public.deals.deals_update',
       'public.notes.notes_insert', 'public.notes.notes_select', 'public.notes.notes_update',
       'public.whatsapp_conversations.wa_conv_select', 'public.whatsapp_messages.wa_msg_select', 'public.whatsapp_templates.wa_tmpl_select',

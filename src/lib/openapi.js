@@ -3436,7 +3436,7 @@ registry.registerPath({
   tags: ['WhatsApp'],
   security: [{ CookieAuth: [] }],
   summary: 'Sign a direct-to-storage upload for template header media',
-  description: "Step 1 of 2. Checks the file against Meta's media caps, mints a path in the location's folder of the public whatsapp-templates bucket and returns a signed-upload token; the browser uploads the bytes straight to storage (they never transit Vercel). Membership at location_id (else the active studio).",
+  description: "Step 1 of 2. Checks the file against Meta's media caps, mints a path in the location's folder of the public whatsapp-templates bucket and returns a signed-upload token; the browser uploads the bytes straight to storage (they never transit Vercel). MANAGER_ROLES plus the whatsapp permission at location_id (else the active studio), or master/owner there; no studio is a 403.",
   request: { body: { content: { 'application/json': { schema: z.object({ format: z.string().min(1), mime: z.string().min(1), size: z.number().int().positive(), file_name: z.string().min(1).max(300), location_id: uuidLike.optional() }).openapi('WaTemplateMediaSign') } } } },
   responses: {
     200: { description: 'Upload path and token', content: { 'application/json': { schema: z.object({ success: z.literal(true), path: z.string(), token: z.string() }) } } },
@@ -3635,7 +3635,7 @@ registry.registerPath({
   tags: ['WhatsApp'],
   security: [{ CookieAuth: [] }],
   summary: 'Finalise a template header-media upload and get a Meta upload handle',
-  description: "Step 2 of 2. Takes the minted path (own folder only), re-checks the REAL size (an oversize object is deleted), and pushes it to Meta's resumable upload with the location's own number for the header_handle a submission needs. A Meta failure is soft: 200 with handle null and meta_error. Multipart bodies (pre-fix tabs) get a 400 asking for a refresh. Membership at location_id (else the active studio).",
+  description: "Step 2 of 2. Takes the minted path (the studio's folder only), re-checks the REAL size (an oversize object is deleted), and pushes it to Meta's resumable upload with the location's own number for the header_handle a submission needs. A Meta failure is soft: 200 with handle null and meta_error. Multipart bodies (pre-fix tabs) get a 400 asking for a refresh. MANAGER_ROLES plus the whatsapp permission at location_id (else the active studio), or master/owner there; no studio is a 403.",
   request: { body: { content: { 'application/json': { schema: z.object({ path: z.string().min(1).max(300), format: z.string().min(1), mime: z.string().min(1), file_name: z.string().min(1).max(300), location_id: uuidLike.optional() }).openapi('WaTemplateMediaFinalise') } } } },
   responses: {
     200: { description: 'Stored; handle is null when Meta refused (meta_error says why)', content: { 'application/json': { schema: z.object({ success: z.literal(true), handle: z.string().nullable(), url: z.string(), path: z.string(), file_name: z.string(), file_size: z.number().int(), meta_error: z.string().nullable() }) } } },
