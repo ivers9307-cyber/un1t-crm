@@ -5,9 +5,13 @@
 // override from the serialized permissions blob, and runs the shared resolver.
 import { MOBILE_NAV_FEATURES, resolveMobileLayout } from 'shared/mobile-nav'
 import { canMobile } from './permissions'
+import { canUseTasksHere } from './tasks-access'
 
 function navFeatureEnabled(profile, feature, activeLocation) {
   if (feature.employmentType && profile?.employment_type !== feature.employmentType) return false
+  // C146 TASKSNEEDCONTACTS.1 — Tasks also needs Contacts at the studio (web
+  // OR phone): since mig 700 every phone task write is refused without it.
+  if (feature.key === 'tasks') return canUseTasksHere(profile, activeLocation)
   return feature.permKeys.some(k => canMobile(profile, k, activeLocation))
 }
 
