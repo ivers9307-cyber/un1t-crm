@@ -1,8 +1,14 @@
-// C138 (c) — DELETE /api/whatsapp/broadcasts/[id] deleted the recipients and
-// never read that delete's error, then deleted the broadcast anyway. A failed
-// recipients delete now fails the request (500) and the broadcast row stays:
-// no half-deleted broadcast. Fictional ids.
+// C138 (c) — DELETE /api/whatsapp/broadcasts/[id] deleted the recipients, never
+// read that delete's error, then deleted the broadcast. Worse, when the
+// broadcast delete then failed (whatsapp_messages.broadcast_id has no cascade,
+// so any broadcast that sent a message refuses with 23503), the broadcast
+// survived with its per-recipient send claims gone, and a re-send went to the
+// whole audience again. Now it is ONE statement: the broadcast delete, its
+// recipient rows going with it through the FK's ON DELETE CASCADE (mig 007).
+// All or nothing. Fictional ids.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { person, LOC_A } from '../../../../../../tests/helpers/role-sweep-callers.js'
 
 let db
@@ -16,7 +22,7 @@ const BC = '11111111-1111-4111-8111-111111111111'
 const del = () => DELETE(new Request('http://localhost/api/x', { method: 'DELETE' }), { params: Promise.resolve({ id: BC }) })
 
 let deletes
-let failRecipients
+let failBroadcast
 function makeDb() {
   return {
     from(table) {
@@ -28,8 +34,8 @@ function makeDb() {
       b.delete = () => { isDelete = true; return b }
       b.then = (ok, bad) => {
         if (isDelete) {
-          if (table === 'whatsapp_broadcast_recipients' && failRecipients) {
-            return Promise.resolve({ data: null, error: { message: 'boom' } }).then(ok, bad)
+          if (table === 'whatsapp_broadcasts' && failBroadcast) {
+            return Promise.resolve({ data: null, error: failBroadcast }).then(ok, bad)
           }
           deletes.push(table)
         }
@@ -42,24 +48,36 @@ function makeDb() {
 
 beforeEach(() => {
   deletes = []
-  failRecipients = false
+  failBroadcast = null
   db = makeDb()
   getCurrentUser.mockResolvedValue(person({ [LOC_A]: { role: 'owner', permissions: { whatsapp: true } } }, LOC_A))
+  vi.spyOn(console, 'error').mockImplementation(() => {})
 })
 
-describe('DELETE /api/whatsapp/broadcasts/[id] — the recipients delete is read (C138 c)', () => {
-  it('a failed recipients delete: 500 and the broadcast is NOT deleted (main: 200, deleted)', async () => {
-    failRecipients = true
-    vi.spyOn(console, 'error').mockImplementation(() => {})
-    const res = await del()
-    expect(res.status).toBe(500)
-    expect((await res.json()).success).toBe(false)
-    expect(deletes).not.toContain('whatsapp_broadcasts')
-  })
-
-  it('both deletes succeed: 200, recipients first then the broadcast', async () => {
+describe('DELETE /api/whatsapp/broadcasts/[id] — one atomic delete (C138 c)', () => {
+  it('deletes the broadcast only; the recipient rows go with it by cascade, never on their own', async () => {
     const res = await del()
     expect(res.status).toBe(200)
-    expect(deletes).toEqual(['whatsapp_broadcast_recipients', 'whatsapp_broadcasts'])
+    expect(deletes).toEqual(['whatsapp_broadcasts'])
+  })
+
+  it('a broadcast that has sent messages (FK 23503): 409, and the recipients were never touched', async () => {
+    failBroadcast = { code: '23503', message: 'violates foreign key constraint' }
+    const res = await del()
+    expect(res.status).toBe(409)
+    expect((await res.json()).success).toBe(false)
+    expect(deletes).toEqual([])
+  })
+
+  it('any other failed delete: 500, nothing deleted', async () => {
+    failBroadcast = { code: 'XX000', message: 'boom' }
+    const res = await del()
+    expect(res.status).toBe(500)
+    expect(deletes).toEqual([])
+  })
+
+  it('the cascade it relies on is declared (mig 007)', () => {
+    const sql = readFileSync(path.resolve(import.meta.dirname, '../../../../../../supabase/migrations/007_whatsapp_platform.sql'), 'utf8')
+    expect(sql).toMatch(/CREATE TABLE[^;]*whatsapp_broadcast_recipients[\s\S]*?broadcast_id UUID NOT NULL REFERENCES whatsapp_broadcasts\(id\) ON DELETE CASCADE/)
   })
 })
