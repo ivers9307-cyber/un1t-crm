@@ -151,13 +151,19 @@ export function rollupAttention({ openApprovals = 0, atRiskHigh = 0 } = {}) {
 export function resolveAccountScope(user, requestedOrgId) {
   if (!user) return { ok: false, status: 401 }
 
+  // profileRole is the account-home's historical third spelling of master;
+  // resolveAdminOrgId keys a master off isMaster/role, so a master is
+  // answered here first (same rule: requested org, else the active one).
   const isMaster = Boolean(user.isMaster || user.profileRole === 'master' || user.role === 'master')
-  // resolveAdminOrgId keys a master off isMaster/role; profileRole is the
-  // account-home's historical third spelling, so normalise it in.
-  const resolved = resolveAdminOrgId(isMaster ? { ...user, isMaster: true } : user, requestedOrgId || null)
+  if (isMaster) {
+    const orgId = requestedOrgId || user.activeOrganization?.id || null
+    if (!orgId) return { ok: false, status: 404 }
+    return { ok: true, orgId, isMaster: true }
+  }
+  const resolved = resolveAdminOrgId(user, requestedOrgId || null)
   if (resolved.notFound) return { ok: false, status: 404 }
-  if (!resolved.orgId) return { ok: false, status: isMaster ? 404 : 403 }
-  return { ok: true, orgId: resolved.orgId, isMaster }
+  if (!resolved.orgId) return { ok: false, status: 403 }
+  return { ok: true, orgId: resolved.orgId, isMaster: false }
 }
 
 // ---------------------------------------------------------------------------
