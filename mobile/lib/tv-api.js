@@ -1,21 +1,52 @@
 // STUDIO-HUB.1 — mobile TV-displays data helpers.
 //
-// tv_displays + tv_content are RLS-scoped to authenticated operators in
-// the location (mig 160), so the mobile app reads/clears them directly
-// via the Supabase client — exactly like the web TVAdmin does. We filter
-// by the active location explicitly: RLS scopes a direct read to ALL the
-// user's locations, and the active-location header only applies to the
-// /api/* routes (not direct Supabase calls).
+// MEMBERWRITESWEEP.1f — every read and write goes through the session routes
+// (/api/admin/tv-displays*, /api/admin/tv-templates*) via api(): tv_displays
+// (web or mobile) at the TV's or template's own studio, pushes validated and
+// stamped (pushed_by, created_by) on the server. Until then these helpers
+// read and wrote tv_displays, tv_content and tv_templates straight from the
+// phone's session under nothing but the membership policy (migs 160/190);
+// mig 685 (PR 1g) closes the three tables to client sessions. Every function
+// keeps its old { success, data | id | error } shape, so the screens are
+// unchanged.
 //
-// Reads, clears, pushes and template edits run here; image bytes go through
-// the signed-upload routes (uploadTvImage below, TVUPLOAD.1).
+// Old server: an OTA can land before the web deploy that adds the routes.
+// The server then answers an HTML 404 (routeNotDeployed), and only then the
+// old direct path runs (./tv-api-legacy.js, deleted in 1g).
+//
+// Image bytes go through the signed-upload routes (uploadTvImage below,
+// TVUPLOAD.1); public image URLs are the bucket's public read (tvImageUrl).
 
 import Constants from 'expo-constants'
 import { supabase } from './supabase'
-import { authHeaders } from './api'
+import { api, authHeaders } from './api'
 import { readPickedFiles, withTimeout, mimeResolver } from './upload-slots'
+import * as legacy from './tv-api-legacy'
 
 const API_BASE = Constants.expoConfig?.extra?.apiBaseUrl || ''
+
+/**
+ * Is this api() answer "the route does not exist on this server"? Only the
+ * transport envelope api() mints for a non-JSON body with status 404 (an
+ * older deploy's HTML 404 page). A route's own JSON 404 ("TV not found") is
+ * an answer, and a dropped connection has no status: neither falls back.
+ */
+export function routeNotDeployed(res) {
+  return res?.transport === true && res?.status === 404
+}
+
+// The route's answer, or (older server only) the old direct path's.
+async function viaRoute(path, options, legacyCall) {
+  const res = await api(path, options)
+  return routeNotDeployed(res) ? legacyCall() : res
+}
+
+const failed = (res, fallback) => ({ success: false, error: res?.error || fallback })
+const done = (res, fallback) => (res?.success ? { success: true } : failed(res, fallback))
+// A delete whose row is already gone (the route's JSON 404) is done: the old
+// direct delete was idempotent too.
+const deleted = (res, fallback) => (res?.success || (res?.status === 404 && !res?.transport) ? { success: true } : failed(res, fallback))
+const enc = encodeURIComponent
 
 /**
  * The public cast URL an operator pastes into UC Cast Pro for a TV.
@@ -40,76 +71,48 @@ export function orientationLabel(rotation) {
 }
 
 /**
- * List the location's TVs with their current content (one tv_content
- * row per display, or none when the TV is idle).
- *
- * Two plain selects rather than a PostgREST embed: embeds are brittle
- * in this codebase (grant + multi-FK ambiguity surprises), and both
- * tables are independently authenticated-readable (the web TVAdmin
- * reads/writes tv_content via the same authenticated client), so a
- * separate fetch + client-side merge is the safe shape.
+ * List the location's TVs with their current content (`content`: the TV's
+ * one tv_content row, or null when it is idle). The route merges the two
+ * reads and answers 500 if either fails, so an unreadable content row never
+ * shows a TV as idle.
  */
 export async function listTvDisplays(locationId) {
   if (!locationId) return { success: true, data: [] }
-  const { data: displays, error } = await supabase
-    .from('tv_displays')
-    .select('id, label, token, active, rotation, location_id, created_at')
-    .eq('location_id', locationId)
-    .order('created_at', { ascending: true })
-  if (error) return { success: false, error: error.message }
-  const rows = displays || []
-  if (rows.length === 0) return { success: true, data: [] }
-
-  const ids = rows.map((d) => d.id)
-  const { data: contents } = await supabase
-    .from('tv_content')
-    .select('tv_display_id, source_type, source_ref, label, template_values, pushed_at')
-    .in('tv_display_id', ids)
-  const byDisplay = new Map((contents || []).map((c) => [c.tv_display_id, c]))
-
-  return {
-    success: true,
-    data: rows.map((d) => ({ ...d, content: byDisplay.get(d.id) || null })),
-  }
+  const res = await viaRoute(`/api/admin/tv-displays?location_id=${enc(locationId)}`, { locationId },
+    () => legacy.listTvDisplays(locationId))
+  return res?.success ? { success: true, data: res.data || [] } : failed(res, 'Could not load the TVs.')
 }
 
-/**
- * Clear a TV back to the idle screen by deleting its content row.
- */
+/** Clear a TV back to the idle screen. */
 export async function clearTvContent(tvDisplayId) {
-  const { error } = await supabase
-    .from('tv_content')
-    .delete()
-    .eq('tv_display_id', tvDisplayId)
-  if (error) return { success: false, error: error.message }
-  return { success: true }
+  const res = await viaRoute(`/api/admin/tv-displays/${enc(tvDisplayId)}/content`, { method: 'DELETE' },
+    () => legacy.clearTvContent(tvDisplayId))
+  return done(res, 'Could not clear the TV.')
 }
 
 // ── Phase A: management (register / delete / orientation) ──────────
-// All RLS-direct writes (tv_displays is authenticated-in-location CRUD).
 
 /** Register a new TV at the location. A unique token is auto-generated. */
 export async function registerTvDisplay(locationId, label) {
   if (!locationId || !label?.trim()) return { success: false, error: 'A label is required.' }
-  const { error } = await supabase
-    .from('tv_displays')
-    .insert({ location_id: locationId, label: label.trim() })
-  if (error) return { success: false, error: error.message }
-  return { success: true }
+  const trimmed = label.trim()
+  const res = await viaRoute('/api/admin/tv-displays', { method: 'POST', body: { location_id: locationId, label: trimmed }, locationId },
+    () => legacy.registerTvDisplay(locationId, trimmed))
+  return done(res, 'Could not register the TV.')
 }
 
 /** Delete a TV. Its cast URL stops working (idempotent if already gone). */
 export async function deleteTvDisplay(id) {
-  const { error } = await supabase.from('tv_displays').delete().eq('id', id)
-  if (error) return { success: false, error: error.message }
-  return { success: true }
+  const res = await viaRoute(`/api/admin/tv-displays/${enc(id)}`, { method: 'DELETE' },
+    () => legacy.deleteTvDisplay(id))
+  return deleted(res, 'Could not delete the TV.')
 }
 
 /** Set how the panel is physically hung — the cast picks it up on its next poll. */
 export async function setTvRotation(id, rotation) {
-  const { error } = await supabase.from('tv_displays').update({ rotation }).eq('id', id)
-  if (error) return { success: false, error: error.message }
-  return { success: true }
+  const res = await viaRoute(`/api/admin/tv-displays/${enc(id)}`, { method: 'PATCH', body: { rotation } },
+    () => legacy.setTvRotation(id, rotation))
+  return done(res, 'Could not change the orientation.')
 }
 
 // ── Phase B: push content (URL / photo / template) ─────────────────
@@ -117,13 +120,9 @@ export async function setTvRotation(id, rotation) {
 /** The location's reusable templates (base image + fixed text zones). */
 export async function listTvTemplates(locationId) {
   if (!locationId) return { success: true, data: [] }
-  const { data, error } = await supabase
-    .from('tv_templates')
-    .select('id, name, base_image_path, zones')
-    .eq('location_id', locationId)
-    .order('name', { ascending: true })
-  if (error) return { success: false, error: error.message }
-  return { success: true, data: data || [] }
+  const res = await viaRoute(`/api/admin/tv-templates?location_id=${enc(locationId)}`, { locationId },
+    () => legacy.listTvTemplates(locationId))
+  return res?.success ? { success: true, data: res.data || [] } : failed(res, 'Could not load the templates.')
 }
 
 /** Public URL for a tv-content bucket path (templates + uploaded images). */
@@ -252,62 +251,56 @@ export async function uploadTvImage({ uri, name, mimeType }, locationId, kind = 
 }
 
 /**
- * Push content to a TV — upserts the single tv_content row (RLS-direct).
- * source_type: 'url' | 'storage' | 'template'. template_values carries
- * the per-zone text for a template push (null otherwise).
+ * Push content to a TV: the route upserts its single tv_content row.
+ * source_type: 'url' | 'storage' | 'template'. template_values carries the
+ * per-zone text for a template push. The server stamps pushed_at, pushed_by
+ * and triggered_by from the session and refuses a push the cast page may not
+ * show (DECISION 4); `pushedBy` is kept for the call sites and used only by
+ * the old-server fallback.
  */
 export async function pushTvContent(tvDisplayId, { source_type, source_ref, label, template_values } = {}, pushedBy) {
-  const { error } = await supabase.from('tv_content').upsert({
-    tv_display_id: tvDisplayId,
+  const body = {
     source_type,
     source_ref,
     label: label || null,
-    template_values: template_values ?? null,
-    pushed_at: new Date().toISOString(),
-    pushed_by: pushedBy || null,
-    triggered_by: pushedBy ? `manual:${pushedBy}` : 'manual',
-  }, { onConflict: 'tv_display_id' })
-  if (error) return { success: false, error: error.message }
-  return { success: true }
+    ...(template_values === undefined ? {} : { template_values }),
+  }
+  const res = await viaRoute(`/api/admin/tv-displays/${enc(tvDisplayId)}/content`, { method: 'PUT', body },
+    () => legacy.pushTvContent(tvDisplayId, { source_type, source_ref, label, template_values }, pushedBy))
+  return done(res, 'Push failed.')
 }
 
 // ── Phase C: template authoring (create / edit / delete) ───────────
 
-/** A single template by id (for the editor). */
+/** A single template by id (for the editor), with its studio (`location_id`). */
 export async function getTvTemplate(id) {
-  const { data, error } = await supabase
-    .from('tv_templates')
-    .select('id, name, base_image_path, zones, location_id')
-    .eq('id', id)
-    .single()
-  if (error) return { success: false, error: error.message }
-  return { success: true, data }
+  const res = await viaRoute(`/api/admin/tv-templates/${enc(id)}`, {}, () => legacy.getTvTemplate(id))
+  return res?.success ? { success: true, data: res.data } : failed(res, 'Could not load the template.')
 }
 
-/** Create or update a template. Pass `id` to update, omit to insert. */
+/**
+ * Create or update a template. Pass `id` to update, omit to insert at
+ * `locationId`. The server sets created_by from the session; `createdBy` is
+ * kept for the call site and used only by the old-server fallback.
+ */
 export async function saveTvTemplate({ id, locationId, name, base_image_path, zones, createdBy } = {}) {
   if (!name?.trim()) return { success: false, error: 'A template name is required.' }
   if (!base_image_path) return { success: false, error: 'A base image is required.' }
+  const fields = { name: name.trim(), base_image_path, zones: zones || [] }
   if (id) {
-    const { error } = await supabase
-      .from('tv_templates')
-      .update({ name: name.trim(), base_image_path, zones: zones || [], updated_at: new Date().toISOString() })
-      .eq('id', id)
-    if (error) return { success: false, error: error.message }
-    return { success: true, id }
+    const res = await viaRoute(`/api/admin/tv-templates/${enc(id)}`, { method: 'PUT', body: fields },
+      () => legacy.saveTvTemplate({ id, ...fields }))
+    return res?.success ? { success: true, id } : failed(res, 'Could not save the template.')
   }
-  const { data, error } = await supabase
-    .from('tv_templates')
-    .insert({ location_id: locationId, name: name.trim(), base_image_path, zones: zones || [], created_by: createdBy || null })
-    .select('id')
-    .single()
-  if (error) return { success: false, error: error.message }
-  return { success: true, id: data?.id }
+  const res = await viaRoute('/api/admin/tv-templates', { method: 'POST', body: { location_id: locationId, ...fields }, locationId },
+    () => legacy.saveTvTemplate({ locationId, ...fields, createdBy }))
+  if (!res?.success) return failed(res, 'Could not save the template.')
+  return { success: true, id: res.id ?? res.data?.id }
 }
 
-/** Delete a template. Any TV showing it falls back to idle. */
+/** Delete a template. Any TV showing it falls back to idle (idempotent if already gone). */
 export async function deleteTvTemplate(id) {
-  const { error } = await supabase.from('tv_templates').delete().eq('id', id)
-  if (error) return { success: false, error: error.message }
-  return { success: true }
+  const res = await viaRoute(`/api/admin/tv-templates/${enc(id)}`, { method: 'DELETE' },
+    () => legacy.deleteTvTemplate(id))
+  return deleted(res, 'Could not delete the template.')
 }

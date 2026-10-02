@@ -145,6 +145,16 @@ const SCOPING_HELPERS = [
   // hasPermissionForLocation(…, 'email') there; the handlers then write only
   // by that campaign's id (/api/communications/campaigns/[id]*).
   'loadCampaignForUser(',
+  // src/lib/tv-admin.js (MEMBERWRITESWEEP.1f) — authoriseTvLocation runs
+  // assertLocationAccessOr404 at the given studio, then web OR mobile
+  // tv_displays there; loadTvDisplayForUser / loadTvTemplateForUser read the
+  // TV / template by pk, 404 a row with no location_id, and run
+  // authoriseTvLocation at the ROW's location_id. The handlers then list by
+  // that studio or write by that row's id AND location_id
+  // (/api/admin/tv-displays*, /api/admin/tv-templates*).
+  'authoriseTvLocation(',
+  'loadTvDisplayForUser(',
+  'loadTvTemplateForUser(',
   // src/app/api/accounting/coverage/[id]/_line.js — permission check +
   // active-location scoping + 404-not-403 line lookup.
   'loadLineForUser(',
