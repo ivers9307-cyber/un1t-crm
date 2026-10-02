@@ -27,6 +27,7 @@ import RolePermissions from '@/components/RolePermissions'
 import CarDepositSettings from '@/components/CarDepositSettings'
 import BrandingSettings from '@/components/BrandingSettings'
 import OrgBrandingSettings from '@/components/OrgBrandingSettings'
+import { isOrgAdmin } from '@/lib/org-admin'
 import LocationIntegrations from '@/components/settings/LocationIntegrations'
 import NotificationConfigCard from '@/components/settings/NotificationConfigCard'
 import EmailMailboxesCard from '@/components/settings/EmailMailboxesCard'
@@ -309,7 +310,12 @@ export default async function EditLocationPage(props) {
             <ImageIcon size={16} className="text-un1t-subtle" />
             <h3 className="text-lg font-semibold">Branding</h3>
           </div>
-          <OrgBrandingSettings orgId={location.organization_id} orgName={org?.name} />
+          {/* C18 ORGROLE.1 — organisation branding is for organisation admins of
+              this studio's org (the /api/settings/org-branding rule); a studio
+              owner keeps the studio branding below. */}
+          {isOrgAdmin(user, location.organization_id) && (
+            <OrgBrandingSettings orgId={location.organization_id} orgName={org?.name} />
+          )}
           <BrandingSettings user={user} locationId={location.id} />
         </section>
       )}

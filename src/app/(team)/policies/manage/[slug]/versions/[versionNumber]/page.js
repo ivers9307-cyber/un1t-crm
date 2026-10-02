@@ -66,7 +66,7 @@ export default async function AdminPolicyVersionPage({ params }) {
   if (!version) notFound()
 
   const [{ viewers, outstanding }, hotSections] = await Promise.all([
-    listVersionViewers(version.id),
+    listVersionViewers(version.id, user),
     sectionDwellAggregate(version.id),
   ])
 

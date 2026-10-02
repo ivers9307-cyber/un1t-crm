@@ -1,14 +1,16 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getOwnerOrganizationIds } from '@/lib/auth'
+import { getCurrentUser } from '@/lib/auth'
+import { isOrgAdminSomewhere, resolveAdminOrgId } from '@/lib/org-admin'
 import { validateBody, uuidLike } from '@/lib/validate'
 import { httpUrl } from '@/lib/schemas'
 
 // Organisation-level branding defaults (mig 317). Locations inherit these via
 // getLocationBranding when they have not set their own. Mirrors
-// /api/settings/branding but keyed on organization_id. Master may target any
-// org; an owner is limited to organisations they own.
+// /api/settings/branding but keyed on organization_id. C18 ORGROLE.1:
+// organisation admins only — master may target any org, an org admin
+// (org_admin grant) only the orgs they administer; a studio owner is not one.
 const OrgBrandingSchema = z.object({
   organization_id: uuidLike.optional(),
   // HYGIENE-PII.1 — http(s) only; these render into <img src> / <link rel=icon>.
@@ -24,14 +26,10 @@ const OrgBrandingSchema = z.object({
   privacy_contact_email: z.string().email().max(200).nullable().optional(),
 })
 
-// Resolve the org the caller may act on. Master targets any org (defaults to
-// active); an owner is constrained to orgs they own (getOwnerOrganizationIds).
-// Returns null when the caller has no claim to the requested/active org.
+// Resolve the org the caller may act on (resolveAdminOrgId). Returns null when
+// the caller is not an admin of the requested/active org.
 function resolveOrgId(user, requested) {
-  if (user.role === 'master') return requested || user.activeOrganization?.id || null
-  const owned = getOwnerOrganizationIds(user)
-  const target = requested || user.activeOrganization?.id || owned[0] || null
-  return target && owned.includes(target) ? target : null
+  return resolveAdminOrgId(user, requested).orgId || null
 }
 
 // GET /api/settings/org-branding?organization_id=xxx — org branding defaults
@@ -44,19 +42,23 @@ export async function GET(request) {
   if (!orgId) return NextResponse.json({ success: false, error: 'No organisation access' }, { status: 403 })
 
   const db = createServerClient()
-  const { data } = await db.from('org_settings')
+  const { data, error } = await db.from('org_settings')
     .select('*')
     .eq('organization_id', orgId)
     .maybeSingle()
+  if (error) {
+    return NextResponse.json({ success: false, error: 'Could not load the organisation branding just now.' }, { status: 500 })
+  }
 
   return NextResponse.json({ success: true, data: data || null })
 }
 
-// PUT /api/settings/org-branding — upsert org branding (owner-of-org or master)
+// PUT /api/settings/org-branding — upsert org branding (organisation admin)
 export async function PUT(request) {
   const user = await getCurrentUser()
-  if (!user || (user.role !== 'owner' && user.role !== 'master')) {
-    return NextResponse.json({ success: false, error: 'Only owners or master can update organisation branding' }, { status: 403 })
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (!isOrgAdminSomewhere(user)) {
+    return NextResponse.json({ success: false, error: 'Only organisation admins can update organisation branding' }, { status: 403 })
   }
 
   const validation = await validateBody(request, OrgBrandingSchema)

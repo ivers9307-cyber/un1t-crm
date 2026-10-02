@@ -4,48 +4,38 @@
 // totals and a per-location split from usage_rollups_daily (nightly).
 // Write side sets/clears the two OPTIONAL hard caps on org_settings.
 //
-// Access mirrors /api/settings/org-branding: master targets any org
-// (defaults to active); an owner is constrained to orgs they own.
-// Reads additionally allow managers at the active org (usage is an
-// operations number, caps are an ownership decision).
+// Access (C18 ORGROLE.1, Richard 1 Oct 2026): organisation admins only,
+// for the read and the caps alike — master targets any org (defaults to
+// active), an org admin (org_admin grant) only the orgs they administer. A
+// studio owner is not an org admin; the read used to admit ADMIN_ROLES
+// (managers included) at the active studio.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getOwnerOrganizationIds } from '@/lib/auth'
+import { getCurrentUser } from '@/lib/auth'
+import { isOrgAdminSomewhere, resolveAdminOrgId } from '@/lib/org-admin'
 import { validateBody, uuidLike } from '@/lib/validate'
-import { ADMIN_ROLES } from '@/lib/schemas'
 import { getOrgUsageSummary } from '@/lib/usage-summary'
 import { parseOpsAlertEmails } from '@/lib/ops-alerts'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-function resolveWriteOrgId(user, requested) {
-  if (user.role === 'master') return requested || user.activeOrganization?.id || null
-  const owned = getOwnerOrganizationIds(user)
-  const target = requested || user.activeOrganization?.id || owned[0] || null
-  return target && owned.includes(target) ? target : null
-}
-
-function resolveReadOrgId(user, requested) {
-  if (user.role === 'master') return requested || user.activeOrganization?.id || null
-  // Managers/owners read their ACTIVE org only.
-  const active = user.activeOrganization?.id || null
-  if (requested && requested !== active) return null
-  return active
+function resolveOrgId(user, requested) {
+  return resolveAdminOrgId(user, requested).orgId || null
 }
 
 // GET /api/settings/org-usage?organization_id=xxx
 export async function GET(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!ADMIN_ROLES.includes(user.role)) {
+  if (!isOrgAdminSomewhere(user)) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
   const { searchParams } = new URL(request.url)
-  const orgId = resolveReadOrgId(user, searchParams.get('organization_id'))
+  const orgId = resolveOrgId(user, searchParams.get('organization_id'))
   if (!orgId) return NextResponse.json({ success: false, error: 'No organisation access' }, { status: 403 })
 
   const db = createServerClient()
@@ -63,18 +53,19 @@ const CapsSchema = z.object({
   ops_alert_emails: z.union([z.string().max(2000), z.array(z.string().email()).max(20)]).nullable().optional(),
 })
 
-// PUT /api/settings/org-usage — set/clear the org hard caps (owner-of-org or master)
+// PUT /api/settings/org-usage — set/clear the org hard caps (organisation admin)
 export async function PUT(request) {
   const user = await getCurrentUser()
-  if (!user || (user.role !== 'owner' && user.role !== 'master')) {
-    return NextResponse.json({ success: false, error: 'Only owners or master can change usage caps' }, { status: 403 })
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (!isOrgAdminSomewhere(user)) {
+    return NextResponse.json({ success: false, error: 'Only organisation admins can change usage caps' }, { status: 403 })
   }
 
   const validation = await validateBody(request, CapsSchema)
   if (!validation.ok) return validation.response
   const body = validation.data
 
-  const orgId = resolveWriteOrgId(user, body.organization_id)
+  const orgId = resolveOrgId(user, body.organization_id)
   if (!orgId) return NextResponse.json({ success: false, error: 'No organisation access' }, { status: 403 })
 
   const patch = { organization_id: orgId, updated_at: new Date().toISOString(), updated_by: user.id }

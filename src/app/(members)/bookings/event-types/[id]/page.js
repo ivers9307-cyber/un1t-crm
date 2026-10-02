@@ -10,6 +10,7 @@ import { ArrowLeft, Edit } from 'lucide-react'
 import EventActions from '@/components/EventActions'
 import { canManageEventType } from '@/lib/event-type-gates'
 import BookingStatusToggle from '@/components/BookingStatusToggle'
+import { hasPermissionForLocation } from '@/lib/permissions'
 
 export const dynamic = 'force-dynamic'
 
@@ -54,6 +55,10 @@ export default async function BookingTypeDetailPage(props) {
   // ROLEUI.1 — Edit and Delete show exactly when /api/bookings/event-types/[id]
   // would act: a master, or MANAGER_ROLES at THIS booking type's location.
   const canManage = canManageEventType(user, event.location_id)
+  // C134 WEBBOOKINGWRITES.1 — the status pill writes through
+  // POST /api/bookings/[id]/status: the WEB `bookings` key at the booking's
+  // studio (this booking type's). Without it the pill is a plain label.
+  const canEditBookings = hasPermissionForLocation(user, event.location_id, 'bookings')
 
   return (
     <div className="p-8">
@@ -145,7 +150,7 @@ export default async function BookingTypeDetailPage(props) {
                       View Contact
                     </Link>
                   )}
-                  <BookingStatusToggle bookingId={booking.id} currentStatus={booking.status} />
+                  <BookingStatusToggle bookingId={booking.id} currentStatus={booking.status} canEdit={canEditBookings} />
                 </div>
               </div>
             ))}

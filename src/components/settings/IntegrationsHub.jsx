@@ -303,7 +303,7 @@ function PlanMeter({ label, used, allowance, overQty, overageDrawnCents }) {
 // One pinned location's strip row: plan name/price · wallet balance
 // with expiry (+ lapse warning) · the three meter bars. Read-only —
 // mutations happen on the D1 billing page, reached via Manage plan.
-function BillingStripRow({ row, locationName, showLocation }) {
+function BillingStripRow({ row, locationName, showLocation, canManageBilling = false }) {
   const { plan, wallet, meters } = row
   return (
     <div className="rounded-xl border border-un1t-border bg-white p-4 flex flex-col lg:flex-row gap-4 lg:gap-8">
@@ -321,9 +321,11 @@ function BillingStripRow({ row, locationName, showLocation }) {
             + {plan.addons.map((a) => a.name).join(', ')}
           </p>
         )}
-        <div className="flex gap-2 pt-2">
-          <Link href="/settings/billing" className={linkBtn()}>Manage plan</Link>
-        </div>
+        {canManageBilling && (
+          <div className="flex gap-2 pt-2">
+            <Link href="/settings/billing" className={linkBtn()}>Manage plan</Link>
+          </div>
+        )}
       </div>
       <div className="lg:w-56 shrink-0">
         <div className="text-[10px] uppercase tracking-wider text-un1t-muted">Wallet</div>
@@ -406,7 +408,9 @@ const DOT = {
   info: 'bg-blue-600',
 }
 
-export default function IntegrationsHub({ data: initialData, isMaster = false }) {
+// canManageBilling — C18 ORGROLE.1: "Manage plan" opens /settings/billing,
+// which is for organisation admins only; the page passes isActiveOrgAdmin.
+export default function IntegrationsHub({ data: initialData, isMaster = false, canManageBilling = false }) {
   const [scope, setScope] = useState('all')
   // The hub payload is held in state so a save inside the Manage drawer can
   // re-grade in place: after connect/disconnect the drawer's onChanged fires
@@ -537,14 +541,14 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
 
       {/* ── Plan & wallet strip (INTEG-C4) — read-only, pinning-gated ──
           Manage-plan deep-links into the D1 billing page (/settings/billing,
-          owner+/master). */}
+          organisation admins only, C18 ORGROLE.1). */}
       <div className="space-y-3 mb-6">
         {billing.some((r) => r.unreadable) ? (
           <div className="rounded-xl border border-un1t-border bg-white px-4 py-3 flex flex-wrap items-center justify-between gap-3">
             <span className="text-sm text-amber-700">Could not load the platform plan just now.</span>
             <div className="flex gap-2">
               <RetryButton id="billing" />
-              <Link href="/settings/billing" className={linkBtn()}>Manage plan</Link>
+              {canManageBilling && <Link href="/settings/billing" className={linkBtn()}>Manage plan</Link>}
             </div>
           </div>
         ) : pinnedBilling.length === 0 ? (
@@ -552,7 +556,7 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
             <span className="text-sm text-un1t-subtle">
               No platform plan{scope !== 'all' && nameById[scope] ? ` — ${nameById[scope]}` : ''}
             </span>
-            <Link href="/settings/billing" className={linkBtn()}>Manage plan</Link>
+            {canManageBilling && <Link href="/settings/billing" className={linkBtn()}>Manage plan</Link>}
           </div>
         ) : pinnedBilling.map((row) => (
           <BillingStripRow
@@ -560,6 +564,7 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
             row={row}
             locationName={nameById[row.locationId]}
             showLocation={scope === 'all'}
+            canManageBilling={canManageBilling}
           />
         ))}
       </div>

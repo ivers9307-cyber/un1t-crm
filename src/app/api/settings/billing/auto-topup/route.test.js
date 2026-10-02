@@ -19,9 +19,11 @@ beforeEach(() => vi.clearAllMocks())
 const LOC_A = 'a0000000-0000-0000-0000-00000000aaa1'
 const LOC_B = 'b0000000-0000-0000-0000-00000000bbb1'
 
+// An org admin of org A (C18 ORGROLE.1), also owner at LOC_A.
 const ownerA = {
   id: 'owner-a',
   role: 'owner',
+  orgAdminOrgIds: ['org-a'],
   activeOrganization: { id: 'org-a' },
   rolesByLocation: { [LOC_A]: 'owner' },
   locations: [{ id: LOC_A, organization_id: 'org-a' }],
@@ -89,9 +91,14 @@ describe('PATCH auto-topup — auth + org boundary', () => {
   })
 
   it('403 for staff and manager', async () => {
-    getCurrentUser.mockResolvedValue({ ...ownerA, role: 'staff' })
+    getCurrentUser.mockResolvedValue({ ...ownerA, role: 'staff', orgAdminOrgIds: [] })
     expect((await PATCH(patchReq(validBody))).status).toBe(403)
-    getCurrentUser.mockResolvedValue({ ...ownerA, role: 'manager' })
+    getCurrentUser.mockResolvedValue({ ...ownerA, role: 'manager', orgAdminOrgIds: [] })
+    expect((await PATCH(patchReq(validBody))).status).toBe(403)
+  })
+
+  it('403 for a studio owner with no org_admin grant (C18 ORGROLE.1)', async () => {
+    getCurrentUser.mockResolvedValue({ ...ownerA, orgAdminOrgIds: [] })
     expect((await PATCH(patchReq(validBody))).status).toBe(403)
   })
 
