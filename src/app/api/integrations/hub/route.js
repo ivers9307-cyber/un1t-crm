@@ -17,6 +17,9 @@
 //     own/administer — the payload is HARD-SCOPED to those via
 //     getOwnerOrganizationIds(), so an owner never receives another
 //     tenant's locations, statuses, tokens, or billing strip.
+//   - C141 ORGROLE.2: the plan & wallet strip (`billing`) carries only the
+//     locations of an organisation the caller ADMINISTERS (master or an
+//     org_admin grant); a studio owner gets the integration cards only.
 //   - manager / head_coach / staff: 403.
 // The service-role client bypasses RLS, so the .in('organization_id')
 // filter below IS the tenant boundary (same model as the org-scoped
@@ -26,6 +29,7 @@ import { NextResponse } from 'next/server'
 import { getCurrentUser, getOwnerOrganizationIds } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { assembleIntegrationsHub } from '@/lib/integrations-hub'
+import { isOrgAdmin } from '@/lib/org-admin'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -65,6 +69,11 @@ export async function GET() {
   const { data: locations, error } = await query
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
 
-  const data = await assembleIntegrationsHub(db, locations || [])
+  // C141 ORGROLE.2 — the plan & wallet strip is organisation-level billing
+  // data: only the locations of an organisation the caller administers (a
+  // master: every location). A studio owner keeps the integration cards.
+  const data = await assembleIntegrationsHub(db, locations || [], {
+    billingFor: (loc) => isOrgAdmin(user, loc.organization_id),
+  })
   return NextResponse.json({ success: true, data })
 }
