@@ -61,12 +61,12 @@ describe('/policies/manage tree — organisation admins only (C141)', () => {
   ]) {
     it(`${name}: an owner without an org_admin grant is sent home`, async () => {
       vi.mocked(getCurrentUser).mockResolvedValue(owner([]))
-      await expect(render()).rejects.toThrow('NEXT_REDIRECT:/')
+      await expect(render()).rejects.toThrow(/^NEXT_REDIRECT:\/$/)
     })
 
     it(`${name}: an org admin of a DIFFERENT organisation is sent home`, async () => {
       vi.mocked(getCurrentUser).mockResolvedValue(owner(['org-b']))
-      await expect(render()).rejects.toThrow('NEXT_REDIRECT:/')
+      await expect(render()).rejects.toThrow(/^NEXT_REDIRECT:\/$/)
     })
 
     it(`${name}: an org admin of the active organisation gets past the gate`, async () => {
