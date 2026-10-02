@@ -154,9 +154,11 @@ const SESSION_SPECS = [
     call: () => contractTemplatesRoute.GET(),
     ids: (json) => idsOf(json?.data),
     cases: [
-      { title: 'owner of A sees only org-A templates', persona: 'ownerA1', expectIds: [TPL_A] },
-      { title: 'owner of B sees only org-B templates (mirror)', persona: 'ownerB1', expectIds: [TPL_B] },
-      { title: 'org admin of A sees org-A templates', persona: 'orgAdminA', expectIds: [TPL_A] },
+      // C18 ORGROLE.1 — the issue wizard's list is for organisation admins
+      // only, scoped to the orgs they administer.
+      { title: 'org admin of A sees only org-A templates', persona: 'orgAdminA', expectIds: [TPL_A] },
+      { title: 'a studio owner of A with no org_admin grant is refused (403)', persona: 'ownerA1', expectStatus: 403 },
+      { title: 'a studio owner of B with no org_admin grant is refused (403, mirror)', persona: 'ownerB1', expectStatus: 403 },
       { title: 'master sees every org’s templates', persona: 'master', expectIds: [TPL_A, TPL_B] },
       { title: 'staff is refused outright (403)', persona: 'staffA1', expectStatus: 403 },
     ],
@@ -165,10 +167,16 @@ const SESSION_SPECS = [
     name: 'GET /api/contract-templates/[id] (org-scoped detail)',
     call: (c) => contractTemplateDetailRoute.GET(makeReq(`/api/contract-templates/${c.id}`), propsOf({ id: c.id })),
     cases: [
-      { title: 'owner of A reads their own template', persona: 'ownerA1', id: TPL_A, verify: ({ json }) => expect(json.data.id).toBe(TPL_A) },
+      // C18 ORGROLE.1 — templates are managed by organisation admins only.
+      { title: 'org admin of A reads their own template', persona: 'orgAdminA', id: TPL_A, verify: ({ json }) => expect(json.data.id).toBe(TPL_A) },
       {
-        title: 'owner of B fetching an org-A template must get 404',
-        persona: 'ownerB1', id: TPL_A, expectStatus: 404,
+        title: 'org admin of A fetching an org-B template must get 404',
+        persona: 'orgAdminA', id: TPL_B, expectStatus: 404,
+        verify: ({ json }) => expect(JSON.stringify(json)).not.toContain('ORG B SALARY TERMS'),
+      },
+      {
+        title: 'a studio owner with no org_admin grant is refused (403) before any read',
+        persona: 'ownerB1', id: TPL_A, expectStatus: 403,
         verify: ({ json }) => expect(JSON.stringify(json)).not.toContain('ORG A SALARY TERMS'),
       },
     ],
@@ -178,8 +186,13 @@ const SESSION_SPECS = [
     call: (c) => contractTemplateDetailRoute.PATCH(makeReq(`/api/contract-templates/${c.id}`, { method: 'PATCH', body: { name: 'Hacked Template' } }), propsOf({ id: c.id })),
     cases: [
       {
-        title: 'owner of B patching an org-A template must get 404 and the row must be untouched',
-        persona: 'ownerB1', id: TPL_A, expectStatus: 404,
+        title: 'org admin of A patching an org-B template must get 404 and the row must be untouched',
+        persona: 'orgAdminA', id: TPL_B, expectStatus: 404,
+        verify: ({ world: w }) => expect(w.contract_templates.find((t) => t.id === TPL_B).name).toBe('Org B Contract'),
+      },
+      {
+        title: 'a studio owner with no org_admin grant is refused (403) and the row is untouched (C18)',
+        persona: 'ownerB1', id: TPL_A, expectStatus: 403,
         verify: ({ world: w }) => expect(w.contract_templates.find((t) => t.id === TPL_A).name).toBe('Org A Contract'),
       },
     ],
@@ -189,8 +202,13 @@ const SESSION_SPECS = [
     call: (c) => contractTemplateDetailRoute.DELETE(makeReq(`/api/contract-templates/${c.id}`, { method: 'DELETE' }), propsOf({ id: c.id })),
     cases: [
       {
-        title: 'owner of B soft-deleting an org-A template must get 404 and the template must stay active',
-        persona: 'ownerB1', id: TPL_A, expectStatus: 404,
+        title: 'org admin of A soft-deleting an org-B template must get 404 and the template must stay active',
+        persona: 'orgAdminA', id: TPL_B, expectStatus: 404,
+        verify: ({ world: w }) => expect(w.contract_templates.find((t) => t.id === TPL_B).active).toBe(true),
+      },
+      {
+        title: 'a studio owner with no org_admin grant is refused (403) and the template stays active (C18)',
+        persona: 'ownerB1', id: TPL_A, expectStatus: 403,
         verify: ({ world: w }) => expect(w.contract_templates.find((t) => t.id === TPL_A).active).toBe(true),
       },
     ],

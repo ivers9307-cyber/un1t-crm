@@ -102,7 +102,7 @@ describe('SETTINGS_TREE structure', () => {
       expect(typeof row.description).toBe('string')
       expect(row.description.length).toBeGreaterThan(0)
       expect(row.gate, `${row.id} has no gate`).toBeTruthy()
-      const gateKinds = ['permission', 'anyPermission', 'roles', 'masterOnly', 'openToAll']
+      const gateKinds = ['permission', 'anyPermission', 'roles', 'orgAdmin', 'masterOnly', 'openToAll']
       const kind = gateKinds.find((k) => row.gate[k] !== undefined)
       expect(kind, `${row.id}'s gate is not one of ${gateKinds.join('/')}`).toBeTruthy()
     }
@@ -182,6 +182,25 @@ describe('settingsRowVisible()', () => {
     expect(settingsRowVisible(gate, { role: 'master' }, hasNone)).toBe(true)
     expect(settingsRowVisible(gate, { profileRole: 'master', role: 'staff' }, hasNone)).toBe(true)
     expect(settingsRowVisible(gate, { role: 'owner' }, hasNone)).toBe(false)
+  })
+
+  // C18 ORGROLE.1 — the organisation-level rows (billing, usage, API keys,
+  // email domain): master or an org_admin grant on the ACTIVE organisation.
+  it('orgAdmin: master or an org admin of the active org; never a studio owner', () => {
+    const gate = { orgAdmin: true }
+    const inOrg = { activeOrganization: { id: 'org-1' } }
+    expect(settingsRowVisible(gate, { role: 'master', isMaster: true, ...inOrg }, hasNone)).toBe(true)
+    expect(settingsRowVisible(gate, { role: 'staff', orgAdminOrgIds: ['org-1'], ...inOrg }, hasNone)).toBe(true)
+    expect(settingsRowVisible(gate, { role: 'owner', orgAdminOrgIds: [], ...inOrg }, hasAll)).toBe(false)
+    expect(settingsRowVisible(gate, { role: 'owner', orgAdminOrgIds: ['org-2'], ...inOrg }, hasAll)).toBe(false)
+    expect(settingsRowVisible(gate, null, hasAll)).toBe(false)
+  })
+
+  it('the four organisation-level rows carry the orgAdmin gate', () => {
+    const rows = Object.fromEntries(SETTINGS_TREE.flatMap((g) => g.rows).map((r) => [r.id, r]))
+    for (const id of ['email-domain', 'billing', 'usage', 'api-keys']) {
+      expect(rows[id].gate, id).toEqual({ orgAdmin: true })
+    }
   })
 
   it('openToAll is visible to any signed-in user, invisible signed out', () => {

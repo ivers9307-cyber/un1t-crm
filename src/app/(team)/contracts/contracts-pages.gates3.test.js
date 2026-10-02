@@ -66,17 +66,25 @@ const hrefs = (tree) => findAll(tree, (n) => typeof n.props?.href === 'string').
 
 beforeEach(() => vi.clearAllMocks())
 
+// C18 ORGROLE.1 (Richard, 1 Oct 2026): contracts are managed by ORGANISATION
+// ADMINS (master or an org_admin grant). A studio owner is not one.
+const adminYManagerXActive = { ...ownerYManagerXActive, orgAdminOrgIds: [ORG_Y] }
+
 describe('/contracts/issue (GATES-3: POST /api/contracts\' coarse rule)', () => {
   it.each([
-    ['an owner of another org whose ACTIVE role is manager (main: redirected)', ownerYManagerXActive],
+    ['an org admin of another org whose ACTIVE role is manager (main: redirected)', adminYManagerXActive],
     ['an org admin whose own role at the active studio is staff (main: redirected)', adminXStaffActive],
   ])('%s: the wizard', async (_label, caller) => {
     getCurrentUser.mockResolvedValue(caller)
     const tree = await IssueContractPage({ searchParams: Promise.resolve({}) })
     expect(findAll(tree, (n) => n.type === ContractIssueWizard)).toHaveLength(1)
   })
-  it('a manager who owns no org: sent home', async () => {
-    getCurrentUser.mockResolvedValue(managerOnly)
+  it.each([
+    ['a manager who owns no org', managerOnly],
+    ['a studio owner with no org_admin grant, at the active studio (C18)', ownerYActive],
+    ['a studio owner of another org with no org_admin grant (C18)', ownerYManagerXActive],
+  ])('%s: sent home', async (_label, caller) => {
+    getCurrentUser.mockResolvedValue(caller)
     await expect(IssueContractPage({ searchParams: Promise.resolve({}) })).rejects.toThrow(/^NEXT_REDIRECT:\/$/)
   })
 })
@@ -87,10 +95,16 @@ describe('/contracts list canWrite (GATES-3: manages the ACTIVE org)', () => {
     const tree = await ContractsAdminPage()
     expect(hrefs(tree)).toEqual(expect.arrayContaining(['/contracts/templates', '/contracts/issue']))
   })
-  it('an owner at the active studio gets them', async () => {
-    getCurrentUser.mockResolvedValue(ownerYActive)
+  it('an org admin of the active org who owns the active studio gets them', async () => {
+    getCurrentUser.mockResolvedValue({ ...ownerYActive, orgAdminOrgIds: [ORG_Y] })
     const tree = await ContractsAdminPage()
     expect(hrefs(tree)).toEqual(expect.arrayContaining(['/contracts/templates', '/contracts/issue']))
+  })
+  it('a studio owner at the active studio with no org_admin grant gets the read-only list (C18: the Templates page and the issue route refuse them)', async () => {
+    getCurrentUser.mockResolvedValue(ownerYActive)
+    const tree = await ContractsAdminPage()
+    expect(hrefs(tree)).not.toContain('/contracts/issue')
+    expect(hrefs(tree)).not.toContain('/contracts/templates')
   })
   it('a contracts-permission manager of the active org gets the read-only list', async () => {
     getCurrentUser.mockResolvedValue(managerOnly)

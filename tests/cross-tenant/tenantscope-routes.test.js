@@ -139,6 +139,10 @@ const withPerm = (u, key) => ({
   },
 })
 const noActive = (u) => ({ ...u, activeLocation: null, activeOrganization: null })
+// C18 ORGROLE.1 — the staff fleet and the host back-fill are organisation-
+// admin surfaces: these personas carry an org_admin grant on org A, so the
+// TENANTSCOPE.1 assertions (org A only, never org B) still hold for them.
+const adminOfA = (u) => ({ ...u, orgAdminOrgIds: [...(u.orgAdminOrgIds || []), ORG_A] })
 
 // ─── accounting/health ───────────────────────────────────────────────
 describe('GET /api/accounting/health — a studio sees its own LLM spend (TENANTSCOPE.1)', () => {
@@ -183,7 +187,7 @@ describe('GET /api/accounting/health — a studio sees its own LLM spend (TENANT
 // ─── the staff fleet ─────────────────────────────────────────────────
 describe("GET /api/staff-devices — the active organisation's fleet (TENANTSCOPE.1)", () => {
   it("a manager at A One sees org A's staff (members + org admin), never org B's", async () => {
-    as(users.managerA1())
+    as(adminOfA(users.managerA1()))
     const { status, json } = await jsonOf(await staffDevices.GET())
     expect(status).toBe(200)
     expect(idsOf(json.data.staff)).toEqual(A_FLEET) // main: all nine profiles
@@ -192,7 +196,7 @@ describe("GET /api/staff-devices — the active organisation's fleet (TENANTSCOP
   })
 
   it('keeps the target version estate-wide — one app binary', async () => {
-    as(users.managerA1())
+    as(adminOfA(users.managerA1()))
     const { json } = await jsonOf(await staffDevices.GET())
     expect(json.data.target_version).toBe('2.5.0') // set by org B's newest phone
     const a1 = json.data.staff.find((s) => s.id === P_STAFF_A1)
@@ -205,11 +209,17 @@ describe("GET /api/staff-devices — the active organisation's fleet (TENANTSCOP
     expect(idsOf(json.data.staff)).toEqual(ALL_PROFILES)
   })
 
-  it('a non-master with no active organisation sees nobody', async () => {
-    as(noActive(users.managerA1()))
+  it('a non-master with no active organisation is refused (C18 ORGROLE.1: no organisation to administer)', async () => {
+    as(noActive(adminOfA(users.managerA1())))
     const { status, json } = await jsonOf(await staffDevices.GET())
-    expect(status).toBe(200)
-    expect(json.data.staff).toEqual([]) // main: all nine profiles
+    expect(status).toBe(403) // TENANTSCOPE.1: 200 with nobody; main before it: all nine profiles
+    expect(json).not.toHaveProperty('data')
+  })
+
+  it('a manager at A One who is not an organisation admin is refused (C18 ORGROLE.1)', async () => {
+    as(users.managerA1())
+    const { status } = await jsonOf(await staffDevices.GET())
+    expect(status).toBe(403)
   })
 })
 
@@ -217,7 +227,7 @@ describe('POST /api/staff-devices/nudge — only your own organisation (TENANTSC
   const nudgeReq = (ids) => makeReq('/api/staff-devices/nudge', { method: 'POST', body: { profile_ids: ids } })
 
   it("a manager at A One cannot push to org B's outdated staff", async () => {
-    as(users.managerA1())
+    as(adminOfA(users.managerA1()))
     const { status, json } = await jsonOf(await nudge.POST(nudgeReq([P_STAFF_B1])))
     expect(status).toBe(200)
     expect(json.data).toEqual({ sent: 0, skipped_throttled: 0, skipped_no_app: 0, skipped_no_token: 0 }) // main: sent 1
@@ -226,7 +236,7 @@ describe('POST /api/staff-devices/nudge — only your own organisation (TENANTSC
   })
 
   it("nudges org A's outdated staff and drops the org B id from a mixed list", async () => {
-    as(users.managerA1())
+    as(adminOfA(users.managerA1()))
     const { json } = await jsonOf(await nudge.POST(nudgeReq([P_STAFF_A1, P_STAFF_B1])))
     expect(json.data.sent).toBe(1)
     expect(sendPush).toHaveBeenCalledTimes(1)
@@ -294,7 +304,7 @@ describe('a failed fleet-scope read is a 500 and nothing is sent (TENANTSCOPE.1,
   })
 
   it('POST /api/staff-devices/nudge answers 500, pushes nothing and claims nothing', async () => {
-    as(users.managerA1())
+    as(adminOfA(users.managerA1()))
     const req = makeReq('/api/staff-devices/nudge', { method: 'POST', body: { profile_ids: [P_STAFF_A1, P_STAFF_B1] } })
     const { status, json } = await jsonOf(await nudge.POST(req))
     expect(status).toBe(500)
@@ -315,7 +325,7 @@ describe('a failed fleet-scope read is a 500 and nothing is sent (TENANTSCOPE.1,
   })
 
   it('GET /api/staff-devices answers 500, never an empty fleet', async () => {
-    as(users.managerA1())
+    as(adminOfA(users.managerA1()))
     const { status, json } = await jsonOf(await staffDevices.GET())
     expect(status).toBe(500)
     expect(json.success).toBe(false)
@@ -325,8 +335,8 @@ describe('a failed fleet-scope read is a 500 and nothing is sent (TENANTSCOPE.1,
 
 // ─── the two host jobs ───────────────────────────────────────────────
 describe("POST /api/admin/backfill-host-contacts — your organisation's hosts only (TENANTSCOPE.1)", () => {
-  it("an owner at A One back-fills org A's hosted events only", async () => {
-    as(users.ownerA1())
+  it("an org admin of A back-fills org A's hosted events only", async () => {
+    as(adminOfA(users.ownerA1()))
     const { status, json } = await jsonOf(await backfillHosts.POST())
     expect(status).toBe(200)
     expect(idsOf(json.data.events, 'event_id')).toEqual([EV_A]) // main: [EV_A, EV_B]
@@ -341,10 +351,17 @@ describe("POST /api/admin/backfill-host-contacts — your organisation's hosts o
   })
 
   it('a non-master with no active organisation is refused, and nothing runs', async () => {
-    as(noActive(users.ownerA1()))
+    as(noActive(adminOfA(users.ownerA1())))
     const { status, json } = await jsonOf(await backfillHosts.POST())
-    expect(status).toBe(400) // main: 200, every organisation's events
-    expect(json.error).toBe('No active organisation')
+    expect(status).toBe(403) // C18 ORGROLE.1: no organisation to administer (TENANTSCOPE.1: 400; main: 200, every organisation's events)
+    expect(json.success).toBe(false)
+    expect(addEventAttendeesToHostList).not.toHaveBeenCalled()
+  })
+
+  it('an owner at A One who is not an organisation admin is refused, and nothing runs (C18 ORGROLE.1)', async () => {
+    as(users.ownerA1())
+    const { status } = await jsonOf(await backfillHosts.POST())
+    expect(status).toBe(403)
     expect(addEventAttendeesToHostList).not.toHaveBeenCalled()
   })
 })
