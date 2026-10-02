@@ -88,7 +88,10 @@ export async function POST(request) {
   const insert = {
     ...validation.data,
     kind: 'task',
-    source: 'api',
+    // activities_source_check (mig 138) allows only 'crm' and 'glofox'; the
+    // 'api' this used to stamp was refused on every create (C150,
+    // tests/activities-source-check-guard.test.js).
+    source: 'crm',
     type: 'task',
   }
 
