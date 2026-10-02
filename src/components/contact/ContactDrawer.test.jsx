@@ -80,3 +80,13 @@ describe('ContactDrawer — Cold is hidden on a manual board', () => {
     expect(actions).toContain('cancel_form')
   })
 })
+
+describe('ContactDrawer — Task follows Contacts at the board\'s studio (C146 TASKSNEEDCONTACTS.1)', () => {
+  it('drops Task when canTask is false', async () => {
+    expect(await actionsFor({ canTask: false })).toEqual(['sequence', 'cancel_form', 'cold'])
+  })
+
+  it('keeps Task when canTask is true', async () => {
+    expect(await actionsFor({ canTask: true })).toContain('task')
+  })
+})

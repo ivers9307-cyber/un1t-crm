@@ -808,9 +808,11 @@ async function assembleEmailDelivery(db, locs, orgIds) {
  * @param {Array<object>} locations  full location rows (id, name, organization_id,
  *   settings, sensibo_api_key, sensibo_pod_id, thinq_pat, thinq_client_id,
  *   thinq_country_code, bca_config, features)
- * @param {{ now?: Date }} [opts]
+ * @param {{ now?: Date, billingFor?: (loc: object) => boolean }} [opts]
+ *   billingFor — C141 ORGROLE.2: which locations get a plan & wallet strip
+ *   row (organisation admins only); omitted = every location.
  */
-export async function assembleIntegrationsHub(db, locations, { now = new Date() } = {}) {
+export async function assembleIntegrationsHub(db, locations, { now = new Date(), billingFor = null } = {}) {
   const locs = Array.isArray(locations) ? locations : []
   const ids = locs.map((l) => l.id)
   const nameById = Object.fromEntries(locs.map((l) => [l.id, l.name]))
@@ -1280,7 +1282,13 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
   if (email.some((e) => e.status === HUB_UNKNOWN)) pushUnreadable('email')
 
   // ── Plan & wallet strip (INTEG-C4) — pinning-gated, zero writes ──
-  const billing = await assembleBillingStrip(db, locs, dublinDayStr(now))
+  // C141 ORGROLE.2 — plan, wallet and meters are organisation-level billing
+  // data (C18's rule: organisation admins only). The hub stays open to studio
+  // owners for their integrations, so the caller says which locations it may
+  // see billing for (`billingFor`); the rest get no row and no plan read.
+  // Omitted (the master tenants console) = every location.
+  const billingLocs = typeof billingFor === 'function' ? locs.filter((l) => billingFor(l)) : locs
+  const billing = await assembleBillingStrip(db, billingLocs, dublinDayStr(now))
 
   return {
     generatedAt: now.toISOString(),

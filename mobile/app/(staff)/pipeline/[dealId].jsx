@@ -58,6 +58,7 @@ import {
   logActivity, createNote,
 } from '../../../lib/pipeline-api'
 import { canMobile } from '../../../lib/permissions'
+import { canLogActivityHere } from '../../../lib/tasks-access'
 import ContactComposer from '../../../components/ContactComposer'
 
 function ContactActions({ contact }) {
@@ -106,6 +107,13 @@ export default function DealDetail() {
   const [loading, setLoading] = useState(true)
   const [logText, setLogText] = useState('')
   const [logKind, setLogKind] = useState('note')   // 'note' | 'call' | 'email' | 'meeting'
+  // C146 TASKSNEEDCONTACTS.1 — Call / Email / Meeting are a direct
+  // `activities` insert that reads its row back, refused since mig 700 at a
+  // studio where this person cannot read Contacts. Note posts to the notes
+  // route and stays. Derived every render, so a studio switch re-decides
+  // (and a kind picked before the switch falls back to Note).
+  const canLogActivity = canLogActivityHere(profile, activeLocation)
+  const effectiveLogKind = canLogActivity ? logKind : 'note'
   const [submittingLog, setSubmittingLog] = useState(false)
   const [coldSaving, setColdSaving] = useState(false)
   // WAITLIST-M.1 — the board this card sits on, and its live columns.
@@ -248,7 +256,7 @@ export default function DealDetail() {
     setSubmittingLog(true)
 
     let res
-    if (logKind === 'note') {
+    if (effectiveLogKind === 'note') {
       res = await createNote({
         contactId: deal.contact_id,
         dealId: deal.id,
@@ -264,7 +272,7 @@ export default function DealDetail() {
       res = await logActivity({
         contactId: deal.contact_id,
         dealId: deal.id,
-        type: logKind,
+        type: effectiveLogKind,
         subject,
         note: trimmed,
         locationId: activeLocation?.id,
@@ -505,8 +513,8 @@ export default function DealDetail() {
               { kind: 'call',    icon: 'call-outline',          label: 'Call' },
               { kind: 'email',   icon: 'mail-outline',          label: 'Email' },
               { kind: 'meeting', icon: 'people-outline',        label: 'Meeting' },
-            ].map(t => {
-              const sel = logKind === t.kind
+            ].filter(t => canLogActivity || t.kind === 'note').map(t => {
+              const sel = effectiveLogKind === t.kind
               return (
                 <Pressable
                   key={t.kind}
@@ -529,9 +537,9 @@ export default function DealDetail() {
               onChangeText={setLogText}
               multiline
               placeholder={
-                logKind === 'note'    ? 'Add a note…' :
-                logKind === 'call'    ? 'What was discussed on the call?' :
-                logKind === 'email'   ? 'Summary of the email…' :
+                effectiveLogKind === 'note'    ? 'Add a note…' :
+                effectiveLogKind === 'call'    ? 'What was discussed on the call?' :
+                effectiveLogKind === 'email'   ? 'Summary of the email…' :
                                         'Summary of the meeting…'
               }
               placeholderTextColor="#94A3B8"
@@ -549,7 +557,7 @@ export default function DealDetail() {
                 <ActivityIndicator />
               ) : (
                 <Text className="text-un1t-bg font-semibold text-sm">
-                  Save {logKind === 'note' ? 'note' : logKind}
+                  Save {effectiveLogKind === 'note' ? 'note' : effectiveLogKind}
                 </Text>
               )}
             </Pressable>

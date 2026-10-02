@@ -59,7 +59,8 @@ describe('ALL_NAV structure', () => {
     // 19 Aug 2026 — see the entry's comment in nav-items.js).
     const pinned = ALL_NAV.filter((i) => !i.section)
     expect(pinned.map((i) => i.href)).toEqual(['/portfolio', '/dashboard', '/approvals'])
-    expect(pinned[0].masterOrOwnerOnly).toBe(true) // owner+/master only
+    expect(pinned[0].orgAdminOnly).toBe(true) // C141 ORGROLE.2: organisation admins only
+    expect(pinned[0].masterOrOwnerOnly).toBeUndefined()
     expect(pinned[1].dashboardGroup).toBe(true)
     expect(pinned[2].permission).toBe('approvals_inbox')
   })
@@ -67,7 +68,7 @@ describe('ALL_NAV structure', () => {
   it('gives every entry a label, an icon, and a visibility gate', () => {
     const gated = (i) =>
       i.openToAll || i.dashboardGroup || i.anyPermission || i.permission ||
-      i.masterOrOwnerOnly || i.masterOnly
+      i.orgAdminOnly || i.masterOnly
     for (const item of ALL_NAV) {
       expect(item.label, item.href).toBeTruthy()
       expect(item.icon, item.href).toBeTruthy()

@@ -16,6 +16,7 @@ import { Users } from 'lucide-react'
 import StaffSearchableList from '@/components/settings/StaffSearchableList'
 import { deriveTargetVersion, deviceVerdict, currentDevice } from '@/lib/staff-devices'
 import { excludeTombstones } from '@/lib/staff-tombstone'
+import { isActiveOrgAdmin } from '@/lib/org-admin'
 
 export const dynamic = 'force-dynamic'
 
@@ -65,6 +66,11 @@ export default async function StaffIndexPage() {
   // STAFF-DEV.5 — devices ride along with the roster so the list can show
   // who is behind. Both sets are staff-sized; one round-trip each.
   //
+  // C141 ORGROLE.2 — the Device column is the staff device fleet, which is
+  // organisation-level since C18 (GET /api/staff-devices and the StaffForm
+  // devices card: organisation admins only). Everyone else who holds
+  // `settings` gets the roster without it, and no device row is read.
+  //
   // The app-version baseline stays ESTATE-WIDE on purpose: "is this phone
   // behind?" is a question about releases, not about who you manage, and
   // deriving it from one studio would call a whole studio up to date merely
@@ -73,13 +79,18 @@ export default async function StaffIndexPage() {
   // STAFFDELETE.1 — a permanently deleted staff member keeps a profiles row (a
   // tombstone). The scoped branch cannot contain one (its ids come from
   // profile_locations, which the delete empties); the two unscoped reads can.
+  const showDevices = isActiveOrgAdmin(user)
   const rosterQuery = visibleIds === null
     ? excludeTombstones(db.from('profiles').select(STAFF_COLUMNS)).order('created_at')
     : db.from('profiles').select(STAFF_COLUMNS).in('id', visibleIds).order('created_at')
   const [staffRes, devicesRes, activeRes] = await Promise.all([
     rosterQuery,
-    db.from('device_tokens').select('id, user_id, app_version, last_seen_at, geofence_permission'),
-    excludeTombstones(db.from('profiles').select('id, active')),
+    showDevices
+      ? db.from('device_tokens').select('id, user_id, app_version, last_seen_at, geofence_permission')
+      : { data: [] },
+    showDevices
+      ? excludeTombstones(db.from('profiles').select('id, active'))
+      : { data: [] },
   ])
   const staff = staffRes.data || []
   const devices = devicesRes.data || []
@@ -88,24 +99,29 @@ export default async function StaffIndexPage() {
   // component renders a decision rather than making one. The target comes
   // from ACTIVE staff's devices only — a leaver's newer phone must not
   // mark everyone still here as outdated.
-  const now = Date.now()
-  const devicesByUser = new Map()
-  for (const d of devices) {
-    if (!d.user_id) continue
-    if (!devicesByUser.has(d.user_id)) devicesByUser.set(d.user_id, [])
-    devicesByUser.get(d.user_id).push(d)
+  let targetVersion = null
+  let verdictsById = {}
+  let permissionsById = {}
+  if (showDevices) {
+    const now = Date.now()
+    const devicesByUser = new Map()
+    for (const d of devices) {
+      if (!d.user_id) continue
+      if (!devicesByUser.has(d.user_id)) devicesByUser.set(d.user_id, [])
+      devicesByUser.get(d.user_id).push(d)
+    }
+    const activeIds = new Set((activeRes.data || []).filter(s => s.active).map(s => s.id))
+    targetVersion = deriveTargetVersion(devices.filter(d => activeIds.has(d.user_id)), now)
+    verdictsById = Object.fromEntries(
+      staff.map(s => [s.id, deviceVerdict(devicesByUser.get(s.id) || [], targetVersion, now)]),
+    )
+    // Background-location state for the CURRENT device only — an old iPad
+    // that once granted "always" says nothing about today's phone. NULL
+    // means never reported and renders as "—", never as "denied".
+    permissionsById = Object.fromEntries(
+      staff.map(s => [s.id, currentDevice(devicesByUser.get(s.id) || [])?.geofence_permission ?? null]),
+    )
   }
-  const activeIds = new Set((activeRes.data || []).filter(s => s.active).map(s => s.id))
-  const targetVersion = deriveTargetVersion(devices.filter(d => activeIds.has(d.user_id)), now)
-  const verdictsById = Object.fromEntries(
-    staff.map(s => [s.id, deviceVerdict(devicesByUser.get(s.id) || [], targetVersion, now)]),
-  )
-  // Background-location state for the CURRENT device only — an old iPad
-  // that once granted "always" says nothing about today's phone. NULL
-  // means never reported and renders as "—", never as "denied".
-  const permissionsById = Object.fromEntries(
-    staff.map(s => [s.id, currentDevice(devicesByUser.get(s.id) || [])?.geofence_permission ?? null]),
-  )
 
   // Pre-compute the canEdit boolean per row server-side so the client
   // component doesn't need to know about the master/owner peer rules.
@@ -145,6 +161,7 @@ export default async function StaffIndexPage() {
         staff={staff}
         user={user}
         canEditFns={canEditFns}
+        showDevices={showDevices}
         verdictsById={verdictsById}
         permissionsById={permissionsById}
         targetVersion={targetVersion}

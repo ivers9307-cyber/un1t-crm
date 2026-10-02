@@ -34,15 +34,19 @@ export function timelineFilterGroup(item) {
 // light-theme chip ramp (danger → red, warn → amber).
 export function deriveNeedsAttention({ contact, arrearsCents = 0, openTasks = [], todayStr = null }) {
   const items = []
+  // A NULL count is "no count" (C145): still flag the missing class, with no
+  // number. A known 0 means the trial is spent, so no flag.
+  const credits = contact?.trial_credits_remaining
+  const hasCount = Number.isFinite(credits)
   if (
     FUNNEL_SLUGS.has(contact?.pipeline_stage_slug) &&
     !contact?.next_class_at &&
-    (contact?.trial_credits_remaining ?? 0) > 0
+    (!hasCount || credits > 0)
   ) {
     items.push({
       key: 'no_next_class',
       label: 'No next class booked',
-      detail: `${contact.trial_credits_remaining} trial credit${contact.trial_credits_remaining === 1 ? '' : 's'} unused`,
+      detail: hasCount ? `${credits} trial credit${credits === 1 ? '' : 's'} unused` : '',
       tone: 'danger',
     })
   }

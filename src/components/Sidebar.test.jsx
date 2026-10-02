@@ -39,12 +39,13 @@ import Sidebar from './Sidebar.jsx'
 import { usePolledCount } from './use-polled-count'
 import { hasPermission } from '@/lib/permissions'
 
-// owner (not master) — real enough to pass the masterOrOwnerOnly gate on
-// /portfolio without also rendering the master-only Platform link / the
+// owner (not master) — the Account home entry is organisation-admin only
+// (C141 ORGROLE.2), so this owner does not see it; and it avoids also rendering the master-only Platform link / the
 // ImpersonatePicker, which would just be extra unrelated DOM. No
 // `activeLocation` — Sidebar's branding effect no-ops without an id, so
 // no fetch mock is needed either.
 const USER = { role: 'owner', full_name: 'Test Owner' }
+const ORG = 'org-a'
 
 // TABTITLE.1 — a real base title, reset per test. These assertions used to be
 // /^\(10\) / against an EMPTY jsdom title, and passed only because of the bug
@@ -58,6 +59,26 @@ afterEach(() => {
   usePolledCount.mockReturnValue(0)
   usePolledCount.mockClear()
   hasPermission.mockImplementation(() => true)
+})
+
+describe('Sidebar — Account home is for organisation admins (C141 ORGROLE.2)', () => {
+  it('hides Account home from an owner at a studio without an org_admin grant', () => {
+    mockPathname.mockReturnValue('/dashboard')
+    render(<Sidebar user={{ ...USER, activeOrganization: { id: ORG }, orgAdminOrgIds: [] }} />)
+    expect(screen.queryByText('Account home')).toBeNull()
+  })
+
+  it('shows Account home to an org admin of the active organisation', () => {
+    mockPathname.mockReturnValue('/dashboard')
+    render(<Sidebar user={{ ...USER, activeOrganization: { id: ORG }, orgAdminOrgIds: [ORG] }} />)
+    expect(screen.getByText('Account home')).toBeTruthy()
+  })
+
+  it('hides Account home from an org admin of a DIFFERENT organisation', () => {
+    mockPathname.mockReturnValue('/dashboard')
+    render(<Sidebar user={{ ...USER, activeOrganization: { id: ORG }, orgAdminOrgIds: ['org-b'] }} />)
+    expect(screen.queryByText('Account home')).toBeNull()
+  })
 })
 
 describe('Sidebar — HOME.3 badge retirement, as amended', () => {
