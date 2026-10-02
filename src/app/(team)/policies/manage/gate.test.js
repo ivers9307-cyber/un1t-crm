@@ -1,7 +1,8 @@
 // C141 ORGROLE.2 — managing policies (the /policies/manage tree, the
 // "Manage policies" link on /policies, and the publish route behind it) is
-// organisation-level: C18's rule, organisation admins only (a master or an
-// org_admin grant on the active organisation). An owner at a studio keeps
+// MASTER ONLY (Richard, 2 Oct): the policies table has no organisation, so a
+// published version reaches every studio in the estate. An org admin of any
+// organisation would publish estate-wide; an owner at a studio keeps
 // /policies itself (reading), not the manage surfaces.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -46,6 +47,11 @@ function db() {
   return { from: vi.fn(() => b), rpc: vi.fn() }
 }
 
+const master = () => ({
+  id: 'm1', role: 'master', profileRole: 'master', isMaster: true,
+  activeOrganization: { id: ORG }, orgAdminOrgIds: [],
+})
+
 const params = { params: Promise.resolve({ slug: 'conduct', versionNumber: '1' }) }
 
 beforeEach(() => {
@@ -53,7 +59,7 @@ beforeEach(() => {
   vi.mocked(createServerClient).mockReturnValue(db())
 })
 
-describe('/policies/manage tree — organisation admins only (C141)', () => {
+describe('/policies/manage tree — master only (C141)', () => {
   for (const [name, render] of [
     ['/policies/manage', () => ManagePage()],
     ['/policies/manage/[slug]', () => ManageDetailPage(params)],
@@ -69,8 +75,13 @@ describe('/policies/manage tree — organisation admins only (C141)', () => {
       await expect(render()).rejects.toThrow(/^NEXT_REDIRECT:\/$/)
     })
 
-    it(`${name}: an org admin of the active organisation gets past the gate`, async () => {
+    it(`${name}: an org admin of the ACTIVE organisation is sent home too (policies are estate-wide)`, async () => {
       vi.mocked(getCurrentUser).mockResolvedValue(owner([ORG]))
+      await expect(render()).rejects.toThrow(/^NEXT_REDIRECT:\/$/)
+    })
+
+    it(`${name}: a master gets past the gate`, async () => {
+      vi.mocked(getCurrentUser).mockResolvedValue(master())
       // Past the gate the page reads policies (or 404s on the empty fixture);
       // never the home redirect.
       await render().then(
@@ -88,8 +99,14 @@ describe('/policies — the "Manage policies" link (C141)', () => {
     expect(html).not.toContain('/policies/manage')
   })
 
-  it('is shown to an org admin of the active organisation', async () => {
+  it('is hidden from an org admin of the active organisation (master only)', async () => {
     vi.mocked(getCurrentUser).mockResolvedValue(owner([ORG]))
+    const html = renderToStaticMarkup(await PoliciesPage())
+    expect(html).not.toContain('/policies/manage')
+  })
+
+  it('is shown to a master', async () => {
+    vi.mocked(getCurrentUser).mockResolvedValue(master())
     const html = renderToStaticMarkup(await PoliciesPage())
     expect(html).toContain('/policies/manage')
   })
@@ -107,8 +124,15 @@ describe('POST /api/admin/policies/[slug]/versions (C141)', () => {
     expect(createServerClient).not.toHaveBeenCalled()
   })
 
-  it('lets an org admin of the active organisation through to validation (400 on an empty body)', async () => {
+  it('refuses an org admin of the active organisation (403, master only) before reading anything', async () => {
     vi.mocked(getCurrentUser).mockResolvedValue(owner([ORG]))
+    const res = await publishVersion(req(), params)
+    expect(res.status).toBe(403)
+    expect(createServerClient).not.toHaveBeenCalled()
+  })
+
+  it('lets a master through to validation (400 on an empty body)', async () => {
+    vi.mocked(getCurrentUser).mockResolvedValue(master())
     const res = await publishVersion(req(), params)
     expect(res.status).toBe(400)
   })

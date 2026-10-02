@@ -10,19 +10,16 @@ import { redirect } from 'next/navigation'
 import { Eye, AlertCircle, ChevronRight, FileText, Settings } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { listPoliciesWithStatus } from '@/lib/policies'
-import { isActiveOrgAdmin } from '@/lib/org-admin'
+import { canManagePolicies } from '@/lib/policies-access'
 
 export const dynamic = 'force-dynamic'
 
 // Same formula as /policies/manage's own gate (server-checked here too
 // — this only controls whether the CTA is offered, the destination
 // page enforces the real gate independently either way).
-// C141 ORGROLE.2 — managing policies is organisation-level (C18's rule):
-// organisation admins only, a master or an org_admin grant on the active
-// organisation. An owner at a studio still reads /policies.
-function canManagePolicies(user) {
-  return isActiveOrgAdmin(user)
-}
+// C141 ORGROLE.2 — managing policies is MASTER ONLY (Richard, 2 Oct): the
+// policies table has no organisation, so a version reaches every studio.
+// canManagePolicies lives in src/lib/policies-access.js.
 
 function fmtDate(iso) {
   if (!iso) return ''

@@ -36,7 +36,7 @@ function db() {
 
 describe('/policies/manage open counts', () => {
   it('renders the scoped counts for the caller, never an estate-wide profiles count', async () => {
-    const user = { id: 'owner', role: 'owner', isMaster: false, activeOrganization: { id: 'org-a' }, orgAdminOrgIds: ['org-a'] }
+    const user = { id: 'master', role: 'master', profileRole: 'master', isMaster: true, activeOrganization: { id: 'org-a' }, orgAdminOrgIds: [] }
     vi.mocked(getCurrentUser).mockResolvedValue(user)
     const fake = db()
     vi.mocked(createServerClient).mockReturnValue(fake)

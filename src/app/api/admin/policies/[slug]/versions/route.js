@@ -1,5 +1,5 @@
 // POST /api/admin/policies/[slug]/versions — publish a NEW version
-// of a policy. Organisation admins only (C141 ORGROLE.2). Atomically (via the partial-unique
+// of a policy. Master only (C141 ORGROLE.2; policies are estate-wide). Atomically (via the partial-unique
 // index race-safety) flips the previous current to false and inserts
 // the new version with is_current = true.
 //
@@ -17,7 +17,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { publishVersion } from '@/lib/policies'
 import { logAuditEvent } from '@/lib/audit'
-import { isActiveOrgAdmin } from '@/lib/org-admin'
+import { canManagePolicies } from '@/lib/policies-access'
 
 export const runtime = 'nodejs'
 
@@ -27,12 +27,9 @@ const PublishSchema = z.object({
   effective_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
 })
 
-// C141 ORGROLE.2 — managing policies is organisation-level (C18's rule):
-// organisation admins only, a master or an org_admin grant on the active
-// organisation. An owner at a studio still reads /policies.
-function canManagePolicies(user) {
-  return isActiveOrgAdmin(user)
-}
+// C141 ORGROLE.2 — managing policies is MASTER ONLY (Richard, 2 Oct): the
+// policies table has no organisation, so a version reaches every studio.
+// canManagePolicies lives in src/lib/policies-access.js.
 
 export async function POST(request, { params }) {
   const { slug } = await params

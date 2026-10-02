@@ -1,9 +1,9 @@
-// /policies/manage — organisation-admin-only (C141 ORGROLE.2) admin for the policies hub.
+// /policies/manage — master-only (C141 ORGROLE.2; policies are estate-wide) admin for the policies hub.
 // ADMIN.2h Task 1 — moved out of /admin (was /admin/policies) to sit
 // alongside the staff-facing read surface at /policies (that page and
 // its [slug] detail predate this move and are untouched — this CRUD
 // tree lives at /policies/manage so the two don't collide). Gate is
-// standalone below (organisation admins), unaffected by the move.
+// standalone below (master only), unaffected by the move.
 // Lists policies with current version + view counts (POLICIES-VIEWS.1
 // replaced the previous acknowledgement model). Click a row to drill
 // into version history, viewer report, and the publish-new-version form.
@@ -14,16 +14,13 @@ import { ChevronRight, FileText } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { currentVersionOpenCounts } from '@/lib/policies'
-import { isActiveOrgAdmin } from '@/lib/org-admin'
+import { canManagePolicies } from '@/lib/policies-access'
 
 export const dynamic = 'force-dynamic'
 
-// C141 ORGROLE.2 — managing policies is organisation-level (C18's rule):
-// organisation admins only, a master or an org_admin grant on the active
-// organisation. An owner at a studio still reads /policies.
-function canManagePolicies(user) {
-  return isActiveOrgAdmin(user)
-}
+// C141 ORGROLE.2 — managing policies is MASTER ONLY (Richard, 2 Oct): the
+// policies table has no organisation, so a version reaches every studio.
+// canManagePolicies lives in src/lib/policies-access.js.
 
 function fmtDate(iso) {
   if (!iso) return ''
