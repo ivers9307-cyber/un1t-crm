@@ -18,7 +18,7 @@ vi.mock('shared/dashboard-data', () => ({
 
 const { api } = await import('./api')
 const shared = await import('shared/dashboard-data')
-const { fetchStudioDashboard, fetchRosterRunway, swapRowTitle, fetchStudioContactCounts, studioContactNumbers } = await import('./dashboard-api')
+const { fetchStudioDashboard, fetchRosterRunway, swapRowTitle, fetchStudioContactCountsFromRoute, studioContactNumbers, studioWhatsappUnread } = await import('./dashboard-api')
 
 const LOC = 'a0000000-0000-0000-0000-000000000001'
 // CONTACTREADSCOPE.1a — the shared fetcher no longer returns the contact
@@ -206,13 +206,14 @@ describe('swapRowTitle — same wording as the web approvals queue', () => {
 describe('shared fetchStudioDashboardData never embeds profiles', () => {
   it('its selects carry no profiles embed (mobile calls it on the authenticated client)', async () => {
     const { readFileSync } = await import('node:fs')
-    const src = readFileSync(new URL('../../shared/dashboard-data.js', import.meta.url), 'utf8')
+    const { stripComments } = await import('../../tests/helpers/js-code.js')
+    // Comments blanked (the explanation of the old bug must not trip it) by
+    // the TypeScript parser's ranges, never a regex (GUARDSTRIP.1).
+    const src = stripComments(readFileSync(new URL('../../shared/dashboard-data.js', import.meta.url), 'utf8'))
     const start = src.indexOf('export async function fetchStudioDashboardData')
     const end = src.indexOf('\nexport ', start + 1)
-    const body = src.slice(start, end)
+    const code = src.slice(start, end)
     expect(start).toBeGreaterThan(-1)
-    // Strip comments so the explanation of the old bug doesn't trip it.
-    const code = body.replace(/\/\/.*$/gm, '')
     expect(code).not.toMatch(/profiles/)
   })
 })
@@ -242,7 +243,7 @@ describe('CONTACTREADSCOPE.1a — contact numbers come from the route', () => {
       null,
     ]) {
       routeApi({ timeOff: OK_EMPTY, swaps: OK_EMPTY, contacts: bad })
-      expect(await fetchStudioContactCounts(LOC)).toBeNull()
+      expect(await fetchStudioContactCountsFromRoute(LOC)).toBeNull()
     }
   })
 
@@ -264,6 +265,15 @@ describe('CONTACTREADSCOPE.1a — contact numbers come from the route', () => {
       headline: [{ key: 'new_lead', count: 3 }, { key: 'first_class', count: 0 },
         { key: 'trial_done', count: 0 }, { key: 'converted', count: 1 }],
     })
+  })
+
+  // REVIEWNITS.1 (D5): a failed unread read arrives as null and shows a dash,
+  // not "0 across the inbox".
+  it('studioWhatsappUnread: a dash and no tap for null; the count otherwise', () => {
+    expect(studioWhatsappUnread(null)).toEqual({ value: '—', sublabel: "Couldn't load", accent: 'text-un1t-muted', pressable: false })
+    expect(studioWhatsappUnread(undefined).value).toBe('—')
+    expect(studioWhatsappUnread(0)).toEqual({ value: 0, sublabel: 'across the inbox', accent: 'text-un1t-muted', pressable: false })
+    expect(studioWhatsappUnread(4)).toEqual({ value: 4, sublabel: 'across the inbox', accent: 'text-un1t-text', pressable: true })
   })
 
   it('a real zero stays a zero (a studio with no contacts is not a failure)', () => {

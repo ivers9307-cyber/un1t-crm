@@ -49,6 +49,7 @@ import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs'
 import path from 'node:path'
 import { sqlCode, ident, splitTop } from './helpers/sql-code.js'
 import { stripComments, isClientFile } from './helpers/js-code.js'
+import { roleLeaks } from './helpers/sql-escapes.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const TABLE_ACL_MIGRATION = 677
@@ -68,11 +69,9 @@ const NOT_A_RELATION = /^(function|procedure|routine|schema|database|large\s+obj
 const ADP_RE = /\balter\s+default\s+privileges\b[^;]*;?/gi
 const GRANT_RE = /\bgrant\s+([^;]+?)\s+on\s+([^;]+?)\s+to\s+([^;'$]+)/gi
 const REVOKE_RE = /\brevoke\s+([^;]+?)\s+on\s+([^;]+?)\s+from\s+([^;'$]+)/gi
-const MEMBERSHIP_RE = /\bgrant\s+((?:(?!\bon\b)[^;'$])+?)\s+to\s+([^;'$]+)/gi
 const NAME = String.raw`((?:"?[a-z_][\w]*"?\s*\.\s*)?"?[a-z_][\w]*"?)(?![\w."%$])`
 const CREATE_RE = new RegExp(String.raw`\bcreate\s+(?:or\s+replace\s+)?(?:(?:global\s+|local\s+)?(temp|temporary|unlogged)\s+)?(table|view|materialized\s+view|sequence)\s+(?:if\s+not\s+exists\s+)?${NAME}`, 'gi')
 const SET_SCHEMA_RE = new RegExp(String.raw`\balter\s+(table|view|materialized\s+view|sequence)\s+(?:if\s+exists\s+)?(?:only\s+)?${NAME}\s+set\s+schema\s+"?public"?`, 'gi')
-const OWNER_RE = /\balter\s+(?:table|view|materialized\s+view|sequence)\s+[^;]+?\bowner\s+to\s+"?(anon|authenticated|public)"?/gi
 const rolesOf = (list) => splitTop(list.replace(/\s+(with\s+(grant|admin|inherit|set)\s+option|with\s+(admin|inherit|set)\s+\w+|granted\s+by\b|cascade|restrict)[\s\S]*$/i, '')).map(ident)
 const privNames = (privs) => splitTop(privs).map((p) => p.replace(/\([\s\S]*$/, '').trim().toLowerCase().replace(/\s+/g, ' '))
 
@@ -272,17 +271,8 @@ export function serialInsertGaps(sql, prior = new Map()) {
   return [...new Set(out)]
 }
 
-/** Role memberships into a client role, and client-role owners (rule 6). */
-export function roleLeaks(sql) {
-  const code = sqlCode(sql).replace(ADP_RE, ' ')
-  const out = []
-  for (const [stmt, , to] of code.matchAll(MEMBERSHIP_RE)) {
-    if (/\bon\b/i.test(stmt)) continue
-    if (rolesOf(to).some((r) => CLIENT_ROLES.includes(r))) out.push(stmt.trim().replace(/\s+/g, ' '))
-  }
-  for (const [stmt] of code.matchAll(OWNER_RE)) out.push(stmt.trim().replace(/\s+/g, ' '))
-  return out
-}
+// roleLeaks (rule 6) lives in tests/helpers/sql-escapes.js, shared with
+// tests/closed-table-escapes-guard.test.js (GUARDSTRIP.1).
 
 // ── the migrations ───────────────────────────────────────────────────────
 const migrationFiles = () => readdirSync(MIGRATIONS)
@@ -397,6 +387,11 @@ describe('the detectors', () => {
       '-- rollback: GRANT ALL ON public.notes TO anon;',
       '/* GRANT ALL ON public.notes TO anon; */',
     ]) expect(clientGrantViolations(sql), sql).toEqual([])
+  })
+
+  it("a '/*' inside a string or a later $$ literal hides no grant (GUARDSTRIP.1)", () => {
+    expect(clientGrantViolations("SELECT '/*';\nGRANT SELECT ON public.x TO anon;\nSELECT '*/';")).not.toEqual([])
+    expect(clientGrantViolations('DO $$ BEGIN PERFORM 1; END $$;\nSELECT $$ /* $$;\nGRANT TRUNCATE ON public.x TO authenticated;\nSELECT $$ */ $$;')).not.toEqual([])
   })
 
   it('defaultReopeners catches tables/sequences re-opened in public or globally', () => {

@@ -50,6 +50,7 @@ import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { stripComments } from '../../../../tests/helpers/js-code.js'
 
 const SCHEDULE_DIR = path.dirname(fileURLToPath(import.meta.url))
 
@@ -135,41 +136,10 @@ const NAMED_PARAM_READ = new RegExp(
   'g',
 )
 
-/**
- * The source with its `//` and `/* *\/` comments blanked, so a comment that
- * reads like the check (`// TODO: refuse endDate < startDate`) never counts
- * as one. Strings and template literals are skipped over, so the `//` in a
- * URL is not taken for a comment. A regex literal holding a quote can throw
- * the string tracking off; that only ever leaves a comment in place, which is
- * the pre-strip behaviour, never code removed.
- */
-function stripComments(src) {
-  let out = ''
-  let quote = null
-  for (let i = 0; i < src.length; i++) {
-    const c = src[i]
-    if (quote) {
-      out += c
-      if (c === '\\') { out += src[++i] ?? ''; continue }
-      if (c === quote) quote = null
-      continue
-    }
-    if (c === '/' && src[i + 1] === '/') {
-      while (i < src.length && src[i] !== '\n') i++
-      out += '\n'
-      continue
-    }
-    if (c === '/' && src[i + 1] === '*') {
-      const close = src.indexOf('*/', i + 2)
-      i = close === -1 ? src.length : close + 1
-      out += ' '
-      continue
-    }
-    if (c === "'" || c === '"' || c === '`') quote = c
-    out += c
-  }
-  return out
-}
+// The source with its `//` and `/* */` comments blanked, so a comment that
+// reads like the check (`// TODO: refuse endDate < startDate`) never counts as
+// one: the TypeScript parser's comment ranges (tests/helpers/js-code.js), not a
+// hand state machine that lost track after a regex literal (GUARDSTRIP.1).
 
 /** Rule 3: both ends of a query range are read, and never put in order. */
 function unorderedPairOffence(rawSrc) {

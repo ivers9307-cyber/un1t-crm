@@ -47,6 +47,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { stripComments } from './helpers/js-code.js'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 
@@ -70,12 +71,9 @@ function componentTestFiles() {
     .filter((file) => /@testing-library\/react/.test(readFileSync(`${ROOT}${file}`, 'utf8')))
 }
 
-/** Source with comments blanked (same length, same line numbers). */
-function withoutComments(source) {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
-    .replace(/(^|[^:'"`\\])\/\/[^\n]*/g, (m, lead) => lead + ' '.repeat(m.length - lead.length))
-}
+/** Source with comments blanked (same length, same line numbers), by the
+ * TypeScript parser's comment ranges (tests/helpers/js-code.js), never a regex. */
+const withoutComments = stripComments
 
 /** Is the call at `index` inside the parentheses of the nearest preceding act( ? */
 export function isInsideAct(source, index) {
@@ -107,7 +105,7 @@ export function bareClockMoves(rawSource) {
   return found
 }
 
-describe('the detector itself', () => {
+describe('the detector itself', { timeout: 120_000 }, () => {
   it('sees a bare advance', () => {
     expect(bareClockMoves('await vi.advanceTimersByTimeAsync(0)\nscreen.getByRole("button")'))
       .toEqual([{ line: 1, snippet: 'advanceTimersByTimeAsync(0)' }])
@@ -131,13 +129,19 @@ describe('the detector itself', () => {
     expect(bareClockMoves('// await vi.advanceTimersByTimeAsync(0) was the bug\n/* vi.runAllTimers() */')).toEqual([])
   })
 
+  // GUARDSTRIP.1 (C74): a regex stripper read the '/*' in a string as a
+  // comment and hid every clock move up to the next '*/'.
+  it('a /* inside a string hides no clock move', () => {
+    expect(bareClockMoves('const accept = "image/*"\nvi.runAllTimers()\n/* note */').map((f) => f.line)).toEqual([2])
+  })
+
   it('covers the whole clock-moving family', () => {
     expect(bareClockMoves('vi.runAllTimers()\nawait vi.runOnlyPendingTimersAsync()\nvi.advanceTimersToNextTimer()').map((f) => f.line))
       .toEqual([1, 2, 3])
   })
 })
 
-describe('a component test never moves the fake clock outside act()', () => {
+describe('a component test never moves the fake clock outside act()', { timeout: 120_000 }, () => {
   const files = componentTestFiles()
 
   it('finds the component tests at all', () => {
