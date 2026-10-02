@@ -32,10 +32,13 @@ export const LATE_SCHEDULED_BLAST_REASON =
 // How the cron promotes a due scheduled broadcast, or null when the row is
 // not promotable (already claimed by a concurrent tick, cancelled, …).
 //
-//  - drip  → flip scheduled→sending: the state /send starts a drip in
-//    (GATES-3 e), so the existing drip machinery (window gate, daily cap,
-//    tier budget, auto-pause, the template and number checks each tick)
-//    takes over untouched.
+//  - drip  → flip scheduled→draft, then the cron starts it through
+//    sendBroadcast (C138 b): since GATES-3 (e) that runs a drip's start
+//    checks (template APPROVED, URL value, own number, quality preflight,
+//    wallet) and owns the draft→sending CAS without sending anything, so a
+//    refused start is a draft plus the managers' push, exactly as a blast's.
+//    Once 'sending', the drip machinery (window gate, daily cap, tier budget,
+//    auto-pause) takes over untouched.
 //  - blast → flip scheduled→draft: 'draft' is the ONE entry state the blast
 //    engine owns end-to-end — sendBroadcast performs its own draft→sending
 //    CAS, and every refusal path lands back there (quality preflight throws
@@ -48,7 +51,7 @@ export const LATE_SCHEDULED_BLAST_REASON =
 //    scheduled_at, keeps the blast plan.
 export function promotionPlan(broadcast, now) {
   if (!broadcast || broadcast.status !== 'scheduled') return null
-  if (broadcast.delivery_mode === 'drip') return { mode: 'drip', flipTo: 'sending' }
+  if (broadcast.delivery_mode === 'drip') return { mode: 'drip', flipTo: 'draft' }
   const due = Date.parse(broadcast.scheduled_at ?? '')
   const at = now instanceof Date ? now.getTime() : NaN
   if (Number.isFinite(due) && Number.isFinite(at) && at - due > LATE_SCHEDULED_BLAST_HOURS * 3600 * 1000) {

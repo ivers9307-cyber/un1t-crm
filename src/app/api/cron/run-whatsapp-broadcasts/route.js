@@ -8,8 +8,12 @@
 //     the tick that wins the flip proceeds (the 15-min cadence + 300s
 //     maxDuration also means two ticks never truly overlap; the CAS is the
 //     belt-and-braces, same posture as sendDripChunk's concurrency note).
-//       - drip  → flip to 'sending'; the existing drip machinery owns it
-//         (first chunk goes out this tick if inside the send window).
+//       - drip  → C138 (b): flip to 'draft' and start it through
+//         sendBroadcast, which runs a drip's start checks (template, URL
+//         value, own number, quality, wallet) and CAS-flips draft→sending
+//         without sending. A refusal stays a draft and pushes the managers
+//         (as a blast's does); once started the drip machinery owns it (first
+//         chunk goes out this tick if inside the send window).
 //       - blast → flip to 'draft' and invoke sendBroadcast with a per-tick
 //         recipient cap: sendBroadcast performs its own draft→sending CAS and
 //         every refusal (quality gate, tier budget, breaker) lands the row
@@ -148,6 +152,10 @@ export async function GET(request) {
   for (const row of scheduledQ.data) {
     const plan = promotionPlan(row, now)
     if (!plan) continue
+    // C138 (b) — true once the row is past its start (a blast's or a drip's
+    // sendBroadcast returned): a later throw (a drip chunk) is not a refused
+    // start and gets no push.
+    let started = false
     try {
       // CAS the flip — a concurrent tick that already claimed it gets 0 rows.
       // C127 — a stale blast also loses its schedule: it is a plain draft now,
@@ -177,6 +185,12 @@ export async function GET(request) {
       stats.promoted++
 
       if (plan.mode === 'drip') {
+        // C138 (b) — the start checks, then draft→sending (nothing sent). A
+        // refusal throws with the row at draft: the catch pushes the managers.
+        const start = await sendBroadcast(row.id)
+        started = true
+        // Lost the CAS (someone started it in between): the drip arm owns it.
+        if (start?.mode !== 'drip' || start?.skipped) continue
         // The drip engine owns it from here; start the first chunk now if the
         // send window is open (otherwise the next in-window tick will).
         const inWindow = isWithinSendWindow(now, {
@@ -200,14 +214,15 @@ export async function GET(request) {
       stats.refused++
       stats.errors.push({ broadcast_id: row.id, error: msg })
       console.warn(`[cron run-whatsapp-broadcasts] scheduled ${row.id} (${row.name}) refused: ${msg}`)
-      // A BLAST refusal (quality gate / tier budget) threw out of
-      // sendBroadcast and left the row at 'draft' (its own state machine
-      // guarantees that) — tell the managers, a silently missed schedule is
-      // worse than the refusal itself. Best-effort push, never re-throws.
-      // A promoted DRIP that errors is already 'sending' and the next tick
-      // retries it, so no push (the wording wouldn't fit and a transient
-      // error would page every 15 min).
-      if (plan.mode === 'blast') await notifyScheduledStartFailure(row, msg)
+      // A refused START (quality gate / tier budget / wallet / template /
+      // own number) threw out of sendBroadcast and left the row at 'draft'
+      // (its own state machine guarantees that) — tell the managers, a
+      // silently missed schedule is worse than the refusal itself. Since
+      // C138 (b) that holds for a drip's start too. Best-effort push, never
+      // re-throws. A drip whose first CHUNK errors after a good start is
+      // already 'sending' and the next tick retries it, so no push (the
+      // wording wouldn't fit and a transient error would page every 15 min).
+      if (plan.mode === 'blast' || (plan.mode === 'drip' && !started)) await notifyScheduledStartFailure(row, msg)
     }
   }
 

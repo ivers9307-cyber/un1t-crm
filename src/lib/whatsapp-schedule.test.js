@@ -9,9 +9,12 @@ import {
 } from './whatsapp-schedule.js'
 
 describe('promotionPlan — how the cron promotes a due scheduled broadcast', () => {
-  it('promotes a scheduled drip straight to sending (the drip engine takes over)', () => {
+  // C138 (b) — a drip goes to draft first, like a blast: sendBroadcast then runs
+  // a drip's start checks (template, URL value, own number, quality, wallet) and
+  // owns the draft→sending CAS, so a refused start is a draft plus a manager push.
+  it('promotes a scheduled drip to draft (sendBroadcast starts it after the start checks)', () => {
     expect(promotionPlan({ status: 'scheduled', delivery_mode: 'drip' }))
-      .toEqual({ mode: 'drip', flipTo: 'sending' })
+      .toEqual({ mode: 'drip', flipTo: 'draft' })
   })
 
   it('promotes a scheduled blast to draft (sendBroadcast owns the draft→sending CAS + gates)', () => {
@@ -60,7 +63,7 @@ describe('promotionPlan — a late scheduled blast is returned, never sent (C127
 
   it('a late drip is never stale (it paces itself inside its window)', () => {
     expect(promotionPlan({ status: 'scheduled', delivery_mode: 'drip', scheduled_at: ago(48 * H) }, now))
-      .toEqual({ mode: 'drip', flipTo: 'sending' })
+      .toEqual({ mode: 'drip', flipTo: 'draft' })
   })
 
   it('no clock, or an unreadable time, keeps the old plan', () => {
