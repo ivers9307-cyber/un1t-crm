@@ -87,7 +87,12 @@ export async function POST(request) {
     phone: body.phone,
     label: body.label,
     glofox_member_id: body.glofox_member_id,
-    trial_credits_remaining: body.trial_credits_remaining ?? 3,
+    // C145 TRIALDEFAULT.1 (Richard, 2 Oct) — no default trial credits: a new
+    // contact has NO credit count until Glofox says otherwise (the sync sets
+    // it on link). It used to be `?? 3`, shown as "3 credits" before any
+    // Glofox account existed. An explicit NULL, not an omitted key, so the
+    // column's old DEFAULT 3 (mig 001, dropped in mig 702) never applies.
+    trial_credits_remaining: body.trial_credits_remaining ?? null,
     lead_source: body.lead_source,
     lead_created_at: body.lead_created_at || new Date().toISOString(),
     ...(body.location_id ? { location_id: body.location_id } : {}),

@@ -86,7 +86,8 @@ const ContactCreate = z.object({
   phone: phone.optional().nullable(),
   label: z.string().max(100).nullable().optional(),
   glofox_member_id: z.string().max(100).nullable().optional(),
-  trial_credits_remaining: z.number().int().min(0).max(100).optional(),
+  trial_credits_remaining: z.number().int().min(0).max(100).optional()
+    .describe('Omitted = no credit count (null) until Glofox links the contact and sets it (C145). No default.'),
   lead_source: leadSourceSchema.optional(),
   lead_created_at: z.string().datetime().optional(),
   location_id: uuidLike.optional(),
