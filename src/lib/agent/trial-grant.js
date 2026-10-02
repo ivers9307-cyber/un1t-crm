@@ -33,11 +33,23 @@
 //      readGlofoxConfig, where a failed read is GLOFOX_SETTINGS_UNREADABLE,
 //      never "not configured". A queue row that cannot be read, or two that
 //      disagree, is TRIAL_PRODUCT_UNKNOWN: never a guess at the default;
-//   5. write-ahead: details.trial_grant = { stage: 'purchasing' } is
+//   5. TRIALCLAIM.1 (C113) — an atomic claim: one live glofox_trial_claims
+//      row per (studio, Glofox member) (mig 697's partial unique index). The
+//      reads in 3 cannot stop two cards approved at the same instant (neither
+//      has recorded anything yet); the claim can. Taken after the product is
+//      known and before the marker. A claim held by another card or by a
+//      seeded mint/old grant → TRIAL_ALREADY_GRANTED; one this card already
+//      holds (a retry) → go on; a claim that cannot be written →
+//      TRIAL_GRANT_UNRECORDED; a conflict whose holder cannot be read →
+//      TRIAL_HISTORY_UNREADABLE. Never a purchase on an unknown claim state.
+//      Released only when NOTHING can have been bought (the marker was not
+//      written, or Glofox answered a clear refusal); a lost release leaves
+//      the claim standing, so the next card stops for staff (closed);
+//   6. write-ahead: details.trial_grant = { stage: 'purchasing' } is
 //      recorded on THIS execution (the route's guarded `record`) before the
 //      purchase, and its outcome after it, both before any booking. If the
 //      marker cannot be written nothing is bought (TRIAL_GRANT_UNRECORDED);
-//   6. the purchase is judged on its body (purchaseGlofoxMembership().ok).
+//   7. the purchase is judged on its body (purchaseGlofoxMembership().ok).
 // A marker with no outcome, or a purchase Glofox never answered
 // (outcome_unknown), may have gone through: a later attempt books only if
 // credits show, and otherwise refuses (TRIAL_GRANT_UNVERIFIED), since a trial
@@ -132,6 +144,55 @@ async function trialAtMint(db, { locationId, memberId }) {
   return { ok: true, eventId: data?.[0]?.id ?? null }
 }
 
+// TRIALCLAIM.1 (C113) — the atomic claim (mig 697). { ok: true } when this
+// card holds the live claim (just taken, or taken by an earlier attempt of
+// the same card); otherwise { ok: false, code, extra }.
+const CLAIMS = 'glofox_trial_claims'
+async function claimTrial(db, { locationId, memberId, requestId, at }) {
+  const { data, error } = await db.from(CLAIMS)
+    .insert({ location_id: locationId, glofox_member_id: memberId, request_id: requestId, source: 'approval', claimed_at: at })
+    .select('id')
+    .single()
+  if (!error && data?.id) return { ok: true, claimId: data.id }
+  // Anything but the unique conflict (a database error, or the table not
+  // there yet) is an unknown claim state: no purchase.
+  if (error?.code !== '23505') return { ok: false, code: TRIAL_GRANT_UNRECORDED, err: error || null }
+  const { data: held, error: readErr } = await db.from(CLAIMS)
+    .select('id, request_id, push_event_id')
+    .eq('location_id', locationId)
+    .eq('glofox_member_id', memberId)
+    .is('released_at', null)
+    .limit(1)
+  // The holder unreadable, or gone by now (released meanwhile): unknown.
+  if (readErr || !held?.length) return { ok: false, code: TRIAL_HISTORY_UNREADABLE, err: readErr || null }
+  const live = held[0]
+  if (live.request_id && live.request_id === requestId) return { ok: true, claimId: live.id }
+  return {
+    ok: false,
+    code: TRIAL_ALREADY_GRANTED,
+    extra: {
+      prior_claim_id: live.id,
+      ...(live.request_id ? { prior_request_id: live.request_id } : {}),
+      ...(live.push_event_id ? { prior_push_event_id: live.push_event_id } : {}),
+    },
+  }
+}
+
+// Only when nothing can have been bought. A release that does not land
+// leaves the claim standing: the next card for this member stops on
+// TRIAL_ALREADY_GRANTED and staff decide (closed, never a second trial).
+async function releaseClaim(db, claimId, { reason, at, requestId }) {
+  try {
+    const { data, error } = await db.from(CLAIMS)
+      .update({ released_at: at, release_reason: reason })
+      .eq('id', claimId)
+      .is('released_at', null)
+      .select('id')
+    if (!error && data?.length) return
+  } catch { /* logged below */ }
+  logWarn('trial-grant', 'trial claim not released; the next card for this member will stop for staff', { requestId, reason })
+}
+
 export async function grantTrialBeforeBooking(db, {
   creds, locationId, memberId, priorGrant = null, isRetry = false, requestId = null,
   trialOverride = null, record = null,
@@ -157,6 +218,8 @@ export async function grantTrialBeforeBooking(db, {
   // Set once the 'purchasing' marker is on the row: from then on, a purchase
   // whose answer we never got may have gone through at Glofox.
   let purchaseStarted = false
+  // TRIALCLAIM.1 — the live claim this attempt holds, once taken.
+  let claimId = null
   const persist = async (trialGrant) => {
     if (typeof record !== 'function') return false
     try { return (await record(trialGrant)) === true } catch { return false }
@@ -221,10 +284,21 @@ export async function grantTrialBeforeBooking(db, {
       trial = { membershipId: cfg.trial_membership_id, planCode: cfg.trial_plan_code }
     }
 
+    // TRIALCLAIM.1 (C113) — the atomic claim. Two cards for this member
+    // approved together both passed the reads above; only one gets the
+    // claim. No card id or member id: nothing to claim for, so no purchase.
+    if (!requestId || !memberId) return stop(TRIAL_GRANT_UNRECORDED)
+    const claim = await claimTrial(db, { locationId, memberId, requestId, at })
+    if (!claim.ok) return stop(claim.code, claim.extra || {}, claim.err || null)
+    claimId = claim.claimId
+
     // Write-ahead: the row says a purchase is under way BEFORE it starts, so
     // a death anywhere after this point leaves a marker a retry refuses to
-    // buy over. No marker, no purchase.
-    if (!(await persist({ stage: 'purchasing', at, ...who }))) return stop(TRIAL_GRANT_UNRECORDED)
+    // buy over. No marker, no purchase (and the claim goes: nothing bought).
+    if (!(await persist({ stage: 'purchasing', at, ...who }))) {
+      await releaseClaim(db, claimId, { reason: 'marker_unrecorded', at, requestId })
+      return stop(TRIAL_GRANT_UNRECORDED)
+    }
     purchaseStarted = true
 
     const p = await purchaseGlofoxMembership(creds, memberId, trial.membershipId, trial.planCode)
@@ -235,16 +309,22 @@ export async function grantTrialBeforeBooking(db, {
       if (!(await persist(grant))) logWarn('trial-grant', 'trial granted but the outcome was not recorded; the purchasing marker stands', { requestId })
       return { proceed: true, grant, failure: null }
     }
+    // No clear answer (a network error, http_status 0, or a 5xx, which
+    // glofoxFetch no longer re-sends: GLOFOXPOSTRETRY.1): Glofox may have
+    // processed it, so a retry must not buy blind, and the claim stands.
+    const unknown = p?.outcome_unknown === true || p?.http_status === 0
+    // A refusal Glofox answered bought nothing: the claim goes.
+    if (!unknown) await releaseClaim(db, claimId, { reason: 'purchase_refused', at, requestId })
     return stop(TRIAL_GRANT_FAILED, {
       glofox_message_code: p?.message_code ?? null,
       http_status: p?.http_status ?? null,
       purchase_status: p?.purchase_status ?? null,
-      // No clear answer (a network error, http_status 0, or a 5xx, which
-      // glofoxFetch no longer re-sends: GLOFOXPOSTRETRY.1): Glofox may have
-      // processed it, so a retry must not buy blind.
-      ...((p?.outcome_unknown === true || p?.http_status === 0) ? { outcome_unknown: true } : {}),
+      ...(unknown ? { outcome_unknown: true } : {}),
     })
   } catch (e) {
+    // A throw after the claim but before the purchase was sent bought
+    // nothing: the claim goes. After it was sent, the claim stands.
+    if (claimId && !purchaseStarted) await releaseClaim(db, claimId, { reason: 'stopped_before_purchase', at, requestId })
     return stop(TRIAL_GRANT_FAILED, {
       glofox_message_code: null, http_status: null, purchase_status: null, error: 'exception',
       ...(purchaseStarted ? { outcome_unknown: true } : {}),

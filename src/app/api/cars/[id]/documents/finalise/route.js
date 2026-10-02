@@ -98,6 +98,23 @@ export async function POST(request, props) {
   }
 
   async function refuse(error, status = 400) {
+    // CARDOCREFUSERACE.1 (C136) — the existing-row check above ran before
+    // this call judged the object. A concurrent finalise on the same slot
+    // (one that declared the right type) may have recorded its row since, and
+    // the object is then THAT row's file: removing it would leave a document
+    // pointing at nothing. Re-read before removing. A row → keep the object,
+    // answer as the replay does. A failed read → keep it too (an orphan
+    // object is recoverable, a recorded row with no file is not) and refuse
+    // as before. A short window remains between this read and the remove.
+    const { data: recorded, error: recheckErr } = await db.from('car_documents')
+      .select('id').eq('car_id', car.id).eq('storage_path', body.path).limit(1)
+    if (recheckErr) {
+      logWarn('car-documents-upload', 'refused document kept: recorded-row re-check failed', { error: recheckErr.message })
+      return NextResponse.json({ success: false, error }, { status })
+    }
+    if (recorded?.length) {
+      return NextResponse.json({ success: false, error: CAR_DOCUMENT_ALREADY_SAVED }, { status: 409 })
+    }
     try {
       const { error: rmErr } = await bucket.remove([body.path])
       if (rmErr) logWarn('car-documents-upload', 'refused document not removed', { error: rmErr.message })
