@@ -16,6 +16,8 @@
 //
 // Body: { doc_type, path, file_name, mime, notes? }
 // → 201 { success: true, data: <car_documents row>, queue_warning? }
+// → 409 when the slot is already recorded (a replay, or the loser of two
+//   concurrent calls: CARDOCUNIQUE.1, mig 693)
 
 import { z } from 'zod'
 import { NextResponse } from 'next/server'
@@ -24,7 +26,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { ALL_DOCUMENT_TYPES } from '@/lib/cars'
 import { carDocumentsGate } from '@/lib/car-documents-gate'
-import { recordCarDocument } from '@/lib/car-document-record'
+import { recordCarDocument, CAR_DOCUMENT_ALREADY_SAVED } from '@/lib/car-document-record'
 import { sniffMimeFromBytes } from '@/lib/invoice-extraction'
 import { resolveCarDocumentType, sniffCarDocumentHeif, isUnlabelledCarDocumentType } from '@/lib/car-document-media'
 import {
@@ -67,7 +69,10 @@ export async function POST(request, props) {
   }
 
   // A slot is recorded once: a replayed finalise must not file a second
-  // document (and a second bookkeeper-queue entry) for the same bytes.
+  // document (and a second bookkeeper-queue entry) for the same bytes. This
+  // read answers the plain replay; two CONCURRENT calls both pass it, and the
+  // unique storage_path (mig 693) refuses the second insert, which
+  // recordCarDocument reports as a conflict (409, object kept).
   const { data: existing, error: existingErr } = await db.from('car_documents')
     .select('id').eq('car_id', car.id).eq('storage_path', body.path).limit(1)
   if (existingErr) {
@@ -75,7 +80,7 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: `Could not check the upload: ${existingErr.message}` }, { status: 500 })
   }
   if (existing?.length) {
-    return NextResponse.json({ success: false, error: 'This upload is already saved.' }, { status: 409 })
+    return NextResponse.json({ success: false, error: CAR_DOCUMENT_ALREADY_SAVED }, { status: 409 })
   }
 
   const bucket = db.storage.from('car-documents')
@@ -135,7 +140,7 @@ export async function POST(request, props) {
     userId: user.id,
     notes: body.notes ?? null,
   })
-  if (!rec.ok) return NextResponse.json({ success: false, error: rec.error }, { status: 500 })
+  if (!rec.ok) return NextResponse.json({ success: false, error: rec.error }, { status: rec.conflict ? 409 : 500 })
 
   return NextResponse.json({ success: true, data: rec.doc, queue_warning: rec.queueWarning }, { status: 201 })
 }
