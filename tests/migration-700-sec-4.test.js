@@ -17,16 +17,16 @@
 //     get_user_role_at (they answer about ANY user); service_role still can;
 //     auth_can_read_shift_assignment keeps authenticated, and asking it about
 //     another user's id answers only about the caller (fails closed);
-//   * pins, InitPlan, idempotent, abort cases, the POST-677 rollback record,
-//     and a static guard that no later migration gives the two back.
+//   * pins, InitPlan, idempotent, abort cases, the POST-677 rollback record
+//     (the static guard that no later migration gives the two back is
+//     tests/closed-function-regrant-guard.test.js).
 // Fictional ids only: the repo is public.
 
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest'
-import { readFileSync, readdirSync, existsSync } from 'node:fs'
+import { readFileSync, existsSync } from 'node:fs'
 import path from 'node:path'
 import { boot, asUser, asRole, IDS, abortMessage, policiesOf } from './helpers/member-write-sweep.js'
 import { KEY_BUNDLES } from '../shared/permission-bundles.js'
-import { sqlCode, ident, splitTop } from './helpers/sql-code.js'
 
 const MIGRATIONS = path.resolve(import.meta.dirname, '../supabase/migrations')
 const mig = (f) => readFileSync(path.join(MIGRATIONS, f), 'utf8')
@@ -539,47 +539,8 @@ describe.each(STATES)('$label', ({ with699 }) => {
   })
 })
 
-// ---------------------------------------------------------------------------
-// Static guard: no later migration gives authenticated / anon / PUBLIC back
-// EXECUTE on a uid-taking role function closed here (or by 699).
-// A floor, not a proof: SQL built at runtime is invisible.
-// ---------------------------------------------------------------------------
-const CLOSED_UID_FNS = ['get_user_role', 'get_user_role_at', 'mobile_can_for']
-const migNum = (f) => Number.parseInt(f, 10)
-const ALL_IN_SCHEMA = /^all\s+(functions|routines)\s+in\s+schema\s+([\s\S]+)$/i
-
-/** GRANT EXECUTE/ALL statements in `sql` that reopen a closed uid-taking function to a client role. */
-export function uidFnReopeners(sql) {
-  const out = []
-  for (const [stmt, privs, target, to] of sqlCode(sql).matchAll(/\bgrant\s+([^;]+?)\s+on\s+([^;]+?)\s+to\s+([^;]+)/gi)) {
-    if (!/\b(execute|all)\b/i.test(privs)) continue
-    const roles = splitTop(to.replace(/\s+with\s+grant\s+option[\s\S]*$/i, '')).map(ident)
-    if (!roles.some((r) => ['authenticated', 'anon', 'public'].includes(r))) continue
-    const t = target.trim()
-    const all = t.match(ALL_IN_SCHEMA)
-    if (all) { if (splitTop(all[2]).map(ident).includes('private')) out.push(stmt.trim().replace(/\s+/g, ' ')); continue }
-    if (!/^(function|routine)\s/i.test(t)) continue
-    const names = splitTop(t.replace(/^(function|routine)\s+/i, '')).map((i) => i.replace(/\([\s\S]*$/, '').split('.').map(ident))
-    if (names.some((p) => p.length === 2 && p[0] === 'private' && CLOSED_UID_FNS.includes(p[1]))) out.push(stmt.trim().replace(/\s+/g, ' '))
-  }
-  return out
-}
-
-describe('static guard: the closed uid-taking functions stay closed to client roles', () => {
-  it('no migration after 700 reopens them', () => {
-    const offenders = readdirSync(MIGRATIONS).filter((f) => f.endsWith('.sql') && migNum(f) > 700)
-      .flatMap((f) => uidFnReopeners(mig(f)).map((h) => `${f}: ${h}`))
-    expect(offenders).toEqual([])
-  })
-
-  it('700 itself only grants service_role, and the detector catches the shapes', () => {
-    expect(uidFnReopeners(MIG_700)).toEqual([])
-    expect(uidFnReopeners('GRANT EXECUTE ON FUNCTION private.get_user_role(uuid) TO authenticated;')).toHaveLength(1)
-    expect(uidFnReopeners('grant all on function private.get_user_role_at(uuid, uuid), private.x() to service_role, public;')).toHaveLength(1)
-    expect(uidFnReopeners('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA private TO authenticated;')).toHaveLength(1)
-    expect(uidFnReopeners('GRANT EXECUTE ON FUNCTION private.mobile_can_for(uuid, uuid, text) TO anon;')).toHaveLength(1)
-    expect(uidFnReopeners('GRANT EXECUTE ON FUNCTION private.get_user_role(uuid) TO service_role;')).toEqual([])
-    expect(uidFnReopeners('GRANT EXECUTE ON FUNCTION private.auth_is_manager_at(uuid) TO authenticated;')).toEqual([])
-    expect(uidFnReopeners('-- GRANT EXECUTE ON FUNCTION private.get_user_role(uuid) TO authenticated;')).toEqual([])
-  })
-})
+// The static guard that no later migration gives authenticated / anon /
+// PUBLIC back EXECUTE on the two closed here (or 699's mobile_can_for), by a
+// GRANT or by a DROP + CREATE that takes the default ACL, is
+// tests/closed-function-regrant-guard.test.js (C147); the registry of closed
+// functions is tests/helpers/closed-functions.js.
