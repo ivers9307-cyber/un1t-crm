@@ -2558,8 +2558,9 @@ registry.registerPath({
   request: { body: { content: { 'application/json': { schema: ContactCreate } } } },
   responses: {
     200: { description: 'Contact created', content: { 'application/json': { schema: SuccessResponse(Contact) } } },
-    400: { description: 'Validation failed', content: { 'application/json': { schema: ErrorResponse } } },
-    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: 'Validation failed, or location_id missing (cookie callers and per-organisation keys)', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized, or (cookie caller) not Manager+ at location_id', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Per-organisation API key: location_id is not in your organisation. Cookie caller: not a member of location_id.', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -2576,6 +2577,9 @@ registry.registerPath({
   responses: {
     200: { description: 'Contact updated', content: { 'application/json': { schema: SuccessResponse(Contact) } } },
     400: { description: 'Validation failed', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such contact (or a malformed id), or (cookie caller) not Manager+ at its location; per-organisation keys: not in your organisation', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'The contact could not be read just now; nothing was changed. Retry.', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

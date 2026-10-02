@@ -63,7 +63,7 @@ const ORG_B = 'c0000000-0000-0000-0000-000000000003'
 
 // Records every table touched AND every filter, so "never reached the
 // database" and "read only ITS OWN org" are assertions, not assumptions.
-function makeDb({ errors = {}, location = null } = {}) {
+function makeDb({ errors = {}, location = null, locationError = null } = {}) {
   const touched = []
   const filters = []
   const from = (table) => {
@@ -71,11 +71,13 @@ function makeDb({ errors = {}, location = null } = {}) {
     const c = {}
     for (const op of ['select', 'in', 'order', 'limit']) c[op] = () => c
     c.eq = (col, val) => { filters.push({ table, col, val }); return c }
-    c.single = () => Promise.resolve({
-      data: table === 'locations'
-        ? (location || { id: LOC_B, organization_id: ORG_B, name: 'Someone else', features: {} })
-        : null,
-    })
+    c.single = () => Promise.resolve(table === 'locations' && locationError
+      ? { data: null, error: locationError }
+      : {
+        data: table === 'locations'
+          ? (location || { id: LOC_B, organization_id: ORG_B, name: 'Someone else', features: {} })
+          : null,
+      })
     c.maybeSingle = () => Promise.resolve(errors[table]
       ? { data: null, error: errors[table] }
       : { data: table === 'organizations' ? { id: ORG_B, name: 'Another Org' } : null })
@@ -201,6 +203,32 @@ function findElement(node, name) {
   if (node.type && node.type.name === name) return node
   return findElement(node.props?.children, name)
 }
+
+// REVIEWNITS.1 (D5, from CHANNELREAD.1): the location read's error was
+// dropped, so a failed read showed the 404 page ("not found") for a location
+// that exists. It now says the read failed, with Try again; no row is still
+// a 404.
+describe('/settings/locations/[id] — a failed location read', () => {
+  const owner = () => user({ role: 'owner', rolesByLocation: { [LOC_B]: 'owner' }, locations: [{ id: LOC_B }] })
+
+  it('says the read failed (Try again), not "not found", and renders no form', async () => {
+    getCurrentUser.mockResolvedValue(owner())
+    createServerClient.mockReturnValue(makeDb({ locationError: { code: 'XX000', message: 'connection reset' } }))
+    const el = await call()
+    expect(notFound).not.toHaveBeenCalled()
+    const note = findElement(el, 'ReadFailedNote')
+    expect(note).toBeTruthy()
+    expect(note.props.href).toBe(`/settings/locations/${LOC_B}`)
+    expect(findElement(el, 'LocationForm')).toBeNull()
+  })
+
+  it('no row at all is still a 404', async () => {
+    getCurrentUser.mockResolvedValue(owner())
+    createServerClient.mockReturnValue(makeDb({ locationError: { code: 'PGRST116', message: 'no rows' } }))
+    await expect(call()).rejects.toThrow()
+    expect(notFound).toHaveBeenCalled()
+  })
+})
 
 describe('/settings/locations/[id] — a failed Xero read (CHANNELREAD.1)', () => {
   const owner = () => user({ role: 'owner', rolesByLocation: { [LOC_B]: 'owner' }, locations: [{ id: LOC_B }] })

@@ -27,6 +27,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
+import { sqlCode } from './helpers/sql-code.js'
 import { PGlite } from '@electric-sql/pglite'
 import { netPolicyState } from '../scripts/check-rls-restrictive.mjs'
 
@@ -424,7 +425,7 @@ describe('the replayed pre-626 state is the real one', () => {
   })
 
   it('the 626 file re-creates exactly the policies this test replays', () => {
-    const created = [...MIG_626.replace(/--.*$/gm, '').matchAll(/CREATE POLICY\s+("[^"]+"|\w+)\s+ON\s+([\w.]+)/g)]
+    const created = [...sqlCode(MIG_626).matchAll(/CREATE POLICY\s+("[^"]+"|\w+)\s+ON\s+([\w.]+)/g)]
       .map(([, n, t]) => `${t.includes('.') ? t : `public.${t}`} :: ${n.replace(/"/g, '')}`).sort()
     expect(created).toEqual(GATED_POLICIES.map(([s, t, n]) => `${s}.${t} :: ${n}`).sort())
   })
@@ -608,13 +609,13 @@ describe('after 626', () => {
     expect(await one(`SELECT has_function_privilege('anon', 'private.auth_role()', 'EXECUTE') AS v`)).toBe(false)
   })
   it('sets lock_timeout right after BEGIN', () => {
-    expect(MIG_626.replace(/--.*$/gm, '')).toMatch(/BEGIN;\s*SET LOCAL lock_timeout = '3s';/)
+    expect(sqlCode(MIG_626)).toMatch(/BEGIN;\s*SET LOCAL lock_timeout = '3s';/)
   })
 })
 
 describe('mig 626 — all or nothing', () => {
   it('wraps itself in one explicit transaction', () => {
-    const sql = MIG_626.replace(/--.*$/gm, '')
+    const sql = sqlCode(MIG_626)
     expect(sql.match(/^\s*BEGIN;\s*$/gm)).toHaveLength(1)
     expect(sql.match(/^\s*COMMIT;\s*$/gm)).toHaveLength(1)
     expect(sql.trimStart().startsWith('BEGIN;')).toBe(true)

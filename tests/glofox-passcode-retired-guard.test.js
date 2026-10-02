@@ -25,6 +25,8 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs'
 import path from 'node:path'
 import { collectSchema, applyMigrationSql } from '../scripts/check-select-columns.mjs'
+import { stripComments, stripCommentsOfFile } from './helpers/js-code.js'
+import { sqlCode } from './helpers/sql-code.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const PASSCODE_RETIRE_MIGRATION = 651
@@ -64,12 +66,13 @@ function walk(dir, out = []) {
   return out
 }
 
-/** Block comments, and line comments that start a line or follow whitespace (keeps `https://`). */
-const stripComments = (text) => text.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|\s)\/\/[^\n]*/g, '$1')
+// Comments are blanked by the TypeScript parser's ranges and SQL by the
+// quote-aware $tag$-pairing scan (tests/helpers/), never by a regex: a '/*' in
+// a string hid the rest of a file from the old regex (GUARDSTRIP.1).
 
 /** Every mention of a retired column in code (comments ignored; the retired tag literal allowed). */
-function retiredColumnUses(text) {
-  const code = stripComments(text)
+function retiredColumnUses(text, file) {
+  const code = file ? stripCommentsOfFile(file) : stripComments(text)
   return [
     ...[...code.matchAll(/(?<!\{\{)\bglofox_passcode\b/g)].map(() => 'glofox_passcode'),
     ...[...code.matchAll(/\bpasscode_sent\b/g)].map(() => 'passcode_sent'),
@@ -91,7 +94,7 @@ describe('(a) no app code names a retired passcode column', { timeout: WHOLE_REP
   it('finds none', () => {
     const offenders = []
     for (const file of files) {
-      for (const col of retiredColumnUses(readFileSync(file, 'utf8'))) offenders.push(`${path.relative(ROOT, file)}: ${col}`)
+      for (const col of retiredColumnUses(null, file)) offenders.push(`${path.relative(ROOT, file)}: ${col}`)
     }
     expect(offenders, 'Glofox passwords are not stored; these columns were dropped (PASSCODEREAD.1/.2, migs 651/652)').toEqual([])
   })
@@ -108,6 +111,8 @@ describe('(a) no app code names a retired passcode column', { timeout: WHOLE_REP
       const replacements = { '{{glofox_passcode}}': '' }
       const url = 'https://example.test/x'`
     expect(retiredColumnUses(ok)).toEqual([])
+    // GUARDSTRIP.1 (C74): a '/*' in a string no longer hides the code after it.
+    expect(retiredColumnUses(`const a = 'image/*'\nrow.glofox_passcode = pc\n/* x */`)).toEqual(['glofox_passcode'])
   })
 })
 
@@ -117,7 +122,7 @@ describe('(b) client-run code never reads glofox_push_events (it has no client g
     for (const file of ['src', 'shared', 'mobile'].flatMap((d) => walk(path.join(ROOT, d)))) {
       const rel = path.relative(ROOT, file).split(path.sep).join('/')
       const text = readFileSync(file, 'utf8')
-      if (isClientRun(rel, text) && /\bglofox_push_events\b/.test(stripComments(text))) offenders.push(rel)
+      if (isClientRun(rel, text) && /\bglofox_push_events\b/.test(stripCommentsOfFile(file))) offenders.push(rel)
     }
     expect(offenders, 'read it through a service-role /api route (see /api/admin/glofox-push-events)').toEqual([])
   })
@@ -148,7 +153,7 @@ function splitTop(list) {
 
 /** GRANTs in `sql` that give a client role ANY privilege on glofox_push_events. */
 function pushEventClientGrants(sql) {
-  const code = sql.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--[^\n]*/g, ' ')
+  const code = sqlCode(sql)
   const hits = []
   for (const m of code.matchAll(/\bgrant\s+([\s\S]+?)\s+on\s+([\s\S]+?)\s+to\s+([\s\S]+?)(?:;|'|$)/gi)) {
     const [stmt, , target, to] = m
@@ -190,7 +195,7 @@ describe('(c)(d) later migrations keep the passcode retired', () => {
 
   it.each(cases)('%s drops a *_passcode_retired CHECK only together with its column', (file) => {
     if (file === '(none yet)') return
-    const sql = readFileSync(path.join(dir, file), 'utf8').replace(/--[^\n]*/g, ' ')
+    const sql = sqlCode(readFileSync(path.join(dir, file), 'utf8'))
     if (/drop\s+constraint\s+(if\s+exists\s+)?"?contacts_glofox_passcode_retired/i.test(sql)) {
       expect(sql, `${file}: drop contacts.glofox_passcode in the same file`).toMatch(/drop\s+column\s+(if\s+exists\s+)?"?glofox_passcode\b/i)
     }
@@ -217,6 +222,8 @@ describe('(c)(d) later migrations keep the passcode retired', () => {
       'GRANT EXECUTE ON FUNCTION public.glofox_push_events_x() TO authenticated;',
     ]
     for (const sql of ok) expect(pushEventClientGrants(sql), sql).toEqual([])
+    // GUARDSTRIP.1 (C74): a '/*' inside a string no longer hides the GRANT after it.
+    expect(pushEventClientGrants("SELECT '/*';\nGRANT SELECT ON public.glofox_push_events TO authenticated;\nSELECT '*/';")).not.toEqual([])
   })
 })
 

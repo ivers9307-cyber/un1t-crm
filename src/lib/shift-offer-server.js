@@ -103,7 +103,13 @@ export async function withdrawOffer(db, { offerId, nowIso }) {
   return { closed: (data || []).length > 0 }
 }
 
-/** The one claim decision (mig 641). */
+/**
+ * The one claim decision (mig 641). Its overlap check (step 6) compares the
+ * claimant's other blocks by block_date and wall-clock start/end times across
+ * every studio, ignoring locations.timezone: it assumes every studio of the
+ * organisation keeps one timezone (true today: all Europe/Dublin). A studio in
+ * another timezone would need the check done on instants instead.
+ */
 export async function claimOffer(db, { offerId, profileId }) {
   const { data, error } = await db.rpc('claim_shift_offer', { p_offer_id: offerId, p_profile_id: profileId })
   return { result: data || null, error: error || null }

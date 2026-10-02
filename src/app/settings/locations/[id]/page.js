@@ -37,6 +37,7 @@ import GeofenceAttendanceCard from '@/components/settings/GeofenceAttendanceCard
 import SendQuietHoursCard from '@/components/settings/SendQuietHoursCard'
 import EmailCopyCard from '@/components/settings/EmailCopyCard'
 import EmailSpamFilterCard from '@/components/settings/EmailSpamFilterCard'
+import ReadFailedNote from '@/components/settings/ReadFailedNote'
 
 export const dynamic = 'force-dynamic'
 
@@ -81,8 +82,20 @@ export default async function EditLocationPage(props) {
   if (guardMasterOrOwner(user, params.id)) redirect('/')
 
   const db = createServerClient()
-  const { data: locationRow } = await db.from('locations').select('*').eq('id', params.id).single()
+  const { data: locationRow, error: locationErr } = await db.from('locations').select('*').eq('id', params.id).single()
 
+  // REVIEWNITS.1 (D5, from CHANNELREAD.1): a failed read is not "no such
+  // location". Say so, with Try again, and render nothing that could act on
+  // the unread state. No row at all is still a 404.
+  if (locationErr && locationErr.code !== 'PGRST116') {
+    logError('settings/locations/[id]', 'location read failed', { locationId: params.id, err: locationErr.message })
+    return (
+      <div className="p-8 max-w-3xl">
+        <h2 className="text-2xl font-bold mb-4">Edit Location</h2>
+        <ReadFailedNote what="this location" href={`/settings/locations/${params.id}`} />
+      </div>
+    )
+  }
   if (!locationRow) notFound()
 
   // ACDEVLOC.1 — every component below is a CLIENT component, so whatever

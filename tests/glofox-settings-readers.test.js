@@ -20,7 +20,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs'
 import { join, dirname, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { stripComments } from '../scripts/lib/strip-comments.mjs'
+import { stripComments } from './helpers/js-code.js'
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), '..')
 export const CALL = /(?<!function\s)glofoxCredentialsForLocation\(/
@@ -59,7 +59,7 @@ export function undecidedCallers(root = repo) {
   return out.sort()
 }
 
-describe('every glofoxCredentialsForLocation caller decides what a failed settings read means', () => {
+describe('every glofoxCredentialsForLocation caller decides what a failed settings read means', { timeout: 120_000 }, () => {
   it('handles readError, or is LOG_ONLY with a reason', () => {
     expect(
       undecidedCallers(),

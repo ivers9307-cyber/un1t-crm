@@ -113,6 +113,15 @@ describe('getOpenApiSpec', () => {
 
   // SEQGAPS.1 — the manual exit is irreversible and 409s on the second
   // call; both facts belong in the spec, not just in the route header.
+  // REVIEWNITS.1 (D5): contact create refuses a location outside the key's
+  // organisation, or one a cookie caller is not a member of (403); update
+  // answers 404 for an unknown id and 503 when the contact could not be read.
+  it('documents the contact create 403 and the update 404/503', () => {
+    expect(spec.paths['/api/contacts'].post.responses).toHaveProperty('403')
+    const put = spec.paths['/api/contacts/{id}'].put.responses
+    for (const code of ['401', '404', '503']) expect(put, code).toHaveProperty(code)
+  })
+
   it('documents the manual enrolment exit, including its 409', () => {
     const p = '/api/sequences/{id}/enrollments/{enrollmentId}/exit'
     expect(spec.paths, `missing ${p}`).toHaveProperty(p)

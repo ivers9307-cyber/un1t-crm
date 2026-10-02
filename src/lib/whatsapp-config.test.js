@@ -251,7 +251,7 @@ describe('classifyInboundOwner — SAAS-2 strict tenant routing', () => {
   })
   it('db row with a location → route to that location', () => {
     expect(classifyInboundOwner({ source: 'db', locationId: 'L9' }))
-      .toEqual({ action: 'location', locationId: 'L9' })
+      .toEqual({ action: 'location', locationId: 'L9', numberId: null })
   })
   it('db row somehow missing locationId → drop, never a guessed tenant', () => {
     expect(classifyInboundOwner({ source: 'db', locationId: null }))

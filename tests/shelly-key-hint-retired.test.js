@@ -6,8 +6,9 @@
 // built at runtime is invisible here. The DB CHECK is the proof for writes.
 
 import { describe, it, expect } from 'vitest'
-import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
+import { stripComments, stripCommentsOfFile } from './helpers/js-code.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const SKIP_DIRS = new Set(['node_modules', 'ios', 'android', 'dist', 'web-build'])
@@ -23,18 +24,16 @@ function walk(dir, out = []) {
   return out
 }
 
-export function codeOnly(text) {
-  return text
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/(^|[^:'"`])\/\/.*$/gm, '$1')
-}
+// Comments blanked by the TypeScript parser's ranges (tests/helpers/js-code.js),
+// never a regex: a '/*' in a string hid the rest of a file from the old one.
+export const codeOnly = (text, file) => stripComments(text, file)
 
-describe('no code names the retired Shelly key hint (SECRETTAILS.1)', () => {
+describe('no code names the retired Shelly key hint (SECRETTAILS.1)', { timeout: 120_000 }, () => {
   it('no source file under src/, shared/ or mobile/ reads, writes or selects it', () => {
     const hits = []
     for (const dir of ['src', 'shared', 'mobile']) {
       for (const f of walk(path.join(ROOT, dir))) {
-        const m = codeOnly(readFileSync(f, 'utf8')).match(FORBIDDEN)
+        const m = stripCommentsOfFile(f).match(FORBIDDEN)
         if (m) hits.push(`${path.relative(ROOT, f)}: ${m.join(', ')}`)
       }
     }
@@ -47,5 +46,7 @@ describe('no code names the retired Shelly key hint (SECRETTAILS.1)', () => {
     expect(codeOnly(`// key_hint was retired by mig 659`).match(FORBIDDEN)).toBeNull()
     expect(codeOnly(`/* no keyHint */ const x = 1`).match(FORBIDDEN)).toBeNull()
     expect(codeOnly(`const u = 'https://x.example/key_hint'`).match(FORBIDDEN)).toEqual(['key_hint'])
+    // GUARDSTRIP.1 (C74): the regex stripper read the '/*' in a string as a comment.
+    expect(codeOnly(`const a = 'image/*'\nrow.key_hint = k\n/* x */`).match(FORBIDDEN)).toEqual(['key_hint'])
   })
 })

@@ -5,7 +5,7 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, it, expect } from 'vitest'
-import { stripComments } from '../scripts/lib/strip-comments.mjs'
+import { stripComments } from './helpers/js-code.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const read = (rel) => stripComments(readFileSync(path.join(ROOT, rel), 'utf8'))

@@ -30,6 +30,7 @@ import {
 } from './helpers/credential-column-grants.js'
 import { columnUses, fkAliasesInto } from './helpers/postgrest-column-uses.js'
 import { collectSchema } from '../scripts/check-select-columns.mjs'
+import { sqlCode } from './helpers/sql-code.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 // Every FK column that points at one of the five tables (location_id,
@@ -151,6 +152,16 @@ describe('client code names only granted credential-table columns (SECFIX.3c)', 
   // Review S4 probes: each was a blind spot, found by a probe, before the fix.
   const probe = (src) => columnUses(src, CREDENTIAL_GRANT_TABLES, FK_ALIASES).reads.map(([t, c]) => `${t}.${c}`)
 
+  // GUARDSTRIP.1 (C74): columnUses masked comments with check-select-columns'
+  // maskComments, which reads the '/*' in JSX text or a regex literal as a
+  // comment and hid every call up to the next '*/'.
+  it('a /* in JSX text or a regex literal hides no read', () => {
+    const reads = (src) => columnUses(src, CREDENTIAL_GRANT_TABLES, FK_ALIASES).reads.map(([t, c]) => `${t}.${c}`)
+    const call = "const { data } = await supabase.from('locations').select('id, settings')"
+    expect(reads(`const p = <p>files/*.csv</p>\n${call}\nconst q = <i>*/</i>\n`)).toContain('locations.settings')
+    expect(reads(`const re = /[/*]/\n${call}\nconst x = 1 /* end */\n`)).toContain('locations.settings')
+  })
+
   it('sees a bare FK-column embed with no alias', () => {
     expect(probe(`await supabase.from('shift_blocks').select('id, location_id ( settings )')`)).toContain('locations.settings')
     expect(probe(`await supabase.from('shift_blocks').select('id, location_id!inner(thinq_pat)')`)).toContain('locations.thinq_pat')
@@ -210,7 +221,7 @@ describe('client code names only granted credential-table columns (SECFIX.3c)', 
     const tableLevel = new RegExp(`foreign\\s+key\\s*\\(\\s*"?([a-z_]+)"?\\s*\\)\\s*references\\s+(?:public\\.)?"?(${alt})\\b`, 'gi')
     const found = {}
     for (const f of readdirSync(dir).filter((n) => n.endsWith('.sql'))) {
-      const sql = readFileSync(path.join(dir, f), 'utf8').replace(/--[^\n]*/g, ' ')
+      const sql = sqlCode(readFileSync(path.join(dir, f), 'utf8'))
       for (const m of [...sql.matchAll(inline), ...sql.matchAll(tableLevel)]) found[m[1].toLowerCase()] = m[2].toLowerCase()
     }
     expect(Object.keys(found).length).toBeGreaterThan(3)
@@ -239,7 +250,7 @@ function splitTop(list) {
 
 /** Every GRANT of a TABLE-LEVEL privilege (no column list) to a client role on the five tables. */
 function tableLevelClientGrants(sql) {
-  const code = sql.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--[^\n]*/g, ' ')
+  const code = sqlCode(sql)
   const hits = []
   for (const m of code.matchAll(/\bgrant\s+([\s\S]+?)\s+on\s+([\s\S]+?)\s+to\s+([\s\S]+?)(?:;|'|$)/gi)) {
     const [stmt, privs, target, to] = m
@@ -314,6 +325,13 @@ describe('later migrations keep the credential grants (SECFIX.3c)', () => {
     expect(decided(`${undecided}\n-- column-grant: withheld locations.shelly_token`, 'locations', 'shelly_token')).toBe(true)
     expect(decided(`${undecided}\nGRANT SELECT (shelly_token) ON public.locations TO authenticated;`, 'locations', 'shelly_token')).toBe(true)
     expect(addedColumns('ALTER TABLE public.location_holidays ADD COLUMN note text;')).toEqual([])
+  })
+
+  // GUARDSTRIP.1 (C74): a '/*' inside a string, or after a DO block's $$, hid
+  // the GRANT from the old regex / unpaired stripper.
+  it('a /* inside a string or a later $$ literal hides no GRANT (GUARDSTRIP.1)', () => {
+    expect(tableLevelClientGrants("SELECT '/*';\nGRANT SELECT ON public.locations TO authenticated;\nSELECT '*/';"), 'string').not.toEqual([])
+    expect(tableLevelClientGrants("DO $$ BEGIN PERFORM 1; END $$;\nSELECT $$ /* $$;\nGRANT SELECT ON public.locations TO authenticated;\nSELECT $$ */ $$;"), 'dollar').not.toEqual([])
   })
 
   it('the table-level detector catches every form and passes column grants', () => {
