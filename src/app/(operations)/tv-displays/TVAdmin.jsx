@@ -9,14 +9,18 @@
 //   - Buttons: Push image (upload OR URL), Clear (back to idle),
 //     Delete (remove the TV from the location)
 //
-// All mutations go direct via the browser Supabase client — RLS
-// already allows authenticated-in-location operators full CRUD
-// on tv_displays + tv_content. The /tv/[token] page reads via
-// service-role through /api/tv/[token]/content; this page never
-// needs to touch that public path.
+// MEMBERWRITESWEEP.1f — every read and write goes through the session
+// routes /api/admin/tv-displays* and /api/admin/tv-templates*
+// (src/lib/tv-admin-client.js): tv_displays permission (web or mobile) at
+// the TV's studio, pushes validated and stamped on the server. Until then
+// this page wrote tv_displays / tv_content / tv_templates straight from
+// the browser Supabase client under nothing but the membership policy;
+// mig 685 closes the tables to client sessions. The /tv/cast page reads
+// via the service role through /api/public/tv*; this page never needs
+// that public path.
 
 import { useState, useCallback, useRef } from 'react'
-import { createBrowserClient } from '@/lib/supabase'
+import { tvRequest, tvAdminPaths, deletedOrGone, withTvContent } from '@/lib/tv-admin-client'
 import { Tv, Plus, Copy, Check, Trash2, Upload, Link2, X, Image as ImageIcon, AlertCircle, RotateCcw, RotateCw, LayoutTemplate, Pencil, Type } from 'lucide-react'
 import TemplateEditor, { bucketPublicUrl } from './TemplateEditor'
 import TemplateCanvas from '@/components/TemplateCanvas'
@@ -48,28 +52,25 @@ const ORIENTATION_OPTIONS = [
   { value: 180, label: 'Landscape — upside down' },
 ]
 
-export default function TVAdmin({ initialDisplays, initialTemplates, locationId, currentUserId }) {
-  const db = createBrowserClient()
+export default function TVAdmin({ initialDisplays, initialTemplates, locationId }) {
   const [displays, setDisplays] = useState(initialDisplays)
   const [templates, setTemplates] = useState(initialTemplates || [])
   const [registerOpen, setRegisterOpen] = useState(false)
   const [error, setError] = useState(null)
 
+  // A list we could not read keeps what is on screen and says why: an empty
+  // list would read as "no TVs".
   const refresh = useCallback(async () => {
-    const { data } = await db.from('tv_displays')
-      .select('*, tv_content(*)')
-      .eq('location_id', locationId)
-      .order('created_at', { ascending: true })
-    setDisplays(data || [])
-  }, [db, locationId])
+    const r = await tvRequest(tvAdminPaths.displays(locationId))
+    if (!r.ok) { setError(r.error); return }
+    setDisplays(withTvContent(r.data))
+  }, [locationId])
 
   const refreshTemplates = useCallback(async () => {
-    const { data } = await db.from('tv_templates')
-      .select('*')
-      .eq('location_id', locationId)
-      .order('name', { ascending: true })
-    setTemplates(data || [])
-  }, [db, locationId])
+    const r = await tvRequest(tvAdminPaths.templates(locationId))
+    if (!r.ok) { setError(r.error); return }
+    setTemplates(r.data || [])
+  }, [locationId])
 
   return (
     <div className="p-6 max-w-4xl">
@@ -106,10 +107,8 @@ export default function TVAdmin({ initialDisplays, initialTemplates, locationId,
             key={d.id}
             display={d}
             templates={templates}
-            currentUserId={currentUserId}
             onError={setError}
             onChange={refresh}
-            db={db}
           />
         ))}
       </div>
@@ -118,8 +117,6 @@ export default function TVAdmin({ initialDisplays, initialTemplates, locationId,
       <TemplatesSection
         templates={templates}
         locationId={locationId}
-        currentUserId={currentUserId}
-        db={db}
         onError={setError}
         onChange={refreshTemplates}
       />
@@ -129,9 +126,8 @@ export default function TVAdmin({ initialDisplays, initialTemplates, locationId,
           onClose={() => setRegisterOpen(false)}
           onCreate={async (label) => {
             setError(null)
-            const { error: e } = await db.from('tv_displays')
-              .insert({ location_id: locationId, label })
-            if (e) { setError(e.message); return }
+            const r = await tvRequest(tvAdminPaths.register(), { method: 'POST', body: { location_id: locationId, label } })
+            if (!r.ok) { setError(r.error); return }
             await refresh()
             setRegisterOpen(false)
           }}
@@ -147,14 +143,14 @@ export default function TVAdmin({ initialDisplays, initialTemplates, locationId,
 // fixed text zones. Built once here; staff fill the zone text and
 // push it from the "Push image → Template" tab.
 
-function TemplatesSection({ templates, locationId, currentUserId, db, onError, onChange }) {
+function TemplatesSection({ templates, locationId, onError, onChange }) {
   const [editing, setEditing] = useState(null)   // template object | 'new' | null
 
   async function deleteTemplate(tpl) {
     if (!confirm(`Delete template "${tpl.name}"? Any TV currently showing it will fall back to the idle screen.`)) return
     onError(null)
-    const { error } = await db.from('tv_templates').delete().eq('id', tpl.id)
-    if (error) { onError(error.message); return }
+    const r = await tvRequest(tvAdminPaths.template(tpl.id), { method: 'DELETE' })
+    if (!deletedOrGone(r)) { onError(r.error); return }
     await onChange()
   }
 
@@ -206,6 +202,7 @@ function TemplatesSection({ templates, locationId, currentUserId, db, onError, o
                   </button>
                   <button
                     onClick={() => deleteTemplate(t)}
+                    title="Delete template"
                     className="inline-flex items-center text-xs text-red-400 hover:text-red-300 border border-un1t-border hover:border-red-400/40 px-2 py-1 rounded-md"
                   >
                     <Trash2 size={12} />
@@ -221,8 +218,6 @@ function TemplatesSection({ templates, locationId, currentUserId, db, onError, o
         <TemplateEditor
           template={editing === 'new' ? null : editing}
           locationId={locationId}
-          currentUserId={currentUserId}
-          db={db}
           onClose={() => setEditing(null)}
           onSaved={onChange}
         />
@@ -233,7 +228,7 @@ function TemplatesSection({ templates, locationId, currentUserId, db, onError, o
 
 // ── Per-TV row ──────────────────────────────────────────────────
 
-function TVCard({ display, templates, currentUserId, onError, onChange, db }) {
+function TVCard({ display, templates, onError, onChange }) {
   const content = Array.isArray(display.tv_content) ? display.tv_content[0] : display.tv_content
   const tvUrl = typeof window !== 'undefined'
     ? `${window.location.origin}/tv/cast/${display.token}`
@@ -245,20 +240,16 @@ function TVCard({ display, templates, currentUserId, onError, onChange, db }) {
   async function clearContent() {
     if (!confirm(`Clear ${display.label}? The TV will fall back to the idle screen.`)) return
     onError(null)
-    const { error } = await db.from('tv_content')
-      .delete()
-      .eq('tv_display_id', display.id)
-    if (error) onError(error.message)
+    const r = await tvRequest(tvAdminPaths.content(display.id), { method: 'DELETE' })
+    if (!r.ok) { onError(r.error); return }
     await onChange()
   }
 
   async function deleteTV() {
     if (!confirm(`Delete ${display.label}? The TV URL will stop working — you'll need to update UC Cast Pro if it's currently using this URL.`)) return
     onError(null)
-    const { error } = await db.from('tv_displays')
-      .delete()
-      .eq('id', display.id)
-    if (error) onError(error.message)
+    const r = await tvRequest(tvAdminPaths.display(display.id), { method: 'DELETE' })
+    if (!deletedOrGone(r)) { onError(r.error); return }
     await onChange()
   }
 
@@ -333,7 +324,7 @@ function TVCard({ display, templates, currentUserId, onError, onChange, db }) {
           ) : (
             <span className="text-un1t-muted">Idle — UN1T mark + clock</span>
           )}
-          <OrientationControl display={display} db={db} onError={onError} onChange={onChange} />
+          <OrientationControl display={display} onError={onError} onChange={onChange} />
         </div>
       </div>
 
@@ -342,19 +333,15 @@ function TVCard({ display, templates, currentUserId, onError, onChange, db }) {
           onClose={() => setPushOpen(false)}
           onPush={async ({ source_type, source_ref, label, template_values }) => {
             onError(null)
-            const { error } = await db.from('tv_content').upsert({
-              tv_display_id: display.id,
-              source_type,
-              source_ref,
-              label,
-              // Reset to null for non-template pushes so a previous
-              // template's text never lingers on the row.
-              template_values: template_values ?? null,
-              pushed_at: new Date().toISOString(),
-              pushed_by: currentUserId,
-              triggered_by: `manual:${currentUserId}`,
-            }, { onConflict: 'tv_display_id' })
-            if (error) { onError(error.message); return }
+            // The server stamps pushed_at / pushed_by / triggered_by, resets
+            // template_values for a non-template push, and refuses a push the
+            // cast page may not show (DECISION 4). A refusal throws, so the
+            // push window stays open and shows the route's words.
+            const r = await tvRequest(tvAdminPaths.content(display.id), {
+              method: 'PUT',
+              body: { source_type, source_ref, label, ...(template_values === undefined ? {} : { template_values }) },
+            })
+            if (!r.ok) throw new Error(r.error)
             await onChange()
             setPushOpen(false)
           }}
@@ -421,7 +408,7 @@ function NowShowingThumb({ content, templates }) {
 // its next 3s poll, so the operator can re-aim a TV live without
 // touching the cast device.
 
-function OrientationControl({ display, db, onError, onChange }) {
+function OrientationControl({ display, onError, onChange }) {
   const [saving, setSaving] = useState(false)
   const rotation = display.rotation ?? 0
 
@@ -429,11 +416,9 @@ function OrientationControl({ display, db, onError, onChange }) {
     if (value === rotation) return
     onError(null)
     setSaving(true)
-    const { error } = await db.from('tv_displays')
-      .update({ rotation: value })
-      .eq('id', display.id)
+    const r = await tvRequest(tvAdminPaths.display(display.id), { method: 'PATCH', body: { rotation: value } })
     setSaving(false)
-    if (error) { onError(error.message); return }
+    if (!r.ok) { onError(r.error); return }
     await onChange()
   }
 

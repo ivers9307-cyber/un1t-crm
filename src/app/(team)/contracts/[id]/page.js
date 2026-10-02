@@ -20,10 +20,6 @@ import ContractDraftActions from '@/components/ContractDraftActions'
 
 export const dynamic = 'force-dynamic'
 
-function isOwnerOrMaster(user) {
-  return user?.role === 'master' || user?.role === 'owner'
-}
-
 const STATUS_BADGE = {
   issued:   { label: 'Sent · awaiting signature', class: 'bg-blue-500/15 text-blue-700' },
   viewed:   { label: 'Viewed · awaiting signature', class: 'bg-amber-500/15 text-amber-700' },
@@ -88,10 +84,9 @@ export default async function ContractDetailAdmin(props) {
   // GATES-2 — judged at the CONTRACT's org (the revoke/resend/send/discard
   // routes' rule), not the active studio's role; Download PDF follows the
   // /pdf route, which a `contracts`-permission manager is refused by.
-  const { canRevoke, canResend, canManageDraft, canDownloadPdf } = contractDetailActions(user, c)
-  // Re-issue opens /contracts/issue, whose page and POST /api/contracts still
-  // ask the active studio's role, so the link asks the same.
-  const canReissue = (c.status === 'revoked' || c.status === 'declined') && isOwnerOrMaster(user)
+  // GATES-3 (c) — Re-issue opens /contracts/issue?from=<id>, whose prefill and
+  // POST /api/contracts decide at the contract's org too.
+  const { canRevoke, canResend, canManageDraft, canDownloadPdf, canReissue } = contractDetailActions(user, c)
 
   return (
     <div className="p-6 md:p-8 max-w-3xl print:p-0 print:max-w-none">

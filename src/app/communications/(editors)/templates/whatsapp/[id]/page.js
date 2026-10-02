@@ -1,8 +1,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { redirect, notFound } from 'next/navigation'
-import { hasRoleAtLocation } from '@/lib/role-at-location'
-import { MANAGER_ROLES } from '@/lib/schemas'
+import { canManageWaTemplatesAt } from '@/lib/wa-template-access'
 import WATemplateEditor from '@/components/WATemplateEditor'
 import { canUseCommunicationsForRecord } from '@/lib/communications-access'
 
@@ -44,7 +43,8 @@ export default async function EditWATemplatePage(props) {
       events={events || []}
       // WATPLROLE.1 — resubmit, edit and delete decide MANAGER_ROLES at the
       // TEMPLATE's location (not the active studio's role); so does the editor.
-      canManage={hasRoleAtLocation(user, template.location_id, MANAGER_ROLES)}
+      // GATES-3 (b) — with `whatsapp` there too (canManageWaTemplatesAt).
+      canManage={canManageWaTemplatesAt(user, template.location_id)}
     />
   )
 }

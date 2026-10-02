@@ -34,9 +34,23 @@ const BroadcastUpdateSchema = z.object({
   per_tick_max: z.number().int().positive().max(5000).optional(),
 })
 
+// GATES-3 (f) — the read's error is read: a failed read is a 500, never
+// "not found" (PGRST116 = no row).
 async function loadBroadcastForUpdate(db, id) {
-  const { data } = await db.from('whatsapp_broadcasts').select('location_id, status, scheduled_at').eq('id', id).single()
-  return data
+  const { data, error } = await db.from('whatsapp_broadcasts').select('location_id, status, scheduled_at').eq('id', id).single()
+  if (error && error.code !== 'PGRST116') return { row: null, failed: true }
+  return { row: data || null, failed: false }
+}
+const readFailed = () => NextResponse.json({ success: false, error: 'Could not read the broadcast' }, { status: 500 })
+
+// C120 GATES-3 (f) — which status a PUT may move a broadcast to, from where.
+// 'draft' only un-schedules: never an un-cancel, and never a reset of a row
+// the send engines own (sending/sent). 'cancelled' stops a draft, a scheduled
+// row or a running send (the editor's Cancel on a drip), never a finished or
+// already-cancelled one. 'scheduled' keeps its own check below.
+const STATUS_FROM = {
+  draft: ['draft', 'scheduled'],
+  cancelled: ['draft', 'scheduled', 'sending'],
 }
 
 // GET /api/whatsapp/broadcasts/[id]
@@ -69,7 +83,8 @@ export async function PUT(request, props) {
   if (!hasPermissionAtAnyLocation(user, 'whatsapp')) return waForbidden()
 
   const db = createServerClient()
-  const row = await loadBroadcastForUpdate(db, params.id)
+  const { row, failed } = await loadBroadcastForUpdate(db, params.id)
+  if (failed) return readFailed()
   if (!row) return NextResponse.json({ success: false, error: 'Broadcast not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, row.location_id)
   if (guard) return guard
@@ -115,13 +130,29 @@ export async function PUT(request, props) {
     }
   }
 
-  const { data, error } = await db.from('whatsapp_broadcasts')
+  if (updates.status && STATUS_FROM[updates.status] && !STATUS_FROM[updates.status].includes(row.status)) {
+    return NextResponse.json({
+      success: false,
+      error: `Broadcast is in '${row.status}' state, so it cannot be set to '${updates.status}'`,
+    }, { status: 409 })
+  }
+
+  // GATES-3 (f) — a status change is a compare-and-swap on the state it was
+  // judged against: the cron may promote a scheduled row (or finish a send) in
+  // between, and the write must not overwrite that.
+  let write = db.from('whatsapp_broadcasts')
     .update(updates)
     .eq('id', params.id)
-    .select()
-    .single()
+  if (updates.status) write = write.eq('status', row.status)
+  const { data, error } = await write.select().maybeSingle()
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (!data) {
+    return NextResponse.json({
+      success: false,
+      error: 'The broadcast changed while you were editing it. Reload the page and try again.',
+    }, { status: 409 })
+  }
   return NextResponse.json({ success: true, broadcast: data })
 }
 
@@ -133,7 +164,8 @@ export async function DELETE(request, props) {
   if (!hasPermissionAtAnyLocation(user, 'whatsapp')) return waForbidden()
 
   const db = createServerClient()
-  const row = await loadBroadcastForUpdate(db, params.id)
+  const { row, failed } = await loadBroadcastForUpdate(db, params.id)
+  if (failed) return readFailed()
   if (!row) return NextResponse.json({ success: false, error: 'Broadcast not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, row.location_id)
   if (guard) return guard

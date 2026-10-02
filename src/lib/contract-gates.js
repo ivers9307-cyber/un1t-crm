@@ -55,8 +55,10 @@ export function canDownloadContractPdf(user, contract) {
  * The /contracts/[id] action buttons, each shown exactly when its route would
  * act: Resend and Revoke (issued/viewed) and Send/Discard (draft) on
  * canManageContractsInOrg at the contract's org; Download PDF on the /pdf
- * route's rule. (Re-issue links to /contracts/issue, which with
- * POST /api/contracts still asks the active role; the page keeps that.)
+ * route's rule. GATES-3 (c): Re-issue (revoked/declined) opens
+ * /contracts/issue?from=<id>, whose prefill (GET /api/contracts/[id]) and
+ * submit (POST /api/contracts, judged at the template's org) need the same
+ * org, so it follows canManageContractsInOrg too.
  */
 export function contractDetailActions(user, contract) {
   const manages = canManageContractsInOrg(user, contract?.organization_id)
@@ -66,5 +68,6 @@ export function contractDetailActions(user, contract) {
     canRevoke: manages && (status === 'issued' || status === 'viewed'),
     canManageDraft: manages && status === 'draft',
     canDownloadPdf: canDownloadContractPdf(user, contract),
+    canReissue: manages && (status === 'revoked' || status === 'declined'),
   }
 }
