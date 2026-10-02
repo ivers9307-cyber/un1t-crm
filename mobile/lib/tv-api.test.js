@@ -178,7 +178,7 @@ describe('1g: no old-server fallback (mobile/lib/tv-api-legacy.js is deleted; mi
   })
 
   it('the fallback probe is gone from the module', () => {
-    expect(tvApi.routeNotDeployed).toBeUndefined()
+    expect(Object.keys(tvApi)).not.toContain('routeNotDeployed')
   })
 })
 
