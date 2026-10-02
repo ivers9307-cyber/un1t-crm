@@ -6,6 +6,8 @@ import {
   promotionPlan,
   sliceBlastChunk,
   scheduledStartFailureNotification,
+  resumeIsStale,
+  LATE_RESUME_REASON,
 } from './whatsapp-schedule.js'
 
 describe('promotionPlan — how the cron promotes a due scheduled broadcast', () => {
@@ -126,5 +128,46 @@ describe('scheduledStartFailureNotification — manager push when a scheduled se
     const n = scheduledStartFailureNotification({}, null)
     expect(n.title).toBeTruthy()
     expect(n.body).toMatch(/broadcast/i)
+  })
+})
+
+// C139 LATERESUME.1 (Richard's C127 rule: never send stale) — a PART-SENT
+// scheduled blast whose last send is more than 3 hours old when the cron's
+// resume arm reaches it is paused and the managers told, never resumed.
+describe('resumeIsStale — a part-sent blast is never resumed stale (C139)', () => {
+  const now = new Date('2026-10-02T12:00:00.000Z')
+  const ago = (ms) => new Date(now.getTime() - ms).toISOString()
+  const H = 3600 * 1000
+
+  it('uses the same 3 hours as a late start', () => {
+    expect(resumeIsStale(ago(LATE_SCHEDULED_BLAST_HOURS * H + 1000), now)).toBe(true)
+    expect(resumeIsStale(ago(LATE_SCHEDULED_BLAST_HOURS * H), now)).toBe(false)
+  })
+
+  it('a resume a tick or two later is not stale', () => {
+    expect(resumeIsStale(ago(15 * 60 * 1000), now)).toBe(false)
+    expect(resumeIsStale(ago(45 * 60 * 1000), now)).toBe(false)
+  })
+
+  it('no clock, or an unreadable time, is not stale (the promotionPlan posture)', () => {
+    expect(resumeIsStale(ago(48 * H))).toBe(false)
+    expect(resumeIsStale(null, now)).toBe(false)
+    expect(resumeIsStale('nonsense', now)).toBe(false)
+  })
+
+  it('the managers\' push says it stopped part-way, what was kept, and why; no em-dash in the new words', () => {
+    expect(LATE_RESUME_REASON).toMatch(/more than 3 hours ago/)
+    expect(LATE_RESUME_REASON).not.toMatch(/\u2014/)
+    const n = scheduledStartFailureNotification({ name: 'Spring' }, LATE_RESUME_REASON, { partSent: true })
+    expect(n.title).toBe('Scheduled WhatsApp broadcast paused part-way')
+    expect(n.body).toContain('"Spring"')
+    expect(n.body).toContain(LATE_RESUME_REASON)
+    expect(n.body).toMatch(/already sent/)
+    expect(n.body).toMatch(/draft/)
+    expect(n.title + n.body).not.toMatch(/\u2014/)
+  })
+
+  it('without partSent the start-failure wording is unchanged', () => {
+    expect(scheduledStartFailureNotification({ name: 'Spring' }, 'x').title).toBe('Scheduled WhatsApp broadcast did not start')
   })
 })
