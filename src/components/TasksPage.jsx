@@ -10,16 +10,16 @@
 // Filters (apply in both views): assignee, project, priority.
 // Free-text project tags are auto-discovered from existing rows.
 //
-// Source-of-truth: activities table, kind='task'. RLS already lets
-// authenticated-in-location operators CRUD the location's rows
-// (campaigns + activities share the same policy pattern), so all
-// mutations go through the browser Supabase client directly. No
-// /api/tasks layer needed for the UI itself.
+// Source-of-truth: activities table, kind='task'. C148 ACTWRITEGATEWEB.1:
+// the writes post to service-role routes judged on the WEB rule at the
+// task's studio (POST /api/activities/tasks, POST
+// /api/activities/tasks/[id]/status). They used to go through the browser
+// client, where RLS judged the PHONE Tasks / Pipeline keys and refused
+// people who hold web Tasks without them. /api/tasks is the API-key surface.
 
 import { useState, useMemo, useCallback, useEffect } from 'react'
-import { createBrowserClient } from '@/lib/supabase'
 import { dublinTodayStr } from '@/lib/dublin-time'
-import { taskStatusUpdateOutcome } from '@/lib/activity-write-gate'
+import { postActivityWrite } from '@/lib/activity-write-gate'
 import Link from 'next/link'
 import {
   DndContext, DragOverlay, PointerSensor, useSensor, useSensors,
@@ -52,13 +52,11 @@ const PRIORITIES = [
   { key: 'low',    label: 'Low',    cls: 'text-un1t-subtle' },
 ]
 
-// C146 TASKSNEEDCONTACTS.1 — `canWrite` is the page's canWriteActivitiesAt
-// at this studio (src/lib/activity-write-gate.js). Since mig 700 a browser
-// session without Contacts here cannot read `activities`, so the insert-and-
-// read-back of New task is refused and a status update by id matches nothing:
-// the page shows the list but offers no write. Defaults false: fail closed.
+// C146 TASKSNEEDCONTACTS.1 / C148 — `canWrite` is the page's
+// canWriteActivitiesAt at this studio (src/lib/activity-write-gate.js): web
+// Tasks AND Contacts here, the rule the write routes apply. Without it the
+// page shows the list but offers no write. Defaults false: fail closed.
 export default function TasksPage({ initialTasks, locationId, profiles, projectsSeed, canWrite = false }) {
-  const db = createBrowserClient()
   const [tasks, setTasks] = useState(initialTasks || [])
   const [view, setView] = useState('board')   // 'board' | 'list'
   const [createOpen, setCreateOpen] = useState(false)
@@ -105,35 +103,24 @@ export default function TasksPage({ initialTasks, locationId, profiles, projects
     const before = tasks.find(t => t.id === taskId)
     // Optimistic update — UI changes immediately, DB call follows.
     setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: newStatus, done: newStatus === 'done' } : t))
-    // C146 — select the id back: a zero-row UPDATE is not an error in
-    // PostgREST, so without it a refused update (RLS hides the row) reported
-    // success and the board showed a move the database never made.
-    const res = await db.from('activities')
-      .update({ status: newStatus })
-      .eq('id', taskId)
-      .select('id')
-    const outcome = taskStatusUpdateOutcome(res)
+    // A refusal, a zero-row write (the route's 404) or a network error is
+    // never a silent success: the board puts the card back and says why.
+    const outcome = await postActivityWrite(`/api/activities/tasks/${taskId}/status`, { status: newStatus })
     if (!outcome.ok) {
       // Roll back to what was on screen before the optimistic move.
       if (before) setTasks(prev => prev.map(t => t.id === taskId ? before : t))
       alert(outcome.message)
     }
-  }, [db, canWrite, tasks])
+  }, [canWrite, tasks])
 
   const addTask = useCallback(async (payload) => {
     if (!canWrite) throw new Error('Tasks are read-only for you at this studio.')
-    const insert = {
-      kind: 'task',
-      status: 'todo',
-      location_id: locationId,
-      source: 'manual',
-      ...payload,
-    }
-    const { data, error } = await db.from('activities').insert(insert).select('*, contacts(id, name), profiles!activities_assignee_id_fkey(id, full_name)').single()
-    if (error) throw new Error(error.message)
-    setTasks(prev => [data, ...prev])
-    return data
-  }, [db, locationId, canWrite])
+    // kind / status / source are the route's to set.
+    const outcome = await postActivityWrite('/api/activities/tasks', { ...payload, location_id: locationId })
+    if (!outcome.ok) throw new Error(outcome.message)
+    setTasks(prev => [outcome.data, ...prev])
+    return outcome.data
+  }, [locationId, canWrite])
 
   // Drag-drop handlers — only used in board view.
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))

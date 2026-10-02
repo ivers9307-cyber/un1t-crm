@@ -178,10 +178,11 @@ export function isMemberOfContactStudio(user, locationId) {
 
 /**
  * The Task / Activity writes (ContactActions' Activity form, the kebab's Task
- * item: a browser insert into `activities`). Membership of the contact's
- * studio, AND (C146 TASKSNEEDCONTACTS.1, Richard 2 Oct) Contacts there, web
- * OR phone: since mig 700 a session without it cannot read the row it would
- * create. See src/lib/activity-write-gate.js.
+ * item). Membership of the contact's studio AND canWriteActivitiesAt there:
+ * C146 (Richard 2 Oct) Contacts web OR phone, and C148 ACTWRITEGATEWEB.1 the
+ * web Tasks key (`activities`), the rule POST /api/activities/tasks applies
+ * (it used to be a browser insert judged by RLS on the phone keys). See
+ * src/lib/activity-write-gate.js.
  */
 export function canAddContactTask(user, locationId) {
   return isMemberOfContactStudio(user, locationId) && canWriteActivitiesAt(user, locationId)

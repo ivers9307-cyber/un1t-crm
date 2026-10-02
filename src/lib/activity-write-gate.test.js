@@ -1,14 +1,16 @@
 // C146 TASKSNEEDCONTACTS.1 — the web's task / activity write controls follow
-// the Contacts rule mig 700 put on reading `activities`.
-import { describe, it, expect } from 'vitest'
-import { canWriteActivitiesAt, taskStatusUpdateOutcome, personActionsFor } from './activity-write-gate'
+// the Contacts rule mig 700 put on reading `activities`. C148 ACTWRITEGATEWEB.1
+// (Richard 2 Oct) — and the WEB Tasks key (`activities`) at the same studio:
+// the web writes are service-role routes now, judged on this one function.
+import { describe, it, expect, vi } from 'vitest'
+import { canWriteActivitiesAt, taskWriteOutcome, postActivityWrite, personActionsFor } from './activity-write-gate'
 import { contactWorkGates } from './contact-page-gates'
 import { person, MASTER, OUTSIDER, LOC_A, LOC_B } from '../../tests/helpers/role-sweep-callers.js'
 import { webOrMobileCases } from '../../tests/helpers/role-sweep-callers-c.js'
 
 const shows = (outcome) => outcome === 'pass'
 
-describe('canWriteActivitiesAt — Contacts web OR phone at the studio (private.auth_contact_read_location_ids)', () => {
+describe('canWriteActivitiesAt — web Tasks AND Contacts (web OR phone) at the studio', () => {
   it.each(webOrMobileCases(['contacts']))('%s', (_label, caller, target, outcome) => {
     expect(canWriteActivitiesAt(caller, target)).toBe(shows(outcome))
   })
@@ -34,6 +36,35 @@ describe('canWriteActivitiesAt — Contacts web OR phone at the studio (private.
   it('the role template tier counts', () => {
     const u = person({ [LOC_B]: { role: 'owner', template: { contacts: false, mobile: { contacts: false } } } }, LOC_B)
     expect(canWriteActivitiesAt(u, LOC_B)).toBe(false)
+  })
+
+  it('C148: web Tasks (`activities`) off at the studio: no, whatever Contacts says', () => {
+    const u = person({ [LOC_B]: { role: 'owner', permissions: { activities: false, contacts: true } } }, LOC_B)
+    expect(canWriteActivitiesAt(u, LOC_B)).toBe(false)
+  })
+
+  it('C148: the phone Tasks / Pipeline keys do not stand in for web Tasks', () => {
+    const u = person({ [LOC_B]: { role: 'owner', permissions: { activities: false, mobile: { tasks: true, pipeline: true } } } }, LOC_B)
+    expect(canWriteActivitiesAt(u, LOC_B)).toBe(false)
+  })
+
+  it('C148: web Tasks with neither phone key is enough (the gap RLS left)', () => {
+    const u = person({ [LOC_B]: { role: 'staff', permissions: { activities: true, contacts: true, mobile: { tasks: false, pipeline: false } } } }, LOC_B)
+    expect(canWriteActivitiesAt(u, LOC_B)).toBe(true)
+  })
+
+  it('C148: web Tasks judged at the row\'s studio, not the active one', () => {
+    const u = person({ [LOC_A]: { role: 'owner', permissions: { activities: false } }, [LOC_B]: { role: 'owner' } }, LOC_A)
+    expect(canWriteActivitiesAt(u, LOC_B)).toBe(true)
+    expect(canWriteActivitiesAt(u, LOC_A)).toBe(false)
+  })
+
+  it('C148: the studio\'s Tasks switch binds a master too', () => {
+    const m = {
+      ...MASTER,
+      locations: MASTER.locations.map((l) => (l.id === LOC_B ? { ...l, features: { activities: false } } : l)),
+    }
+    expect(canWriteActivitiesAt(m, LOC_B)).toBe(false)
   })
 
   it('fails closed with no user or no studio', () => {
@@ -65,21 +96,41 @@ describe('contactWorkGates.canTask — membership AND Contacts at the contact\'s
   })
 })
 
-describe('taskStatusUpdateOutcome — an update by id must touch its row', () => {
-  it('ok when the row comes back', () => {
-    expect(taskStatusUpdateOutcome({ data: [{ id: 't-1' }], error: null })).toEqual({ ok: true })
+describe('taskWriteOutcome — read a task route\'s answer', () => {
+  it('ok with the row when the route says success', () => {
+    expect(taskWriteOutcome({ ok: true, body: { success: true, data: { id: 't-1' } } })).toEqual({ ok: true, data: { id: 't-1' } })
   })
 
-  it('an error is a failure with its message', () => {
-    expect(taskStatusUpdateOutcome({ data: null, error: { message: 'permission denied' } }))
-      .toEqual({ ok: false, message: 'permission denied' })
+  it('a refusal carries the route\'s message', () => {
+    expect(taskWriteOutcome({ ok: false, body: { success: false, error: 'No Tasks permission at this location' } }))
+      .toEqual({ ok: false, message: 'No Tasks permission at this location' })
   })
 
-  it('0 rows is a failure, not a silent success (RLS filters the UPDATE to nothing)', () => {
-    const r = taskStatusUpdateOutcome({ data: [], error: null })
+  it('a 200 without success, or no body, is not a success', () => {
+    expect(taskWriteOutcome({ ok: true, body: { success: false } }).ok).toBe(false)
+    const r = taskWriteOutcome({ ok: false, body: null })
     expect(r.ok).toBe(false)
     expect(r.message).toMatch(/not saved/i)
-    expect(taskStatusUpdateOutcome({ data: null, error: null }).ok).toBe(false)
+  })
+})
+
+describe('postActivityWrite — POST JSON, never a silent success', () => {
+  it('posts the payload and returns the row', async () => {
+    const fetchImpl = vi.fn(async () => ({ ok: true, json: async () => ({ success: true, data: { id: 't-1' } }) }))
+    const r = await postActivityWrite('/api/activities/tasks', { subject: 'x' }, fetchImpl)
+    expect(r).toEqual({ ok: true, data: { id: 't-1' } })
+    expect(fetchImpl).toHaveBeenCalledWith('/api/activities/tasks', expect.objectContaining({ method: 'POST', body: JSON.stringify({ subject: 'x' }) }))
+  })
+
+  it('a network failure is a failure with a message', async () => {
+    const r = await postActivityWrite('/api/x', {}, async () => { throw new Error('Failed to fetch') })
+    expect(r.ok).toBe(false)
+    expect(r.message).toMatch(/not saved/i)
+  })
+
+  it('a non-JSON error page is a failure', async () => {
+    const r = await postActivityWrite('/api/x', {}, async () => ({ ok: false, json: async () => { throw new Error('html') } }))
+    expect(r.ok).toBe(false)
   })
 })
 

@@ -134,6 +134,11 @@ const SCOPING_HELPERS = [
   // ('bookings') there, and returns that row; the routes' write is then by
   // that row's id, which is why the handlers look unscoped in isolation.
   'loadBookingForWebWrite(',
+  // src/lib/activity-web-writes.js — C148 ACTWRITEGATEWEB.1. Reads the task
+  // by id (kind='task' only; no studio = 404), runs assertLocationAccessOr404
+  // at its location_id and then canWriteActivitiesAt there, and returns that
+  // row; POST /api/activities/tasks/[id]/status then writes by that row's id.
+  'loadTaskForWebWrite(',
   // src/lib/audience-filter.js — every send audience goes through the
   // whitelist filter, which applies the location scope with the audience.
   'applyAudienceFilter(',
