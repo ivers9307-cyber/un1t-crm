@@ -19,6 +19,7 @@
 import { useState, useMemo, useCallback, useEffect } from 'react'
 import { createBrowserClient } from '@/lib/supabase'
 import { dublinTodayStr } from '@/lib/dublin-time'
+import { taskStatusUpdateOutcome } from '@/lib/activity-write-gate'
 import Link from 'next/link'
 import {
   DndContext, DragOverlay, PointerSensor, useSensor, useSensors,
@@ -40,6 +41,10 @@ const STATUSES = [
   { key: 'cancelled',   label: 'Cancelled',   Icon: MinusCircle,   bg: 'bg-un1t-border/40' },
 ]
 
+// C146 — with no sensors a card cannot be picked up, so a read-only board
+// offers no drag at all (module-level so the reference is stable).
+const NO_SENSORS = []
+
 const PRIORITIES = [
   { key: 'urgent', label: 'Urgent', cls: 'text-red-400' },
   { key: 'high',   label: 'High',   cls: 'text-orange-400' },
@@ -47,7 +52,12 @@ const PRIORITIES = [
   { key: 'low',    label: 'Low',    cls: 'text-un1t-subtle' },
 ]
 
-export default function TasksPage({ initialTasks, locationId, profiles, projectsSeed }) {
+// C146 TASKSNEEDCONTACTS.1 — `canWrite` is the page's canWriteActivitiesAt
+// at this studio (src/lib/activity-write-gate.js). Since mig 700 a browser
+// session without Contacts here cannot read `activities`, so the insert-and-
+// read-back of New task is refused and a status update by id matches nothing:
+// the page shows the list but offers no write. Defaults false: fail closed.
+export default function TasksPage({ initialTasks, locationId, profiles, projectsSeed, canWrite = false }) {
   const db = createBrowserClient()
   const [tasks, setTasks] = useState(initialTasks || [])
   const [view, setView] = useState('board')   // 'board' | 'list'
@@ -91,19 +101,27 @@ export default function TasksPage({ initialTasks, locationId, profiles, projects
   }, [visibleTasks])
 
   const updateStatus = useCallback(async (taskId, newStatus) => {
+    if (!canWrite) return
+    const before = tasks.find(t => t.id === taskId)
     // Optimistic update — UI changes immediately, DB call follows.
     setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: newStatus, done: newStatus === 'done' } : t))
-    const { error } = await db.from('activities')
+    // C146 — select the id back: a zero-row UPDATE is not an error in
+    // PostgREST, so without it a refused update (RLS hides the row) reported
+    // success and the board showed a move the database never made.
+    const res = await db.from('activities')
       .update({ status: newStatus })
       .eq('id', taskId)
-    if (error) {
-      // Rollback on failure — pull the fresh row.
-      const { data } = await db.from('activities').select('*').eq('id', taskId).single()
-      if (data) setTasks(prev => prev.map(t => t.id === taskId ? data : t))
+      .select('id')
+    const outcome = taskStatusUpdateOutcome(res)
+    if (!outcome.ok) {
+      // Roll back to what was on screen before the optimistic move.
+      if (before) setTasks(prev => prev.map(t => t.id === taskId ? before : t))
+      alert(outcome.message)
     }
-  }, [db])
+  }, [db, canWrite, tasks])
 
   const addTask = useCallback(async (payload) => {
+    if (!canWrite) throw new Error('Tasks are read-only for you at this studio.')
     const insert = {
       kind: 'task',
       status: 'todo',
@@ -115,7 +133,7 @@ export default function TasksPage({ initialTasks, locationId, profiles, projects
     if (error) throw new Error(error.message)
     setTasks(prev => [data, ...prev])
     return data
-  }, [db, locationId])
+  }, [db, locationId, canWrite])
 
   // Drag-drop handlers — only used in board view.
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
@@ -123,6 +141,7 @@ export default function TasksPage({ initialTasks, locationId, profiles, projects
   function onDragStart(e) { setActiveDragId(e.active.id) }
   function onDragEnd(e) {
     setActiveDragId(null)
+    if (!canWrite) return
     const { active, over } = e
     if (!over) return
     const taskId = active.id
@@ -144,20 +163,28 @@ export default function TasksPage({ initialTasks, locationId, profiles, projects
         <h2 className="text-2xl font-bold">Tasks</h2>
         <div className="flex items-center gap-2">
           <ViewSwitcher value={view} onChange={setView} />
-          <button
-            onClick={() => setCreateOpen(true)}
-            className="inline-flex items-center gap-1.5 text-sm bg-un1t-text text-un1t-bg font-medium px-3 py-1.5 rounded-md hover:bg-un1t-accent"
-          >
-            <Plus size={14} /> New task
-          </button>
+          {canWrite && (
+            <button
+              type="button"
+              onClick={() => setCreateOpen(true)}
+              className="inline-flex items-center gap-1.5 text-sm bg-un1t-text text-un1t-bg font-medium px-3 py-1.5 rounded-md hover:bg-un1t-accent"
+            >
+              <Plus size={14} /> New task
+            </button>
+          )}
         </div>
       </div>
       <p className="text-sm text-un1t-subtle mb-4">Manual follow-ups, calls, reminders, and project work.</p>
+      {!canWrite && (
+        <p className="text-sm text-un1t-subtle bg-un1t-surface border border-un1t-border rounded-md px-3 py-2 mb-4">
+          Read-only here: tasks need Contacts access at this studio.
+        </p>
+      )}
 
       <FiltersBar filter={filter} setFilter={setFilter} profiles={profiles} projects={projects} />
 
       {view === 'board' ? (
-        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={onDragStart} onDragEnd={onDragEnd}>
+        <DndContext sensors={canWrite ? sensors : NO_SENSORS} collisionDetection={closestCenter} onDragStart={onDragStart} onDragEnd={onDragEnd}>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
             {STATUSES.map(col => (
               <Column key={col.key} status={col} tasks={byStatus[col.key]} />
@@ -178,7 +205,7 @@ export default function TasksPage({ initialTasks, locationId, profiles, projects
                 <col.Icon size={12} /> {col.label} <span className="text-un1t-muted">· {byStatus[col.key].length}</span>
               </h3>
               <div className="bg-un1t-surface border border-un1t-border rounded-lg divide-y divide-un1t-border">
-                {byStatus[col.key].map(t => <TaskListRow key={t.id} task={t} onStatus={updateStatus} />)}
+                {byStatus[col.key].map(t => <TaskListRow key={t.id} task={t} onStatus={canWrite ? updateStatus : null} />)}
               </div>
             </div>
           ))}
@@ -190,7 +217,7 @@ export default function TasksPage({ initialTasks, locationId, profiles, projects
         </div>
       )}
 
-      {createOpen && (
+      {createOpen && canWrite && (
         <NewTaskModal
           onClose={() => setCreateOpen(false)}
           onCreate={addTask}
@@ -360,8 +387,10 @@ function TaskListRow({ task, onStatus }) {
   return (
     <div className="flex items-start gap-3 p-3">
       <button
-        onClick={() => onStatus(task.id, task.status === 'done' ? 'todo' : 'done')}
-        className="mt-0.5 text-un1t-subtle hover:text-un1t-text"
+        type="button"
+        onClick={() => onStatus?.(task.id, task.status === 'done' ? 'todo' : 'done')}
+        disabled={!onStatus}
+        className="mt-0.5 text-un1t-subtle hover:text-un1t-text disabled:cursor-default disabled:hover:text-un1t-subtle"
         aria-label="Toggle done"
       >
         {task.status === 'done' ? <CheckCircle2 size={16} /> : <Circle size={16} />}

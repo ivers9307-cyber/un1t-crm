@@ -36,6 +36,7 @@ import { createServerClient } from '@/lib/supabase'
 import { pipelineDealSelect, toBoardDeal, PIPELINE_PAGE_SIZE } from '@/lib/pipeline-board'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
+import { canWriteActivitiesAt } from '@/lib/activity-write-gate'
 import { redirect } from 'next/navigation'
 import KanbanBoard from '@/components/KanbanBoard'
 import PipelineViewSwitcher from '@/components/PipelineViewSwitcher'
@@ -177,6 +178,10 @@ export default async function PipelinePage(props) {
         view={view}
         manual={manual}
         locationId={locationId}
+        // C146 TASKSNEEDCONTACTS.1 — the cards' and drawer's Task item is a
+        // browser `activities` insert at this studio; since mig 700 it needs
+        // Contacts here (web or phone).
+        canTask={canWriteActivitiesAt(user, locationId)}
       />
     </div>
   )

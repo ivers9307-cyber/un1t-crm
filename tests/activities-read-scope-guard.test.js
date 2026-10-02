@@ -15,6 +15,11 @@
 //   (b) no migration after 691 gives anon or PUBLIC a privilege on it.
 // A floor, not a proof: a policy made by hand on prod or by dynamic SQL is
 // invisible; the replay of the migration that changes it is the proof.
+//
+// SEC-4 (C144, mig 700; Richard 2 Oct 2026): reading activities ALSO needs
+// Contacts at the studio (every activity row belongs to a contact), so the
+// one reader is now (tasks OR pipeline) AND the mig 690 Contacts helper,
+// all three as InitPlans. tests/migration-700-sec-4.test.js is the replay.
 
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
@@ -31,7 +36,8 @@ const migrationFiles = () => readdirSync(MIGRATIONS).filter((f) => f.endsWith('.
 
 const norm = (e) => (e || '').replace(/\s+/g, ' ').replace(/\(\s+/g, '(').replace(/\s+\)/g, ')').trim().toLowerCase()
 const WRAPPER = (k) => `location_id = any ((select private.auth_mobile_can_location_ids('${k}'))::uuid[])`
-export const ACTIVITIES_READ = `${WRAPPER('tasks')} or ${WRAPPER('pipeline')}`
+const CONTACTS = 'location_id = any ((select private.auth_contact_read_location_ids())::uuid[])'
+export const ACTIVITIES_READ = `(${WRAPPER('tasks')} or ${WRAPPER('pipeline')}) and ${CONTACTS}`
 
 /** Permissive policies that let a client role read activities, from a replayed policy state. */
 export function activitiesReaders(policies) {
@@ -52,15 +58,15 @@ export function anonActivitiesGrants(sql) {
   return out
 }
 
-describe('(a) activities is read on the phone Tasks / Pipeline permission only (mig 691)', () => {
+describe('(a) activities is read on phone Tasks / Pipeline AND Contacts only (migs 691 + 700)', () => {
   const readers = activitiesReaders(netPolicyState(MIGRATIONS))
 
-  it('exactly one reader: activities_select, authenticated, the 691 wrapper form', () => {
+  it('exactly one reader: activities_select, authenticated, the 700 form', () => {
     expect(readers.map((p) => `${p.name} ${p.cmd} ${p.roles.join(',')} (${p.file})`)).toHaveLength(1)
     const [p] = readers
     expect(p.name).toBe('activities_select')
     expect(p.roles).toEqual(['authenticated'])
-    expect(norm(p.using), 'activities must not go back to membership (C132)').toBe(ACTIVITIES_READ)
+    expect(norm(p.using), 'activities must not go back to membership (C132) or drop Contacts (C144)').toBe(ACTIVITIES_READ)
   })
 
   it('the detector catches the shapes that would reopen it', () => {
@@ -69,8 +75,11 @@ describe('(a) activities is read on the phone Tasks / Pipeline permission only (
     expect(activitiesReaders(state({ cmd: 'SELECT', roles: ['public'], using: 'true' }))).toHaveLength(1)
     expect(activitiesReaders(state({ cmd: 'DELETE', roles: ['authenticated'], using: 'true' }))).toEqual([])
     expect(activitiesReaders(state({ cmd: 'SELECT', roles: ['service_role'], using: 'true' }))).toEqual([])
-    expect(norm(`location_id = ANY ((SELECT private.auth_mobile_can_location_ids('tasks'))::uuid[])
-         OR location_id = ANY ((SELECT private.auth_mobile_can_location_ids('pipeline'))::uuid[])`)).toBe(ACTIVITIES_READ)
+    expect(norm(`(location_id = ANY ((SELECT private.auth_mobile_can_location_ids('tasks'))::uuid[])
+          OR location_id = ANY ((SELECT private.auth_mobile_can_location_ids('pipeline'))::uuid[]))
+         AND location_id = ANY ((SELECT private.auth_contact_read_location_ids())::uuid[])`)).toBe(ACTIVITIES_READ)
+    // the 691 form without Contacts is no longer enough (C144)
+    expect(norm(`${WRAPPER('tasks')} or ${WRAPPER('pipeline')}`)).not.toBe(ACTIVITIES_READ)
     expect(norm(`${ACTIVITIES_READ} OR private.auth_is_in_location(location_id)`)).not.toBe(ACTIVITIES_READ)
   })
 })
