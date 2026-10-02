@@ -3426,6 +3426,103 @@ registry.registerPath({
   },
 })
 
+// MEMBERWRITESWEEP.1f — the TV admin's session routes (web /tv-displays and
+// the staff phone). They replace direct tv_displays / tv_content /
+// tv_templates reads and writes from client sessions, which mig 685 (1g)
+// closes. Gate: tv_displays (web OR mobile) at the TV's or template's own
+// studio, after membership (404 outside the caller's studios).
+const tvGateResponses = {
+  401: tvErr('Unauthorized'),
+  403: tvErr('No tv_displays permission (web or mobile) at that studio'),
+  404: tvErr('Not found, or outside your studios'),
+}
+const TvContentSchema = z.object({
+  tv_display_id: uuidLike, source_type: z.string(), source_ref: z.string(), label: z.string().nullable(),
+  template_values: z.record(z.string(), z.unknown()).nullable(), pushed_at: z.string(),
+}).openapi('TvContent')
+const TvDisplaySchema = z.object({
+  id: uuidLike, label: z.string(), token: z.string(), active: z.boolean(), rotation: z.number().int(),
+  location_id: uuidLike, created_at: z.string(), content: TvContentSchema.nullable(),
+}).openapi('TvDisplay')
+const TvTemplateSchema = z.object({
+  id: uuidLike, name: z.string(), base_image_path: z.string(), zones: z.array(z.record(z.string(), z.unknown())), location_id: uuidLike,
+}).openapi('TvTemplate')
+const TvTemplateBody = z.object({ name: z.string().min(1).max(120), base_image_path: z.string().min(1).max(500), zones: z.array(z.record(z.string(), z.unknown())).max(100).optional() })
+const tvOk = (description, schema) => ({ description, content: { 'application/json': { schema: z.object({ success: z.literal(true), ...(schema ? { data: schema } : {}) }) } } })
+const tvSecurity = [{ CookieAuth: [] }, { BearerAuth: [] }]
+const tvId = z.object({ id: uuidLike })
+
+registry.registerPath({
+  method: 'get', path: '/api/admin/tv-displays', tags: ['TV displays'], security: tvSecurity,
+  summary: "A studio's TVs, each with what it is showing",
+  description: 'Oldest first; `content` is the TV\'s one tv_content row, or null when idle. location_id defaults to the active studio.',
+  request: { query: z.object({ location_id: uuidLike.optional() }) },
+  responses: { 200: tvOk('TVs', z.array(TvDisplaySchema)), 400: tvErr('No location'), 500: tvErr('The TVs or their content could not be read'), ...tvGateResponses },
+})
+registry.registerPath({
+  method: 'post', path: '/api/admin/tv-displays', tags: ['TV displays'], security: tvSecurity,
+  summary: 'Register a TV at a studio (its cast token is generated)',
+  request: { body: { content: { 'application/json': { schema: z.object({ location_id: uuidLike, label: z.string().min(1).max(80) }).openapi('TvRegister') } } } },
+  responses: { 200: tvOk('Registered', TvDisplaySchema), 400: tvErr('Validation failed'), 409: tvErr('A TV with that label is already registered at the studio'), 500: tvErr('Insert failed'), ...tvGateResponses },
+})
+registry.registerPath({
+  method: 'patch', path: '/api/admin/tv-displays/{id}', tags: ['TV displays'], security: tvSecurity,
+  summary: 'Set how a TV is hung (rotation 0, 90, 180 or 270)',
+  request: { params: tvId, body: { content: { 'application/json': { schema: z.object({ rotation: z.number().int() }).openapi('TvRotation') } } } },
+  responses: { 200: tvOk('Saved'), 400: tvErr('Rotation must be 0, 90, 180 or 270'), 500: tvErr('Update failed'), ...tvGateResponses },
+})
+registry.registerPath({
+  method: 'delete', path: '/api/admin/tv-displays/{id}', tags: ['TV displays'], security: tvSecurity,
+  summary: 'Delete a TV (its cast URL stops working)',
+  request: { params: tvId },
+  responses: { 200: tvOk('Deleted'), 500: tvErr('Delete failed'), ...tvGateResponses },
+})
+registry.registerPath({
+  method: 'put', path: '/api/admin/tv-displays/{id}/content', tags: ['TV displays'], security: tvSecurity,
+  summary: 'Push a URL, a photo or a template to a TV',
+  description: 'pushed_at, pushed_by and triggered_by come from the session. A URL must be http(s); a photo must be in the TV studio\'s tv-content folder; a template must be one of the TV\'s studio, with template_values an object (null for the other two).',
+  request: { params: tvId, body: { content: { 'application/json': { schema: z.object({ source_type: z.enum(['url', 'storage', 'template']), source_ref: z.string().min(1).max(2048), label: z.string().max(200).nullable().optional(), template_values: z.record(z.string(), z.unknown()).optional() }).openapi('TvPush') } } } },
+  responses: { 200: tvOk('Pushed', TvContentSchema), 400: tvErr('Validation failed, or a push the cast page may not show'), 500: tvErr('Upsert or template read failed'), ...tvGateResponses },
+})
+registry.registerPath({
+  method: 'delete', path: '/api/admin/tv-displays/{id}/content', tags: ['TV displays'], security: tvSecurity,
+  summary: 'Clear a TV back to its idle screen',
+  request: { params: tvId },
+  responses: { 200: tvOk('Cleared'), 500: tvErr('Delete failed'), ...tvGateResponses },
+})
+registry.registerPath({
+  method: 'get', path: '/api/admin/tv-templates', tags: ['TV displays'], security: tvSecurity,
+  summary: "A studio's TV templates, by name",
+  request: { query: z.object({ location_id: uuidLike.optional() }) },
+  responses: { 200: tvOk('Templates', z.array(TvTemplateSchema)), 400: tvErr('No location'), 500: tvErr('Read failed'), ...tvGateResponses },
+})
+registry.registerPath({
+  method: 'post', path: '/api/admin/tv-templates', tags: ['TV displays'], security: tvSecurity,
+  summary: 'Create a TV template',
+  description: 'created_by is the caller. The base image must sit under <location_id>/templates/ (where the upload routes put it).',
+  request: { body: { content: { 'application/json': { schema: TvTemplateBody.extend({ location_id: uuidLike }).openapi('TvTemplateCreate') } } } },
+  responses: { 200: tvOk('Created', TvTemplateSchema), 400: tvErr('Validation failed, or a base image outside the studio templates folder'), 409: tvErr('A template with that name exists at the studio'), 500: tvErr('Insert failed'), ...tvGateResponses },
+})
+registry.registerPath({
+  method: 'get', path: '/api/admin/tv-templates/{id}', tags: ['TV displays'], security: tvSecurity,
+  summary: 'One TV template (with its studio)',
+  request: { params: tvId },
+  responses: { 200: tvOk('Template', TvTemplateSchema), 500: tvErr('Read failed'), ...tvGateResponses },
+})
+registry.registerPath({
+  method: 'put', path: '/api/admin/tv-templates/{id}', tags: ['TV displays'], security: tvSecurity,
+  summary: 'Save a TV template',
+  description: "A changed base image must sit under the TEMPLATE's studio's templates folder (C118); an unchanged one is kept.",
+  request: { params: tvId, body: { content: { 'application/json': { schema: TvTemplateBody.openapi('TvTemplateSave') } } } },
+  responses: { 200: tvOk('Saved', TvTemplateSchema), 400: tvErr("Validation failed, or a new base image outside the template's studio"), 409: tvErr('A template with that name exists at the studio'), 500: tvErr('Update failed'), ...tvGateResponses },
+})
+registry.registerPath({
+  method: 'delete', path: '/api/admin/tv-templates/{id}', tags: ['TV displays'], security: tvSecurity,
+  summary: 'Delete a TV template (a TV showing it falls back to idle)',
+  request: { params: tvId },
+  responses: { 200: tvOk('Deleted'), 500: tvErr('Delete failed'), ...tvGateResponses },
+})
+
 // CARDOCUPLOAD.1 (C124) — the car Documents picker's upload, direct to Storage.
 const carDocErr = (description) => ({ description, content: { 'application/json': { schema: ErrorResponse } } })
 const CarDocType = z.string().min(1).max(64).openapi({ description: 'A car document type key (src/lib/cars.js ALL_DOCUMENT_TYPES)' })

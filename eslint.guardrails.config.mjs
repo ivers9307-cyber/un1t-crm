@@ -413,6 +413,13 @@ const config = [
       // write reads its error and the rows it touched.
       'src/app/api/communications/campaigns/**',
       'src/lib/campaign-session-access.js',
+      // MEMBERWRITESWEEP.1f — the TV admin's session routes, new in this PR
+      // (they replace client-session writes on tv_displays / tv_content /
+      // tv_templates): born clean, every write reads its error.
+      'src/app/api/admin/tv-displays/route.js',
+      'src/app/api/admin/tv-displays/[[]id]/**',
+      'src/app/api/admin/tv-templates/**',
+      'src/lib/tv-admin.js',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },
