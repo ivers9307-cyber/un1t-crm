@@ -956,3 +956,32 @@ describe('assembleIntegrationsHub — email + plan strip reads (HUBREAD.1)', () 
     expect(data.billing[0].unreadable).toBeUndefined()
   })
 })
+
+// C141 ORGROLE.2 — the plan & wallet strip is organisation-level billing
+// data (C18's rule: organisation admins only). The hub stays open to studio
+// owners for their integrations, so the assembler builds the strip only for
+// the locations the caller may see billing for (`billingFor`).
+describe('assembleIntegrationsHub — plan & wallet strip is organisation-admin only (C141)', () => {
+  it('billingFor narrows the strip AND its reads to the admitted locations', async () => {
+    const db = tableDb()
+    const data = await assembleIntegrationsHub(db, [LOC_A, LOC_B], {
+      now: NOW, billingFor: (loc) => loc.id === LOC_B.id,
+    })
+    expect(data.billing.map((r) => r.locationId)).toEqual([LOC_B.id])
+    expect(db.inCalls.location_plans[0]).toEqual(['location_id', [LOC_B.id]])
+    // The rest of the hub is untouched.
+    expect(data.shelly.map((r) => r.locationId)).toEqual([LOC_A.id, LOC_B.id])
+  })
+
+  it('no admitted location: no strip rows and no plan read at all', async () => {
+    const db = tableDb()
+    const data = await assembleIntegrationsHub(db, [LOC_A, LOC_B], { now: NOW, billingFor: () => false })
+    expect(data.billing).toEqual([])
+    expect(db.inCalls.location_plans || []).toEqual([])
+  })
+
+  it('without billingFor every location keeps its row (the master tenants console)', async () => {
+    const data = await assembleIntegrationsHub(tableDb(), [LOC_A, LOC_B], { now: NOW })
+    expect(data.billing.map((r) => r.locationId)).toEqual([LOC_A.id, LOC_B.id])
+  })
+})
