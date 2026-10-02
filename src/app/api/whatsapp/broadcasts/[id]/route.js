@@ -5,6 +5,7 @@ import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, audienceFilterSchema, url } from '@/lib/schemas'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
+import { logError } from '@/lib/log'
 
 // GATES-2 — GET/PUT/DELETE took membership only, so a member with WhatsApp
 // switched off could read the recipient list, rewrite or delete a broadcast
@@ -171,7 +172,13 @@ export async function DELETE(request, props) {
   if (guard) return guard
   if (!hasPermissionForLocation(user, row.location_id, 'whatsapp')) return waForbidden()
 
-  await db.from('whatsapp_broadcast_recipients').delete().eq('broadcast_id', params.id)
+  // C138 (c) — read the recipients delete's error: a failure stops here, so a
+  // broadcast is never deleted with its recipient rows half gone.
+  const { error: recipErr } = await db.from('whatsapp_broadcast_recipients').delete().eq('broadcast_id', params.id)
+  if (recipErr) {
+    logError('api:whatsapp-broadcasts', 'recipients delete failed; broadcast kept', { broadcastId: params.id, code: recipErr.code || null })
+    return NextResponse.json({ success: false, error: 'Could not delete the broadcast\'s recipients; nothing was deleted' }, { status: 500 })
+  }
   const { error } = await db.from('whatsapp_broadcasts').delete().eq('id', params.id)
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   return NextResponse.json({ success: true })
