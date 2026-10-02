@@ -562,6 +562,60 @@ registry.registerPath({
   },
 })
 
+// C148 ACTWRITEGATEWEB.1 — the web task writes, off the browser client.
+const taskWriteErr = (description) => ({ description, content: { 'application/json': { schema: ErrorResponse } } })
+const TASK_RULE = "Judged on the WEB rule at the task's studio: the web Tasks permission (`activities`) AND Contacts (web or phone) there; the phone Tasks / Pipeline keys do not count. Browser session only; the API-key surface is /api/tasks."
+registry.registerPath({
+  method: 'post',
+  path: '/api/activities/tasks',
+  tags: ['Tasks'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Create a task from the web',
+  description: `${TASK_RULE} Membership of location_id first (403). A contact_id must be a contact AT that studio (404 otherwise); an assignee_id must work there (400). kind, status and source are set by the route (task, todo, manual).`,
+  request: {
+    body: { content: { 'application/json': { schema: z.object({
+      location_id: uuidLike,
+      subject: z.string().min(1).max(500),
+      type: z.string().max(50).optional(),
+      note: z.string().max(20000).nullable().optional(),
+      due_date: z.string().nullable().optional().openapi({ example: '2026-10-09' }),
+      due_time: z.string().nullable().optional().openapi({ example: '09:30' }),
+      assignee_id: uuidLike.nullable().optional(),
+      priority: z.enum(['low', 'medium', 'high', 'urgent']).nullable().optional(),
+      project: z.string().max(100).nullable().optional(),
+      contact_id: uuidLike.nullable().optional(),
+    }) } } },
+  },
+  responses: {
+    200: { description: 'Created (the row, with its contact and assignee)', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ id: uuidLike }).passthrough() }) } } },
+    400: taskWriteErr('Validation failed, or the assignee does not work at this studio'),
+    401: taskWriteErr('Unauthorized'),
+    403: taskWriteErr('No web Tasks permission anywhere; not a member of the studio; or no Tasks / Contacts permission there'),
+    404: taskWriteErr('The contact does not exist or is not at this studio'),
+    500: taskWriteErr('The contact or assignee could not be read, or the task could not be written'),
+  },
+})
+registry.registerPath({
+  method: 'post',
+  path: '/api/activities/tasks/{id}/status',
+  tags: ['Tasks'],
+  security: [{ CookieAuth: [] }],
+  summary: "Change a task's status",
+  description: `${TASK_RULE} The task's own studio, never the active one; membership first (404). Only kind='task' rows.`,
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ status: z.enum(['todo', 'in_progress', 'done', 'cancelled']) }) } } },
+  },
+  responses: {
+    200: { description: 'Changed', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ id: uuidLike, status: z.string() }) }) } } },
+    400: taskWriteErr('Validation failed'),
+    401: taskWriteErr('Unauthorized'),
+    403: taskWriteErr("No web Tasks permission anywhere, or no Tasks / Contacts permission at the task's studio"),
+    404: taskWriteErr('No such task, or not at a studio of yours'),
+    500: taskWriteErr('The task could not be read or written'),
+  },
+})
+
 registry.registerPath({
   method: 'get',
   path: '/api/public/challenges/{locationId}',
