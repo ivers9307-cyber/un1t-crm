@@ -16,11 +16,15 @@ import { ChevronLeft, Eye, AlertCircle, Flame } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { listVersionViewers, sectionDwellAggregate } from '@/lib/policies'
+import { isActiveOrgAdmin } from '@/lib/org-admin'
 
 export const dynamic = 'force-dynamic'
 
-function isOwnerOrMaster(user) {
-  return user?.role === 'master' || user?.role === 'owner' || user?.profileRole === 'master'
+// C141 ORGROLE.2 — managing policies is organisation-level (C18's rule):
+// organisation admins only, a master or an org_admin grant on the active
+// organisation. An owner at a studio still reads /policies.
+function canManagePolicies(user) {
+  return isActiveOrgAdmin(user)
 }
 
 function fmtDateTime(iso) {
@@ -47,7 +51,7 @@ export default async function AdminPolicyVersionPage({ params }) {
 
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  if (!isOwnerOrMaster(user)) redirect('/')
+  if (!canManagePolicies(user)) redirect('/')
 
   const db = createServerClient()
   const { data: policy } = await db

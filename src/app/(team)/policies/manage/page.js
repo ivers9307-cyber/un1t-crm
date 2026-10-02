@@ -1,9 +1,9 @@
-// /policies/manage — master/owner-only admin for the policies hub.
+// /policies/manage — organisation-admin-only (C141 ORGROLE.2) admin for the policies hub.
 // ADMIN.2h Task 1 — moved out of /admin (was /admin/policies) to sit
 // alongside the staff-facing read surface at /policies (that page and
 // its [slug] detail predate this move and are untouched — this CRUD
 // tree lives at /policies/manage so the two don't collide). Gate is
-// standalone below (owner|master), unaffected by the move.
+// standalone below (organisation admins), unaffected by the move.
 // Lists policies with current version + view counts (POLICIES-VIEWS.1
 // replaced the previous acknowledgement model). Click a row to drill
 // into version history, viewer report, and the publish-new-version form.
@@ -14,11 +14,15 @@ import { ChevronRight, FileText } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { currentVersionOpenCounts } from '@/lib/policies'
+import { isActiveOrgAdmin } from '@/lib/org-admin'
 
 export const dynamic = 'force-dynamic'
 
-function isOwnerOrMaster(user) {
-  return user?.role === 'master' || user?.role === 'owner' || user?.profileRole === 'master'
+// C141 ORGROLE.2 — managing policies is organisation-level (C18's rule):
+// organisation admins only, a master or an org_admin grant on the active
+// organisation. An owner at a studio still reads /policies.
+function canManagePolicies(user) {
+  return isActiveOrgAdmin(user)
 }
 
 function fmtDate(iso) {
@@ -29,7 +33,7 @@ function fmtDate(iso) {
 export default async function AdminPoliciesPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  if (!isOwnerOrMaster(user)) redirect('/')
+  if (!canManagePolicies(user)) redirect('/')
 
   const db = createServerClient()
   const { data: policies } = await db
