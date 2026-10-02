@@ -33,6 +33,7 @@ describe('no web client code writes activities (C148)', () => {
     expect(ACTIVITIES_WRITE.test("await db.from('activities').insert(insert).select('*').single()")).toBe(true)
     expect(ACTIVITIES_WRITE.test("const res = await db.from('activities')\n  .update({ status: newStatus })\n  .eq('id', taskId)")).toBe(true)
     expect(ACTIVITIES_WRITE.test('await db.from("activities").delete().eq("id", id)')).toBe(true)
+    expect(ACTIVITIES_WRITE.test("await db.from(`activities`).upsert(row, { onConflict: 'id' })")).toBe(true)
     expect(ACTIVITIES_WRITE.test("await db.from('activities').select('id').eq('id', id)")).toBe(false)
   })
 

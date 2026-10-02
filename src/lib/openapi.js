@@ -571,7 +571,7 @@ registry.registerPath({
   tags: ['Tasks'],
   security: [{ CookieAuth: [] }],
   summary: 'Create a task from the web',
-  description: `${TASK_RULE} Membership of location_id first (403). A contact_id must be a contact AT that studio (404 otherwise); an assignee_id must work there (400). kind, status and source are set by the route (task, todo, manual).`,
+  description: `${TASK_RULE} Membership of location_id first (403). A contact_id must be a contact AT that studio (404 otherwise); an assignee_id must work there (400). kind, status and source are set by the route (task, todo, crm).`,
   request: {
     body: { content: { 'application/json': { schema: z.object({
       location_id: uuidLike,

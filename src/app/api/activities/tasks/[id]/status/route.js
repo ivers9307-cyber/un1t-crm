@@ -34,6 +34,9 @@ export async function POST(request, props) {
     .update({ status })
     .eq('id', task.id)
     .eq('kind', 'task')
+    // Pinned to the studio the gate judged: a row moved between the read and
+    // the write matches nothing (404) instead of being written unjudged.
+    .eq('location_id', task.location_id)
     .select('id, status')
   if (error) {
     return NextResponse.json({ success: false, error: 'Could not change the task. Try again.' }, { status: 500 })

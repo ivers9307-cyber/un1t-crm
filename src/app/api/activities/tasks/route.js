@@ -55,8 +55,11 @@ export async function POST(request) {
   })
   if (linkRefusal) return linkRefusal
 
+  // source 'crm': activities_source_check (mig 138) allows only 'crm' and
+  // 'glofox'. The old TasksPage insert sent 'manual' and was refused by that
+  // CHECK (0 task rows in prod); the contact-page forms took the 'crm' default.
   const { data, error } = await db.from('activities')
-    .insert({ ...body, kind: 'task', status: 'todo', source: 'manual' })
+    .insert({ ...body, kind: 'task', status: 'todo', source: 'crm' })
     .select(TASK_ROW)
     .single()
   if (error || !data) {

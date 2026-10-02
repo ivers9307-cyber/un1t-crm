@@ -78,7 +78,7 @@ describe('POST /api/activities/tasks', () => {
     expect(body.success).toBe(true)
     expect(tables.activities).toHaveLength(1)
     expect(tables.activities[0]).toEqual({
-      location_id: LOC_B, subject: 'Call back about the trial', kind: 'task', status: 'todo', source: 'manual',
+      location_id: LOC_B, subject: 'Call back about the trial', kind: 'task', status: 'todo', source: 'crm',
       contact_id: C1, assignee_id: P1, type: 'email', due_date: '2026-10-09', due_time: '09:30', note: 'n', priority: 'high', project: 'Trials',
     })
   })
@@ -91,7 +91,7 @@ describe('POST /api/activities/tasks', () => {
 
   it('the client cannot choose kind, source, status or a deal', async () => {
     await createTask(req({ ...BODY, kind: 'event', source: 'glofox', status: 'done', deal_id: C1 }))
-    expect(tables.activities[0]).toMatchObject({ kind: 'task', source: 'manual', status: 'todo' })
+    expect(tables.activities[0]).toMatchObject({ kind: 'task', source: 'crm', status: 'todo' })
     expect(tables.activities[0]).not.toHaveProperty('deal_id')
   })
 
