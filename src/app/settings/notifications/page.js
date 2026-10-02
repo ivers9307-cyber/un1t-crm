@@ -19,6 +19,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
+import { isActiveOrgAdmin } from '@/lib/org-admin'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { Bell, Clock, Users, User, Mail, Cog, Webhook, ChevronRight, ShieldCheck } from 'lucide-react'
@@ -79,21 +80,25 @@ export default async function NotificationRegistryPage() {
         Every push notification the CRM sends. {totalProfiles} active staff member{totalProfiles === 1 ? '' : 's'} can receive notifications, subject to per-user toggles in their profile.
       </p>
 
-      <Link
-        href="/settings/notifications/health"
-        className="bg-un1t-surface border border-un1t-border hover:border-un1t-subtle rounded-lg p-4 flex items-center justify-between text-sm group transition-colors mb-6"
-      >
-        <div className="flex items-start gap-3">
-          <ShieldCheck size={16} className="text-un1t-subtle mt-0.5" />
-          <div>
-            <div className="text-un1t-text">Delivery health</div>
-            <div className="text-xs text-un1t-subtle mt-0.5">
-              See which staff have the mobile app installed and tokens registered. Send test pushes to verify end-to-end delivery.
+      {/* C18 ORGROLE.1 — the staff device fleet is for organisation admins
+          (the health page's and /api/staff-devices' rule). */}
+      {isActiveOrgAdmin(user) && (
+        <Link
+          href="/settings/notifications/health"
+          className="bg-un1t-surface border border-un1t-border hover:border-un1t-subtle rounded-lg p-4 flex items-center justify-between text-sm group transition-colors mb-6"
+        >
+          <div className="flex items-start gap-3">
+            <ShieldCheck size={16} className="text-un1t-subtle mt-0.5" />
+            <div>
+              <div className="text-un1t-text">Delivery health</div>
+              <div className="text-xs text-un1t-subtle mt-0.5">
+                See which staff have the mobile app installed and tokens registered. Send test pushes to verify end-to-end delivery.
+              </div>
             </div>
           </div>
-        </div>
-        <ChevronRight size={16} className="text-un1t-subtle group-hover:text-un1t-text" />
-      </Link>
+          <ChevronRight size={16} className="text-un1t-subtle group-hover:text-un1t-text" />
+        </Link>
+      )}
 
       <div className="space-y-3">
         {NOTIFICATION_REGISTRY.map(n => (

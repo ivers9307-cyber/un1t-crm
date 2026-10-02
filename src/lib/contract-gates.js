@@ -1,41 +1,40 @@
 // C116 GATES-2 — who may manage a contract (or a contract template), and who
 // may download a signed contract's PDF, judged at the RECORD's organisation.
 //
-// Contracts and contract templates are ORG-scoped (mig 106). The routes have
-// always scoped the row with getOwnerOrganizationIds() (per-location owner
-// roles mapped to their orgs, plus org-admin grants), but several of them,
+// Contracts and contract templates are ORG-scoped (mig 106). Several routes,
 // and their pages, first asked `user.role === 'owner'`: the role at the
-// ACTIVE studio. That refused an owner of the contract's org who happened to
-// be working from a studio where they are a manager, and an org admin whose
-// own assignment at the active studio is not owner. These helpers are the one
-// rule the routes and the pages now share. Server-only (auth.js).
-import { getOwnerOrganizationIds } from './auth'
+// ACTIVE studio. These helpers are the one rule the routes and the pages
+// share.
+//
+// C18 ORGROLE.1 (Richard, 1 Oct 2026): contracts are an organisation-level
+// surface, so "manages contracts in an org" means an ORGANISATION ADMIN of
+// it: a master or an org_admin grant (src/lib/org-admin.js). It used to be
+// getOwnerOrganizationIds (an owner at ANY studio of the org counted); a
+// studio owner is not an organisation admin. The recipient's own access to
+// their contract is unchanged.
+import { isOrgAdmin, isOrgAdminSomewhere } from './org-admin'
 
 /**
- * Master, or an owner/org admin of `organizationId`. A null org is master-only.
+ * Master, or an org admin of `organizationId`. A null org is master-only.
  *
  * @param {object|null} user           getCurrentUser() result
  * @param {string|null} organizationId the contract's / template's organization_id
  */
 export function canManageContractsInOrg(user, organizationId) {
-  if (!user) return false
-  if (user.isMaster) return true
-  if (!organizationId) return false
-  return getOwnerOrganizationIds(user).includes(organizationId)
+  return isOrgAdmin(user, organizationId)
 }
 
 /**
- * The coarse pre-check, before the row is read: master, or an owner/org admin
- * of SOME organisation. Anyone else is refused without the id being looked up.
+ * The coarse pre-check, before the row is read: master, or an org admin of
+ * SOME organisation. Anyone else is refused without the id being looked up.
  */
 export function canManageContractsSomewhere(user) {
-  if (!user) return false
-  return Boolean(user.isMaster) || getOwnerOrganizationIds(user).length > 0
+  return isOrgAdminSomewhere(user)
 }
 
 /**
  * GET /api/contracts/[id]/pdf's rule, for the Download PDF link: a PDF is on
- * file, and the caller is the recipient, a master, or an owner/admin of the
+ * file, and the caller is the recipient, a master, or an org admin of the
  * contract's org. A recipient-only caller never gets a draft (a draft never has
  * a PDF anyway; kept identical to the route).
  *
@@ -55,8 +54,10 @@ export function canDownloadContractPdf(user, contract) {
  * The /contracts/[id] action buttons, each shown exactly when its route would
  * act: Resend and Revoke (issued/viewed) and Send/Discard (draft) on
  * canManageContractsInOrg at the contract's org; Download PDF on the /pdf
- * route's rule. (Re-issue links to /contracts/issue, which with
- * POST /api/contracts still asks the active role; the page keeps that.)
+ * route's rule. GATES-3 (c): Re-issue (revoked/declined) opens
+ * /contracts/issue?from=<id>, whose prefill (GET /api/contracts/[id]) and
+ * submit (POST /api/contracts, judged at the template's org) need the same
+ * org, so it follows canManageContractsInOrg too.
  */
 export function contractDetailActions(user, contract) {
   const manages = canManageContractsInOrg(user, contract?.organization_id)
@@ -66,5 +67,6 @@ export function contractDetailActions(user, contract) {
     canRevoke: manages && (status === 'issued' || status === 'viewed'),
     canManageDraft: manages && status === 'draft',
     canDownloadPdf: canDownloadContractPdf(user, contract),
+    canReissue: manages && (status === 'revoked' || status === 'declined'),
   }
 }

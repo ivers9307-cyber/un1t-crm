@@ -15,6 +15,11 @@
 //         every refusal (quality gate, tier budget, breaker) lands the row
 //         back at 'draft' — recoverable, never stranded. A refusal pushes a
 //         manager notification so the missed schedule isn't silent.
+//     - C127 LATEBLAST.1: a blast more than LATE_SCHEDULED_BLAST_HOURS (3)
+//       late (in practice: it fell due while the studio's WhatsApp was off,
+//       see C122 below) is NOT sent. The CAS flips it to 'draft' with
+//       scheduled_at cleared and the managers get the same push as a refused
+//       start, so they re-schedule. Drips are exempt (window-paced).
 //  2. Blast RESUME: a scheduled blast bigger than one tick's cap was left at
 //     'sending' with the remainder unclaimed — send the next chunk. Scoped to
 //     scheduled_at IS NOT NULL so operator-fired blasts are untouched. The
@@ -38,7 +43,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { sendDripChunk, sendBroadcast } from '@/lib/whatsapp'
 import { isWithinSendWindow } from '@/lib/whatsapp-drip'
-import { promotionPlan, SCHEDULED_BLAST_MAX_PER_TICK, scheduledStartFailureNotification } from '@/lib/whatsapp-schedule'
+import { promotionPlan, SCHEDULED_BLAST_MAX_PER_TICK, scheduledStartFailureNotification, LATE_SCHEDULED_BLAST_REASON } from '@/lib/whatsapp-schedule'
 import { sendPushToRolesAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
@@ -48,6 +53,23 @@ import { whatsappEnabledLocationIds, notEnabledLocationFilter } from '@/lib/what
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300 // Pro ceiling
+
+// Tell the studio's managers a scheduled broadcast did not go out (a refused
+// start, or C127 a stale one). Best-effort: a failed push is logged, never
+// thrown into the tick.
+async function notifyScheduledStartFailure(row, reason) {
+  try {
+    const notify = scheduledStartFailureNotification(row, reason)
+    await sendPushToRolesAtLocation(row.location_id, MANAGER_ROLES, {
+      title: notify.title,
+      body: notify.body,
+      category: 'whatsapp',
+      data: { type: 'broadcast_schedule_failed', broadcast_id: row.id },
+    })
+  } catch (pushErr) {
+    console.error(`[cron run-whatsapp-broadcasts] refusal push failed:`, pushErr?.message || pushErr)
+  }
+}
 
 export async function GET(request) {
   const auth = request.headers.get('authorization') || ''
@@ -115,7 +137,7 @@ export async function GET(request) {
   }
 
   const stats = {
-    scheduled_found: scheduledQ.data.length, promoted: 0, refused: 0,
+    scheduled_found: scheduledQ.data.length, promoted: 0, refused: 0, returned_late: 0,
     resume_found: resumeQ.data.length,
     found: dripQ.data.length,
     sent: 0, failed: 0, finished: 0, in_progress: 0, outside_window: 0, errors: [],
@@ -124,12 +146,15 @@ export async function GET(request) {
 
   // ── 1. Promote due scheduled broadcasts ─────────────────────────────────
   for (const row of scheduledQ.data) {
-    const plan = promotionPlan(row)
+    const plan = promotionPlan(row, now)
     if (!plan) continue
     try {
       // CAS the flip — a concurrent tick that already claimed it gets 0 rows.
+      // C127 — a stale blast also loses its schedule: it is a plain draft now,
+      // and the resume arm (scheduled_at IS NOT NULL) must never pick it up.
+      const patch = plan.mode === 'stale' ? { status: plan.flipTo, scheduled_at: null } : { status: plan.flipTo }
       const { data: claimed, error: claimErr } = await db.from('whatsapp_broadcasts')
-        .update({ status: plan.flipTo })
+        .update(patch)
         .eq('id', row.id)
         .eq('status', 'scheduled')
         .select('id')
@@ -141,6 +166,14 @@ export async function GET(request) {
         continue
       }
       if (!claimed?.length) continue
+
+      if (plan.mode === 'stale') {
+        // C127 — returned, not sent; the managers re-schedule it.
+        stats.returned_late++
+        logWarn('cron:run-whatsapp-broadcasts', 'scheduled blast more than the late limit past due; returned to draft, not sent', { broadcastId: row.id })
+        await notifyScheduledStartFailure(row, LATE_SCHEDULED_BLAST_REASON)
+        continue
+      }
       stats.promoted++
 
       if (plan.mode === 'drip') {
@@ -174,19 +207,7 @@ export async function GET(request) {
       // A promoted DRIP that errors is already 'sending' and the next tick
       // retries it, so no push (the wording wouldn't fit and a transient
       // error would page every 15 min).
-      if (plan.mode === 'blast') {
-        try {
-          const notify = scheduledStartFailureNotification(row, msg)
-          await sendPushToRolesAtLocation(row.location_id, MANAGER_ROLES, {
-            title: notify.title,
-            body: notify.body,
-            category: 'whatsapp',
-            data: { type: 'broadcast_schedule_failed', broadcast_id: row.id },
-          })
-        } catch (pushErr) {
-          console.error(`[cron run-whatsapp-broadcasts] refusal push failed:`, pushErr?.message || pushErr)
-        }
-      }
+      if (plan.mode === 'blast') await notifyScheduledStartFailure(row, msg)
     }
   }
 

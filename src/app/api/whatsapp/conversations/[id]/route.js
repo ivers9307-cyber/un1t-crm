@@ -1,7 +1,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404, requireWhatsAppInboxAnywhere, requireWhatsAppInboxAt } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404, requireWhatsAppInboxAnywhere, requireWhatsAppInboxAt, requireWebWhatsAppInboxAt } from '@/lib/auth'
 import { resolveRearmPatch } from '@/lib/agent/core'
 import { validateBody } from '@/lib/validate'
 
@@ -62,11 +62,18 @@ export async function GET(request, props) {
   const { data: loc } = await db.from('locations').select('settings').eq('id', conversation.location_id).single()
   const flowAvailable = Boolean(loc?.settings?.whatsapp_flow?.flow_id)
 
+  // C126 INBOXCONTROLS.1 — this GET takes web OR mobile `whatsapp` here, but
+  // Handled-by (/agent) and add-contact (/add-contact) are web-only routes
+  // (INBOXWEBONLY3.1: the WEB key at this studio). Tell the web inbox whether
+  // they would act, so it hides them instead of offering a control that fails.
+  const canUseWebControls = requireWebWhatsAppInboxAt(user, conversation.location_id) === null
+
   return NextResponse.json({
     success: true,
     conversation,
     messages: messages || [],
     flow_available: flowAvailable,
+    canUseWebControls,
   })
 }
 

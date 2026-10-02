@@ -12,12 +12,16 @@
 //
 // Presentational + self-contained: no store, just a local `busy` guard
 // against double-clicks and an onChanged() ping so the parent thread
-// re-fetches the fresh row. WA/IG are the only channels — email has no
+// re-fetches the fresh row. C126 INBOXCONTROLS.1: a failed flip (a non-OK
+// answer, success:false, or no answer) shows the route's error under the
+// control; it used to be swallowed, so the operator believed Mia was paused. WA/IG are the only channels — email has no
 // customer agent, and since INBOX-SPLIT.1 it is not an inbox channel at
 // all (its surface is /communications/mail).
 
 import { useState } from 'react'
 import { Sparkles, UserCheck } from 'lucide-react'
+
+const FLIP_FAILED = 'Could not change who handles this thread. Try again.'
 
 const AGENT_ENDPOINT = {
   wa: (id) => `/api/whatsapp/conversations/${id}/agent`,
@@ -31,6 +35,7 @@ function isHandledByMia(channel, conversation) {
 
 export default function HandledByControl({ channel, conversation, onChanged }) {
   const [busy, setBusy] = useState(false)
+  const [error, setError] = useState(null)
   const handledByMia = isHandledByMia(channel, conversation)
   const buildUrl = AGENT_ENDPOINT[channel]
 
@@ -39,6 +44,7 @@ export default function HandledByControl({ channel, conversation, onChanged }) {
     if (active === handledByMia) return // already on that side — no-op
 
     setBusy(true)
+    setError(null)
     try {
       const res = await fetch(buildUrl(conversation.id), {
         method: 'PATCH',
@@ -46,43 +52,50 @@ export default function HandledByControl({ channel, conversation, onChanged }) {
         body: JSON.stringify({ active }),
       })
       const data = await res.json().catch(() => ({}))
-      if (res.ok && data.success) onChanged?.()
+      if (res.ok && data?.success) onChanged?.()
+      else setError(data?.error || FLIP_FAILED)
     } catch {
-      /* transient — buttons re-enable so staff can retry */
+      // No answer at all. The buttons re-enable so staff can retry.
+      setError(FLIP_FAILED)
     } finally {
       setBusy(false)
     }
   }
 
   return (
-    <div className="flex items-center gap-1.5">
-      <span className="text-[10px] font-semibold uppercase tracking-wider text-un1t-muted">
-        Handled by
-      </span>
-      <div className="inline-flex items-center gap-0.5 rounded-md border border-un1t-border p-0.5">
-        <button
-          type="button"
-          onClick={() => flip(true)}
-          disabled={busy}
-          className={`flex items-center gap-1 rounded px-2 py-1 text-xs font-medium transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${
-            handledByMia ? 'bg-mia/10 text-mia' : 'text-un1t-subtle hover:text-un1t-text'
-          }`}
-        >
-          <Sparkles size={12} />
-          Mia
-        </button>
-        <button
-          type="button"
-          onClick={() => flip(false)}
-          disabled={busy}
-          className={`flex items-center gap-1 rounded px-2 py-1 text-xs font-medium transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${
-            !handledByMia ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'
-          }`}
-        >
-          <UserCheck size={12} />
-          You
-        </button>
+    <div className="flex flex-col items-end gap-1">
+      <div className="flex items-center gap-1.5">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-un1t-muted">
+          Handled by
+        </span>
+        <div className="inline-flex items-center gap-0.5 rounded-md border border-un1t-border p-0.5">
+          <button
+            type="button"
+            onClick={() => flip(true)}
+            disabled={busy}
+            className={`flex items-center gap-1 rounded px-2 py-1 text-xs font-medium transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${
+              handledByMia ? 'bg-mia/10 text-mia' : 'text-un1t-subtle hover:text-un1t-text'
+            }`}
+          >
+            <Sparkles size={12} />
+            Mia
+          </button>
+          <button
+            type="button"
+            onClick={() => flip(false)}
+            disabled={busy}
+            className={`flex items-center gap-1 rounded px-2 py-1 text-xs font-medium transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${
+              !handledByMia ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'
+            }`}
+          >
+            <UserCheck size={12} />
+            You
+          </button>
+        </div>
       </div>
+      {error && (
+        <p role="alert" className="max-w-[18rem] text-right text-[11px] text-red-700">{error}</p>
+      )}
     </div>
   )
 }

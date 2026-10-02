@@ -18,7 +18,8 @@
 // non-master issuers only reach templates in orgs they own (NULL-org
 // templates are master-only), foreign ids 404 as 'Template not found'.
 //
-// We use the REAL getOwnerOrganizationIds — only getCurrentUser + the
+// We use the REAL contract-gates / org-admin rule (C18 ORGROLE.1: an
+// org_admin grant, not a studio owner role) — only getCurrentUser + the
 // Supabase client are stubbed.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -106,11 +107,17 @@ describe('GET /api/contracts — list scoping', () => {
     expect(calls.eq).toHaveLength(0)
   })
 
-  it('owner is scoped to own contracts OR contracts in orgs they own', async () => {
+  // C18 ORGROLE.1 (Richard, 1 Oct 2026): the org arm is the orgs the caller is
+  // an ORGANISATION ADMIN of (an org_admin grant), not every org where they
+  // own a studio. This list is what mobile's "my contracts" reads, so a studio
+  // owner listed org rows whose detail (GET /api/contracts/[id], org-admin
+  // since C18) answered 404.
+  it('an org admin is scoped to own contracts OR contracts in the orgs they administer', async () => {
     getCurrentUser.mockResolvedValue({
       id: 'owner-a', isMaster: false, role: 'owner',
-      rolesByLocation: { [LOC_A1]: 'owner' },
-      locations: [{ id: LOC_A1, organization_id: ORG_A }],
+      rolesByLocation: { [LOC_A1]: 'owner', [LOC_B1]: 'owner' },
+      locations: [{ id: LOC_A1, organization_id: ORG_A }, { id: LOC_B1, organization_id: 'org-b' }],
+      orgAdminOrgIds: [ORG_A],
     })
     const { db, calls } = mockDb({ data: [] })
     createServerClient.mockReturnValue(db)
@@ -123,8 +130,27 @@ describe('GET /api/contracts — list scoping', () => {
     // included there — that's the issuer/admin view).
     expect(calls.or[0]).toContain('profile_id.eq.owner-a')
     expect(calls.or[0]).toContain(`organization_id.in.(${ORG_A})`)
-    // No bare .eq scoping — the owner uses the .or() branch.
+    // A studio owner in org B with no grant there: org B is not listed.
+    expect(calls.or[0]).not.toContain('org-b')
+    // No bare .eq scoping — the admin uses the .or() branch.
     expect(calls.eq).toHaveLength(0)
+  })
+
+  it('a studio owner with no org_admin grant gets their OWN contracts only (not an organisation admin)', async () => {
+    getCurrentUser.mockResolvedValue({
+      id: 'owner-a', isMaster: false, role: 'owner',
+      rolesByLocation: { [LOC_A1]: 'owner' },
+      locations: [{ id: LOC_A1, organization_id: ORG_A }],
+      orgAdminOrgIds: [],
+    })
+    const { db, calls } = mockDb({ data: [] })
+    createServerClient.mockReturnValue(db)
+
+    const res = await GET(FAKE_REQUEST)
+    expect(res.status).toBe(200)
+    expect(calls.or).toHaveLength(0)
+    expect(calls.eq).toContainEqual(['profile_id', 'owner-a'])
+    expect(calls.neq).toContainEqual(['status', 'draft'])
   })
 
   it('plain staff (owns no org) is scoped to their OWN contracts only', async () => {
@@ -161,11 +187,12 @@ describe('GET /api/contracts — list scoping', () => {
       expect(calls.neq).toContainEqual(['status', 'draft'])
     })
 
-    it("excludes drafts from the profile_id arm of an owner's .or() filter (org arm untouched)", async () => {
+    it("excludes drafts from the profile_id arm of an org admin's .or() filter (org arm untouched)", async () => {
       getCurrentUser.mockResolvedValue({
         id: 'owner-a', isMaster: false, role: 'owner',
         rolesByLocation: { [LOC_A1]: 'owner' },
         locations: [{ id: LOC_A1, organization_id: ORG_A }],
+        orgAdminOrgIds: [ORG_A],
       })
       const { db, calls } = mockDb({ data: [] })
       createServerClient.mockReturnValue(db)
@@ -261,17 +288,32 @@ const issueReq = (template_id) => new Request('https://example.com/api/contracts
   }),
 })
 
+// C18 ORGROLE.1 — issuing is for ORGANISATION ADMINS (an org_admin grant).
 const OWNER_A = {
   id: 'owner-a', isMaster: false, role: 'owner',
   rolesByLocation: { [LOC_A1]: 'owner' },
   locations: [{ id: LOC_A1, organization_id: ORG_A }],
+  orgAdminOrgIds: [ORG_A],
 }
+// The same studio owner with no grant: not an organisation admin.
+const STUDIO_OWNER_A = { ...OWNER_A, orgAdminOrgIds: [] }
 
 const MASTER = {
   id: 'm1', isMaster: true, role: 'master', rolesByLocation: {}, locations: [],
 }
 
 describe('POST /api/contracts — template-pick scoping', () => {
+  it('a studio owner with no org_admin grant is refused before any read (403, nothing inserted)', async () => {
+    getCurrentUser.mockResolvedValue(STUDIO_OWNER_A)
+    const { db, calls } = issueMockDb()
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(issueReq(TPL_A))
+    expect(res.status).toBe(403)
+    expect(db.from).not.toHaveBeenCalled()
+    expect(calls.contractsInsert).toHaveLength(0)
+  })
+
   it("owner of org A cannot issue from org B's template — 404, nothing inserted", async () => {
     getCurrentUser.mockResolvedValue(OWNER_A)
     const { db, calls } = issueMockDb()
