@@ -16,8 +16,10 @@
 // blanks its own cells ('unavailable'), never the column — only a
 // wholesale failure shows BlockError. The pre-KPI operational Studio
 // view (pending time-off / swaps / unread) lives on in the Business
-// "needs you" rail, /schedule and the mobile Studio tab
-// (fetchStudioDashboardData is untouched — mobile still consumes it).
+// "needs you" rail, /schedule and the mobile Studio tab (its WhatsApp
+// unread total through shared fetchStudioDashboardData; its pending lists
+// through /api/schedule/time-off and /api/schedule/swaps; its contact
+// numbers through /api/dashboard/studio-contacts).
 
 import { Suspense } from 'react'
 import { redirect } from 'next/navigation'

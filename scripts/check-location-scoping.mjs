@@ -63,6 +63,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { sqlCode } from './lib/sql-code.mjs'
 
 const API_ROOT = 'src/app/api'
 const APP_ROOT = 'src/app'
@@ -414,10 +415,12 @@ export const EXEMPT = {
 // Pure functions (exported for tests)
 // ---------------------------------------------------------------------------
 
-/** Strip `-- …` line comments so commented-out DDL can't add tables. */
-function stripSqlComments(sql) {
-  return sql.replace(/--[^\n]*/g, '')
-}
+/**
+ * Blank `-- …` and `/* … *\/` comments so commented-out DDL can't add tables,
+ * by the one quote-aware, $tag$-pairing scan (scripts/lib/sql-code.mjs), not a
+ * regex: a '--' inside a string ended the old strip early (GUARDSTRIP.1).
+ */
+const stripSqlComments = (sql) => sqlCode(sql)
 
 /**
  * Derive the tables that gain a location_id column from one migration file's

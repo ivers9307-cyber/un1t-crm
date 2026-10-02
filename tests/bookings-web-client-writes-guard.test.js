@@ -13,6 +13,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
+import { codeOf, isClientFile } from './helpers/js-code.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 function walk(dir, out = []) {
@@ -24,9 +25,9 @@ function walk(dir, out = []) {
   }
   return out
 }
-// A 'use client' file, or one that CALLS createBrowserClient() (a comment that
-// names it, as the cancel route's history does, is not a call).
-const isClient = (src) => /^\s*(?:\/\/[^\n]*\n|\/\*[\s\S]*?\*\/\s*)*\s*['"]use client['"]/.test(src) || /createBrowserClient\(\s*\)/.test(src)
+// A client file (tests/helpers/js-code.js isClientFile: 'use client', a
+// browser/auth client, or the anon key), read with comments blanked, so a
+// comment that names createBrowserClient or a bookings write is not code.
 const BOOKINGS_WRITE = /\.from\(\s*['"]bookings['"]\s*\)[\s\S]{0,300}?\.(update|insert|upsert|delete)\(/
 
 describe('no web client code writes bookings (C134)', () => {
@@ -38,7 +39,7 @@ describe('no web client code writes bookings (C134)', () => {
 
   it('finds none under src/', () => {
     const offenders = walk(path.join(ROOT, 'src'))
-      .filter((f) => { const s = readFileSync(f, 'utf8'); return isClient(s) && BOOKINGS_WRITE.test(s) })
+      .filter((f) => { const s = readFileSync(f, 'utf8'); return isClientFile(s) && BOOKINGS_WRITE.test(codeOf(s, f)) })
       .map((f) => path.relative(ROOT, f))
     expect(offenders).toEqual([])
   })

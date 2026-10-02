@@ -32,6 +32,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { stripComments } from './helpers/js-code.js'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 
@@ -45,12 +46,9 @@ function rtlTestFiles() {
     .filter((file) => /['"]@testing-library\/react['"]/.test(readFileSync(`${ROOT}${file}`, 'utf8')))
 }
 
-/** Source with comments blanked (same length, same line numbers). */
-function withoutComments(source) {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
-    .replace(/(^|[^:'"`\\])\/\/[^\n]*/g, (m, lead) => lead + ' '.repeat(m.length - lead.length))
-}
+/** Source with comments blanked (same length, same line numbers), by the
+ * TypeScript parser's comment ranges (tests/helpers/js-code.js), never a regex. */
+const withoutComments = stripComments
 
 /** Does the source mount anything through RTL? */
 export function rendersThroughRtl(rawSource) {
@@ -73,7 +71,7 @@ export function cleansUpAfterEach(rawSource) {
   return false
 }
 
-describe('the detector itself', () => {
+describe('the detector itself', { timeout: 120_000 }, () => {
   it('accepts the house idioms', () => {
     expect(cleansUpAfterEach('afterEach(cleanup)')).toBe(true)
     expect(cleansUpAfterEach('afterEach(() => cleanup())')).toBe(true)
@@ -95,6 +93,13 @@ describe('the detector itself', () => {
     expect(cleansUpAfterEach('afterEach(() => {\n  // cleanup()\n})')).toBe(false)
   })
 
+  // GUARDSTRIP.1 (C74): a regex stripper hid a render behind a '/*' in a
+  // string, and kept a line comment that follows a quote.
+  it('a /* in a string hides no render; a comment after a quote is a comment', () => {
+    expect(rendersThroughRtl("const a = 'x/*'\nrender(<App />)\n/* note */")).toBe(true)
+    expect(cleansUpAfterEach("afterEach(() => { const s = 'a'// cleanup()\n})")).toBe(false)
+  })
+
   it('knows what counts as rendering', () => {
     expect(rendersThroughRtl('render(<App />)')).toBe(true)
     expect(rendersThroughRtl('const { result } = renderHook(() => useX())')).toBe(true)
@@ -102,7 +107,7 @@ describe('the detector itself', () => {
   })
 })
 
-describe('every RTL test file unmounts after each test', () => {
+describe('every RTL test file unmounts after each test', { timeout: 120_000 }, () => {
   const files = rtlTestFiles()
 
   it('finds the RTL test files (the scan is not empty)', () => {

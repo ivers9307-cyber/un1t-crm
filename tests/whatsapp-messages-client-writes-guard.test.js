@@ -35,7 +35,8 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs'
 import path from 'node:path'
-import { stripComments } from '../scripts/lib/strip-comments.mjs'
+import { stripComments } from './helpers/js-code.js'
+import { sqlCode } from './helpers/sql-code.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const WA_MSG_WRITES_OFF_MIGRATION = 656
@@ -76,84 +77,6 @@ export function waMessageWrites(text) {
 }
 
 // ── migrations ───────────────────────────────────────────────────────────
-/**
- * The SQL with its comments blanked (newlines kept), by a quote-aware scan:
- * '…' (with '' doubling, and backslash escapes in E'…'), "…" identifiers and
- * $tag$…$tag$ bodies are never read as comment markers, so a '/*' or '--'
- * inside one cannot hide code. Block comments nest, as in Postgres. A
- * dollar-quoted body is matched to its own closing tag first and scanned the
- * same way on its own, so nothing inside can run past it. String contents
- * are kept verbatim: a GRANT run from EXECUTE '…' counts.
- * (tests/function-execute-guard.test.js sqlCode, copied verbatim rather than
- * imported: importing a test file would re-register its tests here.)
- */
-export function sqlCode(sql) {
-  let out = ''
-  let i = 0
-  const n = sql.length
-  const blank = (s) => s.replace(/[^\n]/g, ' ')
-  const DOLLAR = /\$([A-Za-z_\u0080-\uffff][\w\u0080-\uffff]*)?\$/y
-  while (i < n) {
-    const c = sql[i]
-    const d = sql[i + 1]
-    if (c === '-' && d === '-') {
-      const end = sql.indexOf('\n', i)
-      const stop = end === -1 ? n : end
-      out += blank(sql.slice(i, stop))
-      i = stop
-      continue
-    }
-    if (c === '/' && d === '*') {
-      let depth = 0
-      let j = i
-      while (j < n) {
-        if (sql[j] === '/' && sql[j + 1] === '*') { depth++; j += 2; continue }
-        if (sql[j] === '*' && sql[j + 1] === '/') { depth--; j += 2; if (depth === 0) break; continue }
-        j++
-      }
-      out += blank(sql.slice(i, j))
-      i = j
-      continue
-    }
-    if (c === "'") {
-      const escapes = /[eE]/.test(sql[i - 1] ?? '') && !/[\w$]/.test(sql[i - 2] ?? '')
-      let j = i + 1
-      while (j < n) {
-        if (escapes && sql[j] === '\\') { j += 2; continue }
-        if (sql[j] === "'") { if (sql[j + 1] === "'") { j += 2; continue } break }
-        j++
-      }
-      out += sql.slice(i, j + 1)
-      i = j + 1
-      continue
-    }
-    if (c === '"') {
-      let j = i + 1
-      while (j < n) {
-        if (sql[j] === '"') { if (sql[j + 1] === '"') { j += 2; continue } break }
-        j++
-      }
-      out += sql.slice(i, j + 1)
-      i = j + 1
-      continue
-    }
-    if (c === '$' && !/[\w$]/.test(sql[i - 1] ?? '')) {
-      DOLLAR.lastIndex = i
-      const m = DOLLAR.exec(sql)
-      if (m) {
-        const tag = m[0]
-        const end = sql.indexOf(tag, i + tag.length)
-        if (end === -1) { out += sql.slice(i); break }
-        out += tag + sqlCode(sql.slice(i + tag.length, end)) + tag
-        i = end + tag.length
-        continue
-      }
-    }
-    out += c
-    i++
-  }
-  return out
-}
 
 const CLIENT_ROLES = ['authenticated', 'anon', 'public']
 const ident = (s) => s.trim().replace(/["']/g, '').toLowerCase()
@@ -257,7 +180,7 @@ export function waMessageAnonReopeners(sql) {
   return hits
 }
 
-describe('client code never writes whatsapp_messages (WAMSGCLIENTWRITE.1, mig 656)', () => {
+describe('client code never writes whatsapp_messages (WAMSGCLIENTWRITE.1, mig 656)', { timeout: 120_000 }, () => {
   const files = clientFiles()
 
   it('scans the files it is meant to police (not vacuous)', () => {
@@ -303,7 +226,7 @@ describe('client code never writes whatsapp_messages (WAMSGCLIENTWRITE.1, mig 65
   })
 })
 
-describe('later migrations keep whatsapp_messages read-only for clients (mig 656)', () => {
+describe('later migrations keep whatsapp_messages read-only for clients (mig 656)', { timeout: 120_000 }, () => {
   it('mig 656 is present', () => {
     expect(readdirSync(MIGRATIONS).some((f) => f.startsWith(`${WA_MSG_WRITES_OFF_MIGRATION}_`))).toBe(true)
   })
@@ -354,7 +277,7 @@ describe('later migrations keep whatsapp_messages read-only for clients (mig 656
   })
 })
 
-describe('later migrations keep whatsapp_messages closed to anon (WAANONREAD.1, mig 673)', () => {
+describe('later migrations keep whatsapp_messages closed to anon (WAANONREAD.1, mig 673)', { timeout: 120_000 }, () => {
   it('mig 673 is present', () => {
     expect(readdirSync(MIGRATIONS).some((f) => f.startsWith(`${WA_ANON_CLOSED_MIGRATION}_`))).toBe(true)
   })

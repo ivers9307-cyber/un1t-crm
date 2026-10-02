@@ -8,6 +8,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
+import { stripComments } from '../tests/helpers/js-code.js'
 import { fetchIncompletePayProfiles, fetchPendingRosterApprovalsCount, paginatedSumCents, fetchAdsSummary, fetchStudioDashboardData, fetchStudioContactCounts, fetchPersonalDashboardData, fetchTodayOps, fetchRevenueMTD, fetchFunnelCounts } from './dashboard-data'
 
 function mockSupabaseFor(rows) {
@@ -318,6 +319,21 @@ describe('fetchStudioDashboardData (the phone Studio tab, the phone session)', (
     const res = await fetchStudioDashboardData(supabase, 'loc1')
     expect(res).toEqual({ success: true, data: { totalUnreadWhatsapp: 5 } })
     expect(tables).toEqual(['whatsapp_conversations'])
+  })
+
+  // REVIEWNITS.1 (D5): the read's error was dropped and `(data || [])` summed
+  // to 0, so a failed read showed "0 unread". Unknown is null (the phone shows
+  // a dash); the tab itself still loads (success stays true: failing the
+  // whole fetch would blank every other card for one count).
+  it('a failed unread read is unknown (null), never 0, and does not fail the tab', async () => {
+    const supabase = { from: () => chainableBuilder({ data: null, error: { message: 'down' } }) }
+    const res = await fetchStudioDashboardData(supabase, 'loc1')
+    expect(res).toEqual({ success: true, data: { totalUnreadWhatsapp: null } })
+  })
+
+  it('no unread conversations is a real 0', async () => {
+    const supabase = { from: () => chainableBuilder({ data: [], error: null }) }
+    expect(await fetchStudioDashboardData(supabase, 'loc1')).toEqual({ success: true, data: { totalUnreadWhatsapp: 0 } })
   })
 
   it('refuses without a location', async () => {
@@ -1012,8 +1028,9 @@ describe("fetchPersonalDashboardData — the weeks hang off the caller's today (
 // the local calendar, which on the server is UTC's.
 describe('dashboard-data stays loadable on the phone, and the server reads Dublin (A4 REVENUEMTD.1)', () => {
   const source = readFileSync(path.resolve(import.meta.dirname, './dashboard-data.js'), 'utf8')
-  // Whole-line comments first (they name the old helpers on purpose), then blocks.
-  const code = source.replace(/^\s*\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '')
+  // Comments name the old helpers on purpose; they are blanked by the
+  // TypeScript parser's ranges, never a regex (GUARDSTRIP.1).
+  const code = stripComments(source)
   const body = (name) => {
     const start = code.indexOf(`export async function ${name}(`)
     const next = code.indexOf('\nexport ', start + 1)

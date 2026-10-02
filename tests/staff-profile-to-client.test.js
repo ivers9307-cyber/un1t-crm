@@ -25,7 +25,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
-import ts from 'typescript'
+import { stripComments } from './helpers/js-code.js'
 import { collectSchema } from '../scripts/check-select-columns.mjs'
 import { isSecretKeyName } from '../src/lib/secret-keys.js'
 import {
@@ -48,37 +48,6 @@ function walk(dir, out = []) {
     if (statSync(full).isDirectory()) walk(full, out)
     else if (/\.(m?js|jsx)$/.test(name) && !/\.test\.(m?js|jsx)$|\.test-helpers\.js$/.test(name)) out.push(full)
   }
-  return out
-}
-
-// Comments come from the TypeScript parser, not a regex: a regex that removes
-// /* … */ first reads `accept="image/*"` or `// the /api/* routes` as the start
-// of a comment and hides everything up to the next */ (102 files carried such
-// a `/*` when this was written). A file the parser cannot read is scanned raw:
-// a false positive beats a blind spot.
-export function stripComments(text) {
-  const sf = ts.createSourceFile('scan.jsx', text, ts.ScriptTarget.Latest, false, ts.ScriptKind.JSX)
-  if (sf.parseDiagnostics?.length) return text
-  // JSX text is not trivia, but asked for comments at its start the scanner
-  // reads `<p>/* note</p>` or `<p>// x</p>` as one and would blank the code
-  // after it, so no range is taken at a position where JSX text begins (a
-  // wrapper node can share that position, hence the set, not a kind check).
-  const jsxTextAt = new Set()
-  const findJsxText = (node) => {
-    if (node.kind === ts.SyntaxKind.JsxText) jsxTextAt.add(node.pos)
-    for (const child of node.getChildren(sf)) findJsxText(child)
-  }
-  findJsxText(sf)
-  const ranges = new Map()
-  const visit = (node) => {
-    if (!jsxTextAt.has(node.pos)) {
-      for (const r of [...(ts.getLeadingCommentRanges(text, node.pos) || []), ...(ts.getTrailingCommentRanges(text, node.pos) || [])]) ranges.set(r.pos, r.end)
-    }
-    for (const child of node.getChildren(sf)) visit(child)
-  }
-  visit(sf)
-  let out = text
-  for (const [pos, end] of ranges) out = out.slice(0, pos) + out.slice(pos, end).replace(/[^\n]/g, ' ') + out.slice(end)
   return out
 }
 
