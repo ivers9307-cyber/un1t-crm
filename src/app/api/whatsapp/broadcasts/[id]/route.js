@@ -5,6 +5,7 @@ import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, audienceFilterSchema, url } from '@/lib/schemas'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
+import { logError } from '@/lib/log'
 
 // GATES-2 — GET/PUT/DELETE took membership only, so a member with WhatsApp
 // switched off could read the recipient list, rewrite or delete a broadcast
@@ -171,8 +172,22 @@ export async function DELETE(request, props) {
   if (guard) return guard
   if (!hasPermissionForLocation(user, row.location_id, 'whatsapp')) return waForbidden()
 
-  await db.from('whatsapp_broadcast_recipients').delete().eq('broadcast_id', params.id)
+  // C138 (c) — ONE statement. The recipient rows go with the broadcast through
+  // whatsapp_broadcast_recipients.broadcast_id ON DELETE CASCADE (mig 007), so
+  // the delete is atomic: all of it or none of it. It used to delete the
+  // recipients first and the broadcast second. whatsapp_messages.broadcast_id
+  // has NO cascade, so the broadcast delete of any broadcast that has sent a
+  // message fails (23503) — after its recipient rows (the per-recipient send
+  // claims) were already gone. The broadcast survived with no claims, and a
+  // later Send (or the cron's resume of a part-sent scheduled blast) went to
+  // the WHOLE audience again, people already messaged included.
   const { error } = await db.from('whatsapp_broadcasts').delete().eq('id', params.id)
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('api:whatsapp-broadcasts', 'broadcast delete failed; nothing deleted', { broadcastId: params.id, code: error.code || null })
+    if (error.code === '23503') {
+      return NextResponse.json({ success: false, error: 'This broadcast has sent messages, so it cannot be deleted' }, { status: 409 })
+    }
+    return NextResponse.json({ success: false, error: 'Could not delete the broadcast; nothing was deleted' }, { status: 500 })
+  }
   return NextResponse.json({ success: true })
 }

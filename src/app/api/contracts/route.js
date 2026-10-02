@@ -161,6 +161,22 @@ export async function POST(request) {
   if (rErr) return NextResponse.json({ success: false, error: rErr.message }, { status: 500 })
   if (!recipient) return NextResponse.json({ success: false, error: 'Recipient not found' }, { status: 404 })
 
+  // 2a. C140 CONTRACTRECIPIENT.1 (security) — the recipient must belong to the
+  //     template's org. Only the template's org was judged against the issuer,
+  //     so an owner of org A could issue A's template to a person in org B and
+  //     the contract rendered B's person (name, email, pay). A template with an
+  //     org needs a recipient with a studio in it; anyone else is the same 404
+  //     as an unknown id, before any other check reads their row, so other
+  //     orgs' people cannot be probed. A null-org
+  //     template (master-only) keeps its old behaviour.
+  const allLinks = recipient.profile_locations || []
+  const recipientLinks = template.organization_id
+    ? allLinks.filter(l => l?.location?.organization_id === template.organization_id)
+    : allLinks
+  if (template.organization_id && recipientLinks.length === 0) {
+    return NextResponse.json({ success: false, error: 'Recipient not found' }, { status: 404 })
+  }
+
   // Employment-type sanity check — block issuing an FTE-only template
   // to a contractor and vice versa. 'both' templates always pass.
   if (template.employment_type !== 'both'
@@ -171,10 +187,17 @@ export async function POST(request) {
     }, { status: 400 })
   }
 
-  // 3. Resolve location_id + org_id.
+  // 3. Resolve location_id + org_id. C140: the studio is one of the
+  //    recipient's studios IN the template's org (their default there first);
+  //    an explicit location_id outside them is refused.
   let locationId = parsed.data.location_id || null
   let organizationId = template.organization_id || null
-  const recipientLinks = recipient.profile_locations || []
+  if (locationId && template.organization_id && !recipientLinks.some(l => l.location_id === locationId)) {
+    return NextResponse.json({
+      success: false,
+      error: 'That location is not one of the recipient\'s studios in this template\'s organisation.',
+    }, { status: 400 })
+  }
   if (!locationId) {
     const def = recipientLinks.find(l => l.is_default) || recipientLinks[0]
     locationId = def?.location_id || null

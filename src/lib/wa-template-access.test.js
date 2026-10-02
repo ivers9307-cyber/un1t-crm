@@ -32,3 +32,25 @@ describe('canManageWaTemplatesAt', () => {
     expect(canManageWaTemplatesAt(MASTER, null)).toBe(false)
   })
 })
+
+// C138 (a) — the template-media upload routes (sign + finalise).
+import { canUploadWaTemplateMediaAt } from './wa-template-access'
+describe('canUploadWaTemplateMediaAt', () => {
+  it('whoever may manage the templates there may', () => {
+    expect(canUploadWaTemplateMediaAt(person({ [LOC_A]: { role: 'head_coach', permissions: { whatsapp: true } } }, LOC_A), LOC_A)).toBe(true)
+  })
+  it('an owner there may with whatsapp off (the card-set editor rule)', () => {
+    expect(canUploadWaTemplateMediaAt(person({ [LOC_A]: { role: 'owner', permissions: { whatsapp: false } } }, LOC_A), LOC_A)).toBe(true)
+  })
+  it('a manager with whatsapp off, or plain staff, may not', () => {
+    expect(canUploadWaTemplateMediaAt(person({ [LOC_A]: { role: 'manager', permissions: { whatsapp: false } } }, LOC_A), LOC_A)).toBe(false)
+    expect(canUploadWaTemplateMediaAt(person({ [LOC_A]: { role: 'staff', permissions: { whatsapp: true } } }, LOC_A), LOC_A)).toBe(false)
+  })
+  it('judges the target studio; no user or studio fails closed', () => {
+    const u = person({ [LOC_A]: { role: 'owner', permissions: { whatsapp: true } }, [LOC_B]: { role: 'staff', permissions: { whatsapp: true } } }, LOC_A)
+    expect(canUploadWaTemplateMediaAt(u, LOC_B)).toBe(false)
+    expect(canUploadWaTemplateMediaAt(null, LOC_A)).toBe(false)
+    expect(canUploadWaTemplateMediaAt(MASTER, null)).toBe(false)
+    expect(canUploadWaTemplateMediaAt(MASTER, LOC_B)).toBe(true)
+  })
+})

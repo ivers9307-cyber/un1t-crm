@@ -146,9 +146,9 @@ const CALLERS = {
     why: 'blast refused before any status flip → 409. route.test.js.',
   },
   'src/app/api/cron/run-whatsapp-broadcasts/route.js': {
-    calls: { sendDripChunk: 2, sendBroadcast: 2 },
+    calls: { sendDripChunk: 2, sendBroadcast: 3 },
     decision: 'refuse-skip',
-    why: 'scheduled blast refusal: row stays draft, managers pushed (existing path); drip: paused by sendDripChunk (no error loop); a resumed chunked blast logs per tick (existing path).',
+    why: 'scheduled blast or (C138 b) scheduled drip start refusal: row stays draft, managers pushed; drip: paused by sendDripChunk (no error loop); a resumed chunked blast logs per tick (existing path).',
   },
   'src/app/api/whatsapp/conversations/[id]/send/route.js': {
     calls: { sendTemplateMessage: 1, sendMediaMessage: 1, sendTextMessage: 1 },
