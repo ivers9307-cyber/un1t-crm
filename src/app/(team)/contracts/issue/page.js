@@ -28,6 +28,11 @@ export default async function IssueContractPage(props) {
   if (!canManageContractsSomewhere(user)) redirect('/')
 
   const fromContractId = searchParams?.from || null
+  // C140 — the issuer's own studios → their org, so the wizard lists only the
+  // chosen template's org's people (POST /api/contracts refuses anyone else).
+  const locationOrgs = Object.fromEntries(
+    (user.locations || []).filter((l) => l?.id && l.organization_id).map((l) => [l.id, l.organization_id]),
+  )
 
   return (
     <div className="p-6 md:p-8 max-w-3xl">
@@ -38,7 +43,7 @@ export default async function IssueContractPage(props) {
       <p className="text-sm text-un1t-subtle mb-6">
         Pick a recipient and template, fill any custom variables, countersign, and send.
       </p>
-      <ContractIssueWizard issuerName={user.full_name} fromContractId={fromContractId} />
+      <ContractIssueWizard issuerName={user.full_name} fromContractId={fromContractId} locationOrgs={locationOrgs} />
     </div>
   )
 }
