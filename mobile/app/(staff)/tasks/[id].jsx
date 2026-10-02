@@ -17,9 +17,9 @@ import { useLocalSearchParams, useRouter, Stack } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { getTask, setTaskStatus, statusLabel, nextStatus } from '../../../lib/tasks-api'
 import { useAuth } from '../../../lib/auth-context'
-import { canUseTasksHere } from '../../../lib/tasks-access'
+import { tasksAccessState } from '../../../lib/tasks-access'
 import BackHeaderLeft from '../../../components/BackHeaderLeft'
-import TasksUnavailable from '../../../components/TasksUnavailable'
+import TasksUnavailable, { TasksPending } from '../../../components/TasksUnavailable'
 
 function StatusPill({ status }) {
   const tone =
@@ -44,7 +44,8 @@ export default function TaskDetail() {
   // Contacts is unreadable the status writes are refused (mig 700), so the
   // screen does not offer them. Judged at the ACTIVE studio, the same one
   // the list and the More tile use.
-  const allowed = canUseTasksHere(profile, activeLocation)
+  const access = tasksAccessState(profile, activeLocation)
+  const allowed = access === 'allowed'
   const [task, setTask] = useState(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -110,6 +111,7 @@ export default function TaskDetail() {
     headerLeft: () => <BackHeaderLeft label="Tasks" fallbackHref="/tasks" />,
   }
 
+  if (access === 'pending') return <TasksPending title="Task" />
   if (!allowed) return <TasksUnavailable title="Task" />
 
   if (loading) {

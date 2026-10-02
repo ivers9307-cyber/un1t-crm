@@ -10,8 +10,8 @@ import { Stack, useRouter } from 'expo-router'
 import { useAuth } from '../../../lib/auth-context'
 import { sdk } from '../../../lib/sdk'
 import { createTask } from '../../../lib/tasks-api'
-import { canUseTasksHere } from '../../../lib/tasks-access'
-import TasksUnavailable from '../../../components/TasksUnavailable'
+import { tasksAccessState } from '../../../lib/tasks-access'
+import TasksUnavailable, { TasksPending } from '../../../components/TasksUnavailable'
 import { isoDate, addDays } from '../../../lib/dates'
 import { Button } from '../../../components/ui'
 import BackHeaderLeft from '../../../components/BackHeaderLeft'
@@ -83,7 +83,8 @@ export default function TaskNew() {
   const stepDue = (n) => setDueDate(isoDate(addDays(new Date(dueDate + 'T00:00:00'), n)))
 
   // C146 — since mig 700 the insert is refused where Contacts is unreadable.
-  const allowed = canUseTasksHere(profile, activeLocation)
+  const access = tasksAccessState(profile, activeLocation)
+  const allowed = access === 'allowed'
   const canSave = allowed && !!subject.trim() && !!activeLocation?.id && !saving
 
   async function save() {
@@ -102,6 +103,7 @@ export default function TaskNew() {
     router.back()
   }
 
+  if (access === 'pending') return <TasksPending title="New task" />
   if (!allowed) return <TasksUnavailable title="New task" />
 
   return (

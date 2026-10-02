@@ -10,7 +10,7 @@
 // layout and the Home feed link) to it.
 
 import { describe, it, expect } from 'vitest'
-import { canReadContactsHere, canUseTasksHere, canLogActivityHere } from './tasks-access.js'
+import { canReadContactsHere, canUseTasksHere, canLogActivityHere, tasksAccessState } from './tasks-access.js'
 import { resolveLayoutForUser } from './mobile-layout.js'
 import { mobileRouteForFeedRow } from './today-feed-nav.js'
 
@@ -77,6 +77,20 @@ describe('canUseTasksHere', () => {
     expect(canUseTasksHere(owner, a)).toBe(true)
     expect(canUseTasksHere(owner, b)).toBe(false)
     expect(canUseTasksHere(owner, a)).toBe(true)
+  })
+})
+
+describe('tasksAccessState (the Tasks screens)', () => {
+  it('is pending until /api/mobile/me has landed (a cold-start push opens the screen first)', () => {
+    expect(tasksAccessState(null, null)).toBe('pending')
+    expect(tasksAccessState(owner, null)).toBe('pending')
+    expect(tasksAccessState(null, studio())).toBe('pending')
+  })
+
+  it('then follows canUseTasksHere', () => {
+    expect(tasksAccessState(owner, studio())).toBe('allowed')
+    expect(tasksAccessState(owner, contactsOffForMe())).toBe('off')
+    expect(tasksAccessState(owner, studio({ permissions: { mobile: { tasks: false } } }))).toBe('off')
   })
 })
 

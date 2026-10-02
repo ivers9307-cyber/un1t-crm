@@ -15,8 +15,8 @@ import { useRouter, Stack, useFocusEffect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../../lib/auth-context'
 import { listMyTasks, statusLabel } from '../../../lib/tasks-api'
-import { canUseTasksHere } from '../../../lib/tasks-access'
-import TasksUnavailable from '../../../components/TasksUnavailable'
+import { tasksAccessState } from '../../../lib/tasks-access'
+import TasksUnavailable, { TasksPending } from '../../../components/TasksUnavailable'
 import BackHeaderLeft from '../../../components/BackHeaderLeft'
 import TabletConstrained from '../../../components/TabletConstrained'
 
@@ -99,7 +99,8 @@ export default function TasksIndex() {
   const [error, setError] = useState(null)
   const [filter, setFilter] = useState('open') // 'open' | 'all'
   // C146 — evaluated every render, so a studio switch re-decides.
-  const allowed = canUseTasksHere(profile, activeLocation)
+  const access = tasksAccessState(profile, activeLocation)
+  const allowed = access === 'allowed'
 
   const load = useCallback(async () => {
     if (!activeLocation || !profile) return
@@ -134,6 +135,7 @@ export default function TasksIndex() {
     [tasks]
   )
 
+  if (access === 'pending') return <TasksPending title="Your tasks" />
   if (!allowed) return <TasksUnavailable title="Your tasks" />
 
   return (

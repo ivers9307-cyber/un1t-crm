@@ -45,6 +45,20 @@ export function canUseTasksHere(profile, activeLocation) {
 }
 
 /**
+ * The Tasks screens' three states. 'pending' while /api/mobile/me has not
+ * landed yet (a cold start from a task-reminder push routes as soon as the
+ * SESSION is known and loads the profile in the background), so the screen
+ * shows a spinner rather than claiming Tasks are off; then 'allowed' or
+ * 'off' from canUseTasksHere.
+ *
+ * @returns {'pending'|'allowed'|'off'}
+ */
+export function tasksAccessState(profile, activeLocation) {
+  if (!profile || !activeLocation) return 'pending'
+  return canUseTasksHere(profile, activeLocation) ? 'allowed' : 'off'
+}
+
+/**
  * The deal screen's Call / Email / Meeting log (a direct `activities`
  * insert that reads its row back). The deal screen itself is Pipeline-gated,
  * which is the write policy's other key, so Contacts is what is left to ask.
