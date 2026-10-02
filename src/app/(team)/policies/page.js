@@ -10,15 +10,16 @@ import { redirect } from 'next/navigation'
 import { Eye, AlertCircle, ChevronRight, FileText, Settings } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { listPoliciesWithStatus } from '@/lib/policies'
+import { canManagePolicies } from '@/lib/policies-access'
 
 export const dynamic = 'force-dynamic'
 
 // Same formula as /policies/manage's own gate (server-checked here too
 // — this only controls whether the CTA is offered, the destination
 // page enforces the real gate independently either way).
-function isOwnerOrMaster(user) {
-  return user?.role === 'master' || user?.role === 'owner' || user?.profileRole === 'master'
-}
+// C141 ORGROLE.2 — managing policies is MASTER ONLY (Richard, 2 Oct): the
+// policies table has no organisation, so a version reaches every studio.
+// canManagePolicies lives in src/lib/policies-access.js.
 
 function fmtDate(iso) {
   if (!iso) return ''
@@ -38,7 +39,7 @@ export default async function PoliciesPage() {
     <div className="p-6 md:p-8 max-w-3xl">
       <div className="flex items-start justify-between gap-4 mb-1">
         <h2 className="text-2xl font-bold">Policies</h2>
-        {isOwnerOrMaster(user) && (
+        {canManagePolicies(user) && (
           <Link
             href="/policies/manage"
             className="inline-flex items-center gap-1.5 text-xs text-un1t-subtle hover:text-un1t-text border border-un1t-border rounded-md px-2.5 py-1.5 shrink-0"

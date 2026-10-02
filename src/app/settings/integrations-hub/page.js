@@ -26,7 +26,7 @@ import { createServerClient } from '@/lib/supabase'
 import { assembleIntegrationsHub } from '@/lib/integrations-hub'
 import { logError } from '@/lib/log'
 import IntegrationsHub from '@/components/settings/IntegrationsHub'
-import { isActiveOrgAdmin } from '@/lib/org-admin'
+import { isActiveOrgAdmin, isOrgAdmin } from '@/lib/org-admin'
 
 export const dynamic = 'force-dynamic'
 
@@ -61,7 +61,12 @@ export default async function IntegrationsHubPage() {
     return <HubUnavailable />
   }
 
-  const data = await assembleIntegrationsHub(db, locations || [])
+  // C141 ORGROLE.2 — the plan & wallet strip is organisation-level billing
+  // data: only the locations of an organisation the caller administers (a
+  // master: every location). A studio owner keeps the integration cards.
+  const data = await assembleIntegrationsHub(db, locations || [], {
+    billingFor: (loc) => isOrgAdmin(user, loc.organization_id),
+  })
 
   return <IntegrationsHub data={data} isMaster={user.isMaster} canManageBilling={isActiveOrgAdmin(user)} />
 }

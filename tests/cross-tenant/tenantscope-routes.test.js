@@ -255,8 +255,8 @@ describe('POST /api/staff-devices/nudge — only your own organisation (TENANTSC
 describe('POST /api/admin/push/test — only someone in your own organisation (TENANTSCOPE.1)', () => {
   const pushReq = (id) => makeReq('/api/admin/push/test', { method: 'POST', body: { recipient_id: id } })
 
-  it("an owner at A One gets the unknown-id 404 for org B's staff, and nothing is sent", async () => {
-    as(users.ownerA1())
+  it("an org admin of A gets the unknown-id 404 for org B's staff, and nothing is sent", async () => {
+    as(adminOfA(users.ownerA1()))
     const cross = await jsonOf(await pushTest.POST(pushReq(P_STAFF_B1)))
     const unknown = await jsonOf(await pushTest.POST(pushReq(tid('dead'))))
     expect(cross.status).toBe(404) // main: 200 and a push to org B's phone
@@ -265,7 +265,7 @@ describe('POST /api/admin/push/test — only someone in your own organisation (T
   })
 
   it('still tests someone at A One', async () => {
-    as(users.ownerA1())
+    as(adminOfA(users.ownerA1()))
     const { status } = await jsonOf(await pushTest.POST(pushReq(P_STAFF_A1)))
     expect(status).toBe(200)
     expect(vi.mocked(sendPush).mock.calls[0][0]).toEqual([P_STAFF_A1])
@@ -275,6 +275,13 @@ describe('POST /api/admin/push/test — only someone in your own organisation (T
     as(users.master())
     const { status } = await jsonOf(await pushTest.POST(pushReq(P_STAFF_B1)))
     expect(status).toBe(200)
+  })
+
+  it('C141 ORGROLE.2 — an owner at A One without an org_admin grant is refused (403), nothing sent', async () => {
+    as(users.ownerA1())
+    const { status } = await jsonOf(await pushTest.POST(pushReq(P_STAFF_A1)))
+    expect(status).toBe(403)
+    expect(sendPush).not.toHaveBeenCalled()
   })
 })
 
@@ -315,7 +322,7 @@ describe('a failed fleet-scope read is a 500 and nothing is sent (TENANTSCOPE.1,
   })
 
   it('POST /api/admin/push/test answers 500 (not the 404), and nothing is sent', async () => {
-    as(users.ownerA1())
+    as(adminOfA(users.ownerA1()))
     const req = makeReq('/api/admin/push/test', { method: 'POST', body: { recipient_id: P_STAFF_A1 } })
     const { status, json } = await jsonOf(await pushTest.POST(req))
     expect(status).toBe(500)

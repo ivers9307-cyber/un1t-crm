@@ -5,12 +5,13 @@
 // master-or-ANY-owner — one tenant's owner could edit another
 // tenant's front page. These tests pin the org scoping:
 //   • org A admin edits org A's row; org B answers 404 (read + write)
-//   • an owner WITHIN the org passes; an owner of ANOTHER org does not
+//   • an owner WITHIN the org is refused (403, C141 ORGROLE.2: organisation
+//     admins only); an owner of ANOTHER org gets 404
 //   • legacy master flow (no explicit org → activeOrganization) works
 //   • upsert-on-first-edit creates the org's row (id 'org:<uuid>')
 //   • tiles are bounded to the org's locations (read filter + write 404)
 //
-// We use the REAL chooser-access helpers + getOwnerOrganizationIds —
+// We use the REAL chooser-access helpers + isOrgAdmin —
 // only getCurrentUser and the Supabase client are stubbed.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -198,14 +199,16 @@ describe('chooser-settings org scoping (SAAS-6)', () => {
     expect(writes.chooserInserts).toHaveLength(0)
   })
 
-  it('an owner WITHIN the org passes the edit gate (200)', async () => {
+  it('C141 — an owner WITHIN the org without an org_admin grant is refused (403, no writes)', async () => {
     getCurrentUser.mockResolvedValue(orgAOwner)
     const { db, writes } = makeDb({ chooserRow: { id: 'default' } })
     createServerClient.mockReturnValue(db)
 
     const res = await PUT(req('/api/chooser-settings', { method: 'PUT', body: emptyPut }))
-    expect(res.status).toBe(200)
-    expect(writes.chooserUpdates).toHaveLength(1)
+    expect(res.status).toBe(403)
+    expect((await res.json()).error).toBe('Organisation admin required')
+    expect(writes.chooserUpdates).toHaveLength(0)
+    expect(writes.chooserInserts).toHaveLength(0)
   })
 
   it('a plain org member can GET but not PUT (403 — honest, org is their own)', async () => {

@@ -6,11 +6,13 @@
 //
 // Two tiers, mirroring the SAAS-4 org guards in @/lib/auth:
 //   • read  = org MEMBERSHIP (assertOrganizationAccess semantics)
-//   • edit  = master, org_admin of the org, or an OWNER within the org
-//     (getOwnerOrganizationIds — the same delegation tier that manages
-//     org branding, mig 317). Pre-SAAS-6 the gate was master-or-ANY-
-//     owner, which let one tenant's owner edit another tenant's front
-//     page; the org bound closes that hole.
+//   • edit  = master or an org_admin of the org (isOrgAdmin). C141
+//     ORGROLE.2 (C18's rule, Richard 1 Oct): the front page is an
+//     organisation-level surface, so an OWNER at a studio is no longer
+//     enough (it was getOwnerOrganizationIds, owner-within-the-org).
+//     Pre-SAAS-6 the gate was master-or-ANY-owner, which let one
+//     tenant's owner edit another tenant's front page; the org bound
+//     closes that hole.
 //
 // A FOREIGN org answers 404 on both tiers — indistinguishable from an
 // org that doesn't exist (assertOrganizationAccessOr404 rationale: the
@@ -18,7 +20,7 @@
 // member without edit rights on their OWN org gets an honest 403.
 
 import { NextResponse } from 'next/server'
-import { getOwnerOrganizationIds } from '@/lib/auth'
+import { isOrgAdmin } from '@/lib/org-admin'
 import { uuidLike } from '@/lib/schemas'
 
 /**
@@ -97,10 +99,10 @@ export function assertChooserEdit(user, orgId) {
     return NextResponse.json({ success: false, error: 'organization_id is required' }, { status: 400 })
   }
   if (user.isMaster) return null
-  // owner-location orgs ∪ org_admin grants — owner-WITHIN-the-org only.
-  if (getOwnerOrganizationIds(user).includes(orgId)) return null
+  // C141 ORGROLE.2 — organisation admins only (master or org_admin grant).
+  if (isOrgAdmin(user, orgId)) return null
   if (orgReachable(user, orgId)) {
-    return NextResponse.json({ success: false, error: 'Owner or organization admin required' }, { status: 403 })
+    return NextResponse.json({ success: false, error: 'Organisation admin required' }, { status: 403 })
   }
   return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
 }

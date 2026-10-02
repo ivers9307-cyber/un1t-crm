@@ -58,3 +58,29 @@ describe('/settings/integrations-hub — the locations read (HUBREAD.1)', () => 
     expect(assembleIntegrationsHub).toHaveBeenCalledTimes(1)
   })
 })
+
+// C141 ORGROLE.2 — the page passes the same billingFor rule as the route.
+describe('/settings/integrations-hub — plan & wallet strip is organisation-admin only (C141)', () => {
+  it('an owner without an org_admin grant: billingFor admits nothing', async () => {
+    getCurrentUser.mockResolvedValue({
+      id: 'u2', isMaster: false, role: 'owner', orgAdminOrgIds: [],
+      activeOrganization: { id: 'org-1' },
+    })
+    createServerClient.mockReturnValue(locationsDb({ data: [{ id: 'loc-a', name: 'A', organization_id: 'org-1' }], error: null }))
+    await IntegrationsHubPage()
+    const { billingFor } = assembleIntegrationsHub.mock.calls[0][2]
+    expect(billingFor({ id: 'loc-a', organization_id: 'org-1' })).toBe(false)
+  })
+
+  it('an org admin: billingFor admits their organisation\'s locations', async () => {
+    getCurrentUser.mockResolvedValue({
+      id: 'u3', isMaster: false, role: 'owner', orgAdminOrgIds: ['org-1'],
+      activeOrganization: { id: 'org-1' },
+    })
+    createServerClient.mockReturnValue(locationsDb({ data: [{ id: 'loc-a', name: 'A', organization_id: 'org-1' }], error: null }))
+    await IntegrationsHubPage()
+    const { billingFor } = assembleIntegrationsHub.mock.calls[0][2]
+    expect(billingFor({ id: 'loc-a', organization_id: 'org-1' })).toBe(true)
+    expect(billingFor({ id: 'loc-x', organization_id: 'org-2' })).toBe(false)
+  })
+})
