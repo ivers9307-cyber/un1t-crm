@@ -33,8 +33,13 @@ import PushHealthPage from './page.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import {
-  makeWorld, makeTenantDb, users, P_STAFF_A1, P_STAFF_B1,
+  makeWorld, makeTenantDb, users, P_STAFF_A1, P_STAFF_B1, ORG_A,
 } from '../../../../../tests/cross-tenant/fixture.js'
+
+// C18 ORGROLE.1 — the device fleet is for organisation admins: the manager
+// persona carries an org_admin grant on org A (TENANTSCOPE.1's org-A-only
+// assertions are unchanged for them).
+const adminOfA = (u) => ({ ...u, orgAdminOrgIds: [...(u.orgAdminOrgIds || []), ORG_A] })
 
 function fleetWorld() {
   const w = makeWorld()
@@ -57,7 +62,7 @@ async function render(user) {
 
 describe('/settings/notifications/health — the active organisation only (TENANTSCOPE.1)', () => {
   it("a manager at A One sees org A's studios and staff, never org B's", async () => {
-    const html = await render(users.managerA1())
+    const html = await render(adminOfA(users.managerA1()))
     expect(html).toContain('Staff A-One')
     expect(html).toContain('A Two')
     expect(html).not.toContain('Staff B-One') // main: listed under "B One"
@@ -66,7 +71,7 @@ describe('/settings/notifications/health — the active organisation only (TENAN
   })
 
   it('still shows the estate target version — one app binary', async () => {
-    const html = await render(users.managerA1())
+    const html = await render(adminOfA(users.managerA1()))
     expect(html).toContain('v2.5.0') // org B's phone sets it
   })
 
@@ -80,9 +85,15 @@ describe('/settings/notifications/health — the active organisation only (TENAN
 // "Total staff" is the big number on the page; read it off the card.
 const totalStaff = (html) => Number(html.match(/>(\d+)<\/div><div[^>]*>Total staff</)?.[1])
 
+describe('/settings/notifications/health — organisation admins only (C18 ORGROLE.1)', () => {
+  it('a manager holding `settings` but no org_admin grant is sent away', async () => {
+    await expect(render(users.managerA1())).rejects.toThrow(/^NEXT_REDIRECT:\/$/)
+  })
+})
+
 describe('/settings/notifications/health — everyone counted is listed (TENANTSCOPE.1)', () => {
   it("lists org A's org admin, who has no studio membership, under \"No active studio\"", async () => {
-    const html = await render(users.managerA1())
+    const html = await render(adminOfA(users.managerA1()))
     // Org A's fleet: four studio members + the org admin (profile_organizations only).
     expect(totalStaff(html)).toBe(5)
     expect(html).toContain('No active studio')
@@ -102,7 +113,7 @@ describe('/settings/notifications/health — everyone counted is listed (TENANTS
   it('shows no "No active studio" group when everyone has a studio', async () => {
     const world = fleetWorld()
     world.profile_organizations = []
-    vi.mocked(getCurrentUser).mockResolvedValue(users.managerA1())
+    vi.mocked(getCurrentUser).mockResolvedValue(adminOfA(users.managerA1()))
     vi.mocked(createServerClient).mockReturnValue(makeTenantDb(world))
     const html = renderToStaticMarkup(await PushHealthPage())
     expect(totalStaff(html)).toBe(4)

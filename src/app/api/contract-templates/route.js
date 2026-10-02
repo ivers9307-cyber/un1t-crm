@@ -1,15 +1,16 @@
 // /api/contract-templates
 //   GET   list templates the caller can administer (master sees
-//         all; owner sees their org). RLS enforces visibility too.
-//   POST  create a new template (master/owner only).
+//         all; an org admin sees the orgs they administer — C18 ORGROLE.1).
+//   POST  create a new template (master / org admin of the active org).
 //
-// Templates are master/owner-only artefacts — staff and contractors
+// Templates are master/org-admin-only artefacts — staff and contractors
 // never see them. The issue wizard surfaces them only through this
 // authorised route.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getOwnerOrganizationIds } from '@/lib/auth'
+import { getCurrentUser } from '@/lib/auth'
+import { adminOrganizationIds } from '@/lib/org-admin'
 import { canManageContractsInOrg, canManageContractsSomewhere } from '@/lib/contract-gates'
 import { contractTemplateSchema } from '@/lib/schemas'
 import { validateBody } from '@/lib/validate'
@@ -20,8 +21,8 @@ export async function GET() {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   // GATES-3 (c) — the issue wizard's list. The rows are scoped to the orgs the
-  // caller manages below, so the gate is GATES-2's coarse rule (an owner/admin
-  // of SOME org), not the ACTIVE studio's role: an owner of another org
+  // caller manages below, so the gate is GATES-2's coarse rule (an org admin
+  // of SOME org; C18 ORGROLE.1), not the ACTIVE studio's role: an owner of another org
   // working from a studio where they are a manager got a 403 and an empty
   // wizard.
   if (!canManageContractsSomewhere(user)) {
@@ -32,19 +33,22 @@ export async function GET() {
   // "owner sees their org" model must be replicated in app code —
   // otherwise any owner reads every org's templates (incl. comp body
   // copy). Master sees all; a non-master is scoped to the orgs they
-  // own, and an owner of no org sees nothing.
+  // administer.
   const db = createServerClient()
   let query = db
     .from('contract_templates')
     .select('id, organization_id, name, description, body_markdown, variables_schema, employment_type, version, active, created_at, updated_at')
     .order('updated_at', { ascending: false })
 
+  // C18 ORGROLE.1 — the orgs the caller ADMINISTERS (an org_admin grant), the
+  // set POST /api/contracts issues from. getOwnerOrganizationIds (any studio
+  // owner role) listed another org's templates that the issue then 404'd.
   if (!user.isMaster) {
-    const ownerOrgIds = getOwnerOrganizationIds(user)
-    if (ownerOrgIds.length === 0) {
+    const adminOrgIds = adminOrganizationIds(user)
+    if (adminOrgIds.length === 0) {
       return NextResponse.json({ success: true, data: [] })
     }
-    query = query.in('organization_id', ownerOrgIds)
+    query = query.in('organization_id', adminOrgIds)
   }
 
   const { data, error } = await query

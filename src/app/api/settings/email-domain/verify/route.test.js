@@ -38,7 +38,7 @@ const ownerA = {
   activeOrganization: { id: 'org-a', name: 'Synthetic Gym A' },
   organizationsById: { 'org-a': { id: 'org-a', name: 'Synthetic Gym A' } },
   rolesByLocation: { 'loc-a1': 'owner' },
-  orgAdminOrgIds: [],
+  orgAdminOrgIds: ['org-a'], // C18 ORGROLE.1: an org admin of org A
   locations: [{ id: 'loc-a1', organization_id: 'org-a' }],
 }
 const PG = 'canceling statement due to statement timeout'

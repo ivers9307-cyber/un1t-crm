@@ -29,7 +29,7 @@ describe('isAccountTierPath', () => {
 
 describe('resolveAccountNav — manage items (live vs deferred)', () => {
   it('links Billing & usage and Integrations, defers Team & roles', () => {
-    const { manage } = resolveAccountNav({})
+    const { manage } = resolveAccountNav({ isMaster: true, role: 'master' })
     const byKey = Object.fromEntries(manage.map((m) => [m.key, m]))
 
     expect(byKey.billing.href).toBe('/settings/billing')
@@ -44,7 +44,17 @@ describe('resolveAccountNav — manage items (live vs deferred)', () => {
 
   it('always exposes Overview → /portfolio', () => {
     expect(resolveAccountNav(null).overview.href).toBe('/portfolio')
-    expect(resolveAccountNav(ACCOUNT_MANAGE_ITEMS).manage).toBe(ACCOUNT_MANAGE_ITEMS)
+    expect(resolveAccountNav({ isMaster: true, role: 'master' }).manage).toBe(ACCOUNT_MANAGE_ITEMS)
+  })
+
+  // C18 ORGROLE.1 — Billing & usage is for organisation admins of the active org.
+  it('lists Billing & usage only for an org admin of the active org, never a studio owner', () => {
+    const keys = (u) => resolveAccountNav(u).manage.map((m) => m.key)
+    const inOrg = { activeOrganization: { id: 'org-1' } }
+    expect(keys({ role: 'staff', orgAdminOrgIds: ['org-1'], ...inOrg })).toContain('billing')
+    expect(keys({ role: 'owner', orgAdminOrgIds: [], ...inOrg })).not.toContain('billing')
+    expect(keys({ role: 'owner', orgAdminOrgIds: [], ...inOrg })).toEqual(['integrations', 'team'])
+    expect(keys(null)).not.toContain('billing')
   })
 })
 

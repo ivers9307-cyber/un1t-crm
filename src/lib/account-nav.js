@@ -14,6 +14,7 @@
 // permission gate — the tier gate is the gate.
 
 import { Building2, CreditCard, Cable, UsersRound } from 'lucide-react'
+import { isActiveOrgAdmin } from './org-admin.js'
 
 // Which paths render the ACCOUNT shell instead of the studio sidebar.
 // AppShell imports this so the shell swap and the nav model agree on
@@ -38,8 +39,9 @@ export const ACCOUNT_OVERVIEW = Object.freeze({ href: '/portfolio', label: 'Over
 // Secondary "Manage" items. `live: false` renders a disabled "Soon"
 // row (kept visible so the shape of the account tier is legible) —
 // see resolveAccountNav for the live/deferred rationale.
-//   - Billing & usage → /settings/billing (INTEG-D1) — owner/master,
-//     org-oriented. LIVE.
+//   - Billing & usage → /settings/billing (INTEG-D1) — org-oriented. LIVE.
+//     C18 ORGROLE.1: listed only for an organisation admin of the active
+//     org (master or an org_admin grant), the page's and route's rule.
 //   - Integrations    → /settings/integrations-hub (INTEG-B4) — owner+
 //     is HARD-SCOPED to their own org's locations there, so it genuinely
 //     fits an owner at the account tier. LIVE.
@@ -54,6 +56,9 @@ export const ACCOUNT_MANAGE_ITEMS = Object.freeze([
   Object.freeze({ key: 'integrations', href: '/settings/integrations-hub', label: 'Integrations', icon: Cable, live: true }),
   Object.freeze({ key: 'team', href: null, label: 'Team & roles', icon: UsersRound, live: false }),
 ])
+
+// C18 ORGROLE.1 — what a non-admin sees (billing is organisation-admin only).
+const ACCOUNT_MANAGE_ITEMS_NO_BILLING = Object.freeze(ACCOUNT_MANAGE_ITEMS.filter((i) => i.key !== 'billing'))
 
 /**
  * Resolve the account-tier nav for a user. Pure — no DB, no clock.
@@ -92,7 +97,7 @@ export function resolveAccountNav(user) {
   return {
     overview: ACCOUNT_OVERVIEW,
     studios,
-    manage: ACCOUNT_MANAGE_ITEMS,
+    manage: isActiveOrgAdmin(user) ? ACCOUNT_MANAGE_ITEMS : ACCOUNT_MANAGE_ITEMS_NO_BILLING,
     enterStudioId,
   }
 }

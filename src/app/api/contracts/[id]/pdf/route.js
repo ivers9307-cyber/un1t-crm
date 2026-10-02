@@ -24,7 +24,8 @@
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getOwnerOrganizationIds } from '@/lib/auth'
+import { getCurrentUser } from '@/lib/auth'
+import { canManageContractsInOrg } from '@/lib/contract-gates'
 
 export const runtime = 'nodejs'
 
@@ -43,7 +44,9 @@ export async function GET(_request, props) {
   if (!contract) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
 
   const isRecipient = contract.profile_id === user.id
-  const isOrgOwner = getOwnerOrganizationIds(user).includes(contract.organization_id)
+  // C18 ORGROLE.1 — the org side is an organisation admin of the contract's
+  // org (master or an org_admin grant), no longer any studio owner there.
+  const isOrgOwner = canManageContractsInOrg(user, contract.organization_id)
   if (!isRecipient && !user.isMaster && !isOrgOwner) {
     return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   }

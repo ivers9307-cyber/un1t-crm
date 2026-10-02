@@ -1,13 +1,15 @@
 // /api/contracts
 //   GET   role-aware list:
 //           recipient (any role) → only their own
-//           owner                → contracts in their org
+//           org admin            → contracts in the orgs they administer
+//                                  (C18 ORGROLE.1: an org_admin grant; a
+//                                  studio owner is not one)
 //           master               → everything
-//   POST  issue a new contract (master/owner only). Body:
+//   POST  issue a new contract (master / org admin of the template's org). Body:
 //         { template_id, profile_id, location_id?, variables, issuer_signature }
 //
 // Issue path:
-//   1. Validate the issuer is master/owner.
+//   1. Validate the issuer is a master or an org admin (contract-gates).
 //   2. Look up the template (must be active, employment_type
 //      compatible with the recipient's profile).
 //   3. Look up the recipient's primary location → org_id (if not
@@ -23,7 +25,8 @@
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getOwnerOrganizationIds } from '@/lib/auth'
+import { getCurrentUser } from '@/lib/auth'
+import { adminOrganizationIds } from '@/lib/org-admin'
 import { canManageContractsInOrg, canManageContractsSomewhere } from '@/lib/contract-gates'
 import { contractIssueSchema } from '@/lib/schemas'
 import { validateBody } from '@/lib/validate'
@@ -74,11 +77,16 @@ export async function GET() {
   // otherwise see a contract that was never actually sent to them).
   // The org-owner arm is unaffected: an owner reviewing their org's
   // contracts still needs to see drafts to send/discard them.
+  // C18 ORGROLE.1 (Richard, 1 Oct 2026): the org arm is the orgs the caller
+  // ADMINISTERS (an org_admin grant), the rule of GET /api/contracts/[id] and
+  // every contract action. It used to be getOwnerOrganizationIds (any studio
+  // owner role), so a studio owner's list (mobile's "my contracts" too) held
+  // org rows whose detail answered 404.
   if (!user.isMaster) {
-    const ownerOrgIds = getOwnerOrganizationIds(user)
-    if (ownerOrgIds.length > 0) {
+    const adminOrgIds = adminOrganizationIds(user)
+    if (adminOrgIds.length > 0) {
       query = query.or(
-        `and(profile_id.eq.${user.id},status.neq.draft),organization_id.in.(${ownerOrgIds.join(',')})`
+        `and(profile_id.eq.${user.id},status.neq.draft),organization_id.in.(${adminOrgIds.join(',')})`
       )
     } else {
       query = query.eq('profile_id', user.id).neq('status', 'draft')
@@ -93,8 +101,8 @@ export async function GET() {
 export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  // GATES-3 (c) — the coarse pre-check is GATES-2's: master, or an owner/admin
-  // of SOME org (getOwnerOrganizationIds). `user.role` is the ACTIVE studio's
+  // GATES-3 (c) — the coarse pre-check is GATES-2's: master, or an org admin
+  // of SOME org (C18 ORGROLE.1: an org_admin grant, not a studio owner role). `user.role` is the ACTIVE studio's
   // role, so it refused an owner of the template's org working from a studio
   // where they are a manager, and an org admin whose own role there is not
   // owner. The decision is the template's org, below.
@@ -129,7 +137,7 @@ export async function POST(request) {
   //     foreign ids can't be probed (this must precede the `active`
   //     check for the same reason).
   //     GATES-3: canManageContractsInOrg is that same rule (master, or an
-  //     owner/admin of the org; a null org is master-only).
+  //     org admin of the org; a null org is master-only. C18 ORGROLE.1).
   if (!canManageContractsInOrg(user, template.organization_id)) {
     return NextResponse.json({ success: false, error: 'Template not found' }, { status: 404 })
   }

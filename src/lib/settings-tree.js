@@ -13,6 +13,10 @@
 //   - { anyPermission: ['a','b'] } — any one of the listed keys
 //   - { roles: ['owner','master'] } — user.role is one of these (the
 //     ACTIVE-LOCATION role, same field every gated sub-page itself reads)
+//   - { orgAdmin: true }           — C18 ORGROLE.1: an organisation admin of
+//     the ACTIVE organisation (master or an org_admin grant;
+//     isActiveOrgAdmin in src/lib/org-admin.js), the rule of the
+//     organisation-level pages and routes. A studio owner is not one.
 //   - { masterOnly: true }         — user.profileRole === 'master' ||
 //     user.role === 'master' (identical formula to Sidebar.jsx's
 //     `masterOnly`, so a user impersonating a non-master will not see a
@@ -43,6 +47,7 @@
 // forced into a row shape that doesn't fit it.
 
 import { MANAGER_ROLES, ADMIN_ROLES } from '@/lib/schemas'
+import { isActiveOrgAdmin } from '@/lib/org-admin'
 import {
   CalendarDays, Tag, Store, Trophy, Cable,
   Users, UserPlus, UserCog,
@@ -213,8 +218,8 @@ export const SETTINGS_TREE = [
         href: '/settings/email-domain',
         description: 'Send from your own verified domain on a dedicated mail server — your reputation, your analytics. Add-on.',
         icon: AtSign,
-        // Mirrors the page's own gate exactly (hardcoded owner/master).
-        gate: { roles: ['owner', 'master'] },
+        // Mirrors the page's own gate exactly (C18 ORGROLE.1: org admins).
+        gate: { orgAdmin: true },
       },
       {
         id: 'notifications',
@@ -328,8 +333,8 @@ export const SETTINGS_TREE = [
         href: '/settings/billing',
         description: 'Your platform plan, usage against allowances, the usage wallet, and invoices — per location.',
         icon: CreditCard,
-        // Mirrors the page's own gate exactly (hardcoded owner/master).
-        gate: { roles: ['owner', 'master'] },
+        // Mirrors the page's own gate exactly (C18 ORGROLE.1: org admins).
+        gate: { orgAdmin: true },
       },
       {
         id: 'usage',
@@ -337,10 +342,9 @@ export const SETTINGS_TREE = [
         href: '/settings/usage',
         description: 'Month-to-date AI, email, SMS and WhatsApp usage per location, plus optional hard caps that pause Mia or hold campaigns.',
         icon: Gauge,
-        // Mirrors the page's own gate exactly (ADMIN_ROLES view tier —
-        // the caps SAVE form itself is owner/master, enforced client-side
-        // + by the PUT route, not by this row's visibility).
-        gate: { roles: ADMIN_ROLES },
+        // Mirrors the page's own gate exactly (C18 ORGROLE.1: org admins,
+        // for the view and the caps form alike).
+        gate: { orgAdmin: true },
       },
     ],
   },
@@ -374,8 +378,8 @@ export const SETTINGS_TREE = [
         href: '/settings/api-keys',
         description: 'Create and revoke keys for programmatic access (n8n and other integrations).',
         icon: KeyRound,
-        // Mirrors the page's own gate exactly (hardcoded owner/master).
-        gate: { roles: ['owner', 'master'] },
+        // Mirrors the page's own gate exactly (C18 ORGROLE.1: org admins).
+        gate: { orgAdmin: true },
       },
       {
         id: 'landing-page',
@@ -446,6 +450,7 @@ export function settingsRowVisible(gate, user, hasPerm) {
   if (!gate) return false
   if (gate.openToAll) return !!user
   if (gate.masterOnly) return user?.profileRole === 'master' || user?.role === 'master'
+  if (gate.orgAdmin) return isActiveOrgAdmin(user)
   if (gate.roles) return gate.roles.includes(user?.role)
   if (gate.anyPermission) return gate.anyPermission.some((k) => hasPerm(k))
   if (gate.permission) return hasPerm(gate.permission)
