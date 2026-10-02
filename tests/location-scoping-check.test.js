@@ -17,6 +17,11 @@ import {
 } from '../scripts/check-location-scoping.mjs'
 
 describe('deriveLocationTables', () => {
+  it('a -- inside a string does not end the line early (GUARDSTRIP.1)', () => {
+    const sql = `SELECT '--'; CREATE TABLE contacts (id uuid, location_id uuid);`
+    expect([...deriveLocationTables(sql)]).toEqual(['contacts'])
+  })
+
   it('finds location_id inside a CREATE TABLE body', () => {
     const sql = `
       CREATE TABLE contacts (

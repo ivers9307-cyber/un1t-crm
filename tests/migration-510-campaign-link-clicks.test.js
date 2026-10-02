@@ -21,6 +21,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, existsSync } from 'node:fs'
 import path from 'node:path'
+import { sqlCode } from './helpers/sql-code.js'
 
 const FILE = path.resolve(
   import.meta.dirname,
@@ -37,7 +38,7 @@ describe('migration 510 — campaign_link_clicks', () => {
 // naive match cannot tell a warning about a shape from the shape itself.
 // `COMMENT ON` is a statement, not a `--` comment, so it survives stripping.
 const sql = existsSync(FILE)
-  ? readFileSync(FILE, 'utf8').replace(/--[^\n]*/g, '').toLowerCase()
+  ? sqlCode(readFileSync(FILE, 'utf8')).toLowerCase()
   : ''
 
   it('creates the table with a NOT NULL location_id (the tenant boundary)', () => {

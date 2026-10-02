@@ -15,17 +15,17 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
+import { stripComments } from '../../../tests/helpers/js-code.js'
 
 const read = (rel) => readFileSync(path.join(process.cwd(), rel), 'utf8')
 
 // Comments stripped, so every assertion below is about what the file DOES. A
 // header comment naming `<iframe>` or the raw-HTML prop must not read as a use
 // of one — and a violation must not be hideable inside a comment either.
-function codeOf(source) {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/^\s*\/\/.*$/gm, '')
-}
+// Blanked by the TypeScript parser's comment ranges, never a regex: the old
+// one read the '/*' in accept="image/*" or a MIME glob as a comment and hid
+// the markup after it (GUARDSTRIP.1).
+const codeOf = stripComments
 
 const PREVIEW = codeOf(read('src/components/mail/AttachmentPreview.jsx'))
 const THREAD = codeOf(read('src/components/mail/ConversationThread.jsx'))

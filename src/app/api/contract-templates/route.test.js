@@ -6,11 +6,11 @@
 // tenants' contract template bodies. These tests pin the application-
 // layer org-scoping that replicates mig 106's model:
 //   master  → no filter (sees all)
-//   owner   → organization_id IN (orgs they own)
-//   else    → empty result set (owns no org)
+//   org admin → organization_id IN (orgs they administer; C18 ORGROLE.1)
+//   else      → 403 before any query (a studio owner included)
 //
-// We use the REAL getOwnerOrganizationIds — only getCurrentUser + the
-// Supabase client are stubbed.
+// We use the REAL contract-gates / org-admin rule — only getCurrentUser +
+// the Supabase client are stubbed.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -81,25 +81,45 @@ describe('GET /api/contract-templates — list scoping', () => {
     expect(calls.in).toHaveLength(0)
   })
 
-  it('owner is scoped to templates in orgs they own', async () => {
+  // C18 ORGROLE.1 (Richard, 1 Oct 2026): a studio owner is not an
+  // organisation admin, so owning a studio lists no templates.
+  it('a studio owner with no org_admin grant is refused before any query', async () => {
     getCurrentUser.mockResolvedValue({
       id: 'owner-a', isMaster: false, role: 'owner',
       rolesByLocation: { [LOC_A1]: 'owner' },
       locations: [{ id: LOC_A1, organization_id: ORG_A }],
+      orgAdminOrgIds: [],
+    })
+    const { db, calls } = mockDb({ data: [{ id: 'leak' }] })
+    createServerClient.mockReturnValue(db)
+
+    const res = await GET()
+    expect(res.status).toBe(403)
+    expect(calls.in).toHaveLength(0)
+  })
+
+  it('an org admin who also owns a studio in ANOTHER org lists only the org they administer', async () => {
+    // The wizard's list must match POST /api/contracts, which issues only
+    // from a template of an org the caller administers.
+    getCurrentUser.mockResolvedValue({
+      id: 'owner-a', isMaster: false, role: 'owner',
+      rolesByLocation: { [LOC_A1]: 'owner', [LOC_B1]: 'owner' },
+      locations: [{ id: LOC_A1, organization_id: ORG_A }, { id: LOC_B1, organization_id: 'org-b' }],
+      orgAdminOrgIds: [ORG_A],
     })
     const { db, calls } = mockDb({ data: [] })
     createServerClient.mockReturnValue(db)
 
     const res = await GET()
     expect(res.status).toBe(200)
-    expect(calls.in).toContainEqual(['organization_id', [ORG_A]])
+    expect(calls.in).toEqual([['organization_id', [ORG_A]]])
   })
 
   it('org admin (SAAS-4) is scoped to their admin orgs — even with a non-owner active role', async () => {
     // An org admin holding an explicit staff assignment at their
     // active location resolves role 'staff' for the request, but the
     // org_admin grant must still let them manage THEIR org's templates
-    // (and only theirs — getOwnerOrganizationIds bounds the query).
+    // (and only theirs — adminOrganizationIds bounds the query).
     getCurrentUser.mockResolvedValue({
       id: 'org-admin-a', isMaster: false, role: 'staff',
       rolesByLocation: { [LOC_A1]: 'staff' },

@@ -4,7 +4,9 @@
 // bounce/unsubscribe events onto this host's host_campaign_sends rows (mig
 // 590 columns), for sends that predate those columns or whose webhook events
 // were missed. Dry-run by default (counts only, writes nothing) — an
-// operator must explicitly pass ?dry=0 to persist anything. Manager+,
+// operator must explicitly pass ?dry=0 to persist anything. An admin
+// job, so ORGANISATION ADMINS only (C18 ORGROLE.1: master or an org_admin
+// grant on the active org; it used to admit manager+ at the active studio),
 // org-scoped like the rest of /api/hosts/[id] — 404 on a cross-org id, no
 // IDOR enumeration.
 //
@@ -15,6 +17,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
+import { activeOrganizationId, isOrgAdmin } from '@/lib/org-admin'
 import { loadHostForOrg } from '@/lib/hosts'
 import { backfillHostCampaignEvents } from '@/lib/host-campaign-backfill'
 import { logInfo } from '@/lib/log'
@@ -30,10 +33,10 @@ const RETENTION_DAYS = 45
 async function gate() {
   const user = await getCurrentUser()
   if (!user) return { error: NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 }) }
-  if (!['master', 'owner', 'manager'].includes(user.role)) {
-    return { error: NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 }) }
+  const orgId = activeOrganizationId(user)
+  if (!isOrgAdmin(user, orgId)) {
+    return { error: NextResponse.json({ success: false, error: 'Organisation admin required' }, { status: 403 }) }
   }
-  const orgId = user.activeOrganization?.id || user.activeLocation?.organization_id || null
   if (!orgId) return { error: NextResponse.json({ success: false, error: 'no_active_organization' }, { status: 400 }) }
   return { user, orgId }
 }

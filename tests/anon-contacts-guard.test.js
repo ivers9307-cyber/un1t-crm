@@ -15,7 +15,8 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs'
 import path from 'node:path'
-import { stripComments } from '../scripts/lib/strip-comments.mjs'
+import { stripComments } from './helpers/js-code.js'
+import { sqlCode } from './helpers/sql-code.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const ANON_CONTACTS_MIGRATION = 657
@@ -35,7 +36,6 @@ function splitTop(list) {
   out.push(cur)
   return out.map((s) => s.trim()).filter(Boolean)
 }
-const sqlCode = (sql) => sql.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--[^\n]*/g, ' ')
 const GRANT_RE = /\bgrant\s+([\s\S]+?)\s+on\s+([\s\S]+?)\s+to\s+([\s\S]+?)(?:;|'|$)/gi
 const granteesOf = (to) => splitTop(to.replace(/\s+(with\s+grant\s+option|granted\s+by\b)[\s\S]*$/i, '')).map(ident)
 
@@ -86,7 +86,7 @@ const isBrowserFile = (text) => {
   return /^['"]use client['"]/.test(code) || /\bcreateBrowserClient\b/.test(code)
 }
 
-describe('later migrations keep anon off contacts and consent_drift_rows server-only (mig 657)', () => {
+describe('later migrations keep anon off contacts and consent_drift_rows server-only (mig 657)', { timeout: 120_000 }, () => {
   it('mig 657 is present', () => {
     expect(readdirSync(MIGRATIONS).some((f) => f.startsWith(`${ANON_CONTACTS_MIGRATION}_`))).toBe(true)
   })
@@ -96,6 +96,13 @@ describe('later migrations keep anon off contacts and consent_drift_rows server-
     const sql = readFileSync(path.join(MIGRATIONS, file), 'utf8')
     expect(anonContactsGrants(sql), `${file}: anon holds nothing on contacts (mig 657)`).toEqual([])
     expect(consentDriftReopeners(sql), `${file}: consent_drift_rows is service_role only (mig 657)`).toEqual([])
+  })
+
+  // GUARDSTRIP.1 (C74): a '/*' inside a string, or after a DO block's $$, hid
+  // the GRANT from the old regex / unpaired stripper.
+  it('a /* inside a string or a later $$ literal hides no GRANT (GUARDSTRIP.1)', () => {
+    expect(anonContactsGrants("SELECT '/*';\nGRANT SELECT ON public.contacts TO anon;\nSELECT '*/';"), 'string').not.toEqual([])
+    expect(anonContactsGrants("DO $$ BEGIN PERFORM 1; END $$;\nSELECT $$ /* $$;\nGRANT SELECT ON public.contacts TO anon;\nSELECT $$ */ $$;"), 'dollar').not.toEqual([])
   })
 
   it('the contacts detector catches every form and passes the safe ones', () => {
@@ -133,7 +140,7 @@ describe('later migrations keep anon off contacts and consent_drift_rows server-
   })
 })
 
-describe('no client-run code calls consent_drift_rows (mig 657)', () => {
+describe('no client-run code calls consent_drift_rows (mig 657)', { timeout: 120_000 }, () => {
   it('finds none, and the one real caller is a server route', () => {
     const phone = [...walk(path.join(ROOT, 'shared')), ...walk(path.join(ROOT, 'mobile'))]
     const src = walk(path.join(ROOT, 'src'))

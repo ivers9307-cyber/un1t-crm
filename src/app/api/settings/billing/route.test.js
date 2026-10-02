@@ -31,11 +31,13 @@ function req(query = '') {
   return new Request(`http://x/api/settings/billing${query}`)
 }
 
-// Owner of org A: owner role at loc-a1, whose location row carries
-// organization_id org-a (getOwnerOrganizationIds reads exactly this).
+// An org admin of org A (C18 ORGROLE.1: billing is for organisation admins —
+// master or an org_admin grant). Also owner at loc-a1, which on its own is
+// no longer enough (see 'a studio owner with no org_admin grant').
 const ownerA = {
   id: 'owner-a',
   role: 'owner',
+  orgAdminOrgIds: ['org-a'],
   activeOrganization: { id: 'org-a' },
   rolesByLocation: { 'loc-a1': 'owner' },
   locations: [{ id: 'loc-a1', organization_id: 'org-a' }],
@@ -56,14 +58,20 @@ describe('GET /api/settings/billing — access matrix', () => {
   })
 
   it('403 for staff', async () => {
-    getCurrentUser.mockResolvedValue({ ...ownerA, role: 'staff' })
+    getCurrentUser.mockResolvedValue({ ...ownerA, role: 'staff', orgAdminOrgIds: [] })
     expect((await GET(req())).status).toBe(403)
     expect(getBillingPageData).not.toHaveBeenCalled()
   })
 
-  it('403 for manager (billing is owner+master, not ADMIN_ROLES)', async () => {
-    getCurrentUser.mockResolvedValue({ ...ownerA, role: 'manager' })
+  it('403 for manager (billing is organisation admins, not ADMIN_ROLES)', async () => {
+    getCurrentUser.mockResolvedValue({ ...ownerA, role: 'manager', orgAdminOrgIds: [] })
     expect((await GET(req())).status).toBe(403)
+  })
+
+  it('403 for a studio owner with no org_admin grant (C18 ORGROLE.1)', async () => {
+    getCurrentUser.mockResolvedValue({ ...ownerA, orgAdminOrgIds: [] })
+    expect((await GET(req())).status).toBe(403)
+    expect(getBillingPageData).not.toHaveBeenCalled()
   })
 
   it('200 for an owner reading their own org (default = active org)', async () => {

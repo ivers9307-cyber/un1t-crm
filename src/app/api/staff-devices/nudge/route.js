@@ -2,9 +2,11 @@
 // staff who genuinely are (STAFF-DEV.8).
 //
 // SECURITY: two properties carry this route.
-//   1. Service-role reads mean NO RLS. hasPermission(user,'settings') is
-//      the only thing between an ordinary staffer and the ability to
-//      push a notification to the whole fleet. TENANTSCOPE.1: "the
+//   1. Service-role reads mean NO RLS. The organisation-admin gate (C18
+//      ORGROLE.1: master or an org_admin grant on the active organisation;
+//      it used to be `settings` at the active studio) is the only thing
+//      between an ordinary staffer and the ability to push a notification
+//      to the whole fleet. TENANTSCOPE.1: "the
 //      fleet" is the ACTIVE organisation's people (loadFleetScope; a
 //      master keeps the estate) — an id from another tenant is ignored
 //      exactly like an unknown one.
@@ -30,7 +32,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getCurrentUser } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { isActiveOrgAdmin } from '@/lib/org-admin'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody, uuidLike } from '@/lib/validate'
 import { sendPush } from '@/lib/push'
@@ -59,7 +61,7 @@ const NudgeSchema = z.object({
 export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!hasPermission(user, 'settings')) {
+  if (!isActiveOrgAdmin(user)) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 

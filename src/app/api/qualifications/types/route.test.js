@@ -53,6 +53,20 @@ describe('POST /api/qualifications/types', () => {
     expect(createQualificationType).not.toHaveBeenCalled()
   })
 
+  // REVIEWNITS.1 (D5): the catalogue is the organisation's; PATCH (and the
+  // page) judge "owner at a studio of the organisation", so create does too.
+  it('a manager here who owns another studio of the same organisation creates it; an owner in another organisation does not', async () => {
+    const ORG = 'org-1'
+    const OTHER = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
+    const both = { id: 'b1', profileRole: 'staff', locations: [{ id: LOC, organization_id: ORG }, { id: OTHER, organization_id: ORG }], rolesByLocation: { [LOC]: 'manager', [OTHER]: 'owner' } }
+    getCurrentUser.mockResolvedValue(both)
+    expect((await POST(req({ location_id: LOC, name: 'Manual handling' }))).status).toBe(201)
+    const elsewhere = { ...both, locations: [{ id: LOC, organization_id: ORG }, { id: OTHER, organization_id: 'org-2' }] }
+    getCurrentUser.mockResolvedValue(elsewhere)
+    expect((await POST(req({ location_id: LOC, name: 'Manual handling' }))).status).toBe(403)
+    expect(createQualificationType).toHaveBeenCalledTimes(1)
+  })
+
   it('an owner at the studio creates it (name trimmed)', async () => {
     getCurrentUser.mockResolvedValue(owner)
     const res = await POST(req({ location_id: LOC, name: '  Manual handling ' }))

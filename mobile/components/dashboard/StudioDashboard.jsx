@@ -9,7 +9,7 @@ import { View, Text, ActivityIndicator } from 'react-native'
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter, useFocusEffect } from 'expo-router'
 import { useAuth } from '../../lib/auth-context'
-import { fetchStudioDashboard, swapRowTitle, studioContactNumbers } from '../../lib/dashboard-api'
+import { fetchStudioDashboard, swapRowTitle, studioContactNumbers, studioWhatsappUnread } from '../../lib/dashboard-api'
 // COVERLOOP.2 — pending rows open the approval itself (the same place the
 // manager pushes go), and a swap row says when the shift is.
 import { teamApprovalRoute } from '../../lib/notification-nav'
@@ -71,7 +71,8 @@ export default function StudioDashboard({ refreshKey }) {
     )
   }
 
-  const { totalUnreadWhatsapp } = data
+  // null = the unread read failed: a dash, not 0 (dashboard-api.js decides).
+  const unread = studioWhatsappUnread(data.totalUnreadWhatsapp)
   // STUDIODASH.1 — null = the list couldn't be read (see dashboard-api.js).
   // Say so; an empty card would claim nothing is pending.
   const timeOffFailed = data.pendingTimeOff == null
@@ -103,10 +104,10 @@ export default function StudioDashboard({ refreshKey }) {
         />
         <KpiCard
           label="WhatsApp unread"
-          value={totalUnreadWhatsapp}
-          sublabel="across the inbox"
-          accent={totalUnreadWhatsapp > 0 ? 'text-un1t-text' : 'text-un1t-muted'}
-          onPress={totalUnreadWhatsapp > 0 ? () => router.push('/(tabs)/whatsapp') : undefined}
+          value={unread.value}
+          sublabel={unread.sublabel}
+          accent={unread.accent}
+          onPress={unread.pressable ? () => router.push('/(tabs)/whatsapp') : undefined}
         />
       </KpiRow>
 

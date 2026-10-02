@@ -46,9 +46,10 @@ describe('POST /api/contract-templates', () => {
     expect((await post()).status).toBe(200)
     expect(tables.contract_templates[0].organization_id).toBe('org-y')
   })
-  it('an owner at the active studio: created (unchanged)', async () => {
+  it('an owner at the active studio with no org_admin grant: 403, nothing written (C18 ORGROLE.1; main: created)', async () => {
     getCurrentUser.mockResolvedValue(at('org-y', { role: 'owner', rolesByLocation: { 'loc-y': 'owner' } }))
-    expect((await post()).status).toBe(200)
+    expect((await post()).status).toBe(403)
+    expect(tables.contract_templates).toHaveLength(0)
   })
   it('a manager: 403 (unchanged)', async () => {
     getCurrentUser.mockResolvedValue(at('org-y', { role: 'manager', rolesByLocation: { 'loc-y': 'manager' } }))

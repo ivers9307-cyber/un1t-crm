@@ -52,6 +52,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { sqlCode } from './lib/sql-code.mjs'
 
 const MIG_DIR = 'supabase/migrations'
 
@@ -73,15 +74,12 @@ const RE_RENAME_TABLE = new RegExp(
 const RE_ALTER_POLICY = new RegExp(
   String.raw`\bALTER\s+POLICY\s+(${IDENT})\s+ON\s+(${TABLE})([\s\S]*)`, 'i')
 
-function stripSql (text) {
-  // Dollar-quoted bodies can contain semicolons and their own DDL; the
-  // conditional `DO $$ ... $$` wrappers in this repo only ever drop
-  // policies defensively, so dropping the body wholesale is safe here.
-  return text
-    .replace(/\$(\w*)\$[\s\S]*?\$\1\$/g, ' ')
-    .replace(/--[^\n]*/g, ' ')
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
-}
+// Comments and dollar-quoted bodies blanked by the one quote-aware,
+// $tag$-pairing scan (scripts/lib/sql-code.mjs; GUARDSTRIP.1), not three
+// regexes: a '--' or '/*' inside a string hid code from those. Dollar bodies
+// are dropped on purpose: the conditional `DO $$ ... $$` wrappers in this repo
+// only ever drop policies defensively.
+const stripSql = (text) => sqlCode(text, { bodies: 'blank' })
 
 function normIdent (s) {
   const t = s.trim()

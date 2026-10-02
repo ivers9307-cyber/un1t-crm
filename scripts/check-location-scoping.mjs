@@ -63,6 +63,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { sqlCode } from './lib/sql-code.mjs'
 
 const API_ROOT = 'src/app/api'
 const APP_ROOT = 'src/app'
@@ -184,6 +185,11 @@ const SCOPING_HELPERS = [
   // row-org membership compare, used by contracts revoke/resend/send/discard
   // after their fetch-by-id (404 on a foreign org).
   'canManageContractsInOrg(',
+  // src/lib/org-admin.js (C18 ORGROLE.1) — master, or an org_admin grant on
+  // the organisation passed. The wallet routes (settings/billing/topup,
+  // auto-topup) fetch the location by pk and 404 unless
+  // isOrgAdmin(user, location.organization_id): the same row-org compare.
+  'isOrgAdmin(',
   // src/lib/hosts.js — loads an event host and returns null unless
   // host.organization_id === orgId (events review surface).
   'loadHostForOrg(',
@@ -409,10 +415,12 @@ export const EXEMPT = {
 // Pure functions (exported for tests)
 // ---------------------------------------------------------------------------
 
-/** Strip `-- …` line comments so commented-out DDL can't add tables. */
-function stripSqlComments(sql) {
-  return sql.replace(/--[^\n]*/g, '')
-}
+/**
+ * Blank `-- …` and `/* … *\/` comments so commented-out DDL can't add tables,
+ * by the one quote-aware, $tag$-pairing scan (scripts/lib/sql-code.mjs), not a
+ * regex: a '--' inside a string ended the old strip early (GUARDSTRIP.1).
+ */
+const stripSqlComments = (sql) => sqlCode(sql)
 
 /**
  * Derive the tables that gain a location_id column from one migration file's
