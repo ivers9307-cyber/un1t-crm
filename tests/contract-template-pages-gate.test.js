@@ -31,10 +31,11 @@ const inY = (extra) => ({
 const adminStaff = inY({ role: 'staff', rolesByLocation: { 'loc-y': 'staff' }, orgAdminOrgIds: [ORG_Y] })
 const owner = inY({ role: 'owner', rolesByLocation: { 'loc-y': 'owner' } })
 const manager = inY({ role: 'manager', rolesByLocation: { 'loc-y': 'manager' } })
-// Owner of another org (via loc-x) while active in Y, where they are a manager.
+// Org admin of another org (org-x) while active in Y, where they are a manager.
 const ownerElsewhere = inY({
   role: 'manager', rolesByLocation: { 'loc-y': 'manager', 'loc-x': 'owner' },
   locations: [{ id: 'loc-y', organization_id: ORG_Y }, { id: 'loc-x', organization_id: 'org-x' }],
+  orgAdminOrgIds: ['org-x'],
 })
 
 const editProps = { params: Promise.resolve({ id: 'tpl-1' }) }
@@ -55,9 +56,10 @@ describe.each([
     getCurrentUser.mockResolvedValue(adminStaff)
     await expect(render()).resolves.toBeTruthy()
   })
-  it('opens for an owner (unchanged)', async () => {
+  // C18 ORGROLE.1 — a studio owner is not an organisation admin.
+  it('refuses a studio owner with no org_admin grant (C18; main: opened)', async () => {
     getCurrentUser.mockResolvedValue(owner)
-    await expect(render()).resolves.toBeTruthy()
+    await expect(render()).rejects.toThrow(/^NEXT_REDIRECT:\/$/)
   })
   it('refuses a manager (unchanged)', async () => {
     getCurrentUser.mockResolvedValue(manager)
@@ -65,7 +67,7 @@ describe.each([
   })
 })
 
-describe('an owner of ANOTHER org, active where they are a manager', () => {
+describe('an org admin of ANOTHER org, active where they are a manager', () => {
   it('list and new: redirected (unchanged)', async () => {
     getCurrentUser.mockResolvedValue(ownerElsewhere)
     await expect(ListPage()).rejects.toThrow(/^NEXT_REDIRECT:\/$/)

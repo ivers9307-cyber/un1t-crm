@@ -8,6 +8,10 @@
 // GET /api/contracts/[id] and /pdf, already let them in). The decision is now
 // "master, or owner/admin of the contract's org"; the 404 for a foreign org
 // is unchanged.
+//
+// C18 ORGROLE.1 (Richard, 1 Oct 2026): "manages the org" is now an
+// ORGANISATION ADMIN of it (master or an org_admin grant). A studio owner in
+// the org with no grant is refused at the coarse check (403, before any read).
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { makeFakeDb } from '@/lib/api-auth.test-helpers.js'
 
@@ -83,17 +87,23 @@ function seed(status) {
 beforeEach(() => vi.clearAllMocks())
 
 describe.each(ROUTES)('POST /api/contracts/[id]/%s', (_name, call, status) => {
-  it('an owner of the contract\'s org, active at another org\'s studio (main: 403)', async () => {
+  it('a studio owner in the contract\'s org with no org_admin grant: 403 before any read (C18; GATES-2: 200)', async () => {
     seed(status); getCurrentUser.mockResolvedValue(managerXOwnerY)
-    expect((await call()).status).toBe(200)
+    expect((await call()).status).toBe(403)
+    expect(tables.contracts[0].status).toBe(status)
   })
   it('an org admin of the contract\'s org who is not owner at the active studio (main: 403)', async () => {
     seed(status); getCurrentUser.mockResolvedValue(orgAdminYStaffAtActive)
     expect((await call()).status).toBe(200)
   })
-  it('an owner at the active studio who is staff in the contract\'s org: 404 (unchanged)', async () => {
-    seed(status); getCurrentUser.mockResolvedValue(ownerXStaffY)
+  it('an org admin of ANOTHER org, owner at the active studio and staff in the contract\'s org: 404', async () => {
+    seed(status); getCurrentUser.mockResolvedValue({ ...ownerXStaffY, orgAdminOrgIds: [ORG_X] })
     expect((await call()).status).toBe(404)
+    expect(tables.contracts[0].status).toBe(status)
+  })
+  it('a studio owner with no grant anywhere: 403 before any read (C18; GATES-2: 404)', async () => {
+    seed(status); getCurrentUser.mockResolvedValue(ownerXStaffY)
+    expect((await call()).status).toBe(403)
     expect(tables.contracts[0].status).toBe(status)
   })
   it('owner of no org: 403 before any read (unchanged)', async () => {
