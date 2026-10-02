@@ -25,6 +25,19 @@ afterAll(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true 
 const find = (state, table, name) => state.find((p) => p.table === table && p.name === name)
 
 describe('netPolicyState — renames and ALTER POLICY', () => {
+  // GUARDSTRIP.1 (C74): the three-regex strip read the '/*' in a string as a
+  // comment and dropped the policy after it.
+  it('a /* or -- inside a string hides no policy', () => {
+    const state = replay({
+      '001_a.sql': `CREATE TABLE public.t (id int);
+        SELECT '/*';
+        CREATE POLICY t_read ON public.t FOR SELECT TO authenticated USING (true);
+        SELECT '*/'; SELECT '--'; CREATE POLICY t_ins ON public.t FOR INSERT TO authenticated WITH CHECK (true);`,
+    })
+    expect(find(state, 'public.t', 't_read')).toBeDefined()
+    expect(find(state, 'public.t', 't_ins')).toBeDefined()
+  })
+
   it('a policy moves with its table on ALTER TABLE … RENAME TO', () => {
     const state = replay({
       '001_a.sql': `CREATE TABLE public.inbound_invoices (id int);

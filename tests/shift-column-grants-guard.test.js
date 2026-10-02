@@ -25,6 +25,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { SHIFT_COLUMN_GRANTS, SHIFT_GRANT_TABLES, SHIFT_GRANT_MIGRATION } from './helpers/shift-column-grants.js'
+import { sqlCode } from './helpers/sql-code.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const TABLE_ALT = SHIFT_GRANT_TABLES.join('|')
@@ -176,7 +177,7 @@ function splitTop(list) {
  * note is not a grant); a GRANT inside an EXECUTE string is still a grant.
  */
 function blanketGrants(sql) {
-  const code = sql.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--[^\n]*/g, ' ')
+  const code = sqlCode(sql)
   const hits = []
   for (const m of code.matchAll(/\bgrant\s+([\s\S]+?)\s+on\s+([\s\S]+?)\s+to\s+([\s\S]+?)(?:;|'|$)/gi)) {
     const [stmt, privs, target, to] = m
@@ -223,6 +224,13 @@ describe('a new column on a shift table is granted or withheld on purpose', () =
     if (file === '(none yet)') return
     const sql = readFileSync(path.join(dir, file), 'utf8')
     expect(blanketGrants(sql), `${file}: re-granting table-level SELECT silently reopens C8's leak (mig 646) — grant columns instead: GRANT SELECT (<col>, …) ON public.<table> TO authenticated`).toEqual([])
+  })
+
+  // GUARDSTRIP.1 (C74): a '/*' inside a string, or after a DO block's $$, hid
+  // the GRANT from the old regex / unpaired stripper.
+  it('a /* inside a string or a later $$ literal hides no GRANT (GUARDSTRIP.1)', () => {
+    expect(blanketGrants("SELECT '/*';\nGRANT SELECT ON public.shift_blocks TO authenticated;\nSELECT '*/';"), 'string').not.toEqual([])
+    expect(blanketGrants("DO $$ BEGIN PERFORM 1; END $$;\nSELECT $$ /* $$;\nGRANT SELECT ON public.shift_blocks TO authenticated;\nSELECT $$ */ $$;"), 'dollar').not.toEqual([])
   })
 
   it('the blanket-grant detector catches every re-grant form and passes column grants', () => {

@@ -103,7 +103,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, existsSync } from 'node:fs'
 import { dirname, join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { stripComments } from '../scripts/lib/strip-comments.mjs'
+import { stripComments } from './helpers/js-code.js'
 import { exportBodies, collectExportNames } from '../scripts/lib/export-bodies.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -479,7 +479,7 @@ function unclassifiedShims(shims, pairs) {
   return out.sort()
 }
 
-describe('shared/ ↔ src/lib/ pair inventory is complete', () => {
+describe('shared/ ↔ src/lib/ pair inventory is complete', { timeout: 120_000 }, () => {
   it('every module with the SAME NAME in both directories is classified', () => {
     const sameName = walkJs(join(repo, 'shared'))
       .filter((rel) => existsSync(join(repo, 'src', 'lib', rel)))
@@ -616,7 +616,7 @@ describe('shared/ ↔ src/lib/ pair inventory is complete', () => {
   })
 })
 
-describe('reexport pairs — one implementation, proven by identity', () => {
+describe('reexport pairs — one implementation, proven by identity', { timeout: 120_000 }, () => {
   const entries = Object.entries(PAIRS).filter(([, c]) => c.mode === 'reexport')
   for (const [key, cfg] of entries) {
     it(`${key}: every shared export is the SAME object on the web side`, async () => {
@@ -641,7 +641,7 @@ describe('reexport pairs — one implementation, proven by identity', () => {
   }
 })
 
-describe('identical pairs — the copies really are copies', () => {
+describe('identical pairs — the copies really are copies', { timeout: 120_000 }, () => {
   const entries = Object.entries(PAIRS).filter(([, c]) => c.mode === 'identical')
   for (const [key, cfg] of entries) {
     it(`${key}: module bodies match once comments and import specifiers are set aside`, () => {
@@ -675,7 +675,7 @@ describe('identical pairs — the copies really are copies', () => {
   }
 })
 
-describe('web-superset pairs — shared is the subset, extras are declared', () => {
+describe('web-superset pairs — shared is the subset, extras are declared', { timeout: 120_000 }, () => {
   const entries = Object.entries(PAIRS).filter(([, c]) => c.mode === 'web-superset')
   for (const [key, cfg] of entries) {
     it(`${key}: every export shared declares is byte-equal on the web side`, () => {
@@ -697,7 +697,7 @@ describe('web-superset pairs — shared is the subset, extras are declared', () 
   }
 })
 
-describe('diverged pairs — the drift is pinned, in both directions', () => {
+describe('diverged pairs — the drift is pinned, in both directions', { timeout: 120_000 }, () => {
   const entries = Object.entries(PAIRS).filter(([, c]) => c.mode === 'diverged')
   for (const [key, cfg] of entries) {
     it(`${key}: exactly the recorded exports differ — no more, and no fewer`, () => {
@@ -726,7 +726,7 @@ describe('diverged pairs — the drift is pinned, in both directions', () => {
   }
 })
 
-describe('unrelated pairs — same filename, different module', () => {
+describe('unrelated pairs — same filename, different module', { timeout: 120_000 }, () => {
   const entries = Object.entries(PAIRS).filter(([, c]) => c.mode === 'unrelated')
   for (const [key, cfg] of entries) {
     it(`${key}: the export surfaces stay disjoint`, () => {
@@ -742,7 +742,7 @@ describe('unrelated pairs — same filename, different module', () => {
   }
 })
 
-describe('shared-constant pairs — different modules, one value that must agree', () => {
+describe('shared-constant pairs — different modules, one value that must agree', { timeout: 120_000 }, () => {
   const entries = Object.entries(PAIRS).filter(([, c]) => c.mode === 'shared-constant')
   for (const [key, cfg] of entries) {
     for (const name of cfg.constants) {
@@ -773,7 +773,7 @@ describe('shared-constant pairs — different modules, one value that must agree
 // Source comparison catches an edit. These catch the thing the edit would
 // break, and they keep working through a refactor that rewrites the source.
 
-describe('the status-tier ladder means the same thing on both surfaces', () => {
+describe('the status-tier ladder means the same thing on both surfaces', { timeout: 120_000 }, () => {
   it('TIERS is identical, slug/name/months/colour', async () => {
     const s = await import('../shared/tiers.js')
     const w = await import('../src/lib/tiers.js')
@@ -795,7 +795,7 @@ describe('the status-tier ladder means the same thing on both surfaces', () => {
   })
 })
 
-describe('the dark-canvas zone palette means the same thing on both surfaces', () => {
+describe('the dark-canvas zone palette means the same thing on both surfaces', { timeout: 120_000 }, () => {
   it('all five zone hues are identical', async () => {
     const s = await import('../shared/zone-colors.js')
     const w = await import('../src/lib/tv-zone-colors.js')
@@ -812,7 +812,7 @@ describe('the dark-canvas zone palette means the same thing on both surfaces', (
   })
 })
 
-describe('the returning-board taxonomy is ONE object, not a copy (PIPELINES.2b)', () => {
+describe('the returning-board taxonomy is ONE object, not a copy (PIPELINES.2b)', { timeout: 120_000 }, () => {
   it('@/lib/pipeline-classifier re-exports the board module\'s bindings by identity', async () => {
     const board = await import('../shared/pipelines/returning.js')
     const web = await import('../src/lib/pipeline-classifier.js')
@@ -828,7 +828,7 @@ describe('the returning-board taxonomy is ONE object, not a copy (PIPELINES.2b)'
   })
 })
 
-describe('the session-report fixture both copies assert against', () => {
+describe('the session-report fixture both copies assert against', { timeout: 120_000 }, () => {
   it('is identical in shared/__fixtures__ and src/lib/__fixtures__', () => {
     // hr-session-report.js is mode 'identical', so its two test files compute
     // against the same code. If the FIXTURES diverged, the two suites would

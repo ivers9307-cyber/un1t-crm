@@ -420,7 +420,11 @@ export async function fetchStudioDashboardData(supabase, locationId) {
     .eq('location_id', locationId)
     .gt('unread_count', 0)
 
-  const totalUnread = (unreadConvos.data || []).reduce((s, c) => s + (c.unread_count || 0), 0)
+  // REVIEWNITS.1 (D5): a failed read is unknown (null: the phone shows a
+  // dash), never 0. The tab still loads; only this one card says so.
+  const totalUnread = unreadConvos.error
+    ? null
+    : (unreadConvos.data || []).reduce((s, c) => s + (c.unread_count || 0), 0)
 
   return {
     success: true,

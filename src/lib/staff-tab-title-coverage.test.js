@@ -36,6 +36,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { readdirSync, readFileSync, statSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { stripComments } from '../../tests/helpers/js-code.js'
 
 const APP = path.join(process.cwd(), 'src/app')
 const rel = (abs) => path.relative(process.cwd(), abs)
@@ -130,7 +131,8 @@ const exportsOwnMetadata = (src) =>
 // JSX at all once comments are gone. Deliberately strict; a page that renders
 // anything, even a fallback, titles a tab and is not exempt.
 function redirectOnlyProblems(src) {
-  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  // Comments blanked by the TypeScript parser's ranges, never a regex (GUARDSTRIP.1).
+  const code = stripComments(src)
   const problems = []
   if (!/\bredirect\(/.test(code)) problems.push('never calls redirect()')
   if (/\breturn\s*[(<]/.test(code)) problems.push('returns a rendered value')

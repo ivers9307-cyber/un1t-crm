@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { stripComments } from '../../../../../scripts/lib/strip-comments.mjs'
+import { stripComments } from '../../../../../tests/helpers/js-code.js'
 
 const HERE = import.meta.dirname
 const src = (rel) => stripComments(fs.readFileSync(path.join(HERE, rel), 'utf8'))

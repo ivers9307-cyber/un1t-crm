@@ -20,6 +20,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, existsSync } from 'node:fs'
 import path from 'node:path'
+import { sqlCode } from './helpers/sql-code.js'
 import { pickMergedFields } from '../src/lib/contact-merge.js'
 
 const FILE = path.resolve(
@@ -28,7 +29,7 @@ const FILE = path.resolve(
 )
 
 const raw = existsSync(FILE) ? readFileSync(FILE, 'utf8') : ''
-const sql = raw.replace(/--[^\n]*/g, '').toLowerCase()
+const sql = sqlCode(raw).toLowerCase()
 
 describe('migration 533 — merge_contacts exists and is callable only by service_role', () => {
   it('exists', () => {
