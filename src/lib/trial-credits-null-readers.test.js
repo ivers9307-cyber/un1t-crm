@@ -17,10 +17,16 @@ const NEW_LEAD = {
 }
 
 describe('C145 — NULL trial credits read as "no count"', () => {
-  it('contact drawer attention: no "trial credits unused" item for a NULL count', () => {
+  it('contact drawer attention: a NULL count still flags "No next class booked", with no number', () => {
     const items = deriveNeedsAttention({ contact: NEW_LEAD })
-    expect(items.find((i) => i.key === 'no_next_class')).toBeUndefined()
+    const item = items.find((i) => i.key === 'no_next_class')
+    expect(item).toEqual(expect.objectContaining({ label: 'No next class booked', detail: '' }))
     expect(JSON.stringify(items)).not.toMatch(/credit/)
+  })
+
+  it('contact drawer attention: a known 0 (trial spent) does not flag', () => {
+    const items = deriveNeedsAttention({ contact: { ...NEW_LEAD, trial_credits_remaining: 0 } })
+    expect(items.find((i) => i.key === 'no_next_class')).toBeUndefined()
   })
 
   it('approval card summary says "credits unknown", never 0 or 3', () => {
