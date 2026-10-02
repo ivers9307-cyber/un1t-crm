@@ -518,6 +518,50 @@ registry.registerPath({
   },
 })
 
+// C134 WEBBOOKINGWRITES.1 — the /bookings pill and bell, off the browser client.
+const bookingWriteErr = (description) => ({ description, content: { 'application/json': { schema: ErrorResponse } } })
+registry.registerPath({
+  method: 'post',
+  path: '/api/bookings/{id}/status',
+  tags: ['Bookings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Mark a booking confirmed, completed or no-show',
+  description: "The web bookings permission at the booking's studio (its location_id, else its booking type's); membership first (404). Cancelling is POST /api/bookings/{id}/cancel; a cancelled booking is not re-opened (409). The write is a compare-and-swap on the status it was judged against (409 if it changed).",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ status: z.enum(['confirmed', 'completed', 'no_show']) }) } } },
+  },
+  responses: {
+    200: { description: 'Changed', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ id: uuidLike, status: z.string() }) }) } } },
+    400: bookingWriteErr('Validation failed (cancelled is not accepted here)'),
+    401: bookingWriteErr('Unauthorized'),
+    403: bookingWriteErr('No web bookings permission at the booking\'s studio (or at any studio)'),
+    404: bookingWriteErr('No such booking, or not at a studio of yours'),
+    409: bookingWriteErr('The booking is cancelled, or changed while you were looking at it'),
+    500: bookingWriteErr('The booking could not be read or written'),
+  },
+})
+registry.registerPath({
+  method: 'post',
+  path: '/api/bookings/{id}/skip-reminder',
+  tags: ['Bookings'],
+  security: [{ CookieAuth: [] }],
+  summary: "Skip (or re-enable) one booking's reminders",
+  description: "Sets bookings.skip_reminder (mig 075). The web bookings permission at the booking's studio (its location_id, else its booking type's); membership first (404).",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ skip_reminder: z.boolean() }) } } },
+  },
+  responses: {
+    200: { description: 'Saved', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ id: uuidLike, skip_reminder: z.boolean() }) }) } } },
+    400: bookingWriteErr('Validation failed'),
+    401: bookingWriteErr('Unauthorized'),
+    403: bookingWriteErr('No web bookings permission at the booking\'s studio (or at any studio)'),
+    404: bookingWriteErr('No such booking, or not at a studio of yours'),
+    500: bookingWriteErr('The booking could not be read or written'),
+  },
+})
+
 registry.registerPath({
   method: 'get',
   path: '/api/public/challenges/{locationId}',
@@ -3220,7 +3264,7 @@ registry.registerPath({
   tags: ['WhatsApp'],
   security: [{ CookieAuth: [] }],
   summary: 'Create a WhatsApp template and submit it to Meta for review',
-  description: "Submits on the location's own WABA (body location_id, else the active studio), then saves the row with Meta's id and status. MANAGER_ROLES (master, owner, manager, head coach) at that location (WATPLROLE.1).",
+  description: "Submits on the location's own WABA (body location_id, else the active studio), then saves the row with Meta's id and status. MANAGER_ROLES (master, owner, manager, head coach) and the whatsapp permission at that location (WATPLROLE.1, GATES-3).",
   request: {
     body: { content: { 'application/json': { schema: z.object({
       name: z.string().min(1).max(200),
@@ -3238,7 +3282,7 @@ registry.registerPath({
     200: { description: 'Submitted to Meta and saved', content: { 'application/json': { schema: z.object({ success: z.literal(true), template: WaTemplateRow }) } } },
     400: waErr('Validation failed, a malformed button, or Meta refused the template'),
     401: waErr('Unauthorized'),
-    403: waErr('Not a member of the location, or not MANAGER_ROLES there; nothing sent to Meta'),
+    403: waErr('Not a member of the location, or not MANAGER_ROLES with whatsapp there; nothing sent to Meta'),
     409: waErr('No WhatsApp number is connected at this location; nothing sent to Meta'),
     500: waErr("The location's number could not be looked up; nothing sent to Meta"),
   },
@@ -3265,7 +3309,7 @@ registry.registerPath({
   tags: ['WhatsApp'],
   security: [{ CookieAuth: [] }],
   summary: "Edit a WhatsApp template's local fields",
-  description: "No Meta call. display_group (the picker grouping) saves in every state for any member. Any other field needs MANAGER_ROLES at the template's location (WATPLROLE.1) and is accepted only while the template is a draft (never submitted to Meta); once submitted, content changes go through POST /api/whatsapp/templates/{id}/resubmit (REJECTED or PAUSED) or a new template (WATPLPUT.1). status, rejection_reason, quality_rating and meta_template_id are Meta's and are refused in every state. Checks run 404 → 400 → 403 → 409.",
+  description: "No Meta call. display_group (the picker grouping) saves in every state for any member. Any other field needs MANAGER_ROLES and the whatsapp permission at the template's location (WATPLROLE.1, GATES-3) and is accepted only while the template is a draft (never submitted to Meta); once submitted, content changes go through POST /api/whatsapp/templates/{id}/resubmit (REJECTED or PAUSED) or a new template (WATPLPUT.1). status, rejection_reason, quality_rating and meta_template_id are Meta's and are refused in every state. Checks run 404 → 400 → 403 → 409.",
   request: {
     params: z.object({ id: uuidLike }),
     body: { content: { 'application/json': { schema: z.object({
@@ -3281,7 +3325,7 @@ registry.registerPath({
     200: { description: 'Saved', content: { 'application/json': { schema: z.object({ success: z.literal(true), template: WaTemplateRow }) } } },
     400: waErr('Validation failed; includes a body carrying status, rejection_reason, quality_rating or meta_template_id (set by Meta, never by this route); issues names the field; nothing written'),
     401: waErr('Unauthorized'),
-    403: waErr('A field other than display_group, and the caller is not MANAGER_ROLES at the template\'s location; nothing written'),
+    403: waErr('A field other than display_group, and the caller is not MANAGER_ROLES with whatsapp at the template\'s location; nothing written'),
     404: waErr('Not found, or not at one of your locations'),
     409: waErr('The template is with Meta, so its name, category, components, example values and header media are locked: use Edit & resubmit (REJECTED/PAUSED) or a new template; issues lists the locked fields; nothing written'),
     500: waErr('The update failed'),
@@ -3294,12 +3338,12 @@ registry.registerPath({
   tags: ['WhatsApp'],
   security: [{ CookieAuth: [] }],
   summary: 'Delete a WhatsApp template at Meta and locally',
-  description: "Deletes by NAME on the template's own location's WABA (a Meta error is logged, not returned), then the row. A location with no number skips Meta. MANAGER_ROLES at the template's location (WATPLROLE.1).",
+  description: "Deletes by NAME on the template's own location's WABA (a Meta error is logged, not returned), then the row. A location with no number skips Meta. MANAGER_ROLES and the whatsapp permission at the template's location (WATPLROLE.1, GATES-3).",
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: 'Deleted' },
     401: waErr('Unauthorized'),
-    403: waErr('Not MANAGER_ROLES at the template\'s location; nothing deleted'),
+    403: waErr('Not MANAGER_ROLES with whatsapp at the template\'s location; nothing deleted'),
     404: waErr('Not found, or not at one of your locations'),
     500: waErr("The location's number could not be looked up (row kept so a retry still reaches Meta), or the row delete failed"),
   },
@@ -3311,7 +3355,7 @@ registry.registerPath({
   tags: ['WhatsApp'],
   security: [{ CookieAuth: [] }],
   summary: 'Edit a rejected or paused WhatsApp template at Meta and put it back into review',
-  description: "REJECTED or PAUSED only, with a Meta id. Sends category + components to Meta on the template's own number, then saves them locally with status PENDING and no rejection reason; Meta's verdict arrives later on the template webhook. MANAGER_ROLES at the template's location. A new header file (header_media_url/path/handle, WATPLRESUBMEDIA.1) is stored with it, judged like an upload: a path the sign route minted in this template's studio folder of the whatsapp-templates bucket, of the header's type, at the URL the bucket serves for it; media identical to what the row stores is not re-judged.",
+  description: "REJECTED or PAUSED only, with a Meta id. Sends category + components to Meta on the template's own number, then saves them locally with status PENDING and no rejection reason; Meta's verdict arrives later on the template webhook. MANAGER_ROLES and the whatsapp permission at the template's location (GATES-3). A new header file (header_media_url/path/handle, WATPLRESUBMEDIA.1) is stored with it, judged like an upload: a path the sign route minted in this template's studio folder of the whatsapp-templates bucket, of the header's type, at the URL the bucket serves for it; media identical to what the row stores is not re-judged.",
   request: {
     params: z.object({ id: uuidLike }),
     body: { content: { 'application/json': { schema: z.object({ category: WaTemplateCategory.optional(), components: z.array(z.unknown()), header_media_handle: z.string().max(4000).nullable().optional(), header_media_url: z.string().url().max(2000).nullable().optional(), header_media_path: z.string().max(500).nullable().optional() }).openapi('WaTemplateResubmit') } } },
@@ -3320,7 +3364,7 @@ registry.registerPath({
     200: { description: 'Resubmitted; now PENDING', content: { 'application/json': { schema: z.object({ success: z.literal(true), template: WaTemplateRow }) } } },
     400: waErr('Not REJECTED/PAUSED, no Meta id, validation failed, a malformed button, header media that is not a minted file of the right type in this studio\'s folder, or Meta refused the edit'),
     401: waErr('Unauthorized'),
-    403: waErr('Not MANAGER_ROLES at the template\'s location; nothing sent to Meta'),
+    403: waErr('Not MANAGER_ROLES with whatsapp at the template\'s location; nothing sent to Meta'),
     404: waErr('Not found, or not at one of your locations'),
     409: waErr('No WhatsApp number is connected at this location; nothing sent to Meta'),
     500: waErr("The template or the location's number could not be read; nothing sent to Meta"),

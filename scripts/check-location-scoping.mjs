@@ -127,6 +127,12 @@ const SCOPING_HELPERS = [
   // hands back, which is why the handlers that use it look unscoped in
   // isolation.
   'loadSendingMailbox(',
+  // src/lib/booking-web-writes.js — C134 WEBBOOKINGWRITES.1. Reads the
+  // booking by id, resolves its studio (location_id, else its booking type's),
+  // runs assertLocationAccessOr404 there and then hasPermissionForLocation
+  // ('bookings') there, and returns that row; the routes' write is then by
+  // that row's id, which is why the handlers look unscoped in isolation.
+  'loadBookingForWebWrite(',
   // src/lib/audience-filter.js — every send audience goes through the
   // whitelist filter, which applies the location scope with the audience.
   'applyAudienceFilter(',

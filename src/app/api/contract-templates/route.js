@@ -10,28 +10,21 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getOwnerOrganizationIds } from '@/lib/auth'
-import { canManageContractsInOrg } from '@/lib/contract-gates'
+import { canManageContractsInOrg, canManageContractsSomewhere } from '@/lib/contract-gates'
 import { contractTemplateSchema } from '@/lib/schemas'
 import { validateBody } from '@/lib/validate'
 
 export const runtime = 'nodejs'
 
-function isOwnerOrMaster(user) {
-  // SAAS-4: org admins (mig 417) count — they act as owner across
-  // their whole org, and getOwnerOrganizationIds() below already
-  // scopes them to exactly their admin orgs. The role check alone
-  // would usually pass anyway (their active-location role resolves to
-  // the synthetic 'owner'), but an org admin holding an explicit
-  // non-owner assignment at their active location must not be locked
-  // out of their org's templates.
-  return user?.role === 'master' || user?.role === 'owner'
-    || (user?.orgAdminOrgIds || []).length > 0
-}
-
 export async function GET() {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!isOwnerOrMaster(user)) {
+  // GATES-3 (c) — the issue wizard's list. The rows are scoped to the orgs the
+  // caller manages below, so the gate is GATES-2's coarse rule (an owner/admin
+  // of SOME org), not the ACTIVE studio's role: an owner of another org
+  // working from a studio where they are a manager got a 403 and an empty
+  // wizard.
+  if (!canManageContractsSomewhere(user)) {
     return NextResponse.json({ success: false, error: 'Master or owner only' }, { status: 403 })
   }
 

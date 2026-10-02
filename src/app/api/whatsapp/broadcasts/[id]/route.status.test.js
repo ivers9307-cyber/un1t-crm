@@ -65,3 +65,57 @@ describe('PUT /api/whatsapp/broadcasts/[id] status (C123 a)', () => {
     expect(row().name).toBe('Autumn')
   })
 })
+
+// C120 GATES-3 (f) — a status change is judged against the row's CURRENT
+// state: 'draft' only un-schedules (no un-cancel, no reset of a sending or
+// sent row); 'cancelled' stops a draft, a scheduled row or a running send
+// (the editor's Cancel on a drip), never a finished or cancelled one. And the
+// write is a compare-and-swap on the state it was judged against, so a cron
+// flip in between is never overwritten.
+describe('PUT /api/whatsapp/broadcasts/[id] status transitions (GATES-3 f)', () => {
+  it.each([
+    ['draft', 'draft', 200],
+    ['scheduled', 'draft', 200],
+    ['sending', 'draft', 409],
+    ['sent', 'draft', 409],
+    ['cancelled', 'draft', 409],
+    ['draft', 'cancelled', 200],
+    ['scheduled', 'cancelled', 200],
+    ['sending', 'cancelled', 200],
+    ['sent', 'cancelled', 409],
+    ['cancelled', 'cancelled', 409],
+  ])("from '%s' to '%s': %i", async (from, to, expected) => {
+    row().status = from
+    const res = await put({ status: to })
+    expect(res.status).toBe(expected)
+    expect(row().status).toBe(expected === 200 ? to : from)
+    if (expected === 409) expect((await res.json()).error).toMatch(new RegExp(`'${from}'`))
+  })
+
+  it('a state change raced by the cron is a 409, never an overwrite', async () => {
+    row().status = 'scheduled'
+    row().scheduled_at = '2099-01-01T09:00:00.000Z'
+    // The route reads 'scheduled'; the cron promotes it before the write lands.
+    const real = db.from
+    let reads = 0
+    db = { from: (t) => {
+      const b = real(t)
+      const single = b.single
+      b.single = async () => { const r = await single(); if (t === 'whatsapp_broadcasts' && ++reads === 1) row().status = 'sending'; return r }
+      return b
+    } }
+    const res = await put({ status: 'draft', scheduled_at: null })
+    expect(res.status).toBe(409)
+    expect(row().status).toBe('sending')
+  })
+
+  it('a failed read of the broadcast is a 500, not a 404', async () => {
+    db = { from: () => {
+      const b = { select: () => b, eq: () => b, single: async () => ({ data: null, error: { code: '57014', message: 'timeout' } }) }
+      return b
+    } }
+    const res = await put({ name: 'x' })
+    expect(res.status).toBe(500)
+  })
+})
+

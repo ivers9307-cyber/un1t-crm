@@ -34,6 +34,8 @@ vi.mock('@/lib/auth', () => ({
   // INBOXLOC.1 — the decision at the conversation's studio; its real
   // behaviour is pinned in src/lib/auth.test.js and inbox-location.test.js.
   requireWhatsAppInboxAt: () => null,
+  // C126 — the web-controls flag (route.web-controls.test.js pins it).
+  requireWebWhatsAppInboxAt: () => null,
 }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 

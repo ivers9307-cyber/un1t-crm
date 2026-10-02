@@ -1,7 +1,6 @@
 import { getCurrentUser } from '@/lib/auth'
 import { redirect } from 'next/navigation'
-import { hasRoleAtLocation } from '@/lib/role-at-location'
-import { MANAGER_ROLES } from '@/lib/schemas'
+import { canManageWaTemplatesAt } from '@/lib/wa-template-access'
 import { canUseCommunicationsHere } from '@/lib/communications-access'
 import WATemplateEditor from '@/components/WATemplateEditor'
 
@@ -18,7 +17,8 @@ export default async function NewWATemplatePage() {
   // this active-studio page.
   if (!canUseCommunicationsHere(user)) redirect('/')
   const locationId = user.activeLocation?.id
-  if (!hasRoleAtLocation(user, locationId, MANAGER_ROLES)) redirect('/communications/templates?channel=whatsapp')
+  // GATES-3 (b) — the route's rule: MANAGER_ROLES AND `whatsapp` here.
+  if (!canManageWaTemplatesAt(user, locationId)) redirect('/communications/templates?channel=whatsapp')
 
   return (
     <WATemplateEditor

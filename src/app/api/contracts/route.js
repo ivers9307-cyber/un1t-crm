@@ -24,6 +24,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getOwnerOrganizationIds } from '@/lib/auth'
+import { canManageContractsInOrg, canManageContractsSomewhere } from '@/lib/contract-gates'
 import { contractIssueSchema } from '@/lib/schemas'
 import { validateBody } from '@/lib/validate'
 import {
@@ -39,10 +40,6 @@ import { notifyContractIssued } from '@/lib/contracts-notify'
 import { logAuditEvent } from '@/lib/audit'
 
 export const runtime = 'nodejs'
-
-function isOwnerOrMaster(user) {
-  return user?.role === 'master' || user?.role === 'owner'
-}
 
 export async function GET() {
   const user = await getCurrentUser()
@@ -96,7 +93,12 @@ export async function GET() {
 export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!isOwnerOrMaster(user)) {
+  // GATES-3 (c) — the coarse pre-check is GATES-2's: master, or an owner/admin
+  // of SOME org (getOwnerOrganizationIds). `user.role` is the ACTIVE studio's
+  // role, so it refused an owner of the template's org working from a studio
+  // where they are a manager, and an org admin whose own role there is not
+  // owner. The decision is the template's org, below.
+  if (!canManageContractsSomewhere(user)) {
     return NextResponse.json({ success: false, error: 'Master or owner only' }, { status: 403 })
   }
 
@@ -126,11 +128,10 @@ export async function POST(request) {
   //     template is master-only. Same 404 as a missing template so
   //     foreign ids can't be probed (this must precede the `active`
   //     check for the same reason).
-  if (!user.isMaster) {
-    const ownerOrgIds = getOwnerOrganizationIds(user)
-    if (!template.organization_id || !ownerOrgIds.includes(template.organization_id)) {
-      return NextResponse.json({ success: false, error: 'Template not found' }, { status: 404 })
-    }
+  //     GATES-3: canManageContractsInOrg is that same rule (master, or an
+  //     owner/admin of the org; a null org is master-only).
+  if (!canManageContractsInOrg(user, template.organization_id)) {
+    return NextResponse.json({ success: false, error: 'Template not found' }, { status: 404 })
   }
 
   if (!template.active) return NextResponse.json({ success: false, error: 'Template is inactive' }, { status: 400 })

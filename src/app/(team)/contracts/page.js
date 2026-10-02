@@ -22,12 +22,9 @@ import { Plus, FileText, Settings as SettingsIcon, ChevronRight } from 'lucide-r
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
+import { canManageContractsInOrg } from '@/lib/contract-gates'
 
 export const dynamic = 'force-dynamic'
-
-function isOwnerOrMaster(user) {
-  return user?.role === 'master' || user?.role === 'owner'
-}
 
 const STATUS_BADGE = {
   issued:   { label: 'Sent',     class: 'bg-blue-500/15 text-blue-700' },
@@ -78,7 +75,10 @@ export default async function ContractsAdminPage() {
   // CONTRACTS-GATES.1 — issuing/templates stay owner/master-only; a
   // permission-granted non-owner sees the list and can open rows
   // read-only but gets no write affordances.
-  const canWrite = isOwnerOrMaster(user)
+  // GATES-3 (c) — judged at the ACTIVE org (this list's, and the one the
+  // Templates page manages), not the active studio's role: an org admin
+  // whose own role there is not owner was offered nothing.
+  const canWrite = canManageContractsInOrg(user, user.activeOrganization?.id || null)
 
   // CONTRACTS-SCOPE.1 — replicate mig 106's tenant boundary in app code
   // (service role bypasses RLS). Master sees every contract; everyone else
