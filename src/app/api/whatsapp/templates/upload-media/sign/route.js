@@ -16,6 +16,7 @@ import { randomUUID } from 'node:crypto'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
+import { canUploadWaTemplateMediaAt } from '@/lib/wa-template-access'
 import { uuidLike } from '@/lib/schemas'
 import { validateTemplateMedia } from '@/lib/template-media'
 
@@ -51,10 +52,15 @@ export async function POST(request) {
   const locationId = body.location_id || user.activeLocation?.id
   const guard = locationId ? assertLocationAccess(user, locationId) : null
   if (guard) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  // C138 (a) — the template routes' rule at this studio (or master / owner
+  // there, the card-set editor's); no studio fails closed (no global/ slot).
+  if (!canUploadWaTemplateMediaAt(user, locationId)) {
+    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  }
 
   // UUID-based path so the public URL is effectively unguessable; folder
   // per location for cleanup. Same scheme the old in-route upload used.
-  const storagePath = `${locationId || 'global'}/${randomUUID()}${check.ext}`
+  const storagePath = `${locationId}/${randomUUID()}${check.ext}`
 
   const db = createServerClient()
   const { data, error } = await db.storage

@@ -26,6 +26,7 @@ import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
+import { canUploadWaTemplateMediaAt } from '@/lib/wa-template-access'
 import { uuidLike } from '@/lib/schemas'
 import { validateTemplateMedia, isMintedMediaPath } from '@/lib/template-media'
 import { uploadMediaForTemplate } from '@/lib/whatsapp'
@@ -66,14 +67,20 @@ export async function POST(request) {
   const locationId = body.location_id || user.activeLocation?.id
   const guard = locationId ? assertLocationAccess(user, locationId) : null
   if (guard) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  // C138 (a) — the template routes' rule at this studio (or master / owner
+  // there, the card-set editor's); no studio fails closed (no global/ slot).
+  if (!canUploadWaTemplateMediaAt(user, locationId)) {
+    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  }
 
   // Only paths minted by ./sign are accepted, and only within this
-  // caller's own folder (or 'global') — no pointing at other objects.
+  // studio's folder — no pointing at other objects. (C138 a: a studio is now
+  // required, so the old 'global' folder is never minted or finalised.)
   if (!isMintedMediaPath(body.path)) {
     return NextResponse.json({ success: false, error: 'Invalid media path' }, { status: 400 })
   }
   const folder = body.path.split('/')[0]
-  if (folder !== 'global' && folder !== String(locationId)) {
+  if (folder !== String(locationId)) {
     return NextResponse.json({ success: false, error: 'Invalid media path' }, { status: 400 })
   }
 

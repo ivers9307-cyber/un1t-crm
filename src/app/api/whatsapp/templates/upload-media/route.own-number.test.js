@@ -7,7 +7,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/auth', () => ({
-  getCurrentUser: vi.fn(async () => ({ id: 'prof-1', activeLocation: { id: 'a0000000-0000-4000-8000-000000000001' } })),
+  // C138 (a) — an owner there (the upload routes now judge the role too).
+  getCurrentUser: vi.fn(async () => ({
+    id: 'prof-1', profileRole: 'staff', activeLocation: { id: 'a0000000-0000-4000-8000-000000000001' },
+    rolesByLocation: { 'a0000000-0000-4000-8000-000000000001': 'owner' },
+    locations: [{ id: 'a0000000-0000-4000-8000-000000000001', role: 'owner' }],
+  })),
   assertLocationAccess: vi.fn(() => null),
 }))
 vi.mock('@/lib/whatsapp', () => ({ uploadMediaForTemplate: vi.fn() }))
