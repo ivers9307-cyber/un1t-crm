@@ -77,6 +77,8 @@ export async function POST(request, props) {
   try {
     sendResult = await sendFlowMessage(conversation.wa_phone, {
       locationId: conversation.location_id,
+      // WAREPLYNUMBER.1 (C86) — from the number this thread was written to.
+      replyInConversation: conversation.id,
       flowId: cfg.flow_id,
       // FLOWTOKENDEDUP.1 — THE token format lives in flowTokenFor. contact_id
       // is checked above, so this is never null here.

@@ -87,11 +87,13 @@ export const DASHBOARD_LINK_PERM_KEYS = [
 export const ALL_NAV = [
   // REPSET-ACCOUNT.1 — ACCOUNT-tier home (org portfolio). Pinned above
   // the Dashboard link and section headers because it sits ABOVE the
-  // studio surfaces in the tier model (Account → Studio). Owner+/master
-  // only (role-gated, like the other privileged config surfaces — no
-  // per-user permission key). `/account` is the personal account page,
-  // so the org portfolio lives at /portfolio.
-  { href: '/portfolio',  label: 'Account home', icon: Building2,       masterOrOwnerOnly: true },
+  // studio surfaces in the tier model (Account → Studio). Organisation
+  // admins only (C141 ORGROLE.2, C18's rule: master or an org_admin grant
+  // on the active organisation — the /portfolio page's and
+  // GET /api/account/overview's rule; no per-user permission key).
+  // `/account` is the personal account page, so the org portfolio lives
+  // at /portfolio.
+  { href: '/portfolio',  label: 'Account home', icon: Building2,       orgAdminOnly: true },
   { href: '/dashboard',  label: 'Dashboard',   icon: LayoutDashboard, dashboardGroup: true },
 
   // HOME.3 retired this row in favour of the needs-attention queue;

@@ -11,12 +11,13 @@ import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { listVersions } from '@/lib/policies'
 import PublishPolicyVersionForm from '@/components/PublishPolicyVersionForm'
+import { canManagePolicies } from '@/lib/policies-access'
 
 export const dynamic = 'force-dynamic'
 
-function isOwnerOrMaster(user) {
-  return user?.role === 'master' || user?.role === 'owner' || user?.profileRole === 'master'
-}
+// C141 ORGROLE.2 — managing policies is MASTER ONLY (Richard, 2 Oct): the
+// policies table has no organisation, so a version reaches every studio.
+// canManagePolicies lives in src/lib/policies-access.js.
 
 function fmtDateTime(iso) {
   if (!iso) return ''
@@ -30,7 +31,7 @@ export default async function AdminPolicyDetailPage({ params }) {
   const { slug } = await params
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  if (!isOwnerOrMaster(user)) redirect('/')
+  if (!canManagePolicies(user)) redirect('/')
 
   const db = createServerClient()
   const { data: policy } = await db

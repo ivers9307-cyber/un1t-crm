@@ -61,6 +61,7 @@ const RESOLVING = {
   ],
   'src/lib/whatsapp-config': [
     'getWhatsAppConfig', 'getLocationWhatsAppNumberConfig', 'getWhatsAppConfigById', 'resolveWhatsAppNumberByPhoneNumberId',
+    'getConversationReplyConfig', 'getConversationNumberConfig',
   ],
   'src/lib/whatsapp-own-number': ['ownNumberOrRefusal'],
 }
@@ -80,9 +81,9 @@ const RESOLVING = {
 //   resolver       the resolution layer itself
 const CALLERS = {
   'src/lib/whatsapp.js': {
-    calls: { getWhatsAppConfig: 3 },
+    calls: { getWhatsAppConfig: 3, getConversationReplyConfig: 1 },
     decision: 'resolver',
-    why: 'resolveConfig (every Meta helper), sendBroadcast (blast: throws BEFORE the status flip → route 409 / cron pushes managers), sendDripChunk (pauses the drip). src/lib/whatsapp-no-number-senders.test.js, whatsapp-no-number-broadcasts.test.js.',
+    why: 'resolveConfig (every Meta helper; opts.replyInConversation → getConversationReplyConfig, which falls back to getWhatsAppConfig and so refuses a number-less studio the same way: WAREPLYNUMBER.1, whatsapp-reply-number.test.js), sendBroadcast (blast: throws BEFORE the status flip → route 409 / cron pushes managers), sendDripChunk (pauses the drip). src/lib/whatsapp-no-number-senders.test.js, whatsapp-no-number-broadcasts.test.js.',
   },
   'src/lib/whatsapp-own-number.js': {
     calls: { getLocationWhatsAppNumberConfig: 1 },
@@ -125,9 +126,9 @@ const CALLERS = {
     why: 'header upload with the location’s own app + token (it always used the env app). Soft contract kept: URL returned, handle null, meta_error says why. route.own-number.test.js.',
   },
   'src/app/api/contacts/[id]/whatsapp/route.js': {
-    calls: { sendTextMessage: 1, sendTemplateMessage: 1, ownNumberOrRefusal: 1 },
+    calls: { sendTextMessage: 1, sendTemplateMessage: 1, ownNumberOrRefusal: 1, getConversationNumberConfig: 1 },
     decision: 'refuse-409',
-    why: 'contact composer: own number checked BEFORE a thread is opened (no empty thread); the send carries that checked { config } (one lookup, no check-then-send gap). route.test.js.',
+    why: 'contact composer: own number checked BEFORE a thread is opened (no empty thread); the send carries that checked { config } (one lookup, no check-then-send gap), or the thread\'s own number while it is active here (WAREPLYNUMBER.1: getConversationNumberConfig never throws, null → the checked default; a template only within the default\'s WABA). route.test.js.',
   },
   'src/app/api/contacts/[id]/cancellation-form/route.js': {
     calls: { sendCtaUrlMessage: 1, sendTemplateMessage: 1, ownNumberOrRefusal: 1 },

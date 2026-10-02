@@ -50,7 +50,9 @@ export async function POST(request, props) {
 
   let sendResult
   try {
-    sendResult = await sendReaction(conversation.wa_phone, message_id, emoji, { locationId: conversation.location_id })
+    // WAREPLYNUMBER.1 (C86) — Meta accepts a reaction only from the number
+    // holding the message: the one this thread was written to.
+    sendResult = await sendReaction(conversation.wa_phone, message_id, emoji, { locationId: conversation.location_id, replyInConversation: conversation.id })
   } catch (e) {
     // WACONFIGFALLBACK.1 — a location with no WhatsApp number of its own is a
     // 409 with the resolver's message (it used to send from the env number).

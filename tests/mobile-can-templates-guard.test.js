@@ -11,9 +11,9 @@
 //   (c) no later policy goes back to the per-row form (auth_mobile_can(…) /
 //       mobile_can_for(…), ~0.35 ms a row) and every call of the wrapper is a
 //       (SELECT …)::uuid[] sub-select (an InitPlan, once per statement);
-//   (d) the latest core still reads the template, defaults and bundle tables
-//       and the active-staff predicate (a floor; the replay's parity matrix is
-//       the proof).
+//   (d) the latest core still reads the template, defaults and bundle tables,
+//       the active-staff predicate and (since mig 699) the organisation-admin
+//       tier (a floor; the replays' parity matrices are the proof).
 // A floor, not a proof: a policy built by EXECUTE format(…) or made by hand
 // on prod is invisible here.
 
@@ -146,5 +146,17 @@ describe('(d) the latest core keeps its tiers (floor)', () => {
     expect(body).toMatch(/active\s+is\s+not\s+false/i)
     expect(body).toMatch(/deleted_at\s+is\s+null/i)
     expect(body).toMatch(/jsonb_typeof/)
+  })
+
+  it('keeps the organisation-admin tier (mig 699, SEC-3: owner at the org\'s active studios, as getCurrentUser)', () => {
+    const def = /create\s+(?:or\s+replace\s+)?function\s+private\s*\.\s*mobile_can_location_ids_for\s*\(/i
+    const file = migrationFiles().filter((f) => def.test(sqlCode(read(f)))).at(-1)
+    expect(migNum(file)).toBeGreaterThanOrEqual(699)
+    const code = sqlCode(read(file))
+    const body = code.slice(code.search(def)).match(/\$function\$([\s\S]*?)\$function\$/)[1]
+    expect(body).toMatch(/profile_organizations/)
+    expect(body).toMatch(/role\s*=\s*'org_admin'/)
+    expect(body).toMatch(/coalesce\(\s*l\.active\s*,\s*false\s*\)/i)
+    expect(body).toMatch(/then\s+'owner'/i)
   })
 })

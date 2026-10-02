@@ -9,6 +9,7 @@ import LocationSwitcher from './LocationSwitcher'
 import ImpersonatePicker from './ImpersonatePicker'
 import clsx from 'clsx'
 import { hasPermission } from '@/lib/permissions'
+import { isActiveOrgAdmin } from '@/lib/org-admin'
 import { usePolledCount } from './use-polled-count'
 import { ALL_NAV, NAV_SECTIONS, DASHBOARD_LINK_PERM_KEYS, activeHrefFor } from '@/lib/nav-items'
 import { withTitleBadge, stripTitleBadge } from '@/lib/tab-title-badge'
@@ -150,15 +151,17 @@ export default function Sidebar({ user, isLinkedHost = false, mobileOpen = false
   //   - anyPermission: any of the listed keys (e.g. communications
   //     shows if either email OR whatsapp is held)
   //   - permission (default): the single key listed
-  //   - masterOrOwnerOnly / masterOnly: legacy role-only gates,
-  //     retained for entries that never grew per-user permissions.
+  //   - orgAdminOnly: C141 ORGROLE.2 — an organisation admin of the
+  //     active organisation (master or an org_admin grant)
+  //   - masterOnly: legacy role-only gate, retained for entries that
+  //     never grew per-user permissions.
   // Privileged actions (staff management, branding, location config)
   // remain owner-only via separate role gates inside those pages.
   function matches(item) {
     if (item.openToAll) return !!user
     if (item.dashboardGroup) return DASHBOARD_LINK_PERM_KEYS.some(hasPerm)
     if (item.anyPermission) return item.anyPermission.some(hasPerm)
-    if (item.masterOrOwnerOnly) return user?.role === 'master' || user?.role === 'owner'
+    if (item.orgAdminOnly) return isActiveOrgAdmin(user)
     if (item.masterOnly) return user?.profileRole === 'master' || user?.role === 'master'
     return hasPerm(item.permission)
   }

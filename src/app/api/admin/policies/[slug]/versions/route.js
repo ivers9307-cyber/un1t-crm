@@ -1,5 +1,5 @@
 // POST /api/admin/policies/[slug]/versions — publish a NEW version
-// of a policy. Master/owner only. Atomically (via the partial-unique
+// of a policy. Master only (C141 ORGROLE.2; policies are estate-wide). Atomically (via the partial-unique
 // index race-safety) flips the previous current to false and inserts
 // the new version with is_current = true.
 //
@@ -17,6 +17,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { publishVersion } from '@/lib/policies'
 import { logAuditEvent } from '@/lib/audit'
+import { canManagePolicies } from '@/lib/policies-access'
 
 export const runtime = 'nodejs'
 
@@ -26,15 +27,15 @@ const PublishSchema = z.object({
   effective_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
 })
 
-function isOwnerOrMaster(user) {
-  return user?.role === 'master' || user?.role === 'owner' || user?.profileRole === 'master'
-}
+// C141 ORGROLE.2 — managing policies is MASTER ONLY (Richard, 2 Oct): the
+// policies table has no organisation, so a version reaches every studio.
+// canManagePolicies lives in src/lib/policies-access.js.
 
 export async function POST(request, { params }) {
   const { slug } = await params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!isOwnerOrMaster(user)) {
+  if (!canManagePolicies(user)) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 

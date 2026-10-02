@@ -15,7 +15,7 @@ vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.f
 import { grantTrialBeforeBooking, TRIAL_GRANT_FAILED, TRIAL_NOT_CONFIGURED, TRIAL_GRANT_UNVERIFIED, TRIAL_GRANT_UNRECORDED, TRIAL_PRODUCT_UNKNOWN, TRIAL_ALREADY_GRANTED, TRIAL_HISTORY_UNREADABLE } from './trial-grant'
 import { fetchUserCreditsResult, purchaseGlofoxMembership } from '@/lib/glofox'
 import { readGlofoxConfig } from '@/lib/connection-registry'
-import { logError } from '@/lib/log'
+import { logError, logWarn } from '@/lib/log'
 
 const creds = { branchId: 'b', apiKey: 'k', apiToken: 't' }
 // The route's write-ahead: persists details.trial_grant on THIS execution
@@ -23,9 +23,13 @@ const creds = { branchId: 'b', apiKey: 'k', apiToken: 't' }
 const record = vi.fn()
 const base = { creds, locationId: 'L1', memberId: 'gm1', requestId: 'amr-1', record, now: () => '2026-10-01T09:00:00.000Z' }
 
-// A small PostgREST stand-in over in-memory tables: eq/neq on top-level
+// A small PostgREST stand-in over in-memory tables: eq/neq/is on top-level
 // columns, contains() as a jsonb partial match, limit(). A table given as
-// { error } answers that error to every read.
+// { error } answers that error to every read. TRIALCLAIM.1: insert() and
+// update() work on glofox_trial_claims, which enforces the mig 697 partial
+// unique index (one live claim per location + member) with a 23505, and
+// `faults` makes a write or a read of a table fail:
+//   faults.insert[table] / faults.update[table] / faults.read[table] = error
 function deepContains(value, pattern) {
   if (pattern && typeof pattern === 'object') {
     if (!value || typeof value !== 'object') return false
@@ -33,28 +37,67 @@ function deepContains(value, pattern) {
   }
   return value === pattern
 }
-function makeDb(tables = {}) {
+const UNIQUE_LIVE = { code: '23505', message: 'duplicate key value violates unique constraint "glofox_trial_claims_one_live"' }
+function makeDb(tables = {}, faults = {}) {
   const reads = []
+  const writes = []
+  let seq = 0
+  const rowsOf = (table) => {
+    if (!Array.isArray(tables[table])) tables[table] = []
+    return tables[table]
+  }
   return {
     reads,
+    writes,
     tables,
     from(table) {
       const filters = []
       let cap = Infinity
+      let op = 'select'
+      let payload = null
+      const run = () => {
+        if (op === 'insert') {
+          writes.push({ table, op, row: payload })
+          if (faults.insert?.[table]) return { data: null, error: faults.insert[table] }
+          const rows = rowsOf(table)
+          if (table === 'glofox_trial_claims' && rows.some((r) => r.released_at == null
+            && r.location_id === payload.location_id && r.glofox_member_id === payload.glofox_member_id)) {
+            return { data: null, error: UNIQUE_LIVE }
+          }
+          seq += 1
+          const row = { id: `claim-${seq}`, released_at: null, release_reason: null, push_event_id: null, ...payload }
+          rows.push(row)
+          return { data: [{ id: row.id }], error: null }
+        }
+        if (op === 'update') {
+          writes.push({ table, op, patch: payload })
+          if (faults.update?.[table]) return { data: null, error: faults.update[table] }
+          const hit = rowsOf(table).filter((r) => filters.every((f) => f(r)))
+          for (const r of hit) Object.assign(r, payload)
+          return { data: hit.map((r) => ({ id: r.id })), error: null }
+        }
+        reads.push(table)
+        if (faults.read?.[table]) return { data: null, error: faults.read[table] }
+        const t = tables[table]
+        return t && !Array.isArray(t) && t.error
+          ? { data: null, error: t.error }
+          : { data: (t || []).filter((r) => filters.every((f) => f(r))).slice(0, cap), error: null }
+      }
       const q = {
         select() { return q },
+        insert(row) { op = 'insert'; payload = row; return q },
+        update(patch) { op = 'update'; payload = patch; return q },
         eq(col, v) { filters.push((r) => r[col] === v); return q },
         neq(col, v) { filters.push((r) => r[col] !== v); return q },
+        is(col, v) { filters.push((r) => (v === null ? r[col] == null : r[col] === v)); return q },
         contains(col, v) { filters.push((r) => deepContains(r[col], v)); return q },
         limit(n) { cap = n; return q },
-        then(resolve, reject) {
-          reads.push(table)
-          const t = tables[table]
-          const out = t && !Array.isArray(t) && t.error
-            ? { data: null, error: t.error }
-            : { data: (t || []).filter((r) => filters.every((f) => f(r))).slice(0, cap), error: null }
-          return Promise.resolve(out).then(resolve, reject)
+        async single() {
+          const out = run()
+          if (out.error) return out
+          return out.data?.length === 1 ? { data: out.data[0], error: null } : { data: null, error: { code: 'PGRST116', message: 'not one row' } }
         },
+        then(resolve, reject) { return Promise.resolve(run()).then(resolve, reject) },
       }
       return q
     },
@@ -601,5 +644,167 @@ describe('grantTrialBeforeBooking: a trial bought when the account was minted', 
     expect(out.failure).toEqual({ ok: false, message_code: TRIAL_HISTORY_UNREADABLE })
     expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
     expect(record).not.toHaveBeenCalled()
+  })
+})
+
+// TRIALCLAIM.1 (C113) — one live claim per (studio, Glofox member), taken
+// atomically before the purchase. Two cards for one member approved at the
+// same instant both passed the history reads above (neither had recorded
+// anything yet) and both bought; the claim's unique index (mig 697) lets
+// exactly one through. Never buy on an unknown claim state.
+describe('grantTrialBeforeBooking: the atomic trial claim (TRIALCLAIM.1)', () => {
+  const live = (rows) => rows.filter((r) => r.released_at == null)
+
+  it('claims before buying: the claim names the studio, member and card, and lands before the marker', async () => {
+    const order = []
+    record.mockImplementation(async (g) => { order.push(['record', g.stage || 'outcome']); return true })
+    purchaseGlofoxMembership.mockImplementationOnce(async () => { order.push(['purchase']); return { ok: true, http_status: 200, purchase_status: 'SUCCESS', invoice_id: 'inv-1' } })
+    const out = await grantTrialBeforeBooking(db, base)
+    expect(out.proceed).toBe(true)
+    expect(db.tables.glofox_trial_claims).toEqual([expect.objectContaining({
+      location_id: 'L1', glofox_member_id: 'gm1', request_id: 'amr-1', source: 'approval', released_at: null,
+    })])
+    const claimAt = db.writes.findIndex((w) => w.table === 'glofox_trial_claims' && w.op === 'insert')
+    expect(claimAt).toBeGreaterThanOrEqual(0)
+    expect(order).toEqual([['record', 'purchasing'], ['purchase'], ['record', 'outcome']])
+  })
+
+  it('two cards for one member approved together: exactly ONE purchase; the other stops TRIAL_ALREADY_GRANTED', async () => {
+    // Both read the history before either wrote anything (the real race).
+    let release
+    const gate = new Promise((r) => { release = r })
+    let readsDone = 0
+    fetchUserCreditsResult.mockImplementation(async () => {
+      readsDone += 1
+      if (readsDone === 2) release()
+      await gate
+      return { ok: true, credits: [] }
+    })
+    const [a, b] = await Promise.all([
+      grantTrialBeforeBooking(db, { ...base, requestId: 'amr-A' }),
+      grantTrialBeforeBooking(db, { ...base, requestId: 'amr-B' }),
+    ])
+    expect(purchaseGlofoxMembership).toHaveBeenCalledTimes(1)
+    const [won, lost] = a.proceed ? [a, b] : [b, a]
+    expect(won.proceed).toBe(true)
+    expect(lost.proceed).toBe(false)
+    expect(lost.failure).toEqual({ ok: false, message_code: TRIAL_ALREADY_GRANTED, prior_claim_id: 'claim-1', prior_request_id: a.proceed ? 'amr-A' : 'amr-B' })
+    expect(live(db.tables.glofox_trial_claims)).toHaveLength(1)
+  })
+
+  it('a live claim from a /start mint (no card) stops the purchase with its push event', async () => {
+    db = makeDb({ glofox_trial_claims: [{ id: 'claim-m', location_id: 'L1', glofox_member_id: 'gm1', request_id: null, push_event_id: 'gpe-1', released_at: null }] })
+    const out = await grantTrialBeforeBooking(db, base)
+    expect(out.failure).toEqual({ ok: false, message_code: TRIAL_ALREADY_GRANTED, prior_claim_id: 'claim-m', prior_push_event_id: 'gpe-1' })
+    expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
+  })
+
+  it('a claim seeded from an old grant (before member ids were recorded) stops the purchase', async () => {
+    db = makeDb({ glofox_trial_claims: [{ id: 'claim-o', location_id: 'L1', glofox_member_id: 'gm1', request_id: 'amr-old', push_event_id: null, released_at: null, source: 'approval_backfill' }] })
+    const out = await grantTrialBeforeBooking(db, base)
+    expect(out.failure).toEqual({ ok: false, message_code: TRIAL_ALREADY_GRANTED, prior_claim_id: 'claim-o', prior_request_id: 'amr-old' })
+    expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
+  })
+
+  it('THIS card already holds the live claim (a retry after a clear refusal whose release was lost) → buys', async () => {
+    db = makeDb({ glofox_trial_claims: [{ id: 'claim-own', location_id: 'L1', glofox_member_id: 'gm1', request_id: 'amr-1', released_at: null }] })
+    const out = await grantTrialBeforeBooking(db, { ...base, priorGrant: { ok: false, code: TRIAL_GRANT_FAILED }, isRetry: true })
+    expect(out.proceed).toBe(true)
+    expect(purchaseGlofoxMembership).toHaveBeenCalledTimes(1)
+    expect(db.tables.glofox_trial_claims).toHaveLength(1)
+  })
+
+  it('a released claim does not count: the member may be claimed again', async () => {
+    db = makeDb({ glofox_trial_claims: [{ id: 'claim-r', location_id: 'L1', glofox_member_id: 'gm1', request_id: 'amr-X', released_at: '2026-09-30T10:00:00.000Z' }] })
+    const out = await grantTrialBeforeBooking(db, base)
+    expect(out.proceed).toBe(true)
+    expect(live(db.tables.glofox_trial_claims)).toEqual([expect.objectContaining({ request_id: 'amr-1' })])
+  })
+
+  it('another member or another studio is no conflict', async () => {
+    db = makeDb({ glofox_trial_claims: [
+      { id: 'c-a', location_id: 'L1', glofox_member_id: 'gm2', request_id: 'amr-X', released_at: null },
+      { id: 'c-b', location_id: 'L2', glofox_member_id: 'gm1', request_id: 'amr-Y', released_at: null },
+    ] })
+    const out = await grantTrialBeforeBooking(db, base)
+    expect(out.proceed).toBe(true)
+  })
+
+  it('the claim cannot be written (a database error, or 697 not applied yet) → TRIAL_GRANT_UNRECORDED, nothing bought, no marker', async () => {
+    db = makeDb({}, { insert: { glofox_trial_claims: { code: '42P01', message: 'relation "public.glofox_trial_claims" does not exist' } } })
+    const out = await grantTrialBeforeBooking(db, base)
+    expect(out.failure).toEqual({ ok: false, message_code: TRIAL_GRANT_UNRECORDED })
+    expect(record).not.toHaveBeenCalled()
+    expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
+  })
+
+  it('a conflict whose holder cannot be read → TRIAL_HISTORY_UNREADABLE, nothing bought', async () => {
+    db = makeDb({ glofox_trial_claims: [{ id: 'c-a', location_id: 'L1', glofox_member_id: 'gm1', request_id: 'amr-X', released_at: null }] },
+      { read: { glofox_trial_claims: { message: 'boom' } } })
+    const out = await grantTrialBeforeBooking(db, base)
+    expect(out.failure).toEqual({ ok: false, message_code: TRIAL_HISTORY_UNREADABLE })
+    expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
+  })
+
+  it('a conflict whose holder has gone by the re-read (released meanwhile) → TRIAL_HISTORY_UNREADABLE, never a guess', async () => {
+    db = makeDb({}, { insert: { glofox_trial_claims: { code: '23505', message: 'duplicate key value violates unique constraint "glofox_trial_claims_one_live"' } } })
+    const out = await grantTrialBeforeBooking(db, base)
+    expect(out.failure).toEqual({ ok: false, message_code: TRIAL_HISTORY_UNREADABLE })
+    expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
+  })
+
+  it('no card id (no owner to claim for) → TRIAL_GRANT_UNRECORDED, nothing bought', async () => {
+    const out = await grantTrialBeforeBooking(db, { ...base, requestId: null })
+    expect(out.failure).toEqual({ ok: false, message_code: TRIAL_GRANT_UNRECORDED })
+    expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
+  })
+
+  it('Glofox answered a clear refusal → the claim is released (nothing was bought), so the next card may buy', async () => {
+    purchaseGlofoxMembership.mockResolvedValueOnce({ ok: false, http_status: 200, message_code: 'PURCHASE_NOT_ALLOWED', purchase_status: 'ERROR' })
+    const out = await grantTrialBeforeBooking(db, base)
+    expect(out.failure.message_code).toBe(TRIAL_GRANT_FAILED)
+    expect(live(db.tables.glofox_trial_claims)).toEqual([])
+    expect(db.tables.glofox_trial_claims[0]).toMatchObject({ release_reason: 'purchase_refused', released_at: '2026-10-01T09:00:00.000Z' })
+  })
+
+  it('no clear answer from Glofox (outcome_unknown) → the claim STANDS', async () => {
+    purchaseGlofoxMembership.mockResolvedValueOnce({ ok: false, http_status: 502, outcome_unknown: true })
+    const out = await grantTrialBeforeBooking(db, base)
+    expect(out.failure).toMatchObject({ message_code: TRIAL_GRANT_FAILED, outcome_unknown: true })
+    expect(live(db.tables.glofox_trial_claims)).toHaveLength(1)
+  })
+
+  it('a purchase that throws after it was sent → the claim STANDS', async () => {
+    purchaseGlofoxMembership.mockRejectedValueOnce(new Error('socket hang up'))
+    const out = await grantTrialBeforeBooking(db, base)
+    expect(out.failure).toMatchObject({ message_code: TRIAL_GRANT_FAILED, outcome_unknown: true })
+    expect(live(db.tables.glofox_trial_claims)).toHaveLength(1)
+  })
+
+  it('the write-ahead marker cannot be written → the claim is released (nothing was bought)', async () => {
+    record.mockResolvedValueOnce(false)
+    const out = await grantTrialBeforeBooking(db, base)
+    expect(out.failure).toEqual({ ok: false, message_code: TRIAL_GRANT_UNRECORDED })
+    expect(live(db.tables.glofox_trial_claims)).toEqual([])
+    expect(db.tables.glofox_trial_claims[0].release_reason).toBe('marker_unrecorded')
+  })
+
+  it('a lost release is logged and the claim stands (the next card stops, closed)', async () => {
+    db = makeDb({}, { update: { glofox_trial_claims: { message: 'boom' } } })
+    purchaseGlofoxMembership.mockResolvedValueOnce({ ok: false, http_status: 200, message_code: 'PURCHASE_NOT_ALLOWED', purchase_status: 'ERROR' })
+    const out = await grantTrialBeforeBooking(db, base)
+    expect(out.failure.message_code).toBe(TRIAL_GRANT_FAILED)
+    expect(live(db.tables.glofox_trial_claims)).toHaveLength(1)
+    expect(logWarn).toHaveBeenCalledWith('trial-grant', 'trial claim not released; the next card for this member will stop for staff', { requestId: 'amr-1', reason: 'purchase_refused' })
+  })
+
+  it('stops before the product is known take no claim (a settings read failure, no trial set, credits present)', async () => {
+    readGlofoxConfig.mockResolvedValueOnce({ cfg: {}, error: { message: 'boom' } })
+    await grantTrialBeforeBooking(db, base)
+    readGlofoxConfig.mockResolvedValueOnce({ cfg: {}, error: null })
+    await grantTrialBeforeBooking(db, base)
+    fetchUserCreditsResult.mockResolvedValueOnce({ ok: true, credits: [{ available: 2 }] })
+    await grantTrialBeforeBooking(db, base)
+    expect(db.writes.filter((w) => w.table === 'glofox_trial_claims')).toEqual([])
   })
 })

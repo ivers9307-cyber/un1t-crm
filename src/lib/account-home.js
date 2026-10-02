@@ -46,7 +46,7 @@
 //                     (the proposal's `integrations-hub.js` does not exist),
 //                     so health-error detection is deferred to a later phase.
 
-import { getOwnerOrganizationIds } from '@/lib/auth'
+import { resolveAdminOrgId } from '@/lib/org-admin'
 import { dublinDayStr, addDaysISO } from '@/lib/dublin-time'
 
 // Glofox statuses that count as an active member (same cohort as
@@ -126,17 +126,23 @@ export function rollupAttention({ openApprovals = 0, atRiskHigh = 0 } = {}) {
  * replicating the org-membership RLS model in app code (service-role
  * routes bypass RLS — CLAUDE.md). Pure: no DB.
  *
+ * C141 ORGROLE.2 (C18's rule, Richard 1 Oct): the Account Home is an
+ * organisation-level surface, so it is for ORGANISATION ADMINS only — a
+ * master or an org_admin grant (resolveAdminOrgId, src/lib/org-admin.js).
+ * An owner at one studio (or at every studio) is not an organisation admin.
+ *
  * Behaviour:
  *   - no user                         → { ok:false, status:401 }
  *   - master                          → any org (requested, else active);
  *                                       nothing to target → 404
- *   - owner of ≥1 org, requests an org
- *     they DON'T own (or unknown)      → { ok:false, status:404 }   (not 403 —
+ *   - requests an org they are not an
+ *     admin of (or unknown)            → { ok:false, status:404 }   (not 403 —
  *                                       don't reveal another org exists)
- *   - owner, requests/defaults to an
- *     org they own                     → { ok:true, orgId }
- *   - not master, owns no org
- *     (manager / head_coach / staff)   → { ok:false, status:403 }
+ *   - org admin, requests/defaults to
+ *     an org they administer           → { ok:true, orgId }
+ *   - not an admin of the org they are
+ *     working in (owner / manager /
+ *     head_coach / staff)              → { ok:false, status:403 }
  *
  * @param {object|null} user            getCurrentUser() result
  * @param {string|null|undefined} requestedOrgId  ?organization_id
@@ -145,24 +151,19 @@ export function rollupAttention({ openApprovals = 0, atRiskHigh = 0 } = {}) {
 export function resolveAccountScope(user, requestedOrgId) {
   if (!user) return { ok: false, status: 401 }
 
-  const isMaster = user.isMaster || user.profileRole === 'master' || user.role === 'master'
+  // profileRole is the account-home's historical third spelling of master;
+  // resolveAdminOrgId keys a master off isMaster/role, so a master is
+  // answered here first (same rule: requested org, else the active one).
+  const isMaster = Boolean(user.isMaster || user.profileRole === 'master' || user.role === 'master')
   if (isMaster) {
     const orgId = requestedOrgId || user.activeOrganization?.id || null
     if (!orgId) return { ok: false, status: 404 }
     return { ok: true, orgId, isMaster: true }
   }
-
-  const owned = getOwnerOrganizationIds(user)
-  // Not an owner of any org → not an account-tier operator at all.
-  if (owned.length === 0) return { ok: false, status: 403 }
-
-  const target = requestedOrgId || user.activeOrganization?.id || owned[0] || null
-  // Owner asking for an org they don't own (or an unknown id) → 404,
-  // identical to "no such org", so ownership of other tenants can't be
-  // probed.
-  if (!target || !owned.includes(target)) return { ok: false, status: 404 }
-
-  return { ok: true, orgId: target, isMaster: false }
+  const resolved = resolveAdminOrgId(user, requestedOrgId || null)
+  if (resolved.notFound) return { ok: false, status: 404 }
+  if (!resolved.orgId) return { ok: false, status: 403 }
+  return { ok: true, orgId: resolved.orgId, isMaster: false }
 }
 
 // ---------------------------------------------------------------------------

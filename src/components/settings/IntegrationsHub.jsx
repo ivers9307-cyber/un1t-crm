@@ -541,7 +541,11 @@ export default function IntegrationsHub({ data: initialData, isMaster = false, c
 
       {/* ── Plan & wallet strip (INTEG-C4) — read-only, pinning-gated ──
           Manage-plan deep-links into the D1 billing page (/settings/billing,
-          organisation admins only, C18 ORGROLE.1). */}
+          organisation admins only, C18 ORGROLE.1). C141 ORGROLE.2: billing
+          rows exist only for locations of an organisation the viewer
+          administers, so no rows in scope = no strip (never "No platform
+          plan", a billing fact this viewer may not see). */}
+      {billing.length > 0 && (
       <div className="space-y-3 mb-6">
         {billing.some((r) => r.unreadable) ? (
           <div className="rounded-xl border border-un1t-border bg-white px-4 py-3 flex flex-wrap items-center justify-between gap-3">
@@ -568,6 +572,7 @@ export default function IntegrationsHub({ data: initialData, isMaster = false, c
           />
         ))}
       </div>
+      )}
 
       {/* ── Needs attention ── */}
       <div className="rounded-xl border border-un1t-border bg-white mb-6">

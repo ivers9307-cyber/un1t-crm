@@ -175,7 +175,7 @@ export async function POST(request) {
               })
               if (dedup.seen) continue
             }
-            await handleIncomingMessage(db, message, value.contacts, routing.locationId)
+            await handleIncomingMessage(db, message, value.contacts, routing.locationId, routing.numberId)
           }
         }
 
@@ -207,7 +207,8 @@ export async function POST(request) {
 
 // `defaultLocationId` is the location owning the recipient phone_number_id —
 // already resolved (and unroutable traffic dropped) by the POST loop.
-async function handleIncomingMessage(db, message, contacts, defaultLocationId) {
+// `receivingNumberId` is that whatsapp_numbers row (WAREPLYNUMBER.1).
+async function handleIncomingMessage(db, message, contacts, defaultLocationId, receivingNumberId = null) {
   const senderPhone = message.from  // E.164 format
   const messageId = message.id
   const timestamp = message.timestamp ? new Date(parseInt(message.timestamp) * 1000) : new Date()
@@ -314,6 +315,21 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId) {
   if (!conversationId) {
     console.error('Could not create conversation for:', senderPhone)
     return
+  }
+
+  // WAREPLYNUMBER.1 (C86) — record the number the customer wrote to, so a
+  // reply into this thread (staff send, Flow, carousel, reaction, Mia, her
+  // confirmations) goes from it rather than the studio's default
+  // (getConversationReplyConfig). Only when that number belongs to the
+  // thread's studio: a contact filed at another studio keeps that studio's
+  // thread, which replies from its own number. Its OWN update, logged: a
+  // lost stamp (the column missing before mig 696 is applied included) costs
+  // only the stamp, never the message, the thread or Mia's turn.
+  if (receivingNumberId && locationId === defaultLocationId) {
+    const { error: numberStampErr } = await db.from('whatsapp_conversations')
+      .update({ whatsapp_number_id: receivingNumberId })
+      .eq('id', conversationId)
+    if (numberStampErr) console.error(`[wa-webhook] receiving-number stamp failed for conversation ${conversationId} (replies go from the studio default):`, numberStampErr.message)
   }
 
   // CTWA attribution — stamp the click id (conversation + contact) and fire
