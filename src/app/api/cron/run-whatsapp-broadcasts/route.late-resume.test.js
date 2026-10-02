@@ -17,6 +17,7 @@ const ago = (ms) => new Date(Date.now() - ms).toISOString()
 
 let tables
 let failRecipients
+let onRecipientsRead
 function makeDb() {
   return {
     from(table) {
@@ -40,6 +41,7 @@ function makeDb() {
       b.update = chain((p) => { patch = p })
       b.then = (resolve, reject) => {
         let out
+        if (table === 'whatsapp_broadcast_recipients' && onRecipientsRead) onRecipientsRead()
         if (table === 'whatsapp_broadcast_recipients' && failRecipients) out = { data: null, error: { message: 'boom', code: 'XX000' } }
         else if (patch) {
           for (const r of rows) Object.assign(r, patch)
@@ -83,6 +85,7 @@ function seed(bc, recipients) {
 beforeEach(() => {
   vi.clearAllMocks()
   failRecipients = false
+  onRecipientsRead = null
 })
 
 describe('run-whatsapp-broadcasts never resumes a stale part-sent blast (C139)', () => {
@@ -129,6 +132,17 @@ describe('run-whatsapp-broadcasts never resumes a stale part-sent blast (C139)',
     expect(sendBroadcast).not.toHaveBeenCalled()
     expect(row().status).toBe('sending')
     expect(body.stats.errors.map((e) => e.broadcast_id)).toContain('b1')
+    expect(sendPushToRolesAtLocation).not.toHaveBeenCalled()
+  })
+
+  it('someone paused or cancelled it between the read and the park: the park CAS wins nothing, no push, nothing sent', async () => {
+    seed(blast(), claims(5 * H))
+    // An operator's Cancel lands while the cron is reading the last send.
+    onRecipientsRead = () => { row().status = 'cancelled' }
+    const body = await (await run()).json()
+    expect(sendBroadcast).not.toHaveBeenCalled()
+    expect(row()).toMatchObject({ status: 'cancelled', paused_at: null })
+    expect(body.stats.paused_late).toBe(0)
     expect(sendPushToRolesAtLocation).not.toHaveBeenCalled()
   })
 

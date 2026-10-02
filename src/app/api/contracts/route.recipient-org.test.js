@@ -79,10 +79,13 @@ const issue = (extra = {}) => POST(new Request('https://crm.test/api/contracts',
   body: JSON.stringify({ template_id: TPL_A, profile_id: RECIPIENT, variables: {}, issuer_signature: 'Issuer', ...extra }),
 }))
 
+// C18 ORGROLE.1 (merged from main) — issuing is for ORGANISATION ADMINS (an
+// org_admin grant), so the org A issuer here holds one.
 const OWNER_A = {
   id: 'owner-a', isMaster: false, role: 'owner', profileRole: 'owner',
   rolesByLocation: { [LOC_A1]: 'owner' },
   locations: [{ id: LOC_A1, organization_id: ORG_A, role: 'owner' }],
+  orgAdminOrgIds: [ORG_A],
 }
 const MASTER = { id: 'm1', isMaster: true, role: 'master', profileRole: 'master', rolesByLocation: {}, locations: [] }
 
@@ -92,7 +95,7 @@ beforeEach(() => {
 })
 
 describe('POST /api/contracts — the recipient must belong to the template\'s org (C140)', () => {
-  it.each([['an owner of org A', OWNER_A], ['a master', MASTER]])(
+  it.each([['an org admin of org A', OWNER_A], ['a master', MASTER]])(
     '%s: org A template to a person only in org B is 404, nothing inserted (main: issued)', async (_l, caller) => {
       getCurrentUser.mockResolvedValue(caller)
       createServerClient.mockReturnValue(makeDb([link(LOC_B1, ORG_B, true)]))
