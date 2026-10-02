@@ -85,7 +85,6 @@ export const CONTACT_READERS = Object.freeze({
   'mobile/lib/pipeline-api.js': { from: 0, embed: 2, why: 'board + deal detail; "Unknown" and no contact buttons when the embed is null' },
   'mobile/lib/tasks-api.js': { from: 0, embed: 1, why: 'my tasks; the contact line is hidden when the embed is null' },
   'mobile/lib/bookings-api.js': { from: 0, embed: 1, why: 'upcoming bookings; customer_name is shown first' },
-  'src/components/TasksPage.jsx': { from: 0, embed: 1, why: 'the row returned after creating a task; the contact chip is hidden when the embed is null' },
   // Two hits that are not session reads (measured with this detector on 4f1853d8):
   'src/lib/customer-auth.js': { from: 1, embed: 0, why: 'service role: the anon-key client only verifies the Bearer JWT; the contacts read (resolveCustomerContact) uses createServerClient()' },
   'src/components/host/HostEmails.jsx': { from: 0, embed: 1, why: 'not a query: the display text "… contacts (where emailable)" in a template literal' },

@@ -14,12 +14,24 @@
 // studio, through resolvePermission's tiers (studio switch + bundle, master,
 // per-user override, employment-type template, 'all' template, role default),
 // which is what hasPermissionForLocation / hasMobilePermissionForLocation
-// resolve. UI only: RLS is the enforcement.
+// resolve.
+//
+// C148 ACTWRITEGATEWEB.1 (Richard 2 Oct: "judge web task saves on the WEB
+// permission"). The browser writes were judged by RLS, whose write policies
+// (mig 691) ask the PHONE Tasks or Pipeline key, so someone with the web Tasks
+// key (`activities`, what /activities opens on) but neither phone key was
+// refused. The web writes are service-role routes now
+// (POST /api/activities/tasks, POST /api/activities/tasks/[id]/status, gate in
+// src/lib/activity-web-writes.js), and this function is their rule AND the
+// UI's: the web `activities` key at the row's studio, AND Contacts there
+// (web or phone; kept so a write never lands a row its author cannot read).
+// Client-safe: imports ./permissions only.
 
 import { hasPermissionForLocation, hasMobilePermissionForLocation } from './permissions'
 
 /**
- * Contacts (web OR phone) at `locationId`, the studio the write lands at.
+ * Web Tasks (`activities`) AND Contacts (web OR phone) at `locationId`, the
+ * studio the write lands at.
  *
  * @param {object|null} user        getCurrentUser() result
  * @param {string|null} locationId  the row's studio
@@ -27,6 +39,7 @@ import { hasPermissionForLocation, hasMobilePermissionForLocation } from './perm
  */
 export function canWriteActivitiesAt(user, locationId) {
   if (!user || !locationId) return false
+  if (!hasPermissionForLocation(user, locationId, 'activities')) return false
   return hasPermissionForLocation(user, locationId, 'contacts')
     || hasMobilePermissionForLocation(user, locationId, 'contacts')
 }
@@ -43,18 +56,42 @@ export function personActionsFor(actions, { canTask = true } = {}) {
   return (actions || []).filter((a) => canTask || a !== 'task')
 }
 
+const NOT_SAVED = 'Not saved: the task could not be saved. Try again.'
+
 /**
- * Judge `update(…).eq('id', x).select('id')`. A zero-row UPDATE is not an
- * error in PostgREST, so "no row came back" has to be read as the failure it
- * is (the row is gone, or RLS hides it from this session).
+ * Read a task route's answer (the fetch's `ok` and its parsed JSON body).
+ * Only `ok` AND `success: true` is a success; anything else carries the
+ * route's own message when it sent one.
  *
- * @param {{ data: Array|null, error: { message?: string }|null }} res
- * @returns {{ ok: true } | { ok: false, message: string }}
+ * @param {{ ok?: boolean, body?: { success?: boolean, data?: any, error?: string }|null }} res
+ * @returns {{ ok: true, data: any } | { ok: false, message: string }}
  */
-export function taskStatusUpdateOutcome({ data, error } = {}) {
-  if (error) return { ok: false, message: error.message || 'The task could not be updated.' }
-  if (!Array.isArray(data) || data.length === 0) {
-    return { ok: false, message: 'Not saved: this task could not be updated from your login here.' }
+export function taskWriteOutcome({ ok, body } = {}) {
+  if (ok && body?.success === true) return { ok: true, data: body.data ?? null }
+  return { ok: false, message: (body && typeof body.error === 'string' && body.error) || NOT_SAVED }
+}
+
+/**
+ * POST a JSON payload to a task route and judge the answer. A network error
+ * or a non-JSON page (a proxy error, a login redirect) is a failure, never a
+ * silent success.
+ *
+ * @param {string} url
+ * @param {object} payload
+ * @param {typeof fetch} [fetchImpl]
+ */
+export async function postActivityWrite(url, payload, fetchImpl = globalThis.fetch) {
+  let res
+  try {
+    res = await fetchImpl(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+  } catch {
+    return { ok: false, message: NOT_SAVED }
   }
-  return { ok: true }
+  let body = null
+  try { body = await res.json() } catch { /* non-JSON: judged as a failure below */ }
+  return taskWriteOutcome({ ok: res.ok, body })
 }

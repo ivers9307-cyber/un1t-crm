@@ -319,6 +319,20 @@ describe('getOpenApiSpec', () => {
     expect(spec.paths['/api/whatsapp/templates/{id}/resubmit'].post.responses).toHaveProperty('403')
   })
 
+  it('documents the two web task writes (C148 ACTWRITEGATEWEB.1), cookie only', () => {
+    const create = spec.paths['/api/activities/tasks']?.post
+    const status = spec.paths['/api/activities/tasks/{id}/status']?.post
+    for (const [name, op, codes] of [
+      ['create', create, ['200', '400', '401', '403', '404', '500']],
+      ['status', status, ['200', '400', '401', '403', '404', '500']],
+    ]) {
+      expect(op, `${name} is not registered`).toBeTruthy()
+      expect(op.tags).toContain('Tasks')
+      expect(op.security).toEqual([{ CookieAuth: [] }])
+      for (const c of codes) expect(op.responses, `${name} must document its ${c}`).toHaveProperty(c)
+    }
+  })
+
   it('caches the spec object across calls (same reference)', async () => {
     expect(await getOpenApiSpec()).toBe(spec)
   })
