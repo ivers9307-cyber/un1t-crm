@@ -28,6 +28,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { generateBundleRows } from './generate-bundle-sql.mjs'
+import { sqlCode } from './lib/sql-code.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(__dirname, '..')
@@ -35,16 +36,12 @@ const MIG_DIR = path.join(repoRoot, 'supabase/migrations')
 
 const SEED_TABLE = 'private.permission_key_bundles'
 
-function stripSql(text) {
-  // Same approach as check-rls-restrictive.mjs: dollar-quoted bodies
-  // can contain semicolons/comments of their own, but nothing in this
-  // repo's seed migrations wraps the INSERT in one, so a wholesale
-  // drop is safe.
-  return text
-    .replace(/\$(\w*)\$[\s\S]*?\$\1\$/g, ' ')
-    .replace(/--[^\n]*/g, ' ')
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
-}
+// Comments and dollar-quoted bodies blanked by the one quote-aware,
+// $tag$-pairing scan (scripts/lib/sql-code.mjs; GUARDSTRIP.1), not three
+// regexes: a '--' or '/*' inside a string hid code from those. Dollar bodies
+// are dropped on purpose: nothing in this repo's seed migrations wraps the
+// INSERT in one.
+const stripSql = (text) => sqlCode(text, { bodies: 'blank' })
 
 /**
  * Finds the migration file (by filesystem path) that most recently

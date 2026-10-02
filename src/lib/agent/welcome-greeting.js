@@ -47,7 +47,8 @@ export async function maybeSendWelcomeGreeting(db, { conversationId, locationId,
     // Scrubbed like every other agent message (core.js parseAgentResponse) so
     // an operator-typed greeting can't ship an em dash either.
     const text = stripEmDashes((settings?.welcome_greeting || '').trim() || DEFAULT_WELCOME_GREETING)
-    const result = await sendTextMessage(senderPhone, text, { locationId })
+    // WAREPLYNUMBER.1 (C86) — from the number the chat was opened on.
+    const result = await sendTextMessage(senderPhone, text, { locationId, replyInConversation: conversationId })
     await db.from('whatsapp_messages').insert({
       conversation_id: conversationId,
       contact_id: contactId || null,

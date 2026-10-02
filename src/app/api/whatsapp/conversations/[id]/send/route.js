@@ -90,6 +90,9 @@ export async function POST(request, props) {
   let templateName = null
   let templateVariables = null
   let send // () => Promise<{ messageId }>: the ONE call that reaches Meta
+  // WAREPLYNUMBER.1 (C86) — reply from the number the customer wrote to
+  // (recorded on the thread by the webhook), else the studio default.
+  const replyOpts = { locationId: conversation.location_id, replyInConversation: conversation.id }
 
   if (messageType === 'template') {
     // Template message — works outside the 24h window.
@@ -171,20 +174,22 @@ export async function POST(request, props) {
     messageBody = renderSentTemplateBody(tplRow, components) || `[Template: ${templateName}]`
     // Route from THIS location's WhatsApp number (whatsapp_numbers); a
     // location with none is refused (WACONFIGFALLBACK.1), never another's.
-    send = () => sendTemplateMessage(phone, templateName, language, components, { locationId: conversation.location_id })
+    // WAREPLYNUMBER.1 — the number this thread was written to when it
+    // shares the default's WABA, else the default (getConversationReplyConfig).
+    send = () => sendTemplateMessage(phone, templateName, language, components, replyOpts)
   } else if (['image', 'video', 'document', 'audio'].includes(messageType)) {
     // Media message — 24h window only
     if (!isWindowOpen(conversation)) {
       return NextResponse.json({ success: false, error: WINDOW_EXPIRED, window_expired: true }, { status: 400 })
     }
     messageBody = body.caption || `[${messageType}]`
-    send = () => sendMediaMessage(phone, messageType, body.media_url, body.caption, { locationId: conversation.location_id })
+    send = () => sendMediaMessage(phone, messageType, body.media_url, body.caption, replyOpts)
   } else {
     // Text message — 24h window only
     if (!isWindowOpen(conversation)) {
       return NextResponse.json({ success: false, error: WINDOW_EXPIRED, window_expired: true }, { status: 400 })
     }
-    send = () => sendTextMessage(phone, messageBody, { locationId: conversation.location_id })
+    send = () => sendTextMessage(phone, messageBody, replyOpts)
   }
 
   let result

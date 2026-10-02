@@ -49,9 +49,8 @@
 // JS comments are blanked from the TypeScript parser's comment ranges (never
 // a regex; no range taken where JSX text starts), SQL comments by one
 // quote- and dollar-aware pass that pairs each $tag$ with its own closing
-// tag (sqlCode). Helpers copied verbatim from
-// tests/tv-content-bucket-guard.test.js (importing a test file would
-// re-register its tests here; follow-ups C74 moves them to tests/helpers/).
+// tag (sqlCode): the shared tests/helpers/js-code.js and sql-code.js
+// (GUARDSTRIP.1, C74).
 // A floor, not a proof: a bucket name built at runtime (`brand${x}`, a join,
 // an object property defined outside client code), SQL built at runtime or a
 // policy created by hand on prod is invisible; mig 675's self-check covers
@@ -62,7 +61,8 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs'
 import path from 'node:path'
-import ts from 'typescript'
+import { stripComments, stripCommentsOfFile as codeOfFile } from './helpers/js-code.js'
+import { sqlCode } from './helpers/sql-code.js'
 import { netPolicyState } from '../scripts/check-rls-restrictive.mjs'
 import { BRANDING_BUCKET_MIME_TYPES, BRANDING_BUCKET_MAX_BYTES } from '../src/lib/branding-media.js'
 
@@ -109,50 +109,12 @@ function walk(dir, out = []) {
   return out
 }
 
-/**
- * JS/TS with comments blanked (newlines and offsets kept), from the
- * TypeScript parser's own comment ranges, so a '/*' or '//' inside a string,
- * template or regex literal is never read as a comment. JSX text is not
- * trivia, but asked for comments at its start the scanner reads
- * `<p>/* note</p>` as one, so no range is taken at a position where JSX text
- * begins (tests/staff-profile-to-client.test.js). A file the parser cannot
- * read is returned raw: a false positive beats a blind spot.
- */
-export function stripComments(text, file = 'scan.jsx') {
-  const kind = /\.tsx$/.test(file) ? ts.ScriptKind.TSX : /\.ts$/.test(file) ? ts.ScriptKind.TS : ts.ScriptKind.JSX
-  const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, false, kind)
-  if (sf.parseDiagnostics?.length) return text
-  const jsxTextAt = new Set()
-  const findJsxText = (node) => {
-    if (node.kind === ts.SyntaxKind.JsxText) jsxTextAt.add(node.pos)
-    for (const child of node.getChildren(sf)) findJsxText(child)
-  }
-  findJsxText(sf)
-  const ranges = new Map()
-  const visit = (node) => {
-    if (!jsxTextAt.has(node.pos)) {
-      for (const r of [...(ts.getLeadingCommentRanges(text, node.pos) || []), ...(ts.getTrailingCommentRanges(text, node.pos) || [])]) ranges.set(r.pos, r.end)
-    }
-    for (const child of node.getChildren(sf)) visit(child)
-  }
-  visit(sf)
-  let out = text
-  for (const [pos, end] of ranges) out = out.slice(0, pos) + out.slice(pos, end).replace(/[^\n]/g, ' ') + out.slice(end)
-  return out
-}
-
 function isClientCode(code) {
   return /^['"]use client['"]/.test(code.trimStart()) || /\bcreateBrowserClient\b/.test(code) ||
     /\bcreateAuthClient\s*\(/.test(code) || /\bNEXT_PUBLIC_SUPABASE_ANON_KEY\b/.test(code)
 }
 export const isClientFile = (text, file) => isClientCode(stripComments(text, file))
 
-// Every file is parsed once per run (the TypeScript parse is the slow part).
-const CODE = new Map()
-const codeOfFile = (f) => {
-  if (!CODE.has(f)) CODE.set(f, stripComments(readFileSync(f, 'utf8'), f))
-  return CODE.get(f)
-}
 // The desktop (Tauri) shell's own pages are client code too; an .html file
 // is read raw (the TypeScript parser cannot read it, so nothing is stripped).
 const DESKTOP = path.join(ROOT, 'desktop/src')
@@ -229,84 +191,6 @@ export const mimeLiteralsIn = (code) => [...new Set([...code.matchAll(MIME_LITER
 export const mibCapsIn = (code) => [...code.matchAll(MIB_CAP)].map((m) => Math.round(Number(m[1]) * 1024 * 1024))
 
 // ── migrations ───────────────────────────────────────────────────────────
-/**
- * The SQL with its comments blanked (newlines kept), by a quote-aware scan:
- * '…' (with '' doubling, and backslash escapes in E'…'), "…" identifiers and
- * $tag$…$tag$ bodies are never read as comment markers, so a '/*' or '--'
- * inside one cannot hide code. Block comments nest, as in Postgres. A
- * dollar-quoted body is matched to its own closing tag first and scanned the
- * same way on its own, so nothing inside can run past it. String contents
- * are kept verbatim: a GRANT run from EXECUTE '…' counts.
- * (tests/function-execute-guard.test.js sqlCode, copied verbatim rather than
- * imported: importing a test file would re-register its tests here.)
- */
-export function sqlCode(sql) {
-  let out = ''
-  let i = 0
-  const n = sql.length
-  const blank = (s) => s.replace(/[^\n]/g, ' ')
-  const DOLLAR = /\$([A-Za-z_\u0080-\uffff][\w\u0080-\uffff]*)?\$/y
-  while (i < n) {
-    const c = sql[i]
-    const d = sql[i + 1]
-    if (c === '-' && d === '-') {
-      const end = sql.indexOf('\n', i)
-      const stop = end === -1 ? n : end
-      out += blank(sql.slice(i, stop))
-      i = stop
-      continue
-    }
-    if (c === '/' && d === '*') {
-      let depth = 0
-      let j = i
-      while (j < n) {
-        if (sql[j] === '/' && sql[j + 1] === '*') { depth++; j += 2; continue }
-        if (sql[j] === '*' && sql[j + 1] === '/') { depth--; j += 2; if (depth === 0) break; continue }
-        j++
-      }
-      out += blank(sql.slice(i, j))
-      i = j
-      continue
-    }
-    if (c === "'") {
-      const escapes = /[eE]/.test(sql[i - 1] ?? '') && !/[\w$]/.test(sql[i - 2] ?? '')
-      let j = i + 1
-      while (j < n) {
-        if (escapes && sql[j] === '\\') { j += 2; continue }
-        if (sql[j] === "'") { if (sql[j + 1] === "'") { j += 2; continue } break }
-        j++
-      }
-      out += sql.slice(i, j + 1)
-      i = j + 1
-      continue
-    }
-    if (c === '"') {
-      let j = i + 1
-      while (j < n) {
-        if (sql[j] === '"') { if (sql[j + 1] === '"') { j += 2; continue } break }
-        j++
-      }
-      out += sql.slice(i, j + 1)
-      i = j + 1
-      continue
-    }
-    if (c === '$' && !/[\w$]/.test(sql[i - 1] ?? '')) {
-      DOLLAR.lastIndex = i
-      const m = DOLLAR['exec'](sql)   // RegExp#exec (sticky); bracketed only for a local lint hook
-      if (m) {
-        const tag = m[0]
-        const end = sql.indexOf(tag, i + tag.length)
-        if (end === -1) { out += sql.slice(i); break }
-        out += tag + sqlCode(sql.slice(i + tag.length, end)) + tag
-        i = end + tag.length
-        continue
-      }
-    }
-    out += c
-    i++
-  }
-  return out
-}
 
 const CLIENT_ROLES = ['anon', 'authenticated', 'public']
 // A positive single-bucket restriction; '' covers a policy inside EXECUTE '…'.

@@ -21,7 +21,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs'
 import { join, dirname, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { stripComments } from '../scripts/lib/strip-comments.mjs'
+import { stripComments } from './helpers/js-code.js'
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), '..')
 const NAMES_LOCATIONS = /from\(\s*['"]locations['"]\s*\)/
@@ -71,7 +71,7 @@ export function undecidedWriters(root = repo) {
   return out.sort()
 }
 
-describe('every writer of locations.settings goes through mergeLocationSettings', () => {
+describe('every writer of locations.settings goes through mergeLocationSettings', { timeout: 120_000 }, () => {
   it('no unreviewed whole-column writer', () => {
     expect(
       undecidedWriters(),

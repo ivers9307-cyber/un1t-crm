@@ -86,6 +86,21 @@ describe('loadQualificationsPage', () => {
     expect(out.body.data.can_edit_types).toBe(true)
   })
 
+  // REVIEWNITS.1 (D5): the catalogue is the organisation's, and PATCH judges
+  // "owner at a studio of the organisation"; the page judged the ACTIVE studio.
+  it('a manager here who owns another studio of the organisation may edit the catalogue; an owner elsewhere may not', async () => {
+    const both = person({
+      id: 'b1', full_name: 'Bea Both', rolesByLocation: { [STILL]: 'manager', [HATCH]: 'owner' },
+      locations: [{ id: STILL, organization_id: ORG }, { id: HATCH, organization_id: ORG }],
+    })
+    expect((await loadQualificationsPage(pageDb(), { user: both, locationId: STILL, today: '2026-09-28' })).body.data.can_edit_types).toBe(true)
+    const otherOrg = person({
+      id: 'g1', full_name: 'Gil Garage', rolesByLocation: { [STILL]: 'manager', [GARAGE]: 'owner' },
+      locations: [{ id: STILL, organization_id: ORG }, { id: GARAGE, organization_id: OTHER_ORG }],
+    })
+    expect((await loadQualificationsPage(pageDb(), { user: otherOrg, locationId: STILL, today: '2026-09-28' })).body.data.can_edit_types).toBe(false)
+  })
+
   it.each([['a coach', coach], ['a head coach', headCoach]])('%s gets their own records only, read-only', async (_, user) => {
     const own = { ...RECORD, profile_id: user.id }
     const db = pageDb({ staff_qualifications: { data: [own], error: null } })
@@ -334,6 +349,14 @@ describe('template requirements', () => {
     const out = await replaceTemplateRequirements(reqDb({ add: { data: null, error: { code: 'P0001', message: 'qualification_requirement_other_org: type x' } } }),
       { user: manager, input: { template_id: 't1', qualification_type_ids: ['fa', 'ins'] } })
     expect(out.status).toBe(400)
+  })
+
+  // REVIEWNITS.1 (D5): mig 695's count trigger is the cap two concurrent PUTs
+  // cannot get past; its refusal is the same 400 as the API's own check.
+  it('the database\'s cap refusal (mig 695) is a 400 "At most 5 qualifications", not a 500', async () => {
+    const out = await replaceTemplateRequirements(reqDb({ add: { data: null, error: { code: 'P0001', message: 'qualification_requirements_cap: template t1 would ask for 6 (max 5)' } } }),
+      { user: manager, input: { template_id: 't1', qualification_type_ids: ['fa', 'ins'] } })
+    expect(out).toMatchObject({ status: 400, body: { error: 'At most 5 qualifications' } })
   })
 })
 

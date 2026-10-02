@@ -65,6 +65,8 @@ function writeFailed(error) {
     return fail(400, 'That value is not allowed.')
   }
   if (/^qualification_requirement_other_org/.test(String(error?.message || ''))) return fail(400, 'Unknown qualification type')
+  // Mig 695's count trigger: the cap two concurrent saves cannot get past.
+  if (/^qualification_requirements_cap/.test(String(error?.message || ''))) return fail(400, `At most ${MAX_TEMPLATE_REQUIREMENTS} qualifications`)
   logWarn('qualifications', 'write failed', { code: error?.code, err: error?.message })
   return fail(500, 'Could not save the change')
 }
@@ -169,7 +171,9 @@ export async function loadQualificationsPage(db, { user, locationId, today }) {
       audience: manager ? 'manager' : 'self',
       today,
       organization_id: org.organizationId,
-      can_edit_types: manager && hasRoleAtLocation(user, locationId, QUAL_CATALOGUE_ROLES),
+      // The catalogue is the organisation's: owner at ANY of its studios, the
+      // rule PATCH and POST judge (canEditCatalogue), not just the active one.
+      can_edit_types: manager && (hasRoleAtLocation(user, locationId, QUAL_CATALOGUE_ROLES) || canEditCatalogue(user, org.organizationId)),
       types,
       people: people.map((p) => ({ ...p, records: byPerson.get(p.profile_id) || [] })),
     },

@@ -10,6 +10,7 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
+import { stripComments } from './helpers/js-code.js'
 
 const ROOT = path.resolve(__dirname, '..', 'src', 'app', 'api', 'public')
 
@@ -23,11 +24,11 @@ function routeFiles(dir) {
   return out
 }
 
-// Strip // line comments and /* block */ comments: a comment explaining the
-// rule must not trip the rule.
-function codeOnly(src) {
-  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
-}
+// Blank // line comments and /* block */ comments: a comment explaining the
+// rule must not trip the rule. The TypeScript parser's comment ranges
+// (tests/helpers/js-code.js), never a regex: a '/*' in a string hid the rest
+// of the route from the old one (GUARDSTRIP.1).
+export const codeOnly = stripComments
 
 const LEAKS = [
   { name: 'a spots_left / spotsLeft / places_left key or call', re: /\b(spots_?left|spotsLeft|places_?left|placesLeft|seats_?left|remaining_spots|remaining_places)\b/i },
@@ -41,6 +42,11 @@ describe('PUBCAP.1 — public routes never send a capacity count', () => {
   it('finds the public routes', () => {
     expect(files.length).toBeGreaterThan(10)
     expect(files.some((f) => f.endsWith(path.join('public', 'classes', 'route.js')))).toBe(true)
+  })
+
+  it('a /* inside a string hides no leak (GUARDSTRIP.1)', () => {
+    const src = "const accept = 'image/*'\nreturn json({ spots_left: n })\n/* note */"
+    expect(LEAKS[0].re.test(codeOnly(src))).toBe(true)
   })
 
   for (const leak of LEAKS) {
