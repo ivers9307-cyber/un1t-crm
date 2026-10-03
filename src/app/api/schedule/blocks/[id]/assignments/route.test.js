@@ -22,11 +22,15 @@ vi.mock('@/lib/auth', async (importOriginal) => {
   }
 })
 vi.mock('@/lib/roster-change-notify', () => ({ notifyRosterChanges: vi.fn(() => Promise.resolve({ notified: 0 })) }))
+// AVAIL.3 D1 — the availability read (src/lib/availability-leave.test.js pins its query).
+vi.mock('@/lib/availability-leave', () => ({ readAvailabilityLeave: vi.fn() }))
 
 const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser, getUserLocationIds } = await import('@/lib/auth')
 const { POST } = await import('./route.js')
 const { notifyRosterChanges } = await import('@/lib/roster-change-notify')
+const { readAvailabilityLeave } = await import('@/lib/availability-leave')
+const { availabilityLeaveRows } = await import('@shared/unavailable-days')
 const { fakeDb, resolveLocations, scopedAssignments, locationScopeOf } = await import('@/lib/time-off.test-helpers')
 
 beforeEach(() => {
@@ -34,6 +38,8 @@ beforeEach(() => {
   getCurrentUser.mockReset()
   getUserLocationIds.mockReset()
   notifyRosterChanges.mockClear()
+  readAvailabilityLeave.mockReset()
+  readAvailabilityLeave.mockResolvedValue({ rows: [], error: null })
 })
 
 function req(body) {
@@ -625,5 +631,38 @@ describe('POST — double-booking advisory stays inside the organisation (ORGSCO
     expect(locationScopeOf(advisoryReads()[0])).toEqual(['loc-1'])
     expect(json.warnings).toHaveLength(1)
     expect(json.warnings[0]).toContain('Same studio shift')
+  })
+})
+
+// AVAIL.3 D1 (Richard, 3 Oct 2026: "treat like leave") — an all-day "can't
+// work" availability date warns on assign exactly like approved leave.
+describe('POST — warns about an all-day availability date like leave (AVAIL.3 D1)', () => {
+  const COACH = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+  const BLOCK = { id: 'block-1', location_id: 'loc-1', block_date: '2026-10-15', max_coaches: 5, start_time: '09:00:00', end_time: '10:00:00', roster_id: null, rosters: null }
+  const rule = { id: 'u1', profile_id: COACH, kind: 'dated', start_date: '2026-10-15', end_date: '2026-10-15', all_day: true, note: null, profiles: { full_name: 'Coach One' } }
+
+  it('warns, still assigns, and reads that coach on that date', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    readAvailabilityLeave.mockResolvedValue({ rows: availabilityLeaveRows([rule]), error: null })
+    const { db, insertSpy } = buildDb({ block: BLOCK })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(req({ profile_id: COACH }), PROPS)
+    expect(res.status).toBe(201)
+    const json = await res.json()
+    expect(json.warnings).toContain('Coach One can’t work from 2026-10-15 to 2026-10-15 (My availability)')
+    expect(insertSpy).toHaveBeenCalledTimes(1)
+    expect(readAvailabilityLeave).toHaveBeenCalledWith(db, { profileIds: [COACH], startDate: '2026-10-15', endDate: '2026-10-15' })
+  })
+
+  it('a failed availability read never blocks the assign (an advisory, like the leave read)', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    readAvailabilityLeave.mockResolvedValue({ rows: null, error: { message: 'down' } })
+    const { db, insertSpy } = buildDb({ block: BLOCK })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(req({ profile_id: COACH }), PROPS)
+    expect(res.status).toBe(201)
+    expect(insertSpy).toHaveBeenCalledTimes(1)
+    // ...and says it could not check, never a silent "free that day".
+    expect((await res.json()).warnings).toContain('Could not check My availability on 2026-10-15: confirm this coach can work before publishing')
   })
 })

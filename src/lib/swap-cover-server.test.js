@@ -4,6 +4,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('./log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
+// AVAIL.3 D1 — the availability read (availability-leave.test.js pins its query).
+vi.mock('./availability-leave', () => ({ readAvailabilityLeave: vi.fn(async () => ({ rows: [], error: null })) }))
 vi.mock('./push', async (importOriginal) => {
   const real = await importOriginal()
   return {
@@ -22,6 +24,8 @@ const { readRoleRecipientIds } = await import('./push')
 const { notifyUsersOnce, notifyUsersAtRolesOnce } = await import('./push-dedup')
 const { MANAGER_ROLES } = await import('./schemas')
 const { notifyOpenPool, runSwapCoverSweep } = await import('./swap-cover-server')
+const { readAvailabilityLeave } = await import('./availability-leave')
+const { availabilityLeaveRows } = await import('@shared/unavailable-days')
 const { SWAP_EXPIRY_NOTES } = await import('./swap-cover')
 
 // A thenable builder per from() call. Records the select, the filters and any
@@ -165,6 +169,27 @@ describe('notifyOpenPool', () => {
     const out = await notifyOpenPool(db, ARGS)
     expect(notifyUsersOnce).not.toHaveBeenCalled()
     expect(out).toEqual({ notified: 0, degraded: false })
+  })
+
+  // AVAIL.3 D1 (Richard, 3 Oct 2026: "treat like leave") — a coach who said
+  // they can't work that day (all day) is not offered the shift.
+  it('drops a coach with an all-day "can\u2019t work" date, like approved leave', async () => {
+    readAvailabilityLeave.mockResolvedValueOnce({
+      rows: availabilityLeaveRows([{ id: 'u1', profile_id: 'a', kind: 'dated', start_date: '2026-09-24', end_date: '2026-09-24', all_day: true, note: null }]),
+      error: null,
+    })
+    const db = mockDb(healthy())
+    await notifyOpenPool(db, ARGS)
+    expect(notifyUsersOnce.mock.calls[0][2]).toEqual(['b'])
+    expect(readAvailabilityLeave).toHaveBeenLastCalledWith(db, { profileIds: ['a', 'b'], startDate: '2026-09-24', endDate: '2026-09-24' })
+  })
+
+  it('availability unreadable degrades like leave unreadable: only coaches working here that day', async () => {
+    readAvailabilityLeave.mockResolvedValueOnce({ rows: null, error: { message: 'down' } })
+    const db = mockDb(healthy({ shift_assignments: { data: [shiftHere('a', '09:00:00', '10:00:00')], error: null } }))
+    const out = await notifyOpenPool(db, ARGS)
+    expect(notifyUsersOnce.mock.calls[0][2]).toEqual(['a'])
+    expect(out).toEqual({ notified: 1, degraded: true })
   })
 
   // FAILURE MODES. A failed read may only SHRINK the audience to (at most) the

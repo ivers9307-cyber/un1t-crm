@@ -15,6 +15,7 @@
 
 import { liveAssignments } from './roster'
 import { timeRangesOverlap, fmtTime } from './schedule-overlap'
+import { isAvailabilityLeave, AVAILABILITY_LEAVE_SOURCE } from '@shared/unavailable-days'
 
 /**
  * The approved-leave row covering this coach on this date, or null.
@@ -64,6 +65,8 @@ export function leaveClashes(blocks, { from = null, to = null, todayIso = null, 
         coach_name: a.profiles?.full_name || 'Coach',
         leave_start: leave.start_date,
         leave_end: leave.end_date,
+        // AVAIL.3 D1 — an all-day "can't work" availability date, not a request.
+        ...(isAvailabilityLeave(leave) ? { leave_source: AVAILABILITY_LEAVE_SOURCE } : {}),
       })
     }
   }
@@ -153,8 +156,14 @@ export function doubleBookings(blocks, otherAssignments, { from = null, to = nul
  * on five shifts is five rows and still one coach.
  */
 export function leaveClashesHeadline(clashes) {
-  const people = new Set((clashes || []).map((c) => c.profile_id)).size
-  return `${people} coach${people === 1 ? '' : 'es'} rostered on approved leave`
+  const list = clashes || []
+  const people = new Set(list.map((c) => c.profile_id)).size
+  const who = `${people} coach${people === 1 ? '' : 'es'} rostered on`
+  // AVAIL.3 D1 — availability clashes (leave_source) say what they are.
+  const avail = list.filter((c) => c.leave_source === AVAILABILITY_LEAVE_SOURCE).length
+  if (avail === 0) return `${who} approved leave`
+  if (avail === list.length) return `${who} a day they can’t work`
+  return `${who} leave or a day they can’t work`
 }
 
 /**
@@ -164,10 +173,12 @@ export function leaveClashesHeadline(clashes) {
  * matches the rest of the line it sits on. Only string slices of the ISO dates
  * are read here: no Date, so no timezone can move a day.
  */
-export function leaveRangeLabel(startIso, endIso, fmtDay) {
-  if (!startIso) return 'on leave'
-  if (!endIso || endIso === startIso) return `on leave ${fmtDay(startIso)}`
+export function leaveRangeLabel(startIso, endIso, fmtDay, source = null) {
+  // AVAIL.3 D1 — a clash with an all-day availability date reads "can't work".
+  const lead = source === AVAILABILITY_LEAVE_SOURCE ? 'can’t work' : 'on leave'
+  if (!startIso) return lead
+  if (!endIso || endIso === startIso) return `${lead} ${fmtDay(startIso)}`
   const sameMonth = startIso.slice(0, 7) === endIso.slice(0, 7)
   const from = sameMonth ? String(Number(startIso.slice(8, 10))) : fmtDay(startIso)
-  return `on leave ${from} to ${fmtDay(endIso)}`
+  return `${lead} ${from} to ${fmtDay(endIso)}`
 }

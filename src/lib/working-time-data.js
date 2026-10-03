@@ -28,6 +28,7 @@ import { isLiveAssignment } from './roster'
 import { siblingLocationIds } from './sibling-locations'
 import { logWarn } from './log'
 import { isWorkingTimeCovered } from '@shared/working-time'
+import { readAvailabilityLeave } from './availability-leave'
 
 // OWNER REVIEW (WORKTIME.1 review note 3): a live assignment on an
 // UNPUBLISHED block at the organisation's OTHER studio counts. A half-built
@@ -65,6 +66,15 @@ async function readApprovedLeave(db, profileIds, from, to) {
       byProfile.get(l.profile_id).push(l)
     }
     if (!page || page.length < PAGE) break
+  }
+  // AVAIL.3 D1 (Richard, 3 Oct 2026: "treat like leave") — an all-day
+  // "can't work" availability date is off like approved leave. Same failure
+  // rule: an unreadable read is an error, never an all-clear.
+  const { rows: unavailable, error: availErr } = await readAvailabilityLeave(db, { profileIds, startDate: from, endDate: to })
+  if (availErr) return { byProfile: null, error: availErr }
+  for (const l of unavailable) {
+    if (!byProfile.has(l.profile_id)) byProfile.set(l.profile_id, [])
+    byProfile.get(l.profile_id).push(l)
   }
   return { byProfile, error: null }
 }

@@ -23,6 +23,8 @@ import { isAdminShift } from '@shared/shift-kind'
 import { staffingGaps } from './roster-staffing'
 import { dublinTodayStr, addDaysISO } from './dublin-time'
 import { leaveScopeOrFilter } from './time-off-leave'
+// AVAIL.3 D1 — an all-day "can't work" availability date is off like leave.
+import { readAvailabilityLeave } from './availability-leave'
 import { logWarn } from './log'
 import { leaveCovering, leaveClashes, doubleBookings } from './roster-publish-advisories'
 import { loadWorkingTimeShifts } from './working-time-data'
@@ -189,6 +191,19 @@ async function loadBudgetContext(db, locationId, periodStart, periodEnd = period
     leave.push(...(page || []))
     if (!page || page.length < BLOCK_PAGE_SIZE) break
   }
+
+  // AVAIL.3 D1 (Richard, 3 Oct 2026: "treat like leave") — an all-day dated
+  // availability rule ("I can't work 11-13 Oct") is not billed and is listed
+  // in the leave-clash advisory, like the Unavailable time off it replaces
+  // (mig 703). Same people, same months. A budget input, so a failed read
+  // throws like the leave read above.
+  const { rows: availabilityLeave, error: availErr } = await readAvailabilityLeave(db, {
+    profileIds: [...(links || []).map((l) => l.profile_id), ...holderIds],
+    startDate: monthStart,
+    endDate: monthEnd,
+  })
+  if (availErr) throw new Error(`Availability lookup failed: ${availErr.message}`)
+  leave.push(...availabilityLeave)
 
   const leaveByProfile = new Map()
   for (const row of leave) {

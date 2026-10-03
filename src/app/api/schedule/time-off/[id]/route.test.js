@@ -315,7 +315,9 @@ describe('PUT /api/schedule/time-off/[id] — LEAVE.2', () => {
     createServerClient.mockReturnValue(db)
     const res = await PUT(req({ status: 'approved' }), PROPS)
     expect(res.status).toBe(400)
-    expect((await res.json()).error).toMatch(/Contractors/)
+    const error = (await res.json()).error
+    expect(error).toMatch(/^Contractors don’t take leave\. Decline this request/)
+    expect(error).not.toMatch(/file it as Unavailable/)
     expect(updateSpy).not.toHaveBeenCalled()
     expect(allowanceInsertSpy).not.toHaveBeenCalled()
   })
