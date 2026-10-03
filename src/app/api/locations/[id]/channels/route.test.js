@@ -149,6 +149,10 @@ const successBody = (locationId, updatedBy) => ({
     is_active: true,
     token_expires_at: null,
     token_refreshed_at: null,
+    // A fresh token resets the hub health stamps; on insert these equal the
+    // column defaults, so the stored row is what it always was.
+    status: 'connected',
+    last_error: null,
     access_token: '••••••',
     has_access_token: true,
     app_secret: null,
