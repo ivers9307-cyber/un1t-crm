@@ -209,6 +209,20 @@ describe('generateReport — all-day availability is reported like Unavailable t
     expect(off).toEqual(['2026-09-15', '2026-09-16'])
   })
 
+  it('roster coverage lists a person once a day when leave and an availability date overlap', async () => {
+    // Coach U: approved sick 15-16 Sep AND a can't-work date 16-17 Sep, plus a
+    // second overlapping rule on the 17th (mig 703 carries overlapping requests
+    // as overlapping rules).
+    readAvailabilityLeave.mockResolvedValueOnce({ rows: [...avail('u1', '2026-09-16', '2026-09-17'), ...avail('u2', '2026-09-17', '2026-09-17')], error: null })
+    const { db, captured } = makeDb({ timeOff: [req('sick', '2026-09-15', '2026-09-16', { name: 'Coach U' })] })
+    createServerClient.mockReturnValue(db)
+    expect((await generateReport({ report_type: 'roster_coverage', ...SEPT })).success).toBe(true)
+    const byDate = Object.fromEntries(captured.inserted.report_data.days.map((d) => [d.date, d.staff_off]))
+    expect(byDate['2026-09-15']).toEqual(['Coach U'])
+    expect(byDate['2026-09-16']).toEqual(['Coach U'])
+    expect(byDate['2026-09-17']).toEqual(['Coach U'])
+  })
+
   it('a failed availability read fails either report instead of losing the days', async () => {
     for (const report_type of ['time_off_summary', 'roster_coverage']) {
       readAvailabilityLeave.mockResolvedValueOnce({ rows: null, error: { message: 'availability down' } })

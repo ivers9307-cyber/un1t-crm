@@ -101,3 +101,9 @@ export function leaveWarningLine(name, row) {
   }
   return `${who} has approved ${row.type} from ${row.start_date} to ${row.end_date}`
 }
+
+/** The assign / bulk-assign line when the availability read failed: never a silent "free". */
+export function availabilityUncheckedLine(startIso, endIso) {
+  const when = !endIso || endIso === startIso ? `on ${startIso}` : `from ${startIso} to ${endIso}`
+  return `Could not check My availability ${when}: confirm this coach can work before publishing`
+}

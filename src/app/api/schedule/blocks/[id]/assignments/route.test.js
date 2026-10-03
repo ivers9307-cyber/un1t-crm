@@ -662,5 +662,7 @@ describe('POST — warns about an all-day availability date like leave (AVAIL.3 
     const res = await POST(req({ profile_id: COACH }), PROPS)
     expect(res.status).toBe(201)
     expect(insertSpy).toHaveBeenCalledTimes(1)
+    // ...and says it could not check, never a silent "free that day".
+    expect((await res.json()).warnings).toContain('Could not check My availability on 2026-10-15: confirm this coach can work before publishing')
   })
 })

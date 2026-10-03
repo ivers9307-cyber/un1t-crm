@@ -465,11 +465,21 @@ export async function generateReport({ report_type, period_start, period_end, lo
 
       // Only the part of the leave inside the period can land on a day, so the
       // walk is clipped to it (a year-long request no longer walks a year).
+      // AVAIL.3 D1 — each PERSON once a day (the overview's ROSTERLOOK.1
+      // rule): approved leave plus an all-day availability date, or two
+      // overlapping rules, are one person off, not two names.
+      const offSeen = new Set()
       for (const t of (timeOff || [])) {
         const from = t.start_date > period_start ? t.start_date : period_start
         const to = t.end_date < period_end ? t.end_date : period_end
         for (const ds of eachReportDay(from, to)) {
-          if (days[ds]) days[ds].staff_off.push(t.profiles?.full_name || 'Unknown')
+          if (!days[ds]) continue
+          if (t.profile_id) {
+            const key = `${t.profile_id}|${ds}`
+            if (offSeen.has(key)) continue
+            offSeen.add(key)
+          }
+          days[ds].staff_off.push(t.profiles?.full_name || 'Unknown')
         }
       }
 

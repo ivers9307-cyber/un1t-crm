@@ -52,7 +52,8 @@ import { logRosterChange } from '@/lib/roster-change-log'
 import { notifyRosterChanges } from '@/lib/roster-change-notify'
 import { isRosterableProfile, notRosterableError } from '@/lib/roster-write'
 import { readAvailabilityLeave } from '@/lib/availability-leave'
-import { leaveWarningLine } from '@shared/unavailable-days'
+import { leaveWarningLine, availabilityUncheckedLine } from '@shared/unavailable-days'
+import { logWarn } from '@/lib/log'
 
 const BulkAssignSchema = z.object({
   block_ids: z.array(uuidLike).min(1, 'At least one block_id is required').max(200, 'Max 200 blocks per request'),
@@ -206,8 +207,8 @@ export async function POST(request) {
       .gte('end_date', minDate)
     // AVAIL.3 D1 (Richard, 3 Oct 2026: "treat like leave") — an all-day
     // "can't work" availability date warns like approved leave. Advisory:
-    // a failed read warns nothing and never blocks the assign.
-    const { rows: unavailable } = await readAvailabilityLeave(db, {
+    // a failed read never blocks the assign, and it SAYS it could not check.
+    const { rows: unavailable, error: availErr } = await readAvailabilityLeave(db, {
       profileIds: [body.profile_id], startDate: minDate, endDate: maxDate,
     })
     const seen = new Set()
@@ -223,6 +224,10 @@ export async function POST(request) {
         seen.add(line)
         return true
       })
+    if (availErr) {
+      logWarn('schedule-bulk-assign', 'availability read failed; assigned without the can\'t-work check', { err: availErr.message })
+      warnings.push(availabilityUncheckedLine(minDate, maxDate))
+    }
   }
 
   // SCHEDULE-DOUBLE-BOOKING.1 — advisory: flag any of this coach's shifts

@@ -510,5 +510,6 @@ describe('POST /api/schedule/blocks/bulk-assign — availability warns like leav
     createServerClient.mockReturnValue(db)
     const j = await (await POST(buildRequest({ block_ids: [VALID_UUID_A, VALID_UUID_B], profile_id: PROFILE_A }))).json()
     expect(j.assigned).toHaveLength(2)
+    expect(j.warnings).toContain('Could not check My availability from 2026-11-12 to 2026-11-14: confirm this coach can work before publishing')
   })
 })

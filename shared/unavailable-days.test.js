@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   AVAILABILITY_LEAVE_SOURCE, isLeaveLikeAvailabilityRule, availabilityLeaveRow, availabilityLeaveRows,
-  isAvailabilityLeave, coversDate, isOffOn, offLookup, leaveWarningLine,
+  isAvailabilityLeave, coversDate, isOffOn, offLookup, leaveWarningLine, availabilityUncheckedLine,
 } from './unavailable-days'
 
 // Fictional ids only: the repo is public.
@@ -111,5 +111,13 @@ describe('AVAIL.3 D1 — the assign warning line', () => {
 
   it('has no em dashes', () => {
     expect(leaveWarningLine('A', availabilityLeaveRow(dated()))).not.toMatch(/—/)
+  })
+})
+
+describe('availabilityUncheckedLine', () => {
+  it('names the day or the range, and has no em dash', () => {
+    expect(availabilityUncheckedLine('2026-10-15', '2026-10-15')).toBe('Could not check My availability on 2026-10-15: confirm this coach can work before publishing')
+    expect(availabilityUncheckedLine('2026-10-15', '2026-10-17')).toMatch(/from 2026-10-15 to 2026-10-17/)
+    expect(availabilityUncheckedLine('2026-10-15', '2026-10-17')).not.toMatch(/[—–]/)
   })
 })

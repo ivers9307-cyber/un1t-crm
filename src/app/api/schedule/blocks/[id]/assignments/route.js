@@ -41,7 +41,8 @@ import { isLiveAssignment, liveAssignments } from '@/lib/roster'
 import { isRosterableProfile, notRosterableError } from '@/lib/roster-write'
 import { findShiftOverlaps } from '@/lib/shift-overlaps'
 import { readAvailabilityLeave } from '@/lib/availability-leave'
-import { leaveWarningLine } from '@shared/unavailable-days'
+import { leaveWarningLine, availabilityUncheckedLine } from '@shared/unavailable-days'
+import { logWarn } from '@/lib/log'
 
 const AssignSchema = z.object({
   profile_id: uuidLike.optional(),
@@ -204,12 +205,17 @@ export async function POST(request, props) {
       .gte('end_date', block.block_date)
     // AVAIL.3 D1 (Richard, 3 Oct 2026: "treat like leave") — an all-day
     // "can't work" availability date warns like approved leave. Advisory:
-    // a failed read warns nothing and never blocks the assign.
-    const { rows: unavailable } = await readAvailabilityLeave(db, {
+    // a failed read never blocks the assign, and it SAYS it could not check
+    // (a silent miss would read as "free that day").
+    const { rows: unavailable, error: availErr } = await readAvailabilityLeave(db, {
       profileIds: [profileId], startDate: block.block_date, endDate: block.block_date,
     })
     for (const t of [...(timeOff || []), ...(unavailable || [])]) {
       warnings.push(leaveWarningLine(t.profiles?.full_name, t))
+    }
+    if (availErr) {
+      logWarn('schedule-assign', 'availability read failed; assigned without the can\'t-work check', { blockId: block.id, err: availErr.message })
+      warnings.push(availabilityUncheckedLine(block.block_date, block.block_date))
     }
 
     // ROSTER-FIX.1 — clear this coach's tombstone first; the unique key is on

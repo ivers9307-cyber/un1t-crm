@@ -6,7 +6,7 @@
 // src/lib/availability-leave.js.
 //
 // This fails a non-test file that reads time_off_requests with
-// .eq('status', 'approved') unless it imports one of the two, or is listed in
+// .eq('status', 'approved') (or .in('status', [..., 'approved'])) unless it imports one of the two, or is listed in
 // EXEMPT with the reason it is not asking "is this person off". It is a
 // floor, not a proof: a reader that filters status some other way, or holds
 // its select in another module, is invisible to it.
@@ -19,6 +19,8 @@ const ROOT = path.resolve(import.meta.dirname, '..')
 const SCAN = ['src', 'shared', 'mobile/lib', 'mobile/app', 'mobile/components']
 
 const EXEMPT = {
+  'src/app/api/schedule/time-off/route.js':
+    'files a time-off REQUEST: its pending+approved read refuses an overlapping request, not "is this person off"',
   'src/app/api/schedule/time-off/[id]/route.js':
     'decides a time-off REQUEST (allowance, clashing shifts of that request)',
   'src/app/api/schedule/time-off/[id]/cancel-request/route.js':
@@ -47,7 +49,11 @@ function walk(dir, out = []) {
 const files = SCAN.flatMap((d) => walk(path.join(ROOT, d)))
 const rel = (p) => path.relative(ROOT, p).split(path.sep).join('/')
 const readsApprovedTimeOff = (src) =>
-  /from\(\s*['"]time_off_requests['"]\s*\)/.test(src) && /\.eq\(\s*['"]status['"]\s*,\s*['"]approved['"]\s*\)/.test(src)
+  /from\(\s*['"]time_off_requests['"]\s*\)/.test(src) && (
+    /\.eq\(\s*['"]status['"]\s*,\s*['"]approved['"]\s*\)/.test(src)
+    // .in('status', ['pending', 'approved']) asks the same question.
+    || /\.in\(\s*['"]status['"]\s*,\s*\[[^\]]*['"]approved['"]/.test(src)
+  )
 const usesTheRule = (src) => /from\s+['"][^'"]*(availability-leave|unavailable-days)['"]/.test(src)
 
 const readers = [...new Set([
