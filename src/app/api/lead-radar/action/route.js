@@ -23,6 +23,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { sendRadarOutreach } from '@/lib/radar-outreach'
+import { whatsappErrorStatus } from '@/lib/whatsapp-number-missing'
 import { invalidateRadar } from '@/lib/radar-cache'
 import { logWarn, logInfo } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
@@ -92,10 +93,11 @@ export async function POST(request) {
       await sendRadarOutreach({ db, contact, templateName, locationId, sentBy: user.id })
     } catch (e) {
       logWarn('lead-radar', 'outreach send failed', { err: e, contactId })
+      // WACONFIGFALLBACK.1 — no WhatsApp number at this location → 409.
       return NextResponse.json({
         success: false,
         error: e.message || 'Could not send the WhatsApp template.',
-      }, { status: 502 })
+      }, { status: whatsappErrorStatus(e, 502) })
     }
     logRow.template_name = templateName
   }

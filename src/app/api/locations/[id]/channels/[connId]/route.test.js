@@ -76,7 +76,7 @@ const MASTER = {
 //   DELETE .delete().eq('id').eq('location_id')
 // Every mutating call is logged AT THE CALL, so a refusal that reached the DB
 // at all shows up as a non-empty log. Fail LOUD on any other table.
-function makeDb({ existing = { platform: 'instagram' }, stored = {} } = {}) {
+function makeDb({ existing = { platform: 'instagram', agent_enabled: false }, stored = {} } = {}) {
   const writes = []
   return {
     writes,
@@ -84,7 +84,7 @@ function makeDb({ existing = { platform: 'instagram' }, stored = {} } = {}) {
       if (table !== 'channel_connections') throw new Error(`unexpected db.from('${table}') in channel-detail test`)
       return {
         select(cols) {
-          if (cols !== 'platform') throw new Error(`unexpected .select('${cols}') in channel-detail test`)
+          if (cols !== 'platform, agent_enabled') throw new Error(`unexpected .select('${cols}') in channel-detail test`)
           const filters = {}
           const builder = {
             eq(col, val) { filters[col] = val; return builder },
@@ -298,5 +298,63 @@ describe('DELETE /api/locations/[id]/channels/[connId] — the gate is the role 
     getCurrentUser.mockResolvedValue(STAFF_A_HEAD_COACH_B)
     expect((await DELETE(delReq(LOC_B, CONN), props(LOC_B, CONN))).status).toBe(200)
     expect(db.writes).toEqual([{ op: 'delete', filters: { id: CONN, location_id: LOC_B } }])
+  })
+})
+
+// MIANITS (Richard's call, 30 Sep) — Mia's on/off switch for a channel
+// (agent_enabled) is OWNER-ONLY, like Mia's settings: canEditMiaSettings at
+// the target (owner there, or a master). Only a CHANGE to that field is gated:
+// a manager's edit to the label, ids or is_active, or a form that echoes the
+// stored agent_enabled unchanged, passes as before.
+describe('PATCH /api/locations/[id]/channels/[connId] — Mia on/off is owner-only (MIANITS)', () => {
+  const OWNER_A = {
+    id: 'u7', role: 'owner', profileRole: 'owner', isMaster: false,
+    locations: [{ id: LOC_A }], rolesByLocation: { [LOC_A]: 'owner' },
+    activeLocation: { id: LOC_A },
+  }
+
+  it('a manager switching Mia ON is refused, writing nothing', async () => {
+    const res = await PATCH(patchReq(LOC_A, CONN, { agent_enabled: true }), props(LOC_A, CONN))
+    expect(res.status).toBe(403)
+    expect((await res.json()).error).toMatch(/Only an owner/)
+    expect(db.writes).toEqual([])
+  })
+
+  it('a manager switching Mia OFF is refused too', async () => {
+    createServerClient.mockReturnValue(db = makeDb({ existing: { platform: 'instagram', agent_enabled: true } }))
+    const res = await PATCH(patchReq(LOC_A, CONN, { agent_enabled: false }), props(LOC_A, CONN))
+    expect(res.status).toBe(403)
+    expect(db.writes).toEqual([])
+  })
+
+  it('a head coach at the target is refused', async () => {
+    getCurrentUser.mockResolvedValue(STAFF_A_HEAD_COACH_B)
+    const res = await PATCH(patchReq(LOC_B, CONN, { agent_enabled: true }), props(LOC_B, CONN))
+    expect(res.status).toBe(403)
+    expect(db.writes).toEqual([])
+  })
+
+  it('an owner at the target may switch it', async () => {
+    getCurrentUser.mockResolvedValue(OWNER_A)
+    const res = await PATCH(patchReq(LOC_A, CONN, { agent_enabled: true }), props(LOC_A, CONN))
+    expect(res.status).toBe(200)
+    expect(db.writes.at(-1).patch.agent_enabled).toBe(true)
+  })
+
+  it('a master may switch it', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const res = await PATCH(patchReq(LOC_B, CONN, { agent_enabled: true }), props(LOC_B, CONN))
+    expect(res.status).toBe(200)
+  })
+
+  it('a manager changing a non-Mia field is still allowed', async () => {
+    const res = await PATCH(patchReq(LOC_A, CONN, { label: 'New name', is_active: false }), props(LOC_A, CONN))
+    expect(res.status).toBe(200)
+  })
+
+  it('a manager whose form echoes the stored agent_enabled unchanged is still allowed', async () => {
+    createServerClient.mockReturnValue(db = makeDb({ existing: { platform: 'instagram', agent_enabled: true } }))
+    const res = await PATCH(patchReq(LOC_A, CONN, { label: 'New name', agent_enabled: true }), props(LOC_A, CONN))
+    expect(res.status).toBe(200)
   })
 })

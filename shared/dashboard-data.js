@@ -26,10 +26,11 @@ const isLiveRow = (a) => a?.status !== 'cancelled'
 // ============================================================
 // Date helpers — the RUNNING device's local calendar.
 // A4 REVENUEMTD.1: on a staff phone in Ireland, local IS Dublin, which is what
-// the phone-run fetchers want (fetchPersonalDashboardData's fallback,
-// fetchStudioDashboardData). On the server local is UTC (Vercel), so a
-// server-run fetcher must never use these: it loads the Dublin calendar with
-// loadDublinTime() instead (pinned in dashboard-data.test.js).
+// the phone-run fetchers want (fetchPersonalDashboardData's fallback). On the
+// server local is UTC (Vercel), so a server-run fetcher must never use these:
+// it loads the Dublin calendar with loadDublinTime() instead (pinned in
+// dashboard-data.test.js), or takes its window from the caller
+// (fetchStudioContactCounts, whose route computes the Dublin Monday).
 // ============================================================
 
 export function isoDate(d) {
@@ -400,42 +401,70 @@ export async function fetchIncompletePayProfiles(supabase, locationIds) {
 export async function fetchStudioDashboardData(supabase, locationId) {
   if (!locationId) return { success: false, error: 'No location' }
 
-  const weekStartIso = startOfWeek().toISOString()
-
   // STUDIODASH.1 — the pending time-off + swap lists are NOT read here.
   // They need the requester's name, and this runs on mobile's authenticated
   // client, which has no grant on public.profiles (mig 153b) — the embed
   // 500'd the whole select and `|| []` rendered it as "nothing pending".
   // mobile/lib/dashboard-api.js reads them from the service-role
   // /api/schedule/time-off + /api/schedule/swaps routes instead.
-  const [newLeadsThisWeek, unreadConvos] = await Promise.all([
-    // joined_at, NOT lead_created_at: the latter defaults to NOW() at
-    // insert (mig 001), so every bulk-imported contact carries its
-    // import day and any import spikes this count into the thousands.
-    // joined_at is the Glofox-side signup date — the same signal
-    // fetchFunnelCounts uses for "entered" below.
-    supabase
-      .from('contacts')
-      .select('id', { count: 'exact', head: true })
-      .eq('location_id', locationId)
-      .gte('joined_at', weekStartIso),
+  //
+  // CONTACTREADSCOPE.1a — nor are the contact numbers (new leads this week,
+  // the funnel, the total). From mig 690 this session reads a studio's
+  // contacts only while holding Contacts there, and this screen is gated by
+  // dashboard_studio, so they would read as zeros. The phone gets them from
+  // /api/dashboard/studio-contacts (fetchStudioContactCounts below, service
+  // role).
+  const unreadConvos = await supabase
+    .from('whatsapp_conversations')
+    .select('unread_count')
+    .eq('location_id', locationId)
+    .gt('unread_count', 0)
 
-    supabase
-      .from('whatsapp_conversations')
-      .select('unread_count')
-      .eq('location_id', locationId)
-      .gt('unread_count', 0),
-  ])
+  // REVIEWNITS.1 (D5): a failed read is unknown (null: the phone shows a
+  // dash), never 0. The tab still loads; only this one card says so.
+  const totalUnread = unreadConvos.error
+    ? null
+    : (unreadConvos.data || []).reduce((s, c) => s + (c.unread_count || 0), 0)
 
-  // AUDIT P1-2 — the funnel reads pipeline_stage_slug for EVERY contact at the
-  // location (Stillorgan is 8,000+), so a bare .select() silently truncated at
-  // the PostgREST 1000-row cap — the funnel + totalContacts under-counted by
-  // ~7,000. This file is the shared web↔mobile seam and CANNOT import
-  // src/lib/select-all (check:mobile-imports forbids it), so we inline a
-  // .range() page loop (no import) instead. Kept faithful to the original
-  // return shape: a per-slug funnel map (including an 'unknown' bucket for
-  // NULL / off-list slugs) plus an EXACT totalContacts = sum of all rows. The
-  // narrow single-column projection makes the ~8 pages cheap.
+  return {
+    success: true,
+    data: {
+      totalUnreadWhatsapp: totalUnread,
+    },
+  }
+}
+
+// CONTACTREADSCOPE.1a — the Studio dashboard's contact numbers, for ONE
+// studio, read by the SERVER with the service-role client
+// (/api/dashboard/studio-contacts). Never call it with the phone's session:
+// from mig 690 that session reads contacts only while holding Contacts.
+// The caller passes the week start (the route computes the Europe/Dublin
+// Monday), so this stays free of any calendar.
+//
+// joined_at, NOT lead_created_at: the latter defaults to NOW() at insert
+// (mig 001), so every bulk-imported contact carries its import day and any
+// import spikes the count into the thousands. joined_at is the Glofox-side
+// signup date, the same signal fetchFunnelCounts uses for "entered".
+//
+// AUDIT P1-2 — the funnel reads pipeline_stage_slug for EVERY contact at the
+// studio (8,000+), so it pages past the PostgREST 1000-row cap with an
+// explicit order. This file is the shared web↔mobile seam and cannot import
+// src/lib/select-all, hence the inline loop.
+//
+// A failed read is { success: false }, never a zero and never a partial
+// funnel (the old phone-side loop stopped at a failed page and showed what it
+// had as if complete).
+export async function fetchStudioContactCounts(supabase, locationId, { weekStartIso } = {}) {
+  if (!locationId) return { success: false, error: 'No location' }
+  if (!weekStartIso) return { success: false, error: 'No week start' }
+
+  const { count: newLeadsThisWeek, error: countError } = await supabase
+    .from('contacts')
+    .select('id', { count: 'exact', head: true })
+    .eq('location_id', locationId)
+    .gte('joined_at', weekStartIso)
+  if (countError) return { success: false, error: countError.message }
+
   const funnel = {}
   let totalContacts = 0
   const PAGE = 1000
@@ -447,10 +476,7 @@ export async function fetchStudioDashboardData(supabase, locationId) {
       .eq('location_id', locationId)
       .order('id', { ascending: true })
       .range(from, from + PAGE - 1)
-    // Best-effort, matching the original (which never checked .error): on a
-    // mid-pagination failure, stop and render the funnel built so far rather
-    // than blanking the whole dashboard (the other cards loaded fine).
-    if (error) break
+    if (error) return { success: false, error: error.message }
     if (!Array.isArray(page) || page.length === 0) break
     for (const c of page) {
       const k = c.pipeline_stage_slug || 'unknown'
@@ -459,17 +485,8 @@ export async function fetchStudioDashboardData(supabase, locationId) {
     totalContacts += page.length
     if (page.length < PAGE) break
   }
-  const totalUnread = (unreadConvos.data || []).reduce((s, c) => s + (c.unread_count || 0), 0)
 
-  return {
-    success: true,
-    data: {
-      newLeadsThisWeek: newLeadsThisWeek.count || 0,
-      funnel,
-      totalContacts,
-      totalUnreadWhatsapp: totalUnread,
-    },
-  }
+  return { success: true, data: { newLeadsThisWeek: newLeadsThisWeek || 0, funnel, totalContacts } }
 }
 
 // ---------------------------------------------------------------------------

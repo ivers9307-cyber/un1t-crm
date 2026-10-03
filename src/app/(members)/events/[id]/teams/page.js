@@ -8,8 +8,10 @@ import { redirect, notFound } from 'next/navigation'
 import Link from 'next/link'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import RaceTeamsManager from '@/components/RaceTeamsManager'
+import { hasRoleAtLocation } from '@/lib/role-at-location'
+import { MANAGER_ROLES } from '@/lib/schemas'
 import { ArrowLeft } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
@@ -18,7 +20,9 @@ export default async function RaceTeamsPage(props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  if (!hasPermission(user, 'races')) redirect('/')
+  // PAGEGATES.1 — coarse pre-check only; the decision is at the event's
+  // location below, the same one every teams route makes.
+  if (!hasPermissionAtAnyLocation(user, 'races')) redirect('/')
 
   const db = createServerClient()
   const { data: race } = await db
@@ -31,8 +35,8 @@ export default async function RaceTeamsPage(props) {
     .single()
   if (!race) notFound()
 
-  const guard = assertLocationAccess(user, race.location_id)
-  if (guard) redirect('/')
+  if (assertLocationAccess(user, race.location_id)) notFound()
+  if (!hasPermissionForLocation(user, race.location_id, 'races')) redirect('/')
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
@@ -48,7 +52,9 @@ export default async function RaceTeamsPage(props) {
           })}
         </p>
       </header>
-      <RaceTeamsManager race={race} />
+      {/* GATES-2 — Cancel entry calls POST /api/registrations/[id]/cancel,
+          which requires MANAGER_ROLES at the event's studio. */}
+      <RaceTeamsManager race={race} canCancelEntries={hasRoleAtLocation(user, race.location_id, MANAGER_ROLES)} />
     </div>
   )
 }

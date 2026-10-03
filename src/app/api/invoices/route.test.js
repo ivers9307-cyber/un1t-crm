@@ -127,6 +127,16 @@ describe('POST /api/invoices — INVOICEHOURS.1 resubmit pre-check', () => {
     }
   })
 
+  // REVIEWNITS.1 (D5): approval writes awaiting_accountant_review (the
+  // accountant step comes after), so an approved invoice read "pending review".
+  it('the 409 says "already approved" for an approved invoice awaiting the accountant', async () => {
+    for (const [status, wording] of [['awaiting_accountant_review', /already been approved/], ['approved', /already been approved/], ['submitted', /pending review/]]) {
+      createServerClient.mockReturnValue(fakeDb({ rows: [prior(status)] }))
+      const res = await submit()
+      expect((await res.json()).error, status).toMatch(wording)
+    }
+  })
+
   // The unique index is the authoritative guard; the pre-check is only a
   // friendlier early answer. main discarded this read's error and went on to
   // the insert, so answering 500 here refused a submission main would have

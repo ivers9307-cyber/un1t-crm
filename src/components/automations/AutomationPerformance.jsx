@@ -91,8 +91,13 @@ function NextStepNote({ run }) {
   )
 }
 
-export default function AutomationPerformance({ sequenceId, steps = [] }) {
+// GATES-2 — `canManageEnrolments` (the page's `email`-at-the-sequence's-studio
+// decision, the resume/exit routes' rule) gates Resume and Exit. Defaults closed.
+export default function AutomationPerformance({ sequenceId, steps = [], canManageEnrolments = false }) {
   const [stats, setStats] = useState(null)
+  // SEQCOUNTERS.1 — the last /stats answer failed. Shown only while there
+  // are no good numbers yet; a failed refresh keeps the last good ones.
+  const [statsFailed, setStatsFailed] = useState(false)
   const [runs, setRuns] = useState(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -115,10 +120,21 @@ export default function AutomationPerformance({ sequenceId, steps = [] }) {
       const s = await sRes.json().catch(() => ({}))
       const r = await rRes.json().catch(() => ({}))
       if (!aliveRef.current) return
-      if (s?.success) setStats(s.data)
+      if (s?.success) {
+        // SEQCOUNTERS.1 — enrolments: null means the counts could not be read
+        // (never "nobody enrolled"). Keep the last good counts if we have
+        // them; the per-step results still update.
+        setStats((prev) => (s.data?.enrolments == null && prev?.enrolments
+          ? { ...s.data, enrolments: prev.enrolments, exit_reasons: prev.exit_reasons }
+          : s.data))
+        setStatsFailed(false)
+      } else {
+        setStatsFailed(true)
+      }
       if (r?.success) setRuns(r.data?.runs || [])
     } catch {
       /* network error — keep whatever we have */
+      if (aliveRef.current) setStatsFailed(true)
     } finally {
       if (aliveRef.current) { setLoading(false); setRefreshing(false) }
     }
@@ -211,6 +227,18 @@ export default function AutomationPerformance({ sequenceId, steps = [] }) {
 
       {loading && <p className="text-sm text-un1t-subtle">Loading&hellip;</p>}
 
+      {/* SEQCOUNTERS.1 — an unknown number is said, never shown as 0. */}
+      {!loading && !stats && statsFailed && (
+        <p role="alert" className="text-xs bg-amber-500/10 text-amber-700 rounded-lg px-3 py-2 mb-6">
+          Couldn&apos;t load this automation&apos;s results. Reload to try again.
+        </p>
+      )}
+      {!loading && stats && stats.enrolments == null && (
+        <p role="alert" className="text-xs bg-amber-500/10 text-amber-700 rounded-lg px-3 py-2 mb-6">
+          Enrolment counts couldn&apos;t load. Reload to try again.
+        </p>
+      )}
+
       {!loading && en && (
         <>
           {/* Funnel */}
@@ -282,7 +310,7 @@ export default function AutomationPerformance({ sequenceId, steps = [] }) {
                       <span className="text-xs text-amber-700 max-w-xs truncate" title={r.outcome}>{r.outcome}</span>
                     )}
                     <div className="flex items-center gap-1.5">
-                      {r.state === 'paused' && (
+                      {canManageEnrolments && r.state === 'paused' && (
                         <button
                           type="button"
                           onClick={() => resume(r.id)}
@@ -294,7 +322,7 @@ export default function AutomationPerformance({ sequenceId, steps = [] }) {
                       )}
                       {/* SEQGAPS.1 — only a live enrolment can be exited; the
                           route CAS-es on the same two statuses. */}
-                      {(r.state === 'active' || r.state === 'paused') && (
+                      {canManageEnrolments && (r.state === 'active' || r.state === 'paused') && (
                         <button
                           type="button"
                           onClick={() => exitRun(r)}

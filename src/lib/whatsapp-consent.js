@@ -3,7 +3,8 @@
 // The broadcast footer promises "Reply STOP to Unsubscribe" — this is
 // what honours it. The webhook calls applyWhatsappConsentKeyword when an
 // inbound TEXT message is an exact keyword match (parseConsentKeyword in
-// whatsapp.js). Nothing here throws: a consent write must never fail the
+// whatsapp.js: UNSUBSCRIBE / STOP / STOP ALL / STOPALL out, START / UNSTOP /
+// SUBSCRIBE back in; CANCEL/END/QUIT dropped in STOPWORDS.1). Nothing here throws: a consent write must never fail the
 // webhook (which always 200s so Meta doesn't disable the subscription). That
 // is NOT the same as best-effort — every write is ATTEMPTED regardless of what
 // the others did, the failures are collected, and the result says whether the

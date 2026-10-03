@@ -16,22 +16,38 @@
 //     column level, by name or through ALL TABLES IN SCHEMA public, may not
 //     hand a client role another role, and may not add a permissive
 //     INSERT/UPDATE/DELETE/ALL policy to them.
+//  3. (WAANONREAD.1, mig 673) anon and PUBLIC hold NOTHING on the three
+//     tables: a migration may not GRANT them any privilege (SELECT included,
+//     column lists too, by name or through ALL TABLES IN SCHEMA public),
+//     hand anon a role (GRANT <role> TO anon: it inherits whatever the role
+//     holds), add a permissive policy that admits them (TO anon, TO public,
+//     or no TO clause at all, which means PUBLIC), re-point an existing
+//     policy at them (ALTER POLICY … TO), or CREATE or RENAME a table or view
+//     to one of the names (the default ACL re-grants ALL to anon). The one
+//     exemption, for rule 3 only, is a rollback migration named
+//     `<NNN>_waanonread1_rollback.sql`.
 //
 // A floor, not a proof: a builder held in a variable, or SQL built at runtime,
 // is invisible. Server code is not checked: service_role bypasses grants.
 // champ-app is another repo and never names these tables (C66 plan §3).
 // Same detector shape as tests/whatsapp-messages-client-writes-guard.test.js
-// (mig 656), over three tables plus the two counter RPCs.
+// (mig 656), over three tables plus the two counter RPCs. SQL comments are
+// blanked by one quote- and dollar-aware pass that pairs each $tag$ body
+// with its own closing tag (sqlCode, tests/function-execute-guard.test.js),
+// never by a regex; a GRANT run from EXECUTE '…' counts.
 
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs'
 import path from 'node:path'
-import { stripComments } from '../scripts/lib/strip-comments.mjs'
+import { stripComments } from './helpers/js-code.js'
+import { sqlCode } from './helpers/sql-code.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const WA_CONV_WRITES_OFF_MIGRATION = 661
+const WA_ANON_CLOSED_MIGRATION = 673
 const TABLES = ['whatsapp_conversations', 'whatsapp_broadcasts', 'whatsapp_broadcast_recipients']
 const MIGRATIONS = path.join(ROOT, 'supabase/migrations')
+const ANON_ROLLBACK_FILE = /^\d+_waanonread1_rollback\.sql$/
 
 const WRITE = /\.from\(\s*['"`](whatsapp_conversations|whatsapp_broadcasts|whatsapp_broadcast_recipients)['"`]\s*\)\s*\??\.\s*(insert|update|upsert|delete)\s*\(/g
 const RPC = /\.rpc\(\s*['"`](increment_whatsapp_conversation_unread|increment_whatsapp_broadcast_metric)['"`]/g
@@ -71,6 +87,7 @@ export function waConvWrites(text) {
 }
 
 // ── migrations ───────────────────────────────────────────────────────────
+
 const CLIENT_ROLES = ['authenticated', 'anon', 'public']
 const ident = (s) => s.trim().replace(/["']/g, '').toLowerCase()
 function splitTop(list) {
@@ -88,7 +105,7 @@ function splitTop(list) {
 
 /** Every statement in `sql` that would let a client role write one of the three tables again. */
 export function waConvWriteReopeners(sql) {
-  const code = sql.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--[^\n]*/g, ' ')
+  const code = sqlCode(sql)
   const hits = []
   for (const m of code.matchAll(/\bgrant\s+([\s\S]+?)\s+on\s+([\s\S]+?)\s+to\s+([\s\S]+?)(?:;|'|$)/gi)) {
     const [stmt, privs, target, to] = m
@@ -120,7 +137,60 @@ export function waConvWriteReopeners(sql) {
   return hits
 }
 
-describe('client code never writes WhatsApp conversations or broadcasts (WACONVCLIENTWRITE.1, mig 661)', () => {
+// One statement each: no part may cross a ';', and the role list also ends
+// at a quote or a dollar sign (a GRANT run from EXECUTE '…'). ALTER DEFAULT
+// PRIVILEGES statements are removed first: they change future tables only.
+const ADP_RE = /\balter\s+default\s+privileges\b[^;]*;?/gi
+const GRANT_ON = /\bgrant\s+([^;]+?)\s+on\s+([^;]+?)\s+to\s+([^;'$]+)/gi
+const NAMES = '(?:"?public"?\\s*\\.\\s*)?"?(whatsapp_conversations|whatsapp_broadcasts|whatsapp_broadcast_recipients)"?'
+// A role list ends at WITH … (GRANT/ADMIN/INHERIT/SET OPTION, or PG 16's
+// WITH INHERIT TRUE) or GRANTED BY.
+const rolesOf = (list) => splitTop(list.replace(/\s+(with\s+(grant|admin|inherit|set)\b|granted\s+by\b)[\s\S]*$/i, '')).map(ident)
+const admitsAnon = (list) => rolesOf(list).some((r) => r === 'anon' || r === 'public')
+// A policy's head: everything before USING / WITH CHECK, so a literal in the
+// expression ('to customer') is never read as its TO clause.
+const policyHead = (body) => body.split(/\b(?:using|with\s+check)\b/i)[0]
+// GRANT <role>[, …] TO … (no ON): these words would make it a privilege grant.
+const PRIV_WORDS = ['all', 'select', 'insert', 'update', 'delete', 'truncate', 'references', 'trigger', 'maintain', 'usage', 'execute', 'create', 'connect', 'temporary', 'temp']
+
+/** Every statement in `sql` that would give anon or PUBLIC anything on one of the three tables again (mig 673). */
+export function waConvAnonReopeners(sql) {
+  const code = sqlCode(sql).replace(ADP_RE, ' ')
+  const hits = []
+  for (const [stmt, , target, to] of code.matchAll(GRANT_ON)) {
+    if (!rolesOf(to).some((r) => r === 'anon' || r === 'public')) continue
+    const t = target.trim()
+    const all = t.match(/^all\s+tables\s+in\s+schema\s+([\s\S]+)$/i)
+    if (all) { if (splitTop(all[1]).map(ident).includes('public')) hits.push(stmt.trim()); continue }
+    if (/^(sequence|function|procedure|routine|schema|database|foreign|large|language|tablespace|type|domain|all\s)/i.test(t)) continue
+    if (splitTop(t.replace(/^table\s+/i, '')).map((x) => ident(x).replace(/^public\s*\.\s*/, '')).some((x) => TABLES.includes(x))) hits.push(stmt.trim())
+  }
+  // Role membership: anon inherits everything the granted role holds.
+  for (const [stmt, roles, to] of code.matchAll(/\bgrant\s+("?[a-z_]\w*"?(?:\s*,\s*"?[a-z_]\w*"?)*)\s+to\s+([^;'$]+)/gi)) {
+    if (splitTop(roles).map(ident).some((r) => PRIV_WORDS.includes(r))) continue
+    if (admitsAnon(to)) hits.push(stmt.trim())
+  }
+  for (const m of code.matchAll(new RegExp(`\\bcreate\\s+policy\\s+(?:"[^"]+"|\\S+)\\s+on\\s+${NAMES}(?=[\\s;])([^;]*)`, 'gi'))) {
+    const head = policyHead(m[2])
+    if (/\bas\s+restrictive\b/i.test(head)) continue   // a restrictive policy can only deny
+    const to = head.match(/\bto\s+([\s\S]+)$/i)
+    if (!to || admitsAnon(to[1])) hits.push(m[0].trim())   // no TO clause means PUBLIC
+  }
+  // ALTER POLICY … TO re-points an existing policy (it cannot change its kind,
+  // so this flags a restrictive one too: a floor, stop and look).
+  for (const m of code.matchAll(new RegExp(`\\balter\\s+policy\\s+(?:"[^"]+"|\\S+)\\s+on\\s+${NAMES}(?=[\\s;])([^;]*)`, 'gi'))) {
+    const head = policyHead(m[2])
+    if (/^\s*rename\b/i.test(head)) continue
+    const to = head.match(/\bto\s+([\s\S]+)$/i)
+    if (to && admitsAnon(to[1])) hits.push(m[0].trim())
+  }
+  // A table or view created under the name gets the default ACL (anon: ALL).
+  for (const m of code.matchAll(new RegExp(`\\bcreate\\s+(?:or\\s+replace\\s+)?(?:(?:unlogged|materialized|recursive)\\s+)*(?:table|view)\\s+(?:if\\s+not\\s+exists\\s+)?${NAMES}(?=[\\s(;])`, 'gi'))) hits.push(m[0].trim())
+  for (const m of code.matchAll(/\balter\s+(?:table|view|materialized\s+view)\s+[^;]*?\brename\s+to\s+"?(whatsapp_conversations|whatsapp_broadcasts|whatsapp_broadcast_recipients)"?(?=[\s;]|$)/gi)) hits.push(m[0].trim())
+  return hits
+}
+
+describe('client code never writes WhatsApp conversations or broadcasts (WACONVCLIENTWRITE.1, mig 661)', { timeout: 120_000 }, () => {
   const files = clientFiles()
 
   it('scans the files it is meant to police (not vacuous)', () => {
@@ -175,7 +245,7 @@ describe('client code never writes WhatsApp conversations or broadcasts (WACONVC
   })
 })
 
-describe('later migrations keep the three tables read-only for clients (mig 661)', () => {
+describe('later migrations keep the three tables read-only for clients (mig 661)', { timeout: 120_000 }, () => {
   it('mig 661 is present', () => {
     expect(readdirSync(MIGRATIONS).some((f) => f.startsWith(`${WA_CONV_WRITES_OFF_MIGRATION}_`))).toBe(true)
   })
@@ -227,5 +297,97 @@ describe('later migrations keep the three tables read-only for clients (mig 661)
       'GRANT authenticated TO authenticator;',
     ]
     for (const sql of ok) expect(waConvWriteReopeners(sql), sql).toEqual([])
+  })
+})
+
+describe('later migrations keep the three tables closed to anon (WAANONREAD.1, mig 673)', { timeout: 120_000 }, () => {
+  it('mig 673 is present', () => {
+    expect(readdirSync(MIGRATIONS).some((f) => f.startsWith(`${WA_ANON_CLOSED_MIGRATION}_`))).toBe(true)
+  })
+
+  // From 631, not 673: migration numbers are reserved ahead of time and a
+  // lower number can merge later (631 is the HELD #1774, 663 PR #1849 when
+  // 673 was written). 631-672 give anon nothing on the three tables (checked).
+  const ANON_SCAN_FROM = 631
+  const later = readdirSync(MIGRATIONS)
+    .filter((f) => f.endsWith('.sql') && parseInt(f, 10) >= ANON_SCAN_FROM && !ANON_ROLLBACK_FILE.test(f))
+  it.each(later)('%s: gives anon/PUBLIC nothing on the three tables', (file) => {
+    expect(waConvAnonReopeners(readFileSync(path.join(MIGRATIONS, file), 'utf8')),
+      `${file} re-opens a WhatsApp conversation/broadcast table to anon/PUBLIC (mig 673). Nothing reads them signed out; read them signed in or through a route`).toEqual([])
+  })
+
+  it('the anon detector catches every form', () => {
+    const bad = [
+      'GRANT SELECT ON public.whatsapp_conversations TO anon;',
+      'grant select on table whatsapp_broadcasts to authenticated, anon;',
+      'GRANT ALL ON "public"."whatsapp_broadcast_recipients" TO PUBLIC;',
+      'GRANT SELECT (id, unread_count) ON public.whatsapp_conversations TO anon;',
+      'GRANT SELECT ON public.whatsapp_messages, public.whatsapp_broadcasts TO anon;',
+      'GRANT SELECT ON ALL TABLES IN SCHEMA public TO anon;',
+      `DO $$ BEGIN EXECUTE 'GRANT SELECT ON public.whatsapp_conversations TO anon'; END $$;`,
+      `DO $x$ BEGIN EXECUTE 'GRANT SELECT ON public.whatsapp_broadcasts TO public'; END $x$;`,
+      'CREATE POLICY conv_peek ON public.whatsapp_conversations FOR SELECT TO anon USING (true);',
+      'create policy "p" on whatsapp_broadcasts for select to authenticated, public using (true);',
+      'CREATE POLICY r_open ON public.whatsapp_broadcast_recipients FOR SELECT USING (true);',
+      'CREATE TABLE IF NOT EXISTS public.whatsapp_broadcasts (id uuid);',
+      'ALTER TABLE public.whatsapp_conversations_v2 RENAME TO whatsapp_conversations;',
+      "SELECT '/*';\nGRANT SELECT ON public.whatsapp_conversations TO anon;\nSELECT '*/';",
+      // a '/*' inside a dollar body ends with that body: only $tag$ pairing sees the GRANT
+      "COMMENT ON TABLE x IS $c$ /* $c$;\nGRANT SELECT ON public.whatsapp_broadcasts TO anon;\nSELECT $d$ */ $d$;",
+      // an existing policy re-pointed at anon/PUBLIC
+      'ALTER POLICY wa_conv_select ON public.whatsapp_conversations TO anon, authenticated;',
+      'alter policy "p" on whatsapp_broadcast_recipients to public using (true);',
+      `DO $$ BEGIN EXECUTE 'ALTER POLICY whatsapp_broadcasts_select ON public.whatsapp_broadcasts TO anon'; END $$;`,
+      // role membership: anon inherits whatever the role holds (no ON clause)
+      'GRANT authenticated TO anon;',
+      'grant "wa_reader" to anon;',
+      'GRANT wa_reader TO anon WITH INHERIT TRUE;',
+      // no TO clause (= PUBLIC), with a literal that reads like one
+      "CREATE POLICY p ON public.whatsapp_broadcasts FOR SELECT USING (name = 'to customer');",
+      // a view under the name inherits the default ACL (anon: ALL)
+      'CREATE VIEW public.whatsapp_conversations AS SELECT 1;',
+      'create or replace view whatsapp_broadcasts as select 1;',
+      'CREATE MATERIALIZED VIEW IF NOT EXISTS public.whatsapp_broadcast_recipients AS SELECT 1;',
+      'ALTER VIEW public.wa_conv_v RENAME TO whatsapp_conversations;',
+    ]
+    for (const sql of bad) expect(waConvAnonReopeners(sql), sql).not.toEqual([])
+  })
+
+  it('…and passes the safe ones', () => {
+    const ok = [
+      'GRANT SELECT ON public.whatsapp_conversations TO authenticated;',
+      'GRANT ALL ON public.whatsapp_broadcasts TO service_role;',
+      'GRANT SELECT ON public.whatsapp_conversations_archive TO anon;',
+      'GRANT SELECT ON public.whatsapp_templates TO authenticated;',
+      'REVOKE ALL ON public.whatsapp_conversations, public.whatsapp_broadcasts FROM anon, PUBLIC;',
+      'CREATE POLICY wa_conv_select ON public.whatsapp_conversations FOR SELECT TO authenticated USING (true);',
+      'CREATE POLICY d ON public.whatsapp_broadcasts AS RESTRICTIVE FOR ALL TO anon USING (false);',
+      'CREATE POLICY p ON public.whatsapp_broadcasts_archive FOR SELECT TO anon USING (true);',
+      'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO anon;',
+      'ALTER TABLE public.whatsapp_conversations RENAME COLUMN wa_phone TO phone;',
+      'CREATE TABLE public.whatsapp_broadcast_drafts (id uuid);',
+      '-- rollback: GRANT SELECT ON public.whatsapp_conversations TO anon;',
+      '/* GRANT ALL ON public.whatsapp_broadcasts TO anon; */',
+      `CREATE FUNCTION f() RETURNS void LANGUAGE plpgsql AS $$ BEGIN
+         -- GRANT SELECT ON public.whatsapp_broadcast_recipients TO anon;
+       END $$;`,
+      'ALTER TABLE public.whatsapp_messages ADD COLUMN broadcast_id uuid REFERENCES public.whatsapp_broadcasts(id);',
+      'ALTER POLICY wa_conv_select ON public.whatsapp_conversations RENAME TO wa_conv_read;',
+      "ALTER POLICY wa_conv_select ON public.whatsapp_conversations TO authenticated USING (wa_phone = 'to anon');",
+      "CREATE POLICY p ON public.whatsapp_broadcasts FOR SELECT TO authenticated USING (name = 'to public');",
+      'ALTER POLICY p ON public.whatsapp_conversations_archive TO anon;',
+      'GRANT anon TO authenticator;',
+      'GRANT authenticated TO service_role;',
+      'CREATE VIEW public.whatsapp_broadcasts_v AS SELECT 1;',
+      'ALTER VIEW public.whatsapp_broadcasts_v RENAME COLUMN a TO whatsapp_broadcasts;',
+    ]
+    for (const sql of ok) expect(waConvAnonReopeners(sql), sql).toEqual([])
+  })
+
+  it('the rollback exemption is by exact name, and covers the anon rule only', () => {
+    expect(ANON_ROLLBACK_FILE.test('674_waanonread1_rollback.sql')).toBe(true)
+    expect(ANON_ROLLBACK_FILE.test('674_whatsapp_conversations_anon_regrant.sql')).toBe(false)
+    // the write rule still reads a rollback file
+    expect(waConvWriteReopeners('GRANT UPDATE ON public.whatsapp_conversations TO anon;')).not.toEqual([])
   })
 })

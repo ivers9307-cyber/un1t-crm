@@ -30,6 +30,7 @@ import ApprovalCard from '../../components/approvals/ApprovalCard'
 import CustomerApprovalCard from '../../components/approvals/CustomerApprovalCard'
 import DeclineSheet from '../../components/approvals/DeclineSheet'
 import { InvoiceRosterCheck } from '../../components/invoices/RosterComparison'
+import { approveFailureAlert } from '../../lib/approval-outcome'
 
 const REASON_REQUIRED = new Set(['fte_expenses', 'contractor_invoices', 'host_events'])
 
@@ -190,9 +191,10 @@ export default function ApprovalsInbox() {
     const res = await decideApproval(item.id, 'approved')
     setBusyId(null)
     if (!res.success) { Alert.alert('Could not approve', res.error || 'Unknown error'); return }
-    if (res.executed && res.executed.ok === false) {
-      Alert.alert('Approved, but the action failed', res.executed.message_code || 'The booking system rejected it. Check the account and retry.')
-    }
+    // C85 (c) — the operator sentence for the code (and what to fix), never
+    // the bare code: shared/agent-request-failure.js via approveFailureAlert.
+    const failed = approveFailureAlert(res)
+    if (failed) Alert.alert(failed.title, failed.message)
     load()
   }
 

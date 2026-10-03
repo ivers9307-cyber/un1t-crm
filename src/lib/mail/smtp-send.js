@@ -199,7 +199,9 @@ export function safeSmtpError(err, auth) {
  * Adapt auth-strategy.js's transport-neutral verdict to the shape nodemailer
  * actually reads.
  *
- * 🔴 VERIFIED AGAINST NODEMAILER 9.0.5's SOURCE, because the cross-phase
+ * 🔴 VERIFIED AGAINST NODEMAILER 9.0.5's SOURCE (re-checked on 10.0.13, where
+ * the file is dist/…/smtp-transport/index.js; smtp-send.nodemailer-contract
+ * .test.js now pins it against the real library), because the cross-phase
  * contract's claim that "both imapflow and nodemailer accept either object
  * shape verbatim" is HALF TRUE and the false half is the dangerous one.
  *

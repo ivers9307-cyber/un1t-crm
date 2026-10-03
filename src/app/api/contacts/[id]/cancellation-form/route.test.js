@@ -26,6 +26,9 @@ vi.mock('@/lib/permissions', () => {
   }
 })
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => dbMock) }))
+// WACONFIGFALLBACK.1 — the route checks the location's OWN number before
+// opening a thread; the default is "has one" (the no-number case is below).
+vi.mock('@/lib/whatsapp-config', () => ({ getLocationWhatsAppNumberConfig: vi.fn(async () => ({ source: 'db', id: 'n1' })) }))
 vi.mock('@/lib/app-url', () => ({ getAppUrl: () => 'https://crm.example' }))
 vi.mock('@/lib/cancellation-form/links', () => ({
   issueLink: vi.fn(), revokeLink: vi.fn(), latestLinkForContact: vi.fn(async () => null),
@@ -170,7 +173,7 @@ describe('POST whatsapp', () => {
     const res = await post({ channel: 'whatsapp' })
     expect(res.status).toBe(200)
     expect(issueLink).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ channel: 'whatsapp', conversationId: 'conv-1' }))
-    expect(sendCtaUrlMessage).toHaveBeenCalledWith('353871234567', expect.objectContaining({ buttonText: 'Open form', url: 'https://crm.example/cancel/TOKEN' }), { locationId: LOC })
+    expect(sendCtaUrlMessage).toHaveBeenCalledWith('353871234567', expect.objectContaining({ buttonText: 'Open form', url: 'https://crm.example/cancel/TOKEN' }), { config: { source: 'db', id: 'n1' } })
     expect(sendTemplateMessage).not.toHaveBeenCalled()
     const msg = writes.find((w) => w.table === 'whatsapp_messages').payload
     expect(msg).toMatchObject({ conversation_id: 'conv-1', direction: 'outbound', message_type: 'interactive', sent_by: 'u-1', wa_message_id: 'wamid.cta' })
@@ -198,7 +201,7 @@ describe('POST whatsapp', () => {
     const res = await post({ channel: 'whatsapp' })
     expect(res.status).toBe(200)
     expect(buildTemplateComponents).toHaveBeenCalledWith(templateRow, expect.objectContaining({ id: 'c-1' }), { url_button: 'TOKEN' }, null, expect.objectContaining({ locationId: LOC }))
-    expect(sendTemplateMessage).toHaveBeenCalledWith('353871234567', 'cancellation_form_link', 'en', expect.any(Array), { locationId: LOC })
+    expect(sendTemplateMessage).toHaveBeenCalledWith('353871234567', 'cancellation_form_link', 'en', expect.any(Array), { config: { source: 'db', id: 'n1' } })
     const msg = writes.find((w) => w.table === 'whatsapp_messages').payload
     expect(msg).toMatchObject({ message_type: 'template', template_name: 'cancellation_form_link', body: 'Hi Aoife, here is the link.' })
   })
@@ -226,5 +229,29 @@ describe('POST whatsapp', () => {
     const res = await post({ channel: 'whatsapp' })
     expect(res.status).toBe(502)
     expect(revokeLink).toHaveBeenCalledWith(expect.anything(), 'l-1', expect.stringMatching(/meta 131/))
+  })
+})
+
+// WACONFIGFALLBACK.1 — no WhatsApp number at the contact's location: refused
+// before a thread is opened or a link minted (the send used to go out on the
+// global env number). Email is unaffected.
+describe('POST whatsapp — no WhatsApp number at the contact location', () => {
+  it('409 with the shared message; no thread, no link, nothing sent', async () => {
+    const { getLocationWhatsAppNumberConfig } = await import('@/lib/whatsapp-config')
+    getLocationWhatsAppNumberConfig.mockResolvedValueOnce(null)
+    const res = await post({ channel: 'whatsapp' })
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ success: false, error: 'No WhatsApp number is connected at this location.' })
+    expect(getOrCreateContactConversation).not.toHaveBeenCalled()
+    expect(issueLink).not.toHaveBeenCalled()
+    expect(sendCtaUrlMessage).not.toHaveBeenCalled()
+  })
+
+  it('email still sends at a location with no WhatsApp number (the check is WhatsApp-only)', async () => {
+    const { getLocationWhatsAppNumberConfig } = await import('@/lib/whatsapp-config')
+    getLocationWhatsAppNumberConfig.mockResolvedValue(null)
+    const res = await post({ channel: 'email' })
+    expect(res.status).toBe(200)
+    expect(getLocationWhatsAppNumberConfig).not.toHaveBeenCalled()
   })
 })

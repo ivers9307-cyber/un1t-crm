@@ -13,6 +13,7 @@
 
 import { User, Clock } from 'lucide-react'
 import PersonActionBar from './PersonActionBar'
+import { personActionsFor } from '@/lib/activity-write-gate'
 
 // PIPE-AGE.1 footer tones — colour keys on the server-derived
 // deal.age.tone (time in stage, falling back to time in pipeline).
@@ -60,7 +61,11 @@ const CARD_ACTIONS = {
 // off-funnel stages don't (it'd be noise there).
 const BADGE_SLUGS = new Set(['new_lead', 'first_class', 'second_class', 'trial_done'])
 
-export default function DealCard({ deal, locationId, stageName, onOpenContact, manual = false }) {
+// C146 TASKSNEEDCONTACTS.1 — `canTask` (the pipeline page's
+// canWriteActivitiesAt at the board's studio) drops the Task item where the
+// person cannot read Contacts. Defaults true so a caller that does not judge
+// it keeps today's menu; the pipeline page always passes it.
+export default function DealCard({ deal, locationId, stageName, onOpenContact, manual = false, canTask = true }) {
   const contact = deal.contacts || {}
   const borderColor = statusColors[contact.pipeline_stage_slug] || 'border-l-blue-500'
 
@@ -102,7 +107,7 @@ export default function DealCard({ deal, locationId, stageName, onOpenContact, m
             <PersonActionBar
               contactId={contact.id}
               locationId={locationId}
-              actions={CARD_ACTIONS[manual ? 'manual' : 'derived']}
+              actions={personActionsFor(CARD_ACTIONS[manual ? 'manual' : 'derived'], { canTask })}
               isCold={contact.pipeline_stage_slug === 'cold_lead'}
             />
           )}

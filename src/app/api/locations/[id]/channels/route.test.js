@@ -395,3 +395,76 @@ describe('POST /api/locations/[id]/channels — the echo is presence-only', () =
     expect(JSON.parse(text).connection).toMatchObject({ access_token: '••••••', has_access_token: true, app_secret: '••••••', has_app_secret: true })
   })
 })
+
+// MIANITS (Richard's call, 30 Sep) — Mia's on/off switch for a channel
+// (agent_enabled) is OWNER-ONLY, like Mia's settings: canEditMiaSettings at
+// the target (owner there, or a master). Only that field is gated; managers
+// and head coaches still connect channels as before. agent_enabled defaults
+// to false (mig 407), so a create that leaves Mia off changes nothing.
+describe('POST /api/locations/[id]/channels — Mia on at create is owner-only (MIANITS)', () => {
+  const OWNER_A = {
+    id: 'u7', role: 'owner', profileRole: 'owner', isMaster: false,
+    locations: [{ id: LOC_A }], rolesByLocation: { [LOC_A]: 'owner' },
+    activeLocation: { id: LOC_A },
+  }
+
+  it('a manager creating a connection with agent_enabled true is refused, writing nothing', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    const res = await POST(post(LOC_A, { ...VALID, agent_enabled: true }), props(LOC_A))
+    expect(res.status).toBe(403)
+    expect((await res.json()).error).toMatch(/Only an owner/)
+    expect(db.writes).toEqual([])
+  })
+
+  it('a head coach at the target is refused too', async () => {
+    getCurrentUser.mockResolvedValue(STAFF_A_HEAD_COACH_B)
+    const res = await POST(post(LOC_B, { ...VALID, agent_enabled: true }), props(LOC_B))
+    expect(res.status).toBe(403)
+    expect(db.writes).toEqual([])
+  })
+
+  it('an owner at the target may switch Mia on at create', async () => {
+    getCurrentUser.mockResolvedValue(OWNER_A)
+    const res = await POST(post(LOC_A, { ...VALID, agent_enabled: true }), props(LOC_A))
+    expect(res.status).toBe(200)
+    expect(db.writes[0].row.agent_enabled).toBe(true)
+  })
+
+  it('a master may too', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const res = await POST(post(LOC_B, { ...VALID, agent_enabled: true }), props(LOC_B))
+    expect(res.status).toBe(200)
+  })
+
+  it('a manager connecting with Mia left off (false or omitted) is still allowed', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    expect((await POST(post(LOC_A, { ...VALID, agent_enabled: false }), props(LOC_A))).status).toBe(200)
+    expect((await POST(post(LOC_A, VALID), props(LOC_A))).status).toBe(200)
+  })
+})
+
+// MIANITS — the card greys out Mia's per-channel switch for anyone the PATCH
+// would refuse, so the GET says whether this caller may flip it: the same
+// canEditMiaSettings predicate the writes gate on.
+describe('GET /api/locations/[id]/channels — can_edit_agent (MIANITS)', () => {
+  const OWNER_A = {
+    id: 'u7', role: 'owner', profileRole: 'owner', isMaster: false,
+    locations: [{ id: LOC_A }], rolesByLocation: { [LOC_A]: 'owner' },
+    activeLocation: { id: LOC_A },
+  }
+  const flagFor = async (user, loc) => {
+    getCurrentUser.mockResolvedValue(user)
+    createServerClient.mockReturnValue(makeDb({ rows: [] }))
+    return (await (await GET(get(loc), props(loc))).json()).can_edit_agent
+  }
+
+  it('is true for an owner at the target and for a master', async () => {
+    expect(await flagFor(OWNER_A, LOC_A)).toBe(true)
+    expect(await flagFor(MASTER, LOC_B)).toBe(true)
+  })
+
+  it('is false for a manager or a head coach at the target', async () => {
+    expect(await flagFor(MANAGER_A, LOC_A)).toBe(false)
+    expect(await flagFor(STAFF_A_HEAD_COACH_B, LOC_B)).toBe(false)
+  })
+})

@@ -342,14 +342,47 @@ export function unresolvedPlaceholders(bodyMarkdown, recipient, customVariables,
  *
  * @param {Array<{employment_type?: string|null}>} recipients
  * @param {Array<{employment_type: string}>} templates
+ * @param {Record<string, string>|null} [locationOrgs] C140: the caller's
+ *   { location_id: organization_id }; when given, a template must also be in
+ *   an org every recipient belongs to (recipientInTemplateOrg).
  * @returns {Array}
  */
-export function eligibleTemplatesFor(recipients, templates) {
+export function eligibleTemplatesFor(recipients, templates, locationOrgs = null) {
   const all = templates || []
   if (!recipients || recipients.length === 0) return all
   return all.filter((t) =>
-    recipients.every((r) => t.employment_type === 'both' || t.employment_type === r?.employment_type)
+    recipients.every((r) =>
+      (t.employment_type === 'both' || t.employment_type === r?.employment_type)
+      // C140 — with the caller's location→org map, also the template's org.
+      && (!locationOrgs || recipientInTemplateOrg(r, t, locationOrgs)))
   )
+}
+
+/**
+ * C140 CONTRACTRECIPIENT.1 (folds C138 d) — does this person belong to the
+ * template's organisation, through any of their studios? POST /api/contracts
+ * refuses anyone else; the issue wizard uses this to list only that org's
+ * people. A null-org template (master-only) fits anyone, as the route allows.
+ * `locationOrgs` is the CALLER's own { location_id: organization_id } map
+ * (the wizard's staff list only holds people at the caller's studios).
+ * Pure.
+ *
+ * @param {{ profile_locations?: Array<{ location_id: string }> }|null} recipient
+ * @param {{ organization_id?: string|null }|null} template
+ * @param {Record<string, string>} locationOrgs
+ * @returns {boolean}
+ */
+export function recipientInTemplateOrg(recipient, template, locationOrgs) {
+  if (!template?.organization_id) return true
+  return (recipient?.profile_locations || [])
+    .some((l) => (locationOrgs || {})[l?.location_id] === template.organization_id)
+}
+
+/** C140 — the wizard's recipient list, narrowed to the chosen template's org (no template: everyone). Pure. */
+export function recipientsForTemplate(staff, template, locationOrgs) {
+  const all = staff || []
+  if (!template) return all
+  return all.filter((r) => recipientInTemplateOrg(r, template, locationOrgs))
 }
 
 /**

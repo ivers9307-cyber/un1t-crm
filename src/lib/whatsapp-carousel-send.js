@@ -1,5 +1,6 @@
 // MIA-CARDS.1 — shared card-set carousel send, used by BOTH the inbox
-// send-carousel route (staff-initiated, no source) and the agent's
+// send-carousel route (staff-initiated, no source, sent_by = the acting
+// staff member since CHECKINSTALL.2) and the agent's
 // send_card_set tool (source = AGENT_MESSAGE_SOURCE). One place owns the
 // sendMediaCarousel call + the whatsapp_messages thread row so the two
 // paths can never drift.
@@ -20,13 +21,16 @@ import { sendMediaCarousel } from '@/lib/whatsapp'
  * @param {{id:string, contact_id?:string|null, wa_phone:string}} args.conversation
  * @param {string} args.locationId
  * @param {string} [args.source]  whatsapp_messages.source stamp (e.g. 'agent'); omitted = staff send
+ * @param {string} [args.sentBy]  the acting staff member's profile id (inbox path) → whatsapp_messages.sent_by
  * @returns {Promise<{messageId?:string}|undefined>} the sendMediaCarousel result
  */
-export async function sendCardSetToConversation(db, { set, conversation, locationId, source }) {
+export async function sendCardSetToConversation(db, { set, conversation, locationId, source, sentBy }) {
   const sendResult = await sendMediaCarousel(
     conversation.wa_phone,
     { bodyText: set.body_text || set.name, cards: set.cards },
-    { locationId }
+    // WAREPLYNUMBER.1 (C86) — from the number this thread was written to
+    // (staff's send-carousel and Mia's send_card_set both come through here).
+    { locationId, replyInConversation: conversation.id }
   )
 
   // Best-effort thread row — a logging failure never fails the send.
@@ -42,6 +46,9 @@ export async function sendCardSetToConversation(db, { set, conversation, locatio
       body: `[Card set: ${set.name}]`,
       status: 'sent',
       ...(source ? { source } : {}),
+      // CHECKINSTALL.2 (C106 b) — a staff send is a person: Mia's reply path
+      // and the check-in runner read sent_by as "a person spoke".
+      ...(sentBy ? { sent_by: sentBy } : {}),
       sent_at: new Date().toISOString(),
     })
   } catch (e) { console.error('[wa-carousel] thread row insert failed:', e?.message) }

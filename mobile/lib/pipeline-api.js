@@ -1,10 +1,13 @@
 // Pipeline API helpers for mobile.
 //
-// The web app's /api/deals, /api/contacts, /api/notes, /api/activities,
-// /api/stages routes all use requireApiKey() (n8n integration only) —
-// they don't accept session/JWT auth. The web KanbanBoard talks to
-// Supabase directly via createBrowserClient, relying on RLS for per-
-// location scoping. Mobile follows the same pattern for READS.
+// The web app's /api/deals, /api/notes and /api/activities routes take an
+// API key only (authenticateApiKey: n8n and integrations); /api/contacts
+// and /api/stages take an API key or a Manager+ session
+// (requireApiKeyOrManager). None of them is a per-screen read for the
+// phone. Mobile READS pipelines, stages, deals, notes and activities
+// straight from Supabase with the signed-in session, relying on RLS for
+// per-location scoping. (The web KanbanBoard now reads through
+// /api/pipeline/deals and moves cards through /api/deals/[id]/stage.)
 //
 // Three writes deliberately go through /api/* (Bearer JWT via api()) instead:
 //   - createNote → POST /api/contacts/[id]/notes — the session-authed

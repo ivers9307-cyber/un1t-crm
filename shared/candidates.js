@@ -89,6 +89,20 @@ function weekStartOf(iso) {
   return new Date(ms - sinceMonday * DAY_MS).toISOString().slice(0, 10)
 }
 
+// `iso` moved by `days` calendar days (Date.UTC only).
+function addDaysIso(iso, days) {
+  const m = String(iso ?? '').match(ISO_DAY)
+  if (!m) return null
+  return new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) + days * DAY_MS).toISOString().slice(0, 10)
+}
+
+// The instant a Dublin calendar day starts, through the same wall-clock
+// conversion as every window here (no dublin-time import: this module loads
+// on the phone).
+function dayStartMs(iso) {
+  return workingWindow({ profile_id: '-', block_date: iso, start_time: '00:00:00', end_time: '00:01:00' })?.startMs ?? null
+}
+
 function joinList(items) {
   if (items.length <= 1) return items.join('')
   return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
@@ -350,8 +364,13 @@ export function candidateFacts({
     const busy = windows.filter(overlaps).sort((a, b) => a.startMs - b.startMs)[0] || null
     facts.free = !busy
     facts.busy = busy ? slotOf(busy, hereLocationId) : null
+    // On site the same Dublin day: a window here that runs into the target's
+    // day, so one from the night before that ends after midnight counts.
+    const dayStart = dayStartMs(target.date)
+    const dayEnd = dayStartMs(addDaysIso(target.date, 1))
+    const sameDay = (w) => w.date === target.date || (dayStart != null && dayEnd != null && w.startMs < dayEnd && w.endMs > dayStart)
     const near = windows
-      .filter((w) => !overlaps(w) && hereLocationId && w.location_id === hereLocationId && w.date === target.date)
+      .filter((w) => !overlaps(w) && hereLocationId && w.location_id === hereLocationId && sameDay(w))
       .map((w) => ({ w, gap: Math.round((w.endMs <= target.startMs ? target.startMs - w.endMs : w.startMs - target.endMs) / MINUTE_MS) }))
       .sort((a, b) => a.gap - b.gap || a.w.startMs - b.w.startMs)[0]
     facts.on_site = near
@@ -472,9 +491,14 @@ export function buildCandidates({
   })
 
   const ids = new Set(people.map((m) => m.profile_id))
+  // Only days a fact reads: the block's Mon–Sun week (week hours) and the day
+  // either side (rest gap, the night before). The read itself spans more.
+  const week = weekStartOf(block.block_date)
+  const nextTo = new Set([addDaysIso(block.block_date, -1), addDaysIso(block.block_date, 1)])
+  const inScope = (s) => weekStartOf(s?.block_date) === week || nextTo.has(s?.block_date)
   const untimed = colleague || people.length === 0
     ? 0
-    : untimedShiftCount((shifts || []).filter((s) => ids.has(s?.profile_id))) + (target ? 0 : 1)
+    : untimedShiftCount((shifts || []).filter((s) => ids.has(s?.profile_id) && inScope(s))) + (target ? 0 : 1)
   return {
     candidates: rankCandidates(facts, colleague ? 'colleague' : 'manager', { crossStudioChecked: checked?.cross_studio !== false }),
     untimed,

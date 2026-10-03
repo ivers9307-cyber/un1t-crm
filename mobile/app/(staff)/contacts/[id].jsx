@@ -8,9 +8,9 @@
 //      class bookings — from the denormalised contact columns.
 //   4. CRM event bookings (upcoming/past), whatever RLS lets the caller
 //      read (the mobile `bookings` key at each booking's location).
-//   5. WhatsApp thread deep-link, when one exists and the caller has
-//      the whatsapp permission at the ACTIVE studio (see below: the
-//      thread screen and its route work at the active studio).
+//   5. WhatsApp thread deep-link, when RLS returns one (wa_conv_select:
+//      mobile `whatsapp` at the thread's studio). INBOXLOC.1 moved the
+//      thread screen and its routes to the thread's studio too.
 //   6. Note-first composer + merged notes+activities timeline with
 //      Glofox provenance chips (the drawer bundle route).
 //   7. Send kudos (web-consultations-gated, same as the web card).
@@ -19,7 +19,7 @@
 // the server: the timeline bundle carries `permissions` (the send, cancel
 // form and kudos routes' own decisions for this contact) and
 // contactActionFlags turns them into buttons. Nothing here asks canMobile at
-// the ACTIVE studio any more; see mobile/lib/contact-actions.js.
+// the ACTIVE studio; see mobile/lib/contact-actions.js.
 //
 // Editing contact fields stays on the web — this screen adds read
 // surfaces plus the note + kudos writes only.
@@ -31,8 +31,6 @@ import {
   getContact, getContactCommandCentre, listBookingsForContact,
   getWhatsAppThreadForContact, prettyStage, contactDisplayName,
 } from '../../../lib/contacts-api'
-import { useAuth } from '../../../lib/auth-context'
-import { canMobile } from '../../../lib/permissions'
 import { contactActionFlags } from '../../../lib/contact-actions'
 import { colors } from '../../../lib/colors'
 import { isoDate } from '../../../lib/dates'
@@ -171,7 +169,6 @@ export default function ContactDetail() {
   const id = Array.isArray(params.id) ? params.id[0] : params.id
   const router = useRouter()
 
-  const { profile, activeLocation } = useAuth()
   const [contact, setContact] = useState(null)
   const [error, setError] = useState(null)
   // CC-M.1 — drawer bundle (notes + activities); null = still loading.
@@ -190,13 +187,11 @@ export default function ContactDetail() {
   const [composeChannel, setComposeChannel] = useState(null)
 
   const actions = contactActionFlags(actionPermissions, contact)
-  // The WhatsApp THREAD row is navigation, not an action on this contact: it
-  // opens /whatsapp/[conversationId], which loads and sends with the ACTIVE
-  // studio's header, behind GET /api/whatsapp/conversations/[id]'s
-  // requireInboxPermission(user, 'wa') (an active-studio gate). Its target is
-  // the active studio today, so it keeps this gate until that screen and
-  // route are judged at the conversation's location (a follow-up row).
-  const canOpenWhatsAppThread = canMobile(profile, 'whatsapp', activeLocation)
+  // INBOXLOC.1 (C37) — the WhatsApp THREAD row has no client gate. It used to
+  // ask canMobile at the ACTIVE studio because the thread screen and its
+  // routes worked there; both now act at the conversation's studio, and the
+  // Supabase-direct read below returns a thread only where RLS
+  // (wa_conv_select) grants mobile `whatsapp` at that studio.
 
   // CANCEL-FORM.6 — channel picker + send for the cancellation form link.
   function offerCancellationForm() {
@@ -252,10 +247,8 @@ export default function ContactDetail() {
     // and the section renders nothing when empty, so no client gate: the old
     // active-studio one only hid rows RLS would have returned.
     listBookingsForContact(id).then(r => setBookings(Array.isArray(r?.data) ? r.data : [])).catch(() => {})
-    if (canOpenWhatsAppThread) {
-      getWhatsAppThreadForContact(id).then(r => setWaConversation(r?.data || null)).catch(() => {})
-    }
-  }, [id, loadTimeline, canOpenWhatsAppThread])
+    getWhatsAppThreadForContact(id).then(r => setWaConversation(r?.success ? (r.data || null) : null)).catch(() => {})
+  }, [id, loadTimeline])
 
   useFocusEffect(useCallback(() => { load().catch(() => {}) }, [load]))
 
@@ -299,13 +292,12 @@ export default function ContactDetail() {
             )}
           </View>
 
-          {/* Quick actions. Call stays a phone dial; Text / WhatsApp /
-              Email send through the platform's linked services (company
+          {/* Quick actions. Call stays a phone dial; WhatsApp / Email
+              send through the platform's linked services (company
               sender), gated per-channel by the server's per-contact flags
               (contactActionFlags, ROLEUI.1). */}
           <View className="flex-row gap-2 mt-4">
             {contact.phone && <ActionButton icon="call-outline" label="Call" onPress={() => openUrl(`tel:${digits(contact.phone)}`)} />}
-            {actions.sms && <ActionButton icon="chatbubble-outline" label="Text" onPress={() => setComposeChannel('sms')} />}
             {actions.whatsapp && <ActionButton icon="logo-whatsapp" label="WhatsApp" onPress={() => setComposeChannel('whatsapp')} />}
             {actions.email && <ActionButton icon="mail-outline" label="Email" onPress={() => setComposeChannel('email')} />}
             {/* CANCEL-FORM.6 — hand the member a single-use pause/cancel form
@@ -332,8 +324,8 @@ export default function ContactDetail() {
               renders nothing when there are none. */}
           <BookingsSection bookings={bookings} />
 
-          {/* WhatsApp thread deep-link (active-studio gate, see above) */}
-          {canOpenWhatsAppThread && waConversation && (
+          {/* WhatsApp thread deep-link (whatever RLS returned, see above) */}
+          {waConversation && (
             <WhatsAppThreadRow
               conversation={waConversation}
               onPress={() => router.push(`/whatsapp/${waConversation.id}`)}

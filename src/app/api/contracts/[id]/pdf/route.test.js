@@ -75,6 +75,7 @@ const ownerOfAUser = {
   id: 'owner-a',
   isMaster: false,
   role: 'owner',
+  orgAdminOrgIds: [ORG_A], // C18 ORGROLE.1: contracts are for org admins
   rolesByLocation: { [LOC_A1]: 'owner' },
   locations: [{ id: LOC_A1, organization_id: ORG_A }],
 }
@@ -89,6 +90,7 @@ const ownerOfBUser = {
   id: 'owner-b',
   isMaster: false,
   role: 'owner',
+  orgAdminOrgIds: [ORG_B], // C18 ORGROLE.1: contracts are for org admins
   rolesByLocation: { [LOC_B1]: 'owner' },
   locations: [{ id: LOC_B1, organization_id: ORG_B }],
 }
@@ -129,6 +131,15 @@ describe('GET /api/contracts/[id]/pdf — authorization gate', () => {
 
   it('returns 404 for an owner of a DIFFERENT org', async () => {
     getCurrentUser.mockResolvedValue(ownerOfBUser)
+    const { db, createSignedUrl } = mockDb({ contract: contractFixture() })
+    createServerClient.mockReturnValue(db)
+    const res = await GET(FAKE_REQUEST, { params: { id: 'c1' } })
+    expect(res.status).toBe(404)
+    expect(createSignedUrl).not.toHaveBeenCalled()
+  })
+
+  it('returns 404 for a studio owner of the contract org with no org_admin grant (C18 ORGROLE.1)', async () => {
+    getCurrentUser.mockResolvedValue({ ...ownerOfAUser, orgAdminOrgIds: [] })
     const { db, createSignedUrl } = mockDb({ contract: contractFixture() })
     createServerClient.mockReturnValue(db)
     const res = await GET(FAKE_REQUEST, { params: { id: 'c1' } })

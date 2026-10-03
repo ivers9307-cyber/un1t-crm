@@ -8,6 +8,8 @@
 // its context (inbox chat vs profile WhatsApp).
 import { useState, useEffect } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
+import { classBookResultView } from '@/lib/glofox-class-book-result'
+import { bookChatConfirmationText } from '@/lib/book-chat-copy'
 
 function fmtDay(d) {
   return d.toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short' })
@@ -20,14 +22,16 @@ function fmtSlot(time) {
   return `${h12}:${String(m).padStart(2, '0')}${ampm}`
 }
 
-// Format a YYYY-MM-DD + HH:MM as Dublin wall-clock copy — no Date
-// composition with Z suffixes (the BOOKING.2 lesson).
-function fmtBookingLine(eventName, dateStr, time) {
+// What a consultation booking was, for the chat confirmation's {class}:
+// "Consultation, Friday 6 October at 10:00am". A YYYY-MM-DD + HH:MM as Dublin
+// wall-clock copy, no Date composition with Z suffixes (the BOOKING.2 lesson).
+// BOOKCHATCOPY.1 — the sentence around it is the studio's editable text.
+function bookingWhat(eventName, dateStr, time) {
   const [y, mo, d] = dateStr.split('-').map(Number)
   const label = new Date(Date.UTC(y, mo - 1, d, 12)).toLocaleDateString('en-IE', {
     weekday: 'long', day: 'numeric', month: 'long',
   })
-  return `✅ Booked: ${eventName} — ${label} at ${fmtSlot(time)}`
+  return `${eventName}, ${label} at ${fmtSlot(time)}`
 }
 
 const DAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
@@ -175,7 +179,12 @@ function BookPanel({ contactId, locationId, glofoxMemberId, eventTypes, channel,
         return
       }
 
-      const threadNote = await sendThreadText(fmtBookingLine(event.name, dateStr, time))
+      // BOOKCHATCOPY.1 — the studio's editable booking confirmation (the route
+      // hands it back as chat_template), or the plain default.
+      const threadNote = await sendThreadText(bookChatConfirmationText({
+        what: bookingWhat(event.name, dateStr, time),
+        template: data.chat_template,
+      }))
       const channels = data.confirmation?.channels_sent?.length
         ? ` Confirmation ${data.confirmation.channels_sent.join(' + ')} sent.`
         : ''
@@ -203,17 +212,23 @@ function BookPanel({ contactId, locationId, glofoxMemberId, eventTypes, channel,
         body: JSON.stringify({ contact_id: contactId, event_id: cls.id }),
       })
       const data = await res.json().catch(() => ({}))
-      if (!data.success) {
-        setClassResult({ ok: false, message: data.error || 'Glofox booking failed' })
+      // GLOFOXWRITEJUDGE.1 — already booked is shown as done, not as an error.
+      const view = classBookResultView(data, cls.name)
+      if (!view.ok) {
+        setClassResult({ ok: false, message: view.message })
         return
       }
-      const threadNote = await sendThreadText(
-        `✅ Booked into ${cls.name}${cls.time_start_ms ? ` — ${fmtClassTime(cls.time_start_ms)}` : ''}`
-      )
+      // BOOKCHATCOPY.1 — as for a consultation above.
+      const threadNote = view.sendChat
+        ? await sendThreadText(bookChatConfirmationText({
+          what: [cls.name, fmtClassTime(cls.time_start_ms)].filter(Boolean).join(', '),
+          template: data.chat_template,
+        }))
+        : ''
       setClassResult({
         ok: true,
-        message: `Booked into ${cls.name}.${threadNote ? ` ${threadNote}` : ''}`,
-        bookingId: data.glofox_booking_id || null,
+        message: `${view.message}${threadNote ? ` ${threadNote}` : ''}`,
+        bookingId: view.bookingId,
       })
       onBooked?.()
     } finally {

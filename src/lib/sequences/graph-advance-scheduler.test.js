@@ -130,9 +130,9 @@ describe("runSequences — config.next_step_order = 'end' (terminal arm)", () =>
     // must not land on the no-arm row.
     expect(payload.current_step_order).toBe(2)
 
-    // Completion is counted on the sequence.
-    const rpc = statements.find(s => s.table === '__rpc__')
-    expect(rpc.ops[0].args[0]).toBe('increment_sequence_completed')
+    // SEQCOUNTERS.1 — completion is read from sequence_enrollments.status;
+    // the increment_sequence_completed rpc never existed.
+    expect(statements.find(s => s.table === '__rpc__')).toBeUndefined()
   })
 })
 

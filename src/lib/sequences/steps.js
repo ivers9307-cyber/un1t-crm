@@ -37,6 +37,7 @@ import {
   renderTemplateBody,
 } from '@/lib/whatsapp'
 import { logWarn } from '@/lib/log'
+import { isWhatsAppNumberMissing } from '@/lib/whatsapp-number-missing'
 import { signStartPrefillToken } from '@/lib/start-prefill-token'
 import { getLocationBranding } from '@/lib/location-branding'
 import { isFrequencyCapped, frequencyCapDeferUntil, FrequencyCapDeferral, stampMarketingTouch } from '@/lib/frequency-cap'
@@ -377,9 +378,10 @@ export async function sendEmailStep(db, { enrollment, step, sequence, contact, f
   // effort in the helper; stamped even while the cap is disabled).
   await stampMarketingTouch(db, [contact.id])
 
-  // Bump per-step metric.
-  // supabase-js builders don't have .catch — try/catch around await.
-  try { await db.rpc('increment_step_sent', { p_step_id: step.id }) } catch {}
+  // STEPSENTRPC.1 — no per-step counter bump. increment_step_sent never
+  // existed (no migration, not in pg_proc), so this 404'd on every send and
+  // the resolved { error } was dropped; sequence_steps.total_* never moved.
+  // Per-step email numbers are counted from email_sends (/stats).
 
   return result?.messageId || null
 }
@@ -549,20 +551,36 @@ export async function sendWhatsappStep(db, { enrollment, step, sequence, contact
   }
 
   // COMMS-AUDIT 2026-07-10: route from the sequence location's
-  // whatsapp_numbers row. Without { locationId } config resolution
-  // falls back to env vars — the wrong sender for any location that
-  // isn't the env default, and a dead send if the env token has
-  // rotted. The sequence's location is authoritative here (same as
+  // whatsapp_numbers row. Without { locationId } config resolution has
+  // no number to use and refuses (it used to fall back to the global env
+  // number, the wrong sender for every other location). The sequence's location is authoritative here (same as
   // broadcasts, which pass broadcast.location_id): the template,
   // branding, flow_token and conversation above are all already
   // resolved against sequence.location_id.
-  const result = await sendTemplateMessage(
-    contact.wa_phone,
-    template.name,
-    template.language,
-    components,
-    { locationId: sequence.location_id },
-  )
+  //
+  // WACONFIGFALLBACK.1 — a sequence location with no WhatsApp number of its
+  // own used to send from the global env number. It is now refused, and the
+  // refusal is a RECORDED SKIP, not a throw: a throw feeds error_count and
+  // can auto-pause the whole enrolment, killing its email steps too (a
+  // dunning or trial run losing its emails over a WhatsApp setup gap). Logged
+  // structurally, like PAYLINK.7, so whoever watches the logs sees the gap.
+  let result
+  try {
+    result = await sendTemplateMessage(
+      contact.wa_phone,
+      template.name,
+      template.language,
+      components,
+      { locationId: sequence.location_id },
+    )
+  } catch (e) {
+    if (!isWhatsAppNumberMissing(e)) throw e
+    logWarn('sequences', 'WhatsApp step skipped: no WhatsApp number at the sequence location', {
+      sequenceId: sequence.id, stepId: step.id, contactId: contact.id, locationId: sequence.location_id,
+    })
+    await recordStepSkip(db, { contact, sequence, step, channel: 'WhatsApp', reason: 'no WhatsApp number at this location' })
+    return null
+  }
 
   // Log to whatsapp_messages so the inbox + analytics see it.
   // Conversation is upserted via the helper to attribute correctly.
@@ -605,9 +623,8 @@ export async function sendWhatsappStep(db, { enrollment, step, sequence, contact
   // effort in the helper; stamped even while the cap is disabled).
   await stampMarketingTouch(db, [contact.id])
 
-  // Bump per-step metric.
-  // supabase-js builders don't have .catch — try/catch around await.
-  try { await db.rpc('increment_step_sent', { p_step_id: step.id }) } catch {}
+  // STEPSENTRPC.1 — no per-step counter bump (increment_step_sent never
+  // existed; see sendEmailStep).
 
   return sendRowId
 }

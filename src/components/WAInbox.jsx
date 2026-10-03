@@ -7,6 +7,10 @@ import { isServableMedia } from '@shared/whatsapp-media'
 import { mergeTimeline } from '@shared/approval-cards'
 import { CHANNELS } from '@shared/channels'
 import { groupWaTemplates, UNGROUPED_LABEL } from '@shared/wa-template-groups'
+import {
+  bodyVariableSlots, templateSendBlock, SEND_BLOCK_TEXT,
+  initialTemplateValues, renderTemplatePreview, buildTemplateSend,
+} from '@shared/wa-template-send'
 import WAMediaContent from '@/components/WAMediaContent'
 import ApprovalActionCard from '@/components/ApprovalActionCard'
 import { ChannelAvatar } from '@/components/inbox/ChannelBits'
@@ -89,11 +93,14 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
     if (!conversation?.id || !msg.wa_message_id) return
     setReactingId(msg.id)
     try {
-      await fetch(`/api/whatsapp/conversations/${conversation.id}/react`, {
+      const res = await fetch(`/api/whatsapp/conversations/${conversation.id}/react`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message_id: msg.wa_message_id, emoji }),
       })
+      const data = await res.json()
+      // Sent, but the thread row was lost: say so rather than show nothing.
+      if (data.success && data.warnings?.length) alert(data.warnings.join('\n\n'))
     } catch {} finally {
       setReactingId(null)
     }
@@ -134,6 +141,11 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
   // FLOW-SEND — drop the location's booking Flow into an open conversation
   // (availability comes back on the conversation GET).
   const [flowAvailable, setFlowAvailable] = useState(false)
+  // C126 INBOXCONTROLS.1 — the thread GET's canUseWebControls: web `whatsapp`
+  // at the thread's studio, the rule of the web-only /agent (Handled-by) and
+  // /add-contact routes. The thread itself opens on web OR mobile `whatsapp`,
+  // so without this those two controls were offered and then failed.
+  const [canUseWebControls, setCanUseWebControls] = useState(false)
   const [sendingFlow, setSendingFlow] = useState(false)
   const [showTemplatePicker, setShowTemplatePicker] = useState(false)
   const [selectedTemplate, setSelectedTemplate] = useState(null)
@@ -141,6 +153,9 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
   // WA-TPL-GROUPS — search box inside the template picker (mig 450 groups).
   const [templateSearch, setTemplateSearch] = useState('')
   const [sendingTemplate, setSendingTemplate] = useState(false)
+  // A ref, not state: a second click can land before the re-render that
+  // disables the button, and a template to a customer can't be unsent.
+  const sendingTplRef = useRef(false)
   // INBOX-REDESIGN.3.2 — unified "+" composer menu (Template / Card set /
   // Booking Flow), open-window-only. Same click-toggled popover idiom as
   // the header's ⋯ menu above: trigger + menu refs, outside-click
@@ -371,6 +386,7 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
         setConversation(data.conversation)
         setMessages(msgs)
         setFlowAvailable(Boolean(data.flow_available))
+        setCanUseWebControls(data.canUseWebControls === true)
 
         // Pre-fill add contact form with WA profile name
         if (!data.conversation.contact_id && data.conversation.wa_profile_name) {
@@ -420,6 +436,8 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
 
       if (data.success) {
         setNewMessage('')
+        // WATPLSEND.1 — sent, but the thread row or the conversation update failed.
+        if (data.warnings?.length) alert(data.warnings.join('\n\n'))
         await fetchMessages(selectedId)
         await fetchApprovals(selectedId)
         await fetchConversations()
@@ -462,45 +480,30 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
     }
   }
 
+  // WATPLSEND.1 — the same rules the phone uses (shared/wa-template-send.js):
+  // a template the send route would refuse cannot be picked, and {{1}} starts
+  // as the contact's first name (editable).
   function selectTemplate(template) {
+    if (templateSendBlock(template)) return
     setSelectedTemplate(template)
-    setTemplateVars({})
-    // Pre-fill variable mapping with contact name if available
-    const bodyComp = template.components?.find(c => c.type === 'BODY')
-    const vars = bodyComp?.text?.match(/\{\{\d+\}\}/g) || []
-    if (vars.length > 0 && conversation?.contacts?.first_name) {
-      setTemplateVars({ '1': conversation.contacts.first_name })
-    }
+    setTemplateVars(initialTemplateValues(template, conversation?.contacts?.first_name))
   }
 
   async function handleSendTemplate() {
-    if (!selectedTemplate || !selectedId) return
+    if (!selectedTemplate || !selectedId || sendingTplRef.current) return
+    // One value per DISTINCT {{n}}, in number order (what Meta expects), the
+    // row's own language, and never a blank: buildTemplateSend refuses to build
+    // until every slot is filled, and the button stays disabled until then.
+    const built = buildTemplateSend(selectedTemplate, templateVars)
+    if (!built.ok) return
 
+    sendingTplRef.current = true
     setSendingTemplate(true)
     try {
-      // Build template components with variable values
-      const bodyComp = selectedTemplate.components?.find(c => c.type === 'BODY')
-      const vars = bodyComp?.text?.match(/\{\{\d+\}\}/g) || []
-      const components = []
-
-      if (vars.length > 0) {
-        const parameters = vars.map((_, i) => ({
-          type: 'text',
-          text: templateVars[String(i + 1)] || ' ',
-        }))
-        components.push({ type: 'body', parameters })
-      }
-
       const res = await fetch(`/api/whatsapp/conversations/${selectedId}/send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type: 'template',
-          template_name: selectedTemplate.name,
-          template_language: selectedTemplate.language || 'en',
-          template_components: components,
-          sent_by: userId,
-        }),
+        body: JSON.stringify(built.payload),
       })
 
       const data = await res.json()
@@ -508,6 +511,7 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
         setShowTemplatePicker(false)
         setSelectedTemplate(null)
         setTemplateVars({})
+        if (data.warnings?.length) alert(data.warnings.join('\n\n'))
         await fetchMessages(selectedId)
         await fetchApprovals(selectedId)
         await fetchConversations()
@@ -517,6 +521,7 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
     } catch {
       alert('Failed to send template')
     } finally {
+      sendingTplRef.current = false
       setSendingTemplate(false)
     }
   }
@@ -557,6 +562,8 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
       const res = await fetch(`/api/whatsapp/conversations/${selectedId}/send-flow`, { method: 'POST' })
       const data = await res.json()
       if (data.success) {
+        // FLOWTOKENDEDUP.1 — sent, but the thread row could not be saved.
+        if (data.warnings?.length) alert(data.warnings.join('\n\n'))
         await fetchMessages(selectedId)
         await fetchApprovals(selectedId)
         await fetchConversations()
@@ -614,12 +621,14 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
                 <div className="space-y-1">
                   {group.templates.map(t => {
                     const bodyComp = t.components?.find(c => c.type === 'BODY')
+                    const block = templateSendBlock(t)
                     return (
                       <button
                         key={t.id}
                         type="button"
                         onClick={() => selectTemplate(t)}
-                        className="w-full text-left px-3 py-2 rounded-md hover:bg-un1t-border/30 transition-colors"
+                        disabled={!!block}
+                        className={`w-full text-left px-3 py-2 rounded-md transition-colors ${block ? 'opacity-60 cursor-not-allowed' : 'hover:bg-un1t-border/30'}`}
                       >
                         <p className="text-sm font-medium flex items-center gap-1.5">
                           {t.name}
@@ -629,6 +638,9 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
                         <p className="text-xs text-un1t-muted truncate mt-0.5">
                           {bodyComp?.text || 'No body text'}
                         </p>
+                        {!!block && (
+                          <p className="text-xs text-amber-700 mt-0.5">{SEND_BLOCK_TEXT[block]}</p>
+                        )}
                       </button>
                     )
                   })}
@@ -664,49 +676,36 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
           the sibling INBOX-REDESIGN.3.1 bubble retoken. */}
       <div className="bg-un1t-surface text-un1t-text border border-un1t-border rounded-lg px-3 py-2 mb-3 max-w-[80%]">
         <p className="text-sm whitespace-pre-wrap">
-          {(() => {
-            const bodyComp = selectedTemplate.components?.find(c => c.type === 'BODY')
-            let text = bodyComp?.text || ''
-            // Replace variables with filled values
-            text = text.replace(/\{\{(\d+)\}\}/g, (match, num) => {
-              return templateVars[num] || `{{${num}}}`
-            })
-            return text
-          })()}
+          {renderTemplatePreview(selectedTemplate, templateVars)}
         </p>
       </div>
 
-      {/* Variable inputs */}
-      {(() => {
-        const bodyComp = selectedTemplate.components?.find(c => c.type === 'BODY')
-        const vars = bodyComp?.text?.match(/\{\{\d+\}\}/g) || []
-        if (vars.length === 0) return null
-
-        return (
-          <div className="space-y-2 mb-3">
-            {vars.map((v, i) => {
-              const num = String(i + 1)
-              return (
-                <div key={num} className="flex items-center gap-2">
-                  <span className="text-xs text-un1t-muted w-10">{`{{${num}}}`}</span>
-                  <input
-                    type="text"
-                    value={templateVars[num] || ''}
-                    onChange={e => setTemplateVars({ ...templateVars, [num]: e.target.value })}
-                    placeholder={num === '1' ? 'e.g. first name' : `Variable ${num}`}
-                    className="flex-1 bg-un1t-bg border border-un1t-border rounded-md px-3 py-1.5 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
-                  />
-                </div>
-              )
-            })}
-          </div>
-        )
-      })()}
+      {/* Variable inputs — WATPLLOG.1: one per DISTINCT {{n}}, in number order,
+          which is how Meta takes them; a repeated {{1}} is one box. */}
+      {bodyVariableSlots(selectedTemplate).length > 0 && (
+        <div className="space-y-2 mb-3">
+          {bodyVariableSlots(selectedTemplate).map((n) => {
+            const num = String(n)
+            return (
+              <div key={num} className="flex items-center gap-2">
+                <span className="text-xs text-un1t-muted w-10">{`{{${num}}}`}</span>
+                <input
+                  type="text"
+                  value={templateVars[num] || ''}
+                  onChange={e => setTemplateVars({ ...templateVars, [num]: e.target.value })}
+                  placeholder={num === '1' ? 'e.g. first name' : `Variable ${num}`}
+                  className="flex-1 bg-un1t-bg border border-un1t-border rounded-md px-3 py-1.5 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
+                />
+              </div>
+            )
+          })}
+        </div>
+      )}
 
       <button
         type="button"
         onClick={handleSendTemplate}
-        disabled={sendingTemplate}
+        disabled={sendingTemplate || !buildTemplateSend(selectedTemplate, templateVars).ok}
         className="flex items-center gap-2 text-sm bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700 transition-colors disabled:opacity-50 w-full justify-center"
       >
         <Send size={14} />
@@ -865,7 +864,7 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
                 </div>
               </div>
               <div className="flex items-center gap-2 shrink-0">
-                {conversation && (
+                {conversation && canUseWebControls && (
                   <HandledByControl
                     channel="wa"
                     conversation={conversation}
@@ -918,7 +917,7 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
                         >
                           {conversation.is_blocked ? 'Blocked — unblock' : 'Block'}
                         </button>
-                        {isUnknown ? (
+                        {isUnknown ? (canUseWebControls && (
                           <button
                             type="button"
                             role="menuitem"
@@ -928,7 +927,7 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
                             <UserPlus size={13} />
                             Add to Contacts
                           </button>
-                        ) : conversation?.contacts?.id && (
+                        )) : conversation?.contacts?.id && (
                           <Link
                             href={`/contacts/${conversation.contacts.id}`}
                             role="menuitem"
@@ -957,7 +956,7 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
             )}
 
             {/* Add to Contacts form — slides in below header */}
-            {showAddContact && isUnknown && (
+            {showAddContact && isUnknown && canUseWebControls && (
               <div className="border-b border-un1t-border bg-un1t-surface/80 px-5 py-4 shrink-0">
                 <div className="flex items-center justify-between mb-3">
                   <h4 className="text-sm font-semibold flex items-center gap-2">

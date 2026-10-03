@@ -4,7 +4,10 @@ import { createServerClient as createSSRClient } from '@supabase/ssr'
 import { cookies, headers } from 'next/headers'
 import { NextResponse } from 'next/server'
 import { isApiKeyToken } from './api-keys'
-import { hasPermission } from './permissions'
+import {
+  hasPermission, hasPermissionForLocation, hasPermissionAtAnyLocation,
+  hasMobilePermissionForLocation, hasMobilePermissionAtAnyLocation,
+} from './permissions'
 import { loadRoleTemplatesForLocations } from './role-templates.js'
 import { SUPPORT_COOKIE, verifySupportCookie } from './support-session-edge'
 import { hasRoleAtLocation, hasRoleAtAnyLocation } from './role-at-location'
@@ -889,6 +892,90 @@ export function requireInboxPermission(user, channel) {
     return NextResponse.json({ success: false, error: 'Forbidden — inbox permission required' }, { status: 403 })
   }
   return null
+}
+
+// ─── INBOXLOC.1 (C37) — WhatsApp thread routes judge at the THREAD's studio ──
+// requireInboxPermission(user, 'wa') resolves `whatsapp` at the ACTIVE studio
+// (the phone's x-active-location header, the web's cookie). The thread routes
+// under /api/whatsapp/conversations/[id] (and /start) act on ONE studio's
+// conversation, so they judge there: a coarse pre-check before any read, then
+// the decision at the conversation's (or contact's) location once the row is
+// read and membership has passed. Web OR mobile `whatsapp`, the rule the
+// contact routes use (contactChannelFlags, /api/contacts/[id]/whatsapp): the
+// phone calls these routes, and its own reads of the same rows (RLS
+// wa_conv_select) already judge the mobile toggle at the row's studio.
+// (Since INBOXWEBONLY3.1 the three the phone never calls, /add-contact,
+// /agent and /start, use the web-only pair below instead.)
+
+const FORBIDDEN_INBOX = () =>
+  NextResponse.json({ success: false, error: 'Forbidden — inbox permission required' }, { status: 403 })
+
+/**
+ * Coarse pre-check: does the caller hold WhatsApp (web or mobile) at ANY
+ * studio? Run before the conversation is read; the real decision is
+ * requireWhatsAppInboxAt at the conversation's studio.
+ *
+ * @param {object|null} user
+ * @returns {NextResponse | null}
+ */
+export function requireWhatsAppInboxAnywhere(user) {
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (hasPermissionAtAnyLocation(user, 'whatsapp') || hasMobilePermissionAtAnyLocation(user, 'whatsapp')) return null
+  return FORBIDDEN_INBOX()
+}
+
+/**
+ * The decision: WhatsApp (web or mobile) at `locationId`, the studio the
+ * conversation belongs to. No location, or a studio the caller does not
+ * belong to, is refused (fail closed). Call it after assertLocationAccessOr404.
+ *
+ * @param {object|null} user
+ * @param {string|null|undefined} locationId
+ * @returns {NextResponse | null}
+ */
+export function requireWhatsAppInboxAt(user, locationId) {
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (!locationId) return FORBIDDEN_INBOX()
+  if (hasPermissionForLocation(user, locationId, 'whatsapp') || hasMobilePermissionForLocation(user, locationId, 'whatsapp')) return null
+  return FORBIDDEN_INBOX()
+}
+
+// ─── INBOXWEBONLY3.1 (C119) — the web-only thread actions keep the WEB key ──
+// Richard, 30 Sep: the thread routes the PHONE calls take web OR mobile
+// `whatsapp` (the pair above); the ones only the WEB calls
+// (/conversations/[id]/add-contact, /conversations/[id]/agent — pause/resume
+// Mia — and /conversations/start) take the WEB key only, judged at the same
+// studio. Same order and shapes: the any-studio pre-check before any read,
+// membership (404) once the row is read, then the decision at its studio.
+
+/**
+ * Coarse pre-check: does the caller hold the WEB `whatsapp` permission at ANY
+ * studio? Run before the record is read; the decision is
+ * requireWebWhatsAppInboxAt at the conversation's (or contact's) studio.
+ *
+ * @param {object|null} user
+ * @returns {NextResponse | null}
+ */
+export function requireWebWhatsAppInboxAnywhere(user) {
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (hasPermissionAtAnyLocation(user, 'whatsapp')) return null
+  return FORBIDDEN_INBOX()
+}
+
+/**
+ * The decision: the WEB `whatsapp` permission at `locationId`. No location,
+ * or a studio the caller does not belong to, is refused (fail closed). Call
+ * it after the membership guard.
+ *
+ * @param {object|null} user
+ * @param {string|null|undefined} locationId
+ * @returns {NextResponse | null}
+ */
+export function requireWebWhatsAppInboxAt(user, locationId) {
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (!locationId) return FORBIDDEN_INBOX()
+  if (hasPermissionForLocation(user, locationId, 'whatsapp')) return null
+  return FORBIDDEN_INBOX()
 }
 
 // ─── Organization guards (SAAS-4, mig 417) ──────────────────────────

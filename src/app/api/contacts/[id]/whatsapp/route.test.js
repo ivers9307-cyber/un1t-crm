@@ -39,6 +39,15 @@ vi.mock('@/lib/permissions', () => {
 })
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+// WACONFIGFALLBACK.1 — the route checks the location's OWN number before
+// opening a thread; the default is "has one" (the no-number case is at the end).
+// WAREPLYNUMBER.1 review — the thread's own number (null = none recorded);
+// pickReplyConfig is the real rule.
+vi.mock('@/lib/whatsapp-config', async () => ({
+  getLocationWhatsAppNumberConfig: vi.fn(async () => ({ source: 'db', id: 'n1' })),
+  getConversationNumberConfig: vi.fn(async () => null),
+  pickReplyConfig: (await vi.importActual('@/lib/whatsapp-config')).pickReplyConfig,
+}))
 
 // Stub the WhatsApp transport — no real Meta call, 24h window always open.
 vi.mock('@/lib/whatsapp', () => ({
@@ -175,5 +184,91 @@ describe('POST /api/contacts/[id]/whatsapp', () => {
     // … with sent_by = the operator's profiles.id uuid, never their name.
     expect(payload.sent_by).toBe(USER_ID)
     expect(payload.sent_by).not.toBe(STAFF.full_name)
+  })
+})
+
+// WACONFIGFALLBACK.1 — the contact's location has no WhatsApp number of its
+// own. The send used to go out on the global env number (another studio's);
+// now it is refused BEFORE a thread is opened, so no empty thread lands in
+// this location's inbox.
+describe('POST /api/contacts/[id]/whatsapp — no WhatsApp number at the contact location', () => {
+  it('409 with the shared message; no thread opened, nothing sent or logged', async () => {
+    const { getLocationWhatsAppNumberConfig } = await import('@/lib/whatsapp-config')
+    const { sendTextMessage } = await import('@/lib/whatsapp')
+    getLocationWhatsAppNumberConfig.mockResolvedValueOnce(null)
+    const insertSpy = echoInsert()
+    const db = makeDb(insertSpy)
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(postReq({ text: 'Hi' }), props)
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ success: false, error: 'No WhatsApp number is connected at this location.' })
+    expect(getLocationWhatsAppNumberConfig).toHaveBeenCalledWith(LOC_ID)
+    expect(db.from.mock.calls.map((c) => c[0])).not.toContain('whatsapp_conversations')
+    expect(sendTextMessage).not.toHaveBeenCalled()
+    expect(insertSpy).not.toHaveBeenCalled()
+  })
+})
+
+// WACONFIGFALLBACK.1 review — the send uses the number the route already
+// checked ({ config }), so there is one lookup and no gap between the check
+// and the send in which a different number could be resolved.
+describe('POST /api/contacts/[id]/whatsapp — sends on the number it checked', () => {
+  it('one lookup; the send gets { config } of that number, never a second resolve by location', async () => {
+    const { getLocationWhatsAppNumberConfig } = await import('@/lib/whatsapp-config')
+    const { sendTextMessage } = await import('@/lib/whatsapp')
+    const NUMBER = { source: 'db', id: 'n-checked' }
+    getLocationWhatsAppNumberConfig.mockResolvedValueOnce(NUMBER)
+    createServerClient.mockReturnValue(makeDb(echoInsert()))
+
+    const res = await POST(postReq({ text: 'Hi' }), props)
+    expect(res.status).toBe(200)
+    expect(getLocationWhatsAppNumberConfig).toHaveBeenCalledTimes(1)
+    expect(sendTextMessage).toHaveBeenCalledWith(expect.any(String), 'Hi', { config: NUMBER })
+  })
+})
+
+// WAREPLYNUMBER.1 review (C86) — the composer's free text is a reply into the
+// contact's thread (it needs the open 24h window), so it goes from the number
+// the customer wrote to, like the inbox send; a template only within the
+// default's WABA. Still ONE resolve by location (the checked default): the
+// thread number is read by its id.
+describe('POST /api/contacts/[id]/whatsapp — replies from the number the thread was written to', () => {
+  const DEFAULT_NUMBER = { source: 'db', id: 'n-default', businessAccountId: 'WABA-1' }
+  const SECOND = { source: 'db', id: 'n-second', businessAccountId: 'WABA-1' }
+  const OTHER_WABA = { source: 'db', id: 'n-other', businessAccountId: 'WABA-2' }
+
+  it('free text goes from the thread number; the location is resolved once', async () => {
+    const { getLocationWhatsAppNumberConfig, getConversationNumberConfig } = await import('@/lib/whatsapp-config')
+    const { sendTextMessage } = await import('@/lib/whatsapp')
+    getLocationWhatsAppNumberConfig.mockResolvedValueOnce(DEFAULT_NUMBER)
+    getConversationNumberConfig.mockResolvedValueOnce(SECOND)
+    createServerClient.mockReturnValue(makeDb(echoInsert()))
+
+    const res = await POST(postReq({ text: 'Hi' }), props)
+    expect(res.status).toBe(200)
+    expect(getConversationNumberConfig).toHaveBeenCalledWith(LOC_ID, CONV_ID)
+    expect(getLocationWhatsAppNumberConfig).toHaveBeenCalledTimes(1)
+    expect(sendTextMessage).toHaveBeenCalledWith(expect.any(String), 'Hi', { config: SECOND })
+  })
+
+  it('no thread number recorded: the checked default, as before', async () => {
+    const { getLocationWhatsAppNumberConfig, getConversationNumberConfig } = await import('@/lib/whatsapp-config')
+    const { sendTextMessage } = await import('@/lib/whatsapp')
+    getLocationWhatsAppNumberConfig.mockResolvedValueOnce(DEFAULT_NUMBER)
+    getConversationNumberConfig.mockResolvedValueOnce(null)
+    createServerClient.mockReturnValue(makeDb(echoInsert()))
+
+    const res = await POST(postReq({ text: 'Hi' }), props)
+    expect(res.status).toBe(200)
+    expect(sendTextMessage).toHaveBeenCalledWith(expect.any(String), 'Hi', { config: DEFAULT_NUMBER })
+  })
+
+  it('a thread number on another WABA never sends a template (templates are the default WABA\'s)', async () => {
+    const { pickReplyConfig } = await import('@/lib/whatsapp-config')
+    expect(pickReplyConfig(OTHER_WABA, DEFAULT_NUMBER, { template: true })).toBe(DEFAULT_NUMBER)
+    expect(pickReplyConfig(SECOND, DEFAULT_NUMBER, { template: true })).toBe(SECOND)
+    expect(pickReplyConfig(OTHER_WABA, DEFAULT_NUMBER)).toBe(OTHER_WABA)
+    expect(pickReplyConfig(null, DEFAULT_NUMBER, { template: true })).toBe(DEFAULT_NUMBER)
   })
 })

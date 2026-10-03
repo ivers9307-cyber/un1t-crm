@@ -42,8 +42,9 @@ const SequenceCreateSchema = z.object({
 // SEQROUTEGATE.1 — named columns. Never webhook_token / webhook_secret: the
 // builder's settings panel gets those from the /automations/[id] page's own
 // read. The one list caller (SequencePicker) reads id, name, description,
-// status and trigger_type.
-const SEQUENCE_LIST_COLUMNS = 'id, location_id, name, description, status, trigger_type, total_enrolled, created_at, updated_at, sequence_steps(count)'
+// status and trigger_type. SEQCOUNTERS.1 — no total_* (never maintained;
+// mig 663).
+const SEQUENCE_LIST_COLUMNS = 'id, location_id, name, description, status, trigger_type, created_at, updated_at, sequence_steps(count)'
 
 // GET /api/sequences — list sequences
 export async function GET(request) {

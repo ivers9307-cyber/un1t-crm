@@ -199,6 +199,8 @@ describe('GET /api/cron/glofox-detail-backfill — DETAILBACKFILL.1 cursor', () 
       requests: expect.any(Number), retries: expect.any(Number), status_429: expect.any(Number),
       status_5xx: expect.any(Number), network_errors: expect.any(Number), gave_up: expect.any(Number),
       aborted: expect.any(Number),
+      unsafe_not_retried: expect.any(Number), verify_landed: expect.any(Number),
+      verify_absent: expect.any(Number), verify_unknown: expect.any(Number),
     })
     expect(run.glofox_http.requests).toBeGreaterThanOrEqual(1)   // the member GET went through glofoxFetch
     expect(stampHeartbeat).toHaveBeenCalledWith('glofox-detail-backfill', expect.objectContaining({

@@ -241,6 +241,7 @@ describe('findOrCreateGlofoxMember — create-and-trial (createIfMissing=true)',
     expect(out.status).toBe('created')
     expect(purchaseGlofoxMembership).toHaveBeenCalledWith(VALID_CREDS, 'gx-new', 'mem-trial', 999)
     expect(out.error).toBeNull()
+    expect(out.trial_failed).toBe(false)
   })
 
   it('marks needs_review when trial config missing', async () => {
@@ -257,6 +258,7 @@ describe('findOrCreateGlofoxMember — create-and-trial (createIfMissing=true)',
     expect(out.status).toBe('needs_review')
     expect(out.error).toMatch(/Trial membership not configured/)
     expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
+    expect(out.trial_failed).toBe(true)
   })
 
   it('marks needs_review when trial purchase fails', async () => {
@@ -276,6 +278,36 @@ describe('findOrCreateGlofoxMember — create-and-trial (createIfMissing=true)',
     })
     expect(out.status).toBe('needs_review')
     expect(out.error).toMatch(/Glofox 422/)
+    // TRIALGRANT.1 — the processor files needs_credit_grant on this, not
+    // account_needs_review.
+    expect(out.trial_failed).toBe(true)
+    // A refusal Glofox answered is a known outcome: the card may buy again.
+    expect(out.trial_outcome_unknown).toBeUndefined()
+  })
+
+  it('a trial purchase with no clear answer (a 5xx) says it may have gone through (GLOFOXPOSTRETRY.1)', async () => {
+    registerGlofoxMember.mockResolvedValueOnce({ ok: true, member: { _id: 'gx-new' } })
+    purchaseGlofoxMembership.mockResolvedValueOnce({ ok: false, error: 'Glofox HTTP 503', http_status: 503, outcome_unknown: true })
+    const db = makeFakeDb({
+      locationSelect: {
+        data: { settings: { glofox: { trial_membership_id: 'mem-trial', trial_plan_code: 999 } } },
+        error: null,
+      },
+    })
+    const out = await findOrCreateGlofoxMember({
+      db, locationId: 'loc1', source: 'booking_form',
+      contact: { id: 'c1', email: 'a@b.com', first_name: 'Alice', last_name: 'Smith' },
+      createIfMissing: true,
+      attachTrial: true,
+    })
+    expect(out.status).toBe('needs_review')
+    expect(out.trial_failed).toBe(true)
+    expect(out.error).toMatch(/may have gone through/)
+    expect(out.error).toMatch(/€0 trial invoice/)
+    expect(purchaseGlofoxMembership).toHaveBeenCalledTimes(1)
+    // Review: the doubt must reach the card the processor files, or its
+    // first approval could buy a second trial.
+    expect(out.trial_outcome_unknown).toBe(true)
   })
 
   it('reports register failure as failed', async () => {

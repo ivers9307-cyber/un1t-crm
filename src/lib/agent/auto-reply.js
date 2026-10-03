@@ -24,11 +24,13 @@ import { recordAgentDecision, compactDecisionMeta } from './decision-log'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { sendPushToRolesAtLocation, sendPushToInboxStaffAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
+import { isWhatsAppStaffAuthored } from '@/lib/whatsapp-staff-sources'
 import { buildCachedSystem } from './prompt'
 import { getLocationBranding } from '@/lib/location-branding'
 import {
   shouldAgentReply,
-  formatHistoryForClaude,
+  buildReplyTurnMessages,
+  isReplyWorthyInbound,
   parseAgentResponse,
   isVerificationFresh,
   resolveAgentEffort,
@@ -332,13 +334,16 @@ export async function runChannelAgent(db, adapter, ctx) {
     reruns < MAX_MISSED_INBOUND_RERUNS &&
     result?.handled === true && result.action === 'reply' && result.lastInboundSeenIso
   ) {
-    const missed = await hasInboundAfter(db, adapter, ctx?.conversationId, result.lastInboundSeenIso)
+    const answeredThroughIso = result.lastInboundSeenIso
+    const missed = await hasInboundAfter(db, adapter, ctx?.conversationId, answeredThroughIso)
     if (!missed) break
     reruns++
     console.warn('[radar-agent] missed-inbound rerun', JSON.stringify({
       channel: adapter.name, conversationId: ctx?.conversationId || null, rerun: reruns,
     }))
-    result = await runChannelAgentInner(db, adapter, ctx, trace)
+    // MIAPREFILL.1 — tell the rerun what the last pass already answered, so
+    // the missed message is placed after Mia's reply, not before it.
+    result = await runChannelAgentInner(db, adapter, { ...ctx, answeredThroughIso }, trace)
   }
 
   if (result?.handled === false) {
@@ -346,6 +351,9 @@ export async function runChannelAgent(db, adapter, ctx) {
       channel: adapter.name,
       conversationId: ctx?.conversationId || null,
       reason: result.reason || 'unknown',
+      // MIAPREFILL.1 — nothing_to_answer names the newest row (source + type,
+      // never its body) so a cause other than a STOP acknowledgement shows.
+      ...(result.trailing ? { trailing: result.trailing } : {}),
     }))
   }
 
@@ -367,16 +375,19 @@ export async function runChannelAgent(db, adapter, ctx) {
   return result
 }
 
-// Any inbound row newer than the last one the just-finished turn saw?
+// Any REPLY-WORTHY inbound row newer than the last one the just-finished turn
+// saw? MIAPREFILL.1 — a reaction or a photo landing mid-turn is not a reason
+// to run again: a reaction is never answered (MIA-REVIEW.2), and media takes
+// its own soft-handoff path in its own webhook, never the in_flight bail.
 async function hasInboundAfter(db, adapter, conversationId, sinceIso) {
   if (!conversationId || !sinceIso) return false
   const { data } = await db.from(adapter.messagesTable)
-    .select('id')
+    .select('message_type, body')
     .eq('conversation_id', conversationId)
     .eq('direction', 'inbound')
     .gt('created_at', sinceIso)
-    .limit(1)
-  return Array.isArray(data) && data.length > 0
+    .limit(20)
+  return Array.isArray(data) && data.some((r) => isReplyWorthyInbound({ ...r, direction: 'inbound' }))
 }
 
 // AGENT-REARM.3 — did a human take this thread over since the turn began?
@@ -446,7 +457,7 @@ function takeoverCheckFailed(adapter, conversationId, stage, err) {
 }
 
 async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
-  const { conversationId, locationId, recipient, contactId, messageType, body, connection } = ctx
+  const { conversationId, locationId, recipient, contactId, messageType, body, connection, answeredThroughIso = null } = ctx
 
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) return { handled: false, reason: 'no_api_key' }
@@ -575,11 +586,38 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
   // sending, whether a human took the thread over WHILE the model was thinking.
   const turnStartIso = new Date().toISOString()
 
-  // The agent WILL run a turn now — let the channel show read + typing while
-  // Claude thinks. Best-effort; never blocks or fails the turn.
-  try { await adapter.onEngage?.(ctx) } catch { /* cosmetic only */ }
-
   try {
+    // Newest rows first then reversed — ascending+limit returns the OLDEST
+    // rows, which would freeze the agent's view at the start of the
+    // conversation once a thread outgrows the cap (latent amnesia v2).
+    // `source` lets the builder find the previous pass's own reply on a rerun
+    // (both message tables carry it).
+    const { data: historyDesc } = await db.from(adapter.messagesTable)
+      .select('direction, body, message_type, created_at, source')
+      .eq('conversation_id', conversationId)
+      .order('created_at', { ascending: false })
+      .limit(MAX_HISTORY * 2)
+    const history = (historyDesc || []).slice().reverse()
+    // Newest inbound this turn will have seen — the wrapper's missed-inbound
+    // sweep compares against it after the reply goes out.
+    const lastInboundSeenIso = (historyDesc || []).find((m) => m.direction === 'inbound')?.created_at || null
+
+    // MIAPREFILL.1 — never a request that ends on an assistant turn (Sonnet 5
+    // 400s it as prefill). 'nothing_to_answer' = the newest turn is the
+    // studio's own (e.g. the STOP acknowledgement): stay silent, no API call.
+    // Decided from history alone, BEFORE onEngage, so a silent turn never
+    // shows the customer a read receipt and "typing…" followed by nothing.
+    // `trailing` (source + type, no body) goes to the wrapper's no-reply line.
+    const { messages, reason: historyReason, trailing } = buildReplyTurnMessages(history || [], {
+      maxMessages: MAX_HISTORY,
+      answeredThroughIso,
+    })
+    if (historyReason) return { handled: false, reason: historyReason, ...(trailing ? { trailing } : {}) }
+
+    // The agent WILL run a turn now — let the channel show read + typing while
+    // Claude thinks. Best-effort; never blocks or fails the turn.
+    try { await adapter.onEngage?.(ctx) } catch { /* cosmetic only */ }
+
     // Cost / abuse ceilings, cheapest check first. The per-location daily
     // cap stops a runaway across all threads; the per-conversation hourly
     // cap catches a single chatty/looping sender.
@@ -675,19 +713,6 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       .eq('enabled', true)
       .order('sort_order', { ascending: true })
 
-    // Newest rows first then reversed — ascending+limit returns the OLDEST
-    // rows, which would freeze the agent's view at the start of the
-    // conversation once a thread outgrows the cap (latent amnesia v2).
-    const { data: historyDesc } = await db.from(adapter.messagesTable)
-      .select('direction, body, message_type, created_at')
-      .eq('conversation_id', conversationId)
-      .order('created_at', { ascending: false })
-      .limit(MAX_HISTORY * 2)
-    const history = (historyDesc || []).slice().reverse()
-    // Newest inbound this turn will have seen — the wrapper's missed-inbound
-    // sweep compares against it after the reply goes out.
-    const lastInboundSeenIso = (historyDesc || []).find((m) => m.direction === 'inbound')?.created_at || null
-
     // A still-fresh prior verification, re-read from the stamp.
     // PERSON-ACCT.6 — used AS STAMPED (no primary remap; see the phone lane
     // above), but only once we know the contact still exists: a merge deletes
@@ -776,9 +801,6 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     // notch below the API's `high` default) for this short transactional turn.
     const agentEffort = resolveAgentEffort(settings?.effort)
     const verifyFailThreshold = resolveVerifyFailHandoff(settings)
-
-    const messages = formatHistoryForClaude(history || [], { maxMessages: MAX_HISTORY })
-    if (messages.length === 0) return { handled: false, reason: 'no_history' }
 
     // Tool-execution context. verifiedContactId is mutable: verify_identity
     // both stamps the DB and updates this so later tools in the same turn
@@ -1178,12 +1200,12 @@ export async function sendAndLog(db, adapter, { conversationId, locationId, reci
   let recordedText = text
   try {
     if (opts && adapter.sendOptions) {
-      const r = await adapter.sendOptions(recipient, text, opts, { locationId, connection })
+      const r = await adapter.sendOptions(recipient, text, opts, { locationId, connection, conversationId })
       messageId = r?.messageId || null
       recordedText = `${text}\n[Options: ${opts.join(' | ')}]`
     } else {
       const sendText = opts ? `${text}\n\n${opts.map(o => `• ${o}`).join('\n')}` : text
-      const r = await adapter.send(recipient, sendText, { locationId, connection, settings })
+      const r = await adapter.send(recipient, sendText, { locationId, connection, settings, conversationId })
       messageId = r?.messageId || null
       recordedText = sendText
     }
@@ -1238,7 +1260,7 @@ async function handoff(db, adapter, { conversationId, locationId, recipient, con
   }).eq('id', conversationId)
 
   try {
-    const r = await adapter.send(recipient, holding, { locationId, connection, settings })
+    const r = await adapter.send(recipient, holding, { locationId, connection, settings, conversationId })
     await recordAgentMessage(db, adapter,
       adapter.outboundRow({ conversationId, locationId, contactId, messageId: r?.messageId || null, text: holding, now })
     )
@@ -1382,7 +1404,7 @@ async function softHandoff(db, adapter, { conversationId, locationId, recipient,
   const holding = (settings?.holding_message || '').trim() || DEFAULT_HOLDING_MESSAGE
   const now = new Date().toISOString()
   try {
-    const r = await adapter.send(recipient, holding, { locationId, connection, settings })
+    const r = await adapter.send(recipient, holding, { locationId, connection, settings, conversationId })
     await recordAgentMessage(db, adapter,
       adapter.outboundRow({ conversationId, locationId, contactId, messageId: r?.messageId || null, text: holding, now })
     )
@@ -1409,6 +1431,13 @@ async function softHandoff(db, adapter, { conversationId, locationId, recipient,
 }
 
 // ── WhatsApp adapter ────────────────────────────────────────────────
+// WAREPLYNUMBER.1 (C86) — every send names the conversation, so it goes from
+// the number the customer wrote to (recorded by the webhook), else the
+// studio default. No conversation id → exactly the old options.
+const waReplyOpts = (locationId, conversationId) => (conversationId
+  ? { locationId, replyInConversation: conversationId }
+  : { locationId })
+
 export const whatsappAdapter = {
   name: 'whatsapp',
   label: 'WhatsApp',
@@ -1420,33 +1449,35 @@ export const whatsappAdapter = {
   // Meta authenticates the sender's phone number — safe to use as identity.
   trustsSenderIdentity: true,
   // AGENT-REARM.2 — operator send routes stamp sent_by; agent + sequence /
-  // automation sends leave it null, so sent_by IS the human signal.
+  // automation sends leave it null, so sent_by IS the human signal. C106 (d):
+  // plus a reply typed in the studio's linked phone app (source 'app_echo',
+  // no sent_by). One rule, shared with the check-in runner and handoff SLA.
   humanOutboundColumns: 'source, sent_by',
-  isHumanOutbound: (m) => m.source !== 'agent' && m.sent_by != null,
+  isHumanOutbound: isWhatsAppStaffAuthored,
   // Fires once the agent has committed to replying (gating + claim passed):
   // marks the inbound read and shows "typing…" while Claude composes.
-  onEngage: async ({ waMessageId, locationId }) => {
+  onEngage: async ({ waMessageId, locationId, conversationId }) => {
     if (!waMessageId) return
-    try { await sendTypingIndicator(waMessageId, { locationId }) }
+    try { await sendTypingIndicator(waMessageId, waReplyOpts(locationId, conversationId)) }
     catch (e) { console.warn('[agent] typing indicator failed:', e?.message) }
   },
   // C3 — a reply that ends in a URL becomes a cta_url button message (body +
   // tappable button) instead of a raw link. Operator-editable button text;
   // plain text is byte-identical to before when no trailing URL.
-  send: async (recipient, text, { locationId, settings }) => {
+  send: async (recipient, text, { locationId, settings, conversationId }) => {
     const split = splitTrailingUrl(text)
     if (split) {
       const buttonText = (settings?.link_button_text || '').trim() || 'Open link'
       try {
-        return await sendCtaUrlMessage(recipient, { bodyText: split.body, buttonText, url: split.url }, { locationId })
+        return await sendCtaUrlMessage(recipient, { bodyText: split.body, buttonText, url: split.url }, waReplyOpts(locationId, conversationId))
       } catch (e) {
         // cta_url rejected (rare) — fall back to the plain text send below.
         console.warn('[agent] cta_url send failed, falling back to text:', e?.message)
       }
     }
-    return sendTextMessage(recipient, text, { locationId })
+    return sendTextMessage(recipient, text, waReplyOpts(locationId, conversationId))
   },
-  sendOptions: (recipient, text, options, { locationId }) => sendInteractiveOptions(recipient, text, options, { locationId }),
+  sendOptions: (recipient, text, options, { locationId, conversationId }) => sendInteractiveOptions(recipient, text, options, waReplyOpts(locationId, conversationId)),
   outboundRow: ({ conversationId, locationId, contactId, messageId, text, now }) => ({
     conversation_id: conversationId,
     contact_id: contactId || null,

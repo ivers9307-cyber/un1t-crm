@@ -14,6 +14,8 @@ import {
   finishedMarker,
 } from '@/lib/agent/request-recovery'
 import { approvalGrantsTrialCredit } from '@/lib/approvals/agent-request-why'
+import { logWarn } from '@/lib/log'
+import { isManualEventId } from '@/lib/manual-timetable'
 
 // PATCH /api/agent/membership-requests/[id] — staff decides a queued
 // agent request. Decision rights follow the comms surface (any staff
@@ -261,7 +263,11 @@ export async function PATCH(request, { params }) {
     } else {
       const result = await cancelBooking(creds, details.booking_id, executingMemberId)
       const messageCode = result?.body?.message_code || result?.body?.message || null
-      executed = { ok: result.ok, status: result.status, message_code: messageCode }
+      executed = {
+        ok: result.ok, status: result.status, message_code: messageCode,
+        // GLOFOXPOSTRETRY.1 — Glofox answered 5xx and a read found it cancelled.
+        ...(result.recovered ? { recovered: result.recovered } : {}),
+      }
       details = { ...details, result: executed }
       finalStatus = result.ok ? 'actioned' : 'failed'
 
@@ -293,8 +299,14 @@ export async function PATCH(request, { params }) {
   // Only rows carrying a machine-readable details.starts_at are guardable;
   // funnel rows always have one, legacy Mia-thread rows may not. Expiring is
   // SILENT to the member (MIA-EXPIRY-QUIET.1) — staff follow up by hand.
+  //
+  // MANUALFUNNEL.1 — a class off a studio's hand-written timetable (no Glofox
+  // there: staff book it on the studio's own platform) is exempt. Approving
+  // it executes nothing and messages nobody, it only records that staff did
+  // the booking, so recording it after the class has run is still true.
+  const manualBooking = row.kind === 'class_booking' && isManualEventId(details?.event_id)
   let expiredBeforeExecution = false
-  if (executing && row.kind === 'class_booking') {
+  if (executing && row.kind === 'class_booking' && !manualBooking) {
     const startsAtMs = Date.parse(row.details?.starts_at || '')
     if (Number.isFinite(startsAtMs) && startsAtMs < Date.now()) {
       expiredBeforeExecution = true
@@ -318,8 +330,55 @@ export async function PATCH(request, { params }) {
     }
   }
 
+  // MANUALFUNNEL.1 — approving a manual-timetable booking records it as done.
+  // Nothing is sent to Glofox (the studio has none) and no trial is bought.
+  // Judged on the event id, never on details.reason: a request that reached
+  // its card through the queue's retry path carries 'processing_error'.
+  if (executing && manualBooking) {
+    executed = { ok: true, manual: true }
+    details = { ...details, result: executed }
+    finalStatus = 'actioned'
+    let queueRowId = null
+    if (details?.source === 'start_funnel') {
+      // Keep the funnel's queue row in step, or it sits in needs_review for
+      // good. Best-effort: the card is the record staff act on.
+      const { data: synced, error: cbrErr } = await db.from('class_booking_requests')
+        .update({ status: 'booked', last_error: null })
+        .eq('approval_request_id', id)
+        .select('id')
+      if (cbrErr) logWarn('agent-requests', 'manual booking: queue row sync failed', { requestId: id, err: cbrErr })
+      queueRowId = Array.isArray(synced) && synced[0]?.id ? synced[0].id : null
+    }
+    // MANUALSCHEDULE.1 — tell Meta the booking was really made. The funnel
+    // already sent a Lead when the customer asked for the class; this is the
+    // Schedule that the Glofox path sends when ITS booking lands
+    // (class-booking-processor.js), with the same event id shape, so an ad
+    // campaign can be pointed at people who end up booked rather than anyone
+    // who fills the form. Sent only on approve: a declined or expired card
+    // sends nothing. Best-effort and gated inside the helper on the
+    // location's settings.meta_ads.dataset_id; it never fails the decision.
+    try {
+      const [{ data: c }, { data: page }] = await Promise.all([
+        db.from('contacts').select('email, phone').eq('id', row.contact_id).maybeSingle(),
+        db.from('landing_page_settings').select('public_path, blocks').eq('location_id', row.location_id).maybeSingle(),
+      ])
+      if (c && (c.email || c.phone)) {
+        const { sendWebsiteConversion } = await import('@/lib/meta-capi')
+        const { classFunnelConfigFromBlocks } = await import('@/lib/public-landing')
+        await sendWebsiteConversion(db, {
+          locationId: row.location_id, eventName: 'Schedule',
+          email: c.email, phone: c.phone,
+          eventSourceUrl: page?.public_path ? classFunnelConfigFromBlocks(page.blocks, page.public_path).eventSourceUrl : undefined,
+          // Stable per booking, so a re-run of this approval is deduped by Meta.
+          eventId: queueRowId ? `classbooking-${queueRowId}` : `classbooking-approval-${id}`,
+          contentName: details?.class_name || 'Class',
+        })
+      }
+    } catch (e) { logWarn('agent-requests', 'manual booking: Schedule event failed', { requestId: id, err: e }) }
+  }
+
   // AGENT-HANDS.1 — approving a drafted class booking executes it.
-  if (executing && row.kind === 'class_booking' && !expiredBeforeExecution) {
+  if (executing && row.kind === 'class_booking' && !expiredBeforeExecution && !manualBooking) {
     const { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, createBooking, interpretBookingResult, GLOFOX_BOOKING_MODEL } =
       await import('@/lib/glofox')
     // PERSON-ACCT.9 — the row is FILED against the contact this booking
@@ -362,50 +421,99 @@ export async function PATCH(request, { params }) {
       finalStatus = 'failed'
       console.warn(`[agent-requests] refused execution ${id}: elected account ${electedMemberId} no longer matches contact ${executingContactId}`)
     } else {
-      // If the processor sent this for a credit grant (existing account with no
-      // live credits), grant the trial class credit BEFORE booking — otherwise
-      // Glofox rejects on no-credits and staff could never complete it.
+      // TRIALGRANT.1 — a needs_credit_grant card buys the trial BEFORE
+      // booking, and the purchase is JUDGED (grantTrialBeforeBooking; Glofox
+      // 200s with success:false). It used to be fire-and-forget: a trial that
+      // did not take went straight on to createBooking and failed
+      // YOU_HAVE_NO_CREDITS_LEFT (4 of 16 in 90 days), and Fix & retry bought
+      // the trial again. Now a grant that did not happen lands the card on
+      // 'failed' with its own reason (failureExplanation) and NOTHING is
+      // booked or sent, like every other failed execution. The grant is
+      // written ahead on details.trial_grant (below), so a retry does not buy
+      // over a recorded grant, nor over a purchase whose answer was never
+      // recorded unless credits show. glofoxFetch never re-sends the purchase
+      // after a 5xx (GLOFOXPOSTRETRY.1): a 5xx is outcome_unknown, like no reply.
+      let grantFailure = null
       if (approvalGrantsTrialCredit(details)) {
-        try {
-          const { purchaseGlofoxMembership } = await import('@/lib/glofox')
-          const { getGlofoxConfig } = await import('@/lib/connection-registry')
-          // INTEG-A2 dual-read: registry config first, legacy settings.glofox otherwise.
-          const g = await getGlofoxConfig(db, row.location_id)
-          if (g.trial_membership_id && g.trial_plan_code) {
-            await purchaseGlofoxMembership(creds, contact.glofox_member_id, g.trial_membership_id, g.trial_plan_code)
+        const { grantTrialBeforeBooking } = await import('@/lib/agent/trial-grant')
+        // Write-ahead (review of TRIALGRANT.1): the grant reaches the row
+        // BEFORE the purchase ({ stage: 'purchasing' }) and again with its
+        // outcome, before any booking, instead of only in the final update.
+        // Guarded on THIS execution's started_at and judged on the row it
+        // touched, so a write that lands nowhere is "not recorded" and the
+        // helper buys nothing.
+        const executionStartedAt = details?.execution?.started_at || null
+        const recordTrialGrant = async (trialGrant) => {
+          if (!executionStartedAt) return false
+          const { data, error } = await db.from('agent_membership_requests')
+            .update({ details: { ...details, trial_grant: trialGrant }, updated_at: new Date().toISOString() })
+            .eq('id', id)
+            .eq('details->execution->>started_at', executionStartedAt)
+            .select('id')
+            .maybeSingle()
+          if (error) {
+            logWarn('agent-requests', 'trial grant record write failed', { requestId: id, err: error })
+            return false
           }
-        } catch (e) { console.warn(`[agent-requests] trial grant error: ${e?.message || e}`) }
+          return !!data
+        }
+        const grant = await grantTrialBeforeBooking(db, {
+          record: recordTrialGrant,
+          creds,
+          locationId: row.location_id,
+          memberId: contact.glofox_member_id,
+          priorGrant: details?.trial_grant || null,
+          isRetry: isRetry || isFailedRetry,
+          requestId: id,
+          // The funnel block's own trial, stamped on the card by routeToReview.
+          trialOverride: { membershipId: details?.trial_membership_id || null, planCode: details?.trial_plan_code || null },
+        })
+        details = { ...details, trial_grant: grant.grant }
+        if (!grant.proceed) grantFailure = grant.failure
       }
-      const result = await createBooking(creds, {
-        user_id: contact.glofox_member_id,
-        model: GLOFOX_BOOKING_MODEL,
-        model_id: details.event_id,
-      })
-      // Glofox can 200 with a failure body (YOU_HAVE_NO_CREDITS_LEFT) —
-      // success needs the created booking id, not just HTTP ok. alreadyBooked
-      // counts as success: the member IS in the class (MIA-BOOK.1 — staff may
-      // have booked them manually before approving a fallback card).
-      const { booked, bookingId, messageCode, alreadyBooked } = interpretBookingResult(result)
-      const success = booked || alreadyBooked
-      executed = { ok: success, status: result.status, message_code: messageCode, glofox_booking_id: bookingId }
-      details = { ...details, result: executed }
-      finalStatus = success ? 'actioned' : 'failed'
+      if (grantFailure) {
+        executed = { ...grantFailure, trial_grant: details.trial_grant }
+        details = { ...details, result: executed }
+        finalStatus = 'failed'
+      } else {
+        const result = await createBooking(creds, {
+          user_id: contact.glofox_member_id,
+          model: GLOFOX_BOOKING_MODEL,
+          model_id: details.event_id,
+        })
+        // Glofox can 200 with a failure body (YOU_HAVE_NO_CREDITS_LEFT) —
+        // success needs the created booking id, not just HTTP ok. alreadyBooked
+        // counts as success: the member IS in the class (MIA-BOOK.1 — staff may
+        // have booked them manually before approving a fallback card).
+        const { booked, bookingId, messageCode, alreadyBooked } = interpretBookingResult(result)
+        const success = booked || alreadyBooked
+        executed = {
+          ok: success, status: result.status, message_code: messageCode, glofox_booking_id: bookingId,
+          // GLOFOXPOSTRETRY.1 — Glofox answered 5xx and a read found the booking.
+          ...(result.recovered ? { recovered: result.recovered } : {}),
+          // TRIALGRANT.1 — the card's failure copy must know a trial was just
+          // added: a no-credits refusal then means it starts later.
+          ...(details.trial_grant ? { trial_grant: details.trial_grant } : {}),
+        }
+        details = { ...details, result: executed }
+        finalStatus = success ? 'actioned' : 'failed'
 
-      // Close the loop with the customer in-thread — best-effort.
-      if (success && row.conversation_id) {
-        try {
-          const { sendAgentThreadMessage, buildBookingConfirmationText } = await import('@/lib/agent/notify')
-          await sendAgentThreadMessage(db, {
-            channel: row.channel,
-            conversationId: row.conversation_id,
-            text: buildBookingConfirmationText({
-              className: details.class_name,
-              classTime: details.class_time,
-              template: await confirmationTemplate('booking'),
-            }),
-          })
-        } catch (e) {
-          console.warn(`[agent-requests] confirmation send error: ${e?.message || e}`)
+        // Close the loop with the customer in-thread — best-effort.
+        if (success && row.conversation_id) {
+          try {
+            const { sendAgentThreadMessage, buildBookingConfirmationText } = await import('@/lib/agent/notify')
+            await sendAgentThreadMessage(db, {
+              channel: row.channel,
+              conversationId: row.conversation_id,
+              text: buildBookingConfirmationText({
+                className: details.class_name,
+                classTime: details.class_time,
+                template: await confirmationTemplate('booking'),
+              }),
+            })
+          } catch (e) {
+            console.warn(`[agent-requests] confirmation send error: ${e?.message || e}`)
+          }
         }
       }
     }

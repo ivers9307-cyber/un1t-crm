@@ -209,7 +209,7 @@ function SenderDefaultsCard({ hostId, host, applyHost }) {
 // (once verified) offer the per-host kill switch. Backed by
 // POST /api/hosts/[id]/email-domain (+ /verify) — the provision route is
 // idempotent, so a provisioned host's mount-fetch is a plain state read.
-function EmailSendingCard({ hostId, host }) {
+function EmailSendingCard({ hostId, host, canBackfill = false }) {
   const [provisioned, setProvisioned] = useState(!!host?.postmark_domain_id)
   const [state, setState] = useState(null) // { domain, sender_email, sender_name, slug, verified, dkim_verified, return_path_verified, records }
   const [stateLoading, setStateLoading] = useState(!!host?.postmark_domain_id)
@@ -455,38 +455,44 @@ function EmailSendingCard({ hostId, host }) {
         </>
       )}
 
-      {/* HOST-METRICS.1 — Postmark backfill lives OUTSIDE the provisioned branch:
-          its precondition is the host's campaigns, not a provisioned sending
-          domain (the first host sends from an un1tdublin.com address and was
-          never provisioned, which is exactly where the button was missing). */}
-      <div className="mt-6 border-t border-un1t-border pt-4">
-        <p className="text-sm font-medium text-un1t-text">Campaign outcomes</p>
-        <p className="mt-1 text-xs text-un1t-subtle">
-          Fold Postmark delivery, open, click, bounce and unsubscribe events for the last 45 days into this host&apos;s email reports. Preview first; the live run is idempotent.
-        </p>
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <Button type="button" variant="secondary" size="sm" loading={backfill.running} onClick={previewBackfill}>
-            Backfill Postmark events (preview)
-          </Button>
-          {backfill.result && (
-            <Button type="button" variant="secondary" size="sm" loading={backfill.running} onClick={runBackfill}>
-              Run backfill
-            </Button>
-          )}
-        </div>
-        {backfill.result && (
-          <p className="mt-2 text-xs text-un1t-muted">
-            Scanned {backfill.result.scanned} · matched {backfill.result.matched} · stamped {backfill.result.stamped} ·
-            {' '}updated {backfill.result.updated} · skipped {backfill.result.skipped} · errors {backfill.result.errors.length}
-            {backfill.result.dry ? ' (preview)' : ''}
-          </p>
-        )}
-        {backfill.error && (
-          <p className="mt-2 text-xs text-stage-lost flex items-center gap-1">
-            <AlertTriangle size={12} /> {backfill.error}
-          </p>
-        )}
-      </div>
+      {/* C18 ORGROLE.1 — the back-fill is an organisation-admin job (its route's
+          rule: master or an org_admin grant on the active organisation). */}
+      {canBackfill && (
+        <>
+          {/* HOST-METRICS.1 — Postmark backfill lives OUTSIDE the provisioned branch:
+              its precondition is the host's campaigns, not a provisioned sending
+              domain (the first host sends from an un1tdublin.com address and was
+              never provisioned, which is exactly where the button was missing). */}
+          <div className="mt-6 border-t border-un1t-border pt-4">
+            <p className="text-sm font-medium text-un1t-text">Campaign outcomes</p>
+            <p className="mt-1 text-xs text-un1t-subtle">
+              Fold Postmark delivery, open, click, bounce and unsubscribe events for the last 45 days into this host&apos;s email reports. Preview first; the live run is idempotent.
+            </p>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <Button type="button" variant="secondary" size="sm" loading={backfill.running} onClick={previewBackfill}>
+                Backfill Postmark events (preview)
+              </Button>
+              {backfill.result && (
+                <Button type="button" variant="secondary" size="sm" loading={backfill.running} onClick={runBackfill}>
+                  Run backfill
+                </Button>
+              )}
+            </div>
+            {backfill.result && (
+              <p className="mt-2 text-xs text-un1t-muted">
+                Scanned {backfill.result.scanned} · matched {backfill.result.matched} · stamped {backfill.result.stamped} ·
+                {' '}updated {backfill.result.updated} · skipped {backfill.result.skipped} · errors {backfill.result.errors.length}
+                {backfill.result.dry ? ' (preview)' : ''}
+              </p>
+            )}
+            {backfill.error && (
+              <p className="mt-2 text-xs text-stage-lost flex items-center gap-1">
+                <AlertTriangle size={12} /> {backfill.error}
+              </p>
+            )}
+          </div>
+        </>
+      )}
 
       {error && (
         <p className="mt-3 text-xs text-stage-lost flex items-center gap-1">
@@ -497,7 +503,7 @@ function EmailSendingCard({ hostId, host }) {
   )
 }
 
-export default function HostDetail({ hostId }) {
+export default function HostDetail({ hostId, canBackfill = false }) {
   const [host, setHost] = useState(null)
   const [loading, setLoading] = useState(true)
   const [checking, setChecking] = useState(false) // ?stripe=return sync-on-load
@@ -1130,7 +1136,7 @@ export default function HostDetail({ hostId }) {
       {/* Email sending (HOST-EMAIL.2) — the host's dedicated Postmark sending
           domain: provision, DNS records, verification, kill switch. Keyed on
           the domain id so a fresh provision remounts with the new state. */}
-      <EmailSendingCard key={host.postmark_domain_id || 'unprovisioned'} hostId={hostId} host={host} />
+      <EmailSendingCard key={host.postmark_domain_id || 'unprovisioned'} hostId={hostId} host={host} canBackfill={canBackfill} />
 
       {/* Sender defaults (HOST-EMAIL.5) — from-address, sender name, reply-to. */}
       <SenderDefaultsCard

@@ -63,15 +63,9 @@ const PREDICATE_ACTIVE = /\bactive\s+is\s+not\s+false\b/i
 const PREDICATE_DELETED = /\bdeleted_at\s+is\s+null\b/i
 
 // ─── policies that read a profile table inline and legitimately carry no gate
-const POLICY_ALLOW = {
-  'public.staff_allowances :: staff_allowances_select': 'reads the TARGET\'s profile_locations; caller authority is private.auth_is_manager_at() (gated, mig 626). Own-row branch = subject.',
-  'public.staff_allowances :: staff_allowances_ins': 'target-scoped; caller authority is private.auth_is_manager_at() (gated).',
-  'public.staff_allowances :: staff_allowances_upd': 'target-scoped; caller authority is private.auth_is_manager_at() (gated).',
-  'public.staff_allowances :: staff_allowances_del': 'target-scoped; caller authority is private.auth_is_manager_at() (gated).',
-  'storage.objects :: Owners can upload branding': 'file text (mig 013) is stale: prod redefined it out-of-band to call private.is_owner() (mig 549), which mig 626 gates.',
-  'storage.objects :: Owners can update branding': 'as above — prod calls private.is_owner().',
-  'storage.objects :: Owners can delete branding': 'as above — prod calls private.is_owner().',
-}
+// (The four staff_allowances policies that lived here were dropped by mig 692
+// MEMBERWRITESWEEP.2: staff_allowances is service-role only.)
+const POLICY_ALLOW = {}
 
 // ─── every function that decides authority from a profile, classified ───────
 // predicate  = its own body carries `active IS NOT FALSE` + `deleted_at IS NULL`
@@ -82,6 +76,7 @@ const FUNCTIONS = {
   'private.auth_is_active_staff': { class: 'predicate' },
   'private.auth_is_master': { class: 'predicate' },
   'private.auth_is_in_location': { class: 'predicate' },
+  'private.auth_contact_read_location_ids': { class: 'predicate' }, // mig 690: studios where the caller holds Contacts; reads profiles with the predicate
   'private.auth_is_owner_at': { class: 'predicate' },
   'private.auth_is_admin_at': { class: 'predicate' },
   'private.auth_is_manager_at': { class: 'predicate' },
@@ -89,7 +84,11 @@ const FUNCTIONS = {
   'private.auth_role': { class: 'predicate' },
   'private.get_user_role': { class: 'predicate' },
   'private.get_user_role_at': { class: 'predicate' },
-  'private.mobile_can_for': { class: 'predicate' },
+  // MOBILECANTEMPLATES.1 (mig 691): the phone resolver lives in the core;
+  // the old per-row entry points and the policies' wrapper delegate to it.
+  'private.mobile_can_location_ids_for': { class: 'predicate' },
+  'private.mobile_can_for': { class: 'delegates', to: ['private.mobile_can_location_ids_for'] },
+  'private.auth_mobile_can_location_ids': { class: 'delegates', to: ['private.mobile_can_location_ids_for'] },
   'private.auth_can_view_all_profiles': { class: 'predicate' },
   'private.auth_is_admin_or_head_coach': { class: 'predicate' },
   'private.is_owner': { class: 'predicate' },
@@ -97,7 +96,7 @@ const FUNCTIONS = {
   'private.auth_has_ticket_mailbox_grant': { class: 'predicate' },
   'private.auth_is_owner': { class: 'delegates', to: ['private.auth_role'] },
   'private.auth_is_owner_or_manager': { class: 'delegates', to: ['private.auth_role'] },
-  'private.auth_mobile_can': { class: 'delegates', to: ['private.mobile_can_for'] },
+  'private.auth_mobile_can': { class: 'delegates', to: ['private.mobile_can_location_ids_for'] },
   'private.auth_is_manager_at_bridge': { class: 'delegates', to: ['private.auth_is_manager_at'] },
   'private.auth_can_read_shift_block': { class: 'delegates', to: ['private.auth_is_manager_at', 'private.auth_is_in_location'] },
   'private.auth_can_read_shift_assignment': { class: 'delegates', to: ['private.auth_is_manager_at', 'private.auth_is_in_location'] },
@@ -266,9 +265,16 @@ describe('RLSACTIVE.1 — inline policies that read a profile table carry the ac
 
   it('finds the policies it is meant to guard (not vacuous)', () => {
     // 47 gated by mig 626 + 7 allowlisted, less audit_events_select_master_owner
-    // (gated; dropped by mig 655 AUDITRLS.1, audit_events is service-role only).
-    expect(inline.length).toBeGreaterThanOrEqual(53)
-    expect(inline.filter((p) => policyGated(p.body)).length).toBeGreaterThanOrEqual(46)
+    // (gated; dropped by mig 655 AUDITRLS.1, audit_events is service-role only),
+    // less car_bca_submissions_read_at_location and
+    // car_bca_submission_events_read_at_location (gated; dropped by mig 674
+    // CARSCLIENTWRITE.1, both tables are service-role only),
+    // less the three allowlisted "Owners can … branding" storage policies
+    // (dropped by mig 675 BRANDINGBUCKET.1, no client writes the bucket),
+    // less the four allowlisted staff_allowances policies (dropped by mig 692
+    // MEMBERWRITESWEEP.2, staff_allowances is service-role only).
+    expect(inline.length).toBeGreaterThanOrEqual(44)
+    expect(inline.filter((p) => policyGated(p.body)).length).toBeGreaterThanOrEqual(44)
     expect(inline.map((p) => `${p.table} :: ${p.name}`)).toContain('public.invoices_queue :: inbound_invoices_read')
   })
 

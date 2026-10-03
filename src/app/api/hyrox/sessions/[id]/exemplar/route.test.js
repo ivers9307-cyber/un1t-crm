@@ -41,6 +41,15 @@ describe('POST …/exemplar', () => {
     expect((await res.json()).data).toEqual({ added: false, reason: 'already_saved' })
     expect(d.writes).toEqual([])
   })
+  // C32 HYROXSTAR.1 — the page adds the starred example to its own list, so
+  // a Save in the same page load keeps it.
+  it('returns the example it added, so the page can show and keep it', async () => {
+    const d = db({ data: { settings: { hyrox: { style_examples: [] } } }, error: null })
+    createServerClient.mockReturnValue(d)
+    const json = await (await call()).json()
+    expect(json.data).toMatchObject({ added: true, example: { id: `session:${SID}`, source: 'generated', text: 'SESSION TEXT' } })
+    expect(json.data.example).toEqual(d.writes[0].patch.settings.hyrox.style_examples[0])
+  })
   it('pin: prepends the example and keeps every other key', async () => {
     const d = db({ data: { settings: { glofox: {}, hyrox: { charter: 'C', style_examples: [] } } }, error: null })
     createServerClient.mockReturnValue(d)

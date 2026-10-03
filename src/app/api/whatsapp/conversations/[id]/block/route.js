@@ -1,9 +1,10 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404, requireInboxPermission } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404, requireWhatsAppInboxAnywhere, requireWhatsAppInboxAt } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { setWhatsAppUserBlockState } from '@/lib/whatsapp'
+import { whatsappErrorStatus } from '@/lib/whatsapp-number-missing'
 
 const BlockSchema = z.object({ action: z.enum(['block', 'unblock']) })
 
@@ -16,8 +17,9 @@ export async function POST(request, props) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
-  // Channel permission — service-role client, so this IS the gate (INBOX-PERM.1).
-  const perm = requireInboxPermission(user, 'wa')
+  // INBOXLOC.1 — coarse pre-check (WhatsApp at any studio); the decision is
+  // requireWhatsAppInboxAt at the conversation's studio, once the row is read.
+  const perm = requireWhatsAppInboxAnywhere(user)
   if (perm) return perm
 
   const validation = await validateBody(request, BlockSchema)
@@ -32,11 +34,17 @@ export async function POST(request, props) {
   if (!conversation) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, conversation.location_id)
   if (guard) return guard
+  // INBOXLOC.1 — WhatsApp (web or mobile) judged at THIS studio, not the active one.
+  const permHere = requireWhatsAppInboxAt(user, conversation.location_id)
+  if (permHere) return permHere
 
   try {
     await setWhatsAppUserBlockState(conversation.wa_phone, blocked, { locationId: conversation.location_id })
   } catch (e) {
-    return NextResponse.json({ success: false, error: e?.message || 'Meta block call failed' }, { status: 502 })
+    // WACONFIGFALLBACK.1 — a location with no WhatsApp number of its own is a
+    // 409: the Block API on the env number blocked the sender on ANOTHER
+    // studio's number. Nothing is mirrored locally.
+    return NextResponse.json({ success: false, error: e?.message || 'Meta block call failed' }, { status: whatsappErrorStatus(e, 502) })
   }
 
   await db.from('whatsapp_conversations').update({ is_blocked: blocked }).eq('id', conversation.id)

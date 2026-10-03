@@ -85,6 +85,7 @@ function usageDb(rows, calls = {}) {
           const chain = {
             eq(col, val) { calls.filters.push(['eq', col, val]); return chain },
             gt(col, val) { calls.filters.push(['gt', col, val]); return chain },
+            not(col, op, val) { calls.filters.push(['not', col, op, val]); return chain },
             order() { return chain },
             range: (s, e) => Promise.resolve({ data: rows.slice(s, e + 1), error: null }),
           }
@@ -123,6 +124,15 @@ describe('countBusinessInitiatedContactsLast24h', () => {
     const windowMs = Date.now() - new Date(gt[2]).getTime()
     expect(windowMs).toBeGreaterThan(23.9 * 3600 * 1000)
     expect(windowMs).toBeLessThan(24.1 * 3600 * 1000)
+  })
+  // C106 CHECKINRISKS.1 (d) — a message typed in the studio's linked WhatsApp
+  // Business phone app (app_echo / history_sync) never went through the Cloud
+  // API: it is not a send we paid for and must not eat the tier budget.
+  it('excludes phone-app rows (coexistence echoes and history)', async () => {
+    const calls = {}
+    const db = usageDb([], calls)
+    await countBusinessInitiatedContactsLast24h(db, 'loc1')
+    expect(calls.filters).toContainEqual(['not', 'source', 'in', '(app_echo,history_sync)'])
   })
   it('paginates past the 1,000-row PostgREST cap', async () => {
     const rows = []

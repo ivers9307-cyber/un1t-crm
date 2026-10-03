@@ -27,16 +27,20 @@ export async function POST(request, { params }) {
   // SETTINGSWIPE.1 — through mergeLocationSettings: this used to discard the
   // settings read error and rewrite the whole column. `null` = already saved.
   const exampleId = `session:${session.id}`
+  let added = null
   const saved = await mergeLocationSettings(db, session.location_id, (settings) => {
     const hyrox = { ...(settings.hyrox || {}) }
     const existing = Array.isArray(hyrox.style_examples) ? hyrox.style_examples : []
     if (existing.some((e) => e?.id === exampleId)) return null
     const entry = { id: exampleId, source: 'generated', label: `Week ${session.week_no} session ${session.slot}${session.focus ? ` - ${session.focus}` : ''}`, text: sessionToExampleText(session), added_at: new Date().toISOString() }
     hyrox.style_examples = [entry, ...existing].slice(0, MAX_STORED_EXAMPLES)
+    added = entry
     settings.hyrox = hyrox
     return settings
   }, { scope: 'hyrox-exemplar' })
   if (!saved.ok) return settingsSaveFailure(saved)
   if (saved.unchanged) return NextResponse.json({ success: true, data: { added: false, reason: 'already_saved' } })
-  return NextResponse.json({ success: true, data: { added: true } })
+  // C32 HYROXSTAR.1 — hand the entry back so the page adds it to its own
+  // list: its house-style Save then keeps it instead of deleting it.
+  return NextResponse.json({ success: true, data: { added: true, example: added } })
 }

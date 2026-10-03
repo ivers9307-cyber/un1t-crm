@@ -5,6 +5,12 @@ import { getCurrentUser, assertLocationAccess, hasRoleAtLocation } from '@/lib/a
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { maskConnectionRow, buildConnectionPatch, SUPPORTED_PLATFORMS } from '@/lib/agent/channels'
 import { validateBody } from '@/lib/validate'
+import { canEditMiaSettings } from '@/lib/agent/settings-access'
+
+// MIANITS (Richard's call, 30 Sep) — Mia's on/off switch for a channel is
+// owner-only, like Mia's settings. agent_enabled defaults to false (mig 407),
+// so only a create that switches her ON is a change to gate.
+const MIA_SWITCH_OWNER_ONLY = 'Only an owner can switch the customer agent on or off for a channel.'
 
 const ChannelConnectionSchema = z.object({
   platform: z.string().min(1),
@@ -54,7 +60,13 @@ export async function GET(request, props) {
     .order('updated_at', { ascending: false })
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
 
-  return NextResponse.json({ success: true, connections: (data || []).map(maskConnectionRow) })
+  // MIANITS — whether this caller may switch Mia on or off for a channel, so
+  // the card greys the switch out for anyone the writes would refuse.
+  return NextResponse.json({
+    success: true,
+    connections: (data || []).map(maskConnectionRow),
+    can_edit_agent: canEditMiaSettings(user, locationId),
+  })
 }
 
 // POST /api/locations/[id]/channels — add a connection (never replaces an active one: 409).
@@ -104,6 +116,9 @@ export async function POST(request, props) {
   const validation = await validateBody(request, ChannelConnectionSchema)
   if (!validation.ok) return validation.response
   const body = validation.data
+  if (body.agent_enabled === true && !canEditMiaSettings(user, locationId)) {
+    return NextResponse.json({ success: false, error: MIA_SWITCH_OWNER_ONLY }, { status: 403 })
+  }
   if (!SUPPORTED_PLATFORMS.includes(body.platform)) {
     return NextResponse.json({ success: false, error: `platform must be one of: ${SUPPORTED_PLATFORMS.join(', ')}` }, { status: 400 })
   }

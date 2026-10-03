@@ -2,9 +2,9 @@
 
 import { useState } from 'react'
 import { Plus, Mail } from 'lucide-react'
-import { createBrowserClient } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
 import SequencePicker from './SequencePicker'
+import { postActivityWrite } from '@/lib/activity-write-gate'
 
 // Per-contact quick actions: add a note, log an activity, or enrol the
 // contact in a sequence.
@@ -12,11 +12,21 @@ import SequencePicker from './SequencePicker'
 // Messaging (WhatsApp + SMS) moved to ContactComposer in
 // CONTACT-COMPOSER.1 — the unified, window-aware "Message this
 // customer" box — so it's no longer duplicated here.
-export default function ContactActions({ contactId, locationId }) {
+//
+// ROLEUI.2 — each button follows the rule of what it calls, judged at the
+// contact's location by the page (contactWorkGates in
+// src/lib/contact-page-gates.js): canNote → POST …/notes (`contacts`),
+// canTask → POST /api/activities/tasks (C148: web Tasks AND Contacts at the
+// contact's studio; it used to be a browser insert judged by RLS on the phone
+// keys), canSequence → the sequence enrol (`email`). A missing flag hides
+// the button.
+export default function ContactActions({ contactId, locationId, canNote = false, canTask = false, canSequence = false }) {
   const [showForm, setShowForm] = useState(null) // 'note' | 'activity' | 'sequence' | null
   const [saving, setSaving] = useState(false)
+  const [taskError, setTaskError] = useState(null)
   const router = useRouter()
-  const db = createBrowserClient()
+
+  if (!canNote && !canTask && !canSequence) return null
 
   async function addNote(e) {
     e.preventDefault()
@@ -40,18 +50,21 @@ export default function ContactActions({ contactId, locationId }) {
   async function addActivity(e) {
     e.preventDefault()
     setSaving(true)
+    setTaskError(null)
     const fd = new FormData(e.target)
-    await db.from('activities').insert({
+    // The route makes it a task (mig 073: the manual form always does).
+    const outcome = await postActivityWrite('/api/activities/tasks', {
       contact_id: contactId,
       subject: fd.get('subject'),
       type: fd.get('type') || 'call',
-      kind: 'task',  // mig 073 — manual form always creates a task
       due_date: fd.get('due_date') || null,
       due_time: fd.get('due_time') || null,
       note: fd.get('note') || null,
       location_id: locationId,
     })
     setSaving(false)
+    // A refusal keeps the form (and what was typed) open with the reason.
+    if (!outcome.ok) { setTaskError(outcome.message); return }
     setShowForm(null)
     router.refresh()
   }
@@ -59,18 +72,24 @@ export default function ContactActions({ contactId, locationId }) {
   return (
     <div className="relative">
       <div className="flex gap-2 flex-wrap">
-        <button onClick={() => setShowForm(showForm === 'note' ? null : 'note')}
-          className="text-xs px-2.5 py-1 rounded border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted flex items-center gap-1">
-          <Plus size={12} /> Note
-        </button>
-        <button onClick={() => setShowForm(showForm === 'activity' ? null : 'activity')}
-          className="text-xs px-2.5 py-1 rounded border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted flex items-center gap-1">
-          <Plus size={12} /> Activity
-        </button>
-        <button onClick={() => setShowForm(showForm === 'sequence' ? null : 'sequence')}
-          className="text-xs px-2.5 py-1 rounded border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted flex items-center gap-1">
-          <Mail size={12} /> Sequence
-        </button>
+        {canNote && (
+          <button onClick={() => setShowForm(showForm === 'note' ? null : 'note')}
+            className="text-xs px-2.5 py-1 rounded border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted flex items-center gap-1">
+            <Plus size={12} /> Note
+          </button>
+        )}
+        {canTask && (
+          <button onClick={() => { setTaskError(null); setShowForm(showForm === 'activity' ? null : 'activity') }}
+            className="text-xs px-2.5 py-1 rounded border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted flex items-center gap-1">
+            <Plus size={12} /> Activity
+          </button>
+        )}
+        {canSequence && (
+          <button onClick={() => setShowForm(showForm === 'sequence' ? null : 'sequence')}
+            className="text-xs px-2.5 py-1 rounded border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted flex items-center gap-1">
+            <Mail size={12} /> Sequence
+          </button>
+        )}
       </div>
 
       {showForm === 'note' && (
@@ -117,6 +136,7 @@ export default function ContactActions({ contactId, locationId }) {
           </div>
           <textarea name="note" rows={2} placeholder="Optional note..."
             className="w-full bg-un1t-bg border border-un1t-border rounded p-2 text-sm text-un1t-text placeholder:text-un1t-muted resize-none focus:outline-none focus:border-un1t-muted" />
+          {taskError && <p role="alert" className="text-xs text-red-400">{taskError}</p>}
           <div className="flex justify-end gap-2">
             <button type="button" onClick={() => setShowForm(null)} className="text-xs text-un1t-subtle hover:text-un1t-text">Cancel</button>
             <button type="submit" disabled={saving}

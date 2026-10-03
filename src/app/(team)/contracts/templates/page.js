@@ -7,12 +7,9 @@ import { redirect } from 'next/navigation'
 import { Plus, FileText, ChevronRight } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { canManageContractsInOrg } from '@/lib/contract-gates'
 
 export const dynamic = 'force-dynamic'
-
-function isOwnerOrMaster(user) {
-  return user?.role === 'master' || user?.role === 'owner'
-}
 
 const TYPE_LABEL = {
   fte: 'FTE',
@@ -23,7 +20,11 @@ const TYPE_LABEL = {
 export default async function TemplatesPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  if (!isOwnerOrMaster(user)) redirect('/')
+  // GATES-2 — this lists the ACTIVE org's templates, so the question is
+  // whether the caller manages contracts in that org (the templates routes'
+  // org rule). The active studio's role refused an org admin whose own
+  // assignment there is not owner.
+  if (!canManageContractsInOrg(user, user.activeOrganization?.id || null)) redirect('/')
 
   // CONTRACTS-SCOPE.1 — service role bypasses RLS; scope templates to the
   // viewer's org so one tenant's owner never sees another tenant's

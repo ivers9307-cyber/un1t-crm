@@ -3,6 +3,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { sendBroadcast } from '@/lib/whatsapp'
+import { whatsappErrorStatus } from '@/lib/whatsapp-number-missing'
 
 // POST /api/whatsapp/broadcasts/[id]/send
 export async function POST(request, props) {
@@ -43,9 +44,11 @@ export async function POST(request, props) {
     return NextResponse.json({ success: true, ...result })
   } catch (error) {
     console.error('Broadcast send error:', error)
+    // WACONFIGFALLBACK.1 — no WhatsApp number at the broadcast's location is a
+    // 409 (the blast used to go out on the env number); nothing was flipped.
     return NextResponse.json(
       { success: false, error: error.message },
-      { status: 400 }
+      { status: whatsappErrorStatus(error, 400) }
     )
   }
 }

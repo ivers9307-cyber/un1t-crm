@@ -530,3 +530,22 @@ describe('primaryCta wraps pageCtas (HATCH-OFFER.1)', () => {
     expect(primaryCta(blocks)).toEqual(pageCtas(blocks).primary)
   })
 })
+
+// MANUALFUNNEL.1 — the class_funnel CTA honours the block's own label and
+// the "keep it off the main page" switch.
+describe('pageCtas — class_funnel label and visibility', () => {
+  it('a class_funnel page keeps the label it has always had', () => {
+    expect(pageCtas([{ id: 'a', type: 'class_funnel' }])).toEqual({
+      primary: { href: '#start', label: 'Claim 3 free classes' }, secondary: null,
+    })
+  })
+  it('uses the block cta_label when set', () => {
+    expect(pageCtas([{ id: 'a', type: 'class_funnel', cta_label: 'Book your free class' }]).primary)
+      .toEqual({ href: '#start', label: 'Book your free class' })
+  })
+  it('a funnel kept off the main page never owns the CTA (there is no #start on the page)', () => {
+    expect(pageCtas([{ id: 'a', type: 'class_funnel', show_on_landing: false }])).toEqual({ primary: null, secondary: null })
+    expect(pageCtas([{ id: 'a', type: 'class_funnel', show_on_landing: false }, { id: 'b', type: 'booking' }]).primary)
+      .toEqual({ href: '#book', label: 'Book a free consult' })
+  })
+})

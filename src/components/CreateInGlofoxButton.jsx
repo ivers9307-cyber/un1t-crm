@@ -51,9 +51,26 @@ function passwordNote(passcode) {
     : ''
 }
 
+// GLOFOXWRITEJUDGE.1 — Glofox refused a new account because the email already
+// has one, and the push could not link it: nothing was created, so this is not
+// a "partial success". Staff-facing; the details are on the Review tab row.
+// BOOKCHATCOPY.1 (C111) — the phone dup-check (glofox-push.js step 2.5) is the
+// same shape: it blocks the mint and never links (a shared number may be a
+// partner's), so nothing was created. It carries its code in `error`, not
+// `reason`, and used to print "Partial success, operator review required.
+// phone_match_no_link".
+const EMAIL_IN_USE_TEXT = {
+  email_in_use_not_linked: 'Not created: this email already has a Glofox account we could not match. Check the Review tab.',
+  email_in_use_link_failed: 'Not created: this email already has a Glofox account, but saving the link to it failed. Check the Review tab.',
+  phone_match_no_link: 'Not created: this mobile number is already on a Glofox account. Nothing was created or linked, because a shared number may belong to someone else. Review it on the Review tab.',
+}
+
 function CreateInGlofoxResult({ result, onDismiss }) {
   if (!result) return null
-  const meta = {
+  const emailInUse = result.status === 'needs_review'
+    ? EMAIL_IN_USE_TEXT[result.reason] || (result.error === 'phone_match_no_link' ? EMAIL_IN_USE_TEXT.phone_match_no_link : null)
+    : null
+  const meta = emailInUse ? { Icon: AlertTriangle, cls: 'text-amber-400', text: emailInUse } : {
     linked:        { Icon: CheckCircle2, cls: 'text-emerald-400', text: 'Linked to an existing Glofox account.' },
     created:       { Icon: CheckCircle2, cls: 'text-emerald-400', text: `Created in Glofox.${passwordNote(result.passcode)}` },
     needs_review:  { Icon: AlertTriangle, cls: 'text-amber-400', text: `Partial success, operator review required. ${result.error || ''}`.trim() + passwordNote(result.passcode) },

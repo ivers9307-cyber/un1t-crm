@@ -3,7 +3,7 @@
 // Trigger a Postmark re-check of the org's sending domain (DKIM +
 // Return-Path); when both verify, flip status → 'live'. IDEMPOTENT.
 //
-// Access: owner-of-org or master (same gate as the parent route). Operates
+// Access: an organisation admin (same gate as the parent route, C18 ORGROLE.1). Operates
 // on an ALREADY-provisioned row (409 if none) — the add-on gate lives on
 // the initiate route; a provisioned domain stays verifiable so a live org
 // can re-confirm DNS. 503 when POSTMARK_ACCOUNT_TOKEN is unset. The server
@@ -13,6 +13,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
+import { isOrgAdminSomewhere } from '@/lib/org-admin'
 import { validateBody, uuidLike } from '@/lib/validate'
 import { isPostmarkAccountConfigured } from '@/lib/postmark-account'
 import { orgHasEmailDomainAddon, tenantEmailStatePayload } from '@/lib/tenant-email'
@@ -28,8 +29,8 @@ const VerifySchema = z.object({
 export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (user.role !== 'owner' && user.role !== 'master') {
-    return NextResponse.json({ success: false, error: 'Owner or master role required.' }, { status: 403 })
+  if (!isOrgAdminSomewhere(user)) {
+    return NextResponse.json({ success: false, error: 'Organisation admin role required.' }, { status: 403 })
   }
 
   const validation = await validateBody(request, VerifySchema)

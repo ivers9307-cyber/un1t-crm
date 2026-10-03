@@ -144,6 +144,16 @@ describe('POST /api/admin/push/test', () => {
     expect(global.fetch).not.toHaveBeenCalled()
   })
 
+  it('C141 ORGROLE.2 — rejects an owner without an org_admin grant (organisation admins only)', async () => {
+    getCurrentUser.mockResolvedValue({
+      id: STAFF, role: 'owner', isMaster: false, orgAdminOrgIds: [],
+      activeOrganization: { id: 'org-1' },
+    })
+    const res = await POST(req({ recipient_id: STAFF }))
+    expect(res.status).toBe(403)
+    expect(global.fetch).not.toHaveBeenCalled()
+  })
+
   it('404s an unknown recipient', async () => {
     const res = await POST(req({ recipient_id: '33333333-3333-3333-3333-333333333333' }))
     expect(res.status).toBe(404)

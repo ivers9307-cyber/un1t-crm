@@ -91,8 +91,17 @@ describe('renderTemplateBody / substituteTemplateBody', () => {
 
 describe('parseConsentKeyword', () => {
   it('matches stop keywords case/whitespace-insensitively', () => {
-    for (const t of ['STOP', ' stop ', 'Unsubscribe', 'stopall', 'STOP ALL', 'cancel', 'end', 'quit']) {
+    for (const t of ['STOP', 'STOP ', ' stop ', 'Unsubscribe', 'unsubscribe', 'stopall', 'stop all', 'STOP ALL']) {
       expect(parseConsentKeyword(t)).toBe('stop')
+    }
+  })
+  // STOPWORDS.1 (Richard, 30 Sep: "unsubscribe should be the used
+  // terminology") — a member who texts just "cancel" is almost always talking
+  // about a booking or a membership, not WhatsApp marketing. CANCEL/END/QUIT
+  // are ordinary messages now; they reach Mia or staff like any other text.
+  it('does NOT treat cancel / end / quit as an opt-out', () => {
+    for (const t of ['cancel', 'end', 'quit', ' CANCEL ', 'Cancel', 'END', 'Quit']) {
+      expect(parseConsentKeyword(t)).toBeNull()
     }
   })
   it('matches start keywords', () => {
@@ -176,5 +185,38 @@ describe('PAYLINK.6 — reserved payment names resolve from opts.payment, never 
 
   it('renderTemplateBody persists the amount, so the inbox thread shows what was sent', () => {
     expect(renderTemplateBody(PAY_TEMPLATE, contact, mapping, { payment })).toBe('Hi Richard, your membership payment of €209 did not go through.')
+  })
+})
+
+// TPLVARORDER.1 (C72) — broadcasts (sendBroadcast and the drip tick) and
+// sequence steps (sendWhatsappStep) build their parameters and the logged body
+// through buildTemplateComponents + renderTemplateBody. Meta fills a positional
+// template BY NUMBER: parameter i is the value of the i-th distinct {{n}} in
+// ascending order, and every occurrence of {{n}} shows that value. Mapping by
+// order of APPEARANCE (occurrence i -> mapping key i+1) sent the wrong value
+// for a template that repeats a variable or puts {{2}} before {{1}}.
+describe('positional variables fill by NUMBER (TPLVARORDER.1)', () => {
+  const tpl = { components: [{ type: 'BODY', text: 'Code {{2}} is yours, {{1}}. Use {{2}} at the desk.' }] }
+  const mapping = { 1: 'first_name', 2: 'GYM20' }
+
+  it('sends one parameter per distinct variable, in number order', () => {
+    const body = buildTemplateComponents(tpl, contact, mapping, null, {}).find(c => c.type === 'body')
+    expect(body.parameters).toEqual([
+      { type: 'text', text: 'Richard' },
+      { type: 'text', text: 'GYM20' },
+    ])
+  })
+
+  it('resolveTemplateVariableValues returns one value per distinct variable', () => {
+    expect(resolveTemplateVariableValues(tpl, contact, mapping, {})).toEqual(['Richard', 'GYM20'])
+  })
+
+  it('logs the body the customer reads, every occurrence filled by its number', () => {
+    expect(renderTemplateBody(tpl, contact, mapping, {}))
+      .toBe('Code GYM20 is yours, Richard. Use GYM20 at the desk.')
+  })
+
+  it('substituteTemplateBody fills by number too', () => {
+    expect(substituteTemplateBody('{{2}} then {{1}} then {{2}}', ['one', 'two'])).toBe('two then one then two')
   })
 })

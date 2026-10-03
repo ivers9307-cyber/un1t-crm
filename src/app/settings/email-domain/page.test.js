@@ -24,7 +24,8 @@ import EmailDomainSettingsPage from './page.js'
 import { getCurrentUser } from '@/lib/auth'
 import { loadEmailDomainRow } from '@/lib/email-domain-service'
 
-const owner = { id: 'u1', role: 'owner', organizationsById: { 'org-a': { name: 'Gym A' } } }
+// C18 ORGROLE.1 — the page is for organisation admins (an org_admin grant).
+const owner = { id: 'u1', role: 'owner', orgAdminOrgIds: ['org-a'], activeOrganization: { id: 'org-a' }, organizationsById: { 'org-a': { name: 'Gym A' } } }
 const render = async () => renderToStaticMarkup(await EmailDomainSettingsPage({ searchParams: Promise.resolve({}) }))
 
 beforeEach(() => { vi.clearAllMocks(); getCurrentUser.mockResolvedValue(owner) })
@@ -43,5 +44,12 @@ describe('/settings/email-domain — a failed read (CHANNELREAD.1)', () => {
     loadEmailDomainRow.mockResolvedValue(null)
     const html = await render()
     expect(html).toContain('WIZARD-RENDERED')
+  })
+})
+
+describe('/settings/email-domain — organisation admins only (C18 ORGROLE.1)', () => {
+  it('a studio owner with no org_admin grant is sent back to /settings', async () => {
+    getCurrentUser.mockResolvedValue({ ...owner, orgAdminOrgIds: [] })
+    await expect(render()).rejects.toThrow(/^NEXT_REDIRECT:\/settings$/)
   })
 })

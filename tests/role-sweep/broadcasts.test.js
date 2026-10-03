@@ -20,6 +20,8 @@ import { describeGate } from '../helpers/role-gate-probe.js'
 import { roleCases, permissionCases } from '../helpers/role-sweep-callers.js'
 import * as waSend from '@/app/api/whatsapp/broadcasts/[id]/send/route.js'
 import * as waResubmit from '@/app/api/whatsapp/templates/[id]/resubmit/route.js'
+import * as waTemplates from '@/app/api/whatsapp/templates/route.js'
+import * as waTemplate from '@/app/api/whatsapp/templates/[id]/route.js'
 
 const T = { getCurrentUser, createServerClient, describe, it, expect }
 const json = (method, body) => new Request('http://localhost/api/x', {
@@ -45,4 +47,37 @@ describeGate('POST /api/whatsapp/templates/[id]/resubmit (MANAGER_ROLES at the t
   gateReads: row({ id: 'wt-1', status: 'REJECTED', meta_template_id: 'meta-1' }),
   forbidden: { status: 403, body: { success: false, error: 'Forbidden' } },
   hidden: NOT_FOUND, cases: roleCases(MANAGER_ROLES),
+}, T)
+
+// WATPLROLE.1 — template create, edit and delete judge the resubmit rule
+// (MANAGER_ROLES) at the location created at / the template's location.
+// Create takes its location from the body, so its non-member answer is
+// assertLocationAccess's 403; the two detail handlers keep their 404.
+// roleCases' "(main: …)" notes describe the old active-studio gates; these
+// three were membership-only before WATPLROLE.1 (every member passed), so
+// the notes are dropped here rather than left saying something untrue.
+const templateRoleCases = () => roleCases(MANAGER_ROLES)
+  .map(([label, ...rest]) => [label.replace(/ \(main: [a-z]+\)$/, ''), ...rest])
+describeGate('POST /api/whatsapp/templates (MANAGER_ROLES at the body location)', {
+  call: (target) => waTemplates.POST(json('POST', { name: 'promo_x', components: [], location_id: target })),
+  forbidden: { status: 403, body: { success: false, error: 'Forbidden' } },
+  hidden: { status: 403, body: { success: false, error: 'Forbidden — location not in your assignments' } },
+  cases: templateRoleCases(),
+}, T)
+
+describeGate('DELETE /api/whatsapp/templates/[id] (MANAGER_ROLES at the template)', {
+  call: () => waTemplate.DELETE(bare('DELETE'), params({ id: 'wt-1' })),
+  gateReads: row({ name: 'promo_x' }),
+  forbidden: { status: 403, body: { success: false, error: 'Forbidden' } },
+  hidden: NOT_FOUND, cases: templateRoleCases(),
+}, T)
+
+// WATPLPUT.1 — `status` is refused for everyone (400) before the role check,
+// so the role is probed with a content edit on a DRAFT (a submitted
+// template's content is locked, 409, after the role check).
+describeGate('PUT /api/whatsapp/templates/[id] with a content field (MANAGER_ROLES at the template)', {
+  call: () => waTemplate.PUT(json('PUT', { components: [{ type: 'BODY', text: 'x' }] }), params({ id: 'wt-1' })),
+  gateReads: row({ status: 'draft', meta_template_id: null }),
+  forbidden: { status: 403, body: { success: false, error: 'Forbidden' } },
+  hidden: NOT_FOUND, cases: templateRoleCases(),
 }, T)

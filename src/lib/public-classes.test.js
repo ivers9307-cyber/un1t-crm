@@ -146,3 +146,70 @@ describe('readPublicClasses — REGISTRYREAD.1a', () => {
     expect(await listPublicClasses(makeDb({}), 'L', 7)).toEqual([])
   })
 })
+
+// MANUALFUNNEL.1 — a studio with no Glofox lists the timetable its operator
+// wrote on the class_funnel block.
+describe('readPublicClasses — manual timetable (no Glofox)', () => {
+  function landingDb(result) {
+    const calls = []
+    const b = {
+      from: (t) => { calls.push(['from', t]); return b },
+      select: (c) => { calls.push(['select', c]); return b },
+      eq: (c, v) => { calls.push(['eq', c, v]); return b },
+      maybeSingle: async () => result,
+    }
+    return { db: b, calls }
+  }
+  async function noGlofox() {
+    const { missingGlofoxCredentialsForLocation } = await import('@/lib/glofox')
+    glofoxCredentialsForLocation.mockResolvedValueOnce({ branchId: null, apiKey: null, apiToken: null, readError: null })
+    missingGlofoxCredentialsForLocation.mockReturnValueOnce(['Branch ID', 'API Key', 'API Token'])
+  }
+  const TIMETABLE = 'Mon-Sun 06:15 Strength\nMon-Sun 18:00 Conditioning'
+
+  it('lists the block timetable in the public class shape, read by location, and never calls Glofox', async () => {
+    await noGlofox()
+    const { db, calls } = landingDb({ data: { blocks: [{ type: 'class_funnel', timetable: TIMETABLE, min_notice_hours: 0 }] }, error: null })
+    const out = await readPublicClasses(db, 'HATCH', 7)
+    expect(out.error).toBeNull()
+    expect(out.classes.length).toBeGreaterThanOrEqual(12)
+    for (const c of out.classes) {
+      expect(Object.keys(c).sort()).toEqual([...PUBLIC_CLASS_KEYS].sort())
+      expect(c.event_id.startsWith('manual-')).toBe(true)
+      expect(Date.parse(c.starts_at)).toBeGreaterThan(Date.now())
+    }
+    expect(calls).toEqual([['from', 'landing_page_settings'], ['select', 'blocks'], ['eq', 'location_id', 'HATCH']])
+    expect(fetchUpcomingEvents).not.toHaveBeenCalled()
+  })
+
+  it('the 14-day read the booking route validates against contains every class the 7-day list shows', async () => {
+    const blocks = [{ type: 'class_funnel', timetable: TIMETABLE }]
+    await noGlofox()
+    const shown = await readPublicClasses(landingDb({ data: { blocks }, error: null }).db, 'HATCH', 7)
+    await noGlofox()
+    const valid = await readPublicClasses(landingDb({ data: { blocks }, error: null }).db, 'HATCH', 14)
+    const ids = new Set(valid.classes.map((c) => c.event_id))
+    expect(shown.classes.length).toBeGreaterThan(0)
+    for (const c of shown.classes) expect(ids.has(c.event_id)).toBe(true)
+  })
+
+  it('a landing row that could not be read is an error, not an empty timetable', async () => {
+    await noGlofox()
+    const out = await readPublicClasses(landingDb({ data: null, error: { message: 'boom' } }).db, 'HATCH', 7)
+    expect(out).toEqual({ classes: [], error: 'manual_timetable_unreadable' })
+  })
+
+  it('no landing row, or a block with no timetable, is an empty list with no error', async () => {
+    await noGlofox()
+    expect(await readPublicClasses(landingDb({ data: null, error: null }).db, 'HATCH', 7)).toEqual({ classes: [], error: null })
+    await noGlofox()
+    expect(await readPublicClasses(landingDb({ data: { blocks: [{ type: 'class_funnel' }] }, error: null }).db, 'HATCH', 7)).toEqual({ classes: [], error: null })
+  })
+
+  it('a studio WITH Glofox never reads the manual timetable', async () => {
+    const { db, calls } = landingDb({ data: { blocks: [{ type: 'class_funnel', timetable: TIMETABLE }] }, error: null })
+    const out = await readPublicClasses(db, 'L', 7)
+    expect(out.classes.map((c) => c.event_id)).toEqual(['e1'])
+    expect(calls).toEqual([])
+  })
+})

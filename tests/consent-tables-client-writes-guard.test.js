@@ -1,6 +1,7 @@
-// CONSENTCLIENTWRITE.1 guard (mig 660). anon/authenticated hold SELECT only on
-// public.contact_preferences, public.contact_location_preferences and
-// public.consent_log, and each keeps one policy, <table>_select FOR SELECT.
+// CONSENTCLIENTWRITE.1 guard (mig 660). anon/authenticated hold no write
+// privilege on public.contact_preferences, public.contact_location_preferences
+// and public.consent_log. (Since mig 662, CONSENTREAD.1, they hold no privilege
+// at all and the tables have no policy: tests/consent-tables-client-closed-guard.test.js.)
 // Pinned here:
 //
 //  1. Browser and phone code never WRITES these tables. Client-run code =
@@ -23,7 +24,8 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs'
 import path from 'node:path'
-import { stripComments } from '../scripts/lib/strip-comments.mjs'
+import { stripComments } from './helpers/js-code.js'
+import { sqlCode } from './helpers/sql-code.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const CONSENT_WRITES_OFF_MIGRATION = 660
@@ -80,7 +82,7 @@ function splitTop(list) {
 
 /** Every statement in `sql` that would let a client role write a consent table again. */
 export function consentWriteReopeners(sql) {
-  const code = sql.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--[^\n]*/g, ' ')
+  const code = sqlCode(sql)
   const hits = []
   for (const m of code.matchAll(/\bgrant\s+([\s\S]+?)\s+on\s+([\s\S]+?)\s+to\s+([\s\S]+?)(?:;|'|$)/gi)) {
     const [stmt, privs, target, to] = m
@@ -113,7 +115,7 @@ export function consentWriteReopeners(sql) {
   return hits
 }
 
-describe('client code never writes consent (CONSENTCLIENTWRITE.1, mig 660)', () => {
+describe('client code never writes consent (CONSENTCLIENTWRITE.1, mig 660)', { timeout: 120_000 }, () => {
   const files = clientFiles()
 
   it('scans the files it is meant to police (not vacuous)', () => {
@@ -156,7 +158,7 @@ describe('client code never writes consent (CONSENTCLIENTWRITE.1, mig 660)', () 
   })
 })
 
-describe('later migrations keep consent read-only for clients (mig 660)', () => {
+describe('later migrations keep consent read-only for clients (mig 660)', { timeout: 120_000 }, () => {
   it('a server file that queries with the signed-in user\'s session is client-bound', () => {
     expect(isBrowserFile(`import { createAuthClient } from '@/lib/supabase'\nconst db = createAuthClient()`)).toBe(true)
     expect(isBrowserFile(`import { createServerClient } from '@/lib/supabase'`)).toBe(false)
@@ -175,6 +177,13 @@ describe('later migrations keep consent read-only for clients (mig 660)', () => 
   it.each(later)('%s: no client write privilege and no permissive write policy on a consent table', (file) => {
     expect(consentWriteReopeners(readFileSync(path.join(MIGRATIONS, file), 'utf8')),
       `${file} reopens client writes on consent (mig 660). Write through a service-role route that logs consent_log`).toEqual([])
+  })
+
+  // GUARDSTRIP.1 (C74): a '/*' inside a string, or after a DO block's $$, hid
+  // the GRANT from the old regex / unpaired stripper.
+  it('a /* inside a string or a later $$ literal hides no GRANT (GUARDSTRIP.1)', () => {
+    expect(consentWriteReopeners("SELECT '/*';\nGRANT UPDATE ON public.contact_preferences TO authenticated;\nSELECT '*/';"), 'string').not.toEqual([])
+    expect(consentWriteReopeners("DO $$ BEGIN PERFORM 1; END $$;\nSELECT $$ /* $$;\nGRANT UPDATE ON public.contact_preferences TO authenticated;\nSELECT $$ */ $$;"), 'dollar').not.toEqual([])
   })
 
   it('the migration detector catches every form and passes the safe ones', () => {

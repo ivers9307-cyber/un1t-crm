@@ -1,5 +1,6 @@
 // ROLESWEEP.1c — the 1:1 contact channels (cancellation-form, email,
-// whatsapp, the messaging context; sms left with TWILIO-RETIRE.1), the TV image upload and the command
+// whatsapp, the messaging context; sms left with TWILIO-RETIRE.1), the TV image upload, the TV admin
+// session routes (MEMBERWRITESWEEP.1f) and the command
 // centre's channel flags judge the WEB key OR the MOBILE toggle at the
 // contact's / upload's location, never at the caller's ACTIVE studio
 // (hasPermission / hasMobilePermission).
@@ -24,6 +25,13 @@ import * as whatsapp from '@/app/api/contacts/[id]/whatsapp/route.js'
 import * as messaging from '@/app/api/contacts/[id]/messaging/route.js'
 import * as commandCentre from '@/app/api/contacts/[id]/command-centre/route.js'
 import * as tvUpload from '@/app/api/admin/tv-displays/upload/route.js'
+import * as tvUploadSign from '@/app/api/admin/tv-displays/upload/sign/route.js'
+import * as tvUploadFinalise from '@/app/api/admin/tv-displays/upload/finalise/route.js'
+import * as tvDisplays from '@/app/api/admin/tv-displays/route.js'
+import * as tvDisplay from '@/app/api/admin/tv-displays/[id]/route.js'
+import * as tvContent from '@/app/api/admin/tv-displays/[id]/content/route.js'
+import * as tvTemplates from '@/app/api/admin/tv-templates/route.js'
+import * as tvTemplate from '@/app/api/admin/tv-templates/[id]/route.js'
 
 const T = { getCurrentUser, createServerClient, describe, it, expect }
 const json = (method, body) => new Request('http://localhost/api/x', {
@@ -98,6 +106,48 @@ describeGate('POST /api/admin/tv-displays/upload (tv_displays, web OR mobile, at
   forbidden: { status: 403, body: { success: false, error: 'Not authorised for TV displays' } },
   hidden: NOT_MEMBER, cases: webOrMobileCases(['tv_displays']),
 }, T)
+// TVUPLOAD.1 (C93) — the phone's signed-upload pair: the same gate as the
+// multipart route above (src/lib/tv-upload-gate.js), on the same case table.
+describeGate('POST /api/admin/tv-displays/upload/sign (tv_displays, web OR mobile, at location_id)', {
+  call: (loc) => tvUploadSign.POST(json('POST', { kind: 'content', location_id: loc, file_name: 'art.png', mime: 'image/png', size: 4 })),
+  forbidden: { status: 403, body: { success: false, error: 'Not authorised for TV displays' } },
+  hidden: NOT_MEMBER, cases: webOrMobileCases(['tv_displays']),
+}, T)
+describeGate('POST /api/admin/tv-displays/upload/finalise (tv_displays, web OR mobile, at location_id)', {
+  call: (loc) => tvUploadFinalise.POST(json('POST', { kind: 'content', location_id: loc, path: `${loc}/1c000000-0000-4000-8000-000000000003.png` })),
+  forbidden: { status: 403, body: { success: false, error: 'Not authorised for TV displays' } },
+  hidden: NOT_MEMBER, cases: webOrMobileCases(['tv_displays']),
+}, T)
+
+// MEMBERWRITESWEEP.1f — the TV admin's session routes (src/lib/tv-admin.js):
+// the upload routes' gate (web OR mobile tv_displays) judged at the TV's or
+// the template's OWN studio, or the query/body studio for list and create.
+// A studio outside the caller's is a 404 (not 403, as on the upload routes),
+// so ids are not enumerable.
+const TV_FORBIDDEN = { status: 403, body: { success: false, error: 'Not authorised for TV displays' } }
+const TV_ID = 'e0000000-0000-4000-8000-0000000000e1'
+const TPL_ID = 'f1000000-0000-4000-8000-0000000000f1'
+const tvRow = (loc) => [{ data: { id: TV_ID, location_id: loc }, error: null }]
+const tplRow = (loc) => [{ data: { id: TPL_ID, location_id: loc, base_image_path: `${loc}/templates/old.png` }, error: null }]
+const tvSpecs = [
+  ['GET /api/admin/tv-displays?location_id=', (loc) => tvDisplays.GET(bare('GET', `?location_id=${loc}`)), null],
+  ['POST /api/admin/tv-displays', (loc) => tvDisplays.POST(json('POST', { location_id: loc, label: 'Lobby TV' })), null],
+  ['PATCH /api/admin/tv-displays/[id]', () => tvDisplay.PATCH(json('PATCH', { rotation: 90 }), params({ id: TV_ID })), tvRow],
+  ['DELETE /api/admin/tv-displays/[id]', () => tvDisplay.DELETE(bare('DELETE'), params({ id: TV_ID })), tvRow],
+  ['PUT /api/admin/tv-displays/[id]/content', () => tvContent.PUT(json('PUT', { source_type: 'url', source_ref: 'https://example.invalid/a.png' }), params({ id: TV_ID })), tvRow],
+  ['DELETE /api/admin/tv-displays/[id]/content', () => tvContent.DELETE(bare('DELETE'), params({ id: TV_ID })), tvRow],
+  ['GET /api/admin/tv-templates?location_id=', (loc) => tvTemplates.GET(bare('GET', `?location_id=${loc}`)), null],
+  ['POST /api/admin/tv-templates', (loc) => tvTemplates.POST(json('POST', { location_id: loc, name: 'Board', base_image_path: `${loc}/templates/x.png`, zones: [] })), null],
+  ['GET /api/admin/tv-templates/[id]', () => tvTemplate.GET(bare('GET'), params({ id: TPL_ID })), tplRow],
+  ['PUT /api/admin/tv-templates/[id]', (loc) => tvTemplate.PUT(json('PUT', { name: 'Board', base_image_path: `${loc}/templates/old.png`, zones: [] }), params({ id: TPL_ID })), tplRow],
+  ['DELETE /api/admin/tv-templates/[id]', () => tvTemplate.DELETE(bare('DELETE'), params({ id: TPL_ID })), tplRow],
+]
+for (const [title, call, gateReads] of tvSpecs) {
+  describeGate(`${title} (tv_displays, web OR mobile, at the row's / requested studio)`, {
+    call, ...(gateReads ? { gateReads } : {}),
+    forbidden: TV_FORBIDDEN, hidden: NOT_FOUND, cases: webOrMobileCases(['tv_displays']),
+  }, T)
+}
 
 // ── command centre: the drawer's channel flags at the contact's location ───
 // Not an access gate (the route is membership-only); the flags decide what

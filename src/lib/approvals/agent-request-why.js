@@ -1,5 +1,6 @@
 import { hasBookableMembership } from '@/lib/person-accounts'
 import { CLASS_BOOKING_MAX_ATTEMPTS } from '@/lib/class-booking-attempts'
+import { isManualEventId } from '@/lib/manual-timetable'
 
 // AGENT-REQ-UX.1 — operator-readable explanations for agent requests.
 //
@@ -27,8 +28,10 @@ const MACHINE_REASONS = {
   // means "attended before AND nothing on the account to book with".
   prior_attendance:
     'They have attended before and no usable balance was found (no class credits, no active membership) — the free intro does not apply. Grant a credit or set up a membership in Glofox, then approve to book.',
+  // TRIALGRANT.1 — approving buys the trial first and judges the purchase;
+  // if Glofox will not add it, nothing is booked and this card says why.
   needs_credit_grant:
-    'Their Glofox account has no class credits left. Approving grants the trial credit and completes the booking automatically.',
+    'Their Glofox account has no class credits left. Approving adds the trial in Glofox first, then books. If Glofox will not add the trial, nothing is booked and this card says why.',
   // MIA-CREDITS.1 — Mia's pre-flight found nothing to book with and handed
   // the thread to a human; this card carries the booking intent.
   no_credits:
@@ -101,15 +104,29 @@ function bookingFailedExplanation(code) {
  * draft-mode default), or null when there is nothing mechanical to
  * explain (pause/cancel — the reason there is the customer's own words).
  */
+// MANUALFUNNEL.1 — a class off a studio's hand-written timetable (no Glofox
+// there). Judged on the event id, not on `reason`: a request that reached
+// the card through the retry path carries 'processing_error', and its
+// approve still books nothing.
+const MANUAL_BOOKING =
+  'This studio books by hand. Create their account on the booking platform and book them into this class, using the contact details on this card, and let them know they are booked. Then approve to record it as done. Approving does not book anything.'
+
+const TRIAL_UNSETTLED_AT_MINT =
+  'Their Glofox account was just created, but Glofox gave no clear answer when the trial was being added, so it may already be there. Approving books only if class credits show on the account, and will not buy a second trial. Check their account in Glofox for a €0 trial invoice; if there is none, add a credit by hand, then approve.'
+
 export function whyFlagged(row) {
   if (!row || row.kind !== 'class_booking') return null
   const d = row.details || {}
   const reason = typeof d.reason === 'string' ? d.reason : null
+  if (isManualEventId(d.event_id)) return MANUAL_BOOKING
   if (reason) {
     if (reason === 'credit_check_failed') {
       const line = creditUnreadLine(d.credit_unread_accounts)
       return line ? `${MACHINE_REASONS[reason]} ${line}` : MACHINE_REASONS[reason]
     }
+    // GLOFOXPOSTRETRY.1 review — the account was just made, but the trial
+    // purchase got no clear answer, so this card's approve will not buy one.
+    if (reason === 'needs_credit_grant' && d.trial_grant?.outcome_unknown === true) return TRIAL_UNSETTLED_AT_MINT
     if (MACHINE_REASONS[reason]) return MACHINE_REASONS[reason]
     if (reason.startsWith('booking_failed:')) {
       return bookingFailedExplanation(reason.slice('booking_failed:'.length) || 'unknown')
@@ -136,40 +153,10 @@ export function approvalGrantsTrialCredit(details) {
   return details?.reason === 'needs_credit_grant'
 }
 
-// AGENT-RETRY.1 — what a FAILED execution's Glofox code means and what to
-// fix before retrying. Keyed on details.result.message_code.
-const FAILURE_EXPLANATIONS = {
-  YOU_HAVE_NO_CREDITS_LEFT:
-    'Glofox refused the booking — no class credits on their account. Grant a credit in Glofox, then retry.',
-  NOT_EXECUTABLE:
-    'The request could not be executed — the contact has no linked Glofox account (or Glofox is not configured here). Link the account, then retry.',
-  // PERSON-ACCT.7 — the row named the Glofox account the agent chose for this
-  // booking, and the contact is now linked to a different one, so nothing was
-  // booked (rather than booking on an account nobody picked).
-  ACCOUNT_MISMATCH:
-    'This booking was queued for a different Glofox account than the one the contact is linked to now, so it was not executed. Check which account is right in Glofox, then retry.',
-  // CANCEL-FORM.5 — membership cancellation execution (auto-cancel toggle on).
-  NO_END_DATE:
-    'No machine-readable end date on this request, so Glofox was not called. Set the end date on the card and approve again, or cancel in Glofox by hand.',
-  NO_USER_MEMBERSHIP:
-    'Glofox returned no active membership for this account, so there was nothing to cancel. Check the membership in Glofox (it may already be cancelled or on another account), then retry.',
-  // REGISTRYREAD.1a — the studio's Glofox settings could not be read when
-  // staff approved (a database blip). Nothing reached Glofox.
-  GLOFOX_SETTINGS_UNREADABLE:
-    "The studio's Glofox settings could not be read (a temporary database error), so nothing was sent to Glofox. Retry.",
-}
-
-/**
- * Operator-readable line for a failed execution, or null when the row is
- * not a failed execution. Pure.
- */
-export function failureExplanation(row) {
-  if (!row || row.status !== 'failed') return null
-  const code = row.details?.result?.message_code || row.details?.result?.reason || null
-  if (!code) return 'The execution failed. Check the account in Glofox, fix what is wrong, then retry.'
-  return FAILURE_EXPLANATIONS[code]
-    || `Glofox rejected the action (${code}). Fix the issue in Glofox, then retry.`
-}
+// C85 (c) — failureExplanation moved to shared/agent-request-failure.js so the
+// phone's post-approve alert can use it (it printed the raw code). One
+// definition, re-exported here for every web caller.
+export { failureExplanation, FAILURE_CODES } from '@shared/agent-request-failure'
 
 // PERSON-ACCT.3 — states that mean the membership (whatever its status)
 // cannot book right now. glofox_membership_status is NEVER the string

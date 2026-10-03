@@ -14,6 +14,7 @@ import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
 import { hasBookableMembership, personRowsForContact, corroborated, reusableSibling, electWriteAccount, chunkIds } from '@/lib/person-accounts'
 import { maybeSendBookingWhatsappConfirm, CLASS_CONFIRM_TEMPLATE } from '@/lib/automations/booking-whatsapp-confirm'
 import { sendCtwaConversion, sendWebsiteConversion } from '@/lib/meta-capi'
+import { isManualEventId } from '@/lib/manual-timetable'
 import { logWarn } from '@/lib/log'
 
 const labelFmt = new Intl.DateTimeFormat('en-IE', { timeZone: 'Europe/Dublin', weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false })
@@ -67,7 +68,7 @@ async function readCredits(creds, memberId) {
 // exhausts its retries on a THROW lands here too, so staff get a card rather
 // than a bare needs_review nobody is shown. Also run by the cron's reaper for
 // rows stuck in 'processing' past the attempt cap.
-export async function routeToReview(db, request, reason, { personContactIds = null, executingContactId = null, electedMemberId = null, creditUnreadAccounts = null } = {}) {
+export async function routeToReview(db, request, reason, { personContactIds = null, executingContactId = null, electedMemberId = null, creditUnreadAccounts = null, trialGrant = null } = {}) {
   let approvalId = null
   // A row that ALREADY names a card keeps it while that card is still pending
   // — never file a second one for the same booking. The person-wide lookup
@@ -145,6 +146,18 @@ export async function routeToReview(db, request, reason, { personContactIds = nu
           ...(request.payment_status === 'paid'
             ? { paid: true, amount_cents: request.amount_cents, currency: request.currency || 'EUR' }
             : {}),
+          // TRIALGRANT.1 — approving needs_credit_grant buys a trial
+          // (agent/trial-grant.js). The funnel block may name its own trial,
+          // which the mint path buys; carry it so the approve buys the same
+          // one instead of the location default.
+          ...(reason === 'needs_credit_grant' && request.trial_membership_id && request.trial_plan_code
+            ? { trial_membership_id: request.trial_membership_id, trial_plan_code: request.trial_plan_code }
+            : {}),
+          // GLOFOXPOSTRETRY.1 — a mint whose trial purchase got no clear
+          // answer: the approve route reads this as details.trial_grant (the
+          // priorGrant of grantTrialBeforeBooking), so even the FIRST approval
+          // books only if credits show and never buys a second trial.
+          ...(trialGrant ? { trial_grant: trialGrant } : {}),
         },
       }).select('id').maybeSingle()
       approvalId = amr?.id || null
@@ -186,6 +199,11 @@ export async function processClassBookingRequest(db, request) {
   // customer's class.
   if (creds.readError) throw new Error(creds.readError)
   if (missingGlofoxCredentialsForLocation(creds).length) {
+    // MANUALFUNNEL.1 — a class off a hand-written timetable (a studio with no
+    // Glofox: Hatch Street books on its own platform) is never booked from
+    // here. It goes straight to staff, who create the account and the booking
+    // by hand and then approve the card to record it.
+    if (isManualEventId(request.glofox_event_id)) return routeToReview(db, request, 'manual_booking')
     await setStatus(db, request.id, { status: 'failed', last_error: 'glofox_not_configured' })
     return { outcome: 'failed', detail: 'glofox_not_configured' }
   }
@@ -259,8 +277,8 @@ export async function processClassBookingRequest(db, request) {
   // confirmation goes to the number the customer just typed).
   let executingContactId = null
   let electedMemberId = null
-  const toReview = (reason) => routeToReview(db, request, reason, {
-    personContactIds, executingContactId, electedMemberId,
+  const toReview = (reason, { trialGrant = null } = {}) => routeToReview(db, request, reason, {
+    personContactIds, executingContactId, electedMemberId, trialGrant,
   })
   // CBPCREDITREAD.1 — the retry signal carries the same account the card
   // would have named (read at throw time, like toReview above).
@@ -422,10 +440,11 @@ export async function processClassBookingRequest(db, request) {
     return false
   }
 
-  let grantedTrial = false
-  if (attended) {
-    // Attended before with no Glofox account at all → nothing to book with.
-    if (!memberId) return toReview('prior_attendance')
+  // The returner's balance gate: book against an existing balance, never a
+  // fresh trial. Returns the review outcome when there is nothing to book
+  // with, null to go on and book. Run where attendance is known: below, and
+  // again after the mint LINKED an existing account (GLOFOXWRITEJUDGE.1).
+  async function returnerBalanceGate() {
     // computeCreditsRemaining is null for BOTH "no credits" and "membership
     // without per-class credit records" — the CRM's synced membership status
     // breaks the tie: a bookable membership is bookable (Glofox arbitrates,
@@ -449,6 +468,15 @@ export async function processClassBookingRequest(db, request) {
     } else if (!(read.remaining > 0) && !activeMembership && !(await rescueSiblingBalance())) {
       return toReview('prior_attendance')
     }
+    return null
+  }
+
+  let grantedTrial = false
+  if (attended) {
+    // Attended before with no Glofox account at all → nothing to book with.
+    if (!memberId) return toReview('prior_attendance')
+    const gate = await returnerBalanceGate()
+    if (gate) return gate
     // Fall through to the booking — consuming the EXISTING balance, never a
     // fresh trial.
   } else if (!memberId) {
@@ -470,11 +498,42 @@ export async function processClassBookingRequest(db, request) {
       ? { membershipId: request.trial_membership_id, planCode: request.trial_plan_code }
       : null
     const res = await findOrCreateGlofoxMember({ db, locationId: request.location_id, contact, source: 'booking_form', createIfMissing: true, attachTrial: true, trialOverride })
+    // TRIALGRANT.1 — the account WAS created and linked, but its trial did not
+    // take. That is exactly the card whose approve buys the trial and then
+    // books (needs_credit_grant), not account_needs_review, whose copy says
+    // the account match needs a human check and whose approve books with no
+    // credit behind it.
+    if (res.status === 'needs_review' && res.trial_failed === true && res.glofox_member_id) {
+      // GLOFOXPOSTRETRY.1 review — a purchase with no clear answer (a 5xx or
+      // no reply) may have bought the trial. Without this stamp the card's
+      // first approval (priorGrant null, not a retry) would buy blind when
+      // the balance reads empty or unreadable, stacking a second trial.
+      return toReview('needs_credit_grant', res.trial_outcome_unknown === true
+        // TRIALPURCHASE.2 (d): named by member, so another card for the same
+        // person finds the doubt (grantTrialBeforeBooking) and buys nothing.
+        ? { trialGrant: { ok: false, code: 'TRIAL_GRANT_FAILED', outcome_unknown: true, glofox_member_id: res.glofox_member_id } }
+        : {})
+    }
     if (!res.glofox_member_id || (res.status !== 'created' && res.status !== 'linked')) {
       return toReview(`account_${res.status || 'failed'}`)
     }
     memberId = res.glofox_member_id
     grantedTrial = res.status === 'created'
+    // GLOFOXWRITEJUDGE.1 — 'linked' means Glofox already held an account for
+    // this email (EMAIL_ALREADY_IN_USE, found on a second search). Attendance
+    // was read above with no account to read, so read it now on the linked
+    // one: a returner must reach the returner gate (prior_attendance), never
+    // needs_credit_grant, whose approve buys a trial. A failed read is not
+    // "never attended": it goes to review like the read above.
+    if (res.status === 'linked') {
+      const { ok: attendOk, bookings } = await fetchUserBookingsResult(creds, memberId, { windowDays: 365 * 5 })
+      if (!attendOk) return toReview('attendance_check_failed')
+      if (bookings.some((b) => b.attended === true)) {
+        attended = true
+        const gate = await returnerBalanceGate()
+        if (gate) return gate
+      }
+    }
   }
   // Existing never-attended account, no live credit → review (staff grant the
   // trial + approve); an unreadable credit read is retried (CBPCREDITREAD.1).

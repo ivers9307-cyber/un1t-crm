@@ -1,8 +1,9 @@
 // /api/cars — list and create.
 //
-// Auth: session (getCurrentUser). Permission: car_processing must
-// be true on the caller. RLS enforces location scoping at the DB
-// layer; the permission check is the UI/UX gate.
+// Auth: session (getCurrentUser). Permission: car_processing at the
+// studio (hasPermissionForLocation), checked here: this route uses the
+// service role, so RLS does nothing for it. No client session can reach
+// cars at all (mig 674, CARSCLIENTWRITE.1).
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'

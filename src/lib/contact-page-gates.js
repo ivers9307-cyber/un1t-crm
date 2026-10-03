@@ -10,6 +10,7 @@
 // here is made at the contact's location instead.
 import { hasPermissionForLocation, hasMobilePermissionForLocation } from './permissions'
 import { hasRoleAtLocation } from './role-at-location'
+import { canWriteActivitiesAt } from './activity-write-gate'
 import { ADMIN_ROLES, MANAGER_ROLES } from './schemas'
 
 /**
@@ -148,5 +149,105 @@ export function contactActionGates(user, contact) {
       canEditDevices: canEditContactDevices(user, loc),
       canLinkAccount: canLinkAppAccount(user, loc),
     },
+  }
+}
+
+// ── ROLEUI.2 — the buttons that had NO gate ───────────────────────────────
+// Rendered for every viewer until now and refused by their routes for anyone
+// the route's rule excludes, a crossover viewer included (canViewContact opens
+// a contact with a deal at the caller's studio to someone who belongs to none
+// of the contact's). Each helper is the route's decision at the contact's
+// location; src/lib/contact-page-gates-roleui2.test.js runs each over the
+// route's own sweep table.
+
+/**
+ * A member of the contact's studio (masters are members everywhere). The
+ * whole rule for the Book card
+ * (/api/bookings/create, /api/glofox/classes/*: assertLocationAccess) and the
+ * consent history card (/api/contacts/[id]/consent-log: assertLocationAccessOr404).
+ * Membership only, never a role or key: those paths judge nothing more. (The
+ * Task/Activity writes used to share this rule; canAddContactTask below adds
+ * the Contacts key mig 700 put on them. Since mig 691 the SQL resolves phone
+ * toggles with role templates too, so a JS key gate no longer hides a write
+ * RLS would accept.)
+ */
+export function isMemberOfContactStudio(user, locationId) {
+  if (!user || !locationId) return false
+  return Boolean(user.isMaster) || (user.locations || []).some((l) => l?.id === locationId)
+}
+
+/**
+ * The Task / Activity writes (ContactActions' Activity form, the kebab's Task
+ * item). Membership of the contact's studio AND canWriteActivitiesAt there:
+ * C146 (Richard 2 Oct) Contacts web OR phone, and C148 ACTWRITEGATEWEB.1 the
+ * web Tasks key (`activities`), the rule POST /api/activities/tasks applies
+ * (it used to be a browser insert judged by RLS on the phone keys). See
+ * src/lib/activity-write-gate.js.
+ */
+export function canAddContactTask(user, locationId) {
+  return isMemberOfContactStudio(user, locationId) && canWriteActivitiesAt(user, locationId)
+}
+
+/** POST /api/contacts/[id]/pipeline-status (the Cold item): `pipeline` at the contact. */
+export function canSetPipelineStatus(user, locationId) {
+  return hasPermissionForLocation(user, locationId, 'pipeline')
+}
+
+/** POST /api/contacts/[id]/notes (the Note button): `contacts` at the contact. */
+export function canAddContactNote(user, locationId) {
+  return hasPermissionForLocation(user, locationId, 'contacts')
+}
+
+/**
+ * The Sequence buttons: the picker lists sequences AT the contact's location
+ * (GET /api/sequences: email or whatsapp there) and enrols through
+ * POST /api/sequences/[id]/enrol (`email` at the sequence's location), so the
+ * button works exactly when the caller holds `email` at the contact's.
+ */
+export function canEnrolContactInSequence(user, locationId) {
+  return hasPermissionForLocation(user, locationId, 'email')
+}
+
+/** GET/POST /api/contacts/[id]/cancellation-form: email OR whatsapp, web OR mobile, at the contact. */
+export function canSendCancellationForm(user, locationId) {
+  const f = contactChannelFlags(user, locationId)
+  return f.whatsapp || f.email
+}
+
+/** POST/DELETE /api/contacts/[id]/link (Linked accounts): `contact_linking` at the contact. */
+export function canLinkContacts(user, locationId) {
+  return hasPermissionForLocation(user, locationId, 'contact_linking')
+}
+
+/**
+ * POST /api/whatsapp/conversations/start. The route judges `whatsapp` AT the
+ * contact's studio after membership there (INBOXLOC.1, C37) and, since
+ * INBOXWEBONLY3.1 (C119, Richard 30 Sep), only the WEB key
+ * (requireWebWhatsAppInboxAt): only the web starts a thread, and the button
+ * then opens the web inbox. So a caller with only the mobile toggle there
+ * does not see it.
+ */
+export function canStartWhatsAppThread(user, locationId) {
+  return isMemberOfContactStudio(user, locationId) && hasPermissionForLocation(user, locationId, 'whatsapp')
+}
+
+/**
+ * The flags the contact page hands the components whose buttons had no gate.
+ *
+ * @param {object|null} user
+ * @param {object|null} contact  the contacts row (location_id)
+ */
+export function contactWorkGates(user, contact) {
+  const loc = contact?.location_id || null
+  return {
+    canNote: canAddContactNote(user, loc),
+    canTask: canAddContactTask(user, loc),
+    canSequence: canEnrolContactInSequence(user, loc),
+    canCancelForm: canSendCancellationForm(user, loc),
+    canCold: canSetPipelineStatus(user, loc),
+    canLinkAccounts: canLinkContacts(user, loc),
+    canStartWhatsApp: canStartWhatsAppThread(user, loc),
+    canBook: isMemberOfContactStudio(user, loc),
+    canReadConsent: isMemberOfContactStudio(user, loc),
   }
 }

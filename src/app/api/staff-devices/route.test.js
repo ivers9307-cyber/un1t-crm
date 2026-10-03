@@ -74,6 +74,15 @@ describe('GET /api/staff-devices', () => {
     expect(createServerClient).not.toHaveBeenCalled()
   })
 
+  // C18 ORGROLE.1 — the fleet is the organisation's: a studio owner holding
+  // `settings` but no org_admin grant is refused; an org admin is not.
+  it('403s a studio owner who is not an organisation admin', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'u3', role: 'owner', isMaster: false, orgAdminOrgIds: [], activeOrganization: { id: 'org-1' } })
+    const res = await GET()
+    expect(res.status).toBe(403)
+    expect(createServerClient).not.toHaveBeenCalled()
+  })
+
   it('returns the fleet with a derived target version', async () => {
     getCurrentUser.mockResolvedValue(settingsUser)
     const calls = []

@@ -11,7 +11,7 @@
 // don't need any of this. These helpers exist for the edge cases
 // the coach needs to handle in real time.
 
-import { logWarn } from '@/lib/log'
+import { logError, logWarn } from '@/lib/log'
 import { findRegistrationConflict } from '@/lib/hr-claim'
 import { selectAll } from '@/lib/select-all'
 import { resolveCurrentOccurrence } from '@/lib/class-occurrences'
@@ -296,7 +296,15 @@ export async function pairOverride(db, { locationId, bridgeId, contactId, device
       patch.class_link_source = linkSource
     }
     if (Object.keys(patch).length) {
-      await db.from('heart_rate_sessions').update(patch).eq('id', sessionId)
+      // C31 PUSHNITS.1 — judged, not discarded. The pairing below still
+      // stands (it is the coach's action); a lost patch leaves the session on
+      // the old strap / unlinked, so say it.
+      const { error: patchErr } = await db.from('heart_rate_sessions').update(patch).eq('id', sessionId)
+      if (patchErr) {
+        logError('live-class', 'pairOverride session patch failed; session keeps its old strap/class link', {
+          sessionId, fields: Object.keys(patch), err: patchErr,
+        })
+      }
     }
   }
 
@@ -446,12 +454,18 @@ export async function endSession(db, sessionId, { nowMs = Date.now() } = {}) {
     .eq('id', sessionId)
   if (updErr) return { ok: false, error: updErr.message }
 
-  // Close strap_assignments rows for this session (if any).
-  await db
+  // Close strap_assignments rows for this session (if any). C31 PUSHNITS.1 —
+  // judged: the session itself is finalised above, so a lost close is logged
+  // (the row stays open until the next end/close of this session), never
+  // grounds to fail the end.
+  const { error: saCloseErr } = await db
     .from('strap_assignments')
     .update({ ended_at: endedAt })
     .eq('heart_rate_session_id', sessionId)
     .is('ended_at', null)
+  if (saCloseErr) {
+    logError('live-class', 'endSession strap_assignments close failed; assignment left open', { sessionId, err: saCloseErr })
+  }
 
   // HR-CLASS-ALLOC.2 — anonymous (null-contact) walk-in sessions still get
   // zones/points from summariseSession above, but skip every contact-bound
@@ -537,14 +551,7 @@ export async function finalizeSessionRewards(db, sessionId, { nowMs = Date.now()
   try {
     const det = await runDetectionForSession(db, sessionId)
     const unlocked = det && det.ok && Array.isArray(det.unlocked) ? det.unlocked : []
-    if (unlocked.length) {
-      await db
-        .from('contact_achievements')
-        .update({ notified_at: new Date(nowMs).toISOString() })
-        .eq('source_session_id', sessionId)
-        .is('notified_at', null)
-    }
-    await sendCustomerPush(
+    const pushResult = await sendCustomerPush(
       db,
       session.contact_id,
       buildSessionPush({
@@ -554,6 +561,23 @@ export async function finalizeSessionRewards(db, sessionId, { nowMs = Date.now()
         unlocked,
       })
     )
+    // C31 PUSHNITS.1 — notified_at is stamped AFTER the push, and only when it
+    // reached a device. It used to be stamped first, so a push that reached
+    // nobody (Expo down, a failed token read, no device) still marked the
+    // achievements "notified". Nothing re-sends from this column today, so the
+    // order costs no duplicate; a null notified_at now means "never told".
+    if (unlocked.length && (Number(pushResult?.sent) || 0) > 0) {
+      const { error: stampErr } = await db
+        .from('contact_achievements')
+        .update({ notified_at: new Date(nowMs).toISOString() })
+        .eq('source_session_id', sessionId)
+        .is('notified_at', null)
+      if (stampErr) {
+        logError('live-class', 'achievement notified_at stamp failed after a delivered push', {
+          sessionId, unlocked: unlocked.length, err: stampErr,
+        })
+      }
+    }
   } catch (err) {
     logWarn('live-class', 'engagement notify threw', { err, sessionId })
   }
