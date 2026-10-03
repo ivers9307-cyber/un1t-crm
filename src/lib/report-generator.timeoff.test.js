@@ -9,10 +9,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.fn() }))
 vi.mock('@/lib/time-off-leave', () => ({ getNonWorkingDates: vi.fn() }))
+// AVAIL.3 D1 — the availability read (availability-leave.test.js pins its query).
+vi.mock('@/lib/availability-leave', () => ({ readAvailabilityLeave: vi.fn(async () => ({ rows: [], error: null })) }))
 
 import { createServerClient } from '@/lib/supabase'
 import { getNonWorkingDates } from '@/lib/time-off-leave'
 import { generateReport, fetchOverlappingTimeOff, timeOffDaysInPeriod } from './report-generator'
+import { readAvailabilityLeave } from '@/lib/availability-leave'
+import { availabilityLeaveRows } from '@shared/unavailable-days'
 
 // A builder that APPLIES the date filters the code asks for, so a containment
 // filter (the old bug) and an overlap filter give different answers.
@@ -171,5 +175,47 @@ describe('generateReport — roster_coverage time off', () => {
     expect(res.success).toBe(true)
     const off = captured.inserted.report_data.days.filter((d) => d.staff_off.includes('Coach B')).map((d) => d.date)
     expect(off).toEqual(['2026-09-29', '2026-09-30'])
+  })
+})
+
+// AVAIL.3 D1 (Richard, 3 Oct 2026: "treat like leave") — the time-off reports
+// keep showing the days an Unavailable request used to cover, now that they
+// live in availability (mig 703). Read for the studio's members.
+describe('generateReport — all-day availability is reported like Unavailable time off (AVAIL.3 D1)', () => {
+  const avail = (id, start, end, name = 'Coach U') => availabilityLeaveRows([
+    { id, profile_id: `p-${name}`, kind: 'dated', start_date: start, end_date: end, all_day: true, note: null, profiles: { full_name: name } },
+  ])
+
+  it('the summary counts the days inside the period as unavailable, beside real requests', async () => {
+    readAvailabilityLeave.mockResolvedValueOnce({ rows: avail('u1', '2026-09-28', '2026-10-02'), error: null })
+    const { db, captured } = makeDb({ timeOff: [req('inside', '2026-09-10', '2026-09-11', { total: 2, name: 'Coach A' })] })
+    createServerClient.mockReturnValue(db)
+    const res = await generateReport({ report_type: 'time_off_summary', ...SEPT })
+    expect(res.success).toBe(true)
+    const data = captured.inserted.report_data
+    expect(data.by_type.unavailable).toBe(3)
+    expect(data.by_staff['Coach U'].unavailable).toBe(3)
+    expect(data.by_status.approved).toBe(2)
+    expect(captured.inserted.summary.total_days).toBe(5)
+    expect(readAvailabilityLeave).toHaveBeenLastCalledWith(db, expect.objectContaining({ startDate: '2026-09-01', endDate: '2026-09-30' }))
+  })
+
+  it('roster coverage lists the person as off on those days', async () => {
+    readAvailabilityLeave.mockResolvedValueOnce({ rows: avail('u1', '2026-09-15', '2026-09-16'), error: null })
+    const { db, captured } = makeDb()
+    createServerClient.mockReturnValue(db)
+    expect((await generateReport({ report_type: 'roster_coverage', ...SEPT })).success).toBe(true)
+    const off = captured.inserted.report_data.days.filter((d) => d.staff_off.includes('Coach U')).map((d) => d.date)
+    expect(off).toEqual(['2026-09-15', '2026-09-16'])
+  })
+
+  it('a failed availability read fails either report instead of losing the days', async () => {
+    for (const report_type of ['time_off_summary', 'roster_coverage']) {
+      readAvailabilityLeave.mockResolvedValueOnce({ rows: null, error: { message: 'availability down' } })
+      const { db, captured } = makeDb()
+      createServerClient.mockReturnValue(db)
+      expect(await generateReport({ report_type, ...SEPT })).toEqual({ success: false, error: 'availability down' })
+      expect(captured.inserted).toBeNull()
+    }
   })
 })

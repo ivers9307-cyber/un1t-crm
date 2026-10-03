@@ -3,7 +3,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('./log', () => ({ logWarn: vi.fn() }))
+// AVAIL.3 D1 — the availability read (availability-leave.test.js pins its query).
+vi.mock('./availability-leave', () => ({ readAvailabilityLeave: vi.fn() }))
 const { logWarn } = await import('./log')
+const { readAvailabilityLeave } = await import('./availability-leave')
+const { availabilityLeaveRows } = await import('@shared/unavailable-days')
 const { findSwapConflicts } = await import('./swap-conflicts')
 
 // A thenable builder per table that records its filters and resolves to the
@@ -39,7 +43,11 @@ const clashRow = {
   shift_blocks: { id: 'blk-9', block_date: '2099-01-01', start_time: '08:00:00', end_time: '12:00:00', shift_templates: { name: 'Midday' }, locations: { name: 'Hatch' } },
 }
 
-beforeEach(() => { logWarn.mockClear() })
+beforeEach(() => {
+  logWarn.mockClear()
+  readAvailabilityLeave.mockReset()
+  readAvailabilityLeave.mockResolvedValue({ rows: [], error: null })
+})
 
 describe('findSwapConflicts', () => {
   it('reads approved leave covering the date and that day\'s assignments by PERSON, with no studio filter', async () => {
@@ -101,5 +109,26 @@ describe('findSwapConflicts', () => {
     expect(await findSwapConflicts(db, [{ ...move, coachId: null }, { ...move, block: {} }])).toEqual([])
     expect(await findSwapConflicts(db, null)).toEqual([])
     expect(db.queries).toEqual([])
+  })
+})
+
+// AVAIL.3 D1 (Richard, 3 Oct 2026: "treat like leave") — a swap onto a date
+// the taker said they can't work (all day) is a leave conflict.
+describe('findSwapConflicts — all-day availability is a leave conflict (AVAIL.3 D1)', () => {
+  const rule = { id: 'u1', profile_id: 'coach-2', kind: 'dated', start_date: '2099-01-01', end_date: '2099-01-01', all_day: true, note: null }
+
+  it('flags the taker, reading that person on that date', async () => {
+    readAvailabilityLeave.mockResolvedValue({ rows: availabilityLeaveRows([rule]), error: null })
+    const db = mockDb({ profiles: { data: [{ id: 'coach-2', full_name: 'Coach Two' }], error: null } })
+    const out = await findSwapConflicts(db, [move])
+    expect(out).toHaveLength(1)
+    expect(out[0]).toMatchObject({ kind: 'leave', coachId: 'coach-2', type: 'unavailable', startDate: '2099-01-01', endDate: '2099-01-01' })
+    expect(readAvailabilityLeave).toHaveBeenCalledWith(db, { profileIds: ['coach-2'], startDate: '2099-01-01', endDate: '2099-01-01' })
+  })
+
+  it('a failed availability read is a check_failed conflict, never silence', async () => {
+    readAvailabilityLeave.mockResolvedValue({ rows: null, error: { message: 'down' } })
+    const out = await findSwapConflicts(mockDb({}), [move])
+    expect(out.map((c) => c.kind)).toEqual(['check_failed'])
   })
 })

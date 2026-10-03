@@ -24,6 +24,9 @@
 // back through local components, never toISOString() (BST, see CLAUDE.md).
 
 import { isLiveAssignment, WEEKDAY_CODES } from './roster'
+// AVAIL.3 D1 — an all-day "can't work" availability date is off like leave.
+import { offLookup } from '@shared/unavailable-days'
+import { withAvailabilityLeave } from './availability-leave'
 
 export const COPY_MODES = ['exact', 'template']
 
@@ -159,14 +162,9 @@ function templateRunsOn(tpl, weekday) {
  * unavailable.
  */
 export function approvedLeaveLookup(leaveRows) {
-  const byProfile = new Map()
-  for (const r of leaveRows || []) {
-    if (r?.status !== 'approved' || !r.profile_id || !r.start_date || !r.end_date) continue
-    if (!byProfile.has(r.profile_id)) byProfile.set(r.profile_id, [])
-    byProfile.get(r.profile_id).push(r)
-  }
-  return (profileId, dateIso) =>
-    (byProfile.get(profileId) || []).some((r) => r.start_date <= dateIso && r.end_date >= dateIso)
+  // AVAIL.3 D1 — the one rule (shared/unavailable-days): approved leave rows
+  // and leave-shaped availability rows decide alike.
+  return offLookup(leaveRows)
 }
 
 /** COPYLEAVE.1 — pure. Distinct profile ids with a LIVE assignment in these blocks. */
@@ -197,13 +195,15 @@ function liveCoachIds(sourceBlocks) {
  * @returns {Promise<{ isOnLeave: ((profileId: string, dateIso: string) => boolean)|null, error: object|null }>}
  */
 export async function fetchLeaveLookup(db, { sourceBlocks, startDate, endDate }) {
-  const { leave, error } = await fetchApprovedLeave(db, {
-    profileIds: liveCoachIds(sourceBlocks),
-    startDate,
-    endDate,
-  })
+  const profileIds = liveCoachIds(sourceBlocks)
+  const { leave, error } = await fetchApprovedLeave(db, { profileIds, startDate, endDate })
   if (error) return { isOnLeave: null, error }
-  return { isOnLeave: approvedLeaveLookup(leave), error: null }
+  // AVAIL.3 D1 (Richard, 3 Oct 2026: "treat like leave") — an all-day dated
+  // availability rule skips the copy like the Unavailable time off it
+  // replaces. A failed read is a failed copy read: no lookup.
+  const { rows, error: availError } = await withAvailabilityLeave(db, leave, { profileIds, startDate, endDate })
+  if (availError) return { isOnLeave: null, error: availError }
+  return { isOnLeave: approvedLeaveLookup(rows), error: null }
 }
 
 /**

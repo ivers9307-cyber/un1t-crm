@@ -40,6 +40,8 @@ import { notifyRosterChanges } from '@/lib/roster-change-notify'
 import { isLiveAssignment, liveAssignments } from '@/lib/roster'
 import { isRosterableProfile, notRosterableError } from '@/lib/roster-write'
 import { findShiftOverlaps } from '@/lib/shift-overlaps'
+import { readAvailabilityLeave } from '@/lib/availability-leave'
+import { leaveWarningLine } from '@shared/unavailable-days'
 
 const AssignSchema = z.object({
   profile_id: uuidLike.optional(),
@@ -200,8 +202,14 @@ export async function POST(request, props) {
       .eq('status', 'approved')
       .lte('start_date', block.block_date)
       .gte('end_date', block.block_date)
-    for (const t of timeOff || []) {
-      warnings.push(`${t.profiles?.full_name} has approved ${t.type} from ${t.start_date} to ${t.end_date}`)
+    // AVAIL.3 D1 (Richard, 3 Oct 2026: "treat like leave") — an all-day
+    // "can't work" availability date warns like approved leave. Advisory:
+    // a failed read warns nothing and never blocks the assign.
+    const { rows: unavailable } = await readAvailabilityLeave(db, {
+      profileIds: [profileId], startDate: block.block_date, endDate: block.block_date,
+    })
+    for (const t of [...(timeOff || []), ...(unavailable || [])]) {
+      warnings.push(leaveWarningLine(t.profiles?.full_name, t))
     }
 
     // ROSTER-FIX.1 — clear this coach's tombstone first; the unique key is on

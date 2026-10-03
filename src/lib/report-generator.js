@@ -7,6 +7,7 @@ import { roleAtDeletion } from '@/lib/staff-tombstone'
 import { reportPeriodError, eachReportDay } from '@/lib/report-period'
 import { countLeaveDays } from '@/lib/time-off-days'
 import { getNonWorkingDates } from '@/lib/time-off-leave'
+import { readAvailabilityLeave } from '@/lib/availability-leave'
 
 // RETIRE-SHIFTS-MIRROR.1 — reports now read the Roster v2 source of truth
 // (shift_assignments + shift_blocks) instead of the legacy public.shifts
@@ -157,6 +158,24 @@ export async function fetchOverlappingTimeOff(db, { locationId, periodStart, per
     if (!data || data.length < PAGE) break
   }
   return { rows, error: null }
+}
+
+/**
+ * AVAIL.3 D1 (Richard, 3 Oct 2026: "treat like leave") — the studio's
+ * members' all-day "can't work" availability dates over the period, as
+ * leave-shaped rows (type 'unavailable', status 'approved'), so both time-off
+ * reports keep showing the days an Unavailable request used to cover (mig 703
+ * moves those requests into availability). Availability belongs to the
+ * PERSON, so a two-studio coach shows in both studios' reports. A failed read
+ * is an error, never "nobody unavailable".
+ * @returns {Promise<{ rows: Array<object>, error: string|null }>}
+ */
+export async function fetchAvailabilityTimeOff(db, { locationId, periodStart, periodEnd }) {
+  const { profileIds, error: membersError } = await fetchLocationProfileIds(db, locationId)
+  if (membersError) return { rows: [], error: membersError }
+  const { rows, error } = await readAvailabilityLeave(db, { profileIds, startDate: periodStart, endDate: periodEnd })
+  if (error) return { rows: [], error: error.message || 'Could not read availability' }
+  return { rows: rows.map((r) => ({ ...r, location_id: locationId })), error: null }
 }
 
 /**
@@ -357,11 +376,18 @@ export async function generateReport({ report_type, period_start, period_end, lo
       // TIMEOFFREPORT.1 — every request that touches the period, each counted
       // for the days INSIDE it (timeOffDaysInPeriod), so leave spanning a
       // month end lands in both months' reports and in neither twice.
-      const { rows: requests, error: requestsError } = await fetchOverlappingTimeOff(db, {
+      const { rows: timeOffRequests, error: requestsError } = await fetchOverlappingTimeOff(db, {
         locationId: locId, periodStart: period_start, periodEnd: period_end,
         select: '*, profiles!profile_id(full_name, role)',
       })
       if (requestsError) return { success: false, error: requestsError }
+      // AVAIL.3 D1 — all-day availability reported like the Unavailable
+      // requests it replaces, so future unavailable days don't drop out.
+      const { rows: unavailableDays, error: unavailableError } = await fetchAvailabilityTimeOff(db, {
+        locationId: locId, periodStart: period_start, periodEnd: period_end,
+      })
+      if (unavailableError) return { success: false, error: unavailableError }
+      const requests = [...timeOffRequests, ...unavailableDays]
 
       // Only a holiday that crosses an edge is recounted against the studio's
       // bank holidays and closures, so the list is read only then. Fail
@@ -401,7 +427,7 @@ export async function generateReport({ report_type, period_start, period_end, lo
     case 'roster_coverage': {
       reportName = 'Roster Coverage'
       // shifts and approved time-off are independent — fetch in parallel.
-      const [{ rows: shifts, error: shiftsError }, { rows: timeOff, error: timeOffError }] = await Promise.all([
+      const [{ rows: shifts, error: shiftsError }, { rows: timeOffRequests, error: timeOffError }, { rows: unavailableDays, error: unavailableError }] = await Promise.all([
         fetchScheduledShiftRows(db, { locationId: locId, periodStart: period_start, periodEnd: period_end }),
         // TIMEOFFREPORT.1 — paged, and a failed read fails the report instead
         // of saving days with nobody off.
@@ -409,9 +435,13 @@ export async function generateReport({ report_type, period_start, period_end, lo
           locationId: locId, periodStart: period_start, periodEnd: period_end, status: 'approved',
           select: 'id, start_date, end_date, profile_id, type, profiles!profile_id(full_name)',
         }),
+        // AVAIL.3 D1 — all-day availability marks the person off like leave.
+        fetchAvailabilityTimeOff(db, { locationId: locId, periodStart: period_start, periodEnd: period_end }),
       ])
       if (shiftsError) return { success: false, error: shiftsError }
       if (timeOffError) return { success: false, error: timeOffError }
+      if (unavailableError) return { success: false, error: unavailableError }
+      const timeOff = [...(timeOffRequests || []), ...unavailableDays]
 
       // DATECHECK.1 — walk the period as calendar strings. The old walk built
       // LOCAL-midnight Dates and keyed them with toISOString(), which is UTC:

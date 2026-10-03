@@ -2520,7 +2520,7 @@ function PublishRosterClashes({ leaveClashes, doubleBookings, crossLocationCheck
             {leaveClashes.map((c) => (
               <li key={`${c.block_id}|${c.profile_id}`} className="text-xs text-un1t-text">
                 <span className="font-medium">{c.coach_name}</span> · {dayOf(c.block_date)} · {formatTime(c.start_time)} {c.name}
-                <span className="text-un1t-subtle"> · {leaveRangeLabel(c.leave_start, c.leave_end, shortDay)}</span>
+                <span className="text-un1t-subtle"> · {leaveRangeLabel(c.leave_start, c.leave_end, shortDay, c.leave_source)}</span>
               </li>
             ))}
           </ul>
