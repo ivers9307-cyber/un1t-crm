@@ -4,9 +4,10 @@
 // input: body_html. Everything else (sender name, host name, subject, the
 // unsubscribe link) is escaped, and the body itself goes through
 // sanitizeCampaignHtml — a strip-list sanitizer that removes active content
-// (script/iframe/object/embed/form/link/svg/math, non-viewport meta, on*
-// handlers, and every URL scheme outside http/https/mailto/tel — checked
-// after entity-decoding), keeps `<style>` scrubbed and one canonical
+// (script/iframe/object/embed/form/link/svg/math, non-viewport meta, every
+// attribute whose name starts with `on`, and every URL scheme outside
+// http/https/mailto/tel — both checked after entity-decoding), keeps
+// `<style>` scrubbed (also after entity-decoding) and one canonical
 // viewport meta (HOST-EMAILS.2). The footer — host name + per-host
 // unsubscribe link + the "why you're receiving this" line — is injected
 // server-side AFTER sanitization, so a host can never omit or strip it
@@ -42,16 +43,26 @@ const PAGE = 1000 // the supabase-js 1k select cap — always .range()-paginate
 // engineered to force ten inner passes took 94s — all from ONE authenticated
 // `POST /api/host/emails/preview`.
 //
-// The tokenizer walks each pass ONCE: at every `<` that starts a tag it finds
-// that tag's `>` under a real tokenizer's `=`-gated quote rule (scanTag),
-// acts on that one tag, and RESUMES AFTER the `>`. The attribute regexes below
-// survive unchanged but are applied to a SINGLE TAG's substring, so their cost
-// is bounded by that tag's length and every character of the document is
-// visited once. Every "find the closer" search (`</script`, `</style`, `-->`,
-// `--!>`) goes through a MEMOISED finder, because N openers sharing ONE closer
-// is the same quadratic wearing a different hat
-// (`'<!--[if mso]>'.repeat(23000)` plus a single `-->`). Output is accumulated
-// as an array of chunks and joined once, never spliced string by string.
+// The tokenizer walks each pass ONCE: at every `<` that starts a tag it runs
+// the HTML tokenizer's tag states to that tag's `>` (scanTag / walkMarkup),
+// acts on that one tag, and RESUMES AFTER the `>`. Every "find the closer"
+// search (`</script`, `</style`, `-->`, `--!>`) goes through a MEMOISED
+// finder, because N openers sharing ONE closer is the same quadratic wearing a
+// different hat (`'<!--[if mso]>'.repeat(23000)` plus a single `-->`). Output
+// is accumulated as an array of chunks and joined once, never spliced string
+// by string.
+//
+// ROUND 6 MADE THAT WALK THE ONLY ONE. The scanner it replaced ended a tag at
+// any inner `<` — including one inside a quoted attribute value, which no
+// tokenizer does — and a second, deliberately cruder scanner answered "is this
+// position inside a tag?" for the placeholder drop. Two hand-rolled scanners
+// that disagree on purpose is how a critical XSS survived 182 green tests
+// (`<img src=x onerror="alert(document.domain);'<a'">` sanitized to itself),
+// so tokenizePass, the placeholder-drop scan and the footer's `</body>` lookup
+// are all derived from ONE walk now, and the attribute rules read that walk's
+// ATTRIBUTE SPANS instead of pattern-matching a tag's text. A parse5 oracle
+// pins the walk's tag boundaries against a real parser, in the test file and
+// over 100,000 random inputs in the fuzz harness.
 //
 // Nothing here lowercases the whole document to drive indices: that can change
 // string length for some Unicode characters and desynchronise every offset.
@@ -98,8 +109,12 @@ const STRIP_TAGS = new Set([
 // canonical form, never as authored (no attribute smuggling), and the test
 // that recognises one runs against a SINGLE tag's substring, never over the
 // document.
+//
+// ROUND 6: the test that RECOGNISES an authored viewport meta is no longer a
+// regex over the tag's text (it matched `name=viewport` written inside another
+// attribute's VALUE, so `<meta content="name=viewport">` claimed the one
+// canonical slot). isViewportMeta reads the tokenizer's attribute spans.
 const VIEWPORT_META_SAFE = '<meta name="viewport" content="width=device-width, initial-scale=1">'
-const VIEWPORT_NAME_ATTR = /\bname\s*=\s*["']?viewport\b/i
 
 // HOST-EMAILS.2 — a <style> body is lifted to a placeholder while the strip
 // passes run, and restored after them.
@@ -170,42 +185,33 @@ function makeNonce() {
   }
   return Math.random().toString(36).slice(2, 10)
 }
-// on* event-handler attributes: double-quoted, single-quoted, bare. The
-// boundary before the attribute name may be whitespace, a `/` (SVG-style
-// `<img/onerror=…>`), or a quote closing the previous attribute's value
-// (`src="x"onerror=…`) — captured and put back so stripping the handler
-// never eats the closing quote.
+// on* event-handler attributes, in the three quotings HTML allows.
 //
-// ROUND 5: these three and the two below are no longer run over the DOCUMENT.
-// scrubTagAttributes applies them to ONE TAG's substring at a time, so their
-// `[^"]*"` / `[^\s>]*` scans are bounded by the length of the tag they sit in
-// and each character of the document is offered to them once. Within a single
-// tag the letter runs `on[a-z]+` can backtrack over are disjoint (every match
-// attempt starts at a fresh `[\s/"']` boundary, and the runs between two
-// boundaries do not overlap), so the per-tag cost is linear too.
+// ROUND 6: THESE ARE NO LONGER THE SANITIZER'S ATTRIBUTE RULE. They survive
+// for exactly one job — stripOnAttrsFromCss, which runs over a <style> BODY,
+// i.e. over TEXT that has no attribute structure to read and can never become
+// an attribute either. Every real attribute decision is now made from the
+// tokenizer's own attribute spans (scrubTagAttributes), because a regex cannot
+// describe the attribute names a browser actually accepts: `on<p`, `onerror`
+// with no value at all, or a handler whose value contains the `<` that used to
+// cut the tag in half (`onerror="alert(1);'<a'"`, the round-6 critical).
 const ON_ATTR_DQ = /([\s/"'])on[a-z]+\s*=\s*"[^"]*"/gi
 const ON_ATTR_SQ = /([\s/"'])on[a-z]+\s*=\s*'[^']*'/gi
 const ON_ATTR_BARE = /([\s/"'])on[a-z]+\s*=\s*[^\s>'"][^\s>]*/gi
-// URL-carrying attributes (href / src / poster / formaction / background, and
-// the xlink: form; any boundary/quoting). Each of these carries a SINGLE URL,
-// so each is scheme-checked exactly like href/src: `poster` fetches a video
-// still, `formaction` re-points a submit, and `background` is a tracking
-// pixel wearing a table cell (`<td background="http://tracker/x.png">`) that
-// nothing else here would look at.
-// neutralizeUrlAttr scheme-checks the value against an ALLOWLIST after
-// entity-decoding + control-char stripping, so entity-encoded or
-// control-obfuscated schemes and any scheme outside the allowlist all
-// neutralize to "#", while https/http/mailto/tel and scheme-less relative
-// URLs pass through verbatim.
-const URL_ATTR = /([\s/"'])((?:xlink:)?(?:href|src|poster|formaction|background))\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi
+
+// URL-carrying attributes (href / src / poster / formaction / background /
+// action, and the xlink: forms). Each of these carries a SINGLE URL, so each
+// is scheme-checked exactly like href/src: `poster` fetches a video still,
+// `formaction` re-points a submit, `action` is a form's own target, and
+// `background` is a tracking pixel wearing a table cell
+// (`<td background="http://tracker/x.png">`) that nothing else here would look
+// at. Matched by NAME against the tokenizer's attribute spans, so quoting,
+// spacing and case cannot hide one.
+const URL_ATTR_NAMES = new Set([
+  'href', 'src', 'poster', 'formaction', 'background', 'action',
+  'xlink:href', 'xlink:src',
+])
 const SAFE_URL_SCHEMES = new Set(['http', 'https', 'mailto', 'tel'])
-// The inline `style="…"` attribute — the same posture as the CRM's own
-// safeStyle (email-html.js). Without it the <style>-BLOCK scrub covers only
-// half the surface: `style="background:url(https://tracker/x.gif)"` on a
-// single <td> is an unconsented remote fetch that no other rule here looks
-// at. Applied INSIDE the fixed-point loop, so a value spliced together by an
-// earlier strip is scrubbed too.
-const STYLE_ATTR = /([\s/"'])style\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi
 
 // Fixed-point bounds. The INNER bound belongs to one stripActiveContent call;
 // the OUTER one bounds the strip+drop rounds in sanitizeCampaignHtml.
@@ -213,62 +219,60 @@ const STYLE_ATTR = /([\s/"'])style\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi
 // "ship what we have" one — an unconverged document is precisely one where a
 // deletion's splice has not been re-scanned.
 const MAX_INNER_PASSES = 10
-// Reachable from ~1.5 KB of nested `<scr<script>…` (one round per nesting
-// level), and that is fine: exhausting it fails closed and warns, loudly.
+// Reachable from `'<'.repeat(n) + 'link>'.repeat(n)` — every pass deletes one
+// welded `<link>` and hands the next `<` a fresh one — and that is fine:
+// exhausting it fails closed and warns, loudly.
 const MAX_OUTER_PASSES = 20
 
 // Minimal entity decode for scheme sniffing: numeric (dec/hex) plus the named
-// entities usable to obfuscate a scheme. Decode-for-CHECK only — a value that
-// passes is kept byte-for-byte as authored.
+// entities usable to obfuscate a scheme or to smuggle a quote back into an
+// attribute value. Decode-for-CHECK only where a URL is concerned — a value
+// that passes is kept byte-for-byte as authored.
+//
+// The named pass runs AFTER the numeric one and neither is repeated, which is
+// what a browser does: `&amp;#106;avascript:` decodes to the literal text
+// `&#106;avascript:`, which is a RELATIVE url and not a scheme at all.
+const NAMED_ENTITIES = {
+  colon: ':', tab: '\t', newline: '\n', amp: '&', quot: '"', apos: "'",
+  lt: '<', gt: '>', sol: '/', nbsp: '\u00a0',
+}
 function decodeEntitiesForCheck(s) {
   return s
     .replace(/&#x([0-9a-f]+);?/gi, (_, hex) => fromCodePointSafe(parseInt(hex, 16)))
     .replace(/&#(\d+);?/g, (_, dec) => fromCodePointSafe(parseInt(dec, 10)))
-    .replace(/&(colon|tab|newline);/gi, (_, name) => ({ colon: ':', tab: '\t', newline: '\n' })[name.toLowerCase()])
+    .replace(/&(colon|tab|newline|amp|quot|apos|lt|gt|sol|nbsp);/gi, (_, name) => NAMED_ENTITIES[name.toLowerCase()])
 }
 
 function fromCodePointSafe(code) {
   return Number.isFinite(code) && code >= 0 && code <= 0x10ffff ? String.fromCodePoint(code) : ''
 }
 
-/** Drop the surrounding quotes from a captured attribute value, if any. */
-function unquoteAttrValue(raw) {
-  if (raw.length >= 2 && ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'")))) {
-    return raw.slice(1, -1)
-  }
-  return raw
+/**
+ * Escape a value being written back into a double-quoted attribute.
+ *
+ * scrubStyleAttrValue DECODES entities before scrubbing (round-6 finding 3:
+ * `style="width:&#101;xpression(alert(1))"` walked straight past a scrub that
+ * only understood literal text), and a decode can mint a `"` that would end
+ * the attribute early. Re-escaping is what makes the decode safe, and using
+ * `&amp;` / `&quot;` / `&#39;` — all of which decodeEntitiesForCheck knows how
+ * to read back — is what makes it IDEMPOTENT: escape, decode, scrub, escape is
+ * a fixed point.
+ */
+function escapeAttrValue(s) {
+  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
 }
 
-// HOST-EMAILS.2 — a <style> body captured via the backslash-close trick (see
-// STYLE_BLOCK below) can smuggle HTML-attribute-shaped text — `onerror=…` —
-// past scrubCss, which only understands CSS syntax and leaves it as inert
-// text. Stripping on* handlers from the raw capture BEFORE scrubCss runs
-// keeps that text out of the shipped message even though it can never
-// become a live attribute.
+// HOST-EMAILS.2 — a <style> body captured via the backslash-close trick can
+// smuggle HTML-attribute-shaped text — `onerror=…` — past scrubCss, which only
+// understands CSS syntax and leaves it as inert text. Stripping on* handlers
+// from the raw capture BEFORE scrubCss runs keeps that text out of the shipped
+// message even though it can never become a live attribute.
 //
 // The boundary character captured by ON_ATTR_* ($1) is ALWAYS put back
-// verbatim, never dropped: it may be whitespace separating two attributes,
-// but it may just as easily be a `/` (SVG-style `<img/onerror=…>`) or the
-// quote CLOSING the previous attribute's value (`src="x"onerror=…`) — and
-// when the removed on* attribute directly abuts the next token (no
-// whitespace), that boundary character is the only thing standing between
-// them. Dropping it merges the two, e.g. `<a onclick="1"href="...">` would
-// lose the space between attributes and become `<ahref="...">` (and its
-// href would then never reach URL_ATTR's scheme check because it's no
-// longer a `href=` attribute boundary at all).
-//
-// The cosmetic leftover space before `>` (`<a href="x" >`) is simply KEPT.
-// The `\s+>` collapse that used to tidy it ran over the WHOLE finished
-// document, so it edited ordinary copy and attribute values (`5 > 3` became
-// `5> 3`) — a silent rewrite of the host's text that inert whitespace is not
-// worth. It is NOT, however, what costs a restored <style> body its child
-// combinators: scrubCss (email-html.js) ends with `.replace(/[<>]/g, '')`, so
-// a `>` never survives ANY CSS this sanitizer emits, and `.a > .b` degrades
-// to the descendant selector `.a  .b` regardless of anything done here. That
-// angle-bracket strip is load-bearing for security — it is the guarantee that
-// a scrubbed body can never reconstitute a `</style>` and break out of the
-// element it is re-wrapped in — so the fidelity limit is inherited from the
-// CRM's scrubber and stays.
+// verbatim, never dropped: it may be whitespace, but it may just as easily be
+// a `/` or the quote CLOSING the previous attribute's value, and when the
+// removed on* text directly abuts the next token it is the only thing standing
+// between them.
 function stripOnAttrsFromCss(css) {
   return css
     .replace(ON_ATTR_DQ, '$1')
@@ -276,193 +280,334 @@ function stripOnAttrsFromCss(css) {
     .replace(ON_ATTR_BARE, '$1')
 }
 
-function neutralizeUrlAttr(match, boundary, attr, rawValue) {
-  const value = unquoteAttrValue(rawValue)
-  // Browsers strip ASCII controls/whitespace anywhere in a URL before scheme
-  // detection — mirror that (after entity-decoding) before sniffing.
-  const decoded = decodeEntitiesForCheck(value).replace(/[\u0000-\u0020\u00a0]/g, '')
+// Browsers strip ASCII controls and whitespace anywhere in a URL before they
+// detect its scheme; NBSP goes too, because an entity-decoded `&nbsp;` is not
+// a character a scheme check should trip over.
+const URL_IGNORED_CHARS = /[\u0000-\u0020\u00a0]/g
+
+/**
+ * Is this URL value safe to keep as authored? Judged on the ENTITY-DECODED,
+ * control-stripped value, so `&#106;avascript:`, `jav&Tab;ascript:` and
+ * `jAvAsCrIpT:` are all seen for what they are. A value with no scheme at all
+ * is relative or a fragment, which is inert.
+ */
+function isSafeUrlValue(value) {
+  const decoded = decodeEntitiesForCheck(value).replace(URL_IGNORED_CHARS, '')
   const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(decoded)
-  if (!scheme) return match // relative / fragment / '#' — inert, keep verbatim
-  if (SAFE_URL_SCHEMES.has(scheme[1].toLowerCase())) return match
-  return `${boundary}${attr}="#"`
+  if (!scheme) return true
+  return SAFE_URL_SCHEMES.has(scheme[1].toLowerCase())
 }
 
 /**
- * Scrub one inline style attribute value. scrubCss's output contains no `<`
- * and no `>` by construction; the quotes are stripped here as well, so the
- * scrubbed value can never break OUT of the attribute it is re-emitted into
- * whichever quoting the author used.
+ * Scrub one inline style attribute value, and return it ESCAPED for a
+ * double-quoted attribute.
+ *
+ * DECODE FIRST (round-6 finding 3). The URL check has always decoded entities
+ * before sniffing a scheme; this did not, so
+ * `style="width:&#101;xpression(alert(1))"` and
+ * `style="x:&#106;avascript&colon;alert(1)"` passed through unchanged. The
+ * scrub has to see what the CSS parser will see.
+ *
+ * scrubCss's output contains no `<` and no `>` by construction; the quotes are
+ * stripped here as well and whatever is left is escaped, so the scrubbed value
+ * can never break OUT of the attribute it is re-emitted into.
  */
 function scrubStyleAttrValue(rawValue, counter) {
-  return scrubCss(unquoteAttrValue(rawValue), counter).replace(/["']/g, '').trim()
+  const decoded = decodeEntitiesForCheck(rawValue)
+  return escapeAttrValue(scrubCss(decoded, counter).replace(/["']/g, '').trim())
 }
 
+// ── The tokenizer ─────────────────────────────────────────
+//
+// ONE SPEC-FAITHFUL WALK, AND EVERY PASS IS DERIVED FROM IT (round 6).
+//
+// What it replaced: a scanner that returned a PARTIAL tag at any inner `<`,
+// even one sitting inside a quoted attribute value. That is not what any
+// tokenizer does — inside a tag, only `>` (or end of input) ends the tag, and
+// a `<` is an ordinary character in every tag state — and the gap was a live,
+// critical XSS:
+//
+//   <img src=x onerror="alert(document.domain);'<a'">
+//
+// cut at the `<a`, so the handler regexes saw a value with no closing quote
+// (ON_ATTR_DQ needs one), the bare-value pattern refuses a leading quote, and
+// the URL pattern's bare alternative produced a value starting with `"` whose
+// scheme check therefore failed "relative". The payload sanitized to ITSELF
+// and ran in the browser, on both render paths. The same cut left `=` in
+// tag-name position, so `<s=<x='><!--</>` — ONE element named `s=<x='`
+// followed by a comment, to parse5 and to every browser — sent the sanitizer
+// into a phantom quoted value and cost the message its unsubscribe anchor.
+//
+// So the states below are the HTML tokenizer's states, and the walk is the
+// single source of truth for where a tag begins and ends. The parse5 ORACLE in
+// the test file pins that claim against a real parser over a corpus of tricky
+// tags; the fuzz runs the same comparison over random input.
+//
+// The one deliberate deviation is the round-4 CONDITIONAL COMMENT convention:
+// `<!--[if …]>` / `<![endif]` / `<!--<![endif]` are scanned as tags that end
+// at their first `>`, with what lies between them scanned as markup, because
+// every Unlayer and Canva export ships
+// `<!--[if mso]><style>…</style><![endif]-->` and mso really does parse the
+// contents. A `<!--[if` opener with no `-->` or `--!>` after it is still an
+// unterminated comment in every client that is not Outlook, so it is
+// tail-deleted like any other.
+
 /**
- * Scrub the attributes of ONE tag: the whole of the attribute battery above,
- * applied to `tagSrc` (a single `<…>` substring) rather than to the document.
- *
- * The `=` fast path is not a nicety. Every one of those patterns needs an `=`
- * to match, and the overwhelmingly common tag (`<p>`, `<tr>`, `</td>`) has
- * none, so skipping them is what keeps a document of 100,000 tiny tags cheap.
+ * The HTML tokenizer's whitespace set. `\r` is here because the input stream
+ * preprocessor turns CR and CRLF into LF before the tokenizer ever runs.
  */
-function scrubTagAttributes(tagSrc, counter) {
-  if (tagSrc.indexOf('=') === -1) return tagSrc
-  return tagSrc
-    .replace(ON_ATTR_DQ, '$1')
-    .replace(ON_ATTR_SQ, '$1')
-    .replace(ON_ATTR_BARE, '$1')
-    .replace(URL_ATTR, neutralizeUrlAttr)
-    .replace(STYLE_ATTR, (_m, boundary, rawValue) => {
-      const safe = scrubStyleAttrValue(rawValue, counter)
-      return safe ? `${boundary}style="${safe}"` : boundary
-    })
+function isHtmlSpace(ch) {
+  return ch === ' ' || ch === '\t' || ch === '\n' || ch === '\f' || ch === '\r'
 }
 
-/** Does `ch` after a `<` start an ELEMENT (as opposed to `<!…` / `<?…`)? */
-function isElementNameStart(ch) {
-  if (!ch) return false
-  return ch === '/' || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+/** Only an ASCII letter after `<` (or after `</`) opens a tag. */
+function isAsciiAlpha(ch) {
+  return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
 }
 
-/** ASCII tag-name characters. An HTML tag name is never non-ASCII. */
-function isTagNameChar(ch) {
-  return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch === '-'
-}
+// The conditional-comment markers that begin `<!--`. The bare `<![endif]` is
+// recognised with the other `<!` forms in the walk below.
+const COND_COMMENT_OPENERS = ['<!--<![endif]', '<!--[if']
 
 /**
- * The name of the tag opening at `start` (which must be a `<`), lowercased,
- * plus whether it is an END tag. A name is a handful of characters, so
- * lowercasing it is free and — unlike lowercasing the DOCUMENT, which can
- * change string length for some Unicode characters — cannot shift an offset.
- */
-function tagNameAt(html, start) {
-  let i = start + 1
-  const isEnd = html[i] === '/'
-  if (isEnd) i++
-  let j = i
-  while (j < html.length && isTagNameChar(html[j])) j++
-  return { name: html.slice(i, j).toLowerCase(), isEnd }
-}
-
-/**
- * Scan the tag opening at `start` (which must be a `<`) and say where it ends.
+ * Scan the tag opening at `start` (which must be a `<` followed by an ASCII
+ * letter, or by `/` and an ASCII letter) and return its shape:
  *
- *   { closed: true,  stop }  `stop` is the index of the `>` that ends the tag.
- *   { closed: false, stop }  the scan hit an INNER `<` that itself starts a
- *                            tag, at index `stop` — the tag is PARTIAL.
- *   { closed: false, stop: html.length }   the input ran out inside the tag.
+ *   { start, end, isEnd, nameStart, nameEnd, attrs }   `end` is EXCLUSIVE —
+ *   one past the `>` — and every attribute carries the offsets of its name,
+ *   its value and the whole attribute source (`end`), so a caller can delete
+ *   or replace exactly one attribute and leave the rest of the tag
+ *   byte-for-byte as authored.
  *
- * THE QUOTE RULE IS `=`-GATED, like a real tokenizer — strandedOffsets keeps
- * a cruder version of the same idea ON PURPOSE, see the note under this
- * function: an attribute value is only quoted when the quote is the FIRST
- * character after `=` (whitespace allowed between). A stray quote anywhere
- * else stays in attribute-name position and does not open a value. Tracking
- * parity on every quote instead flipped the machine out of the tag early —
- * round 4's `<a href=x" y="z>AAA" BBB=…>` reads its `>` as closing the `<a`,
- * so a `>` inside a genuinely quoted value must still be shielded.
+ *   null   the input ran out inside the tag. A real tokenizer DROPS such a
+ *          tag; the caller tail-deletes from the `<`, which is what stops the
+ *          server-injected footer from supplying the missing `>` (round 5).
  *
- * THE INNER-`<` STOP is what keeps this LINEAR and what keeps the sanitizer's
- * position-blind posture. Two things come out of it:
- *   - Every scan stops at the next tag-opening `<`, so the ranges two
- *     consecutive scans cover are DISJOINT and one pass touches each character
- *     a bounded number of times. Without it, `'<meta x'.repeat(42000) + '>'`
- *     asks 42,000 scans to run to the same far `>` — the O(n²) this tokenizer
- *     exists to remove, in its purest form (4.6s measured at the 300 KB cap).
- *   - A construct SAWN IN HALF (`<img src=x on<style>…</style>error=alert(1)>`)
- *     keeps being taken apart the way the old whole-document regexes took it
- *     apart: the partial `<img src=x on` is left alone, the `<style>` after it
- *     is lifted like any other, and dropStrandedPlaceholders then deletes that
- *     placeholder because strandedOffsets — which does NOT stop at an inner
- *     `<`, and so is strictly STRICTER about what counts as "inside a tag" —
- *     says it is sitting in one. The weld that leaves (`onerror=`) is
- *     re-scanned by the next pass and stripped there. The two scanners
- *     disagreeing in THAT direction is safe and load-bearing: restoration only
- *     happens where the STRICTER of the two says "ordinary text".
- *
- * A PARTIAL tag is not deleted merely for being partial (`<img alt="a<b>c">`
- * is somebody's ordinary copy, and the walk simply resumes at the `<b`), but a
- * partial whose NAME is on the strip list is — `<p>hi</p><script <a href=x>`
- * would otherwise ship a `<script` that takes its `>` from the next tag and
- * swallows the injected footer as script data.
- *
- * THE EOF CASE IS THE ROUND-5 BLOCKER. `<p>hi</p><script ` used to sanitize to
- * itself, and the render shell then supplied the missing `>` out of the
- * server-injected footer, putting the host name, the unsubscribe anchor and
- * the consent line inside a `<script>` text node: parse5 and jsdom both found
- * no `a[href]` while the source still contained the word "Unsubscribe", which
- * is exactly why the footer tests parse instead of grepping. The whole family
- * behaved that way (`<style `, `<title x="y`, `<textarea `, `<iframe `,
- * `<template `, …). A real tokenizer that reaches EOF inside a tag DROPS the
- * tag, so the caller tail-deletes from the `<`. In practice
- * trimUnterminatedTail reaches most of these first — it asks the same question
- * browser-faithfully, over the whole document — and this branch is the
- * backstop that keeps the answer right if that scan is ever weakened.
+ * THE STATES ARE THE SPEC'S, and the two that matter most are the ones the
+ * round-6 review was written about:
+ *   TAG_NAME ends on whitespace, `/` or `>` ONLY — `=` and `<` are part of the
+ *     name, so `<s=<x='>` is one element named `s=<x='`;
+ *   VALUE_DQ / VALUE_SQ end on their OWN closing quote ONLY — a `<` inside a
+ *     quoted value is an ordinary character, so `onerror="alert(1);'<a'"` is a
+ *     complete attribute and the handler is seen and removed.
+ * AFTER_VALUE_QUOTED and SELF_CLOSING reconsume anything unexpected as the
+ * start of the next attribute name, exactly as the spec does, which is how
+ * `<img src="x"onerror=…>` and `<img/onerror=…>` are read as two attributes.
  */
 function scanTag(html, start) {
-  // The attribute states a real tokenizer keeps, because the naive
-  // "any `=` arms the next quote" model gets the UNQUOTED value wrong and the
-  // fuzz found it: in `<a href=alert(1)="<!--[if mso]>` the second `=` and the
-  // `"` are ordinary characters INSIDE an unquoted value, so a browser ends
-  // that tag at the `>` — while the naive model opened a quoted value there,
-  // ran past the `>`, and left a tag with an unbalanced quote in the output.
-  // The footer injected after it then landed inside that quote and the
-  // unsubscribe anchor stopped existing, which is finding 2 by another route.
-  //   NAME  tag-name / attribute-name position (a quote here opens nothing)
-  //   EQ    just past an `=`, whitespace allowed: a quote HERE opens a value
-  //   UNQ   an unquoted value: it ends at whitespace or `>`, and `=` and `"`
-  //         inside it are ordinary characters
-  //   DQ/SQ a quoted value: only its own closing quote ends it, which is what
-  //         shields a `>` in `<img title="a>b">`
-  let state = 'NAME'
-  for (let i = start + 1; i < html.length; i++) {
+  const isEnd = html[start + 1] === '/'
+  const nameStart = start + (isEnd ? 2 : 1)
+  const attrs = []
+  let nameEnd = -1
+  let state = 'TAG_NAME'
+  let attr = null
+  const openAttr = (i) => {
+    attr = { nameStart: i, nameEnd: -1, valueStart: -1, valueEnd: -1, valueOuterStart: -1, end: -1 }
+  }
+  const closeAttr = (end) => {
+    if (!attr) return
+    if (attr.nameEnd < 0) attr.nameEnd = end
+    attr.end = end
+    attrs.push(attr)
+    attr = null
+  }
+  const done = (gt) => {
+    if (nameEnd < 0) nameEnd = gt
+    closeAttr(gt)
+    return { start, end: gt + 1, isEnd, nameStart, nameEnd, attrs }
+  }
+
+  for (let i = nameStart; i < html.length; i++) {
     const ch = html[i]
-    if (ch === '<' && (isElementNameStart(html[i + 1]) || (state !== 'DQ' && state !== 'SQ' && isTagNameStart(html[i + 1])))) {
-      return { closed: false, stop: i }
-    }
-    if (state === 'NAME') {
-      if (ch === '>') return { closed: true, stop: i }
-      else if (ch === '=') state = 'EQ'
-    } else if (state === 'EQ') {
-      if (ch === '>') return { closed: true, stop: i }
-      else if (ch === '"') state = 'DQ'
-      else if (ch === "'") state = 'SQ'
-      else if (!/\s/.test(ch)) state = 'UNQ' // whitespace after `=` is allowed
-    } else if (state === 'UNQ') {
-      if (ch === '>') return { closed: true, stop: i }
-      else if (/\s/.test(ch)) state = 'NAME'
-    } else if (state === 'DQ') {
-      if (ch === '"') state = 'NAME'
-    } else if (state === 'SQ') {
-      if (ch === "'") state = 'NAME'
+    switch (state) {
+      case 'TAG_NAME':
+        if (ch === '>') return done(i)
+        if (isHtmlSpace(ch)) { nameEnd = i; state = 'BEFORE_ATTR_NAME' }
+        else if (ch === '/') { nameEnd = i; state = 'SELF_CLOSING' }
+        break
+      case 'BEFORE_ATTR_NAME':
+        if (ch === '>') return done(i)
+        if (isHtmlSpace(ch)) break
+        if (ch === '/') { state = 'SELF_CLOSING'; break }
+        // An `=` here is a parse error whose recovery starts an attribute NAME
+        // containing the `=`, never a value.
+        openAttr(i)
+        state = 'ATTR_NAME'
+        break
+      case 'ATTR_NAME':
+        if (ch === '>') return done(i)
+        if (isHtmlSpace(ch)) { attr.nameEnd = i; state = 'AFTER_ATTR_NAME'; break }
+        if (ch === '/') { attr.nameEnd = i; closeAttr(i); state = 'SELF_CLOSING'; break }
+        if (ch === '=') { attr.nameEnd = i; state = 'BEFORE_ATTR_VALUE'; break }
+        break
+      case 'AFTER_ATTR_NAME':
+        if (ch === '>') return done(i)
+        if (isHtmlSpace(ch)) break
+        if (ch === '/') { closeAttr(attr.nameEnd); state = 'SELF_CLOSING'; break }
+        if (ch === '=') { state = 'BEFORE_ATTR_VALUE'; break }
+        closeAttr(attr.nameEnd)
+        openAttr(i)
+        state = 'ATTR_NAME'
+        break
+      case 'BEFORE_ATTR_VALUE':
+        if (isHtmlSpace(ch)) break
+        if (ch === '"') { attr.valueOuterStart = i; attr.valueStart = i + 1; state = 'VALUE_DQ'; break }
+        if (ch === "'") { attr.valueOuterStart = i; attr.valueStart = i + 1; state = 'VALUE_SQ'; break }
+        // `<a href=>` — missing-attribute-value. The tag ends here and the
+        // attribute keeps its `=`, so a deletion has to take the `=` with it.
+        if (ch === '>') return done(i)
+        attr.valueOuterStart = i
+        attr.valueStart = i
+        state = 'VALUE_UNQ'
+        break
+      case 'VALUE_DQ':
+        if (ch === '"') { attr.valueEnd = i; closeAttr(i + 1); state = 'AFTER_VALUE_QUOTED' }
+        break
+      case 'VALUE_SQ':
+        if (ch === "'") { attr.valueEnd = i; closeAttr(i + 1); state = 'AFTER_VALUE_QUOTED' }
+        break
+      case 'VALUE_UNQ':
+        if (ch === '>') { attr.valueEnd = i; return done(i) }
+        if (isHtmlSpace(ch)) { attr.valueEnd = i; closeAttr(i); state = 'BEFORE_ATTR_NAME' }
+        break
+      case 'AFTER_VALUE_QUOTED':
+        if (ch === '>') return done(i)
+        if (isHtmlSpace(ch)) { state = 'BEFORE_ATTR_NAME'; break }
+        if (ch === '/') { state = 'SELF_CLOSING'; break }
+        openAttr(i)
+        state = 'ATTR_NAME'
+        break
+      default: // SELF_CLOSING
+        if (ch === '>') return done(i)
+        i -= 1 // reconsume in before-attribute-name
+        state = 'BEFORE_ATTR_NAME'
+        break
     }
   }
-  return { closed: false, stop: html.length }
+  return null
 }
 
-// strandedOffsets keeps the OLDER, cruder version of this machine, and that is
-// deliberate: its states are only ever used to answer "is this placeholder
-// sitting outside every tag?", and the crude machine treats MORE positions as
-// inside a tag than this one does (it arms a quoted value on any `=`, so it
-// can stay in a tag longer, never less long). The two therefore disagree in
-// one direction only — the tokenizer may lift a <style> whose placeholder the
-// drop step then deletes, costing that stylesheet — and never in the direction
-// that matters, which would be restoring a `<style>` element into a position
-// that is really inside a tag.
+/**
+ * THE walk. Visit every markup construct in `html`, left to right, once.
+ *
+ * The visitor is called with one span per construct and may return an offset
+ * to RESUME AT (tokenizePass uses that to skip a `<script>` element's raw text
+ * in one step); returning nothing resumes just past the span. TEXT is
+ * everything the spans do not cover, so a caller that keeps text verbatim
+ * copies the gaps.
+ *
+ *   TAG          { start, end, name, isEnd, attrs }. `name` is LOWERCASED for
+ *                comparison only — nothing here lowercases the document, which
+ *                can change string length for some Unicode characters (`İ`
+ *                lowercases to TWO code points) and desynchronise every offset.
+ *   COMMENT      a real `<!--…-->` (or `--!>`), including the two abrupt forms
+ *                `<!-->` and `<!--->` that close immediately. With
+ *                `enterComments` the walk reports the OPENER instead and then
+ *                walks the interior as markup, which is how a `<script>`
+ *                written inside a comment is still stripped.
+ *   COND         the conditional-comment convention (see above).
+ *   BOGUS        a bogus comment or a doctype: `</` + non-letter, `<!` that is
+ *                not a comment, `<?`. All of them end at the first `>` with no
+ *                quote awareness at all, so their contents can never contain a
+ *                `>` and nothing dangerous fits inside one.
+ *   DROP         `</>`, for which a tokenizer emits nothing at all.
+ *   EOF          the input ran out inside a tag, a quoted value, a comment or a
+ *                bogus comment. `start` is the OPENER; the walk stops there and
+ *                the caller tail-deletes, because a browser drops the construct
+ *                and what the missing `>` would swallow is the server-injected
+ *                footer.
+ */
+function walkMarkup(html, visit, { enterComments = false } = {}) {
+  const findCommentClose = makeCloserFinder(/--!?>/g)
+  const emit = (span) => {
+    const next = visit(span)
+    return typeof next === 'number' && next > span.start ? next : span.end
+  }
+  let i = 0
+  for (;;) {
+    const lt = html.indexOf('<', i)
+    if (lt < 0) return
+    const c1 = html[lt + 1]
+    if (c1 === undefined) return // a trailing `<` is text
+
+    if (html.startsWith('<!--', lt)) {
+      if (COND_COMMENT_OPENERS.some((t) => html.startsWith(t, lt))) {
+        // Outlook parses these; every other client sees an ordinary comment, so
+        // an opener with no closer still swallows everything after it.
+        const gt = findCommentClose(html, lt + 4) < 0 ? -1 : html.indexOf('>', lt)
+        if (gt < 0) { visit({ kind: 'EOF', start: lt, reason: 'comment' }); return }
+        i = emit({ kind: 'COND', start: lt, end: gt + 1 })
+        continue
+      }
+      // The tokenizer's abrupt-closing rules: both of these are COMPLETE, empty
+      // comments, not danglers.
+      if (html.startsWith('<!-->', lt)) { i = emit({ kind: 'COMMENT', start: lt, end: lt + 5 }); continue }
+      if (html.startsWith('<!--->', lt)) { i = emit({ kind: 'COMMENT', start: lt, end: lt + 6 }); continue }
+      const close = findCommentClose(html, lt + 4)
+      if (close < 0) { visit({ kind: 'EOF', start: lt, reason: 'comment' }); return }
+      const end = close + (html[close + 2] === '!' ? 4 : 3)
+      if (!enterComments) { i = emit({ kind: 'COMMENT', start: lt, end }); continue }
+      i = emit({ kind: 'COMMENT_OPEN', start: lt, end: lt + 4, commentEnd: end })
+      continue
+    }
+
+    if (c1 === '!' || c1 === '?') {
+      const isCond = html.startsWith('<![endif]', lt)
+      const gt = html.indexOf('>', c1 === '?' ? lt + 1 : lt + 2)
+      if (gt < 0) { visit({ kind: 'EOF', start: lt, reason: 'bogus' }); return }
+      i = emit({ kind: isCond ? 'COND' : 'BOGUS', start: lt, end: gt + 1 })
+      continue
+    }
+
+    if (c1 === '/') {
+      const c2 = html[lt + 2]
+      if (c2 === undefined) return // `</` at end of input is text
+      if (c2 === '>') { i = emit({ kind: 'DROP', start: lt, end: lt + 3 }); continue }
+      if (!isAsciiAlpha(c2)) {
+        const gt = html.indexOf('>', lt + 2)
+        if (gt < 0) { visit({ kind: 'EOF', start: lt, reason: 'bogus' }); return }
+        i = emit({ kind: 'BOGUS', start: lt, end: gt + 1 })
+        continue
+      }
+    } else if (!isAsciiAlpha(c1)) {
+      i = lt + 1 // a bare `<` in ordinary copy (`book if 5 < 6`) starts no tag
+      continue
+    }
+
+    const tag = scanTag(html, lt)
+    if (!tag) { visit({ kind: 'EOF', start: lt, reason: 'tag' }); return }
+    tag.kind = 'TAG'
+    tag.name = html.slice(tag.nameStart, tag.nameEnd).toLowerCase()
+    i = emit(tag)
+  }
+}
 
 /**
- * A MEMOISED forward search. `re` must be a global regex; the returned
- * function takes a start offset and answers with the index of the first match
- * at or after it.
+ * Every TAG span the walk finds, with its attribute spans. Exported for the
+ * parse5 ORACLE test, which asserts that every start/end tag a real parser
+ * reports has a span here at exactly the same offsets — the claim this whole
+ * file rests on, checked against something that is not this file.
+ */
+export function markupTagSpans(html) {
+  const spans = []
+  walkMarkup(String(html), (span) => { if (span.kind === 'TAG') spans.push(span) })
+  return spans
+}
+
+/**
+ * A MEMOISED forward search. `re` must be a global regex; the returned function
+ * takes a start offset and answers with the index of the first match at or
+ * after it.
  *
  * The memo is what keeps "N openers, ONE closer" linear. Without it,
  * `'<!--[if mso]>'.repeat(23000) + '-->'` asks 23,000 times whether a comment
  * closer exists after each opener, and each answer costs a full scan of the
- * tail: the same O(n²) the tokenizer exists to remove, wearing a different
- * hat. Both facts it caches are MONOTONE in the start offset — a match found
- * at index m answers every start <= m, and "no match from here" answers every
- * later start as well — which is what makes the cache sound. A finder belongs
- * to ONE pass over ONE string; a new pass builds new ones, because what it
- * caches are offsets into that string.
+ * tail: the O(n²) the tokenizer exists to remove, wearing a different hat. Both
+ * facts it caches are MONOTONE in the start offset — a match found at index m
+ * answers every start <= m, and "no match from here" answers every later start
+ * as well — which is what makes the cache sound. A finder belongs to ONE walk
+ * over ONE string; a new walk builds new ones, because what it caches are
+ * offsets into that string.
  */
 function makeCloserFinder(re) {
   let found = -1
@@ -479,78 +624,71 @@ function makeCloserFinder(re) {
 }
 
 /**
- * Cut the document at the start of a tag that NEVER CLOSES, judged the way a
- * browser judges it. Returns the input unchanged when there is no such tag.
- *
- * scanTag answers a narrower question — it stops at the next tag-opening `<`,
- * which is what keeps a pass linear and what keeps a sawn-in-half construct
- * being taken apart — and that narrower question misses this one:
- *
- *   <img src=x ='"<!--[if mso]><!--</body>
- *
- * has an attribute value opened with `'` that never closes, so a browser runs
- * to EOF inside it and DROPS the tag; scanTag stopped at the `</body` and left
- * the partial in place, and the footer injected before that `</body>` landed
- * inside the open quote. No `<a href>` in the parsed document, "Unsubscribe"
- * still in the source — finding 2's failure mode reached through an
- * unterminated ATTRIBUTE VALUE instead of an unterminated tag. The fuzz found
- * it; a person would not have.
- *
- * The walk is linear: a tag scan runs to its `>` and the walk RESUMES AFTER
- * that `>`, so the ranges two scans cover are disjoint — `'<meta x'.repeat(N)`
- * plus one far `>` is ONE scan here, not N. Comments are skipped whole (their
- * closer is found once and the walk resumes past it) so a `>` inside a comment
- * cannot read as a tag end; an unterminated comment is left alone, because
- * tokenizePass's own comment rule deletes it and says so in its own terms.
- *
- * This is a TAIL deletion, so it splices nothing together, and it runs inside
- * the fixed point like every other deletion here.
+ * Does this tag carry `name=viewport`? Read from the ATTRIBUTE SPANS, not from
+ * a regex over the tag's text: `<meta content="name=viewport">` is not a
+ * viewport meta, and the regex that used to answer this said it was.
  */
-function trimUnterminatedTail(html) {
-  let i = 0
-  for (;;) {
-    const lt = html.indexOf('<', i)
-    if (lt < 0) return html
-    // A comment's INTERIOR is walked, not skipped, because tokenizePass walks
-    // it too (see its `<!--` rules): whatever the tokenizer can leave standing
-    // in there, this has to be able to see. Skipping comments instead let
-    // `<!--=<a href='--><!--[if mso]>` through — the tokenizer processed that
-    // `<a` and kept it as a partial with an unbalanced quote, and the injected
-    // footer went inside the quote. The cost of walking in is that an
-    // unbalanced quote inside a BALANCED comment now tail-deletes, which a
-    // browser would not do; that shape does not occur in composer output, and
-    // erring towards deletion is the right direction for a rule whose job is
-    // that the footer cannot be swallowed.
-    if (html.startsWith('<!--', lt)) { i = lt + 4; continue }
-    if (!isTagNameStart(html[lt + 1])) { i = lt + 1; continue }
-    let state = 'NAME'
-    let end = -1
-    for (let j = lt + 1; j < html.length; j++) {
-      const ch = html[j]
-      if (state === 'NAME') {
-        if (ch === '>') { end = j; break }
-        else if (ch === '=') state = 'EQ'
-      } else if (state === 'EQ') {
-        if (ch === '>') { end = j; break }
-        else if (ch === '"') state = 'DQ'
-        else if (ch === "'") state = 'SQ'
-        else if (!/\s/.test(ch)) state = 'UNQ'
-      } else if (state === 'UNQ') {
-        if (ch === '>') { end = j; break }
-        else if (/\s/.test(ch)) state = 'NAME'
-      } else if (state === 'DQ') {
-        if (ch === '"') state = 'NAME'
-      } else if (state === 'SQ') {
-        if (ch === "'") state = 'NAME'
-      }
-    }
-    if (end < 0) return html.slice(0, lt)
-    i = end + 1
+function isViewportMeta(html, tag) {
+  for (const a of tag.attrs) {
+    if (a.valueStart < 0) continue
+    if (html.slice(a.nameStart, a.nameEnd).toLowerCase() !== 'name') continue
+    if (html.slice(a.valueStart, a.valueEnd).trim().toLowerCase() === 'viewport') return true
   }
+  return false
 }
 
 /**
- * ONE PASS of the tokenizer: walk `html` left to right, act on each tag
+ * Scrub the attributes of ONE tag, from the tokenizer's own attribute spans.
+ * Returns null when nothing needs changing, which is the overwhelmingly common
+ * case and keeps the host's markup byte-for-byte as authored.
+ *
+ * Three rules, and the first one is the round-6 fix:
+ *   ANY attribute whose name starts with `on` is DELETED, whatever it contains
+ *     and whether or not it has a value. The old regexes needed a well-formed
+ *     `on[a-z]+=` with a matching quote, so a handler whose value contained a
+ *     `<` was invisible to them (the critical) and a junk name like `on<p`, or
+ *     a valueless `onerror`, reached the DOM untouched (finding 4).
+ *   a URL attribute whose DECODED scheme is outside the allowlist has its whole
+ *     value replaced by `"#"`;
+ *   `style=` is decoded, scrubbed by scrubCss and written back escaped.
+ *
+ * Deleting an attribute removes exactly its own source span, so the character
+ * BEFORE it — whitespace, a `/`, or the quote closing the previous attribute's
+ * value in `<a onclick="1"href="…">` — is left where it was and two attributes
+ * can never be welded into one.
+ */
+function scrubTagAttributes(html, tag, counter) {
+  let edits = null
+  const edit = (start, end, text) => { (edits || (edits = [])).push({ start, end, text }) }
+  for (const a of tag.attrs) {
+    const name = html.slice(a.nameStart, a.nameEnd).toLowerCase()
+    if (name.startsWith('on')) { edit(a.nameStart, a.end, ''); continue }
+    if (a.valueStart < 0) continue
+    const value = html.slice(a.valueStart, a.valueEnd)
+    if (URL_ATTR_NAMES.has(name)) {
+      if (!isSafeUrlValue(value)) edit(a.valueOuterStart, a.end, '"#"')
+      continue
+    }
+    if (name === 'style') {
+      const safe = scrubStyleAttrValue(value, counter)
+      if (!safe) { edit(a.nameStart, a.end, ''); continue }
+      const replacement = `"${safe}"`
+      if (html.slice(a.valueOuterStart, a.end) !== replacement) edit(a.valueOuterStart, a.end, replacement)
+    }
+  }
+  if (!edits) return null
+  const parts = []
+  let pos = tag.start
+  for (const e of edits) {
+    parts.push(html.slice(pos, e.start), e.text)
+    pos = e.end
+  }
+  parts.push(html.slice(pos, tag.end))
+  return parts.join('')
+}
+
+/**
+ * ONE PASS of the tokenizer: walk `html` left to right, act on each construct
  * exactly once, and return the rewritten document. Linear in html.length.
  *
  * `ctx` carries what must survive across passes and rounds: the per-call nonce
@@ -560,50 +698,23 @@ function trimUnterminatedTail(html) {
  *
  * The rules, in the order the walk applies them:
  *
- *   `<!-->` / `<!--->`     COMPLETE comments (the tokenizer's abrupt-closing
- *                          rules) — kept verbatim, and the walk continues
- *                          after them. The raw `lastIndexOf('<!--')` this
- *                          replaced read them as danglers and tail-deleted the
- *                          rest of the message: `<p>a</p><!--><p>KEEPME</p>`
- *                          lost KEEPME.
- *   `<!--` with no closer  TAIL-DELETED, comment and all. `<p>Sale!</p><!--`
- *                          otherwise puts every later byte inside a comment,
- *                          so the server-injected footer is appended INTO it
- *                          and renders as nothing. Because this is a TAIL
- *                          deletion nothing follows it, so it splices nothing
- *                          together and cannot weld a new construct out of the
- *                          text on either side.
- *                          THIS INCLUDES A CONDITIONAL OPENER: `<!--[if mso]`
- *                          with no `-->` or `--!>` after it is an unterminated
- *                          comment in every client that is not Outlook, and
- *                          would swallow the footer in all of them. So
- *                          `<!--[if mso]<style>evil{x:y}</style>` sanitizing
- *                          to `''` is CORRECT browser semantics, not a
- *                          fidelity bug, and a test pins it as such.
- *   `<!--` with a closer   the comment's INTERIOR is walked as ordinary text,
- *                          so a `<script>` or `<style>` written inside a
- *                          comment is stripped or lifted exactly as it would
- *                          be outside one (which is what the old
- *                          whole-document regexes did, and
- *                          dropStrandedPlaceholders then deletes any
- *                          placeholder that ended up inside the comment).
- *                          Only the OPENER's position matters here, and it now
- *                          comes from the walk — so a `<!--` sitting inside a
- *                          quoted attribute value (`title="a<!--b"`) is not an
- *                          opener at all. That is what a browser does, and
- *                          what the raw `lastIndexOf` got wrong: it truncated
- *                          `<a href="/x" title="a<!--b">Link</a><p>KEEP</p>`
- *                          to `<a href="/x" title="a`.
- *   unterminated tag       TAIL-DELETED from the `<` (trimUnterminatedTail
- *                          answers this browser-faithfully before the walk
- *                          starts; scanTag's own EOF case is the backstop).
+ *   unterminated anything  TAIL-DELETED from its opener (the walk's EOF span,
+ *                          which is the one notion of "unterminated" here).
+ *   `</>`                  deleted — a tokenizer emits nothing for it.
+ *   comments / bogus       kept verbatim. A comment's INTERIOR is walked as
+ *                          markup, so a `<script>` or `<style>` written inside
+ *                          one is stripped or lifted exactly as it would be
+ *                          outside one, and dropStrandedPlaceholders then
+ *                          deletes any placeholder that ended up in there. A
+ *                          bogus comment's contents cannot contain a `>` at
+ *                          all, so there is nothing in one to act on.
  *   `<script …>`           deleted THROUGH its `</script …>`, content and all;
  *                          with no closer, tail-deleted from the opener, since
  *                          the rest of the document is script data to a real
  *                          parser, footer included.
  *   `<style …>`            body lifted, scrubbed by scrubCss and replaced by a
- *                          nonced placeholder; with no closer, tail-deleted
- *                          for the same reason (RAWTEXT to EOF).
+ *                          nonced placeholder; with no closer, tail-deleted for
+ *                          the same reason (RAWTEXT to EOF).
  *   first viewport <meta>  replaced by a nonced placeholder. Every LATER one
  *                          falls through to the strip list, so it is removed
  *                          and the splice its removal makes is re-scanned.
@@ -611,147 +722,101 @@ function trimUnterminatedTail(html) {
  *   anything else          attributes scrubbed (on*, URL schemes, style=), the
  *                          tag otherwise kept exactly as authored.
  */
-function tokenizePass(rawHtml, ctx) {
-  // A tag that never closes takes the footer with it, and only a
-  // browser-faithful scan can see all of them — see trimUnterminatedTail.
-  const html = trimUnterminatedTail(rawHtml)
+function tokenizePass(html, ctx) {
   const findScriptClose = makeCloserFinder(/<\/script/gi)
   const findStyleClose = makeCloserFinder(/<\/style/gi)
-  // `-->` and the abrupt-close `--!>` both end a comment.
-  const findCommentClose = makeCloserFinder(/--!?>/g)
   const out = []
   let textStart = 0 // start of the pending run of text and kept-as-authored tags
-  let i = 0
+  let truncated = false
   // Everything from textStart up to `end` is kept verbatim, as one chunk.
   const flush = (end) => { if (end > textStart) out.push(html.slice(textStart, end)) }
+  const cutTail = (at) => { flush(at); truncated = true; return html.length }
+  const dropSpan = (span) => { flush(span.start); textStart = span.end }
 
-  for (;;) {
-    const lt = html.indexOf('<', i)
-    if (lt < 0) break
-    let isCond = false
-
-    if (html.startsWith('<!--', lt)) {
-      // `<!-->` and `<!--->` close immediately: complete comments, kept.
-      if (html.startsWith('<!-->', lt)) { i = lt + 5; continue }
-      if (html.startsWith('<!--->', lt)) { i = lt + 6; continue }
-      if (findCommentClose(html, lt + 4) < 0) { flush(lt); return out.join('') }
-      isCond = COND_TAGS.some((t) => html.startsWith(t, lt))
-      if (!isCond) { i = lt + 4; continue } // walk the interior as text
-    } else if (!isTagNameStart(html[lt + 1])) {
-      i = lt + 1 // a bare `<` in ordinary copy (`book if 5 < 6`) starts no tag
-      continue
-    }
-
-    const scan = scanTag(html, lt)
-    if (!scan.closed) {
-      // EOF inside the tag: a real tokenizer drops it, and leaving it would
-      // hand the footer's own `>` to a `<script`. Tail-delete.
-      if (scan.stop >= html.length) { flush(lt); return out.join('') }
-      // A PARTIAL tag, cut short by an inner `<`. Delete it if its name is one
-      // we strip (it would otherwise borrow the next tag's `>`); otherwise
-      // leave it exactly as authored and resume the walk at that inner `<`.
-      const partial = isCond ? '' : tagNameAt(html, lt).name
-      if (STRIP_TAGS.has(partial) || partial === 'script' || partial === 'style') {
-        flush(lt)
-        i = textStart = scan.stop
-        continue
-      }
-      // Kept — but SCRUBBED, never verbatim. A partial tag carries live
-      // attributes: `<a href=javascript:<p>KEEPME</p>` is a partial `<a`
-      // (cut short by the `<p`) whose href a browser reads as
-      // `javascript:<p`, and leaving it as authored shipped exactly that.
-      // The old whole-document attribute regexes caught it because they did
-      // not care where a tag ended; applying them to the partial's own text
-      // is how that stays true now.
-      const partialSrc = html.slice(lt, scan.stop)
-      const partialScrubbed = scrubTagAttributes(partialSrc, ctx.inlineCounter)
-      if (partialScrubbed !== partialSrc) {
-        flush(lt)
-        out.push(partialScrubbed)
-        textStart = scan.stop
-      }
-      i = scan.stop
-      continue
-    }
-    const end = scan.stop
-    const tagSrc = html.slice(lt, end + 1)
-    // A conditional opener is a "tag" with no name — it can match no rule
-    // below, so it is emitted as authored, like any tag we do not act on.
-    const { name, isEnd } = isCond ? { name: '', isEnd: false } : tagNameAt(html, lt)
+  walkMarkup(html, (span) => {
+    // A construct that never closes takes the footer with it, so it is
+    // TAIL-DELETED from its opener — the walk's EOF span, and the only notion
+    // of "unterminated" in this file. Round 5 needed a separate,
+    // browser-faithful pre-pass here (trimUnterminatedTail) because the
+    // scanner this walk replaced answered a NARROWER question and could not
+    // see an unterminated quoted value; asking the same question twice, with
+    // two scanners that disagreed on purpose, is what the round-6 review was
+    // about. One walk answers it once, at the same offset, and a `<script>` or
+    // `<style>` whose RAW TEXT contains an unterminated tag now loses that
+    // element rather than the whole tail of the message.
+    if (span.kind === 'EOF') return cutTail(span.start)
+    if (span.kind === 'DROP') { dropSpan(span); return undefined }
+    if (span.kind !== 'TAG') return undefined // COMMENT_OPEN / COMMENT / COND / BOGUS: verbatim
+    const { name, isEnd, start, end } = span
 
     if (!isEnd && name === 'script') {
-      const closer = findScriptClose(html, end + 1)
-      const closerScan = closer < 0 ? null : scanTag(html, closer)
+      const closer = findScriptClose(html, end)
+      const closerTag = closer < 0 ? null : scanTag(html, closer)
       // No `</script …>` that actually closes: the rest of the document is
       // script data to a real parser, footer included, so it goes.
-      if (!closerScan || !closerScan.closed) { flush(lt); return out.join('') }
-      const closerEnd = closerScan.stop
-      flush(lt)
-      i = textStart = closerEnd + 1
-      continue
+      if (!closerTag) return cutTail(start)
+      flush(start)
+      textStart = closerTag.end
+      return closerTag.end
     }
     if (!isEnd && name === 'style') {
-      const closer = findStyleClose(html, end + 1)
-      const closerScan = closer < 0 ? null : scanTag(html, closer)
+      const closer = findStyleClose(html, end)
+      const closerTag = closer < 0 ? null : scanTag(html, closer)
       // No `</style …>` that actually closes: RAWTEXT to EOF, same reasoning.
-      if (!closerScan || !closerScan.closed) { flush(lt); return out.join('') }
-      const closerEnd = closerScan.stop
-      const safe = scrubCss(stripOnAttrsFromCss(html.slice(end + 1, closer)), ctx.blockCounter).trim()
-      flush(lt)
+      if (!closerTag) return cutTail(start)
+      const safe = scrubCss(stripOnAttrsFromCss(html.slice(end, closer)), ctx.blockCounter).trim()
+      flush(start)
       // An empty result after the scrub drops the block entirely.
       if (safe) {
         ctx.styles.push(safe)
         out.push(`@@UN1T_${ctx.nonce}_STYLE_${ctx.styles.length - 1}@@`)
       }
-      i = textStart = closerEnd + 1
-      continue
+      textStart = closerTag.end
+      return closerTag.end
     }
-    if (!isEnd && !ctx.viewportSeen && name === 'meta' && VIEWPORT_NAME_ATTR.test(tagSrc)) {
+    if (!isEnd && !ctx.viewportSeen && name === 'meta' && isViewportMeta(html, span)) {
       ctx.viewportSeen = true
-      flush(lt)
+      flush(start)
       out.push(ctx.viewportPlaceholder)
-      i = textStart = end + 1
-      continue
+      textStart = end
+      return undefined
     }
-    if (STRIP_TAGS.has(name) || name === 'script' || name === 'style') {
-      flush(lt)
-      i = textStart = end + 1
-      continue
-    }
+    if (STRIP_TAGS.has(name) || name === 'script' || name === 'style') { dropSpan(span); return undefined }
 
-    const scrubbed = scrubTagAttributes(tagSrc, ctx.inlineCounter)
-    if (scrubbed !== tagSrc) {
-      flush(lt)
+    const scrubbed = scrubTagAttributes(html, span, ctx.inlineCounter)
+    if (scrubbed !== null) {
+      flush(start)
       out.push(scrubbed)
-      textStart = end + 1
+      textStart = end
     }
-    i = end + 1
-  }
-  flush(html.length)
+    return undefined
+  }, { enterComments: true })
+
+  if (!truncated) flush(html.length)
   return out.join('')
 }
 
 /**
  * Strip active content to a FIXED POINT: removing one construct can splice a
- * new one together (`<scr<script>ipt>`), so every pass re-scans the whole
- * string and the loop only stops when a pass changes nothing. Bounded at
- * MAX_INNER_PASSES — and every pass is LINEAR now (tokenizePass), so the loop
- * costs O(10n) where round 4 paid O(10n²).
+ * new one together (`'<'.repeat(n) + 'link>'.repeat(n)` welds one fresh
+ * `<link>` per pass), so every pass re-scans the whole string and the loop only
+ * stops when a pass changes nothing. Bounded at MAX_INNER_PASSES — and every
+ * pass is LINEAR, so the loop costs O(10n) where round 4 paid O(10n²).
  *
  * `ctx.inlineCounter` is the CSS budget for the INLINE `style=` scrub (the
  * document-level <style>-BLOCK budget is `ctx.blockCounter`, spent once per
- * document). It is reset to zero at the top of EVERY pass, and the caller
- * hands in a fresh one for every outer round, because the budget is meant to
- * bound ONE linear scan of the document — not the number of times a fixed
- * point happens to re-scan it. Sharing it across passes made the passes
- * multiply against CSS_TOTAL_MAX_CHARS, so on a large but entirely legitimate
- * message (a long table of styled cells) a later pass would start returning ''
- * for every value and silently wipe every inline style in the email.
+ * document). It is reset to zero at the top of EVERY pass, and the caller hands
+ * in a fresh one for every outer round, because the budget is meant to bound
+ * ONE linear scan of the document — not the number of times a fixed point
+ * happens to re-scan it. Sharing it across passes made the passes multiply
+ * against CSS_TOTAL_MAX_CHARS, so on a large but entirely legitimate message (a
+ * long table of styled cells) a later pass would start returning '' for every
+ * value and silently wipe every inline style in the email.
  *
- * This is not the only place deletions happen: dropStrandedPlaceholders
- * deletes too. The invariant that covers both is stated on
- * sanitizeCampaignHtml — every deletion happens INSIDE the outer fixed point,
- * so the splice it makes is re-scanned.
+ * This is not the only place deletions happen: dropStrandedPlaceholders deletes
+ * too. The invariant that covers both is stated on sanitizeCampaignHtml — every
+ * deletion happens INSIDE the outer fixed point, so the splice it makes is
+ * re-scanned.
  */
 function stripActiveContent(html, ctx) {
   let out = html
@@ -764,105 +829,35 @@ function stripActiveContent(html, ctx) {
   return out
 }
 
-/** Does `ch` turn a `<` into the start of a tag? (`<` + space is just text.) */
-function isTagNameStart(ch) {
-  if (!ch) return false
-  return ch === '/' || ch === '!' || ch === '?' || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
-}
-
 /**
- * QUOTE-AWARE tag-position scan. Walks `whole` ONCE tracking
- * TEXT / TAG / TAG_DQ / TAG_SQ / COMMENT, and returns the subset of
- * `offsets` (which MUST be ascending) sitting anywhere other than TEXT — i.e.
- * inside an open tag, inside one of its quoted attribute values, or inside a
- * comment.
+ * The subset of `offsets` (which MUST be ascending) sitting anywhere other than
+ * ordinary TEXT — inside a tag, inside one of its quoted attribute values,
+ * inside a comment or inside a bogus comment.
  *
- * The `before.lastIndexOf('<') > before.lastIndexOf('>')` test this replaced
- * was wrong in BOTH directions:
- *   FALSE POSITIVE — a bare `<` in ordinary copy (`book if 5 < 6`) starts no
- *     tag at all, yet it made every later placeholder read as stranded, so a
- *     legitimate <style> block was silently deleted from the email. HTML only
- *     opens a tag when the `<` is followed by a letter, `/`, `!` or `?`.
- *   FALSE NEGATIVE — a `>` inside a quoted attribute value
- *     (`<img title="a>b" style="…">`) does not close the tag, but it pushed
- *     lastIndexOf('>') past the `<`, so a placeholder genuinely INSIDE that
- *     tag read as outside it and a `<style>` element was restored into
- *     another tag's attribute list.
- * One scan answers both, and it is O(document) rather than O(document) per
- * placeholder — which matters, because the number of placeholders is the
- * number of <style> blocks the host chose to write.
+ * It is THE SAME WALK the strip pass uses, with one difference that is the
+ * whole point of running it: comments are NOT entered, so a placeholder lifted
+ * out of a `<style>` written inside a comment counts as stranded and is dropped
+ * rather than restored. Before round 6 this was a second, cruder state machine
+ * kept deliberately out of step with the tokenizer; two hand-rolled scanners
+ * disagreeing about where a tag ends is exactly the shape of the bug the
+ * round-6 review found, so there is now one.
  *
- * THE QUOTE RULE IS `=`-GATED, like a real tokenizer: an attribute value is
- * only quoted when the quote is the FIRST character after `=` (whitespace
- * allowed between). A stray quote anywhere else in a tag stays in
- * attribute-name position and does not open a value. Tracking parity on every
- * quote instead flipped the machine out of the tag early — round 4's
- * `<a href=x" y="z>AAA" BBB=…>` reads its `>` as closing the `<a`, so a
- * placeholder still inside the tag scanned as ordinary text and a `<style>`
- * element was restored into the attribute list.
- *
- * CONDITIONAL COMMENTS are not comments for this purpose. Every Unlayer and
- * Outlook export ships `<!--[if mso]><style>…</style><![endif]-->`, and mso
- * really does parse the contents — so treating the whole thing as COMMENT
- * stranded the placeholder and silently deleted the Outlook stylesheet from
- * every export that had one. `<!--[if …]>` and `<![endif]-->` (with or
- * without a leading `<!--`) are therefore scanned as TAGS that end at their
- * first `>`, leaving what is between them as TEXT. An ORDINARY `<!--` still
- * enters COMMENT, and a placeholder inside one is still dropped.
- *
- * Its quote rule is the CRUDER ancestor of scanTag's, and deliberately so:
- * every `=` arms the next quote here, and this scan does not stop at an inner
- * `<` at all, so it treats MORE positions as "inside a tag" than the tokenizer
- * does. The two therefore disagree in one direction only — a lifted <style>
- * whose placeholder this calls stranded is dropped, costing that stylesheet —
- * and never in the direction that would restore a `<style>` element into a
- * position that is really inside a tag. The note under scanTag says the same
- * thing from the other end.
- *
- * This is a tokenizer-faithful APPROXIMATION, not a proof: it is a hand-rolled
- * scanner over a deny-list sanitizer's output, not a spec parser, and a
- * construct neither it nor the strip passes model could still mis-place a
- * position. What makes restoration safe is not this scan but what restoration
- * can DO — insert `<style>` around a scrubCss body that provably contains no
- * `<` and no `>`, or the one fixed literal meta tag. Getting a position wrong
- * therefore misplaces a stylesheet; it cannot mint an attribute or a tag.
+ * What makes restoration safe is not this scan but what restoration can DO —
+ * insert `<style>` around a scrubCss body that provably contains no `<` and no
+ * `>`, or the one fixed literal meta tag. Getting a position wrong therefore
+ * misplaces a stylesheet; it cannot mint an attribute or a tag.
  */
-const COND_TAGS = ['<!--<![endif]', '<![endif]', '<!--[if']
-
 function strandedOffsets(whole, offsets) {
+  const ranges = []
+  walkMarkup(whole, (span) => {
+    ranges.push(span.kind === 'EOF' ? [span.start, whole.length] : [span.start, span.end])
+  })
   const stranded = new Set()
-  let state = 'TEXT'
-  let next = 0
-  // TAG only: has the scan just passed an `=` (possibly then whitespace)?
-  // Only then does a quote open an attribute value.
-  let afterEq = false
-  for (let i = 0; i < whole.length; i++) {
-    while (next < offsets.length && offsets[next] === i) {
-      if (state !== 'TEXT') stranded.add(offsets[next])
-      next++
-    }
-    if (next >= offsets.length) break
-    const ch = whole[i]
-    if (state === 'TEXT') {
-      if (ch === '<') {
-        if (COND_TAGS.some((t) => whole.startsWith(t, i))) { state = 'TAG'; afterEq = false }
-        else if (whole.startsWith('<!--', i)) state = 'COMMENT'
-        else if (isTagNameStart(whole[i + 1])) { state = 'TAG'; afterEq = false }
-      }
-    } else if (state === 'TAG') {
-      if (ch === '>') { state = 'TEXT'; afterEq = false }
-      else if (ch === '=') afterEq = true
-      else if (ch === '"' && afterEq) { state = 'TAG_DQ'; afterEq = false }
-      else if (ch === "'" && afterEq) { state = 'TAG_SQ'; afterEq = false }
-      else if (!/\s/.test(ch)) afterEq = false // whitespace after `=` is allowed
-    } else if (state === 'TAG_DQ') {
-      if (ch === '"') { state = 'TAG'; afterEq = false }
-    } else if (state === 'TAG_SQ') {
-      if (ch === "'") { state = 'TAG'; afterEq = false }
-    } else if (state === 'COMMENT') {
-      // `-->` and the abrupt-close `--!>` both end a comment.
-      if (ch === '>' && (whole.slice(i - 2, i) === '--' || whole.slice(i - 3, i) === '--!')) state = 'TEXT'
-    }
+  let r = 0
+  for (const off of offsets) {
+    while (r < ranges.length && ranges[r][1] <= off) r++
+    if (r >= ranges.length) break
+    if (off >= ranges[r][0]) stranded.add(off)
   }
   return stranded
 }
@@ -1022,6 +1017,33 @@ export function sanitizeCampaignHtml(html) {
   return out
 }
 
+/**
+ * The offset of the document's real `</body>` end tag, or -1.
+ *
+ * Read from the tokenizer walk, never from a regex: `<!--</body>-->` is a
+ * COMMENT, and injecting the mandatory footer before ITS `</body>` put the
+ * whole footer inside the comment — the host name, the unsubscribe anchor and
+ * the consent line all present in the source and absent from the DOM, which is
+ * precisely the failure the footer tests parse for. Comments are not entered
+ * here, so only an end tag in markup position can match.
+ */
+function bodyEndTagOffset(html) {
+  let at = -1
+  // A `</body>` between `<!--[if mso]>` and `<![endif]-->` is comment data to
+  // every client that is not Outlook. The walk scans that interior as markup
+  // ON PURPOSE (it is where an Unlayer export keeps its stylesheet), so the
+  // footer injection has to opt out of the convention: a body end tag in there
+  // would put the whole footer inside a comment for everyone else — the same
+  // failure as `<!--</body>-->`, one indirection further out. The fuzz found
+  // this one too.
+  let insideConditional = false
+  walkMarkup(html, (span) => {
+    if (span.kind === 'COND') { insideConditional = html.startsWith('<!--[if', span.start); return }
+    if (at < 0 && !insideConditional && span.kind === 'TAG' && span.isEnd && span.name === 'body') at = span.start
+  })
+  return at
+}
+
 function escapeHtml(s) {
   return String(s ?? '')
     .replace(/&/g, '&amp;')
@@ -1079,9 +1101,14 @@ export function renderHostCampaignHtml({ host, subject, bodyHtml, unsubscribeUrl
   if (/<\s*(!doctype|html)[\s>]/i.test(safeBody.slice(0, 500))) {
     const safeDoc = safeBody
     const footer = `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;"><tr><td align="center" style="padding:16px 8px;font-family:${FONT};font-size:11px;line-height:1.5;color:#888888;">${hostName} &middot; <a href="${unsub}" style="color:#888888;text-decoration:underline;">Unsubscribe</a><br>You&#39;re receiving this because you attended an event or joined the mailing list.</td></tr></table>`
-    if (/<\/body\s*>/i.test(safeDoc)) {
-      return safeDoc.replace(/<\/body\s*>/i, `${footer}</body>`)
-    }
+    // THE `</body>` HAS TO BE A REAL ONE. A regex found the first `</body>`
+    // ANYWHERE in the text, so a host body containing `<!--</body>-->` had the
+    // whole mandatory footer injected INSIDE that comment: present in the
+    // source, absent from the DOM, no unsubscribe anchor at all on either
+    // parser. The round-6 fuzz found it; the walk answers it, because the walk
+    // is the one thing here that knows a comment from an end tag.
+    const bodyEnd = bodyEndTagOffset(safeDoc)
+    if (bodyEnd >= 0) return `${safeDoc.slice(0, bodyEnd)}${footer}${safeDoc.slice(bodyEnd)}`
     return safeDoc + footer
   }
 
