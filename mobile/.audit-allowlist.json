@@ -27,7 +27,15 @@
     "(admits 5.0.12). `cd mobile && npm update brace-expansion --package-lock-only` moves both (a 12-line lockfile diff,",
     "verified 30 Sep). They are accepted instead because mobile/package-lock.json is an OTA publish path and neither copy",
     "is imported by app code (nothing under mobile/app, components or lib imports glob, minimatch or brace-expansion).",
-    "Take the lockfile bump with the next native release and delete both entries then."
+    "Take the lockfile bump with the next native release and delete both entries then.",
+    "",
+    "The braces and node-forge accepts (DEPAUDIT.6, 2026-10-03) are NOT fixable, like image-size: braces' range is <= 3.0.3",
+    "and node-forge's is <= 1.4.0, both the LATEST published versions (checked `npm view <pkg> versions` and the GitHub",
+    "advisories 3 Oct: no first_patched_version). Both were proven absent from the shipped app the strong way: a local",
+    "`expo export --platform ios --source-maps` (the same Metro bundle eas update ships) lists 2666 source modules and",
+    "NONE of them is braces, micromatch, fast-glob, chokidar, tailwindcss, node-forge or @expo/code-signing-certificates.",
+    "Re-check at expiry; the moment a patched release lands, `npm update <pkg> --package-lock-only` with the next native",
+    "release and delete the entry."
   ],
   "accepted": [
     {
@@ -52,6 +60,18 @@
       "id": "GHSA-qhr7-859c-m2p7",
       "package": "brace-expansion",
       "reason": "Build-time only, first-party input only. Two vulnerable copies, both covered: (a) 2.1.4 via @bacons/apple-targets (the WIDGET.1 Expo config plugin) > glob@10 > minimatch@9, whose only globSync calls use patterns hard-coded in the plugin (`./targets/*/expo-target.config.@(json|js)`, `preview/*.xcassets`, `_shared/*`, `*.entitlements`; app.config.js passes no root/match options); (b) the root 5.0.9 via expo's build tooling (@expo/cli, @expo/metro-config, @expo/fingerprint, @expo/config, expo-updates) > glob@13 > minimatch@10, globbing repo paths with patterns the tooling and this repo write. Both run on the build machine (config evaluation, prebuild, bundling, fingerprinting); nothing under mobile/app, mobile/components or mobile/lib imports glob, minimatch or brace-expansion, so no attacker-supplied pattern ever reaches brace expansion; the worst case is a hung build from a pattern we wrote ourselves. Variant: recursion on nested brace groups (fixed in 2.1.6 / 5.0.11).",
+      "expires": "2026-12-15"
+    },
+    {
+      "id": "GHSA-vfj7-8cjw-p6xm",
+      "package": "braces",
+      "reason": "Build-time only, first-party input only. One copy, braces 3.0.3, reached via (a) tailwindcss@3 (NativeWind's compiler, run by `withNativeWind` in metro.config.js) > micromatch / fast-glob / chokidar, expanding the content globs in mobile/tailwind.config.js (`./app/**/*.{js,jsx,ts,tsx}`, `./components/**/*.{js,jsx,ts,tsx}`); and (b) metro-file-map and @expo/metro-file-map > micromatch, matching the dev-server watcher's ignore/glob patterns from metro.config.js and expo's defaults. Every pattern is written by this repo or the tooling; all of it runs on the build machine (bundling, export, `expo start`). A local `expo export --platform ios --source-maps` shows none of braces, micromatch, fast-glob, chokidar or tailwindcss in the shipped bundle (NativeWind's runtime is react-native-css-interop, which does not import them), so no attacker-supplied pattern can ever reach brace expansion; the worst case is a stack overflow in our own build from a pattern we wrote. No patched version exists (vulnerable range <= 3.0.3 = every published release).",
+      "expires": "2026-12-15"
+    },
+    {
+      "id": "GHSA-86w9-cpqp-85rv",
+      "package": "node-forge",
+      "reason": "Build-time/CLI only, never verifies an attacker's signature. One copy, node-forge 1.4.0, reached via (a) expo > @expo/cli (utils/codesigning.js: signs dev-server manifests with the developer's own key, `signBufferRSASHA256AndVerify` re-verifies the signature it JUST made, `validateSelfSignedCertificate` checks a cert we generated against our own key pair; run/ios/codeSigning/Security.js only PARSES certs from the local macOS keychain) and (b) expo-updates > @expo/code-signing-certificates, imported ONLY by expo-updates/cli (generate/configure code-signing commands), not by expo-updates/build. The flaw is a forgery-acceptance bug in RSA PKCS#1 v1.5 VERIFY; none of these paths verifies a signature produced by anyone else. On the phone, update code signing (not even configured in app.config.js) would be verified natively by expo-updates' Swift/Kotlin, not JS. A local `expo export --platform ios --source-maps` shows neither node-forge nor @expo/code-signing-certificates in the shipped bundle (expo-updates contributes only its build/ runtime modules). No patched version exists (vulnerable range <= 1.4.0 = every published release).",
       "expires": "2026-12-15"
     }
   ]
