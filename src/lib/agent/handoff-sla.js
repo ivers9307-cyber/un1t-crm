@@ -11,8 +11,9 @@
 //
 // Human-touch signals, per channel:
 //   WhatsApp — an outbound row with sent_by set (operator send routes
-//     stamp the sender; agent + sequence/automation sends don't), or
-//     resolved_at after the handoff.
+//     stamp the sender; agent + sequence/automation sends don't), or a
+//     phone-app reply (source 'app_echo', C106 d), or resolved_at after the
+//     handoff.
 //   Instagram — any outbound row with source != 'agent' (IG has no
 //     sequence traffic), or resolved_at after the handoff.
 // A conversation the cooldown already re-armed (agent_active back to
@@ -41,6 +42,7 @@ import { MANAGER_ROLES } from '@/lib/schemas'
 import { pushOutcome } from '@/lib/push-outcome'
 import { logWarn, logError } from '@/lib/log'
 import { resolveRearmPatch } from './core'
+import { WA_STAFF_OUTBOUND_OR_FILTER } from '@/lib/whatsapp-staff-sources'
 
 export const HANDOFF_SLA_DEFAULT_MINUTES = 60
 // C21 PUSHDONE.1 — how long past the breach a failed escalation keeps being
@@ -293,7 +295,9 @@ const CHANNELS = [
     pushCategory: 'whatsapp',
     handoffType: 'whatsapp_agent_handoff',
     // Operator send routes stamp sent_by; agent/sequence sends leave it null.
-    humanFilter: (q) => q.not('sent_by', 'is', null),
+    // C106 (d): a reply typed in the studio's linked phone app is stored as
+    // source 'app_echo' with no sent_by, and is a human reply too.
+    humanFilter: (q) => q.or(WA_STAFF_OUTBOUND_OR_FILTER),
   },
   {
     name: 'instagram',

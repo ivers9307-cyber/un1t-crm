@@ -35,6 +35,7 @@
 // (or a config with no location) = no gate.
 
 import { tierLabel } from './whatsapp-number-health'
+import { WA_PHONE_APP_SOURCES_IN_LIST } from './whatsapp-staff-sources'
 
 // Meta messaging-limit tier → business-initiated conversations per rolling 24h.
 // UNLIMITED (and unknown/null) carry no numeric limit → ungated.
@@ -96,6 +97,9 @@ export async function countBusinessInitiatedContactsLast24h(db, locationId) {
       .eq('location_id', locationId)
       .eq('direction', 'outbound')
       .eq('message_type', 'template')
+      // C106 (d) — phone-app rows (coexistence echoes, history) never went
+      // through the Cloud API: not our send, not our tier budget.
+      .not('source', 'in', WA_PHONE_APP_SOURCES_IN_LIST)
       .gt('sent_at', since)
       .order('id', { ascending: true })
       .range(start, end)
