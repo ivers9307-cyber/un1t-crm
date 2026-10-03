@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { listStaffForUser } from '@/lib/staff'
 import { validateBody } from '@/lib/validate'
 import { getAppUrl } from '@/lib/app-url'
@@ -11,6 +11,7 @@ import {
   OWNER_ASSIGNABLE_ROLES, MASTER_ASSIGNABLE_ROLES,
 } from '@/lib/schemas'
 import { sparsifyAssignmentPermissions } from '@/lib/staff-write'
+import { STAFF_MANAGED_SELECT, pickManagedStaffRow } from '@/lib/staff-fields'
 
 export const runtime = 'nodejs'
 
@@ -41,8 +42,10 @@ const CreateStaffSchema = z.object({
 })
 
 // GET /api/staff — List staff in the caller's locations.
-//   - master/owner/manager: full profile + HR fields
-//   - head_coach/staff: slim public roster (no salary, etc.)
+//   - a person the caller MANAGES (master, or owner/manager at a studio that
+//     person works at): full profile + HR fields
+//   - everyone else: the slim public roster (no salary, no contract); the
+//     caller's own row keeps their contract (CONTRACTVIS.1)
 // Read logic lives in src/lib/staff.js (shared with GET /api/staff/[id]
 // and consumed on mobile via the SDK).
 export async function GET(request) {
@@ -56,6 +59,10 @@ export async function GET(request) {
   // default, full shape rather than throwing.
   const params = request?.url ? new URL(request.url).searchParams : null
   const fields = params?.get('fields') === 'picker' ? 'picker' : null
+  // CONTRACTVIS.1 — the picker's opt-in for contracted hours. Asking is not
+  // being told: listStaffForUser adds them only to rows the caller manages
+  // (and their own). Without the picker the full shape already decides.
+  const includeContract = fields === 'picker' && params?.get('include') === 'contract'
 
   // ROSTER-FIX.6c — `?location_id=` was ACCEPTED and ignored: callers had been
   // sending it for months (the roster's colleague picker among them) while
@@ -76,7 +83,7 @@ export async function GET(request) {
   }
 
   const db = createServerClient()
-  const result = await listStaffForUser({ db, user, fields, locationId })
+  const result = await listStaffForUser({ db, user, fields, locationId, includeContract })
   if (!result.ok) return NextResponse.json({ success: false, error: result.error }, { status: 400 })
   return NextResponse.json({ success: true, data: result.data })
 }
@@ -93,10 +100,11 @@ export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
-  // Caller must be owner-or-master AT THE CURRENT ACTIVE LOCATION
-  // (or platform-wide master). user.role is now the active-location
-  // role (mig 051).
-  if (!user.isMaster && user.role !== 'owner') {
+  // ROLESWEEP.1c — caller must be an owner SOMEWHERE (or master). This used
+  // to read user.role (the ACTIVE studio's role) and refused an owner at B
+  // whose active studio is A. Each requested assignment is judged below at
+  // its own location (hasRoleAtLocation(user, a.location_id, ['owner'])).
+  if (!user.isMaster && !hasRoleAtAnyLocation(user, ['owner'])) {
     return NextResponse.json({
       success: false,
       error: 'Forbidden — must be an owner at this location (or a master) to create staff',
@@ -130,9 +138,11 @@ export async function POST(request) {
         error: `Role '${a.role}' cannot be granted by ${user.isMaster ? 'master' : 'owner'}.`,
       }, { status: 403 })
     }
+    // ROLESWEEP.1c — owner AT this assignment's location (the same test the
+    // inline rolesByLocation read made, spelled as the canonical helper so the
+    // role-at-target guard sees the decision behind the coarse pre-check).
     if (!user.isMaster) {
-      const callerRoleHere = user.rolesByLocation?.[a.location_id]
-      if (callerRoleHere !== 'owner') {
+      if (!hasRoleAtLocation(user, a.location_id, ['owner'])) {
         return NextResponse.json({
           success: false,
           error: 'You can only assign staff at locations where you are an owner.',
@@ -305,12 +315,13 @@ export async function POST(request) {
     }
   }
 
-  // Fetch the complete profile
+  // Fetch the complete profile. STAFFPROFILEPICK.1 — the named managed shape
+  // (staff-fields.js): the caller is owner/master at the new person's studio.
   const { data: profile } = await db
     .from('profiles')
-    .select('*, profile_locations(*, locations(*))')
+    .select(STAFF_MANAGED_SELECT)
     .eq('id', newUserId)
     .single()
 
-  return NextResponse.json({ success: true, data: profile }, { status: 201 })
+  return NextResponse.json({ success: true, data: pickManagedStaffRow(profile) }, { status: 201 })
 }

@@ -6,6 +6,7 @@
 // Result codes the card explains (agent-request-why.js):
 //   NO_END_DATE         no machine-readable requested_end_date on the row
 //   NOT_EXECUTABLE      no Glofox member id / no credentials for the location
+//   GLOFOX_SETTINGS_UNREADABLE  the studio's Glofox settings could not be read (a DB blip)
 //   NO_USER_MEMBERSHIP  Glofox returned no membership instance id
 //   <Glofox code>       kept verbatim (e.g. a minimum-term rejection)
 
@@ -32,6 +33,10 @@ export async function executeMembershipCancellation(db, row, { contact, creds })
   }
   // PERSON-ACCT.8 — the request may have elected a sibling account.
   const memberId = details.elected_glofox_member_id || contact?.glofox_member_id || null
+  // REGISTRYREAD.1a: a failed settings read is not "no credentials".
+  if (creds?.readError) {
+    return { ok: false, message_code: 'GLOFOX_SETTINGS_UNREADABLE', local_planned_end_date: null }
+  }
   if (!memberId || !creds || missingGlofoxCredentialsForLocation(creds).length) {
     return { ok: false, message_code: 'NOT_EXECUTABLE', local_planned_end_date: null }
   }

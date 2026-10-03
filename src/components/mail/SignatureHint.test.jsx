@@ -222,11 +222,11 @@ describe('SignatureHint — a mounted composer never goes stale', () => {
 
     // The other tab saved a new name — its editor writes the key, and the
     // browser fires `storage` in THIS tab.
-    stub.set({ email_signature: '', email_signature_rich: { ...RICH, name: 'Sarah Doyle' } })
+    stub.set({ email_signature: '', email_signature_rich: { ...RICH, name: 'Sam Demo' } })
     act(() => {
       window.dispatchEvent(new StorageEvent('storage', { key: SIGNATURE_UPDATED_KEY, newValue: '1' }))
     })
-    await waitFor(() => expect(document.querySelector('pre').textContent).toContain('Sarah Doyle'))
+    await waitFor(() => expect(document.querySelector('pre').textContent).toContain('Sam Demo'))
     expect(document.querySelector('pre').textContent).not.toContain('Alex Example')
     expect(prefsCalls()).toBe(2)
   })
@@ -250,9 +250,9 @@ describe('SignatureHint — a mounted composer never goes stale', () => {
 
     // Back into view: the first return always refreshes — the mount fetch
     // does not count against the throttle.
-    stub.set({ email_signature: '', email_signature_rich: { ...RICH, name: 'Sarah Doyle' } })
+    stub.set({ email_signature: '', email_signature_rich: { ...RICH, name: 'Sam Demo' } })
     act(() => { document.dispatchEvent(new Event('visibilitychange')) })
-    await waitFor(() => expect(document.querySelector('pre').textContent).toContain('Sarah Doyle'))
+    await waitFor(() => expect(document.querySelector('pre').textContent).toContain('Sam Demo'))
     expect(prefsCalls()).toBe(2)
 
     // A flurry of tab switches inside the window is one read.

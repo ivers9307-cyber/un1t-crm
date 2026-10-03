@@ -18,23 +18,26 @@
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import {
-  Calendar, AlertCircle, AlertTriangle, ClipboardCheck, Inbox, MessagesSquare,
+  Calendar, CalendarX, AlertCircle, AlertTriangle, ClipboardCheck, Inbox, MessagesSquare,
   Radar, CheckSquare, Flag, Mail, Receipt, FileText, Wallet, Zap,
   ArrowLeftRight, Users, Handshake, ShoppingBag,
 } from 'lucide-react'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser, getUserLocationIds, hasRoleAtLocation } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import {
   fetchPersonalDashboardData,
-  fetchUnstaffedBlocksThisWeek,
   fetchIncompletePayProfiles,
   fetchPendingRosterApprovalsCount,
 } from '@shared/dashboard-data'
 import { buildMonthMatrix } from '@shared/roster-month'
 import { MANAGER_ROLES } from '@/lib/schemas'
+import { fetchStaffingGapsThisWeek, staffingGapsHeadline, staffingGapsBreakdown } from '@/lib/roster-staffing'
+import { fetchRosterRunways } from '@/lib/roster-runway-data'
+import RosterRunwayChip from '@/components/dashboard/RosterRunwayChip'
 import { fetchTodayFeed } from '@/lib/today-feed-data'
 import { assembleHomeQueue, queueCountLabel, groupQueueRows } from '@/lib/home-queue'
+import { dublinTodayStr } from '@/lib/dublin-time'
 import { relativeTime } from '@/lib/mail/conversation-display'
 import {
   KpiCard, KpiRow, SectionHeader, ListCard, PendingRow,
@@ -42,6 +45,7 @@ import {
 import MonthRoster from '@/components/dashboard/MonthRoster'
 import MyRequests from '@/components/dashboard/MyRequests'
 import SwapActions from '@/components/dashboard/SwapActions'
+import OfferedShifts from '@/components/dashboard/OfferedShifts'
 
 // Icon per triage row id (assembleTodayFeed in shared/today-feed.js owns
 // the ids). Kept here — icons are a web rendering concern. HOME.3 —
@@ -99,6 +103,8 @@ const QUEUE_SOURCE_ICONS = {
   fte_expenses: <Wallet size={16} />,
   agent_requests: <Zap size={16} />,
   time_off: <Calendar size={16} />,
+  // LEAVECANCEL.1 — a request to cancel approved leave (owner/master only).
+  time_off_cancellations: <CalendarX size={16} />,
   shift_swaps: <ArrowLeftRight size={16} />,
   rosters: <ClipboardCheck size={16} />,
   hyrox_sessions: <Users size={16} />,
@@ -140,12 +146,13 @@ function QueueRows({ rows }) {
 
 export const dynamic = 'force-dynamic'
 
-function isoDate(d) {
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
-}
+// TODAYTZ.1 — "today" is a DUBLIN calendar day, never the server's.
+// This page used to build it from a local `isoDate` helper over the current
+// instant, and Vercel runs in UTC: between midnight and 01:00 Dublin during
+// BST the server is still on yesterday's date, so the month grid highlighted
+// the wrong cell and SwapActions' "on with you today" listed yesterday's
+// shifts. dublinTodayStr() is the house helper for a business today
+// (CLAUDE.md).
 
 export default async function PersonalDashboardPage() {
   const user = await getCurrentUser()
@@ -153,6 +160,8 @@ export default async function PersonalDashboardPage() {
 
   // Permission gate — toggle is honoured for every role including owner.
   if (!hasPermission(user, 'dashboard_personal')) redirect('/dashboard')
+
+  const todayIso = dublinTodayStr()
 
   const db = createServerClient()
   // TODAY-FEED.1 / HOME.3 — the triage feed and the item-level queue
@@ -166,7 +175,9 @@ export default async function PersonalDashboardPage() {
   // getPendingApprovalsCount fired once here and once more inside
   // assembleHomeQueue, every page load).
   const [res, feedRows, queue] = await Promise.all([
-    fetchPersonalDashboardData(db, user.id, user.activeLocation?.id),
+    // A4 REVENUEMTD.1 — the same Dublin today as the month grid, so "This
+    // week" never lags a day behind it between 00:00 and 01:00 Dublin.
+    fetchPersonalDashboardData(db, user.id, user.activeLocation?.id, { todayIso }),
     fetchTodayFeed(db, user, user.activeLocation?.id, { skip: QUEUE_MIGRATED_IDS }),
     assembleHomeQueue(db, user),
   ])
@@ -214,22 +225,43 @@ export default async function PersonalDashboardPage() {
         .map(([id]) => id)
   const isOwnerSomewhere = ownerLocationIds.length > 0
 
-  let unstaffedCount = 0
+  // RUNWAY.1 — studios where THIS user can publish a roster (the gate on
+  // POST /api/schedule/rosters). Deliberately not `locIds` below, which is
+  // every studio the user belongs to: whether next week is published is
+  // manager information, and hasRoleAtLocation judges the role AT that studio,
+  // not the active one. Started here and awaited after the block below so the
+  // two reads overlap. A failed read shows NO chip: an alert must never claim
+  // a problem it could not read.
+  const runwayLocations = (user.locations || []).filter((l) => hasRoleAtLocation(user, l.id, MANAGER_ROLES))
+  const runwayPromise = runwayLocations.length > 0
+    ? fetchRosterRunways(db, runwayLocations.map((l) => l.id)).catch(() => ({ success: false }))
+    : Promise.resolve({ success: false })
+
+  // ROSTERVIS.1 — empty AND below-minimum shifts. This chip used to count only
+  // shifts with zero coaches, so a shift at 1 of 2 never raised it.
+  let staffingGaps = { empty: 0, short: 0, total: 0 }
   let incompletePay = { count: 0, sample: [] }
   let pendingApprovals = 0
   if (isManager || isOwnerSomewhere) {
     const locIds = user.role === 'master'
       ? (user.locations || []).map(l => l.id)
       : getUserLocationIds(user)
-    const [unstaffedRes, payRes, approvalsRes] = await Promise.all([
-      fetchUnstaffedBlocksThisWeek(db, locIds),
+    const [staffingGapsRes, payRes, approvalsRes] = await Promise.all([
+      fetchStaffingGapsThisWeek(db, locIds),
       fetchIncompletePayProfiles(db, locIds),
       isOwnerSomewhere ? fetchPendingRosterApprovalsCount(db, ownerLocationIds) : Promise.resolve({ success: true, data: { count: 0 } }),
     ])
-    if (unstaffedRes.success) unstaffedCount = unstaffedRes.data.count
+    if (staffingGapsRes.success) staffingGaps = staffingGapsRes.data
     if (payRes.success) incompletePay = payRes.data
     if (approvalsRes.success) pendingApprovals = approvalsRes.data.count
   }
+
+  const runwayRes = await runwayPromise
+  const rosterRunways = runwayRes.success
+    ? runwayLocations
+        .map((l) => ({ id: l.id, name: l.name, runway: runwayRes.data.byLocation[l.id] }))
+        .filter((r) => r.runway)
+    : []
 
   // Show the per-shift location chip only when the user is assigned
   // to 2+ locations — otherwise it's redundant clutter for staff
@@ -317,7 +349,7 @@ export default async function PersonalDashboardPage() {
           by the Week | Month control inside MonthRoster. */}
       <div className="mb-4 max-w-5xl">
         <MonthRoster
-          weeks={buildMonthMatrix(monthStartIso, monthEndIso, monthShifts, isoDate(new Date()))}
+          weeks={buildMonthMatrix(monthStartIso, monthEndIso, monthShifts, todayIso)}
           monthLabel={`${new Date(monthStartIso + 'T00:00:00').toLocaleDateString('en-IE', { day: 'numeric', month: 'short' })} – ${new Date(monthEndIso + 'T00:00:00').toLocaleDateString('en-IE', { day: 'numeric', month: 'short' })}`}
           monthSummary={`${shiftsThisMonth} shift${shiftsThisMonth === 1 ? '' : 's'} · ${hoursThisMonth}h`}
           weekPanels={[
@@ -367,24 +399,37 @@ export default async function PersonalDashboardPage() {
           Empty future shift_blocks across the user's locations;
           customers will be in the studio either way, so loud surfacing
           here matches the "demand window" model. */}
-      {isManager && unstaffedCount > 0 && (
+      {/* ROSTERVIS.1 — red while any shift has no coach at all, amber when
+          every gap is a below-minimum one. */}
+      {isManager && staffingGaps.total > 0 && (
         <Link
           href="/schedule"
-          className="block mt-3 p-3 rounded-lg border border-red-500/40 bg-red-500/10 hover:bg-red-500/15 transition-colors"
+          className={`block mt-3 p-3 rounded-lg border transition-colors ${
+            staffingGaps.empty > 0
+              ? 'border-red-500/40 bg-red-500/10 hover:bg-red-500/15'
+              : 'border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/15'
+          }`}
         >
           <div className="flex items-start gap-3">
-            <AlertCircle size={16} className="text-red-600 mt-0.5 flex-shrink-0" />
+            <AlertCircle size={16} className={`${staffingGaps.empty > 0 ? 'text-red-600' : 'text-amber-600'} mt-0.5 flex-shrink-0`} />
             <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-red-700">
-                {unstaffedCount} unstaffed block{unstaffedCount === 1 ? '' : 's'} this week
+              <div className={`text-sm font-medium ${staffingGaps.empty > 0 ? 'text-red-700' : 'text-amber-700'}`}>
+                {staffingGapsHeadline(staffingGaps)}
               </div>
-              <div className="text-xs text-red-700/80 mt-0.5">
-                Demand windows with no coach assigned. Click to open the schedule.
+              <div className={`text-xs mt-0.5 ${staffingGaps.empty > 0 ? 'text-red-700/80' : 'text-amber-700/90'}`}>
+                {staffingGapsBreakdown(staffingGaps)}. Click to open the schedule.
               </div>
             </div>
           </div>
         </Link>
       )}
+
+      {/* RUNWAY.1 — an upcoming week, inside 10 days, that is not built or not
+          published. One chip per studio this user can publish at; the studio
+          is named only when the user has more than one. */}
+      {rosterRunways.map((r) => (
+        <RosterRunwayChip key={r.id} runway={r.runway} locationName={showLocation ? r.name : ''} />
+      ))}
 
       {/* Roster v2 phase 3 — pay-data completeness for managers.
           Phase 4's cost panel zero-costs anyone whose employment
@@ -413,12 +458,16 @@ export default async function PersonalDashboardPage() {
         </Link>
       )}
 
+      {/* REPLACE.1b — shifts a manager offered to the team that I could take
+          ("Shifts up for grabs", Claim). Renders nothing when none is. */}
+      <OfferedShifts locationId={user.activeLocation?.id} />
+
       {/* CT-P3b — coach self-service swap surfaces: accept/decline swaps
           offered to you, claim open-pool swaps, and "on with you today".
           Renders nothing when all three lists are empty. */}
       <SwapActions
         locationId={user.activeLocation?.id}
-        todayIso={isoDate(new Date())}
+        todayIso={todayIso}
         currentProfileId={user.id}
       />
 

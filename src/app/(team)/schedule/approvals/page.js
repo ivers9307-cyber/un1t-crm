@@ -9,8 +9,10 @@ import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import RosterApprovalActions from '@/components/RosterApprovalActions'
-import { projectPublishImpact } from '@/lib/roster-publish'
+import { projectPublishImpactBatch } from '@/lib/roster-publish'
 import { logWarn } from '@/lib/log'
+import { hasPermissionForLocation } from '@/lib/permissions'
+import { APPROVAL_CATEGORY_PERMISSION } from '@shared/permissions'
 
 export const dynamic = 'force-dynamic'
 
@@ -60,22 +62,35 @@ export default async function RosterApprovalsPage() {
   // the card was quoting a figure that could be days stale. Re-project per
   // draft against live data instead, and fall back to the stored snapshot
   // only if the projection throws — a stale number beats an error page.
-  const impacts = await Promise.all((drafts || []).map(async (d) => {
-    try {
-      return await projectPublishImpact(db, {
-        locationId: d.location_id,
-        periodStart: d.period_start,
-        periodEnd: d.period_end,
-      })
-    } catch (e) {
-      logWarn('schedule/approvals', 'live impact failed; using stored snapshot', { roster_id: d.id, err: e?.message })
-      return null
+  // ROSTERTIDY.1 — one batch, not one full context load per draft: the
+  // location's blocks, rates and leave are read once for the span every draft
+  // touches, and each draft is judged by the same pure function the single
+  // projection uses. The batch never throws; a per-draft failure comes back as
+  // `impact: null` and falls back to the snapshot exactly as before.
+  let projections = (drafts || []).map(() => ({ impact: null, error: null }))
+  try {
+    projections = await projectPublishImpactBatch(db, (drafts || []).map((d) => ({
+      locationId: d.location_id,
+      periodStart: d.period_start,
+      periodEnd: d.period_end,
+    })))
+  } catch (e) {
+    projections = (drafts || []).map(() => ({ impact: null, error: e }))
+  }
+  const impacts = (drafts || []).map((d, i) => {
+    const impact = projections[i]?.impact || null
+    if (!impact) {
+      logWarn('schedule/approvals', 'live impact failed; using stored snapshot', { roster_id: d.id, err: projections[i]?.error?.message })
     }
-  }))
+    return impact
+  })
   const impactByRosterId = Object.fromEntries((drafts || []).map((d, i) => [d.id, impacts[i]]))
 
   return (
-    <div>
+    // ROSTERTIDY.1 — this page had NO wrapper padding at any breakpoint
+    // (AppShell's <main> adds none), so it ran edge-to-edge against the
+    // sidebar. Same wrapper as the other /schedule pages.
+    <div className="px-4 py-6 sm:p-8">
       <Link href="/schedule" className="inline-flex items-center gap-1.5 text-sm text-un1t-subtle hover:text-un1t-text mb-6">
         <ArrowLeft size={16} /> Back to Schedule
       </Link>
@@ -100,7 +115,10 @@ export default async function RosterApprovalsPage() {
             const isLive = impact != null
             const overrun = isLive ? impact.overrunEur : (d.projected_contractor_eur || 0) - (d.budget_at_publish_eur || 0)
             const requesterRoleAtLocation = d.created_by_profile?.full_name || 'Someone'
-            const canApprove = isOwner && (user.role === 'master' || user.rolesByLocation?.[d.location_id] === 'owner')
+            // BUDGETAPPROVE.1 — the SAME gate the approve route enforces, at the
+            // roster's location. It read the active-studio role before, so an
+            // owner of this studio browsing from another studio saw no button.
+            const canApprove = hasPermissionForLocation(user, d.location_id, APPROVAL_CATEGORY_PERMISSION.rosters)
             return (
               <div key={d.id} className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
                 <div className="flex items-start justify-between gap-4">
@@ -136,6 +154,19 @@ export default async function RosterApprovalsPage() {
                       <div className="text-xs text-emerald-700 mt-1">
                         Now within budget — the month has moved since this was submitted.
                       </div>
+                    )}
+                    {/* BUDGETAPPROVE.1 — a period across a month boundary is
+                        judged per month, so show each month's own total. */}
+                    {isLive && impact.months?.length > 1 && (
+                      <ul className="text-xs text-un1t-subtle mt-1 space-y-0.5">
+                        {impact.months.map((m) => (
+                          <li key={m.monthStart}>
+                            {m.monthStart.slice(0, 7)}: this period {formatEur(m.periodProjectedEur)}, month {formatEur(m.monthProjectedTotalEur)}
+                            {m.monthlyBudgetEur != null && <> of {formatEur(m.monthlyBudgetEur)}</>}
+                            {m.overrunEur > 0 && <span className="text-red-700 font-medium"> ({formatEur(m.overrunEur)} over)</span>}
+                          </li>
+                        ))}
+                      </ul>
                     )}
                     {d.notes && (
                       <p className="text-xs text-un1t-subtle mt-2 italic">&ldquo;{d.notes}&rdquo;</p>

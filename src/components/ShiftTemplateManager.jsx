@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
-import { Plus, Clock, Pencil, Trash2, AlertCircle, Users } from 'lucide-react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
+import { Plus, Clock, Pencil, Trash2, Users, Ban, ChevronUp, ChevronDown, Check, Copy } from 'lucide-react'
 import Modal from '@/components/ui/Modal'
 // ROSTER-FIX.6a — one failure shape and one banner across the schedule
 // screens, so no call site can quietly forget to check the response.
@@ -11,6 +11,13 @@ import { readJson } from './schedule/useScheduleData'
 // three schedule screens. One definition now, in the lib that already owns
 // schedule time formatting.
 import { formatTime12h as formatTime } from '@/lib/schedule-overlap'
+// TPLCLONE.1 — copy templates in from another studio of the same organisation.
+import CopyTemplatesModal from './schedule/CopyTemplatesModal'
+import { cloneSourceStudios, cloneResultNotice } from '@/lib/shift-template-clone'
+// QUALS.1 — what a template asks for (advisory: the coach picker badges, it
+// never refuses). Saved by its own route after the template.
+import { parseTemplateQualificationsAnswer } from '@shared/qualifications'
+import { MAX_TEMPLATE_REQUIREMENTS } from '@/lib/qualifications-schemas'
 
 const PRESET_COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#06B6D4', '#F97316']
 // ROSTER-FIX.6b — the swatches are eight empty buttons whose only content is
@@ -30,6 +37,13 @@ const DAY_OPTIONS = [
   { code: 'sun', label: 'Sun' },
 ]
 
+// SHIFTTYPE.1 (mig 628) — what kind of shift a template makes. The hint is
+// the rule in the operator's words, so the choice explains itself.
+const KIND_OPTIONS = [
+  { value: 'class', label: 'Class', hint: 'Needs coaches. Flagged when below its minimum.' },
+  { value: 'admin', label: 'Admin', hint: 'No minimum. Never flagged as a gap, outside the contractor budget; hours still count.' },
+]
+
 function formatDays(days) {
   if (!days || days.length === 0) return null
   const order = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
@@ -39,6 +53,31 @@ function formatDays(days) {
     .join(', ')
 }
 
+// SHIFTTPL.1 — "min 2, up to 10". The minimum was editable on the form and
+// then invisible on the list, so the number that decides whether a shift
+// flags understaffed could only be read by opening the editor.
+function coachRangeLabel(t) {
+  const max = t.max_coaches || 15
+  const min = t.min_coaches == null ? 1 : t.min_coaches
+  const maxPart = `up to ${max} ${max === 1 ? 'coach' : 'coaches'}`
+  return min === 0 ? `no minimum, ${maxPart}` : `min ${min}, ${maxPart}`
+}
+
+// What the deactivate actually did to the calendar. `publishedEmptiesKept`
+// is the count deliberately left alone: those slots are on a week staff have
+// already been shown, and nothing here would record their disappearance.
+function deactivateNotice(propagation) {
+  const deleted = propagation?.deactivatedBlocksDeleted || 0
+  const kept = propagation?.publishedEmptiesKept || 0
+  const parts = [deleted === 0
+    ? 'Deactivated. No empty future slots to clear.'
+    : `Deactivated and cleared ${deleted} empty future slot${deleted === 1 ? '' : 's'}.`]
+  if (kept > 0) {
+    parts.push(`${kept} empty slot${kept === 1 ? '' : 's'} on an already-published week ${kept === 1 ? 'was' : 'were'} kept.`)
+  }
+  return parts.join(' ')
+}
+
 export default function ShiftTemplateManager({ user }) {
   const [templates, setTemplates] = useState([])
   const [loading, setLoading] = useState(true)
@@ -46,9 +85,31 @@ export default function ShiftTemplateManager({ user }) {
   // ROSTER-FIX.6a — the load cleared `loading` on the happy path only, so a
   // refused or dropped request left this screen on "Loading templates..."
   // forever. `busyId` is the single-flight guard for deactivate/reactivate.
+  // SHIFTTPL.1 — `error` is no longer only a failed LOAD: a refused hard
+  // delete lands here too, and rendering "Could not load shift templates" over
+  // "this template has shifts on the calendar" with a Retry button would be
+  // three kinds of wrong. The title travels with the message, and Retry is
+  // offered only where retrying is the answer.
   const [error, setError] = useState(null)
+  const [errorTitle, setErrorTitle] = useState('Could not load shift templates')
+  // SHIFTTPL.1 — the destructive actions now report what they DID (slots
+  // cleared, row deleted). There was no success channel on this screen at
+  // all, so a deactivate that also removed twelve empty future slots looked
+  // identical to one that removed none.
+  const [notice, setNotice] = useState(null)
   const [busyId, setBusyId] = useState(null)
   const locationId = user.activeLocation?.id
+  // TPLCLONE.1 — the studios this caller could copy templates FROM into this
+  // one: same organisation, and a manager at both. Only what the screen
+  // offers; the route re-checks all of it.
+  const copySources = useMemo(() => cloneSourceStudios(user, locationId), [user, locationId])
+  const [showCopy, setShowCopy] = useState(false)
+
+  // One place that sets both, so a new call site cannot forget the title.
+  const failWith = useCallback((title, message) => {
+    setErrorTitle(title)
+    setError(message)
+  }, [])
 
   const fetchTemplates = useCallback(async () => {
     if (!locationId) {
@@ -61,6 +122,7 @@ export default function ShiftTemplateManager({ user }) {
       const data = await readJson(`/api/schedule/templates?location_id=${locationId}`)
       setTemplates(data.data || [])
     } catch (e) {
+      setErrorTitle('Could not load shift templates')
       setError(e?.message || 'Could not load shift templates')
     } finally {
       setLoading(false)
@@ -69,17 +131,72 @@ export default function ShiftTemplateManager({ user }) {
 
   useEffect(() => { fetchTemplates() }, [fetchTemplates])
 
+  // QUALS.1 — the organisation's catalogue and every template's requirements.
+  // null = not loaded, refused, or not understood: the editor then shows no
+  // field and saves nothing about requirements (the template saves as before).
+  const [quals, setQuals] = useState(null)
+  const fetchQuals = useCallback(async () => {
+    if (!locationId) return
+    try {
+      const res = await fetch(`/api/schedule/template-qualifications?location_id=${locationId}`)
+      const parsed = parseTemplateQualificationsAnswer(await res.json().catch(() => null))
+      setQuals(parsed.ok ? parsed : null)
+    } catch {
+      setQuals(null)
+    }
+  }, [locationId])
+  useEffect(() => { fetchQuals() }, [fetchQuals])
+
+  const requiredIdsFor = (templateId) => (templateId && quals?.requirements?.[templateId]) || []
+  // The list chip names ACTIVE types only: the picker does not advise on an
+  // archived one, so the chip would promise a check that never happens.
+  const requiredNamesFor = (templateId) => requiredIdsFor(templateId)
+    .map((id) => quals?.types.find((t) => t.id === id && t.active !== false)?.name)
+    .filter(Boolean)
+  // The editor offers active types, plus any archived type this template
+  // already asks for (so it can be seen and removed).
+  const editorTypesFor = (templateId) => (quals
+    ? quals.types.filter((t) => t.active !== false || requiredIdsFor(templateId).includes(t.id))
+    : null)
+
+  // PUT only when the set changed. A failure is reported, never swallowed:
+  // the template itself did save.
+  async function saveRequirements(templateId, before, wanted) {
+    if (!templateId) return
+    if (before.length === wanted.length && before.every((id) => wanted.includes(id))) return
+    try {
+      await readJson('/api/schedule/template-qualifications', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ template_id: templateId, qualification_type_ids: wanted }),
+      })
+    } catch (e) {
+      failWith('Template saved, but not what it asks for', e?.message || 'Could not save the required qualifications')
+    }
+    fetchQuals()
+  }
+
   async function handleSave(formData) {
     const isEdit = typeof showForm === 'object'
     const url = isEdit ? `/api/schedule/templates/${showForm.id}` : '/api/schedule/templates'
     const method = isEdit ? 'PUT' : 'POST'
 
+    // QUALS.1 — requirements ride their own route, AFTER the template (a new
+    // one has no id until it is created). Absent = the field was not shown.
+    // The form sends both halves from the snapshot it took when it OPENED
+    // (TemplateFormModal), never from a catalogue that landed later.
+    const {
+      required_qualification_type_ids: wantedQuals,
+      required_qualification_type_ids_before: beforeQuals,
+      ...templateFields
+    } = formData
     const payload = {
-      ...formData,
+      ...templateFields,
       location_id: locationId,
     }
 
     setError(null)
+    setNotice(null)
     try {
       const res = await fetch(url, {
         method,
@@ -88,11 +205,21 @@ export default function ShiftTemplateManager({ user }) {
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok || !data.success) {
-        setError(data.error || 'Failed to save')
+        failWith('Could not save this template', data.error || 'Failed to save')
         return
       }
       setShowForm(false)
       fetchTemplates()
+      if (Array.isArray(wantedQuals)) {
+        await saveRequirements(isEdit ? showForm.id : data.data?.id, Array.isArray(beforeQuals) ? beforeQuals : [], wantedQuals)
+      }
+      // BLOCKEDIT.1 — shifts edited on their own on the calendar keep their
+      // own times/staffing; say how many, so a template edit that did not
+      // reach them is not a surprise.
+      const keptEdited = data.propagation?.futureBlocksKeptEdited || 0
+      if (keptEdited > 0) {
+        setNotice(`${keptEdited} shift${keptEdited === 1 ? '' : 's'} you edited individually kept ${keptEdited === 1 ? 'its' : 'their'} own times/staffing.`)
+      }
       // If the API generated blocks, surface the count so the
       // operator knows their schedule is ready to staff.
       if (data.generated?.inserted > 0) {
@@ -102,7 +229,7 @@ export default function ShiftTemplateManager({ user }) {
         console.info(`Generated ${data.generated.inserted} blocks for the next 8 weeks.`)
       }
     } catch {
-      setError('Network error, please try again')
+      failWith('Could not save this template', 'Network error, please try again')
     }
   }
 
@@ -114,31 +241,120 @@ export default function ShiftTemplateManager({ user }) {
     if (busyId) return
     setBusyId(id)
     setError(null)
+    setNotice(null)
     try {
       const res = await fetch(`/api/schedule/templates/${id}`, active
         ? { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ active: true }) }
         : { method: 'DELETE' })
       const data = await res.json().catch(() => ({}))
       if (!res.ok || data.success === false) {
-        setError(data.error || (active ? 'Failed to reactivate' : 'Failed to deactivate'))
+        failWith(active ? 'Could not reactivate this template' : 'Could not deactivate this template',
+          data.error || (active ? 'Failed to reactivate' : 'Failed to deactivate'))
         return
       }
+      // D4 UINITS.1 — re-read FIRST, then say what happened: fetchTemplates
+      // clears the banner as it starts, so a warning written before it was
+      // wiped before anyone saw it (the handleCopied order, TPLCLONE.1).
       await fetchTemplates()
+      // SHIFTTPL.1 — the DELETE route clears the empty future slots now (the
+      // PUT path always did), so say what went and what was deliberately kept.
+      if (!active) setNotice(deactivateNotice(data.propagation))
+      if (data.warning) failWith('The template changed, but the calendar did not fully follow', data.warning)
     } catch {
-      setError('Network error, please try again')
+      failWith(active ? 'Could not reactivate this template' : 'Could not deactivate this template', 'Network error, please try again')
     } finally {
       setBusyId(null)
     }
   }
 
   async function handleDeactivate(id) {
-    if (!confirm('Deactivate this shift template? Existing shifts using it will remain.')) return
+    if (!confirm('Deactivate this shift template? Shifts already on the calendar with a coach on them stay; empty future slots are cleared.')) return
     await setTemplateActive(id, false)
+  }
+
+  // SHIFTTPL.1 — a template created by mistake could only ever be
+  // deactivated, so it sat in the Inactive list forever. The server decides:
+  // it deletes only a template with no shifts and no assignments EVER, and
+  // otherwise answers 409 with a sentence naming what is in the way.
+  async function handleDelete(t) {
+    if (busyId) return
+    if (!confirm(`Permanently delete "${t.name}"? This only works if it has never had a shift on the calendar. Otherwise deactivate it instead.`)) return
+    setBusyId(t.id)
+    setError(null)
+    setNotice(null)
+    try {
+      const res = await fetch(`/api/schedule/templates/${t.id}?hard=true`, { method: 'DELETE' })
+      const data = await res.json().catch(() => ({}))
+      if (data.error === 'template_in_use') {
+        failWith('This template was kept', data.message || 'This template has shifts on the calendar, so it cannot be deleted. Deactivate it instead.')
+        return
+      }
+      if (!res.ok || data.success === false) {
+        failWith('Could not delete this template', data.error || 'Failed to delete')
+        return
+      }
+      setNotice(`"${t.name}" was deleted.`)
+      await fetchTemplates()
+    } catch {
+      failWith('Could not delete this template', 'Network error, please try again')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  // TPLCLONE.1 — fetchTemplates clears the error banner as it starts, so it
+  // runs FIRST and the outcome is written after it: a warning set before the
+  // re-read would be wiped by it.
+  async function handleCopied(result) {
+    setShowCopy(false)
+    await fetchTemplates()
+    setNotice(cloneResultNotice(result, result.fromName))
+    if (result.warning) failWith('Templates copied, but the calendar did not fully follow', result.warning)
+  }
+
+  // SHIFTTPL.1 — `display_order` has existed since the table did and nothing
+  // ever wrote it, so every template sat at 0 and the list fell back to
+  // start_time. Moving a row writes a dense 0..n-1 order for the ACTIVE list
+  // and PUTs only the rows whose number actually changed (a display_order-only
+  // PUT is the one edit the route does not regenerate blocks for).
+  async function moveTemplate(id, delta) {
+    if (busyId) return
+    const ordered = activeTemplates.slice()
+    const from = ordered.findIndex((t) => t.id === id)
+    const to = from + delta
+    if (from < 0 || to < 0 || to >= ordered.length) return
+    const [moved] = ordered.splice(from, 1)
+    ordered.splice(to, 0, moved)
+
+    setBusyId(id)
+    setError(null)
+    setNotice(null)
+    try {
+      for (const [index, t] of ordered.entries()) {
+        if (t.display_order === index) continue
+        const res = await fetch(`/api/schedule/templates/${t.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ display_order: index }),
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok || data.success === false) {
+          // Stop at the first refusal and re-read: a half-applied order is
+          // still a valid order, and guessing at the rest would hide it.
+          failWith('Could not save the new order', data.error || 'The order was only partly saved')
+          break
+        }
+      }
+      await fetchTemplates()
+    } catch {
+      failWith('Could not save the new order', 'Network error, please try again')
+    } finally {
+      setBusyId(null)
+    }
   }
 
   const activeTemplates = templates.filter(t => t.active)
   const inactiveTemplates = templates.filter(t => !t.active)
-  const templatesWithoutDays = activeTemplates.filter(t => !t.days_of_week || t.days_of_week.length === 0)
 
   return (
     <div>
@@ -147,34 +363,51 @@ export default function ShiftTemplateManager({ user }) {
           <h2 className="text-2xl font-bold">Shift Templates</h2>
           <p className="text-sm text-un1t-subtle mt-1">{user.activeLocation?.name} — Define your demand windows (when the studio needs coaches)</p>
         </div>
-        <button
-          type="button"
-          onClick={() => setShowForm('new')}
-          className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium px-4 py-2.5 rounded-lg transition-colors"
-        >
-          <Plus size={16} /> New Shift
-        </button>
+        <div className="flex items-center gap-2">
+          {copySources.length > 0 && (
+            <button
+              type="button"
+              onClick={() => { setNotice(null); setShowCopy(true) }}
+              className="flex items-center gap-2 border border-un1t-border bg-un1t-surface hover:bg-un1t-border/50 text-un1t-text text-sm font-medium px-4 py-2.5 rounded-lg transition-colors"
+            >
+              <Copy size={16} aria-hidden="true" /> Copy from another studio
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setShowForm('new')}
+            className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium px-4 py-2.5 rounded-lg transition-colors"
+          >
+            <Plus size={16} /> New Shift
+          </button>
+        </div>
       </div>
 
-      {templatesWithoutDays.length > 0 && (
-        <div className="mb-4 flex items-start gap-3 p-3 rounded-lg border border-amber-500/40 bg-amber-500/10 text-sm">
-          <AlertCircle size={16} className="text-amber-600 mt-0.5 flex-shrink-0" />
-          <div>
-            <div className="font-medium text-amber-800">
-              {templatesWithoutDays.length} template{templatesWithoutDays.length === 1 ? '' : 's'} without applicable days
-            </div>
-            <div className="text-xs text-amber-700/90 mt-0.5">
-              Edit each template to set which weekdays it should apply to. No blocks are generated until at least one day is selected.
-            </div>
-          </div>
+      {/* SHIFTTPL.1 — the "N templates without applicable days" warning is
+          gone. A template with no weekdays is the ONLY way to express a
+          one-off shift you place by hand, and operators keep them on purpose,
+          so the banner nagged forever about a deliberate choice and nothing
+          could ever clear it. The state is still visible, as a label on the
+          row that says what it IS rather than what is wrong with it. */}
+      {notice && (
+        <div
+          className="mb-4 flex items-start gap-2 p-3 rounded-lg border border-green-500/40 bg-green-500/10 text-sm text-green-700"
+          role="status"
+          data-testid="template-notice"
+        >
+          <Check size={16} className="mt-0.5 flex-shrink-0" aria-hidden="true" />
+          <div>{notice}</div>
         </div>
       )}
 
       {error && (
         <ScheduleErrorBanner
-          title="Could not load shift templates"
+          title={errorTitle}
           message={error}
-          onRetry={fetchTemplates}
+          // Retry re-reads the list, which only answers a failed LOAD. A
+          // refused delete is not retryable, and offering it would read as
+          // "try again and it might work".
+          onRetry={errorTitle === 'Could not load shift templates' ? fetchTemplates : undefined}
           busy={loading}
           onDismiss={() => setError(null)}
         />
@@ -187,20 +420,32 @@ export default function ShiftTemplateManager({ user }) {
           <Clock size={40} className="mx-auto mb-4 text-un1t-subtle" />
           <h3 className="text-lg font-semibold mb-2">No shift templates yet</h3>
           <p className="text-sm text-un1t-subtle mb-4">Create your first shift to start building rosters</p>
-          <button
-            type="button"
-            onClick={() => setShowForm('new')}
-            className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium px-4 py-2.5 rounded-lg transition-colors"
-          >
-            <Plus size={16} /> Create Shift
-          </button>
+          <div className="flex items-center justify-center gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={() => setShowForm('new')}
+              className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium px-4 py-2.5 rounded-lg transition-colors"
+            >
+              <Plus size={16} /> Create Shift
+            </button>
+            {/* TPLCLONE.1 — an empty studio (Hatch Street had none) is exactly
+                where copying another studio's templates saves the most typing. */}
+            {copySources.length > 0 && (
+              <button
+                type="button"
+                onClick={() => { setNotice(null); setShowCopy(true) }}
+                className="inline-flex items-center gap-2 border border-un1t-border bg-un1t-surface hover:bg-un1t-border/50 text-un1t-text text-sm font-medium px-4 py-2.5 rounded-lg transition-colors"
+              >
+                <Copy size={16} aria-hidden="true" /> Copy from another studio
+              </button>
+            )}
+          </div>
         </div>
       ) : (
         <div className="grid gap-3">
-          {activeTemplates.map(t => {
+          {activeTemplates.map((t, index) => {
             const daysLabel = formatDays(t.days_of_week)
-            const max = t.max_coaches || 15
-            const noDays = !daysLabel
+            const oneOff = !daysLabel
             return (
               <div key={t.id} className="bg-un1t-surface border border-un1t-border rounded-lg p-4 flex items-center justify-between">
                 <div className="flex items-center gap-4">
@@ -209,9 +454,33 @@ export default function ShiftTemplateManager({ user }) {
                     <div className="font-semibold">{t.name}</div>
                     <div className="text-sm text-un1t-subtle flex items-center gap-3 mt-0.5 flex-wrap">
                       <span className="flex items-center gap-1"><Clock size={12} /> {formatTime(t.start_time)} – {formatTime(t.end_time)}</span>
-                      <span className="flex items-center gap-1"><Users size={12} /> up to {max} {max === 1 ? 'coach' : 'coaches'}</span>
-                      {noDays ? (
-                        <span className="text-amber-700 text-xs">No days set</span>
+                      {/* SHIFTTPL.1 — the minimum was set on the form and then
+                          never shown again, so the number driving every
+                          understaffed flag in the estate was invisible here. */}
+                      <span className="flex items-center gap-1"><Users size={12} /> {coachRangeLabel(t)}</span>
+                      {t.kind === 'admin' && (
+                        <span
+                          className="text-xs px-1.5 py-0.5 rounded font-medium bg-slate-500/10 text-slate-700"
+                          title="Admin shift: no minimum, never flagged as a gap, outside the contractor budget. Hours still count."
+                        >
+                          Admin
+                        </span>
+                      )}
+                      {requiredNamesFor(t.id).length > 0 && (
+                        <span
+                          className="text-xs px-1.5 py-0.5 rounded font-medium bg-sky-500/10 text-sky-700"
+                          title="Advisory: the coach picker flags anyone without a current record on the day. It never stops an assignment."
+                        >
+                          Requires {requiredNamesFor(t.id).join(', ')}
+                        </span>
+                      )}
+                      {oneOff ? (
+                        <span
+                          className="text-xs px-1.5 py-0.5 rounded font-medium bg-slate-500/10 text-slate-700"
+                          title="No weekdays set, so no shifts are generated. Add them by hand on the calendar."
+                        >
+                          One-off
+                        </span>
                       ) : (
                         <span>{daysLabel}</span>
                       )}
@@ -219,7 +488,27 @@ export default function ShiftTemplateManager({ user }) {
                     </div>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => moveTemplate(t.id, -1)}
+                    disabled={busyId != null || index === 0}
+                    className="p-2 rounded hover:bg-un1t-border/50 text-un1t-subtle hover:text-un1t-text transition-colors disabled:opacity-30"
+                    aria-label={`Move the ${t.name} template up`}
+                    title="Move up"
+                  >
+                    <ChevronUp size={16} aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => moveTemplate(t.id, 1)}
+                    disabled={busyId != null || index === activeTemplates.length - 1}
+                    className="p-2 rounded hover:bg-un1t-border/50 text-un1t-subtle hover:text-un1t-text transition-colors disabled:opacity-30"
+                    aria-label={`Move the ${t.name} template down`}
+                    title="Move down"
+                  >
+                    <ChevronDown size={16} aria-hidden="true" />
+                  </button>
                   <button
                     type="button"
                     onClick={() => setShowForm(t)}
@@ -232,10 +521,20 @@ export default function ShiftTemplateManager({ user }) {
                   <button
                     type="button"
                     onClick={() => handleDeactivate(t.id)}
-                    className="p-2 rounded hover:bg-red-500/20 text-un1t-subtle hover:text-red-700 transition-colors"
+                    className="p-2 rounded hover:bg-amber-500/20 text-un1t-subtle hover:text-amber-700 transition-colors disabled:opacity-50"
                     disabled={busyId === t.id}
                     aria-label={`Deactivate the ${t.name} template`}
                     title="Deactivate"
+                  >
+                    <Ban size={16} aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(t)}
+                    className="p-2 rounded hover:bg-red-500/20 text-un1t-subtle hover:text-red-700 transition-colors disabled:opacity-50"
+                    disabled={busyId === t.id}
+                    aria-label={`Delete the ${t.name} template permanently`}
+                    title="Delete permanently"
                   >
                     <Trash2 size={16} aria-hidden="true" />
                   </button>
@@ -253,15 +552,29 @@ export default function ShiftTemplateManager({ user }) {
                     <div className="w-2 h-8 rounded-full" style={{ backgroundColor: t.color }} />
                     <span className="text-sm">{t.name} ({formatTime(t.start_time)}–{formatTime(t.end_time)})</span>
                   </div>
-                  <button
-                    type="button"
-                    aria-label={`Reactivate the ${t.name} template`}
-                    onClick={() => setTemplateActive(t.id, true)}
-                    disabled={busyId === t.id}
-                    className="text-xs text-blue-700 hover:text-blue-800 disabled:opacity-50"
-                  >
-                    Reactivate
-                  </button>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      aria-label={`Reactivate the ${t.name} template`}
+                      onClick={() => setTemplateActive(t.id, true)}
+                      disabled={busyId === t.id}
+                      className="text-xs text-blue-700 hover:text-blue-800 disabled:opacity-50"
+                    >
+                      Reactivate
+                    </button>
+                    {/* SHIFTTPL.1 — the deactivated list is where a template
+                        created by mistake ends up, so this is where deleting
+                        it for good has to be reachable. */}
+                    <button
+                      type="button"
+                      aria-label={`Delete the ${t.name} template permanently`}
+                      onClick={() => handleDelete(t)}
+                      disabled={busyId === t.id}
+                      className="text-xs text-red-700 hover:text-red-800 disabled:opacity-50"
+                    >
+                      Delete
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -275,13 +588,24 @@ export default function ShiftTemplateManager({ user }) {
           template={typeof showForm === 'object' ? showForm : null}
           onSave={handleSave}
           onClose={() => setShowForm(false)}
+          qualificationTypes={editorTypesFor(typeof showForm === 'object' ? showForm.id : null)}
+          requiredIds={requiredIdsFor(typeof showForm === 'object' ? showForm.id : null)}
+        />
+      )}
+
+      {showCopy && (
+        <CopyTemplatesModal
+          sources={copySources}
+          target={{ id: locationId, name: user.activeLocation?.name || 'this studio' }}
+          onClose={() => setShowCopy(false)}
+          onDone={handleCopied}
         />
       )}
     </div>
   )
 }
 
-function TemplateFormModal({ template, onSave, onClose }) {
+function TemplateFormModal({ template, onSave, onClose, qualificationTypes = null, requiredIds = [] }) {
   const [name, setName] = useState(template?.name || '')
   const [startTime, setStartTime] = useState(template?.start_time?.slice(0, 5) || '06:00')
   const [endTime, setEndTime] = useState(template?.end_time?.slice(0, 5) || '14:00')
@@ -295,6 +619,38 @@ function TemplateFormModal({ template, onSave, onClose }) {
   const [minCoaches, setMinCoaches] = useState(
     template?.min_coaches === 0 ? 0 : (template?.min_coaches || 1)
   )
+  // SHIFTTYPE.1 — an admin template has no minimum; the API refuses one
+  // (admin_has_no_minimum), so the field is locked at 0 while Admin is chosen.
+  const [kind, setKind] = useState(template?.kind === 'admin' ? 'admin' : 'class')
+  // The class minimum in force when Admin was chosen, so flipping back
+  // restores it (a deliberate 0 included). null = none known: a template that
+  // opened as admin, which gets the new-class-template default of 1.
+  const [classMin, setClassMin] = useState(null)
+  // QUALS.1 — null types = the catalogue did not load: no field, and the
+  // save carries no requirements at all.
+  // QUALS.1 review 3 — a SNAPSHOT taken once, when the form opens. If the
+  // catalogue had not loaded by then, the form shows no field and sends no
+  // requirements key at all for its whole life (the PUT is skipped and the
+  // server keeps what it has), even if the catalogue lands while it is open:
+  // a form that opened with [] would otherwise save "requires nothing".
+  const [qualSnapshot] = useState(() => (Array.isArray(qualificationTypes)
+    ? { types: qualificationTypes, before: [...(requiredIds || [])] }
+    : null))
+  const [requiredQuals, setRequiredQuals] = useState(() => qualSnapshot?.before || [])
+
+  function chooseKind(next) {
+    if (next === kind) return
+    setKind(next)
+    if (next === 'admin') {
+      setClassMin(minCoaches)
+      setMinCoaches(0)
+    } else {
+      // Leaving admin: the minimum this template had as a class shift, or the
+      // same default a new class template gets (SHIFTMIN.1). Kept at or under
+      // the maximum, which may have been lowered while Admin was chosen.
+      setMinCoaches(Math.min(classMin ?? 1, maxCoaches))
+    }
+  }
 
   function toggleDay(code) {
     setDays(prev => prev.includes(code) ? prev.filter(d => d !== code) : [...prev, code])
@@ -333,6 +689,33 @@ function TemplateFormModal({ template, onSave, onClose }) {
               className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
             />
           </div>
+
+          <fieldset>
+            <legend className="block text-xs text-un1t-subtle mb-1">Kind *</legend>
+            <div className="grid grid-cols-2 gap-2">
+              {KIND_OPTIONS.map((k) => (
+                <label
+                  key={k.value}
+                  className={`flex items-start gap-2 rounded-md border px-3 py-2 cursor-pointer bg-un1t-bg ${
+                    kind === k.value ? 'border-un1t-text' : 'border-un1t-border'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="template-kind"
+                    value={k.value}
+                    checked={kind === k.value}
+                    onChange={() => chooseKind(k.value)}
+                    className="mt-0.5"
+                  />
+                  <span>
+                    <span className="block text-sm font-medium text-un1t-text">{k.label}</span>
+                    <span className="block text-[11px] text-un1t-subtle">{k.hint}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -392,20 +775,24 @@ function TemplateFormModal({ template, onSave, onClose }) {
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs text-un1t-subtle mb-1">Minimum coaches *</label>
+              <label htmlFor="template-min-coaches" className="block text-xs text-un1t-subtle mb-1">Minimum coaches *</label>
               <input
+                id="template-min-coaches"
                 type="number"
                 min={0}
                 max={maxCoaches}
                 value={minCoaches}
+                disabled={kind === 'admin'}
                 onChange={e => {
                   const v = Math.max(0, Math.min(maxCoaches, parseInt(e.target.value || '0', 10)))
                   setMinCoaches(v)
                 }}
-                className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+                className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text disabled:opacity-60"
               />
               <p className="text-[11px] text-un1t-subtle mt-1.5">
-                Blocks with fewer assigned flip the Studio Overview to amber. 0 = no floor.
+                {kind === 'admin'
+                  ? 'Admin shifts have no minimum.'
+                  : 'Blocks with fewer assigned flip the Studio Overview to amber. 0 = no floor.'}
               </p>
             </div>
             <div>
@@ -441,6 +828,8 @@ function TemplateFormModal({ template, onSave, onClose }) {
             />
           </div>
 
+          <TemplateQualificationsField types={qualSnapshot?.types || null} selected={requiredQuals} onChange={setRequiredQuals} />
+
           <div>
             <label className="block text-xs text-un1t-subtle mb-2">Colour</label>
             <div className="flex gap-2 flex-wrap">
@@ -475,6 +864,10 @@ function TemplateFormModal({ template, onSave, onClose }) {
               days_of_week: days,
               max_coaches: maxCoaches,
               min_coaches: minCoaches,
+              kind,
+              ...(qualSnapshot
+                ? { required_qualification_type_ids: requiredQuals, required_qualification_type_ids_before: qualSnapshot.before }
+                : {}),
             })
           }
           disabled={!name || !startTime || !endTime}
@@ -484,5 +877,39 @@ function TemplateFormModal({ template, onSave, onClose }) {
         </button>
       </div>
     </Modal>
+  )
+}
+
+// QUALS.1 — what a template asks for. Advisory: the coach picker badges a
+// coach without a current record on the shift's date; nothing refuses.
+function TemplateQualificationsField({ types, selected, onChange }) {
+  if (!types || types.length === 0) return null
+  const full = selected.length >= MAX_TEMPLATE_REQUIREMENTS
+  return (
+    <fieldset>
+      <legend className="block text-xs text-un1t-subtle mb-2">Requires (advisory)</legend>
+      <div className="flex flex-wrap gap-2">
+        {types.map((t) => {
+          const on = selected.includes(t.id)
+          return (
+            <label
+              key={t.id}
+              className={`flex items-center gap-1.5 text-sm px-2 py-1 rounded-md border ${on ? 'border-un1t-text' : 'border-un1t-border'}`}
+            >
+              <input
+                type="checkbox"
+                checked={on}
+                disabled={!on && full}
+                onChange={() => onChange(on ? selected.filter((id) => id !== t.id) : [...selected, t.id])}
+              />
+              {t.name}{t.active === false ? ' (archived)' : ''}
+            </label>
+          )
+        })}
+      </div>
+      <p className="text-[11px] text-un1t-subtle mt-1.5">
+        The coach picker flags anyone without a current record on the day. It never stops you assigning them. Up to {MAX_TEMPLATE_REQUIREMENTS}.
+      </p>
+    </fieldset>
   )
 }

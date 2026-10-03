@@ -18,6 +18,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
+import { canWriteActivitiesAt } from '@/lib/activity-write-gate'
 import { redirect } from 'next/navigation'
 import TasksPage from '@/components/TasksPage'
 
@@ -78,6 +79,9 @@ export default async function ActivitiesPage() {
       locationId={locationId}
       profiles={profiles}
       projectsSeed={projectsSeed}
+      // C146 TASKSNEEDCONTACTS.1 — create / status writes need Contacts here
+      // (web or phone) since mig 700; without it the page is read-only.
+      canWrite={canWriteActivitiesAt(user, locationId)}
     />
   )
 }

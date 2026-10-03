@@ -9,6 +9,7 @@
 import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { excludeTombstones } from '@/lib/staff-tombstone'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -25,9 +26,8 @@ export async function GET() {
   }
 
   const db = createServerClient()
-  const { data, error } = await db
-    .from('profiles')
-    .select('id, full_name, email, role, active, profile_locations(locations(id, name))')
+  const { data, error } = await excludeTombstones(db.from('profiles')
+    .select('id, full_name, email, role, active, profile_locations(locations(id, name))'))
     .order('full_name')
   if (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 })

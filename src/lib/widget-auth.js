@@ -16,6 +16,7 @@
 import { parseWidgetBearer, hashWidgetToken } from './widget-token.js'
 import { loadRoleTemplatesForLocations } from './role-templates.js'
 import { logWarn } from './log.js'
+import { isTombstone } from './staff-tombstone.js'
 
 export async function getWidgetUser(db, request) {
   const token = parseWidgetBearer(request?.headers?.get?.('authorization'))
@@ -33,10 +34,17 @@ export async function getWidgetUser(db, request) {
 
   const { data: profile, error: profileErr } = await db
     .from('profiles')
-    .select('id, email, full_name, role, employment_type')
+    .select('id, email, full_name, role, employment_type, active, deleted_at')
     .eq('id', row.profile_id)
     .maybeSingle()
   if (profileErr || !profile) return null
+  // ACTIVEUSER.1 — this path never touches getCurrentUser(), so it needs the
+  // same two refusals. Deactivating someone KEEPS their profile_locations rows
+  // (reactivation must restore them), so the assignment check below does not
+  // catch it — and a widget can unlock the studio door. Strictly `=== false`,
+  // as in getCurrentUser: a missing `active` never locks anyone out. (A
+  // tombstone's tokens are deleted by mig 622; the check is the second lock.)
+  if (isTombstone(profile) || profile.active === false) return null
 
   // The assignment is the authorisation, and its absence is a revocation
   // nobody had to perform: take someone off a studio and their widget for

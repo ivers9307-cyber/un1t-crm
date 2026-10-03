@@ -72,6 +72,17 @@ describe('groupTeamShiftsByCoach', () => {
   })
 })
 
+// MOBILESCHED.2 — the /shifts row carries the block's own time; a block edited
+// away from its template must show the coach on at the block's hours.
+describe('groupTeamShiftsByCoach — block times', () => {
+  it('resolves override → block_start_time → template', () => {
+    const row = { ...shift('a', 'A', '06:00', '14:00'), block_start_time: '07:00:00', block_end_time: '12:00:00' }
+    expect(groupTeamShiftsByCoach([row])[0]).toMatchObject({ firstStart: '07:00', lastEnd: '12:00' })
+    const adjusted = { ...row, end_time_override: '11:00:00' }
+    expect(groupTeamShiftsByCoach([adjusted])[0]).toMatchObject({ firstStart: '07:00', lastEnd: '11:00' })
+  })
+})
+
 describe('coachSpanLabel', () => {
   it('renders a start – end range', () => {
     expect(coachSpanLabel({ firstStart: '05:45', lastEnd: '20:30' })).toBe('05:45 – 20:30')

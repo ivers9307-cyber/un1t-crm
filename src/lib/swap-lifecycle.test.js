@@ -1,6 +1,9 @@
 // src/lib/swap-lifecycle.test.js
 import { describe, it, expect } from 'vitest'
-import { resolveSwapTransition, TERMINAL_SWAP_STATES } from './swap-lifecycle'
+import {
+  resolveSwapTransition, TERMINAL_SWAP_STATES, swapChangeLogEntries, swapApprovalError, swapApprovalRpc,
+  swapIncomingMoves, evaluateSwapMoveConflicts, swapConflictMessage, SWAP_MOVE_CLEARS, SHIFT_STARTED_ERROR, SHIFT_STARTED_ERRORS,
+} from './swap-lifecycle'
 
 // Minimal swap factory. requester_shift / target_shift mirror the embed the
 // route fetches (only profile_id is read by the resolver).
@@ -52,7 +55,9 @@ describe('resolveSwapTransition — coach claim (open swap)', () => {
     expect(r.status).toBe(403)
   })
 
-  it('rejects a claim by a coach not at the swap location', () => {
+  // SCHEDROLES.2 — a stranger to the swap's studio gets the detail-route 404,
+  // not a 403 that confirms the id exists.
+  it('404s a claim by a coach not at the swap location', () => {
     const r = resolveSwapTransition({
       swap: makeSwap(),
       requestedStatus: 'awaiting_approval',
@@ -60,7 +65,8 @@ describe('resolveSwapTransition — coach claim (open swap)', () => {
       userLocationIds: ['loc-other'],
     })
     expect(r.ok).toBe(false)
-    expect(r.status).toBe(403)
+    expect(r.status).toBe(404)
+    expect(r.error).toBe('Swap request not found')
   })
 
   it('rejects claiming a swap already targeted at someone else', () => {
@@ -179,6 +185,7 @@ describe('resolveSwapTransition — manager approve finalisation', () => {
       swap: makeSwap({ status: 'awaiting_approval', target_id: 'coach-2' }),
       requestedStatus: 'approved',
       user: manager,
+      isManagerHere: true,
       userLocationIds: ['loc-1'],
       reviewNote: 'ok',
     })
@@ -187,7 +194,7 @@ describe('resolveSwapTransition — manager approve finalisation', () => {
     expect(r.swapUpdates).toMatchObject({ status: 'approved', reviewed_by: 'mgr-1', review_note: 'ok' })
     expect(r.swapUpdates.reviewed_at).toBeTruthy()
     expect(r.assignmentOps).toEqual([
-      { id: 'asg-req', set: { profile_id: 'coach-2', status: 'swapped' } },
+      { id: 'asg-req', set: { profile_id: 'coach-2', status: 'swapped', ...SWAP_MOVE_CLEARS } },
     ])
   })
 
@@ -202,16 +209,26 @@ describe('resolveSwapTransition — manager approve finalisation', () => {
       }),
       requestedStatus: 'approved',
       user: manager,
+      isManagerHere: true,
       userLocationIds: ['loc-1'],
     })
     expect(r.ok).toBe(true)
     expect(r.effect).toBe('approved_swap')
     expect(r.assignmentOps).toEqual(
       expect.arrayContaining([
-        { id: 'asg-req', set: { profile_id: 'coach-2', status: 'swapped' } },
-        { id: 'asg-tgt', set: { profile_id: 'req-1', status: 'swapped' } },
+        { id: 'asg-req', set: { profile_id: 'coach-2', status: 'swapped', ...SWAP_MOVE_CLEARS } },
+        { id: 'asg-tgt', set: { profile_id: 'req-1', status: 'swapped', ...SWAP_MOVE_CLEARS } },
       ])
     )
+    // SWAPNOTIFY.1 — a reciprocal swap changes BOTH coaches' shifts; before
+    // this the target (swap.target_id) was never told their shift changed.
+    expect(r.notify).toEqual(
+      expect.arrayContaining([
+        { kind: 'decision_for_requester', to: ['req-1'] },
+        { kind: 'decision_for_taker', to: ['coach-2'] },
+      ])
+    )
+    expect(r.notify).toHaveLength(2)
   })
 
   it('drops the shift when approving an untargeted swap', () => {
@@ -219,6 +236,7 @@ describe('resolveSwapTransition — manager approve finalisation', () => {
       swap: makeSwap(),
       requestedStatus: 'approved',
       user: manager,
+      isManagerHere: true,
       userLocationIds: ['loc-1'],
     })
     expect(r.ok).toBe(true)
@@ -232,6 +250,7 @@ describe('resolveSwapTransition — manager approve finalisation', () => {
       swap: makeSwap({ status: 'awaiting_approval', target_id: 'coach-2' }),
       requestedStatus: 'rejected',
       user: manager,
+      isManagerHere: true,
       userLocationIds: ['loc-1'],
     })
     expect(r.ok).toBe(true)
@@ -258,6 +277,7 @@ describe('resolveSwapTransition — terminal-state + bad-input guards', () => {
       swap: makeSwap({ status: st }),
       requestedStatus: 'awaiting_approval',
       user: manager,
+      isManagerHere: true,
       userLocationIds: ['loc-1'],
     })
     expect(r.ok).toBe(false)
@@ -269,6 +289,7 @@ describe('resolveSwapTransition — terminal-state + bad-input guards', () => {
       swap: makeSwap(),
       requestedStatus: 'banana',
       user: manager,
+      isManagerHere: true,
       userLocationIds: ['loc-1'],
     })
     expect(r.ok).toBe(false)
@@ -282,14 +303,14 @@ describe('resolveSwapTransition — terminal-state + bad-input guards', () => {
 
 // APPROVALS-PERCAT.1 — the "approve" transition is gated by the
 // approvals_shift_swaps permission, passed in as `canApprove` by the route.
-// canApprove defaults to the old isManager check when omitted, so every
-// existing caller/test above (which never passes it) keeps working.
+// canApprove defaults to the isManagerHere answer when omitted.
 describe('resolveSwapTransition canApprove override', () => {
   it('denies a manager approval when canApprove is explicitly false', () => {
     const r = resolveSwapTransition({
       swap: makeSwap({ status: 'awaiting_approval', target_id: 'coach-2' }),
       requestedStatus: 'approved',
       user: manager,
+      isManagerHere: true,
       userLocationIds: ['loc-1'],
       canApprove: false,
     })
@@ -309,15 +330,26 @@ describe('resolveSwapTransition canApprove override', () => {
     expect(r.effect).toBe('approved_reassign')
   })
 
-  it('falls back to the manager check when canApprove is omitted (back-compat)', () => {
+  it('falls back to isManagerHere when canApprove is omitted', () => {
+    const r = resolveSwapTransition({
+      swap: makeSwap({ status: 'awaiting_approval', target_id: 'coach-2' }),
+      requestedStatus: 'approved',
+      user: manager,
+      isManagerHere: true,
+      userLocationIds: ['loc-1'],
+    })
+    expect(r.ok).toBe(true)
+    expect(r.effect).toBe('approved_reassign')
+  })
+
+  it('SCHEDROLES.1 — with neither canApprove nor isManagerHere, even a manager is refused (fail closed)', () => {
     const r = resolveSwapTransition({
       swap: makeSwap({ status: 'awaiting_approval', target_id: 'coach-2' }),
       requestedStatus: 'approved',
       user: manager,
       userLocationIds: ['loc-1'],
     })
-    expect(r.ok).toBe(true)
-    expect(r.effect).toBe('approved_reassign')
+    expect(r.status).toBe(403)
   })
 })
 
@@ -342,7 +374,7 @@ describe('resolveSwapTransition — assignment status stays DB-valid', () => {
 
   it.each(approveCases)('%s → only DB-valid assignment statuses', (_label, swap) => {
     const r = resolveSwapTransition({
-      swap, requestedStatus: 'approved', user: manager, userLocationIds: ['loc-1'],
+      swap, requestedStatus: 'approved', user: manager, userLocationIds: ['loc-1'], isManagerHere: true,
     })
     expect(r.ok).toBe(true)
     for (const op of r.assignmentOps) {
@@ -352,5 +384,445 @@ describe('resolveSwapTransition — assignment status stays DB-valid', () => {
         expect(VALID_ASSIGNMENT_STATUSES).toContain(op.set.status)
       }
     }
+  })
+})
+
+describe('swapChangeLogEntries (SWAPAUDIT.1)', () => {
+  const reqBlock = { id: 'blk-req', location_id: 'loc-1', block_date: '2099-01-01', rosters: { status: 'published' } }
+  const tgtBlock = { id: 'blk-tgt', location_id: 'loc-1', block_date: '2099-01-02', rosters: { status: 'draft' } }
+
+  it('reassign: requester leaves, taker takes, both on the requester block', () => {
+    const swap = makeSwap({ target_id: 'coach-2', requester_shift: { id: 'asg-req', profile_id: 'req-1', block_id: 'blk-req', block: reqBlock } })
+    expect(swapChangeLogEntries('approved_reassign', swap)).toEqual([
+      { role: 'requester', coachId: 'req-1', action: 'unassigned', block: reqBlock, blockId: 'blk-req' },
+      { role: 'taker', coachId: 'coach-2', action: 'assigned', block: reqBlock, blockId: 'blk-req' },
+    ])
+  })
+
+  it('reciprocal: four rows, each block gets a leave and a take', () => {
+    const swap = makeSwap({
+      target_id: 'coach-2',
+      target_shift_id: 'asg-tgt',
+      requester_shift: { id: 'asg-req', profile_id: 'req-1', block_id: 'blk-req', block: reqBlock },
+      target_shift: { id: 'asg-tgt', profile_id: 'coach-2', block_id: 'blk-tgt', block: tgtBlock },
+    })
+    expect(swapChangeLogEntries('approved_swap', swap)).toEqual([
+      { role: 'requester', coachId: 'req-1', action: 'unassigned', block: reqBlock, blockId: 'blk-req' },
+      { role: 'taker', coachId: 'coach-2', action: 'assigned', block: reqBlock, blockId: 'blk-req' },
+      { role: 'taker', coachId: 'coach-2', action: 'unassigned', block: tgtBlock, blockId: 'blk-tgt' },
+      { role: 'requester', coachId: 'req-1', action: 'assigned', block: tgtBlock, blockId: 'blk-tgt' },
+    ])
+  })
+
+  it('falls back to the embed block_id when the block embed is missing', () => {
+    const swap = makeSwap({ target_id: 'coach-2', requester_shift: { id: 'asg-req', profile_id: 'req-1', block_id: 'blk-req' } })
+    const entries = swapChangeLogEntries('approved_reassign', swap)
+    expect(entries.map((e) => [e.block, e.blockId])).toEqual([[null, 'blk-req'], [null, 'blk-req']])
+  })
+
+  it('returns nothing for any other effect', () => {
+    for (const effect of ['approved_drop', 'rejected', 'claimed', 'cancelled', 'denied']) {
+      expect(swapChangeLogEntries(effect, makeSwap({ target_id: 'coach-2' }))).toEqual([])
+    }
+    expect(swapChangeLogEntries('approved_swap', null)).toEqual([])
+  })
+})
+
+describe('swapApprovalError (SWAPATOMIC.1 / SWAPS.2)', () => {
+  it('maps each swap_* refusal to a 409 with a human message', () => {
+    for (const prefix of ['swap_not_open', 'swap_shift_missing', 'swap_stale', 'swap_same_block', 'swap_conflict']) {
+      const r = swapApprovalError({ code: 'P0001', message: `${prefix}: detail` })
+      expect(r.status).toBe(409)
+      expect(r.error).not.toMatch(/^swap_/)
+    }
+  })
+  it('maps swap_not_found to 404', () => {
+    expect(swapApprovalError({ code: 'P0001', message: 'swap_not_found: x' })).toEqual({ status: 404, error: 'Swap request not found' })
+  })
+  it('maps a unique violation to a 409 conflict', () => {
+    expect(swapApprovalError({ code: '23505', message: 'duplicate key' }).status).toBe(409)
+  })
+  it('leaves an unrecognised P0001 or any other error as a 400 with the raw message', () => {
+    expect(swapApprovalError({ code: 'P0001', message: 'something else' })).toEqual({ status: 400, error: 'something else' })
+    expect(swapApprovalError({ code: '08006', message: 'connection lost' })).toEqual({ status: 400, error: 'connection lost' })
+    expect(swapApprovalError(null)).toEqual({ status: 400, error: 'Swap failed' })
+  })
+})
+
+describe('SWAP_MOVE_CLEARS (SWAPS.2)', () => {
+  it('clears the previous coach\'s overrides, reason and arrival stamp, nothing else', () => {
+    expect(SWAP_MOVE_CLEARS).toEqual({
+      start_time_override: null, end_time_override: null, partial_reason: null, arrived_at: null, arrival_source: null,
+    })
+    expect(Object.isFrozen(SWAP_MOVE_CLEARS)).toBe(true)
+  })
+})
+
+describe('swapApprovalRpc (SWAPS.2)', () => {
+  const updates = { status: 'approved', reviewed_by: 'mgr-1', reviewed_at: '2026-09-17T10:00:00Z', review_note: 'ok' }
+  const review = { p_swap_id: 'swap-1', p_reviewed_by: 'mgr-1', p_reviewed_at: '2026-09-17T10:00:00Z', p_review_note: 'ok' }
+
+  it('reciprocal -> approve_reciprocal_shift_swap with both coaches read off the embeds', () => {
+    const swap = makeSwap({ target_id: 'coach-2', target_shift_id: 'asg-tgt', target_shift: { id: 'asg-tgt', profile_id: 'coach-2' } })
+    expect(swapApprovalRpc('approved_swap', 'swap-1', swap, updates)).toEqual({
+      fn: 'approve_reciprocal_shift_swap', args: { ...review, p_requester_profile: 'req-1', p_target_profile: 'coach-2' },
+    })
+  })
+
+  it('reassign -> approve_reassign_shift_swap with the taker from swap.target_id', () => {
+    const swap = makeSwap({ status: 'awaiting_approval', target_id: 'coach-2' })
+    expect(swapApprovalRpc('approved_reassign', 'swap-1', swap, updates)).toEqual({
+      fn: 'approve_reassign_shift_swap', args: { ...review, p_requester_profile: 'req-1', p_target_profile: 'coach-2' },
+    })
+  })
+
+  it('drop -> approve_drop_shift_swap with the requester only', () => {
+    expect(swapApprovalRpc('approved_drop', 'swap-1', makeSwap(), updates)).toEqual({
+      fn: 'approve_drop_shift_swap', args: { ...review, p_requester_profile: 'req-1' },
+    })
+  })
+
+  it('passes null profiles when the embed is missing (the function answers swap_stale)', () => {
+    const swap = makeSwap({ requester_shift: null })
+    expect(swapApprovalRpc('approved_drop', 'swap-1', swap, updates).args.p_requester_profile).toBeNull()
+  })
+
+  it('returns null for every non-approval effect', () => {
+    for (const effect of ['claimed', 'accepted', 'withdrawn', 'declined', 'rejected', 'cancelled', 'denied']) {
+      expect(swapApprovalRpc(effect, 'swap-1', makeSwap(), updates)).toBeNull()
+    }
+    expect(swapApprovalRpc('approved_drop', 'swap-1', null, updates)).toBeNull()
+  })
+})
+
+describe('swapIncomingMoves (SWAPS.2)', () => {
+  const reqBlock = { id: 'blk-req', block_date: '2099-01-01', start_time: '06:00:00', end_time: '10:00:00' }
+  const tgtBlock = { id: 'blk-tgt', block_date: '2099-01-02', start_time: '17:00:00', end_time: '20:00:00' }
+  const reciprocalSwap = () => makeSwap({
+    target_id: 'coach-2', target_shift_id: 'asg-tgt',
+    requester_shift: { id: 'asg-req', profile_id: 'req-1', block: reqBlock },
+    target_shift: { id: 'asg-tgt', profile_id: 'coach-2', block: tgtBlock },
+  })
+
+  it('reassign: the taker lands on the requester block, leaving nothing', () => {
+    const swap = makeSwap({ target_id: 'coach-2', requester_shift: { id: 'asg-req', profile_id: 'req-1', block: reqBlock } })
+    expect(swapIncomingMoves(swap)).toEqual([
+      { role: 'taker', coachId: 'coach-2', block: reqBlock, leavingAssignmentId: null },
+    ])
+  })
+
+  it('open claim: the claimant is the taker', () => {
+    const swap = makeSwap({ requester_shift: { id: 'asg-req', profile_id: 'req-1', block: reqBlock } })
+    expect(swapIncomingMoves(swap, { takerId: 'coach-9', takerOnly: true })).toEqual([
+      { role: 'taker', coachId: 'coach-9', block: reqBlock, leavingAssignmentId: null },
+    ])
+  })
+
+  it('reciprocal: both coaches land on the other block, each leaving their own shift', () => {
+    expect(swapIncomingMoves(reciprocalSwap())).toEqual([
+      { role: 'taker', coachId: 'coach-2', block: reqBlock, leavingAssignmentId: 'asg-tgt' },
+      { role: 'requester', coachId: 'req-1', block: tgtBlock, leavingAssignmentId: 'asg-req' },
+    ])
+  })
+
+  it('takerOnly keeps a colleague\'s move (and leave) out of a claim', () => {
+    expect(swapIncomingMoves(reciprocalSwap(), { takerId: 'coach-2', takerOnly: true }).map((m) => m.role)).toEqual(['taker'])
+  })
+
+  it('drop, missing swap or missing block embed: no moves', () => {
+    expect(swapIncomingMoves(makeSwap({ requester_shift: { id: 'asg-req', profile_id: 'req-1', block: reqBlock } }))).toEqual([])
+    expect(swapIncomingMoves(null)).toEqual([])
+    expect(swapIncomingMoves(makeSwap({ target_id: 'coach-2' }))).toEqual([])
+  })
+})
+
+describe('evaluateSwapMoveConflicts (SWAPS.2)', () => {
+  const block = { id: 'blk-1', block_date: '2099-01-01', start_time: '06:00:00', end_time: '10:00:00' }
+  const move = { role: 'taker', coachId: 'coach-2', block, leavingAssignmentId: 'asg-own' }
+  const other = (over = {}) => ({
+    id: 'asg-x', profile_id: 'coach-2', block_id: 'blk-x', status: 'scheduled',
+    shift_blocks: { id: 'blk-x', block_date: '2099-01-01', start_time: '09:00:00', end_time: '12:00:00', shift_templates: { name: 'Midday' }, locations: { name: 'Hatch' } },
+    ...over,
+  })
+  const leave = (over = {}) => ({ id: 't1', profile_id: 'coach-2', type: 'holiday', status: 'approved', start_date: '2098-12-31', end_date: '2099-01-02', ...over })
+
+  it('approved leave covering the date is a conflict', () => {
+    expect(evaluateSwapMoveConflicts(move, { timeOff: [leave()] })).toEqual([
+      { kind: 'leave', role: 'taker', coachId: 'coach-2', date: '2099-01-01', type: 'holiday', startDate: '2098-12-31', endDate: '2099-01-02' },
+    ])
+  })
+
+  it('pending leave, leave not covering the date, or someone else\'s leave is not', () => {
+    expect(evaluateSwapMoveConflicts(move, { timeOff: [
+      leave({ status: 'pending' }),
+      leave({ start_date: '2099-01-02', end_date: '2099-01-03' }),
+      leave({ profile_id: 'coach-3' }),
+    ] })).toEqual([])
+  })
+
+  it('an overlapping live shift that day is a conflict, with its effective window', () => {
+    expect(evaluateSwapMoveConflicts(move, { assignments: [other()] })).toEqual([{
+      kind: 'overlap', role: 'taker', coachId: 'coach-2', date: '2099-01-01',
+      shiftName: 'Midday', locationName: 'Hatch', startTime: '09:00', endTime: '12:00', blockStart: '06:00', blockEnd: '10:00',
+    }])
+  })
+
+  it('uses the other shift\'s own override: trimmed clear of the block, no conflict', () => {
+    expect(evaluateSwapMoveConflicts(move, { assignments: [other({ start_time_override: '10:00:00' })] })).toEqual([])
+  })
+
+  it('ignores touching shifts, cancelled rows, the leaving shift, the destination block and other days', () => {
+    const touching = other({ shift_blocks: { ...other().shift_blocks, start_time: '10:00:00' } })
+    expect(evaluateSwapMoveConflicts(move, { assignments: [
+      touching,
+      other({ status: 'cancelled' }),
+      other({ id: 'asg-own' }),
+      other({ block_id: 'blk-1', shift_blocks: { ...other().shift_blocks, id: 'blk-1' } }),
+      other({ shift_blocks: { ...other().shift_blocks, block_date: '2099-01-02' } }),
+      other({ profile_id: 'coach-3' }),
+    ] })).toEqual([])
+  })
+
+  it('no coach or no date: nothing', () => {
+    expect(evaluateSwapMoveConflicts({ ...move, coachId: null }, { timeOff: [leave()] })).toEqual([])
+    expect(evaluateSwapMoveConflicts(null)).toEqual([])
+  })
+})
+
+describe('swapConflictMessage (SWAPS.2)', () => {
+  const leave = { kind: 'leave', coachId: 'c', date: '2099-01-01', type: 'holiday', startDate: '2099-01-01', endDate: '2099-01-03' }
+  const overlap = { kind: 'overlap', coachId: 'c', date: '2099-01-01', shiftName: 'Midday', locationName: 'Hatch', startTime: '09:00', endTime: '12:00', blockStart: '06:00', blockEnd: '10:00' }
+
+  it('names a colleague for a manager', () => {
+    expect(swapConflictMessage(leave, { name: 'Bea' })).toBe('Bea has approved holiday from 2099-01-01 to 2099-01-03, which covers the shift on 2099-01-01.')
+    expect(swapConflictMessage(overlap, { name: 'Bea' })).toBe('Bea is already on Midday 09:00 to 12:00 at Hatch on 2099-01-01, which overlaps the shift (06:00 to 10:00).')
+  })
+
+  it('speaks to the coach as "You"', () => {
+    expect(swapConflictMessage({ ...leave, endDate: '2099-01-01', type: 'sick' }, { isViewer: true })).toBe('You have approved sick leave on 2099-01-01, which covers the shift on 2099-01-01.')
+    expect(swapConflictMessage(overlap, { isViewer: true })).toMatch(/^You are already on Midday/)
+  })
+
+  it('falls back when names or details are missing', () => {
+    expect(swapConflictMessage({ ...overlap, shiftName: null, locationName: null })).toMatch(/^This coach is already on another shift 09:00 to 12:00 on/)
+    expect(swapConflictMessage({ kind: 'check_failed', date: '2099-01-01' }, { name: 'Bea' })).toBe('Could not check Bea\'s leave and other shifts for 2099-01-01.')
+  })
+
+  it('never uses an em dash', () => {
+    for (const c of [leave, overlap, { kind: 'check_failed' }]) {
+      expect(swapConflictMessage(c, { name: 'Bea' })).not.toMatch(/—/)
+    }
+  })
+})
+
+// SCHEDROLES.1 — the manager cancel / reject branches are judged at the
+// swap's studio. The route passes `isManagerHere`; omitted means not a
+// manager.
+describe('resolveSwapTransition — manager branches are per studio (SCHEDROLES.1)', () => {
+  it('isManagerHere=false refuses a manager-at-another-studio cancel and reject', () => {
+    for (const requestedStatus of ['cancelled', 'rejected']) {
+      const r = resolveSwapTransition({
+        swap: makeSwap(), requestedStatus, user: manager, userLocationIds: ['loc-1'], isManagerHere: false,
+      })
+      expect(r.ok).toBe(false)
+      expect(r.status).toBe(403)
+    }
+  })
+
+  it('isManagerHere=true allows them, whatever the active-studio role says', () => {
+    const r = resolveSwapTransition({
+      swap: makeSwap(), requestedStatus: 'rejected', user: coach('mix'), userLocationIds: ['loc-1'], isManagerHere: true,
+    })
+    expect(r.ok).toBe(true)
+    expect(r.effect).toBe('rejected')
+  })
+
+  it('without isManagerHere, even an active-studio manager AT the swap\'s studio is refused (fail closed)', () => {
+    for (const requestedStatus of ['cancelled', 'rejected']) {
+      const r = resolveSwapTransition({
+        swap: makeSwap(), requestedStatus, user: manager, userLocationIds: ['loc-1'],
+      })
+      expect(r.status).toBe(403)
+    }
+  })
+
+  it('the requester still cancels their own swap with isManagerHere=false', () => {
+    const r = resolveSwapTransition({
+      swap: makeSwap(), requestedStatus: 'cancelled', user: coach('req-1'), userLocationIds: ['loc-1'], isManagerHere: false,
+    })
+    expect(r.ok).toBe(true)
+  })
+})
+
+// SCHEDSTATUS.1 / SCHEDROLES.2 — the detail-route rule, applied to every
+// transition rather than to the one branch that happened to check membership.
+describe('resolveSwapTransition — a foreign swap id is invisible, not forbidden', () => {
+  const stranger = { id: 'nobody', role: 'staff' }
+  const foreign = ['loc-other']
+
+  for (const requestedStatus of ['cancelled', 'awaiting_approval', 'pending', 'rejected', 'approved']) {
+    it(`404s '${requestedStatus}' from a caller outside the swap's studio`, () => {
+      const r = resolveSwapTransition({
+        swap: makeSwap({ status: 'awaiting_approval', target_id: 'coach-2' }),
+        requestedStatus,
+        user: stranger,
+        userLocationIds: foreign,
+      })
+      expect(r.ok).toBe(false)
+      expect(r.status).toBe(404)
+      // The message must not vary with the transition, or it is still an oracle.
+      expect(r.error).toBe('Swap request not found')
+    })
+  }
+
+  it('a MEMBER of the studio who may not act still gets an honest 403', () => {
+    const r = resolveSwapTransition({
+      swap: makeSwap(),
+      requestedStatus: 'cancelled',
+      user: { id: 'coach-9', role: 'staff' },
+      userLocationIds: ['loc-1'],
+    })
+    expect(r.ok).toBe(false)
+    expect(r.status).toBe(403)
+  })
+
+  it('the requester keeps access even from another studio', () => {
+    const r = resolveSwapTransition({
+      swap: makeSwap(),
+      requestedStatus: 'cancelled',
+      user: { id: 'req-1', role: 'staff' },
+      userLocationIds: foreign,
+    })
+    expect(r.ok).toBe(true)
+  })
+
+  it('the target keeps access even from another studio', () => {
+    const r = resolveSwapTransition({
+      swap: makeSwap({ status: 'awaiting_approval', target_id: 'coach-2' }),
+      requestedStatus: 'pending',
+      user: { id: 'coach-2', role: 'staff' },
+      userLocationIds: foreign,
+    })
+    expect(r.ok).toBe(true)
+  })
+
+  it('a manager at the swap\'s studio (isManagerHere) is never 404d', () => {
+    const r = resolveSwapTransition({
+      swap: makeSwap(),
+      requestedStatus: 'cancelled',
+      user: { id: 'mgr-1', role: 'manager' },
+      userLocationIds: foreign,
+      isManagerHere: true,
+    })
+    expect(r.ok).toBe(true)
+  })
+})
+
+// COVERLOOP.1 — nothing used to refuse a swap on a shift that is already being
+// worked: approving one moves a live shift and clears that coach's arrival
+// stamp and overrides (SWAP_MOVE_CLEARS). The route answers `shiftStarted`
+// with swapShiftHasStarted (src/lib/swap-cover.js), the predicate the sweep
+// closes the swap on. The ways OUT of a swap must keep working.
+describe('resolveSwapTransition — a started shift (COVERLOOP.1)', () => {
+  const claimed = () => makeSwap({ status: 'awaiting_approval', target_id: 'coach-2' })
+  const call = (swap, requestedStatus, user, extra = {}) => resolveSwapTransition({
+    swap, requestedStatus, user, userLocationIds: ['loc-1'], shiftStarted: true, ...extra,
+  })
+
+  it('the message is exported, once', () => {
+    expect(SHIFT_STARTED_ERROR).toBe('This shift has already started')
+  })
+
+  it.each([
+    ['an open CLAIM', () => call(makeSwap(), 'awaiting_approval', coach('coach-2'))],
+    ['a targeted ACCEPT', () => call(makeSwap({ target_id: 'coach-2' }), 'awaiting_approval', coach('coach-2'))],
+    ['an APPROVE of a drop', () => call(makeSwap(), 'approved', manager, { isManagerHere: true })],
+    ['an APPROVE of a reassign', () => call(claimed(), 'approved', manager, { isManagerHere: true })],
+  ])('refuses %s with 409', (_name, run) => {
+    const r = run()
+    expect(r).toMatchObject({ ok: false, status: 409, error: 'This shift has already started' })
+    expect(r.swapUpdates).toBe(null)
+    expect(r.assignmentOps).toEqual([])
+  })
+
+  it.each([
+    ['the taker WITHDRAWS', () => call(claimed(), 'pending', coach('coach-2')), 'withdrawn'],
+    ['the requester CANCELS', () => call(claimed(), 'cancelled', coach('req-1')), 'cancelled'],
+    ['a manager CANCELS', () => call(makeSwap(), 'cancelled', manager, { isManagerHere: true }), 'cancelled'],
+    ['a manager REJECTS', () => call(claimed(), 'rejected', manager, { isManagerHere: true }), 'rejected'],
+    ['the target DECLINES', () => call(makeSwap({ target_id: 'coach-2' }), 'rejected', coach('coach-2')), 'declined'],
+  ])('%s still works', (_name, run, effect) => {
+    expect(run()).toMatchObject({ ok: true, effect })
+  })
+
+  it('does not become an id oracle: a stranger still gets 404, a non-approver still gets 403', () => {
+    expect(resolveSwapTransition({ swap: makeSwap(), requestedStatus: 'awaiting_approval', user: coach('x'), userLocationIds: ['loc-9'], shiftStarted: true }))
+      .toMatchObject({ ok: false, status: 404 })
+    expect(call(makeSwap(), 'approved', coach('coach-2'))).toMatchObject({ ok: false, status: 403 })
+    expect(call(makeSwap({ target_id: 'coach-3' }), 'awaiting_approval', coach('coach-2'))).toMatchObject({ ok: false, status: 403 })
+  })
+
+  it('omitted or false: nothing changes', () => {
+    expect(resolveSwapTransition({ swap: makeSwap(), requestedStatus: 'awaiting_approval', user: coach('coach-2'), userLocationIds: ['loc-1'] })).toMatchObject({ ok: true, effect: 'claimed' })
+    expect(resolveSwapTransition({ swap: makeSwap(), requestedStatus: 'awaiting_approval', user: coach('coach-2'), userLocationIds: ['loc-1'], shiftStarted: false })).toMatchObject({ ok: true, effect: 'claimed' })
+  })
+})
+
+// COVERLOOP.1 — a RECIPROCAL swap moves TWO shifts. Either one having started
+// refuses the accept and the approval, and the message says WHICH shift, in
+// words that read right for whoever is acting.
+describe('resolveSwapTransition — a started shift in a reciprocal swap (COVERLOOP.1)', () => {
+  const recip = (over = {}) => makeSwap({
+    target_id: 'coach-2', target_shift_id: 'asg-tgt', target_shift: { id: 'asg-tgt', profile_id: 'coach-2' }, ...over,
+  })
+  const call = (swap, requestedStatus, user, extra = {}) => resolveSwapTransition({ swap, requestedStatus, user, userLocationIds: ['loc-1'], ...extra })
+  const asManager = { isManagerHere: true }
+
+  it('the messages are exported, once', () => {
+    expect(SHIFT_STARTED_ERRORS).toEqual({
+      single: 'This shift has already started',
+      acceptTheirs: 'The shift you would be taking has already started',
+      acceptOwn: 'Your own shift in this swap has already started',
+      approveRequester: "The requester's shift has already started",
+      approveTarget: "The other coach's shift has already started",
+    })
+    expect(SHIFT_STARTED_ERRORS.single).toBe(SHIFT_STARTED_ERROR)
+  })
+
+  it.each([
+    ['ACCEPT, the requester\'s shift started', () => call(recip(), 'awaiting_approval', coach('coach-2'), { shiftStarted: true }), 'The shift you would be taking has already started'],
+    ['ACCEPT, the accepting coach\'s OWN shift started', () => call(recip(), 'awaiting_approval', coach('coach-2'), { targetShiftStarted: true }), 'Your own shift in this swap has already started'],
+    ['ACCEPT, both started: the one they would be taking is named', () => call(recip(), 'awaiting_approval', coach('coach-2'), { shiftStarted: true, targetShiftStarted: true }), 'The shift you would be taking has already started'],
+    ['APPROVE, the requester\'s shift started', () => call(recip({ status: 'awaiting_approval' }), 'approved', manager, { ...asManager, shiftStarted: true }), "The requester's shift has already started"],
+    ['APPROVE, the other coach\'s shift started', () => call(recip({ status: 'awaiting_approval' }), 'approved', manager, { ...asManager, targetShiftStarted: true }), "The other coach's shift has already started"],
+  ])('%s -> 409', (_name, run, error) => {
+    const r = run()
+    expect(r).toMatchObject({ ok: false, status: 409, error })
+    expect(r.assignmentOps).toEqual([])
+  })
+
+  it('targetShiftStarted means nothing on a swap that is NOT reciprocal', () => {
+    expect(call(makeSwap(), 'awaiting_approval', coach('coach-2'), { targetShiftStarted: true })).toMatchObject({ ok: true, effect: 'claimed' })
+    expect(call(makeSwap({ status: 'awaiting_approval', target_id: 'coach-2' }), 'approved', manager, { ...asManager, targetShiftStarted: true })).toMatchObject({ ok: true, effect: 'approved_reassign' })
+  })
+
+  it('a swap with ONE shift keeps the plain message', () => {
+    expect(call(makeSwap(), 'awaiting_approval', coach('coach-2'), { shiftStarted: true }).error).toBe('This shift has already started')
+    expect(call(makeSwap(), 'approved', manager, { ...asManager, shiftStarted: true }).error).toBe('This shift has already started')
+  })
+
+  it.each([
+    ['the target WITHDRAWS', () => call(recip({ status: 'awaiting_approval' }), 'pending', coach('coach-2'), { shiftStarted: true, targetShiftStarted: true }), 'withdrawn'],
+    ['the target DECLINES', () => call(recip(), 'rejected', coach('coach-2'), { shiftStarted: true, targetShiftStarted: true }), 'declined'],
+    ['the requester CANCELS', () => call(recip(), 'cancelled', coach('req-1'), { shiftStarted: true, targetShiftStarted: true }), 'cancelled'],
+    ['a manager REJECTS', () => call(recip({ status: 'awaiting_approval' }), 'rejected', manager, { ...asManager, shiftStarted: true, targetShiftStarted: true }), 'rejected'],
+  ])('%s still works with both shifts started', (_name, run, effect) => {
+    expect(run()).toMatchObject({ ok: true, effect })
+  })
+
+  it('still not an id oracle', () => {
+    expect(resolveSwapTransition({ swap: recip(), requestedStatus: 'awaiting_approval', user: coach('x'), userLocationIds: ['loc-9'], targetShiftStarted: true })).toMatchObject({ status: 404 })
+    expect(call(recip(), 'awaiting_approval', coach('coach-3'), { targetShiftStarted: true })).toMatchObject({ status: 403 })
+    expect(call(recip({ status: 'awaiting_approval' }), 'approved', coach('coach-3'), { targetShiftStarted: true })).toMatchObject({ status: 403 })
   })
 })

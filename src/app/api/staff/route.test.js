@@ -12,7 +12,9 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/auth', () => ({
+// ROLESWEEP.1c — the REAL per-location role helpers (pure: role-at-location).
+vi.mock('@/lib/auth', async () => ({
+  ...(await vi.importActual('@/lib/role-at-location')),
   getCurrentUser: vi.fn(),
   getUserLocationIds: (u) => (u?.locations || []).map((l) => l.id),
   // ROSTER-FIX.6c — a spy, not a re-implementation: what matters here is that
@@ -33,10 +35,11 @@ vi.mock('@/lib/staff-write', () => ({
 import { POST, GET } from './route.js'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { STAFF_MANAGED_SELECT } from '@/lib/staff-fields'
 
 const LOC = 'a0000000-0000-0000-0000-000000000001'
 
-function mockDb({ inviteError, profileUpdate, clearError } = {}) {
+function mockDb({ inviteError, profileUpdate, clearError, finalProfile } = {}) {
   const inviteUserByEmail = vi.fn((_email, _opts) =>
     Promise.resolve(inviteError
       ? { data: null, error: inviteError }
@@ -61,7 +64,7 @@ function mockDb({ inviteError, profileUpdate, clearError } = {}) {
           select: vi.fn(() => ({
             eq: vi.fn(() => ({
               single: vi.fn(() => Promise.resolve({
-                data: { id: 'new-user-id', full_name: 'New Coach', profile_locations: [] },
+                data: finalProfile || { id: 'new-user-id', full_name: 'New Coach', profile_locations: [] },
                 error: null,
               })),
             })),
@@ -286,5 +289,74 @@ describe('GET /api/staff — ?location_id=', () => {
     expect(res.status).toBe(400)
     expect(assertLocationAccess).not.toHaveBeenCalled()
     expect(listStaffForUser).not.toHaveBeenCalled()
+  })
+})
+
+// CONTRACTVIS.1 — the picker's opt-in. The read service decides per row who
+// may see a contract; the route only forwards the ask, and only with the picker.
+describe('GET /api/staff — ?include=contract', () => {
+  beforeEach(() => {
+    getCurrentUser.mockResolvedValue({ id: 'u', role: 'manager', locations: [{ id: LOC }] })
+    createServerClient.mockReturnValue({})
+  })
+
+  it('forwards the opt-in with the picker shape', async () => {
+    const { listStaffForUser } = await import('@/lib/staff')
+    listStaffForUser.mockResolvedValue({ ok: true, data: [] })
+    await GET({ url: 'http://x/api/staff?fields=picker&include=contract', headers: { get: () => '' } })
+    expect(listStaffForUser).toHaveBeenLastCalledWith(expect.objectContaining({ fields: 'picker', includeContract: true }))
+  })
+
+  it('ignores it without fields=picker', async () => {
+    const { listStaffForUser } = await import('@/lib/staff')
+    listStaffForUser.mockResolvedValue({ ok: true, data: [] })
+    await GET({ url: 'http://x/api/staff?include=contract', headers: { get: () => '' } })
+    expect(listStaffForUser).toHaveBeenLastCalledWith(expect.objectContaining({ fields: null, includeContract: false }))
+  })
+
+  it('is off by default', async () => {
+    const { listStaffForUser } = await import('@/lib/staff')
+    listStaffForUser.mockResolvedValue({ ok: true, data: [] })
+    await GET({ url: 'http://x/api/staff?fields=picker', headers: { get: () => '' } })
+    expect(listStaffForUser).toHaveBeenLastCalledWith(expect.objectContaining({ includeContract: false }))
+  })
+})
+
+// SECFIX.3a — the create echo re-reads the new profile with
+// profile_locations(*, locations(*)), so it used to hand the caller every
+// stored credential on each assigned studio. The response is redacted.
+describe('POST /api/staff — SECFIX.3a: the echo carries no location credential', () => {
+  it('masks the embedded locations\' credentials in the 201 body', async () => {
+    getCurrentUser.mockResolvedValue(ownerUser)
+    const { db } = mockDb({
+      finalProfile: {
+        id: 'new-user-id', full_name: 'New Coach',
+        pin_hash: 'SYNTH-PIN-HASH', unifi_user_id: 'SYNTH-UU', email_signature: 'SYNTH-SIG', auth_disposition: null,
+        profile_locations: [{
+          location_id: LOC, role: 'staff',
+          locations: {
+            id: LOC, name: 'Studio', sensibo_api_key: 'SYNTH-S', thinq_pat: 'SYNTH-T',
+            settings: { glofox: { branch_id: 'b1', api_key: 'SYNTH-GK', api_token: 'SYNTH-GT', webhook_secret: 'SYNTH-GW' }, unifi: { api_token: 'SYNTH-UT' }, customer_agent: { test_phones: ['+353000000000'] } },
+          },
+        }],
+      },
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(postReq({ email: 'new@example.com', full_name: 'New Coach', assignments: [{ location_id: LOC, role: 'staff' }] }))
+
+    expect(res.status).toBe(201)
+    const body = await res.json()
+    expect(JSON.stringify(body)).not.toMatch(/SYNTH-/)
+    expect(body.data.profile_locations[0].locations.name).toBe('Studio')
+    // STAFFPROFILEPICK.1 — the echo re-reads the named managed shape.
+    const profileSelects = db.from.mock.results
+      .map((r) => r.value)
+      .filter((v) => v && typeof v.select === 'function' && v.select.mock)
+      .flatMap((v) => v.select.mock.calls.map((c) => c[0]))
+    expect(profileSelects).toContain(STAFF_MANAGED_SELECT)
+    expect(body.data.id).toBe('new-user-id')
+    expect(body.data.profile_locations[0].locations).not.toHaveProperty('settings')
+    expect(JSON.stringify(body)).not.toMatch(/pin_hash|unifi_user_id|email_signature|auth_|test_phones|\+353000000000/)
   })
 })

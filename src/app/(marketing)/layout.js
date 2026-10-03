@@ -50,6 +50,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import HubTabs from '@/components/HubTabs'
+import { staffTabMetadata } from '@/lib/staff-tab-title'
 
 export const dynamic = 'force-dynamic'
 
@@ -60,12 +61,20 @@ const TABS = [
   // on it alone, so a device_control-only holder needs the tab to show too.
   { id: 'automations', label: 'Automations',  href: '/automations', perms: ['automations', 'email', 'whatsapp', 'device_control'] },
   { id: 'landing',     label: 'Landing page', href: '/welcome',     perms: ['landing_page'], newTab: true },
-  { id: 'send',        label: 'Send',         href: '/communications/send',        perms: ['email', 'whatsapp', 'sms'] },
-  { id: 'sent',        label: 'Sent',         href: '/communications/sent',        perms: ['email', 'whatsapp', 'sms'] },
+  { id: 'send',        label: 'Send',         href: '/communications/send',        perms: ['email', 'whatsapp'] },
+  { id: 'sent',        label: 'Sent',         href: '/communications/sent',        perms: ['email', 'whatsapp'] },
   { id: 'templates',   label: 'Templates',    href: '/communications/templates',   perms: ['email', 'whatsapp'] },
   { id: 'segments',    label: 'Segments',     href: '/communications/segments',    perms: ['email', 'whatsapp'], roles: MANAGER_ROLES },
   { id: 'list-health', label: 'List health',  href: '/communications/list-health', perms: ['email'] },
 ]
+
+// TABTITLE.1 — the tab names the ACTIVE studio for every page under this
+// layout (see src/lib/staff-tab-title.js). This is the OUTERMOST staff layout
+// of its subtree: a layout nested under it must NOT export this again, or the
+// tab reads "Studio · Studio".
+export async function generateMetadata() {
+  return staffTabMetadata()
+}
 
 export default async function MarketingHubLayout({ children }) {
   const user = await getCurrentUser()

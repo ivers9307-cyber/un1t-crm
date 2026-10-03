@@ -4,7 +4,7 @@
 // per-row outcome. Manager+ at the batch's location.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { selectAll } from '@/lib/select-all'
@@ -16,7 +16,8 @@ export async function GET(_request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!MANAGER_ROLES.includes(user.role)) {
+  // ROLESWEEP.1c — coarse pre-check; the role is judged at the batch's location below.
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   }
 
@@ -30,6 +31,10 @@ export async function GET(_request, props) {
 
   const guard = assertLocationAccessOr404(user, batch.location_id)
   if (guard) return guard
+  // ROLESWEEP.1c — MANAGER_ROLES at the batch's location.
+  if (!hasRoleAtLocation(user, batch.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
+  }
 
   // Paginated via selectAll — the old .limit(5000) was silently capped
   // at the 1000-row PostgREST ceiling, so a >1000-row import only showed

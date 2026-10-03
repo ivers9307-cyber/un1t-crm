@@ -18,6 +18,7 @@
 
 import { cookies, headers } from 'next/headers'
 import { createServerClient } from './supabase'
+import { isTombstone } from './staff-tombstone.js'
 
 export const IMPERSONATE_COOKIE = 'un1t_impersonate'
 export const IMPERSONATE_HEADER = 'x-impersonate-target'
@@ -101,10 +102,11 @@ export async function startImpersonation({ masterProfile, targetUserId, reason, 
   // Verify target exists.
   const { data: target, error: tErr } = await db
     .from('profiles')
-    .select('id, full_name, role, active')
+    .select('id, full_name, role, active, deleted_at')
     .eq('id', targetUserId)
     .single()
-  if (tErr || !target) throw new Error('Target user not found.')
+  // STAFFDELETE.1 — a tombstone is not a user; there is nothing to view as.
+  if (tErr || !target || isTombstone(target)) throw new Error('Target user not found.')
 
   // Close any currently-active impersonation row for this master so
   // there's never more than one open at a time.

@@ -18,6 +18,7 @@
 // here so adding a new block type is a single-file change.
 
 import { z } from 'zod'
+import { classFunnelCtaLabel, classFunnelShownOnLanding } from '@/lib/public-landing'
 
 // Stable id helper — a uuid string. We keep ids in the saved JSON
 // because @dnd-kit needs stable per-item keys for smooth drag
@@ -238,7 +239,7 @@ export const BLOCK_TYPES = [
   { type: 'booking',     label: 'Booking form', description: 'Embed the booking form for a chosen booking type.',    factory: BOOKING_DEFAULT },
   { type: 'event',       label: 'Event signup', description: 'Embed the full signup form for a chosen event.',        factory: EVENT_DEFAULT },
   { type: 'lead_form',   label: 'Lead form',    description: 'Waitlist / interest capture — name, email, phone + consent.',  factory: LEAD_FORM_DEFAULT },
-  { type: 'class_funnel', label: 'Glofox Class Booking Funnel', description: 'Capture details, pick a live Glofox class, book. Optional free-consult upsell.', factory: CLASS_FUNNEL_DEFAULT },
+  { type: 'class_funnel', label: 'Glofox Class Booking Funnel', description: 'Pick a class, enter details, book. Live Glofox classes, or a timetable you type in for a studio without Glofox (staff then book by hand). Optional free-consult upsell.', factory: CLASS_FUNNEL_DEFAULT },
   { type: 'pillars',     label: 'Pillars',      description: '3 value-prop tiles. Each can have a photo.',           factory: PILLARS_DEFAULT },
   { type: 'gallery',     label: 'Photo gallery',description: 'Grid of photos with optional captions.',                factory: GALLERY_DEFAULT },
   { type: 'embed',       label: 'Video embed',  description: 'YouTube or Instagram video embed.',                    factory: EMBED_DEFAULT },
@@ -338,8 +339,10 @@ export function pageCtas(blocks) {
     }
   }
   if (waitlist) return { primary: waitlist, secondary: null }
-  if (list.some((b) => b && b.type === 'class_funnel')) {
-    return { primary: { href: '#start', label: 'Claim 3 free classes' }, secondary: null }
+  // MANUALFUNNEL.1 — a funnel kept off the main page (it only configures
+  // /start/{path}) has no #start anchor here, so it must not own the CTA.
+  if (list.some((b) => classFunnelShownOnLanding(b))) {
+    return { primary: { href: '#start', label: classFunnelCtaLabel(list) }, secondary: null }
   }
   if (list.some((b) => b && b.type === 'booking')) {
     return { primary: { href: '#book', label: 'Book a free consult' }, secondary: null }

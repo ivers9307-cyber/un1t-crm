@@ -14,16 +14,40 @@
 // cannot work a shift raises a swap rather than deleting themselves off a
 // published roster. Managers act on locations they own (a foreign location
 // 404s, the detail-route rule); master acts anywhere.
+//
+// SCHEDROLES.1 — "manager" means manager AT THE SHIFT's location
+// (hasRoleAtLocation), not `user.role` (the ACTIVE studio's role). The early
+// refusal is now "manages nowhere"; a member of the shift's studio who is not
+// a manager THERE gets the same 403 after the row is loaded, and a
+// non-member still gets the 404.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser, getUserLocationIds, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { MANAGER_ROLES, timeOfDay } from '@/lib/schemas'
+import { MANAGER_ROLES, timeOfDay, assignmentStatusSchema } from '@/lib/schemas'
 import { notifyUsersOnce } from '@/lib/push-dedup'
 import { logRosterChange } from '@/lib/roster-change-log'
+import { markRosterChangesNotified } from '@/lib/roster-change-notify'
 import { logWarn } from '@/lib/log'
+import { unassignShiftAssignments, SHIFT_CHANGED_ERROR } from '@/lib/shift-unassign'
+
+// Shared by PUT and DELETE: the assignment's block location decides.
+// Returns a response to send, or null to carry on.
+function gateOnShiftLocation(user, assignment, forbiddenMessage) {
+  const blockLocation = assignment.shift_blocks?.location_id
+  const isMaster = user.profileRole === 'master'
+  // ROSTER-FIX.3 — an unscopeable row (no location_id) 404s for everyone
+  // but master; a foreign location 404s so the id is never confirmed.
+  if (!isMaster && (!blockLocation || !getUserLocationIds(user).includes(blockLocation))) {
+    return NextResponse.json({ success: false, error: 'Assignment not found' }, { status: 404 })
+  }
+  if (!isMaster && !hasRoleAtLocation(user, blockLocation, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: forbiddenMessage }, { status: 403 })
+  }
+  return null
+}
 
 // All fields optional. To CLEAR an override, send null explicitly
 // (z.nullable() vs .optional() — PUT body should pass null to remove
@@ -33,7 +57,12 @@ const UpdateAssignmentSchema = z.object({
   end_time_override: timeOfDay.nullable().optional(),
   partial_reason: z.string().max(200).nullable().optional(),
   notes: z.string().max(2000).nullable().optional(),
-  status: z.enum(['scheduled', 'confirmed', 'declined', 'completed']).optional(),
+  // SCHEDSTATUS.1 — validated against what the DATABASE accepts. This used to
+  // read z.enum([… 'declined' …]), and 'declined' is not in
+  // shift_assignments_status_check (mig 067/337), so the route passed the body
+  // and Postgres refused the write: the caller got a 400 quoting a constraint
+  // name. assignmentStatusSchema is the subset of the DB set this route owns.
+  status: assignmentStatusSchema.optional(),
 })
 
 // The fields whose VALUE decides whether this PUT is an override change —
@@ -49,7 +78,7 @@ export async function PUT(request, props) {
 
   // ROSTER-FIX.3 (D3) — refuse before touching the body or the database:
   // a non-manager has nothing to say about a paid window.
-  if (!MANAGER_ROLES.includes(user.role)) {
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json(
       { success: false, error: 'Only a manager can change shift hours' },
       { status: 403 }
@@ -74,18 +103,13 @@ export async function PUT(request, props) {
     return NextResponse.json({ success: false, error: 'Assignment not found' }, { status: 404 })
   }
 
-  // Per-location ownership for non-master managers. A shift at a location
-  // the caller does not own is invisible, not forbidden — 404, matching the
-  // rest of the detail routes, so the response never confirms it exists.
-  // ROSTER-FIX.3 — a block with no location_id 404s too: an unscopeable row
-  // cannot be proved to belong to this manager, so it is not theirs to edit.
-  if (user.role !== 'master') {
-    const userLocationIds = getUserLocationIds(user)
-    const blockLocation = assignment.shift_blocks?.location_id
-    if (!blockLocation || !userLocationIds.includes(blockLocation)) {
-      return NextResponse.json({ success: false, error: 'Assignment not found' }, { status: 404 })
-    }
-  }
+  // Per-location ownership. A shift at a location the caller does not belong
+  // to is invisible, not forbidden — 404, matching the rest of the detail
+  // routes, so the response never confirms it exists. ROSTER-FIX.3 — a block
+  // with no location_id 404s too. SCHEDROLES.1 — a member who is not a
+  // manager at the shift's studio is refused.
+  const putGate = gateOnShiftLocation(user, assignment, 'Only a manager can change shift hours')
+  if (putGate) return putGate
 
   // Soft sanity check on overrides — if both are set and end <= start
   // (and neither crosses midnight), the operator's typo'd. Reject
@@ -107,10 +131,15 @@ export async function PUT(request, props) {
     )
   }
 
+  // REPLACE.1a review 2 — pinned to the coach that was READ: a replace hands
+  // this row to another coach under the same id, and the hours (and the push
+  // below) belong to the coach the manager was looking at. Zero rows = it
+  // changed hands meanwhile: 409, nobody pushed, nothing logged.
   const { data, error } = await db
     .from('shift_assignments')
     .update(updates)
     .eq('id', params.id)
+    .eq('profile_id', assignment.profile_id)
     .select(`
       id, block_id, profile_id, notes, status, assigned_at, updated_at,
       start_time_override, end_time_override, partial_reason,
@@ -120,10 +149,13 @@ export async function PUT(request, props) {
       ),
       profiles:profile_id(id, full_name, email, avatar_url, role)
     `)
-    .single()
+    .maybeSingle() // zero rows is a legitimate answer: the row changed hands
 
   if (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+  }
+  if (!data) {
+    return NextResponse.json({ success: false, code: 'changed', error: SHIFT_CHANGED_ERROR }, { status: 409 })
   }
 
   // Push the affected coach, and log the change, only when an override
@@ -141,6 +173,12 @@ export async function PUT(request, props) {
     (updates[field] ?? null) !== (assignment[field] ?? null)
   ))
   if (overrideChanged) {
+    // NOTIFY.1 review — the result decides whether the `time_changed` row
+    // below gets stamped: a re-publish must not send a second "your shift
+    // changed" message for something this PUT already delivered. `undefined`
+    // (the catch below fired, or notifyUsersOnce itself never ran) means
+    // delivery can't be judged, so the row is deliberately left unstamped.
+    let deliveryResult
     try {
       const block = data.shift_blocks
       const tplName = block?.shift_templates?.name || 'Shift'
@@ -165,7 +203,7 @@ export async function PUT(request, props) {
       // PUSH.2 — keyed on the adjustment CONTENT, not just the assignment:
       // the same shift can legitimately be adjusted twice (each should
       // notify); only an identical re-submit of the same times dedupes.
-      await notifyUsersOnce(db, `shift_adjusted:${data.id}:${date}:${cleared ? 'cleared' : `${newStart}-${newEnd}`}`, [data.profile_id], {
+      deliveryResult = await notifyUsersOnce(db, `shift_adjusted:${data.id}:${date}:${cleared ? 'cleared' : `${newStart}-${newEnd}`}`, [data.profile_id], {
         title: 'Shift adjusted',
         body,
         category: 'shift_adjusted',
@@ -196,6 +234,24 @@ export async function PUT(request, props) {
           end_time_override: data.end_time_override || null,
         },
       })
+
+      // NOTIFY.1 review — this PUT already pushed/emailed the coach above;
+      // stamp the row it just wrote so renotifyChangedCoaches doesn't send a
+      // second "your shift changed" message at the next re-publish/approve.
+      // `deduped` deliberately does NOT count as delivery: a dedup hit means
+      // notifyUsersOnce found an existing claim for the SAME key (identical
+      // override values — e.g. an A→B→A round trip lands back on a key it
+      // already claimed), which says nothing about whether THIS change was
+      // delivered, only that some earlier identical-content send claimed it.
+      const delivered = deliveryResult && (deliveryResult.sent || 0) + (deliveryResult.emailed || 0) > 0
+      if (delivered) {
+        await markRosterChangesNotified(db, {
+          locationId: assignment.shift_blocks?.location_id,
+          coachId: data.profile_id,
+          blockIds: [assignment.block_id],
+          action: 'time_changed',
+        })
+      }
     }
   }
 
@@ -211,7 +267,7 @@ export async function DELETE(_request, props) {
 
   // ROSTER-FIX.3 (D2) — a coach cannot delete themselves off a shift; the
   // way out of a shift you cannot work is a swap "drop" request.
-  if (!MANAGER_ROLES.includes(user.role)) {
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json(
       { success: false, error: 'Ask for a swap to drop this shift' },
       { status: 403 }
@@ -231,35 +287,40 @@ export async function DELETE(_request, props) {
     return NextResponse.json({ success: false, error: 'Assignment not found' }, { status: 404 })
   }
 
-  // Per-location ownership check for non-master managers — 404 (not 403) on
-  // a foreign location, matching the rest of the detail routes. ROSTER-FIX.3
-  // — a block with no location_id 404s too rather than falling through.
-  if (user.role !== 'master') {
-    const userLocationIds = getUserLocationIds(user)
-    const blockLocation = assignment.shift_blocks?.location_id
-    if (!blockLocation || !userLocationIds.includes(blockLocation)) {
-      return NextResponse.json({ success: false, error: 'Assignment not found' }, { status: 404 })
+  // Per-location ownership — 404 (not 403) on a foreign location, matching
+  // the rest of the detail routes. ROSTER-FIX.3 — a block with no location_id
+  // 404s too. SCHEDROLES.1 — a member who is not a manager THERE gets 403.
+  const deleteGate = gateOnShiftLocation(user, assignment, 'Ask for a swap to drop this shift')
+  if (deleteGate) return deleteGate
+
+  // LEAVE.2 — the delete, the change-log row and the coach notification live
+  // in unassignShiftAssignments, so the leave-clash "Unassign them" action
+  // takes coaches off shifts exactly the way this route does.
+  const { failed, gone } = await unassignShiftAssignments(db, {
+    actorId: user.id,
+    assignments: [{
+      id: assignment.id,
+      profile_id: assignment.profile_id,
+      block_id: assignment.block_id,
+      block_date: assignment.shift_blocks?.block_date,
+      location_id: assignment.shift_blocks?.location_id,
+      roster_status: assignment.shift_blocks?.rosters?.status || null,
+    }],
+  })
+  if (failed.length > 0) {
+    // REPLACE.1a review 2 — the row changed hands since it was read.
+    if (failed[0].code === 'changed') {
+      return NextResponse.json({ success: false, code: 'changed', error: failed[0].error }, { status: 409 })
     }
+    return NextResponse.json({ success: false, error: failed[0].error }, { status: 400 })
   }
-
-  const { error } = await db.from('shift_assignments').delete().eq('id', params.id)
-  if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 400 })
-  }
-
-  // SCHEDULE-CHANGE-LOG.1 — record a manager removing a coach from a
-  // published roster so the next re-publish re-notifies them. Best-effort.
-  // ROSTER-FIX.3 — the self-removal skip is gone with the self-delete path.
-  if (assignment.shift_blocks?.rosters?.status === 'published') {
-    await logRosterChange(db, {
-      isPublished: true,
-      locationId: assignment.shift_blocks?.location_id,
-      blockId: assignment.block_id,
-      blockDate: assignment.shift_blocks?.block_date,
-      actorId: user.id,
-      coachId: assignment.profile_id,
-      action: 'unassigned',
-    })
+  // REPLACENITS.1 — the row went between our read and our delete (a double
+  // submit's other request, another manager, the slot's delete). The coach
+  // is off the shift, which is what was asked, and whoever deleted it logged
+  // it and told them: 200, nothing done twice. A repeat that reads AFTER the
+  // first finished still gets the 404 above (no id enumeration).
+  if ((gone || []).length > 0) {
+    return NextResponse.json({ success: true, data: { already_removed: true } })
   }
 
   return NextResponse.json({ success: true })

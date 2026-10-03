@@ -6,7 +6,7 @@
 // for a week the operator has left cannot overwrite a newer one.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { renderHook, waitFor, act } from '@testing-library/react'
+import { renderHook, waitFor, act, cleanup } from '@testing-library/react'
 
 import { useWeekCost } from './useWeekCost'
 
@@ -26,7 +26,9 @@ function okResponse(body) {
 beforeEach(() => {
   global.fetch = vi.fn(async () => okResponse({ success: true, data: PAYLOAD }))
 })
-afterEach(() => { vi.restoreAllMocks() })
+// cleanup unmounts each hook's host tree before jsdom is torn down
+// (see tests/rtl-cleanup-after-each.test.js).
+afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
 describe('useWeekCost', () => {
   it('loads the week and asks for the location and week it was given', async () => {

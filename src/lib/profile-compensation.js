@@ -65,9 +65,11 @@ export async function getCompensationForProfile(db, profileId) {
  * Map keyed by profile_id. Missing profiles have no key — the caller
  * should default to emptyComp() / null fields.
  *
- * Uses .range() pagination (PostgREST 1k-row cap — the recurring trap
- * documented in CLAUDE.md). UN1T has ~12 profiles today; the cap
- * doesn't bite until many hundreds, but page anyway for safety.
+ * LABOUR.1 — THROWS on a failed read. It used to discard the error and
+ * return an empty Map, which a caller summing pay reads as "nobody is paid":
+ * a silent €0, not a failure. It had no callers when that was fixed.
+ *
+ * Chunks the IN list at 200 ids (URL length). UN1T has ~20 profiles.
  *
  * @param {SupabaseClient} db
  * @param {string[]} profileIds
@@ -81,10 +83,11 @@ export async function getCompensationForProfiles(db, profileIds) {
   const CHUNK = 200
   for (let i = 0; i < profileIds.length; i += CHUNK) {
     const slice = profileIds.slice(i, i + CHUNK)
-    const { data } = await db
+    const { data, error } = await db
       .from('profile_compensation')
       .select(`profile_id, ${COMP_COLS.join(', ')}`)
       .in('profile_id', slice)
+    if (error) throw new Error(`profile_compensation read failed: ${error.message || error}`)
     for (const row of (data || [])) {
       out.set(row.profile_id, {
         annual_salary:             toNum(row.annual_salary),

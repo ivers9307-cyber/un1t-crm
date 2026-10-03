@@ -5,10 +5,14 @@
 // edit page (mig 120 attendance), so an owner / manager can manually
 // link a CRM profile to an existing UniFi user.
 //
-// Auth: master / owner / manager only — these are the same gates that
-// already protect /studio-management and /api/staff/[id], because
-// reading the full user list at a controller is a sensitive operation
-// (employee names, emails, employee numbers).
+// Auth (TRAINERSROLE.1): master, or owner/manager AT THIS LOCATION
+// (ADMIN_ROLES), because reading the full user list at a controller is a
+// sensitive operation (employee names, emails, employee numbers).
+// Membership first (404), then the role judged at the PATH id with
+// hasRoleAtLocation. Never `user.role`: StaffForm calls this once per studio
+// the staff member is assigned to, whichever studio is active, and the
+// active studio's role let a manager at one studio who is staff at another
+// read the other's list.
 //
 // Returns:
 //   { success: true, users: [{ id, full_name, user_email, employee_number,
@@ -16,7 +20,9 @@
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation } from '@/lib/auth'
+import { ADMIN_ROLES } from '@/lib/schemas'
+import { logError } from '@/lib/log'
 import {
   getUnifiConfig,
   listUnifiUsers,
@@ -26,26 +32,19 @@ import {
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-// Roles allowed to read the full UniFi user list. Mirrors the gate
-// on the staff edit page so the picker is only available to people
-// who can also see / edit the staff record itself.
-const ALLOWED_ROLES = new Set(['master', 'owner', 'manager'])
+const MODULE = 'locations-unifi-users'
 
 export async function GET(_request, { params }) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'unauthenticated' }, { status: 401 })
-  if (!ALLOWED_ROLES.has(user.role)) {
-    return NextResponse.json({ success: false, error: 'forbidden' }, { status: 403 })
-  }
 
   const { id: locationId } = await params
   if (!locationId) return NextResponse.json({ success: false, error: 'missing_location_id' }, { status: 400 })
 
-  // Master sees every location; owner/manager only the locations they
-  // belong to. Mirrors the per-location gate in /api/staff routes.
-  if (user.role !== 'master') {
-    const allowed = (user.locations || []).some((l) => l.id === locationId)
-    if (!allowed) return NextResponse.json({ success: false, error: 'forbidden' }, { status: 403 })
+  const denied = assertLocationAccessOr404(user, locationId)
+  if (denied) return denied
+  if (!hasRoleAtLocation(user, locationId, ADMIN_ROLES)) {
+    return NextResponse.json({ success: false, error: 'forbidden' }, { status: 403 })
   }
 
   const db = createServerClient()
@@ -54,7 +53,13 @@ export async function GET(_request, { params }) {
     .select('id, name, settings')
     .eq('id', locationId)
     .maybeSingle()
-  if (locErr || !location) {
+  // F3 (TRAINERSROLE.1): a failed read is a 500, logged. Folding it into the
+  // 404 below told the picker "location not found" for a transient error.
+  if (locErr) {
+    logError(MODULE, 'could not read the location', { locationId, error: locErr.message })
+    return NextResponse.json({ success: false, error: 'location_read_failed' }, { status: 500 })
+  }
+  if (!location) {
     return NextResponse.json({ success: false, error: 'location_not_found' }, { status: 404 })
   }
 

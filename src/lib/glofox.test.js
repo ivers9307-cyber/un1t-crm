@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createHmac } from 'node:crypto'
-import { verifyGlofoxSignature, parseGlofoxEvent, tagsForGlofoxEvent, generateGlofoxPasscode, purchaseGlofoxMembership, createGlofoxInteraction, interpretBookingResult } from './glofox.js'
+import { verifyGlofoxSignature, parseGlofoxEvent, tagsForGlofoxEvent, generateGlofoxPasscode, purchaseGlofoxMembership, createGlofoxInteraction, interpretBookingResult, interpretPurchaseResult } from './glofox.js'
 
 function sign(secret, body) {
   return createHmac('sha256', secret).update(body).digest('hex')
@@ -358,6 +358,103 @@ describe('glofoxFetch 429/5xx backoff (via fetchMemberResult)', () => {
   })
 })
 
+// MEMBERRESULT.1 — GET /2.0/members/{id} answers 200 success:false for an id
+// it will not serve ("Resource not available", seen live every 10 minutes since
+// 30 Aug 2026). fetchMemberResult used to return that error body as the member,
+// and the attendance refresh wrote NULL over 16 stored columns from it.
+describe('MEMBERRESULT.1 — a 2xx that carries no member is no data', () => {
+  beforeEach(() => vi.stubGlobal('fetch', vi.fn()))
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
+
+  const res = (status, body) => ({
+    ok: status >= 200 && status < 300,
+    status,
+    headers: { get: () => null },
+    json: async () => body,
+  })
+  const creds = { branchId: 'b', apiKey: 'k', apiToken: 't' }
+  const CODE = 'Resource not available, empty result cant be processed'
+  const REFUSAL = { success: false, message: CODE, message_code: CODE }
+
+  describe('interpretMemberBody (pure)', () => {
+    it('takes the first non-blank id, like mapGlofoxMember (an empty _id falls through to id)', async () => {
+      const { interpretMemberBody } = await import('./glofox.js')
+      const member = { _id: '', id: 'm-synthetic-1', first_name: 'Test' }
+      expect(interpretMemberBody(member)).toEqual({ member, refused: false, messageCode: null })
+      expect(interpretMemberBody({ _id: '  ', id: null, member_id: '' })).toEqual({ member: null, refused: true, messageCode: 'NO_MEMBER_IN_BODY' })
+    })
+    it('a wrapped member is the member', async () => {
+      const { interpretMemberBody } = await import('./glofox.js')
+      const member = { _id: 'g1', first_name: 'A', membership: { status: 'ACTIVE' } }
+      expect(interpretMemberBody({ data: member })).toEqual({ member, refused: false, messageCode: null })
+      expect(interpretMemberBody({ success: true, data: member })).toEqual({ member, refused: false, messageCode: null })
+    })
+
+    it('an unwrapped member is the member, keyed by _id, id or member_id', async () => {
+      const { interpretMemberBody } = await import('./glofox.js')
+      for (const member of [{ _id: 'g1' }, { id: 'g1' }, { member_id: 'g1' }, { _id: 42 }]) {
+        expect(interpretMemberBody(member)).toEqual({ member, refused: false, messageCode: null })
+      }
+    })
+
+    it('success:false is a refusal, whatever else the body holds, and keeps Glofox\'s code', async () => {
+      const { interpretMemberBody } = await import('./glofox.js')
+      expect(interpretMemberBody(REFUSAL)).toEqual({ member: null, refused: true, messageCode: CODE })
+      expect(interpretMemberBody({ success: false, message: 'Only a message' })).toEqual({ member: null, refused: true, messageCode: 'Only a message' })
+      expect(interpretMemberBody({ success: false })).toEqual({ member: null, refused: true, messageCode: 'GLOFOX_SUCCESS_FALSE' })
+      // even a refusal that happens to carry something id-shaped is a refusal
+      expect(interpretMemberBody({ success: false, data: { _id: 'g1' } })).toEqual({ member: null, refused: true, messageCode: 'GLOFOX_SUCCESS_FALSE' })
+    })
+
+    it('a body with no member, or a member with no id, is no data', async () => {
+      const { interpretMemberBody } = await import('./glofox.js')
+      const none = { member: null, refused: true, messageCode: 'NO_MEMBER_IN_BODY' }
+      for (const body of [null, undefined, 'text', 42, [], {}, { data: [] }, { data: null }, { data: { name: 'no id' } }, { _id: '' }, { _id: '   ' }]) {
+        expect(interpretMemberBody(body)).toEqual(none)
+      }
+    })
+  })
+
+  describe('fetchMemberResult', () => {
+    it('reads Glofox\'s 200 success:false as a refusal: not ok, no member, the code kept, not retried', async () => {
+      const { fetchMemberResult } = await import('./glofox.js')
+      global.fetch.mockResolvedValueOnce(res(200, REFUSAL))
+      const out = await fetchMemberResult(creds, 'g1')
+      expect(out).toEqual({ ok: false, member: null, refused: true, messageCode: CODE })
+      expect(global.fetch).toHaveBeenCalledTimes(1)
+    })
+
+    it('a 2xx body with no member id is no data', async () => {
+      const { fetchMemberResult } = await import('./glofox.js')
+      global.fetch.mockResolvedValueOnce(res(200, { data: [] }))
+      expect(await fetchMemberResult(creds, 'g1')).toEqual({ ok: false, member: null, refused: true, messageCode: 'NO_MEMBER_IN_BODY' })
+    })
+
+    it('a real member is ok, with the same stable shape', async () => {
+      const { fetchMemberResult } = await import('./glofox.js')
+      global.fetch.mockResolvedValueOnce(res(200, { data: { _id: 'g1', active: true } }))
+      expect(await fetchMemberResult(creds, 'g1')).toEqual({ ok: true, member: { _id: 'g1', active: true }, refused: false, messageCode: null })
+    })
+
+    it('a transient failure is not a refusal', async () => {
+      const { fetchMemberResult } = await import('./glofox.js')
+      global.fetch.mockResolvedValueOnce(res(404, { message: 'not found' }))
+      expect(await fetchMemberResult(creds, 'g1')).toEqual({ ok: false, member: null, refused: false, messageCode: null })
+      global.fetch.mockRejectedValueOnce(new Error('socket hang up'))
+      expect(await fetchMemberResult(creds, 'g1')).toEqual({ ok: false, member: null, refused: false, messageCode: null })
+      expect(await fetchMemberResult(null, 'g1')).toEqual({ ok: false, member: null, refused: false, messageCode: null })
+    })
+
+    it('resolveUserMembershipId answers null on a refusal (the cancel card says NO_USER_MEMBERSHIP), and reads a real one', async () => {
+      const { resolveUserMembershipId } = await import('./glofox.js')
+      global.fetch.mockResolvedValueOnce(res(200, REFUSAL))
+      expect(await resolveUserMembershipId(creds, 'g1')).toBeNull()
+      global.fetch.mockResolvedValueOnce(res(200, { data: { _id: 'g1', membership: { user_membership_id: 'um-1' } } }))
+      expect(await resolveUserMembershipId(creds, 'g1')).toBe('um-1')
+    })
+  })
+})
+
 describe('registerGlofoxMember content-type', () => {
   beforeEach(() => vi.stubGlobal('fetch', vi.fn()))
   afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
@@ -444,6 +541,14 @@ describe('createGlofoxInteraction', () => {
 // (message_code YOU_HAVE_NO_CREDITS_LEFT, live 2026-07-27), so booking
 // success is "HTTP ok AND a created-booking id", never HTTP ok alone.
 describe('interpretBookingResult', () => {
+  it('GLOFOXWRITEJUDGE.1: a 200 success:false with no code and no id is NOT booked (Glofox: 200 + success:false = bad request)', () => {
+    expect(interpretBookingResult({ ok: true, status: 200, body: { success: false } }))
+      .toEqual({ booked: false, bookingId: null, messageCode: null, alreadyBooked: false })
+    // the live success shape and a bare clean 2xx are unchanged
+    expect(interpretBookingResult({ ok: true, status: 200, body: { success: true, Booking: { _id: 'bk9' } } }).booked).toBe(true)
+    expect(interpretBookingResult({ ok: true, status: 200, body: {} }).booked).toBe(true)
+  })
+
   it('HTTP 200 + a booking id → booked, id harvested', () => {
     expect(interpretBookingResult({ ok: true, status: 200, body: { _id: 'bk1' } }))
       .toEqual({ booked: true, bookingId: 'bk1', messageCode: null, alreadyBooked: false })
@@ -592,5 +697,79 @@ describe('fetchGlofoxTrainers', () => {
     expect(await fetchGlofoxTrainers(creds)).toEqual([])
     expect(await fetchGlofoxTrainers(null)).toEqual([])
     expect(await fetchGlofoxTrainers({ branchId: null })).toEqual([])
+  })
+})
+
+// TRIALGRANT.1 — POST /2.2/…/memberships/{id}/plans/{code}/purchase answers
+// 200 with { success, message, message_code, status: SUCCESS | PENDING-INTENT
+// | ERROR, invoice_id } (Glofox API Reference v2.3.0), and "older endpoints
+// sometimes return 200 with success:false. That indicates a bad request."
+// The shapes below are the spec's; the codes are illustrative, since no
+// refusal body was ever captured (the approve path threw them away).
+describe('TRIALGRANT.1 — a membership purchase is judged on its body', () => {
+  beforeEach(() => vi.stubGlobal('fetch', vi.fn()))
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
+  const res = (status, body) => ({ ok: status >= 200 && status < 300, status, headers: { get: () => null }, json: async () => body })
+  const creds = { branchId: 'b', apiKey: 'k', apiToken: 't' }
+  const SUCCESS = { success: true, message: 'Purchase complete', message_code: 'CART_LEGACY_PURCHASE_SUCCESS', status: 'SUCCESS', invoice_id: '9b2f3c1e-0000-4000-8000-000000000001' }
+
+  it('a SUCCESS body is granted, with the invoice id', () => {
+    expect(interpretPurchaseResult({ httpOk: true, httpStatus: 200, body: SUCCESS })).toEqual({
+      granted: true, messageCode: 'CART_LEGACY_PURCHASE_SUCCESS', purchaseStatus: 'SUCCESS', invoiceId: SUCCESS.invoice_id, message: 'Purchase complete',
+    })
+  })
+
+  it('200 with success:false is NOT granted (Glofox: treat it as a 400)', () => {
+    const out = interpretPurchaseResult({ httpOk: true, httpStatus: 200, body: { success: false, message: 'Membership cannot be purchased', message_code: 'PURCHASE_NOT_ALLOWED' } })
+    expect(out.granted).toBe(false)
+    expect(out.messageCode).toBe('PURCHASE_NOT_ALLOWED')
+  })
+
+  it('200 with status ERROR is NOT granted, even with success:true', () => {
+    expect(interpretPurchaseResult({ httpOk: true, body: { success: true, status: 'ERROR' } }).granted).toBe(false)
+  })
+
+  it('PENDING-INTENT is NOT granted: the payment still needs action, so the credits are not usable yet', () => {
+    const out = interpretPurchaseResult({ httpOk: true, body: { success: true, status: 'PENDING-INTENT', invoice_id: 'inv-2' } })
+    expect(out.granted).toBe(false)
+    expect(out.purchaseStatus).toBe('PENDING-INTENT')
+  })
+
+  // Glofox spells the pending state both ways (the spec's PENDING-INTENT, and
+  // PENDING_INTENT on invoices); either is not granted, in any case.
+  it('status is compared normalised: PENDING_INTENT, pending-intent and error are refusals too', () => {
+    expect(interpretPurchaseResult({ httpOk: true, body: { success: true, status: 'PENDING_INTENT' } }).granted).toBe(false)
+    expect(interpretPurchaseResult({ httpOk: true, body: { success: true, status: 'pending-intent' } }).granted).toBe(false)
+    expect(interpretPurchaseResult({ httpOk: true, body: { success: true, status: 'error' } }).granted).toBe(false)
+    expect(interpretPurchaseResult({ httpOk: true, body: { success: true, status: 'success' } }).granted).toBe(true)
+  })
+
+  it('a non-2xx is never granted', () => {
+    expect(interpretPurchaseResult({ httpOk: false, httpStatus: 400, body: { message: 'Invalid plan', message_code: 'INVALID_PLAN' } }).granted).toBe(false)
+    expect(interpretPurchaseResult({ httpOk: false, httpStatus: 500, body: null }).granted).toBe(false)
+  })
+
+  it('a clean 2xx with no success/status field is granted (the mint path has run on that for months)', () => {
+    expect(interpretPurchaseResult({ httpOk: true, httpStatus: 200, body: {} }).granted).toBe(true)
+    expect(interpretPurchaseResult({ httpOk: true, httpStatus: 200, body: null }).granted).toBe(true)
+  })
+
+  it('purchaseGlofoxMembership: 200 + success:false → ok:false, with the code and the reason', async () => {
+    global.fetch.mockResolvedValueOnce(res(200, { success: false, message: 'Membership cannot be purchased', message_code: 'PURCHASE_NOT_ALLOWED', status: 'ERROR' }))
+    const out = await purchaseGlofoxMembership(creds, 'u1', 'm1', 'p1')
+    expect(out).toMatchObject({ ok: false, http_status: 200, message_code: 'PURCHASE_NOT_ALLOWED', purchase_status: 'ERROR', error: 'Membership cannot be purchased' })
+  })
+
+  it('purchaseGlofoxMembership: SUCCESS → ok:true with the invoice id, no error', async () => {
+    global.fetch.mockResolvedValueOnce(res(200, SUCCESS))
+    const out = await purchaseGlofoxMembership(creds, 'u1', 'm1', 'p1')
+    expect(out).toMatchObject({ ok: true, http_status: 200, purchase_status: 'SUCCESS', invoice_id: SUCCESS.invoice_id })
+    expect(out.error).toBeUndefined()
+  })
+
+  it('purchaseGlofoxMembership: a network throw → ok:false, http_status 0', async () => {
+    global.fetch.mockRejectedValueOnce(new Error('socket hang up'))
+    const out = await purchaseGlofoxMembership(creds, 'u1', 'm1', 'p1')
+    expect(out).toMatchObject({ ok: false, http_status: 0, error: 'socket hang up' })
   })
 })

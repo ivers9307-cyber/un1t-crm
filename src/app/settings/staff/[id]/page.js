@@ -1,16 +1,22 @@
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, hasRoleAtAnyLocation } from '@/lib/auth'
 import { redirect, notFound } from 'next/navigation'
 import StaffForm from '@/components/StaffForm'
 import WidgetTokensCard from '@/components/WidgetTokensCard'
+import { isActiveOrgAdmin } from '@/lib/org-admin'
 import { canEditStaffMember, mapProfileLocationToAssignment } from '@/lib/staff-access'
+import { isTombstone } from '@/lib/staff-tombstone'
+import { loadStaffFormLocations } from '@/lib/staff-form-locations'
+import { STAFF_EDITOR_SELECT, pickStaffEditorProfile } from '@/lib/staff-fields'
 
 export const dynamic = 'force-dynamic'
 
 export default async function EditStaffPage(props) {
   const params = await props.params;
   const user = await getCurrentUser()
-  if (!user || (!user.isMaster && user.role !== 'owner')) redirect('/')
+  // PAGEGATES.1 — "owner SOMEWHERE" (the routes' own coarse pre-check), not
+  // the ACTIVE studio's role; which record is theirs is decided below.
+  if (!user || (!user.isMaster && !hasRoleAtAnyLocation(user, ['owner']))) redirect('/')
 
   // The locations this caller is OWNER at — the page's own definition of
   // what an owner may administer (it already used this below to decide
@@ -38,7 +44,7 @@ export default async function EditStaffPage(props) {
   // read either.
   //
   // Deliberately NOT narrowing the profile read itself to those locations
-  // (the obvious alternative): the `*, profile_locations(*)` select below
+  // (the obvious alternative): the `profile_locations(*)` embed below
   // is load-bearing, and its own comment records TWICE that a narrowed
   // list silently dropped a column and the form then saved defaults back
   // over the operator's real values. A filtered read would hide
@@ -66,8 +72,8 @@ export default async function EditStaffPage(props) {
     if (!targetLocationIds.some(id => ownedByCaller.includes(id))) notFound()
   }
 
-  const [profileRes, locationsRes, templatesRes, orgsRes, orgGrantsRes] = await Promise.all([
-    // CRITICAL: select profile_locations(*) — EVERY column — so
+  const [profileRes, staffFormLocations, templatesRes, orgsRes, orgGrantsRes] = await Promise.all([
+    // CRITICAL: profile_locations(*) — EVERY link column — so
     // mapProfileLocationToAssignment() always receives the full row.
     // History: a narrowed explicit column list silently dropped a
     // per-assignment column TWICE — first `permissions` (mig 092),
@@ -78,12 +84,23 @@ export default async function EditStaffPage(props) {
     // selection, so the saved override looked wiped on refresh. `*`
     // makes the mapper the single source of shape truth, so adding a
     // future per-assignment column can never silently drop here again.
-    // (Service-role client — no RLS column concerns.)
+    //
+    // STAFFPROFILEPICK.1 — the PROFILE columns are named (staff-fields.js
+    // STAFF_EDITOR_SELECT): exactly the fields StaffForm reads (pinned both
+    // ways by tests/staff-profile-to-client.test.js, so the same
+    // drop-then-save-defaults failure cannot happen here), + role and
+    // deleted_at, read for the gate and never passed. profiles.* used to
+    // spread the person's pin_hash, UniFi id, signatures and bookkeeping
+    // into this client component.
     db.from('profiles')
-      .select('*, profile_locations(*)')
+      .select(STAFF_EDITOR_SELECT)
       .eq('id', params.id)
       .single(),
-    db.from('locations').select('*').eq('active', true).eq('is_host_anchor', false).order('name'),
+    // STAFFFORMSETTINGS.1 — identity + unifi_configured, never `settings`
+    // (the customer agent's test phone numbers and every integration's
+    // config rode into this page). A failed read is logged inside and
+    // flagged to StaffForm, which still renders but says so.
+    loadStaffFormLocations(db),
     // PERM-AUDIT.3 — role templates (mig 364) so the form hydrates
     // toggles against the role's EFFECTIVE defaults at each location.
     db.from('location_role_permissions').select('location_id, role, employment_type, permissions'),
@@ -98,7 +115,8 @@ export default async function EditStaffPage(props) {
       : Promise.resolve({ data: null }),
   ])
 
-  if (!profileRes.data) notFound()
+  // STAFFDELETE.1 — a permanently deleted staff member has no editable profile.
+  if (!profileRes.data || isTombstone(profileRes.data)) notFound()
 
   // Owner-self / owner-peer guard. Master is exempt. The check has
   // a server-side equivalent in /api/staff/[id]'s PUT handler — this
@@ -125,11 +143,14 @@ export default async function EditStaffPage(props) {
   // locations they themselves are owner at. Used to gate which cards
   // the form can add/remove/edit.
   const callerOwnerLocationIds = user.isMaster
-    ? (locationsRes.data || []).map(l => l.id)
+    ? staffFormLocations.locations.map(l => l.id)
     : ownedByCaller
 
+  // STAFFPROFILEPICK.1 — only what StaffForm reads, plus the two values this
+  // page computes. The raw links stay here; the form gets the mapped
+  // assignments (which carry each studio's UniFi user link for the picker).
   const staff = {
-    ...profileRes.data,
+    ...pickStaffEditorProfile(profileRes.data),
     is_master: profileRes.data.role === 'master',
     assignments,
   }
@@ -151,12 +172,14 @@ export default async function EditStaffPage(props) {
       <p className="text-sm text-un1t-subtle mb-6">Update role, permissions, and access</p>
       <StaffForm
         staff={staff}
-        locations={locationsRes.data || []}
+        locations={staffFormLocations.locations}
+        locationsLoadFailed={!!staffFormLocations.error}
         callerIsMaster={!!user.isMaster}
         callerOwnerLocationIds={callerOwnerLocationIds}
         roleTemplates={roleTemplates}
         organizations={orgsRes?.data || []}
         orgAdminOrgIds={(orgGrantsRes?.data || []).map(g => g.organization_id)}
+        canSeeDevices={isActiveOrgAdmin(user)}
       />
       <div className="mt-8">
         <WidgetTokensCard profileId={staff.id} />

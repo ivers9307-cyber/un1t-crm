@@ -16,7 +16,6 @@ import ShellyDevicesClient, { refreshSummary, syncNamesSummary } from './ShellyD
 
 const CONNECTION = {
   host: 'shelly-68-eu.shelly.cloud',
-  key_hint: 'ab12',
   has_auth_key: true,
   status: 'connected',
   last_ok_at: new Date(Date.now() - 60_000).toISOString(),
@@ -94,6 +93,19 @@ describe('ShellyDevicesClient — the happy path', () => {
     render(<ShellyDevicesClient locationName="Stillorgan" glofoxConnected canManageConnection />)
     await waitFor(() => expect(screen.getByText(/Managed by the studio owner/)).toBeTruthy())
     expect(screen.queryByRole('button', { name: /Re-paste key/ })).toBeNull()
+  })
+})
+
+// PROFILESPREAD.1a — the page could not read the Glofox status; the flag
+// travels to every card's schedule editor, so none of them says "Connect Glofox".
+describe('ShellyDevicesClient — Glofox status unknown', () => {
+  it('passes glofoxUnknown through to each card\'s schedule editor', async () => {
+    script([[okConn(), okDevices()]])
+    render(<ShellyDevicesClient locationName="Stillorgan" glofoxConnected={false} glofoxUnknown canManageConnection />)
+    await waitFor(() => expect(screen.getByText('Sauna plug')).toBeTruthy())
+    const radio = screen.getByLabelText('Class timetable')
+    expect(radio.disabled).toBe(true)
+    expect(radio.closest('label').getAttribute('title')).toBe("Couldn't check Glofox. Reload to try again.")
   })
 })
 

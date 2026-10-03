@@ -23,7 +23,7 @@ vi.mock('next/navigation', () => ({
 vi.mock('@/components/ScheduleRosterView', () => ({ default: () => <div>roster-view-stub</div> }))
 vi.mock('@/components/ScheduleReporting', () => ({ default: () => <div>reporting-stub</div> }))
 
-import SchedulePage from './page.js'
+import SchedulePage, * as pageModule from './page.js'
 import { getCurrentUser } from '@/lib/auth'
 
 function user({ role = 'manager' } = {}) {
@@ -62,5 +62,36 @@ describe('/schedule root — ?view=reporting search param', () => {
     const html = renderToStaticMarkup(await SchedulePage({ searchParams: Promise.resolve({ view: 'reporting' }) }))
     expect(html).toContain('roster-view-stub')
     expect(html).not.toContain('reporting-stub')
+  })
+})
+
+// ROSTERTIDY.1 — a CLASS PIN, not a layout proof (jsdom/static markup has no
+// layout engine). It only stops the wrapper regressing to a bare `p-8`, which
+// left 32px side margins on a 360px phone; whether 16px actually renders is a
+// browser check.
+describe('/schedule root — wrapper padding classes', () => {
+  it('uses 16px side padding below sm and p-8 from sm up', async () => {
+    getCurrentUser.mockResolvedValue(user())
+    const html = renderToStaticMarkup(await SchedulePage({ searchParams: Promise.resolve({}) }))
+    const firstClass = html.match(/^<div class="([^"]*)"/)?.[1] || ''
+    expect(firstClass.split(' ')).toEqual(expect.arrayContaining(['px-4', 'py-6', 'sm:p-8']))
+    expect(firstClass.split(' ')).not.toContain('p-8')
+  })
+})
+
+// ROSTERLOOK.1 — the tab read "UN1T Hatch Street" with the Stillorgan roster on
+// screen: the root layout's title is the first company_settings row by
+// location_id, for everyone. TABTITLE.1 moved the studio name up into
+// (team)/layout.js (title.template), so this page now only names ITSELF. That
+// the two still compose to "Schedule · UN1T Stillorgan" is pinned against the
+// installed Next resolver in src/lib/staff-tab-title.test.js.
+describe('/schedule root — tab title', () => {
+  it('names the page and leaves the studio to the (team) layout template', () => {
+    expect(pageModule.metadata).toEqual({ title: 'Schedule' })
+  })
+
+  // Next refuses a segment that exports both, and only `next build` says so.
+  it('does not also export generateMetadata', () => {
+    expect(pageModule.generateMetadata).toBeUndefined()
   })
 })

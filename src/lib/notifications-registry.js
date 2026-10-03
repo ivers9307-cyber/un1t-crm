@@ -26,7 +26,7 @@
  *   - 'cron'      — fires from a scheduled job. May have configurable
  *                   lead times.
  *   - 'webhook'   — fires from an inbound webhook (Postmark,
- *                   Twilio, WhatsApp, Calendly).
+ *                   WhatsApp, Calendly).
  *
  * `recipients` tells the UI who gets it:
  *   - 'assignee'              — single user the entity is assigned to
@@ -65,9 +65,25 @@ export const NOTIFICATION_REGISTRY = Object.freeze([
     },
   },
   {
+    category: 'shift_reminder',
+    label: 'Shift reminders',
+    description: 'One reminder before each run of published shifts (shifts no more than 2 hours apart count as one run): 2 hours before the first start, or 8pm the evening before when the first start is before 9am. Never sent between 10pm and 7am: a shift added late in the evening for a start before 7:30am gets no reminder. Names the studio, the times, the shifts and who you are on with. Skipped on a whole day of approved leave.',
+    trigger: { kind: 'cron', source: '/api/cron/send-push-reminders (every 5 min) -> src/lib/shift-reminders.js' },
+    recipients: { kind: 'assignee', detail: 'The coach on the shift (shift_assignments.profile_id). Skipped while on approved leave.' },
+    // Fixed rule, not a per-location lead-time list: 96 shifts in 8 weeks
+    // started before 07:00, where any fixed lead is either useless or a 4am push.
+    // The rule itself lives at the top of src/lib/shift-reminders.js.
+    configurable: { leadTimes: false, roles: false },
+    // Unlike tasks/bookings this DOES fall back to email. The evening-before
+    // reminder has ten hours of slack, and Android staff have no push tokens
+    // until FCM credentials exist, so email is the only channel they have.
+    fallbackEmail: true,
+    emailSubject: 'Shift reminder',
+  },
+  {
     category: 'time_off',
     label: 'Time-off decisions',
-    description: 'When your own time-off request is approved or declined, and when a new request lands for managers to review.',
+    description: 'When your own time-off request is approved or declined, and when a new request lands for managers to review. Also when a manager asks to cancel their own approved leave (owners are told) and when an owner decides it.',
     trigger: { kind: 'event', source: 'PUT /api/schedule/time-off/[id] (status change) + POST /api/schedule/time-off (new request)' },
     recipients: { kind: 'individual_or_creator', detail: 'Requester (on decision) or owner/manager (on new request)' },
     configurable: { leadTimes: false, roles: false },
@@ -77,18 +93,29 @@ export const NOTIFICATION_REGISTRY = Object.freeze([
   {
     category: 'schedule',
     label: 'Schedule published',
-    description: "Fires when a new week's schedule is published.",
+    // RUNWAY.1 — the roster-runway alert rides this category (and so this
+    // toggle), with its OWN email subject: see src/lib/roster-runway-notify.js.
+    description: "Fires when a new week's schedule is published. The people who can publish a studio's roster also get its roster-runway alert here (an upcoming week, inside 10 days, that is unpublished or has shifts with no coach; once at 10 days, once more at 5; never between 10pm and 7am).",
     trigger: { kind: 'event', source: 'POST /api/schedule/publish' },
     recipients: { kind: 'roles_at_location', detail: 'All staff with shifts in the published week' },
     configurable: { leadTimes: false, roles: false },
-    fallbackEmail: false,  // weekly, not time-critical, would be noisy
+    // PUBNOTIFY.1 — was false ("weekly, not time-critical, would be noisy"),
+    // which made the FIRST publish push-only: a coach without the app was
+    // never told their week exists at all, and this is the one notice that
+    // says so. Same argument ROSTER-FIX.8d used to flip `swap`: volume is one
+    // message per published period, not per event, so this is not the noise
+    // case bookings/leads are. The per-user notify_schedule toggle still gates
+    // the email (notifyUsers → readPushAllowedIds), so an opt-out is not
+    // routed around.
+    fallbackEmail: true,
+    emailSubject: 'Your schedule has been published',
   },
   {
     category: 'swap',
     label: 'Swap requests',
-    description: 'Inbound swap requests for managers, the open pool for coaches working that day, and the swap-request response for the requester.',
-    trigger: { kind: 'event', source: 'POST/PUT /api/schedule/swaps' },
-    recipients: { kind: 'individual_or_creator', detail: 'Managers (new request), coaches rostered that day (open pool), or the requester / taker (decision)' },
+    description: 'Inbound swap requests for managers, the open pool for every coach at the studio who could take the shift, reminders to managers while a swap is unresolved (48h and 12h before the shift, only between 07:00 and 22:00 studio time), and the outcome for the requester and taker, including a swap that expired when its shift started. Also "Offer to team" (REPLACE.1b): a shift a manager offers goes to every coach at the studio who is free then (07:00-22:00 studio time), and the managers are told who took it.',
+    trigger: { kind: 'event', source: 'POST/PUT /api/schedule/swaps + the checklist-sweep cron' },
+    recipients: { kind: 'individual_or_creator', detail: 'Managers (new request, reminders), coaches at the studio who are free and not on leave (open pool), or the requester / taker (decision, expiry), coaches free for an offered shift, managers when it is taken' },
     configurable: { leadTimes: false, roles: false },
     // ROSTER-FIX.8d — was false, so every swap notification was push-only and
     // reached nobody without the app installed. A swap is a request somebody
@@ -212,13 +239,13 @@ export const NOTIFICATION_REGISTRY = Object.freeze([
   },
   {
     category: 'shift_adjusted',
-    label: 'Shift adjusted',
-    description: 'A manager changed the times on one of your shifts (partial-shift override).',
-    trigger: { kind: 'event', source: 'PUT /api/schedule/shift-assignments/[id]' },
+    label: 'Shift changes',
+    description: "A manager added you to, removed you from, or changed the times on one of your shifts. A manager replacing one coach with another tells each of them once, with the shift's day and start time; outside 07:00-22:00 studio time that notice waits for 07:00.",
+    trigger: { kind: 'event', source: 'PUT/DELETE /api/schedule/assignments/[id] + POST /api/schedule/assignments/[id]/replace (held notices: the */5 send-push-reminders cron) + POST /api/schedule/blocks/[id]/assignments + bulk-assign + copy-week/copy-month' },
     recipients: { kind: 'assignee', detail: 'Coach whose shift was edited' },
     configurable: { leadTimes: false, roles: false },
     fallbackEmail: true,
-    emailSubject: 'A shift has been adjusted',
+    emailSubject: 'Your shifts have changed',
   },
   {
     category: 'contract_issued',
@@ -229,6 +256,28 @@ export const NOTIFICATION_REGISTRY = Object.freeze([
     configurable: { leadTimes: false, roles: false },
     fallbackEmail: true,
     emailSubject: 'New contract ready for your signature',
+  },
+  {
+    category: 'availability_change',
+    label: 'Availability changes',
+    description: 'A coach at your studio saved a change to when they are unavailable: which weekly times or dates were added or removed. One notification per save. Sent between 7am and 10pm studio time; a change saved outside those hours is sent at 7am, and several overnight changes by one coach arrive as one.',
+    trigger: { kind: 'event', source: 'PUT /api/schedule/availability (inside 07:00-22:00) + the checklist-sweep cron (deferred ones) -> src/lib/availability-notify.js' },
+    recipients: { kind: 'roles_at_location', detail: 'Owner, manager and head coach (and masters) at every studio the coach belongs to, never the coach' },
+    configurable: { leadTimes: false, roles: false },
+    // An FYI with nothing to decide, and the roster shows it: no email.
+    fallbackEmail: false,
+  },
+  {
+    category: 'qualification_expiry',
+    label: 'Qualification expiry',
+    description: 'At most once a week, and only when something is due: the qualifications (first aid, insurance, vetting and any others your organisation tracks) of the people at the studios you own that have expired or expire in the next 30 days. Sent between 7am and 10pm studio time.',
+    trigger: { kind: 'cron', source: '/api/cron/contract-reminders (daily 08:00 UTC) -> src/lib/qualification-digest.js' },
+    recipients: { kind: 'roles_at_location', detail: 'Owners (and masters linked to the studio); the list covers the people at the studios where they are owner, never another organisation' },
+    configurable: { leadTimes: false, roles: false },
+    // The push can only say how many; the fallback email carries the list,
+    // and an owner without the app would otherwise never hear at all.
+    fallbackEmail: true,
+    emailSubject: 'Qualifications to renew',
   },
 ])
 

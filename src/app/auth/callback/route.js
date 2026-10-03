@@ -18,6 +18,7 @@ import { NextResponse } from 'next/server'
 import { createAuthClient } from '@/lib/auth'
 import { safeInternalPath } from '@/lib/urlish'
 import { logError } from '@/lib/log'
+import { isBannedSignInError } from '@/lib/login-account-state'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -29,6 +30,21 @@ export async function GET(request) {
 
   const failTo = (reason) => NextResponse.redirect(new URL(`/login?error=${reason}`, origin))
 
+  // ACTIVEUSER.1 (review S1) — GoTrue answers a link it will not honour with an
+  // ERROR bounce (`?error=…&error_code=…`, no `code`), and this route used to
+  // read every one of them as "no code → link_invalid". Two are worth telling
+  // apart, because the person can ACT on them:
+  //   user_banned  deactivation bans the login. "That link was not valid,
+  //                request a fresh one" sends them round that loop forever;
+  //                /login?error=account_deactivated says what happened.
+  //                Checked BEFORE the code, and with no exchange attempted.
+  //   otp_expired  an expired link is not a malformed one (CLAUDE.md).
+  // Only the QUERY is visible here: a bounce GoTrue puts in the #fragment never
+  // reaches a server route, and still lands on link_invalid below.
+  const errorCode = searchParams.get('error_code')
+  if (errorCode === 'user_banned') return failTo('account_deactivated')
+  if (!code && errorCode === 'otp_expired') return failTo('link_expired')
+
   if (!code) return failTo('link_invalid')
 
   try {
@@ -38,6 +54,8 @@ export async function GET(request) {
     const { data, error } = await supabase.auth.exchangeCodeForSession(code)
     if (error || !data?.session) {
       logError('auth', 'magic-link code exchange failed', { err: error })
+      // A ban discovered at the exchange itself is the same fact.
+      if (isBannedSignInError(error)) return failTo('account_deactivated')
       return failTo('link_expired')
     }
   } catch (err) {

@@ -283,8 +283,27 @@ describe('executeTool create_shift — template + profile location validation', 
     expect(res.shift).toEqual({ date: '2026-07-06', staff: 'Anna Coach', template: 'Morning' })
     const block = db._writes.find(w => w.table === 'shift_blocks' && w.op === 'insert')
     expect(block.payload.location_id).toBe('loc-a')
-    const assign = db._writes.find(w => w.table === 'shift_assignments' && w.op === 'upsert')
+    const assign = db._writes.find(w => w.table === 'shift_assignments' && w.op === 'insert')
     expect(assign.payload.profile_id).toBe('p-a1')
+  })
+
+  // AGENTROSTER.1 — create_shift on a coach who is ALREADY on the shift used
+  // to blind-upsert every field back to null, wiping the manager-set paid
+  // window (mig 099/100) that every hours and cost reader bills.
+  it('leaves an existing assignment — and its adjusted hours — untouched', async () => {
+    const db = useDb({
+      shift_templates, profile_locations, profiles,
+      shift_blocks: [{ id: 'blk-1', location_id: 'loc-a', template_id: 't-a1', block_date: '2026-07-06' }],
+      shift_assignments: [{
+        id: 'a-1', block_id: 'blk-1', profile_id: 'p-a1', status: 'confirmed',
+        start_time_override: '10:00:00', end_time_override: '14:00:00',
+      }],
+    })
+    const res = await executeTool('create_shift', { profile_id: 'p-a1', shift_template_id: 't-a1', shift_date: '2026-07-06' }, MANAGER)
+    expect(res.success).toBe(true)
+    // No block created (it exists) and NOTHING written to the assignment.
+    expect(db._writes.filter(w => w.table === 'shift_assignments')).toHaveLength(0)
+    expect(db._writes.filter(w => w.table === 'shift_blocks')).toHaveLength(0)
   })
 
   it('rejects a cross-tenant shift_template_id and writes nothing', async () => {
@@ -399,6 +418,71 @@ describe('executeTool generate_report staff_cost — profiles read is location-s
     const res = await executeTool('generate_report', { report_type: 'staff_cost', period_start: '2026-07-01', period_end: '2026-07-07' }, { ...MANAGER, locationId: null })
     expect(res.error).toMatch(/active location/i)
   })
+
+  // STAFFCOST.1 — pay rates and staff cost are owner/manager/master only.
+  it('refuses a head coach, and reads no pay data', async () => {
+    useDb({ profile_locations, profiles, shift_assignments })
+    const res = await executeTool('generate_report', { report_type: 'staff_cost', period_start: '2026-07-01', period_end: '2026-07-07' }, { ...MANAGER, role: 'head_coach' })
+    expect(res.error).toMatch(/owners and managers/i)
+    expect(res.staff).toBeUndefined()
+    expect(JSON.stringify(res)).not.toContain('20')
+  })
+
+  it('still lets a head coach run staff_hours', async () => {
+    useDb({ profile_locations, profiles, shift_assignments })
+    const res = await executeTool('generate_report', { report_type: 'staff_hours', period_start: '2026-07-01', period_end: '2026-07-07' }, { ...MANAGER, role: 'head_coach' })
+    expect(res.error).toBeUndefined()
+    expect(res.report).toBe('Staff Hours Worked')
+  })
+
+})
+
+// ── generate_report hours honour adjustments (AGENTROSTER.1) ─────────
+// The assistant computed hours straight off the TEMPLATE's times, so a
+// manager-set partial shift billed at its template length and the assistant
+// disagreed with /schedule's Reporting tab and the calendar (229h vs 257h for
+// 1-16 Sep at Stillorgan). Hours now resolve override → the BLOCK's own time
+// → the template, via shiftHours() — the same resolution src/lib/payroll.js
+// and src/lib/report-generator.js use.
+describe('executeTool generate_report — effective hours, not template hours', () => {
+  const profile_locations = [{ profile_id: 'p-a1', location_id: 'loc-a' }]
+  const profiles = [
+    { id: 'p-a1', full_name: 'Anna Coach', employment_type: 'contractor', hourly_rate: 10, annual_salary: null, contracted_hours_per_week: null, active: true },
+  ]
+  // One 8h template slot. The block was moved to 6h, and the coach's own
+  // override shortened it again to 4h. Only the 4h is real.
+  const adjusted = [{
+    profile_id: 'p-a1', status: 'scheduled',
+    start_time_override: '10:00:00', end_time_override: '14:00:00',
+    profiles: { full_name: 'Anna Coach' },
+    shift_blocks: {
+      location_id: 'loc-a', block_date: '2026-07-02',
+      start_time: '09:00:00', end_time: '15:00:00',
+      shift_templates: { name: 'AM', start_time: '09:00:00', end_time: '17:00:00' },
+    },
+  }]
+
+  it('staff_hours reports the coach\'s overridden window, not the template\'s', async () => {
+    useDb({ profile_locations, profiles, shift_assignments: adjusted })
+    const res = await executeTool('generate_report', { report_type: 'staff_hours', period_start: '2026-07-01', period_end: '2026-07-07' }, MANAGER)
+    expect(res.staff).toEqual([{ name: 'Anna Coach', hours: 4 }])
+    expect(res.total_hours).toBe(4)
+  })
+
+  it("falls back to the BLOCK's times when there is no override", async () => {
+    const noOverride = [{ ...adjusted[0], start_time_override: null, end_time_override: null }]
+    useDb({ profile_locations, profiles, shift_assignments: noOverride })
+    const res = await executeTool('generate_report', { report_type: 'staff_hours', period_start: '2026-07-01', period_end: '2026-07-07' }, MANAGER)
+    // 09:00-15:00 on the block, NOT 09:00-17:00 on the template.
+    expect(res.staff).toEqual([{ name: 'Anna Coach', hours: 6 }])
+  })
+
+  it('staff_cost moves with the same hours, so one reply cannot disagree with itself', async () => {
+    useDb({ profile_locations, profiles, shift_assignments: adjusted })
+    const res = await executeTool('generate_report', { report_type: 'staff_cost', period_start: '2026-07-01', period_end: '2026-07-07' }, MANAGER)
+    expect(res.staff).toEqual([{ name: 'Anna Coach', hours: 4, cost: '€40.00', hourly_rate: '€10.00' }])
+    expect(res.total_cost).toBe('€40.00')
+  })
 })
 
 // ── null-locationId guards ───────────────────────────────────────────
@@ -408,11 +492,105 @@ describe('executeTool — safe empties when there is no active location', () => 
     const res = await executeTool('list_shift_templates', {}, { ...MANAGER, locationId: null })
     expect(res).toEqual({ templates: [] })
   })
+})
 
-  it('get_shifts_for_week returns no shifts (never an unscoped read)', async () => {
-    useDb({ shift_assignments: [{ profile_id: 'p-b1', profiles: { full_name: 'Ben Other' }, shift_blocks: { location_id: 'loc-b', block_date: '2026-07-02', shift_templates: { name: 'AM', start_time: '09:00:00', end_time: '17:00:00' } } }] })
-    const res = await executeTool('get_shifts_for_week', { start_date: '2026-07-01' }, { ...MANAGER, locationId: null })
-    expect(res).toEqual({ shifts: [] })
+// ── get_shifts_for_week — what a staff member may see, and the true times ──
+// SCHEDHYGIENE.1 — the tool reported the TEMPLATE's hours (a block moved off
+// its template, or a coach's own override, was invisible), showed a coach
+// the DRAFT roster no coach screen shows, and built the week's end from a
+// local-midnight Date read back as UTC: in Irish summer time the "week" ended
+// on Saturday.
+describe('executeTool get_shifts_for_week — published only for staff, true times, whole week', () => {
+  const STAFF = { locationId: 'loc-a', role: 'staff', userId: 'u-2' }
+  const tpl = { name: 'AM', start_time: '09:00:00', end_time: '17:00:00' }
+  const row = (id, date, { published = true, block = {}, override = {}, loc = 'loc-a' } = {}) => ({
+    id, profile_id: `p-${id}`, status: 'scheduled', profiles: { full_name: `Coach ${id}` },
+    start_time_override: override.start ?? null, end_time_override: override.end ?? null,
+    shift_blocks: {
+      location_id: loc, block_date: date, start_time: block.start ?? null, end_time: block.end ?? null,
+      shift_templates: tpl, rosters: { status: published ? 'published' : 'draft' },
+    },
+  })
+
+  // A published roster covering the whole test week, at loc-a only.
+  const WEEK_ROSTER = [{ location_id: 'loc-a', status: 'published', period_start: '2026-07-06', period_end: '2026-07-12' }]
+
+  it('a staff member sees published shifts only', async () => {
+    useDb({ rosters: WEEK_ROSTER, shift_assignments: [row('pub', '2026-07-07'), row('draft', '2026-07-08', { published: false })] })
+    const res = await executeTool('get_shifts_for_week', { start_date: '2026-07-06' }, STAFF)
+    expect(res.shifts.map(s => s.staff)).toEqual(['Coach pub'])
+  })
+
+  it('a manager sees the draft too, labelled as not published', async () => {
+    useDb({ rosters: WEEK_ROSTER, shift_assignments: [row('pub', '2026-07-07'), row('draft', '2026-07-08', { published: false })] })
+    const res = await executeTool('get_shifts_for_week', { start_date: '2026-07-06' }, MANAGER)
+    expect(res.shifts.map(s => [s.staff, s.published])).toEqual([['Coach pub', true], ['Coach draft', false]])
+  })
+
+  it('reports the shift\'s real hours: override, then block, then template', async () => {
+    useDb({ rosters: WEEK_ROSTER, shift_assignments: [
+      row('tpl', '2026-07-06'),
+      row('blk', '2026-07-07', { block: { start: '06:00:00', end: '10:00:00' } }),
+      row('ovr', '2026-07-08', { block: { start: '06:00:00', end: '10:00:00' }, override: { start: '07:30:00' } }),
+    ] })
+    const res = await executeTool('get_shifts_for_week', { start_date: '2026-07-06' }, MANAGER)
+    expect(res.shifts.map(s => s.time)).toEqual(['09:00–17:00', '06:00–10:00', '07:30–10:00'])
+  })
+
+  it('the week runs Monday to Sunday inclusive, in summer time too', async () => {
+    // Pinned: the old bug (a local-midnight Date read back as UTC) only shows
+    // on a clock ahead of UTC, so a CI box on UTC would pass it.
+    const tz = process.env.TZ
+    process.env.TZ = 'Europe/Dublin'
+    try {
+      useDb({ rosters: WEEK_ROSTER, shift_assignments: [row('mon', '2026-07-06'), row('sun', '2026-07-12'), row('next', '2026-07-13')] })
+      const res = await executeTool('get_shifts_for_week', { start_date: '2026-07-06' }, MANAGER)
+      expect(res.shifts.map(s => s.date)).toEqual(['2026-07-06', '2026-07-12'])
+      expect([res.week_start, res.week_end]).toEqual(['2026-07-06', '2026-07-12'])
+    } finally {
+      if (tz === undefined) delete process.env.TZ
+      else process.env.TZ = tz
+    }
+  })
+
+  it('any day of the week reads that whole Monday-to-Sunday week', async () => {
+    useDb({ rosters: WEEK_ROSTER, shift_assignments: [row('mon', '2026-07-06'), row('sun', '2026-07-12')] })
+    const res = await executeTool('get_shifts_for_week', { start_date: '2026-07-09' }, MANAGER)
+    expect([res.week_start, res.week_end]).toEqual(['2026-07-06', '2026-07-12'])
+    expect(res.shifts.map(s => s.date)).toEqual(['2026-07-06', '2026-07-12'])
+  })
+
+  it('names the days with no published roster, so a half-published week is not "nobody working"', async () => {
+    useDb({
+      rosters: [
+        { location_id: 'loc-a', status: 'published', period_start: '2026-07-06', period_end: '2026-07-08' },
+        { location_id: 'loc-a', status: 'draft', period_start: '2026-07-09', period_end: '2026-07-12' },
+        { location_id: 'loc-b', status: 'published', period_start: '2026-07-09', period_end: '2026-07-12' },
+      ],
+      shift_assignments: [row('mon', '2026-07-06'), row('thu', '2026-07-09', { published: false })],
+    })
+    const res = await executeTool('get_shifts_for_week', { start_date: '2026-07-06' }, STAFF)
+    expect(res.shifts.map(s => s.staff)).toEqual(['Coach mon'])
+    expect(res.unpublished_days).toEqual(['2026-07-09', '2026-07-10', '2026-07-11', '2026-07-12'])
+  })
+
+  it('a fully published week has no unpublished days, even with no shifts in it', async () => {
+    useDb({ rosters: WEEK_ROSTER, shift_assignments: [] })
+    const res = await executeTool('get_shifts_for_week', { start_date: '2026-07-06' }, STAFF)
+    expect(res).toMatchObject({ shifts: [], unpublished_days: [] })
+  })
+
+  it('never reads another studio', async () => {
+    useDb({ rosters: WEEK_ROSTER, shift_assignments: [row('a', '2026-07-07'), row('b', '2026-07-07', { loc: 'loc-b' })] })
+    const res = await executeTool('get_shifts_for_week', { start_date: '2026-07-06' }, MANAGER)
+    expect(res.shifts.map(s => s.staff)).toEqual(['Coach a'])
+  })
+
+  it('refuses a date the calendar does not have instead of guessing a week', async () => {
+    useDb({ shift_assignments: [row('a', '2026-03-02')] })
+    const res = await executeTool('get_shifts_for_week', { start_date: '2026-02-30' }, MANAGER)
+    expect(res.error).toMatch(/real date/i)
+    expect(res.shifts).toBeUndefined()
   })
 })
 
@@ -430,5 +608,170 @@ describe('executeTool — TOOL_PERMISSIONS gate is unchanged', () => {
     const res = await executeTool('create_contact', { name: 'X', email: 'x@x.com' }, { locationId: 'loc-a', role: 'head_coach', userId: 'u' })
     expect(res.error).toMatch(/permission denied/i)
     expect(db._writes.some(w => w.table === 'contacts' && w.op === 'insert')).toBe(false)
+  })
+})
+
+// ── RANGEVALID.1 — the model supplies these dates ────────────────────
+// A bad date used to reach the database: a reversed period came back as a
+// report of 0 hours ("nobody worked"), and get_time_off / get_holiday_allowance
+// discarded their read errors, answering "nobody is off" / the 20-day default.
+// Each is now a tool error the model can act on, returned before any read.
+describe('executeTool — model-supplied dates are checked before any read (RANGEVALID.1)', () => {
+  // Records every table the tool touches, so "nothing was read" is observable.
+  function watched(fixtures = {}) {
+    // makeDb + mockReturnValue (not useDb): react-hooks/rules-of-hooks reads
+    // any use* call inside a named non-hook function as a hook call.
+    const db = makeDb(fixtures)
+    vi.mocked(createServerClient).mockReturnValue(db)
+    const tables = []
+    const from = db.from
+    db.from = (t) => { tables.push(t); return from(t) }
+    return { db, tables }
+  }
+  // One table answers { data: null, error } to any read; the rest are fixtures.
+  function failingOn(table, fixtures = {}) {
+    const ok = makeDb(fixtures)
+    const res = { data: null, error: { message: 'connection reset' } }
+    const db = {
+      from: (t) => {
+        if (t !== table) return ok.from(t)
+        const chain = {}
+        for (const op of ['select', 'eq', 'in', 'gte', 'lte', 'or', 'order', 'limit', 'range']) chain[op] = () => chain
+        chain.single = () => Promise.resolve(res)
+        chain.maybeSingle = () => Promise.resolve(res)
+        chain.then = (f, r) => Promise.resolve(res).then(f, r)
+        return chain
+      },
+    }
+    vi.mocked(createServerClient).mockReturnValue(db)
+    return db
+  }
+
+  it('generate_report: a bad period is the Reporting tab\'s refusal, and nothing is read', async () => {
+    for (const report_type of ['staff_hours', 'staff_cost']) {
+      for (const [period_start, period_end, error] of [
+        ['2026-02-30', '2026-03-06', 'period_start and period_end must be real dates, YYYY-MM-DD'],
+        [undefined, '2026-07-07', 'period_start and period_end must be real dates, YYYY-MM-DD'],
+        ['last week', '2026-07-07', 'period_start and period_end must be real dates, YYYY-MM-DD'],
+        ['2026-07-07', '2026-07-01', 'period_end must be on or after period_start'],
+        ['2026-01-01', '2027-01-02', 'A report can cover at most 366 days'],
+      ]) {
+        const { tables } = watched({})
+        const res = await executeTool('generate_report', { report_type, period_start, period_end }, MANAGER)
+        expect(res, `${report_type} ${period_start}..${period_end}`).toEqual({ error })
+        expect(tables).toEqual([])
+      }
+    }
+  })
+
+  it('create_shift: a date the calendar does not have is refused before any read or write', async () => {
+    for (const shift_date of ['2026-02-30', '2026-7-6', 'next monday', undefined]) {
+      const { db, tables } = watched({})
+      const res = await executeTool('create_shift', { profile_id: 'p-a1', shift_template_id: 't-a1', shift_date }, MANAGER)
+      expect(res, String(shift_date)).toEqual({ error: 'shift_date must be a real date, YYYY-MM-DD.' })
+      expect(tables).toEqual([])
+      expect(db._writes).toEqual([])
+    }
+  })
+
+  it('get_time_off: a bad range is refused before any read', async () => {
+    for (const [start_date, end_date, error] of [
+      ['2026-02-30', '2026-03-06', 'start_date and end_date must be real dates, YYYY-MM-DD'],
+      ['2026-07-01', undefined, 'start_date and end_date must be real dates, YYYY-MM-DD'],
+      ['2026-07-07', '2026-07-01', 'end_date must be on or after start_date'],
+      ['2026-01-01', '2027-01-02', 'A time-off lookup can cover at most 366 days'],
+    ]) {
+      const { tables } = watched({})
+      const res = await executeTool('get_time_off', { start_date, end_date }, MANAGER)
+      expect(res, `${start_date}..${end_date}`).toEqual({ error })
+      expect(tables).toEqual([])
+    }
+  })
+
+  it('get_time_off: no active studio is an error, never "nobody is off"', async () => {
+    const { tables } = watched({})
+    const res = await executeTool('get_time_off', { start_date: '2026-07-01', end_date: '2026-07-07' }, { ...MANAGER, locationId: null })
+    // create_shift's wording: tell the model what the person can do about it.
+    expect(res).toEqual({ error: 'No active location — switch to a location before looking up time off.' })
+    expect(tables).toEqual([])
+  })
+
+  it('get_time_off: a failed read is an error, never an empty list', async () => {
+    failingOn('time_off_requests')
+    const res = await executeTool('get_time_off', { start_date: '2026-07-01', end_date: '2026-07-07' }, MANAGER)
+    expect(res.error).toMatch(/Failed to load time off/)
+    expect(res.time_off).toBeUndefined()
+  })
+
+  // get_shifts_for_week answered no studio with { shifts: [] }, which the
+  // model reads out as "nobody is on shift" (get_time_off's old trap).
+  it('get_shifts_for_week: no active studio is an error, never an empty week, and nothing is read', async () => {
+    const { tables } = watched({ shift_assignments: [{ profile_id: 'p-b1', profiles: { full_name: 'Ben Other' }, shift_blocks: { location_id: 'loc-b', block_date: '2026-07-02', shift_templates: { name: 'AM', start_time: '09:00:00', end_time: '17:00:00' } } }] })
+    const res = await executeTool('get_shifts_for_week', { start_date: '2026-07-01' }, { ...MANAGER, locationId: null })
+    expect(res).toEqual({ error: 'No active location — switch to a location before looking up shifts.' })
+    expect(tables).toEqual([])
+  })
+
+  it('get_shifts_for_week: a failed shifts read is an error, never an empty week', async () => {
+    failingOn('shift_assignments')
+    const res = await executeTool('get_shifts_for_week', { start_date: '2026-07-06' }, MANAGER)
+    expect(res.error).toMatch(/^Failed to load shifts/)
+    expect(res.shifts).toBeUndefined()
+  })
+
+  it('get_shifts_for_week: a failed rosters read is an error, never "every day unpublished"', async () => {
+    failingOn('rosters')
+    const res = await executeTool('get_shifts_for_week', { start_date: '2026-07-06' }, MANAGER)
+    expect(res.error).toMatch(/^Failed to load rosters/)
+    expect(res.shifts).toBeUndefined()
+  })
+
+  // search_contacts discarded its read error, so a failed search read as
+  // "no contact by that name" — and the model would offer to create one.
+  it('search_contacts: a failed read is an error, never "no matches"', async () => {
+    failingOn('contacts')
+    const res = await executeTool('search_contacts', { query: 'alice' }, MANAGER)
+    expect(res.error).toMatch(/^Failed to load contacts/)
+    expect(res.contacts).toBeUndefined()
+    expect(res.count).toBeUndefined()
+  })
+
+  it('get_time_off: a real range still lists this studio\'s overlapping leave', async () => {
+    useDb({
+      time_off_requests: [
+        { location_id: 'loc-a', start_date: '2026-07-02', end_date: '2026-07-03', type: 'holiday', status: 'approved', total_days: 2, reason: null, profile_id: 'p-a1', profiles: { full_name: 'Anna Coach' } },
+        { location_id: 'loc-a', start_date: '2026-08-02', end_date: '2026-08-03', type: 'holiday', status: 'approved', total_days: 2, reason: null, profile_id: 'p-a1', profiles: { full_name: 'Anna Coach' } },
+        { location_id: 'loc-b', start_date: '2026-07-02', end_date: '2026-07-03', type: 'sick', status: 'approved', total_days: 2, reason: null, profile_id: 'p-b1', profiles: { full_name: 'Ben Other' } },
+      ],
+    })
+    const res = await executeTool('get_time_off', { start_date: '2026-07-01', end_date: '2026-07-07' }, MANAGER)
+    expect(res).toEqual({ time_off: [{ staff: 'Anna Coach', type: 'holiday', start: '2026-07-02', end: '2026-07-03', days: 2, status: 'approved', reason: null }] })
+  })
+
+  it('get_holiday_allowance: a year outside 2020-2100, or not a whole four-digit year, is refused before any read', async () => {
+    for (const year of ['abc', 1999, 2101, 2026.5, 20266, '26']) {
+      const { tables } = watched({})
+      const res = await executeTool('get_holiday_allowance', { year }, MANAGER)
+      expect(res, String(year)).toEqual({ error: 'year must be a four-digit year from 2020 to 2100' })
+      expect(tables).toEqual([])
+    }
+  })
+
+  it('get_holiday_allowance: a failed read is an error, never the 20-day default', async () => {
+    failingOn('staff_allowances')
+    const res = await executeTool('get_holiday_allowance', { year: 2026 }, MANAGER)
+    expect(res.error).toMatch(/Failed to load the holiday allowance/)
+    expect(res.total_days).toBeUndefined()
+  })
+
+  it('get_holiday_allowance: no year means this year in Dublin', async () => {
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.parse('2027-01-01T03:00:00Z') })
+    try {
+      useDb({})
+      const res = await executeTool('get_holiday_allowance', {}, MANAGER)
+      expect(res.year).toBe(2027)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

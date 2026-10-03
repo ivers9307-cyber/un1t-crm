@@ -7,6 +7,8 @@
 
 import { describe, it, expect } from 'vitest'
 import { SEQUENCE_TEMPLATES, getTemplate, TEMPLATE_CATEGORIES } from './sequence-templates.js'
+import { applyMergeTags } from '@/lib/postmark'
+import { paymentCtaHtml, payAmountPhrase } from '@/lib/dunning-payment'
 
 describe('SEQUENCE_TEMPLATES catalog', () => {
   it('every template has a stable id, category, name, trigger, and at least one step', () => {
@@ -58,21 +60,21 @@ describe('GLOFOX4.4 trial-lifecycle templates', () => {
     }
   })
 
-  it('engaged template fires on glofox_trial_engaged and is comms-only (wait → email → sms)', () => {
+  it('engaged template fires on glofox_trial_engaged and is comms-only (wait → email)', () => {
     expect(engagedTpl).not.toBeNull()
     expect(engagedTpl.trigger_type).toBe('tag_added')
     expect(engagedTpl.trigger_config?.tag).toBe('glofox_trial_engaged')
     // The leading 2h wait preserves the send timing the template had
     // before its move step was retired.
-    expect(engagedTpl.steps.map((s) => s.step_type)).toEqual(['wait', 'email', 'sms'])
+    expect(engagedTpl.steps.map((s) => s.step_type)).toEqual(['wait', 'email'])
     expect(engagedTpl.steps[0].delay_hours).toBe(2)
   })
 
-  it('credits-low template fires on glofox_trial_credits_low and is comms-only (sms → email)', () => {
+  it('credits-low template fires on glofox_trial_credits_low and is comms-only (email)', () => {
     expect(creditsTpl).not.toBeNull()
     expect(creditsTpl.trigger_type).toBe('tag_added')
     expect(creditsTpl.trigger_config?.tag).toBe('glofox_trial_credits_low')
-    expect(creditsTpl.steps.map((s) => s.step_type)).toEqual(['sms', 'email'])
+    expect(creditsTpl.steps.map((s) => s.step_type)).toEqual(['email'])
   })
 
   it('trial-ended template fires on glofox_trial_ended (comms-only)', () => {
@@ -116,26 +118,38 @@ describe('GLOFOX3.5 welcome template', () => {
     expect(tpl.category).toBe('Welcome')
   })
 
-  it('first step is the immediate email containing the passcode merge tag', () => {
+  it('first step is the immediate email telling the member how to log in for the first time', () => {
     const step = tpl.steps[0]
     expect(step.step_type).toBe('email')
     expect(step.delay_days).toBe(0)
     expect(step.delay_hours).toBe(0)
-    expect(step.html_content).toContain('{{glofox_passcode}}')
+    expect(step.html_content).toContain('Forgot password?')
     expect(step.html_content).toContain('{{email}}')
   })
 
-  it('also surfaces the passcode via SMS as a backup channel', () => {
-    // Junk-folder insurance — we want the passcode on at least two
-    // channels.
-    const smsStep = tpl.steps.find((s) => s.step_type === 'sms')
-    expect(smsStep, 'no SMS step in the welcome template').toBeTruthy()
-    expect(smsStep.sms_body).toContain('{{glofox_passcode}}')
+  // TWILIO-RETIRE.1 — the SMS backup of the login instructions left with the
+  // SMS channel, so no gallery template may ship an SMS step at all: the
+  // runner would only record a skip for it.
+  it('no gallery template ships an SMS step (TWILIO-RETIRE.1)', () => {
+    for (const t of SEQUENCE_TEMPLATES) {
+      expect(t.steps.some((s) => s.step_type === 'sms'), t.id).toBe(false)
+    }
   })
 
-  it('uses a long re-enrolment cooldown so a stale passcode isn\'t re-emailed', () => {
-    // A passcode is minted once per Glofox account. If the same tag
-    // somehow fires again, we don't want to email the OLD passcode.
+  it('never carries a password (PASSCODEREAD.1): no step of ANY template uses the retired tag', () => {
+    // Glofox passwords are no longer stored, so {{glofox_passcode}} renders
+    // empty; a step that used it would send "Passcode: " with nothing after.
+    for (const t of SEQUENCE_TEMPLATES) {
+      for (const s of t.steps) {
+        for (const field of ['subject', 'html_content', 'sms_body']) {
+          expect(s[field] || '', `${t.id} ${field}`).not.toContain('{{glofox_passcode}}')
+          expect(s[field] || '', `${t.id} ${field}`).not.toMatch(/passcode/i)
+        }
+      }
+    }
+  })
+
+  it('uses a long re-enrolment cooldown so a re-tag does not re-send the welcome', () => {
     expect(tpl.re_enrolment_cooldown_days).toBeGreaterThanOrEqual(180)
   })
 })
@@ -419,7 +433,7 @@ describe('RADAR-DUNNING.1 overdue dunning template', () => {
   })
 })
 
-describe('DUNNING.6 — overdue membership payment → card update reminders', () => {
+describe('DUNNING.6 — overdue membership payment → Pay now reminders', () => {
   const tpl = getTemplate('overdue_payment_dunning')
   it('is a manual-trigger automation (the dunning picker + auto-enrol enrol directly), 14-day cooldown, daytime window', () => {
     expect(tpl.trigger_type).toBe('manual')
@@ -430,11 +444,21 @@ describe('DUNNING.6 — overdue membership payment → card update reminders', (
     expect(tpl.steps.map((s) => s.step_type)).toEqual(['wait', 'whatsapp', 'email', 'email', 'whatsapp', 'email'])
     expect(tpl.steps.map((s) => [s.delay_days ?? 0, s.delay_hours ?? 0])).toEqual([[0, 0], [0, 1], [0, 0], [3, 0], [4, 0], [0, 0]])
   })
-  it('both WhatsApp steps use the approved utility template by NAME with the first name as {{1}}', () => {
+  it('PAYLINK.8 — both WhatsApp steps use the pay-link template by NAME: first name, amount, and the invoice id on the URL button', () => {
     for (const s of tpl.steps.filter((s) => s.step_type === 'whatsapp')) {
-      expect(s.whatsapp_template_name).toBe('outstanding_payment_')
-      expect(s.whatsapp_variables).toEqual({ '1': 'first_name' })
+      expect(s.whatsapp_template_name).toBe('outstanding_payment_link_')
+      expect(s.whatsapp_variables).toEqual({ '1': 'first_name', '2': 'pay_amount', url_button: 'pay_link_suffix' })
     }
+  })
+  it('PAYLINK.8 — every email uses the amount phrase and the CTA fragment, and never a raw pay link', () => {
+    for (const s of tpl.steps.filter((s) => s.step_type === 'email')) {
+      expect(s.html_content).toContain('{{pay_amount_phrase}}')
+      expect(s.html_content).toContain('{{payment_cta}}')
+      expect(s.html_content).not.toContain('pay.glofox.com')
+    }
+  })
+  it('PAYLINK.8 — the description tells the operator which WhatsApp template must be approved first', () => {
+    expect(tpl.description).toContain('outstanding_payment_link_')
   })
   it('email copy is low-key: no em-dashes, no emoji, mentions updating the card', () => {
     for (const s of tpl.steps.filter((s) => s.step_type === 'email')) {
@@ -442,6 +466,145 @@ describe('DUNNING.6 — overdue membership payment → card update reminders', (
       expect(s.html_content).not.toMatch(/\u2014/)
       expect(s.html_content).not.toMatch(/[\u{1F300}-\u{1FAFF}]/u)
       expect(s.html_content.toLowerCase()).toMatch(/card/)
+    }
+  })
+})
+
+// PAYLINK.8b \u2014 {{payment_cta}} expands to a full clause ("<a>pay it now</a>,
+// it takes a few seconds, or update your card in the Glofox app", or just
+// the card-update clause with no link). Each email body must read cleanly
+// in BOTH cases: no sentence ends up with two "or"s stitched together (the
+// bug the earlier copy had \u2014 CTA already ends "...or update your card...",
+// so a trailing ", or reply..." on the SAME sentence produced a double
+// "or"), no doubled punctuation from a fragment butting against the
+// template's own trailing comma/period.
+describe('PAYLINK.8b \u2014 payment_cta email copy reads cleanly with and without a pay link', () => {
+  const tpl = getTemplate('overdue_payment_dunning')
+  const contact = { first_name: 'Emma' }
+  const withLink = { link: 'https://pay.test/inv-42', amount: '\u20ac209' }
+  const noLink = { link: null, amount: '\u20ac209' }
+
+  function render(html, payment) {
+    return applyMergeTags(html, contact, {
+      location_name: 'Stillorgan',
+      pay_amount_phrase: payAmountPhrase(payment),
+      payment_cta: paymentCtaHtml(payment),
+    })
+  }
+
+  it('every email renders cleanly in both the with-link and no-link variant', () => {
+    for (const s of tpl.steps.filter((s) => s.step_type === 'email')) {
+      const linked = render(s.html_content, withLink)
+      const unlinked = render(s.html_content, noLink)
+
+      for (const rendered of [linked, unlinked]) {
+        for (const sentence of rendered.split(/(?<=[.!?])\s+/)) {
+          const orCount = (sentence.match(/\bor\b/gi) || []).length
+          expect(orCount, `"${sentence}" reads with a doubled "or"`).toBeLessThanOrEqual(1)
+        }
+        expect(rendered, `${s.subject}: doubled comma`).not.toMatch(/,\s*,/)
+        expect(rendered, `${s.subject}: doubled period`).not.toMatch(/\.\./)
+      }
+
+      expect(linked, `${s.subject}: with-link variant has no <a href=`).toContain('<a href=')
+      expect(unlinked, `${s.subject}: no-link variant leaked an <a> anyway`).not.toContain('<a href=')
+    }
+  })
+})
+
+// FLOW-DELAY.1 — the gallery is the reason this matters. 15 of the 25
+// templates carry their delays on ACTION steps (whatsapp/email), not on
+// `wait` rows, because the legacy runner honours the three delay columns on
+// every step_type. /api/sequences/from-template copies those delays onto
+// sequence_steps verbatim — and then the very first Publish out of the flow
+// builder used to rewrite every one of them to zero, because the graph
+// decompiler only read delays off `wait` steps and the compiler stamped
+// 0/0/0 on everything else. Seen live on the overdue-payment reminders
+// install: a drip designed to run over seven days became a burst of sends
+// inside the hour.
+//
+// This is the guard in both directions: install a template, open it in the
+// builder, publish it — the member gets the messages at the same moments.
+describe('FLOW-DELAY.1 — every gallery template survives a builder round trip unchanged in timing', () => {
+  // The runner's rule (src/lib/sequences/scheduler.js): an enrolment starts
+  // with next_step_at = now, so step 1's own delay is never applied; after
+  // finishing step N the runner schedules the step it advances into at
+  // now + nextStepDelayMs(that step). A `wait` row sends nothing, it only
+  // moves the clock.
+  function sendTimeline(steps) {
+    const ms = (s) => (((s.delay_days || 0) * 24 * 60) + ((s.delay_hours || 0) * 60) + (s.delay_minutes || 0)) * 60_000
+    let t = 0
+    const out = []
+    steps.forEach((s, i) => {
+      if (i > 0) t += ms(s)
+      if (s.step_type !== 'wait') out.push({ step_type: s.step_type, at: t })
+    })
+    return out
+  }
+
+  // What /api/sequences/from-template writes into sequence_steps.
+  function installedSteps(tpl) {
+    return tpl.steps.map((s, i) => ({ ...s, step_order: i + 1 }))
+  }
+
+  it('the catalog really does lean on action-step delays (sanity — if this drops to 0 the guard below is vacuous)', () => {
+    const withActionDelays = SEQUENCE_TEMPLATES.filter((t) => t.steps.some(
+      (s) => s.step_type !== 'wait' && ((s.delay_days || 0) || (s.delay_hours || 0) || (s.delay_minutes || 0)),
+    ))
+    // Was 19; TWILIO-RETIRE.1 removed the SMS steps that carried four of them.
+    expect(withActionDelays.length).toBeGreaterThanOrEqual(15)
+  })
+
+  it('compile(decompile(steps)) sends every template at exactly the original times', async () => {
+    const { decompileStepsToGraph } = await import('./sequences/graph/decompile.js')
+    const { compileGraphToSteps } = await import('./sequences/graph/compile.js')
+    for (const tpl of SEQUENCE_TEMPLATES) {
+      const steps = installedSteps(tpl)
+      const graph = decompileStepsToGraph(steps, { type: tpl.trigger_type, config: tpl.trigger_config || {} })
+      const recompiled = compileGraphToSteps(graph)
+      expect(sendTimeline(recompiled), `${tpl.id} publishes a different schedule than it installs`)
+        .toEqual(sendTimeline(steps))
+    }
+  })
+
+  it('no template loses its total elapsed span in the round trip', async () => {
+    const { decompileStepsToGraph } = await import('./sequences/graph/decompile.js')
+    const { compileGraphToSteps } = await import('./sequences/graph/compile.js')
+    const span = (steps) => {
+      const t = sendTimeline(steps)
+      return t.length ? t[t.length - 1].at : 0
+    }
+    for (const tpl of SEQUENCE_TEMPLATES) {
+      const steps = installedSteps(tpl)
+      const recompiled = compileGraphToSteps(
+        decompileStepsToGraph(steps, { type: tpl.trigger_type, config: tpl.trigger_config || {} }),
+      )
+      expect(span(recompiled), `${tpl.id} collapsed from ${span(steps)}ms to ${span(recompiled)}ms`).toBe(span(steps))
+    }
+  })
+})
+
+// FLOW-DELAY.1 (review) — two things the timing guard above assumes, made
+// explicit so a future gallery addition cannot quietly invalidate it.
+//
+//   1. sendTimeline walks the step list LINEARLY. That is only a faithful
+//      model while the gallery is branch-free — a `branch` step routes by
+//      then/else pointers, and a linear walk would then be comparing two
+//      schedules neither run takes.
+//   2. It models zero execution time. In the real runner a lifted wait costs
+//      up to one extra scheduler tick (the wait row executes, THEN its
+//      successor is scheduled at +0 and fires on the following pass), so the
+//      equivalence the guard asserts is of the DELAYS, not of wall-clock to
+//      the second. That is the right bar: a tick is ~10 minutes at most and
+//      applies equally to every wait node the builder has ever produced,
+//      whereas the defect being guarded collapsed days into nothing.
+describe('FLOW-DELAY.1 — the timing guard walk is valid for this catalog', () => {
+  it('no gallery template ships a branch step, so the linear walk is faithful', () => {
+    for (const tpl of SEQUENCE_TEMPLATES) {
+      expect(
+        tpl.steps.find((s) => s.step_type === 'branch'),
+        `${tpl.id} ships a branch step — the linear sendTimeline model no longer describes it`,
+      ).toBeUndefined()
     }
   })
 })

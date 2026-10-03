@@ -142,12 +142,12 @@ describe('toggle off — the plain path is untouched', () => {
     expect(document.querySelector('iframe')).toBeNull()
 
     const textarea = screen.getByLabelText('Email signature')
-    fireEvent.change(textarea, { target: { value: 'Sarah Doyle\n01 234 5678' } })
+    fireEvent.change(textarea, { target: { value: 'Sam Demo\n01 234 5678' } })
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
 
     await waitFor(() => expect(bodies).toHaveLength(1))
     // Exactly the EMAIL-TICKET.5 shape — no email_signature_rich key rides along.
-    expect(bodies[0]).toEqual({ email_signature: 'Sarah Doyle\n01 234 5678' })
+    expect(bodies[0]).toEqual({ email_signature: 'Sam Demo\n01 234 5678' })
     // …and the cross-tab signal goes out, so an open composer refetches.
     await waitFor(() => expect(window.localStorage.getItem(SIGNATURE_UPDATED_KEY)).toMatch(/^\d+$/))
   })
@@ -175,7 +175,7 @@ describe('rich save payload', () => {
     ])
     render(<EmailSignatureForm initialSignature="" initialRich={null} />)
     enableToggle()
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: '  Sarah Doyle ' } })
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: '  Sam Demo ' } })
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Head Coach' } })
     fireEvent.change(screen.getByLabelText('Phone'), { target: { value: '01 234 5678' } })
     fireEvent.click(screen.getByRole('button', { name: /add link/i }))
@@ -187,7 +187,7 @@ describe('rich save payload', () => {
     expect(bodies[0]).toEqual({
       email_signature_rich: {
         enabled: true,
-        name: 'Sarah Doyle', // trimmed
+        name: 'Sam Demo', // trimmed
         title: 'Head Coach',
         phone: '01 234 5678',
         note: '',

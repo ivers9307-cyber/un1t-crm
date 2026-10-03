@@ -141,7 +141,10 @@ async function moveContact(db, id, masterId, anchorId) {
  * master location. Dry-run by default. Never deletes, never merges.
  *
  * @param {object} db service-role supabase client
- * @param {{dryRun?: boolean}} [opts]
+ * @param {{dryRun?: boolean, organizationIds?: string[]|null}} [opts]
+ *   organizationIds (TENANTSCOPE.1): null walks every organisation's anchors
+ *   (a master's run); an array walks only those organisations' — and an
+ *   EMPTY array walks none, because "no organisation" never means "all".
  * @returns {Promise<{dry_run: boolean, planned: number, moved: number,
  *   moved_ids: string[], moved_ids_truncated?: boolean,
  *   needs_manual_merge: Array<{anchor_id: string, master_id: string}>,
@@ -152,7 +155,7 @@ async function moveContact(db, id, masterId, anchorId) {
  *   identical either way, since collisions are never acted on. `moved_ids` is
  *   the only record of what a live run changed — there is no undo list.
  */
-export async function runHostLeadMigration(db, { dryRun = true } = {}) {
+export async function runHostLeadMigration(db, { dryRun = true, organizationIds = null } = {}) {
   const summary = {
     dry_run: dryRun,
     planned: 0,
@@ -165,9 +168,12 @@ export async function runHostLeadMigration(db, { dryRun = true } = {}) {
     errors: [],
   }
 
-  const anchors = await pageAll(db, 'locations', 'id, organization_id', (q) =>
-    q.eq('is_host_anchor', true)
-  )
+  if (Array.isArray(organizationIds) && organizationIds.length === 0) return summary
+
+  const anchors = await pageAll(db, 'locations', 'id, organization_id', (q) => {
+    const anchored = q.eq('is_host_anchor', true)
+    return organizationIds ? anchored.in('organization_id', organizationIds) : anchored
+  })
   if (!anchors.length) return summary
 
   // Resolve each org's master location once (mig 464).

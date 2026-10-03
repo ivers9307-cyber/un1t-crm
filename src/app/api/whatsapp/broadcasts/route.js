@@ -2,6 +2,7 @@ import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getCurrentUser, assertLocationAccess , getUserLocationIds} from '@/lib/auth'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, audienceFilterSchema, url, timeOfDay } from '@/lib/schemas'
 import { validateAudienceFilter, InvalidAudienceFilterError } from '@/lib/audience-filter'
@@ -32,15 +33,25 @@ const BroadcastCreateSchema = z.object({
   status: z.enum(['draft', 'scheduled']).optional(),
 })
 
+// C120 GATES-3 (a) — the list and the create took membership only, so a
+// member with WhatsApp switched off could read a studio's broadcasts and park
+// a new one that /send would refuse them. Same rule as the [id] routes and
+// /send: `whatsapp` at SOME studio before any read, then at the studio asked
+// for (or created at).
+const waForbidden = () => NextResponse.json(
+  { success: false, error: 'Forbidden — WhatsApp not enabled' }, { status: 403 })
+
 // GET /api/whatsapp/broadcasts
 export async function GET(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (!hasPermissionAtAnyLocation(user, 'whatsapp')) return waForbidden()
 
   const { searchParams } = new URL(request.url)
   const locationId = searchParams.get('location_id')
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
+  if (locationId && !hasPermissionForLocation(user, locationId, 'whatsapp')) return waForbidden()
 
   const db = createServerClient()
   let query = db.from('whatsapp_broadcasts')
@@ -50,7 +61,9 @@ export async function GET(request) {
   if (locationId) {
     query = query.eq('location_id', locationId)
   } else {
+    // Every studio the caller belongs to AND holds `whatsapp` at.
     const userLocationIds = getUserLocationIds(user)
+      .filter((id) => hasPermissionForLocation(user, id, 'whatsapp'))
     if (userLocationIds.length === 0) return NextResponse.json({ success: true, broadcasts: [] })
     query = query.in('location_id', userLocationIds)
   }
@@ -65,6 +78,7 @@ export async function GET(request) {
 export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (!hasPermissionAtAnyLocation(user, 'whatsapp')) return waForbidden()
 
   const validation = await validateBody(request, BroadcastCreateSchema)
   if (!validation.ok) return validation.response
@@ -72,6 +86,8 @@ export async function POST(request) {
   const locationId = body.location_id || user.activeLocation?.id
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
+  // No location at all fails closed (hasPermissionForLocation(null) is false).
+  if (!hasPermissionForLocation(user, locationId, 'whatsapp')) return waForbidden()
 
   // COMMSFIX.B.7 — reject an invalid audience filter at save time instead of
   // parking a broadcast whose audience can never resolve.
@@ -85,11 +101,28 @@ export async function POST(request) {
   }
 
   const db = createServerClient()
+
+  // GATES-3 (a) — a template is sent on its OWN studio's number, so a new
+  // broadcast may only use a template of the studio it is created at (the
+  // PUT's GATES-2 rule; the id is caller-supplied).
+  const { data: tpl, error: tplErr } = await db.from('whatsapp_templates')
+    .select('id, location_id')
+    .eq('id', body.template_id)
+    .maybeSingle()
+  if (tplErr) return NextResponse.json({ success: false, error: 'Could not check the template' }, { status: 500 })
+  if (!tpl || tpl.location_id !== locationId) {
+    return NextResponse.json({ success: false, error: 'Template not found at this location' }, { status: 400 })
+  }
+
   const isDrip = body.delivery_mode === 'drip'
   // WA-SCHEDULE — 'scheduled' requires a scheduled_at; otherwise it'd sit
   // invisible to the cron (which picks up status='scheduled' AND
   // scheduled_at <= now). A scheduled drip starts (status→'sending') when the
-  // cron promotes it; an unscheduled drip starts immediately as before.
+  // cron promotes it.
+  // C120 GATES-3 (e) — an UNSCHEDULED drip is a draft too. It used to be
+  // created straight into 'sending', which the cron then sent with none of
+  // /send's checks; the composer now calls /send, whose sendBroadcast runs
+  // them and starts the drip (draft→sending) without sending anything itself.
   const isScheduled = body.status === 'scheduled' && !!body.scheduled_at
   const { data, error } = await db.from('whatsapp_broadcasts').insert({
     name: body.name || 'Untitled Broadcast',
@@ -97,9 +130,9 @@ export async function POST(request) {
     variable_mapping: body.variable_mapping || {},
     header_media_url: body.header_media_url || null,
     audience_filter: body.audience_filter || { filters: [], logic: 'and' },
-    // A drip starts immediately — the run-whatsapp-broadcasts cron drives it during
-    // the send window. A blast stays 'draft' until the operator fires /send.
-    status: isScheduled ? 'scheduled' : isDrip ? 'sending' : 'draft',
+    // A blast or a drip stays 'draft' until /send starts it (GATES-3 e); the
+    // run-whatsapp-broadcasts cron then drives a drip during its window.
+    status: isScheduled ? 'scheduled' : 'draft',
     scheduled_at: body.scheduled_at || null,
     delivery_mode: body.delivery_mode || 'blast',
     handle_replies_manually: body.handle_replies_manually === true,

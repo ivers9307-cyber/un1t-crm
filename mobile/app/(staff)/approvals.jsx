@@ -9,7 +9,7 @@
 //                    screens (receipts, issues, hyrox, rosters).
 // Reached from the More tab. No client-side role logic — the aggregator
 // role-scopes server-side.
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import { View, Text, ScrollView, RefreshControl, ActivityIndicator, Alert, Pressable } from 'react-native'
 import { Stack, useFocusEffect, useLocalSearchParams, router } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
@@ -20,13 +20,17 @@ import {
   mobileApprovalSections, customerQueue, failedQueue, teamNavTiles,
   customerBadgeCount, teamBadgeCount,
 } from '../../lib/approvals'
-import { respondToTimeOff, respondToSwap } from '../../lib/schedule-api'
+import { respondToTimeOff, respondToSwap, unassignLeaveClashes } from '../../lib/schedule-api'
+import { leaveClashPrompt } from 'shared/time-off'
+import { swapConflictPrompt } from '../../lib/swap-conflicts'
 import { approveExpenseClaim, declineExpenseClaim } from '../../lib/expenses-api'
 import { approveInvoice, declineInvoice } from '../../lib/invoices-api'
 import { decideApproval } from '../../lib/inbox-approvals-api'
 import ApprovalCard from '../../components/approvals/ApprovalCard'
 import CustomerApprovalCard from '../../components/approvals/CustomerApprovalCard'
 import DeclineSheet from '../../components/approvals/DeclineSheet'
+import { InvoiceRosterCheck } from '../../components/invoices/RosterComparison'
+import { approveFailureAlert } from '../../lib/approval-outcome'
 
 const REASON_REQUIRED = new Set(['fte_expenses', 'contractor_invoices', 'host_events'])
 
@@ -57,6 +61,10 @@ export default function ApprovalsInbox() {
   const [error, setError] = useState(null)
   const [busyId, setBusyId] = useState(null)
   const [declineFor, setDeclineFor] = useState(null) // { key, id } — key 'agent_requests' = customer decline
+  // SWAPOVERRIDE.1 — ids with an approve request in flight. busyId disables
+  // the card's buttons only after a re-render; this ref refuses a second tap
+  // that lands before it (and a second "Approve anyway").
+  const approving = useRef(new Set())
 
   const load = useCallback(async () => {
     if (!locationId) return
@@ -101,12 +109,78 @@ export default function ApprovalsInbox() {
   }
 
   async function onApprove(key, item) {
+    if (approving.current.has(item.id)) return
+    approving.current.add(item.id)
     setBusyId(item.id)
-    const res = await approveFn(key, item.id)
-    setBusyId(null)
+    let res
+    try {
+      res = await approveFn(key, item.id)
+    } finally {
+      approving.current.delete(item.id)
+      setBusyId(null)
+    }
+    if (!res.success) {
+      // SWAPOVERRIDE.1 — a swap refused for leave / a same-day clash (409
+      // swap_conflicts) is the manager's call, not a dead end: list the
+      // conflicts and offer to approve anyway, as the web Swaps page does.
+      // Every other failure keeps the plain alert.
+      const conflict = key === 'shift_swaps' ? swapConflictPrompt(res) : null
+      if (conflict) {
+        Alert.alert(conflict.title, conflict.message, [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Approve anyway', onPress: () => approveSwapAnyway(item) },
+        ])
+        return
+      }
+      Alert.alert('Could not approve', res.error || 'Unknown error')
+      return
+    }
+    afterApproved(key, item, res)
+  }
+
+  // SWAPOVERRIDE.1 — the same approval, re-sent with confirm_conflicts: true.
+  async function approveSwapAnyway(item) {
+    if (approving.current.has(item.id)) return
+    approving.current.add(item.id)
+    setBusyId(item.id)
+    let res
+    try {
+      res = await respondToSwap(item.id, 'approved', null, locationId, { confirmConflicts: true })
+    } finally {
+      approving.current.delete(item.id)
+      setBusyId(null)
+    }
     if (!res.success) { Alert.alert('Could not approve', res.error || 'Unknown error'); return }
+    afterApproved('shift_swaps', item, res)
+  }
+
+  function afterApproved(key, item, res) {
+    // LEAVE.1 — approved leave the person is still rostered over. Ask; never
+    // unassign on the approver's behalf.
+    const clash = key === 'time_off' ? leaveClashPrompt(res.clashes) : null
+    if (clash) {
+      Alert.alert(clash.title, clash.message, [
+        { text: 'Keep them', style: 'cancel' },
+        { text: 'Unassign them', style: 'destructive', onPress: () => unassignClashes(item.id, clash.assignmentIds) },
+      ])
+      load()
+      return
+    }
     const warn = res.warning || (Array.isArray(res.warnings) && res.warnings.length ? res.warnings.join('\n') : null)
     if (warn) Alert.alert('Approved — note', warn)
+    load()
+  }
+
+  async function unassignClashes(id, assignmentIds) {
+    setBusyId(id)
+    const res = await unassignLeaveClashes(id, { assignmentIds, locationId })
+    setBusyId(null)
+    const skipped = res.data?.skipped?.length || 0
+    if (!res.success) {
+      Alert.alert('Could not unassign', res.error || 'Unknown error')
+    } else if (skipped > 0) {
+      Alert.alert('Partly done', `${skipped} shift${skipped === 1 ? ' is' : 's are'} at a studio you don't manage, so ${skipped === 1 ? 'it was' : 'they were'} left on the roster.`)
+    }
     load()
   }
 
@@ -117,9 +191,10 @@ export default function ApprovalsInbox() {
     const res = await decideApproval(item.id, 'approved')
     setBusyId(null)
     if (!res.success) { Alert.alert('Could not approve', res.error || 'Unknown error'); return }
-    if (res.executed && res.executed.ok === false) {
-      Alert.alert('Approved, but the action failed', res.executed.message_code || 'The booking system rejected it. Check the account and retry.')
-    }
+    // C85 (c) — the operator sentence for the code (and what to fix), never
+    // the bare code: shared/agent-request-failure.js via approveFailureAlert.
+    const failed = approveFailureAlert(res)
+    if (failed) Alert.alert(failed.title, failed.message)
     load()
   }
 
@@ -214,7 +289,11 @@ export default function ApprovalsInbox() {
                       busy={busyId === item.id}
                       onApprove={() => onApprove(sec.key, item)}
                       onDecline={() => setDeclineFor({ key: sec.key, id: item.id })}
-                    />
+                    >
+                      {/* INVOICEREVIEW.2 — roster vs invoice before Approve,
+                          via GET /api/invoices/[id] (same route as web). */}
+                      {sec.key === 'contractor_invoices' ? <InvoiceRosterCheck invoiceId={item.id} /> : null}
+                    </ApprovalCard>
                   ))}
                 </View>
               ))}

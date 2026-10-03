@@ -69,14 +69,13 @@ export function defaultConfigForType(type) {
   switch (type) {
     case 'wait': return { days: 1, hours: 0, minutes: 0 }
     case 'email': return { subject: '', html_content: '' }
-    case 'sms': return { body: '' }
     case 'whatsapp': return { template_id: '' }
     case 'apply_tag': return { tag: '' }
     case 'update_field': return { field: '', value: '' }
     case 'internal_task': return { subject: '', note: '' }
     case 'webhook': return { url: '', method: 'POST' }
-    // move_pipeline_stage intentionally absent — RETIRED (FUNNEL.1),
-    // never offered as a new node.
+    // move_pipeline_stage (FUNNEL.1) and sms (TWILIO-RETIRE.1) intentionally
+    // absent — RETIRED, never offered as a new node.
     case 'glofox_provision': return {}
     default: return {}
   }

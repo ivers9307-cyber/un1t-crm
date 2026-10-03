@@ -68,6 +68,17 @@ const HEADER_ACTIONS = {
   manual: ['message', 'task', 'sequence', 'cancel_form'],
 }
 
+// ROLEUI.2 — which flag (contactWorkGates in src/lib/contact-page-gates.js,
+// judged at the contact's location) lets each kebab item through. Message
+// has none: it deep-links to the composer, which gates its own channels.
+// Missing flags hide the item: the menu fails closed.
+const ACTION_GATE = { task: 'canTask', sequence: 'canSequence', cancel_form: 'canCancelForm', cold: 'canCold' }
+
+export function headerActions(manual, actionGates) {
+  return HEADER_ACTIONS[manual ? 'manual' : 'derived']
+    .filter((a) => !ACTION_GATE[a] || Boolean(actionGates?.[ACTION_GATE[a]]))
+}
+
 function StatTile({ label, value, tone = 'default' }) {
   const valueCls = tone === 'danger' ? 'text-red-700' : 'text-un1t-text'
   return (
@@ -81,7 +92,7 @@ function StatTile({ label, value, tone = 'default' }) {
 // `manual` defaults FALSE — Cold shown — so a caller that cannot resolve the
 // contact's board keeps exactly today's behaviour. A failed lookup must never
 // remove an operator action; an inert button beats a missing one.
-export default function ContactHeaderBand({ contact, person, risk, journey, metrics, attention = [], nextClassAt = null, canToggleExempt = false, cancellationLink = null, manual = false }) {
+export default function ContactHeaderBand({ contact, person, risk, journey, metrics, attention = [], nextClassAt = null, canToggleExempt = false, cancellationLink = null, manual = false, actionGates = null }) {
   // CANCEL-FORM.4 — latest issued form link → one chip (sent / opened / submitted).
   const cancelChip = cancellationLinkChip(cancellationLink)
   const funnel = BADGE_SLUGS.has(contact.pipeline_stage_slug)
@@ -137,7 +148,7 @@ export default function ContactHeaderBand({ contact, person, risk, journey, metr
             <PersonActionBar
               contactId={contact.id}
               locationId={contact.location_id}
-              actions={HEADER_ACTIONS[manual ? 'manual' : 'derived']}
+              actions={headerActions(manual, actionGates)}
               isCold={contact.pipeline_stage_slug === 'cold_lead'}
             />
           </PersonHeader>

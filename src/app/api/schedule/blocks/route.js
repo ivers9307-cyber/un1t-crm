@@ -17,15 +17,18 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, getUserLocationIds, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { uuidLike, isoDate, timeOfDay, MANAGER_ROLES } from '@/lib/schemas'
+import { uuidLike, realIsoDate, timeOfDay, MANAGER_ROLES } from '@/lib/schemas'
+import { rangeQueryError, MAX_LIST_RANGE_DAYS } from '@/lib/report-period'
 import { findPublishedRosterFor } from '@/lib/roster'
+import { logWarn } from '@/lib/log'
+import { adminMinimumRefusal } from '@/lib/shift-template-kind'
 
 const BlockCreateSchema = z.object({
   location_id: uuidLike,
   template_id: uuidLike,
-  block_date: isoDate,
+  block_date: realIsoDate,
   start_time: timeOfDay.optional(),
   end_time: timeOfDay.optional(),
   max_coaches: z.number().int().min(1).max(50).optional(),
@@ -41,10 +44,16 @@ export async function GET(request) {
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
 
-  const isManager = MANAGER_ROLES.includes(user.role)
-
   const startDate = searchParams.get('start_date')
   const endDate = searchParams.get('end_date')
+  // DATECHECK.1 — these bounds reach Postgres as they are, and it refuses
+  // 2026-02-30 (the route used to hand back its error text as the 400). Refuse
+  // it here, in change-log's words. Absent or empty = no bound, as before.
+  // RANGEVALID.1 — and, when both are given, in order and at most
+  // MAX_LIST_RANGE_DAYS apart, before any read: reversed was an empty 200, and
+  // a wide range one unpaged select PostgREST silently cut at 1,000 rows.
+  const rangeError = rangeQueryError(startDate, endDate, { maxDays: MAX_LIST_RANGE_DAYS })
+  if (rangeError) return NextResponse.json({ success: false, error: rangeError }, { status: 400 })
   const db = createServerClient()
 
   let query = db
@@ -52,7 +61,7 @@ export async function GET(request) {
     .select(`
       *,
       rosters:roster_id ( status ),
-      shift_templates(id, name, color, role_label, start_time, end_time, days_of_week, max_coaches),
+      shift_templates(id, name, color, role_label, start_time, end_time, days_of_week, max_coaches, kind),
       shift_assignments(
         id,
         profile_id,
@@ -103,12 +112,16 @@ export async function GET(request) {
   //   reason — a coach reads the roster as it stands, not its history.
   //
   // Managers keep the full ManageMode shape, drafts included.
-  if (!isManager) {
-    const published = (data || []).filter((b) => b.rosters?.status === 'published')
-    return NextResponse.json({ success: true, data: published.map(slimBlockForCoach) })
-  }
-
-  return NextResponse.json({ success: true, data })
+  //
+  // COACHSCOPE.1 — "manager" is judged per block against the caller's role at
+  // THAT block's location, not `user.role` (the ACTIVE location's role): a head
+  // coach at one studio who is plain staff at another passed the old check
+  // while reading the other studio's drafts via ?location_id=.
+  const shaped = (data || []).flatMap((b) => {
+    if (hasRoleAtLocation(user, b.location_id, MANAGER_ROLES)) return [b]
+    return b.rosters?.status === 'published' ? [slimBlockForCoach(b)] : []
+  })
+  return NextResponse.json({ success: true, data: shaped })
 }
 
 // ROSTER-FIX.2 — the coach-facing projection of a block row. Allow-list,
@@ -125,6 +138,9 @@ function slimBlockForCoach(block) {
     end_time: block.end_time,
     roster_id: block.roster_id,
     rosters: block.rosters,
+    // BLOCKEDIT.1 (mig 629) — the one block text a coach DOES read: written
+    // for them. `notes` stays out (a manager's working note).
+    briefing: block.briefing ?? null,
     // The template embed carries max_coaches as well — same capacity fact,
     // one join further out. Dropped here so the slim shape has no back door.
     shift_templates: tpl
@@ -136,6 +152,9 @@ function slimBlockForCoach(block) {
           start_time: tpl.start_time,
           end_time: tpl.end_time,
           days_of_week: tpl.days_of_week,
+          // SHIFTTYPE.1 — class | admin. Not a capacity fact: a coach's admin
+          // shift is drawn in the admin tone too.
+          kind: tpl.kind,
         }
       : tpl,
     shift_assignments: (block.shift_assignments || [])
@@ -147,7 +166,10 @@ function slimBlockForCoach(block) {
         assigned_at: a.assigned_at,
         start_time_override: a.start_time_override,
         end_time_override: a.end_time_override,
-        profiles: a.profiles,
+        // COACHSCOPE.1 — who is on it, not how to email them.
+        profiles: a.profiles
+          ? { id: a.profiles.id, full_name: a.profiles.full_name, avatar_url: a.profiles.avatar_url, role: a.profiles.role }
+          : a.profiles,
       })),
   }
 }
@@ -156,9 +178,13 @@ function slimBlockForCoach(block) {
 // come from the auto-generator when a template is saved; this
 // endpoint exists for one-off "I need an extra slot on this Saturday"
 // cases.
+//
+// SCHEDROLES.1 — the caller must be a manager AT body.location_id, not at
+// their active studio (`user.role`). Membership first (its 403 names the
+// location problem), then the role there.
 export async function POST(request) {
   const user = await getCurrentUser()
-  if (!user || !MANAGER_ROLES.includes(user.role)) {
+  if (!user || !hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -168,6 +194,9 @@ export async function POST(request) {
 
   const guard = assertLocationAccess(user, body.location_id)
   if (guard) return guard
+  if (!hasRoleAtLocation(user, body.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+  }
 
   const db = createServerClient()
 
@@ -175,27 +204,38 @@ export async function POST(request) {
   // template. SHIFTMIN.1 — min_coaches uses `??` (not `||`) on the
   // body value because `0` is a legitimate explicit choice and
   // shouldn't fall through to the template default.
+  //
+  // SCHEDROLES.1 — the template is ALWAYS read, scoped to body.location_id,
+  // even when every snapshot field was supplied: a block must never hang off
+  // another studio's template. A template elsewhere reads as not found (404).
   let start = body.start_time
   let end = body.end_time
   let max = body.max_coaches
   let min = body.min_coaches
-  if (!start || !end || !max || min === undefined) {
-    const { data: tpl, error: tplErr } = await db
-      .from('shift_templates')
-      .select('start_time, end_time, max_coaches, min_coaches')
-      .eq('id', body.template_id)
-      .single()
-    if (tplErr || !tpl) {
-      return NextResponse.json(
-        { success: false, error: 'Template not found' },
-        { status: 400 }
-      )
-    }
-    start = start || tpl.start_time
-    end = end || tpl.end_time
-    max = max || tpl.max_coaches || 15
-    min = min ?? (tpl.min_coaches ?? 1)
+  const { data: tpl, error: tplErr } = await db
+    .from('shift_templates')
+    .select('start_time, end_time, max_coaches, min_coaches, kind')
+    .eq('id', body.template_id)
+    .eq('location_id', body.location_id)
+    .maybeSingle()
+  if (tplErr) {
+    return NextResponse.json({ success: false, error: tplErr.message }, { status: 500 })
   }
+  if (!tpl) {
+    return NextResponse.json(
+      { success: false, error: 'Template not found' },
+      { status: 404 }
+    )
+  }
+  // SHIFTTYPE.1 — an admin shift has no minimum staffing. An explicit
+  // minimum is a contradiction the caller should hear about (400, the same
+  // answer as the template routes); an omitted one is 0.
+  const refusal = adminMinimumRefusal(tpl.kind, body.min_coaches)
+  if (refusal) return NextResponse.json(refusal.body, { status: refusal.status })
+  start = start || tpl.start_time
+  end = end || tpl.end_time
+  max = max || tpl.max_coaches || 15
+  min = tpl.kind === 'admin' ? 0 : (min ?? (tpl.min_coaches ?? 1))
 
   // ROSTER-FIX.4 — if this date already sits inside a PUBLISHED period, the
   // new block joins that roster. Publishing tags the blocks that exist at
@@ -220,7 +260,7 @@ export async function POST(request) {
     })
     .select(`
       *,
-      shift_templates(id, name, color, role_label, start_time, end_time, days_of_week, max_coaches),
+      shift_templates(id, name, color, role_label, start_time, end_time, days_of_week, max_coaches, kind),
       shift_assignments(
         id, profile_id, notes, status, assigned_at,
         profiles:profile_id(id, full_name, email, avatar_url, role)
@@ -238,5 +278,28 @@ export async function POST(request) {
     }
     return NextResponse.json({ success: false, error: error.message }, { status: 400 })
   }
+
+  // SLOTREMOVAL.1 — adding a slot back by hand is the undo for "Delete this
+  // slot": clear its removal row so the nightly generator and roster copies
+  // treat it as a normal slot again. The block exists either way; if this
+  // fails, the stale row only matters once the block is deleted again, so it
+  // is a warning, not a failure.
+  const { error: restoreErr } = await db
+    .from('shift_block_removals')
+    .delete()
+    .eq('location_id', body.location_id)
+    .eq('template_id', body.template_id)
+    .eq('block_date', body.block_date)
+  if (restoreErr) {
+    logWarn('schedule-blocks', 'clearing slot removal failed', {
+      locationId: body.location_id, templateId: body.template_id, blockDate: body.block_date, err: restoreErr,
+    })
+    return NextResponse.json({
+      success: true,
+      data,
+      warning: 'Slot added, but its earlier removal could not be cleared.',
+    }, { status: 201 })
+  }
+
   return NextResponse.json({ success: true, data }, { status: 201 })
 }

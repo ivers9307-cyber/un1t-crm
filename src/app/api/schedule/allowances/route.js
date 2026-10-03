@@ -1,23 +1,37 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser, getUserLocationIds, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, days , MANAGER_ROLES} from '@/lib/schemas'
+import { getEmploymentType, getLeaveEntitlement, getPendingHolidayDays } from '@/lib/time-off-leave'
+import { ALLOWANCE_YEAR_MIN, ALLOWANCE_YEAR_MAX, parseAllowanceYear } from '@/lib/allowance-year'
 
 // ROSTER-FIX.2 — a profile is in scope when it shares a location with the
 // caller (master = everywhere). Detail-style 404 on miss so a cross-tenant
 // id is indistinguishable from a missing one.
-async function profileInScope(db, user, profileId) {
-  if (user.role === 'master') return true
-  const { data } = await db.from('profile_locations').select('location_id').eq('profile_id', profileId)
+//
+// SCHEDROLES.1 — sharing a studio is not enough to manage someone's
+// allowance: the caller must be a MANAGER at a studio the profile belongs to
+// (hasRoleAtLocation), not merely hold a manager role at their ACTIVE studio
+// (`user.role`). A head coach at Hatch who is staff at Stillorgan managed
+// every Stillorgan coach's allowance. Answers:
+//   'managed'   — manager at one of the profile's studios (or master)
+//   'member'    — shares a studio, manages none of the shared ones → 403
+//   'foreign'   — no shared studio, or the lookup failed          → 404
+async function profileScope(db, user, profileId) {
+  if (user.profileRole === 'master') return 'managed'
+  const { data, error } = await db.from('profile_locations').select('location_id').eq('profile_id', profileId)
+  if (error) return 'foreign'
   const mine = new Set(getUserLocationIds(user))
-  return (data || []).some((l) => mine.has(l.location_id))
+  const shared = (data || []).map((l) => l.location_id).filter((id) => mine.has(id))
+  if (shared.length === 0) return 'foreign'
+  return shared.some((id) => hasRoleAtLocation(user, id, MANAGER_ROLES)) ? 'managed' : 'member'
 }
 
 const AllowanceUpdateSchema = z.object({
   profile_id: uuidLike,
-  year: z.number().int().min(2020).max(2100),
+  year: z.number().int().min(ALLOWANCE_YEAR_MIN).max(ALLOWANCE_YEAR_MAX),
   total_days: days.optional(),
   carried_over: days.optional(),
 })
@@ -29,17 +43,28 @@ export async function GET(request) {
 
   const { searchParams } = new URL(request.url)
   const profileId = searchParams.get('profile_id') || user.id
-  const year = searchParams.get('year') || new Date().getFullYear()
+  // RANGEVALID.1 — a four-digit year in the PUT's window, before any read, and
+  // "this year" is Dublin's. It went to .eq('year', …) as given: 'abc' came back
+  // as Postgres's own text, 99999 as a made-up entitlement.
+  const { year, error: yearError } = parseAllowanceYear(searchParams.get('year'))
+  if (yearError) return NextResponse.json({ success: false, error: yearError }, { status: 400 })
   const db = createServerClient()
 
-  // Staff can only view their own allowance
-  if (profileId !== user.id && !MANAGER_ROLES.includes(user.role)) {
+  // Staff can only view their own allowance. SCHEDROLES.1 — "staff" means
+  // manages nowhere; the per-studio decision is profileScope below.
+  if (profileId !== user.id && !hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
   // ROSTER-FIX.2 — a manager only reads allowances for their own studios.
-  if (profileId !== user.id && !(await profileInScope(db, user, profileId))) {
-    return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  if (profileId !== user.id) {
+    const scope = await profileScope(db, user, profileId)
+    if (scope === 'foreign') {
+      return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+    }
+    if (scope !== 'managed') {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+    }
   }
 
   // ROSTER-FIX.2 — name the columns rather than `*`: this row is handed
@@ -55,17 +80,44 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: error.message }, { status: 400 })
   }
 
-  // If no allowance record exists, return defaults
+  // LEAVE.4 — with no row yet, the balance is the person's contract
+  // entitlement (profile_compensation, mig 152), not a flat 20. LEAVE.3 —
+  // contractors have no holiday allowance at all; say so rather than showing
+  // them twenty days they cannot take. A stray row (one exists from before the
+  // contractor gate) is still reported as not applicable.
+  const { employmentType, error: employmentError } = await getEmploymentType(db, profileId)
+  if (employmentError) {
+    return NextResponse.json({ success: false, error: employmentError.message }, { status: 500 })
+  }
+  const notApplicable = employmentType === 'contractor'
+
+  // LEAVEDAYS.1 — `remaining` has never deducted PENDING holiday requests, and
+  // the time-off POST refuses on remaining minus them, so a form judging on
+  // `remaining` alone stays quiet about a request the POST then refuses.
+  // `pending_days` is that sum, from the function the POST judges with.
+  // ADDED beside `remaining`, whose meaning is unchanged (the phone subtracts
+  // its own pending sum from it). An unreadable sum is OMITTED, never 0: the
+  // allowance still loads and the form hedges its wording instead.
+  const { days: pendingDays, error: pendingError } = await getPendingHolidayDays(db, profileId, year)
+  if (pendingError) console.error('[allowances] pending holiday days unreadable', pendingError.message)
+  const pendingField = pendingError ? {} : { pending_days: pendingDays }
+
   if (!data) {
+    const { days, error: entError } = await getLeaveEntitlement(db, profileId)
+    if (entError) {
+      return NextResponse.json({ success: false, error: entError.message }, { status: 500 })
+    }
     return NextResponse.json({
       success: true,
       data: {
         profile_id: profileId,
         year: Number(year),
-        total_days: 20,
+        total_days: days,
         used_days: 0,
         carried_over: 0,
-        remaining: 20,
+        remaining: days,
+        ...pendingField,
+        not_applicable: notApplicable,
       }
     })
   }
@@ -75,6 +127,8 @@ export async function GET(request) {
     data: {
       ...data,
       remaining: data.total_days + data.carried_over - data.used_days,
+      ...pendingField,
+      not_applicable: notApplicable,
     }
   })
 }
@@ -84,7 +138,7 @@ export async function PUT(request) {
   const user = await getCurrentUser()
   // ROSTER-FIX.2 — MANAGER_ROLES is the house manager set; the hand-written
   // ['owner','manager'] here locked out master and head_coach.
-  if (!user || !MANAGER_ROLES.includes(user.role)) {
+  if (!user || !hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -93,8 +147,14 @@ export async function PUT(request) {
   const { profile_id, year, total_days, carried_over } = validation.data
   const db = createServerClient()
 
-  if (!(await profileInScope(db, user, profile_id))) {
+  // SCHEDROLES.1 — manager at one of the profile's studios, not at the
+  // caller's active one. A profile only met as a colleague is 403.
+  const scope = await profileScope(db, user, profile_id)
+  if (scope === 'foreign') {
     return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  }
+  if (scope !== 'managed') {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
   // ROSTER-FIX.2 — a partial PUT (say, only carried_over) used to reset

@@ -7,6 +7,8 @@
 //
 // Per-location error isolation: one bad location never stops the loop.
 // Push delivery is best-effort; sendPush returns counts and never throws.
+// A failed recipients read (recipients_failed) is not recorded or audited
+// as a sent reminder (C1 RECIPIENTS.1).
 //
 // Auth: CRON_SECRET Bearer, same as every other cron.
 
@@ -57,14 +59,34 @@ export async function GET(request) {
         continue
       }
 
-      await sendPushToRolesAtLocation(settings.location_id, ROLES, {
+      const r = await sendPushToRolesAtLocation(settings.location_id, ROLES, {
         title: 'Equipment inspections due',
         body: buildReminderBody(outstanding),
         data: { type: 'equipment_inspection' },
-        // Registered in MOBILE_PERMISSIONS — an unregistered category
-        // resolves false for every role but master.
-        category: 'notify_inspection_due',
+        // BARE — push.js prepends `notify_` itself, so this gates on
+        // notify_inspection_due (registered in MOBILE_PERMISSIONS). The
+        // prefixed form resolved notify_notify_…, which is unregistered
+        // and reaches no one but master (PUSHCAT.1).
+        category: 'inspection_due',
       })
+
+      // C1 RECIPIENTS.1 — the recipients read failed (push.js logged it):
+      // nobody was told, so this is not a sent reminder and is not audited
+      // as one. The 19:00 UTC overdue sweep does chase the same assets
+      // today, but it notifies ONLY owner + master; this reminder goes to all
+      // six ROLES, including the staff who do the inspections. Those staff
+      // (and manager, head_coach, reception) are NOT re-chased the same day.
+      if (r?.recipients_failed) {
+        results.push({ locationId: settings.location_id, due: outstanding.length, pushed: false, recipients_failed: true })
+        continue
+      }
+      // C16 PUSHREADERR.1 — push.js could not read who may be told or their
+      // devices, and nobody was told: not a sent reminder, not audited as one.
+      // Someone told (a partial send under an unreadable template) still counts.
+      if (r?.read_failed && !((r.sent || 0) > 0)) {
+        results.push({ locationId: settings.location_id, due: outstanding.length, pushed: false, read_failed: true })
+        continue
+      }
 
       await logAuditEvent({
         category: 'business',

@@ -204,3 +204,23 @@ describe('planReenrolments (DUNNING.2)', () => {
     expect(planReenrolments([{ contact_id: null }], 14, 'x', NOW).size).toBe(0)
   })
 })
+
+// ENROLFIX.1 — the real history row carries `enrolled_at`, not `created_at`
+// (the column never existed on sequence_enrollments). A terminal row with no
+// last_processed_at must still anchor the cooldown on enrolled_at.
+describe('ENROLFIX.1 — enrolled_at is the fallback end-time', () => {
+  it('findBlockedByCooldown blocks on a recent enrolled_at when last_processed_at is null', () => {
+    const recent = new Date(Date.now() - 2 * 86_400_000).toISOString()
+    const blocked = findBlockedByCooldown([{ contact_id: 'a', status: 'completed', last_processed_at: null, enrolled_at: recent }], 14)
+    expect(blocked.has('a')).toBe(true)
+  })
+  it('planReenrolments picks the latest terminal row by enrolled_at when last_processed_at is null', () => {
+    const older = new Date(Date.now() - 60 * 86_400_000).toISOString()
+    const newer = new Date(Date.now() - 30 * 86_400_000).toISOString()
+    const plan = planReenrolments([
+      { id: 'e-old', contact_id: 'a', status: 'completed', last_processed_at: null, enrolled_at: older, source_ref: 'x' },
+      { id: 'e-new', contact_id: 'a', status: 'completed', last_processed_at: null, enrolled_at: newer, source_ref: 'y' },
+    ], 14, 'z')
+    expect(plan.get('a')?.row?.id).toBe('e-new')
+  })
+})

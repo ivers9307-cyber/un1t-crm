@@ -7,14 +7,25 @@
 // collapsible approvals section". There is none and there never was: approvals
 // (time-off, swaps) live on the Approvals tab. Corrected rather than built,
 // because the approvals surface is not this screen's job.
-import { useState, useEffect, useCallback } from 'react'
-import { View, Text, ActivityIndicator, Alert } from 'react-native'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { View, Text, ActivityIndicator, Alert, Pressable } from 'react-native'
 import { useFocusEffect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import {
-  getScheduleBlocks, getLocationStaff, assignCoachToBlock, removeAssignment,
+  getScheduleBlocks, getLocationStaff, assignCoachToBlock, removeAssignment, replaceAssignment, getBlockCandidates,
+  getManagedOffers, offerBlockToTeam, withdrawShiftOffer,
 } from '../../lib/schedule-api'
+// REPLACE.1b — "Offer to team" on the block card (decisions: offer-cards.js).
+import { blockOfferControl, offerPostAlert } from '../../lib/offer-cards'
+import { indexOffersByBlock } from 'shared/offer-to-team'
+// CANDIDATES.1 — the picker's ranked list: request lifecycle (pure, tested).
+import { NO_CANDIDATES, candidatesStarted, candidatesSettled, candidatesFor } from '../../lib/candidates-view'
 import { effShiftStart } from '../../lib/schedule-team'
+import {
+  adjustTargetFor, rosterKey, rosterLoadOutcome, staffLoadOutcome, isCurrentLoad,
+  coachPressActions, replacePickerTitle, replaceResultAlert,
+} from '../../lib/schedule-manage'
+import { dublinTodayIso } from '../../lib/dates'
 import BlockCard from './BlockCard'
 import CoachPickerSheet from './CoachPickerSheet'
 
@@ -23,17 +34,76 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
   const [blocks, setBlocks] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  // MANAGEMODE.1 — true while a failed refresh left the last good roster of
+  // THIS location+week on screen (rosterLoadOutcome decides).
+  const [stale, setStale] = useState(false)
+  const [canRetry, setCanRetry] = useState(false)
   const [busyId, setBusyId] = useState(null)
   const [staff, setStaff] = useState(null) // null = not loaded
   const [staffLoading, setStaffLoading] = useState(false)
+  const [staffError, setStaffError] = useState(null)
   const [pickerBlock, setPickerBlock] = useState(null)
+  const [replaceTarget, setReplaceTarget] = useState(null) // REPLACE.1a — { block, assignment }
+  const [offers, setOffers] = useState({}) // REPLACE.1b — open offers by block id
+  // CANDIDATES.1 — the ranked list for the block the picker is open on. One
+  // ask per open; only the newest ask for the open block lands.
+  const [candidates, setCandidates] = useState(NO_CANDIDATES)
+  const candidatesSeq = useRef(0)
 
-  const load = useCallback(async () => {
-    if (!locationId) return
-    setError(null)
-    const b = await getScheduleBlocks({ locationId, startDate: weekStart, endDate: weekEnd })
-    if (!b.success) setError(b.error || 'Failed to load roster')
-    setBlocks(b.success ? b.data || [] : [])
+  // MANAGEMODE.1 — only the newest load may write state. Paging weeks fast, a
+  // slow answer for the week just left used to land after the new week's and
+  // paint it under the new dates. `loadedKey` is what `blocks` belongs to.
+  const generation = useRef(0)
+  const loadedKey = useRef(null)
+  // MANAGEMODE.1 (review) — what is on screen NOW, read by loads that were
+  // started from an older render (an assign/remove's refresh). See
+  // isCurrentLoad: such a load for a key the screen has left never starts.
+  const currentKey = useRef(null)
+  const currentLocation = useRef(null)
+  currentKey.current = locationId ? rosterKey(locationId, weekStart, weekEnd) : null
+  currentLocation.current = locationId ?? null
+
+  // The error is NOT cleared when a load starts, only when one settles, so a
+  // persistent failure does not blink on every refresh (the web's rule).
+  //
+  // `spinner` covers the screen until THIS load settles. Only the newest load
+  // clears it: a superseded one finishing first used to drop the spinner and
+  // show the week just left under the new week's dates until the winner came.
+  const load = useCallback(async ({ spinner = false } = {}) => {
+    if (!locationId) {
+      generation.current += 1 // an in-flight answer for the old studio is dropped
+      setLoading(false)
+      return
+    }
+    const requestedKey = rosterKey(locationId, weekStart, weekEnd)
+    if (requestedKey !== currentKey.current) return
+    const gen = ++generation.current
+    if (spinner) setLoading(true)
+    let res
+    let offersRes = null
+    try {
+      // REPLACE.1b — the week's open offers ride the same load (and the same
+      // generation guard). Their failure is on its own: it never costs the roster.
+      const both = await Promise.all([
+        getScheduleBlocks({ locationId, startDate: weekStart, endDate: weekEnd }),
+        getManagedOffers({ locationId, startDate: weekStart, endDate: weekEnd }).catch(() => null),
+      ])
+      res = both[0]
+      offersRes = both[1]
+    } catch (e) {
+      res = { success: false, error: e?.message }
+    }
+    if (!isCurrentLoad({ gen, currentGen: generation.current, requestedKey, currentKey: currentKey.current })) return
+    // An unreadable offer list shows no offer lines; "Offer to team" may then
+    // show on an offered shift, and the route answers "already offered".
+    setOffers(offersRes?.success ? indexOffersByBlock(offersRes.data) : {})
+    const out = rosterLoadOutcome({ res, requestedKey, loadedKey: loadedKey.current })
+    if (out.blocks !== undefined) setBlocks(out.blocks)
+    loadedKey.current = out.loadedKey
+    setError(out.error)
+    setStale(out.stale)
+    setCanRetry(out.canRetry)
+    setLoading(false)
   }, [locationId, weekStart, weekEnd])
 
   // ROSTER-FIX.7h — ONE fetch, not two. A plain useEffect on [load] and a
@@ -46,13 +116,16 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
     // refreshKey is a bump from the screen after an adjust saves; nothing reads
     // its value, being in this dependency list IS its job.
     void refreshKey
-    setLoading(true)
-    load().finally(() => setLoading(false))
+    load({ spinner: true })
   }, [load, refreshKey]))
+
+  function retry() {
+    load({ spinner: true })
+  }
 
   const dayBlocks = blocks
     .filter((b) => b.block_date === selectedIso)
-    .sort((a, b) => (effShiftStart(a) || a.start_time || '').localeCompare(effShiftStart(b) || b.start_time || ''))
+    .sort((a, b) => (effShiftStart(a) || '').localeCompare(effShiftStart(b) || ''))
 
   // ROSTER-FIX.7 — the assignable-staff pool is fetched once and cached for
   // the life of the mount, and it went stale two ways. (1) It is a PER-LOCATION
@@ -62,20 +135,51 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
   // assigning one 404s at the block. (2) `active` and `profile_locations` can
   // change under the operator, and the pool is what CoachPickerSheet filters,
   // so a stale copy re-offers someone who has just been removed everywhere.
+  //
+  // MANAGEMODE.1 — a failed load stored `[]`: the picker said "No available
+  // coaches to add." and, since openPicker only fetches while the pool is
+  // null, never tried again. staffLoadOutcome keeps a failed first load null
+  // (the next open, or the sheet's Try again, retries) with a reason for the
+  // sheet to show; a failed refresh keeps the pool already loaded. The
+  // generation drops an answer for a studio the manager has since left.
+  const staffGeneration = useRef(0)
+  // The pool as last written, for staffLoadOutcome's keep-on-refresh rule
+  // without making loadStaff depend on (and re-create with) `staff`.
+  const staffRef = useRef(null)
   const loadStaff = useCallback(async () => {
-    if (!locationId) return
+    // Same rule as load(): a refresh fired from a render for a studio the
+    // manager has since left must not start, let alone write that studio's
+    // coaches into this one's picker.
+    if (!locationId || locationId !== currentLocation.current) return
+    const gen = ++staffGeneration.current
     setStaffLoading(true)
-    const res = await getLocationStaff({ locationId })
+    let res
+    try {
+      res = await getLocationStaff({ locationId })
+    } catch (e) {
+      res = { success: false, error: e?.message }
+    }
+    if (gen !== staffGeneration.current || locationId !== currentLocation.current) return
     setStaffLoading(false)
-    setStaff(res.success ? res.data || [] : [])
-    if (!res.success) Alert.alert('Could not load staff', res.error || 'Unknown error')
+    const out = staffLoadOutcome({ res, current: staffRef.current })
+    staffRef.current = out.staff
+    setStaff(out.staff)
+    setStaffError(out.error)
   }, [locationId])
 
   // ROSTER-FIX.7h — close the picker with the pool. Dropping the staff list on
   // a location switch while the sheet stayed open left it mid-flight over the
   // new studio: an empty list, then a reload of coaches for a block that
   // belongs to the studio the manager just left.
-  useEffect(() => { setStaff(null); setPickerBlock(null) }, [locationId])
+  useEffect(() => {
+    candidatesSeq.current += 1
+    setCandidates(NO_CANDIDATES)
+    staffGeneration.current += 1
+    staffRef.current = null
+    setStaff(null); setStaffError(null); setStaffLoading(false); setPickerBlock(null)
+    setReplaceTarget(null) // REPLACE.1a — a studio switch closes this picker too
+    setOffers({}) // REPLACE.1b — the old studio's offers are not this one's
+  }, [locationId])
 
   // Refetch only when the pool was already loaded — a manager who never opened
   // the picker should not pay for a staff call on every assign/remove.
@@ -83,8 +187,23 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
     if (staff !== null) loadStaff()
   }, [staff, loadStaff])
 
+  async function loadCandidates(block) {
+    const requestId = ++candidatesSeq.current
+    setCandidates(candidatesStarted(block.id, requestId))
+    let res
+    try {
+      res = await getBlockCandidates(block.id, { locationId })
+    } catch (e) {
+      res = { success: false, error: e?.message }
+    }
+    // A studio the manager has since left: its answer is not for this screen.
+    if (locationId !== currentLocation.current) return
+    setCandidates((prev) => candidatesSettled(prev, { blockId: block.id, requestId, res }))
+  }
+
   async function openPicker(block) {
     setPickerBlock(block)
+    loadCandidates(block) // not awaited: the staff list below is the fallback
     if (staff === null && !staffLoading) await loadStaff()
   }
 
@@ -115,25 +234,78 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
   }
 
   function onCoachPress(block, assignment) {
+    // REPLACE.1a — which actions, and in what order: coachPressActions.
+    const buttons = {
+      adjust: { text: 'Adjust times', onPress: () => onAdjust(adjustTargetFor(block, assignment)) },
+      replace: { text: 'Replace coach', onPress: () => openReplace(block, assignment) },
+      remove: { text: 'Remove from shift', style: 'destructive', onPress: () => confirmRemove(block, assignment) },
+    }
     Alert.alert(
       assignment.profiles?.full_name || 'Coach',
       `${block.shift_templates?.name || 'Shift'} · ${block.block_date}`,
-      [
-        { text: 'Adjust times', onPress: () => onAdjust({
-          shift_assignment_id: assignment.id,
-          shift_date: block.block_date,
-          start_time: block.start_time,
-          end_time: block.end_time,
-          shift_templates: block.shift_templates,
-          start_time_override: assignment.start_time_override ?? null,
-          end_time_override: assignment.end_time_override ?? null,
-          partial_reason: assignment.partial_reason ?? null,
-        }) },
-        { text: 'Remove from shift', style: 'destructive', onPress: () => confirmRemove(block, assignment) },
-        { text: 'Cancel', style: 'cancel' },
-      ],
+      [...coachPressActions(block, dublinTodayIso()).map((k) => buttons[k]), { text: 'Cancel', style: 'cancel' }],
     )
   }
+
+  // REPLACE.1a — the Add-coach picker, titled for the coach going off, on
+  // CANDIDATES.1's ranked list for this block (which leaves out everyone live
+  // on it, the outgoing coach included; the A-Z staff list is the fallback,
+  // as for Add coach). The two sheets share the candidates state: only one is
+  // ever open, and candidatesFor hands a sheet only its own block's answer.
+  // The pick IS the confirmation (as for Add coach); an Alert is shown only
+  // after the network answer.
+  async function openReplace(block, assignment) {
+    setReplaceTarget({ block, assignment })
+    loadCandidates(block) // not awaited: the staff list below is the fallback
+    if (staff === null && !staffLoading) await loadStaff()
+  }
+
+  async function runReplace(target, coach, confirmConflicts = false) {
+    setBusyId(target.block.id)
+    const res = await replaceAssignment(target.assignment.id, { profileId: coach.id, confirmConflicts, locationId })
+    setBusyId(null)
+    const out = replaceResultAlert(res, { fromName: target.assignment.profiles?.full_name, toName: coach.full_name })
+    if (out.kind === 'confirm') {
+      Alert.alert(out.title, out.message, [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Replace anyway', onPress: () => runReplace(target, coach, true) },
+      ])
+      return
+    }
+    Alert.alert(out.title, out.message)
+    if (out.kind === 'done') { load(); refreshStaffIfLoaded() }
+  }
+  // REPLACE.1b — offer a shift to the team. The confirm Alert comes from a
+  // tap on the card (no Modal is dismissing), and the result Alert only after
+  // the network answer.
+  function offerToTeam(block) {
+    Alert.alert('Offer to the team?', `${block.shift_templates?.name || 'This shift'} goes to every coach at this studio who is free then. The first to claim it gets it.`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Offer', onPress: async () => {
+        setBusyId(block.id)
+        const res = await offerBlockToTeam(block.id, { locationId })
+        setBusyId(null)
+        const out = offerPostAlert(res)
+        Alert.alert(out.title, out.message)
+        load()
+      } },
+    ])
+  }
+  // REPLACE.1b — the offer line opens its state and "Withdraw offer".
+  function onOfferPress(block, offer) {
+    if (!offer) return
+    Alert.alert(block.shift_templates?.name || 'Offered shift', blockOfferControl(block, offer, dublinTodayIso()).label, [
+      { text: 'Close', style: 'cancel' },
+      { text: 'Withdraw offer', style: 'destructive', onPress: async () => {
+        setBusyId(block.id)
+        const res = await withdrawShiftOffer(offer.id, { locationId })
+        setBusyId(null)
+        if (!res.success) Alert.alert('Could not withdraw', res.error || 'Unknown error')
+        load()
+      } },
+    ])
+  }
+
   function confirmRemove(block, assignment) {
     Alert.alert('Remove from shift?', `Remove ${assignment.profiles?.full_name || 'this coach'} from ${block.shift_templates?.name || 'this shift'}?`, [
       { text: 'Cancel', style: 'cancel' },
@@ -154,6 +326,12 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
       {error ? (
         <View className="bg-red-500/10 border border-red-500/30 rounded-xl p-3 mb-3">
           <Text className="text-red-500 text-sm">{error}</Text>
+          {stale ? <Text className="text-un1t-subtle text-xs mt-1">Showing the last roster that loaded.</Text> : null}
+          {canRetry ? (
+            <Pressable onPress={retry} hitSlop={8} className="mt-2 self-start active:opacity-60">
+              <Text className="text-sm font-semibold text-un1t-text">Retry</Text>
+            </Pressable>
+          ) : null}
         </View>
       ) : null}
 
@@ -165,11 +343,24 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
         </View>
       ) : dayBlocks.map((b) => (
         <BlockCard key={b.id} block={b} busy={busyId === b.id}
-          onAddCoach={() => openPicker(b)} onCoachPress={(a) => onCoachPress(b, a)} />
+          onAddCoach={() => openPicker(b)} onCoachPress={(a) => onCoachPress(b, a)}
+          offerControl={blockOfferControl(b, offers[b.id] ?? null, dublinTodayIso())}
+          onOffer={() => offerToTeam(b)} onOfferPress={() => onOfferPress(b, offers[b.id])} />
       ))}
 
       <CoachPickerSheet visible={!!pickerBlock} block={pickerBlock} locationId={locationId}
-        staff={staff} loading={staffLoading} onPick={pickCoach} onClose={() => setPickerBlock(null)} />
+        staff={staff} loading={staffLoading} error={staff === null ? staffError : null} onRetry={loadStaff}
+        {...candidatesFor(candidates, pickerBlock?.id)}
+        onPick={pickCoach} onClose={() => setPickerBlock(null)} />
+
+      {/* REPLACE.1a — the same sheet, one pick, titled for the coach going off. */}
+      <CoachPickerSheet visible={!!replaceTarget} block={replaceTarget?.block ?? null} locationId={locationId}
+        staff={staff} loading={staffLoading} error={staff === null ? staffError : null} onRetry={loadStaff}
+        {...candidatesFor(candidates, replaceTarget?.block?.id)}
+        title={replaceTarget ? replacePickerTitle(replaceTarget.assignment) : ''}
+        emptyText="No other coaches at this studio."
+        onPick={(coach) => { const t = replaceTarget; setReplaceTarget(null); if (t) runReplace(t, coach) }}
+        onClose={() => setReplaceTarget(null)} />
     </View>
   )
 }

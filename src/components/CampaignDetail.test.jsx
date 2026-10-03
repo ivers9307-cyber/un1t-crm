@@ -17,26 +17,12 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({ refresh, replace, push }),
 }))
 
-// Track the browser-client writes CampaignDetail makes (same mechanism
-// CampaignEditor's handleCancel uses: a direct campaigns update).
-let updates = []
-let updateError = null
-const eqSpy = vi.fn()
-vi.mock('@/lib/supabase', () => ({
-  createBrowserClient: () => ({
-    from: (table) => ({
-      update: (payload) => {
-        updates.push({ table, payload })
-        return {
-          eq: (col, val) => {
-            eqSpy(col, val)
-            return Promise.resolve({ error: updateError })
-          },
-        }
-      },
-    }),
-  }),
-}))
+// MEMBERWRITESWEEP.1e — Stop / Unschedule used to be a browser-direct
+// `db.from('campaigns').update(...)`; they now POST to
+// /api/communications/campaigns/[id]/stop, which picks the branch from the
+// CURRENT status on the server. `stopAnswer` is what that route answers.
+let stopAnswer = { status: 200, body: { success: true, data: { status: 'draft', cancel_requested_at: null } } }
+const stopCalls = () => fetch.mock.calls.filter(([url]) => url === '/api/communications/campaigns/camp-1/stop')
 
 import CampaignDetail from './CampaignDetail.jsx'
 
@@ -52,10 +38,14 @@ const BASE = {
 }
 
 beforeEach(() => {
-  updates = []
-  updateError = null
+  stopAnswer = { status: 200, body: { success: true, data: { status: 'draft', cancel_requested_at: null } } }
   vi.clearAllMocks()
-  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ success: true }) })))
+  vi.stubGlobal('fetch', vi.fn(async (url) => {
+    if (url === '/api/communications/campaigns/camp-1/stop') {
+      return { ok: stopAnswer.status < 400, status: stopAnswer.status, json: async () => stopAnswer.body }
+    }
+    return { ok: true, json: async () => ({ success: true }) }
+  }))
 })
 afterEach(() => {
   cleanup()
@@ -118,33 +108,47 @@ describe('CampaignDetail — cancel / unschedule', () => {
     expect(screen.queryByTestId('campaign-cancel')).toBeNull()
   })
 
-  it('unschedules a scheduled campaign back to draft', () => {
+  it('unschedules a scheduled campaign back to draft through the stop route', async () => {
     vi.stubGlobal('confirm', vi.fn(() => true))
     renderDetail({ status: 'scheduled', scheduled_at: '2026-08-20T09:00:00.000Z' })
     fireEvent.click(screen.getByTestId('campaign-cancel'))
-    expect(updates).toEqual([
-      { table: 'campaigns', payload: { status: 'draft', scheduled_at: null } },
-    ])
-    expect(eqSpy).toHaveBeenCalledWith('id', 'camp-1')
+    await waitFor(() => expect(stopCalls()).toHaveLength(1))
+    expect(stopCalls()[0][1]).toEqual({ method: 'POST' })
+    await waitFor(() => expect(refresh).toHaveBeenCalled())
   })
 
-  it.each(['queued', 'sending'])('stamps cancel_requested_at on a %s campaign', (status) => {
+  it.each(['queued', 'sending'])('requests a cancel of a %s campaign through the stop route', async (status) => {
+    stopAnswer = { status: 200, body: { success: true, data: { status, cancel_requested_at: '2026-08-20T09:00:00.000Z' } } }
     vi.stubGlobal('confirm', vi.fn(() => true))
     renderDetail({ status })
     fireEvent.click(screen.getByTestId('campaign-cancel'))
-    expect(updates).toHaveLength(1)
-    expect(updates[0].table).toBe('campaigns')
-    expect(typeof updates[0].payload.cancel_requested_at).toBe('string')
+    await waitFor(() => expect(stopCalls()).toHaveLength(1))
+    await waitFor(() => expect(refresh).toHaveBeenCalled())
   })
 
-  it('names the recipient count in the confirm dialog and writes nothing when declined', () => {
+  it('shows the route\'s refusal and does not refresh', async () => {
+    stopAnswer = { status: 409, body: { success: false, error: "The campaign's status changed; reload.", data: { status: 'sent' } } }
+    vi.stubGlobal('confirm', vi.fn(() => true))
+    renderDetail({ status: 'queued' })
+    fireEvent.click(screen.getByTestId('campaign-cancel'))
+    await screen.findByText("The campaign's status changed; reload.")
+    expect(refresh).not.toHaveBeenCalled()
+  })
+
+  it('names the recipient count in the confirm dialog and sends nothing when declined', () => {
     const confirmSpy = vi.fn(() => false)
     vi.stubGlobal('confirm', confirmSpy)
     renderDetail({ status: 'queued', total_recipients: 3053 })
     fireEvent.click(screen.getByTestId('campaign-cancel'))
     expect(confirmSpy).toHaveBeenCalledTimes(1)
     expect(confirmSpy.mock.calls[0][0]).toContain('3,053')
-    expect(updates).toHaveLength(0)
+    expect(stopCalls()).toHaveLength(0)
+  })
+
+  it('imports no browser Supabase client', async () => {
+    const { readFileSync } = await import('node:fs')
+    const src = readFileSync(`${process.cwd()}/src/components/CampaignDetail.jsx`, 'utf8')
+    expect(src).not.toMatch(/createBrowserClient|from '@\/lib\/supabase'/)
   })
 })
 

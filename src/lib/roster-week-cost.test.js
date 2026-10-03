@@ -211,4 +211,15 @@ describe('computeWeeklyFteHours', () => {
     expect(res.coaches).toEqual([])
     expect(spy.mock.calls.map((c) => c[0])).not.toContain('profiles')
   })
+
+  // SHIFTTYPE.1 — an admin shift still counts toward hours (Richard, 25 Sep).
+  it("counts an admin shift toward an FTE's hours like any other", async () => {
+    const admin = block({ id: 'b-admin', date: '2026-05-06', start: '09:00:00', end: '13:00:00', coaches: ['sarah'] })
+    admin.shift_templates = { ...admin.shift_templates, kind: 'admin' }
+    const res = await callWith({
+      staff: [SARAH],
+      blocks: [block({ id: 'b1', date: '2026-05-04', start: '09:00:00', end: '16:00:00', coaches: ['sarah'] }), admin],
+    })
+    expect(res.coaches[0]).toMatchObject({ profile_id: 'sarah', allocated_hours: 11, contracted_hours: 10, overtime_hours: 1 })
+  })
 })

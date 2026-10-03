@@ -7,7 +7,7 @@
 // flakiness on TZ proved we need the regression coverage.
 
 import { describe, it, expect } from 'vitest'
-import { localToUtc, formatLocalTime, inLeadWindow } from './push-reminders'
+import { localToUtc, formatLocalTime, inLeadWindow, isLastFireTick } from './push-reminders'
 
 describe('localToUtc', () => {
   it('Dublin in DST (BST/IST, UTC+1) → subtracts 1 hour', () => {
@@ -135,5 +135,70 @@ describe('inLeadWindow', () => {
       const due = new Date(now + 66 * 60 * 1000).toISOString() // 6 min early
       expect(inLeadWindow(due, now, 60, 5, 15)).toBe(false)
     })
+  })
+})
+
+// SHIFTREMIND.1 — localToUtc now reuses one Intl formatter per timezone. The
+// tolerance it always had must survive that: an invalid IANA string returns
+// null (the caller skips that entity), it never throws into the task or
+// booking arm, and a bad zone is never cached or allowed to poison a good one.
+describe('localToUtc — invalid timezone tolerance (cached-formatter path)', () => {
+  it('returns null, never throws, every time it is asked', () => {
+    for (let i = 0; i < 3; i++) {
+      expect(() => localToUtc('2026-09-22', '06:00', 'Not/AZone')).not.toThrow()
+      expect(localToUtc('2026-09-22', '06:00', 'Not/AZone')).toBeNull()
+      expect(localToUtc('2026-09-22', '06:00', '')).toBeNull()
+    }
+  })
+
+  it('a valid zone still converts correctly before and after a bad one was asked for', () => {
+    expect(localToUtc('2026-09-22', '06:00', 'Europe/Dublin').toISOString()).toBe('2026-09-22T05:00:00.000Z')
+    localToUtc('2026-09-22', '06:00', 'Not/AZone')
+    expect(localToUtc('2026-09-22', '06:00', 'Europe/Dublin').toISOString()).toBe('2026-09-22T05:00:00.000Z')
+    expect(localToUtc('2026-12-15', '14:00', 'Europe/Dublin').toISOString()).toBe('2026-12-15T14:00:00.000Z')
+  })
+})
+
+// CRONREADERR.1 — the push-reminder cron fires (entity, recipient, lead) while
+// delta = minutesAway - lead is inside [-15, +5], on a */5 cron. When its
+// "already sent?" read fails, it holds the reminder while a later tick can
+// still fire it, and sends unchecked only on the last tick that can. The next
+// tick is tickMin later plus up to jitterMin (3.5) of Vercel lateness.
+describe('isLastFireTick', () => {
+  it('early and on-time ticks are not the last chance', () => {
+    expect(isLastFireTick(65, 60)).toBe(false) // delta +5, the early edge
+    expect(isLastFireTick(60, 60)).toBe(false) // delta 0
+    expect(isLastFireTick(55, 60)).toBe(false) // delta -5
+  })
+
+  it('the boundary: a later tick (delta - 8.5) still reaches -15, so delta -6.5 holds and just past it is the last chance', () => {
+    expect(isLastFireTick(53.5, 60)).toBe(false) // delta -6.5 → next -15, still inside
+    expect(isLastFireTick(53.4, 60)).toBe(true)  // delta -6.6 → next -15.1, outside
+    expect(isLastFireTick(47, 60)).toBe(true)
+    expect(isLastFireTick(45, 60)).toBe(true)    // delta -15, the late edge
+  })
+
+  it('an unreadable input is treated as the last chance (send rather than risk a loss)', () => {
+    expect(isLastFireTick(Number.NaN, 60)).toBe(true)
+    expect(isLastFireTick(60, undefined)).toBe(true)
+  })
+
+  it('honours the cadence and window it is given', () => {
+    expect(isLastFireTick(50.5, 60, { tickMin: 2 })).toBe(false) // -9.5 - 5.5 = -15
+    expect(isLastFireTick(50.4, 60, { tickMin: 2 })).toBe(true)  // -9.6 - 5.5 = -15.1
+    expect(isLastFireTick(40, 60, { lateWindowMin: 30 })).toBe(false) // -20 - 8.5 = -28.5
+    expect(isLastFireTick(51, 60, { jitterMin: 1 })).toBe(false)  // -9 - 6 = -15
+    expect(isLastFireTick(50.9, 60, { jitterMin: 1 })).toBe(true) // -9.1 - 6 = -15.1
+  })
+
+  it('agrees with inLeadWindow: whenever it says "not last", the next tick is still inside the window', () => {
+    const now = Date.parse('2026-10-06T09:00:00.000Z')
+    for (let delta = 5; delta >= -15; delta -= 0.25) {
+      const minutesAway = 60 + delta
+      if (isLastFireTick(minutesAway, 60)) continue
+      const due = new Date(now + minutesAway * 60_000).toISOString()
+      const nextTickMs = now + (5 + 3.5) * 60_000 // tick + jitter
+      expect(inLeadWindow(due, nextTickMs, 60, 5, 15)).toBe(true)
+    }
   })
 })

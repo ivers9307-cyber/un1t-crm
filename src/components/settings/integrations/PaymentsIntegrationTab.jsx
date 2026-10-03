@@ -8,8 +8,7 @@
 // the box, no extra setup). Stripe = a direct charge on THIS location's
 // own Stripe Connect account — onboarding must finish (charges_enabled)
 // before the location can be switched over. Follows the same
-// read-merge-write-into-locations.settings pattern as GlofoxIntegrationTab
-// and TwilioIntegrationTab.
+// read-merge-write-into-locations.settings pattern as GlofoxIntegrationTab.
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
@@ -23,6 +22,9 @@ export default function PaymentsIntegrationTab({ location, canEdit }) {
   const [provider, setProvider] = useState(initial.provider || 'revolut')
   const [status, setStatus] = useState(null)
   const [statusLoading, setStatusLoading] = useState(false)
+  // REVIEWNITS.1 (D5): the status read failed, so whether onboarding finished
+  // is unknown. Never read that as "not finished".
+  const [statusFailed, setStatusFailed] = useState(false)
   const [connecting, setConnecting] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
@@ -36,9 +38,10 @@ export default function PaymentsIntegrationTab({ location, canEdit }) {
       try {
         const r = await fetch(`/api/locations/${location.id}/stripe-connect/status`, { cache: 'no-store' })
         const j = await r.json().catch(() => ({}))
-        if (!cancelled && r.ok && j.success) setStatus(j.data)
+        if (cancelled) return
+        if (r.ok && j.success) { setStatus(j.data); setStatusFailed(false) } else setStatusFailed(true)
       } catch {
-        // Silently ignore — the tab just shows what it has stored.
+        if (!cancelled) setStatusFailed(true)
       } finally {
         if (!cancelled) setStatusLoading(false)
       }
@@ -89,9 +92,9 @@ export default function PaymentsIntegrationTab({ location, canEdit }) {
     try {
       const r = await fetch(`/api/locations/${location.id}/stripe-connect/status`, { cache: 'no-store' })
       const j = await r.json().catch(() => ({}))
-      if (j?.success) setStatus(j.data)
+      if (r.ok && j?.success) { setStatus(j.data); setStatusFailed(false) } else setStatusFailed(true)
     } catch {
-      // Silently ignore.
+      setStatusFailed(true)
     } finally {
       setStatusLoading(false)
     }
@@ -143,9 +146,11 @@ export default function PaymentsIntegrationTab({ location, canEdit }) {
           <div className="text-[11px] text-un1t-muted">
             {status?.charges_enabled
               ? 'Ready — charges enabled.'
-              : hasStripeAccount
-                ? 'Onboarding not finished — charges not yet enabled.'
-                : 'Not connected yet.'}
+              : hasStripeAccount && statusFailed && !status
+                ? "Couldn't check the Stripe status just now. Refresh to try again."
+                : hasStripeAccount
+                  ? 'Onboarding not finished — charges not yet enabled.'
+                  : 'Not connected yet.'}
           </div>
           <div className="flex items-center gap-2 pt-1">
             <button

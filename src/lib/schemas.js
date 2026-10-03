@@ -22,6 +22,31 @@ export const isoDate = z.string().regex(
   'Use YYYY-MM-DD'
 )
 
+/**
+ * CHANGELOG.1 — isoDate above checks the SHAPE only: '2026-13-01' and
+ * '2026-02-30' pass it, reach Postgres, and come back as a 500. This is the
+ * calendar check to pair with it on a route that hands a date to the database.
+ * Pure arithmetic on the three numbers: no Date parsing, so no host timezone
+ * and no engine leniency (V8 rolls '2026-02-30' over to 2 March).
+ */
+export function isRealCalendarDate(str) {
+  if (typeof str !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(str)) return false
+  const [y, m, d] = str.split('-').map(Number)
+  if (m < 1 || m > 12 || d < 1) return false
+  const leap = (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0
+  return d <= [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1]
+}
+
+/**
+ * DATECHECK.1 — isoDate AND isRealCalendarDate as one schema. Use it for any
+ * date a route hands to the database or does arithmetic on: the shape alone
+ * lets 2026-02-30 through, which V8 reads as 2 March and Postgres refuses.
+ * A well-shaped impossible date gets one issue (the message below); a bad
+ * shape gets 'Use YYYY-MM-DD' as well (Zod runs the refine after a failed
+ * regex). For a raw query param, call isRealCalendarDate directly.
+ */
+export const realIsoDate = isoDate.refine(isRealCalendarDate, 'Use a real date, YYYY-MM-DD')
+
 // Time of day, HH:MM or HH:MM:SS.
 export const timeOfDay = z.string().regex(
   /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/,
@@ -211,6 +236,28 @@ export const timeOffStatusSchema = z.enum(['pending', 'approved', 'rejected', 'c
 // swap and it's waiting for a manager to finalise (CT-P3). Free TEXT in the
 // DB (no CHECK constraint) — this enum is the only gate.
 export const swapStatusSchema = z.enum(['pending', 'awaiting_approval', 'approved', 'rejected', 'cancelled'])
+
+// SCHEDSTATUS.1 — shift_assignments.status.
+//
+// The DB set is the CHECK constraint `shift_assignments_status_check`
+// (mig 067, widened by mig 337) — anything outside it is rejected by Postgres,
+// and the route hands the caller the raw constraint message as a 400. The PUT
+// schema on /api/schedule/assignments/[id] used to accept 'declined', which is
+// NOT in that set: every such request failed at the database with a message
+// naming a constraint, not a field. `tests/shift-assignment-status.test.js`
+// pins this list against the migration so the two cannot drift again.
+export const SHIFT_ASSIGNMENT_DB_STATUSES = Object.freeze([
+  'scheduled', 'confirmed', 'completed', 'cancelled', 'swapped',
+])
+
+// What THIS route may set. A strict subset of the DB set, and deliberately so:
+//   - 'swapped' is written only by mig 615's approve_* functions, inside the
+//     transaction that moves the assignment;
+//   - 'cancelled' is the tombstone ROSTER-FIX.1 (D4) removed and mig 603
+//     deleted from disk — the roster DELETEs an assignment instead, and a
+//     tombstone would make the block look staffed and keep billing the coach.
+// Anything a manager legitimately sets by hand is here.
+export const assignmentStatusSchema = z.enum(['scheduled', 'confirmed', 'completed'])
 
 // Report frequency / type — match scheduled_reports.frequency and the
 // report-generator's switch statement. ROSTER-FIX.5: 'fortnightly' has been

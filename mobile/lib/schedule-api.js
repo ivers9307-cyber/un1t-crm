@@ -3,12 +3,15 @@
 
 import { api } from './api'
 
-export function getMyShifts({ locationId, profileId, startDate, endDate }) {
+// withArrivals (ARRIVALSHOW.1) — the Schedule tab's Me view asks the server
+// for the caller's own arrival facts; nobody else pays for that read.
+export function getMyShifts({ locationId, profileId, startDate, endDate, withArrivals = false }) {
   const qs = new URLSearchParams()
   if (locationId) qs.set('location_id', locationId)
   if (profileId) qs.set('profile_id', profileId)
   if (startDate) qs.set('start_date', startDate)
   if (endDate) qs.set('end_date', endDate)
+  if (withArrivals) qs.set('include', 'arrival')
   return api(`/api/schedule/shifts?${qs.toString()}`, { locationId })
 }
 
@@ -30,6 +33,32 @@ export function getMyTimeOff({ locationId, profileId, status }) {
   if (locationId) qs.set('location_id', locationId)
   if (profileId) qs.set('profile_id', profileId)
   if (status) qs.set('status', status)
+  return api(`/api/schedule/time-off?${qs.toString()}`, { locationId })
+}
+
+// LEAVEPHONE.1 — the caller's OWN holiday allowance. No profile_id on purpose:
+// GET /api/schedule/allowances defaults it to the caller, and a coach may read
+// nobody else's. The response carries `not_applicable: true` for a contractor.
+export function getMyAllowance({ year, locationId }) {
+  const qs = new URLSearchParams()
+  if (year) qs.set('year', String(year))
+  return api(`/api/schedule/allowances?${qs.toString()}`, { locationId })
+}
+
+// LEAVEPHONE.1 — ask the SERVER what this request would cost and which of MY
+// published shifts it hits. The phone never counts days itself: a holiday's
+// cost depends on bank holidays and studio closures only the server can see.
+// location_id is the studio createTimeOffRequest will file at, so the answer
+// is about the same studio. The route ignores profile_id in preview mode, so
+// none is sent. Read the answer with leavePreviewFrom (lib/leave-form.js),
+// which also recognises an older deployment answering with the request list.
+export function getLeavePreview({ type, startDate, endDate, locationId }) {
+  const qs = new URLSearchParams()
+  qs.set('preview', '1')
+  qs.set('type', type)
+  qs.set('start_date', startDate)
+  qs.set('end_date', endDate || startDate)
+  if (locationId) qs.set('location_id', locationId)
   return api(`/api/schedule/time-off?${qs.toString()}`, { locationId })
 }
 
@@ -55,6 +84,13 @@ export function cancelTimeOffRequest(id, locationId) {
   })
 }
 
+// LEAVECANCEL.1 — a manager's cancel of their own APPROVED leave becomes a
+// request for an owner to cancel it (the PUT above answers cancellation:
+// 'requested'). This withdraws that request; the leave stays approved.
+export function withdrawLeaveCancelRequest(id, locationId) {
+  return api(`/api/schedule/time-off/${id}/cancel-request`, { method: 'DELETE', locationId })
+}
+
 export function cancelSwapRequest(id, locationId) {
   return api(`/api/schedule/swaps/${id}`, {
     method: 'PUT',
@@ -76,11 +112,17 @@ export function createSwapRequest({ requesterShiftId, targetShiftId, targetId, r
   })
 }
 
-export function respondToSwap(id, status, reviewNote, locationId) {
+// SWAPOVERRIDE.1 — `confirmConflicts` re-sends an approval the route refused
+// with 409 swap_conflicts (leave / same-day clash) as confirm_conflicts: true,
+// the manager's "Approve anyway". Only sent when set, so every other call's
+// body is unchanged.
+export function respondToSwap(id, status, reviewNote, locationId, { confirmConflicts = false } = {}) {
+  const body = { status, review_note: reviewNote || null }
+  if (confirmConflicts) body.confirm_conflicts = true
   return api(`/api/schedule/swaps/${id}`, {
     method: 'PUT',
     locationId,
-    body: { status, review_note: reviewNote || null },
+    body,
   })
 }
 
@@ -154,10 +196,52 @@ export function assignCoachToBlock(blockId, { profileId, allowOverCapacity, loca
   })
 }
 
+// CANDIDATES.1 — the ranked coaches for one block. A manager at the block's
+// studio gets every fact; a coach live on the block (asking for cover) gets
+// free/working only. The server decides; see
+// src/app/api/schedule/blocks/[id]/candidates/route.js.
+export function getBlockCandidates(blockId, { locationId } = {}) {
+  return api(`/api/schedule/blocks/${encodeURIComponent(blockId)}/candidates`, { locationId })
+}
+
 // Remove a coach from a shift (delete the assignment). ROSTER-FIX.3 (D2) —
 // MANAGER-ONLY: a coach who cannot work a shift posts a swap instead.
 export function removeAssignment(assignmentId, { locationId }) {
   return api(`/api/schedule/assignments/${assignmentId}`, { method: 'DELETE', locationId })
+}
+
+// REPLACE.1a — hand this assignment to another coach in one action.
+// MANAGER-ONLY (at the shift's studio). A 409 { code: 'swap_conflicts' }
+// asks the manager to confirm (leave or another shift that day): resend with
+// confirmConflicts. Read the answer with replaceResultAlert (schedule-manage).
+export function replaceAssignment(assignmentId, { profileId, confirmConflicts = false, locationId }) {
+  const body = { profile_id: profileId }
+  if (confirmConflicts) body.confirm_conflicts = true
+  return api(`/api/schedule/assignments/${assignmentId}/replace`, { method: 'POST', locationId, body })
+}
+
+// --- REPLACE.1b "Offer to team" ------------------------------------------
+// Offers the caller could take (coach view; default 6 decided server-side).
+export function getOffersForMe({ locationId }) {
+  const qs = new URLSearchParams({ location_id: locationId })
+  return api(`/api/schedule/offers?${qs.toString()}`, { locationId })
+}
+// A manager's open offers for a period (Manage mode). MANAGER at the studio.
+export function getManagedOffers({ locationId, startDate, endDate }) {
+  const qs = new URLSearchParams({ location_id: locationId, view: 'manage', start_date: startDate, end_date: endDate })
+  return api(`/api/schedule/offers?${qs.toString()}`, { locationId })
+}
+// A manager offers an unfilled published shift to the team.
+export function offerBlockToTeam(blockId, { locationId }) {
+  return api(`/api/schedule/blocks/${blockId}/offer`, { method: 'POST', locationId })
+}
+// A coach claims an offered shift: first to claim gets it.
+export function claimShiftOffer(offerId, { locationId }) {
+  return api(`/api/schedule/offers/${offerId}/claim`, { method: 'POST', locationId })
+}
+// A manager withdraws an open offer.
+export function withdrawShiftOffer(offerId, { locationId }) {
+  return api(`/api/schedule/offers/${offerId}`, { method: 'DELETE', locationId })
 }
 
 // Approve / reject a time-off request (MANAGER_ROLES).
@@ -166,6 +250,18 @@ export function respondToTimeOff(id, status, reviewNote, locationId) {
     method: 'PUT',
     locationId,
     body: { status, review_note: reviewNote || null },
+  })
+}
+
+// LEAVE.1 — after approving leave that left the person rostered: take them off
+// exactly the shifts the approver was shown (the approve response's
+// `clashes`). Same server path as a manager removing a coach by hand, so the
+// coach is notified and the change is logged.
+export function unassignLeaveClashes(id, { assignmentIds, locationId }) {
+  return api(`/api/schedule/time-off/${id}/unassign-clashes`, {
+    method: 'POST',
+    locationId,
+    body: { assignment_ids: assignmentIds },
   })
 }
 

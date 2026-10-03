@@ -49,6 +49,15 @@ describe('extendRosterHorizon', () => {
     expect(out).toMatchObject({ templates: 2, inserted: 6, failed: 0 })
   })
 
+  // HORIZONMIN.1 — the generator reads template.min_coaches; a select that
+  // leaves it off hands the generator undefined and every block falls to 1.
+  it('selects min_coaches alongside max_coaches for the generator', async () => {
+    const db = dbWith({ data: [TPL_A], error: null })
+    await extendRosterHorizon(db)
+    const sel = builder.calls.find((c) => c[0] === 'select')[1]
+    expect(sel.split(',').map((c) => c.trim())).toEqual(expect.arrayContaining(['min_coaches', 'max_coaches']))
+  })
+
   it('starts at this week\'s Monday and projects the requested weeks', async () => {
     const db = dbWith({ data: [TPL_A], error: null })
     await extendRosterHorizon(db, { weeks: 12 })
@@ -86,6 +95,15 @@ describe('extendRosterHorizon', () => {
   it('throws when the template query errors — the cron must not report success', async () => {
     const db = dbWith({ data: null, error: { message: 'boom' } })
     await expect(extendRosterHorizon(db)).rejects.toThrow(/boom/)
+  })
+
+  // SLOTREMOVAL.1 — dates skipped for a deleted slot are totalled separately.
+  it('totals the dates each template skipped for a deleted slot', async () => {
+    generateBlocksForTemplate
+      .mockResolvedValueOnce({ inserted: 2, skipped: 0, removed: 1 })
+      .mockResolvedValueOnce({ inserted: 1, skipped: 0 })
+    const db = dbWith({ data: [TPL_A, TPL_B], error: null })
+    expect(await extendRosterHorizon(db)).toMatchObject({ inserted: 3, removed: 1, failed: 0 })
   })
 
   it('is a no-op when there are no active templates', async () => {

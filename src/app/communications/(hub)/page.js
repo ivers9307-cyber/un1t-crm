@@ -1,8 +1,8 @@
 // /communications — landing/hub.
 //
-// Combined snapshot of email, WhatsApp, and SMS activity for the
-// current location. Stats only show for channels the user has
-// permission for.
+// Combined snapshot of email and WhatsApp activity for the
+// current location (SMS was retired with Twilio, TWILIO-RETIRE.1).
+// Stats only show for channels the user has permission for.
 //
 // DEEP.4 Task 2 (4B) — this stays the Messages landing (inbox/tickets are
 // genuinely this hub's content), but 4 of its original 6 action cards
@@ -16,12 +16,14 @@
 // surface.
 
 import Link from 'next/link'
+import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
+import { canUseCommunicationsHere } from '@/lib/communications-access'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { tierLabel, qualityAccent } from '@/lib/whatsapp-number-health'
 import { loadEmailHubStats } from './email-hub-stats.js'
-import { Mail, MessageCircle, MessageSquare, Megaphone, Repeat, FileText, Inbox, Send, ShieldCheck, Gauge } from 'lucide-react'
+import { Mail, MessageCircle, Megaphone, Repeat, FileText, Inbox, Send, ShieldCheck, Gauge } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
 
@@ -58,9 +60,12 @@ function ActionCard({ href, icon: Icon, color, title, desc }) {
 
 export default async function CommunicationsHub() {
   const user = await getCurrentUser()
+  if (!user) redirect('/login')
+  // GATES-2 — the hub is about the ACTIVE studio; the layout is only the
+  // coarse gate now, so this keeps the layout's old rule here.
+  if (!canUseCommunicationsHere(user)) redirect('/')
   const canEmail = hasPermission(user, 'email')
   const canWhatsapp = hasPermission(user, 'whatsapp')
-  const canSms = hasPermission(user, 'sms')
   // EMAIL-TICKET.4 key — the studio email surface, not the marketing `email`
   // one. Powers the Mail card below.
   const canEmailInbox = hasPermission(user, 'email_inbox')
@@ -104,52 +109,6 @@ export default async function CommunicationsHub() {
     draftBroadcasts = drafts || 0
   }
 
-  // SMS stats (mig 060 + Phase 5C analytics).
-  //
-  // total_sent / total_failed at the broadcast level give us a fast
-  // location-scoped view without scanning recipients. Recipient
-  // counts (cross-location) would need a join via sms_broadcasts,
-  // and that's expensive on the hub — keep the cheap path.
-  let smsSent = 0, smsDelivered = 0, smsFailed = 0, smsSent30d = 0, smsScheduled = 0
-  if (canSms && locationId) {
-    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
-    const [
-      { data: totals },
-      { data: last30 },
-      { count: scheduled },
-    ] = await Promise.all([
-      db.from('sms_broadcasts')
-        .select('total_sent, total_delivered, total_failed')
-        .eq('location_id', locationId)
-        .in('status', ['sent', 'sending']),
-      db.from('sms_broadcasts')
-        .select('total_sent')
-        .eq('location_id', locationId)
-        .eq('status', 'sent')
-        .gte('sent_at', thirtyDaysAgo),
-      db.from('sms_broadcasts')
-        .select('id', { count: 'exact', head: true })
-        .eq('location_id', locationId)
-        .eq('status', 'scheduled'),
-    ])
-    smsSent = (totals || []).reduce((acc, b) => acc + (b.total_sent || 0), 0)
-    smsDelivered = (totals || []).reduce((acc, b) => acc + (b.total_delivered || 0), 0)
-    smsFailed = (totals || []).reduce((acc, b) => acc + (b.total_failed || 0), 0)
-    smsSent30d = (last30 || []).reduce((acc, b) => acc + (b.total_sent || 0), 0)
-    smsScheduled = scheduled || 0
-  }
-  // Delivery rate as a percentage of sent (mig 065 — only meaningful
-  // when carriers report DLRs; alpha-sender routes in IE/UK
-  // under-report so this number floors below the real rate).
-  const smsDeliveryRate = smsSent > 0
-    ? Math.round((smsDelivered / smsSent) * 100)
-    : null
-  // Failure rate as a percentage — only meaningful when we've sent
-  // anything. Hide otherwise to avoid a stat that says "NaN%".
-  const smsFailureRate = (smsSent + smsFailed) > 0
-    ? Math.round((smsFailed / (smsSent + smsFailed)) * 100)
-    : null
-
   return (
     <div>
       {/* Stats row */}
@@ -178,26 +137,6 @@ export default async function CommunicationsHub() {
               </>
             )}
             {!canEmail && <StatCard label="Draft broadcasts" value={draftBroadcasts} icon={Megaphone} />}
-          </>
-        )}
-        {canSms && (
-          <>
-            <StatCard label="SMS sent" value={smsSent.toLocaleString()} icon={MessageSquare} accent={smsSent > 0 ? 'text-cyan-700' : undefined} />
-            <StatCard label="SMS · last 30 days" value={smsSent30d.toLocaleString()} accent={smsSent30d > 0 ? 'text-cyan-700' : undefined} />
-            {smsDeliveryRate !== null && (
-              <StatCard
-                label="Delivered (carrier-confirmed)"
-                value={`${smsDeliveryRate}%`}
-                accent={smsDeliveryRate >= 70 ? 'text-emerald-700' : 'text-amber-700'}
-              />
-            )}
-            {smsFailureRate !== null && (
-              <StatCard
-                label="SMS failure rate"
-                value={`${smsFailureRate}%`}
-                accent={smsFailureRate > 5 ? 'text-red-700' : 'text-un1t-subtle'}
-              />
-            )}
           </>
         )}
       </div>
@@ -237,31 +176,27 @@ export default async function CommunicationsHub() {
         {/* DEEP.4 Task 2 — the four cards below are cross-links: same URLs
             as always, but they now land in communications/(marketing-era),
             a Marketing-owned chrome (its own HubTabs strip), not this page's. */}
-        {(canSms || canWhatsapp || canEmail) && (
+        {(canWhatsapp || canEmail) && (
           <ActionCard
             href="/communications/send"
             icon={Send}
             color="bg-un1t-text/10 text-un1t-text"
             title="Send a message"
-            desc="Pick an audience, write once, send via SMS, WhatsApp or email — now in Marketing"
+            desc="Pick an audience, write once, send via WhatsApp or email — now in Marketing"
           />
         )}
-        {(canSms || canWhatsapp || canEmail) && (
+        {(canWhatsapp || canEmail) && (
           <ActionCard
             href="/communications/sent"
             icon={Megaphone}
             color="bg-cyan-500/20 text-cyan-700"
             title="Sent"
-            desc={
-              smsScheduled > 0
-                ? `${smsScheduled} scheduled · history of one-off sends — now in Marketing`
-                : 'History of one-off SMS, WhatsApp & email sends — now in Marketing'
-            }
+            desc="History of one-off WhatsApp & email sends — now in Marketing"
           />
         )}
         {/* Rider (DEEP.4 Task 3) — templates/page.js redirects to /communications
-            when !canEmail && !canWhatsapp (sms-only has neither), so an
-            sms-only user must not see a card that bounces. */}
+            when !canEmail && !canWhatsapp, so such a user must not see a card
+            that bounces. */}
         {(canEmail || canWhatsapp) && (
           <ActionCard
             href="/communications/templates"

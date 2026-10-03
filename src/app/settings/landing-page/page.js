@@ -1,6 +1,8 @@
 // /settings/landing-page — operator editor for the public marketing
-// site. Master/owner only by default (matches the table RLS write
-// policy + the API gate).
+// site. Studio pages: the `landing_page` permission. The front page
+// (chooser) is per ORGANISATION, so its editor is for organisation admins
+// only (C141 ORGROLE.2 — master or an org_admin grant), the same rule as
+// PUT /api/chooser-settings (assertChooserEdit).
 //
 // Edits TWO kinds of public page, chosen via the top "Editing" picker:
 //   1. Front page  (?page=chooser) — the un1tdublin.com split chooser
@@ -19,11 +21,12 @@ import { hasPermission } from '@/lib/permissions'
 import LandingPageSettingsForm from '@/components/LandingPageSettingsForm'
 import ChooserEditorForm from '@/components/ChooserEditorForm'
 import PageSwitcher from '@/components/landing-page/PageSwitcher'
+import { isActiveOrgAdmin } from '@/lib/org-admin'
 
 export const dynamic = 'force-dynamic'
 
 function canEditChooser(user) {
-  return user?.profileRole === 'master' || user?.role === 'master' || user?.role === 'owner'
+  return isActiveOrgAdmin(user)
 }
 
 export default async function LandingPageSettingsPage(props) {

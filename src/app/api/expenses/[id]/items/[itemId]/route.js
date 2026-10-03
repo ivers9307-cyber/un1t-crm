@@ -8,6 +8,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
+import { canSeeExpenseClaim } from '@/lib/fte-expense-access'
 import {
   EXPENSE_CATEGORIES,
   RECEIPT_ACCEPTED_MIMES,
@@ -37,7 +38,7 @@ async function loadClaimAndItem(db, claimId, itemId) {
     .from('fte_expense_items')
     .select(`
       id, claim_id, receipt_path,
-      claim:claim_id ( id, profile_id, status )
+      claim:claim_id ( id, profile_id, location_id, status )
     `)
     .eq('id', itemId)
     .eq('claim_id', claimId)
@@ -52,7 +53,9 @@ export async function PATCH(request, { params }) {
 
   const db = createServerClient()
   const item = await loadClaimAndItem(db, claimId, itemId)
-  if (!item) return NextResponse.json({ success: false, error: 'Item not found' }, { status: 404 })
+  // FINALTIDY.1 — a caller who can't see the claim gets the same 404 as a
+  // missing one; only someone who can see it learns it is not theirs to change.
+  if (!item || !canSeeExpenseClaim(user, item.claim)) return NextResponse.json({ success: false, error: 'Item not found' }, { status: 404 })
   if (item.claim.profile_id !== user.id) {
     return NextResponse.json({ success: false, error: 'Only the submitter can edit this item.' }, { status: 403 })
   }
@@ -167,7 +170,9 @@ export async function DELETE(_request, { params }) {
 
   const db = createServerClient()
   const item = await loadClaimAndItem(db, claimId, itemId)
-  if (!item) return NextResponse.json({ success: false, error: 'Item not found' }, { status: 404 })
+  // FINALTIDY.1 — a caller who can't see the claim gets the same 404 as a
+  // missing one; only someone who can see it learns it is not theirs to change.
+  if (!item || !canSeeExpenseClaim(user, item.claim)) return NextResponse.json({ success: false, error: 'Item not found' }, { status: 404 })
   if (item.claim.profile_id !== user.id) {
     return NextResponse.json({ success: false, error: 'Only the submitter can delete items.' }, { status: 403 })
   }

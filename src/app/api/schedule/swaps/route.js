@@ -1,15 +1,17 @@
-import { NextResponse } from 'next/server'
+import { NextResponse, after } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess , getUserLocationIds} from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, getUserLocationIds, hasRoleAtLocation } from '@/lib/auth'
+import { hasPermissionForLocation } from '@/lib/permissions'
+import { APPROVAL_CATEGORY_PERMISSION } from '@shared/permissions'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
 import { notifyUsersOnce, notifyUsersAtRolesOnce } from '@/lib/push-dedup'
-import { resolveRoleRecipientIds } from '@/lib/push'
+import { notifyOpenPool } from '@/lib/swap-cover-server'
+import { shiftWhenLabel } from '@/lib/swap-cover'
 import { swapShiftShape } from '@/lib/roster-read'
 import { isLiveAssignment } from '@/lib/roster'
 import { dublinTodayStr } from '@/lib/dublin-time'
-import { logWarn } from '@/lib/log'
 
 const SwapCreateSchema = z.object({
   requester_shift_id: uuidLike,
@@ -56,14 +58,33 @@ export async function GET(request) {
     `)
     .order('created_at', { ascending: false })
 
+  const scopeIds = locationId ? [locationId] : getUserLocationIds(user)
+  if (scopeIds.length === 0) return NextResponse.json({ success: true, data: [] })
   if (locationId) {
     query = query.eq('location_id', locationId)
   } else {
-    const userLocationIds = getUserLocationIds(user)
-    if (userLocationIds.length === 0) return NextResponse.json({ success: true, data: [] })
-    query = query.in('location_id', userLocationIds)
+    query = query.in('location_id', scopeIds)
   }
   if (status) query = query.eq('status', status)
+
+  // COACHSCOPE.1 — this list used to return EVERY swap at the studio to any
+  // coach there (who is swapping with whom, their reasons, the manager's
+  // review notes). A caller now sees a location's whole list only if they
+  // review swaps THERE: a manager role at that location, or the
+  // approvals_shift_swaps permission for it (the same gate PUT /swaps/[id]
+  // approves with). Everyone else gets exactly what the coach swap UIs read:
+  // swaps they requested, swaps targeted at / claimed by them, and the open
+  // pool (untargeted + pending) they may claim.
+  const reviewerLocIds = new Set(scopeIds.filter((loc) => canReviewSwapsAt(user, loc)))
+  if (reviewerLocIds.size < scopeIds.length) {
+    const terms = [
+      `requester_id.eq.${user.id}`,
+      `target_id.eq.${user.id}`,
+      'and(target_id.is.null,status.eq.pending)',
+    ]
+    if (reviewerLocIds.size > 0) terms.unshift(`location_id.in.(${[...reviewerLocIds].join(',')})`)
+    query = query.or(terms.join(','))
+  }
 
   // CT-P3 actionable lists for coaches. for_me = swaps targeted at / claimed
   // by the caller (needs their accept/decline or shows "awaiting manager").
@@ -84,12 +105,42 @@ export async function GET(request) {
 
   // Flatten the embedded assignment back to the legacy shift shape the
   // consumers read (requester_shift.shift_date / .shift_templates / overrides).
-  const shaped = (data || []).map((row) => ({
-    ...row,
-    requester_shift: swapShiftShape(row.requester_shift),
-    target_shift: swapShiftShape(row.target_shift),
-  }))
+  const shaped = (data || []).flatMap((row) => {
+    const full = {
+      ...row,
+      requester_shift: swapShiftShape(row.requester_shift),
+      target_shift: swapShiftShape(row.target_shift),
+    }
+    if (reviewerLocIds.has(row.location_id)) return [full]
+    // The query's .or() already narrowed these; this is the same rule again
+    // in code, so the response never depends on the filter string alone.
+    const mine = row.requester_id === user.id || row.target_id === user.id
+    const openPool = row.target_id == null && row.status === 'pending'
+    if (!mine && !openPool) return []
+    return [slimSwapForCoach(full, user.id, mine)]
+  })
   return NextResponse.json({ success: true, data: shaped })
+}
+
+function canReviewSwapsAt(user, locationId) {
+  return hasRoleAtLocation(user, locationId, MANAGER_ROLES)
+    || hasPermissionForLocation(user, locationId, APPROVAL_CATEGORY_PERMISSION.shift_swaps)
+}
+
+// COACHSCOPE.1 — a coach's view of a swap row. A colleague's shift embed loses
+// its assignment notes (a manager's working notes about that person); a row
+// the caller is not party to (an open-pool swap they may claim) also loses the
+// requester's free-text reason and any review note. Names, shift name, date
+// and times — what the swap UIs render — stay.
+function slimSwapForCoach(row, viewerId, mine) {
+  const slimShift = (sh) => (sh && sh.profile_id !== viewerId ? { ...sh, notes: null } : sh)
+  return {
+    ...row,
+    reason: mine ? row.reason : null,
+    review_note: mine ? row.review_note : null,
+    requester_shift: slimShift(row.requester_shift),
+    target_shift: slimShift(row.target_shift),
+  }
 }
 
 // POST /api/schedule/swaps — Create a swap request
@@ -114,7 +165,7 @@ export async function POST(request) {
   // shift_assignments.id — RETIRE-SHIFTS-MIRROR.5c). Pull location_id off
   // the assignment's block.
   const { data: assignment } = await db.from('shift_assignments')
-    .select('id, profile_id, status, shift_blocks!block_id(location_id, block_date, rosters:roster_id(status))')
+    .select('id, profile_id, status, shift_blocks!block_id(id, location_id, block_date, start_time, end_time, rosters:roster_id(status))')
     .eq('id', body.requester_shift_id)
     .eq('profile_id', user.id)
     .single()
@@ -202,8 +253,9 @@ export async function POST(request) {
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
 
   // Notify the targeted teammate if one was specified, otherwise alert
-  // managers at the location that an open swap is up for grabs, and the
-  // coaches who could actually take it. Either way delivery is best-effort.
+  // managers at the location that an open swap is up for grabs, and every
+  // coach at the studio who could take it (src/lib/swap-cover-server.js).
+  // Either way delivery is best-effort.
   //
   // ROSTER-FIX.8d — notifyUsers*, not sendPush*: a swap is a request someone
   // has to answer, and a push-only notification reaches nobody who has not
@@ -225,82 +277,28 @@ export async function POST(request) {
       data: { type: 'swap_inbound', swap_id: data.id },
     }).catch(err => console.error('[swaps] notify target failed', err))
   } else {
+    // COVERLOOP.1 — with the time range: managers and head coaches are the
+    // likeliest senior cover, and "a shift" told them nothing about WHEN.
+    const when = shiftWhenLabel(assignment.shift_blocks)
     notifyUsersAtRolesOnce(db, `swap_open:${data.id}`, swapLocationId, MANAGER_ROLES, {
       title: 'Open swap request',
-      body: `${actor} posted a shift for swap. Tap to review.`,
+      body: `${actor} posted a shift for swap: ${when}. Tap to review.`,
       category: 'swap',
-      emailSubject: 'An open shift swap needs a decision',
+      emailSubject: `An open shift swap needs a decision: ${when}`,
       data: { type: 'swap_open', swap_id: data.id },
     }).catch(err => console.error('[swaps] notify managers failed', err))
 
-    notifyOpenPool(db, data.id, swapLocationId, assignment.shift_blocks?.block_date, user)
-      .catch(err => console.error('[swaps] notify open pool failed', err))
+    // COVERLOOP.1 — every coach at the studio who could take it, not only the
+    // ones already working that day. Inside after(): the fan-out awaits several
+    // reads before it sends, and an un-awaited promise left hanging past the
+    // response is the shape Vercel can freeze mid-flight (SWAPNOTIFY.1).
+    after(() => notifyOpenPool(db, {
+      swapId: data.id,
+      locationId: swapLocationId,
+      block: assignment.shift_blocks,
+      requester: { id: user.id, full_name: user.full_name },
+    }).catch(err => console.error('[swaps] notify open pool failed', err)))
   }
 
   return NextResponse.json({ success: true, data }, { status: 201 })
-}
-
-// ROSTER-FIX.8d — an open swap used to be visible only to managers, so the
-// coaches who could actually claim it found out by opening the app and
-// looking. Notify the people already working that day at that location: they
-// are on site, so picking up a neighbouring shift is a real option for them.
-//
-// Fail-soft by construction. This runs after the swap row is committed and
-// the response has been decided, so an unreadable pool must never turn a
-// created swap into an error, and never costs the manager notification either
-// (it is a separate call). Two reads, no fan-out: the pool, and the manager set
-// it subtracts (ROSTER-FIX.8f).
-async function notifyOpenPool(db, swapId, locationId, blockDate, user) {
-  if (!locationId || !blockDate) return
-
-  const { data: rows, error } = await db.from('shift_assignments')
-    .select('profile_id, status, shift_blocks!inner(location_id, block_date, rosters:roster_id(status))')
-    .eq('shift_blocks.location_id', locationId)
-    .eq('shift_blocks.block_date', blockDate)
-  if (error) {
-    logWarn('swaps', 'open-pool recipient query failed; managers were still notified', {
-      swapId, err: error.message,
-    })
-    return
-  }
-
-  // ROSTER-FIX.8e — D1: a coach must never learn they are rostered from a swap
-  // push. Without this, a coach whose only assignment that day sits on a DRAFT
-  // roster is told "a shift is up for swap on a day you are working" — which
-  // announces the unpublished roster the D1 gate exists to keep private, from
-  // the one surface nobody thought to gate.
-  //
-  // The published test is applied in JS, not as a PostgREST filter: the roster
-  // status lives two embeds deep (shift_blocks -> rosters) and filtering on a
-  // nested embed's column is not something PostgREST does reliably. The !inner
-  // above still narrows the rows to this location and date, so the set arriving
-  // here is one day at one studio and the filter is free.
-  // ROSTER-FIX.8f — every manager at this location was told about this swap a
-  // moment ago by the swap_open fan-out. A manager who is ALSO rostered that
-  // day matches the pool query too, and the dedup ledger is keyed per event, so
-  // swap_open and swap_open_pool cannot see each other: they got two
-  // notifications for one swap, one of them inviting them to claim a shift they
-  // are there to approve. Subtract them with the SAME resolver
-  // notifyUsersAtRolesOnce uses internally, so the two sets can never drift.
-  const managerIds = new Set(await resolveRoleRecipientIds(db, locationId, MANAGER_ROLES))
-
-  const ids = [...new Set(
-    (rows || [])
-      .filter(r => r.profile_id
-        && r.profile_id !== user.id
-        && !managerIds.has(r.profile_id)
-        && isLiveAssignment(r)
-        && r.shift_blocks?.rosters?.status === 'published')
-      .map(r => r.profile_id),
-  )]
-  if (!ids.length) return
-
-  const actor = user.full_name || 'A coach'
-  await notifyUsersOnce(db, `swap_open_pool:${swapId}`, ids, {
-    title: 'A shift is up for swap',
-    body: `${actor} posted a shift for swap on a day you are working. Tap to take it.`,
-    category: 'swap',
-    emailSubject: 'A shift is up for swap',
-    data: { type: 'swap_open_pool', swap_id: swapId, block_date: blockDate },
-  })
 }

@@ -3,10 +3,21 @@
 // RCOV.P2 — the Runs & health tab's data: recent recon runs, hunt
 // mailbox health, the feature's cron heartbeats, and 7-day LLM spend.
 // Service-role client; access enforced here.
+//
+// TENANTSCOPE.1 — every figure is the ACTIVE studio's. recon_hunts carries
+// no location, so a hunt's studio is its bank line's
+// (recon_bank_lines.location_id, mig 367), joined !inner. The hunt budget
+// itself is ONE estate-wide weekly cap (hunt.js weeklySpendSoFar sums every
+// tenant), so the payload says whether that shared cap is reached — one
+// bit, never who spent it — and only a master also gets the estate total.
+// The location-less `runs` rows are the weekly coverage report
+// (recon/finalize.js): one estate-wide cycle, carrying a status and counts,
+// never a tenant's lines or an error text.
 import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { hasPermission } from '@/lib/permissions'
+import { HUNT_WEEKLY_BUDGET_USD } from '@/lib/recon/budget'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -16,14 +27,19 @@ const PAGE = 1000
 
 // Mirrors weeklySpendSoFar in src/lib/recon/hunt.js (kept local so a
 // display route never imports the hunt engine; comment there notes
-// the loop is virtually always one round trip).
-async function spend7dUsd(db) {
+// the loop is virtually always one round trip). With a locationId it sums
+// that studio's hunts only; with none, the estate — the budget's own scope.
+async function spend7dUsd(db, locationId = null) {
   const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
   let sum = 0
   for (let start = 0; ; start += PAGE) {
-    const { data, error } = await db
-      .from('recon_hunts')
-      .select('llm_spend_usd')
+    const base = db.from('recon_hunts')
+    const scoped = locationId
+      ? base
+          .select('llm_spend_usd, recon_bank_lines!inner(location_id)')
+          .eq('recon_bank_lines.location_id', locationId)
+      : base.select('llm_spend_usd')
+    const { data, error } = await scoped
       .gte('started_at', since)
       .order('id')
       .range(start, start + PAGE - 1)
@@ -88,11 +104,21 @@ export async function GET() {
           (h.expected_interval_seconds + h.grace_seconds) * 1000,
     }))
 
-    const spendUsd = await spend7dUsd(db)
+    const [spendHere, spendEstate] = await Promise.all([
+      spend7dUsd(db, locationId),
+      spend7dUsd(db),
+    ])
 
     return NextResponse.json({
       success: true,
-      data: { runs, mailboxes: mailboxes || [], heartbeats, spend7dUsd: spendUsd },
+      data: {
+        runs,
+        mailboxes: mailboxes || [],
+        heartbeats,
+        spend7dUsd: spendHere,
+        budget: { weeklyUsd: HUNT_WEEKLY_BUDGET_USD, exhausted: spendEstate >= HUNT_WEEKLY_BUDGET_USD },
+        ...(user.isMaster ? { spend7dUsdAll: spendEstate } : {}),
+      },
     })
   } catch (e) {
     console.error('[accounting/health]', e)

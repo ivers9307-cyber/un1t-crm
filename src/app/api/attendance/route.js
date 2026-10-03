@@ -1,151 +1,143 @@
 // GET /api/attendance
 //
-// Owner/manager/master-only attendance report. Returns one row per
-// shift_assignment in the date range, joined with the matched
-// staff profile + scheduled times + actual arrival (if stamped).
+// The attendance report (/schedule/attendance): one row per live
+// shift_assignment at the caller's ACTIVE studio in [from, to], with the coach,
+// the times they were given, the arrival the app recorded
+// (shift_assignments.arrived_at, ARRIVAL.1) and a status.
 //
-// Status bucketing happens at read time using the same pure helpers
-// the webhook receiver uses, so the report is always consistent
-// with how arrivals were classified.
+// ACCESS: the attendance_reports permission (owner / manager / master by
+// default; off for staff, reception and head coaches), judged at the active
+// studio, and every read is keyed on that same studio. The role and the rows
+// come from one place, so the path-vs-active-studio class (SCHEDROLES, B1/C7)
+// cannot arise here.
+//
+// The rules (effective start/end, the back-to-back carry, the summary, the
+// CSV) live in src/lib/attendance-report.js. This file checks the query and
+// reads.
+//
+// ATTENDREPORT.1 (follow-ups C4):
+//   - from/to must be real dates, to on or after from, at most 366 days
+//     (reportPeriodError); the defaults are the DUBLIN day (dublinTodayStr),
+//     never the server's UTC day. All refused before any read.
+//   - every assignment is read (.range() pages ordered by id: PostgREST returns
+//     at most 1,000 rows, silently), and the events read goes in chunks of 100
+//     ids (a year of ids on one URL was ~32KB).
+//   - a failed read is never an answer: a failed location or assignments read
+//     is a logged 500 (never "not found", never the raw database message); a
+//     failed events read keeps the report and says so, because events only
+//     feed the Source badges and every stamped row carries its own
+//     arrival_source.
 //
 // Query params:
-//   from   YYYY-MM-DD (default: 14 days ago)
-//   to     YYYY-MM-DD (default: today)
-//   profile_id  uuid (optional — filter to one staff)
+//   from        YYYY-MM-DD (default: 14 days before `to`)
+//   to          YYYY-MM-DD (default: today in Dublin)
+//   profile_id  uuid (optional: one coach)
 //
 // Returns:
-//   { success: true, rows: [{ ...one assignment per row }], summary: {...} }
+//   { success: true, rows: [...], summary: {...}, warnings: [] | ['sources_unavailable'],
+//     location: { id, name, timezone } }
 
 import { NextResponse } from 'next/server'
 import { withAuth } from '@/lib/with-auth'
-import {
-  resolveScheduledAt,
-  bucketLateness,
-  minutesLate,
-} from '@/lib/staff-attendance'
+import { dublinTodayStr } from '@/lib/dublin-time'
+import { selectAll, selectAllByKeys } from '@/lib/select-all'
+import { resolveTz } from '@/lib/tz-time'
+import { logError } from '@/lib/log'
+import { parseAttendanceQuery, buildAttendanceReport } from '@/lib/attendance-report'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
+// Assignment ids per events query: ~4KB of `in.(…)` (shift-arrivals.js's bound).
+const EVENT_ID_CHUNK = 100
+
+// shift_assignments has two FKs to profiles (profile_id + assigned_by), so the
+// profile embed names its column: `!profile_id` follows the assigned coach.
+const ASSIGNMENT_COLUMNS = `
+  id, profile_id, status, arrived_at, arrival_source, start_time_override, end_time_override,
+  block:shift_blocks!inner ( id, location_id, block_date, start_time, end_time ),
+  profile:profiles!profile_id ( id, full_name, email, role )
+`
+
+const LOAD_FAILED = 'Could not load the attendance report. Try again.'
+const failed = () => NextResponse.json({ success: false, error: LOAD_FAILED }, { status: 500 })
+
 export const GET = withAuth(
   { permission: 'attendance_reports', location: true },
   async ({ db, locationId, request }) => {
-    const url = new URL(request.url)
-    const today = new Date()
-    const defaultFrom = new Date(today.getTime() - 14 * 24 * 3600_000)
-    const fromStr = url.searchParams.get('from') || defaultFrom.toISOString().slice(0, 10)
-    const toStr   = url.searchParams.get('to')   || today.toISOString().slice(0, 10)
-    const profileFilter = url.searchParams.get('profile_id') || null
+    const query = parseAttendanceQuery(new URL(request.url).searchParams, dublinTodayStr())
+    if (query.error) return NextResponse.json({ success: false, error: query.error }, { status: 400 })
+    const { from, to, profileId } = query
 
-    // Validate date format defensively — bad input gives a 400, not
-    // a SQL error.
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(fromStr) || !/^\d{4}-\d{2}-\d{2}$/.test(toStr)) {
-      return NextResponse.json({ success: false, error: 'invalid_date_format' }, { status: 400 })
-    }
-
-    // Pull the location's timezone — needed to render scheduled and
-    // actual times as instants for the lateness comparison.
-    const { data: location } = await db
+    // The studio's timezone turns stored wall-clock times into instants.
+    const { data: location, error: locationError } = await db
       .from('locations')
       .select('id, name, timezone')
       .eq('id', locationId)
-      .single()
+      .maybeSingle()
+    if (locationError) {
+      logError('attendance', 'location read failed', { locationId, error: locationError.message })
+      return failed()
+    }
     if (!location) return NextResponse.json({ success: false, error: 'location_not_found' }, { status: 404 })
-    const tz = location.timezone || 'UTC'
+    const tz = resolveTz(location.timezone)
 
-    // Pull every assignment in the window for this location.
-    let q = db
-      .from('shift_assignments')
-      // shift_assignments has two FKs to profiles (profile_id +
-      // assigned_by) so PostgREST needs the column name as a
-      // disambiguator on the embed, otherwise it errors with
-      // "more than one relationship was found". `!profile_id` tells
-      // it to follow the assigned-coach FK, not the audit one.
-      .select(`
-        id, profile_id, status, start_time_override,
-        block:shift_blocks!inner ( id, location_id, block_date, start_time, end_time ),
-        profile:profiles!profile_id ( id, full_name, email, role )
-      `)
-      .eq('block.location_id', locationId)
-      .gte('block.block_date', fromStr)
-      .lte('block.block_date', toStr)
-      .neq('status', 'cancelled')
-      .order('block(block_date)', { ascending: false })
-    if (profileFilter) q = q.eq('profile_id', profileFilter)
-
-    const { data: assignments, error: aErr } = await q
-    if (aErr) {
-      return NextResponse.json({ success: false, error: aErr.message }, { status: 500 })
+    let assignments
+    try {
+      assignments = await selectAll((lo, hi) => {
+        let q = db
+          .from('shift_assignments')
+          .select(ASSIGNMENT_COLUMNS)
+          .eq('block.location_id', locationId)
+          .gte('block.block_date', from)
+          .lte('block.block_date', to)
+          .neq('status', 'cancelled')
+        if (profileId) q = q.eq('profile_id', profileId)
+        return q.order('id', { ascending: true }).range(lo, hi)
+      })
+    } catch (e) {
+      logError('attendance', 'assignments read failed', { locationId, from, to, error: e?.message || String(e) })
+      return failed()
     }
 
-    // P2.6 — pull every staff_attendance_event matched to one of these
-    // assignments so we can surface arrival source on the row. A
-    // single shift can be touched by BOTH Access (card tap) AND
-    // Protect (face match) within seconds — we want to show that.
-    const assignmentIds = (assignments || []).map(a => a.id).filter(Boolean)
-    const sourcesByAssignment = new Map() // assignment_id → Set<source>
+    // P2.6 — the event sources that matched each assignment. One shift can be
+    // matched by more than one source, and old rows carry the retired UniFi
+    // sources ('unifi_access', 'protect'), which the page still labels.
+    const warnings = []
+    let events = []
+    const assignmentIds = assignments.map((a) => a.id).filter(Boolean)
     if (assignmentIds.length > 0) {
-      const { data: events } = await db
-        .from('staff_attendance_events')
-        .select('matched_assignment_id, source')
-        .in('matched_assignment_id', assignmentIds)
-        .in('match_outcome', ['matched', 'already_stamped'])
-      for (const ev of (events || [])) {
-        if (!ev.matched_assignment_id) continue
-        if (!sourcesByAssignment.has(ev.matched_assignment_id)) {
-          sourcesByAssignment.set(ev.matched_assignment_id, new Set())
-        }
-        sourcesByAssignment.get(ev.matched_assignment_id).add(ev.source)
+      try {
+        events = await selectAllByKeys(
+          assignmentIds,
+          (ids, lo, hi) => db
+            .from('staff_attendance_events')
+            .select('id, matched_assignment_id, source')
+            .in('matched_assignment_id', ids)
+            .in('match_outcome', ['matched', 'already_stamped'])
+            .order('id', { ascending: true })
+            .range(lo, hi),
+          { chunkSize: EVENT_ID_CHUNK },
+        )
+      } catch (e) {
+        logError('attendance', 'attendance events read failed', {
+          locationId, from, to, assignments: assignmentIds.length, error: e?.message || String(e),
+        })
+        warnings.push('sources_unavailable')
       }
     }
 
-    const nowMs = Date.now()
-    const rows = (assignments || [])
-      .filter((a) => a.block) // defensive — should always be present given !inner above
-      .map((a) => {
-        const scheduledAt    = resolveScheduledAt(a.block.block_date, a.block.start_time, tz)
-        const scheduledEndAt = resolveScheduledAt(a.block.block_date, a.block.end_time, tz)
-        const arrivalAt      = a.start_time_override
-          ? resolveScheduledAt(a.block.block_date, a.start_time_override, tz)
-          : null
-        const status = bucketLateness(scheduledAt, arrivalAt, { scheduledEndAt, nowMs })
-        const sourceSet = sourcesByAssignment.get(a.id) || new Set()
-        return {
-          assignment_id: a.id,
-          profile_id: a.profile_id,
-          profile_name: a.profile?.full_name || a.profile?.email || '—',
-          profile_role: a.profile?.role || null,
-          block_date: a.block.block_date,
-          scheduled_start: a.block.start_time,
-          scheduled_end:   a.block.end_time,
-          scheduled_at:    scheduledAt?.toISOString() || null,
-          arrival_at:      arrivalAt?.toISOString() || null,
-          actual_start:    a.start_time_override || null,
-          status,
-          minutes_late:    minutesLate(scheduledAt, arrivalAt),
-          // P2.6 — sources that contributed to the stamp. Empty array
-          // when never auto-stamped (manual entry / pending / no-show).
-          sources: Array.from(sourceSet).sort(),
-        }
-      })
+    const { rows, summary } = buildAttendanceReport({ assignments, events, tz, nowMs: Date.now() })
 
-    // Summary at the top of the report.
-    const summary = rows.reduce((acc, r) => {
-      acc[r.status] = (acc[r.status] || 0) + 1
-      acc.total++
-      return acc
-    }, { total: 0, on_time: 0, late: 0, no_show: 0, pending: 0 })
-
-    // NOTE: this response used to carry `tailgates`/`tailgate_count` —
-    // recent source='protect' events with match_outcome='unknown_user',
-    // surfaced so an operator could enrol/link a face. The UniFi Protect
-    // receiver was removed 2026-07-31 (never wired up; the query has
-    // always returned 0 rows and no new protect events can ever be
-    // written), so the panel and its query went with it.
+    // NOTE: this response used to carry `tailgates`/`tailgate_count`: recent
+    // source='protect' events with match_outcome='unknown_user', so an operator
+    // could enrol a face. The UniFi Protect receiver was removed 2026-07-31
+    // (never wired up), so the panel and its query went with it.
     return NextResponse.json({
       success: true,
       rows,
       summary,
+      warnings,
       location: { id: location.id, name: location.name, timezone: tz },
     })
   }

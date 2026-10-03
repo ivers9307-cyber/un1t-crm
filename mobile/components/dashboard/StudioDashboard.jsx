@@ -9,10 +9,15 @@ import { View, Text, ActivityIndicator } from 'react-native'
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter, useFocusEffect } from 'expo-router'
 import { useAuth } from '../../lib/auth-context'
-import { fetchStudioDashboard } from '../../lib/dashboard-api'
+import { fetchStudioDashboard, swapRowTitle, studioContactNumbers, studioWhatsappUnread } from '../../lib/dashboard-api'
+// COVERLOOP.2 — pending rows open the approval itself (the same place the
+// manager pushes go), and a swap row says when the shift is.
+import { teamApprovalRoute } from '../../lib/notification-nav'
+import { swapShiftWhen } from '../../lib/swap-cards'
 import {
   KpiCard, KpiRow, SectionHeader, PendingRow, ListCard,
 } from './cards'
+import RosterRunwayChip from './RosterRunwayChip'
 
 // Friendlier labels for the pipeline_stage_slug values than the raw
 // snake_case the DB stores. Anything not in the map falls back to a
@@ -66,32 +71,43 @@ export default function StudioDashboard({ refreshKey }) {
     )
   }
 
-  const {
-    pendingTimeOff, pendingSwaps,
-    newLeadsThisWeek, funnel, totalContacts,
-    totalUnreadWhatsapp,
-  } = data
+  // null = the unread read failed: a dash, not 0 (dashboard-api.js decides).
+  const unread = studioWhatsappUnread(data.totalUnreadWhatsapp)
+  // STUDIODASH.1 — null = the list couldn't be read (see dashboard-api.js).
+  // Say so; an empty card would claim nothing is pending.
+  const timeOffFailed = data.pendingTimeOff == null
+  const swapsFailed = data.pendingSwaps == null
+  const pendingTimeOff = data.pendingTimeOff || []
+  const pendingSwaps = data.pendingSwaps || []
+  const LOAD_FAILED = "Couldn't load this list. Pull down to retry."
 
   // Funnel display: pull the headline statuses to a 2x2 grid; everything
   // else is rolled into the contact total. FUNNEL.1 taxonomy — the old
   // keys (active_trial / active_member / lapsed) no longer exist.
   const headlineStatuses = ['new_lead', 'first_class', 'trial_done', 'converted']
-  const headline = headlineStatuses.map(k => ({ key: k, count: funnel[k] || 0 }))
+  // CONTACTREADSCOPE.1a — from /api/dashboard/studio-contacts; null → dashes
+  // + a retry line, never zeros (dashboard-api.js decides).
+  const contactNumbers = studioContactNumbers(data.contactCounts, headlineStatuses)
+  const headline = contactNumbers.headline
 
   return (
     <View>
+      {/* RUNWAY.1 — an upcoming week that is not built or not published.
+          Draws nothing when data.rosterRunway is null (ready, not a manager
+          here, or the read failed). */}
+      <RosterRunwayChip runway={data.rosterRunway} />
       <KpiRow>
         <KpiCard
           label="New leads this week"
-          value={newLeadsThisWeek}
-          sublabel={newLeadsThisWeek === 1 ? 'contact added' : 'contacts added'}
+          value={contactNumbers.newLeads}
+          sublabel={contactNumbers.newLeadsSublabel}
         />
         <KpiCard
           label="WhatsApp unread"
-          value={totalUnreadWhatsapp}
-          sublabel="across the inbox"
-          accent={totalUnreadWhatsapp > 0 ? 'text-un1t-text' : 'text-un1t-muted'}
-          onPress={totalUnreadWhatsapp > 0 ? () => router.push('/(tabs)/whatsapp') : undefined}
+          value={unread.value}
+          sublabel={unread.sublabel}
+          accent={unread.accent}
+          onPress={unread.pressable ? () => router.push('/(tabs)/whatsapp') : undefined}
         />
       </KpiRow>
 
@@ -108,34 +124,36 @@ export default function StudioDashboard({ refreshKey }) {
         </KpiRow>
       </View>
       <Text className="text-xs text-un1t-muted mt-1 px-1">
-        {totalContacts} total contacts at {activeLocation?.name || 'this location'}
+        {contactNumbers.failed
+          ? "Couldn't load the contact numbers. Pull down to retry."
+          : `${contactNumbers.total} total contacts at ${activeLocation?.name || 'this location'}`}
       </Text>
 
       {/* Approvals queue — time off */}
       <SectionHeader title="Time-off awaiting your call" count={pendingTimeOff.length} />
-      <ListCard empty={pendingTimeOff.length === 0} emptyText="Nothing waiting on you.">
+      <ListCard empty={pendingTimeOff.length === 0} emptyText={timeOffFailed ? LOAD_FAILED : 'Nothing waiting on you.'}>
         {pendingTimeOff.slice(0, 5).map((t, i, arr) => (
           <PendingRow
             key={t.id}
             icon="calendar-outline"
             title={`${t.profiles?.full_name || 'Someone'} · ${t.type}`}
             subtitle={t.start_date === t.end_date ? t.start_date : `${t.start_date} – ${t.end_date} (${t.total_days}d)`}
-            onPress={() => router.push('/(tabs)/schedule')}
+            onPress={() => router.push(teamApprovalRoute(t.id))}
             isLast={i === Math.min(arr.length, 5) - 1}
           />
         ))}
       </ListCard>
 
       {/* Approvals queue — swaps */}
-      <SectionHeader title="Swap requests pending" count={pendingSwaps.length} />
-      <ListCard empty={pendingSwaps.length === 0} emptyText="No swaps to review.">
+      <SectionHeader title="Swaps awaiting your call" count={pendingSwaps.length} />
+      <ListCard empty={pendingSwaps.length === 0} emptyText={swapsFailed ? LOAD_FAILED : 'No swaps to review.'}>
         {pendingSwaps.slice(0, 5).map((s, i, arr) => (
           <PendingRow
             key={s.id}
             icon="swap-horizontal"
-            title={`${s.requester?.full_name || 'Someone'} requested a swap`}
-            subtitle={`Posted ${new Date(s.created_at).toLocaleDateString()}`}
-            onPress={() => router.push('/(tabs)/schedule')}
+            title={swapRowTitle(s)}
+            subtitle={swapShiftWhen(s.requester_shift) || `Posted ${new Date(s.created_at).toLocaleDateString()}`}
+            onPress={() => router.push(teamApprovalRoute(s.id))}
             isLast={i === Math.min(arr.length, 5) - 1}
           />
         ))}

@@ -9,7 +9,7 @@ import { redirect, notFound } from 'next/navigation'
 import Link from 'next/link'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import EventCheckinClient from '@/components/EventCheckinClient'
 import { ArrowLeft } from 'lucide-react'
 
@@ -19,7 +19,9 @@ export default async function EventCheckinPage(props) {
   const params = await props.params
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  if (!hasPermission(user, 'races')) redirect('/')
+  // PAGEGATES.1 — coarse pre-check only; the decision is at the event's
+  // location below, the same one /api/events/[id]/checkin makes.
+  if (!hasPermissionAtAnyLocation(user, 'races')) redirect('/')
 
   const db = createServerClient()
   const { data: race } = await db
@@ -36,8 +38,8 @@ export default async function EventCheckinPage(props) {
     .single()
   if (!race) notFound()
 
-  const guard = assertLocationAccess(user, race.location_id)
-  if (guard) redirect('/')
+  if (assertLocationAccess(user, race.location_id)) notFound()
+  if (!hasPermissionForLocation(user, race.location_id, 'races')) redirect('/')
 
   // Confirmed registrations only — cancelled / no_show aren't on the door list.
   const confirmed = (race.registrations || []).filter((r) => r.status === 'confirmed')

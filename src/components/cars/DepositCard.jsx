@@ -2,19 +2,21 @@
 
 // Per-car deposit affordance. Shown in pending / completed status
 // (next to the BuyerCard, before the XeroCard). One button to issue
-// or resend the deposit link via email + WhatsApp; status badges
-// update as the buyer accepts terms and pays.
+// (or re-issue) the deposit link, which the operator copies and shares
+// with the buyer — nothing is sent from the CRM since SMS was retired
+// (TWILIO-RETIRE.1). Status badges update as the buyer accepts terms
+// and pays.
 //
 // Dynamic-imported from CarDetail so its bundle only loads on
 // pending/completed cars.
 
 import { useState } from 'react'
-import { Send, CheckCircle2, Clock, AlertCircle, ExternalLink, RefreshCw, Mail, MessageCircle, XCircle } from 'lucide-react'
+import { Send, CheckCircle2, Clock, AlertCircle, ExternalLink, RefreshCw, Mail, MessageCircle, XCircle, Copy, Link2 } from 'lucide-react'
 
 const CANCELLABLE_STATUSES = new Set(['sent', 'terms_accepted', 'failed'])
 
 const STATUS_META = {
-  sent:            { label: 'Link sent',       cls: 'bg-blue-500/20 text-blue-700',     icon: Send },
+  sent:            { label: 'Link issued',     cls: 'bg-blue-500/20 text-blue-700',     icon: Send },
   terms_accepted:  { label: 'Terms accepted',  cls: 'bg-amber-500/20 text-amber-700',   icon: CheckCircle2 },
   paid:            { label: 'Deposit paid',    cls: 'bg-green-500/20 text-green-700',   icon: CheckCircle2 },
   failed:          { label: 'Payment failed',  cls: 'bg-red-500/20 text-red-700',       icon: AlertCircle },
@@ -38,6 +40,7 @@ export default function DepositCard({ car, setCar, setError, disabled, defaultAm
   // second click within ~5s actually fires the API. Auto-disarms
   // if the operator looks at it for too long.
   const [cancelArmed, setCancelArmed] = useState(false)
+  const [copied, setCopied] = useState(false)
 
   const status = car.deposit_status
   const meta = status && STATUS_META[status]
@@ -46,7 +49,7 @@ export default function DepositCard({ car, setCar, setError, disabled, defaultAm
   const canCancel = CANCELLABLE_STATUSES.has(status)
 
   async function issueLink() {
-    setBusy(true); setError(null); setLastResult(null)
+    setBusy(true); setError(null); setLastResult(null); setCopied(false)
     try {
       const res = await fetch(`/api/cars/${car.id}/issue-deposit-link`, {
         method: 'POST',
@@ -94,6 +97,16 @@ export default function DepositCard({ car, setCar, setError, disabled, defaultAm
     }
   }
 
+  async function copyLink() {
+    if (!lastResult?.link) return
+    try {
+      await navigator.clipboard.writeText(lastResult.link)
+      setCopied(true)
+    } catch {
+      setError('Could not copy — select the link and copy it by hand.')
+    }
+  }
+
   function armCancel() {
     setCancelArmed(true)
     // Auto-disarm after 5s so the button doesn't sit primed forever.
@@ -106,7 +119,7 @@ export default function DepositCard({ car, setCar, setError, disabled, defaultAm
         <div>
           <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">Buyer deposit</h3>
           <p className="text-xs text-un1t-subtle mt-1">
-            One link by email + WhatsApp. Buyer accepts T&amp;Cs, pays via Revolut, you get notified here.
+            Create a link and share it with the buyer. They accept T&amp;Cs, pay via Revolut, you get notified here.
           </p>
         </div>
         {meta && (
@@ -152,14 +165,34 @@ export default function DepositCard({ car, setCar, setError, disabled, defaultAm
               className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-un1t-text text-un1t-bg text-sm font-semibold hover:bg-un1t-accent disabled:opacity-50"
             >
               {hasLink
-                ? <><RefreshCw size={14} /> {busy ? 'Resending…' : 'Resend deposit link'}</>
-                : <><Send size={14} /> {busy ? 'Sending…' : 'Send deposit link'}</>}
+                ? <><RefreshCw size={14} /> {busy ? 'Creating…' : 'New deposit link'}</>
+                : <><Link2 size={14} /> {busy ? 'Creating…' : 'Create deposit link'}</>}
             </button>
           </div>
 
+          {lastResult?.link && (
+            <div className="flex items-center gap-2 mb-3">
+              <input
+                type="text"
+                readOnly
+                value={lastResult.link}
+                onFocus={(e) => e.target.select()}
+                aria-label="Deposit link"
+                className="flex-1 min-w-0 bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-xs text-un1t-text"
+              />
+              <button
+                type="button"
+                onClick={copyLink}
+                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-un1t-border text-xs text-un1t-text hover:bg-un1t-border/40"
+              >
+                <Copy size={12} /> {copied ? 'Copied' : 'Copy'}
+              </button>
+            </div>
+          )}
+
           {car.deposit_link_sent_at && (
             <p className="text-xs text-un1t-subtle mb-3">
-              Last sent {new Date(car.deposit_link_sent_at).toLocaleString('en-IE')}
+              Link issued {new Date(car.deposit_link_sent_at).toLocaleString('en-IE')}
               {car.deposit_link_sent_via && (
                 <> · via {car.deposit_link_sent_via.split(',').map(c => (
                   <span key={c} className="inline-flex items-center gap-1 ml-1">

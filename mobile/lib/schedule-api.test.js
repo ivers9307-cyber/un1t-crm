@@ -43,18 +43,29 @@ describe('schedule-api — every helper is exercised', () => {
       'assignCoachToBlock',
       'cancelSwapRequest',
       'cancelTimeOffRequest',
+      'claimShiftOffer',
       'createSwapRequest',
       'createTimeOffRequest',
+      'getBlockCandidates',
+      'getLeavePreview',
       'getLocationStaff',
+      'getManagedOffers',
+      'getMyAllowance',
       'getMyShifts',
       'getMyTimeOff',
+      'getOffersForMe',
       'getOpenSwaps',
       'getScheduleBlocks',
       'getSwapsForMe',
       'getTeamShifts',
+      'offerBlockToTeam',
       'removeAssignment',
+      'replaceAssignment',
       'respondToSwap',
       'respondToTimeOff',
+      'unassignLeaveClashes',
+      'withdrawLeaveCancelRequest',
+      'withdrawShiftOffer',
     ])
   })
 })
@@ -68,6 +79,13 @@ describe('shift reads', () => {
     })
     // No method → GET; locationId rides as the x-active-location override.
     expect(lastCall()[1]).toEqual({ locationId: LOC })
+  })
+
+  it('getMyShifts asks for arrivals only when told to (ARRIVALSHOW.1: the Schedule tab Me view)', () => {
+    schedule.getMyShifts({ locationId: LOC, profileId: 'p1', startDate: '2026-09-07', endDate: '2026-09-13', withArrivals: true })
+    expect(lastQuery()).toEqual({
+      location_id: LOC, profile_id: 'p1', start_date: '2026-09-07', end_date: '2026-09-13', include: 'arrival',
+    })
   })
 
   it('getTeamShifts hits the SAME route with no profile_id — that omission is the whole difference', () => {
@@ -114,6 +132,19 @@ describe('time off', () => {
     }])
   })
 
+  // LEAVECANCEL.1 — the requester withdraws their ask; the leave stays approved.
+  it('withdrawLeaveCancelRequest DELETEs the cancel-request sub-route', () => {
+    schedule.withdrawLeaveCancelRequest('t1', LOC)
+    expect(lastCall()).toEqual(['/api/schedule/time-off/t1/cancel-request', { method: 'DELETE', locationId: LOC }])
+  })
+
+  it('unassignLeaveClashes POSTs only the shifts the approver was shown', () => {
+    schedule.unassignLeaveClashes('t1', { assignmentIds: ['a1', 'a2'], locationId: LOC })
+    expect(lastCall()).toEqual(['/api/schedule/time-off/t1/unassign-clashes', {
+      method: 'POST', locationId: LOC, body: { assignment_ids: ['a1', 'a2'] },
+    }])
+  })
+
   it('respondToTimeOff PUTs the decision plus a nullable review note', () => {
     schedule.respondToTimeOff('t1', 'approved', 'Cover arranged', LOC)
     expect(lastCall()).toEqual(['/api/schedule/time-off/t1', {
@@ -153,6 +184,13 @@ describe('swaps', () => {
     schedule.respondToSwap('s1', 'approved', null, LOC)
     expect(lastCall()).toEqual(['/api/schedule/swaps/s1', {
       method: 'PUT', locationId: LOC, body: { status: 'approved', review_note: null },
+    }])
+  })
+
+  it('respondToSwap with confirmConflicts re-sends the approval as confirm_conflicts: true', () => {
+    schedule.respondToSwap('s1', 'approved', null, LOC, { confirmConflicts: true })
+    expect(lastCall()).toEqual(['/api/schedule/swaps/s1', {
+      method: 'PUT', locationId: LOC, body: { status: 'approved', review_note: null, confirm_conflicts: true },
     }])
   })
 
@@ -221,5 +259,68 @@ describe('assignments and blocks (manager surfaces)', () => {
     // fields=picker is load-bearing: plain /api/staff hands an admin caller
     // hourly_rate and annual_salary just to render a dropdown.
     expect(lastCall()).toEqual(['/api/staff?fields=picker', { locationId: LOC }])
+  })
+
+  it('getBlockCandidates GETs the ranked list for one block through api(), escaping the id (CANDIDATES.1)', () => {
+    schedule.getBlockCandidates('b1', { locationId: LOC })
+    expect(lastCall()).toEqual(['/api/schedule/blocks/b1/candidates', { locationId: LOC }])
+    api.mockClear()
+    schedule.getBlockCandidates('a/b', { locationId: LOC })
+    expect(lastCall()[0]).toBe('/api/schedule/blocks/a%2Fb/candidates')
+  })
+})
+
+describe('LEAVEPHONE.1 — leave form reads', () => {
+  it('getMyAllowance asks for the caller\'s own allowance: a year, and NO profile_id', async () => {
+    await schedule.getMyAllowance({ year: 2026, locationId: LOC })
+    expect(lastPathname()).toBe('/api/schedule/allowances')
+    expect(lastQuery()).toEqual({ year: '2026' })
+    expect(lastCall()[1]).toEqual({ locationId: LOC })
+  })
+
+  it('getLeavePreview sends preview=1, the type, the route\'s date names and the studio the POST will file at — and NO profile_id', async () => {
+    await schedule.getLeavePreview({ type: 'holiday', startDate: '2026-06-01', endDate: '2026-06-07', locationId: LOC })
+    expect(lastPathname()).toBe('/api/schedule/time-off')
+    expect(lastQuery()).toEqual({ preview: '1', type: 'holiday', start_date: '2026-06-01', end_date: '2026-06-07', location_id: LOC })
+    expect(lastCall()[1]).toEqual({ locationId: LOC })
+  })
+
+  it('getLeavePreview with a one-tap pick sends end_date = start_date; no studio sends no location_id', async () => {
+    await schedule.getLeavePreview({ type: 'sick', startDate: '2026-10-05', endDate: null, locationId: undefined })
+    expect(lastQuery()).toEqual({ preview: '1', type: 'sick', start_date: '2026-10-05', end_date: '2026-10-05' })
+  })
+
+  it('getLeavePreview asks about the SAME studio createTimeOffRequest files at', async () => {
+    await schedule.getLeavePreview({ type: 'holiday', startDate: '2026-06-01', endDate: '2026-06-07', locationId: LOC })
+    const previewStudio = lastQuery().location_id
+    api.mockClear()   // lastCall() insists on exactly one call
+    await schedule.createTimeOffRequest({ type: 'holiday', startDate: '2026-06-01', endDate: '2026-06-07', locationId: LOC })
+    expect(lastCall()[1].body.location_id).toBe(previewStudio)
+    expect(previewStudio).toBe(LOC)
+  })
+})
+
+describe('REPLACE.1a — replaceAssignment', () => {
+  it('POSTs the new coach to /assignments/:id/replace, confirm only when asked', () => {
+    schedule.replaceAssignment('as-1', { profileId: 'p2', locationId: LOC })
+    expect(lastCall()).toEqual(['/api/schedule/assignments/as-1/replace', { method: 'POST', locationId: LOC, body: { profile_id: 'p2' } }])
+    api.mockClear()
+    schedule.replaceAssignment('as-1', { profileId: 'p2', confirmConflicts: true, locationId: LOC })
+    expect(lastCall()[1].body).toEqual({ profile_id: 'p2', confirm_conflicts: true })
+  })
+})
+
+describe('REPLACE.1b — offer wrappers', () => {
+  it('coach list, manager list, offer, claim, withdraw', () => {
+    schedule.getOffersForMe({ locationId: LOC })
+    expect(lastPathname()).toBe('/api/schedule/offers'); expect(lastQuery()).toEqual({ location_id: LOC }); api.mockClear()
+    schedule.getManagedOffers({ locationId: LOC, startDate: '2026-09-28', endDate: '2026-10-04' })
+    expect(lastQuery()).toEqual({ location_id: LOC, view: 'manage', start_date: '2026-09-28', end_date: '2026-10-04' }); api.mockClear()
+    schedule.offerBlockToTeam('b1', { locationId: LOC })
+    expect(lastCall()).toEqual(['/api/schedule/blocks/b1/offer', { method: 'POST', locationId: LOC }]); api.mockClear()
+    schedule.claimShiftOffer('o1', { locationId: LOC })
+    expect(lastCall()).toEqual(['/api/schedule/offers/o1/claim', { method: 'POST', locationId: LOC }]); api.mockClear()
+    schedule.withdrawShiftOffer('o1', { locationId: LOC })
+    expect(lastCall()).toEqual(['/api/schedule/offers/o1', { method: 'DELETE', locationId: LOC }])
   })
 })

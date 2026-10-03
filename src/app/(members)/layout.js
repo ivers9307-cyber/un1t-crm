@@ -21,6 +21,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { CHALLENGE_ADMIN_ROLES } from '@/lib/challenges-access'
 import HubTabs from '@/components/HubTabs'
+import { staffTabMetadata } from '@/lib/staff-tab-title'
 
 export const dynamic = 'force-dynamic'
 
@@ -37,6 +38,14 @@ const TABS = [
   { id: 'timer',      label: 'Class timer', href: '/studio-management/timer', perms: ['class_timer'] },
   { id: 'hyrox',      label: 'Hyrox',       href: '/hyrox',                   perms: ['approvals_hyrox_sessions'] },
 ]
+
+// TABTITLE.1 — the tab names the ACTIVE studio for every page under this
+// layout (see src/lib/staff-tab-title.js). This is the OUTERMOST staff layout
+// of its subtree: a layout nested under it must NOT export this again, or the
+// tab reads "Studio · Studio".
+export async function generateMetadata() {
+  return staffTabMetadata()
+}
 
 export default async function MembersHubLayout({ children }) {
   const user = await getCurrentUser()

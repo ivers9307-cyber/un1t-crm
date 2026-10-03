@@ -32,6 +32,10 @@ describe('shiftTimeLabel', () => {
     // override-or-template resolver would miss it entirely.
     expect(shiftTimeLabel({ start_time: '07:15:00', end_time: '15:00:00', shift_templates: { start_time: '06:00:00', end_time: '14:00:00' } })).toBe('07:15 – 15:00')
   })
+  // MOBILESCHED.2 — the /shifts row's block time beats the template default.
+  it('uses the block time a /shifts row carries before the template', () => {
+    expect(shiftTimeLabel({ block_start_time: '07:00:00', block_end_time: '12:00:00', shift_templates: { start_time: '06:00:00', end_time: '14:00:00' } })).toBe('07:00 – 12:00')
+  })
   it('empty when nothing is set (timeRange would otherwise render " – ")', () => {
     expect(shiftTimeLabel({})).toBe('')
   })

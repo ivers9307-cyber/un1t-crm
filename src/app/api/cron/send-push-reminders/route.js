@@ -22,6 +22,19 @@
 //   - Bookings (status='confirmed', no skip_reminder) → push to all
 //     users with the location's configured booking roles
 //     (default owner/manager/head_coach), category='bookings'.
+//   - Shifts (published, live shift_assignments, grouped into runs) → one
+//     push per run to the coach, category='shift_reminder'. See
+//     src/lib/shift-reminders.js.
+//     The shift arm has its own heartbeat row, 'shift-reminders' (HEARTBEAT.1,
+//     mig 633), stamped only when it ran clean; 'send-push-reminders' still
+//     means "the tick ran".
+//   - Shift time changes (BLOCKEDIT.1) → one shift_adjusted notice per coach
+//     per edited shift, src/lib/block-edit-notify.js. Own heartbeat row
+//     'shift-time-changes' (mig 639).
+//   - Held replace notices (REPLACE.1a): src/lib/shift-replace-notify.js.
+//     Own heartbeat row 'replace-notices' (mig 640).
+//   - Shift offers (REPLACE.1b, "Offer to team"): src/lib/shift-offer-server.js
+//     runShiftOfferSweep. Own heartbeat row 'shift-offer-sweep' (mig 642).
 //
 // Bookings fan out to a role-set rather than a single staff member
 // because the bookings table has no "assigned coach" column — the
@@ -35,15 +48,25 @@ import { createServerClient } from '@/lib/supabase'
 import { sendPush } from '@/lib/push'
 import { logInfo, logWarn, logError } from '@/lib/log'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
-import { localToUtc, formatLocalTime } from '@/lib/push-reminders'
+import { localToUtc, formatLocalTime, isLastFireTick } from '@/lib/push-reminders'
 import { getEffectiveConfig, getEffectiveLeadTimesForUser } from '@/lib/notification-config'
 import { selectAll } from '@/lib/select-all'
+import { runShiftReminders } from '@/lib/shift-reminders'
+import { SHIFT_REMINDERS_HEARTBEAT, shiftReminderArmHealthy, SHIFT_TIME_CHANGES_HEARTBEAT, timeChangeArmHealthy } from '@/lib/cron-arm-health'
+import { runShiftTimeChangeNotices } from '@/lib/block-edit-notify'
+// REPLACE.1a — the held replace-notice arm, self-contained (see its block below).
+import { runReplaceNotices } from '@/lib/shift-replace-notify'
+import { REPLACE_NOTICES_HEARTBEAT, replaceNoticeArmHealthy, pushReminderTickIsNews } from '@/lib/cron-arm-health'
+// REPLACE.1b — the "Offer to team" arm, self-contained (see its block below).
+import { runShiftOfferSweep } from '@/lib/shift-offer-server'
+import { SHIFT_OFFER_SWEEP_HEARTBEAT, offerSweepArmHealthy } from '@/lib/cron-arm-health'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const WINDOW_MIN = 5       // fire up to 5 min EARLY (matches the cron tick)
 const LATE_WINDOW_MIN = 15 // fire up to 15 min LATE — catch-up runway for missed cron ticks
+const TICK_MIN = 5         // vercel.json */5 — isLastFireTick's cadence (pinned by route.read-errors.test.js)
 
 // True when `minutesAway` (minutes until the entity is due) is inside
 // the asymmetric fire window for `lead`: [lead - LATE_WINDOW_MIN,
@@ -72,7 +95,7 @@ export async function GET(request) {
   // few (single-digit) so this is cheap regardless of size.
   const { data: locations, error: locErr } = await db
     .from('locations')
-    .select('id, timezone, notification_config')
+    .select('id, name, timezone, notification_config')
 
   if (locErr) {
     logError('cron-push-reminders', 'location fetch failed', { err: locErr })
@@ -107,10 +130,20 @@ export async function GET(request) {
     task_skipped_dup: 0,
     task_skipped_no_recipient: 0,
     task_send_failed: 0,
+    task_perms_read_failed: 0, // 1 = assignees' lead-time overrides unreadable; studio lead times used (CRONREADERR.1)
+    task_dedup_unreadable: 0, // "already sent?" unreadable, a later tick can still fire it: held, not sent
+    task_sent_unchecked: 0, // "already sent?" unreadable on the LAST tick that can fire it: sent anyway
     booking_candidates: 0,
     booking_pushed: 0,
     booking_skipped_dup: 0,
     booking_send_failed: 0,
+    booking_recipients_read_failed: 0, // 1 = who-to-tell unreadable: no booking reminder this tick, retried next tick (CRONREADERR.1)
+    booking_dedup_unreadable: 0, // as task_dedup_unreadable
+    booking_sent_unchecked: 0, // as task_sent_unchecked
+    shift_arm_failed: 0, // 1 = the shift arm THREW this tick (see the SHIFTS block)
+    time_change_arm_failed: 0, // 1 = the time-change arm THREW this tick (BLOCKEDIT.1)
+    replace_arm_failed: 0, // 1 = the held replace-notice arm threw or reported a fault of its own (errors or stamp_failed; REPLACE.1a, REPLACENITS.1)
+    offer_arm_failed: 0, // 1 = the shift-offer arm threw or reported a fault of its own (REPLACE.1b)
     lead_time_buckets: [], // for logging / debugging
   }
 
@@ -151,11 +184,22 @@ export async function GET(request) {
       // task's location_id determines which row to read for that user.
       const assigneeIds = [...new Set(tasks.map(t => t.assignee_id))]
       const locationIds = [...new Set(tasks.map(t => t.location_id))]
-      const { data: pls } = await db
+      const { data: pls, error: plsErr } = await db
         .from('profile_locations')
         .select('profile_id, location_id, permissions')
         .in('profile_id', assigneeIds)
         .in('location_id', locationIds)
+      if (plsErr) {
+        // CRONREADERR.1 — a failed read is not "no overrides". Proceed on the
+        // studio's lead times (main's behaviour, and exactly right for everyone
+        // today: 0 personal overrides on prod, 28 Sep 2026) rather than skip,
+        // which could lose a reminder whose window closes. Worst case later:
+        // someone with a personal lead time gets an EXTRA push at the studio's
+        // lead time, not a substitute. The ledger keys on the lead time, so
+        // their personal-lead reminder still fires on a tick that reads.
+        summary.task_perms_read_failed = 1
+        logError('cron-push-reminders', 'task permissions read failed; using studio lead times', { err: plsErr })
+      }
       // Map keyed by `${profileId}|${locationId}` for O(1) lookup.
       const mobilePermsByPair = new Map(
         (pls || []).map(pl => [`${pl.profile_id}|${pl.location_id}`, pl.permissions?.mobile || {}])
@@ -184,7 +228,7 @@ export async function GET(request) {
           summary.task_candidates++
 
           // Per-(task, assignee, lead) dedup.
-          const { data: existing } = await db
+          const { data: existing, error: dedupErr } = await db
             .from('push_reminder_sends')
             .select('id')
             .eq('entity_type', 'task')
@@ -193,6 +237,20 @@ export async function GET(request) {
             .eq('lead_time_minutes', lead)
             .maybeSingle()
           if (existing) { summary.task_skipped_dup++; continue }
+          // CRONREADERR.1 — a failed read is not "not sent yet". While a later
+          // tick can still fire this pair, hold it (no duplicate, no loss); on
+          // the last tick that can, send unchecked (a possible duplicate beats
+          // a certain loss). The ledger's unique index then says which it was.
+          let unchecked = false
+          if (dedupErr) {
+            if (!isLastFireTick(minutesAway, lead, { lateWindowMin: LATE_WINDOW_MIN, tickMin: TICK_MIN })) {
+              summary.task_dedup_unreadable++
+              logError('cron-push-reminders', 'task dedup read failed; held for the next tick', { err: dedupErr, t: t.id, lead })
+              continue
+            }
+            unchecked = true
+            logError('cron-push-reminders', 'task dedup read failed on the last tick; sending unchecked', { err: dedupErr, t: t.id, lead })
+          }
 
           const label = leadLabel(lead)
           const result = await sendPush([t.assignee_id], {
@@ -214,6 +272,7 @@ export async function GET(request) {
             logWarn('cron-push-reminders', 'task push send failed — ledger skipped for retry', { t: t.id, lead })
             continue
           }
+          if (unchecked) summary.task_sent_unchecked++
 
           const { error: ledgerErr } = await db.from('push_reminder_sends').insert({
             entity_type: 'task',
@@ -225,6 +284,9 @@ export async function GET(request) {
           })
           if (ledgerErr && ledgerErr.code !== '23505') {
             logWarn('cron-push-reminders', 'task ledger insert failed', { err: ledgerErr, t: t.id })
+          }
+          if (unchecked && ledgerErr?.code === '23505') {
+            logWarn('cron-push-reminders', 'unchecked task reminder was a duplicate', { t: t.id, lead })
           }
 
           if (result.sent > 0) summary.task_pushed++
@@ -272,10 +334,19 @@ export async function GET(request) {
       // (notify_roles, active) filtering still happens per-booking
       // but we avoid N round-trips by pulling them all up front.
       const bookingLocIds = [...new Set(bookings.map(b => b.location_id).filter(Boolean))]
-      const { data: locLinks } = await db
+      const { data: locLinks, error: linksErr } = await db
         .from('profile_locations')
         .select('profile_id, location_id, permissions, profiles!inner(id, role, active)')
         .in('location_id', bookingLocIds)
+      if (linksErr) {
+        // CRONREADERR.1 — a failed read is not "nobody to tell". Nobody can be
+        // told without knowing who, and nothing reaches the ledger, so the next
+        // */5 tick retries inside the 20-minute fire window (main already
+        // skipped here, silently). Lost only if this read fails on every tick
+        // until the window closes.
+        summary.booking_recipients_read_failed = 1
+        logError('cron-push-reminders', 'booking recipients read failed; no booking reminder this tick (retried next tick)', { err: linksErr })
+      }
       const recipientsByLocation = new Map() // location_id -> [{ profile_id, role, perms }]
       for (const link of locLinks || []) {
         if (!link.profiles?.active) continue
@@ -321,7 +392,7 @@ export async function GET(request) {
             summary.booking_candidates++
 
             // Dedup per (booking, recipient, lead).
-            const { data: existing } = await db
+            const { data: existing, error: dedupErr } = await db
               .from('push_reminder_sends')
               .select('id')
               .eq('entity_type', 'booking')
@@ -330,6 +401,18 @@ export async function GET(request) {
               .eq('lead_time_minutes', lead)
               .maybeSingle()
             if (existing) { summary.booking_skipped_dup++; continue }
+            // CRONREADERR.1 — same rule as the task arm: hold while a later
+            // tick can still fire it, send unchecked only on the last chance.
+            let unchecked = false
+            if (dedupErr) {
+              if (!isLastFireTick(minutesAway, lead, { lateWindowMin: LATE_WINDOW_MIN, tickMin: TICK_MIN })) {
+                summary.booking_dedup_unreadable++
+                logError('cron-push-reminders', 'booking dedup read failed; held for the next tick', { err: dedupErr, b: b.id, recipient: recipient.profile_id, lead })
+                continue
+              }
+              unchecked = true
+              logError('cron-push-reminders', 'booking dedup read failed on the last tick; sending unchecked', { err: dedupErr, b: b.id, recipient: recipient.profile_id, lead })
+            }
 
             const label = leadLabel(lead)
             const result = await sendPush([recipient.profile_id], {
@@ -349,6 +432,7 @@ export async function GET(request) {
               logWarn('cron-push-reminders', 'booking push send failed — ledger skipped for retry', { b: b.id, lead })
               continue
             }
+            if (unchecked) summary.booking_sent_unchecked++
 
             const { error: ledgerErr } = await db.from('push_reminder_sends').insert({
               entity_type: 'booking',
@@ -361,6 +445,9 @@ export async function GET(request) {
             if (ledgerErr && ledgerErr.code !== '23505') {
               logWarn('cron-push-reminders', 'booking ledger insert failed', { err: ledgerErr, b: b.id })
             }
+            if (unchecked && ledgerErr?.code === '23505') {
+              logWarn('cron-push-reminders', 'unchecked booking reminder was a duplicate', { b: b.id, recipient: recipient.profile_id, lead })
+            }
 
             if (result.sent > 0) summary.booking_pushed++
           }
@@ -371,7 +458,120 @@ export async function GET(request) {
     logError('cron-push-reminders', 'booking block threw', { err })
   }
 
-  if (Object.values(summary).some(v => Array.isArray(v) ? v.length > 0 : v > 0)) {
+  // -------------------------- SHIFTS --------------------------
+  // SHIFTREMIND.1 — one reminder per RUN of a coach's published shifts (shifts
+  // no more than 2 hours apart): 2 hours before the run's first start, or
+  // 20:00 the evening before when that would be before 07:00 (a start before 09:00).
+  // The rule, the ledger use and the failure posture live in
+  // src/lib/shift-reminders.js. Isolated like the two blocks above: a shift
+  // failure must never cost a task or booking reminder, or the heartbeat.
+  let shiftSummary = null
+  try {
+    shiftSummary = await runShiftReminders(db, { nowMs, locations: locations || [] })
+    Object.assign(summary, shiftSummary)
+  } catch (err) {
+    // VISIBLE, not just logged: the send-push-reminders heartbeat below is
+    // stamped either way and the response is ok:true, so without this key an
+    // arm that throws on every tick (a select 400, say) would look exactly
+    // like a quiet day in the response. Same class as the 24-day silent
+    // enrolment outage (#1685).
+    summary.shift_arm_failed = 1
+    logError('cron-push-reminders', 'shift block threw', { err })
+  }
+
+  // HEARTBEAT.1 — the shift arm's OWN heartbeat row ('shift-reminders', mig
+  // 633). The health-check reads only is_stale, so the key above pages nobody;
+  // this row does. Stamped ONLY when the arm returned a summary with no fault of
+  // its own (src/lib/cron-arm-health.js): a quiet-hours tick or a tick with
+  // nothing due stamps, a throw / claim failure / notify throw / capped read
+  // does not, so an arm broken for 20 minutes goes STALE. Its own catch: this
+  // stamp can never cost the parent's stamp below or the response.
+  if (summary.shift_arm_failed === 0 && shiftReminderArmHealthy(shiftSummary)) {
+    await stampHeartbeat(SHIFT_REMINDERS_HEARTBEAT, shiftSummary).catch((err) =>
+      logWarn('cron-push-reminders', 'shift-reminders heartbeat failed', { err }))
+  }
+
+  // ----------------------- SHIFT TIME CHANGES -----------------------
+  // BLOCKEDIT.1 — a manager moved a PUBLISHED shift (PUT /api/schedule/blocks/
+  // [id]); each coach whose own hours moved has an unsent roster_change_log
+  // row. This arm is the later tick that lets quiet hours gate that notice
+  // without losing it: one message per coach per shift, 07:00-22:00 at the
+  // studio. The rule lives in src/lib/block-edit-notify.js. Isolated like the
+  // arms above: its failure costs nothing else, and is VISIBLE in the response.
+  // Placed AFTER the shift arm's own heartbeat stamp, so it can never cost it.
+  // Its own heartbeat row, 'shift-time-changes' (mig 639), is stamped below.
+  let timeChangeSummary = null
+  try {
+    timeChangeSummary = await runShiftTimeChangeNotices(db, { nowMs, locations: locations || [] })
+    Object.assign(summary, timeChangeSummary)
+  } catch (err) {
+    summary.time_change_arm_failed = 1
+    logError('cron-push-reminders', 'time-change block threw', { err })
+  }
+
+  // The time-change arm's OWN heartbeat row (the CLAUDE.md arm rule, mig 639):
+  // stamped ONLY on a clean run (src/lib/cron-arm-health.js timeChangeArmHealthy),
+  // quiet-hours ticks included; never on a throw, a failed or capped read, or a
+  // failed not-needed stamp. Its own catch: it cannot cost the parent's stamp.
+  if (summary.time_change_arm_failed === 0 && timeChangeArmHealthy(timeChangeSummary)) {
+    await stampHeartbeat(SHIFT_TIME_CHANGES_HEARTBEAT, timeChangeSummary).catch((err) =>
+      logWarn('cron-push-reminders', 'shift-time-changes heartbeat failed', { err }))
+  }
+
+  // -------------------------- HELD REPLACE NOTICES --------------------------
+  // REPLACE.1a — replace notices made in quiet hours (or lost with a dead
+  // after()) go out from here, from 07:00 studio time. The rule is in
+  // src/lib/shift-replace-notify.js. Isolated like the arms above: it can cost
+  // no reminder and no other heartbeat. Its OWN row, 'replace-notices', is
+  // stamped only on a clean run (cron-arm-health.js), under its own catch.
+  // That row is seeded by mig 640; a failing arm also shows as
+  // replace_arm_failed in the response, the tick log and logError.
+  let replaceSummary = null
+  try {
+    replaceSummary = await runReplaceNotices(db, { nowMs })
+    summary.replace_notices = replaceSummary
+    // REPLACENITS.1 — the arm's own health predicate, like the offer arm
+    // below: a delivered notice whose stamp failed (stamp_failed; the coach is
+    // told again every tick) is a fault, and used to read 0 here.
+    if (replaceSummary && !replaceNoticeArmHealthy(replaceSummary)) summary.replace_arm_failed = 1
+  } catch (err) {
+    summary.replace_arm_failed = 1
+    logError('cron-push-reminders', 'replace notice arm threw', { err })
+  }
+  if (summary.replace_arm_failed === 0 && replaceNoticeArmHealthy(replaceSummary)) {
+    await stampHeartbeat(REPLACE_NOTICES_HEARTBEAT, replaceSummary).catch((err) =>
+      logWarn('cron-push-reminders', 'replace-notices heartbeat failed', { err }))
+  }
+
+  // -------------------------- SHIFT OFFERS --------------------------
+  // REPLACE.1b — "Offer to team": close offers whose shift started, got its
+  // coach another way or left a published roster (STATE, any hour), and send
+  // the owed "up for grabs" / "taken" notices inside 07:00-22:00 studio time
+  // (a MESSAGE; quiet hours gate it, never the state). The rule is in
+  // src/lib/shift-offer-notice.js, the sender in src/lib/shift-offer-server.js.
+  // Isolated like the arms above: it can cost no reminder and no other
+  // heartbeat, and placed after their stamps so it can never cost them. Its
+  // OWN row, 'shift-offer-sweep' (mig 642), is stamped only on a clean run
+  // (cron-arm-health.js offerSweepArmHealthy), under its own catch.
+  let offerSummary = null
+  try {
+    offerSummary = await runShiftOfferSweep(db, { nowMs })
+    summary.shift_offers = offerSummary
+    if (offerSummary && !offerSweepArmHealthy(offerSummary)) summary.offer_arm_failed = 1
+  } catch (err) {
+    summary.offer_arm_failed = 1
+    logError('cron-push-reminders', 'shift offer arm threw', { err })
+  }
+  if (summary.offer_arm_failed === 0 && offerSweepArmHealthy(offerSummary)) {
+    await stampHeartbeat(SHIFT_OFFER_SWEEP_HEARTBEAT, offerSummary).catch((err) =>
+      logWarn('cron-push-reminders', 'shift-offer-sweep heartbeat failed', { err }))
+  }
+
+  // quiet_hours alone is not news: it is 1 on every tick from 22:00 to 07:00.
+  // time_change_quiet likewise (BLOCKEDIT.1). The replace and offer arms'
+  // NESTED outcomes are judged by their own news keys (REPLACENITS.1): an
+  // object never counted, so a notice told or an offer sent never logged.
+  if (pushReminderTickIsNews(summary)) {
     logInfo('cron-push-reminders', 'tick', summary)
   }
 

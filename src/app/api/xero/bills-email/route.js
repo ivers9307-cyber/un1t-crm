@@ -6,7 +6,7 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { uuidLike } from '@/lib/validate'
 
@@ -23,7 +23,10 @@ const Body = z.object({
 export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (user.role !== 'owner' && user.role !== 'master') {
+  // SECFIX.1 — coarse pre-check only (owner somewhere; masters via
+  // profileRole). Owner is judged at the target location below, never at the
+  // caller's ACTIVE studio (`user.role`).
+  if (!hasRoleAtAnyLocation(user, ['owner'])) {
     return NextResponse.json({ success: false, error: 'Not permitted' }, { status: 403 })
   }
 
@@ -40,6 +43,12 @@ export async function POST(request) {
   const userLocationIds = (user.locations || []).map(l => l.id)
   if (!userLocationIds.includes(parsed.data.location_id)) {
     return NextResponse.json({ success: false, error: 'Not a member of that location' }, { status: 403 })
+  }
+  // SECFIX.1 (security) — owner AT the location acted on (masters via
+  // profileRole). An owner at A who is staff at B, with A active, passed the
+  // old active-studio check and could act on B's Xero connection.
+  if (!hasRoleAtLocation(user, parsed.data.location_id, ['owner'])) {
+    return NextResponse.json({ success: false, error: 'Not permitted' }, { status: 403 })
   }
 
   const db = createServerClient()

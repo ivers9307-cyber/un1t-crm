@@ -9,8 +9,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
-import { hasPermissionForLocation } from '@/lib/permissions'
-import { APPROVAL_CATEGORY_PERMISSION } from '@shared/permissions'
+import { canApproveExpenseClaim, canSeeExpenseClaim } from '@/lib/fte-expense-access'
 import { validateBody } from '@/lib/validate'
 import { canTransition, periodLabel } from '@/lib/fte-expenses'
 import { notifyUsersOnce } from '@/lib/push-dedup'
@@ -41,9 +40,20 @@ export async function POST(request, { params }) {
     `)
     .eq('id', id)
     .maybeSingle()
-  if (!claim) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
-  // APPROVALS-PERCAT.1 — permission is the only gate.
-  if (!hasPermissionForLocation(user, claim.location_id, APPROVAL_CATEGORY_PERMISSION.fte_expenses)) {
+  // FINALTIDY.1 — a caller who can't see the claim gets the same 404 as a
+  // missing one. APPROVALS-PERCAT.1 — the permission is still the only gate
+  // to ACT; a caller who can see the claim (the claimant, an owner whose
+  // approvals_fte_expenses was switched off) keeps the honest 403.
+  if (!claim || !canSeeExpenseClaim(user, claim)) {
+    return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  }
+  // FINALTIDY.1 — nobody decides on their own spend, master included. The
+  // claimant can see the claim, so this is an honest 403; to pull a claim
+  // back they revoke it instead.
+  if (claim.profile_id === user.id) {
+    return NextResponse.json({ success: false, error: "You can't decline your own expense claim. Revoke it instead if you need to change it." }, { status: 403 })
+  }
+  if (!canApproveExpenseClaim(user, claim)) {
     return NextResponse.json({ success: false, error: 'You do not have permission to decline expenses.' }, { status: 403 })
   }
   if (!canTransition(claim.status, 'declined')) {

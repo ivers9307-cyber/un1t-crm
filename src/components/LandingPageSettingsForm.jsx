@@ -44,6 +44,8 @@ import {
 } from '@/lib/landing-page-blocks'
 import { buildTrialOptions } from '@/lib/glofox-trial-options'
 import { centsToEuros, eurosToCents } from '@/lib/price-format'
+import { DEFAULT_TIMETABLE_UNAVAILABLE_MESSAGE, DEFAULT_CLASS_FUNNEL_CTA_LABEL } from '@/lib/public-landing'
+import { parseManualTimetable, DEFAULT_MIN_NOTICE_HOURS } from '@/lib/manual-timetable'
 
 // PostMessage namespace shared with src/components/landing-page/
 // EditModeOverlay.jsx so the iframe and the parent only react to
@@ -456,6 +458,7 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
                   uploadErr={uploadErr}
                   progress={progress}
                   locationId={locationId}
+                  publicPath={publicPath}
                 />
               </div>
             ))}
@@ -569,7 +572,7 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
 function SortableBlockCard({
   block, expanded, onToggleExpand, onRemove, onUpdate,
   availableBookingTypes, availableEvents, uploadMedia, uploading, uploadErr, progress,
-  locationId,
+  locationId, publicPath,
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: block.id })
   const style = {
@@ -629,6 +632,7 @@ function SortableBlockCard({
             uploadErr={uploadErr}
             progress={progress}
             locationId={locationId}
+            publicPath={publicPath}
           />
         </div>
       )}
@@ -903,7 +907,99 @@ function LeadFormEdit({ block, onUpdate }) {
   )
 }
 
-function ClassFunnelEdit({ block, onUpdate, availableBookingTypes, locationId }) {
+// MANUALFUNNEL.1 — for a studio with no Glofox (Hatch Street books on its own
+// platform). The operator types the weekly timetable; the funnel lists it,
+// and every request lands in Approvals for staff to book by hand. A studio
+// WITH Glofox ignores all of this and keeps listing its live classes.
+const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+
+function ManualTimetableFields({ block, onUpdate, publicPath }) {
+  const text = typeof block.timetable === 'string' ? block.timetable : ''
+  const { slots, rejected } = useMemo(() => parseManualTimetable(text), [text])
+  const byDay = DAY_NAMES.map((name, i) => ({ name, times: slots.filter((s) => s.dow === i + 1) }))
+    .filter((d) => d.times.length > 0)
+  return (
+    <div className="pt-4 mt-2 border-t border-un1t-border space-y-4">
+      <div>
+        <p className="text-sm font-medium text-un1t-text">Typed-in timetable (studio without Glofox)</p>
+        <p className="text-[11px] text-un1t-muted mt-1">
+          Only used when this studio has no Glofox connection. Visitors pick one of these times and leave their details. Nothing is booked automatically: each request appears in Approvals for staff to create the account and booking by hand.
+        </p>
+      </div>
+      <Field
+        label="Weekly timetable"
+        hint="One line per class: day, time, class name. Several days or times can share a line, e.g. “Mon-Fri 06:15, 07:15 Strength” or “Sat 9am Conditioning”."
+      >
+        <Textarea
+          value={text}
+          onChange={(v) => onUpdate({ timetable: v })}
+          maxLength={4000}
+          rows={8}
+          placeholder={'Mon-Fri 06:15 Strength\nMon-Fri 18:00 Conditioning\nSat 09:00 Strength'}
+        />
+        {text.trim() && (
+          <div className="mt-2 rounded-md border border-un1t-border bg-un1t-bg px-3 py-2 text-xs text-un1t-text space-y-1">
+            {byDay.length === 0 ? (
+              <p className="text-red-700">No class times could be read yet.</p>
+            ) : (
+              <>
+                <p className="text-un1t-subtle">How it reads ({slots.length} class {slots.length === 1 ? 'time' : 'times'} a week):</p>
+                {byDay.map((d) => (
+                  <p key={d.name}>
+                    <span className="font-medium">{d.name}</span>{' '}
+                    {d.times.map((s) => `${s.time} ${s.name}`).join(' · ')}
+                  </p>
+                ))}
+              </>
+            )}
+            {rejected.length > 0 && (
+              <div className="text-red-700 pt-1">
+                <p>Not understood, so not shown to visitors:</p>
+                {rejected.map((line, i) => <p key={`${i}-${line}`} className="font-mono">{line}</p>)}
+              </div>
+            )}
+          </div>
+        )}
+      </Field>
+      <Field label="First bookable date" hint="Optional. No class before this date is offered, e.g. the studio's opening day.">
+        <input
+          type="date"
+          value={block.timetable_start_date || ''}
+          onChange={(e) => onUpdate({ timetable_start_date: e.target.value })}
+          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+        />
+      </Field>
+      <Field label="Minimum notice (hours)" hint={`A class starting sooner than this is not offered, so staff have time to book it by hand. Blank = ${DEFAULT_MIN_NOTICE_HOURS} hours.`}>
+        <Input
+          value={block.min_notice_hours === 0 ? '0' : (block.min_notice_hours || '')}
+          onChange={(v) => {
+            const t = v.trim()
+            const n = Number(t)
+            onUpdate({ min_notice_hours: t === '' || !Number.isFinite(n) || n < 0 ? '' : n })
+          }}
+          maxLength={3}
+          placeholder={String(DEFAULT_MIN_NOTICE_HOURS)}
+        />
+      </Field>
+      <label className="flex items-start gap-2 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={block.show_on_landing !== false}
+          onChange={(e) => onUpdate({ show_on_landing: e.target.checked })}
+          className="mt-0.5"
+        />
+        <span>
+          <span className="block text-sm text-un1t-text">Show this funnel on the main landing page</span>
+          <span className="block text-[11px] text-un1t-muted mt-0.5">
+            Untick to keep it off this page. It always shows on its own booking page{publicPath ? `: /start/${publicPath}` : ' at /start/ followed by this page’s address'}.
+          </span>
+        </span>
+      </label>
+    </div>
+  )
+}
+
+function ClassFunnelEdit({ block, onUpdate, availableBookingTypes, locationId, publicPath }) {
   const bts = availableBookingTypes || []
   // Price is edited as a raw euros string (draft) and only coerced to integer
   // cents on write — a fully-controlled input re-derived from cents each
@@ -948,6 +1044,16 @@ function ClassFunnelEdit({ block, onUpdate, availableBookingTypes, locationId })
       <Field label="Class booked — message">
         <Textarea value={block.class_done_body || ''} onChange={(v) => onUpdate({ class_done_body: v })} maxLength={400} rows={2} />
       </Field>
+      {/* REGISTRYREAD.1a — shown when the timetable could not be read at the
+          moment someone books (the booking is not taken; their details stay
+          in the form). Blank keeps the default. */}
+      <Field label="Timetable unavailable — message" hint="Shown if we can't check the timetable when someone books. Leave blank for the default.">
+        <Textarea value={block.timetable_unavailable_message || ''} onChange={(v) => onUpdate({ timetable_unavailable_message: v })} maxLength={300} rows={2} placeholder={DEFAULT_TIMETABLE_UNAVAILABLE_MESSAGE} />
+      </Field>
+      <Field label="Button label" hint="On the buttons that scroll to this funnel (page header, sections, footer). Leave blank for the default.">
+        <Input value={block.cta_label || ''} onChange={(v) => onUpdate({ cta_label: v })} maxLength={40} placeholder={DEFAULT_CLASS_FUNNEL_CTA_LABEL} />
+      </Field>
+      <ManualTimetableFields block={block} onUpdate={onUpdate} publicPath={publicPath} />
       <Field
         label="Trial product granted on booking"
         hint="Which Glofox membership/plan a NEW member gets on booking. Leave on the location default unless this funnel should grant a different intro offer."

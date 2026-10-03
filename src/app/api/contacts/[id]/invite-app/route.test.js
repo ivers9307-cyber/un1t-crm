@@ -12,7 +12,9 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/auth', () => ({
+// ROLESWEEP.1c — the REAL per-location role helpers (pure: role-at-location).
+vi.mock('@/lib/auth', async () => ({
+  ...(await vi.importActual('@/lib/role-at-location')),
   getCurrentUser: vi.fn(),
   // Mirror the real helper. The previous mock omitted it AND the user
   // fixtures set a non-existent `locationIds` field, so the location
@@ -74,13 +76,13 @@ describe('POST /api/contacts/[id]/invite-app', () => {
   })
 
   it('returns 403 when user is not master/owner/manager', async () => {
-    getCurrentUser.mockResolvedValue({ isMaster: false, role: 'coach', locations: [{ id: 'loc-1' }] })
+    getCurrentUser.mockResolvedValue({ isMaster: false, role: 'coach', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'coach' } })
     const res = await POST(fakeRequest(), { params: { id: 'c1' } })
     expect(res.status).toBe(403)
   })
 
   it('returns 403 when manager is at a different location', async () => {
-    getCurrentUser.mockResolvedValue({ isMaster: false, role: 'manager', locations: [{ id: 'loc-OTHER' }] })
+    getCurrentUser.mockResolvedValue({ isMaster: false, role: 'manager', locations: [{ id: 'loc-OTHER' }], rolesByLocation: { 'loc-OTHER': 'manager' } })
     createServerClient.mockReturnValue(mockDb({
       contact: { id: 'c1', name: 'Sarah', email: 'sarah@example.com', location_id: 'loc-1', user_id: null },
     }))
@@ -128,7 +130,7 @@ describe('POST /api/contacts/[id]/invite-app', () => {
   })
 
   it('manager at the right location can invite', async () => {
-    getCurrentUser.mockResolvedValue({ isMaster: false, role: 'manager', locations: [{ id: 'loc-1' }] })
+    getCurrentUser.mockResolvedValue({ isMaster: false, role: 'manager', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'manager' } })
     createServerClient.mockReturnValue(mockDb({
       contact: { id: 'c1', name: 'Sarah', email: 'sarah@example.com', location_id: 'loc-1', user_id: null },
     }))

@@ -15,8 +15,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
 
 const { createServerClient } = await import('@/lib/supabase')
+const { logWarn } = await import('@/lib/log')
 const { enrolContacts } = await import('./enrol.js')
 
 /**
@@ -49,6 +51,9 @@ function mockDb({
   // as one unbounded URL. `db.from()` returns a fresh builder per call, so
   // this has to be collected from inside the mock.
   const activeInKeys = []
+  // ENROLFIX.1 — the column list each tier-2 history read asked for, so a
+  // test can pin it against the real schema (the table has no created_at).
+  const historySelects = []
 
   function chain(rows, error = null, recordIn = null) {
     const builder = {
@@ -80,8 +85,9 @@ function mockDb({
         return {
           select: vi.fn((cols) => {
             // active dedup: select('contact_id') ... .eq('status', 'active')
-            // history dedup: select('contact_id, status, last_processed_at, created_at') ... .in('status', ['completed', 'exited'])
+            // history dedup: select('contact_id, status, last_processed_at, enrolled_at, …') ... .in('status', ['completed', 'exited'])
             if (cols.includes('last_processed_at')) {
+              historySelects.push(cols)
               return chain(history)
             }
             return chain(activeContactIds.map(id => ({ contact_id: id })), activeReadError, activeInKeys)
@@ -144,11 +150,12 @@ function mockDb({
       return { data: null, error: null }
     }),
   }
-  return { db, inserts, upsertOpts, updates, rpcCalls, contactsQueries, activeInKeys }
+  return { db, inserts, upsertOpts, updates, rpcCalls, contactsQueries, activeInKeys, historySelects }
 }
 
 beforeEach(() => {
   createServerClient.mockReset()
+  logWarn.mockReset()
 })
 
 describe('enrolContacts — short-circuits', () => {
@@ -260,24 +267,16 @@ describe('enrolContacts — insert errors', () => {
   })
 })
 
-describe('enrolContacts — counter RPC', () => {
-  it('fires increment_sequence_enrolled with the insert count', async () => {
+// SEQCOUNTERS.1 — increment_sequence_enrolled never existed (no migration,
+// 0 in pg_proc; every call 404'd and the resolved { error } was dropped).
+// Enrolment counts are computed from sequence_enrollments where shown.
+describe('enrolContacts — no counter RPC (SEQCOUNTERS.1)', () => {
+  it('enrols without calling any rpc', async () => {
     const { db, rpcCalls } = mockDb()
     createServerClient.mockReturnValue(db)
-    await enrolContacts({ sequenceId: 's1', contactIds: ['a', 'b', 'c'] })
-    expect(rpcCalls).toHaveLength(1)
-    expect(rpcCalls[0]).toEqual({
-      name: 'increment_sequence_enrolled',
-      args: { p_sequence_id: 's1', p_delta: 3 },
-    })
-  })
-
-  it('does not throw when the RPC fails (best-effort accounting)', async () => {
-    const { db } = mockDb({ rpcError: new Error('rpc not present') })
-    createServerClient.mockReturnValue(db)
-    // Should resolve normally despite the RPC rejection.
-    const out = await enrolContacts({ sequenceId: 's1', contactIds: ['a'] })
-    expect(out.enrolled).toBe(1)
+    const out = await enrolContacts({ sequenceId: 's1', contactIds: ['a', 'b', 'c'] })
+    expect(out.enrolled).toBe(3)
+    expect(rpcCalls).toEqual([])
   })
 })
 
@@ -431,14 +430,14 @@ describe('ENROLDEDUP.1 — the write is idempotent, not all-or-nothing', () => {
     expect(out.skipped).toBe(1)
   })
 
-  it('reports enrolled from rows actually inserted, and bumps the counter by that number', async () => {
-    // The old return counted toInsert.length, so conflicts inflated both
-    // the reported figure and the dashboard counter.
+  it('reports enrolled from rows actually inserted', async () => {
+    // The old return counted toInsert.length, so conflicts inflated the
+    // reported figure. (SEQCOUNTERS.1 — there is no counter bump any more.)
     const { db, rpcCalls } = mockDb({ conflictedContactIds: ['a', 'b'] })
     createServerClient.mockReturnValue(db)
     const out = await enrolContacts({ sequenceId: 's1', contactIds: ['a', 'b', 'c'] })
     expect(out.enrolled).toBe(1)
-    expect(rpcCalls[0].args.p_delta).toBe(1)
+    expect(rpcCalls).toEqual([])
   })
 
   it('still throws on a genuine write failure', async () => {
@@ -491,7 +490,7 @@ describe('allowReenrol — re-activate a terminal enrolment (DUNNING.2)', () => 
       source_type: 'invoice_past_due', source_ref: 'inv-old', status: 'completed',
       enrolled_at: '2026-06-24T00:00:00.000Z', ended_at: '2026-07-01T00:00:00.000Z', exit_reason: null,
     }])
-    expect(m.rpcCalls).toEqual([{ name: 'increment_sequence_enrolled', args: { p_sequence_id: 's', p_delta: 1 } }])
+    expect(m.rpcCalls).toEqual([])
   })
 
   it('appends to an existing previous_runs list and preserves other metadata', async () => {
@@ -548,5 +547,98 @@ describe('allowReenrol — re-activate a terminal enrolment (DUNNING.2)', () => 
     const res = await enrolContacts({ sequenceId: 's', contactIds: ['a'], sourceType: 'invoice_past_due', sourceRef: 'inv-new', allowReenrol: true })
     expect(res).toMatchObject({ enrolled: 0, reactivated: 0, skipped: 1 })
     expect(m.rpcCalls).toHaveLength(0)
+  })
+
+  it('PAYLINK.3b — forged previous_runs in caller metadata cannot override the real history', async () => {
+    const m = mockDb({ history: [old()], cooldownDays: 14 })
+    createServerClient.mockReturnValue(m.db)
+    await enrolContacts({
+      sequenceId: 's', contactIds: ['a'], sourceType: 'invoice_past_due', sourceRef: 'inv-new', allowReenrol: true,
+      metadata: { payment: { invoice_id: 'inv-NEW' }, previous_runs: [{ forged: true }] },
+    })
+    const upd = m.updates[0]
+    expect(upd.payload.metadata.previous_runs).toHaveLength(1)
+    expect(upd.payload.metadata.previous_runs[0]).toMatchObject({ source_ref: 'inv-old' })
+  })
+})
+
+describe('PAYLINK.3 — enrolContacts({ metadata }) rides the row', () => {
+  it('writes metadata on a fresh insert and leaves it absent when not given', async () => {
+    const m = mockDb({})
+    createServerClient.mockReturnValue(m.db)
+    await enrolContacts({ sequenceId: 's1', contactIds: ['c1'], sourceType: 'invoice_past_due', sourceRef: 'inv-1', metadata: { payment: { invoice_id: 'inv-1', link: 'https://pay.test/x' } } })
+    expect(m.inserts[0][0]).toMatchObject({ contact_id: 'c1', source_ref: 'inv-1', metadata: { payment: { invoice_id: 'inv-1', link: 'https://pay.test/x' } } })
+
+    const m2 = mockDb({})
+    createServerClient.mockReturnValue(m2.db)
+    await enrolContacts({ sequenceId: 's1', contactIds: ['c1'] })
+    expect(m2.inserts[0][0]).not.toHaveProperty('metadata')
+  })
+
+  it('a DUNNING.2 re-activation merges metadata OVER the old run but keeps previous_runs', async () => {
+    // A completed earlier run outside cooldown, different source_ref → reactivate.
+    const m = mockDb({
+      history: [{ id: 'e1', contact_id: 'c1', status: 'completed', source_type: 'invoice_past_due', source_ref: 'inv-OLD',
+        enrolled_at: '2026-01-01T00:00:00Z', completed_at: '2026-01-08T00:00:00Z', exited_at: null, exit_reason: null, last_processed_at: null, created_at: '2026-01-01T00:00:00Z',
+        metadata: { payment: { invoice_id: 'inv-OLD', link: 'https://pay.test/old' }, previous_runs: [] } }],
+      cooldownDays: 14,
+    })
+    createServerClient.mockReturnValue(m.db)
+    const out = await enrolContacts({ sequenceId: 's1', contactIds: ['c1'], sourceType: 'invoice_past_due', sourceRef: 'inv-NEW', allowReenrol: true, metadata: { payment: { invoice_id: 'inv-NEW', link: 'https://pay.test/new' } } })
+    expect(out.reactivated).toBe(1)
+    const upd = m.updates[0]
+    expect(upd.payload.metadata.payment).toEqual({ invoice_id: 'inv-NEW', link: 'https://pay.test/new' })
+    expect(upd.payload.metadata.previous_runs).toHaveLength(1)
+    expect(upd.payload.metadata.previous_runs[0]).toMatchObject({ source_ref: 'inv-OLD' })
+  })
+})
+
+describe('PAYLINK.3b — metadata is strictly per-contact', () => {
+  it('refuses metadata on a multi-contact batch and inserts nothing', async () => {
+    const m = mockDb({})
+    createServerClient.mockReturnValue(m.db)
+    await expect(enrolContacts({
+      sequenceId: 's1', contactIds: ['c1', 'c2'], metadata: { payment: {} },
+    })).rejects.toThrow('enrol: metadata is per-contact; a batch enrolment cannot share it')
+    expect(m.inserts).toHaveLength(0)
+  })
+})
+
+describe('PAYLINK.3b — non-object metadata is dropped with a warning, not silently ignored', () => {
+  it('a string metadata value is dropped and logWarn is called once', async () => {
+    const m = mockDb({})
+    createServerClient.mockReturnValue(m.db)
+    await enrolContacts({ sequenceId: 's1', contactIds: ['c1'], sourceType: 'invoice_past_due', metadata: 'nope' })
+    expect(m.inserts[0][0]).not.toHaveProperty('metadata')
+    expect(logWarn).toHaveBeenCalledTimes(1)
+    expect(logWarn).toHaveBeenCalledWith('enrol', 'metadata ignored: not a plain object', { sourceType: 'invoice_past_due' })
+  })
+
+  it('an array metadata value is dropped and logWarn is called once', async () => {
+    const m = mockDb({})
+    createServerClient.mockReturnValue(m.db)
+    await enrolContacts({ sequenceId: 's1', contactIds: ['c1'], sourceType: 'invoice_past_due', metadata: [1, 2] })
+    expect(m.inserts[0][0]).not.toHaveProperty('metadata')
+    expect(logWarn).toHaveBeenCalledTimes(1)
+    expect(logWarn).toHaveBeenCalledWith('enrol', 'metadata ignored: not a plain object', { sourceType: 'invoice_past_due' })
+  })
+})
+
+// ENROLFIX.1 (2026-09-13) — `sequence_enrollments` has NO `created_at` column
+// (mig 005: the row's timestamp is `enrolled_at`). The tier-2 history read
+// had selected `created_at` since the 2026-05-08 split; PostgREST 400s that,
+// and until ENROLDEDUP.1 (#1480, 20 Aug) the error was DISCARDED so every
+// enrolment sailed through with no cooldown. ENROLDEDUP.1 made the read
+// throw, and from 21 Aug every enrolment in the estate failed: 40 nudge
+// enrolments in the first 19 days of August, zero after. This pins the
+// column list against the real schema.
+describe('ENROLFIX.1 — the history read names only columns the table has', () => {
+  it('selects enrolled_at, never created_at', async () => {
+    const m = mockDb({})
+    createServerClient.mockReturnValue(m.db)
+    await enrolContacts({ sequenceId: 's1', contactIds: ['c1'] })
+    expect(m.historySelects).toHaveLength(1)
+    expect(m.historySelects[0]).toMatch(/\benrolled_at\b/)
+    expect(m.historySelects[0]).not.toMatch(/\bcreated_at\b/)
   })
 })

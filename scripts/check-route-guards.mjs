@@ -106,7 +106,7 @@ function reExportTarget(src) {
 
 // Webhooks authenticate the SENDER (HMAC / shared secret / provider
 // signature). Matches verifyMetaSignature, verifySharedSecret,
-// verifyTwilioSignature, verifyPostmarkRequest, verifyWebhookSignature,
+// verifyPostmarkRequest, verifyWebhookSignature,
 // verifyXeroSignature, verifyGlofoxSignature, verifyUnifi*Request, etc.
 const WEBHOOK_GUARD = /verify[A-Z][A-Za-z]*\(/
 
@@ -124,6 +124,8 @@ const EXEMPT = {
     'Capability-token URL (HMAC per-host, per-contact token, host-unsubscribe.js) + per-IP budget on invalid tokens — public by design, RFC 8058 one-click target for host emails (HOST-CONSENT.1).',
   'src/app/api/preferences/[token]/route.js':
     'Capability-token URL (per-contact preference token) + rate-limited — public by design.',
+  'src/app/api/calendar-feed/[file]/route.js':
+    'Capability-token URL (ICSFEED.1, mig 632): a calendar app polls it and can hold no session. The rcf_ token (256 random bits, only its sha256 stored) resolves to ONE profile and the route reads only that profile\'s own published shifts; refuses (404) an inactive or deleted profile; per-TOKEN rate limit (never per IP: Google fetches from shared egress). Public via the proxy\'s publicExactPaths only — not on brand or tenant hosts.',
   'src/app/api/preferences/hr-emails/route.js':
     'Capability-token URL (per-contact unsubscribe token, or the legacy contact+session PAIR whose session must belong to the contact) + tiered rate limit and refusal logging — public by design, same guard as the sibling consent endpoints (HRPREF-AUTH.1).',
   'src/app/api/webhooks/sequence/[token]/route.js':
@@ -212,6 +214,30 @@ const INBOX_ROUTE_PREFIXES = [
 //                              — the exact #1266 failure mode, live again.
 const INBOX_PERMISSION_GUARDS = [
   'requireInboxPermission(',
+  // INBOXLOC.1 (C37) —
+  //   requireWhatsAppInboxAt(  src/lib/auth.js. VERIFIED: 401 with no user,
+  //                            403 with no location, otherwise 403 unless
+  //                            hasPermissionForLocation OR
+  //                            hasMobilePermissionForLocation grants
+  //                            `whatsapp` AT the location passed. The
+  //                            /api/whatsapp/conversations/[id]* handlers the
+  //                            phone calls (all but /add-contact and /agent,
+  //                            which use the web-only pair below, as does
+  //                            /start) call it with the conversation's
+  //                            location after the row is read, and
+  //                            requireWhatsAppInboxAnywhere before it.
+  'requireWhatsAppInboxAt(',
+  // INBOXWEBONLY3.1 (C119) —
+  //   requireWebWhatsAppInboxAt(  src/lib/auth.js. VERIFIED: 401 with no
+  //                               user, 403 with no location, otherwise 403
+  //                               unless hasPermissionForLocation grants the
+  //                               WEB `whatsapp` key AT the location passed.
+  //                               The web-only thread actions
+  //                               (/conversations/[id]/add-contact, /agent,
+  //                               /conversations/start) call it after the row
+  //                               is read, and requireWebWhatsAppInboxAnywhere
+  //                               before it.
+  'requireWebWhatsAppInboxAt(',
   'hasPermission(',
   'hasPermissionForLocation(',
   'loadTicketForUser(',

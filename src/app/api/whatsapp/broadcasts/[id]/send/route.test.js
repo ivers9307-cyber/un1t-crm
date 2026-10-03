@@ -24,7 +24,13 @@ vi.mock('@/lib/auth', () => ({
   },
 }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
-vi.mock('@/lib/permissions', () => ({ hasPermission: vi.fn() }))
+// ROLESWEEP.1a — the route's pre-check is hasPermissionAtAnyLocation and its
+// decision hasPermissionForLocation; all three share one mock so the
+// "whatsapp permission is off" switch below still switches the gate.
+vi.mock('@/lib/permissions', () => {
+  const perm = vi.fn()
+  return { hasPermission: perm, hasPermissionAtAnyLocation: perm, hasPermissionForLocation: perm }
+})
 vi.mock('@/lib/whatsapp', () => ({ sendBroadcast: vi.fn() }))
 
 import { POST } from './route.js'
@@ -136,5 +142,27 @@ describe('POST /api/whatsapp/broadcasts/[id]/send — authz gate', () => {
     })
     await POST(request, props)
     expect(sendBroadcast).toHaveBeenCalledWith('b1', { force: false })
+  })
+})
+
+// WACONFIGFALLBACK.1 — sendBroadcast refuses (before any status flip) at a
+// location with no WhatsApp number of its own; the route says so with a 409.
+describe('POST /api/whatsapp/broadcasts/[id]/send — no WhatsApp number', () => {
+  it('409 with the resolver message', async () => {
+    const { WhatsAppNumberMissingError } = await import('@/lib/whatsapp-number-missing')
+    getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-1' }] })
+    createServerClient.mockReturnValue(mockDb({ broadcast: { location_id: 'loc-1' } }))
+    sendBroadcast.mockRejectedValueOnce(new WhatsAppNumberMissingError('loc-1'))
+    const res = await POST(req(), props)
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ success: false, error: 'No WhatsApp number is connected at this location.' })
+  })
+
+  it('any other refusal keeps its 400', async () => {
+    getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-1' }] })
+    createServerClient.mockReturnValue(mockDb({ broadcast: { location_id: 'loc-1' } }))
+    sendBroadcast.mockRejectedValueOnce(new Error('Template not approved by Meta'))
+    const res = await POST(req(), props)
+    expect(res.status).toBe(400)
   })
 })

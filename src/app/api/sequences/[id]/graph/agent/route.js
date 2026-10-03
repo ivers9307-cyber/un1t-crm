@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { canBuildSequencesAt, canBuildSequencesSomewhere, sequencePermissionRequired, sequenceNotFound } from '@/lib/sequence-access'
 import { runFlowAgent } from '@/lib/sequences/agent/run'
 import { validateBody } from '@/lib/validate'
 
@@ -21,13 +22,16 @@ export async function POST(request, props) {
   const params = await props.params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (!canBuildSequencesSomewhere(user)) return sequencePermissionRequired()
 
   const db = createServerClient()
   const { data: sequence } = await db.from('email_sequences')
     .select('location_id, name, trigger_type, trigger_config').eq('id', params.id).single()
-  if (!sequence) return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
+  if (!sequence) return sequenceNotFound()
   const guard = assertLocationAccessOr404(user, sequence.location_id)
   if (guard) return guard
+  // SEQROUTEGATE.1 — the builder's rule (email or whatsapp) at the sequence.
+  if (!canBuildSequencesAt(user, sequence.location_id)) return sequencePermissionRequired()
 
   const validation = await validateBody(request, AgentSchema, { allowEmpty: true })
   if (!validation.ok) return validation.response

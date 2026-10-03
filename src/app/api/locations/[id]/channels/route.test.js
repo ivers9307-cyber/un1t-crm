@@ -74,12 +74,12 @@ const STAFF_A = {
 }
 
 // The route's shapes against channel_connections, modelled honestly:
-//   POST .update({is_active:false}).eq×3        (bare await — the one-active sweep)
-//        .insert(row).select().single()          → echoes the inserted row
+//   POST .insert(row).select().single()          → echoes the inserted row
+//        (or `insertError`; CHANNELREAD.1 removed the one-active sweep)
 //   GET  .select('*').eq('location_id').order().order()
 // Echoing the inserted row back means pinning the success BODY also pins the
 // WRITE. Fail LOUD on any other table or any other chain.
-function makeDb({ rows = [] } = {}) {
+function makeDb({ rows = [], insertError = null } = {}) {
   const writes = []
   return {
     writes,
@@ -99,7 +99,13 @@ function makeDb({ rows = [] } = {}) {
         },
         insert(row) {
           writes.push({ op: 'insert', row })
-          return { select: () => ({ single: () => Promise.resolve({ data: { id: 'conn-1', ...row }, error: null }) }) }
+          return {
+            select: () => ({
+              single: () => Promise.resolve(insertError
+                ? { data: null, error: insertError }
+                : { data: { id: 'conn-1', ...row }, error: null }),
+            }),
+          }
         },
         select() {
           let out = rows
@@ -143,7 +149,7 @@ const successBody = (locationId, updatedBy) => ({
     is_active: true,
     token_expires_at: null,
     token_refreshed_at: null,
-    access_token: '••••••123456',
+    access_token: '••••••',
     has_access_token: true,
     app_secret: null,
     has_app_secret: false,
@@ -165,12 +171,16 @@ describe('POST /api/locations/[id]/channels — the legitimate flow is byte-iden
     expect(await res.json()).toEqual(successBody(LOC_A, 'u1'))
   })
 
-  it('sweeps the previous active row for the platform, then inserts against the target location', async () => {
+  // CHANNELREAD.1 — POST used to deactivate the live row and insert the new
+  // one, so a card that wrongly believed nothing was connected (a failed
+  // read) REPLACED a working connection. It now only inserts; the partial
+  // unique index refuses a second active row (next describe).
+  it('inserts against the target location and never deactivates a live row', async () => {
     await POST(post(LOC_A, VALID), props(LOC_A))
-    expect(db.writes.map(w => w.op)).toEqual(['update', 'insert'])
-    expect(db.writes[0].filters).toEqual({ location_id: LOC_A, platform: 'instagram', is_active: true })
-    expect(db.writes[1].row.location_id).toBe(LOC_A)
-    expect(db.writes[1].row.updated_by).toBe('u1')
+    expect(db.writes.map(w => w.op)).toEqual(['insert'])
+    expect(db.writes[0].row.location_id).toBe(LOC_A)
+    expect(db.writes[0].row.updated_by).toBe('u1')
+    expect(db.writes[0].row.is_active).toBe(true)
   })
 
   it('400s an unsupported platform without writing (unchanged)', async () => {
@@ -194,7 +204,7 @@ describe('POST /api/locations/[id]/channels — the gate is the role AT THE TARG
     const res = await POST(post(LOC_B, VALID), props(LOC_B))
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual(successBody(LOC_B, 'u3'))
-    expect(db.writes[1].row.location_id).toBe(LOC_B)
+    expect(db.writes[0].row.location_id).toBe(LOC_B)
   })
 
   it('(c) a master passes with no per-location rows at all', async () => {
@@ -243,27 +253,214 @@ describe('POST /api/locations/[id]/channels — the gate is the role AT THE TARG
   })
 })
 
-// The read side is untouched by LOCFIX-ROLEGATE.1 (membership only, secrets
-// masked) — pinned so the rework cannot quietly narrow or widen it.
-describe('GET /api/locations/[id]/channels — unchanged: membership only, secrets masked', () => {
-  it('a plain staff member of the target lists it, with the token masked', async () => {
-    getCurrentUser.mockResolvedValue(STAFF_A)
-    createServerClient.mockReturnValue(makeDb({ rows: [
-      { id: 'c1', location_id: LOC_A, platform: 'instagram', access_token: 'IGTOKENabcdef123456' },
-      { id: 'c2', location_id: LOC_B, platform: 'instagram', access_token: 'OTHERSTUDIO' },
-    ] }))
-    const res = await GET(get(LOC_A), props(LOC_A))
-    expect(res.status).toBe(200)
+describe('POST /api/locations/[id]/channels — refuses over a live connection (CHANNELREAD.1)', () => {
+  it('409s already_connected when an active row exists, having written nothing else', async () => {
+    db = makeDb({ insertError: { code: '23505', message: 'duplicate key value violates unique constraint "idx_channel_connections_one_active"' } })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(post(LOC_A, VALID), props(LOC_A))
+    expect(res.status).toBe(409)
     const body = await res.json()
-    expect(body.connections).toHaveLength(1)
-    expect(body.connections[0].id).toBe('c1')
-    expect(body.connections[0].access_token).toBe('••••••123456')
-    expect(body.connections[0].has_access_token).toBe(true)
+    expect(body.success).toBe(false)
+    expect(body.code).toBe('already_connected')
+    // The card reloads itself and switches to Update, so the copy never
+    // asks the operator to reload.
+    expect(body.error).toBe('This location already has an Instagram connection. Use Update to change its token.')
+    // The only write attempted is the refused insert: no deactivation.
+    expect(db.writes.map(w => w.op)).toEqual(['insert'])
   })
 
-  it('403s a non-member and 401s an anonymous caller', async () => {
+  it('a 23505 on the index named only in details still 409s', async () => {
+    db = makeDb({ insertError: { code: '23505', message: 'duplicate key', details: 'Key (location_id, platform)=(x, instagram) already exists. idx_channel_connections_one_active' } })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(post(LOC_A, VALID), props(LOC_A))
+    expect(res.status).toBe(409)
+  })
+
+  it('a 23505 from any OTHER unique constraint is a 500, never already_connected', async () => {
+    db = makeDb({ insertError: { code: '23505', message: 'duplicate key value violates unique constraint "channel_connections_pkey"' } })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(post(LOC_A, VALID), props(LOC_A))
+    expect(res.status).toBe(500)
+    expect((await res.json()).code).toBeUndefined()
+  })
+
+  it('a bare 23505 that names no index is a 500', async () => {
+    db = makeDb({ insertError: { code: '23505', message: 'duplicate key' } })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(post(LOC_A, VALID), props(LOC_A))
+    expect(res.status).toBe(500)
+  })
+
+  it('any other insert failure is still a 500', async () => {
+    db = makeDb({ insertError: { code: '57014', message: 'canceling statement due to statement timeout' } })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(post(LOC_A, VALID), props(LOC_A))
+    expect(res.status).toBe(500)
+  })
+
+  it('an explicitly inactive row can still be added beside a live one (no index conflict)', async () => {
+    const res = await POST(post(LOC_A, { ...VALID, is_active: false }), props(LOC_A))
+    expect(res.status).toBe(200)
+    expect(db.writes[0].row.is_active).toBe(false)
+  })
+})
+
+// SECFIX.3a (review S1) — the read side used to be MEMBERSHIP ONLY with a
+// mask that kept the last 6 characters of access_token / app_secret and left
+// `config` alone, where the registry keeps a Glofox connection's api_token. So
+// any plain staff member of a studio could read its Glofox API token in
+// clear. The GET now uses the write gate (the role AT THE TARGET, MANAGER_ROLES:
+// whoever may replace a token may see that it is set; the Integrations cards
+// that call this are owner/master screens), and every secret, at any depth,
+// is presence only.
+const SYNTH_ROWS = [
+  {
+    id: 'c1', location_id: LOC_A, platform: 'instagram', display_name: '@studio',
+    access_token: 'SYNTH-IG-TOKEN-abcdef123456', app_secret: 'SYNTH-IG-APPSECRET-654321', config: {},
+  },
+  {
+    id: 'c3', location_id: LOC_A, platform: 'glofox', external_account_id: 'branch-1',
+    access_token: 'SYNTH-GLOFOX-KEY-111111', app_secret: 'SYNTH-GLOFOX-WEBHOOK-222222',
+    config: { api_token: 'SYNTH-GLOFOX-TOKEN-333333', namespace: 'ns-1' },
+  },
+  { id: 'c2', location_id: LOC_B, platform: 'instagram', access_token: 'SYNTH-OTHERSTUDIO' },
+]
+const NO_SYNTH = /SYNTH|abcdef|123456|654321|111111|222222|333333/
+
+describe('GET /api/locations/[id]/channels — managers at the target only, every secret presence-only', () => {
+  it('a manager at the target lists it: tokens and config.api_token masked, no character of any value', async () => {
+    createServerClient.mockReturnValue(makeDb({ rows: SYNTH_ROWS }))
+    const res = await GET(get(LOC_A), props(LOC_A))
+    expect(res.status).toBe(200)
+    const text = await res.text()
+    expect(text).not.toMatch(NO_SYNTH)
+    const body = JSON.parse(text)
+    expect(body.connections.map(c => c.id)).toEqual(['c1', 'c3'])
+    const [ig, glofox] = body.connections
+    expect(ig.access_token).toBe('••••••')
+    expect(ig.has_access_token).toBe(true)
+    expect(ig.app_secret).toBe('••••••')
+    expect(ig.display_name).toBe('@studio')
+    expect(glofox.config).toEqual({ api_token: '••••••', namespace: 'ns-1' })
+    expect(glofox.has_access_token).toBe(true)
+  })
+
+  it('a plain STAFF member of the target is refused on the role copy, and nothing is read', async () => {
+    getCurrentUser.mockResolvedValue(STAFF_A)
+    const guarded = makeDb({ rows: SYNTH_ROWS })
+    guarded.from = () => { throw new Error('the DB must not be read for a refused caller') }
+    createServerClient.mockReturnValue(guarded)
+    const res = await GET(get(LOC_A), props(LOC_A))
+    expect(res.status).toBe(403)
+    const text = await res.text()
+    expect(text).not.toMatch(NO_SYNTH)
+    expect(JSON.parse(text)).toEqual({ success: false, error: 'Forbidden' })
+  })
+
+  it('a manager at A who is plain staff at B is refused at B', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A_STAFF_B)
+    createServerClient.mockReturnValue(makeDb({ rows: SYNTH_ROWS }))
     expect((await GET(get(LOC_B), props(LOC_B))).status).toBe(403)
+  })
+
+  it('the manager / head coach AT THE TARGET and a master get through', async () => {
+    for (const u of [STAFF_A_MANAGER_B, STAFF_A_HEAD_COACH_B, MASTER]) {
+      getCurrentUser.mockResolvedValue(u)
+      createServerClient.mockReturnValue(makeDb({ rows: SYNTH_ROWS }))
+      const res = await GET(get(LOC_B), props(LOC_B))
+      expect([u.id, res.status]).toEqual([u.id, 200])
+      expect(await res.text()).not.toMatch(NO_SYNTH)
+    }
+  })
+
+  it('403s a non-member on the MEMBERSHIP copy and 401s an anonymous caller', async () => {
+    const res = await GET(get(LOC_B), props(LOC_B))
+    expect(res.status).toBe(403)
+    expect((await res.json()).error).toBe('Forbidden — location not in your assignments')
     getCurrentUser.mockResolvedValue(null)
     expect((await GET(get(LOC_A), props(LOC_A))).status).toBe(401)
+  })
+})
+
+describe('POST /api/locations/[id]/channels — the echo is presence-only', () => {
+  it('a freshly pasted token comes back as the mask, never a character of it', async () => {
+    const res = await POST(post(LOC_A, { ...VALID, access_token: 'SYNTH-NEW-TOKEN-987654', app_secret: 'SYNTH-NEW-SECRET-456789' }), props(LOC_A))
+    expect(res.status).toBe(200)
+    const text = await res.text()
+    expect(text).not.toMatch(/SYNTH|987654|456789/)
+    expect(JSON.parse(text).connection).toMatchObject({ access_token: '••••••', has_access_token: true, app_secret: '••••••', has_app_secret: true })
+  })
+})
+
+// MIANITS (Richard's call, 30 Sep) — Mia's on/off switch for a channel
+// (agent_enabled) is OWNER-ONLY, like Mia's settings: canEditMiaSettings at
+// the target (owner there, or a master). Only that field is gated; managers
+// and head coaches still connect channels as before. agent_enabled defaults
+// to false (mig 407), so a create that leaves Mia off changes nothing.
+describe('POST /api/locations/[id]/channels — Mia on at create is owner-only (MIANITS)', () => {
+  const OWNER_A = {
+    id: 'u7', role: 'owner', profileRole: 'owner', isMaster: false,
+    locations: [{ id: LOC_A }], rolesByLocation: { [LOC_A]: 'owner' },
+    activeLocation: { id: LOC_A },
+  }
+
+  it('a manager creating a connection with agent_enabled true is refused, writing nothing', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    const res = await POST(post(LOC_A, { ...VALID, agent_enabled: true }), props(LOC_A))
+    expect(res.status).toBe(403)
+    expect((await res.json()).error).toMatch(/Only an owner/)
+    expect(db.writes).toEqual([])
+  })
+
+  it('a head coach at the target is refused too', async () => {
+    getCurrentUser.mockResolvedValue(STAFF_A_HEAD_COACH_B)
+    const res = await POST(post(LOC_B, { ...VALID, agent_enabled: true }), props(LOC_B))
+    expect(res.status).toBe(403)
+    expect(db.writes).toEqual([])
+  })
+
+  it('an owner at the target may switch Mia on at create', async () => {
+    getCurrentUser.mockResolvedValue(OWNER_A)
+    const res = await POST(post(LOC_A, { ...VALID, agent_enabled: true }), props(LOC_A))
+    expect(res.status).toBe(200)
+    expect(db.writes[0].row.agent_enabled).toBe(true)
+  })
+
+  it('a master may too', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const res = await POST(post(LOC_B, { ...VALID, agent_enabled: true }), props(LOC_B))
+    expect(res.status).toBe(200)
+  })
+
+  it('a manager connecting with Mia left off (false or omitted) is still allowed', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    expect((await POST(post(LOC_A, { ...VALID, agent_enabled: false }), props(LOC_A))).status).toBe(200)
+    expect((await POST(post(LOC_A, VALID), props(LOC_A))).status).toBe(200)
+  })
+})
+
+// MIANITS — the card greys out Mia's per-channel switch for anyone the PATCH
+// would refuse, so the GET says whether this caller may flip it: the same
+// canEditMiaSettings predicate the writes gate on.
+describe('GET /api/locations/[id]/channels — can_edit_agent (MIANITS)', () => {
+  const OWNER_A = {
+    id: 'u7', role: 'owner', profileRole: 'owner', isMaster: false,
+    locations: [{ id: LOC_A }], rolesByLocation: { [LOC_A]: 'owner' },
+    activeLocation: { id: LOC_A },
+  }
+  const flagFor = async (user, loc) => {
+    getCurrentUser.mockResolvedValue(user)
+    createServerClient.mockReturnValue(makeDb({ rows: [] }))
+    return (await (await GET(get(loc), props(loc))).json()).can_edit_agent
+  }
+
+  it('is true for an owner at the target and for a master', async () => {
+    expect(await flagFor(OWNER_A, LOC_A)).toBe(true)
+    expect(await flagFor(MASTER, LOC_B)).toBe(true)
+  })
+
+  it('is false for a manager or a head coach at the target', async () => {
+    expect(await flagFor(MANAGER_A, LOC_A)).toBe(false)
+    expect(await flagFor(STAFF_A_HEAD_COACH_B, LOC_B)).toBe(false)
   })
 })

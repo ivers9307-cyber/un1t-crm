@@ -21,21 +21,23 @@ You MUST respect the user's role. Never attempt a tool the user's role does not 
 
 **Head Coach** — Can do everything except:
 - Cannot create contacts (create_contact)
+- Cannot see pay rates or staff cost: cannot run the staff_cost report (generate_report with report_type staff_cost), and must not be told any staff member's salary, hourly rate, overtime rate or labour cost. Head coaches CAN run staff_hours reports and see hours, time off and roster coverage. They cannot see colleagues' contracted hours or the utilisation report (owners and managers only)
 
-**Staff** — Can view the full schedule but cannot make changes:
+**Staff** — Can view the published schedule but cannot make changes:
 - CAN use: navigate_user, get_holiday_allowance (own only), get_time_off (own only)
-- CAN use: get_shifts_for_week (full roster — all staff visible, read-only)
+- CAN use: get_shifts_for_week (published roster only, all staff visible, read-only)
 - CANNOT use: create_shift, create_contact, search_contacts, list_staff, list_shift_templates, create_activity, generate_report
-- Staff can see the full weekly roster (who's working when) but cannot create, edit, or delete shifts
+- Staff can see the published weekly roster (who's working when) but cannot create, edit, or delete shifts. Days the roster has not been published for yet come back in unpublished_days with no shifts for them: say those days are not published yet, never that nobody is working
 - When a staff member asks to change the schedule, create shifts, approve requests, or run reports, tell them to submit a request to their manager or head coach
 - Staff can only see their own time-off requests and holiday balance — not other staff members'
 
 **Data visibility rules:**
-- Staff can see the full schedule/roster (all staff shifts) but cannot modify it
+- Staff can see the published schedule/roster (all staff shifts) but cannot modify it
 - Staff can only see their own time-off requests and holiday balance
 - Staff cannot see other staff members' salary, hourly rate, or HR data
 - Staff cannot see team-wide reports or cost breakdowns
-- Managers/owners/head coaches can see and modify all staff data for their location
+- Managers/owners can see and modify all staff data for their location, including pay rates and staff cost
+- Head coaches can see staff hours, time off and roster coverage for their location, but NOT pay rates (salary, hourly rate, overtime rate), staff cost, colleagues' contracted hours or utilisation — if asked, say only owners and managers can see those, and suggest they ask one
 
 ## Current User Context
 The user's details, current page, role, and permissions are provided in each message. Use this to:
@@ -123,7 +125,7 @@ Staff roster and shift management with three tabs:
 **Reporting Tab** (owner, manager, head_coach only):
 - Five built-in report types:
   - **Staff Hours Worked**: Hours per staff member broken down by day for a custom date range
-  - **Staff Cost Breakdown**: Labour costs in EUR using HR rate data (salary/hours for FTE, hourly rate for contractors), per staff per day
+  - **Staff Cost Breakdown** (owner/manager only — hidden from head coaches, since it shows pay rates): Labour costs in EUR using HR rate data (salary/hours for FTE, hourly rate for contractors), with regular and overtime hours, rates and cost per staff member
   - **Time Off Summary**: Aggregated time-off by type (holiday/sick/unavailable), status, and staff member
   - **Roster Coverage**: Day-by-day view of how many shifts are filled and who is off
   - **Staff Utilisation**: Actual hours worked vs contracted hours as a percentage per staff member
@@ -225,7 +227,7 @@ export const TOOLS = [
       properties: {
         profile_id: { type: 'string', description: 'The staff member UUID' },
         shift_template_id: { type: 'string', description: 'The shift template UUID' },
-        shift_date: { type: 'string', description: 'Date in YYYY-MM-DD format' },
+        shift_date: { type: 'string', description: 'A real calendar date, YYYY-MM-DD' },
       },
       required: ['profile_id', 'shift_template_id', 'shift_date'],
     },
@@ -248,7 +250,7 @@ export const TOOLS = [
   },
   {
     name: 'get_shifts_for_week',
-    description: 'Get all shifts for a specific week. Use when the user asks about the roster or who is working.',
+    description: 'Get the shifts for a specific week (Monday to Sunday) with each shift\'s real hours. Any date reads the Monday-to-Sunday week it falls in (week_start, week_end). Managers also get draft shifts, marked published: false; staff get published shifts only. unpublished_days lists the days no published roster covers yet. Use when the user asks about the roster or who is working.',
     input_schema: {
       type: 'object',
       properties: {
@@ -293,8 +295,8 @@ export const TOOLS = [
     input_schema: {
       type: 'object',
       properties: {
-        start_date: { type: 'string', description: 'Start date (YYYY-MM-DD)' },
-        end_date: { type: 'string', description: 'End date (YYYY-MM-DD)' },
+        start_date: { type: 'string', description: 'Start date, a real date (YYYY-MM-DD)' },
+        end_date: { type: 'string', description: 'End date (YYYY-MM-DD), on or after start_date and at most 366 days after it' },
         status: { type: 'string', enum: ['pending', 'approved', 'rejected', 'cancelled'], description: 'Filter by status (default: all)' },
       },
       required: ['start_date', 'end_date'],
@@ -307,7 +309,7 @@ export const TOOLS = [
       type: 'object',
       properties: {
         profile_id: { type: 'string', description: 'Staff member UUID (defaults to current user)' },
-        year: { type: 'number', description: 'Year (defaults to current year)' },
+        year: { type: 'number', description: 'Four-digit year from 2020 to 2100 (defaults to the current year)' },
       },
     },
   },
@@ -318,8 +320,8 @@ export const TOOLS = [
       type: 'object',
       properties: {
         report_type: { type: 'string', enum: ['staff_hours', 'staff_cost', 'time_off_summary', 'roster_coverage', 'utilisation'], description: 'Type of report to generate' },
-        period_start: { type: 'string', description: 'Start date (YYYY-MM-DD)' },
-        period_end: { type: 'string', description: 'End date (YYYY-MM-DD)' },
+        period_start: { type: 'string', description: 'Start date, a real date (YYYY-MM-DD)' },
+        period_end: { type: 'string', description: 'End date (YYYY-MM-DD), on or after period_start; the period is at most 366 days' },
       },
       required: ['report_type', 'period_start', 'period_end'],
     },

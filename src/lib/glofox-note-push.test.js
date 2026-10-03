@@ -47,6 +47,15 @@ describe('pushNoteToGlofox', () => {
     expect(r.pushed).toBe(false)
     expect(createGlofoxInteraction).not.toHaveBeenCalled()
   })
+  it('REGISTRYREAD.1b: an unreadable settings row skips with reason glofox_settings_unreadable, not "no glofox creds"', async () => {
+    glofoxCredentialsForLocation.mockResolvedValue({ branchId: null, apiKey: null, apiToken: null, readError: 'glofox_settings_unreadable' })
+    const ledger = vi.fn()
+    const db = makeDb({ id: 'c1', location_id: 'l1', glofox_member_id: 'gm1' }, ledger)
+    const r = await pushNoteToGlofox(db, { contactId: 'c1', sourceTable: 'notes', sourceId: 'n1', type: 'NOTE', content: 'hi' })
+    expect(r).toEqual({ pushed: false, reason: 'glofox_settings_unreadable' })
+    expect(createGlofoxInteraction).not.toHaveBeenCalled()
+    expect(ledger).not.toHaveBeenCalled()
+  })
   it('skips when the location has no branch id (non-Glofox location — creds object with null fields)', async () => {
     // glofoxCredentialsForLocation never returns falsy; it returns an object
     // with null fields for a non-Glofox location. Must still skip.

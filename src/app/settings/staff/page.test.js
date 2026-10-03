@@ -32,6 +32,7 @@ vi.mock('@/lib/auth', async (importOriginal) => ({
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 
 import StaffIndexPage from './page.js'
+import StaffSearchableList from '@/components/settings/StaffSearchableList'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 
@@ -49,11 +50,12 @@ const COMP_COLUMNS = [
 function makeDb({ peersError = null } = {}) {
   const calls = []
   const from = (table) => {
-    const q = { table, cols: null, inCol: null, inVals: null }
+    const q = { table, cols: null, inCol: null, inVals: null, is: [] }
     calls.push(q)
     const chain = {
       select: (cols) => { q.cols = cols; return chain },
       in: (col, vals) => { q.inCol = col; q.inVals = vals; return chain },
+      is: (col, val) => { q.is.push([col, val]); return chain }, // STAFFDELETE.1 — excludeTombstones()
       order: () => chain,
       then: (res) => {
         let data = []
@@ -76,12 +78,28 @@ function makeDb({ peersError = null } = {}) {
   return { calls, from }
 }
 
-const user = ({ isMaster = false, locations = [{ id: LOC_MINE }] }) => ({
+const ORG = 'org-a'
+const user = ({ isMaster = false, locations = [{ id: LOC_MINE }], orgAdmin = false }) => ({
   id: ME, role: isMaster ? 'master' : 'manager', isMaster,
   profileRole: isMaster ? 'master' : 'manager',
   locations, rolesByLocation: Object.fromEntries(locations.map(l => [l.id, 'manager'])),
-  activeLocation: { id: LOC_MINE },
+  activeLocation: { id: LOC_MINE, organization_id: ORG },
+  activeOrganization: { id: ORG },
+  orgAdminOrgIds: orgAdmin ? [ORG] : [],
 })
+
+// The page returns a server-rendered tree; pull the list's props out of it.
+function listProps(tree) {
+  const stack = [tree]
+  while (stack.length) {
+    const node = stack.pop()
+    if (!node || typeof node !== 'object') continue
+    if (Array.isArray(node)) { stack.push(...node); continue }
+    if (node.type === StaffSearchableList) return node.props
+    if (node.props?.children) stack.push(node.props.children)
+  }
+  return null
+}
 
 const rosterQuery = (db) => db.calls.find(c => c.table === 'profiles' && c.cols && c.cols.includes('full_name'))
 
@@ -123,8 +141,23 @@ describe('/settings/staff — roster scope and columns', () => {
     expect(rosterQuery(db).inVals).toBeNull()
   })
 
+  // STAFFDELETE.1 — a permanently deleted staff member keeps a profiles row.
+  it('a master\'s unrestricted roster excludes tombstones', async () => {
+    getCurrentUser.mockResolvedValue(user({ isMaster: true }))
+    await StaffIndexPage()
+    expect(rosterQuery(db).is).toEqual([['deleted_at', null]])
+  })
+
+  it('the estate-wide baseline excludes tombstones too; the id-scoped roster needs no filter', async () => {
+    getCurrentUser.mockResolvedValue(user({ orgAdmin: true }))
+    await StaffIndexPage()
+    expect(db.calls.find(c => c.table === 'profiles' && c.cols === 'id, active').is).toEqual([['deleted_at', null]])
+    // Its ids come from profile_locations, which the delete empties (mig 622).
+    expect(rosterQuery(db).is).toEqual([])
+  })
+
   it('still derives the app-version baseline estate-wide, from id/active only', async () => {
-    getCurrentUser.mockResolvedValue(user({}))
+    getCurrentUser.mockResolvedValue(user({ orgAdmin: true }))
     await StaffIndexPage()
     const baseline = db.calls.find(c => c.table === 'profiles' && c.cols === 'id, active')
     expect(baseline).toBeTruthy()
@@ -147,5 +180,41 @@ describe('/settings/staff — roster scope and columns', () => {
     getCurrentUser.mockResolvedValue(user({ locations: [] }))
     await expect(StaffIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/$/)
     expect(db.calls.filter(c => c.table === 'profiles')).toEqual([])
+  })
+})
+
+// C141 ORGROLE.2 — the Device column is the staff device fleet, which since
+// C18 (WEB-4) is organisation-admin only (GET /api/staff-devices, the
+// StaffForm devices card). The list showed it to every `settings` holder.
+describe('/settings/staff — Device column is organisation-admin only (C141)', () => {
+  let db
+  beforeEach(() => {
+    vi.clearAllMocks()
+    db = makeDb()
+    createServerClient.mockReturnValue(db)
+  })
+
+  it('a settings holder without an org_admin grant: no device read, no Device column', async () => {
+    getCurrentUser.mockResolvedValue(user({}))
+    const props = listProps(await StaffIndexPage())
+    expect(db.calls.find(c => c.table === 'device_tokens')).toBeUndefined()
+    expect(props.showDevices).toBe(false)
+    expect(props.verdictsById).toEqual({})
+    expect(props.permissionsById).toEqual({})
+    expect(props.targetVersion).toBeNull()
+  })
+
+  it('an org admin of the active organisation keeps the Device column', async () => {
+    getCurrentUser.mockResolvedValue(user({ orgAdmin: true }))
+    const props = listProps(await StaffIndexPage())
+    expect(db.calls.find(c => c.table === 'device_tokens')).toBeTruthy()
+    expect(props.showDevices).toBe(true)
+    expect(Object.keys(props.verdictsById).sort()).toEqual([ME, PEER].sort())
+  })
+
+  it('a master keeps the Device column', async () => {
+    getCurrentUser.mockResolvedValue(user({ isMaster: true }))
+    const props = listProps(await StaffIndexPage())
+    expect(props.showDevices).toBe(true)
   })
 })

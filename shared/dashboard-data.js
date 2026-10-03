@@ -12,7 +12,7 @@
 // safe to import from Metro (React Native) and from server / client
 // React components.
 
-import { upcomingWeeksBounds, summariseShifts } from './roster-month.js'
+import { upcomingWeeksBounds, summariseShifts, effectiveShiftStart, effectiveShiftEnd } from './roster-month.js'
 import { pctDelta, sumCampaignRows, shapeFunnel, FUNNEL_SLUGS } from './dashboard-metrics.js'
 
 // ROSTER-FIX.1 — "this assignment still puts a coach on the block".
@@ -24,7 +24,13 @@ import { pctDelta, sumCampaignRows, shapeFunnel, FUNNEL_SLUGS } from './dashboar
 const isLiveRow = (a) => a?.status !== 'cancelled'
 
 // ============================================================
-// Date helpers (shared across all three fetchers)
+// Date helpers — the RUNNING device's local calendar.
+// A4 REVENUEMTD.1: on a staff phone in Ireland, local IS Dublin, which is what
+// the phone-run fetchers want (fetchPersonalDashboardData's fallback). On the
+// server local is UTC (Vercel), so a server-run fetcher must never use these:
+// it loads the Dublin calendar with loadDublinTime() instead (pinned in
+// dashboard-data.test.js), or takes its window from the caller
+// (fetchStudioContactCounts, whose route computes the Dublin Monday).
 // ============================================================
 
 export function isoDate(d) {
@@ -43,15 +49,20 @@ export function startOfWeek(d = new Date()) {
   return x
 }
 
-export function endOfWeek(d = new Date()) {
-  const x = startOfWeek(d)
-  x.setDate(x.getDate() + 6)
-  x.setHours(23, 59, 59, 999)
-  return x
-}
-
 export function startOfMonth(d = new Date()) {
   return new Date(d.getFullYear(), d.getMonth(), 1)
+}
+
+// A4 REVENUEMTD.1 — the Europe/Dublin calendar, for the fetchers that run on
+// the SERVER: fetchTodayOps, fetchRevenueMTD, fetchFunnelCounts and
+// fetchAdsSummary (the Business dashboard, on web and, via
+// /api/dashboard/business, on the phone). Loaded on first use, never at module
+// scope: the staff app imports this module, and a Hermes build without full
+// ICU throws on the timeZone formatters dublin-time.js builds at import
+// (mobile/lib/dates.js, ROSTER-FIX.7f). The phone never calls those four, so it
+// never loads it.
+function loadDublinTime() {
+  return import('./dublin-time.js')
 }
 
 // ============================================================
@@ -59,9 +70,10 @@ export function startOfMonth(d = new Date()) {
 // ============================================================
 
 export function shiftDurationHours(shift) {
-  // Prefer override times; fall back to template defaults.
-  const start = shift.start_time_override || shift.shift_templates?.start_time
-  const end = shift.end_time_override || shift.shift_templates?.end_time
+  // Override, then the block's own time, then the template default
+  // (MOBILESCHED.2 — the block's time was skipped).
+  const start = effectiveShiftStart(shift)
+  const end = effectiveShiftEnd(shift)
   if (!start || !end) return 0
   const [sh, sm] = start.split(':').map(Number)
   const [eh, em] = end.split(':').map(Number)
@@ -89,8 +101,8 @@ export function hourlyRateFor(profile) {
 // (publishing is a roster concept now: a shift is published iff its block
 // belongs to a published roster). Returns { data, error } so it drops into
 // the existing Promise.all destructuring unchanged. `id` is the assignment
-// id — used only as a display key here (the swap flow reads shift ids from
-// the schedule screen, not the dashboard).
+// id (the Today swap flow posts it as requester_shift_id); `block_id` is its
+// block (CANDIDATES.1's colleague ranking).
 async function fetchDashboardShifts(supabase, { profileId, locationId, startDate, endDate, withProfiles = false, publishedOnly = false }) {
   const profileSelect = withProfiles
     ? ', profiles:profile_id ( annual_salary, hourly_rate, contracted_hours_per_week, employment_type )'
@@ -99,7 +111,7 @@ async function fetchDashboardShifts(supabase, { profileId, locationId, startDate
     .from('shift_assignments')
     .select(`
       id, profile_id, start_time_override, end_time_override, status,
-      shift_blocks!inner ( block_date, location_id, roster_id, rosters:roster_id ( status ), shift_templates ( name, start_time, end_time ), locations:location_id ( id, name ) )${profileSelect}
+      shift_blocks!inner ( id, block_date, start_time, end_time, briefing, location_id, roster_id, rosters:roster_id ( status ), shift_templates ( name, start_time, end_time ), locations:location_id ( id, name ) )${profileSelect}
     `)
     .gte('shift_blocks.block_date', startDate)
     .lte('shift_blocks.block_date', endDate)
@@ -111,9 +123,18 @@ async function fetchDashboardShifts(supabase, { profileId, locationId, startDate
     const block = r.shift_blocks || {}
     return {
       id: r.id,
+      // CANDIDATES.1 — the swap picker ranks colleagues for this BLOCK.
+      block_id: block.id ?? null,
       shift_date: block.block_date,
       start_time_override: r.start_time_override,
       end_time_override: r.end_time_override,
+      // MOBILESCHED.2 — the BLOCK's own times ride along under the same keys
+      // src/lib/roster-read.js toApiShiftRow uses, so a block edited away from
+      // its template displays, sorts and totals at its real hours.
+      block_start_time: block.start_time ?? null,
+      block_end_time: block.end_time ?? null,
+      // BLOCKEDIT.1 (mig 629) — the shift's coach-visible briefing.
+      briefing: block.briefing ?? null,
       status: r.status,
       published: block.rosters?.status === 'published',
       location_id: block.location_id,
@@ -130,22 +151,31 @@ async function fetchDashboardShifts(supabase, { profileId, locationId, startDate
 // Personal — your shifts, your swaps, your inbox.
 // ============================================================
 
-export async function fetchPersonalDashboardData(supabase, profileId, locationId) {
+export async function fetchPersonalDashboardData(supabase, profileId, locationId, opts) {
   if (!profileId) return { success: false, error: 'No profile' }
 
-  // 14-day window — this Monday → next Sunday — fetched as a single
-  // query and split client-side. Cheaper than two queries.
-  const today = new Date()
-  const todayIso = isoDate(today)
-  const thisWeekStart = startOfWeek(today)
-  const thisWeekEnd = endOfWeek(today)
-  const nextWeekStart = new Date(thisWeekEnd); nextWeekStart.setDate(nextWeekStart.getDate() + 1)
-  const nextWeekEnd = new Date(nextWeekStart); nextWeekEnd.setDate(nextWeekEnd.getDate() + 6); nextWeekEnd.setHours(23, 59, 59, 999)
+  // A4 REVENUEMTD.1 — whose "today"? This runs in two places. The web Today
+  // page runs it on the SERVER (UTC on Vercel) and passes its Dublin today
+  // (dublinTodayStr); without that, from 00:00 to 01:00 Dublin on a summer
+  // Monday "This week" was last week. The phone passes nothing and keeps its
+  // device day: Dublin for staff in Ireland, and no Intl, which a Hermes build
+  // without full ICU cannot construct (mobile/lib/dates.js, ROSTER-FIX.7f).
+  // A real calendar date only: '2027-13-45' or '2027-02-30' would otherwise
+  // reach upcomingWeeksBounds and come back as NaN. Date.parse + toISOString
+  // is plain UTC maths, no Intl, so it is Hermes-safe.
+  const callerTodayIso = opts?.todayIso
+  const isRealDay = typeof callerTodayIso === 'string'
+    && /^\d{4}-\d{2}-\d{2}$/.test(callerTodayIso)
+    && !Number.isNaN(Date.parse(`${callerTodayIso}T00:00:00Z`))
+    && new Date(`${callerTodayIso}T00:00:00Z`).toISOString().slice(0, 10) === callerTodayIso
+  const todayIso = isRealDay ? callerTodayIso : isoDate(new Date())
 
-  const thisWeekStartIso = isoDate(thisWeekStart)
-  const thisWeekEndIso = isoDate(thisWeekEnd)
-  const nextWeekStartIso = isoDate(nextWeekStart)
-  const nextWeekEndIso = isoDate(nextWeekEnd)
+  // 14-day window — this Monday → next Sunday — fetched as a single
+  // query and split client-side. Cheaper than two queries. Pure date-string
+  // maths from here (upcomingWeeksBounds), so no clock or zone is read again.
+  const { monthStartIso: thisWeekStartIso, monthEndIso: thisWeekEndIso } = upcomingWeeksBounds(todayIso, 1)
+  const { monthEndIso: nextWeekEndIso } = upcomingWeeksBounds(todayIso, 2)
+  const { monthStartIso: nextWeekStartIso } = upcomingWeeksBounds(nextWeekEndIso, 1)
 
   // Rolling 7-week roster window (this week + the next 6), anchored on the same
   // "today" as the week dates. Kept under the monthStartIso/monthEndIso/monthShifts
@@ -153,7 +183,7 @@ export async function fetchPersonalDashboardData(supabase, profileId, locationId
   // "Upcoming" toggle shows this window instead of a calendar month.
   const { monthStartIso, monthEndIso } = upcomingWeeksBounds(todayIso, 7)
 
-  const [shifts, monthShiftsResult, swapsTargetingMe, myPendingTimeOff, myConvos, myPostedSwapsResult] =
+  const [shifts, monthShiftsResult, myPendingTimeOff, myConvos, myPostedSwapsResult] =
     await Promise.all([
       // Cross-location query — filtered by profile_id only. Multi-
       // location staff see every shift they're assigned to, anywhere.
@@ -170,18 +200,6 @@ export async function fetchPersonalDashboardData(supabase, profileId, locationId
       // D1 (ROSTER-FIX.1) — coaches see published shifts only. Personal =
       // published for everyone; a manager's own drafts live on the calendar.
       fetchDashboardShifts(supabase, { profileId, startDate: monthStartIso, endDate: monthEndIso, publishedOnly: true }),
-
-      // Swaps targeted at this coach that still need their accept/decline.
-      // CT-P3: the old embed referenced the dropped public.shifts table AND
-      // profiles!requester_id (which 500s on mobile's authenticated client —
-      // no profiles grant). Read shift info via shift_assignments only; the
-      // requester NAME for the actionable list is fetched client-side from
-      // GET /api/schedule/swaps?for_me=1 (service-role).
-      supabase
-        .from('shift_swap_requests')
-        .select('id, requester_id, requester_shift_id, target_id, status, reason, created_at, requester_shift:shift_assignments!requester_shift_id(shift_blocks!block_id(block_date, shift_templates(name)))')
-        .eq('target_id', profileId)
-        .eq('status', 'pending'),
 
       supabase
         .from('time_off_requests')
@@ -206,7 +224,7 @@ export async function fetchPersonalDashboardData(supabase, profileId, locationId
       // → this list was silently always empty).
       supabase
         .from('shift_swap_requests')
-        .select('id, status, reason, created_at, target_id, requester_shift_id, requester_shift:shift_assignments!requester_shift_id(shift_blocks!block_id(block_date, shift_templates(name)))')
+        .select('id, status, reason, created_at, target_id, requester_shift_id, requester_shift:shift_assignments!requester_shift_id(shift_blocks!block_id(block_date, start_time, end_time, shift_templates(name)))')
         .eq('requester_id', profileId)
         .in('status', ['pending', 'awaiting_approval']),
     ])
@@ -215,8 +233,8 @@ export async function fetchPersonalDashboardData(supabase, profileId, locationId
 
   const monthShifts = (monthShiftsResult.data || []).slice().sort((a, b) => {
     if (a.shift_date !== b.shift_date) return a.shift_date.localeCompare(b.shift_date)
-    const aStart = a.start_time_override || a.shift_templates?.start_time || ''
-    const bStart = b.start_time_override || b.shift_templates?.start_time || ''
+    const aStart = effectiveShiftStart(a) || ''
+    const bStart = effectiveShiftStart(b) || ''
     return aStart.localeCompare(bStart)
   })
   const monthSummary = summariseShifts(monthShifts)
@@ -224,8 +242,8 @@ export async function fetchPersonalDashboardData(supabase, profileId, locationId
   // Sort by date then start time so "first shift of the day" is index [0].
   const sortedShifts = (shifts.data || []).slice().sort((a, b) => {
     if (a.shift_date !== b.shift_date) return a.shift_date.localeCompare(b.shift_date)
-    const aStart = a.start_time_override || a.shift_templates?.start_time || ''
-    const bStart = b.start_time_override || b.shift_templates?.start_time || ''
+    const aStart = effectiveShiftStart(a) || ''
+    const bStart = effectiveShiftStart(b) || ''
     return aStart.localeCompare(bStart)
   })
 
@@ -261,59 +279,11 @@ export async function fetchPersonalDashboardData(supabase, profileId, locationId
       shiftsThisMonth: monthSummary.count,
       hoursThisMonth: monthSummary.hours,
       // Other
-      pendingSwapsForMe: swapsTargetingMe.data || [],
       myPostedSwaps: myPostedSwapsResult.data || [],
       myPendingTimeOff: myPendingTimeOff.data || [],
       unreadInbox,
       assignedConversations: myConvos.data || [],
     },
-  }
-}
-
-// ============================================================
-// Unstaffed blocks — count of empty future shift_blocks across
-// the manager/owner's assigned locations this week. Surfaced as
-// an alert chip on the Today tab + the manager mobile home.
-// Only meaningful for managers, head_coaches, owners.
-//
-// Roster v2 phase 2. Empty blocks are demand windows (template
-// × date) with zero coach assignments — customers will be in the
-// studio either way, so leaving these unsurfaced is a hazard.
-// ============================================================
-
-export async function fetchUnstaffedBlocksThisWeek(supabase, locationIds) {
-  if (!locationIds || locationIds.length === 0) {
-    return { success: true, data: { count: 0, byLocation: {} } }
-  }
-
-  const todayIso = isoDate(new Date())
-  const endIso = isoDate(endOfWeek())
-
-  // Pull blocks for the visible window, then filter to those with
-  // zero assignments. Cheaper than aggregating in SQL given the
-  // small row count (a typical week has ~50 blocks at one location).
-  // ROSTER-FIX.1 — the embed pulls the assignment ROWS, not `(count)`. A
-  // PostgREST aggregate embed cannot be status-filtered, so a block whose only
-  // assignment was cancelled counted as staffed and the alert stayed silent on
-  // exactly the blocks that need a coach.
-  const { data, error } = await supabase
-    .from('shift_blocks')
-    .select('id, location_id, block_date, shift_assignments(profile_id, status)')
-    .in('location_id', locationIds)
-    .gte('block_date', todayIso)
-    .lte('block_date', endIso)
-
-  if (error) return { success: false, error: error.message }
-
-  const empty = (data || []).filter(b => (b.shift_assignments || []).filter(isLiveRow).length === 0)
-  const byLocation = {}
-  for (const b of empty) {
-    byLocation[b.location_id] = (byLocation[b.location_id] || 0) + 1
-  }
-
-  return {
-    success: true,
-    data: { count: empty.length, byLocation },
   }
 }
 
@@ -431,52 +401,70 @@ export async function fetchIncompletePayProfiles(supabase, locationIds) {
 export async function fetchStudioDashboardData(supabase, locationId) {
   if (!locationId) return { success: false, error: 'No location' }
 
-  const weekStartIso = startOfWeek().toISOString()
+  // STUDIODASH.1 — the pending time-off + swap lists are NOT read here.
+  // They need the requester's name, and this runs on mobile's authenticated
+  // client, which has no grant on public.profiles (mig 153b) — the embed
+  // 500'd the whole select and `|| []` rendered it as "nothing pending".
+  // mobile/lib/dashboard-api.js reads them from the service-role
+  // /api/schedule/time-off + /api/schedule/swaps routes instead.
+  //
+  // CONTACTREADSCOPE.1a — nor are the contact numbers (new leads this week,
+  // the funnel, the total). From mig 690 this session reads a studio's
+  // contacts only while holding Contacts there, and this screen is gated by
+  // dashboard_studio, so they would read as zeros. The phone gets them from
+  // /api/dashboard/studio-contacts (fetchStudioContactCounts below, service
+  // role).
+  const unreadConvos = await supabase
+    .from('whatsapp_conversations')
+    .select('unread_count')
+    .eq('location_id', locationId)
+    .gt('unread_count', 0)
 
-  const [
-    pendingTimeOff, pendingSwaps,
-    newLeadsThisWeek, unreadConvos,
-  ] = await Promise.all([
-    supabase
-      .from('time_off_requests')
-      .select('id, profile_id, type, start_date, end_date, total_days, created_at, profiles!profile_id(full_name)')
-      .eq('location_id', locationId)
-      .eq('status', 'pending')
-      .order('start_date', { ascending: true }),
+  // REVIEWNITS.1 (D5): a failed read is unknown (null: the phone shows a
+  // dash), never 0. The tab still loads; only this one card says so.
+  const totalUnread = unreadConvos.error
+    ? null
+    : (unreadConvos.data || []).reduce((s, c) => s + (c.unread_count || 0), 0)
 
-    supabase
-      .from('shift_swap_requests')
-      .select('id, requester_id, target_id, created_at, requester:profiles!requester_id(full_name)')
-      .eq('location_id', locationId)
-      .eq('status', 'pending'),
+  return {
+    success: true,
+    data: {
+      totalUnreadWhatsapp: totalUnread,
+    },
+  }
+}
 
-    // joined_at, NOT lead_created_at: the latter defaults to NOW() at
-    // insert (mig 001), so every bulk-imported contact carries its
-    // import day and any import spikes this count into the thousands.
-    // joined_at is the Glofox-side signup date — the same signal
-    // fetchFunnelCounts uses for "entered" below.
-    supabase
-      .from('contacts')
-      .select('id', { count: 'exact', head: true })
-      .eq('location_id', locationId)
-      .gte('joined_at', weekStartIso),
+// CONTACTREADSCOPE.1a — the Studio dashboard's contact numbers, for ONE
+// studio, read by the SERVER with the service-role client
+// (/api/dashboard/studio-contacts). Never call it with the phone's session:
+// from mig 690 that session reads contacts only while holding Contacts.
+// The caller passes the week start (the route computes the Europe/Dublin
+// Monday), so this stays free of any calendar.
+//
+// joined_at, NOT lead_created_at: the latter defaults to NOW() at insert
+// (mig 001), so every bulk-imported contact carries its import day and any
+// import spikes the count into the thousands. joined_at is the Glofox-side
+// signup date, the same signal fetchFunnelCounts uses for "entered".
+//
+// AUDIT P1-2 — the funnel reads pipeline_stage_slug for EVERY contact at the
+// studio (8,000+), so it pages past the PostgREST 1000-row cap with an
+// explicit order. This file is the shared web↔mobile seam and cannot import
+// src/lib/select-all, hence the inline loop.
+//
+// A failed read is { success: false }, never a zero and never a partial
+// funnel (the old phone-side loop stopped at a failed page and showed what it
+// had as if complete).
+export async function fetchStudioContactCounts(supabase, locationId, { weekStartIso } = {}) {
+  if (!locationId) return { success: false, error: 'No location' }
+  if (!weekStartIso) return { success: false, error: 'No week start' }
 
-    supabase
-      .from('whatsapp_conversations')
-      .select('unread_count')
-      .eq('location_id', locationId)
-      .gt('unread_count', 0),
-  ])
+  const { count: newLeadsThisWeek, error: countError } = await supabase
+    .from('contacts')
+    .select('id', { count: 'exact', head: true })
+    .eq('location_id', locationId)
+    .gte('joined_at', weekStartIso)
+  if (countError) return { success: false, error: countError.message }
 
-  // AUDIT P1-2 — the funnel reads pipeline_stage_slug for EVERY contact at the
-  // location (Stillorgan is 8,000+), so a bare .select() silently truncated at
-  // the PostgREST 1000-row cap — the funnel + totalContacts under-counted by
-  // ~7,000. This file is the shared web↔mobile seam and CANNOT import
-  // src/lib/select-all (check:mobile-imports forbids it), so we inline a
-  // .range() page loop (no import) instead. Kept faithful to the original
-  // return shape: a per-slug funnel map (including an 'unknown' bucket for
-  // NULL / off-list slugs) plus an EXACT totalContacts = sum of all rows. The
-  // narrow single-column projection makes the ~8 pages cheap.
   const funnel = {}
   let totalContacts = 0
   const PAGE = 1000
@@ -488,10 +476,7 @@ export async function fetchStudioDashboardData(supabase, locationId) {
       .eq('location_id', locationId)
       .order('id', { ascending: true })
       .range(from, from + PAGE - 1)
-    // Best-effort, matching the original (which never checked .error): on a
-    // mid-pagination failure, stop and render the funnel built so far rather
-    // than blanking the whole dashboard (the other cards loaded fine).
-    if (error) break
+    if (error) return { success: false, error: error.message }
     if (!Array.isArray(page) || page.length === 0) break
     for (const c of page) {
       const k = c.pipeline_stage_slug || 'unknown'
@@ -500,19 +485,8 @@ export async function fetchStudioDashboardData(supabase, locationId) {
     totalContacts += page.length
     if (page.length < PAGE) break
   }
-  const totalUnread = (unreadConvos.data || []).reduce((s, c) => s + (c.unread_count || 0), 0)
 
-  return {
-    success: true,
-    data: {
-      pendingTimeOff: pendingTimeOff.data || [],
-      pendingSwaps: pendingSwaps.data || [],
-      newLeadsThisWeek: newLeadsThisWeek.count || 0,
-      funnel,
-      totalContacts,
-      totalUnreadWhatsapp: totalUnread,
-    },
-  }
+  return { success: true, data: { newLeadsThisWeek: newLeadsThisWeek || 0, funnel, totalContacts } }
 }
 
 // ---------------------------------------------------------------------------
@@ -546,22 +520,41 @@ export async function paginatedSumCents(supabase, filters) {
 // Revenue MTD from PAID invoices only (glofox_invoices is stale for
 // anything else — mig 324's daily reconcile keeps statuses honest).
 // Delta compares against the same day-window of last month.
+// A4 REVENUEMTD.1 — both windows are Europe/Dublin calendar days, as half-open
+// UTC ranges over invoice_date (timestamptz, mig 140):
+//   this month  [1st 00:00 Dublin, …)
+//   last month  [its 1st 00:00 Dublin, 00:00 Dublin the day after the same
+//               day-of-month), the same day clamped to last month's length.
+// They were the server's local midnights (UTC on Vercel): from 00:00 to 01:00
+// Dublin on the 1st in summer "MTD" was the whole previous month, and a
+// payment in that hour never counted in its own month. And with no clamp, on
+// the 31st after a 30-day month "last month" ran on into this one.
 export async function fetchRevenueMTD(supabase, locationId, now = new Date()) {
-  const monthStart = startOfMonth(now)
-  const lastMonthStart = startOfMonth(new Date(now.getFullYear(), now.getMonth() - 1, 1))
-  const lastMonthSameDay = new Date(lastMonthStart)
-  lastMonthSameDay.setDate(lastMonthSameDay.getDate() + (now.getDate() - 1))
-  lastMonthSameDay.setHours(23, 59, 59, 999)
+  const { dublinDateKey, dublinMonthStartMs, dublinDayRangeMs } = await loadDublinTime()
+  const nowMs = now.getTime()
+  const [y, m, d] = dublinDateKey(nowMs).split('-').map(Number)
+  const monthStartIso = new Date(dublinMonthStartMs(nowMs)).toISOString()
+  const prevY = m === 1 ? y - 1 : y
+  const prevM = m === 1 ? 12 : m - 1
+  // Day 0 of this month is the last day of the previous one.
+  const daysInPrev = new Date(Date.UTC(y, m - 1, 0)).getUTCDate()
+  const pad = (n) => String(n).padStart(2, '0')
+  const prevRange = dublinDayRangeMs(
+    `${prevY}-${pad(prevM)}-01`,
+    `${prevY}-${pad(prevM)}-${pad(Math.min(d, daysInPrev))}`,
+  )
+  const prevStartIso = new Date(prevRange.startMs).toISOString()
+  const prevEndIso = new Date(prevRange.endMs).toISOString()
 
   const cur = await paginatedSumCents(supabase, q => q
     .eq('location_id', locationId).eq('status', 'PAID')
-    .gte('invoice_date', monthStart.toISOString()))
+    .gte('invoice_date', monthStartIso))
   if (cur.error) return { success: false, error: cur.error.message }
 
   const prev = await paginatedSumCents(supabase, q => q
     .eq('location_id', locationId).eq('status', 'PAID')
-    .gte('invoice_date', lastMonthStart.toISOString())
-    .lte('invoice_date', lastMonthSameDay.toISOString()))
+    .gte('invoice_date', prevStartIso)
+    .lt('invoice_date', prevEndIso))
   if (prev.error) return { success: false, error: prev.error.message }
 
   return {
@@ -601,7 +594,10 @@ export async function fetchArrearsSummary(supabase, locationId) {
 // entered uses joined_at (lead_created_at is import-poisoned);
 // conversions use converted_at (mig 350).
 export async function fetchFunnelCounts(supabase, locationId, now = new Date()) {
-  const monthStartIso = startOfMonth(now).toISOString()
+  // A4 REVENUEMTD.1 — the same Dublin month as Revenue MTD (was the server's
+  // local month: UTC on Vercel).
+  const { dublinMonthStartMs } = await loadDublinTime()
+  const monthStartIso = new Date(dublinMonthStartMs(now.getTime())).toISOString()
 
   // All 7 head-counts are independent — run them in one Promise.all.
   const results = await Promise.all([
@@ -637,8 +633,15 @@ export async function fetchFunnelCounts(supabase, locationId, now = new Date()) 
 // silently truncate spend (order by id for stable pages, like
 // paginatedSumCents above).
 export async function fetchAdsSummary(supabase, locationId, now = new Date()) {
-  const since = new Date(now); since.setDate(since.getDate() - 7)
-  const sinceIso = isoDate(since)
+  // A4 REVENUEMTD.1 — ad_insights_daily.date is a Dublin day, as src/lib/ads/read.js
+  // reads it (that file steps back 168 h and formats a Dublin date, which differs
+  // from calendar minus 7 only in the first Dublin hour after spring-forward);
+  // the server's local day is UTC's. Leads are a rolling
+  // 7 x 24 h over attributed_at (timestamptz), with no local time involved.
+  const { dublinDateKey, dublinAddDays, DUBLIN_DAY_MS } = await loadDublinTime()
+  const nowMs = now.getTime()
+  const sinceIso = dublinAddDays(dublinDateKey(nowMs), -7)
+  const attributedSinceIso = new Date(nowMs - 7 * DUBLIN_DAY_MS).toISOString()
   let from = 0
   const page = 1000
   const rows = []
@@ -660,7 +663,7 @@ export async function fetchAdsSummary(supabase, locationId, now = new Date()) {
     .select('id', { count: 'exact', head: true })
     .eq('location_id', locationId)
     .not('ad_provider', 'is', null)
-    .gte('attributed_at', since.toISOString())
+    .gte('attributed_at', attributedSinceIso)
   if (e2) return { success: false, error: e2.message }
   return {
     success: true,
@@ -674,16 +677,24 @@ export async function fetchAdsSummary(supabase, locationId, now = new Date()) {
 
 // Today's operations strip. Labour reuses the existing week window.
 export async function fetchTodayOps(supabase, locationId, now = new Date()) {
-  const todayIso = isoDate(now)
-
+  // DUBLINDAY.1 — "today" and "this week" are Europe/Dublin calendar days.
+  // They were the SERVER's local days (isoDate/startOfWeek read local time),
+  // and both callers run on Vercel in UTC: from 00:00 to 01:00 Dublin in
+  // summer the strip showed YESTERDAY's bookings, classes and staff, and on a
+  // Monday in that hour it costed LAST week's labour.
+  // Loaded lazily through loadDublinTime (see there): this function only ever
+  // runs on the server, so the phone never loads it.
+  const { dublinDateKey, dublinDayRangeMs, dublinWeekStartMs, dublinAddDays } = await loadDublinTime()
+  const nowMs = now.getTime()
+  const todayIso = dublinDateKey(nowMs)
   // class_occurrences (mig 284) has no date column — it stores starts_at
-  // (timestamptz). Count today's classes via a Dublin wall-clock day window
-  // and exclude cancelled occurrences (cancelled_at, mig 344 — live reads
-  // always filter .is('cancelled_at', null)).
-  const dayStart = new Date(now); dayStart.setHours(0, 0, 0, 0)
-  const dayEnd = new Date(now); dayEnd.setHours(23, 59, 59, 999)
-  const weekStart = startOfWeek(now)
-  const weekEnd = endOfWeek(now)
+  // (timestamptz). Count today's classes over the Dublin day as a half-open
+  // UTC window [00:00 Dublin, next 00:00 Dublin), and exclude cancelled
+  // occurrences (cancelled_at, mig 344 — live reads always filter
+  // .is('cancelled_at', null)).
+  const { startMs: dayStartMs, endMs: dayEndMs } = dublinDayRangeMs(todayIso, todayIso)
+  const weekStartIso = dublinDateKey(dublinWeekStartMs(nowMs))
+  const weekEndIso = dublinAddDays(weekStartIso, 6)
 
   // All four queries are independent — run them in one Promise.all.
   const [
@@ -699,18 +710,23 @@ export async function fetchTodayOps(supabase, locationId, now = new Date()) {
     supabase.from('class_occurrences')
       .select('id', { count: 'exact', head: true })
       .eq('location_id', locationId)
-      .gte('starts_at', dayStart.toISOString())
-      .lte('starts_at', dayEnd.toISOString())
+      .gte('starts_at', new Date(dayStartMs).toISOString())
+      .lt('starts_at', new Date(dayEndMs).toISOString())
       .is('cancelled_at', null),
     // ROSTER-FIX.1 — `status` rides along so staffToday can drop cancelled
     // rows. Without it an approved swap-drop still counted its coach as
     // working today, so the Today strip reported a body that isn't in.
+    // STAFFTODAY.1 — the block's roster status rides along too: a shift on a
+    // draft roster (or on no roster) is not published, so nobody has been
+    // told to come in. Same rule as labour this week (LABOURWEEK.1).
     supabase.from('shift_blocks')
-      .select('id, shift_assignments(profile_id, status)')
+      .select('id, roster_id, rosters:roster_id ( status ), shift_assignments(profile_id, status)')
       .eq('location_id', locationId).eq('block_date', todayIso)
       .limit(200),
+    // LABOURWEEK.1 — published rosters only: a draft week is not labour yet
+    // (the same rule LABOUR.1 costs by). Cancelled rows are dropped below.
     fetchDashboardShifts(supabase, {
-      locationId, startDate: isoDate(weekStart), endDate: isoDate(weekEnd), withProfiles: true,
+      locationId, startDate: weekStartIso, endDate: weekEndIso, withProfiles: true, publishedOnly: true,
     }),
   ])
   if (e1) return { success: false, error: e1.message }
@@ -719,10 +735,14 @@ export async function fetchTodayOps(supabase, locationId, now = new Date()) {
   if (e4) return { success: false, error: e4.message }
 
   const staffToday = new Set()
-  for (const b of blocks || []) for (const a of (b.shift_assignments || []).filter(isLiveRow)) if (a.profile_id) staffToday.add(a.profile_id)
+  for (const b of (blocks || []).filter((blk) => blk.rosters?.status === 'published')) {
+    for (const a of (b.shift_assignments || []).filter(isLiveRow)) if (a.profile_id) staffToday.add(a.profile_id)
+  }
   let labourCents = 0
   let hours = 0
-  for (const s of weekShifts || []) {
+  // LABOURWEEK.1 — a cancelled assignment (an approved swap-drop, a removed
+  // coach) is not labour: it was costed and counted in the hours until now.
+  for (const s of (weekShifts || []).filter(isLiveRow)) {
     const h = shiftDurationHours(s)
     hours += h
     labourCents += Math.round(h * (hourlyRateFor(s.profiles) || 0) * 100)

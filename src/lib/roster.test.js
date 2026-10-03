@@ -1,6 +1,5 @@
-// Roster v2 lib tests — block generation, day-code mapping, and
-// the unstaffed-future predicate that drives the calendar's red
-// flag.
+// Roster v2 lib tests — block generation, day-code mapping, and the
+// one definition of a live assignment.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
@@ -10,13 +9,14 @@ import {
   formatDate,
   expandDaysToDates,
   generateBlocksForTemplate,
-  isBlockUnstaffedFuture,
+  clampMinCoaches,
   isLiveAssignment,
   liveAssignments,
   findPublishedRosterFor,
   findPublishedRosterIdsByDate,
   getMonthStart,
   monthStartForWeek,
+  spendMonthForView,
   weekStartForMonth,
   periodsOverlap,
   periodCovers,
@@ -33,9 +33,11 @@ function rostersBuilder(result) {
     calls: [],
     select: (...a) => { b.calls.push(['select', ...a]); return b },
     eq: (...a) => { b.calls.push(['eq', ...a]); return b },
+    in: (...a) => { b.calls.push(['in', ...a]); return b },
     lte: (...a) => { b.calls.push(['lte', ...a]); return b },
     gte: (...a) => { b.calls.push(['gte', ...a]); return b },
     order: (...a) => { b.calls.push(['order', ...a]); return b },
+    range: (...a) => { b.calls.push(['range', ...a]); return b },
     limit: (...a) => { b.calls.push(['limit', ...a]); return b },
     maybeSingle: () => Promise.resolve(result),
     then: (ok, err) => Promise.resolve(result).then(ok, err),
@@ -89,9 +91,12 @@ describe('dayCodeForDate', () => {
     expect(dayCodeForDate('2026-05-03')).toBe('sun')
   })
   it('handles all 7 weekdays in order', () => {
+    // ROSTERTZ.1 — this used to build `2026-05-0${i}`, which is '2026-05-010'
+    // on the last pass: a malformed date only V8's lenient fallback parser
+    // read as 10 May. Pad it so all seven really are ISO calendar dates.
     const codes = []
     for (let i = 4; i <= 10; i++) {
-      codes.push(dayCodeForDate(`2026-05-0${i}`))
+      codes.push(dayCodeForDate(`2026-05-${String(i).padStart(2, '0')}`))
     }
     expect(codes).toEqual(WEEKDAY_CODES)
   })
@@ -143,11 +148,56 @@ describe('expandDaysToDates', () => {
   })
 })
 
+// ROSTERTZ.1 — the whole point of the rewrite: these two helpers describe
+// CALENDAR dates, so their answers must not move with the host timezone.
+// The suite is run under TZ=Europe/Dublin and a US timezone in CI-mirror
+// terms; these cases are the ones that were a day early west of UTC.
+describe('dayCodeForDate / expandDaysToDates are timezone-independent', () => {
+  it('reads a bare date string by its own components, not as a UTC instant', () => {
+    // 2026-05-04 is a Monday. Under the old UTC-parse-then-local-getDay it
+    // read 'sun' anywhere west of UTC.
+    expect(dayCodeForDate('2026-05-04')).toBe('mon')
+    expect(dayCodeForDate('2026-01-04')).toBe('sun')   // winter, UTC+0 in Dublin
+    expect(dayCodeForDate('2026-07-04')).toBe('sat')   // summer, UTC+1 in Dublin
+  })
+
+  it('reads a Date by its LOCAL calendar components', () => {
+    // A Date built from local components is the day its holder means.
+    expect(dayCodeForDate(new Date(2026, 4, 4))).toBe('mon')
+    expect(dayCodeForDate(new Date(2026, 4, 10))).toBe('sun')
+  })
+
+  it('takes a timestamp string through the same fast path', () => {
+    expect(dayCodeForDate('2026-05-04T23:30:00Z')).toBe('mon')
+    expect(dayCodeForDate('2026-05-04T00:30:00+01:00')).toBe('mon')
+  })
+
+  it('a one-day window still matches west of UTC', () => {
+    expect(expandDaysToDates(['mon'], '2026-05-04', '2026-05-04')).toEqual(['2026-05-04'])
+    expect(expandDaysToDates(['sun'], '2026-05-10', '2026-05-10')).toEqual(['2026-05-10'])
+  })
+
+  it('does not slide the window across a DST transition', () => {
+    // Europe/Dublin springs forward 29 Mar 2026; America/Los_Angeles on 8 Mar.
+    // Every Sunday in the span must be listed exactly once either way.
+    expect(expandDaysToDates(['sun'], '2026-03-01', '2026-03-31')).toEqual([
+      '2026-03-01', '2026-03-08', '2026-03-15', '2026-03-22', '2026-03-29',
+    ])
+  })
+
+  it('returns [] for an unparseable bound rather than looping', () => {
+    expect(expandDaysToDates(['mon'], 'not-a-date', '2026-05-10')).toEqual([])
+    expect(expandDaysToDates(['mon'], '2026-05-04', 'not-a-date')).toEqual([])
+  })
+})
+
 describe('generateBlocksForTemplate', () => {
   let upsertMock
   let fromMock
   let db
   let rostersResult
+  let removalsResult
+  let removalsBuilders
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -161,9 +211,17 @@ describe('generateBlocksForTemplate', () => {
     // ROSTER-FIX.5 — the generator now asks `rosters` which published
     // roster covers each date, so the mock has to dispatch per table.
     rostersResult = { data: [], error: null }
-    fromMock = vi.fn((table) => (
-      table === 'rosters' ? rostersBuilder(rostersResult) : { upsert: upsertMock }
-    ))
+    removalsResult = { data: [], error: null }
+    removalsBuilders = []
+    fromMock = vi.fn((table) => {
+      if (table === 'rosters') return rostersBuilder(rostersResult)
+      if (table === 'shift_block_removals') {
+        const b = rostersBuilder(removalsResult)
+        removalsBuilders.push(b)
+        return b
+      }
+      return { upsert: upsertMock }
+    })
     db = { from: fromMock }
   })
 
@@ -229,6 +287,49 @@ describe('generateBlocksForTemplate', () => {
     expect(records[0].max_coaches).toBe(15)
   })
 
+  // HORIZONMIN.1 — the generator used to leave min_coaches off, so every block
+  // it made (nightly horizon, template create/update) fell to the DB default
+  // of 1 and a 2-coach template never flagged understaffed at 1 coach.
+  it('writes the template min_coaches on every block it generates', async () => {
+    await generateBlocksForTemplate(
+      db,
+      { id: 't1', location_id: 'l1', start_time: '06:00', end_time: '07:00', days_of_week: ['mon', 'tue'], min_coaches: 2, max_coaches: 4 },
+      '2026-05-04',
+      1
+    )
+    const records = upsertMock.mock.calls[0][0]
+    expect(records).toHaveLength(2)
+    for (const r of records) expect(r).toMatchObject({ min_coaches: 2, max_coaches: 4 })
+  })
+
+  it('keeps a legitimate min_coaches of 0 (no minimum)', async () => {
+    await generateBlocksForTemplate(
+      db,
+      { id: 't1', location_id: 'l1', start_time: '06:00', end_time: '07:00', days_of_week: ['mon'], min_coaches: 0, max_coaches: 4 },
+      '2026-05-04',
+      1
+    )
+    expect(upsertMock.mock.calls[0][0][0].min_coaches).toBe(0)
+  })
+
+  it('defaults min_coaches to 1 and clamps it to max_coaches (mig 177 CHECK)', async () => {
+    await generateBlocksForTemplate(
+      db,
+      { id: 't1', location_id: 'l1', start_time: '06:00', end_time: '07:00', days_of_week: ['mon'], max_coaches: 4 },
+      '2026-05-04',
+      1
+    )
+    expect(upsertMock.mock.calls[0][0][0].min_coaches).toBe(1)
+
+    await generateBlocksForTemplate(
+      db,
+      { id: 't1', location_id: 'l1', start_time: '06:00', end_time: '07:00', days_of_week: ['mon'], min_coaches: 9, max_coaches: 3 },
+      '2026-05-04',
+      1
+    )
+    expect(upsertMock.mock.calls[1][0][0]).toMatchObject({ min_coaches: 3, max_coaches: 3 })
+  })
+
   it('throws when supabase reports an error', async () => {
     const errUpsert = vi.fn().mockReturnValue({
       select: vi.fn().mockResolvedValue({
@@ -237,7 +338,9 @@ describe('generateBlocksForTemplate', () => {
       }),
     })
     const errDb = { from: vi.fn((table) => (
-      table === 'rosters' ? rostersBuilder({ data: [], error: null }) : { upsert: errUpsert }
+      table === 'rosters' || table === 'shift_block_removals'
+        ? rostersBuilder({ data: [], error: null })
+        : { upsert: errUpsert }
     )) }
 
     await expect(
@@ -249,33 +352,53 @@ describe('generateBlocksForTemplate', () => {
       }, '2026-05-04', 1)
     ).rejects.toThrow(/unique violation/)
   })
-})
 
-describe('isBlockUnstaffedFuture', () => {
-  const now = new Date('2026-05-04T12:00:00')
+  // SLOTREMOVAL.1 — a slot a manager deleted must not come back overnight.
+  describe('slot removals', () => {
+    const tpl = {
+      id: 't1', location_id: 'l1',
+      start_time: '09:30', end_time: '10:30',
+      days_of_week: ['mon', 'wed'], max_coaches: 15,
+    }
 
-  it('flags an empty future block', () => {
-    expect(
-      isBlockUnstaffedFuture({ block_date: '2026-05-10' }, 0, now)
-    ).toBe(true)
-  })
+    it('skips a date that has a removal row and reports it as removed', async () => {
+      removalsResult = { data: [{ id: 'x1', template_id: 't1', block_date: '2026-05-06' }], error: null }
+      upsertMock.mockReturnValue({ select: vi.fn().mockResolvedValue({ data: [{ id: 'a' }, { id: 'b' }, { id: 'c' }], error: null }) })
+      const result = await generateBlocksForTemplate(db, tpl, '2026-05-04', 2)
+      const dates = upsertMock.mock.calls[0][0].map((r) => r.block_date)
+      expect(dates).toEqual(['2026-05-04', '2026-05-11', '2026-05-13'])
+      expect(result).toEqual({ inserted: 3, skipped: 0, removed: 1 })
+    })
 
-  it('flags an empty block on today', () => {
-    expect(
-      isBlockUnstaffedFuture({ block_date: '2026-05-04' }, 0, now)
-    ).toBe(true)
-  })
+    it('reads removals once, scoped to the location, template and window', async () => {
+      await generateBlocksForTemplate(db, tpl, '2026-05-04', 8)
+      expect(removalsBuilders).toHaveLength(1)
+      const calls = removalsBuilders[0].calls
+      expect(calls).toContainEqual(['eq', 'location_id', 'l1'])
+      expect(calls).toContainEqual(['in', 'template_id', ['t1']])
+      expect(calls).toContainEqual(['gte', 'block_date', '2026-05-04'])
+      expect(calls).toContainEqual(['lte', 'block_date', '2026-06-24'])
+      expect(calls.find((c) => c[0] === 'range')).toEqual(['range', 0, 999])
+    })
 
-  it('does NOT flag a past empty block — those are noise', () => {
-    expect(
-      isBlockUnstaffedFuture({ block_date: '2026-04-30' }, 0, now)
-    ).toBe(false)
-  })
+    it('does not upsert at all when every date in the window was removed', async () => {
+      removalsResult = { data: [{ id: 'x1', template_id: 't1', block_date: '2026-05-04' }, { id: 'x2', template_id: 't1', block_date: '2026-05-06' }], error: null }
+      const result = await generateBlocksForTemplate(db, tpl, '2026-05-04', 1)
+      expect(upsertMock).not.toHaveBeenCalled()
+      expect(result).toEqual({ inserted: 0, skipped: 0, removed: 2 })
+    })
 
-  it('does NOT flag a future block with at least one assignment', () => {
-    expect(
-      isBlockUnstaffedFuture({ block_date: '2026-05-10' }, 1, now)
-    ).toBe(false)
+    it('ignores a removal for another template on the same date', async () => {
+      removalsResult = { data: [{ id: 'x1', template_id: 'other', block_date: '2026-05-04' }], error: null }
+      await generateBlocksForTemplate(db, tpl, '2026-05-04', 1)
+      expect(upsertMock.mock.calls[0][0]).toHaveLength(2)
+    })
+
+    it('throws rather than generating blind when the removals read fails', async () => {
+      removalsResult = { data: null, error: { message: 'removals down' } }
+      await expect(generateBlocksForTemplate(db, tpl, '2026-05-04', 1)).rejects.toThrow(/removals down/)
+      expect(upsertMock).not.toHaveBeenCalled()
+    })
   })
 })
 
@@ -494,9 +617,11 @@ describe('generateBlocksForTemplate → roster_id', () => {
     })
     rostersResult = { data: [], error: null }
     db = {
-      from: vi.fn((table) => (
-        table === 'rosters' ? rostersBuilder(rostersResult) : { upsert: upsertMock }
-      )),
+      from: vi.fn((table) => {
+        if (table === 'rosters') return rostersBuilder(rostersResult)
+        if (table === 'shift_block_removals') return rostersBuilder({ data: [], error: null })
+        return { upsert: upsertMock }
+      }),
     }
   })
 
@@ -655,5 +780,53 @@ describe('periodCovers (ROSTER-FIX.6a)', () => {
   it('is false rather than throwing on a malformed key', () => {
     expect(periodCovers(null, WEEK)).toBe(false)
     expect(periodCovers(MONTH, 'nonsense')).toBe(false)
+  })
+})
+
+describe('clampMinCoaches (HORIZONMIN.1)', () => {
+  it('passes a value inside 0..max through', () => {
+    expect(clampMinCoaches(2, 4)).toBe(2)
+    expect(clampMinCoaches(0, 4)).toBe(0)
+  })
+  it('defaults a missing min to 1', () => {
+    expect(clampMinCoaches(null, 4)).toBe(1)
+    expect(clampMinCoaches(undefined, 4)).toBe(1)
+  })
+  it('clamps to max and never below 0', () => {
+    expect(clampMinCoaches(9, 3)).toBe(3)
+    expect(clampMinCoaches(-2, 3)).toBe(0)
+  })
+})
+
+// REPORTS.2 — the contractor-spend panel follows the period in view.
+describe('spendMonthForView (REPORTS.2)', () => {
+  const d = (iso) => { const [y, m, day] = iso.split('-').map(Number); return new Date(y, m - 1, day) }
+  const view = (viewType, week, month) => {
+    const r = spendMonthForView({ viewType, weekStart: d(week), monthStart: d(month) })
+    return { month: formatDate(r.monthStart), straddles: r.straddles, other: r.otherMonthStart ? formatDate(r.otherMonthStart) : null }
+  }
+
+  it('week view follows the week, not the last month viewed', () => {
+    // Paged from August into a mid-September week; monthStart still says August.
+    expect(view('week', '2026-09-14', '2026-08-01')).toEqual({ month: '2026-09-01', straddles: false, other: null })
+  })
+
+  it('a straddling week reports the month with most of its days and names the other', () => {
+    // Mon 31 Aug - Sun 6 Sep: six days in September.
+    expect(view('week', '2026-08-31', '2026-08-01')).toEqual({ month: '2026-09-01', straddles: true, other: '2026-08-01' })
+    // Mon 28 Sep - Sun 4 Oct: three in September, four in October.
+    expect(view('week', '2026-09-28', '2026-09-01')).toEqual({ month: '2026-10-01', straddles: true, other: '2026-09-01' })
+    // Mon 27 Jul - Sun 2 Aug: five days in July.
+    expect(view('week', '2026-07-27', '2026-09-01')).toEqual({ month: '2026-07-01', straddles: true, other: '2026-08-01' })
+  })
+
+  it('agrees with the Month toggle and publish modal (monthStartForWeek)', () => {
+    for (const week of ['2026-08-31', '2026-09-28', '2026-06-29', '2026-03-30']) {
+      expect(view('week', week, '2020-01-01').month).toBe(formatDate(monthStartForWeek(d(week))))
+    }
+  })
+
+  it('month view keeps its own month', () => {
+    expect(view('month', '2026-08-31', '2026-10-01')).toEqual({ month: '2026-10-01', straddles: false, other: null })
   })
 })

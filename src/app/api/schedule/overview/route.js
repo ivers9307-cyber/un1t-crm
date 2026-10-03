@@ -21,14 +21,18 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { getCurrentUser, assertLocationAccess, hasRoleAtLocation } from '@/lib/auth'
+import { hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
-import { MANAGER_ROLES, uuidLike } from '@/lib/schemas'
+import { MANAGER_ROLES, uuidLike, realIsoDate } from '@/lib/schemas'
+import { reportPeriodError } from '@/lib/report-period'
+import { getLocationMemberIds, leaveScopeOrFilter } from '@/lib/time-off-leave'
 import {
   eventTypeHasWindowForDate,
   sumStaffRequired,
   classifyDayLoad,
+  leaveOnDate,
+  underMinEntry,
 } from '@/lib/schedule-overview'
 import { logWarn } from '@/lib/log'
 
@@ -42,9 +46,12 @@ export const dynamic = 'force-dynamic'
 // strict UUID validation rejects them. uuidLike is the codebase's
 // shared lenient regex (src/lib/schemas.js) — UUID-shaped, no
 // version assertion. Same choice every other API route makes.
+//
+// DATECHECK.1 — the shared shape+calendar schema. The old regex let 2026-02-30
+// through; Date.UTC below rolled it to 2 March and the reads 500'd.
 const QuerySchema = z.object({
-  from:        z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD'),
-  to:          z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD'),
+  from:        realIsoDate,
+  to:          realIsoDate,
   location_id: uuidLike,
 })
 
@@ -82,11 +89,14 @@ export async function GET(request) {
 async function handleGet(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!MANAGER_ROLES.includes(user.role)) {
+
+  // A caller who manages NO studio is refused before the query is parsed, so a
+  // non-manager gets 403 rather than a 400 describing the query shape. The
+  // role at the REQUESTED studio is still checked after parsing, below.
+  const managesSomewhere = user.profileRole === 'master'
+    || Object.values(user.rolesByLocation || {}).some(r => MANAGER_ROLES.includes(r))
+  if (!managesSomewhere) {
     return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
-  }
-  if (!hasPermission(user, 'schedule')) {
-    return NextResponse.json({ success: false, error: 'Schedule feature is disabled at this location' }, { status: 403 })
   }
 
   const url = new URL(request.url)
@@ -109,26 +119,35 @@ async function handleGet(request) {
   const guard = assertLocationAccess(user, location_id)
   if (guard) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
 
-  // Reject ranges over the cap (one round-trip would otherwise pull
-  // a year of events at once). Explicit destructure rather than spread
-  // because spread + Date.UTC was triggering a build-time mangling
-  // issue on Vercel's serverless bundler.
-  const [fy, fm, fd] = from.split('-').map(Number)
-  const [ty, tm, td] = to.split('-').map(Number)
-  const fromMs = Date.UTC(fy, fm - 1, fd)
-  const toMs   = Date.UTC(ty, tm - 1, td)
-  if (toMs < fromMs) {
-    return NextResponse.json({ success: false, error: 'to must be on or after from' }, { status: 400 })
+  // STAFFCOST.1 — role and feature are judged at the REQUESTED studio. This
+  // used to read user.role / hasPermission(user, …), the ACTIVE studio's, so a
+  // manager at Hatch who is staff at Stillorgan read Stillorgan's overview by
+  // passing its location_id.
+  if (!hasRoleAtLocation(user, location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   }
-  const dayCount = Math.floor((toMs - fromMs) / 86400_000) + 1
-  if (dayCount > MAX_DAYS_PER_REQUEST) {
-    return NextResponse.json({
-      success: false,
-      error: `Range too wide (${dayCount} days). Max ${MAX_DAYS_PER_REQUEST}.`,
-    }, { status: 400 })
+  if (!hasPermissionForLocation(user, location_id, 'schedule')) {
+    return NextResponse.json({ success: false, error: 'Schedule feature is disabled at this location' }, { status: 403 })
   }
 
+  // Reject ranges over the cap (one round-trip would otherwise pull a year of
+  // events at once). RANGEVALID.1 — the shared rule (real, in order, at most
+  // MAX_DAYS_PER_REQUEST days), so every schedule range reads alike and the
+  // date guard can see it. Still after the role gate, still before any read.
+  const periodError = reportPeriodError(from, to, {
+    startName: 'from', endName: 'to', maxDays: MAX_DAYS_PER_REQUEST, what: 'The overview',
+  })
+  if (periodError) return NextResponse.json({ success: false, error: periodError }, { status: 400 })
+
   const db = createServerClient()
+
+  // LEAVE.2 — leave covers the person, not the studio it was filed at, so the
+  // supply side subtracts leave taken by anyone who belongs here. Fail closed:
+  // guessing "filed here only" is the undercount this replaced.
+  const { ids: memberIds, error: membersErr } = await getLocationMemberIds(db, [location_id])
+  if (membersErr) {
+    return NextResponse.json({ success: false, error: membersErr.message }, { status: 500 })
+  }
 
   // ── Pull all four data sources in parallel ──────────────────
   const [eventsRes, eventTypesRes, blocksRes, timeOffRes] = await Promise.all([
@@ -157,7 +176,7 @@ async function handleGet(request) {
     db.from('shift_blocks')
       .select(`
         id, block_date, start_time, end_time, min_coaches, max_coaches,
-        shift_templates ( name, color ),
+        shift_templates ( name, color, kind ),
         shift_assignments ( profile_id, status )
       `)
       .eq('location_id', location_id)
@@ -168,7 +187,7 @@ async function handleGet(request) {
     // membership in JS below.
     db.from('time_off_requests')
       .select('profile_id, start_date, end_date, profiles:profile_id ( full_name )')
-      .eq('location_id', location_id)
+      .or(leaveScopeOrFilter([location_id], memberIds))
       .eq('status', 'approved')
       .lte('start_date', to)
       .gte('end_date', from),
@@ -207,16 +226,12 @@ async function handleGet(request) {
       if (!staffByDate.has(block.block_date)) staffByDate.set(block.block_date, new Set())
       staffByDate.get(block.block_date).add(a.profile_id)
     }
-    const min = block.min_coaches || 0
-    if (min > 0 && activeAssignments.length < min) {
+    // SHIFTTYPE.1 — the rule lives in underMinEntry (admin is never a row).
+    // Supply above still counts an admin-rostered person: they are on site.
+    const entry = underMinEntry(block)
+    if (entry) {
       if (!underMinByDate.has(block.block_date)) underMinByDate.set(block.block_date, [])
-      underMinByDate.get(block.block_date).push({
-        id: block.id,
-        label: block.shift_templates?.name || 'Shift',
-        time: `${String(block.start_time || '').slice(0, 5)}–${String(block.end_time || '').slice(0, 5)}`,
-        assigned: activeAssignments.length,
-        min,
-      })
+      underMinByDate.get(block.block_date).push(entry)
     }
   }
 
@@ -233,13 +248,11 @@ async function handleGet(request) {
     // Staff on leave today: any time_off row whose [start_date, end_date]
     // window contains this date AND whose profile_id is in the scheduled
     // set (people on leave only matter if they were going to work).
-    const onLeaveSet = new Set()
-    const onLeaveNames = []
-    for (const off of time_off) {
-      if (date < off.start_date || date > off.end_date) continue
-      onLeaveNames.push(off.profiles?.full_name || 'Unknown')
-      if (staffSet.has(off.profile_id)) onLeaveSet.add(off.profile_id)
-    }
+    // ROSTERLOOK.1 — each PERSON once: two overlapping requests from one
+    // coach used to list their name twice in the day dialog.
+    const onLeave = leaveOnDate(time_off, date)
+    const onLeaveNames = onLeave.names
+    const onLeaveSet = new Set(onLeave.profileIds.filter((id) => staffSet.has(id)))
 
     const staff_scheduled = staffSet.size
     const staff_on_leave  = onLeaveSet.size

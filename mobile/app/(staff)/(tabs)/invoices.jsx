@@ -13,14 +13,20 @@ import { useRouter, useFocusEffect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { listInvoices, periodLabel } from '../../../lib/invoices-api'
 import TabletConstrained from '../../../components/TabletConstrained'
+import { invoiceStatusBadge } from '../../../lib/invoice-review'
 
-const STATUS_STYLE = {
-  submitted: { label: 'Awaiting review', color: '#D97706', bg: 'bg-amber-500/20', text: 'text-amber-700', icon: 'time-outline' },
-  // Owner-approved → awaiting bookkeeper Xero sign-off; reads as "Approved".
-  awaiting_accountant_review: { label: 'Approved', color: '#059669', bg: 'bg-green-500/20', text: 'text-green-700', icon: 'checkmark-circle-outline' },
-  approved:  { label: 'Approved',        color: '#059669', bg: 'bg-green-500/20', text: 'text-green-700', icon: 'checkmark-circle-outline' },
-  declined:  { label: 'Declined',        color: '#DC2626', bg: 'bg-red-500/20',   text: 'text-red-700',   icon: 'close-circle-outline' },
-  revoked:   { label: 'Revoked',         color: '#64748B', bg: 'bg-slate-500/20', text: 'text-slate-700', icon: 'arrow-undo-outline' },
+// INVOICEREVIEW.2 — lifecycle label (queued / sent to Xero / paid) from
+// the server; decisions in lib/invoice-review.js.
+function StatusBadge({ inv }) {
+  const badge = invoiceStatusBadge(inv)
+  return (
+    <View className={`px-2 py-0.5 rounded-full flex-row items-center ${badge.bg}`}>
+      <Ionicons name={badge.icon} size={11} color={badge.tint} />
+      <Text className={`text-[11px] uppercase font-medium ml-1 ${badge.text}`}>
+        {badge.label}
+      </Text>
+    </View>
+  )
 }
 
 export default function InvoicesScreen() {
@@ -69,7 +75,7 @@ export default function InvoicesScreen() {
       >
         <Text className="text-2xl font-bold text-un1t-text mb-1">Invoices</Text>
         <Text className="text-sm text-un1t-subtle mb-5">
-          Submit your monthly invoice as a PDF. Approved invoices are forwarded to accounts;
+          Submit your monthly invoice as a PDF. Approved invoices are queued for our accountant and then paid;
           declined ones come back with notes for adjustment.
         </Text>
 
@@ -104,19 +110,7 @@ export default function InvoicesScreen() {
                 </Text>
               </View>
               <View className="flex-row items-center justify-between">
-                <View className={`px-2 py-0.5 rounded-full flex-row items-center ${STATUS_STYLE[inv.status]?.bg || 'bg-slate-500/20'}`}>
-                  <Ionicons
-                    name={STATUS_STYLE[inv.status]?.icon || 'help-circle-outline'}
-                    size={11}
-                    color={STATUS_STYLE[inv.status]?.color || '#64748B'}
-                  />
-                  <Text className={`text-[11px] uppercase font-medium ml-1 ${STATUS_STYLE[inv.status]?.text || 'text-un1t-subtle'}`}>
-                    {STATUS_STYLE[inv.status]?.label || inv.status}
-                  </Text>
-                </View>
-                {inv.xero_synced_at && (
-                  <Text className="text-[10px] text-un1t-subtle">Forwarded to accounts</Text>
-                )}
+                <StatusBadge inv={inv} />
               </View>
               {inv.status === 'declined' && inv.decline_reason && (
                 <Text className="text-xs text-un1t-subtle italic mt-2" numberOfLines={2}>

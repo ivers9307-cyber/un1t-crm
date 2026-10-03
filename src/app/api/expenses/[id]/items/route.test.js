@@ -204,8 +204,9 @@ describe('POST /api/expenses/[id]/items — JSON mode (direct-to-storage receipt
     h.claim = null
     expect((await POST(jsonReq({ ...FIELDS }), ctx)).status).toBe(404)
 
+    // FINALTIDY.1 — a claim the caller can't see answers like a missing one.
     h.claim = { id: CLAIM_ID, profile_id: 'someone-else', status: 'draft' }
-    expect((await POST(jsonReq({ ...FIELDS }), ctx)).status).toBe(403)
+    expect((await POST(jsonReq({ ...FIELDS }), ctx)).status).toBe(404)
 
     h.claim = { id: CLAIM_ID, profile_id: h.user.id, status: 'submitted' }
     expect((await POST(jsonReq({ ...FIELDS }), ctx)).status).toBe(409)

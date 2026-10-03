@@ -19,16 +19,61 @@ import { logWarn } from '@/lib/log'
 export const WEEKDAY_CODES = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
 
 /**
+ * ROSTERTZ.1 — the calendar components of a date, read LOCALLY.
+ *
+ * shift_blocks.block_date is a timezoneless calendar date: 'YYYY-MM-DD' means
+ * the day the operator meant, never an instant. The old code did
+ * `new Date('2026-05-04')`, which the spec parses as UTC MIDNIGHT, and then
+ * read `.getDay()`, which is the LOCAL weekday — so west of UTC every bare
+ * date string resolved to the day BEFORE (LA: 4 May 00:00Z is 3 May 17:00
+ * local, i.e. 'sun' for a Monday). roster-copy.js noticed and refused to use
+ * this module for exactly that reason. Reading the string's own components
+ * removes the round trip through an instant entirely; a real Date is read
+ * with local getters, which is the calendar day its holder means (and what
+ * formatDate above already renders).
+ *
+ * Returns null for anything unparseable.
+ */
+function calendarParts(input) {
+  if (input instanceof Date) {
+    if (Number.isNaN(input.getTime())) return null
+    return { y: input.getFullYear(), m: input.getMonth() + 1, d: input.getDate() }
+  }
+  // The lookahead keeps a malformed '2026-05-010' OUT of the fast path —
+  // truncating it to 1 May would be a silently wrong day, where the fallback
+  // parse below at least answers the same way it always has. A timestamp
+  // ('2026-05-04T09:00:00Z') still takes the fast path: 'T' is not a digit.
+  const match = /^(\d{4})-(\d{2})-(\d{2})(?![0-9])/.exec(String(input ?? ''))
+  if (match) return { y: Number(match[1]), m: Number(match[2]), d: Number(match[3]) }
+  const parsed = new Date(input)
+  if (Number.isNaN(parsed.getTime())) return null
+  return { y: parsed.getFullYear(), m: parsed.getMonth() + 1, d: parsed.getDate() }
+}
+
+/**
+ * 'mon'..'sun' for calendar components, computed without a TZ. Date.UTC is a
+ * pure calendar calculation here — no local offset ever enters it.
+ */
+function dayCodeOfParts({ y, m, d }) {
+  // JS getUTCDay(): Sun=0, Mon=1, ..., Sat=6. Roll into Mon-first.
+  const jsDay = new Date(Date.UTC(y, m - 1, d)).getUTCDay()
+  return WEEKDAY_CODES[jsDay === 0 ? 6 : jsDay - 1]
+}
+
+/** Render calendar components as 'YYYY-MM-DD'. */
+function partsToIso({ y, m, d }) {
+  return `${String(y).padStart(4, '0')}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+}
+
+/**
  * Convert a JS Date (or ISO date string) to its canonical weekday
- * code ('mon'..'sun'). UTC-day-of-week is what we want — the date
- * stored in shift_blocks.block_date is a calendar date with no TZ.
+ * code ('mon'..'sun'). ROSTERTZ.1 — computed from the date's own calendar
+ * components, so the answer is the same in Dublin and in Los Angeles.
  */
 export function dayCodeForDate(input) {
-  const d = input instanceof Date ? input : new Date(input)
-  // JS getDay(): Sun=0, Mon=1, ..., Sat=6. Roll into Mon-first.
-  const jsDay = d.getDay()
-  const monFirst = jsDay === 0 ? 6 : jsDay - 1
-  return WEEKDAY_CODES[monFirst]
+  const parts = calendarParts(input)
+  if (!parts) return undefined
+  return dayCodeOfParts(parts)
 }
 
 /**
@@ -103,6 +148,33 @@ export function monthStartForWeek(weekStart) {
 }
 
 /**
+ * REPORTS.2 — which month the contractor-spend panel reports on.
+ *
+ * It used to be the calendar's `monthStart` state, which only moves in Month
+ * view, so paging Week view from August into September kept saying "Contractor
+ * spend — August". Month view keeps its month; Week view follows the visible
+ * week by the SAME midweek rule as the Month toggle and the publish modal, so
+ * a week straddling two months reports the month holding most of its days
+ * (four of seven). `otherMonthStart` names the minority month so the panel can
+ * say which month it chose and why.
+ *
+ * @returns {{ monthStart: Date, straddles: boolean, otherMonthStart: Date|null }}
+ */
+export function spendMonthForView({ viewType, weekStart, monthStart }) {
+  if (viewType === 'month') {
+    return { monthStart: getMonthStart(monthStart), straddles: false, otherMonthStart: null }
+  }
+  const chosen = monthStartForWeek(weekStart)
+  const firstDayMonth = getMonthStart(weekStart)
+  const lastDayMonth = getMonthStart(addDays(weekStart, 6))
+  if (firstDayMonth.getTime() === lastDayMonth.getTime()) {
+    return { monthStart: chosen, straddles: false, otherMonthStart: null }
+  }
+  const other = firstDayMonth.getTime() === chosen.getTime() ? lastDayMonth : firstDayMonth
+  return { monthStart: chosen, straddles: true, otherMonthStart: other }
+}
+
+/**
  * The week to show when leaving month view. Keeps the week already on screen
  * when it belongs to this month (so Month then Week is a no-op), otherwise
  * the month's first week - defined by the same midweek rule, which is what
@@ -169,19 +241,89 @@ export function periodCovers(outerKey, innerKey) {
  * generator and by tests asserting which weekdays a template hits.
  */
 export function expandDaysToDates(dayCodes, fromDate, toDate) {
-  const from = fromDate instanceof Date ? fromDate : new Date(fromDate)
-  const to = toDate instanceof Date ? toDate : new Date(toDate)
+  // ROSTERTZ.1 — walk CALENDAR days, not instants. The old loop built a
+  // local-midnight cursor out of a UTC-midnight parse and compared it against
+  // an un-normalised end instant, so west of UTC both ends slid a day and a
+  // one-day window matched nothing at all. Both ends are now read as calendar
+  // components (calendarParts) and the walk runs on a UTC epoch, where every
+  // step is exactly 24h and no DST transition can skip or repeat a day.
+  const from = calendarParts(fromDate)
+  const to = calendarParts(toDate)
+  if (!from || !to) return []
   const set = new Set(dayCodes)
   const out = []
-  let cursor = new Date(from)
-  cursor.setHours(0, 0, 0, 0)
-  while (cursor <= to) {
-    if (set.has(dayCodeForDate(cursor))) {
-      out.push(formatDate(cursor))
-    }
-    cursor = addDays(cursor, 1)
+  const end = Date.UTC(to.y, to.m - 1, to.d)
+  const DAY_MS = 24 * 60 * 60 * 1000
+  for (let t = Date.UTC(from.y, from.m - 1, from.d); t <= end; t += DAY_MS) {
+    const cursor = new Date(t)
+    const parts = { y: cursor.getUTCFullYear(), m: cursor.getUTCMonth() + 1, d: cursor.getUTCDate() }
+    if (set.has(dayCodeOfParts(parts))) out.push(partsToIso(parts))
   }
   return out
+}
+
+/**
+ * HORIZONMIN.1 — the min_coaches a block may carry. shift_blocks has a CHECK
+ * (mig 177) of 0 <= min_coaches <= max_coaches, so a template min above the
+ * block's max would fail the whole write. A missing min falls to 1 (the DB
+ * default); 0 is a legitimate "no minimum" and is kept. Every writer that
+ * creates a block from a template goes through this.
+ *
+ * @param {number|null|undefined} minCoaches  requested minimum
+ * @param {number} maxCoaches                  the block's resolved max
+ * @returns {number}
+ */
+export function clampMinCoaches(minCoaches, maxCoaches) {
+  return Math.max(0, Math.min(minCoaches ?? 1, maxCoaches))
+}
+
+/** SLOTREMOVAL.1 — the key a slot removal is matched on. */
+export function slotKey(templateId, blockDate) {
+  return `${templateId}|${String(blockDate).slice(0, 10)}`
+}
+
+const REMOVAL_PAGE = 1000
+
+/**
+ * SLOTREMOVAL.1 — every deleted slot (shift_block_removals, mig 613) at a
+ * location in [startDate, endDate], as a Set of slotKey(template_id, date).
+ *
+ * Paged over a total order so it is never cut at the 1,000-row select cap. A
+ * single template's 8-week window can hold at most 56 rows, so the generator's
+ * call is always ONE query; the copy routes read a whole week or month across
+ * every template, which in practice is also one page.
+ *
+ * @param {SupabaseClient} db  server-role client
+ * @param {object} opts
+ * @param {string} opts.locationId
+ * @param {string[]} [opts.templateIds]  narrow to these templates
+ * @param {string} opts.startDate  YYYY-MM-DD inclusive
+ * @param {string} opts.endDate    YYYY-MM-DD inclusive
+ * @returns {Promise<Set<string>>}
+ * @throws when the read fails — callers must not treat "couldn't read" as
+ *         "nothing removed", or they re-create the slots this table exists
+ *         to keep deleted.
+ */
+export async function fetchSlotRemovalKeys(db, { locationId, templateIds = null, startDate, endDate }) {
+  const keys = new Set()
+  if (Array.isArray(templateIds) && templateIds.length === 0) return keys
+  for (let from = 0; ; from += REMOVAL_PAGE) {
+    let query = db
+      .from('shift_block_removals')
+      .select('id, template_id, block_date')
+      .eq('location_id', locationId)
+      .gte('block_date', startDate)
+      .lte('block_date', endDate)
+    if (Array.isArray(templateIds)) query = query.in('template_id', templateIds)
+    const { data, error } = await query
+      .order('id', { ascending: true })
+      .range(from, from + REMOVAL_PAGE - 1)
+    if (error) throw new Error(`Failed to load slot removals: ${error.message}`)
+    const page = data || []
+    for (const r of page) keys.add(slotKey(r.template_id, r.block_date))
+    if (page.length < REMOVAL_PAGE) break
+  }
+  return keys
 }
 
 /**
@@ -194,12 +336,15 @@ export function expandDaysToDates(dayCodes, fromDate, toDate) {
  * @param {SupabaseClient} db    server-role client
  * @param {object} template      shift_templates row (must include id,
  *                               location_id, start_time, end_time,
- *                               days_of_week, max_coaches)
+ *                               days_of_week, min_coaches,
+ *                               max_coaches)
  * @param {Date|string} fromDate  inclusive lower bound (defaults to
  *                               start of current week)
  * @param {number} weeks         how many weeks to project forward
  *                               from fromDate (default 8)
- * @returns {Promise<{ inserted: number, skipped: number }>}
+ * @returns {Promise<{ inserted: number, skipped: number, removed?: number }>}
+ *   `removed` counts dates skipped because a manager deleted that slot
+ *   (SLOTREMOVAL.1); they are in neither `inserted` nor `skipped`.
  */
 export async function generateBlocksForTemplate(db, template, fromDate = null, weeks = 8) {
   const days = template.days_of_week || []
@@ -209,8 +354,24 @@ export async function generateBlocksForTemplate(db, template, fromDate = null, w
   start.setHours(0, 0, 0, 0)
   const end = addDays(start, weeks * 7 - 1)
 
-  const dates = expandDaysToDates(days, start, end)
-  if (dates.length === 0) return { inserted: 0, skipped: 0 }
+  const allDates = expandDaysToDates(days, start, end)
+  if (allDates.length === 0) return { inserted: 0, skipped: 0 }
+
+  // SLOTREMOVAL.1 — a slot a manager deleted stays deleted. Without this the
+  // upsert below reads the missing row as "not generated yet" and the slot is
+  // back the next night. Throws on a failed read: generating blind would
+  // re-create exactly the slots someone removed, where skipping this template
+  // for one run only delays the far end of the horizon (both callers already
+  // treat a throw as per-template / warning).
+  const removed = await fetchSlotRemovalKeys(db, {
+    locationId: template.location_id,
+    templateIds: [template.id],
+    startDate: allDates[0],
+    endDate: allDates[allDates.length - 1],
+  })
+  const dates = allDates.filter(date => !removed.has(slotKey(template.id, date)))
+  const removedCount = allDates.length - dates.length
+  if (dates.length === 0) return { inserted: 0, skipped: 0, removed: removedCount }
 
   // ROSTER-FIX.5 — a block created after its week was published belongs to
   // that roster. Untagged blocks were invisible to every roster-scoped
@@ -220,13 +381,19 @@ export async function generateBlocksForTemplate(db, template, fromDate = null, w
   // lookups.
   const rosterByDate = await findPublishedRosterIdsByDate(db, template.location_id, dates)
 
+  // HORIZONMIN.1 — min_coaches is written explicitly. It used to be left off,
+  // so every generated block fell to the DB default of 1 and a 2-coach
+  // template's blocks never flagged understaffed with one coach on.
+  const maxCoaches = template.max_coaches || 15
+  const minCoaches = clampMinCoaches(template.min_coaches, maxCoaches)
   const records = dates.map(date => ({
     location_id: template.location_id,
     template_id: template.id,
     block_date: date,
     start_time: template.start_time,
     end_time: template.end_time,
-    max_coaches: template.max_coaches || 15,
+    min_coaches: minCoaches,
+    max_coaches: maxCoaches,
     roster_id: rosterByDate.get(date) || null,
   }))
 
@@ -245,22 +412,7 @@ export async function generateBlocksForTemplate(db, template, fromDate = null, w
   if (error) throw new Error(`Failed to generate blocks: ${error.message}`)
 
   const inserted = (data || []).length
-  return { inserted, skipped: dates.length - inserted }
-}
-
-/**
- * Compute "is block unstaffed AND in the future" — the condition
- * the calendar uses to flag a block red. Pure function so the
- * Today-tab badge counter can reuse it.
- *
- * @param {object} block         shift_blocks row with block_date
- * @param {number} assignmentCount  current number of assignments on the block
- * @param {Date|string} now      current date (for testability)
- */
-export function isBlockUnstaffedFuture(block, assignmentCount, now = new Date()) {
-  if (assignmentCount > 0) return false
-  const today = formatDate(now instanceof Date ? now : new Date(now))
-  return block.block_date >= today
+  return { inserted, skipped: dates.length - inserted, removed: removedCount }
 }
 
 /**

@@ -14,7 +14,9 @@ import {
   calculateNextRun,
   calculatePeriodForSchedule,
   generateReport,
+  reportableProfiles,
 } from './report-generator'
+import { shiftHours } from './payroll'
 
 // Minimal thenable mock of the supabase query builder: every filter method
 // returns the builder; awaiting it resolves to { data }.
@@ -70,10 +72,47 @@ describe('fetchScheduledShiftRows', () => {
       profile_id: 'p1',
       start_time_override: '09:00:00',
       end_time_override: null,
+      block_start_time: null,
+      block_end_time: null,
       status: 'scheduled',
       profiles: { full_name: 'Jane', role: 'staff', employment_type: 'fte' },
       shift_templates: { name: 'AM', start_time: '09:30:00', end_time: '10:30:00' },
     }])
+  })
+
+  // REPORTS.2 — hours come from override → BLOCK → template, the calendar's
+  // resolution. A block moved off its template (or a template edited after the
+  // block was made) used to report at the template's current times.
+  it('carries the block\'s own times so hours follow the block, not the template', async () => {
+    const rows = [
+      {
+        profile_id: 'moved', start_time_override: null, end_time_override: null, status: 'scheduled',
+        profiles: { full_name: 'Moved' },
+        shift_blocks: {
+          block_date: '2026-05-04', start_time: '06:00:00', end_time: '09:00:00', location_id: 'loc1',
+          shift_templates: { name: 'AM', start_time: '06:00:00', end_time: '07:00:00' },
+        },
+      },
+      {
+        profile_id: 'partial', start_time_override: '07:00:00', end_time_override: null, status: 'scheduled',
+        profiles: { full_name: 'Partial' },
+        shift_blocks: {
+          block_date: '2026-05-04', start_time: '06:00:00', end_time: '09:00:00', location_id: 'loc1',
+          shift_templates: { name: 'AM', start_time: '06:00:00', end_time: '07:00:00' },
+        },
+      },
+      {
+        profile_id: 'untouched', start_time_override: null, end_time_override: null, status: 'scheduled',
+        profiles: { full_name: 'Untouched' },
+        shift_blocks: {
+          block_date: '2026-05-05', start_time: null, end_time: null, location_id: 'loc1',
+          shift_templates: { name: 'PM', start_time: '17:00:00', end_time: '18:30:00' },
+        },
+      },
+    ]
+    const out = await fetchRows(mockDb(rows), { locationId: 'loc1', periodStart: '2026-05-01', periodEnd: '2026-05-31' })
+    expect(out[0].block_start_time).toBe('06:00:00')
+    expect(out.map(shiftHours)).toEqual([3, 2, 1.5])
   })
 
   it('maps block_date → shift_date and surfaces template through the block', async () => {
@@ -528,13 +567,18 @@ describe('generateReport — staff_cost', () => {
   it('restricts profiles to the location via profile_locations', async () => {
     const { db, captured } = makeReportDb({
       profile_locations: PL_ROWS,
-      profiles: [PROFILES[0]],
+      // Both rows come back (the mock does not apply .in()), so it is the pure
+      // filter — not the fixture — that keeps the outsider out.
+      profiles: PROFILES,
       shift_assignments: [assignmentRow('p-here'), assignmentRow('p-away')],
     })
     createServerClient.mockReturnValue(db)
 
     await generateReport({ report_type: 'staff_cost', ...PERIOD })
-    expect(captured['profiles.in']).toEqual({ col: 'id', vals: ['p-here'] })
+    // STAFFDELETE.1 — the read now covers members AND whoever worked, so a
+    // leaver can be found; reportableProfiles() is what keeps an ACTIVE
+    // outsider (p-away) out, exactly as before.
+    expect(captured['profiles.in']).toEqual({ col: 'id', vals: ['p-here', 'p-away'] })
     // A shift belonging to a profile outside the location is not costed —
     // the generator already skips shifts with no matching profile.
     expect(captured.inserted.report_data.staff.map(s => s.name)).toEqual(['Coach Here'])
@@ -622,5 +666,181 @@ describe('generateReport — the staff-list query failing is not "no staff"', ()
     expect(res).toMatchObject({ success: false })
     expect(res.error).toMatch(/boom/)
     expect(from).not.toHaveBeenCalledWith('generated_reports')
+  })
+})
+
+// STAFFDELETE.1 — history stays reportable BY NAME. A coach who left (active
+// false — deactivated, or permanently deleted and now a tombstone with no
+// profile_locations row) used to vanish from staff_cost and utilisation for
+// the weeks they actually worked.
+describe('reportableProfiles', () => {
+  const p = (id, active) => ({ id, full_name: id, active })
+  it('active members, plus anyone inactive who worked in the period', () => {
+    const out = reportableProfiles(
+      [p('member', true), p('member-left-worked', false), p('member-left-idle', false), p('deleted-worked', false), p('visitor-active', true)],
+      { memberIds: ['member', 'member-left-worked', 'member-left-idle'], shiftProfileIds: ['member', 'member-left-worked', 'deleted-worked', 'visitor-active'] },
+    )
+    expect(out.map((x) => x.id)).toEqual(['member', 'member-left-worked', 'deleted-worked'])
+  })
+  it('a legacy row with active NULL counts as active', () => {
+    expect(reportableProfiles([p('m', null)], { memberIds: ['m'], shiftProfileIds: [] }).map((x) => x.id)).toEqual(['m'])
+  })
+})
+
+describe('generateReport — leavers keep their history (STAFFDELETE.1)', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+  const TOMBSTONE = {
+    // role is the floor the delete demoted them to; deleted_role is what they WERE.
+    id: 'p-gone', full_name: 'Former Coach', role: 'staff', deleted_role: 'head_coach', employment_type: 'contractor', active: false,
+    deleted_at: '2026-05-20T10:00:00Z', contracted_hours_per_week: 10, annual_salary: null, hourly_rate: 20, overtime_rate: null,
+  }
+
+  it('staff_cost costs a permanently deleted coach\'s past shifts, under their name', async () => {
+    const { db, captured } = makeReportDb({
+      profile_locations: PL_ROWS,                       // p-here only — the tombstone has no membership
+      profiles: [PROFILES[0], TOMBSTONE],
+      shift_assignments: [assignmentRow('p-here'), assignmentRow('p-gone')],
+    })
+    createServerClient.mockReturnValue(db)
+    await generateReport({ report_type: 'staff_cost', ...PERIOD })
+    expect(captured['profiles.in']).toEqual({ col: 'id', vals: ['p-here', 'p-gone'] })
+    const gone = captured.inserted.report_data.staff.find((s) => s.name === 'Former Coach')
+    expect(gone).toMatchObject({ regular_hours: 3, total_cost: 60 })   // 09:00-12:00 at €20/h
+    // Role HISTORY: the role they held, not the 'staff' floor the tombstone carries.
+    expect(gone.role).toBe('head_coach')
+    expect(captured.inserted.report_data.staff.find((s) => s.name === 'Coach Here').role).toBe('staff')
+  })
+
+  it('utilisation lists a leaver who worked, not one who did not', async () => {
+    const idle = { ...TOMBSTONE, id: 'p-idle', full_name: 'Idle Leaver', deleted_at: null }
+    const { db, captured } = makeReportDb({
+      profile_locations: [...PL_ROWS, { profile_id: 'p-idle' }],
+      profiles: [PROFILES[0], TOMBSTONE, idle],
+      shift_assignments: [assignmentRow('p-here'), assignmentRow('p-gone')],
+    })
+    createServerClient.mockReturnValue(db)
+    await generateReport({ report_type: 'utilisation', ...PERIOD })
+    expect(captured.inserted.report_data.staff.map((s) => s.name).sort()).toEqual(['Coach Here', 'Former Coach'])
+    expect(captured.inserted.report_data.staff.find((s) => s.name === 'Former Coach').role).toBe('head_coach')
+  })
+
+  it('staff_hours shows the role a deleted coach HELD (the shift row\'s own profiles embed)', async () => {
+    const row = assignmentRow('p-gone')
+    row.profiles = { full_name: 'Former Coach', role: 'staff', deleted_role: 'head_coach', employment_type: 'contractor' }
+    const { db, captured } = makeReportDb({ shift_assignments: [row, assignmentRow('p-here')] })
+    createServerClient.mockReturnValue(db)
+    await generateReport({ report_type: 'staff_hours', ...PERIOD })
+    const roles = Object.fromEntries(captured.inserted.report_data.staff.map((s) => [s.name, s.role]))
+    expect(roles).toEqual({ 'Former Coach': 'head_coach', 'p-here': 'staff' })
+  })
+})
+
+// DATECHECK.1 — the routes refuse an impossible period before calling this;
+// this is the floor for any other caller, checked before a single read.
+describe('generateReport — a period the calendar does not have', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+
+  for (const [period_start, period_end] of [['2026-02-30', '2026-03-06'], ['2026-04-01', '2026-04-31'], ['2026-13-01', '2026-13-07']]) {
+    it(`${period_start} to ${period_end} is refused, and nothing is read`, async () => {
+      const { db } = makeReportDb({})
+      createServerClient.mockReturnValue(db)
+
+      const res = await generateReport({ report_type: 'roster_coverage', period_start, period_end, location_id: 'loc1' })
+      expect(res).toEqual({ success: false, error: 'period_start and period_end must be real dates, YYYY-MM-DD' })
+      expect(db.from).not.toHaveBeenCalled()
+    })
+  }
+})
+
+// DATECHECK.1 (review) — realIsoDate accepts 9999-12-31, and the string walk
+// stepped from it to '+010000-01', which still sorts below '9999-12-31': the
+// coverage report spun to the function timeout. The period rule refuses it
+// (and any span over 366 days, and a reversed one) before a single read.
+describe('generateReport — a period out of order or too long', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+
+  for (const [period_start, period_end, error] of [
+    ['2026-01-01', '9999-12-31', 'A report can cover at most 366 days'],
+    ['2026-01-01', '2027-01-02', 'A report can cover at most 366 days'],
+    ['2026-05-10', '2026-05-04', 'period_end must be on or after period_start'],
+  ]) {
+    it(`${period_start} to ${period_end} is refused, and nothing is read`, async () => {
+      const { db } = makeReportDb({})
+      createServerClient.mockReturnValue(db)
+      const res = await generateReport({ report_type: 'roster_coverage', period_start, period_end, location_id: 'loc1' })
+      expect(res).toEqual({ success: false, error })
+      expect(db.from).not.toHaveBeenCalled()
+    })
+  }
+
+  it('a 366-day coverage report has 366 days', async () => {
+    const { db, captured } = makeReportDb({})
+    createServerClient.mockReturnValue(db)
+    const res = await generateReport({ report_type: 'roster_coverage', period_start: '2026-01-01', period_end: '2027-01-01', location_id: 'loc1' })
+    expect(res.success).toBe(true)
+    const days = captured.inserted.report_data.days
+    expect(days).toHaveLength(366)
+    expect(days[0].date).toBe('2026-01-01')
+    expect(days[365].date).toBe('2027-01-01')
+  })
+})
+
+// ─── PAYROLL24.1 — a shift ending at 24:00 is in every report ────────────────
+//
+// payroll.timeToHours refused hour 24, so these three reports counted a
+// 22:00-24:00 shift as 0 hours (and €0).
+
+describe('generateReport — a shift ending at 24:00 (PAYROLL24.1)', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+
+  const late = () => assignmentRow('p-here', { startOverride: '22:00:00', endOverride: '24:00:00' })
+
+  it('staff_hours counts its 2 hours', async () => {
+    const { db, captured } = makeReportDb({ shift_assignments: [late()] })
+    createServerClient.mockReturnValue(db)
+
+    const res = await generateReport({ report_type: 'staff_hours', ...PERIOD })
+    expect(res.success).toBe(true)
+    expect(captured.inserted.summary.total_hours).toBe(2)
+    expect(captured.inserted.report_data.staff[0].total).toBe(2)
+    expect(captured.inserted.report_data.staff[0].days['2026-05-04']).toBe(2)
+  })
+
+  it('staff_cost costs its 2 hours', async () => {
+    const { db, captured } = makeReportDb({
+      profile_locations: PL_ROWS,
+      profiles: [PROFILES[0]],
+      shift_assignments: [late()],
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await generateReport({ report_type: 'staff_cost', ...PERIOD })
+    expect(res.success).toBe(true)
+    expect(captured.inserted.summary.total_hours).toBe(2)
+    expect(captured.inserted.summary.total_cost).toBe(100) // 2h × €50
+    expect(captured.inserted.report_data.staff[0].regular_hours).toBe(2)
+  })
+
+  it('utilisation counts its 2 hours', async () => {
+    const { db, captured } = makeReportDb({
+      profile_locations: PL_ROWS,
+      profiles: [PROFILES[0]],
+      shift_assignments: [late()],
+    })
+    createServerClient.mockReturnValue(db)
+
+    await generateReport({ report_type: 'utilisation', ...PERIOD })
+    expect(captured.inserted.report_data.staff[0].actual_hours).toBe(2)
+    expect(captured.inserted.report_data.staff[0].utilisation_pct).toBe(20) // 2 of 10
+  })
+
+  it('the block\'s own 24:00 end counts too (no override)', async () => {
+    const row = assignmentRow('p-here')
+    row.shift_blocks = { ...row.shift_blocks, start_time: '22:00:00', end_time: '24:00:00' }
+    const { db, captured } = makeReportDb({ shift_assignments: [row] })
+    createServerClient.mockReturnValue(db)
+
+    await generateReport({ report_type: 'staff_hours', ...PERIOD })
+    expect(captured.inserted.summary.total_hours).toBe(2)
   })
 })

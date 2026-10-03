@@ -16,17 +16,19 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // One thenable builder per from() call: chain methods no-op, awaiting
 // resolves the table's rows.
 let tables = {}
-function makeBuilder(rows) {
+// COVERLOOP.1 — a table named here resolves { data: null, error } instead.
+let tableErrors = {}
+function makeBuilder(rows, error = null) {
   const b = {}
   for (const m of ['select', 'eq', 'not', 'lte', 'order', 'limit']) b[m] = () => b
-  b.then = (resolve) => Promise.resolve({ data: rows, error: null }).then(resolve)
+  b.then = (resolve) => Promise.resolve(error ? { data: null, error } : { data: rows, error: null }).then(resolve)
   return b
 }
-const fakeDb = { from: (t) => makeBuilder(tables[t] ?? []) }
+const fakeDb = { from: (t) => makeBuilder(tables[t] ?? [], tableErrors[t] ?? null) }
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => fakeDb }))
 vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: vi.fn(() => Promise.resolve()) }))
-vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
+vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
 vi.mock('@/lib/audit', () => ({ logAuditEvent: vi.fn(async () => ({ logged: true })) }))
 vi.mock('@/lib/push', () => ({
   sendPush: vi.fn(async () => ({ sent: 1 })),
@@ -39,9 +41,26 @@ vi.mock('@/lib/checklist-sweep', () => ({
   isEligibleForSweep: vi.fn(() => ({ eligible: true })),
   markIncomplete: vi.fn(async () => true),
 }))
+// COVERLOOP.1 — the swap cover arm. Its behaviour is pinned in
+// src/lib/swap-cover-server.test.js; here it is a spy.
+vi.mock('@/lib/swap-cover-server', () => ({
+  runSwapCoverSweep: vi.fn(async () => ({ open: 2, nudged: 1, expired: 1, skipped: 0, quiet: 0, errors: 0 })),
+}))
+// AVAIL.1 — the availability-notice arm. Its behaviour is pinned in
+// src/lib/availability-notify.test.js; here it is a spy.
+const QUIET_AVAIL = { pending: 0, groups: 0, sent: 0, deferred: 0, stale: 0, reverted: 0, no_recipients: 0, errors: 0 }
+vi.mock('@/lib/availability-notify', () => ({
+  runAvailabilityNoticeSweep: vi.fn(async () => ({ pending: 0, groups: 0, sent: 0, deferred: 0, stale: 0, reverted: 0, no_recipients: 0, errors: 0 })),
+}))
 
 import { GET } from './route.js'
 import { logAuditEvent } from '@/lib/audit'
+import { runSwapCoverSweep } from '@/lib/swap-cover-server'
+import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { markIncomplete } from '@/lib/checklist-sweep'
+import { sendPush, sendPushToRolesAtLocation } from '@/lib/push'
+import { logError, logWarn } from '@/lib/log'
+import { runAvailabilityNoticeSweep } from '@/lib/availability-notify'
 
 const INSTANCE = {
   id: 'inst-1',
@@ -57,6 +76,11 @@ const INSTANCE = {
   profiles: { id: 'prof-coach', full_name: 'Casey Coach', role: 'head_coach' },
 }
 
+// SWAPHB.1 — the heartbeat rows this tick stamped, in call order. AVAIL.1's
+// own row is left out here and pinned in its own describe block below.
+const stampedNames = () => stampHeartbeat.mock.calls.map((c) => c[0]).filter((n) => n !== 'availability-notice-sweep')
+const availStamped = () => stampHeartbeat.mock.calls.some((c) => c[0] === 'availability-notice-sweep')
+
 function req(auth = 'Bearer test-secret') {
   return { headers: { get: (k) => (k.toLowerCase() === 'authorization' ? auth : null) } }
 }
@@ -64,6 +88,7 @@ function req(auth = 'Bearer test-secret') {
 beforeEach(() => {
   process.env.CRON_SECRET = 'test-secret'
   tables = { checklist_instances: [INSTANCE] }
+  tableErrors = {}
   vi.clearAllMocks()
 })
 
@@ -92,5 +117,206 @@ describe('GET /api/cron/checklist-sweep', () => {
       locationId: 'loc-1',
       details: expect.objectContaining({ profile_id: 'prof-coach', items_missed: 1 }),
     }))
+  })
+})
+
+// COVERLOOP.1 — the swap cover sweep rides this cron (see the route header for
+// why). It must run every tick and report its counts, and the two arms must be
+// ISOLATED in both directions: neither one failing may stop the other, and a
+// failed swap arm must be visible in the response, never a silent success.
+describe('GET /api/cron/checklist-sweep — swap cover arm', () => {
+  it('runs the swap cover sweep with the cron\'s db and reports its counts', async () => {
+    const res = await GET(req())
+    const body = await res.json()
+    expect(runSwapCoverSweep).toHaveBeenCalledTimes(1)
+    expect(runSwapCoverSweep).toHaveBeenCalledWith(fakeDb)
+    expect(body.swap_cover).toEqual({ open: 2, nudged: 1, expired: 1, skipped: 0, quiet: 0, errors: 0 })
+    expect(body.swap_sweep_failed).toBe(0)
+    // The checklist row still carries the swap arm's outcome in last_outcome
+    // (unchanged by SWAPHB.1), where ops and Sentinel can read it.
+    expect(stampHeartbeat).toHaveBeenCalledWith('checklist-sweep', {
+      ...body.stats,
+      swap_cover: { open: 2, nudged: 1, expired: 1, skipped: 0, quiet: 0, errors: 0 },
+      swap_sweep_failed: 0,
+      // AVAIL.1 — the third arm's outcome rides here too.
+      availability_notices: QUIET_AVAIL,
+      availability_sweep_failed: 0,
+    })
+  })
+
+  it('runs it even when no checklist was overdue', async () => {
+    tables = { checklist_instances: [] }
+    await GET(req())
+    expect(runSwapCoverSweep).toHaveBeenCalledTimes(1)
+  })
+
+  it('a THROWING swap arm cannot stop the checklist arm: it is logged, flagged in the response, and the heartbeat is still stamped', async () => {
+    runSwapCoverSweep.mockRejectedValueOnce(new Error('boom'))
+    const res = await GET(req())
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body).toMatchObject({ success: true, swap_cover: null, swap_sweep_failed: 1, stats: expect.objectContaining({ swept: 1 }) })
+    expect(sendPush).toHaveBeenCalledTimes(1)
+    expect(logAuditEvent).toHaveBeenCalledTimes(1)
+    expect(logError).toHaveBeenCalledWith('cron-checklist-sweep', expect.any(String), expect.objectContaining({ err: 'boom' }))
+    // The failure is written where a heartbeat reader sees it...
+    expect(stampHeartbeat).toHaveBeenCalledWith('checklist-sweep', expect.objectContaining({ swap_cover: null, swap_sweep_failed: 1 }))
+    // SWAPHB.1 — ...and the arm's OWN heartbeat is left to go stale, which is
+    // what finally pages someone.
+    expect(stampedNames()).toEqual(['checklist-sweep'])
+    // ...and NOT into the CHECKLIST arm's own error count.
+    expect(body.stats.errors).toBe(0)
+  })
+
+  it('a swap arm that RETURNS errors (it could not read the open swaps) is flagged too', async () => {
+    runSwapCoverSweep.mockResolvedValueOnce({ open: 0, nudged: 0, expired: 0, skipped: 0, quiet: 0, errors: 1 })
+    const body = await (await GET(req())).json()
+    expect(body).toMatchObject({ success: true, swap_sweep_failed: 1, swap_cover: expect.objectContaining({ errors: 1 }) })
+    expect(stampHeartbeat).toHaveBeenCalledWith('checklist-sweep', expect.objectContaining({ swap_sweep_failed: 1 }))
+    expect(stampedNames()).toEqual(['checklist-sweep'])
+    expect(body.stats.errors).toBe(0)
+  })
+
+  it('an unreadable checklist table cannot stop the swap arm: still a 500, no heartbeat, but the swaps were swept', async () => {
+    tableErrors = { checklist_instances: { message: 'checklists down' } }
+    const res = await GET(req())
+    const body = await res.json()
+    expect(res.status).toBe(500)
+    expect(body).toMatchObject({ success: false, error: 'checklists down', swap_sweep_failed: 0 })
+    expect(body.swap_cover).toMatchObject({ open: 2 })
+    expect(runSwapCoverSweep).toHaveBeenCalledTimes(1)
+    // No CHECKLIST heartbeat, as always. SWAPHB.1: the swap arm did its work,
+    // so its own row is stamped; a checklist outage must not page as a swap one.
+    expect(stampedNames()).toEqual(['swap-cover-sweep'])
+  })
+
+  it('a THROWING checklist arm cannot stop the swap arm either', async () => {
+    markIncomplete.mockRejectedValueOnce(new Error('network reset'))
+    const res = await GET(req())
+    const body = await res.json()
+    expect(res.status).toBe(500)
+    expect(body).toMatchObject({ success: false, error: 'network reset' })
+    expect(body.swap_cover).toMatchObject({ open: 2 })
+    expect(runSwapCoverSweep).toHaveBeenCalledTimes(1)
+    expect(stampedNames()).toEqual(['swap-cover-sweep'])
+    expect(logError).toHaveBeenCalledWith('cron-checklist-sweep', expect.any(String), expect.objectContaining({ err: 'network reset' }))
+  })
+
+  it('does not run for an unauthorised caller', async () => {
+    await GET(req('Bearer nope'))
+    expect(runSwapCoverSweep).not.toHaveBeenCalled()
+  })
+})
+
+// SWAPHB.1 — the swap arm has a heartbeat row of its own ('swap-cover-sweep',
+// mig 623). Riding in the checklist row's last_outcome was not enough: the
+// health-check reads only is_stale, so an arm that failed on every tick paged
+// nobody. The row is stamped ONLY when the arm ran and swap_sweep_failed is 0,
+// so a persistently failing arm goes stale and 503s the health-check.
+describe('GET /api/cron/checklist-sweep — swap-cover-sweep heartbeat', () => {
+  it('both arms ok: both heartbeats are stamped, the swap row with the arm\'s counts', async () => {
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect(stampedNames().sort()).toEqual(['checklist-sweep', 'swap-cover-sweep'])
+    expect(stampHeartbeat).toHaveBeenCalledWith('swap-cover-sweep', { open: 2, nudged: 1, expired: 1, skipped: 0, quiet: 0, errors: 0 })
+  })
+
+  it('a quiet-hours tick (the arm ran, did nothing, reported no errors) still stamps, so the row cannot go stale overnight', async () => {
+    runSwapCoverSweep.mockResolvedValueOnce({ open: 3, nudged: 0, expired: 0, skipped: 0, quiet: 3, errors: 0 })
+    await GET(req())
+    expect(stampHeartbeat).toHaveBeenCalledWith('swap-cover-sweep', expect.objectContaining({ quiet: 3, errors: 0 }))
+  })
+
+  it('swap arm throws: checklist-sweep stamped, swap-cover-sweep NOT, still a 200 with swap_sweep_failed: 1', async () => {
+    runSwapCoverSweep.mockRejectedValueOnce(new Error('boom'))
+    const res = await GET(req())
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body).toMatchObject({ success: true, swap_sweep_failed: 1 })
+    expect(stampedNames()).toEqual(['checklist-sweep'])
+  })
+
+  it('an arm that resolves with NOTHING has not shown it ran: no swap stamp', async () => {
+    runSwapCoverSweep.mockResolvedValueOnce(undefined)
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect(stampedNames()).toEqual(['checklist-sweep'])
+  })
+
+  it('a swap heartbeat stamp that rejects cannot cost the checklist arm its stamp or its response', async () => {
+    stampHeartbeat.mockImplementation((name) =>
+      name === 'swap-cover-sweep' ? Promise.reject(new Error('stamp down')) : Promise.resolve())
+    const res = await GET(req())
+    const body = await res.json()
+    stampHeartbeat.mockImplementation(() => Promise.resolve())
+    expect(res.status).toBe(200)
+    expect(body).toMatchObject({ success: true, swap_sweep_failed: 0 })
+    expect(stampedNames()).toContain('checklist-sweep')
+  })
+})
+
+// AVAIL.1 — third arm: availability notices owed (a save made outside
+// 07:00-22:00, or an immediate push that did not land). Isolated like the swap
+// arm, with its own heartbeat row (mig 630), stamped only on a clean run.
+describe('GET /api/cron/checklist-sweep — availability-notice arm', () => {
+  it('runs every tick with the cron db, reports its counts and stamps its own row', async () => {
+    runAvailabilityNoticeSweep.mockResolvedValueOnce({ ...QUIET_AVAIL, pending: 2, groups: 1, sent: 1 })
+    const res = await GET(req())
+    const body = await res.json()
+    expect(runAvailabilityNoticeSweep).toHaveBeenCalledWith(fakeDb)
+    expect(body).toMatchObject({ success: true, availability_notices: { sent: 1 }, availability_sweep_failed: 0 })
+    expect(stampHeartbeat).toHaveBeenCalledWith('availability-notice-sweep', expect.objectContaining({ sent: 1, errors: 0 }))
+  })
+
+  it('an arm that reports errors or throws is NOT stamped, and costs the other arms nothing', async () => {
+    runAvailabilityNoticeSweep.mockResolvedValueOnce({ ...QUIET_AVAIL, errors: 1 })
+    let body = await (await GET(req())).json()
+    expect(body).toMatchObject({ success: true, availability_sweep_failed: 1 })
+    expect(availStamped()).toBe(false)
+    expect(stampedNames().sort()).toEqual(['checklist-sweep', 'swap-cover-sweep'])
+
+    stampHeartbeat.mockClear()
+    runAvailabilityNoticeSweep.mockRejectedValueOnce(new Error('boom'))
+    body = await (await GET(req())).json()
+    expect(body).toMatchObject({ success: true, availability_sweep_failed: 1, availability_notices: null })
+    expect(availStamped()).toBe(false)
+    expect(logError).toHaveBeenCalledWith('cron-checklist-sweep', 'availability notice sweep threw', expect.anything())
+  })
+
+  it('still runs when the checklist arm fails and when the swap arm throws', async () => {
+    tableErrors = { checklist_instances: { message: 'down' } }
+    runSwapCoverSweep.mockRejectedValueOnce(new Error('swap down'))
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    expect(runAvailabilityNoticeSweep).toHaveBeenCalledTimes(1)
+    expect(availStamped()).toBe(true)
+  })
+
+  it("the checklist row's last_outcome carries the arm's counts too", async () => {
+    await GET(req())
+    expect(stampHeartbeat).toHaveBeenCalledWith('checklist-sweep', expect.objectContaining({
+      availability_notices: QUIET_AVAIL, availability_sweep_failed: 0,
+    }))
+  })
+})
+
+// C21 PUSHDONE.1 — the flip to 'incomplete' is the truth and is never undone,
+// so the pushes are not retried; a push that reached nobody is now SAID.
+describe('GET /api/cron/checklist-sweep — pushes that reached nobody', () => {
+  it('counts push_failed and logs each failed push; the audit row is still written', async () => {
+    sendPush.mockResolvedValueOnce({ sent: 0, skipped: 0, invalidated: 0, failed: 1, read_failed: 1 })
+    sendPushToRolesAtLocation.mockResolvedValueOnce({ sent: 0, skipped: 0, invalidated: 0, failed: 0, recipients_failed: 1 })
+    const body = await (await GET(req())).json()
+    expect(body.stats).toMatchObject({ swept: 1, push_overdue: 0, push_compliance: 0, push_failed: 2 })
+    expect(logWarn).toHaveBeenCalledWith('cron-checklist-sweep', 'overdue push reached nobody; not retried', { id: 'inst-1', read_failed: true })
+    expect(logWarn).toHaveBeenCalledWith('cron-checklist-sweep', 'compliance push reached nobody; not retried',
+      { id: 'inst-1', read_failed: false, recipients_failed: true })
+    expect(logAuditEvent).toHaveBeenCalledTimes(1)
+  })
+
+  it('nobody to tell is not a failure', async () => {
+    sendPush.mockResolvedValueOnce({ sent: 0, skipped: 1, invalidated: 0, failed: 0 })
+    const body = await (await GET(req())).json()
+    expect(body.stats.push_failed).toBe(0)
   })
 })

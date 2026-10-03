@@ -65,6 +65,10 @@ export function swapShiftShape(a) {
     status: a.status,
     notes: a.notes ?? null,
     shift_date: b.block_date ?? null,
+    // COVERLOOP.2 — the block's own times, same keys as toApiShiftRow. The
+    // taker works these (a moved shift loses its overrides).
+    block_start_time: b.start_time ?? null,
+    block_end_time: b.end_time ?? null,
     start_time_override: effectiveOverride(a.start_time_override, b.start_time, tpl.start_time),
     end_time_override: effectiveOverride(a.end_time_override, b.end_time, tpl.end_time),
     role_label: tpl.role_label ?? null,
@@ -73,66 +77,11 @@ export function swapShiftShape(a) {
   }
 }
 
-/**
- * Fetch the per-coach scheduled rows in [startDate, endDate] for a
- * location from the Roster v2 model, normalised to the shape the copy
- * routes need. Each row is one coach assigned to one block:
- *
- *   { profileId, shiftTemplateId, shiftDate,
- *     startTimeOverride, endTimeOverride, notes }
- *
- * Overrides are the collapsed effective values (see effectiveOverride).
- *
- * @param {import('@supabase/supabase-js').SupabaseClient} db service-role client
- * @param {object} opts
- * @param {string} opts.locationId
- * @param {string} opts.startDate  YYYY-MM-DD inclusive
- * @param {string} opts.endDate    YYYY-MM-DD inclusive
- * @returns {Promise<{ rows: Array<object>, error: object|null }>}
- */
-export async function fetchSourceShiftRows(db, { locationId, startDate, endDate }) {
-  const { data, error } = await db
-    .from('shift_assignments')
-    .select(`
-      profile_id,
-      status,
-      notes,
-      start_time_override,
-      end_time_override,
-      shift_blocks!inner (
-        location_id,
-        template_id,
-        block_date,
-        start_time,
-        end_time,
-        shift_templates ( start_time, end_time )
-      )
-    `)
-    .eq('shift_blocks.location_id', locationId)
-    .gte('shift_blocks.block_date', startDate)
-    .lte('shift_blocks.block_date', endDate)
-
-  if (error) return { rows: [], error }
-
-  const rows = []
-  for (const a of data || []) {
-    const b = a.shift_blocks
-    if (!b) continue
-    // ROSTER-FIX.1 — a cancelled assignment is a dropped shift. Copying it
-    // forward resurrected a coach onto a week they had already been let off.
-    if (!isLiveAssignment(a)) continue
-    const tpl = b.shift_templates || {}
-    rows.push({
-      profileId: a.profile_id,
-      shiftTemplateId: b.template_id,
-      shiftDate: b.block_date,
-      startTimeOverride: effectiveOverride(a.start_time_override, b.start_time, tpl.start_time),
-      endTimeOverride: effectiveOverride(a.end_time_override, b.end_time, tpl.end_time),
-      notes: a.notes ?? null,
-    })
-  }
-  return { rows, error: null }
-}
+// COPYMODES.1 — the copy routes' source reader (fetchSourceShiftRows) moved to
+// src/lib/roster-copy.js as fetchSourceBlocks: it reads BLOCKS (so empty ones
+// can be carried), pages past the 1,000-row cap, and returns raw times so each
+// copy mode can decide what to keep. effectiveOverride stays here for the swap
+// and API shapes below.
 
 // RETIRE-SHIFTS-MIRROR.5d — the legacy-shaped row GET /api/schedule/shifts
 // returns, built from the Roster v2 model. Mobile is the only consumer; the
@@ -146,19 +95,31 @@ export async function fetchSourceShiftRows(db, { locationId, startDate, endDate 
 //   - published derives from block → roster (ROSTER-FIX.1) — it was hard-coded
 //     true here (and by the mig 100 forward trigger), which showed draft and
 //     copied shifts to every coach's phone as if they were live
-//   - notes = assignment.notes ?? block.notes (matches the trigger's coalesce)
+//   - notes = assignment.notes ?? block.notes for a MANAGER-audience row (the
+//     legacy mig 068/100 mirror's coalesce; that trigger went in mig 238).
+//     COACHNOTES.1: a coach-audience row carries the assignment's own note
+//     only. Block notes are a manager's working note; the coach-facing block
+//     text is `briefing` (BLOCKEDIT.1, mig 629).
 const API_SHIFT_SELECT = `
   id, profile_id, status, notes, partial_reason,
   start_time_override, end_time_override, assigned_by, assigned_at, updated_at,
   shift_blocks!inner (
-    location_id, template_id, block_date, start_time, end_time, notes, roster_id,
+    location_id, template_id, block_date, start_time, end_time, notes, briefing, roster_id,
     rosters:roster_id ( status ),
     shift_templates (*)
   ),
   profiles!profile_id ( id, full_name, email, avatar_url, role )
 `
 
-function toApiShiftRow(a) {
+/**
+ * @param {object} a  embedded shift_assignments row (API_SHIFT_SELECT)
+ * @param {{ forCoach?: boolean }} [opts]
+ *   forCoach — COACHNOTES.1: the row is for someone who is NOT a manager at
+ *   its studio. `notes` is then the assignment's own note only, never the
+ *   block's manager note. Decide this BEFORE building the row: once the two
+ *   are collapsed nobody can tell them apart (slimShiftRowForCoach can't).
+ */
+function toApiShiftRow(a, { forCoach = false } = {}) {
   const b = a.shift_blocks || {}
   const tpl = b.shift_templates || {}
   return {
@@ -176,7 +137,12 @@ function toApiShiftRow(a) {
     start_time_override: effectiveOverride(a.start_time_override, b.start_time, tpl.start_time),
     end_time_override: effectiveOverride(a.end_time_override, b.end_time, tpl.end_time),
     role_label: tpl.role_label ?? null,
-    notes: a.notes ?? b.notes ?? null,
+    // COACHNOTES.1 — block notes are a manager's working note: manager rows
+    // fall back to them, coach rows never do (a coach reads the briefing).
+    notes: forCoach ? (a.notes ?? null) : (a.notes ?? b.notes ?? null),
+    // BLOCKEDIT.1 (mig 629) — written FOR the coaches on this shift, so it is
+    // on every row and slimShiftRowForCoach keeps it (its spread does).
+    briefing: b.briefing ?? null,
     status: a.status,
     // ROSTER-FIX.1 — publishing is a roster concept: a shift is published
     // iff its block belongs to a published roster (same derivation as
@@ -193,6 +159,45 @@ function toApiShiftRow(a) {
 }
 
 /**
+ * COACHSCOPE.1 — the non-manager projection of one API shift row.
+ *
+ * The feed is a coach surface (mobile Me + Team views, web Today's "On with
+ * you today"), and it used to hand every coach each colleague's EMAIL and
+ * NOTES. What a coach needs about a colleague is who they are and when they
+ * are on: id, name, avatar, role label. Their own row keeps its notes and
+ * partial_reason (the Me view renders both). Those notes are the ASSIGNMENT's
+ * own note only, because the row must be built with toApiShiftRow(a, { forCoach:
+ * true }) (COACHNOTES.1): this function cannot tell a block note from an
+ * assignment note once they are collapsed. A colleague's row loses them,
+ * because assignment notes / partial_reason are a manager's working notes
+ * about that person. Email is dropped from every row, own included — the app
+ * already knows the caller's own address and no coach screen renders one.
+ * The briefing (BLOCKEDIT.1) is a coach fact and passes on every row.
+ *
+ * Allow-list on the profile embed, not a delete-list: a column added to the
+ * embed later stays manager-only until someone lists it here on purpose.
+ *
+ * @param {object} row     a toApiShiftRow() result
+ * @param {string} viewerId the caller's profile id
+ * @returns {object}
+ */
+export function slimShiftRowForCoach(row, viewerId) {
+  const own = !!viewerId && row.profile_id === viewerId
+  const p = row.profiles
+  return {
+    ...row,
+    notes: own ? row.notes : null,
+    partial_reason: own ? row.partial_reason : null,
+    profiles: p
+      ? { id: p.id, full_name: p.full_name, avatar_url: p.avatar_url, role: p.role }
+      : p,
+  }
+}
+
+// PostgREST's silent per-select row cap (CLAUDE.md: "1,000-row select cap").
+const POSTGREST_ROW_CAP = 1000
+
+/**
  * Read shifts for GET /api/schedule/shifts from the Roster v2 model,
  * normalised to the legacy shift shape (see toApiShiftRow). Filters by a set
  * of location ids, optional date range, optional profile. Sorted by date.
@@ -204,9 +209,14 @@ function toApiShiftRow(a) {
  * @param {string} [opts.endDate]
  * @param {string} [opts.profileId]
  * @param {boolean} [opts.publishedOnly=false] drop rows whose roster is not published
- * @returns {Promise<{ rows: Array<object>, error: object|null }>}
+ * @param {{ id: string, isManagerAt: (locationId: string) => boolean }} [opts.viewer]
+ *   COACHSCOPE.1 — judge each row by the caller's role AT THAT ROW'S LOCATION.
+ *   Where the caller is not a manager: draft rows are dropped (D1) and the row
+ *   is slimmed (slimShiftRowForCoach). Where they are, the row is untouched.
+ *   A multi-location caller can be both in one response.
+ * @returns {Promise<{ rows: Array<object>, error: object|null, capped?: true }>}
  */
-export async function fetchApiShiftRows(db, { locationIds, startDate, endDate, profileId, publishedOnly = false }) {
+export async function fetchApiShiftRows(db, { locationIds, startDate, endDate, profileId, publishedOnly = false, viewer = null }) {
   if (!Array.isArray(locationIds) || locationIds.length === 0) return { rows: [], error: null }
 
   let q = db.from('shift_assignments')
@@ -221,9 +231,25 @@ export async function fetchApiShiftRows(db, { locationIds, startDate, endDate, p
 
   const rows = (data || [])
     .filter((a) => a.shift_blocks && isLiveAssignment(a))
-    .map(toApiShiftRow)
-    // D1 — coaches see published shifts only; managers pass publishedOnly:false.
-    .filter((r) => !publishedOnly || r.published)
+    .flatMap((a) => {
+      // COACHSCOPE.1 — the audience is judged per row, against the caller's
+      // role AT THIS ROW'S STUDIO. No viewer (cron, assistant) = manager shape.
+      // COACHNOTES.1 — and it is judged BEFORE the row is built, so a coach
+      // row never holds the block's manager notes (toApiShiftRow forCoach).
+      const manager = !viewer || viewer.isManagerAt(a.shift_blocks.location_id)
+      const r = toApiShiftRow(a, { forCoach: !manager })
+      // D1 — coaches see published shifts only; managers pass publishedOnly:false.
+      if (publishedOnly && !r.published) return []
+      // COACHSCOPE.1 — a non-manager at this row's studio gets published rows only, slimmed.
+      if (!manager && !r.published) return []
+      return [manager ? r : slimShiftRowForCoach(r, viewer.id)]
+    })
     .sort((x, y) => (x.shift_date < y.shift_date ? -1 : x.shift_date > y.shift_date ? 1 : 0))
+  // SHIFTREMIND.1 — this read is not paged, and PostgREST caps a select at
+  // 1,000 rows without saying so. A FULL page is therefore reported (`capped`,
+  // present only when true) so a caller that must see every row can say so
+  // instead of acting on a silently truncated set. Judged on the RAW count:
+  // cancelled and draft rows are filtered out above but still used the page.
+  if ((data || []).length >= POSTGREST_ROW_CAP) return { rows, error: null, capped: true }
   return { rows, error: null }
 }

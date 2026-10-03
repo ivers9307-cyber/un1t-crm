@@ -113,6 +113,21 @@ describe('sendInvoiceApprovedEmail — branding from company_settings', () => {
   })
 })
 
+describe('sendInvoiceApprovedEmail — honest wording (INVOICEREVIEW.2)', () => {
+  it('says queued for payment processing, never forwarded for payment', async () => {
+    vi.mocked(createServerClient).mockReturnValue(mockClient({ companySettings: [] }))
+    const fetchMock = stubPostmark()
+
+    await sendInvoiceApprovedEmail('inv-1')
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    for (const part of [body.HtmlBody, body.TextBody]) {
+      expect(part).toContain('queued for payment processing')
+      expect(part).not.toMatch(/forwarded/i)
+    }
+  })
+})
+
 describe('sendInvoiceDeclinedEmail — branding from company_settings', () => {
   it('uses the configured company name when one is set but no logo', async () => {
     vi.mocked(createServerClient).mockReturnValue(

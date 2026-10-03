@@ -21,7 +21,7 @@ const REQUESTS = [{
   end_date: '2026-10-03',
   total_days: 3,
   reason: 'Family holiday',
-  profiles: { full_name: 'Sarah Doyle' },
+  profiles: { full_name: 'Sam Demo' },
 }]
 
 async function renderManager() {
@@ -81,8 +81,8 @@ describe('TimeOffManager accessibility (ROSTER-FIX.6b)', () => {
     await renderManager()
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Team Requests' })) })
 
-    expect(screen.getByRole('button', { name: 'Approve Holiday request from Sarah Doyle' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Reject Holiday request from Sarah Doyle' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Approve Holiday request from Sam Demo' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Reject Holiday request from Sam Demo' })).toBeTruthy()
   })
 
   it('leaves no unnamed button on the page', async () => {

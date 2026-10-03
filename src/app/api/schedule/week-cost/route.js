@@ -14,6 +14,15 @@
 // Gate: MANAGER_ROLES, then assertLocationAccess on the caller-supplied
 // location_id — a query-param route, so a foreign location is a 403 (the
 // 404 rule is for detail routes whose id comes from the path).
+// SCHEDROLES.1 — "MANAGER_ROLES" is the role AT location_id
+// (hasRoleAtLocation), never `user.role`, the ACTIVE studio's role.
+//
+// CONTRACTVIS.1 (Richard, 27 Sep) — every figure here is measured against a
+// contract (overtime = allocated − contract; the status says which side of it
+// a coach is), so only owner / manager / master AT location_id get rows. A
+// head coach gets 200 with contract_visible false and no rows, and nothing is
+// computed: a 200, not a 403, so a tab still on the old bundle shows an empty
+// panel rather than an error (the grid's convention).
 //
 // Query params:
 //   location_id  uuid (required)
@@ -21,26 +30,30 @@
 //                helper snaps it to that week's Monday)
 //
 // Returns:
-//   { success, data: { weekStartIso, weekEndIso, coaches: [...], totals } }
+//   { success, data: { weekStartIso, weekEndIso, contract_visible, coaches: [...], totals } }
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { uuidLike, isoDate, MANAGER_ROLES } from '@/lib/schemas'
+import { getCurrentUser, assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { uuidLike, realIsoDate, MANAGER_ROLES, ADMIN_ROLES } from '@/lib/schemas'
 import { computeWeeklyFteHours } from '@/lib/roster-week-cost'
+import { mondayOf } from '@/lib/payroll'
+import { addDaysISO } from '@/lib/dublin-time'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const QuerySchema = z.object({
   location_id: uuidLike,
-  week_start: isoDate,
+  // DATECHECK.1 — a real date, not just the shape: 2026-02-30 was parsed as
+  // 2 March and answered 200 with the week of 2 March, silently.
+  week_start: realIsoDate,
 })
 
 export async function GET(request) {
   const user = await getCurrentUser()
-  if (!user || !MANAGER_ROLES.includes(user.role)) {
+  if (!user || !hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -59,11 +72,28 @@ export async function GET(request) {
 
   const guard = assertLocationAccess(user, location_id)
   if (guard) return guard
+  if (!hasRoleAtLocation(user, location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+  }
+
+  if (!hasRoleAtLocation(user, location_id, ADMIN_ROLES)) {
+    const weekStartIso = mondayOf(week_start)
+    return NextResponse.json({
+      success: true,
+      data: {
+        weekStartIso,
+        weekEndIso: addDaysISO(weekStartIso, 6),
+        contract_visible: false,
+        coaches: [],
+        totals: { coaches: 0, allocated_hours: 0, overtime_hours: 0, over_threshold: 0 },
+      },
+    })
+  }
 
   try {
     const db = createServerClient()
     const data = await computeWeeklyFteHours({ db, locationId: location_id, weekStart: week_start })
-    return NextResponse.json({ success: true, data })
+    return NextResponse.json({ success: true, data: { ...data, contract_visible: true } })
   } catch (e) {
     return NextResponse.json(
       { success: false, error: e?.message || 'Failed to compute weekly hours' },

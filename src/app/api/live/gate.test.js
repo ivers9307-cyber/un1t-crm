@@ -20,7 +20,9 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth', async () => ({
+  // ROLESWEEP.1b — the session-end pre-check reads hasRoleAtAnyLocation.
+  ...(await vi.importActual('@/lib/role-at-location')),
   getCurrentUser: vi.fn(),
   // Mirror the real helper (src/lib/auth.js) so the fixtures below are the
   // single source of truth for who is a member of what.
@@ -63,6 +65,7 @@ function userAt(locationId, role, { studio = true } = {}) {
     role,
     isMaster: false,
     locations: [{ id: locationId, features: {} }],
+    rolesByLocation: { [locationId]: role },
     assignmentsByLocation: {
       [locationId]: { role, permissions: studio === null ? {} : { studio_management: studio } },
     },

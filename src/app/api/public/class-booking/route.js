@@ -17,7 +17,7 @@ import { isValidMobileNumber } from '@/lib/phone-validate'
 import { publishQueuePush, CLASS_BOOKINGS_WORKER_PATH } from '@/lib/qstash'
 import { logWarn } from '@/lib/log'
 import { placeWaitlistEntry } from '@/lib/waitlist-entry'
-import { resolveLandingPath, classFunnelConfigFromBlocks } from '@/lib/public-landing'
+import { resolveLandingPath, classFunnelConfigFromBlocks, classFunnelTimetableUnavailableMessage } from '@/lib/public-landing'
 import { createClassBookingPayment } from '@/lib/class-booking-payments'
 import { locationCanTakePayments } from '@/lib/location-payments'
 
@@ -42,6 +42,9 @@ const Schema = z.object({
     utm_term: z.string().max(200).optional(),
     ad_provider: z.string().max(50).optional(),
     ad_external_id: z.string().max(200).optional(),
+    // METADATASET.1 — the ad click id off the landing URL. Never stored: it
+    // only rides on the Lead event sent to Meta below.
+    fbclid: z.string().max(500).optional(),
   }).optional(),
 })
 
@@ -91,12 +94,30 @@ export async function POST(request) {
   // for storage so spoofed text can't reach Glofox, /approvals or the WhatsApp
   // confirmation, and an event_id not in the list is rejected (don't capture a
   // lead for a class that can't be booked).
-  const { listPublicClasses } = await import('@/lib/public-classes')
+  const { readPublicClasses } = await import('@/lib/public-classes')
   let chosen = null
+  let timetableErr = null
   try {
-    const classes = await listPublicClasses(db, locationId, 14)
-    chosen = classes.find((c) => c.event_id === b.event_id) || null
-  } catch (e) { logWarn('classbook', 'class validate failed', { err: e }) }
+    const r = await readPublicClasses(db, locationId, 14)
+    timetableErr = r.error
+    chosen = r.classes.find((c) => c.event_id === b.event_id) || null
+  } catch (e) {
+    logWarn('classbook', 'class validate failed', { err: e })
+    timetableErr = 'validate_threw'
+  }
+  if (timetableErr) {
+    // REGISTRYREAD.1a: a timetable we could not read is not "that class is
+    // gone". class_unavailable told the customer it "filled up while you were
+    // typing" and sent them to an empty picker. The funnel shows this error
+    // and keeps what they typed. The words are the operator's (the
+    // class_funnel block's timetable_unavailable_message), default otherwise.
+    logWarn('classbook', 'timetable unreadable', { locationId, error: timetableErr })
+    return NextResponse.json({
+      success: false,
+      code: 'timetable_unavailable',
+      error: classFunnelTimetableUnavailableMessage(page.blocks),
+    }, { status: 503 })
+  }
   if (!chosen) {
     // STARTCONV.1 — a machine-readable code, because the funnel now collects
     // details AFTER the class is chosen. That widens the gap between picking
@@ -226,12 +247,16 @@ export async function POST(request) {
   // class-keyed event_id makes double-submits dedupe at Meta; gated on
   // settings.meta_ads.dataset_id inside the helper. Never blocks the response.
   try {
-    const { sendWebsiteConversion } = await import('@/lib/meta-capi')
+    const { sendWebsiteConversion, fbcFromFbclid } = await import('@/lib/meta-capi')
     await sendWebsiteConversion(db, {
       locationId, eventName: 'Lead', email: b.email, phone: b.phone,
       eventSourceUrl,
       eventId: `classlead-${contactId}-${b.event_id}`,
       contentName: chosen.name,
+      // METADATASET.1 — what lets Meta credit this lead to the ad click.
+      fbc: fbcFromFbclid(b.attribution?.fbclid),
+      clientIp: ip,
+      userAgent: request.headers.get('user-agent') || undefined,
     })
   } catch (e) { logWarn('classbook', 'capi lead failed', { err: e }) }
 

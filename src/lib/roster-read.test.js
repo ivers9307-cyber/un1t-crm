@@ -1,8 +1,8 @@
 // RETIRE-SHIFTS-MIRROR.5b — tests for the copy-route source reader:
 // effectiveOverride (collapse block + assignment override vs template)
-// and fetchSourceShiftRows (new-model read, normalised rows).
+// (fetchSourceShiftRows moved to roster-copy.js as fetchSourceBlocks, COPYMODES.1).
 import { describe, it, expect } from 'vitest'
-import { effectiveOverride, fetchSourceShiftRows, swapShiftShape, fetchApiShiftRows } from './roster-read'
+import { effectiveOverride, swapShiftShape, fetchApiShiftRows, slimShiftRowForCoach } from './roster-read'
 
 describe('effectiveOverride', () => {
   it('prefers the per-assignment override when set', () => {
@@ -35,79 +35,6 @@ function makeDb(result) {
   }
   return { from() { return builder } }
 }
-
-describe('fetchSourceShiftRows', () => {
-  it('normalises assignments + blocks into copy rows with effective overrides', async () => {
-    const db = makeDb({
-      data: [
-        {
-          profile_id: 'p1',
-          notes: 'hi',
-          start_time_override: '08:00:00',
-          end_time_override: null,
-          shift_blocks: {
-            location_id: 'loc1', template_id: 't1', block_date: '2026-06-01',
-            start_time: '09:00:00', end_time: '10:00:00',
-            shift_templates: { start_time: '09:00:00', end_time: '10:00:00' },
-          },
-        },
-        {
-          // no assignment override, but block time deviates from template
-          profile_id: 'p2',
-          notes: null,
-          start_time_override: null,
-          end_time_override: null,
-          shift_blocks: {
-            location_id: 'loc1', template_id: 't2', block_date: '2026-06-02',
-            start_time: '07:30:00', end_time: '08:30:00',
-            shift_templates: { start_time: '08:00:00', end_time: '09:00:00' },
-          },
-        },
-      ],
-      error: null,
-    })
-    const { rows, error } = await fetchSourceShiftRows(db, { locationId: 'loc1', startDate: '2026-06-01', endDate: '2026-06-07' })
-    expect(error).toBeNull()
-    expect(rows).toHaveLength(2)
-    // p1: assignment override wins, end inherits template (null)
-    expect(rows[0]).toMatchObject({
-      profileId: 'p1', shiftTemplateId: 't1', shiftDate: '2026-06-01',
-      startTimeOverride: '08:00:00', endTimeOverride: null, notes: 'hi',
-    })
-    // p2: block-vs-template deviation collapses onto the override
-    expect(rows[1]).toMatchObject({
-      profileId: 'p2', shiftTemplateId: 't2', shiftDate: '2026-06-02',
-      startTimeOverride: '07:30:00', endTimeOverride: '08:30:00', notes: null,
-    })
-  })
-
-  it('skips rows with no joined block and surfaces query errors', async () => {
-    const ok = makeDb({ data: [{ profile_id: 'p1', shift_blocks: null }], error: null })
-    expect((await fetchSourceShiftRows(ok, { locationId: 'l', startDate: 'a', endDate: 'b' })).rows).toHaveLength(0)
-
-    const bad = makeDb({ data: null, error: { message: 'boom' } })
-    const res = await fetchSourceShiftRows(bad, { locationId: 'l', startDate: 'a', endDate: 'b' })
-    expect(res.error?.message).toBe('boom')
-    expect(res.rows).toEqual([])
-  })
-
-  it('does not copy a cancelled assignment (dropped shift must not resurrect)', async () => {
-    const blk = {
-      location_id: 'loc1', template_id: 't1', block_date: '2026-06-01',
-      start_time: '09:00:00', end_time: '10:00:00',
-      shift_templates: { start_time: '09:00:00', end_time: '10:00:00' },
-    }
-    const db = makeDb({
-      data: [
-        { profile_id: 'p1', status: 'cancelled', notes: null, start_time_override: null, end_time_override: null, shift_blocks: blk },
-        { profile_id: 'p2', status: 'scheduled', notes: null, start_time_override: null, end_time_override: null, shift_blocks: blk },
-      ],
-      error: null,
-    })
-    const { rows } = await fetchSourceShiftRows(db, { locationId: 'loc1', startDate: '2026-06-01', endDate: '2026-06-07' })
-    expect(rows.map((r) => r.profileId)).toEqual(['p2'])
-  })
-})
 
 describe('swapShiftShape', () => {
   it('returns null for a null assignment (drop request has no target)', () => {
@@ -156,6 +83,33 @@ describe('swapShiftShape', () => {
     })
     expect(shaped.start_time_override).toBe('07:30:00')
     expect(shaped.end_time_override).toBe('08:30:00')
+  })
+
+  // COVERLOOP.2 — start_time_override collapses the requester's personal paid
+  // window AND a block-vs-template deviation, so a client cannot tell them
+  // apart. The taker works the BLOCK's hours (a moved shift loses its
+  // overrides, SWAP_MOVE_CLEARS), so the block's times ride along under the
+  // same keys toApiShiftRow uses.
+  it('carries the block times beside the collapsed override', () => {
+    const shaped = swapShiftShape({
+      id: 'a3', profile_id: 'p3', status: 'scheduled', notes: null,
+      start_time_override: '06:15:00', end_time_override: null,
+      shift_blocks: {
+        block_date: '2026-09-24', start_time: '06:00:00', end_time: '07:00:00',
+        shift_templates: { name: 'Morning', start_time: '06:00:00', end_time: '07:00:00' },
+      },
+      profiles: null,
+    })
+    expect(shaped.block_start_time).toBe('06:00:00')
+    expect(shaped.block_end_time).toBe('07:00:00')
+    // unchanged: the requester's own window is still what the override says
+    expect(shaped.start_time_override).toBe('06:15:00')
+  })
+
+  it('block times are null, never undefined, when the block embed is missing', () => {
+    const shaped = swapShiftShape({ id: 'a4', profile_id: 'p4', status: 'scheduled' })
+    expect(shaped.block_start_time).toBeNull()
+    expect(shaped.block_end_time).toBeNull()
   })
 })
 
@@ -292,9 +246,191 @@ describe('fetchApiShiftRows', () => {
     expect(rows.map((r) => r.id)).toEqual(['pub'])
   })
 
+  // COACHSCOPE.1 — per-location viewer: a caller who manages one studio and
+  // coaches at another gets each studio's rows on that studio's terms.
+  it('viewer: non-manager rows are published-only and slimmed; manager rows untouched', async () => {
+    const mk = (id, loc, profileId, rosterStatus) => ({
+      id, profile_id: profileId, status: 'scheduled', notes: `note-${id}`, partial_reason: `why-${id}`,
+      shift_blocks: {
+        location_id: loc, template_id: 't1', block_date: '2026-06-10', start_time: '09:00:00', end_time: '10:00:00',
+        notes: null, roster_id: rosterStatus ? 'r' : null, rosters: rosterStatus ? { status: rosterStatus } : null,
+        shift_templates: { id: 't1', name: 'AM', start_time: '09:00:00', end_time: '10:00:00' },
+      },
+      profiles: { id: profileId, full_name: `Name ${profileId}`, email: `${profileId}@x.ie`, avatar_url: 'a.png', role: 'staff' },
+    })
+    const db = makeDb({
+      data: [
+        mk('coach-own', 'loc-coach', 'me', 'published'),
+        mk('coach-colleague', 'loc-coach', 'sam', 'published'),
+        mk('coach-draft', 'loc-coach', 'me', 'draft'),
+        mk('coach-noroster', 'loc-coach', 'sam', null),
+        mk('mgr-draft', 'loc-mgr', 'sam', 'draft'),
+      ],
+      error: null,
+    })
+    const viewer = { id: 'me', isManagerAt: (loc) => loc === 'loc-mgr' }
+    const { rows } = await fetchApiShiftRows(db, { locationIds: ['loc-coach', 'loc-mgr'], viewer })
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r]))
+
+    // D1 at the coach location; drafts kept where they manage.
+    expect(Object.keys(byId).sort()).toEqual(['coach-colleague', 'coach-own', 'mgr-draft'])
+
+    // Own row: own notes + partial_reason stay; nobody's email is served.
+    expect(byId['coach-own'].notes).toBe('note-coach-own')
+    expect(byId['coach-own'].partial_reason).toBe('why-coach-own')
+    expect(byId['coach-own'].profiles).toEqual({ id: 'me', full_name: 'Name me', avatar_url: 'a.png', role: 'staff' })
+
+    // Colleague row: name stays ("on with Sam"), email / notes / partial_reason go.
+    expect(byId['coach-colleague'].profiles).toEqual({ id: 'sam', full_name: 'Name sam', avatar_url: 'a.png', role: 'staff' })
+    expect(byId['coach-colleague'].notes).toBeNull()
+    expect(byId['coach-colleague'].partial_reason).toBeNull()
+
+    // Manager location: the full row.
+    expect(byId['mgr-draft'].profiles.email).toBe('sam@x.ie')
+    expect(byId['mgr-draft'].notes).toBe('note-mgr-draft')
+  })
+
+  // SHIFTREMIND.1 — the read is not paged. PostgREST caps a select at 1,000 rows
+  // and says nothing, so a full page is reported instead of silently truncated.
+  it('flags a read that came back at the 1,000-row cap, and only then', async () => {
+    const row = (i) => ({
+      id: `a${i}`, profile_id: 'p1', status: 'scheduled',
+      shift_blocks: { location_id: 'loc1', template_id: 't1', block_date: '2026-06-08', rosters: { status: 'published' }, shift_templates: {} },
+    })
+    const full = await fetchApiShiftRows(makeDb({ data: Array.from({ length: 1000 }, (_, i) => row(i)), error: null }), { locationIds: ['loc1'] })
+    expect(full.capped).toBe(true)
+    expect(full.rows).toHaveLength(1000)
+    const under = await fetchApiShiftRows(makeDb({ data: Array.from({ length: 999 }, (_, i) => row(i)), error: null }), { locationIds: ['loc1'] })
+    expect('capped' in under).toBe(false)
+  })
+
   it('passes query errors through', async () => {
     const res = await fetchApiShiftRows(makeDb({ data: null, error: { message: 'nope' } }), { locationIds: ['l'] })
     expect(res.error?.message).toBe('nope')
     expect(res.rows).toEqual([])
+  })
+})
+
+// BLOCKEDIT.1 — the briefing is a block fact written FOR coaches: the /shifts
+// feed carries it, and the coach projection keeps it on every row.
+describe('briefing (BLOCKEDIT.1)', () => {
+  const assignment = (id, profileId, briefing) => ({
+    id, profile_id: profileId, status: 'scheduled', notes: 'mgr note', partial_reason: null,
+    start_time_override: null, end_time_override: null, assigned_by: 'mgr', updated_at: 't',
+    shift_blocks: {
+      location_id: 'loc1', template_id: 't1', block_date: '2026-06-08', start_time: '09:00:00', end_time: '10:00:00',
+      notes: 'blk', briefing, roster_id: 'r1', rosters: { status: 'published' },
+      shift_templates: { id: 't1', name: 'AM', start_time: '09:00:00', end_time: '10:00:00', role_label: 'Coach' },
+    },
+    profiles: { id: profileId, full_name: 'Coach A', email: 'a@x.ie', avatar_url: null, role: 'staff' },
+  })
+
+  it('asks for shift_blocks.briefing and puts it on the row (null when absent)', async () => {
+    const selects = []
+    const db = makeDb({ data: [assignment('a1', 'p1', 'Fire drill at 10'), assignment('a2', 'p2', null)], error: null })
+    const from = db.from
+    db.from = (t) => { const b = from(t); const sel = b.select; b.select = function (c) { selects.push(c); return sel.call(this) }; return b }
+    const { rows } = await fetchApiShiftRows(db, { locationIds: ['loc1'] })
+    expect(selects[0]).toMatch(/shift_blocks!inner \(\s*location_id, template_id, block_date, start_time, end_time, notes, briefing, roster_id/)
+    expect(rows.map((r) => r.briefing)).toEqual(['Fire drill at 10', null])
+  })
+
+  it("slimShiftRowForCoach keeps the briefing on the coach's own row AND a colleague's", () => {
+    const row = { profile_id: 'p2', notes: 'n', partial_reason: 'x', briefing: 'Fire drill at 10', profiles: { id: 'p2', full_name: 'B', email: 'b@x.ie' } }
+    expect(slimShiftRowForCoach(row, 'p2').briefing).toBe('Fire drill at 10')
+    const colleague = slimShiftRowForCoach(row, 'someone-else')
+    expect(colleague.briefing).toBe('Fire drill at 10')
+    expect(colleague.notes).toBeNull()
+  })
+})
+
+// COACHNOTES.1 — a coach's view of a shift carries the assignment's OWN note
+// and the block's briefing, never the block's manager `notes`. Manager views,
+// and callers with no viewer (the reminder cron, the assistant), are unchanged.
+// Fictional people only: the repo is public.
+describe('block notes stay manager-only (COACHNOTES.1)', () => {
+  const BLOCK_NOTE = 'MGR-BLOCK-NOTE: short-staffed, keep an eye on Sam'
+  const mk = (id, loc, profileId, assignmentNote) => ({
+    id, profile_id: profileId, status: 'scheduled', notes: assignmentNote, partial_reason: null,
+    start_time_override: null, end_time_override: null, assigned_by: 'mgr', updated_at: 't',
+    shift_blocks: {
+      location_id: loc, template_id: 't1', block_date: '2026-06-10', start_time: '09:00:00', end_time: '10:00:00',
+      notes: BLOCK_NOTE, briefing: 'Fire drill at 10', roster_id: 'r1', rosters: { status: 'published' },
+      shift_templates: { id: 't1', name: 'AM', start_time: '09:00:00', end_time: '10:00:00', role_label: 'Coach' },
+    },
+    profiles: { id: profileId, full_name: `Name ${profileId}`, email: `${profileId}@x.ie`, avatar_url: null, role: 'staff' },
+  })
+  const read = (data, opts = {}) =>
+    fetchApiShiftRows(makeDb({ data, error: null }), { locationIds: ['loc-coach', 'loc-mgr'], ...opts })
+  const byId = (rows) => Object.fromEntries(rows.map((r) => [r.id, r]))
+  const coachEverywhere = { id: 'me', isManagerAt: () => false }
+
+  it("a coach's own row with no note of its own carries null, not the block's notes", async () => {
+    const { rows } = await read([mk('own', 'loc-coach', 'me', null)], { viewer: coachEverywhere })
+    expect(rows).toHaveLength(1)
+    expect(rows[0].notes).toBeNull()
+    // The coach-facing text still arrives.
+    expect(rows[0].briefing).toBe('Fire drill at 10')
+  })
+
+  it("a coach's own row keeps the assignment's own note", async () => {
+    const { rows } = await read([mk('own', 'loc-coach', 'me', 'Bring the rower keys')], { viewer: coachEverywhere })
+    expect(rows[0].notes).toBe('Bring the rower keys')
+  })
+
+  it('no block note reaches any coach row, own or colleague', async () => {
+    const { rows } = await read([
+      mk('own-empty', 'loc-coach', 'me', null),
+      mk('own-noted', 'loc-coach', 'me', 'Bring the rower keys'),
+      mk('mate', 'loc-coach', 'sam', null),
+    ], { viewer: coachEverywhere })
+    expect(rows).toHaveLength(3)
+    expect(JSON.stringify(rows)).not.toContain('MGR-BLOCK-NOTE')
+  })
+
+  it('a manager at the studio still gets the block notes as the fallback, own row included', async () => {
+    const managerEverywhere = { id: 'me', isManagerAt: () => true }
+    const { rows } = await read([
+      mk('mgr-own', 'loc-mgr', 'me', null),
+      mk('mgr-mate', 'loc-mgr', 'sam', null),
+      mk('mgr-noted', 'loc-mgr', 'sam', 'Own note wins'),
+    ], { viewer: managerEverywhere })
+    const r = byId(rows)
+    expect(r['mgr-own'].notes).toBe(BLOCK_NOTE)
+    expect(r['mgr-mate'].notes).toBe(BLOCK_NOTE)
+    expect(r['mgr-noted'].notes).toBe('Own note wins')
+  })
+
+  it('judged per studio: the same caller loses block notes where they coach and keeps them where they manage', async () => {
+    // e.g. a head coach at loc-mgr who is plain staff at loc-coach (the route's
+    // isManagerAt is hasRoleAtLocation(user, loc, MANAGER_ROLES)).
+    const viewer = { id: 'me', isManagerAt: (loc) => loc === 'loc-mgr' }
+    const { rows } = await read([
+      mk('at-coach-studio', 'loc-coach', 'me', null),
+      mk('at-mgr-studio', 'loc-mgr', 'me', null),
+    ], { viewer })
+    const r = byId(rows)
+    expect(r['at-coach-studio'].notes).toBeNull()
+    expect(r['at-mgr-studio'].notes).toBe(BLOCK_NOTE)
+    // Briefing on both.
+    expect(r['at-coach-studio'].briefing).toBe('Fire drill at 10')
+    expect(r['at-mgr-studio'].briefing).toBe('Fire drill at 10')
+  })
+
+  it('with no viewer (the reminder cron, the assistant) the row is unchanged', async () => {
+    const { rows } = await read([mk('cron', 'loc-coach', 'me', null)])
+    expect(rows[0].notes).toBe(BLOCK_NOTE)
+  })
+
+  it('the coach rules around notes are otherwise untouched: drafts dropped, email slimmed, publishedOnly honoured', async () => {
+    const draft = mk('draft', 'loc-coach', 'me', null)
+    draft.shift_blocks = { ...draft.shift_blocks, rosters: { status: 'draft' } }
+    const { rows } = await read([mk('own', 'loc-coach', 'me', null), draft], { viewer: coachEverywhere })
+    expect(rows.map((x) => x.id)).toEqual(['own'])
+    expect(rows[0].profiles).toEqual({ id: 'me', full_name: 'Name me', avatar_url: null, role: 'staff' })
+    const pubOnly = await read([mk('mgr-own', 'loc-mgr', 'me', null), draft], {
+      viewer: { id: 'me', isManagerAt: () => true }, publishedOnly: true,
+    })
+    expect(pubOnly.rows.map((x) => x.id)).toEqual(['mgr-own'])
   })
 })

@@ -4,6 +4,9 @@ import { generateReport, calculatePeriodForSchedule, calculateNextRun, buildRepo
 import { sendTransactionalEmail } from '@/lib/postmark'
 import { getAppUrl } from '@/lib/app-url'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { logWarn } from '@/lib/log'
+import { isRateReportType } from '@/lib/report-access'
+import { filterRateReportRecipients } from '@/lib/report-recipients'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -37,14 +40,20 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: fetchError.message }, { status: 500 })
   }
 
-  if (!dueReports || dueReports.length === 0) {
+  // REPORTS.2 — a paused schedule is skipped. Filtered here rather than with
+  // .eq('paused', false) on purpose: `select('*')` still works if this code
+  // deploys before mig 617 adds the column, where a filter on it would 400
+  // and stop EVERY schedule. A row without the field is not paused.
+  const runnable = (dueReports || []).filter(r => r.paused !== true)
+
+  if (runnable.length === 0) {
     await stampHeartbeat('run-scheduled-reports')
     return NextResponse.json({ success: true, message: 'No reports due', processed: 0 })
   }
 
   const results = []
 
-  for (const schedule of dueReports) {
+  for (const schedule of runnable) {
     try {
       // Calculate the reporting period based on frequency
       const { period_start, period_end } = calculatePeriodForSchedule(schedule.frequency)
@@ -94,7 +103,23 @@ export async function GET(request) {
         // Best-effort: a Postmark failure must not fail the cron tick or undo
         // the report we already generated — we stamp email_sent honestly
         // (true only on a confirmed send) and surface the outcome in `results`.
-        if (schedule.deliver_email && schedule.email_recipients?.length > 0) {
+        //
+        // STAFFCOST.1 — a rate-bearing report (staff_cost) is emailed only to
+        // addresses allowed to see pay at this location; a head coach on the
+        // list is dropped. See src/lib/report-recipients.js for the rule.
+        let recipients = schedule.deliver_email ? (schedule.email_recipients || []) : []
+        if (recipients.length > 0 && isRateReportType(schedule.report_type)) {
+          // REPORTS.2 — an address matching no staff profile is sent only if
+          // the owner confirmed it as external when saving the schedule.
+          const { allowed, dropped } = await filterRateReportRecipients({
+            db, locationId: schedule.location_id, recipients,
+            confirmedExternal: schedule.confirmed_external_recipients,
+          })
+          recipients = allowed
+          // Counts only — the addresses are staff PII and this body is logged.
+          if (dropped.length > 0) resultEntry.recipients_withheld = dropped.length
+        }
+        if (recipients.length > 0) {
           let emailSent = false
           let emailError = null
           try {
@@ -111,7 +136,7 @@ export async function GET(request) {
               // Recipients are staff email addresses (not CRM contacts), so one
               // transactional email to the comma-joined list — no contactId, so
               // it isn't logged to email_sends (which is keyed to contacts).
-              to: schedule.email_recipients.join(', '),
+              to: recipients.join(', '),
               subject: `${schedule.report_name || result.data.report_name} — ${periodLabel}`,
               htmlBody: buildReportEmailHtml(result.data, { appUrl }),
               tag: 'scheduled-report',
@@ -127,16 +152,20 @@ export async function GET(request) {
             .eq('id', result.data.id)
 
           resultEntry.email = emailSent ? 'sent' : `failed: ${emailError}`
+        } else if (resultEntry.recipients_withheld) {
+          // Every address was withheld — say so rather than reading as "email off".
+          resultEntry.email = 'withheld'
+          // Schedule id and count only, never the addresses.
+          logWarn('run-scheduled-reports', 'rate report email withheld from every recipient', {
+            scheduleId: schedule.id, reportType: schedule.report_type, withheld: resultEntry.recipients_withheld,
+          })
         }
 
-        // If notification delivery is enabled, create an in-app notification
-        if (schedule.deliver_notification) {
-          await db.from('generated_reports')
-            .update({ notification_sent: true })
-            .eq('id', result.data.id)
-          // The UI already shows generated reports in the Report History tab,
-          // so "notification" = the report appearing in the list
-        }
+        // REPORTS.2 — the "in-app notification" delivery option is gone. It
+        // only ever stamped generated_reports.notification_sent = true; no
+        // notification was created, and the report appears in Report History
+        // whatever the flag says. No schedule in prod had it on (17 Sep), and
+        // the save routes now refuse it.
       } else {
         results.push({
           id: schedule.id,

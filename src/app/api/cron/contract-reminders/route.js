@@ -2,7 +2,9 @@
 // 'issued'/'viewed' with no signature: a reminder email + push at 3 days
 // (1st) and 7 days (2nd, final) since issued_at, capped at 2 total. Mirrors
 // the issue-time notification in POST /api/contracts (same email shell via
-// contracts-email.js, same push shape via src/lib/push.js).
+// contracts-email.js, same push shape via src/lib/push.js). PUSHDONE.1a: the
+// 2nd also waits 4 days after the RECORDED 1st (last_reminded_at), so a 1st
+// held back by retries is not followed by the 2nd the next day.
 //
 // Registration: mirrors the newest existing cron (expand-hyrox-weeks, mig
 // 441 / HYROX-TC.3) — a plain vercel.json schedule entry with a Bearer
@@ -17,13 +19,26 @@
 // contracts.js) so it's independently unit-tested. The SQL filters below
 // are a coarse pre-filter only (status + not-yet-capped) — reminderDue()
 // is still applied per-row as the authoritative client-side guard.
+//
+// RUNWAY.1 — also runs the daily roster-runway push (second arm, top of GET).
+// HEARTBEAT.1 — that arm stamps its own heartbeat row, 'roster-runway' (mig
+// 633), only when it ran clean; 'contract-reminders' is unchanged.
+// QUALS.1 — also runs the weekly qualification digest (third arm), with its
+// own heartbeat row 'qualification-digest' (mig 635).
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { reminderDue } from '@/lib/contracts'
 import { sendContractReminderEmail } from '@/lib/contracts-email'
 import { sendPush } from '@/lib/push'
-import { logWarn } from '@/lib/log'
+import { pushOutcome } from '@/lib/push-outcome'
+import { logWarn, logError } from '@/lib/log'
+import { runRosterRunwayAlerts } from '@/lib/roster-runway-notify'
+import { runQualificationDigest } from '@/lib/qualification-digest'
+import {
+  ROSTER_RUNWAY_HEARTBEAT, runwayArmHealthy,
+  QUALIFICATION_DIGEST_HEARTBEAT, qualificationDigestArmHealthy,
+} from '@/lib/cron-arm-health'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -41,6 +56,65 @@ export async function GET(request) {
   const db = createServerClient()
   const now = new Date()
 
+  // RUNWAY.1 — second arm: the daily roster-runway push (one per location per
+  // week per severity; src/lib/roster-runway-notify.js). It rides this cron
+  // because both are once-a-day staff nudges and 08:00 UTC is 08:00/09:00 in
+  // Dublin, a civil hour to tell a manager next week is not built; the roster
+  // cron (extend-roster-horizon) runs at 03:20 UTC, which is not. (The arm
+  // also refuses to send outside 07:00-22:00 studio time on its own, so moving
+  // this cron cannot push at night.)
+  //
+  // Isolated BOTH ways. It runs FIRST, so nothing the contract half does can
+  // cost it its run; and it is wrapped, so its own failure is logged, rides in
+  // last_outcome.runway, is counted in runway_arm_failed, and never costs the
+  // contract reminders their run or their heartbeat (the same partial-failure
+  // posture as extend-roster-horizon).
+  let runway
+  let runwayArmFailed = 0
+  try {
+    runway = await runRosterRunwayAlerts(db)
+  } catch (err) {
+    runwayArmFailed = 1
+    logError('cron-contract-reminders', 'roster runway arm threw', { err })
+    runway = { error: err?.message || 'runway arm failed' }
+  }
+
+  // HEARTBEAT.1 — the runway arm's OWN heartbeat row ('roster-runway', mig
+  // 633). runway_arm_failed rides in the contract-reminders row's last_outcome,
+  // which the health-check never reads; this row goes STALE instead. Stamped
+  // HERE, before the contract half, so a contract crash (which answers nothing
+  // and stamps nothing, as always) cannot cost a clean runway run its stamp;
+  // its own catch, so the stamp can never cost the contract half anything.
+  // Only when the arm returned an outcome and did not throw
+  // (src/lib/cron-arm-health.js): a day with nothing to announce stamps.
+  if (runwayArmFailed === 0 && runwayArmHealthy(runway)) {
+    await stampHeartbeat(ROSTER_RUNWAY_HEARTBEAT, runway).catch((err) =>
+      logWarn('cron-contract-reminders', 'roster-runway heartbeat failed', { err }))
+  }
+
+  // QUALS.1 — third arm: the weekly qualification digest to owners
+  // (src/lib/qualification-digest.js). Runs every day; each owner hears at
+  // most once per Dublin week, on the first run with something expired or
+  // expiring (a week stamp in push_event_sends, written AFTER the send),
+  // inside 07:00-22:00 studio time. Isolated both ways, like the runway arm:
+  // its own try/catch, and its own heartbeat row ('qualification-digest', mig
+  // 635) stamped under its own .catch BEFORE the contract half runs, so a
+  // contract crash cannot cost a clean digest its stamp. Only a returned
+  // outcome with no { error } stamps.
+  let qualifications
+  let qualificationArmFailed = 0
+  try {
+    qualifications = await runQualificationDigest(db)
+  } catch (err) {
+    qualificationArmFailed = 1
+    logError('cron-contract-reminders', 'qualification digest arm threw', { err })
+    qualifications = { error: err?.message || 'qualification digest arm failed' }
+  }
+  if (qualificationArmFailed === 0 && qualificationDigestArmHealthy(qualifications)) {
+    await stampHeartbeat(QUALIFICATION_DIGEST_HEARTBEAT, qualifications).catch((err) =>
+      logWarn('cron-contract-reminders', 'qualification-digest heartbeat failed', { err }))
+  }
+
   // Candidate contracts — status in ('issued','viewed') and not yet at the
   // reminder cap. Paginated with an explicit .order() (1k-row cap
   // invariant): a busy org could plausibly exceed 1000 open contracts.
@@ -49,7 +123,7 @@ export async function GET(request) {
     const { data, error } = await db
       .from('contracts')
       .select(`
-        id, status, issued_at, reminder_count, location_id, profile_id,
+        id, status, issued_at, reminder_count, last_reminded_at, location_id, profile_id,
         profile:profiles!profile_id (id, full_name, email),
         template:contract_templates!template_id (name)
       `)
@@ -69,6 +143,7 @@ export async function GET(request) {
   let sent = 0
   let emailFailed = 0
   let rowErrors = 0
+  let undelivered = 0
 
   for (const contract of candidates) {
     if (!reminderDue(contract, now)) continue
@@ -87,9 +162,10 @@ export async function GET(request) {
       // Push notification (best effort, never blocks) — mirrors the
       // issue-route's push block: category 'contract_issued', deep link
       // /contracts/<id>.
+      let push = 'settled'
       try {
         if (recipient?.id) {
-          await sendPush([recipient.id], {
+          push = pushOutcome(await sendPush([recipient.id], {
             title: 'Contract awaiting signature',
             body: templateName
               ? `Reminder: "${templateName}" is still awaiting your signature. Tap to review and sign.`
@@ -100,10 +176,31 @@ export async function GET(request) {
               contract_id: contract.id,
               path: `/contracts/${contract.id}`,
             },
-          })
+          }))
         }
-      } catch {
-        // Push is non-blocking; intentionally swallow (mirrors the issue route).
+      } catch (err) {
+        push = 'failed'
+        logWarn('cron-contract-reminders', 'reminder push threw', { contract_id: contract.id, err: err?.message || String(err) })
+      }
+
+      // C21 PUSHDONE.1 — the stamp is the cadence ("reminder N went out").
+      // It used to be written whatever happened, so a Postmark blip plus a
+      // push failure recorded a reminder nobody received, and the second one
+      // came four days later as if the first had landed. Hold it back only
+      // when NOTHING reached them and something transient broke: tomorrow's
+      // run (daily) sends it again, and it cannot duplicate what never went
+      // out. Email delivered → recorded, whatever the push did (retrying
+      // would repeat the email). No address (or a hard-bounced one, Postmark
+      // 406/300 — PUSHDONE.1a) and no device → recorded: nothing to retry
+      // against, and the contract still stops at the normal 2 reminders.
+      const reached = emailResult.ok || push === 'delivered'
+      const transient = (!emailResult.ok && !emailResult.permanent) || push === 'failed'
+      if (!reached && transient) {
+        undelivered++
+        logWarn('cron-contract-reminders', 'reminder reached nobody; not recorded, tomorrow retries', {
+          contract_id: contract.id, email_error: emailResult.error ?? null, push,
+        })
+        continue
       }
 
       const { error: updErr } = await db
@@ -127,8 +224,13 @@ export async function GET(request) {
     }
   }
 
-  await stampHeartbeat('contract-reminders', { checked: candidates.length, sent, emailFailed, rowErrors }).catch((err) =>
+  const outcome = {
+    checked: candidates.length, sent, emailFailed, rowErrors, undelivered,
+    runway, runway_arm_failed: runwayArmFailed,
+    qualifications, qualification_arm_failed: qualificationArmFailed,
+  }
+  await stampHeartbeat('contract-reminders', outcome).catch((err) =>
     logWarn('cron-contract-reminders', 'heartbeat failed', { err }))
 
-  return NextResponse.json({ success: true, checked: candidates.length, sent, emailFailed, rowErrors })
+  return NextResponse.json({ success: true, ...outcome })
 }

@@ -163,6 +163,65 @@ describe('SwapRequestsManager review actions (ROSTER-FIX.6a)', () => {
   })
 })
 
+// SWAPS.2 — the server refuses an approval with 409 + code swap_conflicts
+// when a coach is on approved leave or already on an overlapping shift that
+// day. The manager sees the sentences and nothing is approved until they
+// press "Approve anyway", which re-sends with confirm_conflicts.
+describe('SwapRequestsManager conflict confirm step (SWAPS.2)', () => {
+  const swap = {
+    id: 's1', status: 'awaiting_approval', requester_id: 'u2', target_id: 'u3',
+    requester: { full_name: 'Aoife' }, target: { full_name: 'Bea' },
+    requester_shift: { shift_date: '2026-06-01', shift_templates: { name: 'Morning', start_time: '06:00:00', end_time: '14:00:00' } },
+  }
+  const conflictBody = {
+    success: false, code: 'swap_conflicts',
+    error: 'Bea has approved holiday on 2026-06-01, which covers the shift on 2026-06-01.',
+    conflicts: [{ kind: 'leave', message: 'Bea has approved holiday on 2026-06-01, which covers the shift on 2026-06-01.' }],
+  }
+
+  it('shows the conflicts, then approves only with confirm_conflicts', async () => {
+    const puts = []
+    global.fetch = vi.fn(async (url, opts) => {
+      if (opts?.method === 'PUT') {
+        const body = JSON.parse(opts.body)
+        puts.push(body)
+        if (!body.confirm_conflicts) return { ok: false, status: 409, json: async () => conflictBody }
+        return ok({ success: true, data: { ...swap, status: 'approved' } })
+      }
+      return ok({ data: [swap] })
+    })
+    render(<SwapRequestsManager user={user} />)
+    await waitFor(() => expect(screen.getByText('Aoife')).toBeTruthy())
+    fireEvent.click(screen.getByText('Approve'))
+
+    await waitFor(() => expect(screen.getByText('Check before approving')).toBeTruthy())
+    expect(screen.getByText(/Bea has approved holiday/)).toBeTruthy()
+    // Not an error banner: nothing failed, a decision is pending.
+    expect(screen.queryByText('Could not approve')).toBeNull()
+    expect(puts).toEqual([{ status: 'approved' }])
+
+    fireEvent.click(screen.getByText('Approve anyway'))
+    await waitFor(() => expect(puts).toHaveLength(2))
+    expect(puts[1]).toEqual({ status: 'approved', confirm_conflicts: true })
+    await waitFor(() => expect(screen.queryByText('Check before approving')).toBeNull())
+  })
+
+  it('Cancel closes the step without approving', async () => {
+    const puts = []
+    global.fetch = vi.fn(async (url, opts) => {
+      if (opts?.method === 'PUT') { puts.push(JSON.parse(opts.body)); return { ok: false, status: 409, json: async () => conflictBody } }
+      return ok({ data: [swap] })
+    })
+    render(<SwapRequestsManager user={user} />)
+    await waitFor(() => expect(screen.getByText('Aoife')).toBeTruthy())
+    fireEvent.click(screen.getByText('Approve'))
+    await waitFor(() => expect(screen.getByText('Approve anyway')).toBeTruthy())
+    fireEvent.click(screen.getByText('Cancel'))
+    expect(screen.queryByText('Check before approving')).toBeNull()
+    expect(puts).toHaveLength(1)
+  })
+})
+
 // ROSTER-FIX.6a-8 — each of these screens ran load failures and ACTION
 // failures through one `error` state under a banner whose title was hard-coded
 // to the load ("Could not load time off"). So a refused approve announced

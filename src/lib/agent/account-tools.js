@@ -57,6 +57,16 @@ export const ACCOUNT_TOOLS = [
     input_schema: { type: 'object', properties: {} },
   },
   {
+    name: 'get_my_payment_reminder',
+    description:
+      'Look up whether the verified customer has been sent an overdue membership payment ' +
+      'reminder, the amount, the pay link, and whether Glofox still shows the payment as ' +
+      'outstanding. Call this before answering anything about a payment reminder, a failed ' +
+      'payment, or a Pay now link. Only works after verify_identity has succeeded this ' +
+      'conversation.',
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
     name: 'get_my_next_class',
     description:
       "Get the verified customer's next upcoming booked class (name + date/time). Only " +
@@ -507,6 +517,105 @@ function queueFailed(kind, error) {
   }
 }
 
+// ── MIA-DUNNING.1 — the overdue-payment reminder run, read-only ─────
+// The CRM chases a failed membership payment with a "Pay now" WhatsApp +
+// emails over ~7 days (PAYLINK, #1683). The run is a sequence_enrollments
+// row whose source_type is transactional and whose metadata.payment carries
+// the invoice, amount and hosted pay link (dunning-payment.js). This tool
+// lets Mia answer "I've paid" / "why did I get this" / "the link doesn't
+// work" from the run itself, plus a LIVE Glofox overdue check with the SAME
+// inference rules as dunningPresendGate: invoice listed → still owed; ok and
+// absent under the page cap → settled; anything else → 'unknown'.
+//
+// It NEVER exits or edits the run. The pre-send gate does that before the
+// next send, which is what makes "the reminders stop automatically" true.
+//
+// Columns are the real ones on sequence_enrollments (mig 005/037/088): there
+// is NO created_at — the row's timestamp is enrolled_at (ENROLFIX.1).
+const REMINDER_ENROLMENT_COLUMNS = 'id, contact_id, status, exit_reason, enrolled_at, metadata, source_type'
+
+const NO_REMINDER = Object.freeze({
+  has_reminder: false, status: 'none', amount: null, currency: null, pay_link: null,
+  first_sent_at: null, exit_reason: null, still_overdue: 'unknown',
+})
+
+function reminderStatus(row) {
+  if (row?.status === 'completed') return 'completed'
+  if (row?.status === 'exited') return 'exited'
+  return 'active'
+}
+
+async function getMyPaymentReminder(db, { verifiedId, locationId }) {
+  try {
+    // Lazy imports, like glofox-catalog above: dunning-payment pulls the
+    // enrolment-status helper (a service client) and glofox pulls the
+    // connection registry. Keeps this module test-loadable.
+    const [{ paymentFromEnrollment }, { TRANSACTIONAL_SOURCE_TYPES }, glofox] = await Promise.all([
+      import('@/lib/dunning-payment'),
+      import('@/lib/sequences/steps'),
+      import('@/lib/glofox'),
+    ])
+    const { glofoxCredentialsForLocation, getGlofoxOverdueInvoices, GLOFOX_OVERDUE_INVOICES_PAGE_CAP } = glofox
+
+    // The run can sit on a sibling contact row (person_groups); read the
+    // whole group, and on an unreadable group fall back to the anchor alone.
+    const linked = await linkedAccountsForContact(db, verifiedId)
+    const ids = linked.readFailed
+      ? [verifiedId]
+      : [...new Set([verifiedId, ...linked.contacts.map((c) => c?.id).filter(Boolean)])]
+
+    const { data: row, error } = await db.from('sequence_enrollments')
+      .select(REMINDER_ENROLMENT_COLUMNS)
+      .in('contact_id', ids)
+      .in('source_type', [...TRANSACTIONAL_SOURCE_TYPES])
+      .order('enrolled_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (error) throw error
+    if (!row) return { ...NO_REMINDER }
+
+    const payment = paymentFromEnrollment(row)
+    const invoiceId = typeof payment?.invoice_id === 'string' ? payment.invoice_id.trim() : ''
+    const result = {
+      has_reminder: true,
+      status: reminderStatus(row),
+      amount: payment?.amount || null,
+      currency: payment?.currency || null,
+      pay_link: typeof payment?.link === 'string' && payment.link.startsWith('https://') ? payment.link : null,
+      first_sent_at: row.enrolled_at || null,
+      exit_reason: row.exit_reason || null,
+      still_overdue: 'unknown',
+    }
+    if (!invoiceId) return result
+
+    // The Glofox member id belongs to the contact that OWNS the run, which
+    // need not be the anchor.
+    const { data: owner, error: ownerErr } = await db.from('contacts')
+      .select('glofox_member_id, location_id')
+      .eq('id', row.contact_id)
+      .maybeSingle()
+    if (ownerErr) throw ownerErr
+    const memberId = owner?.glofox_member_id
+    if (!memberId) return result
+
+    const creds = await glofoxCredentialsForLocation(db, locationId || owner?.location_id)
+    if (!creds?.branchId || !creds?.apiKey || !creds?.apiToken) return result
+
+    const res = await getGlofoxOverdueInvoices(creds, { memberId })
+    if (!res?.ok) return result
+    if (res.invoiceIds.includes(invoiceId)) return { ...result, still_overdue: true }
+    // Absence is only proof of settlement on a page that was not truncated
+    // (same reasoning as dunningPresendGate).
+    if (res.invoiceIds.length >= GLOFOX_OVERDUE_INVOICES_PAGE_CAP) return result
+    return { ...result, still_overdue: false }
+  } catch (err) {
+    // Written FOR the model (card-tools convention): the raw PostgREST /
+    // Glofox string stays in the log, never in the model's context.
+    console.error('[agent][account] get_my_payment_reminder failed:', err?.message || err)
+    return { error: 'The payment reminder could not be looked up right now. Do not guess whether a reminder was sent or paid — hand off to the team.' }
+  }
+}
+
 // ── executor (IO) ───────────────────────────────────────────────────
 // ctx: { db, conversationId, conversationsTable, contactId, verifiedContactId, locationId, channel }
 export async function executeAccountTool(toolName, input, ctx) {
@@ -640,6 +749,10 @@ export async function executeAccountTool(toolName, input, ctx) {
     // change in what the customer is told.
     if (doubleMembership) result.note_for_staff = 'double_membership'
     return result
+  }
+
+  if (toolName === 'get_my_payment_reminder') {
+    return getMyPaymentReminder(db, { verifiedId, locationId })
   }
 
   if (toolName === 'get_my_next_class') {

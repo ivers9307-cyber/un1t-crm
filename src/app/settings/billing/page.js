@@ -11,10 +11,9 @@
 // invoices (empty state v1) and billing contact (disabled — no
 // columns yet).
 //
-// Auth mirrors the SAAS4-M3 /settings/usage page shape (redirect
-// pattern + hasPermission('settings')), narrowed to owner/master —
-// billing is an ownership surface end to end, so unlike usage there
-// is no manager read tier. Same permissions decision as M3: NO new
+// Auth (C18 ORGROLE.1): an organisation admin of the active org, the
+// API route's rule — billing is an ownership surface end to end.
+// (Before: owner/master at the active studio + `settings`.) Same permissions decision as M3: NO new
 // WEB_PERMISSIONS key — billing rides the existing `settings` key,
 // which already has a mobile counterpart (staff_management
 // webEquivalent), and the WEB_ONLY_OK notes already record that
@@ -29,7 +28,7 @@
 
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { isActiveOrgAdmin } from '@/lib/org-admin'
 import { getBillingPageData } from '@/lib/billing-page'
 import { METERS } from '@shared/plans'
 import { redirect } from 'next/navigation'
@@ -97,10 +96,10 @@ function InvoiceStatusChip({ status }) {
 export default async function BillingSettingsPage({ searchParams }) {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  // Owner/master only — billing is an ownership surface (narrower than
-  // /settings/usage, which grants managers a read tier).
-  if (user.role !== 'owner' && user.role !== 'master') redirect('/settings')
-  if (!hasPermission(user, 'settings')) redirect('/settings')
+  // C18 ORGROLE.1 (Richard, 1 Oct 2026) — organisation admins only: master or
+  // an org_admin grant on the active organisation (GET /api/settings/billing's
+  // rule). A studio owner is not an organisation admin.
+  if (!isActiveOrgAdmin(user)) redirect('/settings')
 
   const orgId = user.activeOrganization?.id
   if (!orgId) redirect('/settings')

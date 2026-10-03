@@ -17,7 +17,11 @@
 //                             a one-line change here.
 
 import { createHmac, timingSafeEqual } from 'node:crypto'
-import { getGlofoxConfig, findGlofoxConfigByBranchId } from '@/lib/connection-registry'
+import { readGlofoxConfig, findGlofoxConfigByBranchId } from '@/lib/connection-registry'
+import { logError, logWarn } from '@/lib/log'
+import { GLOFOX_SETTINGS_UNREADABLE } from '@/lib/glofox-settings-read'
+import { toMobileE164 } from '@/lib/phone-validate'
+import { recordErrorEvent } from '@/lib/error-events'
 
 // ─────────────────────────────────────────────────────────────
 // Signature verification (HMAC-SHA256 hex)
@@ -329,21 +333,11 @@ export { EVENT_TYPE_TAGS }
 
 const GLOFOX_API_BASE = 'https://gf-api.aws.glofox.com/prod'
 
-/**
- * Pull Glofox credentials for a single location.
- * @param {object} db        Service-role Supabase client
- * @param {string} locationId  CRM location uuid
- * @returns {Promise<{branchId, apiKey, apiToken, webhookSecret}>}
- *   All fields are null when missing. Use missingGlofoxCredentialsForLocation()
- *   for a friendly array of missing-field names.
- */
-export async function glofoxCredentialsForLocation(db, locationId) {
-  if (!db || !locationId) {
-    return { branchId: null, apiKey: null, apiToken: null, namespace: null, webhookSecret: null }
-  }
-  // INTEG-A2 dual-read: active channel_connections row first, legacy
-  // locations.settings.glofox otherwise (same shape either way).
-  const cfg = await getGlofoxConfig(db, locationId)
+// REGISTRYREAD.1a — one credentials object shape for every answer. On a
+// failed settings read every credential is null (so missingGlofoxCredentials…
+// still lists all three and unmigrated callers behave exactly as before) and
+// readError says WHY. Callers that act on "not configured" must check it.
+function glofoxCredsFromConfig(cfg, readError = null) {
   return {
     branchId:      cfg.branch_id      || null,
     apiKey:        cfg.api_key        || null,
@@ -362,52 +356,94 @@ export async function glofoxCredentialsForLocation(db, locationId) {
     trainerNames:  (cfg.trainer_names && typeof cfg.trainer_names === 'object')
       ? cfg.trainer_names
       : null,
+    // REGISTRYREAD.1a: the public deny-list rides on THIS read, so
+    // listPublicClasses needs no second read that could fail open.
+    hiddenClassKeywords: cfg.hidden_class_keywords ?? null,
     webhookSecret: cfg.webhook_secret || null,
+    readError,
   }
 }
 
 /**
- * Pull Glofox credentials by branch_id (used by the inbound
- * webhook receiver — it knows the branch from the payload before
- * it knows the location). Returns location_id alongside the
- * credentials so the caller can attribute the event correctly.
+ * Pull Glofox credentials for a single location.
+ * @param {object} db        Service-role Supabase client
+ * @param {string} locationId  CRM location uuid
+ * @returns {Promise<{branchId, apiKey, apiToken, namespace, trainerNames, hiddenClassKeywords, webhookSecret, readError}>}
+ *   Credential fields are null when missing. readError is
+ *   'glofox_settings_unreadable' when the settings could not be READ (a DB
+ *   blip) — that is not "not configured"; null otherwise. Use
+ *   missingGlofoxCredentialsForLocation() for the missing-field names.
+ */
+export async function glofoxCredentialsForLocation(db, locationId) {
+  if (!db || !locationId) return glofoxCredsFromConfig({})
+  // INTEG-A2 dual-read: active channel_connections row first, legacy
+  // locations.settings.glofox otherwise (same shape either way).
+  const { cfg, error } = await readGlofoxConfig(db, locationId)
+  if (error) {
+    logError('glofox', 'credentials unreadable: the settings read failed (this is not "not configured")', { locationId, err: error })
+    return glofoxCredsFromConfig({}, GLOFOX_SETTINGS_UNREADABLE)
+  }
+  return glofoxCredsFromConfig(cfg)
+}
+
+/**
+ * Pull Glofox credentials by branch_id (used by the inbound webhook
+ * receiver — it knows the branch from the payload before it knows the
+ * location). Never throws.
  *
  * @param {object} db
  * @param {string} branchId
- * @returns {Promise<null | {locationId, branchId, apiKey, apiToken, webhookSecret}>}
+ * @returns {Promise<{ creds: (null | {locationId, branchId, apiKey, apiToken, webhookSecret}), error: (object|null) }>}
+ *   creds null + error null = no location has this branch (a real answer).
+ *   error set = the lookup could not be made (REGISTRYREAD.1a): never
+ *   "unknown branch".
  */
-export async function glofoxCredentialsByBranchId(db, branchId) {
-  if (!db || !branchId) return null
+export async function readGlofoxCredentialsByBranchId(db, branchId) {
+  if (!db || !branchId) return { creds: null, error: null }
   // INTEG-A2 dual-read: the registry indexes (platform,
   // external_account_id), so an active glofox row resolves directly.
+  // A registry error answers null here (logged) and falls to legacy.
   const fromRegistry = await findGlofoxConfigByBranchId(db, branchId)
   if (fromRegistry) {
     const cfg = fromRegistry.cfg
     return {
-      locationId:    fromRegistry.locationId,
-      branchId:      cfg.branch_id      || null,
-      apiKey:        cfg.api_key        || null,
-      apiToken:      cfg.api_token      || null,
-      webhookSecret: cfg.webhook_secret || null,
+      creds: {
+        locationId:    fromRegistry.locationId,
+        branchId:      cfg.branch_id      || null,
+        apiKey:        cfg.api_key        || null,
+        apiToken:      cfg.api_token      || null,
+        webhookSecret: cfg.webhook_secret || null,
+      },
+      error: null,
     }
   }
   // Legacy fallback. settings is JSONB; the @> operator finds rows
   // where the settings tree contains the given subtree. Index on
   // settings (mig 004 GIN if present) keeps this fast even at scale.
-  const { data } = await db
-    .from('locations')
-    .select('id, settings')
-    .filter('settings', 'cs', JSON.stringify({ glofox: { branch_id: branchId } }))
-    .limit(1)
+  let data
+  try {
+    const res = await db
+      .from('locations')
+      .select('id, settings')
+      .filter('settings', 'cs', JSON.stringify({ glofox: { branch_id: branchId } }))
+      .limit(1)
+    if (res.error) return { creds: null, error: res.error }
+    data = res.data
+  } catch (e) {
+    return { creds: null, error: e }
+  }
   const row = data?.[0]
-  if (!row) return null
+  if (!row) return { creds: null, error: null }
   const cfg = row.settings?.glofox || {}
   return {
-    locationId:    row.id,
-    branchId:      cfg.branch_id      || null,
-    apiKey:        cfg.api_key        || null,
-    apiToken:      cfg.api_token      || null,
-    webhookSecret: cfg.webhook_secret || null,
+    creds: {
+      locationId:    row.id,
+      branchId:      cfg.branch_id      || null,
+      apiKey:        cfg.api_key        || null,
+      apiToken:      cfg.api_token      || null,
+      webhookSecret: cfg.webhook_secret || null,
+    },
+    error: null,
   }
 }
 
@@ -442,7 +478,193 @@ export function missingGlofoxCredentialsForLocation(creds) {
 // (upstream blip) those land as fetch_failed and only get retried a
 // whole tick later, slowing coverage. A bounded in-place retry that
 // honours Retry-After lets the call succeed within the same tick.
+//
+// GLOFOXPOSTRETRY.1 — but only where a repeat is safe. A 429 is Glofox
+// refusing BEFORE it processes the request, so it is retried for every
+// method. A 5xx can come AFTER Glofox processed it (a trial bought, a booking
+// made, then the answer lost), so a 5xx is retried only for a read: GET/HEAD,
+// or a call that says `retry: 'idempotent'` (the read-POSTs). Every other
+// write returns its first 5xx, unless it passes `retry: { verify }`: a dedupe
+// read that answers 'landed' | 'absent' | 'unknown' after the backoff and
+// before each re-send. Only 'absent' re-sends.
 const GLOFOX_MAX_RETRIES = 3
+const GLOFOX_RETRYABLE_METHODS = new Set(['GET', 'HEAD'])
+
+/**
+ * The retry policy of one glofoxFetch call (GLOFOXPOSTRETRY.1). Pure.
+ *   retry: 'idempotent' → 429 and 5xx retried (a read, whatever its method)
+ *   retry: 'never'      → 429 retried; a 5xx returned at once
+ *   retry: { verify }   → 429 retried; a 5xx re-sent only when verify() says 'absent'
+ *   (unset)             → 'idempotent' for GET/HEAD, 'never' for any other method
+ * An unknown value throws: it is a programming error, and guessing would
+ * either re-send a write or stop retrying a read.
+ * @returns {{ mode: 'idempotent'|'never'|'verify', verify?: () => Promise<'landed'|'absent'|'unknown'> }}
+ */
+export function glofoxRetryPolicy(options = {}) {
+  const r = options?.retry
+  if (r === 'idempotent' || r === 'never') return { mode: r }
+  if (r && typeof r === 'object' && typeof r.verify === 'function') return { mode: 'verify', verify: r.verify }
+  if (r !== undefined) throw new TypeError(`glofoxFetch: unknown retry policy ${JSON.stringify(r)}`)
+  const method = String(options?.method || 'GET').toUpperCase()
+  return { mode: GLOFOX_RETRYABLE_METHODS.has(method) ? 'idempotent' : 'never' }
+}
+
+// CREDITSREAD.1 — Glofox headroom, measured. glofoxFetch retried 429/5xx and
+// said nothing, so nobody could tell how close we run to Glofox's limit. These
+// counters are per server INSTANCE (module scope): a cron reads them with
+// glofoxHttpStatsSince(before), which can include a concurrent request on the
+// same instance, so a run's numbers mean "at least this run's traffic".
+const glofoxHttpCounters = {
+  requests: 0,       // HTTP attempts, retries included
+  retries: 0,        // attempts after the first
+  status_429: 0,     // 429 responses
+  status_5xx: 0,     // 5xx responses
+  network_errors: 0, // fetch threw
+  gave_up: 0,        // calls still 429/5xx after every retry
+  aborted: 0,        // calls cancelled by the caller while 429/5xx (retries cut short)
+  // GLOFOXPOSTRETRY.1 — writes that answered 5xx:
+  unsafe_not_retried: 0, // retry 'never': returned without a re-send
+  verify_landed: 0,      // the dedupe read found the first attempt: not re-sent
+  verify_absent: 0,      // the dedupe read found nothing: re-sent (a give-up on the last attempt)
+  verify_unknown: 0,     // the dedupe read could not tell: not re-sent
+}
+
+/** A copy of the instance's Glofox HTTP counters. */
+export function glofoxHttpStats() {
+  return { ...glofoxHttpCounters }
+}
+
+/** Counter deltas since a glofoxHttpStats() snapshot. */
+export function glofoxHttpStatsSince(before) {
+  const now = glofoxHttpStats()
+  const out = {}
+  for (const k of Object.keys(now)) out[k] = now[k] - (Number(before?.[k]) || 0)
+  return out
+}
+
+/**
+ * Run a write's dedupe read and count its verdict. Anything but 'landed' or
+ * 'absent' (a throw included) is 'unknown', which never re-sends.
+ */
+async function runGlofoxVerify(verify) {
+  let verdict
+  try {
+    verdict = await verify()
+  } catch (err) {
+    logWarn('glofox', 'write dedupe read threw; not retried', { err })
+    verdict = 'unknown'
+  }
+  if (verdict === 'absent') { glofoxHttpCounters.verify_absent++; return 'absent' }
+  if (verdict === 'landed') { glofoxHttpCounters.verify_landed++; return 'landed' }
+  glofoxHttpCounters.verify_unknown++
+  return 'unknown'
+}
+
+// GLOFOXWRITEJUDGE.1 — the counters above are per instance and only the crons
+// (which only read) write them down, so a request-path WRITE's 5xx / 429 /
+// no-reply lived only in a log line Vercel keeps for 24 h. A write call that
+// ends that way now leaves ONE error_events row (mig 435; storm-guarded,
+// never throws; Sentinel's crm.error-events check reads it). Reads never do.
+const GLOFOX_WRITE_FAILURE_TEXT = {
+  never: 'not re-sent, because Glofox may already have done it',
+  unknown: 'not re-sent: the check read could not tell whether it went through',
+  gave_up: 'still failing after every retry',
+  aborted: 'the caller gave up while Glofox was failing',
+  no_reply: 'no reply from Glofox (network error), so the outcome is unknown',
+}
+
+/**
+ * Is this glofoxFetch call a write? A method other than GET/HEAD whose policy
+ * is not 'idempotent' (the read-POSTs), unless the caller marks it readOnly
+ * (a read-POST sent once as a write's dedupe read). Pure.
+ */
+export function isGlofoxWrite(options = {}) {
+  if (options?.readOnly === true) return false
+  const method = String(options?.method || 'GET').toUpperCase()
+  if (GLOFOX_RETRYABLE_METHODS.has(method)) return false
+  return glofoxRetryPolicy(options).mode !== 'idempotent'
+}
+
+/** The error_events row for a failed Glofox write. Pure; no ids (path label). */
+export function glofoxWriteFailureEvent({ method, pathOrUrl, status, attempts, reason }) {
+  const m = String(method || 'POST').toUpperCase()
+  const path = glofoxPathLabel(pathOrUrl)
+  const name = reason === 'no_reply' ? 'glofox_write_no_reply' : status === 429 ? 'glofox_write_429' : 'glofox_write_5xx'
+  const answer = reason === 'no_reply' ? 'no reply' : `HTTP ${status}`
+  return {
+    vercel_id: null,
+    runtime: process.env.NEXT_RUNTIME || null,
+    route_path: `glofox:${m} ${path}`,
+    route_type: 'glofox_write',
+    method: m,
+    name,
+    message: `Glofox ${m} ${path} answered ${answer} after ${attempts} attempt(s); ${GLOFOX_WRITE_FAILURE_TEXT[reason] || reason}`.slice(0, 500),
+    digest: null,
+  }
+}
+
+// error_events' storm guard (30 rows a minute per instance) is shared with
+// every unhandled and handled route error. A Glofox outage fails every write,
+// so its rows get their own smaller cap and can never use up that budget: past
+// it, a minute's further failures are dropped with ONE summary warn (each
+// failure still has its own glofox warn line).
+export const GLOFOX_WRITE_FAILURE_ROWS_PER_MIN = 5
+let glofoxFailureWindowStart = 0
+let glofoxFailureWindowCount = 0
+let glofoxFailureWindowWarned = false
+
+function mayRecordGlofoxWriteFailure() {
+  const now = Date.now()
+  if (now - glofoxFailureWindowStart > 60_000) {
+    glofoxFailureWindowStart = now
+    glofoxFailureWindowCount = 0
+    glofoxFailureWindowWarned = false
+  }
+  if (glofoxFailureWindowCount < GLOFOX_WRITE_FAILURE_ROWS_PER_MIN) {
+    glofoxFailureWindowCount++
+    return true
+  }
+  if (!glofoxFailureWindowWarned) {
+    glofoxFailureWindowWarned = true
+    logWarn('glofox', 'Glofox write-failure rows capped this minute; further failures are only logged', {
+      cap: GLOFOX_WRITE_FAILURE_ROWS_PER_MIN,
+    })
+  }
+  return false
+}
+
+// Test seam only: the cap is module-level state.
+export function _resetGlofoxWriteFailureCapForTests() {
+  glofoxFailureWindowStart = 0
+  glofoxFailureWindowCount = 0
+  glofoxFailureWindowWarned = false
+}
+
+async function recordGlofoxWriteFailure(args) {
+  try {
+    if (!mayRecordGlofoxWriteFailure()) return
+    await recordErrorEvent(glofoxWriteFailureEvent(args))
+  } catch { /* recordErrorEvent never throws; observability must not change the call's answer */ }
+}
+
+const GLOFOX_ID_SEGMENT = [
+  /^[0-9a-f]{16,}$/i,                                              // Mongo-style ids
+  /^\d{6,}$/,                                                      // numeric ids
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, // UUIDs (v3.0 payment links)
+]
+
+/**
+ * A Glofox path safe to log: the query dropped (it carries user_id=…) and every
+ * id-like segment (16+ hex chars, 6+ digits, or a UUID) replaced by ':id'.
+ */
+export function glofoxPathLabel(pathOrUrl) {
+  let p = String(pathOrUrl || '')
+  if (/^https?:\/\//i.test(p)) {
+    try { p = new URL(p).pathname } catch { /* keep the raw string */ }
+  }
+  p = p.split('?')[0]
+  return p.split('/').map((seg) => (GLOFOX_ID_SEGMENT.some((re) => re.test(seg)) ? ':id' : seg)).join('/')
+}
 
 /**
  * Backoff delay (ms) for a transient Glofox response. Honours a
@@ -458,12 +680,32 @@ export function computeGlofoxBackoffMs(attempt, retryAfterSeconds = null) {
   return base + Math.floor(Math.random() * 250)
 }
 
-const _glofoxSleep = (ms) => new Promise((r) => setTimeout(r, ms))
+// PAYLINK.5b — abortable: a caller (getGlofoxInvoicePaymentLink) that bounds
+// the whole call with AbortSignal.timeout() must have that signal bound the
+// backoff sleeps too, not just the underlying fetch — otherwise an abort
+// mid-retry still leaves the caller waiting out the remaining sleep(s).
+// Races the delay against the signal's 'abort' event; never rejects.
+export function _glofoxSleep(ms, signal) {
+  return new Promise((resolve) => {
+    if (signal?.aborted) { resolve(); return }
+    const onAbort = () => { clearTimeout(timer); resolve() }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
+}
 
 export async function glofoxFetch(creds, pathOrUrl, options = {}) {
   if (!creds || !creds.branchId || !creds.apiKey || !creds.apiToken) {
     throw new Error('Glofox API credentials missing (need branchId, apiKey, apiToken on the location)')
   }
+  const policy = glofoxRetryPolicy(options)
+  // The policy and the read marker are ours; fetch never sees them.
+  const { retry: _policyOption, readOnly: _readOnlyOption, ...fetchOptions } = options
+  const write = isGlofoxWrite(options)
+  const method = String(fetchOptions.method || 'GET').toUpperCase()
   const url = pathOrUrl.startsWith('http')
     ? pathOrUrl
     : `${GLOFOX_API_BASE}${pathOrUrl.startsWith('/') ? '' : '/'}${pathOrUrl}`
@@ -471,18 +713,96 @@ export async function glofoxFetch(creds, pathOrUrl, options = {}) {
     'x-glofox-branch-id': creds.branchId,
     'x-api-key':          creds.apiKey,
     'x-glofox-api-token': creds.apiToken,
-    ...(options.headers || {}),
+    ...(fetchOptions.headers || {}),
   }
   let res
+  let attempts = 0
+  let aborted = false
+  let notResent = null // 'never' | 'landed' | 'unknown': a write's 5xx we chose not to re-send
   for (let attempt = 0; ; attempt++) {
-    res = await fetch(url, { ...options, headers })
-    // Retry only transient statuses, and only while we have budget.
-    if ((res.status === 429 || res.status >= 500) && attempt < GLOFOX_MAX_RETRIES) {
-      const retryAfter = Number(res.headers?.get?.('retry-after'))
-      await _glofoxSleep(computeGlofoxBackoffMs(attempt, Number.isFinite(retryAfter) ? retryAfter : null))
-      continue
+    attempts++
+    glofoxHttpCounters.requests++
+    try {
+      res = await fetch(url, { ...fetchOptions, headers })
+    } catch (e) {
+      glofoxHttpCounters.network_errors++
+      if (write) await recordGlofoxWriteFailure({ method, pathOrUrl, status: 0, attempts, reason: 'no_reply' })
+      throw e
     }
-    break
+    if (res.status === 429) glofoxHttpCounters.status_429++
+    else if (res.status >= 500) glofoxHttpCounters.status_5xx++
+    // Retry only transient statuses, and only while we have budget.
+    if (res.status !== 429 && res.status < 500) break
+    const budgetLeft = attempt < GLOFOX_MAX_RETRIES
+    // GLOFOXPOSTRETRY.1 — a 5xx on a write may already have been processed.
+    // A 'never' write is counted as not re-sent whether or not budget is left
+    // (a 5xx after three 429s is still an answer we chose not to repeat).
+    const unsafe5xx = res.status >= 500 && policy.mode !== 'idempotent'
+    if (unsafe5xx && policy.mode === 'never') {
+      glofoxHttpCounters.unsafe_not_retried++
+      notResent = 'never'
+      break
+    }
+    // Out of budget: give up, except that a verified write still reads once
+    // after its LAST 5xx, only to report a landing (never to re-send).
+    if (!budgetLeft && !unsafe5xx) break
+    // PAYLINK.5b — an aborted caller (timed out, or otherwise cancelled)
+    // stops retrying immediately and returns the last response as-is,
+    // rather than sleeping out a full backoff first.
+    if (fetchOptions.signal?.aborted) { aborted = true; break }
+    const retryAfter = Number(res.headers?.get?.('retry-after'))
+    await _glofoxSleep(computeGlofoxBackoffMs(attempt, Number.isFinite(retryAfter) ? retryAfter : null), fetchOptions.signal)
+    if (fetchOptions.signal?.aborted) { aborted = true; break }
+    // The dedupe read runs AFTER the backoff, so a write Glofox is still
+    // committing has had the same time to show up.
+    if (unsafe5xx) {
+      const verdict = await runGlofoxVerify(policy.verify)
+      if (verdict === 'landed') { notResent = 'landed'; break }
+      if (!budgetLeft) break // absent or unknown on the last 5xx: a give-up
+      if (verdict !== 'absent') { notResent = verdict; break }
+    }
+    glofoxHttpCounters.retries++
+  }
+  // CREDITSREAD.1 — one line per call that is STILL failing after its retries
+  // (never per retry: a throttled minute would write thousands). No ids.
+  // A call the caller cancelled mid-retry did not use its retries, so it is
+  // counted apart (aborted) and not logged as a give-up. GLOFOXPOSTRETRY.1 — a
+  // write we chose not to re-send is its own line (reason: never | landed |
+  // unknown), not a give-up: it used none of its remaining retries.
+  let failure = null
+  if (aborted) {
+    glofoxHttpCounters.aborted++
+    failure = 'aborted'
+  } else if (notResent) {
+    logWarn('glofox', 'Glofox write answered 5xx; not retried', {
+      status: res.status, attempts, path: glofoxPathLabel(pathOrUrl), reason: notResent,
+    })
+    failure = notResent
+  } else if (res.status === 429 || res.status >= 500) {
+    glofoxHttpCounters.gave_up++
+    logWarn('glofox', 'Glofox still failing after retries', {
+      status: res.status, attempts, path: glofoxPathLabel(pathOrUrl),
+    })
+    failure = 'gave_up'
+  }
+  // GLOFOXWRITEJUDGE.1 — a write's failure outlives the 24 h log window. A
+  // write whose check read found it went through ('landed') is a success the
+  // caller reports as recovered, so it leaves no failure row.
+  if (failure && failure !== 'landed' && write) await recordGlofoxWriteFailure({ method, pathOrUrl, status: res.status, attempts, reason: failure })
+  // GLOFOX-SPEC-2026-09 — Glofox's own guidance: "Older endpoints sometimes
+  // return a 200 status code with a success field set to false. That
+  // indicates a bad request." Each caller judges that per endpoint
+  // (interpretBookingResult and friends); the wrapper only NAMES it, so a
+  // caller that never looks shows up in the logs as a warning instead of as
+  // a silent no-op. Peek at a clone so the caller's own body read is
+  // untouched; a non-JSON or unreadable body has nothing to say.
+  if (res.status === 200 && typeof res.clone === 'function') {
+    try {
+      const peek = await res.clone().json()
+      if (peek && typeof peek === 'object' && peek.success === false) {
+        console.warn(`[glofox] 200 with success:false on ${String(pathOrUrl).split('?')[0]} — Glofox says treat it as a 400 (message_code: ${peek.message_code || 'none'})`)
+      }
+    } catch { /* not JSON, or the clone was unreadable — nothing to report */ }
   }
   return res
 }
@@ -492,28 +812,13 @@ export async function glofoxFetch(creds, pathOrUrl, options = {}) {
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Fetch the active + historical credit packs for a Glofox member.
- * Returns the data array (Credits[]) or [] on failure / no data.
- *
- * Used to drive credit_member detection — a paying customer with
- * an active class-pack credit pack qualifies as a Credit Member
- * (separate audience from subscription members). See
- * src/lib/glofox-sync.js:detectCreditMember.
- *
- * Best-effort: a network/API failure here returns [] so the
- * containing sync can still proceed (member contact gets synced,
- * credit_member detection is skipped, next sync gets it right).
+ * The active + historical credit packs for a Glofox member, as
+ * { ok, credits }. `ok: false` is a read that FAILED (429/5xx after
+ * glofoxFetch's retries, any other non-2xx, a network throw): "unknown",
+ * never "no packs" (MIA-CREDITS.1, CREDITSREAD.1). The old fetchUserCredits,
+ * which collapsed a failure into [], is gone (TRIALGRANT.1: no callers were
+ * left after CBPCREDITREAD.1).
  */
-export async function fetchUserCredits(creds, userId) {
-  const { credits } = await fetchUserCreditsResult(creds, userId)
-  return credits
-}
-
-// MIA-CREDITS.1 — ok-aware variant (the fetchUserBookingsResult pattern):
-// fetchUserCredits collapses "the read failed" and "genuinely no credit
-// records" into the same [], which is fine for callers that fail toward
-// staff review, but a caller that ESCALATES on empty (Mia's booking
-// pre-flight) must not escalate every booking during a Glofox blip.
 export async function fetchUserCreditsResult(creds, userId) {
   if (!creds || !userId) return { ok: false, credits: [] }
   try {
@@ -534,23 +839,37 @@ export async function fetchUserCreditsResult(creds, userId) {
  * benefits from caching across the run.
  *
  * Returns the membership object or null on failure / not-found.
- * Cache stores nulls too so repeated lookups for a missing
- * membership don't re-hit the API.
+ * Only answers are cached (CREDITSREAD.1), a not-found included: a failed
+ * read is retried by the next caller in the run instead of poisoning the
+ * cache with null.
  */
 export async function fetchMembership(creds, membershipId, cache = null) {
-  if (!creds || !membershipId) return null
-  if (cache && cache.has(membershipId)) return cache.get(membershipId)
-  let result = null
+  const { membership } = await fetchMembershipResult(creds, membershipId, cache)
+  return membership
+}
+
+// CREDITSREAD.1 — ok-aware variant. Only an ANSWER is cached: a failed read
+// (429, 5xx, network, bad JSON) used to be cached as null for the whole bulk
+// run, so one blip re-labelled every credit member the run touched as
+// 'member'. Now the next member in the run simply asks again. A 4xx other
+// than 429 (a 404 above all) IS an answer, "no such membership": it is
+// { ok: true, membership: null } and cached, so the run asks once.
+export async function fetchMembershipResult(creds, membershipId, cache = null) {
+  if (!creds || !membershipId) return { ok: false, membership: null }
+  if (cache && cache.has(membershipId)) return { ok: true, membership: cache.get(membershipId) }
   try {
     const r = await glofoxFetch(creds, `/2.0/memberships/${encodeURIComponent(membershipId)}`)
-    if (r.ok) {
-      result = await r.json()
+    if (r.status >= 400 && r.status < 500 && r.status !== 429) {
+      if (cache) cache.set(membershipId, null)
+      return { ok: true, membership: null }
     }
+    if (!r.ok) return { ok: false, membership: null }
+    const membership = await r.json()
+    if (cache) cache.set(membershipId, membership)
+    return { ok: true, membership }
   } catch {
-    result = null
+    return { ok: false, membership: null }
   }
-  if (cache) cache.set(membershipId, result)
-  return result
 }
 
 /**
@@ -588,6 +907,8 @@ export async function fetchBranchLeads(creds, filters = {}, pagination = { skip:
       `/2.1/branches/${encodeURIComponent(creds.branchId)}/leads/filter`,
       {
         method: 'POST',
+        // A leads filter, not a write: safe to repeat (GLOFOXPOSTRETRY.1).
+        retry: 'idempotent',
         body: JSON.stringify({ filters, pagination }),
       },
     )
@@ -711,6 +1032,8 @@ export async function fetchPaymentsReport(creds, opts = {}) {
   try {
     const r = await glofoxFetch(creds, '/Analytics/report', {
       method: 'POST',
+      // A report query, not a write: safe to repeat (GLOFOXPOSTRETRY.1).
+      retry: 'idempotent',
       body: JSON.stringify(body),
     })
     let parsed
@@ -741,47 +1064,176 @@ export async function fetchPaymentsReport(creds, opts = {}) {
 // as the trial).
 
 /**
- * Search Glofox for a member by email.
- * Uses the v3 namespace search per the spec; falls back to a
- * /2.0/members scan if the v3 endpoint isn't available (defensive
- * for older firmwares).
+ * Search Glofox for a member by email and/or phone via the v3 namespace
+ * search (`POST /v3.0/namespaces/members/retrieve`).
  *
- * Returns { found, member, error }. found=true with a member
- * object means we should LINK rather than create.
+ * GLOFOX-SPEC-2026-09 — the September 2026 spec added `phone` (E.164,
+ * exact match against the member's normalised number) beside `email`.
+ * Send one or both; Glofox ANDs them. Phone searches return `MEMBER` rows
+ * only (leads and cancelled included, staff excluded) and never a member
+ * whose stored phone could not be normalised. The phone is normalised
+ * here with toMobileE164 (the public funnels' own gate), so a landline or
+ * placeholder is "no usable phone", not a query.
+ *
+ * Returns { found, member, error }. found=true with a member object means
+ * a Glofox account for this identity already exists. What that entitles
+ * the caller to do is the CALLER's rule: an email match may be linked; a
+ * phone-only match must not be (couples share numbers — PERSON-ACCT.9).
+ *
+ * `retry: 'never'` (GLOFOXPOSTRETRY.1) makes every request ONE attempt: a
+ * write's dedupe read (registerGlofoxMember) must answer at once, not stall
+ * behind nested backoffs. The default keeps the search's retries.
  */
-export async function searchGlofoxByEmail(creds, email) {
-  if (!creds?.branchId || typeof email !== 'string' || !email.trim()) {
+export async function searchGlofoxMember(creds, { email, phone, retry = 'idempotent' } = {}) {
+  const lc = typeof email === 'string' && email.trim() ? email.trim().toLowerCase() : null
+  const e164 = typeof phone === 'string' ? toMobileE164(phone) : null
+  if (!creds?.branchId || (!lc && !e164)) {
     return { found: false, member: null, error: 'missing args' }
   }
-  const lc = email.trim().toLowerCase()
+  // Response shapes vary by endpoint — accept the common ones.
+  const rowsOf = (body) => Array.isArray(body?.data) ? body.data
+    : Array.isArray(body?.members) ? body.members
+    : Array.isArray(body) ? body
+    : (body && typeof body === 'object' && body._id ? [body] : [])
+  // Match the exact identity we asked for: email case-insensitive, phone by
+  // NORMALISED value (v3 returns E.164; the 2.x lists return the raw string
+  // the member typed, e.g. "0830622786"). The searches are documented as
+  // exact; this defends against a fuzzy upstream match ever passing as a
+  // person match. Rows are given `_id` (v3 spells it `id`) so every caller
+  // can link on `member._id` whichever endpoint answered.
+  const matches = (rows) => rows
+    .filter(c => (!lc || (typeof c?.email === 'string' && c.email.toLowerCase() === lc))
+      && (!e164 || (typeof c?.phone === 'string' && toMobileE164(c.phone) === e164)))
+    .map(c => (c._id || !c.id) ? c : { ...c, _id: String(c.id) })
+  const verdict = (exact) => {
+    if (exact.length === 1) return { found: true, member: exact[0], error: null }
+    if (exact.length > 1) {
+      // Multiple Glofox accounts for one identity — operator review.
+      return { found: true, member: exact[0], error: 'multiple_glofox_matches', allMatches: exact }
+    }
+    return { found: false, member: null, error: null }
+  }
+  const httpErr = (r) => ({ found: false, member: null, error: `Glofox HTTP ${r.status}` })
+
   try {
-    // v3 namespace search — POST body { email } per the spec.
+    const filter = {}
+    if (lc) filter.email = lc
+    if (e164) filter.phone = e164
     const r = await glofoxFetch(creds, '/v3.0/namespaces/members/retrieve', {
       method: 'POST',
-      body: JSON.stringify({ email: lc }),
+      // A search, not a write: safe to repeat (GLOFOXPOSTRETRY.1), unless a
+      // write's dedupe read asks for ONE attempt (retry: 'never').
+      retry: retry === 'never' ? 'never' : 'idempotent',
+      // A search even when sent once: never recorded as a failed write.
+      readOnly: true,
+      body: JSON.stringify(filter),
     })
-    if (r.ok) {
-      const body = await r.json()
-      // Response shape varies — try the common shapes.
-      const candidates = Array.isArray(body?.data) ? body.data
-                       : Array.isArray(body?.members) ? body.members
-                       : Array.isArray(body) ? body
-                       : (body && typeof body === 'object' && body._id ? [body] : [])
-      // Filter to exact email match (case-insensitive). The search
-      // is theoretically exact but defending against fuzzy matches.
-      const exact = candidates.filter(c =>
-        typeof c?.email === 'string' && c.email.toLowerCase() === lc
-      )
-      if (exact.length === 1) return { found: true, member: exact[0], error: null }
-      if (exact.length > 1) {
-        // Multiple Glofox accounts for one email — operator review.
-        return { found: true, member: exact[0], error: 'multiple_glofox_matches', allMatches: exact }
-      }
+    if (r.ok) return verdict(matches(rowsOf(await r.json())))
+    if (r.status !== 401 && r.status !== 403) return httpErr(r)
+
+    // Live probe 2026-09-12: the namespace search answers 401 for our
+    // integrator in EVERY shape (email-only included) while every other v3
+    // endpoint we use still works; the last prod call that succeeded was
+    // 7 Sep, the spec re-drop landed 12 Sep. Glofox has been asked. Until
+    // it is re-enabled, fall back to the endpoints we ARE authorised for,
+    // both verified live against Julie Mullins' account:
+    //   email → the documented `GET /2.1/branches/{id}/users?filters[email]=`
+    //           (exact, one row);
+    //   phone → `GET /2.0/members?phone=`, which matches the RAW stored
+    //           string — so try the national spelling first ("0830622786"
+    //           is what Glofox held), then the E.164 forms. Stop at the
+    //           first hit. `filters[phone]` on 2.1 is ignored (returns all).
+    const b = encodeURIComponent(creds.branchId)
+    if (lc) {
+      const r2 = await glofoxFetch(creds, `/2.1/branches/${b}/users?${encodeURIComponent('filters[email]')}=${encodeURIComponent(lc)}`, { retry })
+      if (!r2.ok) return httpErr(r2)
+      return verdict(matches(rowsOf(await r2.json())))
     }
-    return { found: false, member: null, error: r.ok ? null : `Glofox HTTP ${r.status}` }
+    for (const spelling of phoneSpellingsForGlofox(e164)) {
+      const r2 = await glofoxFetch(creds, `/2.0/members?phone=${encodeURIComponent(spelling)}&limit=20`, { retry })
+      if (!r2.ok) return httpErr(r2)
+      const exact = matches(rowsOf(await r2.json()))
+      if (exact.length > 0) return verdict(exact)
+    }
+    return { found: false, member: null, error: null }
   } catch (e) {
     return { found: false, member: null, error: e?.message || 'search failed' }
   }
+}
+
+/**
+ * The spellings a Glofox member record may hold for one E.164 mobile, in
+ * the order worth asking `/2.0/members?phone=` (raw-string match): the
+ * national trunk form first (what Glofox held for the live probe), then
+ * the +CC and bare-CC forms, then the trunkless national digits.
+ * Pure — exported for tests.
+ */
+export function phoneSpellingsForGlofox(e164) {
+  if (typeof e164 !== 'string' || !e164.startsWith('+')) return []
+  const digits = e164.slice(1)
+  const out = []
+  for (const cc of ['353', '44']) {
+    if (digits.startsWith(cc)) {
+      const national = digits.slice(cc.length)
+      out.push(`0${national}`, e164, digits, national)
+      return out
+    }
+  }
+  return [e164, digits]
+}
+
+/**
+ * Search Glofox for a member by email — the email-only face of
+ * searchGlofoxMember, kept so every existing caller (and their mocks)
+ * is untouched. Returns { found, member, error }; found=true means LINK
+ * rather than create.
+ */
+export async function searchGlofoxByEmail(creds, email, { retry } = {}) {
+  if (typeof email !== 'string' || !email.trim()) {
+    return { found: false, member: null, error: 'missing args' }
+  }
+  return searchGlofoxMember(creds, { email, ...(retry ? { retry } : {}) })
+}
+
+export const GLOFOX_EMAIL_IN_USE = 'EMAIL_ALREADY_IN_USE'
+
+/** Glofox's "that email already has an account" refusal (seen live as a
+ *  200 success:false LOGIN_ALREADY_IN_USE,EMAIL_ALREADY_IN_USE, with
+ *  message_code null and the same words in message and errors[]). */
+function isGlofoxEmailInUse(body) {
+  if (!body || typeof body !== 'object') return false
+  const errs = Array.isArray(body.errors) ? body.errors : []
+  return [body.message_code, body.message, body.error, body.code, ...errs]
+    .some((v) => typeof v === 'string' && /EMAIL_ALREADY_IN_USE/i.test(v))
+}
+
+/**
+ * GLOFOXWRITEJUDGE.1 — judge a POST /2.0/register answer. Pure.
+ *
+ * Glofox: "older endpoints sometimes return a 200 with success:false; that is
+ * a bad request". Seen live on register (June 2026: the content-type bug's
+ * "The first name field is required., …"; August: EMAIL_ALREADY_IN_USE). The
+ * live success shape is { success: true, user: { _id } } (27/27 prod rows).
+ * A success therefore needs a 2xx, success !== false AND a member id; anything
+ * else is { ok: false, code, error } with Glofox's own words in `error`.
+ *   code: 'EMAIL_ALREADY_IN_USE' | Glofox's message_code | 'REGISTER_REFUSED'
+ *         | 'HTTP_<status>' | 'NO_MEMBER_ID'
+ */
+export function interpretRegisterResult({ httpOk, httpStatus = null, body } = {}) {
+  const b = body && typeof body === 'object' ? body : null
+  const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null)
+  if (!httpOk || b?.success === false) {
+    const errs = Array.isArray(b?.errors) ? b.errors.map(str).filter(Boolean) : []
+    const words = str(b?.error) || str(b?.message) || str(b?.message_code) || (errs.length ? errs.join('; ') : null)
+    const code = isGlofoxEmailInUse(b)
+      ? GLOFOX_EMAIL_IN_USE
+      : (str(b?.message_code) || (httpOk ? 'REGISTER_REFUSED' : `HTTP_${httpStatus}`))
+    return { ok: false, member: null, code, error: (words || (httpOk ? 'Glofox refused the registration without saying why' : `Glofox HTTP ${httpStatus}`)).slice(0, 300) }
+  }
+  const member = b?.user || b?.data || b
+  const id = member?._id || member?.id
+  if (!id) return { ok: false, member: null, code: 'NO_MEMBER_ID', error: 'Glofox answered without a member id' }
+  return { ok: true, member: member._id ? member : { ...member, _id: String(id) }, code: null, error: null }
 }
 
 /**
@@ -791,11 +1243,16 @@ export async function searchGlofoxByEmail(creds, email) {
  * type='MEMBER', lead_status, password. Optional: phone, birth,
  * emergency_contact, consent.
  *
- * Returns { ok, member, error }. member._id is the new
+ * Returns { ok, member, error, code?, glofox_response? }; ok needs a member
+ * id (interpretRegisterResult). member._id is the new
  * glofox_member_id we write to the CRM contact row.
  *
  * Best-effort: API failures return ok:false with the error
  * message; caller decides how to surface (audit row + Review tab).
+ *
+ * GLOFOXPOSTRETRY.1 — after a 5xx it re-sends only once an email search
+ * finds no account; one it finds comes back as
+ * { ok: true, member, error: null, glofox_response: null, recovered: 'landed_after_5xx' }.
  */
 export async function registerGlofoxMember(creds, payload) {
   if (!creds?.branchId) {
@@ -816,9 +1273,27 @@ export async function registerGlofoxMember(creds, payload) {
     ...(payload.emergency_contact ? { emergency_contact: payload.emergency_contact } : {}),
     ...(payload.consent ? { consent: payload.consent } : {}),
   }
+  // GLOFOXPOSTRETRY.1 — a 5xx can come after Glofox created the account. Before
+  // a re-send, search the email (the caller already found none before this
+  // POST, so a hit now is the account we just made, with the password we
+  // sent): found → return it, no re-send; none → re-send; search failed, or
+  // more than one account (no guessing which) → the 5xx stands (never create
+  // on a failed search). Glofox would refuse a second account on the email
+  // anyway (EMAIL_ALREADY_IN_USE), but as a failure that left the contact
+  // unlinked.
+  let landedMember = null
+  let verifiedAbsent = false
+  const verifyRegistered = async () => {
+    const s = await searchGlofoxByEmail(creds, body.email, { retry: 'never' })
+    if (s.error) return 'unknown'
+    if (s.found && s.member?._id) { landedMember = s.member; return 'landed' }
+    verifiedAbsent = true
+    return 'absent'
+  }
   try {
     const r = await glofoxFetch(creds, '/2.0/register', {
       method: 'POST',
+      retry: { verify: verifyRegistered },
       // MUST set this: without it fetch sends the body as text/plain and Glofox
       // never parses the JSON, rejecting every field as "required" (and the new
       // member is never created → the booking dead-ends in staff review). Mirrors
@@ -826,19 +1301,26 @@ export async function registerGlofoxMember(creds, payload) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     })
+    if (landedMember) return { ok: true, member: landedMember, error: null, glofox_response: null, recovered: 'landed_after_5xx' }
     let parsed
     try { parsed = await r.json() } catch { parsed = null }
-    if (!r.ok) {
-      return {
-        ok: false,
-        member: null,
-        error: parsed?.error || parsed?.message || `Glofox HTTP ${r.status}`,
-        glofox_response: parsed,
+    // A re-send after a read that found no account, refused because the
+    // email is now in use: the first attempt landed after that read. Search
+    // once more (one attempt) and link only an unambiguous single account.
+    if (verifiedAbsent && isGlofoxEmailInUse(parsed)) {
+      const s = await searchGlofoxByEmail(creds, body.email, { retry: 'never' })
+      if (!s.error && s.found && s.member?._id) {
+        return { ok: true, member: s.member, error: null, glofox_response: parsed, recovered: 'landed_after_5xx' }
       }
     }
-    // Glofox wraps the new user under various shapes — try them.
-    const member = parsed?.user || parsed?.data || parsed
-    return { ok: true, member, error: null, glofox_response: parsed }
+    // GLOFOXWRITEJUDGE.1 — judged on the body, not the HTTP status: a 200
+    // success:false is Glofox refusing. `code` lets the caller act on
+    // EMAIL_ALREADY_IN_USE (search and link) instead of filing "unknown".
+    const verdict = interpretRegisterResult({ httpOk: r.ok, httpStatus: r.status, body: parsed })
+    if (!verdict.ok) {
+      return { ok: false, member: null, code: verdict.code, error: verdict.error, glofox_response: parsed }
+    }
+    return { ok: true, member: verdict.member, error: null, glofox_response: parsed }
   } catch (e) {
     return { ok: false, member: null, error: e?.message || 'network error' }
   }
@@ -861,6 +1343,8 @@ export async function updateGlofoxMember(creds, userId, patch) {
   try {
     const r = await glofoxFetch(creds, `/2.0/members/${encodeURIComponent(userId)}`, {
       method: 'PUT',
+      // GLOFOXPOSTRETRY.1 — explicit, like every write. No callers today.
+      retry: 'never',
       body: JSON.stringify(patch),
     })
     let parsed
@@ -875,25 +1359,76 @@ export async function updateGlofoxMember(creds, userId, patch) {
 }
 
 /**
+ * TRIALGRANT.1 — judge a membership purchase
+ * (POST /2.2/branches/{b}/users/{u}/memberships/{m}/plans/{p}/purchase).
+ *
+ * Glofox's spec (v2.3.0) answers 200 with { success, message, message_code,
+ * status: 'SUCCESS' | 'PENDING-INTENT' | 'ERROR', invoice_id }, and its own
+ * guidance says older endpoints 200 with success:false for a bad request.
+ * So HTTP ok alone is not a purchase. Granted = a 2xx whose body does not
+ * say success:false and whose status is neither ERROR nor PENDING-INTENT (a
+ * payment still awaiting action is not a usable credit yet; any case, `_` or
+ * `-`).
+ *
+ * A clean 2xx with neither field is granted: the /start mint path has run on
+ * this call for months (27/27 new accounts in the 90 days to 30 Sep 2026 got
+ * their €0 trial invoice). Its body shape is logged so the real success shape
+ * can be pinned: MIA-BOOK.3's lesson, where the booking id sat one level
+ * down for fourteen months because nobody printed the shape.
+ *
+ * Pure apart from that one log line.
+ * @returns {{ granted: boolean, messageCode: string|null, purchaseStatus: string|null, invoiceId: string|null, message: string|null }}
+ */
+export function interpretPurchaseResult({ httpOk, httpStatus = null, body } = {}) {
+  const b = body && typeof body === 'object' ? body : {}
+  const str = (v) => (typeof v === 'string' && v ? v : null)
+  const messageCode = str(b.message_code)
+  const purchaseStatus = str(b.status)
+  const invoiceId = str(b.invoice_id)
+  const message = str(b.message)
+  // Compared normalised: Glofox spells the pending state both PENDING-INTENT
+  // (this endpoint's spec) and PENDING_INTENT (invoices). purchaseStatus
+  // itself stays as Glofox sent it, for the card and the logs.
+  const statusKey = purchaseStatus ? purchaseStatus.toUpperCase().replace(/_/g, '-') : null
+  const refused = b.success === false || statusKey === 'ERROR' || statusKey === 'PENDING-INTENT'
+  const granted = !!httpOk && !refused
+  if (granted && b.success === undefined && purchaseStatus === null) {
+    logWarn('glofox', 'membership purchase 2xx without success/status; extend interpretPurchaseResult', { httpStatus, shape: describeBodyShape(body) })
+  }
+  return { granted, messageCode, purchaseStatus, invoiceId, message }
+}
+
+/**
  * Purchase a membership for a member via the cart-less direct
  * purchase endpoint:
  *   POST /2.2/branches/{branchId}/users/{userId}/memberships/{membershipId}/plans/{planCode}/purchase
  *
- * Used immediately after registerGlofoxMember to attach the
- * studio's trial membership to a fresh account. Per-location
- * trial config lives at locations.settings.glofox.trial_membership_id
- * + trial_plan_code.
+ * Used right after registerGlofoxMember to attach the studio's trial
+ * membership to a fresh account (glofox-push.js), and by the approve path
+ * of a needs_credit_grant card (agent/trial-grant.js). Per-location trial
+ * config: the glofox connection's trial_membership_id + trial_plan_code.
  *
- * Returns { ok, error, glofox_response }.
+ * Returns { ok, error?, http_status, message_code, purchase_status,
+ * invoice_id, glofox_response }. TRIALGRANT.1: `ok` is the PURCHASE
+ * (interpretPurchaseResult), not the HTTP status; `error` is set only when
+ * !ok.
+ * GLOFOXPOSTRETRY.1: outcome_unknown: true when Glofox gave no clear answer
+ * (a network error or a 5xx); the purchase is never re-sent after a 5xx.
  */
 export async function purchaseGlofoxMembership(creds, userId, membershipId, planCode, opts = {}) {
+  const none = { http_status: null, message_code: null, purchase_status: null, invoice_id: null }
   if (!creds?.branchId || !userId || !membershipId || !planCode) {
-    return { ok: false, error: 'missing args' }
+    return { ok: false, error: 'missing args', ...none }
   }
   const path = `/2.2/branches/${encodeURIComponent(creds.branchId)}/users/${encodeURIComponent(userId)}/memberships/${encodeURIComponent(membershipId)}/plans/${encodeURIComponent(planCode)}/purchase`
   try {
     const r = await glofoxFetch(creds, path, {
       method: 'POST',
+      // GLOFOXPOSTRETRY.1 — NEVER re-sent after a 5xx. Glofox has no dedupe on
+      // a purchase, and a 5xx can come after it has bought: a re-send stacks a
+      // second trial. A 5xx is outcome_unknown instead (below), which
+      // grantTrialBeforeBooking refuses to buy over unless credits show.
+      retry: 'never',
       // Declare the JSON body's content-type (as createBooking/register do).
       // The trial purchase is the next call after register in the booking flow;
       // the body is empty today, but set it so Glofox can't ignore a body we
@@ -903,12 +1438,22 @@ export async function purchaseGlofoxMembership(creds, userId, membershipId, plan
     })
     let parsed
     try { parsed = await r.json() } catch { parsed = null }
-    if (!r.ok) {
-      return { ok: false, error: parsed?.message || `Glofox HTTP ${r.status}`, glofox_response: parsed }
+    const v = interpretPurchaseResult({ httpOk: r.ok, httpStatus: r.status, body: parsed })
+    const out = {
+      ok: v.granted,
+      http_status: r.status,
+      message_code: v.messageCode,
+      purchase_status: v.purchaseStatus,
+      invoice_id: v.invoiceId,
+      glofox_response: parsed,
     }
-    return { ok: true, glofox_response: parsed }
+    if (!v.granted) out.error = v.message || v.messageCode || (v.purchaseStatus ? `purchase ${v.purchaseStatus}` : `Glofox HTTP ${r.status}`)
+    // A 5xx may come after Glofox processed the purchase: like no reply at
+    // all, it says nothing about whether the trial was bought.
+    if (r.status >= 500) out.outcome_unknown = true
+    return out
   } catch (e) {
-    return { ok: false, error: e?.message || 'network error' }
+    return { ok: false, error: e?.message || 'network error', ...none, http_status: 0, outcome_unknown: true }
   }
 }
 
@@ -950,8 +1495,10 @@ export async function listGlofoxMemberships(creds) {
 
 /**
  * Generate a one-time passcode for a new Glofox account. Used as
- * the initial password on /2.0/register; emailed (and SMS'd) to the
- * member as "log in once with this, change to your own password."
+ * the initial password on /2.0/register. It is returned once to the
+ * caller and never stored or sent (PASSCODEREAD.1, mig 651): the desk
+ * Create-in-Glofox button shows it to the staff member who pressed it,
+ * and anyone else sets their own password with Glofox's "Forgot password?".
  *
  * Glofox enforces a multi-class password policy (live failure 2026-06-30:
  * PASSWORD_RULE_LOWER_CASE — the old uppercase+digits-only alphabet could
@@ -1029,15 +1576,40 @@ export const GLOFOX_BOOKING_MODEL = 'event'
  *
  * Returns the parsed JSON response. status + ok hoisted onto the
  * return so the operator-facing endpoint can route on them.
+ *
+ * GLOFOXPOSTRETRY.1 — after a 5xx it re-sends only once a read of the member's
+ * bookings shows the booking did not land; a landed one comes back as
+ * { ok: true, status: 200, body: { success: true, Booking }, recovered: 'landed_after_5xx' }.
  */
 export async function createBooking(creds, bookingRequest) {
   if (!creds || !bookingRequest) return { ok: false, status: 400, body: { error: 'missing args' } }
+  // GLOFOXPOSTRETRY.1 — a 5xx can come after Glofox booked. Before a re-send,
+  // read the member's bookings: landed → report it booked (no re-send);
+  // absent → re-send (Glofox's own member+event dedupe is the second net);
+  // unknown → no re-send, the 5xx goes to the caller's failure lane. Without
+  // both ids there is nothing to check, so a 5xx is final.
+  const userId = bookingRequest.user_id
+  const eventId = bookingRequest.model_id ?? bookingRequest.event_id
+  let landed = null
+  // Before the first send: a booking created from here on is this call's.
+  const sentAt = Date.now()
+  const verifyBooked = async () => {
+    const v = await findLandedBooking(creds, userId, eventId, { sentAt })
+    if (v.state === 'landed') landed = v.booking
+    return v.state
+  }
   try {
     const r = await glofoxFetch(creds, '/2.0/bookings', {
       method: 'POST',
+      retry: userId && eventId ? { verify: verifyBooked } : 'never',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(bookingRequest),
     })
+    if (landed) {
+      // Shaped like Glofox's own success body ({ success, Booking }), so
+      // interpretBookingResult reads it as booked with the found id.
+      return { ok: true, status: 200, body: { success: true, Booking: landed }, recovered: 'landed_after_5xx' }
+    }
     let body
     try { body = await r.json() } catch { body = null }
     return { ok: r.ok, status: r.status, body }
@@ -1058,7 +1630,8 @@ export const GLOFOX_ALREADY_BOOKED_CODE = 'YOU_HAVE_BOOKED_FOR_THIS_EVENT'
  * Glofox's live success body has NEVER matched the harvest shapes below
  * (0/9 historical funnel bookings captured an id; Emma Kennedy
  * 2026-07-28 booked fine on a 200 we then mislabelled a failure). So:
- *   - a 2xx WITH a message code is only booked when an id came back too
+ *   - a 2xx WITH a message code, or with `success: false`, is only booked
+ *     when an id came back too
  *     (the 200-with-error shape — the Lucinda case stays a failure);
  *   - a CLEAN 2xx (no message code) is booked, id or not — the id is a
  *     reconciliation bonus, never the success gate. When a clean 2xx has
@@ -1089,7 +1662,12 @@ export function interpretBookingResult(result) {
     || null
   const messageCode = body?.message_code || body?.message || null
   const alreadyBooked = messageCode === GLOFOX_ALREADY_BOOKED_CODE
-  const booked = !!result?.ok && (!messageCode || !!bookingId)
+  // GLOFOXWRITEJUDGE.1 — Glofox's own rule: an older endpoint's 200 with
+  // success:false is a bad request. Like a message code, it needs an id to
+  // count as booked. (Every failure body seen live also carried a code; this
+  // closes the corner the staff Book panel used to check by hand.)
+  const failureSignal = !!messageCode || body?.success === false
+  const booked = !!result?.ok && (!failureSignal || !!bookingId)
   if (booked && !bookingId) {
     console.warn(`[glofox] booking 2xx without a harvestable id — extend the harvest shapes. ${describeBodyShape(body)}`)
   }
@@ -1126,6 +1704,11 @@ function describeBodyShape(body) {
  * active, private, booking_status, program_obj, …
  * (/2.0/calendar does NOT exist on this tier — WRONG_URL.)
  *
+ * GLOFOX-SPEC-2026-09 — reads the branch-scoped
+ * `GET /2.0/branches/{branchId}/events`; the bare `/2.0/events` is
+ * deprecated in the spec ("use the branch path with the same query
+ * parameters; this path remains supported").
+ *
  * Returns { ok, status, body, events } — events is body.data or [].
  */
 export async function fetchUpcomingEvents(creds, { start, end, limit = 100 } = {}) {
@@ -1137,7 +1720,7 @@ export async function fetchUpcomingEvents(creds, { start, end, limit = 100 } = {
     limit: String(limit),
   })
   try {
-    const r = await glofoxFetch(creds, `/2.0/events?${qs.toString()}`)
+    const r = await glofoxFetch(creds, `/2.0/branches/${encodeURIComponent(creds.branchId)}/events?${qs.toString()}`)
     let body
     try { body = await r.json() } catch { body = null }
     const events = Array.isArray(body?.data) ? body.data : []
@@ -1151,17 +1734,31 @@ export async function fetchUpcomingEvents(creds, { start, end, limit = 100 } = {
  * Cancel a booking via POST /booking/{bookingId}/user/{userId}/cancel.
  * Studios can configure "no cancellation allowed within X hours of class"
  * — Glofox returns the rule violation message in the response body.
+ *
+ * GLOFOXPOSTRETRY.1 — after a 5xx it re-sends only while a read of the
+ * member's bookings shows the booking still live; one that reads cancelled
+ * comes back as { ok: true, status: 200, body: { success: true }, recovered: 'landed_after_5xx' }.
  */
 export async function cancelBooking(creds, bookingId, userId) {
   if (!creds || !bookingId || !userId) {
     return { ok: false, status: 400, body: { error: 'missing args' } }
   }
+  // GLOFOXPOSTRETRY.1 — a 5xx can come after Glofox cancelled. Before a
+  // re-send, read the member's bookings: this booking cancelled → ok, no
+  // re-send; still live → re-send; not found or unreadable → the 5xx stands.
+  let cancelled = false
+  const verifyCancelled = async () => {
+    const state = await findBookingCancelState(creds, userId, bookingId)
+    if (state === 'landed') cancelled = true
+    return state
+  }
   try {
     const r = await glofoxFetch(
       creds,
       `/booking/${encodeURIComponent(bookingId)}/user/${encodeURIComponent(userId)}/cancel`,
-      { method: 'POST' },
+      { method: 'POST', retry: { verify: verifyCancelled } },
     )
+    if (cancelled) return { ok: true, status: 200, body: { success: true }, recovered: 'landed_after_5xx' }
     let body
     try { body = await r.json() } catch { body = null }
     return { ok: r.ok, status: r.status, body }
@@ -1253,6 +1850,10 @@ export async function cancelGlofoxMembership(creds, { userMembershipId, memberId
   try {
     const r = await glofoxFetch(creds, `/v3.0/memberships/${userMembershipId}/cancel`, {
       method: 'POST',
+      // GLOFOXPOSTRETRY.1 — never re-sent after a 5xx: Glofox's answer to a
+      // second ON_DATE cancel is unverified, and the approval card's Fix &
+      // retry is the recovery (auto-cancel is off at every location).
+      retry: 'never',
       headers: {
         'Content-Type': 'application/json',
         'x-glofox-impersonated-member-id': memberId,
@@ -1317,6 +1918,11 @@ export async function createGlofoxInteraction(creds, userId, { type, description
       `/2.1/branches/${encodeURIComponent(creds.branchId)}/leads/${encodeURIComponent(userId)}/interactions`,
       {
         method: 'POST',
+        // GLOFOXPOSTRETRY.1 — never re-sent after a 5xx: a repeat is a
+        // duplicate note in Glofox, the response has no id to check against,
+        // and a lost copy is recorded 'failed' in glofox_note_pushes while the
+        // CRM note itself is untouched.
+        retry: 'never',
         // Required: without it fetch sends the body as text/plain, Glofox never
         // parses the JSON and rejects every field as "required" (the exact bug
         // that broke registration). Mirrors registerGlofoxMember/createBooking.
@@ -1390,13 +1996,89 @@ export async function fetchUserBookingsResult(creds, userId, opts = {}) {
     exclude_cancelled: 'false',
   })
   try {
-    const r = await glofoxFetch(creds, `/2.0/bookings?${qs.toString()}`)
+    // opts.retry: a dedupe read passes 'never' (GLOFOXPOSTRETRY.1), so a
+    // failing read answers 'unknown' at once instead of stalling the write
+    // behind its own backoffs. Unset keeps the GET default (retried).
+    const r = await glofoxFetch(creds, `/2.0/bookings?${qs.toString()}`, { retry: opts.retry })
     if (!r.ok) return { ok: false, bookings: [] }
     const body = await r.json()
     return { ok: true, bookings: Array.isArray(body?.data) ? body.data : [] }
   } catch {
     return { ok: false, bookings: [] }
   }
+}
+
+/** Glofox spells a cancelled booking both ways. */
+function isCancelledBookingStatus(status) {
+  const s = String(status || '').toUpperCase()
+  return s === 'CANCELLED' || s === 'CANCELED'
+}
+
+// Clock skew allowed between us and Glofox when asking "was this booking
+// created by the send that started at sentAt?".
+const GLOFOX_LANDED_SKEW_MS = 2 * 60 * 1000
+
+/**
+ * A Glofox timestamp as epoch ms, or NaN. The bookings GET gives `created` as
+ * epoch seconds (trimRecentBookings stores Number(b.created)); other payloads
+ * carry ISO strings, and some carry "YYYY-MM-DD HH:MM:SS" with no zone, which
+ * is read as UTC. Epoch ms is accepted too.
+ */
+function glofoxTimeMs(v) {
+  if (v === null || v === undefined || v === '') return NaN
+  const n = typeof v === 'number' ? v : (/^\d+(\.\d+)?$/.test(String(v).trim()) ? Number(v) : NaN)
+  if (Number.isFinite(n)) return n < 1e12 ? n * 1000 : n
+  const s = String(v).trim()
+  if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(s)) return Date.parse(`${s.replace(' ', 'T')}Z`)
+  return Date.parse(s)
+}
+
+/**
+ * GLOFOXPOSTRETRY.1 — did a booking POST that answered 5xx land anyway?
+ * Reads the member's bookings (class start in the last 7 days onward, newest
+ * first, cancelled included, ONE attempt) and looks for a NOT-cancelled one
+ * on this event (model_id, or the older event_id) that is this member's (a
+ * row naming another user_id is ignored, whatever the query filter did).
+ *   - created at or after sentAt (less clock skew): this send made it →
+ *     'landed' (a new waitlist entry included: that is what the send did);
+ *   - otherwise an older BOOKED entry → 'landed' (the send would have been
+ *     refused as already booked, so the member IS booked);
+ *   - otherwise an older entry of any other status, e.g. the waitlist entry
+ *     a member held before a spot opened, or one with no readable created
+ *     → 'unknown': it proves nothing about this send, and reporting it as
+ *     booked would tell a waitlisted member they have a place.
+ * @returns {Promise<{ state: 'landed'|'absent'|'unknown', booking: object|null }>}
+ *   unknown also = the read failed; never re-send on it.
+ */
+export async function findLandedBooking(creds, userId, eventId, { sentAt = NaN } = {}) {
+  const read = await fetchUserBookingsResult(creds, userId, { windowDays: 7, retry: 'never' })
+  if (!read.ok) return { state: 'unknown', booking: null }
+  const mine = read.bookings.filter((b) =>
+    String(b?.model_id ?? b?.event_id ?? '') === String(eventId)
+    && !isCancelledBookingStatus(b?.status)
+    && (b?.user_id === undefined || b?.user_id === null || String(b.user_id) === String(userId)))
+  if (!mine.length) return { state: 'absent', booking: null }
+  const fresh = Number.isFinite(sentAt)
+    ? mine.find((b) => glofoxTimeMs(b?.created) >= sentAt - GLOFOX_LANDED_SKEW_MS)
+    : null
+  if (fresh) return { state: 'landed', booking: fresh }
+  const booked = mine.find((b) => String(b?.status || '').toUpperCase() === 'BOOKED')
+  if (booked) return { state: 'landed', booking: booked }
+  return { state: 'unknown', booking: null }
+}
+
+/**
+ * GLOFOXPOSTRETRY.1 — did a booking-cancel POST that answered 5xx land anyway?
+ * @returns {Promise<'landed'|'absent'|'unknown'>} landed = the booking reads
+ *   cancelled; absent = it is still live (re-send); unknown = the read failed
+ *   or the booking is not in it (never re-send on it).
+ */
+export async function findBookingCancelState(creds, userId, bookingId) {
+  const read = await fetchUserBookingsResult(creds, userId, { windowDays: 7, retry: 'never' })
+  if (!read.ok) return 'unknown'
+  const hit = read.bookings.find((b) => String(b?._id ?? b?.id ?? '') === String(bookingId))
+  if (!hit) return 'unknown'
+  return isCancelledBookingStatus(hit.status) ? 'landed' : 'absent'
 }
 
 /**
@@ -1435,6 +2117,41 @@ export async function fetchGlofoxTrainers(creds) {
 }
 
 /**
+ * MEMBERRESULT.1 — judge a 2xx body from GET /2.0/members/{id}.
+ *
+ * Glofox answers 200 with `{ success: false, message_code }` for an id it will
+ * not serve (a deleted or merged account, a trainer id): "Resource not
+ * available, empty result cant be processed", seen live every 10 minutes since
+ * 30 Aug 2026. Its own guidance is to treat that as a 400. So:
+ *   - success === false                      → refused, Glofox's code kept
+ *     (message_code, else message, else GLOFOX_SUCCESS_FALSE);
+ *   - no member object, or a member without
+ *     _id / id / member_id (the ids mapGlofoxMember needs) → refused,
+ *     NO_MEMBER_IN_BODY;
+ *   - otherwise                              → the member (unwrapped from
+ *     `data` when wrapped).
+ * Pure; exported for tests and for any future /2.0/members reader.
+ *
+ * @returns {{ member: (object|null), refused: boolean, messageCode: (string|null) }}
+ */
+export function interpretMemberBody(body) {
+  const none = { member: null, refused: true, messageCode: 'NO_MEMBER_IN_BODY' }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return none
+  if (body.success === false) {
+    const code = (typeof body.message_code === 'string' && body.message_code)
+      || (typeof body.message === 'string' && body.message)
+      || 'GLOFOX_SUCCESS_FALSE'
+    return { member: null, refused: true, messageCode: code }
+  }
+  const member = body.data && typeof body.data === 'object' && !Array.isArray(body.data) ? body.data : body
+  // Same id rule as mapGlofoxMember's pluck: the first of _id / id / member_id
+  // that is not null and not blank (an empty _id falls through to id).
+  const id = [member._id, member.id, member.member_id].find((v) => v != null && String(v).trim() !== '')
+  if (id === undefined) return none
+  return { member, refused: false, messageCode: null }
+}
+
+/**
  * Error-aware single-member fetch — GET /2.0/members/{id}.
  *
  * The /2.0/members LIST payload carries only a thin membership
@@ -1443,24 +2160,175 @@ export async function fetchGlofoxTrainers(creds) {
  * cron to keep contacts.glofox_membership_plan current for the
  * whole member base.
  *
- *   { ok: true,  member: {...} }  — request succeeded
- *   { ok: false, member: null }   — request failed; caller should
- *                                   leave the member's stored data
- *                                   untouched (don't wipe to null)
+ *   { ok: true,  member, refused: false, messageCode: null } — a member
+ *   { ok: false, member: null, refused: true,  messageCode }  — Glofox
+ *       answered 2xx WITHOUT a member (200 success:false, or no member id):
+ *       "no data", never a write. Callers count it apart from a blip.
+ *   { ok: false, member: null, refused: false, messageCode: null } — the
+ *       request failed (non-2xx, network, bad JSON); retry next run.
  *
- * @returns {Promise<{ ok: boolean, member: (object|null) }>}
+ * Either ok:false: the caller leaves the member's stored data untouched
+ * (never wipe to null).
+ *
+ * @returns {Promise<{ ok: boolean, member: (object|null), refused: boolean, messageCode: (string|null) }>}
  */
 export async function fetchMemberResult(creds, memberId) {
-  if (!creds || !memberId) return { ok: false, member: null }
+  const failed = { ok: false, member: null, refused: false, messageCode: null }
+  if (!creds || !memberId) return failed
   try {
     const r = await glofoxFetch(creds, `/2.0/members/${encodeURIComponent(memberId)}`)
-    if (!r.ok) return { ok: false, member: null }
-    const body = await r.json()
-    // The single-member endpoint wraps the member under `data`;
-    // tolerate an unwrapped body too.
-    const member = body && typeof body === 'object' && body.data ? body.data : body
-    return { ok: true, member: (member && typeof member === 'object') ? member : null }
+    if (!r.ok) return failed
+    const { member, refused, messageCode } = interpretMemberBody(await r.json())
+    return { ok: !refused, member, refused, messageCode }
   } catch {
-    return { ok: false, member: null }
+    return failed
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Invoice payment link (PAYLINK.1)
+// ─────────────────────────────────────────────────────────────
+//
+// Live probe 2026-09-12: POST /v3.0/payment-links/invoices/{invoiceID}
+// answers with the three integration headers + x-glofox-impersonated-
+// member-id (the member's Glofox _id). The spec says "Bearer member JWT";
+// for an integrator that is wrong — headers alone 403, a Bearer of the api
+// token 401, impersonation 200. `is_retriable:false` means the invoice
+// cannot be paid by link right now (a custom fee, or Glofox mid-retry).
+
+// PAYLINK.4b — this call sits on the webhook request path (INVOICE_UPDATED →
+// maybeEnrolDunning → capturePaymentForRun) and on an operator's "Send
+// payment reminder" button, so it must NOT inherit glofoxFetch's unbounded
+// wait. PAYLINK.5b — the signal genuinely bounds the WHOLE call now: every
+// fetch attempt AND every retry-backoff sleep in between (glofoxFetch checks
+// `signal.aborted` before and after each sleep and passes the signal into
+// _glofoxSleep, so an abort mid-backoff returns immediately instead of
+// waiting out the remaining sleep(s)) — not just a single attempt's hang.
+const GLOFOX_PAYMENT_LINK_TIMEOUT_MS = 8000
+
+/**
+ * @param {{branchId, apiKey, apiToken}} creds
+ * @param {{ memberId: string, invoiceId: string }} [args]
+ * @returns {Promise<{ ok:boolean, status:number, retriable:boolean, link:string|null,
+ *   amountCents:number|null, currency:string|null, summary:string|null,
+ *   invoiceId:string|null, error:string|null }>}  never throws
+ */
+export async function getGlofoxInvoicePaymentLink(creds, args = {}) {
+  const { memberId, invoiceId } = args || {}
+  const inv = typeof invoiceId === 'string' ? invoiceId.trim() : ''
+  const empty = (status, error) => ({
+    ok: false, status, retriable: false, link: null, amountCents: null, currency: null,
+    summary: null, invoiceId: inv || null, error,
+  })
+  if (!creds?.branchId || !creds?.apiKey || !creds?.apiToken
+    || !GLOFOX_OBJECT_ID_RE.test(String(memberId || '')) || !inv || inv.length > 200) {
+    return empty(400, 'INVALID_ARGS')
+  }
+  try {
+    const r = await glofoxFetch(creds, `/v3.0/payment-links/invoices/${encodeURIComponent(inv)}`, {
+      method: 'POST',
+      // Returns a pay link for an existing invoice; nothing is charged, so a
+      // repeat is harmless and a lost link is a lost reminder (GLOFOXPOSTRETRY.1).
+      retry: 'idempotent',
+      signal: AbortSignal.timeout(GLOFOX_PAYMENT_LINK_TIMEOUT_MS),
+      headers: { 'Content-Type': 'application/json', 'x-glofox-impersonated-member-id': memberId },
+      body: '{}',
+    })
+    let body
+    try { body = await r.json() } catch { body = null }
+    if (!r.ok) {
+      const code = typeof body?.message_code === 'string' ? body.message_code : (typeof body?.code === 'string' ? body.code : null)
+      return empty(r.status, code ? `Glofox HTTP ${r.status} (${code})` : `Glofox HTTP ${r.status}`)
+    }
+    // GLOFOX-SPEC-2026-09 — a 200 can still carry success:false; that's a
+    // failure (bad invoice id, etc.), never "not retriable".
+    if (body?.success === false) {
+      return empty(r.status, body.message_code || 'GLOFOX_SUCCESS_FALSE')
+    }
+    const retriable = body?.is_retriable === true
+    const amount = Number(body?.invoice_amount)
+    const link = retriable && typeof body?.invoice_payment_link === 'string' && body.invoice_payment_link.startsWith('https://')
+      ? body.invoice_payment_link
+      : null
+    return {
+      ok: true, status: r.status, retriable,
+      link,
+      amountCents: retriable && Number.isFinite(amount) && amount > 0 ? amount : null,
+      currency: retriable && typeof body?.invoice_currency === 'string' ? body.invoice_currency : null,
+      summary: retriable && typeof body?.invoice_summary === 'string' ? body.invoice_summary : null,
+      invoiceId: typeof body?.invoice_id === 'string' ? body.invoice_id : inv,
+      error: null,
+    }
+  } catch (e) {
+    if (e?.name === 'AbortError' || e?.name === 'TimeoutError') return empty(0, 'timeout')
+    return empty(0, e?.message || 'network error')
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Member overdue invoices (PRESEND.1)
+// ─────────────────────────────────────────────────────────────
+//
+// Live probe 2026-09-13: GET /v3.0/users/{memberId}/overdue-invoices with the
+// three integration headers + x-glofox-impersonated-member-id answers
+// { data: [{ invoice_id, due_date_utc }] } — the member's overdue SUBSCRIPTION
+// invoices, newest first, capped at 20. Same auth shape as the payment-link
+// call above, and the same 8s abortable budget: this read sits immediately
+// before a dunning send on the runner's tick, so it must never inherit
+// glofoxFetch's unbounded wait.
+//
+// Never throws. The one caller (dunningPresendGate) FAILS OPEN, and it can
+// only do that if every failure comes back as ok:false rather than an
+// exception — a Glofox blip must never silence a legitimate reminder.
+// The endpoint's page size. A response holding exactly this many rows may have
+// been truncated, so a caller inferring anything from an ABSENCE (the pre-send
+// gate: "this invoice is not listed, so it is settled") must treat a full page
+// as inconclusive rather than as proof.
+export const GLOFOX_OVERDUE_INVOICES_PAGE_CAP = 20
+
+// ID NAMESPACE, verified live rather than assumed: the invoice ids this returns
+// are the SAME ids the INVOICE_UPDATED webhook writes to `glofox_invoices.id`
+// and that capturePaymentForRun stores as `metadata.payment.invoice_id` —
+// 0f187762-acc8-42d2-860c-43cbe1477df0 was read back from both on 2026-09-13.
+// Without that, comparing the two would be a category error that silently never
+// matches, and a gate keyed on "not in the list" would exit every live run.
+/**
+ * @param {{branchId, apiKey, apiToken}} creds
+ * @param {{ memberId: string }} [args]
+ * @returns {Promise<{ ok:boolean, status:number, invoiceIds:string[], error:string|null }>}
+ */
+export async function getGlofoxOverdueInvoices(creds, args = {}) {
+  const { memberId } = args || {}
+  const empty = (status, error) => ({ ok: false, status, invoiceIds: [], error })
+  if (!creds?.branchId || !creds?.apiKey || !creds?.apiToken
+    || !GLOFOX_OBJECT_ID_RE.test(String(memberId || ''))) {
+    return empty(400, 'INVALID_ARGS')
+  }
+  try {
+    const r = await glofoxFetch(creds, `/v3.0/users/${encodeURIComponent(memberId)}/overdue-invoices`, {
+      method: 'GET',
+      signal: AbortSignal.timeout(GLOFOX_PAYMENT_LINK_TIMEOUT_MS),
+      headers: { 'x-glofox-impersonated-member-id': memberId },
+    })
+    let body
+    try { body = await r.json() } catch { body = null }
+    if (!r.ok) {
+      const code = typeof body?.message_code === 'string' ? body.message_code : (typeof body?.code === 'string' ? body.code : null)
+      return empty(r.status, code ? `Glofox HTTP ${r.status} (${code})` : `Glofox HTTP ${r.status}`)
+    }
+    // GLOFOX-SPEC-2026-09 — a 200 can still carry success:false. Treating that
+    // as "nothing overdue" would exit every live dunning run at once, so it is
+    // a failure and the gate proceeds.
+    if (body?.success === false) {
+      return empty(r.status, body.message_code || 'GLOFOX_SUCCESS_FALSE')
+    }
+    const rows = Array.isArray(body?.data) ? body.data : []
+    const invoiceIds = rows
+      .map((row) => (typeof row?.invoice_id === 'string' ? row.invoice_id.trim() : ''))
+      .filter(Boolean)
+    return { ok: true, status: r.status, invoiceIds, error: null }
+  } catch (e) {
+    if (e?.name === 'AbortError' || e?.name === 'TimeoutError') return empty(0, 'timeout')
+    return empty(0, e?.message || 'network error')
   }
 }

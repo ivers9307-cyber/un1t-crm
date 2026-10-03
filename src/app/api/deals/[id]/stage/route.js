@@ -29,7 +29,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { logAuditEvent } from '@/lib/audit'
@@ -51,7 +51,7 @@ export async function POST(request, props) {
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   }
-  if (!hasPermission(user, 'pipeline')) {
+  if (!hasPermissionAtAnyLocation(user, 'pipeline')) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -72,6 +72,10 @@ export async function POST(request, props) {
 
   const guard = assertLocationAccessOr404(user, deal.location_id)
   if (guard) return guard
+  // ROLESWEEP.1c — `pipeline` judged at the deal's location, not the active studio.
+  if (!hasPermissionForLocation(user, deal.location_id, 'pipeline')) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+  }
 
   // Same BOARD, not just the same location — see the header note.
   const { data: stage } = await db

@@ -26,14 +26,14 @@ vi.mock('next/navigation', () => ({
 
 // Client component stub — this test asserts on the server-side gate only.
 vi.mock('./CustomerAgentClient', () => ({
-  default: () => <div>customer-agent-client-rendered</div>,
+  default: ({ canEdit }) => <div>customer-agent-client-rendered can-edit={String(canEdit)}</div>,
 }))
 
 import CustomerAgentSettingsPage from './page.js'
 import { getCurrentUser } from '@/lib/auth'
 
-function user(role) {
-  return { id: 'u1', role, activeLocation: { id: 'loc1' } }
+function user(role, rolesByLocation = role === 'master' ? {} : { loc1: role }) {
+  return { id: 'u1', role, profileRole: role === 'master' ? 'master' : 'staff', activeLocation: { id: 'loc1' }, rolesByLocation }
 }
 
 const ALL_ROLES = ['master', 'owner', 'manager', 'head_coach', 'staff']
@@ -59,6 +59,22 @@ describe('/settings/customer-agent page', () => {
       getCurrentUser.mockResolvedValue(user(role))
       const html = renderToStaticMarkup(await CustomerAgentSettingsPage())
       expect(html).toContain('customer-agent-client-rendered')
+    })
+  }
+
+  // MIAROLE.1 (C80) — reads stay manager+; only an owner AT the active studio
+  // (or a master) gets the editable form. Same predicate as the PUT's gate.
+  for (const [label, u, expected] of [
+    ['an owner at the studio', user('owner'), 'true'],
+    ['a master', user('master'), 'true'],
+    ['a manager', user('manager'), 'false'],
+    ['a head coach', user('head_coach'), 'false'],
+    ['an owner at ANOTHER studio (manager here)', user('owner', { loc1: 'manager', loc2: 'owner' }), 'false'],
+  ]) {
+    it(`${label}: canEdit=${expected}`, async () => {
+      getCurrentUser.mockResolvedValue(u)
+      const html = renderToStaticMarkup(await CustomerAgentSettingsPage())
+      expect(html).toContain(`can-edit=${expected}`)
     })
   }
 })

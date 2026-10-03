@@ -27,7 +27,7 @@ export const NAV_COMMANDS = [
   // as the sidebar's: an accounts@/sales@-only user (email_inbox only)
   // still needs to find this command. The email-mail entry below stays
   // separate — its own deep link into the conversation queue tab.
-  { id: 'communications', label: 'Messages', href: '/communications', anyPermission: ['email', 'whatsapp', 'sms', 'email_inbox'] },
+  { id: 'communications', label: 'Messages', href: '/communications', anyPermission: ['email', 'whatsapp', 'email_inbox'] },
   // EMAIL-TICKET.4 — the studio email surface. `email_inbox`, not the
   // marketing `email` key (different population of people). INBOX-SPLIT.1
   // relabelled it "Email"; COMMS-IA.3 relabels it again to "Email inbox" so a
@@ -69,7 +69,7 @@ export const CREATE_COMMANDS = [
   { id: 'new-contact', label: 'New contact', href: '/contacts/new', permission: 'contacts' },
   // FEAT-LAUNCH.1 — quick actions beyond new-contact. All are real standalone
   // destinations (verified routes), permission-gated like the nav commands.
-  { id: 'send-message', label: 'Send a message', href: '/communications/send', anyPermission: ['email', 'whatsapp', 'sms'] },
+  { id: 'send-message', label: 'Send a message', href: '/communications/send', anyPermission: ['email', 'whatsapp'] },
   // K5 — was /whatsapp/broadcasts/new, retired by PILLAR2 Phase 1b and kept
   // only as a redirect here. The same href as 'send-message' is deliberate,
   // not a leftover: the unified composer IS where a WhatsApp broadcast is

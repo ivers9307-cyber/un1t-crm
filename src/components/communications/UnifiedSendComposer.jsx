@@ -2,13 +2,14 @@
 
 // PILLAR2 Phase 1 — the unified, audience-first "send a message off the cuff"
 // surface. One screen: pick audience → pick channel → compose → send now (or
-// schedule, SMS only). It's a FACADE: on send it creates the existing
-// per-channel broadcast record and fires the existing send route — the send
-// libs + crons are untouched. Email joins in Phase 2.
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+// schedule). It's a FACADE: on send it creates the existing per-channel
+// broadcast record and fires the existing send route — the send libs + crons
+// are untouched. Channels: WhatsApp + email (SMS was retired with Twilio,
+// TWILIO-RETIRE.1).
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { MessageSquare, MessageCircle, Mail, Send, Clock, Check, AlertTriangle, Users, Filter, Bookmark } from 'lucide-react'
+import { MessageCircle, Mail, Send, Clock, Check, AlertTriangle, Users, Filter, Bookmark } from 'lucide-react'
 import { Button } from '@/components/ui'
 import AudienceBuilder from '@/components/AudienceBuilder'
 import AudienceCount from './AudienceCount'
@@ -22,7 +23,7 @@ import SendQuietHoursNotice from './SendQuietHoursNotice'
 import CopyAssist from './CopyAssist'
 import { isoToLocalDatetime } from '@/lib/datetime-local'
 import { useUnlayerEditor } from './useUnlayerEditor'
-import { smsSegmentInfo, SMS_MAX_LEN, SMS_MERGE_TAGS, waBodyVariables, WA_VARIABLE_FIELDS } from '@/lib/communications/compose'
+import { waBodyVariables, WA_VARIABLE_FIELDS } from '@/lib/communications/compose'
 import { groupWaTemplates, UNGROUPED_LABEL } from '@shared/wa-template-groups'
 import { dynamicUrlButtonIndex, URL_BUTTON_MAPPING_KEY } from '@/lib/whatsapp-template-buttons'
 
@@ -33,19 +34,16 @@ const fieldCls =
 
 export default function UnifiedSendComposer({ locationId, channels = [], templates = [], initialAudienceFilter = null, initialSegmentId = null }) {
   const router = useRouter()
-  const [channel, setChannel] = useState(channels[0] || 'sms')
+  const [channel, setChannel] = useState(channels[0] || 'email')
   const [label, setLabel] = useState('')
   const [filter, setFilter] = useState(initialAudienceFilter || EMPTY_FILTER)
-  // Explicit "pick people" mode (SMS / WhatsApp only)
+  // Explicit "pick people" mode (WhatsApp only)
   const [audienceMode, setAudienceMode] = useState('filter') // 'filter' | 'people'
   // SEGPICK.1 — saved segments (contact_segments) for this location. null while
   // loading so the empty state doesn't flash before the fetch resolves.
   const [savedSegments, setSavedSegments] = useState(null)
   const [appliedSegmentId, setAppliedSegmentId] = useState(null)
   const [people, setPeople] = useState([]) // [{ id, name, email, phone }]
-  // SMS
-  const [body, setBody] = useState('')
-  const bodyRef = useRef(null)
   // Email
   const [subject, setSubject] = useState('')
   const [emailType, setEmailType] = useState('marketing') // 'marketing' | 'utility'
@@ -150,9 +148,8 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
     const idx = dynamicUrlButtonIndex(selectedTemplate?.components)
     return idx < 0 ? null : selectedTemplate.components.find(c => c.type === 'BUTTONS').buttons[idx]
   }, [selectedTemplate])
-  const seg = smsSegmentInfo(body)
 
-  // Explicit "pick people" mode is SMS/WhatsApp only — email hands off to the
+  // Explicit "pick people" mode is WhatsApp only — email hands off to the
   // campaign editor, whose AudienceBuilder can't represent an id-in filter yet.
   const useExplicit = audienceMode === 'people' && channel !== 'email'
   // FILTER-P1.1 — strip half-built rows here, at the single point the filter
@@ -196,28 +193,17 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
   // the same thing already stripped.
   const countFilter = useExplicit ? effectiveFilter : filter
 
-  const insertTag = (tag) => {
-    const el = bodyRef.current
-    if (!el) { setBody(b => b + tag); return }
-    const start = el.selectionStart ?? body.length
-    const end = el.selectionEnd ?? body.length
-    setBody(body.slice(0, start) + tag + body.slice(end))
-    requestAnimationFrame(() => { el.focus(); el.selectionStart = el.selectionEnd = start + tag.length })
-  }
-
   const defaultLabel = () => {
-    const ch = channel === 'sms' ? 'SMS' : channel === 'whatsapp' ? 'WhatsApp' : 'Email'
+    const ch = channel === 'whatsapp' ? 'WhatsApp' : 'Email'
     return label.trim() || `${ch} — ${new Date().toLocaleString('en-IE', { dateStyle: 'medium', timeStyle: 'short' })}`
   }
 
   // ── validation ──────────────────────────────────────────────────
   const scheduledIso = scheduledAtLocal ? new Date(scheduledAtLocal).toISOString() : null
   const scheduleValid = scheduleMode === 'now' || (scheduledIso && new Date(scheduledIso).getTime() > Date.now())
-  const composeValid = channel === 'sms'
-    ? (body.trim().length > 0 && body.length <= SMS_MAX_LEN)
-    : channel === 'whatsapp'
-      ? !!templateId
-      : subject.trim().length > 0 // email — needs a subject (design is inline)
+  const composeValid = channel === 'whatsapp'
+    ? !!templateId
+    : subject.trim().length > 0 // email — needs a subject (design is inline)
   const audienceValid = !useExplicit || people.length > 0
   const useResend = channel === 'email' && emailType === 'marketing' && resendEnabled
   const resendValid = !useResend || (Number(resendWaitHours) >= 1 && Number(resendWaitHours) <= 168)
@@ -227,12 +213,12 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
   // an audience of 1 with 0 reachable has nobody to send to.
   const sendableCount = channel === 'whatsapp' ? reachable : count
   // FILTER-P1.6c — the MATCH count, as opposed to the sendable one. For email
-  // and SMS the route reports raw matches as `matched` and eligibles as
+  // the route reports raw matches as `matched` and eligibles as
   // `count`; for WhatsApp `count` IS the match count and `reachable` is the
   // sendable one. Keeping the two apart is the whole point: "nobody matched"
   // and "matched, none reachable" are different problems with different fixes.
   const matchedCount = channel === 'whatsapp' ? count : (matched ?? count)
-  const channelNoun = channel === 'whatsapp' ? 'on WhatsApp' : channel === 'sms' ? 'by SMS' : 'by email'
+  const channelNoun = channel === 'whatsapp' ? 'on WhatsApp' : 'by email'
   // COMMSFIX.B.6 — Send requires a REAL positive count: null (still loading /
   // failed) and an errored count both disable it. The old `== null` escape
   // let an operator queue a campaign whose audience could never resolve.
@@ -261,24 +247,10 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
   async function send() {
     setBusy(true); setError(null); setResult(null)
     try {
-      if (channel === 'sms') {
-        // Create in the final state in ONE call. Scheduling used to be a
-        // create-then-PATCH 2-step that stranded a draft if the PATCH failed;
-        // the create now sets status='scheduled' atomically.
-        const { broadcast } = await postJson('/api/sms/broadcasts', {
-          name: defaultLabel(), body, audience_filter: effectiveFilter, location_id: locationId,
-          ...(scheduleMode === 'later' ? { scheduled_at: scheduledIso, status: 'scheduled' } : {}),
-        })
-        if (scheduleMode === 'later') {
-          setResult({ channel, mode: 'scheduled', when: scheduledIso, id: broadcast.id, detail: `/communications/sent/sms/${broadcast.id}` })
-        } else {
-          const data = await postJson(`/api/sms/broadcasts/${broadcast.id}/send`, {})
-          setResult({ channel, mode: 'sent', id: broadcast.id, detail: `/communications/sent/sms/${broadcast.id}`, ...data })
-        }
-      } else if (channel === 'whatsapp') {
+      if (channel === 'whatsapp') {
         const drip = waMode === 'drip'
         const scheduled = scheduleMode === 'later'
-        // WA-SCHEDULE — like the SMS path, a scheduled broadcast is created in
+        // WA-SCHEDULE — a scheduled broadcast is created in
         // its final state in ONE call (status='scheduled' + scheduled_at); the
         // run-whatsapp-broadcasts cron promotes it when due. Works for both
         // pacing modes: a scheduled drip starts dripping at the picked time.
@@ -298,8 +270,10 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
         if (scheduled) {
           setResult({ channel, mode: 'scheduled', when: scheduledIso, drip, id: broadcast.id, detail: `/communications/sent/whatsapp/${broadcast.id}` })
         } else if (drip) {
-          // Create set status='sending'; the run-whatsapp-broadcasts cron drives
-          // it during the window. No /send call for a drip.
+          // C120 GATES-3 (e) — the create made a draft; /send runs the entry
+          // checks and starts the drip (draft→sending), sending nothing itself.
+          // The run-whatsapp-broadcasts cron drives it during the window.
+          await postJson(`/api/whatsapp/broadcasts/${broadcast.id}/send`, {})
           setResult({ channel, mode: 'drip', id: broadcast.id, detail: `/communications/sent/whatsapp/${broadcast.id}`,
             dailyCap: Number(dailyCap) || 500, windowStart, windowEnd })
         } else {
@@ -350,7 +324,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
   }
 
   function reset() {
-    setResult(null); setError(null); setBody(''); setTemplateId(''); setVariables({})
+    setResult(null); setError(null); setTemplateId(''); setVariables({})
     setLabel(''); setFilter(EMPTY_FILTER); setAppliedSegmentId(null); setScheduleMode('now'); setScheduledAtLocal('')
     setResendEnabled(false); setResendWaitHours(48); setResendSubject('')
     setWaMode('blast'); setDailyCap(500); setPerTickCap(''); setWindowStart('09:00'); setWindowEnd('20:00')
@@ -376,7 +350,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
           <>
             <h2 className="text-lg font-semibold text-un1t-text">Scheduled</h2>
             <p className="text-sm text-un1t-subtle mt-1">
-              Your {result.channel === 'sms' ? 'SMS' : result.channel === 'email' ? 'email' : result.drip ? 'WhatsApp drip' : 'WhatsApp'} will {result.drip ? 'start' : 'go out'} at{' '}
+              Your {result.channel === 'email' ? 'email' : result.drip ? 'WhatsApp drip' : 'WhatsApp'} will {result.drip ? 'start' : 'go out'} at{' '}
               {new Date(result.when).toLocaleString('en-IE', { dateStyle: 'medium', timeStyle: 'short' })}.
               {' '}You can cancel it from the details page any time before then.
             </p>
@@ -439,9 +413,6 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
       {/* Channel */}
       {channels.length > 1 && (
         <div className="flex gap-2">
-          {channels.includes('sms') && (
-            <ChannelPill active={channel === 'sms'} onClick={() => switchChannel('sms')} icon={MessageSquare} label="SMS" />
-          )}
           {channels.includes('whatsapp') && (
             <ChannelPill active={channel === 'whatsapp'} onClick={() => switchChannel('whatsapp')} icon={MessageCircle} label="WhatsApp" />
           )}
@@ -509,7 +480,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
           : <AudienceBuilder filter={filter} onChange={handleFilterChange} presets={AUDIENCE_PRESETS} locationId={locationId} />}
         {/* FILTER-B.3 — the shared count block, replacing this surface's own
             inline count. Same component, same request and same wording as the
-            WhatsApp/SMS/sequence builders, so the four can no longer drift.
+            WhatsApp/sequence builders, so they can no longer drift.
             FILTER-A's presets sit above it and write real rows; the count is
             the only thing that states a number, which is why no preset chip
             carries one. */}
@@ -529,21 +500,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
           <input className={fieldCls} value={label} onChange={e => setLabel(e.target.value)} placeholder={defaultLabel()} />
         </label>
 
-        {channel === 'sms' ? (
-          <>
-            <div className="flex flex-wrap gap-1.5 mb-2">
-              {SMS_MERGE_TAGS.map(t => (
-                <button key={t.tag} type="button" onClick={() => insertTag(t.tag)}
-                  className="text-[11px] px-2 py-1 rounded-md bg-un1t-border/40 text-un1t-subtle hover:text-un1t-text">+ {t.label}</button>
-              ))}
-            </div>
-            <textarea ref={bodyRef} className={`${fieldCls} resize-y`} rows={5} value={body} maxLength={SMS_MAX_LEN}
-              onChange={e => setBody(e.target.value)} placeholder="Hi {{first_name}}, …" />
-            <div className="mt-1 text-[11px] text-un1t-subtle text-right">
-              {seg.len}/{SMS_MAX_LEN} chars · {seg.segments} segment{seg.segments === 1 ? '' : 's'}
-            </div>
-          </>
-        ) : channel === 'whatsapp' ? (
+        {channel === 'whatsapp' ? (
           <>
             <label className="block">
               <span className="block text-xs font-medium text-un1t-subtle mb-1">Approved template</span>
@@ -748,7 +705,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
         </Section>
       )}
 
-      {/* When — all three channels schedule via their broadcast cron. */}
+      {/* When — both channels schedule via their broadcast cron. */}
       <Section title="When">
         <div className="flex gap-2 mb-2">
           <ChannelPill active={scheduleMode === 'now'} onClick={() => setScheduleMode('now')} icon={Send} label={isDrip ? 'Start now' : 'Send now'} small />

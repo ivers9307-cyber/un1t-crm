@@ -3,6 +3,10 @@ import { createServerClient } from '@/lib/supabase'
 import { computeWeeklyCost, implicitHourlyRate, mondayOf, shiftHours } from '@/lib/payroll'
 import { isLiveAssignment, formatDate } from '@/lib/roster'
 import { logWarn } from '@/lib/log'
+import { roleAtDeletion } from '@/lib/staff-tombstone'
+import { reportPeriodError, eachReportDay } from '@/lib/report-period'
+import { countLeaveDays } from '@/lib/time-off-days'
+import { getNonWorkingDates } from '@/lib/time-off-leave'
 
 // RETIRE-SHIFTS-MIRROR.1 — reports now read the Roster v2 source of truth
 // (shift_assignments + shift_blocks) instead of the legacy public.shifts
@@ -17,8 +21,8 @@ import { logWarn } from '@/lib/log'
 // which is what the mirror's 1:1-with-assignments behaviour inherited.
 const SHIFT_ROW_SELECT = `
   profile_id, start_time_override, end_time_override, status,
-  profiles:profile_id ( full_name, role, employment_type ),
-  shift_blocks!inner ( block_date, location_id, shift_templates ( name, start_time, end_time ) )
+  profiles:profile_id ( full_name, role, deleted_role, employment_type ),
+  shift_blocks!inner ( block_date, start_time, end_time, location_id, shift_templates ( name, start_time, end_time ) )
 `
 
 // ROSTER-FIX.5 — a report is about ONE location, so its staff list has to be
@@ -40,6 +44,19 @@ export async function fetchLocationProfileIds(db, locationId) {
   // report scoped to nobody, which reads as "no staff worked here".
   if (error) return { profileIds: [], error: `Failed to load location staff: ${error.message}` }
   return { profileIds: [...new Set((data || []).map(r => r.profile_id).filter(Boolean))], error: null }
+}
+
+// STAFFDELETE.1 — who a per-location staff report is about: the location's
+// ACTIVE members, plus anyone no longer active (deactivated, or permanently
+// deleted — a tombstone has no profile_locations row at all) who WORKED here
+// in the period. Without the second half a coach who left on the 20th vanished
+// from that month's cost report, and "reportable by name" failed.
+// An ACTIVE profile outside the location stays out (ROSTER-FIX.5), and an
+// inactive one with no shifts adds no empty row. active NULL = legacy = active.
+export function reportableProfiles(profiles, { memberIds, shiftProfileIds }) {
+  const members = new Set(memberIds || [])
+  const worked = new Set(shiftProfileIds || [])
+  return (profiles || []).filter((p) => (p.active === false ? worked.has(p.id) : members.has(p.id)))
 }
 
 // ROSTER-FIX.5 — returns { rows, error }, not a bare array. The error used to
@@ -100,11 +117,62 @@ export async function fetchScheduledShiftRows(db, { locationId, periodStart, per
     profile_id: r.profile_id,
     start_time_override: r.start_time_override,
     end_time_override: r.end_time_override,
+    // REPORTS.2 — the block's own times ride along, so hours resolve
+    // override → block → template (shared/roster-month.js effectiveShiftStart /
+    // effectiveShiftEnd, read by payroll.shiftHours) — the same hours the
+    // calendar shows. Reports used to read the template's CURRENT times, so a
+    // block moved off its template, or a template edited after the fact, gave
+    // a report that disagreed with the roster.
+    block_start_time: r.shift_blocks?.start_time ?? null,
+    block_end_time: r.shift_blocks?.end_time ?? null,
     status: r.status,
     profiles: r.profiles,
     shift_templates: r.shift_blocks?.shift_templates,
   }))
   return { rows, error: null }
+}
+
+/**
+ * TIMEOFFREPORT.1 — every time-off request at a studio that OVERLAPS
+ * [periodStart, periodEnd] (starts on or before the end, ends on or after the
+ * start), paged past the 1,000-row cap. Both time-off reports read through
+ * it: the summary used to ask for requests CONTAINED in the period, so leave
+ * spanning a month end fell out of both months' reports. A failed read is an
+ * error, never an empty list (the summary used to save an empty report).
+ * @returns {Promise<{ rows: Array<object>, error: string|null }>}
+ */
+export async function fetchOverlappingTimeOff(db, { locationId, periodStart, periodEnd, select, status = null }) {
+  const PAGE = 1000
+  const rows = []
+  for (let from = 0; ; from += PAGE) {
+    let q = db.from('time_off_requests')
+      .select(select)
+      .eq('location_id', locationId)
+      .lte('start_date', periodEnd)
+      .gte('end_date', periodStart)
+    if (status) q = q.eq('status', status)
+    const { data, error } = await q.order('start_date').order('id').range(from, from + PAGE - 1)
+    if (error) return { rows: [], error: error.message || 'Could not read time off' }
+    rows.push(...(data || []))
+    if (!data || data.length < PAGE) break
+  }
+  return { rows, error: null }
+}
+
+/**
+ * TIMEOFFREPORT.1 — pure. The days of `req` that fall inside the period. A
+ * request wholly inside keeps its stored total_days (the figure it was charged
+ * at, half days included); one that crosses an edge is recounted over the
+ * part inside with the charging rule (countLeaveDays: working days for a
+ * holiday, minus `nonWorkingDates`; calendar days for every other type), so a
+ * request spanning two reports is split between them, never counted twice.
+ */
+export function timeOffDaysInPeriod(req, periodStart, periodEnd, nonWorkingDates = null) {
+  const crosses = req.start_date < periodStart || req.end_date > periodEnd
+  if (!crosses) return { days: Number(req.total_days) || 0, crosses: false }
+  const from = req.start_date > periodStart ? req.start_date : periodStart
+  const to = req.end_date < periodEnd ? req.end_date : periodEnd
+  return { days: countLeaveDays(req.type, from, to, nonWorkingDates), crosses: true }
 }
 
 /**
@@ -126,6 +194,14 @@ export async function generateReport({ report_type, period_start, period_end, lo
     return { success: false, error: 'report_type, period_start, period_end, and location_id are required' }
   }
 
+  // DATECHECK.1 — POST /api/schedule/reports refuses a bad period before
+  // calling this (the same rule), and the cron builds its period from real
+  // Dates; this is the floor for any other caller. Real dates, in order, at
+  // most 366 days: it also keeps roster_coverage's day walk short (9999-12-31
+  // used to spin it to the function timeout).
+  const periodError = reportPeriodError(period_start, period_end)
+  if (periodError) return { success: false, error: periodError }
+
   let reportData = {}
   let summary = {}
   let reportName = ''
@@ -143,7 +219,7 @@ export async function generateReport({ report_type, period_start, period_end, lo
         const name = shift.profiles?.full_name || 'Unknown'
         const profileId = shift.profile_id
         if (!staffHours[profileId]) {
-          staffHours[profileId] = { name, role: shift.profiles?.role, employment_type: shift.profiles?.employment_type, days: {}, total: 0 }
+          staffHours[profileId] = { name, role: roleAtDeletion(shift.profiles), employment_type: shift.profiles?.employment_type, days: {}, total: 0 }
         }
 
         // ROSTER-FIX.5 — shiftHours() honours start_time_override /
@@ -180,15 +256,16 @@ export async function generateReport({ report_type, period_start, period_end, lo
       // operator will believe. Distinct from scopeError above so the two
       // causes stay tellable apart.
       if (profileIds.length === 0) return { success: false, error: 'No staff are assigned to this location' }
-      const [{ data: profiles, error: profilesError }, { rows: shifts, error: shiftsError }] = await Promise.all([
-        db.from('profiles')
-          .select('id, full_name, role, employment_type, annual_salary, hourly_rate, contracted_hours_per_week, overtime_rate')
-          .eq('active', true)
-          .in('id', profileIds),
-        fetchScheduledShiftRows(db, { locationId: locId, periodStart: period_start, periodEnd: period_end }),
-      ])
-      if (profilesError) return { success: false, error: profilesError.message }
+      // Sequential now: the profile read depends on who is on the shifts.
+      const { rows: shifts, error: shiftsError } = await fetchScheduledShiftRows(db, { locationId: locId, periodStart: period_start, periodEnd: period_end })
       if (shiftsError) return { success: false, error: shiftsError }
+      const shiftProfileIds = [...new Set((shifts || []).map((s) => s.profile_id).filter(Boolean))]
+      // STAFFDELETE.1 — no `.eq('active', true)`: reportableProfiles decides.
+      const { data: profileRows, error: profilesError } = await db.from('profiles')
+        .select('id, full_name, role, deleted_role, employment_type, active, annual_salary, hourly_rate, contracted_hours_per_week, overtime_rate')
+        .in('id', [...new Set([...profileIds, ...shiftProfileIds])])
+      if (profilesError) return { success: false, error: profilesError.message }
+      const profiles = reportableProfiles(profileRows, { memberIds: profileIds, shiftProfileIds })
 
       const profileMap = {}
       for (const p of (profiles || [])) profileMap[p.id] = p
@@ -216,7 +293,7 @@ export async function generateReport({ report_type, period_start, period_end, lo
         const profile = profileMap[pid]
         const entry = {
           name: profile.full_name,
-          role: profile.role,
+          role: roleAtDeletion(profile), // a tombstone's `role` is the 'staff' floor (mig 622)
           employment_type: profile.employment_type,
           regular_rate: Math.round(implicitHourlyRate(profile) * 100) / 100,
           overtime_rate: Number(profile.overtime_rate) > 0
@@ -277,12 +354,25 @@ export async function generateReport({ report_type, period_start, period_end, lo
 
     case 'time_off_summary': {
       reportName = 'Time Off Summary'
-      const { data: requests } = await db.from('time_off_requests')
-        .select('*, profiles!profile_id(full_name, role)')
-        .eq('location_id', locId)
-        .gte('start_date', period_start)
-        .lte('end_date', period_end)
-        .order('start_date')
+      // TIMEOFFREPORT.1 — every request that touches the period, each counted
+      // for the days INSIDE it (timeOffDaysInPeriod), so leave spanning a
+      // month end lands in both months' reports and in neither twice.
+      const { rows: requests, error: requestsError } = await fetchOverlappingTimeOff(db, {
+        locationId: locId, periodStart: period_start, periodEnd: period_end,
+        select: '*, profiles!profile_id(full_name, role)',
+      })
+      if (requestsError) return { success: false, error: requestsError }
+
+      // Only a holiday that crosses an edge is recounted against the studio's
+      // bank holidays and closures, so the list is read only then. Fail
+      // closed like the time-off POST: an unreadable list is an error, never
+      // "no bank holidays" (that would over-count).
+      let nonWorkingDates = null
+      if (requests.some((r) => r.type === 'holiday' && (r.start_date < period_start || r.end_date > period_end))) {
+        const { dates, error: datesError } = await getNonWorkingDates(db, locId, period_start, period_end, { quiet: true })
+        if (datesError) return { success: false, error: datesError.message || 'Could not read the studio holidays' }
+        nonWorkingDates = dates
+      }
 
       // Seed all five types (mig 283) so unpaid/other/unavailable are bucketed,
       // not dropped. The `byType[req.type] = …` accumulator below tolerates any
@@ -290,40 +380,47 @@ export async function generateReport({ report_type, period_start, period_end, lo
       const byType = { holiday: 0, sick: 0, unpaid: 0, other: 0, unavailable: 0 }
       const byStatus = { pending: 0, approved: 0, rejected: 0, cancelled: 0 }
       const byStaff = {}
+      const reported = []
 
-      for (const req of (requests || [])) {
-        byType[req.type] = (byType[req.type] || 0) + Number(req.total_days)
+      for (const req of requests) {
+        const { days, crosses } = timeOffDaysInPeriod(req, period_start, period_end, nonWorkingDates)
+        reported.push({ ...req, days_in_period: days, crosses_period: crosses })
+        byType[req.type] = (byType[req.type] || 0) + days
         byStatus[req.status] = (byStatus[req.status] || 0) + 1
         const name = req.profiles?.full_name || 'Unknown'
         if (!byStaff[name]) byStaff[name] = { holiday: 0, sick: 0, unpaid: 0, other: 0, unavailable: 0, total: 0 }
-        byStaff[name][req.type] = (byStaff[name][req.type] || 0) + Number(req.total_days)
-        byStaff[name].total += Number(req.total_days)
+        byStaff[name][req.type] = (byStaff[name][req.type] || 0) + days
+        byStaff[name].total += days
       }
 
-      reportData = { requests: requests || [], by_type: byType, by_status: byStatus, by_staff: byStaff }
-      summary = { total_requests: (requests || []).length, total_days: Object.values(byType).reduce((a, b) => a + b, 0), ...byType }
+      reportData = { requests: reported, by_type: byType, by_status: byStatus, by_staff: byStaff }
+      summary = { total_requests: reported.length, total_days: Object.values(byType).reduce((a, b) => a + b, 0), ...byType }
       break
     }
 
     case 'roster_coverage': {
       reportName = 'Roster Coverage'
       // shifts and approved time-off are independent — fetch in parallel.
-      const [{ rows: shifts, error: shiftsError }, { data: timeOff }] = await Promise.all([
+      const [{ rows: shifts, error: shiftsError }, { rows: timeOff, error: timeOffError }] = await Promise.all([
         fetchScheduledShiftRows(db, { locationId: locId, periodStart: period_start, periodEnd: period_end }),
-        db.from('time_off_requests')
-          .select('start_date, end_date, profile_id, type, profiles!profile_id(full_name)')
-          .eq('location_id', locId)
-          .eq('status', 'approved')
-          .lte('start_date', period_end)
-          .gte('end_date', period_start),
+        // TIMEOFFREPORT.1 — paged, and a failed read fails the report instead
+        // of saving days with nobody off.
+        fetchOverlappingTimeOff(db, {
+          locationId: locId, periodStart: period_start, periodEnd: period_end, status: 'approved',
+          select: 'id, start_date, end_date, profile_id, type, profiles!profile_id(full_name)',
+        }),
       ])
       if (shiftsError) return { success: false, error: shiftsError }
+      if (timeOffError) return { success: false, error: timeOffError }
 
+      // DATECHECK.1 — walk the period as calendar strings. The old walk built
+      // LOCAL-midnight Dates and keyed them with toISOString(), which is UTC:
+      // under Irish summer time every key slid back a day (the report started
+      // on the Sunday before and lost its last day, and the spring-forward
+      // week keyed one day twice). Vercel runs in UTC, where both readings
+      // agree, so live reports were right; any process east of UTC was not.
       const days = {}
-      const start = new Date(period_start + 'T00:00:00')
-      const end = new Date(period_end + 'T00:00:00')
-      for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-        const ds = d.toISOString().split('T')[0]
+      for (const ds of eachReportDay(period_start, period_end)) {
         days[ds] = { shifts: 0, staff_on_shift: [], staff_off: [] }
       }
 
@@ -336,14 +433,13 @@ export async function generateReport({ report_type, period_start, period_end, lo
         }
       }
 
+      // Only the part of the leave inside the period can land on a day, so the
+      // walk is clipped to it (a year-long request no longer walks a year).
       for (const t of (timeOff || [])) {
-        const ts = new Date(t.start_date + 'T00:00:00')
-        const te = new Date(t.end_date + 'T00:00:00')
-        for (let d = new Date(ts); d <= te; d.setDate(d.getDate() + 1)) {
-          const ds = d.toISOString().split('T')[0]
-          if (days[ds]) {
-            days[ds].staff_off.push(t.profiles?.full_name || 'Unknown')
-          }
+        const from = t.start_date > period_start ? t.start_date : period_start
+        const to = t.end_date < period_end ? t.end_date : period_end
+        for (const ds of eachReportDay(from, to)) {
+          if (days[ds]) days[ds].staff_off.push(t.profiles?.full_name || 'Unknown')
         }
       }
 
@@ -361,7 +457,7 @@ export async function generateReport({ report_type, period_start, period_end, lo
 
     case 'utilisation': {
       reportName = 'Staff Utilisation'
-      // profiles + shifts are independent — fetch in parallel.
+      // STAFFDELETE.1 — shifts first, then profiles: the profile read covers whoever worked.
       const { profileIds, error: scopeError } = await fetchLocationProfileIds(db, locId)
       if (scopeError) return { success: false, error: scopeError }
       // ROSTER-FIX.5 — same fail-closed rule as staff_cost: no rows in
@@ -369,15 +465,15 @@ export async function generateReport({ report_type, period_start, period_end, lo
       // with an unknown denominator saved as "0% across 0 staff" is worse than
       // no report at all.
       if (profileIds.length === 0) return { success: false, error: 'No staff are assigned to this location' }
-      const [{ data: profiles, error: profilesError }, { rows: shifts, error: shiftsError }] = await Promise.all([
-        db.from('profiles')
-          .select('id, full_name, role, employment_type, contracted_hours_per_week')
-          .eq('active', true)
-          .in('id', profileIds),
-        fetchScheduledShiftRows(db, { locationId: locId, periodStart: period_start, periodEnd: period_end }),
-      ])
-      if (profilesError) return { success: false, error: profilesError.message }
+      const { rows: shifts, error: shiftsError } = await fetchScheduledShiftRows(db, { locationId: locId, periodStart: period_start, periodEnd: period_end })
       if (shiftsError) return { success: false, error: shiftsError }
+      const shiftProfileIds = [...new Set((shifts || []).map((s) => s.profile_id).filter(Boolean))]
+      // STAFFDELETE.1 — no `.eq('active', true)`: reportableProfiles decides.
+      const { data: profileRows, error: profilesError } = await db.from('profiles')
+        .select('id, full_name, role, deleted_role, employment_type, active, contracted_hours_per_week')
+        .in('id', [...new Set([...profileIds, ...shiftProfileIds])])
+      if (profilesError) return { success: false, error: profilesError.message }
+      const profiles = reportableProfiles(profileRows, { memberIds: profileIds, shiftProfileIds })
 
       const periodStartD = new Date(period_start + 'T00:00:00')
       const periodEndD = new Date(period_end + 'T00:00:00')
@@ -386,7 +482,7 @@ export async function generateReport({ report_type, period_start, period_end, lo
       const staffUtil = {}
       for (const p of (profiles || [])) {
         const contracted = (Number(p.contracted_hours_per_week) || 40) * weeks
-        staffUtil[p.id] = { name: p.full_name, role: p.role, contracted_hours: contracted, actual_hours: 0 }
+        staffUtil[p.id] = { name: p.full_name, role: roleAtDeletion(p), contracted_hours: contracted, actual_hours: 0 }
       }
 
       for (const shift of (shifts || [])) {
@@ -560,6 +656,8 @@ function withThousands(intStr) {
 export function formatReportValue(key, value, currency) {
   if (value == null) return '—'
   if (typeof value !== 'number') return String(value)
+  // STAFFCOST.1 — never print "NaN" / "Infinity" into an emailed report.
+  if (!Number.isFinite(value)) return '—'
   const isMoney = /cost|salary|pay\b/i.test(key)
   if (isMoney) {
     const sym = REPORT_CURRENCY_SYMBOLS[currency] || ''

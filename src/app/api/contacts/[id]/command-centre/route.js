@@ -20,7 +20,7 @@
 import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
-import { hasPermission } from '@/lib/permissions'
+import { contactChannelFlags, canLoadContactConsultations } from '@/lib/contact-page-gates'
 import { extractTemplateBody, isSendableUtilityTemplate } from '@/lib/radar-outreach'
 import { classifyContact, scoreMember } from '@/lib/churn-radar'
 import { loadContactArrears } from '@/lib/churn-radar-data'
@@ -155,8 +155,12 @@ export async function GET(request, props) {
     // isSendableUtilityTemplate chain the contact page builds, only
     // when the caller can send WhatsApp at all.
     let composerTemplates = []
-    const canWhatsApp = hasPermission(user, 'whatsapp')
-    if (canWhatsApp) {
+    // ROLESWEEP.1c — the drawer's channel flags are the send routes' own
+    // decision: the web OR the mobile toggle at the CONTACT's location (the
+    // composer sends from there), not the active studio. The contact page
+    // reads the same helper, so the two composers agree.
+    const channels = contactChannelFlags(user, contact.location_id)
+    if (channels.whatsapp) {
       const { data: rawTemplates } = await db
         .from('whatsapp_templates')
         .select('name, language, components, status, category')
@@ -184,11 +188,11 @@ export async function GET(request, props) {
         window_expires_at: latestWa?.window_expires_at || null,
       },
       composer_templates: composerTemplates,
-      permissions: {
-        whatsapp: canWhatsApp,
-        sms: hasPermission(user, 'sms'),
-        email: hasPermission(user, 'email'),
-      },
+      // ROLEUI.1 — `kudos` is POST /api/contacts/[id]/kudos's decision (the
+      // web `consultations` permission at the contact's location). The staff
+      // phone's contact screen reads every flag here instead of judging its
+      // buttons at the active studio.
+      permissions: { ...channels, kudos: canLoadContactConsultations(user, contact.location_id) },
     }
   }
 

@@ -10,6 +10,7 @@ import { UserCog, History } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import ImpersonatePickerFull from '@/components/ImpersonatePickerFull'
+import { excludeTombstones } from '@/lib/staff-tombstone'
 
 export const dynamic = 'force-dynamic'
 
@@ -25,8 +26,8 @@ export default async function ImpersonatePage() {
 
   const db = createServerClient()
   const [profilesRes, logRes] = await Promise.all([
-    db.from('profiles')
-      .select('id, full_name, email, role, active, profile_locations(locations(id, name))')
+    excludeTombstones(db.from('profiles')
+      .select('id, full_name, email, role, active, profile_locations(locations(id, name))'))
       .order('full_name'),
     db.from('impersonation_log')
       .select('id, target_user_id, started_at, ended_at, reason, profiles!impersonation_log_target_user_id_fkey(full_name, email, role)')

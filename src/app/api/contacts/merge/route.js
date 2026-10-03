@@ -14,7 +14,7 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
@@ -31,7 +31,8 @@ const Body = z.object({
 export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (user.role !== 'owner' && user.role !== 'master') {
+  // ROLESWEEP.1c — coarse pre-check; owner is judged at the contacts' location below.
+  if (user.role !== 'master' && !hasRoleAtAnyLocation(user, ['owner'])) {
     return NextResponse.json({ success: false, error: 'Owner or master required' }, { status: 403 })
   }
 
@@ -66,6 +67,10 @@ export async function POST(request) {
     if (!userLocIds.includes(a.location_id)) {
       return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
     }
+  }
+  // ROLESWEEP.1c — owner at the contacts' (shared) location.
+  if (user.role !== 'master' && !hasRoleAtLocation(user, a.location_id, ['owner'])) {
+    return NextResponse.json({ success: false, error: 'Owner or master required' }, { status: 403 })
   }
 
   try {

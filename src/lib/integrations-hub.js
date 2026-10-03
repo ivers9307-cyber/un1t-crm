@@ -3,11 +3,11 @@
 // One place that turns today's scattered connection storage into the
 // uniform card states the master-only hub page renders:
 //
-//   channel_connections  glofox / unifi / sensibo / thinq / twilio_sender /
-//                        bca / instagram — the registry (migs 230/411/412),
+//   channel_connections  glofox / unifi / sensibo / thinq / bca / instagram
+//                        — the registry (migs 230/411/412),
 //                        with legacy location-field fallback via the
 //                        connection-registry pure mappers (dual-read, same
-//                        rules as getConnection()).
+//                        rules as readConnection()).
 //   xero_connections     per-location Xero OAuth binding (tenant + scopes).
 //   whatsapp_numbers     per-location WA Cloud API numbers (read-only here).
 //   ad_accounts          Meta/TikTok ad account presence (read-only here).
@@ -23,6 +23,10 @@
 //
 // Status model (mirrors channel_connections.status + the hub mockup):
 //   connected | action_needed | error | not_connected
+//   + unknown (HUBREAD.1): the READ behind the row failed. Never graded
+//     not_connected (the card would offer Connect over a live connection)
+//     or connected (the page would call it healthy); the UI offers no
+//     action on it, only "Try again".
 // (coming_soon / platform_managed are presentation-only tiers, not row
 // states — the UI applies them to static cards.)
 //
@@ -31,8 +35,8 @@
 // ad_accounts.access_token straight to a has_access_token boolean
 // (same posture as maskConnectionRow / maskAccountRow / publicShape),
 // and selects neither shelly_connections.auth_key nor its
-// auth_key_fingerprint — only key_hint, which publicConnectionView
-// already treats as non-secret.
+// auth_key_fingerprint nor the retired key hint (SECRETTAILS.1): the
+// Shelly card carries key presence only.
 //
 // Pure helpers up top (unit-tested in integrations-hub.test.js); the
 // single async assembler at the bottom does batched reads only — one
@@ -51,8 +55,13 @@ import { METERS, METER_KEYS } from '@shared/plans'
 
 export { EXPIRY_SOON_DAYS }
 
-// Severity order for aggregating many rows into one card chip.
-const STATUS_RANK = { error: 3, action_needed: 2, connected: 1, not_connected: 0 }
+// HUBREAD.1 — the grade for a row whose read FAILED (see the header).
+export const HUB_UNKNOWN = 'unknown'
+export const HUB_UNKNOWN_MESSAGE = 'Could not load this just now. Try again in a moment.'
+
+// Severity order for aggregating many rows into one card chip. unknown sits
+// under error (a known break) and over everything a read could have told us.
+const STATUS_RANK = { error: 4, [HUB_UNKNOWN]: 3, action_needed: 2, connected: 1, not_connected: 0 }
 
 /**
  * Aggregate row statuses into a card-level status: any error wins,
@@ -223,12 +232,16 @@ const CARD_LABELS = {
   unifi: 'UniFi Access',
   climate: 'Climate devices',
   bca: 'BCA Submit',
+  // HUBREAD.1 — card-level rows for a failed read: the registry feeds
+  // several cards at once; email delivery is per organisation.
+  registry: 'Connections',
+  email: 'Email delivery',
 }
 
 /**
  * Build the "Needs attention" strip from assembled card rows.
- * Ordering (per the hub spec): error rows first, then tokens expiring
- * within `expirySoonDays`, then not_connected rows with evidence of a
+ * Ordering (per the hub spec): error rows first, then rows whose read
+ * failed (`unknown`, HUBREAD.1), then tokens expiring within `expirySoonDays`, then not_connected rows with evidence of a
  * partial setup (a registry row exists but is graded not_connected, or
  * a deactivated WhatsApp number) — bare absence never nags. Pure.
  *
@@ -238,10 +251,26 @@ const CARD_LABELS = {
  */
 export function buildAttention(rows, { now = new Date(), expirySoonDays = EXPIRY_SOON_DAYS } = {}) {
   const errors = []
+  const unreadable = []
   const expiring = []
   const setup = []
   for (const r of rows || []) {
     const label = CARD_LABELS[r.cardKey] || r.cardKey
+    // HUBREAD.1 — a read that failed. After real errors (known breaks),
+    // before everything else (nothing under it could be graded).
+    if (r.status === HUB_UNKNOWN) {
+      unreadable.push({
+        severity: 'warning',
+        cardKey: r.cardKey,
+        label,
+        locationId: r.locationId,
+        locationName: r.locationName,
+        message: r.message || `Could not load ${label} just now. Try again in a moment.`,
+        href: r.href ?? null,
+        unreadable: true,
+      })
+      continue
+    }
     if (r.status === 'error') {
       errors.push({
         severity: 'error',
@@ -293,7 +322,33 @@ export function buildAttention(rows, { now = new Date(), expirySoonDays = EXPIRY
       })
     }
   }
-  return [...errors, ...expiring, ...setup]
+  return [...errors, ...unreadable, ...expiring, ...setup]
+}
+
+/**
+ * HUBREAD.1 — the ONE attention row a failed read earns (the Shelly
+ * pattern). Pinned to the first in-scope location so it has a
+ * locationId at all; the UI shows it under every location scope, and
+ * getTenantsRoster (admin-tenants.js) reads ANY unreadable row as every
+ * org unknown — never count it per org. null when there are no
+ * locations. Pure.
+ */
+export function unreadableAttention(cardKey, ids, message) {
+  if (!ids?.length) return null
+  const label = CARD_LABELS[cardKey] || cardKey
+  return {
+    cardKey,
+    locationId: ids[0],
+    locationName: 'All locations',
+    status: HUB_UNKNOWN,
+    message: message || `Could not load ${label} just now. Try again in a moment.`,
+    href: null,
+  }
+}
+
+/** A per-location placeholder row for a card whose read failed. Pure. */
+function unknownRow(locationId, extra = {}) {
+  return { locationId, status: HUB_UNKNOWN, message: HUB_UNKNOWN_MESSAGE, ...extra }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -441,7 +496,7 @@ const REGISTRY_HUB_COLUMNS =
   'id, location_id, platform, status, is_active, label, display_name, ' +
   'external_account_id, config, token_expires_at, last_error, last_ok_at'
 
-const REGISTRY_PLATFORMS = ['glofox', 'unifi', 'sensibo', 'thinq', 'twilio_sender', 'bca', 'instagram']
+const REGISTRY_PLATFORMS = ['glofox', 'unifi', 'sensibo', 'thinq', 'bca', 'instagram']
 
 // ── Shelly plugs (SHELLY-UI.7) ────────────────────────────────────────
 //
@@ -525,7 +580,7 @@ async function fetchBillingRollups(db, locationIds, monthStart) {
   const PAGE = 1000
   const rows = []
   for (let from = 0; ; from += PAGE) {
-    const { data } = await db
+    const { data, error } = await db
       .from('usage_rollups_daily')
       .select('location_id, meter, quantity')
       .in('location_id', locationIds)
@@ -535,10 +590,12 @@ async function fetchBillingRollups(db, locationIds, monthStart) {
       .order('location_id', { ascending: true })
       .order('meter', { ascending: true })
       .range(from, from + PAGE - 1)
+    // HUBREAD.1 — a failed page is an unreadable meter, never a short count.
+    if (error) return { rows: [], error }
     rows.push(...(data || []))
     if (!data || data.length < PAGE) break
   }
-  return rows
+  return { rows, error: null }
 }
 
 // Current-period overage draws (kind='draw'; `period` stamps the
@@ -548,7 +605,7 @@ async function fetchPeriodDraws(db, locationIds, periodStart) {
   const PAGE = 1000
   const rows = []
   for (let from = 0; ; from += PAGE) {
-    const { data } = await db
+    const { data, error } = await db
       .from('wallet_transactions')
       .select('location_id, meter, amount_cents')
       .in('location_id', locationIds)
@@ -557,10 +614,12 @@ async function fetchPeriodDraws(db, locationIds, periodStart) {
       .order('created_at', { ascending: true })
       .order('id', { ascending: true })
       .range(from, from + PAGE - 1)
+    // HUBREAD.1 — a failed page is an unreadable meter, never a short count.
+    if (error) return { rows: [], error }
     rows.push(...(data || []))
     if (!data || data.length < PAGE) break
   }
-  return rows
+  return { rows, error: null }
 }
 
 // ai_message MTD = COUNT of allowance-eligible usage_events rows
@@ -573,16 +632,21 @@ async function fetchPeriodDraws(db, locationIds, periodStart) {
 // ai_message rollup meter exists.
 async function fetchAiMessageCounts(db, locationIds, monthStart) {
   const entries = await Promise.all(locationIds.map(async (locationId) => {
-    const { count } = await db
+    const { count, error } = await db
       .from('usage_events')
       .select('id', { count: 'exact', head: true })
       .eq('location_id', locationId)
       .eq('meter', 'anthropic_tokens')
       .neq('source', 'assistant_chat')
-      .gte('created_at', monthStart)
-    return [locationId, count || 0]
+      // SELECTCOLS.1 — usage_events stamps `occurred_at`; it has no created_at.
+      .gte('occurred_at', monthStart)
+    return [locationId, count || 0, error || null]
   }))
-  return Object.fromEntries(entries)
+  // HUBREAD.1 — the first failed count makes the pinned rows unreadable.
+  return {
+    counts: Object.fromEntries(entries.map(([id, n]) => [id, n])),
+    error: entries.find((e) => e[2])?.[2] || null,
+  }
 }
 
 /**
@@ -597,7 +661,7 @@ async function assembleBillingStrip(db, locs, todayStr) {
   const unpinnedAll = () => locs.map((l) => ({ locationId: l.id, plan: null }))
   if (!ids.length) return []
 
-  const { data: pinRows } = await db
+  const { data: pinRows, error: pinErr } = await db
     .from('location_plans')
     .select(
       'location_id, ' +
@@ -606,6 +670,12 @@ async function assembleBillingStrip(db, locs, todayStr) {
     )
     .in('location_id', ids)
     .eq('active', true)
+  // HUBREAD.1 — without the pins we cannot say which locations have a plan:
+  // "No platform plan" would be a guess. Every row is unreadable.
+  if (pinErr) {
+    logWarn('integrations-hub', 'location_plans read failed — plan strip unreadable', { error: pinErr.message })
+    return locs.map((l) => ({ locationId: l.id, plan: null, unreadable: true }))
+  }
 
   const pins = groupPlanPins(pinRows || [])
   const pinnedIds = ids.filter((id) => pins[id]?.tier)
@@ -614,7 +684,7 @@ async function assembleBillingStrip(db, locs, todayStr) {
   const monthStart = currentPeriodStart(todayStr)
   const expiresOn = billingExpiresOn(todayStr)
 
-  const [walletsRes, rollupRows, drawRows, aiCounts] = await Promise.all([
+  const [walletsRes, rollupRes, drawRes, aiRes] = await Promise.all([
     db.from('wallets')
       .select('location_id, balance_cents, period_start')
       .in('location_id', pinnedIds),
@@ -622,6 +692,18 @@ async function assembleBillingStrip(db, locs, todayStr) {
     fetchPeriodDraws(db, pinnedIds, monthStart),
     fetchAiMessageCounts(db, pinnedIds, monthStart),
   ])
+  // HUBREAD.1 — a pinned location with an unreadable wallet or meter would
+  // render €0.00 and 0 used: unreadable instead. Unpinned rows are true.
+  const pinnedErr = walletsRes.error || rollupRes.error || drawRes.error || aiRes.error
+  if (pinnedErr) {
+    logWarn('integrations-hub', 'plan strip read failed — pinned rows unreadable', { error: pinnedErr.message })
+    return locs.map((loc) => (pins[loc.id]?.tier
+      ? { locationId: loc.id, plan: null, unreadable: true }
+      : { locationId: loc.id, plan: null }))
+  }
+  const rollupRows = rollupRes.rows
+  const drawRows = drawRes.rows
+  const aiCounts = aiRes.counts
 
   const walletByLoc = Object.fromEntries(
     (walletsRes.data || []).map((w) => [w.location_id, w])
@@ -686,6 +768,12 @@ async function assembleEmailDelivery(db, locs, orgIds) {
       .in('organization_id', orgIds),
     db.from('organizations').select('id, name').in('id', orgIds),
   ])
+  // HUBREAD.1 — a failed domain read is unknown ("Platform email" + Set up
+  // domain would invite re-running the wizard over a live domain). A failed
+  // org-name read only drops a label shown when there are 2+ orgs: log only.
+  const domErr = domRes.error || null
+  if (domErr) logWarn('integrations-hub', 'tenant_email_domains read failed — email card unknown', { error: domErr.message })
+  if (orgRes.error) logWarn('integrations-hub', 'organizations read failed — org names omitted', { error: orgRes.error.message })
   const rowByOrg = Object.fromEntries((domRes.data || []).map((r) => [r.organization_id, r]))
   const nameByOrg = Object.fromEntries((orgRes.data || []).map((o) => [o.id, o.name]))
   const locsByOrg = {}
@@ -699,7 +787,7 @@ async function assembleEmailDelivery(db, locs, orgIds) {
       organizationId: orgId,
       orgName: nameByOrg[orgId] || null,
       locationIds: locsByOrg[orgId] || [],
-      status: gradeTenantEmail(row),
+      status: domErr ? HUB_UNKNOWN : gradeTenantEmail(row),
       sendingDomain: row?.sending_domain ?? null,
       fromEmail: row?.from_email ?? null,
       fromName: row?.from_name ?? null,
@@ -719,10 +807,12 @@ async function assembleEmailDelivery(db, locs, orgIds) {
  * @param {object} db  createServerClient() — service role
  * @param {Array<object>} locations  full location rows (id, name, organization_id,
  *   settings, sensibo_api_key, sensibo_pod_id, thinq_pat, thinq_client_id,
- *   thinq_country_code, twilio_alpha_sender_id, bca_config, features)
- * @param {{ now?: Date }} [opts]
+ *   thinq_country_code, bca_config, features)
+ * @param {{ now?: Date, billingFor?: (loc: object) => boolean }} [opts]
+ *   billingFor — C141 ORGROLE.2: which locations get a plan & wallet strip
+ *   row (organisation admins only); omitted = every location.
  */
-export async function assembleIntegrationsHub(db, locations, { now = new Date() } = {}) {
+export async function assembleIntegrationsHub(db, locations, { now = new Date(), billingFor = null } = {}) {
   const locs = Array.isArray(locations) ? locations : []
   const ids = locs.map((l) => l.id)
   const nameById = Object.fromEntries(locs.map((l) => [l.id, l.name]))
@@ -750,8 +840,8 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
     // is a sha256 OF the key, so publishing it turns "which account is this?"
     // into an offline check anyone holding a candidate key can run (the same
     // allowlist argument as NON_SECRET in src/lib/shelly/connections.js).
-    // key_hint is the last ≤4 characters and IS non-secret — publicConnectionView
-    // returns it, and the card renders it as ••••abcd.
+    // No key hint either (SECRETTAILS.1, mig 659): the card shows presence,
+    // derived from the row.
     // updated_at is the LAST ATTEMPT: markConnectionStatus stamps it on every
     // reconcile tick that touches the status, success or failure, where
     // last_ok_at only advances on success. Next to each other they separate
@@ -760,11 +850,36 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
     // location_id is UNIQUE on this table, so ids.length rows is the ceiling;
     // asking for one MORE makes a truncated read distinguishable from a full one.
     db.from('shelly_connections')
-      .select('location_id, host, status, last_error, last_ok_at, updated_at, key_hint')
+      .select('location_id, host, status, last_error, last_ok_at, updated_at')
       .in('location_id', ids)
       .limit(ids.length + 1),
     fetchShellyDevices(db, ids),
   ])
+
+  // HUBREAD.1 — every read here judges its error. A failed read grades every
+  // row it feeds 'unknown' (never not_connected: the card would offer Connect
+  // over a live connection, and Xero's Connect rebinds the location through
+  // OAuth; never connected: the page would call it healthy) and earns ONE
+  // attention row, the Shelly pattern below. The registry does NOT fall back
+  // to legacy here: the hub's job is the health GRADE, which lives only in
+  // the registry (C9's fallback is for routes that need credentials).
+  const regErr = regRes.error || null
+  const xeroErr = xeroRes.error || null
+  const waErr = waRes.error || null
+  const adsErr = adsRes.error || null
+  for (const [table, err] of [
+    ['channel_connections', regErr],
+    ['xero_connections', xeroErr],
+    ['whatsapp_numbers', waErr],
+    ['ad_accounts', adsErr],
+  ]) {
+    if (err) {
+      logWarn('integrations-hub', `${table} read failed — its cards graded unknown`, {
+        error: err.message,
+        locations: ids.length,
+      })
+    }
+  }
 
   const regRows = regRes.data || []
   const xeroRows = xeroRes.data || []
@@ -777,9 +892,19 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
   }))
 
   const attentionInputs = []
+  const pushUnreadable = (cardKey, message) => {
+    const row = unreadableAttention(cardKey, ids, message)
+    if (row) attentionInputs.push(row)
+  }
+  if (regErr) pushUnreadable('registry', 'Could not load the Glofox, Instagram and studio device connections just now. Try again in a moment.')
+  if (xeroErr) pushUnreadable('xero')
+  if (waErr) pushUnreadable('whatsapp')
+  if (adsErr) pushUnreadable('ads')
 
   // ── Glofox — per-location rows (registry first, legacy fallback) ──
-  const glofox = locs.map((loc) => {
+  const glofox = regErr
+    ? locs.map((loc) => unknownRow(loc.id, { href: locationTabHref(loc.id, 'glofox') }))
+    : locs.map((loc) => {
     const reg = pickRegistry(regRows, loc.id, 'glofox')
     const legacy = registryRowFromLegacy('glofox', loc) // presence only — secrets stay here
     const status = reg ? reg.status : (legacy ? 'connected' : 'not_connected')
@@ -809,7 +934,9 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
   })
 
   // ── WhatsApp — per-location numbers + optional tier budget meter ──
-  const whatsapp = await Promise.all(locs.map(async (loc) => {
+  const whatsapp = waErr
+    ? locs.map((loc) => unknownRow(loc.id, { numbers: [], budget: null, href: locationTabHref(loc.id, 'whatsapp') }))
+    : await Promise.all(locs.map(async (loc) => {
     const numbers = waRows.filter((n) => n.location_id === loc.id).map((n) => {
       const grade = gradeWhatsappNumber(n)
       return {
@@ -851,7 +978,9 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
   }))
 
   // ── Instagram — registry rows (health cron maintains status) ──
-  const instagram = locs.flatMap((loc) => {
+  const instagram = regErr
+    ? locs.map((loc) => unknownRow(loc.id, { href: locationTabHref(loc.id, 'instagram') }))
+    : locs.flatMap((loc) => {
     const reg = pickRegistry(regRows, loc.id, 'instagram')
     if (!reg) return []
     const href = locationTabHref(loc.id, 'instagram')
@@ -874,7 +1003,9 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
   })
 
   // ── Xero — per-location OAuth binding (mirrors XeroIntegrationTab) ──
-  const xero = locs.flatMap((loc) => {
+  const xero = xeroErr
+    ? locs.map((loc) => unknownRow(loc.id, { href: locationTabHref(loc.id, 'xero') }))
+    : locs.flatMap((loc) => {
     const row = xeroRows.find((x) => x.location_id === loc.id) || null
     const grade = gradeXeroConnection(row)
     const href = locationTabHref(loc.id, 'xero')
@@ -897,7 +1028,9 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
   })
 
   // ── Ad accounts — presence only (per /api/settings/ads semantics) ──
-  const ads = locs.flatMap((loc) => {
+  const ads = adsErr
+    ? locs.map((loc) => unknownRow(loc.id, { href: locationTabHref(loc.id, 'ads') }))
+    : locs.flatMap((loc) => {
     return adRows.filter((a) => a.location_id === loc.id && a.provider === 'meta').map((a) => {
       const status = a.is_active && a.has_access_token ? 'connected' : 'not_connected'
       const href = locationTabHref(loc.id, 'ads')
@@ -1025,12 +1158,11 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
       status,
       message: grade.message,
       host: row?.host ?? null,
-      // Presence derived from the hint, the same argument as
-      // publicConnectionView.has_auth_key: the hint is the only evidence of
-      // a key this projection HAS, so deriving it from anything else would
-      // make the field mean different things per caller.
-      hasAuthKey: !!row?.key_hint,
-      keyHint: row?.key_hint ?? null,
+      // SECRETTAILS.1 — presence only, the same rule as
+      // publicConnectionView.has_auth_key: a stored row always holds a key
+      // (mig 562: auth_key NOT NULL, fingerprint CHECK), and host is NOT NULL
+      // on it, so "a row with a host" is "a key is stored".
+      hasAuthKey: typeof row?.host === 'string' && row.host !== '',
       lastOkAt: row?.last_ok_at ?? null,
       lastAttemptAt: row?.updated_at ?? null,
       lastError: row?.last_error ?? null,
@@ -1044,18 +1176,6 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
     }
   })
 
-  // ── SMS sender (platform-managed card's live signal) ──
-  const sms = locs.map((loc) => {
-    const reg = pickRegistry(regRows, loc.id, 'twilio_sender')
-    const senderId = reg?.config?.sender_id ?? loc.twilio_alpha_sender_id ?? null
-    return {
-      locationId: loc.id,
-      senderId,
-      source: reg ? 'registry' : 'legacy',
-      href: locationTabHref(loc.id, 'twilio'),
-    }
-  })
-
   // ── AI agent live signal (locations.settings.customer_agent) ──
   const agent = locs.map((loc) => ({
     locationId: loc.id,
@@ -1064,7 +1184,9 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
   }))
 
   // ── Hidden tier: UniFi / Climate / BCA from the registry ──
-  const unifi = locs.flatMap((loc) => {
+  const unifi = regErr
+    ? locs.map((loc) => unknownRow(loc.id, { href: locationTabHref(loc.id, 'unifi') }))
+    : locs.flatMap((loc) => {
     const reg = pickRegistry(regRows, loc.id, 'unifi')
     const legacy = registryRowFromLegacy('unifi', loc)
     if (!reg && !legacy) return []
@@ -1089,7 +1211,9 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
     }]
   })
 
-  const climate = locs.flatMap((loc) => {
+  const climate = regErr
+    ? locs.map((loc) => unknownRow(loc.id, { vendors: [], href: locationTabHref(loc.id, 'ac-devices') }))
+    : locs.flatMap((loc) => {
     const vendors = []
     const sensiboReg = pickRegistry(regRows, loc.id, 'sensibo')
     const sensiboLegacy = registryRowFromLegacy('sensibo', loc)
@@ -1124,7 +1248,9 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
     }]
   })
 
-  const bca = locs.flatMap((loc) => {
+  const bca = regErr
+    ? locs.map((loc) => unknownRow(loc.id, { href: locationTabHref(loc.id, 'bca') }))
+    : locs.flatMap((loc) => {
     const reg = pickRegistry(regRows, loc.id, 'bca')
     const legacy = registryRowFromLegacy('bca', loc)
     if (!reg && !legacy) return []
@@ -1153,9 +1279,16 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
   // the Postmark server token. Org set derives from the already-scoped locs.
   const orgIds = [...new Set(locs.map((l) => l.organization_id).filter(Boolean))]
   const email = await assembleEmailDelivery(db, locs, orgIds)
+  if (email.some((e) => e.status === HUB_UNKNOWN)) pushUnreadable('email')
 
   // ── Plan & wallet strip (INTEG-C4) — pinning-gated, zero writes ──
-  const billing = await assembleBillingStrip(db, locs, dublinDayStr(now))
+  // C141 ORGROLE.2 — plan, wallet and meters are organisation-level billing
+  // data (C18's rule: organisation admins only). The hub stays open to studio
+  // owners for their integrations, so the caller says which locations it may
+  // see billing for (`billingFor`); the rest get no row and no plan read.
+  // Omitted (the master tenants console) = every location.
+  const billingLocs = typeof billingFor === 'function' ? locs.filter((l) => billingFor(l)) : locs
+  const billing = await assembleBillingStrip(db, billingLocs, dublinDayStr(now))
 
   return {
     generatedAt: now.toISOString(),
@@ -1167,7 +1300,6 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
     xero,
     ads,
     shelly,
-    sms,
     agent,
     email,
     unifi,

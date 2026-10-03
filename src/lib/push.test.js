@@ -104,7 +104,7 @@ beforeEach(() => {
   })
 })
 
-import { sendPush, resolvePushAllowedIds, resolveRoleRecipientIds } from './push.js'
+import { sendPush, resolvePushAllowedIds, readRoleRecipientIds } from './push.js'
 
 describe('sendPush — ANDROID-VIS.1 token-less device rows (mig 565)', () => {
   it('never sends to a device row whose expo_push_token is NULL', async () => {
@@ -435,6 +435,41 @@ describe('resolvePushAllowedIds', () => {
   })
 })
 
+// PUSHCAT.1 — the resolver prepends `notify_` ITSELF, so `category` is the
+// bare name. Three equipment senders passed the permission key instead and
+// gated on notify_notify_<x>: unregistered, so it fails closed for every
+// role holding an assignment. Source-scan twin: tests/push-category-literals.
+describe('resolvePushAllowedIds — the category is bare', () => {
+  const ownerAtLoc = () => {
+    fakeProfiles = [{ id: 'o', active: true }]
+    fakeLinks = [{ profile_id: 'o', location_id: 'loc1', role: 'owner', permissions: null }]
+  }
+
+  it.each(['inspection_due', 'inspection_overdue', 'issue_submitted'])(
+    'an owner receives the bare equipment category %s',
+    async (category) => {
+      ownerAtLoc()
+      const allowed = await resolvePushAllowedIds(makeFakeDb(), ['o'], category, { locationId: 'loc1' })
+      expect(allowed.has('o')).toBe(true)
+    }
+  )
+
+  it('a category that already carries the prefix reaches no assigned user', async () => {
+    ownerAtLoc()
+    const allowed = await resolvePushAllowedIds(makeFakeDb(), ['o'], 'notify_inspection_due', { locationId: 'loc1' })
+    expect(allowed.has('o')).toBe(false)
+  })
+
+  it('staff keep their role default: inspection-day reminder on, overdue sweep off', async () => {
+    fakeProfiles = [{ id: 's', active: true }]
+    fakeLinks = [{ profile_id: 's', location_id: 'loc1', role: 'staff', permissions: null }]
+    const due = await resolvePushAllowedIds(makeFakeDb(), ['s'], 'inspection_due', { locationId: 'loc1' })
+    const overdue = await resolvePushAllowedIds(makeFakeDb(), ['s'], 'inspection_overdue', { locationId: 'loc1' })
+    expect(due.has('s')).toBe(true)
+    expect(overdue.has('s')).toBe(false)
+  })
+})
+
 // PUSH-LOC.1 — the notification's location decides the per-category gate.
 describe('resolvePushAllowedIds — per-location gating', () => {
   // Richard's live case: owner at Stillorgan (role default notify_whatsapp
@@ -483,7 +518,7 @@ describe('resolvePushAllowedIds — per-location gating', () => {
   })
 })
 
-describe('resolveRoleRecipientIds — per-location role + master inclusion (PUSH-ROLES.1)', () => {
+describe('readRoleRecipientIds — per-location role + master inclusion (PUSH-ROLES.1)', () => {
   const db = {
     from: () => ({
       select: () => ({
@@ -502,7 +537,7 @@ describe('resolveRoleRecipientIds — per-location role + master inclusion (PUSH
   }
 
   it('judges the PER-LOCATION role, not the stale global profiles.role', async () => {
-    const ids = await resolveRoleRecipientIds(db, 'loc1', ['owner', 'manager'])
+    const { ids } = await readRoleRecipientIds(db, 'loc1', ['owner', 'manager'])
     expect(ids).toContain('garrett')
     expect(ids).not.toContain('demoted')
     expect(ids).not.toContain('james')
@@ -510,7 +545,28 @@ describe('resolveRoleRecipientIds — per-location role + master inclusion (PUSH
   })
 
   it('always includes active masters assigned to the location (they hold every decision right)', async () => {
-    const ids = await resolveRoleRecipientIds(db, 'loc1', ['owner', 'manager'])
+    const { ids } = await readRoleRecipientIds(db, 'loc1', ['owner', 'manager'])
     expect(ids).toContain('richard')
+  })
+})
+
+// REPLACE.1b review 1 — a failed managers read must be tellable from "no
+// managers": the "taken" notice stamped itself done on an empty list.
+describe('readRoleRecipientIds — the same answer, with the read error', () => {
+  const failing = { from: () => ({ select: () => ({ eq: async () => ({ data: null, error: { message: 'down' } }) }) }) }
+  const working = { from: () => ({ select: () => ({ eq: async () => ({ data: [
+    { profile_id: 'm1', role: 'manager', profiles: { id: 'm1', role: 'manager', active: true } },
+    { profile_id: 's1', role: 'staff', profiles: { id: 's1', role: 'staff', active: true } },
+  ], error: null }) }) }) }
+
+  it('returns the ids and no error on a good read', async () => {
+    expect(await readRoleRecipientIds(working, 'loc1', ['manager'])).toEqual({ ids: ['m1'], error: null })
+  })
+  it('returns the error on a failed read (never an empty list that reads as "nobody")', async () => {
+    expect(await readRoleRecipientIds(failing, 'loc1', ['manager'])).toEqual({ ids: [], error: { message: 'down' } })
+  })
+  it('no studio or no roles is an empty answer, not an error', async () => {
+    expect(await readRoleRecipientIds(working, null, ['manager'])).toEqual({ ids: [], error: null })
+    expect(await readRoleRecipientIds(working, 'loc1', [])).toEqual({ ids: [], error: null })
   })
 })

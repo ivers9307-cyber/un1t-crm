@@ -35,7 +35,7 @@ export async function GET(request) {
     .from('glofox_push_events')
     .select(`
       id, contact_id, location_id, source, status, glofox_member_id,
-      glofox_response, error_message, passcode_sent, created_at,
+      glofox_response, error_message, created_at,
       reviewed_at, reviewed_by,
       contacts:contact_id ( id, name, email, first_name, last_name, location_id, glofox_member_id )
     `)

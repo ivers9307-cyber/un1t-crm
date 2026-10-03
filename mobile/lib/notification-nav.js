@@ -11,16 +11,21 @@
 //               surface as a console error instead of a silent dead tap.
 //
 // Routing choices that aren't obvious:
-//   swaps (staff-recipient types) — the accept/decline + "my posted swaps"
-//     cards live on the personal dashboard, not /schedule. That dashboard
-//     moved off Home onto its own Dashboard tab in HOME-LOC.7.
+//   swaps (staff-recipient types, incl. the swap_open_pool broadcast) — the
+//     accept/decline, "Open swaps you can take" + "my posted swaps" cards live
+//     on the personal dashboard, not /schedule. That dashboard moved off Home
+//     onto its own Dashboard tab in HOME-LOC.7.
+//   shift_offer (REPLACE.1b, "A shift is up for grabs") — Claim is in the
+//     Dashboard's "Shifts up for grabs" section. shift_offer_taken (to the
+//     managers) opens that day in Manage mode. A phone without the REPLACE.1b
+//     update gets undefined for both: the push shows, the tap only opens the app.
 //   swap_open / swap_awaiting / time_off_inbound / expense_submitted — sent
 //     to managers/owners; their decision queue is the /approvals inbox.
 //     The payload id (swap_id / request_id / claim_id) equals the pending-
 //     approvals item id, so it rides along as ?focus= and the inbox
 //     highlights the matching card.
-//   schedule_published / schedule_updated / shift_adjusted / swap_decision /
-//     time_off_decision — carry the affected date (start_date / block_date);
+//   schedule_published / schedule_updated / shift_adjusted / shift_reminder /
+//     swap_decision / time_off_decision — carry the affected date (start_date / block_date);
 //     ?date= preselects that week+day on the schedule tab instead of
 //     landing on the current week.
 //   instagram fallback — the WhatsApp tab is the unified inbox (it lists IG
@@ -31,12 +36,21 @@
 //   checklist_compliance — manager-side alert about a coach's checklist;
 //     there is no manager checklist surface on mobile, so land on the
 //     Dashboard tab (the studio dashboard for managers).
+//   availability_changed — manager-side notice that a coach changed their
+//     availability; no per-coach view on mobile, so Manage mode.
 
 // Param guards — server payload fields become URL search params, so only
 // well-formed values are appended; anything else falls back to the bare
 // route rather than building a junk URL.
 const isIsoDay = (s) => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s)
 const isSafeId = (s) => typeof s === 'string' && /^[A-Za-z0-9_-]+$/.test(s)
+
+// The team-approvals inbox, focused on one item when its id is URL-safe.
+// Exported because the Studio tab's pending rows open the same place the
+// manager pushes do (COVERLOOP.2): one spelling of the route, one guard.
+export function teamApprovalRoute(id) {
+  return isSafeId(id) ? `/approvals?tab=team&focus=${id}` : '/approvals?tab=team'
+}
 
 export function routeForNotification(data) {
   if (!data?.type) return null
@@ -49,6 +63,7 @@ export function routeForNotification(data) {
 
     // ── Shift swaps (schedule/swaps routes) ─────────────────────────
     case 'swap_inbound':   // targeted at me — respond on the dashboard
+    case 'swap_open_pool': // a colleague needs cover — claim it on the dashboard
     case 'swap_claimed':   // my posted shift was claimed
     case 'swap_accepted':  // my targeted swap was accepted
     case 'swap_withdrawn': // taker withdrew — my shift is open again
@@ -56,14 +71,21 @@ export function routeForNotification(data) {
       return '/(tabs)/dashboard'
     case 'swap_open':      // manager: open swap posted
     case 'swap_awaiting':  // manager: swap awaiting approval
-      return isSafeId(data.swap_id) ? `/approvals?tab=team&focus=${data.swap_id}` : '/approvals?tab=team'
+      return teamApprovalRoute(data.swap_id)
     case 'swap_decision':  // requester/taker: final decision — roster changed
       // on the requester-shift's date; preselect that week+day.
       return isIsoDay(data.block_date) ? `/(tabs)/schedule?date=${data.block_date}` : '/(tabs)/schedule'
 
+    // ── Offer to team (REPLACE.1b) ──────────────────────────────────
+    case 'shift_offer':       // coach: "A shift is up for grabs" — Claim is on the Dashboard
+      return '/(tabs)/dashboard'
+    case 'shift_offer_taken': // manager: "Coach B took …" — that day in Manage mode
+      // (schedule.jsx honours view=manage for manager roles only).
+      return isIsoDay(data.block_date) ? `/(tabs)/schedule?date=${data.block_date}&view=manage` : '/(tabs)/schedule?view=manage'
+
     // ── Time off ────────────────────────────────────────────────────
     case 'time_off_inbound': // manager: new request
-      return isSafeId(data.request_id) ? `/approvals?tab=team&focus=${data.request_id}` : '/approvals?tab=team'
+      return teamApprovalRoute(data.request_id)
 
     // ── Customer approvals (APPROVALS-STUDIO.1) ─────────────────────
     case 'agent_request': // manager: a customer request needs a decision
@@ -71,16 +93,42 @@ export function routeForNotification(data) {
 
     // ── Host events (HOST-APPROVALS.1) ──────────────────────────────
     case 'host_event_review': // admin: a host submitted an event for review
-      return isSafeId(data.event_id) ? `/approvals?tab=team&focus=${data.event_id}` : '/approvals?tab=team'
+      return teamApprovalRoute(data.event_id)
+    // LEAVECANCEL.1 — owner: a manager asked to cancel approved leave. Decided
+    // on the web Time Off page (the push says so); the approvals inbox has no
+    // card for it, so this must not go there, and leaving it to `default`
+    // makes the tap do nothing. The Schedule tab, on the leave's first week.
+    case 'time_off_cancel_request':
     case 'time_off_decision': // staff: approved/declined — preselect the
       // week+day of the request's first day.
       return isIsoDay(data.start_date) ? `/(tabs)/schedule?date=${data.start_date}` : '/(tabs)/schedule'
 
     // ── Roster (roster-notify, rosters republish, assignment adjust) ─
+    // RUNWAY.1 — manager alert that an upcoming week is not built. Opens that
+    // week in Manage mode (schedule.jsx reads ?view=manage for manager roles
+    // only; anyone else lands on their own week).
+    case 'roster_runway':
+      return isIsoDay(data.week_start)
+        ? `/(tabs)/schedule?date=${data.week_start}&view=manage`
+        : '/(tabs)/schedule?view=manage'
+    // AVAIL.2 — a coach changed when they can't work (AVAIL.1a, sent to the
+    // roster builders at their studios). No per-coach availability view on
+    // the phone, so open the roster they build: Manage mode (schedule.jsx
+    // honours ?view=manage for manager roles only; anyone else lands on their
+    // own week). The payload's profile_id is there for a better target later.
+    // Same pattern as RUNWAY.1's roster_runway above, kept deliberately
+    // (AVAIL.2 review): a manager who mutes the notice (notify_availability_
+    // change) gets no push; one who is not a manager at the studio the
+    // phone has active lands on their own week, which is harmless.
+    case 'availability_changed':
+      return '/(tabs)/schedule?view=manage'
     case 'schedule_published':
     case 'schedule_updated':
       return isIsoDay(data.start_date) ? `/(tabs)/schedule?date=${data.start_date}` : '/(tabs)/schedule'
     case 'shift_adjusted':
+      return isIsoDay(data.block_date) ? `/(tabs)/schedule?date=${data.block_date}` : '/(tabs)/schedule'
+    // SHIFTREMIND.1 — "you are on tomorrow / in 2 hours": open that day.
+    case 'shift_reminder':
       return isIsoDay(data.block_date) ? `/(tabs)/schedule?date=${data.block_date}` : '/(tabs)/schedule'
 
     // ── Leads (POST /api/contacts) ──────────────────────────────────
@@ -120,7 +168,7 @@ export function routeForNotification(data) {
 
     // ── FTE expenses (expenses submit/approve/decline) ──────────────
     case 'expense_submitted': // owner: awaiting approval
-      return isSafeId(data.claim_id) ? `/approvals?tab=team&focus=${data.claim_id}` : '/approvals?tab=team'
+      return teamApprovalRoute(data.claim_id)
     case 'expense_approved':
     case 'expense_declined':
       return data.claim_id ? `/expenses/${data.claim_id}` : '/(tabs)/expenses'

@@ -182,15 +182,15 @@ describe('applyMergeTags', () => {
       .toBe('Unknown {{not_a_real_tag}} stays')
   })
 
-  // ── GLOFOX3.5 — glofox_passcode tag ──────────────────────────────
-  it('substitutes {{glofox_passcode}} from the contact', () => {
-    // The Glofox welcome sequence relies on this tag — locking
-    // it down so a postmark.js refactor can't accidentally drop
-    // the column read.
+  // ── PASSCODEREAD.1 — {{glofox_passcode}} is retired ─────────────
+  it('renders {{glofox_passcode}} empty even when a contact still carries a value', () => {
+    // Glofox passwords are no longer stored (mig 651 CHECKs the column
+    // NULL). The tag stays in the table so an old body renders empty rather
+    // than as literal braces, and it never reads the column again.
     expect(applyMergeTags(
       'Passcode: <code>{{glofox_passcode}}</code>',
-      { name: 'Alice', glofox_passcode: 'ABC1-2345' }
-    )).toBe('Passcode: <code>ABC1-2345</code>')
+      { name: 'Alice', glofox_passcode: 'SYNTH-PC-0001' }
+    )).toBe('Passcode: <code></code>')
   })
 
   it('renders {{glofox_passcode}} as empty when not set on the contact', () => {
@@ -198,6 +198,15 @@ describe('applyMergeTags', () => {
     // the right fallback (no "undefined" leaking into email body).
     expect(applyMergeTags('Code: {{glofox_passcode}}', { name: 'Alice' }))
       .toBe('Code: ')
+  })
+})
+
+describe('PAYLINK.7 — payment merge tags', () => {
+  it('renders {{pay_amount_phrase}} and {{payment_cta}} from extras, empty when absent', () => {
+    const html = '<p>payment{{pay_amount_phrase}} failed. To keep it, {{payment_cta}}.</p>'
+    expect(applyMergeTags(html, { first_name: 'A' }, { pay_amount_phrase: ' of €209', payment_cta: '<a href="https://pay.test/x">pay it now here</a>' }))
+      .toBe('<p>payment of €209 failed. To keep it, <a href="https://pay.test/x">pay it now here</a>.</p>')
+    expect(applyMergeTags(html, { first_name: 'A' }, {})).toBe('<p>payment failed. To keep it, .</p>')
   })
 })
 

@@ -217,7 +217,16 @@ describe('scenario fixtures stay valid', () => {
       expect(system.map(b => b.text).join('\n'), s.id).toContain('Mia')
       expect(messages.length, s.id).toBeGreaterThan(0)
       expect(messages[0].role, s.id).toBe('user')
+      // MIAPREFILL.1 — production never sends a request ending on an
+      // assistant turn (Sonnet 5 400s it as prefill); neither may the harness.
+      expect(messages.at(-1).role, s.id).toBe('user')
     }
+  })
+
+  it('builds the history exactly as production does (buildReplyTurnMessages): a scenario ending on an outbound row is refused, not sent as prefill', () => {
+    expect(() => buildScenarioRequest({
+      history: [{ direction: 'inbound', body: 'hi' }, { direction: 'outbound', body: 'hello' }],
+    })).toThrow(/nothing_to_answer/)
   })
 
   // MIA-REVIEW.3 (3.3) — buildScenarioRequest forwarded only

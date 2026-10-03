@@ -12,6 +12,7 @@
 import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { excludeTombstones } from '@/lib/staff-tombstone'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -32,9 +33,8 @@ export async function GET(request) {
   const q = (url.searchParams.get('q') || '').trim().toLowerCase()
 
   const db = createServerClient()
-  let query = db
-    .from('profiles')
-    .select('id, full_name, email, role, active, profile_locations(locations(id, name))')
+  let query = excludeTombstones(db.from('profiles')
+    .select('id, full_name, email, role, active, profile_locations(locations(id, name))'))
     .order('full_name')
     .limit(50)
 

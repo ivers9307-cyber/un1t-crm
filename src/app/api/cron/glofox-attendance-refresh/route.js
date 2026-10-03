@@ -29,7 +29,8 @@
 // Members are processed stalest-glofox_synced_at-first and the run
 // is time-budgeted: if a run can't finish the whole base it stops
 // cleanly and the next run resumes from the stalest remaining
-// members. A transient Glofox error on a member leaves that
+// members. A transient Glofox error on a member, or Glofox refusing
+// the member read (200 success:false — MEMBERRESULT.1), leaves that
 // member's existing aggregates / plan untouched (never wiped).
 //
 // Auth: same CRON_SECRET pattern as the other Vercel crons.
@@ -37,8 +38,10 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
-import { glofoxCredentialsForLocation, fetchUserBookingsResult, fetchMemberResult } from '@/lib/glofox'
+import { glofoxCredentialsForLocation, fetchUserBookingsResult, fetchMemberResult, glofoxHttpStats, glofoxHttpStatsSince } from '@/lib/glofox'
+import { GLOFOX_SETTINGS_UNREADABLE_MESSAGE } from '@/lib/glofox-settings-read'
 import { computeBookingAggregates, mergeBookingAggregates, trimRecentBookings, extractMembershipPlan, extractMembershipState, extractMemberProfile } from '@/lib/glofox-sync'
+import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -60,6 +63,8 @@ export async function GET(request) {
   }
 
   const startedAt = Date.now()
+  // CREDITSREAD.1 — Glofox traffic for this invocation (instance-wide counters).
+  const httpBefore = glofoxHttpStats()
   const db = createServerClient()
 
   // Locations with Glofox configured — same discovery as glofox-sync.
@@ -85,7 +90,11 @@ export async function GET(request) {
     if (res.budget_exhausted) budgetExhausted = true
   }
 
-  await stampHeartbeat('glofox-attendance-refresh')
+  // CREDITSREAD.1 — reach + traffic, readable from SQL (was: last_outcome NULL).
+  // The run is time-bound (sequential, TIME_BUDGET_MS), so refreshed < eligible
+  // with budget_exhausted=true is its normal shape; the stalest-first order
+  // rotates who is left for tomorrow.
+  await stampHeartbeat('glofox-attendance-refresh', attendanceOutcome(perLocation, budgetExhausted, glofoxHttpStatsSince(httpBefore)))
 
   return NextResponse.json({
     success: true,
@@ -95,12 +104,32 @@ export async function GET(request) {
   })
 }
 
+function attendanceOutcome(perLocation, budgetExhausted, glofoxHttp) {
+  const sum = (k) => perLocation.reduce((n, r) => n + (r.summary?.[k] ?? 0), 0)
+  return {
+    eligible: perLocation.reduce((n, r) => n + (r.eligible ?? 0), 0),
+    refreshed: sum('refreshed'),
+    fetch_failed: sum('fetch_failed'),
+    membership_failed: sum('membership_failed'),
+    member_refused: sum('member_refused'),
+    update_failed: sum('update_failed'),
+    // A run where every location failed would otherwise read as all zeros (idle).
+    failed_locations: perLocation.filter((r) => r.status === 'failed').length,
+    budget_exhausted: budgetExhausted,
+    glofox_http: glofoxHttp,
+  }
+}
+
 /**
  * Refresh attendance aggregates for every paying member at one
  * location, stalest first, within the shared time budget.
  */
 async function refreshLocation(db, location, startedAt) {
-  const summary = { refreshed: 0, fetch_failed: 0, update_failed: 0, membership_failed: 0 }
+  // MEMBERRESULT.1 — member_refused: Glofox answered the member read without a
+  // member (200 success:false "Resource not available" = a deleted/merged
+  // account). Not a blip, so it is counted apart from membership_failed.
+  const summary = { refreshed: 0, fetch_failed: 0, update_failed: 0, membership_failed: 0, member_refused: 0 }
+  const httpBefore = glofoxHttpStats()
   let budgetExhausted = false
 
   // Audit row up-front so a mid-run timeout still leaves a trace.
@@ -123,6 +152,10 @@ async function refreshLocation(db, location, startedAt) {
 
   try {
     const creds = await glofoxCredentialsForLocation(db, location.id)
+    if (creds.readError) {
+      // REGISTRYREAD.1b: same failed-location row, true text; the next run retries.
+      throw new Error(GLOFOX_SETTINGS_UNREADABLE_MESSAGE)
+    }
     if (!creds.branchId || !creds.apiKey || !creds.apiToken) {
       throw new Error('Glofox credentials missing on this location.')
     }
@@ -186,15 +219,23 @@ async function refreshLocation(db, location, startedAt) {
 
       // CHURN-PREP.2 — also refresh the current membership plan +
       // lifecycle state (active/paused/cancelled) from the
-      // single-member payload. On a fetch failure we omit both from
-      // the update (existing values kept) rather than failing the
-      // whole member — attendance still saves.
-      const { ok: memberOk, member } = await fetchMemberResult(creds, m.glofox_member_id)
-      if (memberOk) {
-        update.glofox_membership_plan = extractMembershipPlan(member)
-        update.glofox_membership_state = extractMembershipState(member)
+      // single-member payload. On a fetch failure OR a refusal we omit
+      // every member-read field from the update (existing values kept)
+      // rather than failing the whole member — attendance still saves.
+      // MEMBERRESULT.1 — a refusal used to be read as a member here, and
+      // extract*() of the error body wrote NULL over 16 columns (live,
+      // 30 Aug 2026). fetchMemberResult now returns ok:false for it.
+      const memberRead = await fetchMemberResult(creds, m.glofox_member_id)
+      if (memberRead.ok) {
+        update.glofox_membership_plan = extractMembershipPlan(memberRead.member)
+        update.glofox_membership_state = extractMembershipState(memberRead.member)
         // GLOFOX-PROFILE — renewal/billing detail + profile attributes.
-        Object.assign(update, extractMemberProfile(member))
+        Object.assign(update, extractMemberProfile(memberRead.member))
+      } else if (memberRead.refused) {
+        summary.member_refused++
+        logWarn('glofox-attendance-refresh', 'Glofox refused the member read; stored membership fields kept', {
+          locationId: location.id, contactId: m.id, messageCode: memberRead.messageCode,
+        })
       } else {
         summary.membership_failed++
       }
@@ -213,7 +254,7 @@ async function refreshLocation(db, location, startedAt) {
         duration_ms: Date.now() - startedAt,
         leads_processed: summary.refreshed,
         total_available: eligibleCount,
-        summary,
+        summary: { ...summary, glofox_http: glofoxHttpStatsSince(httpBefore) },
         status: 'completed',
       }).eq('id', runId)
     }

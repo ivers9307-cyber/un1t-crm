@@ -5,7 +5,8 @@
 //   1. Check status = 'submitted'
 //   2. Snapshot the at-review hours/cost into the row (audit truth)
 //   3. Stamp status='approved', reviewed_*, approved_at
-//   4. Forward PDF to Xero via email-to-bills (best-effort)
+//   4. Enqueue into invoices_queue for the accountant (best-effort) —
+//      the bookkeeper forwards to Xero from /invoices, not this route
 //   5. Send approval email to contractor (best-effort)
 //
 // Steps 4 + 5 are wrapped in try/catch so a Xero or Postmark blip
@@ -21,7 +22,7 @@ import { computeScheduledForPeriod, periodLabel } from '@/lib/contractor-invoice
 import { sendInvoiceApprovedEmail } from '@/lib/contractor-invoice-email'
 import { notifyUsersOnce } from '@/lib/push-dedup'
 import { enqueueFromContractorInvoice } from '@/lib/invoices-queue/enqueue'
-import { logWarn } from '@/lib/log'
+import { logWarn, logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 
@@ -58,13 +59,28 @@ export async function POST(_request, props) {
     )
   }
 
-  // Snapshot the at-review numbers for audit.
-  const computed = await computeScheduledForPeriod(db, {
-    contractor_id: inv.contractor_id,
-    location_id: inv.location_id,
-    period_start: inv.period_start,
-    period_end: inv.period_end,
-  })
+  // Snapshot the at-review numbers for audit. INVOICEHOURS.1 D9 — a failed
+  // roster read refuses the approval (nothing written, invoice stays
+  // 'submitted'): approving without a snapshot would save nulls that later
+  // read "approved before snapshots were saved", and the reviewer may not
+  // have seen any comparison. Retrying is one click; nothing is lost.
+  let computed
+  try {
+    computed = await computeScheduledForPeriod(db, {
+      contractor_id: inv.contractor_id,
+      location_id: inv.location_id,
+      period_start: inv.period_start,
+      period_end: inv.period_end,
+    })
+  } catch (e) {
+    logError('invoice-approve', 'roster read failed; approval refused', {
+      err: e?.message || String(e), invoiceId: inv.id,
+    })
+    return NextResponse.json(
+      { success: false, error: 'Could not read the roster for this period, so the invoice was not approved. Try again in a moment.' },
+      { status: 503 },
+    )
+  }
 
   const now = new Date().toISOString()
   // INVOICES-QUEUE.1 — owner approval flips status straight to
@@ -123,7 +139,7 @@ export async function POST(_request, props) {
   try {
     await notifyUsersOnce(db, `invoice_approved:${approved.id}:${approved.reviewed_at || ''}`, [approved.contractor_id], {
       title: 'Invoice approved',
-      body: `€${Number(approved.invoice_amount).toFixed(2)} for ${periodLabel(approved.period_start)} has been approved and forwarded to accounts.`,
+      body: `€${Number(approved.invoice_amount).toFixed(2)} for ${periodLabel(approved.period_start)} has been approved and queued for payment processing.`,
       category: 'invoice_approved',
       emailSubject: `Your invoice has been approved — €${Number(approved.invoice_amount).toFixed(2)}`,
       data: {

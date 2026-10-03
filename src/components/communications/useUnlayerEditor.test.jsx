@@ -11,6 +11,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { renderHook, render, cleanup, screen, act } from '@testing-library/react'
 import { useUnlayerEditor } from './useUnlayerEditor.js'
+import { UNLAYER_MERGE_TAGS } from '@/lib/merge-tags'
 
 function hook() {
   // active:false — we only exercise exportHtml, not the init effect.
@@ -91,5 +92,25 @@ describe('useUnlayerEditor — dirty tracking', () => {
     window.unlayer = { init: () => {} }
     render(<Harness />)
     expect(isDirty()).toBe('false')
+  })
+})
+
+// K3 — useUnlayerEditor used to hard-code its OWN MERGE_TAGS array instead of
+// importing UNLAYER_MERGE_TAGS from lib/merge-tags, and had already drifted
+// (missing {{booking_token}}, which IS offered). Pin that the config Unlayer
+// actually receives is the registry's list, not a hand-kept copy — so a new
+// copy, or a future registry change this file doesn't pick up, fails here.
+describe('useUnlayerEditor — mergeTags config', () => {
+  function Harness() {
+    const { ref } = useUnlayerEditor({ mountId: 'unlayer-mergetags', active: true })
+    return <div ref={ref} data-testid="mount" />
+  }
+
+  it('passes the registry\'s UNLAYER_MERGE_TAGS to Unlayer init, unchanged', () => {
+    let initConfig = null
+    window.unlayer = { init: (config) => { initConfig = config } }
+    render(<Harness />)
+    expect(initConfig).not.toBeNull()
+    expect(initConfig.mergeTags).toEqual(UNLAYER_MERGE_TAGS)
   })
 })

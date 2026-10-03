@@ -87,7 +87,8 @@ export const WEB_PERMISSIONS = Object.freeze([
   // — Communications (single hub at /communications) —
   { key: 'email',      label: 'Email Marketing',                hint: 'Postmark broadcasts, sequences (drip campaigns), templates, segments.' },
   { key: 'whatsapp',   label: 'WhatsApp',                       hint: 'WhatsApp Cloud API inbox + broadcasts.' },
-  { key: 'sms',        label: 'SMS',                            hint: 'Send SMS via Twilio. Per-location alpha sender ID configured in Location Settings.' },
+  // (`sms` left with Twilio in TWILIO-RETIRE.1; a stored `sms` flag in a
+  // profile_locations.permissions blob is simply never read.)
   // — Operations —
   { key: 'schedule',          label: 'Schedule',                hint: 'Coach roster, shift blocks, time-off, swap requests.' },
   // Mig 120: zero-touch attendance tracking. Auto-stamps actual
@@ -333,7 +334,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     // email_mailbox_access (mig 485) — holding this key alone shows
     // nothing until a studio has a mailbox and the person has a grant
     // on it, the same two-level shape as approvals_inbox.
-    email: true, email_inbox: true, whatsapp: true, sms: true,
+    email: true, email_inbox: true, whatsapp: true,
     schedule: true, attendance_reports: true, assistant: true, studio_management: true, class_timer: true,
     device_control: true,
     // Studio Management children (STUDIO-GROUP.1) — master has all.
@@ -366,7 +367,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     engagement_analytics: false,                   // retention analytics — not a staff surface
     pulse_admin: false,                            // Pulse operator hub — retention oversight, not a staff surface
     events: true, bookings: true, races: true,    // race-day starts/finishes are a front-of-house duty
-    email: false, email_inbox: false, whatsapp: false, sms: false,
+    email: false, email_inbox: false, whatsapp: false,
     schedule: true, attendance_reports: false, assistant: false, studio_management: false, class_timer: true,
     device_control: false,                         // on-site device control — not a staff surface
     // Studio Management children — all off for staff.
@@ -404,7 +405,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     engagement_analytics: false,
     pulse_admin: false,
     events: true, bookings: true, races: true,       // front desk runs the booking desk
-    email: false, email_inbox: false, whatsapp: true, sms: false,        // WhatsApp inbox is the front-desk channel
+    email: false, email_inbox: false, whatsapp: true,        // WhatsApp inbox is the front-desk channel
     schedule: true, attendance_reports: false, assistant: false, studio_management: false, class_timer: true,
     device_control: false,
     contracts: false, tv_displays: false, glofox_import: false, preferences_import: false,
@@ -436,7 +437,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     engagement_analytics: true,                    // retention analytics — head coaches own retention
     pulse_admin: true,                             // Pulse operator hub — head coaches own retention
     events: true, bookings: true, races: true,
-    email: true, email_inbox: false, whatsapp: true, sms: true,
+    email: true, email_inbox: false, whatsapp: true,
     schedule: true, attendance_reports: false,    // head coaches don't see attendance — owner/manager only
     assistant: true, studio_management: false,    // explicit opt-in
     class_timer: true,                             // running the class timer is a coaching duty
@@ -471,7 +472,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     engagement_analytics: true,                    // managers track engagement / retention by default
     pulse_admin: true,                             // managers run the Pulse operator hub
     events: true, bookings: true, races: true,
-    email: true, email_inbox: true, whatsapp: true, sms: true,
+    email: true, email_inbox: true, whatsapp: true,
     schedule: true, attendance_reports: true, assistant: true, studio_management: true, class_timer: true,
     device_control: true,                          // managers run on-site device control
     // Studio Management children — manager gets TV displays (marketing
@@ -506,7 +507,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     engagement_analytics: true,
     pulse_admin: true,
     events: true, bookings: true, races: true,
-    email: true, email_inbox: true, whatsapp: true, sms: true,
+    email: true, email_inbox: true, whatsapp: true,
     schedule: true, attendance_reports: true, assistant: true, studio_management: true, class_timer: true,
     device_control: true,
     // Studio Management children — owner gets contracts + TV displays
@@ -566,14 +567,11 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   // explicit opt-in on, staff off).
   { key: 'assistant',          label: 'AI Assistant',             hint: 'Chat with the in-app assistant — navigate the CRM and ask questions. Mirrors the web assistant.', webEquivalent: 'assistant' },
   // MOBILE-CONTACT-SEND.1 — ad-hoc one-to-one send from the mobile
-  // contact card, via the platform's linked service (Twilio / Postmark)
-  // so the message comes from the company, not the staffer's personal
-  // phone. These gate the SMS / Email buttons; WhatsApp reuses the
-  // `whatsapp` key above. webEquivalent links them to the web sms / email
-  // keys for the parity linter — dropping both from WEB_ONLY_OK, since the
-  // ad-hoc single-contact send is no longer web-only (broadcasts /
-  // campaign editor stay desktop-only and keep their web gating).
-  { key: 'sms',                label: 'SMS (send to a contact)',  hint: 'Text a contact from the company Twilio sender, not your phone. Broadcasts/sequences stay on web.', webEquivalent: 'sms' },
+  // contact card, via the platform's linked service (Postmark) so the
+  // message comes from the company, not the staffer's personal phone.
+  // This gates the Email button; WhatsApp reuses the `whatsapp` key above.
+  // webEquivalent links it to the web `email` key for the parity linter.
+  // (The SMS twin left with Twilio in TWILIO-RETIRE.1.)
   { key: 'email',              label: 'Email (send to a contact)', hint: 'Email a contact from the company Postmark sender, not your phone. The campaign editor stays on web.', webEquivalent: 'email' },
   // STUDIO-HUB.1 — TV displays on the mobile Studio hub. View the
   // location's registered TVs + what each is currently showing, copy the
@@ -710,8 +708,26 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   { key: 'notify_expense_declined',  label: '… Expense declined',   hint: 'Notify when an expense claim you submitted needs adjustment',   mobileOnly: true, isNotify: true },
   // Partial-shift overrides (mig 099/100). Coach gets a push when a
   // manager adjusts their times — the schedule effectively shifted
-  // out from under them, so a heads-up is high-value.
-  { key: 'notify_shift_adjusted',   label: '… Shift adjusted',     hint: 'Notify when a manager changes the times on one of your shifts', mobileOnly: true, isNotify: true },
+  // out from under them, so a heads-up is high-value. NOTIFY.1 widened
+  // the category to post-publish adds/removes too; the key stays
+  // `notify_shift_adjusted` so existing opt-outs keep applying.
+  { key: 'notify_shift_adjusted',   label: '… Shift changes',      hint: 'Notify when a manager adds you to a shift, removes you from one, or changes its times', mobileOnly: true, isNotify: true },
+  // SHIFTREMIND.1 — one reminder per run of published shifts from the
+  // send-push-reminders cron: 2 hours before the first start, or 8pm the
+  // evening before for a start before 09:00. Default ON for every role.
+  { key: 'notify_shift_reminder',   label: '… Shift reminders',    hint: 'One reminder before your shifts: 8pm the evening before for a start before 9am, otherwise 2 hours before', mobileOnly: true, isNotify: true },
+  // AVAIL.1 — a coach at your studio changed when they are unavailable.
+  // Recipients are the roster builders (owner, manager, head coach) at each
+  // of the coach's studios; sent 07:00-22:00 studio time, later if saved
+  // outside it. Default ON for every role (see
+  // src/lib/availability-change-registration.test.js for why not only the
+  // manager roles).
+  { key: 'notify_availability_change', label: '… Availability changes', hint: 'Notify when a coach at your studio changes when they are unavailable (roster builders)', mobileOnly: true, isNotify: true },
+  // QUALS.1 — the weekly qualification-expiry digest: what has expired or
+  // expires in 30 days, for the people at your studios. Recipients are owners
+  // (and masters) only, narrowed in src/lib/qualification-digest.js. Default
+  // ON for every role (see src/lib/qualification-expiry-registration.test.js).
+  { key: 'notify_qualification_expiry', label: '… Qualification expiry', hint: 'Weekly: qualifications at your studios that have expired or expire within 30 days (owners)', mobileOnly: true, isNotify: true },
   // Digital contracts (mig 106). Recipient gets a push when a
   // master/owner issues them a contract for signature. Default-on
   // for every role because the prompt-to-sign flow depends on it.
@@ -754,7 +770,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   master: {
     hyrox: true,
     schedule: true, pipeline: true, whatsapp: true, assistant: true,
-    sms: true, email: true,
+    email: true,
     tv_displays: true,
     contacts: true,
     tasks: true, bookings: true,
@@ -778,6 +794,9 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_invoice_approved: true, notify_invoice_declined: true,
     notify_expense_submitted: true, notify_expense_approved: true, notify_expense_declined: true,
     notify_shift_adjusted: true,
+    notify_shift_reminder: true,
+    notify_availability_change: true,
+    notify_qualification_expiry: true,
     notify_contract_issued: true,
     notify_tasks: true, notify_bookings: true,
     notify_checklist_overdue: true, notify_checklist_compliance: true,
@@ -787,7 +806,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   staff: {
     hyrox: false,
     schedule: true, pipeline: false, whatsapp: false, assistant: false,
-    sms: false, email: false,
+    email: false,
     tv_displays: false,
     contacts: true,
     // Coaches see tasks (they get assigned them) but not booking
@@ -816,6 +835,9 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     // ping (they aren't approvers).
     notify_expense_submitted: false, notify_expense_approved: true, notify_expense_declined: true,
     notify_shift_adjusted: true,
+    notify_shift_reminder: true,
+    notify_availability_change: true,
+    notify_qualification_expiry: true,
     notify_contract_issued: true,
     notify_tasks: true, notify_bookings: false,
     // Staff get the 'you missed items' push but NOT the compliance
@@ -833,7 +855,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   reception: {
     hyrox: false,
     schedule: true, pipeline: false, whatsapp: true, assistant: false,
-    sms: false, email: false,
+    email: false,
     tv_displays: false,
     contacts: true,
     tasks: true, bookings: true,
@@ -857,6 +879,9 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_invoice_approved: true, notify_invoice_declined: true,
     notify_expense_submitted: false, notify_expense_approved: true, notify_expense_declined: true,
     notify_shift_adjusted: true,
+    notify_shift_reminder: true,
+    notify_availability_change: true,
+    notify_qualification_expiry: true,
     notify_contract_issued: true,
     notify_tasks: true, notify_bookings: true,
     notify_checklist_overdue: true, notify_checklist_compliance: false,
@@ -866,7 +891,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   head_coach: {
     hyrox: true,
     schedule: true, pipeline: true, whatsapp: true, assistant: true,    // explicit opt-in, mirrors web
-    sms: true, email: true,
+    email: true,
     tv_displays: false,
     contacts: true,
     tasks: true, bookings: true,
@@ -892,6 +917,9 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     // studio); own-claim outcomes on like every role.
     notify_expense_submitted: true, notify_expense_approved: true, notify_expense_declined: true,
     notify_shift_adjusted: true,
+    notify_shift_reminder: true,
+    notify_availability_change: true,
+    notify_qualification_expiry: true,
     notify_contract_issued: true,
     notify_tasks: true, notify_bookings: true,
     // Head coach owns the floor — gets both the personal heads-up
@@ -905,7 +933,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   manager: {
     hyrox: true,
     schedule: true, pipeline: true, whatsapp: true, assistant: true,
-    sms: true, email: true,
+    email: true,
     tv_displays: true,
     contacts: true,
     tasks: true, bookings: true,
@@ -931,6 +959,9 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     // own-claim outcomes on (parity-superset of staff too).
     notify_expense_submitted: true, notify_expense_approved: true, notify_expense_declined: true,
     notify_shift_adjusted: true,
+    notify_shift_reminder: true,
+    notify_availability_change: true,
+    notify_qualification_expiry: true,
     notify_contract_issued: true,
     notify_tasks: true, notify_bookings: true,
     // Managers oversee front-of-house + sometimes work a shift —
@@ -946,7 +977,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   owner: {
     hyrox: true,
     schedule: true, pipeline: true, whatsapp: true, assistant: true,
-    sms: true, email: true,
+    email: true,
     tv_displays: true,
     contacts: true,
     tasks: true, bookings: true,
@@ -972,6 +1003,9 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     // + master) — submitted ping on; own-claim outcomes on.
     notify_expense_submitted: true, notify_expense_approved: true, notify_expense_declined: true,
     notify_shift_adjusted: true,
+    notify_shift_reminder: true,
+    notify_availability_change: true,
+    notify_qualification_expiry: true,
     notify_contract_issued: true,
     notify_tasks: true, notify_bookings: true,
     // Owners get both — they get the compliance summary as

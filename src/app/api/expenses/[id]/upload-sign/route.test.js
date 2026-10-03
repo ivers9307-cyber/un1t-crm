@@ -77,10 +77,10 @@ describe('POST /api/expenses/[id]/upload-sign', () => {
     expect(res.status).toBe(404)
   })
 
-  it("refuses someone else's claim", async () => {
+  it("refuses someone else's claim with the missing-claim 404 (FINALTIDY.1)", async () => {
     h.claim = { id: CLAIM_ID, profile_id: 'someone-else', status: 'draft' }
     const res = await POST(req({ files: [jpeg()] }), ctx)
-    expect(res.status).toBe(403)
+    expect(res.status).toBe(404)
   })
 
   it('refuses a claim that has left draft', async () => {

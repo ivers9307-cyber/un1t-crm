@@ -54,7 +54,7 @@
 
 import Link from 'next/link'
 import { usePathname, useSearchParams } from 'next/navigation'
-import { CalendarClock, BarChart3, Receipt, UserCheck, Wallet, CalendarOff, ArrowLeftRight } from 'lucide-react'
+import { CalendarClock, BarChart3, Receipt, UserCheck, Wallet, CalendarOff, ArrowLeftRight, CalendarX, BadgeCheck } from 'lucide-react'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { hasPermission } from '@/lib/permissions'
 
@@ -100,14 +100,22 @@ export default function ScheduleTabs({ user }) {
   // emails) with no other in-repo link — never change it.
   const showAttendance = hasPermission(user, 'attendance_reports')
 
+  // STAFFCOST.1 — Reporting stays visible to head coaches: only Staff Cost
+  // (pay rates) is withheld from them, and staff hours, time off, roster
+  // coverage and utilisation remain theirs (src/lib/report-access.js).
   const tabs = [
-    { key: 'schedule',   label: 'Schedule',   icon: CalendarClock,  href: ROOT_HREF,                    show: true },
+    { key: 'schedule',  label: 'Schedule',   icon: CalendarClock,  href: ROOT_HREF,                    show: true },
+    // AVAIL.1 — every staff member's own availability, so no gate.
+    { key: 'availability', label: 'Availability', icon: CalendarX, href: '/schedule/availability', show: true },
     { key: 'reporting',  label: 'Reporting',  icon: BarChart3,      href: `${ROOT_HREF}?view=reporting`, show: isManager },
     { key: 'time-off',   label: 'Time Off',   icon: CalendarOff,    href: '/schedule/time-off',          show: isManager },
     { key: 'swaps',      label: 'Swaps',      icon: ArrowLeftRight, href: '/schedule/swaps',             show: isManager },
     { key: 'invoices',   label: 'Invoices',   icon: Receipt,        href: '/schedule/invoices',          show: showInvoices },
     { key: 'expenses',   label: 'Expenses',   icon: Wallet,         href: '/schedule/expenses',          show: showExpenses },
     { key: 'attendance', label: 'Attendance', icon: UserCheck,      href: '/schedule/attendance',        show: showAttendance },
+    // QUALS.1 — everyone: managers manage the studio's records, everyone else
+    // sees their own (the page decides which; its routes re-judge).
+    { key: 'qualifications', label: 'Qualifications', icon: BadgeCheck, href: '/schedule/qualifications', show: true },
   ].filter(t => t.show)
 
   // Longest-match, CalendlyTabs/HubTabs style — with one wrinkle: Schedule
@@ -120,14 +128,20 @@ export default function ScheduleTabs({ user }) {
   }
 
   return (
-    <div className="flex items-center gap-1 mb-6 border-b border-un1t-border">
+    // TABWRAP.1 — seven (eight since AVAIL.1) tabs don't fit a phone. They used to shrink until
+    // "Time Off" wrapped onto two lines; now each label stays on one line and
+    // the strip scrolls sideways instead. The scroll is phone-only (max-sm):
+    // a scrolling box clips the tabs' -mb-px overlap onto the grey rule, so the
+    // phone strip gets one pixel of bottom padding to keep the underline whole,
+    // and desktop keeps its exact layout.
+    <div className="flex items-center gap-1 mb-6 border-b border-un1t-border max-sm:overflow-x-auto max-sm:overflow-y-hidden max-sm:pb-px max-sm:[scrollbar-width:none] max-sm:[&::-webkit-scrollbar]:hidden">
       {tabs.map(tab => {
         const active = isActive(tab)
         return (
           <Link
             key={tab.key}
             href={tab.href}
-            className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors -mb-px ${
+            className={`flex shrink-0 items-center gap-2 whitespace-nowrap px-4 py-3 text-sm font-medium border-b-2 transition-colors -mb-px ${
               active
                 ? 'border-un1t-text text-un1t-text'
                 : 'border-transparent text-un1t-subtle hover:text-un1t-text'

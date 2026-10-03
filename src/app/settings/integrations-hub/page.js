@@ -24,13 +24,15 @@ import { redirect } from 'next/navigation'
 import { getCurrentUser, getOwnerOrganizationIds } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { assembleIntegrationsHub } from '@/lib/integrations-hub'
+import { logError } from '@/lib/log'
 import IntegrationsHub from '@/components/settings/IntegrationsHub'
+import { isActiveOrgAdmin, isOrgAdmin } from '@/lib/org-admin'
 
 export const dynamic = 'force-dynamic'
 
 const HUB_LOCATION_COLUMNS =
   'id, name, organization_id, active, settings, features, sensibo_api_key, sensibo_pod_id, ' +
-  'thinq_pat, thinq_client_id, thinq_country_code, twilio_alpha_sender_id, bca_config'
+  'thinq_pat, thinq_client_id, thinq_country_code, bca_config'
 
 export default async function IntegrationsHubPage() {
   const user = await getCurrentUser()
@@ -51,9 +53,32 @@ export default async function IntegrationsHubPage() {
     .order('created_at')
   if (!user.isMaster) query = query.in('organization_id', ownerOrgIds)
 
-  const { data: locations } = await query
+  const { data: locations, error } = await query
+  // HUBREAD.1 — no locations read, no hub: an empty payload would render every
+  // card "not connected" under Connect buttons and "All connections healthy".
+  if (error) {
+    logError('integrations-hub', 'hub page locations read failed', { error })
+    return <HubUnavailable />
+  }
 
-  const data = await assembleIntegrationsHub(db, locations || [])
+  // C141 ORGROLE.2 — the plan & wallet strip is organisation-level billing
+  // data: only the locations of an organisation the caller administers (a
+  // master: every location). A studio owner keeps the integration cards.
+  const data = await assembleIntegrationsHub(db, locations || [], {
+    billingFor: (loc) => isOrgAdmin(user, loc.organization_id),
+  })
 
-  return <IntegrationsHub data={data} isMaster={user.isMaster} />
+  return <IntegrationsHub data={data} isMaster={user.isMaster} canManageBilling={isActiveOrgAdmin(user)} />
+}
+
+function HubUnavailable() {
+  return (
+    <div className="p-8 max-w-6xl">
+      <div className="text-xs text-un1t-muted mb-1">Settings <span className="text-un1t-subtle font-medium">/ Integrations</span></div>
+      <h2 className="text-2xl font-bold">Integrations</h2>
+      <p className="text-sm text-amber-700 mt-2">
+        Could not load your locations just now, so no connection is shown and none can be changed here. Reload the page to try again.
+      </p>
+    </div>
+  )
 }

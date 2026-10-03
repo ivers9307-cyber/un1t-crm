@@ -1,0 +1,86 @@
+// mobile/lib/shift-arrival.js
+//
+// ARRIVALSHOW.1 — the one line under a coach's OWN shift on the Schedule tab
+// (Me view): what the app recorded as their arrival. Pure, no React, no Intl:
+// the server (src/lib/shift-arrivals.js, via GET /api/schedule/shifts) sends
+// the facts, including the studio-local HH:MM, so a Hermes build without ICU
+// and a phone set to another zone both read it right. This file only compares
+// "now" with two instants and picks words.
+//
+// Unknown is never absence: no `arrival` (an old server), null (a colleague's
+// row, or a failed read), or tracked !== true all show NOTHING about a
+// missing arrival. A stored stamp is always shown.
+//
+// Words are neutral on purpose (late/no-show alerts are held, 00-INDEX): the
+// time, never minutes late, never "missed". Tone classes live in
+// components/schedule/ArrivalLine.jsx (NativeWind does not scan mobile/lib).
+
+// Review 1 — POSITIVE LINES ONLY for now (the coordinator's call, pending
+// Richard): "No arrival recorded (yet)" stays switched off, because today a
+// missing stamp mostly means the app could not stamp, not that the coach was
+// not there. Coverage is ~19% of shifts; a gap of more than 60 min spent
+// inside the studio, an arrival more than 45 min early, and an adjusted start
+// more than 4h after the block start can never stamp; and an offline ping can
+// stamp up to 24h late (QUEUEDARRIVAL.1). The absence rules below are kept
+// and tested with the flag forced on; turning it on is this one line.
+export const SHOW_ABSENCE_LINES = false
+
+export const ARRIVAL_WORDS = Object.freeze({
+  arrived: (hhmm) => `Arrived ${hhmm}`,
+  arrivedDayBefore: (hhmm) => `Arrived ${hhmm} the day before`,
+  onSite: (hhmm) => `On site from your earlier shift (arrived ${hhmm})`,
+  notYet: 'No arrival recorded yet',
+  notRecorded: 'No arrival recorded',
+  help: "Arrival times come from your phone's location when you reach the studio, so not every shift shows one. They don't change your hours.",
+})
+
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/
+const DATE = /^\d{4}-\d{2}-\d{2}$/
+
+/**
+ * @param {object|null} shift  a GET /api/schedule/shifts row
+ * @param {number} nowMs       Date.now() at render
+ * @param {{ showAbsence?: boolean, stale?: boolean }} [opts]
+ *   showAbsence defaults to SHOW_ABSENCE_LINES. stale = the rows on screen are
+ *   the last good fetch kept through a failed refresh (TRANSPORT_ERROR): a
+ *   stamp may have landed since, so no absence is claimed.
+ * @returns {{ kind: 'arrived'|'on_site'|'not_yet'|'not_recorded', text: string } | null}
+ */
+export function arrivalLine(shift, nowMs, { showAbsence = SHOW_ABSENCE_LINES, stale = false } = {}) {
+  const a = shift?.arrival
+  if (!a || typeof a !== 'object') return null
+
+  if (typeof a.at_local === 'string' && HHMM.test(a.at_local)) {
+    if (a.carried === true) return { kind: 'on_site', text: ARRIVAL_WORDS.onSite(a.at_local) }
+    const dayBefore = DATE.test(a.at_local_date || '') && DATE.test(shift.shift_date || '') && a.at_local_date < shift.shift_date
+    return { kind: 'arrived', text: dayBefore ? ARRIVAL_WORDS.arrivedDayBefore(a.at_local) : ARRIVAL_WORDS.arrived(a.at_local) }
+  }
+  // A stamp exists but its local time is unreadable: there IS an arrival, so
+  // saying "No arrival recorded" would be false. Say nothing.
+  if (a.at != null) return null
+
+  // No stamp: say so only when absence lines are on, where arrivals are really
+  // tracked, on a published shift, once it has started.
+  if (showAbsence !== true || stale === true) return null
+  if (a.tracked !== true || shift.published === false) return null
+  const starts = Date.parse(a.starts_at ?? '')
+  const ends = Date.parse(a.ends_at ?? '')
+  // Review 2 — judged at the EARLIER of the phone's clock and the server's
+  // clock at the read (as_of): a phone set ahead, or rows fetched a while ago,
+  // never make a shift look further on than the stamps were read. No server
+  // clock, no absence.
+  const asOf = Date.parse(a.as_of ?? '')
+  if (!Number.isFinite(starts) || !Number.isFinite(ends) || !Number.isFinite(nowMs) || !Number.isFinite(asOf)) return null
+  const judgedAt = Math.min(nowMs, asOf)
+  if (judgedAt < starts) return null
+  if (judgedAt < ends) return { kind: 'not_yet', text: ARRIVAL_WORDS.notYet }
+  return { kind: 'not_recorded', text: ARRIVAL_WORDS.notRecorded }
+}
+
+/** The help line under the Me list: shown only when some line shows. */
+export function arrivalHelpFor(shifts, nowMs, opts) {
+  for (const s of Array.isArray(shifts) ? shifts : []) {
+    if (arrivalLine(s, nowMs, opts)) return ARRIVAL_WORDS.help
+  }
+  return null
+}

@@ -44,23 +44,36 @@ function draft(overrides = {}) {
   }
 }
 
-function buildDb({ roster, deleteError = null }) {
+// The delete chain is delete().eq('id').eq('status','draft').select('id'):
+// every filter is recorded in `deleteFilters`, and `deletedRows` is what the
+// guarded DELETE matched (SNAPSHOT.1 review 2: [] = the roster stopped being
+// a draft between the read and the delete).
+function buildDb({ roster, deleteError = null, deletedRows = [{ id: 'roster-1' }] }) {
   const deleteSpy = vi.fn()
+  const deleteFilters = []
   const db = {
     from: (t) => {
       if (t !== 'rosters') throw new Error(t)
       return {
         select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: roster, error: null }) }) }),
-        delete: () => ({
-          eq: (col, val) => {
-            deleteSpy({ col, val })
-            return Promise.resolve({ error: deleteError })
-          },
-        }),
+        delete: () => {
+          const chain = {
+            eq: (col, val) => {
+              if (deleteFilters.length === 0) deleteSpy({ col, val })
+              deleteFilters.push([col, val])
+              return chain
+            },
+            select: (cols) => {
+              deleteFilters.push(['select', cols])
+              return Promise.resolve({ data: deleteError ? null : deletedRows, error: deleteError })
+            },
+          }
+          return chain
+        },
       }
     },
   }
-  return { db, deleteSpy }
+  return { db, deleteSpy, deleteFilters }
 }
 
 beforeEach(() => {
@@ -148,6 +161,31 @@ describe('POST /api/schedule/rosters/[id]/reject', () => {
 
     const res = await POST(req({}), PROPS)
     expect(res.status).toBe(400)
+    expect(notifyUsersOnce).not.toHaveBeenCalled()
+  })
+
+  // SNAPSHOT.1 review 2 — reject reads the roster as a draft and then deletes
+  // it. An approval landing between the two publishes it (and writes its
+  // snapshot); an unguarded delete by id would then delete a PUBLISHED
+  // roster. The delete is pinned to status = 'draft' and judged by the rows
+  // it matched.
+  it('the delete is pinned to the row still being a draft', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'owner-1', role: 'owner', locations: [{ id: 'loc-1' }] })
+    const { db, deleteFilters } = buildDb({ roster: draft() })
+    createServerClient.mockReturnValue(db)
+    expect((await POST(req({}), PROPS)).status).toBe(200)
+    expect(deleteFilters).toEqual([['id', 'roster-1'], ['status', 'draft'], ['select', 'id']])
+  })
+
+  it('approved between the read and the delete: 409, nothing claimed, nobody told', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'owner-1', role: 'owner', locations: [{ id: 'loc-1' }] })
+    const { db } = buildDb({ roster: draft(), deletedRows: [] })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(req({ note: 'Trim Saturday' }), PROPS)
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.success).toBe(false)
+    expect(body.error).toMatch(/This roster has just changed/)
     expect(notifyUsersOnce).not.toHaveBeenCalled()
   })
 })

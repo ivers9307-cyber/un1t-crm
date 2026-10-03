@@ -21,6 +21,10 @@
 // `offered: false` means the tag substitutes but is deliberately kept out of
 // the pickers, with the reason stated. That is a decision, not an oversight —
 // the whole point of this file is that the difference is visible.
+//
+// `retired: true` means the tag still substitutes, always to the empty string,
+// so a body written before it was retired renders nothing instead of literal
+// braces. A retired tag is never offered.
 
 /**
  * Every tag `applyMergeTags()` substitutes.
@@ -29,6 +33,7 @@
  *   description — one line for the reference panel
  *   offered     — shown in the editors' pickers
  *   why         — required when offered is false
+ *   retired     — substitutes to '' only (kept for old bodies)
  */
 export const MERGE_TAGS = Object.freeze([
   { tag: '{{first_name}}', name: 'First Name', description: "Contact's first name", offered: true },
@@ -63,14 +68,34 @@ export const MERGE_TAGS = Object.freeze([
   },
   {
     tag: '{{glofox_passcode}}',
-    name: 'Glofox Passcode',
-    description: 'One-time Glofox passcode',
+    name: 'Glofox Passcode (retired)',
+    description: 'Retired: always empty',
     offered: false,
-    // Only non-empty for a contact CRM has just minted a Glofox account
-    // for (glofox-push.js writes contacts.glofox_passcode). It is a
-    // welcome-sequence tag: in a broadcast to a general audience it
-    // renders empty for almost everyone, which reads as a broken email.
-    why: 'only populated right after CRM creates a Glofox account — welcome sequence only, empty in a broadcast',
+    retired: true,
+    // PASSCODEREAD.1 (mig 651): Glofox passwords are no longer stored. It
+    // was only ever meant for the GLOFOX3.5 welcome email, which was never
+    // switched on, while every staff member at the location could read the
+    // stored value from their own session.
+    why: 'retired: Glofox passwords are not stored, so it renders empty (PASSCODEREAD.1)',
+  },
+  {
+    tag: '{{pay_amount_phrase}}',
+    name: 'Payment amount',
+    description: 'Overdue payment reminders: " of €209", or empty',
+    offered: false,
+    // PAYLINK.7 — only non-empty on an overdue-payment reminder run
+    // (sendEmailStep resolves it from sequence_enrollments.metadata.payment).
+    // Empty for every other email, so offering it in a general campaign
+    // would read as a broken sentence fragment for almost everyone.
+    why: 'only populated on an overdue-payment reminder run — empty in a broadcast',
+  },
+  {
+    tag: '{{payment_cta}}',
+    name: 'Payment call to action',
+    description: 'Overdue payment reminders: a Pay now link, or the card-update wording',
+    offered: false,
+    // PAYLINK.7 — same run-scoped source as {{pay_amount_phrase}} above.
+    why: 'only populated on an overdue-payment reminder run — empty in a broadcast',
   },
 ])
 

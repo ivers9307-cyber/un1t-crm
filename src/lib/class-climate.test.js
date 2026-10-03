@@ -86,31 +86,31 @@ describe('class-occurrences: mapEventToOccurrence', () => {
 describe('class-occurrences: mapEventToOccurrence trainer-name map', () => {
   const loc = 'a0000000-0000-0000-0000-000000000001'
   const startSec = 1_700_000_000
-  const ID1 = '61a38e7d0cf1970aae0fb3a9'
+  const ID1 = 'aaaaaaaaaaaaaaaaaaaaaaa1'
   const ID2 = 'deadbeefdeadbeefdeadbeef'
 
   it('resolves a trainer id through the map', () => {
     const row = mapEventToOccurrence(
-      { _id: 'e', time_start: startSec, trainers: [ID1] }, loc, { [ID1]: 'Jess Murphy' })
-    expect(row.instructor).toBe('Jess Murphy')
+      { _id: 'e', time_start: startSec, trainers: [ID1] }, loc, { [ID1]: 'Coach One' })
+    expect(row.instructor).toBe('Coach One')
   })
 
   it('joins mapped ids with inline names; unmapped ids still drop', () => {
     const row = mapEventToOccurrence(
-      { _id: 'e', time_start: startSec, trainers: [ID1, 'Coach Mia', ID2] }, loc, { [ID1]: 'Jess' })
-    expect(row.instructor).toBe('Jess, Coach Mia')
+      { _id: 'e', time_start: startSec, trainers: [ID1, 'Coach Mia', ID2] }, loc, { [ID1]: 'Coach One' })
+    expect(row.instructor).toBe('Coach One, Coach Mia')
   })
 
   it('resolves object-shaped trainer entries via _id', () => {
     const row = mapEventToOccurrence(
-      { _id: 'e', time_start: startSec, trainers: [{ _id: ID1 }] }, loc, { [ID1]: 'Jess' })
-    expect(row.instructor).toBe('Jess')
+      { _id: 'e', time_start: startSec, trainers: [{ _id: ID1 }] }, loc, { [ID1]: 'Coach One' })
+    expect(row.instructor).toBe('Coach One')
   })
 
   it('matches map keys case-insensitively', () => {
     const row = mapEventToOccurrence(
-      { _id: 'e', time_start: startSec, trainers: [ID1.toUpperCase()] }, loc, { [ID1]: 'Jess' })
-    expect(row.instructor).toBe('Jess')
+      { _id: 'e', time_start: startSec, trainers: [ID1.toUpperCase()] }, loc, { [ID1]: 'Coach One' })
+    expect(row.instructor).toBe('Coach One')
   })
 
   it('behaves exactly as before when no map is given', () => {
@@ -120,7 +120,7 @@ describe('class-occurrences: mapEventToOccurrence trainer-name map', () => {
 })
 
 describe('class-occurrences: extractTrainerIds', () => {
-  const ID1 = '61a38e7d0cf1970aae0fb3a9'
+  const ID1 = 'aaaaaaaaaaaaaaaaaaaaaaa1'
   const ID2 = 'DEADBEEFDEADBEEFDEADBEEF'
 
   it('collects distinct 24-hex ids (string + object entries), lowercased', () => {

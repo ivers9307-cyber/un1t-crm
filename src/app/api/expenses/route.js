@@ -10,6 +10,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { periodForMonth } from '@/lib/fte-expenses'
+import { withExpenseLifecycle } from '@/lib/fte-expense-lifecycle'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -149,5 +150,8 @@ export async function GET(request) {
 
   const { data, error } = await query
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
-  return NextResponse.json({ success: true, data: data || [] })
+  // EXPENSELIFE.1 — honest per-claim lifecycle (queued / sent to Xero /
+  // paid) from the invoices_queue rows the approval enqueued per item.
+  const rows = await withExpenseLifecycle(db, data || [])
+  return NextResponse.json({ success: true, data: rows })
 }

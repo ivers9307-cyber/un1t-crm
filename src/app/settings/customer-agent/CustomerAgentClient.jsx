@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { BarChart3 } from 'lucide-react'
 import { CANCELLATION_FORM_DEFAULTS, REASON_CODES } from '@/lib/cancellation-form/defaults'
+import ReadFailedNote from '@/components/settings/ReadFailedNote'
 
 // RADAR-AGENT.0 — operator settings for the customer-facing WhatsApp /
 // Instagram agent. Manager+ only. Two parts: behaviour settings + the
@@ -39,7 +40,11 @@ function buildCancellationFormPayload(cf) {
   return out
 }
 
-export default function CustomerAgentClient() {
+// MIAROLE.1 (C80) — `canEdit` comes from the server page (canEditMiaSettings:
+// owner at the active studio, or master), the same predicate the PUT gates
+// on. Omitted, it fails closed: the settings render read-only, with no Save.
+// The knowledge editor below is outside that rule.
+export default function CustomerAgentClient({ canEdit = false } = {}) {
   const [settings, setSettings] = useState(null)
   const [location, setLocation] = useState(null)
   const [entries, setEntries] = useState([])
@@ -48,26 +53,40 @@ export default function CustomerAgentClient() {
   const [savedAt, setSavedAt] = useState(null)
   const [checkinStats, setCheckinStats] = useState(null)
   const [error, setError] = useState(null)
+  // SETTINGSWIPE.1 — true when the settings GET failed. The editor must then
+  // show nothing it could save: the GET used to answer a failed read with
+  // the DEFAULTS, and Save wrote them back (Mia off).
+  const [loadFailed, setLoadFailed] = useState(false)
+
+  async function load(isCancelled = () => false) {
+    try {
+      // allSettled: a failed KNOWLEDGE read must not be reported as a failed
+      // settings read (the editor would hide a Save it can safely offer).
+      const [sOut, kOut] = await Promise.allSettled([
+        fetch('/api/settings/customer-agent').then(r => r.json()),
+        fetch('/api/agent/knowledge').then(r => r.json()),
+      ])
+      if (isCancelled()) return
+      const sRes = sOut.status === 'fulfilled' ? sOut.value : null
+      if (sRes?.success && sRes.settings) {
+        setSettings(sRes.settings); setLocation(sRes.location || null); setCheckinStats(sRes.checkin_stats || null)
+        setLoadFailed(false)
+      } else {
+        setSettings(null); setLoadFailed(true)
+      }
+      if (kOut.status === 'fulfilled' && kOut.value?.success) setEntries(kOut.value.entries || [])
+    } catch {
+      if (!isCancelled()) { setSettings(null); setLoadFailed(true) }
+    } finally {
+      if (!isCancelled()) setLoading(false)
+    }
+  }
 
   useEffect(() => {
     let cancelled = false
-    async function load() {
-      try {
-        const [sRes, kRes] = await Promise.all([
-          fetch('/api/settings/customer-agent').then(r => r.json()),
-          fetch('/api/agent/knowledge').then(r => r.json()),
-        ])
-        if (cancelled) return
-        if (sRes.success) { setSettings(sRes.settings); setLocation(sRes.location || null); setCheckinStats(sRes.checkin_stats || null) }
-        if (kRes.success) setEntries(kRes.entries || [])
-      } catch {
-        if (!cancelled) setError('Failed to load')
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
-    }
-    load()
+    load(() => cancelled)
     return () => { cancelled = true }
+    // load is re-created each render and only ever sets state; run once on mount.
   }, [])
 
   function setField(k, v) { setSettings(s => ({ ...s, [k]: v })) }
@@ -78,6 +97,23 @@ export default function CustomerAgentClient() {
     const parts = Object.entries(reasons).map(([k, n]) => `${k.replace(/_/g, ' ')} ×${n}`)
     if (checkins?.reason === 'quiet_hours') parts.unshift('quiet hours')
     return parts.length ? ` (${parts.join(', ')})` : ''
+  }
+
+  // CHECKINSTALL.1 — one line per Dublin day from last_outcome.checkins_day.
+  // Counts are per 15-minute run, not per person (one lead skipped all
+  // afternoon shows ×20). Staff copy, not customer-facing.
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  function describeCheckinDay(d) {
+    if (!d?.day) return null
+    const [, mm, dd] = d.day.split('-')
+    const label = `${Number(dd)} ${MONTHS[Number(mm) - 1] || ''}`
+    const sent = (d.freeform || 0) + (d.templates || 0)
+    const runs = d.daytime_ticks || 0
+    const checks = d.candidates || 0
+    const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
+    const failed = d.failed_ticks ? ` · ${plural(d.failed_ticks, 'failed run')}` : ''
+    const partial = d.carry_failed ? ' (partial: an earlier run could not be read)' : ''
+    return `${label}: ${plural(runs, 'daytime run')} · ${plural(checks, 'candidate check')} · ${sent} sent · ${d.skipped || 0} skipped${describeCheckinReasons({ reasons: d.reasons })}${failed}${partial}`
   }
 
   async function saveSettings() {
@@ -228,7 +264,15 @@ export default function CustomerAgentClient() {
     await fetch(`/api/agent/knowledge/${id}`, { method: 'DELETE' })
   }
 
-  if (loading || !settings) return <div className="p-6 text-sm text-un1t-muted">Loading…</div>
+  if (loading) return <div className="p-6 text-sm text-un1t-muted">Loading…</div>
+  if (loadFailed || !settings) {
+    return (
+      <div className="max-w-3xl">
+        <h1 className="text-xl font-bold text-un1t-text mb-4">Customer Agent</h1>
+        <ReadFailedNote what="the customer agent settings" onRetry={() => load()} />
+      </div>
+    )
+  }
 
   const inputCls = 'w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text'
 
@@ -267,6 +311,15 @@ export default function CustomerAgentClient() {
         </Link>
       )}
 
+      {!canEdit && (
+        <p className="text-sm text-un1t-muted border border-un1t-border rounded-lg px-4 py-3 mb-6">
+          Only an owner can change these settings.
+        </p>
+      )}
+
+      {/* MIAROLE.1 — one disabled fieldset greys every settings control for a
+          non-owner; the Save buttons are not rendered for them at all. */}
+      <fieldset disabled={!canEdit} className="m-0 min-w-0 border-0 p-0">
       {/* ── Behaviour ─────────────────────────────────────── */}
       <section className="space-y-5 border border-un1t-border rounded-lg p-5 mb-6">
         <label className="flex items-center gap-3">
@@ -460,7 +513,8 @@ export default function CustomerAgentClient() {
           <input className={inputCls} maxLength={500} value={settings.booking_confirmation_text || ''}
             onChange={e => setField('booking_confirmation_text', e.target.value)}
             placeholder="Good news, you're booked in for {class}. See you there." />
-          <p className="text-xs text-un1t-muted mt-1">Sent to the customer when you approve a booking the agent drafted. <code>{'{class}'}</code> becomes the class name and time. Leave blank to use the default shown.</p>
+          {/* BOOKCHATCOPY.1 — the staff Book panel's chat confirmation uses this text too (src/lib/book-chat-copy.js). */}
+          <p className="text-xs text-un1t-muted mt-1">Sent to the customer when you approve a booking the agent drafted, and when staff book them from the Book panel with the chat confirmation ticked. <code>{'{class}'}</code> becomes what was booked and when. Leave blank to use the default shown.</p>
         </div>
 
         <div>
@@ -558,13 +612,15 @@ export default function CustomerAgentClient() {
         </div>
 
         {error && <div className="text-sm text-red-600">{error}</div>}
-        <div>
-          <button onClick={saveSettings} disabled={saving}
-            className="bg-un1t-text text-un1t-bg px-4 py-2 rounded-md text-sm font-medium disabled:opacity-50">
-            {saving ? 'Saving…' : 'Save settings'}
-          </button>
-          {savedAt && <span className="ml-3 text-sm text-green-600">Saved ✓</span>}
-        </div>
+        {canEdit && (
+          <div>
+            <button type="button" onClick={saveSettings} disabled={saving}
+              className="bg-un1t-text text-un1t-bg px-4 py-2 rounded-md text-sm font-medium disabled:opacity-50">
+              {saving ? 'Saving…' : 'Save settings'}
+            </button>
+            {savedAt && <span className="ml-3 text-sm text-green-600">Saved ✓</span>}
+          </div>
+        )}
       </section>
 
       {/* ── Membership cancellation form (CANCEL-FORM.2) ───── */}
@@ -765,13 +821,15 @@ export default function CustomerAgentClient() {
           </p>
         </div>
 
-        <div className="mt-5">
-          <button onClick={saveSettings} disabled={saving}
-            className="bg-un1t-text text-un1t-bg px-4 py-2 rounded-md text-sm font-medium disabled:opacity-50">
-            {saving ? 'Saving…' : 'Save settings'}
-          </button>
-          {savedAt && <span className="ml-3 text-sm text-green-600">Saved ✓</span>}
-        </div>
+        {canEdit && (
+          <div className="mt-5">
+            <button type="button" onClick={saveSettings} disabled={saving}
+              className="bg-un1t-text text-un1t-bg px-4 py-2 rounded-md text-sm font-medium disabled:opacity-50">
+              {saving ? 'Saving…' : 'Save settings'}
+            </button>
+            {savedAt && <span className="ml-3 text-sm text-green-600">Saved ✓</span>}
+          </div>
+        )}
       </section>
 
       {/* ── Proactive follow-ups (AGENT-FOLLOWUP.1) ───────── */}
@@ -839,14 +897,20 @@ export default function CustomerAgentClient() {
         {checkinStats && (
           <div className="mb-4 rounded-md border border-un1t-border bg-un1t-bg/40 px-3 py-2 text-xs text-un1t-subtle space-y-1">
             <p>
+              {/* CHECKINRISKS.1 — both counts are SENDS (the cap's own counter);
+                  null means the read failed, which is never shown as 0. */}
               <span className="font-semibold text-un1t-text">
-                Sent today {checkinStats.sent_today}/{settings.first_class_checkin?.daily_cap ?? 20}
+                {checkinStats.sent_today == null
+                  ? 'Sent today: could not be read'
+                  : `Sent today ${checkinStats.sent_today}/${settings.first_class_checkin?.daily_cap ?? 20}`}
               </span>
-              {' · '}All time {checkinStats.total}
+              {' · '}Sent all time {checkinStats.total == null ? 'could not be read' : checkinStats.total}
               {' · '}Last:{' '}
-              {checkinStats.last
-                ? `${checkinStats.last.contact_name || 'contact'} — ${checkinStats.last.note || 'sent'} (${new Date(checkinStats.last.at).toLocaleString('en-IE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })})`
-                : 'none yet'}
+              {checkinStats.last_unreadable
+                ? 'could not be read'
+                : checkinStats.last
+                  ? `${checkinStats.last.contact_name || 'contact'} — ${checkinStats.last.note || 'sent'} (${new Date(checkinStats.last.at).toLocaleString('en-IE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })})`
+                  : 'none yet'}
             </p>
             {checkinStats.last_run && (
               <p>
@@ -855,6 +919,12 @@ export default function CustomerAgentClient() {
                   ? ` — ${(checkinStats.last_run.checkins.freeform || 0) + (checkinStats.last_run.checkins.templates || 0)} sent · ${checkinStats.last_run.checkins.skipped || 0} skipped${describeCheckinReasons(checkinStats.last_run.checkins)}`
                   : ' — no check-in summary yet (runs every 15 min, 9:00–20:00 Dublin)'}
               </p>
+            )}
+            {checkinStats.last_run?.day && (
+              <p>{describeCheckinDay(checkinStats.last_run.day)}</p>
+            )}
+            {checkinStats.last_run?.day?.previous && (
+              <p>{describeCheckinDay(checkinStats.last_run.day.previous)}</p>
             )}
           </div>
         )}
@@ -903,6 +973,8 @@ export default function CustomerAgentClient() {
           Enable inline suggestions
         </label>
       </section>
+
+      </fieldset>
 
       {/* ── Knowledge ─────────────────────────────────────── */}
       <section className="border border-un1t-border rounded-lg p-5 mt-6">

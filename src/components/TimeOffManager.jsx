@@ -2,11 +2,15 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { CalendarOff, Plus, Check, X, Palmtree, ThermometerSun, Ban, Wallet, CircleEllipsis } from 'lucide-react'
+import { CalendarOff, Plus, Check, X, Palmtree, ThermometerSun, Ban, Wallet, CircleEllipsis, AlertTriangle } from 'lucide-react'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { dublinTodayStr } from '@/lib/dublin-time'
-import { TIME_OFF_TYPES } from '@shared/time-off'
-import Modal from '@/components/ui/Modal'
+import { timeOffTypesFor, defaultTimeOffTypeFor, leaveClashLabel, leaveClashPrompt } from '@shared/time-off'
+import { Modal, Button } from '@/components/ui'
+// LEAVECANCEL.1 — shared with the dashboard's My requests card.
+import { LEAVE_CANCEL_NOTICES, cancelledAtRequestText } from '@/lib/time-off-cancel-copy'
+// LEAVEDAYS.1 — what the form's "days requested" line says, and when.
+import { LEAVE_PREVIEW_DEBOUNCE_MS, leavePreviewRequest, leavePreviewFrom, leavePreviewState, leaveDaysView } from '@/lib/leave-days-preview'
 // ROSTER-FIX.6a — one failure shape and one banner across the schedule
 // screens, so no call site can quietly forget to check the response.
 import ScheduleErrorBanner from './schedule/ScheduleErrorBanner'
@@ -31,9 +35,20 @@ const STATUS_STYLES = {
   approved:  'bg-green-500/20 text-green-700',
   rejected:  'bg-red-500/20 text-red-700',
   cancelled: 'bg-un1t-border/30 text-un1t-muted',
+  // LEAVE.2 — derived, not stored: pending past its end_date.
+  expired:   'bg-un1t-border/30 text-un1t-muted',
 }
 
-export default function TimeOffManager({ user }) {
+// LEAVE.5 — `canApprove` is resolved by the page against the per-location
+// time-off approval permission at the active studio. Without it (older
+// callers, tests) the role at the active studio decides, as before.
+//
+// LEAVECANCEL.1 — `canDecideCancellations`: an owner at the active studio or a
+// master (resolved by the page, ROLE-based). It only widens who gets the Team
+// tab: the approvals queue links owners to a colleague's row there, and an
+// owner whose time-off approval permission was removed would otherwise have no
+// way to reach it. What each row offers comes from the server's per-row flags.
+export default function TimeOffManager({ user, canApprove, canDecideCancellations = false }) {
   // BOOKKEEPER-APPROVALS-FIX — `?focus=<id>` arrives when the user
   // drilled in from /approvals. Default to the 'team' tab (the
   // request being approved belongs to someone else, not the
@@ -42,8 +57,13 @@ export default function TimeOffManager({ user }) {
   // their own holidays instead of the request they clicked.
   const searchParams = useSearchParams()
   const focusId = searchParams?.get('focus') || null
-  const isManager = MANAGER_ROLES.includes(user.role)
-  const hasFocus = !!focusId && isManager
+  const isManager = typeof canApprove === 'boolean' ? canApprove : MANAGER_ROLES.includes(user.role)
+  const showTeam = isManager || canDecideCancellations
+  const hasFocus = !!focusId && showTeam
+  // LEAVECANCEL.1 — from the Leave cancellations queue. The row is APPROVED
+  // leave (the ask is not a status), so the usual focus landing (Pending)
+  // would not contain it.
+  const focusCancellations = hasFocus && searchParams?.get('view') === 'cancellations'
 
   const [requests, setRequests] = useState([])
   const [allowance, setAllowance] = useState(null)
@@ -63,8 +83,17 @@ export default function TimeOffManager({ user }) {
   // double-clicking used to fire two PUTs.
   const [actingId, setActingId] = useState(null)
   const [showForm, setShowForm] = useState(false)
-  const [filter, setFilter] = useState(hasFocus ? 'pending' : 'all') // 'all', 'pending', 'approved'
-  const [tab, setTab] = useState(hasFocus ? 'team' : 'my') // 'my' or 'team' (team only for managers)
+  const [filter, setFilter] = useState(focusCancellations ? 'approved' : hasFocus ? 'pending' : 'all') // 'all', 'pending', 'approved'
+  // LEAVE.5 — approvers land on the team's requests; their own allowance
+  // moves to a smaller section below.
+  const [tab, setTab] = useState(showTeam ? 'team' : 'my') // 'my' or 'team' (team only for managers)
+  // LEAVE.1 — after an approval that left the person rostered:
+  // { requestId, name, prompt } until "Unassign them" or "Keep them".
+  const [clashFollowUp, setClashFollowUp] = useState(null)
+  const [notice, setNotice] = useState(null)
+  // LEAVECANCEL.1 — { mode: 'ask' | 'approve' | 'reject', req } while the
+  // cancel dialog is open.
+  const [cancelDialog, setCancelDialog] = useState(null)
   // Ref-map of request id → DOM node so we can scroll the focused
   // row into view once it lands in the result set.
   const rowRefs = useRef(new Map())
@@ -82,6 +111,8 @@ export default function TimeOffManager({ user }) {
     if (locationId) params.set('location_id', locationId)
     if (filter !== 'all') params.set('status', filter)
     if (tab === 'my') params.set('profile_id', user.id)
+    // LEAVE.1 — each open request carries how many live shifts it clashes with.
+    params.set('with_clashes', '1')
 
     try {
       const [reqRes, allowRes] = await Promise.all([
@@ -136,7 +167,7 @@ export default function TimeOffManager({ user }) {
   // a failed approve by re-running the load would report success while the
   // request is still sitting there pending.
   async function reviewRequest(id, body, title) {
-    if (actingId) return
+    if (actingId) return null
     setActingId(id)
     setError(null)
     try {
@@ -148,18 +179,63 @@ export default function TimeOffManager({ user }) {
       const data = await res.json().catch(() => ({}))
       if (!res.ok || !data.success) {
         setError({ title, message: data.error || 'The request was not updated.', retry: false })
-        return
+        return null
       }
       await fetchData()
+      return data
     } catch {
       setError({ title, message: 'Network error, please try again', retry: false })
+      return null
     } finally {
       setActingId(null)
     }
   }
 
   async function handleApprove(id) {
-    await reviewRequest(id, { status: 'approved' }, 'Could not approve')
+    setClashFollowUp(null)
+    setNotice(null)
+    const result = await reviewRequest(id, { status: 'approved' }, 'Could not approve')
+    // LEAVE.1 — approval never touches the roster. Show what it clashes with
+    // and let the approver decide.
+    const prompt = leaveClashPrompt(result?.clashes)
+    if (prompt) {
+      setClashFollowUp({ requestId: id, name: result?.data?.profiles?.full_name || null, prompt })
+    } else if (result?.clashes_error) {
+      setNotice(`Approved. ${result.clashes_error}.`)
+    }
+  }
+
+  async function handleUnassignClashes() {
+    if (!clashFollowUp || actingId) return
+    const { requestId, prompt } = clashFollowUp
+    setActingId(requestId)
+    setError(null)
+    try {
+      const res = await fetch(`/api/schedule/time-off/${requestId}/unassign-clashes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ assignment_ids: prompt.assignmentIds }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data.success) {
+        setError({ title: 'Could not unassign', message: data.error || 'The shifts were not changed.', retry: false })
+        return
+      }
+      // REPLACENITS.1 — a double submit answers success with the rows the first
+      // request already took off (already_removed). The coach is off them either way.
+      const removed = (data.data?.removed?.length || 0) + (data.data?.already_removed?.length || 0)
+      const skipped = data.data?.skipped?.length || 0
+      setClashFollowUp(null)
+      setNotice(
+        `Unassigned from ${removed} shift${removed === 1 ? '' : 's'}.` +
+        (skipped ? ` ${skipped} at a studio you don't manage ${skipped === 1 ? 'was' : 'were'} left on the roster.` : ''),
+      )
+      await fetchData()
+    } catch {
+      setError({ title: 'Could not unassign', message: 'Network error, please try again', retry: false })
+    } finally {
+      setActingId(null)
+    }
   }
 
   async function handleReject(id, note) {
@@ -170,6 +246,56 @@ export default function TimeOffManager({ user }) {
   async function handleCancel(id) {
     if (!confirm('Cancel this time-off request?')) return
     await reviewRequest(id, { status: 'cancelled' }, 'Could not cancel')
+  }
+
+  // LEAVECANCEL.1 — ask (PUT), decide (POST) or withdraw (DELETE). Returns the
+  // failure message for the dialog to show in place, or null when it worked.
+  // The notice is worded from the server's `cancellation`, never assumed: a
+  // master's PUT cancels outright, a manager's only asks. The words are
+  // LEAVE_CANCEL_NOTICES, shared with the dashboard's My requests card.
+  async function sendCancelAction(id, method, path, body) {
+    if (actingId) return 'Another action is still in progress.'
+    setActingId(id)
+    setError(null)
+    setNotice(null)
+    try {
+      const res = await fetch(path, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data.success) return data.error || 'The request was not updated.'
+      setNotice(LEAVE_CANCEL_NOTICES[data.cancellation] || 'Leave cancelled.')
+      await fetchData()
+      return null
+    } catch {
+      return 'Network error, please try again'
+    } finally {
+      setActingId(null)
+    }
+  }
+
+  async function submitCancelDialog(note) {
+    const { mode, req } = cancelDialog
+    const failed = mode === 'ask'
+      ? await sendCancelAction(req.id, 'PUT', `/api/schedule/time-off/${req.id}`, { status: 'cancelled', cancel_request_note: note || null })
+      : await sendCancelAction(req.id, 'POST', `/api/schedule/time-off/${req.id}/cancel-request`, { decision: mode, note: note || null })
+    if (!failed) setCancelDialog(null)
+    return failed
+  }
+
+  async function handleWithdrawCancel(id) {
+    if (!confirm('Withdraw your cancellation request? Your leave stays approved.')) return
+    const failed = await sendCancelAction(id, 'DELETE', `/api/schedule/time-off/${id}/cancel-request`)
+    if (failed) setError({ title: 'Could not withdraw', message: failed, retry: false })
+  }
+
+  // A master's own approved leave: the PUT cancels it outright, no owner asked.
+  async function handleCancelApproved(id) {
+    if (!confirm('Cancel this approved leave? Any holiday days go back to your allowance.')) return
+    const failed = await sendCancelAction(id, 'PUT', `/api/schedule/time-off/${id}`, { status: 'cancelled' })
+    if (failed) setError({ title: 'Could not cancel', message: failed, retry: false })
   }
 
   return (
@@ -191,29 +317,9 @@ export default function TimeOffManager({ user }) {
         </button>
       </div>
 
-      {/* Allowance Card */}
-      {allowance && (
-        // ROSTER-FIX.6b — four allowance cards side by side put a 2xl number
-        // in a ~85px column on a phone. Two up, four from md.
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-          <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
-            <div className="text-xs text-un1t-subtle uppercase tracking-wider">Total Allowance</div>
-            <div className="text-2xl font-bold mt-1">{allowance.total_days} <span className="text-sm text-un1t-subtle">days</span></div>
-          </div>
-          <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
-            <div className="text-xs text-un1t-subtle uppercase tracking-wider">Used</div>
-            <div className="text-2xl font-bold mt-1 text-red-700">{allowance.used_days} <span className="text-sm text-un1t-subtle">days</span></div>
-          </div>
-          <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
-            <div className="text-xs text-un1t-subtle uppercase tracking-wider">Carried Over</div>
-            <div className="text-2xl font-bold mt-1 text-blue-700">{allowance.carried_over} <span className="text-sm text-un1t-subtle">days</span></div>
-          </div>
-          <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
-            <div className="text-xs text-un1t-subtle uppercase tracking-wider">Remaining</div>
-            <div className="text-2xl font-bold mt-1 text-green-700">{allowance.remaining} <span className="text-sm text-un1t-subtle">days</span></div>
-          </div>
-        </div>
-      )}
+      {/* Allowance — the viewer's own. Coaches see it first; approvers see
+          the team's requests first and their own allowance below (LEAVE.5). */}
+      {!isManager && <AllowanceSummary allowance={allowance} />}
 
       {/* Tabs & Filters */}
       <div className="flex items-center justify-between mb-4">
@@ -225,7 +331,7 @@ export default function TimeOffManager({ user }) {
           >
             My Requests
           </button>
-          {isManager && (
+          {showTeam && (
             <button
               type="button"
               onClick={() => setTab('team')}
@@ -260,6 +366,45 @@ export default function TimeOffManager({ user }) {
         />
       )}
 
+      {notice && (
+        <div role="status" className="mb-4 flex items-start gap-3 p-3 rounded-lg border border-green-500/40 bg-green-500/10 text-sm text-green-700">
+          <div className="flex-1">{notice}</div>
+          <button type="button" onClick={() => setNotice(null)} className="text-xs underline">Dismiss</button>
+        </div>
+      )}
+
+      {clashFollowUp && (
+        <div role="alert" className="mb-4 p-3 rounded-lg border border-amber-500/40 bg-amber-500/10 text-sm">
+          <div className="flex items-start gap-3">
+            <AlertTriangle size={16} className="text-amber-700 mt-0.5 shrink-0" aria-hidden="true" />
+            <div className="flex-1">
+              <div className="font-medium text-amber-700">
+                {clashFollowUp.name ? `${clashFollowUp.name}: ` : ''}{clashFollowUp.prompt.title}
+              </div>
+              <div className="text-xs text-amber-700 mt-1 whitespace-pre-line">{clashFollowUp.prompt.message}</div>
+              <div className="flex gap-2 mt-2">
+                <button
+                  type="button"
+                  onClick={handleUnassignClashes}
+                  disabled={!!actingId}
+                  className="text-xs font-medium px-3 py-1.5 rounded-lg bg-amber-500/20 text-amber-700 hover:bg-amber-500/30 disabled:opacity-50"
+                >
+                  Unassign them
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setClashFollowUp(null)}
+                  disabled={!!actingId}
+                  className="text-xs px-3 py-1.5 rounded-lg border border-un1t-border text-un1t-subtle hover:text-un1t-text disabled:opacity-50"
+                >
+                  Keep them
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Requests List */}
       {loading ? (
         <div className="text-center py-16 text-un1t-subtle">Loading requests...</div>
@@ -274,12 +419,20 @@ export default function TimeOffManager({ user }) {
             const typeConf = TYPE_CONFIG[req.type] || FALLBACK_TYPE
             const TypeIcon = typeConf.icon
             const isOwn = req.profile_id === user.id
+            // LEAVE.2 — an expired request (pending past its end date) can be
+            // declined or withdrawn, not approved.
+            const displayStatus = req.effective_status || req.status
             const canApprove = isManager && req.status === 'pending' && !isOwn
+            const canApproveThis = canApprove && !req.expired
+            const clashLabel = leaveClashLabel(req.clash_count)
             const canCancel = isOwn && req.status === 'pending'
             // ROSTER-FIX.6b — the approve/reject/cancel controls are icon-only
             // and repeat down the list, so "Approve" alone would read as the
             // same control fifteen times. Name the row they act on.
             const requestLabel = `${typeConf.label} request${req.profiles?.full_name ? ` from ${req.profiles.full_name}` : ''}`
+            // LEAVECANCEL.1 — where a request to cancel this APPROVED leave
+            // stands. The row's status chip still reads "approved": it is.
+            const cancelAsk = req.cancel_request_state
 
             const isFocused = req.id === focusId
             return (
@@ -307,9 +460,14 @@ export default function TimeOffManager({ user }) {
                       <span className="font-semibold text-sm">{req.profiles?.full_name}</span>
                     )}
                     <span className="text-sm font-medium" style={{ color: typeConf.color }}>{typeConf.label}</span>
-                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium uppercase ${STATUS_STYLES[req.status]}`}>
-                      {req.status}
+                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium uppercase ${STATUS_STYLES[displayStatus] || STATUS_STYLES[req.status]}`}>
+                      {displayStatus}
                     </span>
+                    {cancelAsk === 'open' && (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full font-medium uppercase bg-amber-500/10 text-amber-700">
+                        Cancellation requested
+                      </span>
+                    )}
                   </div>
                   <div className="text-xs text-un1t-subtle mt-1 flex items-center gap-3">
                     <span>
@@ -319,9 +477,33 @@ export default function TimeOffManager({ user }) {
                     <span>{req.total_days} day{req.total_days !== 1 ? 's' : ''}</span>
                     {req.reason && <span className="text-un1t-muted truncate max-w-[200px]" title={req.reason}>{req.reason}</span>}
                   </div>
+                  {clashLabel && (
+                    <div className="text-xs text-amber-700 mt-1 flex items-center gap-1">
+                      <AlertTriangle size={12} aria-hidden="true" /> {clashLabel}
+                    </div>
+                  )}
                   {req.review_note && (
                     <div className="text-xs text-un1t-muted mt-1 italic">
                       Note: {req.review_note} {req.reviewer && `— ${req.reviewer.full_name}`}
+                    </div>
+                  )}
+                  {cancelAsk === 'open' && (
+                    <div className="text-xs text-amber-700 mt-1">
+                      {isOwn
+                        ? 'Waiting for an owner to decide. Your leave is still approved.'
+                        : 'Asked to cancel this leave. It is still approved until an owner decides.'}
+                      {req.cancel_request_note ? ` Reason: "${req.cancel_request_note}"` : ''}
+                    </div>
+                  )}
+                  {cancelledAtRequestText(req, { own: isOwn }) && (
+                    <div className="text-xs text-un1t-subtle mt-1">{cancelledAtRequestText(req, { own: isOwn })}</div>
+                  )}
+                  {cancelAsk === 'rejected' && isOwn && (
+                    <div className="text-xs text-un1t-subtle mt-1">
+                      Cancellation declined. Your leave stays approved.
+                      {req.cancel_decision_note ? ` Note: "${req.cancel_decision_note}"` : ''}
+                      {/* LEAVECANCEL.1 — the server hides the ask for 24h after a decline and says when it lifts. */}
+                      {req.cancel_retry_after_label ? ` You can ask again after ${req.cancel_retry_after_label}.` : ''}
                     </div>
                   )}
                 </div>
@@ -330,7 +512,7 @@ export default function TimeOffManager({ user }) {
                 <div className="flex items-center gap-2 shrink-0">
                   {canApprove && (
                     <>
-                      <button
+                      {canApproveThis && <button
                         type="button"
                         onClick={() => handleApprove(req.id)}
                         disabled={!!actingId}
@@ -339,7 +521,7 @@ export default function TimeOffManager({ user }) {
                         title="Approve"
                       >
                         <Check size={16} aria-hidden="true" />
-                      </button>
+                      </button>}
                       <button
                         type="button"
                         onClick={() => handleReject(req.id)}
@@ -351,6 +533,50 @@ export default function TimeOffManager({ user }) {
                         <X size={16} aria-hidden="true" />
                       </button>
                     </>
+                  )}
+                  {req.can_decide_cancel && (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        disabled={!!actingId}
+                        onClick={() => setCancelDialog({ mode: 'approve', req })}
+                        aria-label={`Approve cancellation of ${requestLabel}`}
+                      >
+                        Approve cancellation
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={!!actingId}
+                        onClick={() => setCancelDialog({ mode: 'reject', req })}
+                        aria-label={`Decline cancellation of ${requestLabel}`}
+                      >
+                        Decline
+                      </Button>
+                    </>
+                  )}
+                  {req.can_withdraw_cancel && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={!!actingId}
+                      onClick={() => handleWithdrawCancel(req.id)}
+                      aria-label={`Withdraw cancellation request for ${requestLabel}`}
+                    >
+                      Withdraw
+                    </Button>
+                  )}
+                  {req.can_request_cancel && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={!!actingId}
+                      onClick={() => (req.cancel_needs_owner ? setCancelDialog({ mode: 'ask', req }) : handleCancelApproved(req.id))}
+                      aria-label={`Cancel approved ${requestLabel}`}
+                    >
+                      Cancel leave
+                    </Button>
                   )}
                   {canCancel && (
                     <button
@@ -370,32 +596,220 @@ export default function TimeOffManager({ user }) {
         </div>
       )}
 
+      {isManager && allowance && !allowance.not_applicable && (
+        <section className="mt-8" aria-labelledby="own-allowance-heading">
+          <h3 id="own-allowance-heading" className="text-xs uppercase tracking-wider text-un1t-subtle mb-2">Your allowance</h3>
+          <AllowanceSummary allowance={allowance} compact />
+        </section>
+      )}
+
+      {cancelDialog && (
+        <LeaveCancelDialog
+          mode={cancelDialog.mode}
+          req={cancelDialog.req}
+          onClose={() => setCancelDialog(null)}
+          onSubmit={submitCancelDialog}
+        />
+      )}
+
       {/* Request Form Modal */}
       {showForm && (
         <TimeOffFormModal
           user={user}
+          canRecordForOthers={isManager}
           allowance={allowance}
           onClose={() => setShowForm(false)}
-          onSubmit={() => { setShowForm(false); fetchData() }}
+          onSubmit={(result) => {
+            setShowForm(false)
+            // LEAVE.5 — recorded leave is approved on the spot, so it can
+            // clash with the roster exactly like an approval (LEAVE.1).
+            const prompt = leaveClashPrompt(result?.clashes)
+            if (prompt && result?.data?.id) {
+              setClashFollowUp({ requestId: result.data.id, name: result.data.profiles?.full_name || null, prompt })
+            }
+            fetchData()
+          }}
         />
       )}
     </div>
   )
 }
 
-function TimeOffFormModal({ user, allowance, onClose, onSubmit }) {
-  const [type, setType] = useState('holiday')
+// LEAVECANCEL.1 — one dialog, three jobs: the requester ASKS an owner to
+// cancel their approved leave; an owner APPROVES or DECLINES that. Each takes
+// an optional note. A refusal is shown here, in the server's own words, and
+// the dialog stays open.
+const CANCEL_DIALOG = {
+  ask: {
+    title: 'Cancel approved leave',
+    body: () => 'This leave is approved, so cancelling it needs an owner\'s approval. It stays approved until they decide, and you can withdraw the request at any time.',
+    noteLabel: () => 'Reason (optional)',
+    submit: 'Ask an owner',
+    keep: 'Keep my leave',
+  },
+  approve: {
+    title: 'Approve cancellation',
+    body: (name) => `${name}'s leave will be cancelled. Any holiday days go back to their allowance, and they can be rostered on those dates again.`,
+    noteLabel: (name) => `Note to ${name} (optional)`,
+    submit: 'Approve cancellation',
+    keep: 'Not now',
+  },
+  reject: {
+    title: 'Decline cancellation',
+    body: (name) => `${name}'s leave stays approved and they will be told.`,
+    noteLabel: (name) => `Note to ${name} (optional)`,
+    submit: 'Decline cancellation',
+    keep: 'Not now',
+  },
+}
+
+function LeaveCancelDialog({ mode, req, onClose, onSubmit }) {
+  const copy = CANCEL_DIALOG[mode]
+  const name = req.profiles?.full_name || 'This person'
+  const [note, setNote] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState(null)
+
+  async function handleSubmit(e) {
+    e.preventDefault()
+    setSaving(true)
+    setError(null)
+    const failed = await onSubmit(note.trim())
+    // On success the parent has already unmounted this dialog.
+    if (failed) { setError(failed); setSaving(false) }
+  }
+
+  return (
+    <Modal open onClose={onClose} title={copy.title} dismissOnBackdrop={!note.trim()}>
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <p className="text-sm text-un1t-text">{copy.body(name)}</p>
+        <p className="text-xs text-un1t-subtle">
+          {(TYPE_CONFIG[req.type] || FALLBACK_TYPE).label} · {req.start_date}{req.start_date !== req.end_date ? ` to ${req.end_date}` : ''} · {req.total_days} day{Number(req.total_days) === 1 ? '' : 's'}
+        </p>
+        {error && (
+          <div role="alert" className="bg-red-500/10 border border-red-500/30 text-red-700 text-sm rounded-lg p-3">
+            {error}
+          </div>
+        )}
+        <div>
+          <label htmlFor="leave-cancel-note" className="block text-xs text-un1t-subtle mb-1">{copy.noteLabel(name)}</label>
+          <textarea
+            id="leave-cancel-note"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            rows={2}
+            maxLength={2000}
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text resize-none"
+          />
+        </div>
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="ghost" onClick={onClose} disabled={saving}>{copy.keep}</Button>
+          <Button type="submit" variant={mode === 'reject' ? 'secondary' : 'primary'} loading={saving}>{copy.submit}</Button>
+        </div>
+      </form>
+    </Modal>
+  )
+}
+
+// The viewer's holiday allowance. `compact` is the approver's secondary
+// section. A contractor has none (LEAVE.3), so nothing renders.
+function AllowanceSummary({ allowance, compact = false }) {
+  if (!allowance || allowance.not_applicable) return null
+  const cards = [
+    { label: 'Total Allowance', value: allowance.total_days, tone: '' },
+    { label: 'Used', value: allowance.used_days, tone: 'text-red-700' },
+    { label: 'Carried Over', value: allowance.carried_over, tone: 'text-blue-700' },
+    { label: 'Remaining', value: allowance.remaining, tone: 'text-green-700' },
+  ]
+  return (
+    // ROSTER-FIX.6b — four allowance cards side by side put a 2xl number
+    // in a ~85px column on a phone. Two up, four from md.
+    <div className={`grid grid-cols-2 md:grid-cols-4 ${compact ? 'gap-2' : 'gap-3 mb-6'}`}>
+      {cards.map((c) => (
+        <div key={c.label} className={`bg-un1t-surface border border-un1t-border rounded-lg ${compact ? 'p-2.5' : 'p-4'}`}>
+          <div className="text-xs text-un1t-subtle uppercase tracking-wider">{c.label}</div>
+          <div className={`${compact ? 'text-base' : 'text-2xl'} font-bold mt-1 ${c.tone}`}>
+            {c.value} <span className="text-sm text-un1t-subtle font-normal">days</span>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function TimeOffFormModal({ user, canRecordForOthers = false, allowance, onClose, onSubmit }) {
+  // LEAVE.5 — an approver can record leave for a colleague (who phoned in
+  // sick, say). '' = the viewer's own request.
+  const [subjectId, setSubjectId] = useState('')
+  const [staff, setStaff] = useState([])
+  const [type, setType] = useState(() => defaultTimeOffTypeFor(user.employment_type))
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
   const [reason, setReason] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
 
-  const dirty = !!(startDate || endDate || reason.trim())
+  const locationId = user.activeLocation?.id
+  useEffect(() => {
+    if (!canRecordForOthers || !locationId) return
+    let live = true
+    readJson(`/api/staff?fields=picker&location_id=${locationId}`)
+      .then((res) => {
+        if (!live) return
+        const rows = Array.isArray(res.data) ? res.data : []
+        setStaff(rows.filter((p) => p && p.id !== user.id && p.active !== false))
+      })
+      .catch(() => { /* the picker is optional; the own-request form still works */ })
+    return () => { live = false }
+  }, [canRecordForOthers, locationId, user.id])
+
+  const subject = subjectId ? staff.find((p) => p.id === subjectId) || null : null
+  const onBehalf = !!subject
+  // LEAVE.3 — the menu follows the PERSON the leave is for: a contractor is
+  // only offered Unavailable. The server enforces the same rule.
+  const employmentType = onBehalf ? subject.employment_type : user.employment_type
+  const typeOptions = timeOffTypesFor(employmentType)
+  const effectiveType = typeOptions.some((t) => t.value === type) ? type : defaultTimeOffTypeFor(employmentType)
+
+  const dirty = !!(startDate || endDate || reason.trim() || subjectId)
 
   const totalDays = startDate && endDate
     ? Math.max(1, Math.round((new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24)) + 1)
     : 0
+
+  // LEAVEDAYS.1 — `totalDays` above is a CALENDAR count. The server charges a
+  // holiday in working days (no weekends, bank holidays or studio closures —
+  // HOLIDAYLEAVE.1), so the line under the dates shows the server's number,
+  // from the preview the phone already uses (LEAVEPHONE.1), and judges
+  // "exceeds balance" on that alone. Asked for the studio this form POSTs to,
+  // and only for a holiday: every other type IS charged in calendar days.
+  // The days depend on the studio and the dates, not the person, so this is
+  // right for an on-behalf request too; the preview's `clashes` are the
+  // CALLER's own shifts and are never read here.
+  const previewRequest = leavePreviewRequest({ type: effectiveType, startDate, endDate, locationId })
+  const previewKey = previewRequest?.key || null
+  const previewUrl = previewRequest?.url || null
+  // { key, known, days } — only ever shown for the key it was asked with.
+  const [previewResult, setPreviewResult] = useState(null)
+  useEffect(() => {
+    if (!previewUrl) return
+    // Date inputs fire on every change: wait for a pause, and let only the
+    // newest request speak. The abort covers the network; the flag covers a
+    // body that arrives anyway.
+    const controller = new AbortController()
+    const timer = setTimeout(() => {
+      readJson(previewUrl, { signal: controller.signal })
+        .then((res) => leavePreviewFrom(res), () => leavePreviewFrom(null))
+        .then((next) => {
+          if (!controller.signal.aborted) setPreviewResult({ key: previewKey, ...next })
+        })
+    }, LEAVE_PREVIEW_DEBOUNCE_MS)
+    return () => { clearTimeout(timer); controller.abort() }
+  }, [previewKey, previewUrl])
+  const daysView = leaveDaysView({
+    calendarDays: totalDays, preview: leavePreviewState(previewRequest, previewResult),
+    type: effectiveType, onBehalf, allowance, startDate, endDate,
+  })
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -409,11 +823,12 @@ function TimeOffFormModal({ user, allowance, onClose, onSubmit }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          type,
+          type: effectiveType,
           start_date: startDate,
           end_date: endDate,
           reason: reason || null,
-          location_id: user.activeLocation?.id,
+          location_id: locationId,
+          ...(onBehalf ? { profile_id: subject.id } : {}),
         }),
       })
       const data = await res.json().catch(() => ({}))
@@ -421,7 +836,7 @@ function TimeOffFormModal({ user, allowance, onClose, onSubmit }) {
         setError(data.error || 'Failed to submit request')
         return
       }
-      onSubmit()
+      onSubmit(data)
     } catch {
       setError('Network error, please try again')
     } finally {
@@ -432,7 +847,7 @@ function TimeOffFormModal({ user, allowance, onClose, onSubmit }) {
   return (
     // ROSTER-FIX.6b — once any field is filled the backdrop stops dismissing:
     // this form is long enough that losing it to a stray click is a real cost.
-    <Modal open onClose={onClose} title="Request Time Off" dismissOnBackdrop={!dirty}>
+    <Modal open onClose={onClose} title={onBehalf ? 'Record Time Off' : 'Request Time Off'} dismissOnBackdrop={!dirty}>
       <div>
         {error && (
           <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-sm rounded-lg p-3 mb-4">
@@ -441,13 +856,30 @@ function TimeOffFormModal({ user, allowance, onClose, onSubmit }) {
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Type selection — driven by the shared catalogue (all five types;
-              managers recording on behalf are not employment-gated). Icon +
-              colour come from TYPE_CONFIG, with a neutral fallback. */}
+          {canRecordForOthers && staff.length > 0 && (
+            <div>
+              <label htmlFor="time-off-subject" className="block text-xs text-un1t-subtle mb-1">For</label>
+              <select
+                id="time-off-subject"
+                value={subjectId}
+                onChange={(e) => setSubjectId(e.target.value)}
+                className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+              >
+                <option value="">Myself</option>
+                {staff.map((p) => (
+                  <option key={p.id} value={p.id}>{p.full_name}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* Type selection — the shared catalogue, gated by the employment
+              type of the person the leave is for (LEAVE.3). Icon + colour come
+              from TYPE_CONFIG, with a neutral fallback. */}
           <div>
             <label className="block text-xs text-un1t-subtle mb-2">Type</label>
             <div className="grid grid-cols-3 gap-2">
-              {TIME_OFF_TYPES.map(({ value, label }) => {
+              {typeOptions.map(({ value, label }) => {
                 const conf = TYPE_CONFIG[value] || FALLBACK_TYPE
                 const Icon = conf.icon
                 return (
@@ -455,8 +887,9 @@ function TimeOffFormModal({ user, allowance, onClose, onSubmit }) {
                     key={value}
                     type="button"
                     onClick={() => setType(value)}
+                    aria-pressed={effectiveType === value}
                     className={`flex flex-col items-center gap-1.5 p-3 rounded-lg border text-xs transition-colors ${
-                      type === value
+                      effectiveType === value
                         ? 'border-un1t-text/40 bg-un1t-border/30'
                         : 'border-un1t-border hover:border-white/20'
                     }`}
@@ -481,7 +914,7 @@ function TimeOffFormModal({ user, allowance, onClose, onSubmit }) {
                   setStartDate(e.target.value)
                   if (!endDate || e.target.value > endDate) setEndDate(e.target.value)
                 }}
-                min={dublinTodayStr()}
+                min={onBehalf ? undefined : dublinTodayStr()}
                 className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
               />
             </div>
@@ -492,28 +925,40 @@ function TimeOffFormModal({ user, allowance, onClose, onSubmit }) {
                 required
                 value={endDate}
                 onChange={e => setEndDate(e.target.value)}
-                min={startDate || dublinTodayStr()}
+                min={startDate || (onBehalf ? undefined : dublinTodayStr())}
                 className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
               />
             </div>
           </div>
 
-          {totalDays > 0 && (
-            <div className="text-sm text-un1t-subtle">
-              {totalDays} day{totalDays !== 1 ? 's' : ''} requested
-              {type === 'holiday' && allowance && (
-                <span className="ml-2">
-                  · {allowance.remaining} remaining
-                  {totalDays > allowance.remaining && (
-                    <span className="text-red-700 ml-1">(exceeds balance)</span>
-                  )}
-                </span>
-              )}
-            </div>
-          )}
-
           {/* Reason */}
           <div>
+            {/* LEAVEDAYS.1 — the days line is the form's only warning before
+                submit, so it is a live region, and one that is ALWAYS mounted:
+                a region that arrives together with its content is not
+                announced. It sits inside this block rather than as its own
+                child of the form because the form is `space-y-4`, which would
+                give an empty region a 1rem gap of its own; the line carries
+                that gap itself (`mb-4`). "Counting days..." is aria-hidden so
+                each settled line is announced once, whole (aria-atomic), and
+                the wait before it is not. */}
+            <div aria-live="polite" aria-atomic="true">
+              {daysView && (
+                <div className="text-sm text-un1t-subtle mb-4" aria-hidden={daysView.transient ? 'true' : undefined}>
+                  {daysView.text}
+                  {daysView.balance && (
+                    <span className="ml-2">
+                      · {daysView.balance}
+                      {daysView.exceeds && (
+                        <span className="text-red-700 ml-1">(exceeds balance)</span>
+                      )}
+                    </span>
+                  )}
+                  {daysView.hint && <div className="text-xs text-un1t-subtle mt-1">{daysView.hint}</div>}
+                  {daysView.note && <div className="text-xs text-un1t-subtle mt-1">{daysView.note}</div>}
+                </div>
+              )}
+            </div>
             <label className="block text-xs text-un1t-subtle mb-1">Reason (optional)</label>
             <textarea
               value={reason}
@@ -529,10 +974,12 @@ function TimeOffFormModal({ user, allowance, onClose, onSubmit }) {
             disabled={!startDate || !endDate || saving}
             className="w-full bg-un1t-text text-un1t-bg font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
           >
-            {saving ? 'Submitting...' : 'Submit Request'}
+            {saving ? 'Submitting...' : (onBehalf ? 'Record Time Off' : 'Submit Request')}
           </button>
           <p className="text-xs text-un1t-muted text-center">
-            Your request will be reviewed by a manager
+            {onBehalf
+              ? `Recorded as approved for ${subject.full_name}. They will be notified.`
+              : 'Your request will be reviewed by a manager'}
           </p>
         </form>
       </div>

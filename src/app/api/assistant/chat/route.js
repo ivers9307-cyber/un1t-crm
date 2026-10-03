@@ -3,14 +3,20 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { anthropicMessages } from '@/lib/anthropic'
 import { recordUsage } from '@/lib/usage'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { dublinTodayStr, addDaysISO } from '@/lib/dublin-time'
 import { fetchScheduledShiftRows } from '@/lib/report-generator'
+import { fetchApiShiftRows } from '@/lib/roster-read'
+import { effectiveShiftStart, effectiveShiftEnd } from '@shared/roster-month'
+import { RATE_REPORT_VIEWER_ROLES } from '@/lib/report-access'
+import { shiftHours } from '@/lib/payroll'
 import { upsertShiftAssignment } from '@/lib/roster-write'
 import { SYSTEM_PROMPT, TOOLS } from '@/lib/assistant-prompt'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
-import { MANAGER_ROLES, ADMIN_ROLES } from '@/lib/schemas'
+import { MANAGER_ROLES, ADMIN_ROLES, isRealCalendarDate } from '@/lib/schemas'
+import { reportPeriodError } from '@/lib/report-period'
+import { parseAllowanceYear } from '@/lib/allowance-year'
 import {
   splitSSEEvents,
   initTurn,
@@ -18,6 +24,7 @@ import {
   finalizeTurn,
   encodeClientEvent,
 } from '@/lib/assistant-stream'
+import { normaliseChatTurns } from '@/lib/assistant-turns'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -117,16 +124,23 @@ export async function executeTool(toolName, input, context) {
       // Scope to the active location — an unscoped search would match
       // contacts in every tenant. No location → no unscoped read.
       if (!locationId) return { contacts: [], count: 0 }
-      const { data } = await db.from('contacts')
+      // A failed read is an error, never "no contact by that name" (which
+      // the model would answer by offering to create one).
+      const { data, error } = await db.from('contacts')
         .select('id, name, email, phone, pipeline_stage_slug, lead_source')
         .eq('location_id', locationId)
         .or(`name.ilike.%${input.query}%,email.ilike.%${input.query}%`)
         .limit(10)
+      if (error) return { error: `Failed to load contacts: ${error.message}` }
       return { contacts: data || [], count: (data || []).length }
     }
 
     case 'create_shift': {
       if (!locationId) return { error: 'No active location — switch to a location before creating a shift.' }
+      // RANGEVALID.1 — the model writes this date. One the calendar does not
+      // have used to run three reads and then reach Postgres, whose raw text
+      // came back; say what is wrong, before any read, so the model can ask again.
+      if (!isRealCalendarDate(input.shift_date)) return { error: 'shift_date must be a real date, YYYY-MM-DD.' }
       // RETIRE-SHIFTS-MIRROR.4 — writes the Roster v2 model (find-or-create
       // block + upsert assignment) instead of the legacy shifts table.
       // The helper validates template + profile against the location
@@ -177,25 +191,59 @@ export async function executeTool(toolName, input, context) {
     }
 
     case 'get_shifts_for_week': {
-      // No location → no unscoped read.
-      if (!locationId) return { shifts: [] }
-      const startDate = input.start_date
-      const endDate = new Date(new Date(startDate + 'T00:00:00').getTime() + 6 * 86400000).toISOString().split('T')[0]
-      // RETIRE-SHIFTS-MIRROR.3 — reads shift_assignments+shift_blocks now.
-      // ROSTER-FIX.5 — fetchScheduledShiftRows now returns { rows, error }; a
-      // failed read must reach the assistant as an error, not as an empty week
-      // it will happily narrate as "nobody is on shift".
-      const { rows: data, error: shiftsError } = await fetchScheduledShiftRows(db, { locationId, periodStart: startDate, periodEnd: endDate })
-      if (shiftsError) return { error: shiftsError }
-      data.sort((a, b) => String(a.shift_date).localeCompare(String(b.shift_date)))
+      // No location → no unscoped read, and an error rather than
+      // { shifts: [] }, which the model read out as "nobody is on shift".
+      if (!locationId) return { error: 'No active location — switch to a location before looking up shifts.' }
+      if (!isRealCalendarDate(input.start_date)) return { error: 'start_date must be a real date, YYYY-MM-DD.' }
+      // SCHEDHYGIENE.1 — pure date arithmetic, snapped to the Monday of the
+      // week the date falls in (the tool promises Monday to Sunday; a model
+      // that passes a Thursday gets that Thursday's week). The end used to be
+      // a local-midnight Date read back through toISOString, so under Irish
+      // summer time it landed on Saturday and Sunday was never read.
+      const weekday = new Date(`${input.start_date}T00:00:00Z`).getUTCDay() // 0 = Sunday
+      const startDate = addDaysISO(input.start_date, -((weekday + 6) % 7))
+      const endDate = addDaysISO(startDate, 6)
+      // SCHEDHYGIENE.1 — the same read, and the same draft rule, as the
+      // coach's own schedule (GET /api/schedule/shifts): a non-manager sees
+      // published rosters only. This tool used to show a coach the draft
+      // week, which no coach screen shows. A failed read reaches the assistant
+      // as an error, never as an empty week it would narrate as "nobody is
+      // on shift" (ROSTER-FIX.5), and so does a truncated one.
+      const { rows, error: shiftsError, capped } = await fetchApiShiftRows(db, {
+        locationIds: [locationId], startDate, endDate, publishedOnly: !MANAGER_ROLES.includes(role),
+      })
+      if (shiftsError) return { error: `Failed to load shifts: ${shiftsError.message || shiftsError}` }
+      if (capped) return { error: 'Too many shifts to read for this week in one go.' }
+      // SCHEDHYGIENE.1 (review) — which days no published roster covers. A
+      // roster's period is whatever was requested, so a week can be half
+      // published: a coach then gets Monday to Wednesday and nothing after,
+      // which must read as "not published yet", never as "nobody working".
+      // Read here rather than through findPublishedRosterIdsByDate, which
+      // answers a failed read with "no roster" and would call every day
+      // unpublished.
+      const { data: published, error: rostersError } = await db.from('rosters')
+        .select('period_start, period_end')
+        .eq('location_id', locationId)
+        .eq('status', 'published')
+        .lte('period_start', endDate)
+        .gte('period_end', startDate)
+      if (rostersError) return { error: `Failed to load rosters: ${rostersError.message}` }
+      const weekDays = Array.from({ length: 7 }, (_, i) => addDaysISO(startDate, i))
+      const unpublishedDays = weekDays.filter(d => !(published || []).some(r => r.period_start <= d && r.period_end >= d))
       return {
-        shifts: (data || []).map(s => ({
+        week_start: startDate,
+        week_end: endDate,
+        unpublished_days: unpublishedDays,
+        shifts: rows.map(s => ({
           date: s.shift_date,
           staff: s.profiles?.full_name,
           shift: s.shift_templates?.name,
-          time: `${s.shift_templates?.start_time?.slice(0,5)}–${s.shift_templates?.end_time?.slice(0,5)}`,
+          // The hours the calendar shows: the coach's override, then the
+          // block, then the template. Was the template's alone.
+          time: `${effectiveShiftStart(s)?.slice(0, 5)}–${effectiveShiftEnd(s)?.slice(0, 5)}`,
           status: s.status,
-        }))
+          published: s.published,
+        })),
       }
     }
 
@@ -239,6 +287,16 @@ export async function executeTool(toolName, input, context) {
     }
 
     case 'get_time_off': {
+      // RANGEVALID.1 — no studio is an error: `.eq('location_id', null)` failed in
+      // Postgres, and the discarded error read as "nobody is off".
+      if (!locationId) return { error: 'No active location — switch to a location before looking up time off.' }
+      // The model supplies the range: real dates, in order, at most a year,
+      // before any read. It went to Postgres as given, so 2026-02-30 failed
+      // there, and a reversed range matched only leave spanning the gap.
+      const periodError = reportPeriodError(input.start_date, input.end_date, {
+        startName: 'start_date', endName: 'end_date', what: 'A time-off lookup',
+      })
+      if (periodError) return { error: periodError }
       let query = db.from('time_off_requests')
         .select('start_date, end_date, type, status, total_days, reason, profile_id, profiles!profile_id(full_name)')
         .eq('location_id', locationId)
@@ -252,7 +310,10 @@ export async function executeTool(toolName, input, context) {
         query = query.eq('profile_id', userId)
       }
 
-      const { data } = await query
+      // RANGEVALID.1 — a failed read is an error, never an empty list the model
+      // would read out as "nobody is off" (ROSTER-FIX.5's rule for this route).
+      const { data, error } = await query
+      if (error) return { error: `Failed to load time off: ${error.message}` }
       return {
         time_off: (data || []).map(t => ({
           staff: t.profiles?.full_name,
@@ -267,6 +328,10 @@ export async function executeTool(toolName, input, context) {
     }
 
     case 'get_holiday_allowance': {
+      // RANGEVALID.1 — the model supplies the year: the allowances route's rule,
+      // before any read ('abc' used to answer the 20-day default for year 'abc').
+      const { year, error: yearError } = parseAllowanceYear(input.year)
+      if (yearError) return { error: yearError }
       // Staff can only check their own allowance
       const profileId = input.profile_id || userId
       if (!MANAGER_ROLES.includes(role) && profileId !== userId) {
@@ -285,24 +350,33 @@ export async function executeTool(toolName, input, context) {
           .maybeSingle()
         if (!link) return { error: 'Staff member not found in your active location.' }
       }
-      const year = input.year || new Date().getFullYear()
       // K8 — `.maybeSingle()`: no allowance row for this person/year is the
       // ordinary case (the defaults below ARE the answer), so 0 rows must not
       // arrive as an error we discard. (profile_id, year) is uniquely indexed,
       // so at most one row is real; the discarded error was hiding only the
       // query-failed case, which now surfaces as an error instead of silently
       // handing back the 20-day default.
-      const { data } = await db.from('staff_allowances')
+      const { data, error: allowanceError } = await db.from('staff_allowances')
         .select('total_days, used_days, carried_over')
         .eq('profile_id', profileId)
         .eq('year', year)
         .maybeSingle()
+      // RANGEVALID.1 — K8 above says a failed read "now surfaces as an error";
+      // it did not (the error was never destructured), so a failed read answered
+      // the 20-day default. It does now.
+      if (allowanceError) return { error: `Failed to load the holiday allowance: ${allowanceError.message}` }
       if (!data) return { total_days: 20, used_days: 0, carried_over: 0, remaining: 20, year }
       return { ...data, remaining: data.total_days + data.carried_over - data.used_days, year }
     }
 
     case 'generate_report': {
       if (!locationId) return { error: 'No active location for this action.' }
+      // RANGEVALID.1 — the model supplies the period; hold it to the Reporting
+      // tab's rule (real dates, in order, at most 366 days), before any read. It
+      // went straight to the shift read: 2026-02-30 came back as Postgres's text,
+      // and a reversed period as a report of zero hours ("nobody worked").
+      const periodError = reportPeriodError(input.period_start, input.period_end)
+      if (periodError) return { error: periodError }
       // We can't easily call /api/schedule/reports internally with the
       // caller's auth context, so generate the report inline here.
       const reportType = input.report_type
@@ -313,25 +387,34 @@ export async function executeTool(toolName, input, context) {
         // RETIRE-SHIFTS-MIRROR.3 — reads shift_assignments+shift_blocks now.
         const { rows: shifts, error: shiftsError } = await fetchScheduledShiftRows(db, { locationId, periodStart, periodEnd })
         if (shiftsError) return { error: shiftsError }
+        // AGENTROSTER.1 — hours come from shiftHours(), which resolves
+        // override → the BLOCK's own time → the template
+        // (shared/roster-month.js, REPORTS.2). This used to do its own
+        // arithmetic straight off the TEMPLATE's times, so every manager-set
+        // partial shift was billed at its template length and the assistant
+        // answered a different number from /schedule's Reporting tab and from
+        // the calendar — 229h against 257h for 1-16 Sep at Stillorgan. Same
+        // fix ROSTER-FIX.5 made in src/lib/report-generator.js; the rows
+        // fetchScheduledShiftRows returns already carry the overrides and the
+        // block times, they were simply not being read.
         const staffHours = {}
         for (const s of (shifts || [])) {
           const name = s.profiles?.full_name || 'Unknown'
           if (!staffHours[name]) staffHours[name] = 0
-          const st = s.shift_templates?.start_time
-          const en = s.shift_templates?.end_time
-          if (st && en) {
-            const [sh, sm] = st.split(':').map(Number)
-            const [eh, em] = en.split(':').map(Number)
-            let hrs = (eh + em / 60) - (sh + sm / 60)
-            if (hrs < 0) hrs += 24
-            staffHours[name] += hrs
-          }
+          staffHours[name] += shiftHours(s)
         }
         const result = Object.entries(staffHours).map(([name, hours]) => ({ name, hours: Math.round(hours * 10) / 10 })).sort((a, b) => b.hours - a.hours)
         return { report: 'Staff Hours Worked', period: `${periodStart} to ${periodEnd}`, staff: result, total_hours: Math.round(result.reduce((s, r) => s + r.hours, 0) * 10) / 10 }
       }
 
       if (reportType === 'staff_cost') {
+        // STAFFCOST.1 — pay rates and staff cost are owner/manager/master only
+        // (src/lib/report-access.js). The tool itself stays open to head
+        // coaches for staff_hours, so the gate is per type, here. `role` is the
+        // caller's role at `locationId` (both come from the session).
+        if (!RATE_REPORT_VIEWER_ROLES.includes(role)) {
+          return { error: 'Permission denied: staff cost reports show pay rates, which only owners and managers can see. Please ask a manager or owner.' }
+        }
         // Rate data only for staff linked to the active location (mirror
         // list_staff) — an unscoped profiles read would expose every
         // tenant's salary data (SAAS-1).
@@ -362,16 +445,11 @@ export async function executeTool(toolName, input, context) {
           const p = rateMap[s.profile_id]
           if (!p) continue
           if (!costs[p.name]) costs[p.name] = { hours: 0, cost: 0, rate: p.rate }
-          const st = s.shift_templates?.start_time
-          const en = s.shift_templates?.end_time
-          if (st && en) {
-            const [sh, sm] = st.split(':').map(Number)
-            const [eh, em] = en.split(':').map(Number)
-            let hrs = (eh + em / 60) - (sh + sm / 60)
-            if (hrs < 0) hrs += 24
-            costs[p.name].hours += hrs
-            costs[p.name].cost += hrs * p.rate
-          }
+          // AGENTROSTER.1 — effective hours, as above. Cost has to move with
+          // hours or the two answers in the same reply disagree.
+          const hrs = shiftHours(s)
+          costs[p.name].hours += hrs
+          costs[p.name].cost += hrs * p.rate
         }
         const result = Object.entries(costs).map(([name, d]) => ({ name, hours: Math.round(d.hours * 10) / 10, cost: `€${(Math.round(d.cost * 100) / 100).toFixed(2)}`, hourly_rate: `€${d.rate.toFixed(2)}` })).sort((a, b) => parseFloat(b.cost.slice(1)) - parseFloat(a.cost.slice(1)))
         const totalCost = Object.values(costs).reduce((s, d) => s + d.cost, 0)
@@ -455,11 +533,21 @@ export async function POST(request) {
   // server-trusted role, not the client-supplied one.
   const allowedTools = TOOLS.filter(tool => checkToolPermission(tool.name, userContext.role))
 
-  // Call Claude API
-  let claudeMessages = messages.map(m => ({
-    role: m.role,
-    content: m.content,
-  }))
+  // STAFFASSISTPREFILL.1 (C108) — the list is client-sent. The API refuses a
+  // request that opens on an assistant turn or ends on one (the "assistant
+  // message prefill" 400), so normalise it before any call: open and end on a
+  // user turn, alternate. A list ending on the assistant has nothing new to
+  // answer; refuse it here rather than re-answer (and maybe re-run a write
+  // tool for) the previous question.
+  const turns = normaliseChatTurns(messages)
+  if (turns.reason) {
+    return NextResponse.json({
+      success: false,
+      code: turns.reason,
+      error: 'Nothing to answer: the conversation must end on your message.',
+    }, { status: 400 })
+  }
+  let claudeMessages = turns.messages
 
   const toolContext = {
     locationId: userContext.locationId,

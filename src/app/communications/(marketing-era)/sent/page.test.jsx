@@ -5,7 +5,7 @@
 // WhatsApp sends at this location", so the one channel most likely to be
 // looked for was the one the page claimed not to have.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 
 vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn() }))
@@ -32,17 +32,21 @@ function emptyChain() {
   return o
 }
 
+// Unmount AFTER each test, so the last test's tree is gone before jsdom is
+// torn down (see tests/rtl-cleanup-after-each.test.js).
+afterEach(cleanup)
+
 beforeEach(() => {
-  cleanup()
   getCurrentUser.mockResolvedValue({ id: 'u1', role: 'owner', activeLocation: { id: 'loc-1' } })
   createServerClient.mockReturnValue({ from: () => emptyChain() })
 })
 
 describe('/communications/sent subtitle (COMMSLAYOUT.1)', () => {
-  it('names all three channels the page actually lists', async () => {
+  // TWILIO-RETIRE.1 — SMS left the list with the channel.
+  it('names the two channels the page actually lists, and not SMS', async () => {
     render(await SendsHistoryPage())
     const sub = screen.getByText(/sends at this location/i).textContent
-    expect(sub).toMatch(/SMS/)
+    expect(sub).not.toMatch(/SMS/)
     expect(sub).toMatch(/WhatsApp/i)
     expect(sub).toMatch(/email/i)
   })

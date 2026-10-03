@@ -30,9 +30,6 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
     location?.organization_id || (organizations[0]?.id ?? '')
   )
 
-  // SETTINGS.1 follow-up — Twilio alpha sender ID moved to its own
-  // tab in <LocationIntegrations>. Not read here anymore.
-
   // Roster v2 phase 4 — monthly contractor labour budget (mig 071).
   // Stored as numeric euros; null = not configured. FTE labour
   // is NOT counted against this — only contractor hours × rate.
@@ -64,7 +61,7 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
   // SETTINGS.1 — Glofox / UniFi / Sensibo / AC are now their own
   // tabs under <LocationIntegrations> below this form. Their state
   // + save logic lives in the per-tab components; LocationForm
-  // covers only the per-location identity + Twilio + budget fields.
+  // covers only the per-location identity + budget fields.
 
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
@@ -102,7 +99,7 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
 
     if (isEditing) {
       // Edits stay browser-side (RLS-checked). SETTINGS.1 —
-      // sensibo/glofox/unifi/twilio slices are owned by the per-tab
+      // sensibo/glofox/unifi slices are owned by the per-tab
       // Integrations save endpoints; untouched columns are left alone.
       const payload = {
         name,
@@ -113,9 +110,9 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
         timezone,
         country,
         active,
-        // mig 079 — org is read-only when editing (cross-org moves are
-        // rare and risky; do them via SQL with intent).
-        organization_id: location.organization_id,
+        // SECFIX.3b — organization_id is NOT sent: the org is read-only here,
+        // and mig 648 grants no client UPDATE on it (locations_upd would
+        // otherwise let an owner re-parent a studio into another org).
         monthly_contractor_budget_eur: contractorBudgetValue,
         invoices_inbound_slug: invoicesSlugValue,
         // email_inbox_reply_to is DELIBERATELY absent — deprecated by mig 485
@@ -123,7 +120,11 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
         // leaves the existing value untouched rather than nulling it.
         updated_at: new Date().toISOString(),
       }
-      const result = await db.from('locations').update(payload).eq('id', location.id).select().single()
+      // SECFIX.3b — name the returned column: mig 648 column-grants SELECT on
+      // locations, and a bare .select() (every column) would fail WHOLE (42501)
+      // after the row had already been updated. .single() still turns "0 rows
+      // updated" (RLS) into an error.
+      const result = await db.from('locations').update(payload).eq('id', location.id).select('id').single()
       if (result.error) {
         setError(result.error.message)
         setSaving(false)
@@ -311,10 +312,6 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
           </div>
         )}
       </div>
-
-      {/* SETTINGS.1 follow-up — SMS (Twilio) alpha sender ID moved
-          into the TwilioIntegrationTab under <LocationIntegrations>
-          so all integration-y per-location config lives in one place. */}
 
       {/* Roster v2 phase 4 — Monthly contractor labour budget (mig 071).
           FTE labour is sunk cost and doesn't count; this ceiling

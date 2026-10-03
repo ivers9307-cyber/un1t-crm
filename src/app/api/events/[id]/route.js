@@ -5,8 +5,8 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { ADMIN_ROLES, MANAGER_ROLES, uuidLike } from '@/lib/schemas'
@@ -70,10 +70,6 @@ export const UpdateSchema = z.object({
   // EVENT-COMMS-LOC (mig 553) — flows through the generic scalar patch; in-org
   // non-anchor validated in PUT.
   sending_location_id: uuidLike.nullable().optional(),
-  // EVENTS-SMS-TOGGLE (mig 552) — per-event opt-in for the registration SMS
-  // confirmation. Flows through the generic scalar patch in PUT (omit = leave
-  // untouched). The email receipt is separate and unaffected.
-  confirmation_sms_enabled: z.boolean().optional(),
   // When provided, replaces the wave set entirely (diff-and-apply).
   // Omitting leaves waves untouched. At least one wave required if set.
   waves: z.array(WaveInputSchema).min(1).max(50).optional(),
@@ -92,7 +88,7 @@ async function loadRace(db, id) {
       confirmation_email_subject, confirmation_email_intro,
       reminder_email_subject, reminder_email_intro,
       confirmation_email_template_id, reminder_email_template_id,
-      confirmation_sms_enabled, sending_location_id,
+      sending_location_id,
       waves:race_waves ( id, start_time, capacity, label, display_order ),
       registrations:race_registrations (
         id, status, race_started_at, race_finished_at, registered_at, wave_id,
@@ -127,7 +123,7 @@ export async function GET(_request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!hasPermission(user, 'races')) {
+  if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
   }
 
@@ -138,6 +134,12 @@ export async function GET(_request, props) {
   }
   const guard = assertLocationAccessOr404(user, data.location_id)
   if (guard && !(await hostEventOrgAccess(db, user, data))) return guard
+  // ROLESWEEP.1b — `races` judged at the event's location on the member path.
+  // The host path (guard set, hostEventOrgAccess passed: ADMIN_ROLES at the
+  // active studio + the active org) acts from the active studio, as before.
+  if (!hasPermissionForLocation(user, guard ? user.activeLocation?.id : data.location_id, 'races')) {
+    return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
+  }
 
   return NextResponse.json({ success: true, data })
 }
@@ -146,7 +148,7 @@ export async function PUT(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!hasPermission(user, 'races')) {
+  if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
   }
 
@@ -165,14 +167,23 @@ export async function PUT(request, props) {
   }
   const guard = assertLocationAccessOr404(user, existing.location_id)
   if (guard && !(await hostEventOrgAccess(db, user, existing))) return guard
+  // ROLESWEEP.1b — `races` judged at the event's location on the member path.
+  // The host path (guard set, hostEventOrgAccess passed: ADMIN_ROLES at the
+  // active studio + the active org) acts from the active studio, as before.
+  if (!hasPermissionForLocation(user, guard ? user.activeLocation?.id : existing.location_id, 'races')) {
+    return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
+  }
 
   // EVENTS-HOST.4 — changing the payee (assign, switch, or clear) routes
   // ticket money, so it's gated to ADMIN_ROLES — matching who can manage the
   // host itself. An UNCHANGED host_id (staff editing other fields of a
   // hosted event) passes untouched; only an actual payee change is gated.
+  // ROLESWEEP.1b — ADMIN_ROLES judged at the event's location on the member
+  // path. The host path (guard set) already required ADMIN_ROLES in
+  // hostEventOrgAccess, so it is not re-judged here.
   if (body.host_id !== undefined
       && (body.host_id || null) !== (existing.host_id || null)
-      && !ADMIN_ROLES.includes(user.role)) {
+      && !guard && !hasRoleAtLocation(user, existing.location_id, ADMIN_ROLES)) {
     return NextResponse.json({ success: false, error: 'Changing the payment host requires manager access.' }, { status: 403 })
   }
 
@@ -335,10 +346,10 @@ export async function DELETE(_request, props) {
   // for historical record.
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!MANAGER_ROLES.includes(user.role)) {
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   }
-  if (!hasPermission(user, 'races')) {
+  if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
   }
 
@@ -351,6 +362,13 @@ export async function DELETE(_request, props) {
   if (!existing) return NextResponse.json({ success: false, error: 'Race not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, existing.location_id)
   if (guard) return guard
+  // ROLESWEEP.1b — judged at the event's location, not the caller's active studio.
+  if (!hasRoleAtLocation(user, existing.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
+  }
+  if (!hasPermissionForLocation(user, existing.location_id, 'races')) {
+    return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
+  }
 
   const { error } = await db
     .from('race_events')

@@ -484,6 +484,31 @@ export const SCENARIOS = [
     },
   },
   {
+    id: 'payment-reminder-i-paid-still-overdue',
+    // MIA-DUNNING.1 — a member replies "I've paid" to the Pay now reminder
+    // while Glofox STILL lists the invoice as overdue. Mia must consult the
+    // run (get_my_payment_reminder) rather than answer from the thread, and
+    // then hand off: a payment can take minutes to show, so she neither
+    // contradicts the member nor tells them it is paid.
+    why: 'A payment-reminder reply goes through get_my_payment_reminder first; still_overdue true after "I paid" is a hand-off, never a verdict (prompt.js, MIA-DUNNING.1).',
+    prompt: { identityPreverified: true },
+    history: [
+      { direction: 'outbound', body: "Hi Julie, Garrett from UN1T here. Your membership payment of €209 didn't go through. You can pay it now with the button below, or update your card on file if you'd prefer. Thanks" },
+      { direction: 'inbound', body: "I've paid this already, why am I getting this?" },
+    ],
+    tools: {
+      get_my_payment_reminder: {
+        has_reminder: true, status: 'active', amount: '€209', currency: 'EUR',
+        pay_link: 'https://pay.glofox.com/payment-collector/v2/#/i/0f187762-acc8-42d2-860c-43cbe1477df0',
+        first_sent_at: '2026-09-12T10:00:00.000Z', exit_reason: null, still_overdue: true,
+      },
+    },
+    expect: {
+      handoff: true,
+      mustCall: ['get_my_payment_reminder'],
+    },
+  },
+  {
     id: 'injury-hands-off',
     why: 'Injury / medical is an explicit handoff trigger — never coach or advise (prompt.js).',
     prompt: { identityPreverified: true },

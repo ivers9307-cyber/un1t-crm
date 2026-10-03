@@ -26,9 +26,11 @@ import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
+import { canUploadWaTemplateMediaAt } from '@/lib/wa-template-access'
 import { uuidLike } from '@/lib/schemas'
 import { validateTemplateMedia, isMintedMediaPath } from '@/lib/template-media'
 import { uploadMediaForTemplate } from '@/lib/whatsapp'
+import { ownNumberOrRefusal } from '@/lib/whatsapp-own-number'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -65,14 +67,20 @@ export async function POST(request) {
   const locationId = body.location_id || user.activeLocation?.id
   const guard = locationId ? assertLocationAccess(user, locationId) : null
   if (guard) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  // C138 (a) — the template routes' rule at this studio (or master / owner
+  // there, the card-set editor's); no studio fails closed (no global/ slot).
+  if (!canUploadWaTemplateMediaAt(user, locationId)) {
+    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  }
 
   // Only paths minted by ./sign are accepted, and only within this
-  // caller's own folder (or 'global') — no pointing at other objects.
+  // studio's folder — no pointing at other objects. (C138 a: a studio is now
+  // required, so the old 'global' folder is never minted or finalised.)
   if (!isMintedMediaPath(body.path)) {
     return NextResponse.json({ success: false, error: 'Invalid media path' }, { status: 400 })
   }
   const folder = body.path.split('/')[0]
-  if (folder !== 'global' && folder !== String(locationId)) {
+  if (folder !== String(locationId)) {
     return NextResponse.json({ success: false, error: 'Invalid media path' }, { status: 400 })
   }
 
@@ -111,13 +119,22 @@ export async function POST(request) {
   const publicUrl = pub?.publicUrl
 
   // Meta resumable upload → header handle for template approval.
+  // WACONFIGFALLBACK.1 — with THIS location's own number (its app id + token).
+  // The call named no location, so it always used the global env number's
+  // app. No number / a failed lookup keeps this route's soft contract: the
+  // storage URL comes back, handle null, and meta_error says why.
   let handle = null
   let metaError = null
-  try {
-    handle = await uploadMediaForTemplate(bytes, body.mime)
-  } catch (e) {
-    metaError = e.message || String(e)
-    console.warn(`[wa-template upload] Meta resumable upload failed: ${metaError}`)
+  const own = await ownNumberOrRefusal(locationId, 'wa-template-upload')
+  if (!own.ok) {
+    metaError = own.error
+  } else {
+    try {
+      handle = await uploadMediaForTemplate(bytes, body.mime, { config: own.config })
+    } catch (e) {
+      metaError = e.message || String(e)
+      console.warn(`[wa-template upload] Meta resumable upload failed: ${metaError}`)
+    }
   }
 
   return NextResponse.json({

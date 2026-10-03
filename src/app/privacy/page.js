@@ -6,7 +6,8 @@
 // loads without auth and shows up cleanly to App Review.
 //
 // Content reflects the actual data flows of the CRM and the Repset iOS
-// app: Supabase auth + Postgres, Postmark for email, Twilio for SMS,
+// app: Supabase auth + Postgres, Postmark for email (SMS via Twilio was
+// retired in TWILIO-RETIRE.1, so Twilio is no longer a sub-processor),
 // Sensibo for AC control, Apple Push Notification Service via Expo,
 // EAS Update for over-the-air JS updates. Don't add anything here that
 // the system doesn't actually do — this is the controller's public
@@ -35,7 +36,7 @@ export default function PrivacyPolicy() {
         <header className="mb-10">
           <h1 className="text-3xl font-bold tracking-tight">Privacy policy</h1>
           <p className="mt-2 text-sm text-gray-500">
-            Last updated 18 August 2026
+            Last updated 29 September 2026
           </p>
         </header>
 
@@ -143,7 +144,6 @@ export default function PrivacyPolicy() {
             <li><strong>Vercel</strong> — hosts the web application. Region: EU.</li>
             <li><strong>Postmark</strong> — transactional and marketing email delivery.</li>
             <li><strong>Meta Platforms</strong> — WhatsApp Cloud API and Instagram messaging; delivers WhatsApp and Instagram conversations with contacts.</li>
-            <li><strong>Twilio</strong> — SMS delivery.</li>
             <li><strong>Glofox</strong> — gym membership and booking platform; member records, bookings, and attendance sync between Glofox and the CRM.</li>
             <li><strong>Revolut Business</strong> — payment processing for deposits and race entries.</li>
             <li><strong>Stripe</strong> — payment processing for event tickets.</li>
@@ -157,7 +157,7 @@ export default function PrivacyPolicy() {
 
           <h2 className="text-xl font-semibold mt-8 mb-3">7. International transfers</h2>
           <p>
-            Most processing happens within the EU. Some sub-processors (Postmark, Meta, Twilio, Stripe, Upstash, Anthropic, Apple, Expo) are based in the United States and may process data there. Where this happens we rely on the European Commission&rsquo;s Standard Contractual Clauses or, where applicable, the EU-US Data Privacy Framework.
+            Most processing happens within the EU. Some sub-processors (Postmark, Meta, Stripe, Upstash, Anthropic, Apple, Expo) are based in the United States and may process data there. Where this happens we rely on the European Commission&rsquo;s Standard Contractual Clauses or, where applicable, the EU-US Data Privacy Framework.
           </p>
 
           <h2 className="text-xl font-semibold mt-8 mb-3">8. How long we keep it</h2>

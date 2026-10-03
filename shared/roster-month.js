@@ -34,10 +34,32 @@ export function upcomingWeeksBounds(anchorIso, weeks = 5) {
   return { monthStartIso: isoOf(start), monthEndIso: isoOf(end) }
 }
 
+// MOBILESCHED.2 — a shift's times resolve override → the BLOCK's own time →
+// the template default. The template is the last resort: a block edited away
+// from its template's hours must never display or total at the template time,
+// which is the one time nobody works. Both row shapes are read: a normalised
+// shift row carries the block's time as `block_start_time` (dashboard-data's
+// fetchDashboardShifts, src/lib/roster-read.js toApiShiftRow), and a raw
+// shift_blocks row carries it as top-level `start_time`.
+// Same resolution as mobile/lib/schedule-team.js effShiftStart/effShiftEnd,
+// which now read these.
+export function blockDefaultStart(shift) {
+  return shift?.block_start_time || shift?.start_time || shift?.shift_templates?.start_time || null
+}
+export function blockDefaultEnd(shift) {
+  return shift?.block_end_time || shift?.end_time || shift?.shift_templates?.end_time || null
+}
+export function effectiveShiftStart(shift) {
+  return shift?.start_time_override || blockDefaultStart(shift)
+}
+export function effectiveShiftEnd(shift) {
+  return shift?.end_time_override || blockDefaultEnd(shift)
+}
+
 // Effective minutes for a shift, honouring overrides; wraps past midnight.
 function durationMins(shift) {
-  const start = shift.start_time_override || shift.shift_templates?.start_time
-  const end = shift.end_time_override || shift.shift_templates?.end_time
+  const start = effectiveShiftStart(shift)
+  const end = effectiveShiftEnd(shift)
   if (!start || !end) return 0
   const [sh, sm] = start.split(':').map(Number)
   const [eh, em] = end.split(':').map(Number)

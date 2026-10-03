@@ -6,6 +6,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 
 const PauseSchema = z.object({ paused: z.boolean() })
 
@@ -13,6 +14,10 @@ export async function POST(request, props) {
   const params = await props.params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  // GATES-2 — /send's rule: `whatsapp` somewhere, then at the broadcast's studio.
+  if (!hasPermissionAtAnyLocation(user, 'whatsapp')) {
+    return NextResponse.json({ success: false, error: 'Forbidden — WhatsApp not enabled' }, { status: 403 })
+  }
 
   const validation = await validateBody(request, PauseSchema)
   if (!validation.ok) return validation.response
@@ -26,6 +31,9 @@ export async function POST(request, props) {
 
   const guard = assertLocationAccessOr404(user, broadcast.location_id)
   if (guard) return guard
+  if (!hasPermissionForLocation(user, broadcast.location_id, 'whatsapp')) {
+    return NextResponse.json({ success: false, error: 'Forbidden — WhatsApp not enabled' }, { status: 403 })
+  }
 
   const { data, error } = await db.from('whatsapp_broadcasts')
     .update({ paused_at: validation.data.paused ? new Date().toISOString() : null })

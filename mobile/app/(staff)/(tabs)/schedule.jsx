@@ -33,9 +33,20 @@ import {
 } from '../../../lib/schedule-refresh'
 import { canMobile } from '../../../lib/permissions'
 import { useIsTablet } from '../../../lib/use-is-tablet'
-import { effShiftStart, effShiftEnd, teamRosterForDay, initials } from '../../../lib/schedule-team'
-import { canAdjustShiftTimes, canCancelTimeOff, MANAGER_ROLES } from '../../../lib/schedule-manage'
+import { effShiftStart, effShiftEnd, blockStart as blockDefaultStart, blockEnd as blockDefaultEnd, teamRosterForDay, initials } from '../../../lib/schedule-team'
+import { canAdjustShiftTimes, canCancelTimeOff, MANAGER_ROLES, scheduleViewFromParam } from '../../../lib/schedule-manage'
+import { myLeaveCancelOutcome } from '../../../lib/my-leave'
+import { hasOpenSwap, swapShiftWhen, swapPostedCopy, SWAP_PENDING_LABEL, SWAP_ALREADY_OPEN_MESSAGE } from '../../../lib/swap-cards'
+import { createInFlightGuard } from '../../../lib/swap-flow'
+import LeaveFloatingButtons from '../../../components/LeaveFloatingButtons'
 import ManageMode from '../../../components/schedule/ManageMode'
+import CalendarSubscribeRow from '../../../components/schedule/CalendarSubscribeRow'
+import MyAvailabilityRow from '../../../components/schedule/MyAvailabilityRow'
+// LEAVE.2 — one label per leave type (unpaid/other used to read "Time off").
+import { timeOffLeaveLabel } from 'shared/time-off'
+import { briefingOf } from 'shared/shift-briefing'
+import ArrivalLine from '../../../components/schedule/ArrivalLine'
+import { arrivalHelpFor, ARRIVAL_WORDS } from '../../../lib/shift-arrival'
 
 // ROSTER-FIX.3 — MANAGER_ROLES comes from lib/schedule-manage, the module that
 // already owns canAdjustShiftTimes. It was duplicated here (a HOTFIX for
@@ -80,7 +91,7 @@ function WeekStrip({ anchor, selected, onSelect, byDate }) {
 // effShiftStart / effShiftEnd now live in ../../lib/schedule-team (imported
 // above) — single definition shared with the Team sort helper.
 
-function ShiftCard({ shift, onPress, onLongPress, teamMode, selfId }) {
+function ShiftCard({ shift, onPress, onLongPress, teamMode, selfId, nowMs, arrivalStale }) {
   const tpl = shift.shift_templates
   const effStart = effShiftStart(shift)
   const effEnd = effShiftEnd(shift)
@@ -109,6 +120,8 @@ function ShiftCard({ shift, onPress, onLongPress, teamMode, selfId }) {
       <Text className="text-[11px] text-un1t-subtle mt-0.5">
         {timeRange(effStart, effEnd)}
       </Text>
+      {/* ARRIVALSHOW.1 — own shifts only (Me grid); the Team grid never shows arrivals. */}
+      {!teamMode && <ArrivalLine shift={shift} nowMs={nowMs} stale={arrivalStale} compact />}
       <View className="flex-row gap-1 mt-1.5">
         {adjusted && (
           <View className="px-1.5 py-0.5 rounded-full bg-amber-400">
@@ -125,6 +138,11 @@ function ShiftCard({ shift, onPress, onLongPress, teamMode, selfId }) {
             <Text className="text-[9px] uppercase text-blue-700 font-medium">Swap</Text>
           </View>
         )}
+        {hasOpenSwap(shift) && (
+          <View className="px-1.5 py-0.5 rounded-full bg-amber-500/20">
+            <Text className="text-[9px] uppercase text-amber-700 font-medium">{SWAP_PENDING_LABEL}</Text>
+          </View>
+        )}
       </View>
     </Pressable>
   )
@@ -139,7 +157,7 @@ function ShiftCard({ shift, onPress, onLongPress, teamMode, selfId }) {
 // Per-column shift cards reuse the same onPress / onLongPress
 // handlers as the phone's ShiftRow, so adjust + swap flows work
 // identically.
-function WeekGridView({ anchor, shiftsByDate, timeOff, todayIso, canAdjust, openAdjust, requestSwap, teamMode, selfId }) {
+function WeekGridView({ anchor, shiftsByDate, timeOff, todayIso, canAdjust, openAdjust, requestSwap, teamMode, selfId, nowMs, arrivalStale }) {
   const days = daysOfWeek(anchor)
   return (
     <View className="flex-row gap-2">
@@ -164,10 +182,10 @@ function WeekGridView({ anchor, shiftsByDate, timeOff, todayIso, canAdjust, open
             {dayLeave.map(t => (
               <View key={t.id} className="bg-amber-500/10 border border-amber-500/40 rounded-xl p-2 mb-2">
                 <Text className="text-[11px] font-semibold text-amber-700" numberOfLines={1}>
-                  {t.type === 'holiday' ? 'Holiday' : t.type === 'sick' ? 'Sick' : 'Time off'}
+                  {timeOffLeaveLabel(t.type)}
                 </Text>
                 {t.status === 'pending' && (
-                  <Text className="text-[10px] text-amber-700/80 mt-0.5">Pending</Text>
+                  <Text className="text-[10px] text-amber-700/80 mt-0.5">{t.expired ? 'Expired' : 'Pending'}</Text>
                 )}
               </View>
             ))}
@@ -180,6 +198,8 @@ function WeekGridView({ anchor, shiftsByDate, timeOff, todayIso, canAdjust, open
                 shift={s}
                 teamMode={teamMode}
                 selfId={selfId}
+                nowMs={nowMs}
+                arrivalStale={arrivalStale}
                 onPress={teamMode ? undefined : (canAdjust(s) ? () => openAdjust(s) : undefined)}
                 onLongPress={teamMode ? undefined : () => requestSwap(s)}
               />
@@ -235,7 +255,7 @@ function TeamShiftRow({ shift }) {
   )
 }
 
-function ShiftRow({ shift, onPress, onLongPress }) {
+function ShiftRow({ shift, onPress, onLongPress, nowMs, arrivalStale }) {
   const tpl = shift.shift_templates
   // Override-aware effective times. mig 099/100 mirror trigger
   // pushes assignment-level overrides into the legacy shifts row,
@@ -271,6 +291,11 @@ function ShiftRow({ shift, onPress, onLongPress }) {
               <Text className="text-[10px] uppercase text-blue-700 font-medium">Swapped</Text>
             </View>
           )}
+          {hasOpenSwap(shift) && (
+            <View className="px-2 py-0.5 rounded-full bg-amber-500/20">
+              <Text className="text-[10px] uppercase text-amber-700 font-medium">{SWAP_PENDING_LABEL}</Text>
+            </View>
+          )}
         </View>
       </View>
       <View className="flex-row items-center">
@@ -279,15 +304,29 @@ function ShiftRow({ shift, onPress, onLongPress }) {
           {timeRange(effStart, effEnd)} · {hours}h
         </Text>
       </View>
+      {/* ARRIVALSHOW.1 — what the app recorded as your arrival (arrived_at,
+          never the Adjusted paid time below). */}
+      <ArrivalLine shift={shift} nowMs={nowMs} stale={arrivalStale} />
       {adjusted && (
+        // MOBILESCHED.2 — the /shifts row carries the block's time as
+        // block_start_time (no top-level start_time), so this read the
+        // template's hours and labelled them the block default.
         <Text className="text-[11px] text-un1t-subtle mt-0.5 italic">
-          Block default {timeRange(shift.start_time || tpl?.start_time, shift.end_time || tpl?.end_time)}
+          Block default {timeRange(blockDefaultStart(shift), blockDefaultEnd(shift))}
           {shift.partial_reason ? ` · ${shift.partial_reason}` : ''}
         </Text>
       )}
       {shift.notes && (
         <Text className="text-xs text-un1t-subtle mt-1.5">{shift.notes}</Text>
       )}
+      {/* BLOCKEDIT.1 — the manager's note for the coaches on this shift
+          (GET /api/schedule/shifts carries it on every row). */}
+      {briefingOf(shift) ? (
+        <View className="flex-row items-start mt-1.5">
+          <Ionicons name="document-text-outline" size={13} color="#64748B" />
+          <Text className="text-xs text-un1t-text ml-1 flex-1" numberOfLines={3}>{briefingOf(shift)}</Text>
+        </View>
+      ) : null}
     </Pressable>
   )
 }
@@ -304,6 +343,8 @@ export default function Schedule() {
   // sync effect below can key on a stable primitive.
   const params = useLocalSearchParams()
   const dateParam = typeof params.date === 'string' ? params.date : ''
+  // RUNWAY.1 — optional ?view=manage (roster_runway push / Studio chip).
+  const viewParam = typeof params.view === 'string' ? params.view : ''
   const [anchor, setAnchor] = useState(() => weekStart(parseIsoDate(dateParam) || new Date()))
   const [selected, setSelected] = useState(() => parseIsoDate(dateParam) || new Date())
   const [shifts, setShifts] = useState([])
@@ -311,7 +352,7 @@ export default function Schedule() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState(null)
-  const [view, setView] = useState('me') // 'me' | 'team' | 'manage'
+  const [view, setView] = useState(() => scheduleViewFromParam(viewParam, profile?.role) || 'me') // 'me' | 'team' | 'manage'
   const [manageRefreshKey, setManageRefreshKey] = useState(0)
 
   // A push tap can re-target an already-mounted tab (router.push just
@@ -388,6 +429,7 @@ export default function Schedule() {
         profileId: profile.id,
         startDate: start,
         endDate: end,
+        withArrivals: true,
       }),
       getMyTimeOff({
         locationId: activeLocation.id,
@@ -420,6 +462,14 @@ export default function Schedule() {
   useEffect(() => {
     if (view === 'manage' && !isManagerRole(profile?.role)) setView('me')
   }, [profile?.role, view])
+
+  // RUNWAY.1 — a push tap can re-target this mounted tab with ?view=manage.
+  // scheduleViewFromParam returns null for a non-manager, so this can never
+  // fight the effect above.
+  useEffect(() => {
+    const v = scheduleViewFromParam(viewParam, profile?.role)
+    if (v) setView(v)
+  }, [viewParam, profile?.role])
 
   async function onRefresh() {
     setRefreshing(true)
@@ -487,7 +537,11 @@ export default function Schedule() {
           style: 'destructive',
           onPress: async () => {
             const res = await cancelTimeOffRequest(row.id, activeLocation?.id)
-            if (!res.success) Alert.alert('Couldn’t cancel', res.error || 'Unknown error')
+            // LEAVECANCEL.1 — same words as My leave, and not only failures: a
+            // manager's cancel landing on just-approved leave succeeds WITHOUT
+            // cancelling (an owner was asked), and that has to be said.
+            const outcome = myLeaveCancelOutcome(res)
+            if (outcome) Alert.alert(outcome.title, outcome.message)
             // ROSTER-FIX.7h — refetch EITHER WAY, not only on success. The
             // common failure here is "no longer pending": a manager approved or
             // rejected the request while the card sat on screen, so the row the
@@ -501,6 +555,11 @@ export default function Schedule() {
     )
   }
 
+  // COVERLOOP.2 — one post at a time: a second confirm while the first POST is
+  // in flight earned a 409 straight after the success.
+  const swapPostGuard = useRef(null)
+  if (swapPostGuard.current === null) swapPostGuard.current = createInFlightGuard()
+
   function requestSwapForShift(shift) {
     // RETIRE-SHIFTS-MIRROR.5c — swaps now key off the shift_assignment id
     // (stitched into the GET /shifts row), not the legacy shifts.id.
@@ -508,29 +567,52 @@ export default function Schedule() {
       Alert.alert('Can’t post', 'This shift can’t be swapped.')
       return
     }
+    // COVERLOOP.2 — open_swap_status comes from GET /api/schedule/shifts (own
+    // rows only). One open swap per shift: say so rather than earn the 409.
+    if (hasOpenSwap(shift)) {
+      Alert.alert(shift.shift_templates?.name || 'Shift', SWAP_ALREADY_OPEN_MESSAGE)
+      return
+    }
+    const when = swapShiftWhen(shift)
     Alert.alert(
       'Request swap?',
-      `Post ${shift.shift_templates?.name || 'this shift'} on ${shift.shift_date} for someone else to take?`,
+      `Post ${shift.shift_templates?.name || 'this shift'}${when ? ` on ${when}` : ''} for someone else to take?`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Post for swap',
-          onPress: async () => {
+          // run() releases the latch whatever happens inside, including a
+          // throw while the request is being built. locationId is only the
+          // x-active-location override (the server takes the studio from the
+          // shift), so no active location still posts and still answers.
+          onPress: () => swapPostGuard.current.run(async () => {
             const res = await createSwapRequest({
               requesterShiftId: shift.shift_assignment_id,
-              locationId: activeLocation.id,
+              locationId: activeLocation?.id,
             })
             if (res.success) {
-              Alert.alert('Posted', 'Managers have been notified.')
+              // Same words as the Dashboard: coaches who can cover are told too.
+              const done = swapPostedCopy(null)
+              Alert.alert(done.title, done.message)
               fetchWeek()
             } else {
               Alert.alert('Couldn’t post', res.error || 'Unknown error')
             }
-          },
+          }),
         },
       ]
     )
   }
+
+  // ARRIVALSHOW.1 — "now" for the arrival lines, read at render. The tab
+  // refetches (and so re-renders) on every focus, so no ticking timer.
+  // Review 2 — rows kept through a failed refresh (the amber TRANSPORT_ERROR
+  // bar) are stale: a stamp may have landed since, so they never claim absence.
+  const nowMs = Date.now()
+  const arrivalStale = error === TRANSPORT_ERROR
+  const arrivalHelp = view === 'me' && !loading
+    ? arrivalHelpFor(isTablet ? shifts : todays, nowMs, { stale: arrivalStale })
+    : null
 
   return (
     <View className="flex-1 bg-un1t-bg">
@@ -632,6 +714,8 @@ export default function Schedule() {
               requestSwap={requestSwapForShift}
               teamMode={view === 'team'}
               selfId={profile?.id}
+              nowMs={nowMs}
+              arrivalStale={arrivalStale}
             />
           </View>
         ) : view === 'team' ? (
@@ -652,8 +736,8 @@ export default function Schedule() {
             {todaysLeave.map(t => (
               <View key={t.id} className="bg-amber-500/10 border border-amber-500/40 rounded-2xl p-4 mb-2">
                 <Text className="text-sm font-semibold text-amber-700">
-                  {t.type === 'holiday' ? 'Holiday' : t.type === 'sick' ? 'Sick leave' : 'Time off'}
-                  {t.status === 'pending' ? ' · pending' : ''}
+                  {timeOffLeaveLabel(t.type)}
+                  {t.expired ? ' · expired' : t.status === 'pending' ? ' · pending' : ''}
                 </Text>
                 {t.reason && <Text className="text-xs text-amber-700/80 mt-1">{t.reason}</Text>}
                 {canCancelTimeOff(t, profile) && (
@@ -681,6 +765,8 @@ export default function Schedule() {
                 shift={s}
                 onPress={canAdjust(s) ? () => setAdjustingShift(s) : undefined}
                 onLongPress={() => requestSwapForShift(s)}
+                nowMs={nowMs}
+                arrivalStale={arrivalStale}
               />
             ))}
             {todays.length > 0 && (
@@ -692,6 +778,16 @@ export default function Schedule() {
             )}
           </>
         )}
+
+        {/* ARRIVALSHOW.1 — what the arrival lines are, once, when one shows. */}
+        {arrivalHelp ? (
+          <Text className="text-[11px] text-un1t-muted text-center mt-2 px-4">{ARRIVAL_WORDS.help}</Text>
+        ) : null}
+
+        {/* ICSFEED.1 — own published shifts in the coach's calendar app. Me view only, phone and iPad. */}
+        {view === 'me' && <CalendarSubscribeRow />}
+        {/* AVAIL.2 — when the coach can't work. Me view, phone and iPad, every role. */}
+        {view === 'me' && <MyAvailabilityRow onPress={() => router.push('/schedule/availability')} />}
       </ScrollView>
 
       {/* Floating Request Time Off button — MOBILE-PERMS: gated on the
@@ -699,14 +795,14 @@ export default function Schedule() {
           shows the roster). Default on for every role, so this stays
           visible unless an admin turns time-off off for the user. */}
       {canMobile(profile, 'time_off', activeLocation) && (
-        <Pressable
-          onPress={() => router.push('/schedule/time-off-new')}
-          className="absolute bottom-6 right-6 bg-un1t-text rounded-full px-5 py-3.5 flex-row items-center shadow-lg active:opacity-80"
-        >
-          <Ionicons name="add" size={20} color="#FFFFFF" />
-          <Text className="text-un1t-bg font-semibold ml-1.5">Request time off</Text>
-        </Pressable>
+        <LeaveFloatingButtons
+          onRequest={() => router.push('/schedule/time-off-new')}
+          onMyLeave={() => router.push('/schedule/my-leave')}
+        />
       )}
+      {/* LEAVEPHONE.1 — "My leave" (the coach's own requests, with the
+          manager's reply) sits beside it under the same gate; the pair lives
+          in components/LeaveFloatingButtons so the two can never overlap. */}
 
       {/* Adjust modal — partial-shift override editor (mig 099/100). */}
       <AdjustSheet
@@ -729,8 +825,8 @@ function AdjustSheet({ shift, onClose, onSaved, locationId }) {
   // default is only a fallback. Comparing an edit against the template meant a
   // block whose time a manager had moved silently saved `null` (= inherit the
   // template) instead of the coach's actual window.
-  const blockStart = (shift?.block_start_time || shift?.shift_templates?.start_time || '').slice(0, 5)
-  const blockEnd = (shift?.block_end_time || shift?.shift_templates?.end_time || '').slice(0, 5)
+  const blockStart = (blockDefaultStart(shift) || '').slice(0, 5)
+  const blockEnd = (blockDefaultEnd(shift) || '').slice(0, 5)
   const initialStart = (shift?.start_time_override || '').slice(0, 5) || blockStart
   const initialEnd = (shift?.end_time_override || '').slice(0, 5) || blockEnd
 
@@ -743,8 +839,8 @@ function AdjustSheet({ shift, onClose, onSaved, locationId }) {
   // Reset fields whenever a new shift is opened.
   useEffect(() => {
     if (!shift) return
-    setStart((shift.start_time_override || '').slice(0, 5) || (shift.block_start_time || shift.shift_templates?.start_time || '').slice(0, 5))
-    setEnd((shift.end_time_override || '').slice(0, 5) || (shift.block_end_time || shift.shift_templates?.end_time || '').slice(0, 5))
+    setStart((shift.start_time_override || '').slice(0, 5) || (blockDefaultStart(shift) || '').slice(0, 5))
+    setEnd((shift.end_time_override || '').slice(0, 5) || (blockDefaultEnd(shift) || '').slice(0, 5))
     setReason(shift.partial_reason || '')
     setError(null)
   }, [shift])

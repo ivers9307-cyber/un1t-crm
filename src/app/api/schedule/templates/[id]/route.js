@@ -1,12 +1,20 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { validateBody } from '@/lib/validate'
 import { timeOfDay, hexColor , MANAGER_ROLES} from '@/lib/schemas'
 import { WEEKDAY_CODES, generateBlocksForTemplate, liveAssignments } from '@/lib/roster'
 import { logRosterChange } from '@/lib/roster-change-log'
+import {
+  readFutureBlocksForTemplate,
+  clearEmptyFutureBlocks,
+  planBlockCapacityUpdates,
+} from '@/lib/shift-template-blocks'
+import { SHIFT_KINDS } from '@shared/shift-kind'
+import { resolveTemplateKindWrite } from '@/lib/shift-template-kind'
+import { toHms } from '@/lib/block-edit'
 
 const TemplateUpdateSchema = z.object({
   name: z.string().min(1).max(100).optional(),
@@ -20,6 +28,8 @@ const TemplateUpdateSchema = z.object({
   max_coaches: z.number().int().min(1).max(50).optional(),
   // SHIFTMIN.1 — minimum coaches floor.
   min_coaches: z.number().int().min(0).max(50).optional(),
+  // SHIFTTYPE.1 (mig 628) — see resolveTemplateKindWrite for the rule.
+  kind: z.enum(SHIFT_KINDS).optional(),
 })
 
 // PUT /api/schedule/templates/:id
@@ -29,6 +39,13 @@ const TemplateUpdateSchema = z.object({
 //     shifts keep the times/capacity they ran at. Audit truth.
 //   - FUTURE blocks (block_date >= today) reflect the new template
 //     IMMEDIATELY for start_time / end_time / max_coaches.
+//     BLOCKEDIT.1 review 5: start/end only reach future blocks whose times
+//     still EQUAL the template's old times. A block edited away from its
+//     template (a one-off via PUT /api/schedule/blocks/[id]) keeps its own
+//     hours; `propagation.futureBlocksKeptEdited` counts them. Second review:
+//     the same for min_coaches / max_coaches, per field (a switch to admin
+//     still zeroes every minimum). A block whose own value coincides with the
+//     template's OLD value cannot be told from an unedited one: it follows.
 //   - days_of_week add → new blocks materialised for added days
 //     across the next 8 weeks via generateBlocksForTemplate (idempotent).
 //   - days_of_week remove → future blocks for the removed days are
@@ -51,6 +68,10 @@ const TemplateUpdateSchema = z.object({
 //     is no change-log entry saying it went, so the slot would vanish
 //     from a published week with nothing recording it. The count kept
 //     back comes out as `propagation.publishedEmptiesKept`.
+//   - kind (SHIFTTYPE.1): class -> admin also writes min_coaches 0, which
+//     propagates to FUTURE blocks like any minimum edit. Past blocks keep
+//     their minimum; staffing never reads a past block, and it reads kind
+//     through the template, so an admin block's stale minimum is inert.
 //
 // Today is computed in UTC because shift_blocks.block_date is a
 // calendar date with no TZ. Comparing block_date >= today_utc gives
@@ -59,7 +80,9 @@ const TemplateUpdateSchema = z.object({
 export async function PUT(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
-  if (!user || !MANAGER_ROLES.includes(user.role)) {
+  // SCHEDROLES.1 — coarse pre-check only; the authority decision is the
+  // role at the TEMPLATE's location, once the row is loaded below.
+  if (!user || !hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -77,7 +100,9 @@ export async function PUT(request, props) {
   // so a cross-tenant id is indistinguishable from a missing one).
   const { data: priorTemplate } = await db
     .from('shift_templates')
-    .select('location_id, days_of_week')
+    // start_time/end_time: BLOCKEDIT.1 review 5, which future blocks still
+    // follow the template (see the propagation below).
+    .select('location_id, days_of_week, kind, min_coaches, max_coaches, start_time, end_time')
     .eq('id', params.id)
     .maybeSingle()
   if (!priorTemplate) {
@@ -85,7 +110,20 @@ export async function PUT(request, props) {
   }
   const guard = assertLocationAccessOr404(user, priorTemplate.location_id)
   if (guard) return guard
+  // SCHEDROLES.1 — a member of the template's studio who is not a manager
+  // THERE (e.g. head coach at their active studio, staff at this one).
+  if (!hasRoleAtLocation(user, priorTemplate.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+  }
   const locationId = priorTemplate.location_id
+  // SHIFTTYPE.1 — kind + minimum. Runs BEFORE changingCapacity is computed
+  // below: a switch to admin adds min_coaches: 0 to `updates`, and that must
+  // reach the future blocks through the SHIFTMIN-CLAMP.1 path like any other
+  // minimum edit. An explicit minimum on an admin template is refused before
+  // any write.
+  const kindWrite = resolveTemplateKindWrite({ prior: priorTemplate, body: validation.data })
+  if (!kindWrite.ok) return NextResponse.json(kindWrite.body, { status: kindWrite.status })
+  Object.assign(updates, kindWrite.patch)
   const priorDays = new Set(priorTemplate.days_of_week || [])
 
   const today = dublinTodayStr()
@@ -93,6 +131,19 @@ export async function PUT(request, props) {
     || Object.prototype.hasOwnProperty.call(updates, 'end_time')
   const changingDays = Object.prototype.hasOwnProperty.call(updates, 'days_of_week')
   const deactivating = updates.active === false
+  // SHIFTMIN-CLAMP.1 — a capacity edit now needs the blocks' OWN min/max, so
+  // each one can be clamped against its own ceiling rather than pushed the
+  // same number in a single statement that the CHECK can fail wholesale.
+  const changingCapacity = Object.prototype.hasOwnProperty.call(updates, 'min_coaches')
+    || Object.prototype.hasOwnProperty.call(updates, 'max_coaches')
+  // SHIFTTPL.1 — a REORDER is one PUT per template that moved, and running the
+  // 8-week generator behind each click is work nobody asked for. Narrow on
+  // purpose: only a display_order-only body skips it. Every other edit keeps
+  // the rolling-horizon backfill it has always had, because that backfill is
+  // load-bearing for more than the field being written (SLOTREMOVAL.1's
+  // regeneration test saves a name for exactly that reason).
+  const reorderOnly = Object.keys(updates).length > 0
+    && Object.keys(updates).every((k) => k === 'display_order')
 
   // ROSTER-FIX.4 — a template edit is a BULK EDIT of everybody's shifts, and
   // on a published roster those shifts are promises already made to coaches.
@@ -100,17 +151,14 @@ export async function PUT(request, props) {
   // before anything is written, so we can refuse the destructive case and
   // change-log the rest.
   let futureBlocks = []
-  if (changingTimes || changingDays || deactivating) {
-    const { data: fb, error: fbErr } = await db
-      .from('shift_blocks')
-      .select('id, block_date, start_time, end_time, roster_id, rosters:roster_id(status), shift_assignments(profile_id, status)')
-      .eq('template_id', params.id)
-      .eq('location_id', locationId)
-      .gte('block_date', today)
+  if (changingTimes || changingDays || deactivating || changingCapacity) {
+    const { blocks, error: fbErr } = await readFutureBlocksForTemplate(db, {
+      templateId: params.id, locationId, today,
+    })
     if (fbErr) {
       return NextResponse.json({ success: false, error: fbErr.message }, { status: 400 })
     }
-    futureBlocks = fb || []
+    futureBlocks = blocks
   }
 
   const isPublishedBlock = (b) => b.rosters?.status === 'published'
@@ -171,14 +219,27 @@ export async function PUT(request, props) {
   if (Object.prototype.hasOwnProperty.call(updates, 'end_time')) {
     futureFieldUpdates.end_time = template.end_time
   }
-  if (Object.prototype.hasOwnProperty.call(updates, 'max_coaches')) {
-    futureFieldUpdates.max_coaches = template.max_coaches
-  }
-  // SHIFTMIN.1 — same propagation rule as max_coaches: future-only,
-  // past blocks keep their snapshotted minimum.
-  if (Object.prototype.hasOwnProperty.call(updates, 'min_coaches')) {
-    futureFieldUpdates.min_coaches = template.min_coaches
-  }
+  //
+  // BLOCKEDIT.1 review 5 — ONLY blocks still at the template's OLD times. A
+  // block edited away from its template (PUT /api/schedule/blocks/[id]: "this
+  // Tuesday runs 10-1") is a deliberate one-off; rewriting it here silently
+  // undid the manager's edit. It keeps its own hours, and is counted.
+  const followsTemplate = (b) => toHms(b.start_time) === toHms(priorTemplate.start_time)
+    && toHms(b.end_time) === toHms(priorTemplate.end_time)
+  // Second review 2 — the same rule for staffing, per field (below). A block
+  // counts as "kept" only when a value was really changing and it held its own.
+  // (A block edited to a value that equals the template's OLD one looks
+  // unedited, and is treated as unedited.)
+  const switchingToAdmin = updates.kind === 'admin' && priorTemplate.kind !== 'admin'
+  const timesMove = changingTimes && (toHms(template.start_time) !== toHms(priorTemplate.start_time)
+    || toHms(template.end_time) !== toHms(priorTemplate.end_time))
+  const minMoves = !switchingToAdmin && Object.prototype.hasOwnProperty.call(updates, 'min_coaches')
+    && Number(template.min_coaches) !== Number(priorTemplate.min_coaches)
+  const maxMoves = Object.prototype.hasOwnProperty.call(updates, 'max_coaches')
+    && Number(template.max_coaches) !== Number(priorTemplate.max_coaches)
+  const futureBlocksKeptEdited = futureBlocks.filter((b) => (timesMove && !followsTemplate(b))
+    || (minMoves && Number(b.min_coaches) !== Number(priorTemplate.min_coaches))
+    || (maxMoves && Number(b.max_coaches) !== Number(priorTemplate.max_coaches))).length
   let futureBlocksUpdated = 0
   if (Object.keys(futureFieldUpdates).length > 0) {
     const { data: updatedBlocks, error: updErr } = await db
@@ -187,6 +248,8 @@ export async function PUT(request, props) {
       .eq('template_id', params.id)
       .eq('location_id', locationId)
       .gte('block_date', today)
+      .eq('start_time', priorTemplate.start_time)
+      .eq('end_time', priorTemplate.end_time)
       .select('id')
     if (updErr) {
       return NextResponse.json({
@@ -196,6 +259,48 @@ export async function PUT(request, props) {
       })
     }
     futureBlocksUpdated = updatedBlocks?.length || 0
+  }
+
+  // SHIFTMIN-CLAMP.1 — min_coaches / max_coaches do NOT ride the statement
+  // above. `shift_blocks_min_coaches_check` (mig 177) forbids min > max per
+  // ROW, so one UPDATE writing the template's minimum onto every future block
+  // fails ENTIRELY the moment a single block's max sits below it — and the
+  // template row has already saved by then, so the operator gets a saved
+  // template, a warning they cannot act on, and a calendar still flagging the
+  // old minimum. Mig 611 solved the same thing with LEAST(min, max); this is
+  // that, grouped into one statement per distinct clamped value.
+  let capacityWarning = null
+  if (changingCapacity) {
+    const groups = planBlockCapacityUpdates(futureBlocks, {
+      minCoaches: Object.prototype.hasOwnProperty.call(updates, 'min_coaches') ? template.min_coaches : null,
+      maxCoaches: Object.prototype.hasOwnProperty.call(updates, 'max_coaches') ? template.max_coaches : null,
+      // Second review 2 — only blocks still at the template's OLD value; a
+      // block with its own staffing keeps it. A switch to admin forces the
+      // minimum everywhere (an admin shift has no minimum, SHIFTTYPE.1).
+      followMin: switchingToAdmin ? undefined : priorTemplate.min_coaches,
+      followMax: priorTemplate.max_coaches,
+    })
+    const failures = []
+    for (const g of groups) {
+      const { data: touched, error: capErr } = await db
+        .from('shift_blocks')
+        .update(g.patch)
+        .in('id', g.ids)
+        .eq('location_id', locationId)
+        // BLOCKEDIT.1 third check — only if still at the values READ (for a
+        // following block, the template's OLD value): a manager who edited
+        // the block in the meantime keeps their edit.
+        .eq('min_coaches', g.expect.min_coaches)
+        .eq('max_coaches', g.expect.max_coaches)
+        .select('id')
+      // One failing group must not abandon the rest: the whole point is that
+      // the blocks are no longer all-or-nothing.
+      if (capErr) failures.push(capErr.message)
+      else futureBlocksUpdated += touched?.length || 0
+    }
+    if (failures.length > 0) {
+      capacityWarning = `Template saved but the coach minimum/maximum did not reach every future shift: ${failures.join('; ')}`
+    }
   }
 
   // ROSTER-FIX.4 — a published shift whose window just moved is a change the
@@ -208,6 +313,8 @@ export async function PUT(request, props) {
   if (changingTimes) {
     for (const b of futureBlocks) {
       if (!isPublishedBlock(b)) continue
+      // BLOCKEDIT.1 review 5 — an edited block was not rewritten above.
+      if (!followsTemplate(b)) continue
       const newStart = futureFieldUpdates.start_time ?? b.start_time
       const newEnd = futureFieldUpdates.end_time ?? b.end_time
       if (newStart === b.start_time && newEnd === b.end_time) continue
@@ -275,36 +382,37 @@ export async function PUT(request, props) {
   // manager still has to fill is exactly the one they need to keep seeing.
   // The count is reported so the operator learns why the calendar did not go
   // empty; clearing those is the publish path's job, not a side effect here.
+  //
+  // SHIFTTPL.1 — the clean-up itself now lives in `clearEmptyFutureBlocks` so
+  // the DELETE route (which is what the web Deactivate button calls) performs
+  // exactly the same one.
   let deactivatedBlocksDeleted = 0
   let publishedEmptiesKept = 0
   if (deactivating) {
-    const allEmpties = futureBlocks.filter((b) => liveAssignments(b.shift_assignments).length === 0)
-    const empties = allEmpties.filter((b) => !isPublishedBlock(b))
-    publishedEmptiesKept = allEmpties.length - empties.length
-    if (empties.length > 0) {
-      const { error: delErr } = await db
-        .from('shift_blocks')
-        .delete()
-        .in('id', empties.map((b) => b.id))
-        .eq('location_id', locationId)
-      if (delErr) {
-        return NextResponse.json({
-          success: true,
-          data: template,
-          warning: `Template deactivated but clearing its empty future blocks failed: ${delErr.message}`,
-          propagation: { futureBlocksUpdated, futureBlocksDeleted, timeChangesLogged, deactivatedBlocksDeleted: 0, publishedEmptiesKept },
-        })
-      }
-      deactivatedBlocksDeleted = empties.length
+    const cleared = await clearEmptyFutureBlocks(db, {
+      templateId: params.id, locationId, today, blocks: futureBlocks,
+    })
+    publishedEmptiesKept = cleared.publishedEmptiesKept
+    if (cleared.error) {
+      return NextResponse.json({
+        success: true,
+        data: template,
+        warning: `Template deactivated but clearing its empty future blocks failed: ${cleared.error.message}`,
+        propagation: { futureBlocksUpdated, futureBlocksKeptEdited, futureBlocksDeleted, timeChangesLogged, deactivatedBlocksDeleted: 0, publishedEmptiesKept },
+      })
     }
+    deactivatedBlocksDeleted = cleared.deleted
   }
 
   // 3. Backfill any missing dates in the next 8 weeks (handles ADDED
   //    days, plus the rolling horizon). Idempotent — the unique key
   //    on (location, template, date) means existing blocks are
   //    untouched; only genuinely new dates get rows.
+  //
+  // SHIFTTPL.1 — skipped for a reorder, which writes `display_order` on every
+  // template that moved and has no block consequences at all.
   let generated = { inserted: 0, skipped: 0 }
-  if (!deactivating && (template.days_of_week?.length || 0) > 0) {
+  if (!deactivating && !reorderOnly && (template.days_of_week?.length || 0) > 0) {
     try {
       generated = await generateBlocksForTemplate(db, template)
     } catch (e) {
@@ -312,7 +420,7 @@ export async function PUT(request, props) {
         success: true,
         data: template,
         warning: `Template + future fields saved, but new-day generation failed: ${e.message}`,
-        propagation: { futureBlocksUpdated, futureBlocksDeleted, timeChangesLogged, deactivatedBlocksDeleted, publishedEmptiesKept },
+        propagation: { futureBlocksUpdated, futureBlocksKeptEdited, futureBlocksDeleted, timeChangesLogged, deactivatedBlocksDeleted, publishedEmptiesKept },
       })
     }
   }
@@ -321,19 +429,42 @@ export async function PUT(request, props) {
     success: true,
     data: template,
     generated,
-    propagation: { futureBlocksUpdated, futureBlocksDeleted, timeChangesLogged, deactivatedBlocksDeleted, publishedEmptiesKept },
+    propagation: { futureBlocksUpdated, futureBlocksKeptEdited, futureBlocksDeleted, timeChangesLogged, deactivatedBlocksDeleted, publishedEmptiesKept },
+    ...(capacityWarning ? { warning: capacityWarning } : {}),
   })
 }
 
-// DELETE /api/schedule/templates/:id
+// DELETE /api/schedule/templates/:id[?hard=true]
+//
+// SHIFTTPL.1 — TWO findings met here.
+//
+// 1. CONSISTENCY. This is the route the web Deactivate button calls, and all
+//    it did was set `active:false`. The PUT route's `active:false` path also
+//    CLEARS the future blocks nobody is on (keeping the published ones, which
+//    staff have already been shown). So the same operator action left the
+//    calendar full of slots for a shift that no longer exists, or not,
+//    depending on which surface they happened to use. Both now run
+//    `clearEmptyFutureBlocks`.
+//
+// 2. HARD DELETE. A template created by mistake could only ever be
+//    deactivated, so it sat in the Inactive list forever. `?hard=true`
+//    removes the row outright, but ONLY when it has no shift_blocks and no
+//    shift_assignments ever — anything else is history, and
+//    `shift_blocks.template_id` is ON DELETE RESTRICT precisely so the
+//    database has the last word if this check races a block being created.
+//    A refusal is a 409 naming what is in the way, and the operator
+//    deactivates instead.
 export async function DELETE(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
-  if (!user || !MANAGER_ROLES.includes(user.role)) {
+  // SCHEDROLES.1 — coarse pre-check only; the authority decision is the
+  // role at the TEMPLATE's location, once the row is loaded below.
+  if (!user || !hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
   const db = createServerClient()
+  const hard = wantsHardDelete(request)
 
   // Fetch the template's location FIRST so we can gate cross-tenant
   // access before mutating anything — the service-role client bypasses
@@ -350,17 +481,126 @@ export async function DELETE(request, props) {
   }
   const guard = assertLocationAccessOr404(user, template.location_id)
   if (guard) return guard
+  // SCHEDROLES.1 — manager AT the template's studio, not the active one.
+  if (!hasRoleAtLocation(user, template.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+  }
+  const locationId = template.location_id
 
-  // Soft-delete by deactivating (can't delete if shifts reference it).
-  // Scope the write to the verified location too, so even a racing
-  // re-point of the row can't cross tenants.
+  if (hard) {
+    return hardDelete(db, { templateId: params.id, locationId })
+  }
+
+  // Soft-delete by deactivating. Scope the write to the verified location
+  // too, so even a racing re-point of the row can't cross tenants.
   const { data, error } = await db.from('shift_templates')
     .update({ active: false })
     .eq('id', params.id)
-    .eq('location_id', template.location_id)
+    .eq('location_id', locationId)
     .select()
     .single()
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
-  return NextResponse.json({ success: true, data })
+
+  // SHIFTTPL.1 — the clean-up the PUT path has always done. Best-effort: the
+  // template IS deactivated either way, and refusing to say so because the
+  // tidy-up failed would be the louder failure.
+  const cleared = await clearEmptyFutureBlocks(db, {
+    templateId: params.id, locationId, today: dublinTodayStr(),
+  })
+  if (cleared.error) {
+    return NextResponse.json({
+      success: true,
+      data,
+      warning: `Template deactivated but clearing its empty future shifts failed: ${cleared.error.message}`,
+      propagation: { deactivatedBlocksDeleted: 0, publishedEmptiesKept: cleared.publishedEmptiesKept },
+    })
+  }
+  return NextResponse.json({
+    success: true,
+    data,
+    propagation: {
+      deactivatedBlocksDeleted: cleared.deleted,
+      publishedEmptiesKept: cleared.publishedEmptiesKept,
+    },
+  })
+}
+
+// A DELETE carries no body, so the hard flag rides the query string. Read
+// defensively: `request.url` is absolute in Next but need not be everywhere
+// this is called from, and an unreadable URL must mean the SAFE answer
+// (deactivate), never the destructive one.
+function wantsHardDelete(request) {
+  try {
+    return new URL(request?.url).searchParams.get('hard') === 'true'
+  } catch {
+    return false
+  }
+}
+
+// SHIFTTPL.1 — "no blocks and no assignments EVER". Both are checked, not
+// just the one the FK would catch:
+//   - blocks: any row at all, past or future. A past block is the record that
+//     the shift ran, and a template with history is never deletable.
+//   - assignments: they hang off blocks (ON DELETE CASCADE), so zero blocks
+//     implies zero assignments — but the count is still taken over whatever
+//     blocks exist, because the refusal reads very differently to an operator
+//     when coaches are on them, and "check both" should not rest on a
+//     cascade being remembered correctly.
+// The `.in()` is bounded by the page read below; the refusal only needs to
+// know that SOMETHING is in the way, never the exact total.
+const BLOCK_PROBE_LIMIT = 1000
+
+async function hardDelete(db, { templateId, locationId }) {
+  const { data: blocks, error: blocksErr } = await db
+    .from('shift_blocks')
+    .select('id')
+    .eq('template_id', templateId)
+    .eq('location_id', locationId)
+    .order('block_date', { ascending: true })
+    .limit(BLOCK_PROBE_LIMIT)
+  if (blocksErr) {
+    // An unreadable probe must never read as "nothing in the way".
+    return NextResponse.json({ success: false, error: blocksErr.message }, { status: 400 })
+  }
+
+  const blockIds = (blocks || []).map((b) => b.id)
+  if (blockIds.length > 0) {
+    const { count: assignmentCount, error: assignErr } = await db
+      .from('shift_assignments')
+      .select('id', { count: 'exact', head: true })
+      .in('block_id', blockIds)
+    if (assignErr) {
+      return NextResponse.json({ success: false, error: assignErr.message }, { status: 400 })
+    }
+    return NextResponse.json({
+      success: false,
+      error: 'template_in_use',
+      blocks: blockIds.length,
+      assignments: assignmentCount || 0,
+      message: assignmentCount
+        ? `This template has shifts on the calendar and ${assignmentCount} coach assignment${assignmentCount === 1 ? '' : 's'}, so it cannot be deleted. Deactivate it instead, which keeps them.`
+        : 'This template has shifts on the calendar, so it cannot be deleted. Deactivate it instead, which keeps them.',
+    }, { status: 409 })
+  }
+
+  const { error: delErr } = await db
+    .from('shift_templates')
+    .delete()
+    .eq('id', templateId)
+    .eq('location_id', locationId)
+  if (delErr) {
+    // 23503 = a block was created between the probe and this statement.
+    // `shift_blocks.template_id` is ON DELETE RESTRICT, which is why the
+    // race ends in a refusal rather than a cascade.
+    if (delErr.code === '23503') {
+      return NextResponse.json({
+        success: false,
+        error: 'template_in_use',
+        message: 'A shift was created for this template while it was being deleted, so it was kept. Deactivate it instead.',
+      }, { status: 409 })
+    }
+    return NextResponse.json({ success: false, error: delErr.message }, { status: 400 })
+  }
+  return NextResponse.json({ success: true, deleted: true })
 }

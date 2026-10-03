@@ -2,7 +2,7 @@
 //
 // MAIL-RAIL.1 — the rail replaces the view pills AND the account tab strip that
 // sat along the top of the surface. Presentational: props in, callbacks out.
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, screen } from '@testing-library/react'
 import MailRail from './MailRail'
 
@@ -30,7 +30,9 @@ function renderRail(over = {}) {
   return props
 }
 
-beforeEach(() => cleanup())
+// Unmount AFTER each test, so the last test's tree is gone before jsdom is
+// torn down (see tests/rtl-cleanup-after-each.test.js).
+afterEach(cleanup)
 
 describe('MailRail', () => {
   // MAIL-SPAM.1 — every view has an icon. `sent` shipped without one (an

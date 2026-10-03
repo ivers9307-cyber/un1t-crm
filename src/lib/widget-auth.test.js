@@ -76,6 +76,37 @@ describe('getWidgetUser', () => {
     expect(await getWidgetUser(db, requestWith(`Bearer ${TOKEN}`))).toBe(null)
   })
 
+  // ACTIVEUSER.1 — deactivating someone keeps their profile_locations rows (a
+  // reactivation must restore them), so the assignment check below does not
+  // catch it, and this path never touches getCurrentUser(). A home-screen
+  // widget can unlock the studio door.
+  it('returns null when the person has been DEACTIVATED', async () => {
+    const tables = okTables()
+    tables.profiles.data.active = false
+    expect(await getWidgetUser(makeDb(tables), requestWith(`Bearer ${TOKEN}`))).toBe(null)
+  })
+
+  it('returns null for a tombstone, even if a token row outlived the delete', async () => {
+    const tables = okTables()
+    tables.profiles.data.deleted_at = '2026-09-19T10:00:00Z'
+    expect(await getWidgetUser(makeDb(tables), requestWith(`Bearer ${TOKEN}`))).toBe(null)
+  })
+
+  it.each([['true', true], ['null', null], ['undefined', undefined]])('active: %s still resolves (strictly === false)', async (_l, value) => {
+    const tables = okTables()
+    tables.profiles.data.active = value
+    expect(await getWidgetUser(makeDb(tables), requestWith(`Bearer ${TOKEN}`))).not.toBe(null)
+  })
+
+  it('reads `active` and `deleted_at` off the profile — a select that omits them can never refuse', async () => {
+    const db = makeDb(okTables())
+    await getWidgetUser(db, requestWith(`Bearer ${TOKEN}`))
+    const profilesChain = db.from.mock.results[db.from.mock.calls.findIndex(c => c[0] === 'profiles')].value
+    const cols = profilesChain.select.mock.calls[0][0]
+    expect(cols).toMatch(/\bactive\b/)
+    expect(cols).toMatch(/\bdeleted_at\b/)
+  })
+
   it('returns null when the person no longer holds an assignment at that location', async () => {
     // The revocation path that needs no revocation: remove someone from a
     // studio and their widget for it stops working on the next tap.

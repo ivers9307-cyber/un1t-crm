@@ -84,7 +84,10 @@ const CATEGORY_CHANNELS = Object.freeze({
   // Time-sensitive nudges (cron lead-time reminders + speed-to-lead).
   tasks: 'reminders',
   bookings: 'reminders',
+  shift_reminder: 'reminders', // SHIFTREMIND.1 — cron lead-time reminder, same family
   checklist_overdue: 'reminders',
+  inspection_due: 'reminders', // EQUIP-MAINT.3 — inspection-day cron nudge
+  inspection_overdue: 'reminders', // …and the owners' "nobody did it" sweep
   lead: 'reminders',
   // Needs a manager decision.
   swap: 'approvals',
@@ -96,6 +99,8 @@ const CATEGORY_CHANNELS = Object.freeze({
   agent_activity: 'updates', // "Mia is handling a chat" — an ambient FYI, not a heads-up
   schedule: 'updates',
   shift_adjusted: 'updates',
+  availability_change: 'updates', // AVAIL.1 — a coach changed their availability; an FYI
+  qualification_expiry: 'reminders', // QUALS.1 — the weekly qualification-expiry digest (owners)
   invoice_approved: 'updates',
   invoice_declined: 'updates',
   expense_approved: 'updates',
@@ -117,6 +122,10 @@ const TYPE_CHANNELS = Object.freeze({
   swap_withdrawn: 'updates',
   swap_declined: 'updates',
   swap_decision: 'updates',
+  // REPLACE.1b — "Coach B took the offered shift" is an FYI to the managers;
+  // the "up for grabs" broadcast (shift_offer) stays on the category's
+  // 'approvals', as the open-pool swap broadcast does.
+  shift_offer_taken: 'updates',
   // 'time_off' decision back to the requester is an FYI.
   time_off_decision: 'updates',
   // STAFF-DEV.8 — the "your app is out of date" nudge. It rides NO

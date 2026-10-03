@@ -26,7 +26,7 @@ function fmtDublin(iso) {
   } catch { return iso }
 }
 
-export default function ClassClimateCard({ locationId, glofoxConnected, devices, initialEnabled, initialConfig }) {
+export default function ClassClimateCard({ locationId, glofoxConnected, glofoxUnknown = false, devices, initialEnabled, initialConfig }) {
   const router = useRouter()
   const cfg0 = initialConfig || {}
   const [enabled, setEnabled] = useState(Boolean(initialEnabled))
@@ -162,7 +162,7 @@ export default function ClassClimateCard({ locationId, glofoxConnected, devices,
             disabled={busy || (!enabled && !canEnable)}
             aria-pressed={enabled}
             aria-label={enabled ? 'Turn automation off' : 'Turn automation on'}
-            title={!enabled && !canEnable ? 'Connect Glofox + pick at least one AC unit to enable' : (enabled ? 'Turn off' : 'Turn on')}
+            title={!enabled && !canEnable ? (glofoxUnknown ? "Couldn't check Glofox. Reload to try again." : 'Connect Glofox + pick at least one AC unit to enable') : (enabled ? 'Turn off' : 'Turn on')}
             className={`inline-flex h-6 w-11 items-center rounded-full border transition disabled:opacity-50 disabled:cursor-not-allowed ${enabled ? 'bg-emerald-500 border-emerald-600' : 'bg-un1t-muted border-un1t-muted'}`}
           >
             <span className={`h-5 w-5 rounded-full bg-white shadow-sm transition ${enabled ? 'translate-x-5' : 'translate-x-0.5'}`} />
@@ -172,7 +172,11 @@ export default function ClassClimateCard({ locationId, glofoxConnected, devices,
 
       {/* Status warnings */}
       <div className="mt-3 text-xs space-y-1">
-        {!glofoxConnected && (
+        {/* PROFILESPREAD.1 — the page could not read Glofox presence. */}
+        {glofoxUnknown && (
+          <p className="text-amber-700">Couldn&apos;t check Glofox. Reload to try again.</p>
+        )}
+        {!glofoxUnknown && !glofoxConnected && (
           <p className="text-amber-700">Glofox isn&apos;t connected at this location — connect it in Settings → Locations → Glofox Integration to get the class schedule.</p>
         )}
         {glofoxConnected && !hasDevices && (
@@ -330,8 +334,13 @@ export default function ClassClimateCard({ locationId, glofoxConnected, devices,
           )}
           {run?.phase === 'done' && (
             <div className="mt-2 text-[11px] space-y-0.5">
-              {!run.glofox_configured && <p className="text-amber-700">Glofox isn&apos;t connected — no schedule to check.</p>}
-              {run.glofox_configured && (run.planned?.length || 0) === 0 && (
+              {/* REGISTRYREAD.1b: a failed settings read is not "not connected".
+                  The sync was skipped, but the runner still read the stored
+                  class_occurrences, i.e. the last synced timetable. */}
+              {run.glofox_settings_unreadable
+                ? <p className="text-amber-700">Couldn&apos;t read this studio&apos;s Glofox settings just now. The schedule wasn&apos;t refreshed, so this run used the last known timetable.</p>
+                : !run.glofox_configured && <p className="text-amber-700">Glofox isn&apos;t connected — no schedule to check.</p>}
+              {(run.glofox_configured || run.glofox_settings_unreadable) && (run.planned?.length || 0) === 0 && (
                 <p className="text-un1t-subtle">No class is within its lead window right now — nothing to turn on yet.</p>
               )}
               {(run.actions || []).map((a, i) => (

@@ -76,12 +76,27 @@ export async function POST(request, props) {
     }, { status: 409 })
   }
 
-  const { error: delErr } = await db
+  // SNAPSHOT.1 review 2 — the status check above and this delete are two
+  // statements. An approval landing between them publishes the roster (and
+  // writes its publish snapshot); a delete by id alone would then delete a
+  // PUBLISHED roster. So the delete is pinned to the row still being a draft
+  // and judged by the rows it matched: none = it changed under us, and
+  // nothing else is done (no rejection, no message to the submitter). Mig 634
+  // backs this in the database: a roster with a snapshot cannot be deleted.
+  const { data: deleted, error: delErr } = await db
     .from('rosters')
     .delete()
     .eq('id', params.id)
+    .eq('status', 'draft')
+    .select('id')
   if (delErr) {
     return NextResponse.json({ success: false, error: delErr.message }, { status: 400 })
+  }
+  if (!deleted || deleted.length === 0) {
+    return NextResponse.json({
+      success: false,
+      error: 'This roster has just changed (it may have been approved). Refresh to see where it stands.',
+    }, { status: 409 })
   }
 
   // Tell the manager who submitted it. Best-effort: the rejection already

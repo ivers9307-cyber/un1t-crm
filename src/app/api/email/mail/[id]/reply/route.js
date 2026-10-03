@@ -350,7 +350,8 @@ export async function POST(request, props) {
 
   // EMAIL-TICKET.5 — sign off as whoever is sending.
   //
-  // getCurrentUser() spreads the whole profiles row, so email_signature is the
+  // getCurrentUser()'s user object carries USER_PROFILE_COLUMNS
+  // (email_signature, email_signature_rich included), so email_signature is the
   // SENDER'S own (and, under impersonation, the impersonated profile's — the
   // same identity that goes into author_profile_id below, so the two can't
   // disagree). A NULL/empty signature appends nothing at all, which is every

@@ -17,6 +17,7 @@ import { useState } from 'react'
 import { View, Text, Pressable } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { monthBounds, buildMonthMatrix } from 'shared/roster-month'
+import { calendarTap } from '../lib/month-calendar'
 
 const WEEKDAY_LABELS = ['M', 'T', 'W', 'T', 'F', 'S', 'S']
 
@@ -44,13 +45,15 @@ function shiftMonth(anchorIso, delta) {
   return `${y}-${m}-01`
 }
 
-export default function MonthCalendar({ startDate, endDate, minDate, onChange }) {
+export default function MonthCalendar({ startDate, endDate, minDate, onChange, initialMonth }) {
   // Visible month anchors on the current selection start, else today.
+  // `initialMonth` (optional, any ISO day in it) overrides that: AVAIL.2's
+  // started entry has a start in the past and opens on its last day's month.
   const todayIso = (() => {
     const d = new Date()
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
   })()
-  const [anchor, setAnchor] = useState(startDate || minDate || todayIso)
+  const [anchor, setAnchor] = useState(initialMonth || startDate || minDate || todayIso)
 
   const { monthStartIso, monthEndIso } = monthBounds(anchor)
   const weeks = buildMonthMatrix(monthStartIso, monthEndIso, [], todayIso)
@@ -67,19 +70,10 @@ export default function MonthCalendar({ startDate, endDate, minDate, onChange })
   }
 
   function tap(iso) {
-    // Disabled days never reach here (Pressable disabled), but guard anyway.
-    if (minDate && iso < minDate) return
-    // No start yet, or a full range already chosen → start fresh.
-    if (!startDate || (startDate && endDate)) {
-      onChange({ start: iso, end: null })
-      return
-    }
-    // start set, no end: extend forward, or restart if before start.
-    if (iso >= startDate) {
-      onChange({ start: startDate, end: iso })
-    } else {
-      onChange({ start: iso, end: null })
-    }
+    // Disabled days never reach here (Pressable disabled), but the rule
+    // guards anyway (lib/month-calendar.js, tested there).
+    const next = calendarTap({ startDate, endDate, minDate }, iso)
+    if (next) onChange(next)
   }
 
   function cellState(iso, inMonth) {
@@ -100,6 +94,9 @@ export default function MonthCalendar({ startDate, endDate, minDate, onChange })
           disabled={!canGoPrev}
           hitSlop={10}
           className="p-1"
+          accessibilityRole="button"
+          accessibilityLabel="Previous month"
+          accessibilityState={{ disabled: !canGoPrev }}
         >
           <Ionicons
             name="chevron-back"
@@ -110,7 +107,7 @@ export default function MonthCalendar({ startDate, endDate, minDate, onChange })
         <Text className="text-base font-semibold text-un1t-text">
           {monthLabel(monthStartIso)}
         </Text>
-        <Pressable onPress={goNext} hitSlop={10} className="p-1">
+        <Pressable onPress={goNext} hitSlop={10} className="p-1" accessibilityRole="button" accessibilityLabel="Next month">
           <Ionicons name="chevron-forward" size={22} color="#111827" />
         </Pressable>
       </View>
@@ -137,6 +134,9 @@ export default function MonthCalendar({ startDate, endDate, minDate, onChange })
                   onPress={() => tap(day.iso)}
                   disabled={disabled}
                   className="flex-1 items-center py-1"
+                  accessibilityRole="button"
+                  accessibilityLabel={pretty(day.iso)}
+                  accessibilityState={{ disabled: !!disabled, selected: !!(selected || inRange) }}
                 >
                   <View
                     className={`w-9 h-9 items-center justify-center rounded-full ${

@@ -20,6 +20,7 @@
 // APIs are referenced only inside functions, so SSR import is safe.
 
 import { compressVideoIfNeeded } from './video-compress'
+import { BRANDING_BUCKET_MAX_BYTES } from './branding-media'
 
 const UPLOAD_URL = '/api/landing-page-settings/media'
 
@@ -36,11 +37,11 @@ const MAX_VIDEO_INPUT_BYTES = 500 * 1024 * 1024 // 500MB
 //     small — held to 50MB regardless of the bucket's higher ceiling.
 //   • Tap-to-play testimonials only download when a visitor taps one, so first
 //     paint (posters only) is unaffected by clip size — allowed up to the bucket
-//     ceiling (mig 252: 200MB). Compression still shrinks them when it can run;
+//     ceiling (BRANDING_BUCKET_MAX_BYTES, 200MB). Compression still shrinks them when it can run;
 //     this higher cap just avoids a hard-reject when it can't (older Safari, low
 //     device memory) or can't get the clip below 50MB.
 const MAX_AUTOPLAY_VIDEO_BYTES = 50 * 1024 * 1024 // 50MB
-const MAX_VIDEO_OUTPUT_BYTES = 200 * 1024 * 1024 // 200MB — matches bucket (mig 252)
+const MAX_VIDEO_OUTPUT_BYTES = BRANDING_BUCKET_MAX_BYTES // the bucket's own ceiling (src/lib/branding-media.js)
 
 // Stored-file cap for a video slot. Anything but an explicit `false`
 // (tap-to-play) is treated as an autoplay background and held to the small cap —

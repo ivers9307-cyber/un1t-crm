@@ -93,9 +93,13 @@ export async function POST(_request, { params }) {
     .update({ reviewed_at: new Date().toISOString(), reviewed_by: user.id })
     .eq('id', id)
 
+  // PASSCODEREAD.1 — a create returns the new member's initial password.
+  // The Review tab never shows it, so it does not ride the response: the
+  // desk Create-in-Glofox button is the one place it is displayed.
+  const { passcode: _passcode, ...safeResult } = result
   return NextResponse.json({
     success: result.status !== 'failed',
     retried_event_id: id,
-    result,
+    result: safeResult,
   })
 }

@@ -19,6 +19,7 @@ import Link from 'next/link'
 import { X, ChevronLeft, ChevronRight, Clock } from 'lucide-react'
 import PersonHeader from '@/components/PersonHeader'
 import PersonActionBar from '@/components/PersonActionBar'
+import { personActionsFor } from '@/lib/activity-write-gate'
 import ContactComposer from '@/components/ContactComposer'
 import ContactTimeline from '@/components/contact/ContactTimeline'
 import { mergeTimeline, deriveNeedsAttention } from '@/lib/contact-view'
@@ -65,7 +66,10 @@ function DetailRow({ label, value, href = null }) {
 // `manual` defaults FALSE — i.e. Cold shown — so any future caller that cannot
 // resolve a board behaves exactly as today. Hiding an operator action because a
 // lookup came back empty is a worse failure than offering an inert one.
-export default function ContactDrawer({ contactId, columnContactIds = [], locationId, onNavigate, onClose, manual = false }) {
+// C146 TASKSNEEDCONTACTS.1 — `canTask` comes down from the pipeline page
+// through KanbanBoard (canWriteActivitiesAt at the board's studio); false drops
+// the Task item. Defaults true, like DealCard's.
+export default function ContactDrawer({ contactId, columnContactIds = [], locationId, onNavigate, onClose, manual = false, canTask = true }) {
   const [bundle, setBundle] = useState(null)
   const [error, setError] = useState(null)
 
@@ -149,7 +153,7 @@ export default function ContactDrawer({ contactId, columnContactIds = [], locati
                   <PersonActionBar
                     contactId={contact.id}
                     locationId={locationId}
-                    actions={DRAWER_ACTIONS[manual ? 'manual' : 'derived']}
+                    actions={personActionsFor(DRAWER_ACTIONS[manual ? 'manual' : 'derived'], { canTask })}
                     isCold={contact.pipeline_stage_slug === 'cold_lead'}
                   />
                 </PersonHeader>
@@ -236,12 +240,9 @@ export default function ContactDrawer({ contactId, columnContactIds = [], locati
                 contactLocationId={contact.location_id}
                 contactEmail={contact.email || null}
                 canWhatsApp={bundle.permissions?.whatsapp}
-                canSms={bundle.permissions?.sms}
                 canEmail={bundle.permissions?.email}
                 hasWaPhone={!!(contact.wa_phone || contact.phone)}
-                hasPhone={!!contact.phone}
                 hasEmail={!!contact.email}
-                smsBlocked={!!(contact.sms_status && contact.sms_status !== 'active')}
                 emailBlocked={['bounced', 'complained'].includes(contact.email_status)}
                 whatsappWindowOpen={bundle.wa?.window_open}
                 whatsappWindowExpiresAt={bundle.wa?.window_expires_at}

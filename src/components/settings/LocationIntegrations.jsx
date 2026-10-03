@@ -18,24 +18,24 @@
 
 import { useRouter, useSearchParams } from 'next/navigation'
 import {
-  Plug, Zap, DoorOpen, Snowflake, FileCheck, MessageSquare, MessageCircle,
+  Plug, Zap, DoorOpen, Snowflake, FileCheck, MessageCircle,
   AlertCircle, CheckCircle2, Megaphone, CreditCard,
 } from 'lucide-react'
 import { Instagram } from '@/components/icons/InstagramIcon'
 import ConnectionsSection from '@/components/customer-agent/ConnectionsSection'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
+import { hasRoleAtLocation } from '@/lib/role-at-location'
 
 import XeroIntegrationTab from './integrations/XeroIntegrationTab'
 import GlofoxIntegrationTab from './integrations/GlofoxIntegrationTab'
 import UnifiIntegrationTab from './integrations/UnifiIntegrationTab'
 import AcDevicesIntegrationTab from './integrations/AcDevicesIntegrationTab'
 import BcaIntegrationTab from './integrations/BcaIntegrationTab'
-import TwilioIntegrationTab from './integrations/TwilioIntegrationTab'
 import WhatsAppIntegrationTab from './integrations/WhatsAppIntegrationTab'
 import AdsIntegrationTab from './integrations/AdsIntegrationTab'
 import PaymentsIntegrationTab from './integrations/PaymentsIntegrationTab'
 
-export default function LocationIntegrations({ location, xeroConnection, user, sampleBcaCar }) {
+export default function LocationIntegrations({ location, xeroConnection, xeroReadFailed = false, user, sampleBcaCar }) {
   const router = useRouter()
   const searchParams = useSearchParams()
 
@@ -44,7 +44,17 @@ export default function LocationIntegrations({ location, xeroConnection, user, s
   // can't be deep-linked to a tab that doesn't apply here.
   const features = location.features || {}
   const isMaster = user.role === 'master'
-  const isOwnerOrMaster = user.role === 'master' || user.role === 'owner'
+  // PAGEGATES.1 — master or owner AT this location (hasRoleAtLocation's
+  // master bypass is profileRole), the page's own gate (guardMasterOrOwner)
+  // and at least what every route behind these tabs asks of this location.
+  // It read `user.role`, the ACTIVE studio's role, so an owner here whose
+  // active studio is one where they manage lost the Xero, Payments,
+  // Instagram, Ads, AC and BCA tabs on a page that is theirs.
+  const isOwnerOrMaster = isMaster || hasRoleAtLocation(user, location.id, ['owner'])
+  // WAROLE.1 — every write on the WhatsApp tab (numbers, Connect, chat
+  // openers, card sets) decides guardMasterOrOwner AT this location, so the
+  // tab is judged there too, never on `user.role` (the ACTIVE studio's role).
+  const ownsWhatsAppHere = hasRoleAtLocation(user, location.id, ['owner'])
 
   const tabs = []
   // Xero is a platform-wide finance integration, not a car-processing
@@ -60,7 +70,7 @@ export default function LocationIntegrations({ location, xeroConnection, user, s
       key: 'xero',
       label: 'Xero',
       Icon: Plug,
-      status: xeroConnection?.tenant_id ? 'connected' : 'not-configured',
+      status: xeroReadFailed ? 'unknown' : (xeroConnection?.tenant_id ? 'connected' : 'not-configured'),
     })
   }
   if (location.settings?.glofox || features.bookings || features.contacts) {
@@ -83,22 +93,11 @@ export default function LocationIntegrations({ location, xeroConnection, user, s
         : 'connected',
     })
   }
-  // Twilio (SMS) — alpha sender ID. Twilio account creds are global
-  // env vars; this tab is only useful when SMS feature is on at the
-  // location AND the operator wants a per-location branded sender.
-  if (isOwnerOrMaster && (features.sms !== false || location.twilio_alpha_sender_id)) {
-    tabs.push({
-      key: 'twilio',
-      label: 'Twilio (SMS)',
-      Icon: MessageSquare,
-      status: location.twilio_alpha_sender_id ? 'connected' : 'not-configured',
-    })
-  }
   // WA-MULTI.1 — WhatsApp per-location numbers. Tab is visible when
   // the location has the whatsapp feature on, OR when the master is
   // looking (so a not-yet-enabled location still surfaces the
   // first-time setup path). Statuses come from the API on render.
-  if ((features.whatsapp !== false || isMaster) && isOwnerOrMaster) {
+  if ((features.whatsapp !== false || isMaster) && ownsWhatsAppHere) {
     tabs.push({
       key: 'whatsapp',
       label: 'WhatsApp',
@@ -142,7 +141,8 @@ export default function LocationIntegrations({ location, xeroConnection, user, s
   // master edits credentials and adds devices. Connected status fires
   // when at least one vendor has credentials saved on the location.
   if (isOwnerOrMaster) {
-    const acConfigured = !!(location.sensibo_api_key || location.thinq_pat)
+    // ACDEVLOC.1 — the page sends has_* flags, never the credentials.
+    const acConfigured = !!(location.has_sensibo_key || location.has_thinq_pat)
     tabs.push({
       key: 'ac-devices',
       label: 'AC Devices',
@@ -208,7 +208,7 @@ export default function LocationIntegrations({ location, xeroConnection, user, s
         {/* Active tab content */}
         <div className="p-5">
           {activeKey === 'xero' && (
-            <XeroIntegrationTab location={location} connection={xeroConnection} />
+            <XeroIntegrationTab location={location} connection={xeroConnection} readFailed={xeroReadFailed} />
           )}
           {activeKey === 'glofox' && (
             <GlofoxIntegrationTab location={location} canEdit={isOwnerOrMaster} />
@@ -223,16 +223,13 @@ export default function LocationIntegrations({ location, xeroConnection, user, s
             <UnifiIntegrationTab location={location} canEdit={isMaster} />
           )}
           {activeKey === 'ac-devices' && (
-            <AcDevicesIntegrationTab location={location} canEdit={isOwnerOrMaster} />
+            <AcDevicesIntegrationTab location={location} canEdit={isOwnerOrMaster} canManage={isMaster} />
           )}
           {activeKey === 'bca' && (
             <BcaIntegrationTab location={location} canEdit={isMaster} sampleCar={sampleBcaCar} />
           )}
-          {activeKey === 'twilio' && (
-            <TwilioIntegrationTab location={location} canEdit={isOwnerOrMaster} />
-          )}
           {activeKey === 'whatsapp' && (
-            <WhatsAppIntegrationTab location={location} canEdit={isOwnerOrMaster} />
+            <WhatsAppIntegrationTab location={location} canEdit={ownsWhatsAppHere} />
           )}
           {activeKey === 'instagram' && (
             <ConnectionsSection locationId={location.id} locationName={location.name} embedded />
@@ -249,6 +246,13 @@ function StatusDot({ status }) {
   }
   if (status === 'error') {
     return <AlertCircle size={10} className="text-red-400" />
+  }
+  // CHANNELREAD.1 — the read behind this tab failed (amber, like the hub's
+  // "Could not load" chip); never the grey "not configured" dot. role="img"
+  // so the label is announced (an aria-label on a bare span is ignored) and
+  // joins the tab button's accessible name.
+  if (status === 'unknown') {
+    return <span role="img" className="w-2 h-2 rounded-full bg-amber-500 inline-block" aria-label="Could not load" />
   }
   // not-configured: small grey dot
   return <span className="w-2 h-2 rounded-full bg-un1t-muted inline-block" />

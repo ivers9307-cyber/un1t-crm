@@ -5,7 +5,7 @@
 // missing id falls back to the relevant inbox/list.
 
 import { describe, it, expect } from 'vitest'
-import { routeForNotification } from './notification-nav'
+import { routeForNotification, teamApprovalRoute } from './notification-nav'
 
 describe('routeForNotification', () => {
   it('deep-links when the payload carries the entity id', () => {
@@ -67,16 +67,53 @@ describe('routeForNotification', () => {
     expect(routeForNotification({ type: 'time_off_inbound', request_id: 42 })).toBe('/approvals?tab=team')
   })
 
-  it('routes staff swap-response types to the Dashboard tab (swap cards live there)', () => {
+  it('routes staff swap types to the Dashboard tab (swap cards live there)', () => {
     for (const type of ['swap_inbound', 'swap_claimed', 'swap_accepted', 'swap_withdrawn', 'swap_declined']) {
       expect(routeForNotification({ type, swap_id: 's1' })).toBe('/(tabs)/dashboard')
     }
+  })
+
+  // RUNWAY.1
+  it('opens the unready week in Manage mode for a roster-runway alert', () => {
+    expect(routeForNotification({ type: 'roster_runway', location_id: 'l1', week_start: '2026-09-28', severity: 'amber' }))
+      .toBe('/(tabs)/schedule?date=2026-09-28&view=manage')
+    expect(routeForNotification({ type: 'roster_runway' })).toBe('/(tabs)/schedule?view=manage')
+    expect(routeForNotification({ type: 'roster_runway', week_start: '28 Sep' })).toBe('/(tabs)/schedule?view=manage')
+  })
+
+  // AVAIL.2 — manager: a coach changed when they can't work (AVAIL.1a's
+  // notice). The phone has no per-coach availability view, so the tap opens
+  // the roster they build. Before this it was an unknown type: a dead tap.
+  it('opens Manage mode for an availability change', () => {
+    expect(routeForNotification({ type: 'availability_changed', profile_id: 'p1', change_id: 'c1' })).toBe('/(tabs)/schedule?view=manage')
+    expect(routeForNotification({ type: 'availability_changed' })).toBe('/(tabs)/schedule?view=manage')
+  })
+
+  // COVERLOOP.2 — the server has sent this type with "Tap to take it" since
+  // ROSTER-FIX.8d and the tap went nowhere (undefined = unknown type). The
+  // "Open swaps you can take" card is on the Dashboard tab.
+  it('routes the open-pool broadcast to the Dashboard tab, where the Claim button is', () => {
+    expect(routeForNotification({ type: 'swap_open_pool', swap_id: 's1', block_date: '2026-09-24' })).toBe('/(tabs)/dashboard')
+    expect(routeForNotification({ type: 'swap_open_pool' })).toBe('/(tabs)/dashboard')
+  })
+
+  // No payload field rides into the route, so a malformed one cannot build a
+  // junk URL: the bare tab, exactly, whatever the ids and dates look like.
+  it('a malformed open-pool payload still lands on the bare Dashboard tab', () => {
+    expect(routeForNotification({ type: 'swap_open_pool', swap_id: 'a?b=c', block_date: 'next week' })).toBe('/(tabs)/dashboard')
+    expect(routeForNotification({ type: 'swap_open_pool', swap_id: 42, block_date: null })).toBe('/(tabs)/dashboard')
   })
 
   it('routes schedule-affecting types to the schedule tab', () => {
     for (const type of ['swap_decision', 'time_off_decision', 'schedule_published', 'schedule_updated', 'shift_adjusted']) {
       expect(routeForNotification({ type })).toBe('/(tabs)/schedule')
     }
+  })
+
+  it('REPLACE.1b — an offer opens the Dashboard (Claim is there); "taken" opens Manage mode on that day', () => {
+    expect(routeForNotification({ type: 'shift_offer', offer_id: 'o1', block_date: '2026-09-29' })).toBe('/(tabs)/dashboard')
+    expect(routeForNotification({ type: 'shift_offer_taken', offer_id: 'o1', block_date: '2026-09-29' })).toBe('/(tabs)/schedule?date=2026-09-29&view=manage')
+    expect(routeForNotification({ type: 'shift_offer_taken', block_date: 'nope' })).toBe('/(tabs)/schedule?view=manage')
   })
 
   it('appends ?date= for roster types when the payload carries the affected date', () => {
@@ -96,7 +133,26 @@ describe('routeForNotification', () => {
     expect(routeForNotification({ type: 'swap_decision', swap_id: 's1', block_date: null })).toBe('/(tabs)/schedule')
     // Older payloads without the date still land on the schedule tab.
     expect(routeForNotification({ type: 'time_off_decision', request_id: 'r1' })).toBe('/(tabs)/schedule')
+  })
+
+  // LEAVECANCEL.1 — an owner is told a manager asked to cancel approved leave.
+  // It is decided on the web (the push says so) and the phone's approvals list
+  // deliberately has no card for it, so the tap must NOT go to /approvals
+  // (an empty list) and must not be `undefined` (a dead tap, logged as an
+  // unhandled type). It lands on the Schedule tab, on the leave's first week.
+  it('time_off_cancel_request lands on the Schedule tab at the leave\'s week, never on the approvals inbox', () => {
+    expect(routeForNotification({ type: 'time_off_cancel_request', request_id: 'r1', start_date: '2026-10-05' })).toBe('/(tabs)/schedule?date=2026-10-05')
+    expect(routeForNotification({ type: 'time_off_cancel_request', request_id: 'r1' })).toBe('/(tabs)/schedule')
+    expect(routeForNotification({ type: 'time_off_cancel_request', start_date: '../approvals' })).toBe('/(tabs)/schedule')
     expect(routeForNotification({ type: 'swap_decision', swap_id: 's1' })).toBe('/(tabs)/schedule')
+  })
+
+  // SHIFTREMIND.1
+  it('opens the shift day for a shift reminder', () => {
+    expect(routeForNotification({ type: 'shift_reminder', assignment_id: 'a1', block_date: '2026-09-22', lead_minutes: 600 }))
+      .toBe('/(tabs)/schedule?date=2026-09-22')
+    expect(routeForNotification({ type: 'shift_reminder' })).toBe('/(tabs)/schedule')
+    expect(routeForNotification({ type: 'shift_reminder', block_date: 'tomorrow' })).toBe('/(tabs)/schedule')
   })
 
   it('routes WhatsApp health/template alerts to the WhatsApp tab', () => {
@@ -123,5 +179,15 @@ describe('routeForNotification', () => {
   it('returns null for missing/blank payloads', () => {
     expect(routeForNotification(null)).toBe(null)
     expect(routeForNotification({})).toBe(null)
+  })
+})
+
+// COVERLOOP.2 — the Studio tab's pending rows open the same place the pushes do.
+describe('teamApprovalRoute', () => {
+  it('focuses the approval when the id is safe to put in a URL', () => {
+    expect(teamApprovalRoute('0a0a0a0a-0000-4000-8000-000000000000')).toBe('/approvals?tab=team&focus=0a0a0a0a-0000-4000-8000-000000000000')
+  })
+  it.each([[undefined], [null], [42], [''], ['a?b=c'], ['a b']])('falls back to the bare team tab for %j', (id) => {
+    expect(teamApprovalRoute(id)).toBe('/approvals?tab=team')
   })
 })

@@ -12,7 +12,8 @@ vi.mock('@/lib/api-auth', () => ({
   requireApiKeyOrManager: vi.fn(),
   assertRowInOrg: vi.fn(async () => null),
 }))
-vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn() }))
+// ROLESWEEP.1c — the REAL per-location role helpers (pure: role-at-location).
+vi.mock('@/lib/auth', async () => ({ ...(await vi.importActual('@/lib/role-at-location')), getCurrentUser: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/sequences', () => ({ triggerSequencesForTagsAdded: vi.fn(async () => {}) }))
 vi.mock('@/lib/glofox-push', () => ({ findOrCreateGlofoxMember: vi.fn(async () => {}) }))
@@ -36,7 +37,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { redactWhatsAppForContact, redactInBodyForContact, getContactImpact } from '@/lib/contact-merge'
 import { redactMailForContact } from '@/lib/contact-mail-erasure'
 
-function mockDb({ oldRow, updated } = {}) {
+function mockDb({ oldRow, updated, oldErr } = {}) {
   const updateSingle = vi.fn(() =>
     Promise.resolve({ data: updated ?? { id: 'c1', ...oldRow }, error: null })
   )
@@ -50,9 +51,11 @@ function mockDb({ oldRow, updated } = {}) {
         eq: vi.fn(() => ({
           single: vi.fn(() =>
             Promise.resolve(
-              oldRow
-                ? { data: oldRow, error: null }
-                : { data: null, error: { message: 'no rows' } }
+              oldErr
+                ? { data: null, error: oldErr }
+                : oldRow
+                  ? { data: oldRow, error: null }
+                  : { data: null, error: { code: 'PGRST116', message: 'no rows' } }
             )
           ),
         })),
@@ -80,7 +83,7 @@ describe('PUT /api/contacts/[id] — cookie-path location gate', () => {
     requireApiKeyOrManager.mockResolvedValue({
       ok: true,
       orgId: null,
-      user: { role: 'manager', locations: [{ id: 'loc-OTHER' }] },
+      user: { role: 'manager', locations: [{ id: 'loc-OTHER' }], rolesByLocation: { 'loc-OTHER': 'manager' } },
     })
     const db = mockDb({ oldRow: { tags: [], location_id: 'loc-1', email: null, glofox_member_id: null } })
     createServerClient.mockReturnValue(db)
@@ -93,7 +96,7 @@ describe('PUT /api/contacts/[id] — cookie-path location gate', () => {
     requireApiKeyOrManager.mockResolvedValue({
       ok: true,
       orgId: null,
-      user: { role: 'manager', locations: [{ id: 'loc-1' }] },
+      user: { role: 'manager', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'manager' } },
     })
     const db = mockDb({ oldRow: { tags: [], location_id: 'loc-1', email: null, glofox_member_id: null } })
     createServerClient.mockReturnValue(db)
@@ -106,7 +109,7 @@ describe('PUT /api/contacts/[id] — cookie-path location gate', () => {
     requireApiKeyOrManager.mockResolvedValue({
       ok: true,
       orgId: null,
-      user: { role: 'master', locations: [] },
+      user: { role: 'master', profileRole: 'master', locations: [] },
     })
     const db = mockDb({ oldRow: { tags: [], location_id: 'loc-1', email: null, glofox_member_id: null } })
     createServerClient.mockReturnValue(db)
@@ -137,6 +140,45 @@ describe('PUT /api/contacts/[id] — cookie-path location gate', () => {
     const res = await PUT(req(), props)
     expect(res.status).toBe(200)
     expect(db.update).toHaveBeenCalled()
+  })
+
+  // REVIEWNITS.1 (D5): the old-row read's error was dropped. A master or an
+  // API key then wrote anyway: the tag-added sequence trigger was skipped in
+  // silence, the address-change reset read no old address, and a missing id
+  // came back as PostgREST's 400.
+  it('a failed old-row read writes nothing and answers 503 (retryable)', async () => {
+    requireApiKeyOrManager.mockResolvedValue({ ok: true, orgId: null, user: null })
+    const db = mockDb({ oldErr: { code: 'XX000', message: 'connection reset' } })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(req(), props)
+    expect(res.status).toBe(503)
+    expect(db.update).not.toHaveBeenCalled()
+  })
+
+  it('a contact that does not exist is a 404 for every caller, before any write', async () => {
+    for (const auth of [
+      { ok: true, orgId: null, user: null },
+      { ok: true, orgId: null, user: { id: 'm', role: 'master', locations: [] } },
+    ]) {
+      requireApiKeyOrManager.mockResolvedValue(auth)
+      const db = mockDb({})
+      createServerClient.mockReturnValue(db)
+      const res = await PUT(req(), props)
+      expect(res.status, JSON.stringify(auth.user)).toBe(404)
+      expect(db.update).not.toHaveBeenCalled()
+    }
+  })
+
+  // A malformed id (PostgREST 22P02, invalid uuid) is a contact that cannot
+  // exist, not an outage: a 503 "try again" would have n8n retry forever and
+  // log an error per call.
+  it('a malformed id is a 404, not a retryable 503', async () => {
+    requireApiKeyOrManager.mockResolvedValue({ ok: true, orgId: null, user: null })
+    const db = mockDb({ oldErr: { code: '22P02', message: 'invalid input syntax for type uuid: "undefined"' } })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(req(), props)
+    expect(res.status).toBe(404)
+    expect(db.update).not.toHaveBeenCalled()
   })
 
   it('401 passthrough when auth fails', async () => {
@@ -170,7 +212,7 @@ describe('PUT /api/contacts/[id] — automations_exempt gating', () => {
     requireApiKeyOrManager.mockResolvedValue({
       ok: true,
       orgId: null,
-      user: { role: 'manager', locations: [{ id: 'loc-1' }] },
+      user: { role: 'manager', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'manager' } },
     })
     const db = mockDb({ oldRow: { tags: [], location_id: 'loc-1', email: null, glofox_member_id: null } })
     createServerClient.mockReturnValue(db)
@@ -189,7 +231,7 @@ describe('PUT /api/contacts/[id] — automations_exempt gating', () => {
 // the address change.
 describe('PUT /api/contacts/[id] — email_status reset on address change (EMAILREP.1)', () => {
   const asManager = () => requireApiKeyOrManager.mockResolvedValue({
-    ok: true, orgId: null, user: { role: 'manager', locations: [{ id: 'loc-1' }] },
+    ok: true, orgId: null, user: { role: 'manager', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'manager' } },
   })
 
   it('clears a bounce when staff correct the address', async () => {
@@ -292,7 +334,7 @@ describe('DELETE /api/contacts/[id] — blocker check runs before any destructiv
   })
 
   it('403 for a non-manager role — impact never consulted, nothing scrubbed', async () => {
-    getCurrentUser.mockResolvedValue({ role: 'staff', locations: [{ id: 'loc-1' }] })
+    getCurrentUser.mockResolvedValue({ role: 'staff', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'staff' } })
     createServerClient.mockReturnValue(deleteDb())
     const res = await DELETE(new Request('http://localhost/api/contacts/c1', { method: 'DELETE' }), delProps)
     expect(res.status).toBe(403)
@@ -301,7 +343,7 @@ describe('DELETE /api/contacts/[id] — blocker check runs before any destructiv
   })
 
   it('404 when the contact does not exist — nothing scrubbed', async () => {
-    getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-1' }] })
+    getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'manager' } })
     createServerClient.mockReturnValue(deleteDb({ existing: null }))
     const res = await DELETE(new Request('http://localhost/api/contacts/c1', { method: 'DELETE' }), delProps)
     expect(res.status).toBe(404)
@@ -310,7 +352,7 @@ describe('DELETE /api/contacts/[id] — blocker check runs before any destructiv
   })
 
   it('403 across locations — the location guard still fires BEFORE the impact check', async () => {
-    getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-OTHER' }] })
+    getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-OTHER' }], rolesByLocation: { 'loc-OTHER': 'manager' } })
     const db = deleteDb()
     createServerClient.mockReturnValue(db)
     const res = await DELETE(new Request('http://localhost/api/contacts/c1', { method: 'DELETE' }), delProps)
@@ -321,7 +363,7 @@ describe('DELETE /api/contacts/[id] — blocker check runs before any destructiv
   })
 
   it('409 when an FK blocks it — and NEITHER scrub ran', async () => {
-    getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-1' }] })
+    getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'manager' } })
     const db = deleteDb()
     createServerClient.mockReturnValue(db)
     getContactImpact.mockResolvedValue({ ...IMPACT_CLEAN, block_delete: [BLOCKER], total_rows: 3 })
@@ -339,7 +381,7 @@ describe('DELETE /api/contacts/[id] — blocker check runs before any destructiv
   })
 
   it('refuses (503) when the check itself could not run — partial is not a green light', async () => {
-    getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-1' }] })
+    getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'manager' } })
     const db = deleteDb()
     createServerClient.mockReturnValue(db)
     // partial:true means the catalog RPC was unavailable and the legacy
@@ -355,7 +397,7 @@ describe('DELETE /api/contacts/[id] — blocker check runs before any destructiv
   })
 
   it('refuses (503) when the impact check throws', async () => {
-    getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-1' }] })
+    getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'manager' } })
     const db = deleteDb()
     createServerClient.mockReturnValue(db)
     getContactImpact.mockRejectedValue(new Error('boom'))
@@ -367,7 +409,7 @@ describe('DELETE /api/contacts/[id] — blocker check runs before any destructiv
   })
 
   it('unblocked contact still scrubs WhatsApp, then InBody, then deletes — in that order', async () => {
-    getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-1' }] })
+    getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'manager' } })
     const db = deleteDb()
     createServerClient.mockReturnValue(db)
 
@@ -388,7 +430,7 @@ describe('DELETE /api/contacts/[id] — blocker check runs before any destructiv
   // scrub can only find the rows while the contact row still exists: it MUST
   // run before the DELETE, and a clean run keeps the response byte-identical.
   it('scrubs mail BEFORE the delete, and a clean scrub leaves the response unchanged', async () => {
-    getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-1' }] })
+    getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'manager' } })
     const db = deleteDb()
     createServerClient.mockReturnValue(db)
 
@@ -400,7 +442,7 @@ describe('DELETE /api/contacts/[id] — blocker check runs before any destructiv
   })
 
   it('a partial mail scrub is REPORTED in the response, not swallowed — and the delete still proceeds (WhatsApp doctrine)', async () => {
-    getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-1' }] })
+    getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'manager' } })
     const db = deleteDb()
     createServerClient.mockReturnValue(db)
     const failure = { table: 'email_inbox_messages', op: 'update', message: 'connection reset' }
@@ -415,7 +457,7 @@ describe('DELETE /api/contacts/[id] — blocker check runs before any destructiv
   })
 
   it('a mail scrub that THROWS is reported the same way and never blocks the erasure', async () => {
-    getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-1' }] })
+    getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'manager' } })
     const db = deleteDb()
     createServerClient.mockReturnValue(db)
     redactMailForContact.mockRejectedValueOnce(new Error('unexpected'))
@@ -428,7 +470,7 @@ describe('DELETE /api/contacts/[id] — blocker check runs before any destructiv
   })
 
   it('master may delete a contact at any location', async () => {
-    getCurrentUser.mockResolvedValue({ role: 'master', locations: [] })
+    getCurrentUser.mockResolvedValue({ role: 'master', profileRole: 'master', locations: [] })
     const db = deleteDb()
     createServerClient.mockReturnValue(db)
     const res = await DELETE(new Request('http://localhost/api/contacts/c1', { method: 'DELETE' }), delProps)
@@ -437,7 +479,7 @@ describe('DELETE /api/contacts/[id] — blocker check runs before any destructiv
   })
 
   it('still 500s when the delete itself fails — the guard is not a transaction', async () => {
-    getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-1' }] })
+    getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'manager' } })
     const db = deleteDb({ deleteError: { message: 'update or delete on table "contacts" violates foreign key constraint' } })
     createServerClient.mockReturnValue(db)
 

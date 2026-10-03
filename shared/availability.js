@@ -1,0 +1,386 @@
+// shared/availability.js
+//
+// AVAIL.1 — coach availability rules. PURE: no imports, no IO, no clock, no
+// host timezone. Shared by the web calendar and picker, the API
+// (src/lib/availability-server.js, src/lib/availability-notify.js), and the
+// phone (AVAIL.2, CANDIDATES.1) as `shared/availability`.
+//
+// A coach declares when they CANNOT work; everything else is available.
+//   weekly  { kind:'weekly', weekday:'mon'..'sun', all_day, start_time, end_time, note }
+//   dated   { kind:'dated', start_date, end_date, all_day, start_time, end_time, note }
+// Weekday codes are shift_templates.days_of_week's (mig 067) and
+// src/lib/roster.js WEEKDAY_CODES: Monday first.
+// Times are 'HH:MM' (Postgres's 'HH:MM:SS' is read too). There are NO
+// overnight windows: end must be after start on the same day, and a shift
+// that crosses midnight is judged against the whole day.
+// The database (mig 630) enforces the same shape with CHECKs; these functions
+// give the SAME answers earlier, in words a coach can act on.
+
+export const AVAILABILITY_WEEKDAYS = Object.freeze(['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'])
+export const AVAILABILITY_WEEKDAY_LABELS = Object.freeze({
+  mon: 'Monday', tue: 'Tuesday', wed: 'Wednesday', thu: 'Thursday', fri: 'Friday', sat: 'Saturday', sun: 'Sunday',
+})
+const WEEKDAY_PLURAL = Object.freeze({
+  mon: 'Mondays', tue: 'Tuesdays', wed: 'Wednesdays', thu: 'Thursdays', fri: 'Fridays', sat: 'Saturdays', sun: 'Sundays',
+})
+// spanDays mirrors mig 630's `end_date - start_date <= 365`; noteChars its note CHECK.
+export const AVAILABILITY_LIMITS = Object.freeze({ weekly: 28, dated: 60, noteChars: 200, spanDays: 366, aheadDays: 730 })
+
+const DAY_MS = 86400000
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+const ISO_DAY = /^(\d{4})-(\d{2})-(\d{2})$/
+const TIME = /^([01]\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?$/
+
+/** Whole days since 1970-01-01 for a REAL calendar date, else null. */
+function dayIndex(iso) {
+  const m = ISO_DAY.exec(typeof iso === 'string' ? iso : '')
+  if (!m) return null
+  const y = Number(m[1]); const mo = Number(m[2]); const d = Number(m[3])
+  const ms = Date.UTC(y, mo - 1, d)
+  const back = new Date(ms)
+  // Date.UTC rolls 30 Feb into March; a round trip that changes the digits
+  // was never a real date.
+  if (back.getUTCFullYear() !== y || back.getUTCMonth() !== mo - 1 || back.getUTCDate() !== d) return null
+  return ms / DAY_MS
+}
+
+/** 'mon'..'sun' for a real 'YYYY-MM-DD', else null. */
+export function weekdayOf(iso) {
+  const n = dayIndex(iso)
+  if (n === null) return null
+  return AVAILABILITY_WEEKDAYS[(new Date(n * DAY_MS).getUTCDay() + 6) % 7]
+}
+
+function minutes(t) {
+  const m = TIME.exec(typeof t === 'string' ? t : '')
+  return m ? Number(m[1]) * 60 + Number(m[2]) : null
+}
+function hhmm(t) {
+  const m = TIME.exec(typeof t === 'string' ? t : '')
+  return m ? `${m[1]}:${m[2]}` : null
+}
+function time12(t) {
+  const total = minutes(t)
+  if (total === null) return ''
+  const h = Math.floor(total / 60)
+  const mm = total % 60
+  const suffix = h >= 12 ? 'pm' : 'am'
+  const h12 = h % 12 === 0 ? 12 : h % 12
+  return mm === 0 ? `${h12}${suffix}` : `${h12}:${String(mm).padStart(2, '0')}${suffix}`
+}
+// '2026-10-03' → '3 Oct'. String digits only: no Date, so no timezone moves a day.
+const dayMonth = (iso) => `${Number(String(iso).slice(8, 10))} ${MONTHS[Number(String(iso).slice(5, 7)) - 1] || ''}`.trim()
+
+/** One rule in canonical form (accepts API input, DB rows and RPC snapshots). */
+export function normaliseRule(raw) {
+  if (!raw || typeof raw !== 'object') return null
+  const kind = raw.kind === 'weekly' || raw.kind === 'dated' ? raw.kind : (raw.weekday ? 'weekly' : 'dated')
+  const allDay = raw.all_day === true
+  const note = typeof raw.note === 'string' && raw.note.trim() ? raw.note.trim() : null
+  return {
+    kind,
+    weekday: kind === 'weekly' && typeof raw.weekday === 'string' ? raw.weekday.trim().toLowerCase() : null,
+    start_date: kind === 'dated' ? (raw.start_date ?? null) : null,
+    end_date: kind === 'dated' ? (raw.end_date || raw.start_date || null) : null,
+    all_day: allDay,
+    start_time: allDay ? null : hhmm(raw.start_time),
+    end_time: allDay ? null : hhmm(raw.end_time),
+    note,
+  }
+}
+
+// Identity of a rule's CONTENT (no note): what diffAvailability compares.
+function windowKey(r) {
+  return [r.kind, r.weekday ?? '', r.start_date ?? '', r.end_date ?? '', r.all_day ? 'all' : `${r.start_time}-${r.end_time}`].join('|')
+}
+const fullKey = (r) => `${windowKey(r)}|${r.note ?? ''}`
+
+function compareRules(a, b) {
+  if (a.kind !== b.kind) return a.kind === 'weekly' ? -1 : 1
+  const byDay = a.kind === 'weekly'
+    ? AVAILABILITY_WEEKDAYS.indexOf(a.weekday) - AVAILABILITY_WEEKDAYS.indexOf(b.weekday)
+    : String(a.start_date).localeCompare(String(b.start_date)) || String(a.end_date).localeCompare(String(b.end_date))
+  if (byDay) return byDay
+  if (a.all_day !== b.all_day) return a.all_day ? -1 : 1
+  return String(a.start_time ?? '').localeCompare(String(b.start_time ?? '')) || fullKey(a).localeCompare(fullKey(b))
+}
+
+function flat(input) {
+  if (Array.isArray(input)) return input
+  return [...(input?.weekly || []), ...(input?.dated || [])]
+}
+
+/** { weekly, dated } in canonical form: sorted, exact duplicates dropped. */
+export function normaliseAvailability(input) {
+  const out = { weekly: [], dated: [] }
+  const seen = new Set()
+  for (const [list, kind] of [[input?.weekly, 'weekly'], [input?.dated, 'dated']]) {
+    for (const raw of Array.isArray(list) ? list : []) {
+      const rule = normaliseRule({ ...(raw && typeof raw === 'object' ? raw : {}), kind })
+      const key = fullKey(rule)
+      if (seen.has(key)) continue
+      seen.add(key)
+      out[kind].push(rule)
+    }
+  }
+  out.weekly.sort(compareRules)
+  out.dated.sort(compareRules)
+  return out
+}
+
+/** Flat rows (a DB read, an RPC snapshot) → { weekly, dated }. */
+export function splitRules(rows) {
+  const list = (rows || []).map(normaliseRule).filter(Boolean)
+  return normaliseAvailability({
+    weekly: list.filter((r) => r.kind === 'weekly'),
+    dated: list.filter((r) => r.kind === 'dated'),
+  })
+}
+
+/**
+ * A rule's CONTENT identity (kind, day or dates, window; not the note), for
+ * matching what a client sends back against what is stored.
+ */
+export function ruleKey(rule) {
+  const r = normaliseRule(rule)
+  return r ? windowKey(r) : ''
+}
+
+/**
+ * What is wrong with one canonical rule, in the coach's words; null if nothing.
+ * `knownKeys` (optional): ruleKey()s of the person's STORED dated rules that
+ * started before today. A dated rule that ended before today is refused
+ * ('That date has passed') unless it is one of them: then it is history the
+ * client merely sent back (a tab left open over midnight), which is no
+ * problem, and the caller drops it with withoutEnded() before saving. A dated
+ * rule that STARTS before today and is not one of them is refused too ('Start
+ * today or later'): no backdating.
+ */
+export function ruleProblem(rule, { todayIso = null, knownKeys = null } = {}) {
+  if (!rule) return 'This entry could not be read'
+  if (rule.kind === 'weekly') {
+    if (!AVAILABILITY_WEEKDAYS.includes(rule.weekday)) return 'Choose a day of the week'
+  } else {
+    const start = dayIndex(rule.start_date)
+    const end = dayIndex(rule.end_date)
+    if (start === null || end === null) return 'Use a real date'
+    if (end < start) return 'The last day is before the first day'
+    if (end - start + 1 > AVAILABILITY_LIMITS.spanDays) return 'Up to a year at a time'
+    const today = dayIndex(todayIso)
+    if (today !== null && end < today) return knownKeys?.has(windowKey(rule)) ? null : 'That date has passed'
+    // Backdating: a NEW or CHANGED rule may not start before today (its past
+    // days would read as "now unavailable" on days already gone). One the
+    // coach already has, by content (a note edit is fine), stays. Judged only
+    // when knownKeys is given: the route always gives it; a client that has
+    // not loaded them leaves it to the route.
+    if (knownKeys && today !== null && start < today && !knownKeys.has(windowKey(rule))) return 'Start today or later'
+    if (today !== null && start > today + AVAILABILITY_LIMITS.aheadDays) return 'Up to two years ahead'
+  }
+  if (!rule.all_day) {
+    const s = minutes(rule.start_time)
+    const e = minutes(rule.end_time)
+    if (s === null || e === null) return 'Give a start and an end time, or choose all day'
+    if (e <= s) return 'The end time must be after the start time'
+  }
+  if (rule.note && rule.note.length > AVAILABILITY_LIMITS.noteChars) return `Keep the note to ${AVAILABILITY_LIMITS.noteChars} characters`
+  return null
+}
+
+/**
+ * THE STARTED-RULE CONTRACT (server side; web and phone just send the edited
+ * rule). A dated rule that has already started (start_date < today) may come
+ * back from a client in only three shapes:
+ *   * unchanged, or with only its note edited: kept as it is;
+ *   * with only its END moved (same start_date, all_day and times as a stored
+ *     rule that is still current): the days already gone are history, so the
+ *     rule is carried to continue FROM TODAY (start_date := today), and the
+ *     save (replace_staff_unavailability, mig 630) keeps start..yesterday of
+ *     the stored rule as a history row. 20-30 Sep edited to end on the 27th,
+ *     saved on the 25th, becomes history 20-24 + current 25-27. An end moved
+ *     to before today means "not from today": the rule is marked known, so
+ *     validation passes it and withoutEnded() drops it (the RPC keeps its
+ *     elapsed days as history, as for a delete);
+ *   * anything else (a new rule, a moved start, a changed window): left as
+ *     sent, so ruleProblem refuses it ('Start today or later').
+ * `stored` = the person's stored dated rules that started before today (the
+ * route reads them). Returns the carried input (same order and length, so
+ * issue paths still index what was validated) and the knownKeys to validate
+ * with.
+ */
+export function carryStartedRules(input, stored, todayIso) {
+  const today = dayIndex(todayIso)
+  const known = (stored || []).map(normaliseRule).filter((r) => r && r.kind === 'dated')
+  const knownKeys = new Set(known.map(windowKey))
+  if (today === null) return { input, knownKeys }
+  const sameWindow = (a, b) => a.all_day === b.all_day && (a.all_day || (a.start_time === b.start_time && a.end_time === b.end_time))
+  const dated = input.dated.map((r) => {
+    const start = dayIndex(r.start_date)
+    const end = dayIndex(r.end_date)
+    if (start === null || end === null || start >= today || knownKeys.has(windowKey(r))) return r
+    const match = known.find((k) => k.start_date === r.start_date && dayIndex(k.end_date) >= today && sameWindow(k, r))
+    if (!match) return r
+    if (end < today) {
+      knownKeys.add(windowKey(r))
+      return r
+    }
+    return { ...r, start_date: todayIso }
+  })
+  return { input: { weekly: input.weekly, dated }, knownKeys }
+}
+
+/** { weekly, dated } without the dated rules that ended before todayIso (history is never re-saved). */
+export function withoutEnded(input, todayIso) {
+  const today = dayIndex(todayIso)
+  return {
+    weekly: input.weekly,
+    dated: input.dated.filter((r) => {
+      const end = dayIndex(r.end_date)
+      return today === null || end === null || end >= today
+    }),
+  }
+}
+
+/** Every problem with a canonical { weekly, dated }: [{ path, message }] (validateBody's issue shape). */
+export function availabilityProblems(input, opts = {}) {
+  const issues = []
+  if (input.weekly.length > AVAILABILITY_LIMITS.weekly) issues.push({ path: 'weekly', message: `Up to ${AVAILABILITY_LIMITS.weekly} weekly entries` })
+  if (input.dated.length > AVAILABILITY_LIMITS.dated) issues.push({ path: 'dated', message: `Up to ${AVAILABILITY_LIMITS.dated} dates` })
+  for (const kind of ['weekly', 'dated']) {
+    input[kind].forEach((rule, i) => {
+      const message = ruleProblem(rule, opts)
+      if (message) issues.push({ path: `${kind}.${i}`, message })
+    })
+  }
+  return issues
+}
+
+/** The rules that apply on one date. */
+export function rulesOnDate(rules, dateIso) {
+  const day = dayIndex(dateIso)
+  if (day === null) return []
+  const wd = weekdayOf(dateIso)
+  return (rules || []).map(normaliseRule).filter((r) => {
+    if (!r) return false
+    if (r.kind === 'weekly') return r.weekday === wd
+    const s = dayIndex(r.start_date)
+    const e = dayIndex(r.end_date)
+    return s !== null && e !== null && s <= day && day <= e
+  })
+}
+
+/**
+ * Is this person unavailable for [startTime, endTime) on dateIso? null when
+ * not, else the matching rules (sorted). Overlap is strict: a shift ending
+ * as a window starts is fine. No times, or an end not after the start (a
+ * shift crossing midnight), asks about the whole day. ADVISORY everywhere it
+ * is used: it never blocks an assignment.
+ */
+export function unavailableFor(rules, dateIso, startTime = null, endTime = null) {
+  const s = minutes(startTime)
+  const e = minutes(endTime)
+  const wholeDay = s === null || e === null || e <= s
+  const hits = rulesOnDate(rules, dateIso).filter((r) => {
+    if (r.all_day || wholeDay) return true
+    const rs = minutes(r.start_time)
+    const re = minutes(r.end_time)
+    if (rs === null || re === null) return true // unreadable window: flag it, the advisory side
+    return s < re && rs < e
+  })
+  return hits.length ? hits.sort(compareRules) : null
+}
+
+/** '9am–12pm' or 'all day'. */
+export function describeWindow(rule) {
+  const r = normaliseRule(rule)
+  if (!r || r.all_day) return 'all day'
+  return `${time12(r.start_time)}–${time12(r.end_time)}`
+}
+
+/** 'Mondays, 9am–12pm' · '3 Oct, all day' · '3 Oct – 5 Oct, 5pm–7:30pm'. */
+export function describeRule(rule) {
+  const r = normaliseRule(rule)
+  if (!r) return ''
+  const when = r.kind === 'weekly'
+    ? (WEEKDAY_PLURAL[r.weekday] || r.weekday)
+    : (r.start_date === r.end_date ? dayMonth(r.start_date) : `${dayMonth(r.start_date)} – ${dayMonth(r.end_date)}`)
+  return `${when}, ${describeWindow(r)}`
+}
+
+/** The picker badge text for unavailableFor's matches. */
+export function unavailableSummary(matches) {
+  if (!matches || matches.length === 0) return ''
+  if (matches.some((r) => normaliseRule(r)?.all_day)) return 'all day'
+  return [...new Set(matches.map(describeWindow))].join(', ')
+}
+
+/** 'YYYY-MM-DD' for a whole-day index (dayIndex's inverse). UTC arithmetic: no host timezone. */
+function isoFromDayIndex(n) {
+  const d = new Date(n * DAY_MS)
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`
+}
+
+const windowSig = (r) => (r.all_day ? 'all' : `${r.start_time}-${r.end_time}`)
+
+// The parts of each dated rule in `rules` not covered by a same-window rule in
+// `others` (a range minus ranges: a middle cut leaves two pieces).
+function subtractRanges(rules, others) {
+  const out = []
+  for (const r of rules) {
+    let pieces = [[dayIndex(r.start_date), dayIndex(r.end_date)]]
+    for (const o of others) {
+      if (windowSig(o) !== windowSig(r)) continue
+      const os = dayIndex(o.start_date)
+      const oe = dayIndex(o.end_date)
+      pieces = pieces.flatMap(([ps, pe]) => {
+        if (oe < ps || os > pe) return [[ps, pe]]
+        const keep = []
+        if (ps < os) keep.push([ps, os - 1])
+        if (pe > oe) keep.push([oe + 1, pe])
+        return keep
+      })
+    }
+    for (const [ps, pe] of pieces) out.push({ ...r, start_date: isoFromDayIndex(ps), end_date: isoFromDayIndex(pe) })
+  }
+  return out
+}
+
+/**
+ * What a save added and removed, by content (a note-only edit is neither).
+ * With `fromIso` (the day of the save), dated rules are judged from that day
+ * on: the days before it are history the save cannot change (mig 630 keeps a
+ * started rule's elapsed days), so they are clipped away, and a removed and an
+ * added dated rule with the same window cancel where they overlap. 20-30 Sep
+ * cut to 25-27 on the 25th is then "removed 28-30", not "removed 20-30, added
+ * 25-27".
+ */
+export function diffAvailability(before, after, { fromIso = null } = {}) {
+  const from = dayIndex(fromIso)
+  const clip = (rules) => (from === null ? rules : rules.flatMap((r) => {
+    if (r.kind !== 'dated') return [r]
+    const s = dayIndex(r.start_date)
+    const e = dayIndex(r.end_date)
+    if (s === null || e === null) return [r]
+    if (e < from) return []
+    return [s < from ? { ...r, start_date: fromIso } : r]
+  }))
+  const b = clip(flat(splitRules(flat(before))))
+  const a = clip(flat(splitRules(flat(after))))
+  const bKeys = new Set(b.map(windowKey))
+  const aKeys = new Set(a.map(windowKey))
+  const added = a.filter((r) => !bKeys.has(windowKey(r)))
+  const removed = b.filter((r) => !aKeys.has(windowKey(r)))
+  if (from === null) return { added, removed }
+  const dated = (list) => list.filter((r) => r.kind === 'dated' && dayIndex(r.start_date) !== null && dayIndex(r.end_date) !== null)
+  const other = (list) => list.filter((r) => !dated([r]).length)
+  return {
+    added: [...other(added), ...subtractRanges(dated(added), dated(removed))],
+    removed: [...other(removed), ...subtractRanges(dated(removed), dated(added))],
+  }
+}
+
+/** Same rules AND same notes. */
+export function sameAvailability(x, y) {
+  const a = flat(splitRules(flat(x))).map(fullKey)
+  const b = flat(splitRules(flat(y))).map(fullKey)
+  return a.length === b.length && a.every((k, i) => k === b[i])
+}

@@ -51,6 +51,7 @@ vi.mock('@/lib/push', () => ({ sendPushToRolesAtLocation: vi.fn(async () => ({ s
 import { POST } from './route.js'
 import { getInspection, updateInspection, updateEquipment } from '@/lib/equipment-db'
 import { insertIssueWithAttachments } from '@/lib/issues'
+import { sendPushToRolesAtLocation } from '@/lib/push'
 import { rollForward } from '@/lib/equipment'
 import { dublinTodayStr } from '@/lib/dublin-time'
 
@@ -156,6 +157,20 @@ describe('POST /api/equipment/inspections/[id]/submit', () => {
 
     const inspPatch = updateInspection.mock.calls.at(-1)[2]
     expect(inspPatch.issue_id).toBe('iss-1')
+  })
+
+  // PUSHCAT.1 — the category is BARE. resolvePushAllowedIds prepends
+  // `notify_` itself, so the prefixed literal gated on the unregistered
+  // `notify_notify_issue_submitted` and only masters ever heard of a fault.
+  it('a failure pushes the owners on the bare issue_submitted category', async () => {
+    const res = await POST(req({ results: JSON.stringify(ONE_FAIL) }), ctx)
+    expect(res.status).toBe(200)
+    expect(sendPushToRolesAtLocation).toHaveBeenCalledTimes(1)
+    expect(sendPushToRolesAtLocation).toHaveBeenCalledWith(
+      expect.any(String),
+      ['owner', 'master'],
+      expect.objectContaining({ category: 'issue_submitted', data: { type: 'issue', issueId: 'iss-1' } })
+    )
   })
 
   it('takeOutOfService with no failure does NOT take the asset out of service', async () => {

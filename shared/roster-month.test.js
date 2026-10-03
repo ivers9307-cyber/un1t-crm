@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { monthBounds, upcomingWeeksBounds, shiftDurationHours, summariseShifts, buildMonthMatrix } from './roster-month.js'
+import { monthBounds, upcomingWeeksBounds, shiftDurationHours, summariseShifts, buildMonthMatrix, effectiveShiftStart, effectiveShiftEnd, blockDefaultStart, blockDefaultEnd } from './roster-month.js'
 
 describe('monthBounds', () => {
   it('returns the calendar month containing the anchor (Mon-start unaffected)', () => {
@@ -35,6 +35,33 @@ describe('shiftDurationHours', () => {
   })
   it('0 when times missing', () => {
     expect(shiftDurationHours({ shift_templates: {} })).toBe(0)
+  })
+  // MOBILESCHED.2 — a block edited away from its template totals at its own hours.
+  it('uses the block time before the template, overrides on top', () => {
+    const row = { block_start_time: '07:00:00', block_end_time: '12:00:00', shift_templates: { start_time: '06:00', end_time: '14:00' } }
+    expect(shiftDurationHours(row)).toBe(5)
+    expect(shiftDurationHours({ ...row, end_time_override: '10:00:00' })).toBe(3)
+    expect(summariseShifts([row, row])).toEqual({ count: 2, hours: 10 })
+  })
+})
+
+describe('effectiveShiftStart / effectiveShiftEnd (MOBILESCHED.2)', () => {
+  const tpl = { start_time: '06:00:00', end_time: '14:00:00' }
+  it('override → block_start_time → top-level start_time → template', () => {
+    expect(effectiveShiftStart({ shift_templates: tpl })).toBe('06:00:00')
+    expect(effectiveShiftStart({ start_time: '06:30:00', shift_templates: tpl })).toBe('06:30:00')
+    expect(effectiveShiftStart({ block_start_time: '07:00:00', start_time: '06:30:00', shift_templates: tpl })).toBe('07:00:00')
+    expect(effectiveShiftStart({ start_time_override: '08:00:00', block_start_time: '07:00:00', shift_templates: tpl })).toBe('08:00:00')
+    expect(effectiveShiftEnd({ block_end_time: '12:00:00', shift_templates: tpl })).toBe('12:00:00')
+    expect(effectiveShiftEnd({ end_time_override: '11:00:00', block_end_time: '12:00:00' })).toBe('11:00:00')
+  })
+  it('the block default ignores overrides', () => {
+    expect(blockDefaultStart({ start_time_override: '08:00:00', block_start_time: '07:00:00' })).toBe('07:00:00')
+    expect(blockDefaultEnd({ end_time_override: '11:00:00', shift_templates: tpl })).toBe('14:00:00')
+  })
+  it('null when nothing resolves', () => {
+    expect(effectiveShiftStart(null)).toBeNull()
+    expect(effectiveShiftEnd({})).toBeNull()
   })
 })
 

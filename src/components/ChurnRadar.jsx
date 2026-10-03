@@ -494,7 +494,7 @@ function DunningSettings() {
       <p className="mt-1 text-xs text-un1t-subtle">
         The automation that reminds a member to update their card when a{' '}
         <span className="font-medium">membership payment fails</span>. Install
-        &ldquo;Overdue membership payment &rarr; card update reminders&rdquo; from the
+        &ldquo;Overdue membership payment &rarr; Pay now reminders&rdquo; from the
         automations templates (or build a manual one), pick it here, and choose
         whether it starts by itself. The one-click{' '}
         <span className="font-medium">Send payment reminder</span> on the Overdue tab

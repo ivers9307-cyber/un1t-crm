@@ -8,6 +8,7 @@ import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import DashboardTabs from '@/components/dashboard/DashboardTabs'
+import { staffTabMetadata } from '@/lib/staff-tab-title'
 
 const SEGMENTS = [
   { id: 'today',    label: 'Today',    href: '/dashboard/today',    perm: 'dashboard_personal' },
@@ -24,6 +25,14 @@ const SEGMENTS = [
   // ADS-REPORT — paid-ad performance joins the dashboard tab family (moved out of the sidebar).
   { id: 'ads',        label: 'Ads',        href: '/dashboard/ads',        perm: 'dashboard_ads' },
 ]
+
+// TABTITLE.1 — the tab names the ACTIVE studio for every page under this
+// layout (see src/lib/staff-tab-title.js). This is the OUTERMOST staff layout
+// of its subtree: a layout nested under it must NOT export this again, or the
+// tab reads "Studio · Studio".
+export async function generateMetadata() {
+  return staffTabMetadata()
+}
 
 export default async function DashboardLayout({ children }) {
   const user = await getCurrentUser()

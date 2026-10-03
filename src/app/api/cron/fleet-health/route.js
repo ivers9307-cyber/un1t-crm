@@ -57,6 +57,7 @@ import { sendEmail } from '@/lib/postmark'
 import { sendPush } from '@/lib/push'
 import { getAppUrl } from '@/lib/app-url'
 import { listTailnetDevices, tailscaleConfigured } from '@/lib/tailscale-api'
+import { excludeTombstones } from '@/lib/staff-tombstone'
 import {
   isFleetDevice,
   deviceNameOf,
@@ -524,9 +525,11 @@ async function notify(db, alerts) {
     ...back.map((a) => `RECOVERED — ${a.name}`),
   ]
 
-  const { data: masters } = await db
-    .from('profiles')
-    .select('id, email')
+  // STAFFDELETE.1 — never alert a tombstone (its address is scrambled). Mig 622
+  // already demotes a deleted master to role='staff', so this is the second
+  // lock, not the only one: `role` alone is not a tombstone filter.
+  const { data: masters } = await excludeTombstones(db.from('profiles')
+    .select('id, email'))
     .eq('role', 'master')
 
   let delivered = false

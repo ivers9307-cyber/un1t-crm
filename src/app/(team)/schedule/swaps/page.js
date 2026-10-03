@@ -15,7 +15,7 @@ export default async function SwapRequestsPage() {
   if (!hasPermission(user, 'schedule')) redirect('/')
 
   return (
-    <div className="p-8">
+    <div className="px-4 py-6 sm:p-8">
       {/* SCHED.9 — the other convergence target for the old inline
           "Approvals" tab (see ScheduleTabs.jsx). SwapRequestsManager keeps
           its own internal "Back to Schedule" link — harmless overlap with

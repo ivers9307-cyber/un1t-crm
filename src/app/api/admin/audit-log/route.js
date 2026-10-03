@@ -33,7 +33,7 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser, getUserLocationIds, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { uuidLike } from '@/lib/schemas'
 
@@ -63,7 +63,9 @@ export async function GET(request) {
   // RLS allows master + owner SELECT. The page itself is master-only
   // (admin layout), but allow owner via API so future per-location
   // audit pages don't need a separate route.
-  if (user.profileRole !== 'master' && user.role !== 'owner') {
+  // ROLESWEEP.1c — coarse pre-check (owner SOMEWHERE); the scope below keeps
+  // only the locations where the caller is owner.
+  if (user.profileRole !== 'master' && !hasRoleAtAnyLocation(user, ['owner'])) {
     return NextResponse.json({ success: false, error: 'Master or owner only' }, { status: 403 })
   }
 
@@ -86,7 +88,8 @@ export async function GET(request) {
   // constrained to the audit events at their own assigned locations; a
   // caller with no locations sees nothing (don't run an unscoped query).
   const isMaster = user.profileRole === 'master'
-  const scopeLocationIds = isMaster ? null : getUserLocationIds(user)
+  // ROLESWEEP.1c — an owner at A who is staff at B sees A's events only.
+  const scopeLocationIds = isMaster ? null : getUserLocationIds(user).filter((id) => hasRoleAtLocation(user, id, ['owner']))
   if (!isMaster && scopeLocationIds.length === 0) {
     return NextResponse.json({
       success: true,

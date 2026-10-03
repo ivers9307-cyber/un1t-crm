@@ -19,10 +19,21 @@
 //     utilisation metric ("are we using what we're paying for?").
 //   - Contractor shifts cost (hours × hourly_rate) and that
 //     total is what the monthly budget is measured against.
+//   - SHIFTTYPE.1 (Richard, 25 Sep 2026): an ADMIN shift is out of the
+//     contractor budget entirely. Its hours still count as hours (FTE
+//     utilisation, implicit cost, week-cost, payroll).
+//   - CONTRACTORSPEND.1 (27 Sep 2026): the MONTH figure prices every live
+//     assignment at this studio by whoever HOLDS it (active, deactivated,
+//     deleted, or a member of another studio: pay comes in keyed by holder),
+//     counts only PUBLISHED shifts as spend and reports the rest beside it,
+//     and takes its month from the Dublin calendar string, never a Date.
 
 import { shiftHours, implicitHourlyRate } from './payroll'
 import { addDays, formatDate, liveAssignments } from './roster'
 import { effectiveOverride } from './roster-read'
+import { shiftKindOf, isAdminShift } from '@shared/shift-kind'
+import { monthBounds } from '@shared/roster-month'
+import { isRealCalendarDate } from './schemas'
 
 // Roster v2 phase 6 — leave-aware availability.
 //
@@ -36,6 +47,12 @@ import { effectiveOverride } from './roster-read'
 // leave subtracts (contracted_hours_per_week / 5) hours. Weekend
 // leave doesn't reduce availability — the contract didn't count
 // it in the first place.
+//
+// HOLIDAYLEAVE.1 — a bank holiday inside approved leave STILL counts here.
+// countLeaveDays (time-off-days.js) skips it because it costs no ALLOWANCE;
+// this function measures AVAILABILITY, and the coach is no more available on a
+// bank holiday they are on leave for. The two are different questions and are
+// meant to disagree on that one day.
 //
 // Half-days aren't honoured here; we'd need a `hours_per_day`
 // or similar on time_off_requests for that. The error from
@@ -126,8 +143,17 @@ export function blocksToShiftRows(blocks) {
         id: a.id,
         block_id: block.id,
         location_id: block.location_id,
+        // CONTRACTORSPEND.1 — contractor spend counts a shift as spend only on a
+        // PUBLISHED roster (no roster, a draft or a stood-down 'superseded' one
+        // is not yet spend). Nothing that counts HOURS looks at it.
+        published: block.rosters?.status === 'published',
         profile_id: a.profile_id,
         shift_template_id: block.template_id,
+        // SHIFTTYPE.1 — class | admin, read through the embedded template.
+        // Contractor spend skips admin rows (summarizeMonth directly,
+        // summarizeWeek via sumHoursForProfile's classOnly); nothing that
+        // counts HOURS looks at it.
+        kind: shiftKindOf(block),
         // Two spellings of the same day on purpose: the legacy shift shape the
         // payroll + swap helpers read says `shift_date`, this module's own
         // range filter says `block_date`.
@@ -153,14 +179,16 @@ export function blocksToShiftRows(blocks) {
 
 /**
  * Sum (date, hours) tuples for a single profile, across the date
- * range supplied. Returns total hours.
+ * range supplied. Returns total hours. `classOnly` (SHIFTTYPE.1) skips
+ * admin rows: set ONLY where the hours become contractor euros.
  */
-function sumHoursForProfile(rows, profileId, startIso, endIso) {
+function sumHoursForProfile(rows, profileId, startIso, endIso, { classOnly = false } = {}) {
   let total = 0
   for (const r of rows) {
     if (r.profile_id !== profileId) continue
     if (startIso && r.block_date < startIso) continue
     if (endIso && r.block_date > endIso) continue
+    if (classOnly && r.kind === 'admin') continue
     total += shiftHours(r)
   }
   return total
@@ -268,7 +296,8 @@ export function summarizeWeek({ blocks, staff, weekStart, timeOff = [], today = 
       if (rate <= 0) {
         incompleteProfileNames.push(s.full_name)
       }
-      contractorWeekCostEur += allocated * rate
+      // SHIFTTYPE.1 — admin shifts are out of contractor spend.
+      contractorWeekCostEur += sumHoursForProfile(rows, s.id, startIso, endIso, { classOnly: true }) * rate
     }
   }
 
@@ -279,8 +308,10 @@ export function summarizeWeek({ blocks, staff, weekStart, timeOff = [], today = 
   fteSummaries.sort((a, b) => order[a.status] - order[b.status])
 
   const blockCount = weekBlocks.length
+  // SHIFTTYPE.1 — an admin shift has no minimum staffing, so an empty one is
+  // not "unstaffed" (it is still counted in blockCount).
   const unstaffedCount = weekBlocks.filter(
-    b => liveAssignments(b.shift_assignments).length === 0 && b.block_date >= todayIso
+    b => !isAdminShift(b) && liveAssignments(b.shift_assignments).length === 0 && b.block_date >= todayIso
   ).length
 
   return {
@@ -295,36 +326,65 @@ export function summarizeWeek({ blocks, staff, weekStart, timeOff = [], today = 
 }
 
 /**
- * Summarise contractor cost for the calendar month containing
- * `referenceDate`. Compared against the location's
- * monthly_contractor_budget_eur (null = not configured).
+ * Contractor cost for the calendar month containing `referenceDate`, against
+ * the location's monthly_contractor_budget_eur (null = not configured).
+ *
+ * CONTRACTORSPEND.1 — three rules changed, each of which dropped worked shifts:
+ *   - WHO: every live assignment on these blocks is priced by its HOLDER, found
+ *     in `pay` (loadHolderPay, keyed by profile id). It used to loop over this
+ *     studio's ACTIVE members, so a contractor deactivated mid-month, one from
+ *     the sibling studio covering a class, and a deleted one all cost €0.
+ *   - WHICH: `contractorCostEur` (and overBudget / remainingEur /
+ *     utilisationPct) counts PUBLISHED shifts; everything else is
+ *     `unpublishedContractorCostEur`, with the projection beside it, so a month
+ *     still being drafted shows where it is heading without calling it spent.
+ *   - WHEN: `referenceDate` is a 'YYYY-MM-DD' Dublin calendar date and the
+ *     month is string arithmetic (monthBounds). It was `new Date(referenceDate)`
+ *     read with local getters: UTC midnight, so west of UTC the 1st was the
+ *     month before and the sum came back €0. A Date, and an impossible date
+ *     (2026-02-30, 2026-13-01), are refused.
+ * SHIFTTYPE.1 unchanged: an admin shift costs the contractor budget nothing.
+ * Employment type is the holder's CURRENT one for the whole month (no history).
+ *
+ * @param {object} args
+ * @param {object[]} args.blocks  shift_blocks with rosters(status), shift_templates, shift_assignments
+ * @param {Map<string, {employment_type, hourly_rate, annual_salary, contracted_hours_per_week}>} args.pay
+ * @param {string} args.referenceDate  YYYY-MM-DD inside the month
+ * @param {number|string|null} args.monthlyBudgetEur
  */
-export function summarizeMonth({ blocks, staff, referenceDate, monthlyBudgetEur }) {
-  const ref = referenceDate instanceof Date ? referenceDate : new Date(referenceDate)
-  const monthStart = new Date(ref.getFullYear(), ref.getMonth(), 1)
-  const monthEnd = new Date(ref.getFullYear(), ref.getMonth() + 1, 0)
-  const startIso = formatDate(monthStart)
-  const endIso = formatDate(monthEnd)
+export function summarizeMonth({ blocks, pay, referenceDate, monthlyBudgetEur }) {
+  // The shape alone is not enough: monthBounds('2026-02-30') is March and
+  // '2026-13-01' is NaN-NaN-NaN, which matches no block and reads as €0 spent.
+  if (!isRealCalendarDate(referenceDate)) {
+    throw new TypeError('summarizeMonth: referenceDate must be a real YYYY-MM-DD string (a Dublin calendar date)')
+  }
+  const { monthStartIso, monthEndIso } = monthBounds(referenceDate)
 
   const monthBlocks = (blocks || []).filter(
-    b => b.block_date >= startIso && b.block_date <= endIso
+    b => b.block_date >= monthStartIso && b.block_date <= monthEndIso
   )
-  const rows = blocksToShiftRows(monthBlocks)
 
   let contractorCostEur = 0
-  let fteImplicitCostEur = 0  // FTE doesn't hit the budget but we expose it for context
-  for (const s of staff || []) {
-    if (!s.active) continue
-    const allocated = sumHoursForProfile(rows, s.id, startIso, endIso)
-    if (allocated <= 0) continue
-    if (s.employment_type === 'contractor') {
-      const rate = Number(s.hourly_rate) || 0
-      contractorCostEur += allocated * rate
-    } else if (s.employment_type === 'fte') {
-      fteImplicitCostEur += allocated * implicitHourlyRate(s)
+  let unpublishedContractorCostEur = 0
+  // FTE doesn't hit the budget; it is context for owners / managers / masters.
+  // Salary-derived, so the route withholds it from head coaches (FTECOSTVIS.1).
+  let fteImplicitCostEur = 0
+  for (const r of blocksToShiftRows(monthBlocks)) {
+    const person = pay?.get(r.profile_id)
+    if (!person) continue
+    const hours = shiftHours(r)
+    if (person.employment_type === 'contractor') {
+      // SHIFTTYPE.1 — admin shifts are out of the contractor budget.
+      if (r.kind === 'admin') continue
+      const cost = hours * (Number(person.hourly_rate) || 0)
+      if (r.published) contractorCostEur += cost
+      else unpublishedContractorCostEur += cost
+    } else if (person.employment_type === 'fte' && r.published) {
+      fteImplicitCostEur += hours * implicitHourlyRate(person)
     }
   }
 
+  const projected = contractorCostEur + unpublishedContractorCostEur
   const budget = monthlyBudgetEur != null ? Number(monthlyBudgetEur) : null
   const remaining = budget != null ? budget - contractorCostEur : null
   const overBudget = budget != null && contractorCostEur > budget
@@ -333,13 +393,16 @@ export function summarizeMonth({ blocks, staff, referenceDate, monthlyBudgetEur 
     : null
 
   return {
-    monthStartIso: startIso,
-    monthEndIso: endIso,
+    monthStartIso,
+    monthEndIso,
     contractorCostEur: round2(contractorCostEur),
+    unpublishedContractorCostEur: round2(unpublishedContractorCostEur),
+    projectedContractorCostEur: round2(projected),
     fteImplicitCostEur: round2(fteImplicitCostEur),
     monthlyBudgetEur: budget,
     remainingEur: remaining != null ? round2(remaining) : null,
     overBudget,
+    projectedOverBudget: budget != null && projected > budget,
     utilisationPct,
   }
 }

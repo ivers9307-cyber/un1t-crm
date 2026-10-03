@@ -2,10 +2,17 @@
 
 // Attendance report — table view with date range + status filter +
 // CSV export. Reads /api/attendance which already does the bucketing.
+// ATTENDREPORT.1: the default window and the CSV come from
+// src/lib/attendance-report.js (the route uses the same default); "Scheduled"
+// is the start the coach was given (a manager's adjusted start, else the
+// rostered one), which is what lateness is measured from. An adjusted end is
+// shown beside it ("ends 23:00", "ends 00:30 next day"), since pending vs
+// no-show is judged on it.
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Loader2, Download, RefreshCw } from 'lucide-react'
 import { dublinTodayStr } from '@/lib/dublin-time'
+import { defaultAttendancePeriod, attendanceCsv } from '@/lib/attendance-report'
 
 const STATUS_META = {
   on_time:  { label: 'On time', cls: 'bg-emerald-100 text-emerald-800 border-emerald-200' },
@@ -14,22 +21,25 @@ const STATUS_META = {
   pending:  { label: 'Pending', cls: 'bg-neutral-100 text-neutral-700 border-neutral-200' },
 }
 
-function defaultFromIso() {
-  const d = new Date(Date.now() - 14 * 24 * 3600_000)
-  return d.toISOString().slice(0, 10)
-}
-function todayIso() { return dublinTodayStr() }
-
 export default function AttendanceReportClient({ activeLocationName }) {
-  const [from, setFrom] = useState(defaultFromIso())
-  const [to, setTo]     = useState(todayIso())
+  // One Dublin day for both ends (the old `from` was the UTC day).
+  const [from, setFrom] = useState(() => defaultAttendancePeriod(dublinTodayStr()).from)
+  const [to, setTo]     = useState(() => defaultAttendancePeriod(dublinTodayStr()).to)
   const [statusFilter, setStatusFilter] = useState('all') // all | on_time | late | no_show | pending
   const [profileFilter, setProfileFilter] = useState('') // free-text search by name
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
 
+  // Every load takes a number; only the latest one's answer (success or
+  // failure) is shown, and only it ends `loading`. Without this a slow earlier
+  // request could land after a fast later one and show window A's rows under
+  // window B's dates.
+  const requestSeq = useRef(0)
+
   async function load() {
+    const id = ++requestSeq.current
+    const isLatest = () => id === requestSeq.current
     setLoading(true); setError(null)
     try {
       const url = new URL('/api/attendance', window.location.origin)
@@ -38,11 +48,14 @@ export default function AttendanceReportClient({ activeLocationName }) {
       const res = await fetch(url.toString(), { cache: 'no-store' })
       const json = await res.json()
       if (!json.success) throw new Error(json.error || 'failed')
-      setData(json)
+      if (isLatest()) setData(json)
     } catch (e) {
+      if (!isLatest()) return
+      // Drop the last window's rows: a failed load never shows old data.
+      setData(null)
       setError(e.message || 'Network error')
     } finally {
-      setLoading(false)
+      if (isLatest()) setLoading(false)
     }
   }
 
@@ -65,20 +78,7 @@ export default function AttendanceReportClient({ activeLocationName }) {
   }, [data, statusFilter, profileFilter])
 
   function downloadCsv() {
-    const header = ['Date', 'Staff', 'Role', 'Scheduled start', 'Actual start', 'Status', 'Minutes late']
-    const lines = [header.join(',')]
-    for (const r of filtered) {
-      lines.push([
-        r.block_date,
-        csvEscape(r.profile_name),
-        r.profile_role || '',
-        r.scheduled_start,
-        r.actual_start || '',
-        r.status,
-        r.minutes_late ?? '',
-      ].join(','))
-    }
-    const blob = new Blob([lines.join('\n')], { type: 'text/csv' })
+    const blob = new Blob([attendanceCsv(filtered)], { type: 'text/csv' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
@@ -92,13 +92,13 @@ export default function AttendanceReportClient({ activeLocationName }) {
       {/* Filter bar */}
       <div className="mb-4 flex flex-wrap items-end gap-3 rounded-lg border border-neutral-200 bg-white p-3">
         <div>
-          <label className="mb-1 block text-xs font-medium text-neutral-700">From</label>
-          <input type="date" value={from} onChange={(e) => setFrom(e.target.value)}
+          <label htmlFor="attendance-from" className="mb-1 block text-xs font-medium text-neutral-700">From</label>
+          <input id="attendance-from" type="date" value={from} onChange={(e) => setFrom(e.target.value)}
             className="rounded-md border border-neutral-300 px-2 py-1.5 text-sm" />
         </div>
         <div>
-          <label className="mb-1 block text-xs font-medium text-neutral-700">To</label>
-          <input type="date" value={to} onChange={(e) => setTo(e.target.value)}
+          <label htmlFor="attendance-to" className="mb-1 block text-xs font-medium text-neutral-700">To</label>
+          <input id="attendance-to" type="date" value={to} onChange={(e) => setTo(e.target.value)}
             className="rounded-md border border-neutral-300 px-2 py-1.5 text-sm" />
         </div>
         <div>
@@ -146,6 +146,12 @@ export default function AttendanceReportClient({ activeLocationName }) {
         <div className="mb-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</div>
       )}
 
+      {data?.warnings?.includes('sources_unavailable') && (
+        <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+          Arrival sources could not be loaded, so some Source badges may be missing. Refresh to try again.
+        </div>
+      )}
+
       {/* Table */}
       <div className="overflow-hidden rounded-xl border border-neutral-200 bg-white">
         <table className="w-full text-sm">
@@ -161,7 +167,7 @@ export default function AttendanceReportClient({ activeLocationName }) {
             </tr>
           </thead>
           <tbody>
-            {filtered.length === 0 && !loading && (
+            {filtered.length === 0 && !loading && !error && (
               <tr><td colSpan={7} className="px-3 py-8 text-center text-sm text-un1t-subtle">No shifts in this window.</td></tr>
             )}
             {filtered.map((r) => (
@@ -171,8 +177,23 @@ export default function AttendanceReportClient({ activeLocationName }) {
                   <span className="font-medium">{r.profile_name}</span>
                   {r.profile_role && <span className="ml-2 text-xs text-un1t-subtle">{r.profile_role}</span>}
                 </td>
-                <td className="px-3 py-2 font-mono text-xs">{(r.scheduled_start || '').slice(0, 5)}</td>
-                <td className="px-3 py-2 font-mono text-xs">{r.actual_start ? r.actual_start.slice(0, 5) : '—'}</td>
+                <td className="px-3 py-2 font-mono text-xs">
+                  {(r.effective_start || r.scheduled_start || '').slice(0, 5)}
+                  {r.start_adjusted && (
+                    <span className="ml-1 font-sans text-un1t-subtle" title={`Rostered ${(r.scheduled_start || '').slice(0, 5)}`}>adjusted</span>
+                  )}
+                  {r.end_adjusted && (
+                    <span className="ml-1 font-sans text-un1t-subtle" title={`Rostered end ${(r.scheduled_end || '').slice(0, 5)}`}>
+                      {`ends ${(r.effective_end || '').slice(0, 5)}${r.end_next_day ? ' next day' : ''}`}
+                    </span>
+                  )}
+                </td>
+                <td className="px-3 py-2 font-mono text-xs">
+                  {r.actual_start ? r.actual_start.slice(0, 5) : '—'}
+                  {r.arrival_inferred && (
+                    <span className="ml-1 font-sans text-un1t-subtle" title="Already on site from an earlier shift">on site</span>
+                  )}
+                </td>
                 <td className="px-3 py-2">
                   <span className={`inline-block rounded-full border px-2 py-0.5 text-xs font-medium ${STATUS_META[r.status]?.cls || ''}`}>
                     {STATUS_META[r.status]?.label || r.status}
@@ -243,8 +264,3 @@ function SourceBadges({ sources }) {
   )
 }
 
-function csvEscape(s) {
-  const v = String(s ?? '')
-  if (/[",\n]/.test(v)) return `"${v.replace(/"/g, '""')}"`
-  return v
-}

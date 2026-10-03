@@ -7,6 +7,8 @@ import {
   sumStaffRequired,
   aggregateDayDemand,
   classifyDayLoad,
+  leaveOnDate,
+  underMinEntry,
 } from './schedule-overview.js'
 
 describe('eventTypeHasWindowForDate', () => {
@@ -177,5 +179,57 @@ describe('classifyDayLoad', () => {
       // confirms the existing path isn't broken by the new arg.
       expect(classifyDayLoad({ demand: 5, staff_scheduled: 3, staff_on_leave: 0, blocks_below_min: 0 })).toBe('amber')
     })
+  })
+})
+
+// ROSTERLOOK.1 — two overlapping requests from one person put their name in
+// the day dialog's "On leave" list twice (seen live: every day of a week).
+describe('leaveOnDate', () => {
+  const row = (profile_id, start_date, end_date, full_name) => ({ profile_id, start_date, end_date, profiles: { full_name } })
+
+  it('names each PERSON once, however many of their requests cover the day', () => {
+    const out = leaveOnDate([
+      row('p1', '2026-09-21', '2026-09-27', 'Coach A'),
+      row('p1', '2026-09-23', '2026-09-24', 'Coach A'),
+      row('p2', '2026-09-23', '2026-09-23', 'Coach B'),
+    ], '2026-09-23')
+    expect(out.names).toEqual(['Coach A', 'Coach B'])
+    expect(out.profileIds).toEqual(['p1', 'p2'])
+  })
+
+  it('dedupes by profile, not by name: two people who share a name are two people', () => {
+    const out = leaveOnDate([
+      row('p1', '2026-09-23', '2026-09-23', 'Coach A'),
+      row('p2', '2026-09-23', '2026-09-23', 'Coach A'),
+    ], '2026-09-23')
+    expect(out.names).toEqual(['Coach A', 'Coach A'])
+  })
+
+  it('ignores requests that do not cover the day, tolerates a missing name and null input', () => {
+    expect(leaveOnDate([row('p1', '2026-09-21', '2026-09-22', 'Coach A')], '2026-09-23').names).toEqual([])
+    expect(leaveOnDate([{ profile_id: 'p3', start_date: '2026-09-23', end_date: '2026-09-23' }], '2026-09-23').names).toEqual(['Unknown'])
+    expect(leaveOnDate(null, '2026-09-23')).toEqual({ names: [], profileIds: [] })
+  })
+})
+
+describe('underMinEntry (SHIFTMIN.1 / SHIFTTYPE.1)', () => {
+  const b = (over = {}) => ({
+    id: 'b1', block_date: '2026-09-22', start_time: '09:30:00', end_time: '10:30:00', min_coaches: 2,
+    shift_templates: { name: 'Morning', kind: 'class' },
+    shift_assignments: [{ profile_id: 'p1', status: 'scheduled' }, { profile_id: 'p2', status: 'cancelled' }],
+    ...over,
+  })
+
+  it('names a class block below its minimum, counting live coaches only', () => {
+    expect(underMinEntry(b())).toEqual({ id: 'b1', label: 'Morning', time: '09:30–10:30', assigned: 1, min: 2 })
+  })
+
+  it('is null at or above the minimum, and with no minimum', () => {
+    expect(underMinEntry(b({ min_coaches: 1 }))).toBeNull()
+    expect(underMinEntry(b({ min_coaches: 0 }))).toBeNull()
+  })
+
+  it('is null for an admin block, even one still carrying a minimum', () => {
+    expect(underMinEntry(b({ shift_templates: { name: 'Admin', kind: 'admin' } }))).toBeNull()
   })
 })

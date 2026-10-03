@@ -71,7 +71,7 @@ export const BUNDLE_LABELS = Object.freeze({
 // more than one bundle, because src/lib/nav-items.js's own
 // `anyPermission` unions already OR the same underlying key into more
 // than one hub's sidebar entry:
-//   - `email` / `whatsapp` / `sms`   → both bundle_messaging (the
+//   - `email` / `whatsapp`           → both bundle_messaging (the
 //     Messages hub / inbox) AND bundle_marketing (the Marketing hub's
 //     campaign lifecycle + Automations' custom-flow gate).
 //   - `studio_management`            → both bundle_members (the live
@@ -186,10 +186,10 @@ export const KEY_BUNDLES = Object.freeze({
 
   // ---- bundle_messaging + bundle_marketing (shared — design decision) ----
   // src/lib/nav-items.js '/communications' (Messages) anyPermission
-  // AND '/marketing' anyPermission both list these three.
+  // AND '/marketing' anyPermission both list these two (`sms` left with
+  // Twilio in TWILIO-RETIRE.1; mig 665 reseeded the SQL mirror).
   email: ['bundle_messaging', 'bundle_marketing'],
   whatsapp: ['bundle_messaging', 'bundle_marketing'],
-  sms: ['bundle_messaging', 'bundle_marketing'],
   email_inbox: ['bundle_messaging'],
 
   // ---- bundle_marketing only — src/lib/nav-items.js '/marketing' anyPermission ----
@@ -332,7 +332,7 @@ export const CORE_KEYS = Object.freeze([
 // ============================================================
 // EXEMPT_KEYS — keys that were NEVER location-gated PER-KEY in the
 // first place (shared/permissions.js `isFeatureGatedByLocation`): the
-// 25 personal `notify_*` toggles and the 8 `approvals_*` per-category
+// 28 personal `notify_*` toggles and the 8 `approvals_*` per-category
 // grants. bundlesDenyKey() (the KEY_BUNDLES-based single-key check)
 // never denies them — that part is still exactly as documented before.
 //
@@ -377,7 +377,7 @@ export const EXEMPT_KEYS = Object.freeze([
   'approvals_rosters',
   'approvals_hyrox_sessions',
   'approvals_offer_purchases',
-  // -- the 25 personal notify_* toggles (NOTIFY_KEYS) --
+  // -- the 28 personal notify_* toggles (NOTIFY_KEYS) --
   'notify_time_off',
   'notify_schedule',
   'notify_swap',
@@ -394,6 +394,9 @@ export const EXEMPT_KEYS = Object.freeze([
   'notify_expense_approved',
   'notify_expense_declined',
   'notify_shift_adjusted',
+  'notify_shift_reminder',
+  'notify_availability_change',
+  'notify_qualification_expiry',
   'notify_contract_issued',
   'notify_tasks',
   'notify_bookings',
@@ -484,6 +487,9 @@ export const CATEGORY_BUNDLES = Object.freeze({
   // key). All three are staff-scheduling reviews that live beside
   // `schedule`/`contracts`/`attendance_reports` in bundle_team.
   time_off: ['bundle_team'],
+  // LEAVECANCEL.1 — requests to cancel approved leave: the same surface as
+  // time_off, split out only because a different population decides it.
+  time_off_cancellations: ['bundle_team'],
   shift_swaps: ['bundle_team'],
   rosters: ['bundle_team'],
   // JUDGEMENT CALL, confirmed by reading providers/agent-requests.js:

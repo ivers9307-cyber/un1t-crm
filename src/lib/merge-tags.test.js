@@ -15,7 +15,7 @@
 // substitution table out of postmark.js's source AND exercises the function.
 
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 
 import { applyMergeTags } from './postmark.js'
@@ -56,12 +56,25 @@ describe('the registry and applyMergeTags() agree', () => {
       unsubscribe_url: 'https://example.com/unsubscribe/tok',
       preference_url: 'https://example.com/preferences/tok',
       booking_token: 'cGF5bG9hZA.c2ln',
+      // PAYLINK.7 — only non-empty on an overdue-payment reminder run.
+      pay_amount_phrase: ' of €209',
+      payment_cta: '<a href="https://pay.test/x">pay it now here</a>',
     }
-    for (const { tag } of MERGE_TAGS) {
+    for (const { tag, retired } of MERGE_TAGS) {
       const out = applyMergeTags(`<p>${tag}</p>`, contact, extras)
       expect(out, `${tag} was not substituted`).not.toContain(tag)
-      expect(out, `${tag} substituted to an empty string`).not.toBe('<p></p>')
+      if (retired) {
+        expect(out, `${tag} is retired and must render empty`).toBe('<p></p>')
+      } else {
+        expect(out, `${tag} substituted to an empty string`).not.toBe('<p></p>')
+      }
     }
+  })
+
+  it('retires exactly {{glofox_passcode}} (PASSCODEREAD.1), and withholds it from the pickers', () => {
+    const retired = MERGE_TAGS.filter((t) => t.retired)
+    expect(retired.map((t) => t.tag)).toEqual(['{{glofox_passcode}}'])
+    for (const t of retired) expect(t.offered, `${t.tag} is retired but offered`).toBe(false)
   })
 })
 
@@ -77,11 +90,11 @@ describe('the registry is well formed', () => {
     }
   })
 
-  it('withholds exactly the deprecated alias and the welcome-sequence tag', () => {
+  it('withholds exactly the deprecated alias, the welcome-sequence tag, and the payment-reminder tags', () => {
     // Pinned so widening the withheld set is a deliberate edit to this test,
     // not a quiet way to stop advertising something that works.
     expect(MERGE_TAGS.filter((t) => !t.offered).map((t) => t.tag).sort())
-      .toEqual(['{{glofox_passcode}}', '{{lead_status}}'])
+      .toEqual(['{{glofox_passcode}}', '{{lead_status}}', '{{pay_amount_phrase}}', '{{payment_cta}}'])
   })
 
   it('derives the editor shapes from the offered set', () => {
@@ -109,4 +122,40 @@ describe('the editors render the registry rather than their own copy', () => {
     expect(source).not.toMatch(/value:\s*'\{\{/)
     expect(source).not.toMatch(/\[\s*'\{\{[a-z0-9_]+\}\}'\s*,/)
   })
+})
+
+// The EDITORS list above only checked the two files known to have drifted
+// before. useUnlayerEditor.js drifted the SAME way (its own `value: '{{x}}'`
+// array, already missing {{booking_token}}) without anyone adding it to that
+// list — the guard has to find new copies on its own, not wait to be told
+// where to look. So this walks every non-test file under src/components and
+// fails on any hard-coded Unlayer-style merge-tag entry it doesn't already
+// know about.
+describe('no other hard-coded merge-tag arrays lurk in src/components', () => {
+  // HostEmails.jsx (HOST-EMAIL.6) hard-codes its OWN, narrower list on
+  // purpose: the host-send path substitutes only these four tags, not the
+  // full contact registry (hosts have no pipeline_stage, phone, etc.). Using
+  // UNLAYER_MERGE_TAGS there would offer tags that render as literal
+  // {{...}} in a host email. A documented exception, not an oversight —
+  // widening this set is a deliberate edit to this list, not a quiet way to
+  // let a real copy back in.
+  const ALLOWED_OWN_LIST = new Set(['components/host/HostEmails.jsx'])
+
+  function jsFilesUnder(rel) {
+    const files = []
+    for (const entry of readdirSync(path.join(SRC, rel), { withFileTypes: true })) {
+      const relPath = path.join(rel, entry.name)
+      if (entry.isDirectory()) { files.push(...jsFilesUnder(relPath)); continue }
+      if (/\.jsx?$/.test(entry.name) && !/\.test\.jsx?$/.test(entry.name)) files.push(relPath)
+    }
+    return files
+  }
+
+  it.each(jsFilesUnder('components').filter((rel) => !ALLOWED_OWN_LIST.has(rel)))(
+    '%s has no hard-coded Unlayer merge-tag entry',
+    (rel) => {
+      const source = read(rel)
+      expect(source).not.toMatch(/value:\s*'\{\{[a-z0-9_]+\}\}'/)
+    },
+  )
 })
