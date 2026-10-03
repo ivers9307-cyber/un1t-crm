@@ -268,7 +268,7 @@ export async function POST(request) {
   if (!validation.ok) return validation.response
   const { type, start_date, end_date, reason, location_id, profile_id } = validation.data
 
-  // AVAIL.3 — 'unavailable' moved into availability (mig 631): self-declared
+  // AVAIL.3 — 'unavailable' moved into availability (mig 703): self-declared
   // in My availability, no approval. The forms no longer offer it; an old
   // phone or a stale tab still can, so refuse it here, before any read, with
   // words that say where to go (the old phone shows `error` in its alert).

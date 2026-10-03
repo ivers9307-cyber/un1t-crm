@@ -1,5 +1,5 @@
 -- ═════════════════════════════════════════════════════════════════════════
--- NOT A MIGRATION. AVAIL.3 OPERATOR SCRIPT — THE DATA MOVE FOR MIG 631.
+-- NOT A MIGRATION. AVAIL.3 OPERATOR SCRIPT — THE DATA MOVE FOR MIG 703.
 -- 🔴 HELD FOR THE OWNER'S EXPLICIT GO. Do not run it on anything less.
 -- ═════════════════════════════════════════════════════════════════════════
 --
@@ -12,15 +12,15 @@
 -- moves. The function proves no carried day was lost before it returns, and
 -- any guard (avail3_*) aborts the whole move. Full contract, and pre-checks
 -- (a)-(h) / post-checks (i)-(q): the header of
--- supabase/migrations/631_unavailable_time_off_to_availability.sql.
+-- supabase/migrations/703_unavailable_time_off_to_availability.sql.
 --
 -- PRECONDITIONS (all four, in this order):
 --   1. The AVAIL.3 code is deployed to production (the POST refuses new
 --      'unavailable' requests, so nothing is filed behind the move).
---   2. Mig 631 is applied on un1t-crm (iyvtbjjxdggiadzwwvdj — confirm with
+--   2. Mig 703 is applied on un1t-crm (iyvtbjjxdggiadzwwvdj — confirm with
 --      list_projects, never the sentinel project). Applying it moved nothing.
---   3. Pre-checks (b)-(h) from the mig 631 header have been run and saved to
---      the scratchpad as mig631-rollback-<date>.txt (the carry set and the
+--   3. Pre-checks (b)-(h) from the mig 703 header have been run and saved to
+--      the scratchpad as mig703-rollback-<date>.txt (the carry set and the
 --      fingerprints the rollback is judged against).
 --   4. It is not within 15 minutes of Dublin midnight ("today" is taken once,
 --      from the instant this runs).

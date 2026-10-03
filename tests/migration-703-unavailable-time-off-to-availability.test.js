@@ -1,10 +1,10 @@
-// AVAIL.3 — behavioural test for migration 631: contractors' "unavailable"
+// AVAIL.3 — behavioural test for migration 703: contractors' "unavailable"
 // time off moves into staff availability.
 //
 // Boots PGlite, recreates time_off_requests / staff_allowances /
 // profile_compensation / profiles / cron_heartbeats in their prod shape,
 // installs the REAL mig 616 allowance trigger function, the REAL mig 630
-// availability tables + RPC, and the REAL mig 631 file, then drives
+// availability tables + RPC, and the REAL mig 703 file, then drives
 // move_unavailable_time_off_to_availability(today) and
 // restore_moved_unavailable_time_off() with a FIXED today. Proves: exactly the
 // right rows move, the past and every other type are untouched byte-for-byte,
@@ -12,9 +12,9 @@
 // allowances cannot move, the guards abort everything, the move is idempotent,
 // and the restore brings back the exact rows.
 //
-// The data move is HELD for the owner's go: applying mig 631 installs the
+// The data move is HELD for the owner's go: applying mig 703 installs the
 // ledger and the two functions and moves NOTHING. The move is the separate
-// operator script supabase/operator-scripts/631_run_move_unavailable_time_off.sql,
+// operator script supabase/operator-scripts/703_run_move_unavailable_time_off.sql,
 // which the last describe runs against a fresh database to pin both halves.
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
@@ -25,9 +25,9 @@ import { PGlite } from '@electric-sql/pglite'
 const read = (name) => readFileSync(path.resolve(import.meta.dirname, '../supabase/migrations', name), 'utf8')
 const MIG_616 = read('616_time_off_created_by_allowance_seed.sql')
 const MIG_630 = read('630_staff_availability.sql')
-const MIG_631 = read('631_unavailable_time_off_to_availability.sql')
+const MIG_703 = read('703_unavailable_time_off_to_availability.sql')
 const RUN_MOVE = readFileSync(
-  path.resolve(import.meta.dirname, '../supabase/operator-scripts/631_run_move_unavailable_time_off.sql'), 'utf8')
+  path.resolve(import.meta.dirname, '../supabase/operator-scripts/703_run_move_unavailable_time_off.sql'), 'utf8')
 
 const TODAY = '2026-09-25'
 const MOVE_SQL = 'SELECT public.move_unavailable_time_off_to_availability($1::date) AS r'
@@ -183,12 +183,12 @@ beforeAll(async () => {
   await runSql(MIG_616)
   await runSql(CANCEL_COLUMNS)
   await runSql(MIG_630)
-  await runSql(MIG_631) // installs only: the move is a separate, held operator script
+  await runSql(MIG_703) // installs only: the move is a separate, held operator script
 }, 60_000)
 
 afterAll(async () => { await db?.close() })
 
-describe('migration 631 — grants and posture', () => {
+describe('migration 703 — grants and posture', () => {
   it('the browser roles hold nothing on the ledger and cannot run either function', async () => {
     for (const role of ['anon', 'authenticated']) {
       await expect(asRole(role, 'SELECT 1 FROM public.time_off_availability_moves')).rejects.toThrow(/permission denied/)
@@ -216,7 +216,7 @@ describe('migration 631 — grants and posture', () => {
   })
 })
 
-describe('migration 631 — the move', () => {
+describe('migration 703 — the move', () => {
   it('moves future + pending, splits started, leaves the rest byte-for-byte', () => inTx(async () => {
     const untouched = {}
     for (const k of ['PAST', 'REJECTED', 'CANCELLED', 'HOLIDAY', 'TOMB']) untouched[k] = await rowJson(R[k])
@@ -378,7 +378,7 @@ describe('migration 631 — the move', () => {
   }))
 })
 
-describe('migration 631 — guards abort the whole move', () => {
+describe('migration 703 — guards abort the whole move', () => {
   const nothingMoved = async () => {
     expect(await q('SELECT count(*)::int AS n FROM public.time_off_availability_moves')).toEqual([{ n: 0 }])
     expect(await q('SELECT count(*)::int AS n FROM public.staff_unavailability')).toEqual([{ n: 0 }])
@@ -456,7 +456,7 @@ describe('migration 631 — guards abort the whole move', () => {
   }))
 })
 
-describe('migration 631 — restore', () => {
+describe('migration 703 — restore', () => {
   it('restores every row byte-for-byte and removes the carried rules', () => inTx(async () => {
     const timeOff = await allTimeOff()
     const allowancesBefore = await allowances()
@@ -593,7 +593,7 @@ describe('migration 631 — restore', () => {
 })
 
 
-describe('migration 631 — applying the file moves NOTHING; the held operator script does the move', () => {
+describe('migration 703 — applying the file moves NOTHING; the held operator script does the move', () => {
   it('the file only installs; the script carries a future row and splits a started one, relative to the Dublin day', async () => {
     const fresh = new PGlite()
     try {
@@ -613,7 +613,7 @@ describe('migration 631 — applying the file moves NOTHING; the held operator s
 
       // 1. Applying the migration moves nothing: both rows byte-identical, no
       //    ledger row, no rule. (The owner's go is a separate step.)
-      await fresh.exec(MIG_631)
+      await fresh.exec(MIG_703)
       expect((await fresh.query('SELECT to_jsonb(r) AS j FROM public.time_off_requests r ORDER BY id')).rows).toEqual(before)
       expect((await fresh.query('SELECT count(*)::int AS n FROM public.time_off_availability_moves')).rows).toEqual([{ n: 0 }])
       expect((await fresh.query('SELECT count(*)::int AS n FROM public.staff_unavailability')).rows).toEqual([{ n: 0 }])
@@ -638,7 +638,7 @@ describe('migration 631 — applying the file moves NOTHING; the held operator s
   }, 60_000)
 
   it('the migration file never calls the move function (the call lives only in the operator script)', () => {
-    const code = MIG_631.split('\n').filter((l) => !/^\s*--/.test(l)).join('\n')
+    const code = MIG_703.split('\n').filter((l) => !/^\s*--/.test(l)).join('\n')
     expect(code).not.toMatch(/PERFORM\s+public\.move_unavailable_time_off_to_availability|SELECT\s+public\.move_unavailable_time_off_to_availability|:=\s*public\.move_unavailable_time_off_to_availability/)
     expect(RUN_MOVE).toMatch(/SELECT public\.move_unavailable_time_off_to_availability\(\(now\(\) AT TIME ZONE 'Europe\/Dublin'\)::date\) AS result;/)
   })

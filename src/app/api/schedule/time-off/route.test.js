@@ -667,7 +667,7 @@ describe('POST /api/schedule/time-off — LEAVE.2', () => {
   })
 })
 
-// AVAIL.3 — "unavailable" moved into availability (mig 631). An old phone or a
+// AVAIL.3 — "unavailable" moved into availability (mig 703). An old phone or a
 // stale tab can still send it; the answer must say where to go, and nothing
 // may be read or written first.
 describe('POST /api/schedule/time-off — AVAIL.3: unavailable is refused', () => {

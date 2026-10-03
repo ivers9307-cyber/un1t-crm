@@ -213,7 +213,7 @@ export function leaveFloatingButtons({ width, fontScale, employmentType } = {}) 
 
 // ── AVAIL.3: where "Request time off" goes ────────────────────────────────
 //
-// "Unavailable" moved into availability (mig 631). Contractors and casual
+// "Unavailable" moved into availability (mig 703). Contractors and casual
 // staff had no other type, so for them every entry point that said "Request
 // time off" (the Schedule tab's floating button, the Today shortcut) opens My
 // availability instead. Unknown employment keeps the leave form, matching

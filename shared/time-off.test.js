@@ -124,7 +124,7 @@ describe('leavePreviewLine', () => {
   })
 })
 
-// AVAIL.3 — "unavailable" moved into availability (mig 631).
+// AVAIL.3 — "unavailable" moved into availability (mig 703).
 describe('AVAIL.3 — unavailable is no longer requested', () => {
   it('no employment type is offered unavailable, and employees keep their four types', () => {
     for (const et of ['fte', 'contractor', 'casual', null, undefined, 'weird']) {
@@ -153,6 +153,8 @@ describe('AVAIL.3 — unavailable is no longer requested', () => {
     expect(UNAVAILABLE_MOVED_ERROR).toMatch(/^Unavailable is no longer a time-off request\./)
     expect(UNAVAILABLE_MOVED_ERROR).toMatch(/My availability/)
     expect(UNAVAILABLE_MOVED_ERROR).toMatch(/No approval is needed/)
+    // A 2.3.x phone has no My availability screen (its OTA lane is frozen).
+    expect(UNAVAILABLE_MOVED_ERROR).toMatch(/update the app/)
     expect(RESTRICTED_TYPE_ERROR).toMatch(/^Contractors.*My availability/)
     expect(CONTRACTOR_DECIDE_ERROR).toMatch(/^Contractors don’t take leave\. Decline this request/)
     expect(CONTRACTOR_DECIDE_ERROR).not.toMatch(/file it as Unavailable/)

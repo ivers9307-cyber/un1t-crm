@@ -7,7 +7,7 @@
 // types; contractors + casual staff got 'unavailable' only. Unknown/null
 // employment defaults to the full menu (don't over-restrict a mis-typed FTE).
 //
-// AVAIL.3 (mig 631): 'unavailable' is no longer REQUESTED by anyone. Saying
+// AVAIL.3 (mig 703): 'unavailable' is no longer REQUESTED by anyone. Saying
 // when you can't work is My availability (AVAIL.1/2): self-declared, no
 // approval, managers told. So contractors and casual staff have nothing to
 // request here at all, and every form sends them there instead. The type stays
@@ -78,9 +78,11 @@ export const RESTRICTED_TYPE_ON_BEHALF_ERROR =
 
 // AVAIL.3 — the POST's answer to a new 'unavailable' request (an old phone
 // or a stale tab still offers it). The old phone shows it in its
-// "Couldn't submit" alert, so it must say where to go.
+// "Couldn't submit" alert, so it must say where to go. A 2.3.x phone
+// (runtime lane frozen since the 2.4.0 bump, #1677) never got My availability
+// (AVAIL.2 shipped on 2.4.0 only), so the words also say to update the app.
 export const UNAVAILABLE_MOVED_ERROR =
-  'Unavailable is no longer a time-off request. Set the days and times you can’t work in My availability, on the Schedule screen. No approval is needed, and your managers are told.'
+  'Unavailable is no longer a time-off request. Set the days and times you can’t work in My availability, on the Schedule screen (update the app if you don’t see it there). No approval is needed, and your managers are told.'
 
 // AVAIL.3 — the same refusal when an approver records it for someone else:
 // they are not the person who can't work, so it speaks about that person.

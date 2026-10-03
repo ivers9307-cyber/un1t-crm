@@ -43,6 +43,10 @@ export const CLOSED_FUNCTIONS = [
     why: 'answers the role of ANY user id' },
   { fn: 'private.get_user_role_at', args: '(uuid, uuid)', closedBy: 700,
     why: 'answers the role of ANY user id at a location' },
+  { fn: 'public.move_unavailable_time_off_to_availability', args: '(date)', closedBy: 703,
+    why: 'AVAIL.3 data move: deletes and splits time_off_requests rows; an operator runs it as postgres' },
+  { fn: 'public.restore_moved_unavailable_time_off', args: '(uuid)', closedBy: 703,
+    why: 'AVAIL.3 rollback: re-inserts time_off_requests rows and deletes availability rules; operator only' },
 ]
 
 /** The client roles a closed function is closed to. */

@@ -1,14 +1,14 @@
--- 631 — AVAIL.3: contractors' "unavailable" time off moves into availability.
+-- 703 — AVAIL.3: contractors' "unavailable" time off moves into availability.
 --
 -- 🔴 APPLYING THIS FILE MOVES NOTHING. It installs the ledger and the two
 -- functions only. THE DATA MOVE IS HELD FOR THE OWNER'S EXPLICIT GO and is a
 -- separate operator step that CALLS the move function:
 --
---     supabase/operator-scripts/631_run_move_unavailable_time_off.sql
+--     supabase/operator-scripts/703_run_move_unavailable_time_off.sql
 --     (one statement: SELECT public.move_unavailable_time_off_to_availability(
 --                       (now() AT TIME ZONE 'Europe/Dublin')::date) AS result;)
 --
--- Nothing in this file calls it, and tests/migration-631-…test.js pins that.
+-- Nothing in this file calls it, and tests/migration-703-…test.js pins that.
 --
 -- WHAT THE MOVE DOES (when the operator runs it)
 -- ──────────────────────────────────────────────
@@ -91,7 +91,7 @@
 --                           (AVAILABILITY_LIMITS.dated: same reason)
 --   avail3_fk_into_time_off a foreign key references time_off_requests (a
 --                           moved row is DELETED; checked before anything)
--- All five were 0 on 25 Sep.
+-- All five were 0 on 25 Sep and again on 3 Oct.
 --
 -- ORDER: (1) the AVAIL.3 code deploys (the POST then refuses the type, so
 -- nothing can be filed behind the move); (2) this file is applied (installs
@@ -104,7 +104,7 @@
 -- ─────────────────────────────────────────────────────────────────────────
 -- PRE-CHECKS (read-only; (a) before applying this file, (b)-(h) right before
 -- the MOVE; save ALL output to the scratchpad as the rollback record:
--- mig631-rollback-<date>.txt)
+-- mig703-rollback-<date>.txt)
 -- ─────────────────────────────────────────────────────────────────────────
 -- (a) The names are free:
 --       SELECT to_regclass('public.time_off_availability_moves'),
@@ -130,6 +130,8 @@
 --        ORDER BY r.profile_id, r.start_date;
 --     25 Sep: 11 rows, 5 people, 9 moved + 2 split, all approved,
 --     reason_chars <= 9, open_cancel_ask false everywhere.
+--     3 Oct (re-measured): 10 rows, 4 people, 8 moved + 2 split, 9 approved
+--     + 1 PENDING, reason_chars <= 20, open_cancel_ask false everywhere.
 -- (d) The guards, each expected 0:
 --       WITH t AS (SELECT (now() AT TIME ZONE 'Europe/Dublin')::date AS d),
 --       c AS (SELECT r.* FROM public.time_off_requests r JOIN public.profiles p ON p.id = r.profile_id, t
@@ -166,6 +168,8 @@
 --              generate_series(greatest(r.start_date, t.d), r.end_date, interval '1 day') g(d)
 --        WHERE r.type = 'unavailable' AND r.status IN ('approved','pending') AND r.end_date >= t.d AND p.deleted_at IS NULL;
 --     25 Sep: 81 person-days (one overlapping pair).
+--     3 Oct: 63 person-days, 49 distinct (the same overlapping pair, now 14
+--     shared days); 10 distinct ranges, so 10 rules inserted, 0 reused.
 -- (g) The trigger is still only the allowance one, and it still keys on holiday:
 --       SELECT tgname, pg_get_triggerdef(oid) FROM pg_trigger
 --        WHERE tgrelid = 'public.time_off_requests'::regclass AND NOT tgisinternal;
@@ -277,7 +281,7 @@ REVOKE ALL ON public.time_off_availability_moves FROM anon, authenticated, servi
 GRANT SELECT, INSERT, UPDATE ON public.time_off_availability_moves TO service_role;
 
 COMMENT ON TABLE public.time_off_availability_moves IS
-  'AVAIL.3 (mig 631) — one row per time_off_requests row of type unavailable carried into staff_unavailability: the FULL original row (to_jsonb), the dated all-day rule it became, whether that rule was inserted or an identical one reused, and whether the move was a delete (moved) or a split at moved_today (split). The audit and the rollback record for restore_moved_unavailable_time_off(). No FKs on purpose (it outlives what it points at). Service-role only.';
+  'AVAIL.3 (mig 703) — one row per time_off_requests row of type unavailable carried into staff_unavailability: the FULL original row (to_jsonb), the dated all-day rule it became, whether that rule was inserted or an identical one reused, and whether the move was a delete (moved) or a split at moved_today (split). The audit and the rollback record for restore_moved_unavailable_time_off(). No FKs on purpose (it outlives what it points at). Service-role only.';
 
 -- ── The move ─────────────────────────────────────────────────────────────
 CREATE OR REPLACE FUNCTION public.move_unavailable_time_off_to_availability(p_today date)
@@ -478,7 +482,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION public.move_unavailable_time_off_to_availability(date) IS
-  'AVAIL.3 (mig 631) — carries every time_off_requests row of type unavailable (approved or pending, end_date >= p_today, person not tombstoned, not already in the ledger) into staff_unavailability as an all-day dated rule from greatest(start_date, p_today): future rows are deleted, started rows split at p_today (start..p_today-1 stays time off). Full originals go to time_off_availability_moves first. Writes no staff_availability_changes row, so nobody is notified. Guards (avail3_*) abort everything; proves no day lost before returning. Idempotent. service_role only.';
+  'AVAIL.3 (mig 703) — carries every time_off_requests row of type unavailable (approved or pending, end_date >= p_today, person not tombstoned, not already in the ledger) into staff_unavailability as an all-day dated rule from greatest(start_date, p_today): future rows are deleted, started rows split at p_today (start..p_today-1 stays time off). Full originals go to time_off_availability_moves first. Writes no staff_availability_changes row, so nobody is notified. Guards (avail3_*) abort everything; proves no day lost before returning. Idempotent. service_role only.';
 
 REVOKE ALL ON FUNCTION public.move_unavailable_time_off_to_availability(date) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.move_unavailable_time_off_to_availability(date) TO service_role;
@@ -642,14 +646,14 @@ END;
 $$;
 
 COMMENT ON FUNCTION public.restore_moved_unavailable_time_off(uuid) IS
-  'AVAIL.3 (mig 631) — the rollback of move_unavailable_time_off_to_availability: re-inserts every moved row byte-for-byte (same id; a column added since takes its default, a saved column since dropped refuses with avail3_restore_shape), re-extends every split row, and deletes each carried rule the person has not changed since (else restore_outcome = restored_rule_changed and their rule stays). A rule is removed only once no un-restored ledger row of the same (person, start, end) remains, so restoring one batch never deletes a rule a later batch reused (restore_outcome = restored_rule_in_use until that batch is restored too). One batch, or all when p_batch_id is NULL. Idempotent (restored_at). service_role only.';
+  'AVAIL.3 (mig 703) — the rollback of move_unavailable_time_off_to_availability: re-inserts every moved row byte-for-byte (same id; a column added since takes its default, a saved column since dropped refuses with avail3_restore_shape), re-extends every split row, and deletes each carried rule the person has not changed since (else restore_outcome = restored_rule_changed and their rule stays). A rule is removed only once no un-restored ledger row of the same (person, start, end) remains, so restoring one batch never deletes a rule a later batch reused (restore_outcome = restored_rule_in_use until that batch is restored too). One batch, or all when p_batch_id is NULL. Idempotent (restored_at). service_role only.';
 
 REVOKE ALL ON FUNCTION public.restore_moved_unavailable_time_off(uuid) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.restore_moved_unavailable_time_off(uuid) TO service_role;
 
 -- ── The move itself is NOT here ──────────────────────────────────────────
 -- Held for the owner's explicit go: supabase/operator-scripts/
--- 631_run_move_unavailable_time_off.sql calls the function above. Applying
+-- 703_run_move_unavailable_time_off.sql calls the function above. Applying
 -- this file leaves every time_off_requests row exactly as it was.
 
 -- ── Self-check against the catalog, never this text (the mig 153 lesson) ──
@@ -662,39 +666,39 @@ BEGIN
   FOREACH v_role IN ARRAY ARRAY['anon', 'authenticated', 'public'] LOOP
     FOREACH v_priv IN ARRAY ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'] LOOP
       IF has_table_privilege(v_role, 'public.time_off_availability_moves', v_priv) THEN
-        RAISE EXCEPTION 'mig 631: % still holds % on the ledger', v_role, v_priv;
+        RAISE EXCEPTION 'mig 703: % still holds % on the ledger', v_role, v_priv;
       END IF;
     END LOOP;
     IF has_function_privilege(v_role, 'public.move_unavailable_time_off_to_availability(date)', 'EXECUTE')
        OR has_function_privilege(v_role, 'public.restore_moved_unavailable_time_off(uuid)', 'EXECUTE') THEN
-      RAISE EXCEPTION 'mig 631: % can execute a move function', v_role;
+      RAISE EXCEPTION 'mig 703: % can execute a move function', v_role;
     END IF;
   END LOOP;
 
   FOREACH v_priv IN ARRAY ARRAY['DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'] LOOP
     IF has_table_privilege('service_role', 'public.time_off_availability_moves', v_priv) THEN
-      RAISE EXCEPTION 'mig 631: service_role still holds % on the ledger', v_priv;
+      RAISE EXCEPTION 'mig 703: service_role still holds % on the ledger', v_priv;
     END IF;
   END LOOP;
 
   IF NOT has_function_privilege('service_role', 'public.move_unavailable_time_off_to_availability(date)', 'EXECUTE')
      OR NOT has_function_privilege('service_role', 'public.restore_moved_unavailable_time_off(uuid)', 'EXECUTE')
      OR NOT has_table_privilege('service_role', 'public.time_off_availability_moves', 'SELECT') THEN
-    RAISE EXCEPTION 'mig 631: service_role lacks what the functions need';
+    RAISE EXCEPTION 'mig 703: service_role lacks what the functions need';
   END IF;
 
   IF NOT (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.time_off_availability_moves'::regclass) THEN
-    RAISE EXCEPTION 'mig 631: RLS is not enabled on the ledger';
+    RAISE EXCEPTION 'mig 703: RLS is not enabled on the ledger';
   END IF;
   SELECT count(*) INTO v_n FROM pg_policies WHERE schemaname = 'public' AND tablename = 'time_off_availability_moves';
   IF v_n <> 0 THEN
-    RAISE EXCEPTION 'mig 631: expected no policies on the ledger, found %', v_n;
+    RAISE EXCEPTION 'mig 703: expected no policies on the ledger, found %', v_n;
   END IF;
 
   -- The ledger starts empty: this file moves nothing (the move is held).
   SELECT count(*) INTO v_n FROM public.time_off_availability_moves;
   IF v_n <> 0 THEN
-    RAISE EXCEPTION 'mig 631: expected an empty ledger after install, found % rows', v_n;
+    RAISE EXCEPTION 'mig 703: expected an empty ledger after install, found % rows', v_n;
   END IF;
 END $$;
 
