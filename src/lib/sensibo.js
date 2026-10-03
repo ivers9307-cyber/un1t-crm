@@ -53,20 +53,33 @@ async function sensiboFetch(path, { apiKey, method = 'GET', body, query = {} } =
   for (const [k, v] of Object.entries(query)) {
     if (v != null) url.searchParams.set(k, String(v))
   }
-  const init = {
-    method,
-    headers: { Accept: 'application/json' },
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  }
-  if (body !== undefined) {
-    init.headers['Content-Type'] = 'application/json'
-    init.body = JSON.stringify(body)
-  }
+  const serialisedBody = body !== undefined ? JSON.stringify(body) : undefined
   // Queued so two Sensibo calls never go out back-to-back, and so a
   // 429 is retried with jittered backoff rather than surfacing as a
   // dead AC. The whole request — including reading the body — sits
   // inside the scheduled unit so a retry re-runs all of it.
   return sensiboLimiter.schedule(async () => {
+    // SENSIBO-RATE.3 — the timeout is armed PER ATTEMPT, in here.
+    //
+    // It used to be built once, outside this callback, which broke
+    // the limiter's timeout retry in two ways:
+    //   1. AbortSignal.timeout() starts counting the moment it is
+    //      created, so a call that waited in the queue had already
+    //      spent part of its 12s before fetch() began.
+    //   2. The retry re-used the same, already-fired signal — so the
+    //      "second attempt" aborted the instant it started. Prod showed
+    //      exactly this: auto-off failures landed ~14s after the cron
+    //      began (one 12s timeout + backoff + an instant no-op), never
+    //      a second real try at the pod.
+    const init = {
+      method,
+      headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    }
+    if (serialisedBody !== undefined) {
+      init.headers['Content-Type'] = 'application/json'
+      init.body = serialisedBody
+    }
     let resp, text
     try {
       resp = await fetch(url, init)
