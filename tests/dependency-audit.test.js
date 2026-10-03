@@ -294,16 +294,25 @@ describe('the shipped allowlist files', () => {
   // plugin (@bacons/apple-targets) whose glob patterns are all hard-coded.
   // Take the lockfile bump with the next native release and drop them here.
   //
+  // DEPAUDIT.6 (2026-10-03) added braces (GHSA-vfj7-8cjw-p6xm) and
+  // node-forge (GHSA-86w9-cpqp-85rv). Like image-size, NEITHER has a patched
+  // release (braces <= 3.0.3 and node-forge <= 1.4.0 are every published
+  // version). Both were checked against a source-mapped `expo export`: the
+  // shipped bundle contains neither, nor any module that imports them
+  // (micromatch/fast-glob/chokidar/tailwindcss, @expo/code-signing-certificates).
+  //
   // Exact-match on sorted ids, so ANY additional accept — or a swap to a
   // different id — still fails here and forces a reviewed decision.
-  it('mobile accepts exactly the image-size and build-time brace-expansion advisories', () => {
+  it('mobile accepts exactly the image-size, build-time brace-expansion, braces and node-forge advisories', () => {
     const ids = load('../mobile/.audit-allowlist.json')
       .accepted.map((e) => e.id)
       .sort()
     expect(ids).toEqual([
       'GHSA-5p2g-fcmc-qvqq', // image-size
       'GHSA-6j4f-fj2g-mc7p', // brace-expansion (DEPAUDIT.5)
+      'GHSA-86w9-cpqp-85rv', // node-forge (DEPAUDIT.6)
       'GHSA-qhr7-859c-m2p7', // brace-expansion (DEPAUDIT.5)
+      'GHSA-vfj7-8cjw-p6xm', // braces (DEPAUDIT.6)
       'GHSA-w3rx-r6r6-pgpr', // image-size
     ])
   })

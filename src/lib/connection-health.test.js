@@ -150,6 +150,19 @@ describe('isMetaAuthError', () => {
     expect(isMetaAuthError({ code: '190' }, 400)).toBe(true)
   })
 
+  it('does not treat OAuthException-typed rate limits / transient errors as a dead token', () => {
+    for (const code of [1, 2, 4, 17, 32, 341, 368, 613]) {
+      expect(isMetaAuthError({ type: 'OAuthException', code, message: 'rate limit' }, 400)).toBe(false)
+    }
+    expect(isMetaAuthError({ type: 'OAuthException', code: 9999, is_transient: true }, 400)).toBe(false)
+    expect(isMetaAuthError({ type: 'OAuthException', code: 4 }, 429)).toBe(false)
+  })
+
+  it('still treats a permission-style OAuthException (e.g. code 200) and code 190 + subcode as auth', () => {
+    expect(isMetaAuthError({ type: 'OAuthException', code: 200 }, 403)).toBe(true)
+    expect(isMetaAuthError({ type: 'OAuthException', code: 190, error_subcode: 460, is_transient: false }, 400)).toBe(true)
+  })
+
   it('does not classify ordinary Graph failures as auth errors', () => {
     expect(isMetaAuthError({ type: 'GraphMethodException', code: 100, message: '(#100) Invalid parameter' }, 400)).toBe(false)
     expect(isMetaAuthError({}, 400)).toBe(false)
