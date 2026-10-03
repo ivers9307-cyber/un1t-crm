@@ -50,13 +50,14 @@ export const CLOSED_TABLES = Object.freeze({
   challenges: 672, contact_segments: 672, car_notes: 672, // ANYMEMBERWRITE.1
   cars: 674, car_documents: 674, car_bca_submissions: 674, car_bca_submission_events: 674, company_settings: 674, // CARSCLIENTWRITE.1
   rosters: 679, shift_templates: 679, // ROSTERCLIENTWRITE.1
-  // 680-684 MEMBERWRITESWEEP.1a-1e (tests/member-write-sweep-guard.test.js SWEEP)
+  // 680-685 MEMBERWRITESWEEP.1a-1g (tests/member-write-sweep-guard.test.js SWEEP)
   coach_kudos: 680, coaching_goals: 680, inbody_scans: 680, consultation_photos: 680, consultations: 680,
   presentations: 681, presentation_slides: 681, orders: 681, location_automations: 681, location_holidays: 681,
   person_groups: 681, person_group_members: 681, person_link_suggestions: 681,
   race_events: 682, teams: 682, race_registrations: 682, race_payments: 682, race_penalties: 682, race_waves: 682, team_members: 682,
   email_sends: 683, email_templates: 683, sms_broadcasts: 683, sms_broadcast_recipients: 683, agent_message_feedback: 683,
   campaigns: 684, campaign_recipients: 684,
+  tv_displays: 685, tv_templates: 685, tv_content: 685,
   // 692 MEMBERWRITESWEEP.2/.3 (PR #1914, open when this was written; listed
   // ahead so the drift check holds whichever of the two merges first)
   blocked_times: 692, contact_events: 692, contact_tags: 692, shift_block_removals: 692, staff_allowances: 692,
