@@ -796,7 +796,8 @@ export default function Schedule() {
           visible unless an admin turns time-off off for the user. */}
       {canMobile(profile, 'time_off', activeLocation) && (
         <LeaveFloatingButtons
-          onRequest={() => router.push('/schedule/time-off-new')}
+          employmentType={profile?.employment_type}
+          onRequest={(target) => router.push(target)}
           onMyLeave={() => router.push('/schedule/my-leave')}
         />
       )}

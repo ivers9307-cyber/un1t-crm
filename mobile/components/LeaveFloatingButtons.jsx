@@ -10,14 +10,17 @@
 // pointerEvents="box-none": the empty part of the row must not swallow taps
 // meant for the shift list underneath. Navigation stays with the screen (it
 // owns the router); this only draws the pair.
+// AVAIL.3 — for a contractor the request button opens My availability.
 
 import { View, Text, Pressable, useWindowDimensions } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { leaveFloatingButtons } from '../lib/leave-form'
 
-export default function LeaveFloatingButtons({ onMyLeave, onRequest }) {
+export default function LeaveFloatingButtons({ onMyLeave, onRequest, employmentType }) {
   const { width, fontScale } = useWindowDimensions()
-  const b = leaveFloatingButtons({ width, fontScale })
+  // AVAIL.3 — for a contractor the right-hand button is "My availability".
+  // onRequest gets the route to open; the screen owns the router.
+  const b = leaveFloatingButtons({ width, fontScale, employmentType })
   return (
     <View
       pointerEvents="box-none"
@@ -33,12 +36,12 @@ export default function LeaveFloatingButtons({ onMyLeave, onRequest }) {
         <Text className="text-un1t-text font-semibold ml-1.5">{b.myLeaveLabel}</Text>
       </Pressable>
       <Pressable
-        onPress={onRequest}
+        onPress={() => onRequest(b.requestTarget)}
         accessibilityRole="button"
         accessibilityLabel={b.requestA11y}
         className="ml-auto bg-un1t-text rounded-full px-5 py-3.5 flex-row items-center shadow-lg active:opacity-80"
       >
-        <Ionicons name="add" size={20} color="#FFFFFF" />
+        <Ionicons name={b.requestIcon} size={20} color="#FFFFFF" />
         <Text className="text-un1t-bg font-semibold ml-1.5">{b.requestLabel}</Text>
       </Pressable>
     </View>

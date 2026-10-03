@@ -27,6 +27,8 @@
 //     senders, stats and Postmark webhooks; the SMS tables have no code; for
 //     684: /api/communications/campaigns* (the editor and detail page),
 //     /api/campaigns/[id]/send and the other campaign routes, the sender; for
+//     685: /api/admin/tv-displays*, /api/admin/tv-templates* (the web TV admin
+//     and the phone's TV screen), the hyrox push and the public cast routes; for
 //     692: /api/schedule/{blocks,allowances,reports/scheduled}*,
 //     /api/bookings/event-types/[id]/reminders, /api/events/[id]/checkin*,
 //     /api/promo-codes*, /api/host/*, and the contact tag/event writers).
@@ -107,7 +109,10 @@ export const SWEEP = [
   // 1e — mig 684
   { table: 'campaigns', mig: 684, keepRead: null, rollback: 'e' },
   { table: 'campaign_recipients', mig: 684, keepRead: null, rollback: 'e' },
-  // 1g appends its rows here.
+  // 1g — mig 685
+  { table: 'tv_displays', mig: 685, keepRead: null, rollback: 'g' },
+  { table: 'tv_templates', mig: 685, keepRead: null, rollback: 'g' },
+  { table: 'tv_content', mig: 685, keepRead: null, rollback: 'g' },
   // MEMBERWRITESWEEP.2 (C112) — mig 692, rollback file <NNN>_memberwritesweep2_rollback.sql
   { table: 'blocked_times', mig: 692, keepRead: null, rollback: '2' },
   { table: 'contact_events', mig: 692, keepRead: null, rollback: '2' },
@@ -727,20 +732,46 @@ describe('client code only reads its own rows of the swept tables (MEMBERWRITESW
     expect(sweepClientUses(ok)).toEqual([])
   })
 
+  it('the 1g tables (mig 685) are closed to every client use, reads included', () => {
+    const bad = `
+      await supabase.from('tv_displays').select('id, label, token, rotation').eq('location_id', loc)
+      await supabase.from('tv_content').upsert({ tv_display_id: id, source_type: 'url', source_ref: url }, { onConflict: 'tv_display_id' })
+      await supabase.from('tv_templates').delete().eq('id', id)
+      await supabase.from('locations').select('id, tv_displays(label)')
+      channel.on('postgres_changes', { event: '*', schema: 'public', table: 'tv_content' }, cb)
+      await fetch(\`\${SUPABASE_URL}/rest/v1/tv_templates?select=*\`)`
+    expect(sweepClientUses(bad)).toEqual([
+      'tv_displays.select', 'tv_content.upsert', 'tv_templates.delete',
+      'tv_displays.embed', 'tv_content.realtime', 'tv_templates.rest',
+    ])
+    const ok = `
+      const res = await api(\`/api/admin/tv-displays?location_id=\${enc(locationId)}\`, { locationId })
+      await api(\`/api/admin/tv-displays/\${enc(id)}/content\`, { method: 'PUT', body })
+      await fetch('/api/admin/tv-templates', { method: 'POST', body })
+      supabase.storage.from('tv-content').getPublicUrl(path)
+      const tv_content = display.tv_content?.[0] || null
+      hasPermission(user, 'tv_displays')
+      const label = 'No TV displays yet.'`
+    expect(sweepClientUses(ok)).toEqual([])
+  })
+
   // 1f (#1917) left the phone a pre-1f direct path, mobile/lib/tv-api-legacy.js,
   // for an older server without the TV routes (an HTML 404). Once mig 685
   // closes tv_displays / tv_content / tv_templates those calls can only fail,
-  // so 1g deletes the file. This pins it even if 1g forgets its SWEEP rows:
-  // a 685_*.sql beside the file is a failure, and until then only
-  // mobile/lib/tv-api.js may import it.
+  // so 1g deleted the file (with the fallback in tv-api.js). This pins it
+  // beside the SWEEP rows: a 685_*.sql beside the file is a failure, and so is
+  // any import of it once 685 exists (before it, only mobile/lib/tv-api.js
+  // could import it).
   const TV_LEGACY = 'mobile/lib/tv-api-legacy.js'
   const tvLegacyOffenders = ({ migrations, files }) => {
     const out = []
     const mig685 = migrations.some((f) => /^685_.*\.sql$/.test(f))
     if (mig685 && files.has(TV_LEGACY)) out.push(`${TV_LEGACY} outlived mig 685 (1g must delete it)`)
     for (const [file, code] of files) {
-      if (file === TV_LEGACY || file === 'mobile/lib/tv-api.js') continue
-      if (/tv-api-legacy/.test(code)) out.push(`${file} imports ${TV_LEGACY} (only mobile/lib/tv-api.js may, until 1g)`)
+      if (file === TV_LEGACY || (!mig685 && file === 'mobile/lib/tv-api.js')) continue
+      if (/tv-api-legacy/.test(code)) {
+        out.push(mig685 ? `${file} imports ${TV_LEGACY} (deleted with mig 685)` : `${file} imports ${TV_LEGACY} (only mobile/lib/tv-api.js may, until 1g)`)
+      }
     }
     return out
   }
@@ -748,10 +779,13 @@ describe('client code only reads its own rows of the swept tables (MEMBERWRITESW
   it("1f's old-server fallback (mobile/lib/tv-api-legacy.js) is gone once mig 685 lands, and only tv-api.js imports it", () => {
     const legacy = new Map([[TV_LEGACY, "supabase.from('tv_displays')"], ['mobile/lib/tv-api.js', "import * as legacy from './tv-api-legacy'"]])
     expect(tvLegacyOffenders({ migrations: ['684_campaigns_client_closed.sql'], files: legacy })).toEqual([])
-    expect(tvLegacyOffenders({ migrations: ['685_tv_tables_client_closed.sql'], files: legacy })).toEqual([`${TV_LEGACY} outlived mig 685 (1g must delete it)`])
+    expect(tvLegacyOffenders({ migrations: ['685_tv_tables_client_closed.sql'], files: legacy }))
+      .toEqual([`${TV_LEGACY} outlived mig 685 (1g must delete it)`, `mobile/lib/tv-api.js imports ${TV_LEGACY} (deleted with mig 685)`])
     expect(tvLegacyOffenders({ migrations: ['685_tv_tables_client_closed.sql'], files: new Map([['mobile/lib/tv-api.js', '']]) })).toEqual([])
     expect(tvLegacyOffenders({ migrations: [], files: new Map([['mobile/components/X.jsx', "import { listTvDisplays } from '../lib/tv-api-legacy'"]]) }))
       .toEqual([`mobile/components/X.jsx imports ${TV_LEGACY} (only mobile/lib/tv-api.js may, until 1g)`])
+    expect(tvLegacyOffenders({ migrations: ['685_tv_tables_client_closed.sql'], files: new Map([['mobile/lib/tv-api.js', "import * as legacy from './tv-api-legacy'"]]) }))
+      .toEqual([`mobile/lib/tv-api.js imports ${TV_LEGACY} (deleted with mig 685)`])
 
     const files = new Map(walk(path.join(ROOT, 'mobile')).map((f) => [rel(f), codeOfFile(f)]))
     expect(tvLegacyOffenders({ migrations: readdirSync(MIGRATIONS), files })).toEqual([])
@@ -844,6 +878,13 @@ describe('later migrations keep the swept tables closed to clients', () => {
       'CREATE POLICY campaigns_location_scoped ON public.campaigns FOR ALL TO authenticated USING (private.auth_is_in_location(location_id));',
       'CREATE POLICY campaign_recipients_via_campaign ON public.campaign_recipients FOR ALL TO authenticated USING (EXISTS (SELECT 1 FROM campaigns ca WHERE ca.id = campaign_recipients.campaign_id AND private.auth_is_in_location(ca.location_id)));',
       'ALTER TABLE public.campaign_recipients DISABLE ROW LEVEL SECURITY;',
+      'GRANT SELECT ON public.tv_displays TO authenticated;',
+      'GRANT SELECT (token) ON public.tv_displays TO authenticated;',
+      'GRANT INSERT, UPDATE ON public.tv_content TO authenticated;',
+      'GRANT DELETE ON public.tv_templates TO anon;',
+      'CREATE POLICY tv_displays_location_scoped ON public.tv_displays FOR ALL TO authenticated USING (private.auth_is_in_location(location_id));',
+      'CREATE POLICY tv_content_location_scoped ON public.tv_content FOR ALL TO authenticated USING (EXISTS (SELECT 1 FROM tv_displays d WHERE d.id = tv_content.tv_display_id AND private.auth_is_in_location(d.location_id)));',
+      'ALTER TABLE public.tv_templates DISABLE ROW LEVEL SECURITY;',
       'GRANT INSERT ON public.contact_tags TO authenticated;',
       'GRANT SELECT ON public.staff_allowances TO authenticated;',
       'GRANT SELECT ON public.host_contacts TO anon;',

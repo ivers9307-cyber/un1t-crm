@@ -1,16 +1,15 @@
 // MEMBERWRITESWEEP.1f — the staff phone's TV screen acts through the session
 // routes (/api/admin/tv-displays*, /api/admin/tv-templates*) via api(), never
-// supabase.from('tv_*'). Until this PR mobile/lib/tv-api.js read and wrote
+// supabase.from('tv_*'). Until 1f mobile/lib/tv-api.js read and wrote
 // tv_displays, tv_content and tv_templates straight from the phone's session
-// under nothing but the membership policy; mig 685 (PR 1g) closes them.
+// under nothing but the membership policy; mig 685 (1g) closes them.
 //
 // Every function keeps its old return shape ({ success, data | id | error }),
 // so the three screens (tv/index.jsx, tv/template-edit.jsx, TvPushModal.jsx)
-// do not change. The one exception to "never supabase.from": an HTML 404
-// (api()'s transport envelope with status 404) means this bundle reached the
-// phone before the server that has the routes (an OTA lands before the web
-// deploy, or a deploy rolled back), and only then the old direct path runs.
-// A JSON 404 from a route is an answer, never a fallback.
+// do not change. MEMBERWRITESWEEP.1g — the old-server fallback 1f kept
+// (mobile/lib/tv-api-legacy.js, the direct path on an HTML 404) is deleted:
+// after mig 685 a direct read or write can only fail, so an HTML 404 is now an
+// error like any other and nothing ever falls back to supabase.from.
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
@@ -25,22 +24,14 @@ import { api } from './api'
 import { supabase } from './supabase'
 import {
   listTvDisplays, clearTvContent, registerTvDisplay, deleteTvDisplay, setTvRotation, listTvTemplates,
-  pushTvContent, getTvTemplate, saveTvTemplate, deleteTvTemplate, tvImageUrl, routeNotDeployed,
+  pushTvContent, getTvTemplate, saveTvTemplate, deleteTvTemplate, tvImageUrl,
 } from './tv-api'
+import * as tvApi from './tv-api'
 
 const LOC = '0a000000-0000-4000-8000-000000000001'
 const TV = 'e0000000-0000-4000-8000-0000000000e1'
 const TPL = 'f1000000-0000-4000-8000-0000000000f1'
 const NOT_DEPLOYED = { success: false, transport: true, status: 404, error: 'Non-JSON response (404)' }
-
-// A chainable stand-in for the legacy direct path (old server only).
-function legacyChain(result) {
-  const b = {}
-  for (const m of ['select', 'eq', 'in', 'order', 'insert', 'update', 'upsert', 'delete']) b[m] = vi.fn(() => b)
-  b.single = vi.fn(async () => result)
-  b.then = (res, rej) => Promise.resolve(result).then(res, rej)
-  return b
-}
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -173,42 +164,21 @@ describe('refusals keep the old { success: false, error } shape', () => {
   })
 })
 
-describe('an older server without the routes (HTML 404): the old direct path, same shapes', () => {
-  it('routeNotDeployed is only api()\'s transport envelope with status 404', () => {
-    expect(routeNotDeployed(NOT_DEPLOYED)).toBe(true)
-    expect(routeNotDeployed({ success: false, status: 404, error: 'Not found' })).toBe(false)
-    expect(routeNotDeployed({ success: false, transport: true, error: 'Network error' })).toBe(false)
-    expect(routeNotDeployed({ success: false, transport: true, status: 502 })).toBe(false)
-    expect(routeNotDeployed(null)).toBe(false)
+describe('1g: no old-server fallback (mobile/lib/tv-api-legacy.js is deleted; mig 685 closes the tables)', () => {
+  it('an HTML 404 (api()\'s transport envelope) is an error with the route\'s words, never a direct read or write', async () => {
+    api.mockResolvedValue(NOT_DEPLOYED)
+    const results = [
+      await listTvDisplays(LOC), await clearTvContent(TV), await registerTvDisplay(LOC, 'x'), await deleteTvDisplay(TV),
+      await setTvRotation(TV, 90), await listTvTemplates(LOC), await pushTvContent(TV, { source_type: 'url', source_ref: 'https://e.invalid' }, 'u1'),
+      await getTvTemplate(TPL), await saveTvTemplate({ id: TPL, name: 'B', base_image_path: 'p' }),
+      await saveTvTemplate({ locationId: LOC, name: 'B', base_image_path: 'p', createdBy: 'u1' }), await deleteTvTemplate(TPL),
+    ]
+    for (const r of results) expect(r).toEqual({ success: false, error: 'Non-JSON response (404)' })
+    expect(fromTable).not.toHaveBeenCalled()
   })
 
-  it('listTvDisplays falls back to the two direct selects and merges content', async () => {
-    api.mockResolvedValue(NOT_DEPLOYED)
-    fromTable.mockImplementation((t) => (t === 'tv_displays'
-      ? legacyChain({ data: [{ id: TV, label: 'Lobby TV' }], error: null })
-      : legacyChain({ data: [{ tv_display_id: TV, source_type: 'url' }], error: null })))
-    expect(await listTvDisplays(LOC)).toEqual({ success: true, data: [{ id: TV, label: 'Lobby TV', content: { tv_display_id: TV, source_type: 'url' } }] })
-    expect(fromTable).toHaveBeenCalledWith('tv_displays')
-  })
-
-  it('pushTvContent falls back to the direct upsert with the caller as pusher', async () => {
-    api.mockResolvedValue(NOT_DEPLOYED)
-    const chain = legacyChain({ data: null, error: null })
-    fromTable.mockReturnValue(chain)
-    expect(await pushTvContent(TV, { source_type: 'url', source_ref: 'https://e.invalid' }, 'u1')).toEqual({ success: true })
-    expect(chain.upsert.mock.calls[0][0]).toMatchObject({ tv_display_id: TV, pushed_by: 'u1', triggered_by: 'manual:u1' })
-  })
-
-  it('saveTvTemplate (create) falls back to the direct insert and answers its id', async () => {
-    api.mockResolvedValue(NOT_DEPLOYED)
-    fromTable.mockReturnValue(legacyChain({ data: { id: TPL }, error: null }))
-    expect(await saveTvTemplate({ locationId: LOC, name: 'B', base_image_path: 'p', createdBy: 'u1' })).toEqual({ success: true, id: TPL })
-  })
-
-  it('a direct-path error keeps the old shape', async () => {
-    api.mockResolvedValue(NOT_DEPLOYED)
-    fromTable.mockReturnValue(legacyChain({ data: null, error: { message: 'permission denied for table tv_displays' } }))
-    expect(await deleteTvDisplay(TV)).toEqual({ success: false, error: 'permission denied for table tv_displays' })
+  it('the fallback probe is gone from the module', () => {
+    expect(Object.keys(tvApi)).not.toContain('routeNotDeployed')
   })
 })
 

@@ -89,6 +89,12 @@ describe('routeForNotification', () => {
     expect(routeForNotification({ type: 'availability_changed' })).toBe('/(tabs)/schedule?view=manage')
   })
 
+  // AVAIL.3 — the one-time notice to a coach whose Unavailable requests moved
+  // into availability: the tap opens their own My availability.
+  it('opens My availability for the "your unavailable days have moved" notice', () => {
+    expect(routeForNotification({ type: 'availability_moved' })).toBe('/schedule/availability')
+  })
+
   // COVERLOOP.2 — the server has sent this type with "Tap to take it" since
   // ROSTER-FIX.8d and the tap went nowhere (undefined = unknown type). The
   // "Open swaps you can take" card is on the Dashboard tab.

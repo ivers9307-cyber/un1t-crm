@@ -11,7 +11,11 @@ vi.mock('@/lib/auth', async () => {
   return { ...actual, getCurrentUser: vi.fn() }
 })
 
+// AVAIL.3 D1 — the availability read (availability-leave.test.js pins its query).
+vi.mock('@/lib/availability-leave', () => ({ readAvailabilityLeave: vi.fn(async () => ({ rows: [], error: null })) }))
 const { GET } = await import('./route.js')
+const { readAvailabilityLeave } = await import('@/lib/availability-leave')
+const { availabilityLeaveRows } = await import('@shared/unavailable-days')
 const { getCurrentUser } = await import('@/lib/auth')
 const { createServerClient } = await import('@/lib/supabase')
 
@@ -140,5 +144,47 @@ describe('GET /api/schedule/overview — the shared range rule (RANGEVALID.1)', 
     expect(res.status).toBe(400)
     expect((await res.json()).error).toBe('to must be on or after from')
     expect(db.tables).toEqual([])
+  })
+})
+
+// AVAIL.3 D1 (Richard, 3 Oct 2026: "treat like leave") — a member with an
+// all-day "can't work" date is off that day in the overview, like leave.
+describe('GET /api/schedule/overview — all-day availability counts as off (AVAIL.3 D1)', () => {
+  function dataDb(byTable) {
+    return {
+      from(t) {
+        const b = {
+          select: () => b, eq: () => b, gte: () => b, lte: () => b, in: () => b, or: () => b,
+          then: (resolve) => resolve({ data: byTable[t] || [], error: null }),
+        }
+        return b
+      },
+    }
+  }
+
+  it('lists the coach as off and subtracts them from that day\u2019s supply', async () => {
+    getCurrentUser.mockResolvedValue(MGR_A_STAFF_B(LOC_A))
+    createServerClient.mockReturnValue(dataDb({
+      profile_locations: [{ profile_id: 'p1' }],
+      shift_blocks: [{ id: 'b1', block_date: '2026-09-15', start_time: '09:00', end_time: '10:00', min_coaches: 0, max_coaches: 2, shift_templates: { name: 'Early' }, shift_assignments: [{ profile_id: 'p1', status: 'scheduled' }] }],
+    }))
+    readAvailabilityLeave.mockResolvedValueOnce({
+      rows: availabilityLeaveRows([{ id: 'u1', profile_id: 'p1', kind: 'dated', start_date: '2026-09-15', end_date: '2026-09-15', all_day: true, note: null, profiles: { full_name: 'Coach One' } }]),
+      error: null,
+    })
+    const res = await GET(req(LOC_A))
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    const day = body.data.days.find((d) => d.date === '2026-09-15')
+    expect(day.time_off).toEqual(['Coach One'])
+    expect(day.staff_on_leave).toBe(1)
+    expect(readAvailabilityLeave).toHaveBeenLastCalledWith(expect.anything(), { profileIds: ['p1'], startDate: '2026-09-14', endDate: '2026-09-20' })
+  })
+
+  it('a failed availability read is a 500, like a failed leave read', async () => {
+    getCurrentUser.mockResolvedValue(MGR_A_STAFF_B(LOC_A))
+    createServerClient.mockReturnValue(dataDb({ profile_locations: [{ profile_id: 'p1' }] }))
+    readAvailabilityLeave.mockResolvedValueOnce({ rows: null, error: { message: 'down' } })
+    expect((await GET(req(LOC_A))).status).toBe(500)
   })
 })

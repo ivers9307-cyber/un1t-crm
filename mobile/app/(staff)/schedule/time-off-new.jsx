@@ -14,6 +14,11 @@
 // arithmetic), their holiday balance (employees only) and their own published
 // shifts inside the range; after submitting, a confirmation. Every decision
 // and every word of that is in lib/leave-form.js; this file renders it.
+//
+// AVAIL.3 — a contractor (or casual staff member) has no leave types left:
+// "unavailable" moved into My availability. Reached anyway (an old link, a
+// notification), the screen says so and offers My availability instead of
+// showing an empty form. The gate is decided in lib/leave-form.js.
 
 import { useState, useEffect, useRef } from 'react'
 import { useRouter, Stack } from 'expo-router'
@@ -26,7 +31,7 @@ import { useAuth } from '../../../lib/auth-context'
 import { createTimeOffRequest, getMyAllowance, getMyTimeOff, getLeavePreview } from '../../../lib/schedule-api'
 import {
   leavePreviewFrom, leaveDaysLabel, leaveDaysHint, leaveBalanceView, leaveBalanceLines, leaveClashSummary,
-  submittedDays, leaveSubmittedMessage,
+  submittedDays, leaveSubmittedMessage, leaveFormGate,
 } from '../../../lib/leave-form'
 import { createInFlightGuard } from '../../../lib/in-flight-guard'
 import { dublinTodayIso } from '../../../lib/dates'
@@ -34,6 +39,47 @@ import { timeOffTypesFor, defaultTimeOffTypeFor, isRestrictedEmployment } from '
 import MonthCalendar from '../../../components/MonthCalendar'
 
 export default function TimeOffNew() {
+  const { profile } = useAuth()
+  const gate = leaveFormGate(profile?.employment_type)
+  if (gate) return <UseAvailabilityInstead gate={gate} />
+  return <TimeOffForm />
+}
+
+function UseAvailabilityInstead({ gate }) {
+  const router = useRouter()
+  function close() {
+    if (router.canGoBack()) router.back()
+    else router.replace('/(tabs)/schedule')
+  }
+  return (
+    <View className="flex-1 bg-un1t-bg p-4">
+      <Stack.Screen
+        options={{
+          title: 'Time off',
+          headerLeft: () => (
+            <Pressable onPress={close} hitSlop={10} accessibilityRole="button" accessibilityLabel="Close">
+              <Text className="text-base text-un1t-text">Close</Text>
+            </Pressable>
+          ),
+        }}
+      />
+      <View className="bg-un1t-surface border border-un1t-border rounded-xl px-4 py-4">
+        <Text accessibilityRole="header" className="text-base font-semibold text-un1t-text">{gate.title}</Text>
+        <Text className="text-sm text-un1t-subtle mt-1">{gate.message}</Text>
+        <Pressable
+          onPress={() => router.replace(gate.target)}
+          accessibilityRole="button"
+          accessibilityLabel={gate.action}
+          className="mt-4 bg-un1t-text rounded-full px-5 py-3 items-center active:opacity-80"
+        >
+          <Text className="text-un1t-bg font-semibold">{gate.action}</Text>
+        </Pressable>
+      </View>
+    </View>
+  )
+}
+
+function TimeOffForm() {
   const { activeLocation, profile } = useAuth()
   const router = useRouter()
   const headerHeight = useHeaderHeight()
@@ -41,8 +87,9 @@ export default function TimeOffNew() {
   // calendar's minDate and the default range, so a device an hour behind
   // Dublin used to refuse to book leave for a day that had not started yet.
   const today = dublinTodayIso()
-  // Type menu is gated by employment type — contractors + casual staff
-  // only get "Unavailable"; everyone else gets the four leave types.
+  // Type menu is gated by employment type — everyone who reaches this form
+  // gets the four leave types (AVAIL.3: contractors + casual staff are gated
+  // out above and sent to My availability).
   const types = timeOffTypesFor(profile?.employment_type)
   const [type, setType] = useState(defaultTimeOffTypeFor(profile?.employment_type))
   const [start, setStart] = useState(today)
