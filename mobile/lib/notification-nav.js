@@ -122,6 +122,10 @@ export function routeForNotification(data) {
     // phone has active lands on their own week, which is harmless.
     case 'availability_changed':
       return '/(tabs)/schedule?view=manage'
+    // AVAIL.3 — the one-time notice that a coach's Unavailable requests moved
+    // into availability (src/lib/availability-move-notice.js): open their own.
+    case 'availability_moved':
+      return '/schedule/availability'
     case 'schedule_published':
     case 'schedule_updated':
       return isIsoDay(data.start_date) ? `/(tabs)/schedule?date=${data.start_date}` : '/(tabs)/schedule'

@@ -119,7 +119,7 @@ describe('runHandoffAutoResolve', () => {
         const b = {
           select: () => b,
           update: (patch) => { state.op = 'update'; updates.push({ table, patch }); return b },
-          eq: () => b, not: () => b, is: () => b, lt: () => b, gte: () => b,
+          eq: () => b, not: () => b, or: () => b, is: () => b, lt: () => b, gte: () => b,
           order: () => b, limit: () => b,
           then: (res, rej) => Promise.resolve(finish()).then(res, rej),
         }

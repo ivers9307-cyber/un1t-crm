@@ -89,6 +89,12 @@ function seed(features = { [A]: { whatsapp: true }, [B]: { whatsapp: false } }) 
       bc('drip-a', A, { status: 'sending', delivery_mode: 'drip', scheduled_at: null }),
       bc('drip-b', B, { status: 'sending', delivery_mode: 'drip', scheduled_at: null }),
     ],
+    // C139 — the resume rows' last send was a moment ago (a part-sent blast
+    // whose last send is more than 3 hours old is paused, never resumed).
+    whatsapp_broadcast_recipients: [
+      { id: 'r-a', broadcast_id: 'resume-a', created_at: new Date().toISOString() },
+      { id: 'r-b', broadcast_id: 'resume-b', created_at: new Date().toISOString() },
+    ],
   }
 }
 const row = (id) => tables.whatsapp_broadcasts.find((r) => r.id === id)

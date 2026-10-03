@@ -35,6 +35,7 @@ import {
   underMinEntry,
 } from '@/lib/schedule-overview'
 import { logWarn } from '@/lib/log'
+import { readAvailabilityLeave } from '@/lib/availability-leave'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -199,10 +200,18 @@ async function handleGet(request) {
     }
   }
 
+  // AVAIL.3 D1 (Richard, 3 Oct 2026: "treat like leave") — a member's all-day
+  // "can't work" date is off that day, like the Unavailable time off it
+  // replaces (mig 703). Fail closed like the leave read.
+  const { rows: unavailable, error: availErr } = await readAvailabilityLeave(db, { profileIds: memberIds, startDate: from, endDate: to })
+  if (availErr) {
+    return NextResponse.json({ success: false, error: availErr.message }, { status: 500 })
+  }
+
   const events = eventsRes.data || []
   const event_types = eventTypesRes.data || []
   const blocks = blocksRes.data || []
-  const time_off = timeOffRes.data || []
+  const time_off = [...(timeOffRes.data || []), ...unavailable]
 
   // ── Index events by date for fast per-day lookup ────────────
   const eventsByDate = new Map()

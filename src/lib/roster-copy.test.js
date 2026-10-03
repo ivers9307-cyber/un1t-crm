@@ -417,14 +417,35 @@ describe('fetchSourceBlocks', () => {
 })
 
 // Records what was asked for and serves `total` rows a page at a time.
-function leaveDb(total, { fail = false } = {}) {
+// AVAIL.3 D1 — `avail` rows are staff_unavailability rules, served (and
+// recorded in availCalls) when the copy also reads availability.
+function leaveDb(total, { fail = false, avail = [], availFail = false } = {}) {
   const calls = []
+  const availCalls = []
   const all = Array.from({ length: total }, (_, i) => ({
     id: `l${String(i).padStart(5, '0')}`, profile_id: 'p1', status: 'approved', start_date: '2026-07-06', end_date: '2026-07-06',
   }))
   return {
     calls,
+    availCalls,
     from(table) {
+      if (table === 'staff_unavailability') {
+        const q = { filters: [] }
+        const chain = {
+          select: () => chain,
+          in: (c, v) => { q.filters.push(['in', c, v]); return chain },
+          eq: (c, v) => { q.filters.push(['eq', c, v]); return chain },
+          lte: (c, v) => { q.filters.push(['lte', c, v]); return chain },
+          gte: (c, v) => { q.filters.push(['gte', c, v]); return chain },
+          order: () => chain,
+          range: () => {
+            availCalls.push(q)
+            if (availFail) return Promise.resolve({ data: null, error: { message: 'availability boom' } })
+            return Promise.resolve({ data: avail, error: null })
+          },
+        }
+        return chain
+      }
       expect(table).toBe('time_off_requests')
       const q = { filters: [], orders: [] }
       const chain = {
@@ -531,6 +552,34 @@ describe('fetchLeaveLookup', () => {
     const db = leaveDb(5, { fail: true })
     expect(await fetchLeaveLookup(db, { sourceBlocks: [block({ shift_assignments: [{ profile_id: 'p1', status: 'scheduled' }] })], ...RANGE }))
       .toEqual({ isOnLeave: null, error: { message: 'leave boom' } })
+  })
+  // AVAIL.3 D1 (Richard, 3 Oct: "treat like leave") — an all-day dated
+  // availability rule skips the copy exactly like the Unavailable time off it
+  // replaces; a part-day rule stays advisory.
+  it('a coach with an all-day "can\u2019t work" date is skipped like leave; a part-day rule is not', async () => {
+    const avail = [
+      { id: 'u1', profile_id: 'p3', kind: 'dated', start_date: '2026-07-08', end_date: '2026-07-09', all_day: true, note: null },
+      { id: 'u2', profile_id: 'p3', kind: 'dated', start_date: '2026-07-10', end_date: '2026-07-10', all_day: false, start_time: '06:00', end_time: '09:00', note: null },
+    ]
+    const db = leaveDb(0, { avail })
+    const { isOnLeave, error } = await fetchLeaveLookup(db, {
+      sourceBlocks: [block({ shift_assignments: [{ profile_id: 'p3', status: 'scheduled' }] })], ...RANGE,
+    })
+    expect(error).toBeNull()
+    expect(db.availCalls).toHaveLength(1)
+    expect(db.availCalls[0].filters).toEqual(expect.arrayContaining([
+      ['in', 'profile_id', ['p3']], ['eq', 'kind', 'dated'], ['eq', 'all_day', true],
+      ['lte', 'start_date', '2026-07-12'], ['gte', 'end_date', '2026-07-06'],
+    ]))
+    expect(isOnLeave('p3', '2026-07-08')).toBe(true)
+    expect(isOnLeave('p3', '2026-07-09')).toBe(true)
+    expect(isOnLeave('p3', '2026-07-10')).toBe(false)
+  })
+
+  it('a failed availability read is a failed copy read too: no lookup, never "nobody is unavailable"', async () => {
+    const db = leaveDb(1, { availFail: true })
+    expect(await fetchLeaveLookup(db, { sourceBlocks: [block({ shift_assignments: [{ profile_id: 'p1', status: 'scheduled' }] })], ...RANGE }))
+      .toEqual({ isOnLeave: null, error: { message: 'availability boom' } })
   })
 })
 

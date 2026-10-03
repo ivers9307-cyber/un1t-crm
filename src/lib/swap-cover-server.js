@@ -19,6 +19,8 @@ import {
   swapTargetShiftLocationId,
   SWAP_EXPIRY_NOTICE_NOTES, EXPIRY_NOTICE_MAX_AGE_MS, OPEN_SWAP_STATUSES,
 } from './swap-cover'
+// AVAIL.3 D1 — an all-day "can't work" availability date drops a coach like leave.
+import { readAvailabilityLeave } from './availability-leave'
 
 // profile_locations for one studio. The same table and embed
 // readLocationMemberIds (src/lib/push.js) reads, with the ERROR kept and the
@@ -116,7 +118,7 @@ export async function notifyOpenPool(db, { swapId, locationId, block, requester 
     logWarn('swap-cover', 'open-pool organisation read failed; checking this studio only and notifying only coaches working here that day', { swapId, err: org.error })
   }
 
-  const [leaveRes, assignRes] = await Promise.all([
+  const [leaveRes, assignRes, availRes] = await Promise.all([
     db.from('time_off_requests')
       .select('id, profile_id, type, start_date, end_date, total_days, status')
       .in('profile_id', candidates)
@@ -128,6 +130,8 @@ export async function notifyOpenPool(db, { swapId, locationId, block, requester 
       .in('profile_id', candidates)
       .eq('shift_blocks.block_date', block.block_date)
       .in('shift_blocks.location_id', org.ids),
+    // AVAIL.3 D1 (Richard, 3 Oct 2026: "treat like leave").
+    readAvailabilityLeave(db, { profileIds: candidates, startDate: block.block_date, endDate: block.block_date }),
   ])
   if (assignRes.error) {
     logError('swap-cover', 'open-pool shifts read failed; nobody was notified (managers still were)', { swapId, err: assignRes.error.message })
@@ -137,11 +141,16 @@ export async function notifyOpenPool(db, { swapId, locationId, block, requester 
     degraded = true
     logWarn('swap-cover', 'open-pool leave read failed; notifying only coaches working here that day', { swapId, err: leaveRes.error.message })
   }
+  // A failed availability read is a failed leave read: the same fallback.
+  if (availRes.error) {
+    degraded = true
+    logWarn('swap-cover', 'open-pool availability read failed; notifying only coaches working here that day', { swapId, err: availRes.error.message })
+  }
 
   const ids = openPoolRecipients({
     ...rule,
     orgLocationIds: org.ids,
-    timeOff: leaveRes.error ? [] : (leaveRes.data || []),
+    timeOff: [...(leaveRes.error ? [] : (leaveRes.data || [])), ...(availRes.rows || [])],
     assignments: assignRes.data || [],
     rosteredHereOnly: degraded,
   })

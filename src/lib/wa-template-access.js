@@ -19,3 +19,21 @@ export function canManageWaTemplatesAt(user, locationId) {
   return hasRoleAtLocation(user, locationId, MANAGER_ROLES)
     && hasPermissionForLocation(user, locationId, 'whatsapp')
 }
+
+/**
+ * C138 (a) — who may upload template media (the sign + finalise routes) for a
+ * studio: whoever may manage its templates (above), or master / owner there,
+ * the card-set editor's rule (PUT /api/whatsapp/card-sets, guardMasterOrOwner):
+ * the integrations tab uploads card images through the same two routes. The
+ * routes judged membership only, so any staff member could put files in the
+ * public bucket and push media to Meta on the studio's number. No studio
+ * fails closed.
+ *
+ * @param {object|null} user
+ * @param {string|null|undefined} locationId the studio uploaded for
+ * @returns {boolean}
+ */
+export function canUploadWaTemplateMediaAt(user, locationId) {
+  if (!user || !locationId) return false
+  return canManageWaTemplatesAt(user, locationId) || hasRoleAtLocation(user, locationId, ['owner'])
+}

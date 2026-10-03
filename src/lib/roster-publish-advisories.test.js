@@ -155,6 +155,13 @@ describe('leaveClashesHeadline', () => {
     expect(leaveClashesHeadline([])).toBe('0 coaches rostered on approved leave')
     expect(leaveClashesHeadline(null)).toBe('0 coaches rostered on approved leave')
   })
+  // AVAIL.3 D1 — availability clashes are counted too, and the words say which.
+  it('says "a day they can\u2019t work" when every clash is availability, both when mixed', () => {
+    const avail = (profileId, blockId) => ({ ...row(profileId, blockId), leave_source: 'availability' })
+    expect(leaveClashesHeadline([avail('a', 'b1')])).toBe('1 coach rostered on a day they can\u2019t work')
+    expect(leaveClashesHeadline([avail('a', 'b1'), avail('b', 'b2')])).toBe('2 coaches rostered on a day they can\u2019t work')
+    expect(leaveClashesHeadline([avail('a', 'b1'), row('b', 'b2')])).toBe('2 coaches rostered on leave or a day they can\u2019t work')
+  })
 })
 
 // Quality review — leave_start / leave_end were returned and never shown. The
@@ -180,5 +187,11 @@ describe('leaveRangeLabel', () => {
   it('says just "on leave" when the dates are missing (an older server)', () => {
     expect(leaveRangeLabel(null, null, fmt)).toBe('on leave')
     expect(leaveRangeLabel('2026-09-21', undefined, fmt)).toBe('on leave 21 Sep')
+  })
+  // AVAIL.3 D1 — a clash with an all-day "can't work" availability date says so.
+  it('an availability clash reads "can\u2019t work", not "on leave"', () => {
+    expect(leaveRangeLabel('2026-10-15', '2026-10-15', fmt, 'availability')).toBe('can\u2019t work 15 Oct')
+    expect(leaveRangeLabel('2026-10-11', '2026-10-13', fmt, 'availability')).toBe('can\u2019t work 11 to 13 Oct')
+    expect(leaveRangeLabel(null, null, fmt, 'availability')).toBe('can\u2019t work')
   })
 })

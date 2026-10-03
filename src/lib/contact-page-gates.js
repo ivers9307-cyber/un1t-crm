@@ -10,6 +10,7 @@
 // here is made at the contact's location instead.
 import { hasPermissionForLocation, hasMobilePermissionForLocation } from './permissions'
 import { hasRoleAtLocation } from './role-at-location'
+import { canWriteActivitiesAt } from './activity-write-gate'
 import { ADMIN_ROLES, MANAGER_ROLES } from './schemas'
 
 /**
@@ -161,17 +162,30 @@ export function contactActionGates(user, contact) {
 
 /**
  * A member of the contact's studio (masters are members everywhere). The
- * whole rule for: the Task/Activity writes (browser insert; activities RLS,
- * mig 219, needs a profile_locations row there), the Book card
+ * whole rule for the Book card
  * (/api/bookings/create, /api/glofox/classes/*: assertLocationAccess) and the
  * consent history card (/api/contacts/[id]/consent-log: assertLocationAccessOr404).
- * Membership only, never a role or key: those paths judge nothing more, and
- * the RLS half resolves mobile toggles in SQL without role templates, so a JS
- * permission gate on Task could hide a write RLS would accept.
+ * Membership only, never a role or key: those paths judge nothing more. (The
+ * Task/Activity writes used to share this rule; canAddContactTask below adds
+ * the Contacts key mig 700 put on them. Since mig 691 the SQL resolves phone
+ * toggles with role templates too, so a JS key gate no longer hides a write
+ * RLS would accept.)
  */
 export function isMemberOfContactStudio(user, locationId) {
   if (!user || !locationId) return false
   return Boolean(user.isMaster) || (user.locations || []).some((l) => l?.id === locationId)
+}
+
+/**
+ * The Task / Activity writes (ContactActions' Activity form, the kebab's Task
+ * item). Membership of the contact's studio AND canWriteActivitiesAt there:
+ * C146 (Richard 2 Oct) Contacts web OR phone, and C148 ACTWRITEGATEWEB.1 the
+ * web Tasks key (`activities`), the rule POST /api/activities/tasks applies
+ * (it used to be a browser insert judged by RLS on the phone keys). See
+ * src/lib/activity-write-gate.js.
+ */
+export function canAddContactTask(user, locationId) {
+  return isMemberOfContactStudio(user, locationId) && canWriteActivitiesAt(user, locationId)
 }
 
 /** POST /api/contacts/[id]/pipeline-status (the Cold item): `pipeline` at the contact. */
@@ -227,7 +241,7 @@ export function contactWorkGates(user, contact) {
   const loc = contact?.location_id || null
   return {
     canNote: canAddContactNote(user, loc),
-    canTask: isMemberOfContactStudio(user, loc),
+    canTask: canAddContactTask(user, loc),
     canSequence: canEnrolContactInSequence(user, loc),
     canCancelForm: canSendCancellationForm(user, loc),
     canCold: canSetPipelineStatus(user, loc),

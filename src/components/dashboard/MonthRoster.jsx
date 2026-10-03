@@ -26,13 +26,15 @@
 
 import { useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { CalendarOff, RefreshCw } from 'lucide-react'
+import { CalendarOff, CalendarX, RefreshCw } from 'lucide-react'
 import { pickLocationColor } from '@shared/location-colors'
 import { briefingOf } from '@shared/shift-briefing'
 import { effectiveShiftStart, effectiveShiftEnd } from '@shared/roster-month'
 import Modal from '@/components/ui/Modal'
 import Button from '@/components/ui/Button'
 import RequestTimeOffModal from './RequestTimeOffModal'
+import Link from 'next/link'
+import { canRequestTimeOff } from '@shared/time-off'
 import { formatDate } from '@/lib/roster'
 import { shiftHours } from '@/lib/payroll'
 
@@ -598,14 +600,26 @@ export default function MonthRoster({ weeks, monthLabel, monthSummary, weekPanel
             <span className="text-xs text-un1t-muted">{monthSummary}</span>
           )}
           <ModeToggle mode={mode} onChange={setMode} />
-          <button
-            type="button"
-            onClick={() => { setTimeOffSuccess(false); setTimeOffOpen(true) }}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-un1t-border bg-un1t-surface text-xs text-un1t-subtle hover:text-un1t-text hover:bg-un1t-border transition-colors"
-          >
-            <CalendarOff size={13} aria-hidden="true" />
-            Request time off
-          </button>
+          {canRequestTimeOff(employmentType) ? (
+            <button
+              type="button"
+              onClick={() => { setTimeOffSuccess(false); setTimeOffOpen(true) }}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-un1t-border bg-un1t-surface text-xs text-un1t-subtle hover:text-un1t-text hover:bg-un1t-border transition-colors"
+            >
+              <CalendarOff size={13} aria-hidden="true" />
+              Request time off
+            </button>
+          ) : (
+            // AVAIL.3 — contractors have no leave types; "unavailable" is My availability.
+            <Link
+              href="/schedule/availability"
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-un1t-border bg-un1t-surface text-xs text-un1t-subtle hover:text-un1t-text hover:bg-un1t-border transition-colors"
+            >
+              <CalendarX size={13} aria-hidden="true" />
+              My availability
+            </Link>
+          )}
+
         </div>
       </div>
 

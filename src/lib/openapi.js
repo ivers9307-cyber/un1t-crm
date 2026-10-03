@@ -86,7 +86,8 @@ const ContactCreate = z.object({
   phone: phone.optional().nullable(),
   label: z.string().max(100).nullable().optional(),
   glofox_member_id: z.string().max(100).nullable().optional(),
-  trial_credits_remaining: z.number().int().min(0).max(100).optional(),
+  trial_credits_remaining: z.number().int().min(0).max(100).optional()
+    .describe('Omitted = no credit count (null) until Glofox links the contact and sets it (C145). No default.'),
   lead_source: leadSourceSchema.optional(),
   lead_created_at: z.string().datetime().optional(),
   location_id: uuidLike.optional(),
@@ -559,6 +560,60 @@ registry.registerPath({
     403: bookingWriteErr('No web bookings permission at the booking\'s studio (or at any studio)'),
     404: bookingWriteErr('No such booking, or not at a studio of yours'),
     500: bookingWriteErr('The booking could not be read or written'),
+  },
+})
+
+// C148 ACTWRITEGATEWEB.1 — the web task writes, off the browser client.
+const taskWriteErr = (description) => ({ description, content: { 'application/json': { schema: ErrorResponse } } })
+const TASK_RULE = "Judged on the WEB rule at the task's studio: the web Tasks permission (`activities`) AND Contacts (web or phone) there; the phone Tasks / Pipeline keys do not count. Browser session only; the API-key surface is /api/tasks."
+registry.registerPath({
+  method: 'post',
+  path: '/api/activities/tasks',
+  tags: ['Tasks'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Create a task from the web',
+  description: `${TASK_RULE} Membership of location_id first (403). A contact_id must be a contact AT that studio (404 otherwise); an assignee_id must work there (400). kind, status and source are set by the route (task, todo, crm).`,
+  request: {
+    body: { content: { 'application/json': { schema: z.object({
+      location_id: uuidLike,
+      subject: z.string().min(1).max(500),
+      type: z.string().max(50).optional(),
+      note: z.string().max(20000).nullable().optional(),
+      due_date: z.string().nullable().optional().openapi({ example: '2026-10-09' }),
+      due_time: z.string().nullable().optional().openapi({ example: '09:30' }),
+      assignee_id: uuidLike.nullable().optional(),
+      priority: z.enum(['low', 'medium', 'high', 'urgent']).nullable().optional(),
+      project: z.string().max(100).nullable().optional(),
+      contact_id: uuidLike.nullable().optional(),
+    }) } } },
+  },
+  responses: {
+    200: { description: 'Created (the row, with its contact and assignee)', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ id: uuidLike }).passthrough() }) } } },
+    400: taskWriteErr('Validation failed, or the assignee does not work at this studio'),
+    401: taskWriteErr('Unauthorized'),
+    403: taskWriteErr('No web Tasks permission anywhere; not a member of the studio; or no Tasks / Contacts permission there'),
+    404: taskWriteErr('The contact does not exist or is not at this studio'),
+    500: taskWriteErr('The contact or assignee could not be read, or the task could not be written'),
+  },
+})
+registry.registerPath({
+  method: 'post',
+  path: '/api/activities/tasks/{id}/status',
+  tags: ['Tasks'],
+  security: [{ CookieAuth: [] }],
+  summary: "Change a task's status",
+  description: `${TASK_RULE} The task's own studio, never the active one; membership first (404). Only kind='task' rows.`,
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ status: z.enum(['todo', 'in_progress', 'done', 'cancelled']) }) } } },
+  },
+  responses: {
+    200: { description: 'Changed', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ id: uuidLike, status: z.string() }) }) } } },
+    400: taskWriteErr('Validation failed'),
+    401: taskWriteErr('Unauthorized'),
+    403: taskWriteErr("No web Tasks permission anywhere, or no Tasks / Contacts permission at the task's studio"),
+    404: taskWriteErr('No such task, or not at a studio of yours'),
+    500: taskWriteErr('The task could not be read or written'),
   },
 })
 
@@ -3381,7 +3436,7 @@ registry.registerPath({
   tags: ['WhatsApp'],
   security: [{ CookieAuth: [] }],
   summary: 'Sign a direct-to-storage upload for template header media',
-  description: "Step 1 of 2. Checks the file against Meta's media caps, mints a path in the location's folder of the public whatsapp-templates bucket and returns a signed-upload token; the browser uploads the bytes straight to storage (they never transit Vercel). Membership at location_id (else the active studio).",
+  description: "Step 1 of 2. Checks the file against Meta's media caps, mints a path in the location's folder of the public whatsapp-templates bucket and returns a signed-upload token; the browser uploads the bytes straight to storage (they never transit Vercel). MANAGER_ROLES plus the whatsapp permission at location_id (else the active studio), or master/owner there; no studio is a 403.",
   request: { body: { content: { 'application/json': { schema: z.object({ format: z.string().min(1), mime: z.string().min(1), size: z.number().int().positive(), file_name: z.string().min(1).max(300), location_id: uuidLike.optional() }).openapi('WaTemplateMediaSign') } } } },
   responses: {
     200: { description: 'Upload path and token', content: { 'application/json': { schema: z.object({ success: z.literal(true), path: z.string(), token: z.string() }) } } },
@@ -3580,7 +3635,7 @@ registry.registerPath({
   tags: ['WhatsApp'],
   security: [{ CookieAuth: [] }],
   summary: 'Finalise a template header-media upload and get a Meta upload handle',
-  description: "Step 2 of 2. Takes the minted path (own folder only), re-checks the REAL size (an oversize object is deleted), and pushes it to Meta's resumable upload with the location's own number for the header_handle a submission needs. A Meta failure is soft: 200 with handle null and meta_error. Multipart bodies (pre-fix tabs) get a 400 asking for a refresh. Membership at location_id (else the active studio).",
+  description: "Step 2 of 2. Takes the minted path (the studio's folder only), re-checks the REAL size (an oversize object is deleted), and pushes it to Meta's resumable upload with the location's own number for the header_handle a submission needs. A Meta failure is soft: 200 with handle null and meta_error. Multipart bodies (pre-fix tabs) get a 400 asking for a refresh. MANAGER_ROLES plus the whatsapp permission at location_id (else the active studio), or master/owner there; no studio is a 403.",
   request: { body: { content: { 'application/json': { schema: z.object({ path: z.string().min(1).max(300), format: z.string().min(1), mime: z.string().min(1), file_name: z.string().min(1).max(300), location_id: uuidLike.optional() }).openapi('WaTemplateMediaFinalise') } } } },
   responses: {
     200: { description: 'Stored; handle is null when Meta refused (meta_error says why)', content: { 'application/json': { schema: z.object({ success: z.literal(true), handle: z.string().nullable(), url: z.string(), path: z.string(), file_name: z.string(), file_size: z.number().int(), meta_error: z.string().nullable() }) } } },
@@ -3898,11 +3953,11 @@ registry.registerPath({
   tags: ['Staff'],
   security: [{ CookieAuth: [] }],
   summary: 'Staff app versions, devices and geofence permission',
-  description: 'Every active staff profile in the caller\'s ACTIVE organisation (a master: the whole estate) with their registered devices, the target app version derived from the non-stale fleet of the whole estate (one app binary), and a per-person verdict (current | outdated | unknown_version | no_device). The verdict keys off each person\'s most recently seen device, never their best version. Requires the settings permission.',
+  description: 'Every active staff profile in the caller\'s ACTIVE organisation (a master: the whole estate) with their registered devices, the target app version derived from the non-stale fleet of the whole estate (one app binary), and a per-person verdict (current | outdated | unknown_version | no_device). The verdict keys off each person\'s most recently seen device, never their best version. Organisation admins of the active organisation only (a master, or an org_admin grant; C18).',
   responses: {
     200: { description: 'Fleet payload — { target_version, staff[] }' },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Forbidden — settings permission required', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — organisation admins only', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -3912,7 +3967,7 @@ registry.registerPath({
   tags: ['Staff'],
   security: [{ CookieAuth: [] }],
   summary: 'Push an update reminder to staff on an outdated app build',
-  description: 'Sends an "App update available" push. Who is outdated is recomputed SERVER-SIDE from device_tokens and intersected with `profile_ids` — the caller cannot nominate a staff member who is up to date, and profiles with no device are skipped (nothing to push to). Throttled to one nudge per device per 24h via device_tokens.last_update_nudge_at (mig 466). Only staff in the caller\'s ACTIVE organisation can be nudged (a master: anyone); any other id is ignored like an unknown one. Requires the settings permission.',
+  description: 'Sends an "App update available" push. Who is outdated is recomputed SERVER-SIDE from device_tokens and intersected with `profile_ids` — the caller cannot nominate a staff member who is up to date, and profiles with no device are skipped (nothing to push to). Throttled to one nudge per device per 24h via device_tokens.last_update_nudge_at (mig 466). Only staff in the caller\'s ACTIVE organisation can be nudged (a master: anyone); any other id is ignored like an unknown one. Organisation admins of the active organisation only (a master, or an org_admin grant; C18).',
   request: {
     body: {
       content: {
@@ -4308,12 +4363,12 @@ registry.registerPath({
   path: '/api/contracts/{id}/resend',
   tags: ['Contracts'],
   security: [{ CookieAuth: [] }],
-  summary: 'Resend the contract-issued notification email (master/owner only)',
+  summary: 'Resend the contract-issued notification email (organisation admins only)',
   description: "Re-fires sendContractIssuedEmail plus the issue route's push block for a contract still at issued/viewed. Never mutates the contract row — a pure notification replay. Org-scoped like revoke (404 not 403 for a foreign-org id, non-enumerable); 409 once the contract has moved past issued/viewed (signed/declined/revoked).",
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: 'Resent (warning present if the email itself failed)' },
-    403: { description: 'Master or owner only', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Organisation admins only (a master, or an org_admin grant)', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Not found (incl. cross-tenant ids)', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'Contract is not in issued/viewed status', content: { 'application/json': { schema: ErrorResponse } } },
   },
@@ -4325,12 +4380,12 @@ registry.registerPath({
   path: '/api/contracts/{id}/send',
   tags: ['Contracts'],
   security: [{ CookieAuth: [] }],
-  summary: 'Send a draft contract to its recipient (master/owner only)',
+  summary: 'Send a draft contract to its recipient (organisation admins only)',
   description: "Flips a draft to issued (issued_at reset to the send time — the draft's own issued_at is just its creation timestamp, since the column is NOT NULL) and fires notifyContractIssued (email + push) — the recipient's very first notification, since a draft never emailed or pushed anyone. Org-scoped like resend/revoke (404 not 403 for a foreign-org id, non-enumerable); 409 for any status other than draft.",
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: 'Sent (warning present if the email itself failed)' },
-    403: { description: 'Master or owner only', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Organisation admins only (a master, or an org_admin grant)', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Not found (incl. cross-tenant ids)', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'Contract is not a draft', content: { 'application/json': { schema: ErrorResponse } } },
   },
@@ -4342,12 +4397,12 @@ registry.registerPath({
   path: '/api/contracts/{id}/discard',
   tags: ['Contracts'],
   security: [{ CookieAuth: [] }],
-  summary: 'Discard a draft contract (master/owner only)',
+  summary: 'Discard a draft contract (organisation admins only)',
   description: "Revokes a draft with NO recipient notification (they never knew it existed). Non-draft contracts must go through /revoke instead, which does email the recipient. Org-scoped (404 not 403 for a foreign-org id, non-enumerable); 409 for any status other than draft.",
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: "Discarded (status -> revoked, revoked_reason 'Draft discarded')" },
-    403: { description: 'Master or owner only', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Organisation admins only (a master, or an org_admin grant)', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Not found (incl. cross-tenant ids)', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'Contract is not a draft', content: { 'application/json': { schema: ErrorResponse } } },
   },
@@ -4359,8 +4414,8 @@ registry.registerPath({
   path: '/api/contracts/{id}/pdf',
   tags: ['Contracts'],
   security: [{ CookieAuth: [] }],
-  summary: 'Download the dual-signed contract PDF (recipient, master, or org owner)',
-  description: "302-redirects to a 60-second Supabase Storage signed URL for contracts/<id>/signed.pdf, written by the sign route. The bucket is private and no public URL is ever produced. Authorization mirrors GET /api/contracts/{id} exactly: recipient, master, or an owner of the contract's organization; everyone else gets 404 so ids stay non-enumerable. Also 404 when signed_pdf_path is null (unsigned, or sign-time generation degraded to a warning).",
+  summary: 'Download the dual-signed contract PDF (recipient, or an admin of its organisation)',
+  description: "302-redirects to a 60-second Supabase Storage signed URL for contracts/<id>/signed.pdf, written by the sign route. The bucket is private and no public URL is ever produced. Authorization mirrors GET /api/contracts/{id} exactly: recipient, master, or an organisation admin (org_admin grant) of the contract's organization; everyone else gets 404 so ids stay non-enumerable. Also 404 when signed_pdf_path is null (unsigned, or sign-time generation degraded to a warning).",
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     302: { description: 'Redirect to the short-lived signed download URL' },
@@ -4389,8 +4444,8 @@ registry.registerPath({
   path: '/api/settings/org-usage',
   tags: ['Staff'],
   security: [{ CookieAuth: [] }],
-  summary: 'Org month-to-date usage + hard caps (admin roles)',
-  description: 'Live AI spend and email sends (cap-relevant, mig 421 RPCs) plus nightly per-meter and per-location rollup totals for the active organisation. ?organization_id targets another org (master only).',
+  summary: 'Org month-to-date usage + hard caps (organisation admins only)',
+  description: 'Live AI spend and email sends (cap-relevant, mig 421 RPCs) plus nightly per-meter and per-location rollup totals for the active organisation. Organisation admins only (a master, or an org_admin grant; C18). ?organization_id targets another org the caller administers (a master: any; a foreign org answers 404).',
   responses: {
     200: { description: 'Usage summary' },
     403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
@@ -4402,7 +4457,7 @@ registry.registerPath({
   path: '/api/settings/org-usage',
   tags: ['Staff'],
   security: [{ CookieAuth: [] }],
-  summary: 'Set/clear the org hard caps (owner-of-org or master)',
+  summary: 'Set/clear the org hard caps (organisation admins only)',
   description: 'ai_hard_cap_cents (Mia pauses at cap) and email_hard_cap_sends (campaign starts refused at cap). null clears a cap; both default to no cap.',
   request: {
     body: {
@@ -4419,7 +4474,7 @@ registry.registerPath({
   },
   responses: {
     200: { description: 'Caps saved' },
-    403: { description: 'Forbidden — owner of the org or master', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — organisation admins only', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -4429,11 +4484,11 @@ registry.registerPath({
   path: '/api/settings/billing',
   tags: ['Staff'],
   security: [{ CookieAuth: [] }],
-  summary: 'Tenant billing & usage assembler (owner of the org or master)',
-  description: 'Per pinned location: plan (tier/price/effective date/add-ons), month-to-date meters vs allowance (staff assistant separate — allowance-exempt), wallet (balance, Dublin month-end expiry, lapse warning, last-20 ledger, auto-top-up config). Plus the org\'s recent wallet top-up VAT invoices (INTEG-C2b: last 24 across all the org\'s locations, newest first). Orgs with zero active tier pinnings get pinned:false and empty locations/invoices lists. ?organization_id targets another org (master only; a foreign org answers 404, not 403).',
+  summary: 'Tenant billing & usage assembler (organisation admins only)',
+  description: 'Per pinned location: plan (tier/price/effective date/add-ons), month-to-date meters vs allowance (staff assistant separate — allowance-exempt), wallet (balance, Dublin month-end expiry, lapse warning, last-20 ledger, auto-top-up config). Plus the org\'s recent wallet top-up VAT invoices (INTEG-C2b: last 24 across all the org\'s locations, newest first). Orgs with zero active tier pinnings get pinned:false and empty locations/invoices lists. ?organization_id targets another org the caller administers (a master: any; a foreign org answers 404, not 403).',
   responses: {
     200: { description: 'Billing page data' },
-    403: { description: 'Forbidden — owners and master only', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — organisation admins only', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Organization not found (or not yours)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -4443,7 +4498,7 @@ registry.registerPath({
   path: '/api/settings/billing/auto-topup',
   tags: ['Staff'],
   security: [{ CookieAuth: [] }],
-  summary: 'Configure wallet auto-top-up (owner of the org or master)',
+  summary: 'Configure wallet auto-top-up (organisation admins only)',
   description: 'Writes the three DORMANT wallets.auto_topup_* config columns only (never balance_cents — wallet_apply stays the only balance write path). Takes effect when the Stripe card top-up leg ships. A foreign/unknown location answers 404, not 403.',
   request: {
     body: {
@@ -4461,7 +4516,7 @@ registry.registerPath({
   },
   responses: {
     200: { description: 'Auto-top-up config saved' },
-    403: { description: 'Forbidden — owners and master only', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — organisation admins only', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Location not found (or not yours)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -4473,7 +4528,7 @@ registry.registerPath({
   path: '/api/settings/billing/topup',
   tags: ['Staff'],
   security: [{ CookieAuth: [] }],
-  summary: 'Start a Stripe wallet top-up (owner of the org or master)',
+  summary: 'Start a Stripe wallet top-up (organisation admins only)',
   description: 'Creates a pending TU-serial VAT invoice row and a hosted Stripe Checkout Session (plain platform charge — no Connect params) for a FIXED denomination (2500/5000/10000/25000 cents ex-VAT; 23% Irish VAT added on top at checkout). Requires an ACTIVE tier pinning on the location — unpinned locations (every location today) answer 400. Fulfilment (invoice paid + wallet_apply credit + VAT-invoice email) happens on the dedicated /api/webhooks/stripe-wallet endpoint, never on the redirect. A foreign/unknown location answers 404, not 403.',
   request: {
     body: {
@@ -4491,7 +4546,7 @@ registry.registerPath({
   responses: {
     200: { description: 'Checkout created — { checkout_url, invoice_id, number }' },
     400: { description: 'Invalid denomination, or the location has no active platform plan', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Forbidden — owners and master only', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — organisation admins only', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Location not found (or not yours)', content: { 'application/json': { schema: ErrorResponse } } },
     502: { description: 'Stripe checkout could not be created', content: { 'application/json': { schema: ErrorResponse } } },
   },
@@ -4504,11 +4559,11 @@ registry.registerPath({
   path: '/api/settings/email-domain',
   tags: ['Staff'],
   security: [{ CookieAuth: [] }],
-  summary: 'Tenant email sending-domain status (owner of the org or master)',
-  description: 'Redacted status for the caller\'s org: sending domain, the DNS records to add (DKIM TXT + Return-Path CNAME), per-record verified booleans, lifecycle status, and addon_active/account_configured flags for the UI gate. The Postmark SERVER TOKEN is never included. ?organization_id targets another org (master only; a foreign org answers 404, not 403). 503 when POSTMARK_ACCOUNT_TOKEN is unset.',
+  summary: 'Tenant email sending-domain status (organisation admins only)',
+  description: 'Redacted status for the caller\'s org: sending domain, the DNS records to add (DKIM TXT + Return-Path CNAME), per-record verified booleans, lifecycle status, and addon_active/account_configured flags for the UI gate. The Postmark SERVER TOKEN is never included. ?organization_id targets another org the caller administers (a master: any; a foreign org answers 404, not 403). 503 when POSTMARK_ACCOUNT_TOKEN is unset.',
   responses: {
     200: { description: 'Redacted email-domain status' },
-    403: { description: 'Forbidden — owners and master only', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — organisation admins only', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Organization not found (or not yours)', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'Could not read the stored sending-domain state just now; nothing was changed', content: { 'application/json': { schema: ErrorResponse } } },
     503: { description: 'Provisioning not configured on this deployment', content: { 'application/json': { schema: ErrorResponse } } },
@@ -4520,7 +4575,7 @@ registry.registerPath({
   path: '/api/settings/email-domain',
   tags: ['Staff'],
   security: [{ CookieAuth: [] }],
-  summary: 'Provision the org\'s Postmark server + sending domain (owner of the org or master)',
+  summary: 'Provision the org\'s Postmark server + sending domain (organisation admins only)',
   description: 'Initiate: creates the org\'s dedicated Postmark server (via the Account API) and its sending domain, persists ids/token, and returns the DNS records to add — NEVER the server token. Gated by the custom_email_domain plan add-on (403 if the org\'s plan lacks it). Idempotent: a re-post for an already-provisioned org re-reads Postmark, never spawning a second server. A foreign org answers 404, not 403. 503 when POSTMARK_ACCOUNT_TOKEN is unset. A failed read of the stored state answers 502 and creates nothing.',
   request: {
     body: {
@@ -4539,7 +4594,7 @@ registry.registerPath({
   responses: {
     200: { description: 'Provisioned — redacted status + DNS records' },
     400: { description: 'Invalid sending domain', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Forbidden — owners/master only, or the add-on is not on the plan', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — organisation admins only, or the add-on is not on the plan', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Organization not found (or not yours)', content: { 'application/json': { schema: ErrorResponse } } },
     502: { description: 'Postmark could not provision the server/domain', content: { 'application/json': { schema: ErrorResponse } } },
     503: { description: 'Provisioning not configured on this deployment', content: { 'application/json': { schema: ErrorResponse } } },
@@ -4551,7 +4606,7 @@ registry.registerPath({
   path: '/api/settings/email-domain/verify',
   tags: ['Staff'],
   security: [{ CookieAuth: [] }],
-  summary: 'Re-check the org\'s sending-domain DNS and go live (owner of the org or master)',
+  summary: 'Re-check the org\'s sending-domain DNS and go live (organisation admins only)',
   description: 'Asks Postmark to re-verify DKIM + Return-Path; when both verify, flips the status to live. Idempotent. Operates on an already-provisioned row (409 if none). A foreign org answers 404, not 403. 503 when POSTMARK_ACCOUNT_TOKEN is unset.',
   request: {
     body: {
@@ -4566,7 +4621,7 @@ registry.registerPath({
   },
   responses: {
     200: { description: 'Re-checked — redacted status + DNS records' },
-    403: { description: 'Forbidden — owners and master only', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — organisation admins only', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Organization not found (or not yours)', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'No sending domain provisioned yet', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'Could not read the stored sending-domain state just now; nothing was changed', content: { 'application/json': { schema: ErrorResponse } } },
@@ -5362,11 +5417,11 @@ registry.registerPath({
   tags: ['Schedule'],
   security: [{ CookieAuth: [] }],
   summary: 'Submit a time-off request, or record one for a colleague',
-  description: "Without profile_id: the caller's own request, created pending; everyone holding the time-off approval permission at the studio it is filed at and at every studio the caller belongs to is notified. With profile_id (someone else): the caller must hold that permission at the target studio and the person must belong to it; the request is created approved with created_by set and the response carries `clashes` (live shifts the person is still rostered on). Contractors may only file `unavailable` (400 otherwise). Holiday is checked against the balance on every request: the allowance row, or the contract entitlement when none exists yet. A holiday is charged for working days only: Mon-Fri, excluding the national bank holidays of the studio's country and that studio's own closures (GET /api/locations/{id}/holidays); other leave types count calendar days. A holiday made up entirely of such days is refused (400, no working days).",
+  description: "Without profile_id: the caller's own request, created pending; everyone holding the time-off approval permission at the studio it is filed at and at every studio the caller belongs to is notified. With profile_id (someone else): the caller must hold that permission at the target studio and the person must belong to it; the request is created approved with created_by set and the response carries `clashes` (live shifts the person is still rostered on). AVAIL.3: `unavailable` is refused for everyone (400, before any read): saying when you cannot work is PUT /api/schedule/availability, self-declared with no approval. Contractors and casual staff have no leave types to file (400). Holiday is checked against the balance on every request: the allowance row, or the contract entitlement when none exists yet. A holiday is charged for working days only: Mon-Fri, excluding the national bank holidays of the studio's country and that studio's own closures (GET /api/locations/{id}/holidays); other leave types count calendar days. A holiday made up entirely of such days is refused (400, no working days).",
   request: { body: { content: { 'application/json': { schema: TimeOffRequest } } } },
   responses: {
     201: { description: 'Request submitted (or recorded and approved)' },
-    400: { description: 'Invalid dates, no studio to file against (no location_id and no active studio), no working days, contractor leave type, or insufficient holiday balance', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: 'Invalid dates, no studio to file against (no location_id and no active studio), type unavailable (moved to availability, AVAIL.3), no working days, contractor leave type, or insufficient holiday balance', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Recording for a colleague without time-off approval at that studio', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'The colleague is not on that studio’s staff', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'Overlaps an existing pending or approved request', content: { 'application/json': { schema: ErrorResponse } } },
@@ -5380,7 +5435,7 @@ registry.registerPath({
   tags: ['Schedule'],
   security: [{ CookieAuth: [] }],
   summary: 'Approve, reject, or cancel a time-off request',
-  description: 'Deciding needs the time-off approval permission at the studio the request was filed at or at any studio the requester belongs to. Approving refuses a pending request whose end_date has passed (409, expired), and a contractor leave type other than unavailable (400). An approval response carries `clashes`: live shifts, from today, that the person is still rostered on at any studio. Nothing is unassigned; see POST /api/schedule/time-off/{id}/unassign-clashes. LEAVECANCEL.1: the only status a caller may send for their OWN request is `cancelled`. On their own PENDING request that cancels it. On their own APPROVED request it is refused for a plain coach (403), cancels directly for a master, and for manager-tier staff (owner, manager, head coach at a studio the request belongs to) it does NOT cancel: it records a request for an owner to cancel it and answers `{ success, data, cancellation: "requested" }` with the leave still approved (`already_requested: true` when one was already waiting; cancel_request_note is the optional reason). An owner needs a DIFFERENT owner; with no other owner at those studios (a sole owner, or a studio with none) the request goes to the platform admins instead. 409 when the leave has already ended, when nobody else could decide it (no other owner and no platform admin), or when an owner declined the same leave less than 24 hours ago (`retry_after`). Decided by POST /api/schedule/time-off/{id}/cancel-request. Any status change made through this PUT to a row that carries a cancellation request clears that request in the same write (it was about the state the leave was in), guarded on the status that was read: 409 if the leave changed a moment ago, and 409 `This leave was already cancelled.` when an owner has already approved its cancellation. LEAVEGUARD.1: moving someone else\'s APPROVED leave to rejected, cancelled or pending, when that person is manager-tier (owner, manager or head coach at a studio the request belongs to, or org admin of its organisation), needs an OWNER at one of those studios who is not the requester, or a master; when that person is a master, it needs another master. Anyone else gets 403. Plain staff leave and pending leave are unchanged. Every status write is guarded on the status that was read: 409 if the leave changed a moment ago.',
+  description: 'Deciding needs the time-off approval permission at the studio the request was filed at or at any studio the requester belongs to. Approving refuses a pending request whose end_date has passed (409, expired), and a contractor leave type other than unavailable (400; a pending unavailable request filed before AVAIL.3 can still be decided). An approval response carries `clashes`: live shifts, from today, that the person is still rostered on at any studio. Nothing is unassigned; see POST /api/schedule/time-off/{id}/unassign-clashes. LEAVECANCEL.1: the only status a caller may send for their OWN request is `cancelled`. On their own PENDING request that cancels it. On their own APPROVED request it is refused for a plain coach (403), cancels directly for a master, and for manager-tier staff (owner, manager, head coach at a studio the request belongs to) it does NOT cancel: it records a request for an owner to cancel it and answers `{ success, data, cancellation: "requested" }` with the leave still approved (`already_requested: true` when one was already waiting; cancel_request_note is the optional reason). An owner needs a DIFFERENT owner; with no other owner at those studios (a sole owner, or a studio with none) the request goes to the platform admins instead. 409 when the leave has already ended, when nobody else could decide it (no other owner and no platform admin), or when an owner declined the same leave less than 24 hours ago (`retry_after`). Decided by POST /api/schedule/time-off/{id}/cancel-request. Any status change made through this PUT to a row that carries a cancellation request clears that request in the same write (it was about the state the leave was in), guarded on the status that was read: 409 if the leave changed a moment ago, and 409 `This leave was already cancelled.` when an owner has already approved its cancellation. LEAVEGUARD.1: moving someone else\'s APPROVED leave to rejected, cancelled or pending, when that person is manager-tier (owner, manager or head coach at a studio the request belongs to, or org admin of its organisation), needs an OWNER at one of those studios who is not the requester, or a master; when that person is a master, it needs another master. Anyone else gets 403. Plain staff leave and pending leave are unchanged. Every status write is guarded on the status that was read: 409 if the leave changed a moment ago.',
   request: {
     params: z.object({ id: uuidLike }),
     body: { content: { 'application/json': { schema: TimeOffReview } } },
@@ -7925,11 +7980,11 @@ registry.registerPath({
   tags: ['Accounting'],
   security: [{ CookieAuth: [] }],
   summary: 'Org-wide event booking fees (per-ticket fee UN1T earned on host events)',
-  description: 'Rollup of race_payments.application_fee_cents across ALL of the session org\'s event hosts, settled (completed/refunded) payments only: grand total, per-host breakdown, per-month buckets. Requires the accounting_hub permission.',
+  description: 'Rollup of race_payments.application_fee_cents across ALL of the session org\'s event hosts, settled (completed/refunded) payments only: grand total, per-host breakdown, per-month buckets. Organisation admins of the active organisation only (a master, or an org_admin grant; C18).',
   responses: {
     200: { description: 'Total + per-host + per-month fee rollup', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Forbidden — accounting_hub permission required', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — organisation admins only', content: { 'application/json': { schema: ErrorResponse } } },
     400: { description: 'No active organization', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -8567,7 +8622,7 @@ registry.registerPath({
   path: '/api/integrations/hub',
   tags: ['Settings'],
   security: [{ CookieAuth: [] }],
-  summary: 'Integrations hub card states (owner+/master)',
+  summary: 'Integrations hub card states (owner+/master; billing strip organisation admins only)',
   description:
     'Assembled connection state for the caller\'s locations, powering /settings/integrations-hub: ' +
     'channel_connections registry rows (glofox/unifi/sensibo/thinq/bca/instagram, ' +
@@ -8583,7 +8638,8 @@ registry.registerPath({
     'with an ACTIVE tier pinning in location_plans it carries plan {name, effectiveFrom, priceCents, addons}, ' +
     'wallet {balanceCents, periodStart, expiresOn = last day of the current Dublin month, lapseWarning} and ' +
     'per-meter MTD usage vs allowance with overage cents drawn from the wallet ledger; ' +
-    'unpinned locations (all of them today) return { locationId, plan: null }. ' +
+    'unpinned locations return { locationId, plan: null }. C141 ORGROLE.2: rows exist only for locations of an organisation ' +
+    'the caller administers (a master: every location); a studio owner without an org_admin grant gets `billing: []`. ' +
     'Secrets are never returned — no token columns are selected. ' +
     'HUBREAD.1: a row whose underlying read FAILED carries status `unknown` (never `not_connected` or ' +
     '`connected`) and offers no action; each failed read adds ONE `attention` entry with `unreadable: true`. ' +
@@ -8858,20 +8914,20 @@ registry.registerPath({
   path: '/api/account/overview',
   tags: ['Account'],
   security: [{ CookieAuth: [] }, { BearerAuth: [] }],
-  summary: 'Org portfolio roll-up (owner-of-org + master)',
+  summary: 'Org portfolio roll-up (organisation admins only)',
   description:
     'Read-only ACCOUNT-tier roll-up across an organization\'s studios: org-level KPIs ' +
     '(members, bookings last 7 days, high-risk members) plus a per-studio breakdown with an ' +
     'attention signal (open approvals + Glofox-connected). Org-scoped: master may pass ' +
-    '?organization_id (defaults to their active org); an owner is constrained to the orgs they own ' +
-    'and a foreign/unknown org answers 404 (not 403). Managers/staff → 403.',
+    '?organization_id (defaults to their active org); an org admin (org_admin grant) is constrained to the orgs they ' +
+    'administer and a foreign/unknown org answers 404 (not 403). Anyone else (an owner at a studio included, C141) → 403.',
   request: {
     query: z.object({ organization_id: uuidLike.optional() }),
   },
   responses: {
     200: { description: 'Org portfolio roll-up', content: { 'application/json': { schema: z.object({}).passthrough().openapi('AccountOverviewResponse') } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Not an account-tier operator (manager / staff)', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not an organisation admin (owner at a studio, manager, staff)', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Organisation not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -9177,9 +9233,9 @@ registry.registerPath({
   path: '/api/hosts/{id}/backfill-campaign-events',
   tags: ['Staff'],
   security: [{ CookieAuth: [] }],
-  summary: 'Backfill host campaign outcomes from Postmark (Manager+, org-scoped)',
+  summary: 'Backfill host campaign outcomes from Postmark (organisation admins only, org-scoped)',
   description:
-    "Manager+ session; the host must belong to the caller's active organization (404 otherwise, so ids stay un-enumerable). Asks Postmark's Messages API for this host's outbound activity over the last 45 days (its full retention window) and applies any Delivery/Open/Click/Bounce/SpamComplaint/SubscriptionChange events onto the matching host_campaign_sends rows — for sends that predate the mig 590 columns, or whose webhook events were missed. Dry-run by default (counts only, writes nothing); pass ?dry=0 to persist. Runnable from Settings → Hosts. `errors` is per-item, not a count — the run collects one entry per failed step ({ message_id?, stage?, error }) and continues rather than aborting.",
+    "Organisation admin of the active organisation (a master, or an org_admin grant; C18); the host must belong to the caller's active organization (404 otherwise, so ids stay un-enumerable). Asks Postmark's Messages API for this host's outbound activity over the last 45 days (its full retention window) and applies any Delivery/Open/Click/Bounce/SpamComplaint/SubscriptionChange events onto the matching host_campaign_sends rows — for sends that predate the mig 590 columns, or whose webhook events were missed. Dry-run by default (counts only, writes nothing); pass ?dry=0 to persist. Runnable from Settings → Hosts. `errors` is per-item, not a count — the run collects one entry per failed step ({ message_id?, stage?, error }) and continues rather than aborting.",
   request: { params: z.object({ id: uuidLike }), query: z.object({ dry: z.string().optional().describe("Pass '0' to persist; any other value (or omitted) stays dry-run.") }) },
   responses: {
     200: {

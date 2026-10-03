@@ -115,15 +115,16 @@ describe('resolveDashboardTarget', () => {
 // studio owner lands on the org portfolio; everyone else falls through
 // (null) to the existing per-studio behaviour.
 describe('resolveLandingTarget', () => {
-  // getOwnerOrganizationIds reads rolesByLocation + locations, so build
-  // the real user shape.
+  // C141 ORGROLE.2 — the portfolio landing is for organisation admins
+  // (master or an org_admin grant, user.orgAdminOrgIds), so build that shape.
   function acct({
     role = 'owner', isMaster = false, activeOrgId = 'org-a', locations = [], rolesByLocation = {},
+    orgAdminOrgIds = [],
   } = {}) {
     return {
       role, isMaster,
       activeOrganization: activeOrgId ? { id: activeOrgId } : null,
-      rolesByLocation, locations,
+      rolesByLocation, locations, orgAdminOrgIds,
     }
   }
 
@@ -148,9 +149,9 @@ describe('resolveLandingTarget', () => {
     expect(resolveLandingTarget(u)).toBe('/admin/tenants')
   })
 
-  it('owner of the active org with ≥2 studios → portfolio', () => {
+  it('org admin of the active org with ≥2 studios → portfolio', () => {
     const u = acct({
-      role: 'owner', activeOrgId: 'org-a',
+      role: 'owner', activeOrgId: 'org-a', orgAdminOrgIds: ['org-a'],
       rolesByLocation: { loc1: 'owner', loc2: 'owner' },
       locations: [
         { id: 'loc1', organization_id: 'org-a' },
@@ -160,9 +161,33 @@ describe('resolveLandingTarget', () => {
     expect(resolveLandingTarget(u)).toBe('/portfolio')
   })
 
-  it('single-studio owner → null (studio dashboard, UNCHANGED)', () => {
+  it('C141 — an owner of both studios WITHOUT an org_admin grant → null (studio dashboard)', () => {
     const u = acct({
       role: 'owner', activeOrgId: 'org-a',
+      rolesByLocation: { loc1: 'owner', loc2: 'owner' },
+      locations: [
+        { id: 'loc1', organization_id: 'org-a' },
+        { id: 'loc2', organization_id: 'org-a' },
+      ],
+    })
+    expect(resolveLandingTarget(u)).toBe(null)
+  })
+
+  it('C141 — an org admin of ANOTHER org, owner of two studios here → null', () => {
+    const u = acct({
+      role: 'owner', activeOrgId: 'org-a', orgAdminOrgIds: ['org-b'],
+      rolesByLocation: { loc1: 'owner', loc2: 'owner' },
+      locations: [
+        { id: 'loc1', organization_id: 'org-a' },
+        { id: 'loc2', organization_id: 'org-a' },
+      ],
+    })
+    expect(resolveLandingTarget(u)).toBe(null)
+  })
+
+  it('single-studio org admin → null (studio dashboard, UNCHANGED)', () => {
+    const u = acct({
+      role: 'owner', activeOrgId: 'org-a', orgAdminOrgIds: ['org-a'],
       rolesByLocation: { loc1: 'owner' },
       locations: [{ id: 'loc1', organization_id: 'org-a' }],
     })
@@ -171,7 +196,7 @@ describe('resolveLandingTarget', () => {
 
   it('only counts studios WITHIN the active org (a second-org studio does not tip it over)', () => {
     const u = acct({
-      role: 'owner', activeOrgId: 'org-a',
+      role: 'owner', activeOrgId: 'org-a', orgAdminOrgIds: ['org-a'],
       rolesByLocation: { loc1: 'owner', loc2: 'owner' },
       locations: [
         { id: 'loc1', organization_id: 'org-a' },
@@ -201,7 +226,7 @@ describe('resolveLandingTarget', () => {
   it('a malformed user degrades to null instead of throwing (fail-safe)', () => {
     // locations is not an array — the internal filter would throw if
     // unguarded; the try/catch returns null.
-    const u = { role: 'owner', activeOrganization: { id: 'org-a' }, rolesByLocation: { loc1: 'owner' }, locations: 'nope' }
+    const u = { role: 'owner', activeOrganization: { id: 'org-a' }, rolesByLocation: { loc1: 'owner' }, locations: 'nope', orgAdminOrgIds: ['org-a'] }
     expect(resolveLandingTarget(u)).toBe(null)
   })
 })

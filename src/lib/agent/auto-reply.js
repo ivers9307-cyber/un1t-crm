@@ -24,6 +24,7 @@ import { recordAgentDecision, compactDecisionMeta } from './decision-log'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { sendPushToRolesAtLocation, sendPushToInboxStaffAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
+import { isWhatsAppStaffAuthored } from '@/lib/whatsapp-staff-sources'
 import { buildCachedSystem } from './prompt'
 import { getLocationBranding } from '@/lib/location-branding'
 import {
@@ -1448,9 +1449,11 @@ export const whatsappAdapter = {
   // Meta authenticates the sender's phone number — safe to use as identity.
   trustsSenderIdentity: true,
   // AGENT-REARM.2 — operator send routes stamp sent_by; agent + sequence /
-  // automation sends leave it null, so sent_by IS the human signal.
+  // automation sends leave it null, so sent_by IS the human signal. C106 (d):
+  // plus a reply typed in the studio's linked phone app (source 'app_echo',
+  // no sent_by). One rule, shared with the check-in runner and handoff SLA.
   humanOutboundColumns: 'source, sent_by',
-  isHumanOutbound: (m) => m.source !== 'agent' && m.sent_by != null,
+  isHumanOutbound: isWhatsAppStaffAuthored,
   // Fires once the agent has committed to replying (gating + claim passed):
   // marks the inbound read and shows "typing…" while Claude composes.
   onEngage: async ({ waMessageId, locationId, conversationId }) => {

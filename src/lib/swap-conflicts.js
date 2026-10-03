@@ -16,6 +16,8 @@
 
 import { evaluateSwapMoveConflicts, swapConflictMessage } from './swap-lifecycle'
 import { logWarn } from './log'
+// AVAIL.3 D1 — an all-day "can't work" availability date conflicts like leave.
+import { readAvailabilityLeave } from './availability-leave'
 
 /**
  * @param {object} db     service-role supabase client
@@ -30,7 +32,7 @@ export async function findSwapConflicts(db, moves, { viewerId } = {}) {
     const date = move?.block?.block_date
     if (!move?.coachId || !date) continue
     try {
-      const [leaveRes, assignRes] = await Promise.all([
+      const [leaveRes, assignRes, availRes] = await Promise.all([
         db.from('time_off_requests')
           .select('id, profile_id, type, start_date, end_date, status')
           .eq('profile_id', move.coachId)
@@ -41,11 +43,16 @@ export async function findSwapConflicts(db, moves, { viewerId } = {}) {
           .select('id, profile_id, block_id, status, start_time_override, end_time_override, shift_blocks!inner(id, block_date, start_time, end_time, shift_templates(name), locations(name))')
           .eq('profile_id', move.coachId)
           .eq('shift_blocks.block_date', date),
+        // AVAIL.3 D1 (Richard, 3 Oct 2026: "treat like leave").
+        readAvailabilityLeave(db, { profileIds: [move.coachId], startDate: date, endDate: date }),
       ])
-      if (leaveRes.error || assignRes.error) {
-        throw new Error(leaveRes.error?.message || assignRes.error?.message)
+      if (leaveRes.error || assignRes.error || availRes.error) {
+        throw new Error(leaveRes.error?.message || assignRes.error?.message || availRes.error?.message)
       }
-      conflicts.push(...evaluateSwapMoveConflicts(move, { timeOff: leaveRes.data, assignments: assignRes.data }))
+      conflicts.push(...evaluateSwapMoveConflicts(move, {
+        timeOff: [...(leaveRes.data || []), ...availRes.rows],
+        assignments: assignRes.data,
+      }))
     } catch (e) {
       logWarn('swaps', 'swap conflict check failed', { coachId: move.coachId, date, err: e?.message })
       conflicts.push({ kind: 'check_failed', role: move.role, coachId: move.coachId, date })

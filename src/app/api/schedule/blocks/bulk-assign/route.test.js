@@ -24,17 +24,23 @@ vi.mock('@/lib/auth', async (importOriginal) => {
   }
 })
 vi.mock('@/lib/roster-change-notify', () => ({ notifyRosterChanges: vi.fn(() => Promise.resolve({ notified: 0 })) }))
+// AVAIL.3 D1 — the availability read (src/lib/availability-leave.test.js pins its query).
+vi.mock('@/lib/availability-leave', () => ({ readAvailabilityLeave: vi.fn() }))
 
 const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser, getUserLocationIds } = await import('@/lib/auth')
 const { POST } = await import('./route.js')
 const { notifyRosterChanges } = await import('@/lib/roster-change-notify')
+const { readAvailabilityLeave } = await import('@/lib/availability-leave')
+const { availabilityLeaveRows } = await import('@shared/unavailable-days')
 
 beforeEach(() => {
   createServerClient.mockReset()
   getCurrentUser.mockReset()
   getUserLocationIds.mockReset()
   notifyRosterChanges.mockClear()
+  readAvailabilityLeave.mockReset()
+  readAvailabilityLeave.mockResolvedValue({ rows: [], error: null })
 })
 
 function buildRequest(body) {
@@ -472,5 +478,38 @@ describe('POST /api/schedule/blocks/bulk-assign — a deactivated coach cannot b
     createServerClient.mockReturnValue(db)
     expect((await POST(buildRequest({ block_ids: [VALID_UUID_A], profile_id: PROFILE_A }))).status).toBe(500)
     expect(db.insertSpy).not.toHaveBeenCalled()
+  })
+})
+
+// AVAIL.3 D1 (Richard, 3 Oct 2026: "treat like leave") — an all-day "can't
+// work" availability date warns on bulk assign like approved leave: once per
+// window, only when it touches an assigned date.
+describe('POST /api/schedule/blocks/bulk-assign — availability warns like leave (AVAIL.3 D1)', () => {
+  const MASTER = { id: 'boss', role: 'master', profileRole: 'master', rolesByLocation: {} }
+  const blocks = [
+    { id: VALID_UUID_A, location_id: 'loc-1', block_date: '2026-11-12', max_coaches: 5, shift_assignments: [] },
+    { id: VALID_UUID_B, location_id: 'loc-1', block_date: '2026-11-14', max_coaches: 5, shift_assignments: [] },
+  ]
+  const rule = (id, start, end) => ({ id, profile_id: PROFILE_A, kind: 'dated', start_date: start, end_date: end, all_day: true, note: null, profiles: { full_name: 'Coach One' } })
+
+  it('warns once for a "can\u2019t work" window covering an assigned date, not for one between them', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    readAvailabilityLeave.mockResolvedValue({ rows: availabilityLeaveRows([rule('u1', '2026-11-12', '2026-11-12'), rule('u2', '2026-11-13', '2026-11-13')]), error: null })
+    const db = buildDb({ blocks })
+    createServerClient.mockReturnValue(db)
+    const j = await (await POST(buildRequest({ block_ids: [VALID_UUID_A, VALID_UUID_B], profile_id: PROFILE_A }))).json()
+    expect(j.assigned).toHaveLength(2)
+    expect(j.warnings).toEqual(['Coach One can’t work from 2026-11-12 to 2026-11-12 (My availability)'])
+    expect(readAvailabilityLeave).toHaveBeenCalledWith(db, { profileIds: [PROFILE_A], startDate: '2026-11-12', endDate: '2026-11-14' })
+  })
+
+  it('a failed availability read still assigns (an advisory)', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    readAvailabilityLeave.mockResolvedValue({ rows: null, error: { message: 'down' } })
+    const db = buildDb({ blocks })
+    createServerClient.mockReturnValue(db)
+    const j = await (await POST(buildRequest({ block_ids: [VALID_UUID_A, VALID_UUID_B], profile_id: PROFILE_A }))).json()
+    expect(j.assigned).toHaveLength(2)
+    expect(j.warnings).toContain('Could not check My availability from 2026-11-12 to 2026-11-14: confirm this coach can work before publishing')
   })
 })

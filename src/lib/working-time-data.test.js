@@ -9,6 +9,11 @@ vi.mock('./log', async () => ({ ...(await vi.importActual('./log')), logWarn: vi
 
 import { siblingLocationIds } from './sibling-locations'
 import { loadWorkingTimeShifts, readOrgShiftRows, COUNT_UNPUBLISHED_ELSEWHERE, SUBTRACT_APPROVED_LEAVE } from './working-time-data'
+import { readAvailabilityLeave } from './availability-leave'
+import { availabilityLeaveRows } from '@shared/unavailable-days'
+
+// AVAIL.3 D1 — the availability read (availability-leave.test.js pins its query).
+vi.mock('./availability-leave', () => ({ readAvailabilityLeave: vi.fn(async () => ({ rows: [], error: null })) }))
 
 const PEOPLE = [
   { id: 'emp', full_name: 'Sam Demo', employment_type: 'fte' },
@@ -228,6 +233,24 @@ describe('loadWorkingTimeShifts — owner-review switches', () => {
       lte: ['start_date', '2026-09-28'],
       gte: ['end_date', '2026-09-20'],
     })
+  })
+
+  // AVAIL.3 D1 (Richard, 3 Oct 2026: "treat like leave").
+  it('subtractApprovedLeave: an all-day "can\u2019t work" date drops the shift like leave', async () => {
+    readAvailabilityLeave.mockResolvedValueOnce({
+      rows: availabilityLeaveRows([{ id: 'u1', profile_id: 'emp', kind: 'dated', start_date: '2026-09-24', end_date: '2026-09-24', all_day: true, note: null }]),
+      error: null,
+    })
+    const db = mockDb({ assignments: [row('a1', 'emp', 'loc1', '2026-09-21', '09:00:00', '12:00:00'), row('a3', 'emp', 'loc1', '2026-09-24', '09:00:00', '12:00:00')] })
+    const out = await loadWorkingTimeShifts(db, { ...ARGS, subtractApprovedLeave: true })
+    expect(out.shifts.map((s) => s.block_id)).toEqual(['b-a1'])
+    expect(readAvailabilityLeave).toHaveBeenLastCalledWith(db, { profileIds: ['emp'], startDate: '2026-09-20', endDate: '2026-09-28' })
+  })
+
+  it('subtractApprovedLeave: an unreadable availability read is an error too', async () => {
+    readAvailabilityLeave.mockResolvedValueOnce({ rows: null, error: { message: 'availability unreadable' } })
+    const out = await loadWorkingTimeShifts(mockDb({ assignments: [row('a1', 'emp', 'loc1', '2026-09-22', '09:00:00', '12:00:00')] }), { ...ARGS, subtractApprovedLeave: true })
+    expect(out).toMatchObject({ shifts: [], error: { message: 'availability unreadable' } })
   })
 
   it('subtractApprovedLeave: an unreadable leave read is an error, never an all-clear', async () => {

@@ -57,7 +57,7 @@ const DEFAULT_ORG_LOCATIONS = [
   { id: 'loc9', organization_id: 'org2' },
 ]
 
-function mockDb({ location, locationsById = null, failLocationIds = [], contractors = [], blocks = [], timeOff = [], otherAssignments = [], failOtherAssignments = false, orgLocations = DEFAULT_ORG_LOCATIONS, failSiblings = false, throwOn = null, guests = [], failPay = false }) {
+function mockDb({ location, locationsById = null, failLocationIds = [], contractors = [], blocks = [], timeOff = [], otherAssignments = [], failOtherAssignments = false, orgLocations = DEFAULT_ORG_LOCATIONS, failSiblings = false, throwOn = null, guests = [], failPay = false, availability = [], failAvailability = false }) {
   // Mock the chained Supabase queries the helper makes:
   //   from('locations').select(...).eq(...).single() → location
   //   from('profile_locations').select(...).eq(...) → contractor links
@@ -68,6 +68,7 @@ function mockDb({ location, locationsById = null, failLocationIds = [], contract
   const assignmentQueries = []
   const siblingQueries = []
   const payQueries = []
+  const availabilityQueries = []
   // A fixture location that names no organisation is in org1.
   const withOrg = (l) => (l ? { organization_id: 'org1', ...l } : l)
   return {
@@ -77,8 +78,30 @@ function mockDb({ location, locationsById = null, failLocationIds = [], contract
     assignmentQueries,
     siblingQueries,
     payQueries,
+    availabilityQueries,
     from(table) {
       calls.push(table)
+      // AVAIL.3 D1 — all-day dated availability, read by person like leave.
+      if (table === 'staff_unavailability') {
+        const f = { ids: null, filters: [] }
+        availabilityQueries.push(f)
+        const chain = {
+          select: () => chain,
+          in: (_c, v) => { f.ids = v; return chain },
+          eq: (c, v) => { f.filters.push([c, v]); return chain },
+          lte: (_c, v) => { f.startLte = v; return chain },
+          gte: (_c, v) => { f.endGte = v; return chain },
+          order: () => chain,
+          range: async () => (failAvailability
+            ? { data: null, error: { message: 'availability unreadable' } }
+            : {
+              data: availability.filter((r) => f.ids.includes(r.profile_id)
+                && r.start_date <= f.startLte && r.end_date >= f.endGte),
+              error: null,
+            }),
+        }
+        return chain
+      }
       if (table === 'locations') {
         return {
           select: () => ({
@@ -597,6 +620,52 @@ describe('projectPublishImpact — leave clashes and double bookings', () => {
     }])
     expect(r.periodProjectedEur).toBe(0)
     expect(r.overBudget).toBe(false)
+  })
+
+  // AVAIL.3 D1 (Richard, 3 Oct 2026: "treat like leave") — an all-day dated
+  // availability rule is costed and flagged exactly like approved leave.
+  const cantWork = (id, profileId, start, end, over = {}) => ({
+    id, profile_id: profileId, kind: 'dated', start_date: start, end_date: end, all_day: true, note: null, ...over,
+  })
+
+  it('lists a coach rostered on an all-day "can\u2019t work" date, and costs them at zero', async () => {
+    const db = mockDb({
+      location: { id: 'loc1', monthly_contractor_budget_eur: 500 },
+      contractors: [dan],
+      blocks: [block({ id: 'b1', date: '2026-05-06', start: '09:00', end: '11:00', coaches: [named('dan', 'Coach D')] })],
+      availability: [cantWork('u1', 'dan', '2026-05-06', '2026-05-06')],
+    })
+    const r = await projectPublishImpact(db, PERIOD)
+    expect(r.leaveClashes).toEqual([{
+      block_id: 'b1', block_date: '2026-05-06', start_time: '09:00', end_time: '11:00', name: 'Shift',
+      profile_id: 'dan', coach_name: 'Coach D', leave_start: '2026-05-06', leave_end: '2026-05-06', leave_source: 'availability',
+    }])
+    expect(r.periodProjectedEur).toBe(0)
+    // Read by person, over the same months as the leave read.
+    expect(db.availabilityQueries[0].ids).toEqual(expect.arrayContaining(['dan']))
+    expect(db.availabilityQueries[0].filters).toEqual(expect.arrayContaining([['kind', 'dated'], ['all_day', true]]))
+  })
+
+  it('a part-day availability rule stays advisory: billed, not a clash', async () => {
+    const db = mockDb({
+      location: { id: 'loc1', monthly_contractor_budget_eur: 500 },
+      contractors: [dan],
+      blocks: [block({ id: 'b1', date: '2026-05-06', start: '09:00', end: '11:00', coaches: [named('dan', 'Coach D')] })],
+      availability: [cantWork('u1', 'dan', '2026-05-06', '2026-05-06', { all_day: false, start_time: '06:00', end_time: '08:00' })],
+    })
+    const r = await projectPublishImpact(db, PERIOD)
+    expect(r.leaveClashes).toEqual([])
+    expect(r.periodProjectedEur).toBe(70)
+  })
+
+  it('a failed availability read fails the projection like a failed leave read (a budget input)', async () => {
+    const db = mockDb({
+      location: { id: 'loc1', monthly_contractor_budget_eur: 500 },
+      contractors: [dan],
+      blocks: [block({ id: 'b1', date: '2026-05-06', start: '09:00', end: '11:00', coaches: ['dan'] })],
+      failAvailability: true,
+    })
+    await expect(projectPublishImpact(db, PERIOD)).rejects.toThrow(/Availability lookup failed: availability unreadable/)
   })
 
   it('lists a double booking against a shift at ANOTHER studio', async () => {

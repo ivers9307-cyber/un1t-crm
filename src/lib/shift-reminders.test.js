@@ -11,6 +11,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('./roster-read', () => ({ fetchApiShiftRows: vi.fn() }))
 vi.mock('./notify', () => ({ notifyUsers: vi.fn() }))
 vi.mock('./log', () => ({ logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.fn() }))
+// AVAIL.3 D1 — the availability read (availability-leave.test.js pins its query).
+vi.mock('./availability-leave', () => ({ readAvailabilityLeave: vi.fn(async () => ({ rows: [], error: null })) }))
 
 const { fetchApiShiftRows } = await import('./roster-read')
 const { notifyUsers } = await import('./notify')
@@ -889,6 +891,30 @@ describe('runShiftReminders', () => {
     await runShiftReminders(db, { nowMs: NOW, locations: LOCATIONS })
     expect(notifyUsers).toHaveBeenCalledTimes(1)
     expect(logWarn).toHaveBeenCalled()
+  })
+
+  // AVAIL.3 D1 (Richard, 3 Oct 2026: "treat like leave") — no reminder for a
+  // shift on a day the coach said they can't work (all day).
+  it('a coach with an all-day "can\u2019t work" date gets nothing, like approved leave', async () => {
+    const { readAvailabilityLeave } = await import('./availability-leave')
+    const { availabilityLeaveRows } = await import('@shared/unavailable-days')
+    readAvailabilityLeave.mockResolvedValueOnce({
+      rows: availabilityLeaveRows([{ id: 'u1', profile_id: 'coach-1', kind: 'dated', start_date: '2026-09-22', end_date: '2026-09-22', all_day: true, note: null }]),
+      error: null,
+    })
+    const db = makeDb()
+    const summary = await runShiftReminders(db, { nowMs: NOW, locations: LOCATIONS })
+    expect(notifyUsers).not.toHaveBeenCalled()
+    expect(summary.shift_candidates).toBe(0)
+    expect(readAvailabilityLeave).toHaveBeenLastCalledWith(db, expect.objectContaining({ profileIds: ['coach-1'] }))
+  })
+
+  it('availability read failure fails OPEN like the leave read: the reminder still goes, logged', async () => {
+    const { readAvailabilityLeave } = await import('./availability-leave')
+    readAvailabilityLeave.mockResolvedValueOnce({ rows: null, error: { message: 'down' } })
+    await runShiftReminders(makeDb(), { nowMs: NOW, locations: LOCATIONS })
+    expect(notifyUsers).toHaveBeenCalledTimes(1)
+    expect(logWarn).toHaveBeenCalledWith('shift-reminders', expect.stringContaining('availability'), expect.anything())
   })
 
   it('ledger read failure fails CLOSED for this tick: throws before any claim or send', async () => {

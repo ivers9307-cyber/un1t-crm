@@ -134,9 +134,13 @@ describe('run-whatsapp-broadcasts never sends a stale scheduled blast (C127)', (
 
   it('a late scheduled DRIP still starts (it paces itself inside its window)', async () => {
     seed([bc('latedrip', A, { status: 'scheduled', delivery_mode: 'drip', scheduled_at: ago(30 * H) })])
+    // C138 (b) — a drip starts through sendBroadcast (draft→sending, nothing sent).
+    sendBroadcast.mockImplementationOnce(async (id) => { row(id).status = 'sending'; return { status: 'sending', mode: 'drip', sent: 0 } })
     await run()
+    expect(sendBroadcast).toHaveBeenCalledWith('latedrip')
     expect(row('latedrip').status).toBe('sending')
     expect(sendDripChunk).toHaveBeenCalledWith('latedrip')
+    expect(sendPushToRolesAtLocation).not.toHaveBeenCalled()
   })
 
   it('a failed push is logged and never stops the tick', async () => {

@@ -71,6 +71,8 @@ import {
   STAFF_PUSH_FROM, STAFF_PUSH_UNTIL, STAFF_PUSH_DEFAULT_TZ,
   isValidStaffTimeZone, resolveStaffTimeZone, inStaffPushHours,
 } from './staff-push-hours'
+// AVAIL.3 D1 — an all-day "can't work" availability date suppresses a reminder like leave.
+import { readAvailabilityLeave } from './availability-leave'
 
 // QUIET HOURS: a reminder may only be SENT while the location's wall clock is
 // inside [NO_REMINDER_BEFORE, NO_REMINDER_FROM). Outside it nothing is due.
@@ -509,7 +511,12 @@ export async function runShiftReminders(db, { nowMs = Date.now(), locations = []
     .lte('start_date', tomorrow)
     .gte('end_date', today)
   if (leaveErr) logWarn('shift-reminders', 'leave read failed — reminding without the leave check', { err: leaveErr })
-  else onLeave = leaveKeysFor(leaveRows, [today, tomorrow])
+  // AVAIL.3 D1 (Richard, 3 Oct 2026: "treat like leave") — an all-day "can't
+  // work" availability date suppresses the reminder like approved leave.
+  // Fails OPEN like the leave read: a coach is reminded rather than missed.
+  const { rows: availRows, error: availErr } = await readAvailabilityLeave(db, { profileIds, startDate: today, endDate: tomorrow })
+  if (availErr) logWarn('shift-reminders', 'availability read failed — reminding without the availability check', { err: availErr })
+  onLeave = leaveKeysFor([...(leaveErr ? [] : (leaveRows || [])), ...(availRows || [])], [today, tomorrow])
 
   const timeDue = dueShiftReminders(rows, { nowMs, tzByLocation, onLeave })
   if (timeDue.length === 0) return summary
