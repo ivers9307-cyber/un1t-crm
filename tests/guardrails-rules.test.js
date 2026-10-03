@@ -548,3 +548,57 @@ ruleTester.run(
     ],
   }
 )
+
+// D2 EXPECTLINT.1 — an async assertion nothing waits for races the test's end
+// (#1762). Valid = waited for in one of the ways the rule's header lists.
+ruleTester.run('no-unawaited-async-expect', plugin.rules['no-unawaited-async-expect'], {
+  valid: [
+    // awaited, on one line and across lines (the house style grep misses)
+    'async () => { await expect(p).resolves.toBe(1) }',
+    'async () => { await expect(p).rejects.toThrow(/x/) }',
+    'async () => {\n  await expect(\n    load(),\n  )\n    .rejects\n    .toThrow()\n}',
+    'async () => { await expect(p).resolves.not.toThrow() }',
+    'async () => { await expect.soft(p).resolves.toBe(1) }',
+    'async () => { await expect.poll(() => n).toBe(1) }',
+    // returned, or a concise arrow body: the runner awaits the returned promise
+    'it("x", () => { return expect(p).resolves.toBe(1) })',
+    'it("x", () => expect(p).resolves.toBe(1))',
+    // an element of an awaited / returned combinator
+    'async () => { await Promise.all([expect(a).resolves.toBe(1), expect(b).rejects.toThrow()]) }',
+    'it("x", () => Promise.allSettled([expect(a).resolves.toBe(1)]))',
+    // the fake-timer idiom: attach first, move the clock, then await
+    'async () => { const settled = expect(pending).rejects.toThrow(/timed out/); await vi.advanceTimersByTimeAsync(60_000); await settled }',
+    'async () => { const a = expect(p).rejects.toThrow(); await Promise.all([a, vi.runAllTimersAsync()]) }',
+    // not async assertions at all
+    'it("x", () => { expect(fn).toHaveBeenCalled() })',
+    'it("x", () => { expect(value).toBe(1) })',
+    'it("x", () => { expect(obj.resolves).toBe(1) })',
+    'it("x", () => { expect(p).resolves })',
+  ],
+  invalid: [
+    // #1762, verbatim (src/lib/availability-notify.test.js before 7998cb03)
+    {
+      code: 'it("x", async () => { expect(sendPushOnce.mock.results[0].value).resolves.toMatchObject({ sent: 4 }) })',
+      errors: [{ messageId: 'floating' }],
+    },
+    { code: 'it("x", async () => { expect(p).rejects.toThrow("no") })', errors: [{ messageId: 'floating' }] },
+    // multi-line chain
+    { code: 'it("x", async () => {\n  expect(\n    load(),\n  )\n    .rejects\n    .toThrow()\n})', errors: [{ messageId: 'floating' }] },
+    { code: 'it("x", async () => { expect(p).resolves.not.toBe(2) })', errors: [{ messageId: 'floating' }] },
+    { code: 'it("x", async () => { expect.soft(p).resolves.toBe(1) })', errors: [{ messageId: 'floating' }] },
+    { code: 'it("x", async () => { expect.poll(() => n).toBe(1) })', errors: [{ messageId: 'floating' }] },
+    // a combinator nobody waits for
+    { code: 'it("x", async () => { Promise.all([expect(p).resolves.toBe(1)]) })', errors: [{ messageId: 'floating' }] },
+    // forEach throws the callback's return away
+    { code: 'it("x", async () => { ps.forEach((p) => expect(p).resolves.toBe(1)) })', errors: [{ messageId: 'floating' }] },
+    { code: 'it("x", async () => { ps.forEach((p) => { return expect(p).resolves.toBe(1) }) })', errors: [{ messageId: 'floating' }] },
+    // bound but never awaited
+    { code: 'it("x", async () => { const a = expect(p).rejects.toThrow(); await tick() })', errors: [{ messageId: 'unsettledBinding' }] },
+    { code: 'it("x", async () => { const a = expect(p).rejects.toThrow(); use(a) })', errors: [{ messageId: 'unsettledBinding' }] },
+    // one report per assertion
+    {
+      code: 'it("x", async () => { expect(a).resolves.toBe(1); expect(b).rejects.toThrow() })',
+      errors: [{ messageId: 'floating' }, { messageId: 'floating' }],
+    },
+  ],
+})

@@ -5,7 +5,6 @@ import { resolveMasterLocationIdStrict } from './host-events'
 // Isolate the async wrapper from its two IO helpers so we can unit-test its
 // target-selection + row-load + fallback logic (the DB composition) directly.
 vi.mock('./host-events', () => ({ resolveMasterLocationIdStrict: vi.fn() }))
-vi.mock('./connection-registry', () => ({ overlayConnections: vi.fn((_db, row) => row) }))
 
 describe('pickCommsLocationTarget', () => {
   it('uses the explicit override when set (wins over everything)', () => {
@@ -56,7 +55,7 @@ describe('resolveEventCommsLocation', () => {
   }
 
   it('returns the event\'s own location for a normal event — no master lookup', async () => {
-    const db = makeDb({ LOC: { id: 'LOC', name: 'Hatch', twilio_alpha_sender_id: 'UN1THATCH', organization_id: 'ORG' } })
+    const db = makeDb({ LOC: { id: 'LOC', name: 'Hatch', organization_id: 'ORG' } })
     const row = await resolveEventCommsLocation(db, { location_id: 'LOC', host_id: null, sending_location_id: null })
     expect(row?.id).toBe('LOC')
     expect(resolveMasterLocationIdStrict).not.toHaveBeenCalled()
@@ -66,14 +65,14 @@ describe('resolveEventCommsLocation', () => {
     resolveMasterLocationIdStrict.mockResolvedValue('MASTER')
     const db = makeDb({
       ANCHOR: { organization_id: 'ORG' },
-      MASTER: { id: 'MASTER', name: 'Stillorgan', twilio_alpha_sender_id: 'UN1T Dub', organization_id: 'ORG' },
+      MASTER: { id: 'MASTER', name: 'Stillorgan', organization_id: 'ORG' },
     })
     const row = await resolveEventCommsLocation(db, { location_id: 'ANCHOR', host_id: 'H', sending_location_id: null })
     expect(row?.id).toBe('MASTER')
   })
 
   it('returns the explicit override row — no master lookup', async () => {
-    const db = makeDb({ OVR: { id: 'OVR', name: 'Hatch', twilio_alpha_sender_id: 'UN1THATCH', organization_id: 'ORG' } })
+    const db = makeDb({ OVR: { id: 'OVR', name: 'Hatch', organization_id: 'ORG' } })
     const row = await resolveEventCommsLocation(db, { location_id: 'ANCHOR', host_id: 'H', sending_location_id: 'OVR' })
     expect(row?.id).toBe('OVR')
     expect(resolveMasterLocationIdStrict).not.toHaveBeenCalled()
@@ -94,21 +93,13 @@ describe('resolveEventCommsLocation', () => {
   // BAREWRITE.1 made an unreadable row THROW, on the theory that falling
   // through to the event's own location could send under the wrong brand.
   // BAREWRITE.3 narrowed the throw to the brand-crossing hops. BAREWRITE.4
-  // removes it, because the brand it was protecting cannot differ for any event
-  // prod holds today — and the two halves of that are NOT equally solid:
-  //
-  //   • email identity resolves per ORGANISATION (resolveEmailSender →
-  //     tenant_email_domains keyed on the location's organization_id), and a
-  //     host anchor and its org master are in the same organisation BY
-  //     CONSTRUCTION (ensureAnchorLocation / resolveMasterLocationIdStrict);
-  //   • SMS identity is NOT structural — the alpha sender is per LOCATION, and
-  //     inside UN1T Group Hatch Street is `UN1THATCH` while Stillorgan is
-  //     `UN1T Dub`. What IS true, measured read-only against prod 2026-08-20
-  //     over all 13 race_events, is that no event resolves to a (target,
-  //     fallback) pair whose senders differ — the single Hatch event is plain
-  //     (no host, no override), so its target IS its fallback. Give a Hatch
-  //     event a host or a sending_location_id and that stops holding; the
-  //     query and the condition are written out in event-comms-location.js.
+  // removes it, because the brand it was protecting cannot differ: email
+  // identity resolves per ORGANISATION (resolveEmailSender →
+  // tenant_email_domains keyed on the location's organization_id), and a host
+  // anchor and its org master are in the same organisation BY CONSTRUCTION
+  // (ensureAnchorLocation / resolveMasterLocationIdStrict). The per-LOCATION
+  // SMS alpha sender, the half that was only true of the data, left with the
+  // SMS channel (TWILIO-RETIRE.1).
   //
   // Against that, every caller here is delivering a message a customer paid for
   // or asked for, and nothing retries: race-confirmations is only invoked on a
@@ -116,8 +107,7 @@ describe('resolveEventCommsLocation', () => {
   // fixed day-offset, so a skipped tick destroys the reminder rather than
   // deferring it. The throw was trading a certain loss against one that cannot
   // currently occur. What survives is VISIBILITY — every discarded read is
-  // reported through logError with the ids to act on, including the
-  // crossesLocation flag that fires the day the SMS half stops being true.
+  // reported through logError with the ids to act on.
   //
   // These tests are the old ones INVERTED: the same four failure points, now
   // asserting the message is never lost.
@@ -189,8 +179,8 @@ describe('resolveEventCommsLocation', () => {
   })
 
   // The two hops BAREWRITE.3 kept failing CLOSED. These are the receipts the
-  // guard was costing: on prod's data the fallback resolves to the same org and
-  // the same alpha sender, so the throw bought nothing and deleted the message.
+  // guard was costing: the fallback resolves to the same org, so the throw
+  // bought nothing and deleted the message.
   it('RECEIPT NOT LOST: an unreadable sending_location_id override returns null, it does NOT throw', async () => {
     const db = makeFailingDb('OVR')
     await expect(
@@ -214,12 +204,11 @@ describe('resolveEventCommsLocation', () => {
   it('RECEIPT NOT LOST: a master-lookup throw is caught, logged, and degraded to the anchor', async () => {
     resolveMasterLocationIdStrict.mockRejectedValue(new Error('organizations read failed'))
     const db = makeDb({
-      ANCHOR: { id: 'ANCHOR', name: 'Pride (host events)', twilio_alpha_sender_id: 'UN1T Dub', organization_id: 'ORG' },
-      MASTER: { id: 'MASTER', name: 'Stillorgan', twilio_alpha_sender_id: 'UN1T Dub', organization_id: 'ORG' },
+      ANCHOR: { id: 'ANCHOR', name: 'Pride (host events)', organization_id: 'ORG' },
+      MASTER: { id: 'MASTER', name: 'Stillorgan', organization_id: 'ORG' },
     })
     const row = await resolveEventCommsLocation(db, { location_id: 'ANCHOR', host_id: 'H', sending_location_id: null })
-    // Same organisation ⇒ same email identity; and for every event pair prod
-    // holds today, the same alpha sender.
+    // Same organisation ⇒ same email identity.
     expect(row?.id).toBe('ANCHOR')
   })
 

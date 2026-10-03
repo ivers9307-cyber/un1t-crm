@@ -282,7 +282,6 @@ export async function enrolContacts({
   }
 
   if (toInsert.length === 0) {
-    await bumpEnrolledCounter(db, sequenceId, reactivated)
     // Pre-DUNNING.2 this path reported every contact as skipped; a
     // re-activated contact is enrolled, everyone else still counts.
     return { enrolled: reactivated, skipped: contactIds.length - reactivated, reactivated }
@@ -307,7 +306,8 @@ export async function enrolContacts({
   if (error) throw new Error(`Enrol failed: ${error.message}`)
   const enrolledCount = (inserted || []).length
 
-  await bumpEnrolledCounter(db, sequenceId, enrolledCount + reactivated, { always: true })
+  // SEQCOUNTERS.1 — no counter bump: the enrolled-counter RPC this used to
+  // call never existed. /automations counts sequence_enrollments rows instead.
 
   // `skipped` counts everything we declined to enrol, including rows the
   // index rejected on conflict (toInsert.length - enrolledCount), which the
@@ -320,22 +320,4 @@ export async function enrolContacts({
     skipped: alreadyActive.size + exemptSkipped + reenrolSkipped + (toInsert.length - enrolledCount),
     reactivated,
   }
-}
-
-// Bump the cached counter on the parent sequence. Best-effort — the runner
-// doesn't depend on this counter for correctness, it's just for the admin
-// dashboard. `always` keeps the pre-DUNNING.2 behaviour on the insert path
-// (the RPC fired even for a zero delta); the re-activation-only path skips
-// a zero bump.
-// NOTE: a supabase-js builder is a thenable, not a Promise — it has no
-// `.catch`, so `db.rpc(...).catch(...)` throws a synchronous TypeError and
-// the RPC never fires. Must be try/await/catch.
-async function bumpEnrolledCounter(db, sequenceId, delta, { always = false } = {}) {
-  if (!delta && !always) return
-  try {
-    await db.rpc('increment_sequence_enrolled', {
-      p_sequence_id: sequenceId,
-      p_delta: delta,
-    })
-  } catch { /* RPC not present / best-effort counter — no-op */ }
 }

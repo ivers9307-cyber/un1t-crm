@@ -431,6 +431,18 @@ jobs:
       - name: Select column existence
         run: npm run check:select-columns
 
+      # Catches the STEPSENTRPC.1 class (C61/C71): a `.rpc()` naming a
+      # function that does not exist. PostgREST 404s it, supabase-js resolves
+      # with { error } instead of throwing, and a best-effort try/catch drops
+      # it: three sequence counters never moved for months while every mocked
+      # test passed. Function names are replayed from supabase/migrations
+      # (CREATE/DROP/ALTER FUNCTION, per signature, schema public only); a
+      # non-literal name must be declared in the script's RPC_INDIRECT; an
+      # exception goes in .rpc-names-allowlist.json with a reason and an
+      # expiry. See scripts/check-rpc-names.mjs.
+      - name: RPC name existence
+        run: npm run check:rpc-names
+
       # Phase 0b of the Repset merge — the staff + member mobile apps are
       # merging into ONE binary, after which staff-app JS ships to every
       # member phone. Nothing secret-shaped may live in mobile/** or

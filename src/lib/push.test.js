@@ -104,7 +104,7 @@ beforeEach(() => {
   })
 })
 
-import { sendPush, resolvePushAllowedIds, resolveRoleRecipientIds } from './push.js'
+import { sendPush, resolvePushAllowedIds, readRoleRecipientIds } from './push.js'
 
 describe('sendPush — ANDROID-VIS.1 token-less device rows (mig 565)', () => {
   it('never sends to a device row whose expo_push_token is NULL', async () => {
@@ -518,7 +518,7 @@ describe('resolvePushAllowedIds — per-location gating', () => {
   })
 })
 
-describe('resolveRoleRecipientIds — per-location role + master inclusion (PUSH-ROLES.1)', () => {
+describe('readRoleRecipientIds — per-location role + master inclusion (PUSH-ROLES.1)', () => {
   const db = {
     from: () => ({
       select: () => ({
@@ -537,7 +537,7 @@ describe('resolveRoleRecipientIds — per-location role + master inclusion (PUSH
   }
 
   it('judges the PER-LOCATION role, not the stale global profiles.role', async () => {
-    const ids = await resolveRoleRecipientIds(db, 'loc1', ['owner', 'manager'])
+    const { ids } = await readRoleRecipientIds(db, 'loc1', ['owner', 'manager'])
     expect(ids).toContain('garrett')
     expect(ids).not.toContain('demoted')
     expect(ids).not.toContain('james')
@@ -545,7 +545,28 @@ describe('resolveRoleRecipientIds — per-location role + master inclusion (PUSH
   })
 
   it('always includes active masters assigned to the location (they hold every decision right)', async () => {
-    const ids = await resolveRoleRecipientIds(db, 'loc1', ['owner', 'manager'])
+    const { ids } = await readRoleRecipientIds(db, 'loc1', ['owner', 'manager'])
     expect(ids).toContain('richard')
+  })
+})
+
+// REPLACE.1b review 1 — a failed managers read must be tellable from "no
+// managers": the "taken" notice stamped itself done on an empty list.
+describe('readRoleRecipientIds — the same answer, with the read error', () => {
+  const failing = { from: () => ({ select: () => ({ eq: async () => ({ data: null, error: { message: 'down' } }) }) }) }
+  const working = { from: () => ({ select: () => ({ eq: async () => ({ data: [
+    { profile_id: 'm1', role: 'manager', profiles: { id: 'm1', role: 'manager', active: true } },
+    { profile_id: 's1', role: 'staff', profiles: { id: 's1', role: 'staff', active: true } },
+  ], error: null }) }) }) }
+
+  it('returns the ids and no error on a good read', async () => {
+    expect(await readRoleRecipientIds(working, 'loc1', ['manager'])).toEqual({ ids: ['m1'], error: null })
+  })
+  it('returns the error on a failed read (never an empty list that reads as "nobody")', async () => {
+    expect(await readRoleRecipientIds(failing, 'loc1', ['manager'])).toEqual({ ids: [], error: { message: 'down' } })
+  })
+  it('no studio or no roles is an empty answer, not an error', async () => {
+    expect(await readRoleRecipientIds(working, null, ['manager'])).toEqual({ ids: [], error: null })
+    expect(await readRoleRecipientIds(working, 'loc1', [])).toEqual({ ids: [], error: null })
   })
 })

@@ -60,11 +60,11 @@ describe('GET /api/cron/contract-reminders — roster runway arm', () => {
     const res = await GET(req())
     expect(runRosterRunwayAlerts).toHaveBeenCalledWith(fakeDb)
     expect(stampHeartbeat).toHaveBeenCalledWith('contract-reminders', {
-      checked: 0, sent: 0, emailFailed: 0, rowErrors: 0, runway: OUTCOME, runway_arm_failed: 0,
+      checked: 0, sent: 0, emailFailed: 0, rowErrors: 0, undelivered: 0, runway: OUTCOME, runway_arm_failed: 0,
       qualifications: QUALS, qualification_arm_failed: 0,
     })
     expect(await res.json()).toEqual({
-      success: true, checked: 0, sent: 0, emailFailed: 0, rowErrors: 0, runway: OUTCOME, runway_arm_failed: 0,
+      success: true, checked: 0, sent: 0, emailFailed: 0, rowErrors: 0, undelivered: 0, runway: OUTCOME, runway_arm_failed: 0,
       qualifications: QUALS, qualification_arm_failed: 0,
     })
   })
@@ -145,7 +145,7 @@ describe('GET /api/cron/contract-reminders — roster-runway heartbeat', () => {
     expect(res.status).toBe(200)
     expect(stampedNames()).toEqual(['qualification-digest', 'contract-reminders'])
     expect(stampHeartbeat).toHaveBeenCalledWith('contract-reminders', {
-      checked: 0, sent: 0, emailFailed: 0, rowErrors: 0, runway: { error: 'runway read failed: blocks down' }, runway_arm_failed: 1,
+      checked: 0, sent: 0, emailFailed: 0, rowErrors: 0, undelivered: 0, runway: { error: 'runway read failed: blocks down' }, runway_arm_failed: 1,
       qualifications: QUALS, qualification_arm_failed: 0,
     })
   })

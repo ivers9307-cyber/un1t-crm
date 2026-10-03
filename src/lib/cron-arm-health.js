@@ -26,6 +26,12 @@
 // row's upsert is (re-)run RIGHT AFTER the deploy that stamps it: a row
 // seeded before that code is live goes stale after interval + grace.
 //
+// REPLACE.1b adds a fifth:
+//
+//   'shift-offer-sweep' — runShiftOfferSweep (src/lib/shift-offer-server.js),
+//                       the "Offer to team" arm of the */5 send-push-reminders
+//                       cron. Seeded by mig 642, applied RIGHT AFTER the deploy.
+//
 // THE RULE. Stamp only when the arm RETURNED an outcome object (a throw, or a
 // resolved non-object, has not shown it ran) and that outcome carries no
 // fault in the arm's own machinery. A run with nothing to send is healthy (a
@@ -40,6 +46,9 @@ export const ROSTER_RUNWAY_HEARTBEAT = 'roster-runway'
 // runShiftTimeChangeNotices) of the */5 send-push-reminders cron. Seeded by mig 639.
 export const SHIFT_TIME_CHANGES_HEARTBEAT = 'shift-time-changes'
 export const REPLACE_NOTICES_HEARTBEAT = 'replace-notices'
+// REPLACE.1b — the shift-offer arm (src/lib/shift-offer-server.js
+// runShiftOfferSweep) of the */5 send-push-reminders cron. Seeded by mig 642.
+export const SHIFT_OFFER_SWEEP_HEARTBEAT = 'shift-offer-sweep'
 
 // runShiftReminders' counters that mean the ARM went wrong, not a device:
 //   shift_claim_failed — a ledger claim insert failed; that reminder was NOT sent.
@@ -62,10 +71,15 @@ export function shiftReminderArmHealthy(summary) {
  * on every failure of its own (a locations or runway read), which the parent
  * cron records as { error }; `failed` is a per-recipient delivery count whose
  * claims are released for the next daily run, so it does not block the stamp.
+ * C1 RECIPIENTS.1: `recipients_failed` DOES block it: the arm's own "who can
+ * publish here" read failed, so nobody was told. Nothing was claimed and the
+ * next daily run retries, but a stamp would call the run clean. With the
+ * row's 86,400 s + 43,200 s, one bad day turns it stale that evening.
  */
 export function runwayArmHealthy(outcome) {
   if (!isOutcome(outcome)) return false
-  return !Object.prototype.hasOwnProperty.call(outcome, 'error')
+  if (Object.prototype.hasOwnProperty.call(outcome, 'error')) return false
+  return count(outcome.recipients_failed) === 0
 }
 
 // QUALS.1 — the weekly qualification digest arm of contract-reminders. Seeded by mig 635.
@@ -113,4 +127,51 @@ export function timeChangeArmHealthy(summary) {
 export function replaceNoticeArmHealthy(outcome) {
   if (!isOutcome(outcome)) return false
   return count(outcome.errors) === 0 && count(outcome.stamp_failed) === 0
+}
+
+/**
+ * REPLACE.1b — true when a runShiftOfferSweep() outcome shows a clean run.
+ * Faults in the arm's own machinery, each retried next tick:
+ *   errors       — an offer list could not be read, a list filled its 200-row
+ *                  guard (capped: the rest waited), or a lease / close /
+ *                  give-up write failed.
+ *   stamp_failed — a notice was DELIVERED but its stamp did not land: it is
+ *                  sent again once the lease expires, until the stamp lands.
+ * A quiet-hours tick, a tick with no offers and a busy lease are healthy. NOT
+ * a fault: retry (the audience could not be read, or the send failed
+ * outright: the lease is released and the next tick retries) and gave_up
+ * (logged loudly on its own, and shown on the manager's line).
+ */
+export function offerSweepArmHealthy(outcome) {
+  if (!isOutcome(outcome)) return false
+  return count(outcome.errors) === 0 && count(outcome.stamp_failed) === 0
+}
+
+// C5 REPLACENITS.1 — the */5 send-push-reminders tick log line. The route
+// logs its summary only when the tick did something, so a quiet night writes
+// nothing. The replace and offer arms report a NESTED outcome
+// (summary.replace_notices, summary.shift_offers), and the old top-level test
+// (`v > 0`) is always false for an object: a notice told, an offer sent, a
+// give-up never reached the log. Each nested outcome is judged by the
+// counters that mean something HAPPENED. Left out on purpose, because they
+// repeat every tick while nothing changes: a held notice (rows, groups,
+// quiet, fresh, undelivered) and a waiting offer (open, claimed_owed, none,
+// busy, leased, quiet_hours).
+export const REPLACE_NOTICE_NEWS_KEYS = Object.freeze(['told', 'silent', 'started', 'gone', 'send_failed', 'stamp_failed', 'errors'])
+export const OFFER_SWEEP_NEWS_KEYS = Object.freeze(['expired', 'filled', 'raced', 'retry', 'sent', 'stamp_failed', 'gave_up', 'capped', 'errors'])
+
+const NESTED_NEWS_KEYS = Object.freeze({ replace_notices: REPLACE_NOTICE_NEWS_KEYS, shift_offers: OFFER_SWEEP_NEWS_KEYS })
+// Top-level keys that are 1 on every tick from 22:00 to 07:00.
+const QUIET_KEYS = new Set(['quiet_hours', 'time_change_quiet'])
+
+/** True when a send-push-reminders tick summary is worth one log line. */
+export function pushReminderTickIsNews(summary) {
+  if (!isOutcome(summary)) return false
+  return Object.entries(summary).some(([k, v]) => {
+    if (QUIET_KEYS.has(k)) return false
+    const nested = NESTED_NEWS_KEYS[k]
+    if (nested) return isOutcome(v) && nested.some((key) => count(v[key]) > 0)
+    if (Array.isArray(v)) return v.length > 0
+    return count(v) > 0
+  })
 }

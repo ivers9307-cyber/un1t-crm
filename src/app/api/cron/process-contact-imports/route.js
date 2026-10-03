@@ -28,6 +28,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { claimAndProcessImportJob, STUCK_AFTER_MINUTES } from '@/lib/contact-import-queue'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -40,12 +41,12 @@ export async function GET(request) {
   }
 
   const db = createServerClient()
-  const stats = { processed: 0, recovered: 0, failed: 0, skipped: 0, skipped_no_work: 0 }
+  const stats = { processed: 0, recovered: 0, failed: 0, skipped: 0, skipped_no_work: 0, recover_failed: 0 }
 
   // 1. Stuck-job recovery — reset anything in 'processing' for too
   // long. One UPDATE handles it.
   const stuckCutoff = new Date(Date.now() - STUCK_AFTER_MINUTES * 60_000).toISOString()
-  const { data: recovered } = await db
+  const { data: recovered, error: recoverErr } = await db
     .from('contact_imports')
     .update({
       status: 'pending',
@@ -55,24 +56,40 @@ export async function GET(request) {
     .eq('status', 'processing')
     .lt('started_processing_at', stuckCutoff)
     .select('id')
-  stats.recovered = (recovered || []).length
+  if (recoverErr) {
+    // CRONREADERR.1 — the reset did not happen, so a stuck row stays
+    // 'processing' until a later tick's reset works. That is this tick's own
+    // fault: no stamp (mig 644's 120 + 240 absorbs one missed tick; a reset
+    // broken on every tick pages, since stuck imports would never retry). The
+    // pending job below is independent work and still runs.
+    stats.recover_failed = 1
+    logError('cron-process-contact-imports', 'stuck-job reset failed; heartbeat not stamped this tick', { err: recoverErr })
+  } else {
+    stats.recovered = (recovered || []).length
+  }
 
   // 2. Fetch the oldest pending job. The claim itself is the shared
   // CAS in src/lib/contact-import-queue.js — the QStash push consumer
   // races this pass by design (and pg_cron + manual pings could race
   // each other); exactly one claimant processes each job, everyone
   // else sees `skipped`.
-  const { data: pending } = await db
+  const { data: pending, error: pendingErr } = await db
     .from('contact_imports')
     .select('*')
     .eq('status', 'pending')
     .order('created_at', { ascending: true })
     .limit(1)
+  if (pendingErr) {
+    // CRONREADERR.1 — a failed read is not "no work". Nothing is claimed; the
+    // job stays pending for the next tick and for the QStash worker.
+    logError('cron-process-contact-imports', 'pending-job read failed; nothing claimed, heartbeat not stamped', { err: pendingErr })
+    return NextResponse.json({ success: false, error: 'Could not read the import queue', data: stats }, { status: 500 })
+  }
 
   const job = (pending || [])[0]
   if (!job) {
     stats.skipped_no_work = 1
-    await stampHeartbeat('process-contact-imports', stats).catch(() => {})
+    await stampIfClean(stats)
     return NextResponse.json({ success: true, data: stats })
   }
 
@@ -91,6 +108,12 @@ export async function GET(request) {
     stats.skipped = 1 // lost the claim race to the QStash worker
   }
 
-  await stampHeartbeat('process-contact-imports', stats).catch(() => {})
+  await stampIfClean(stats)
   return NextResponse.json({ success: true, data: stats })
+}
+
+// Stamped only on a tick with no fault of its own (CLAUDE.md, cron heartbeats).
+async function stampIfClean(stats) {
+  if (stats.recover_failed) return
+  await stampHeartbeat('process-contact-imports', stats).catch(() => {})
 }

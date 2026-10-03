@@ -21,6 +21,7 @@ import {
   LAPSE_WARN_MIN_CENTS,
   LAPSE_WARN_DAYS,
   assembleIntegrationsHub,
+  HUB_UNKNOWN,
 } from './integrations-hub'
 // The tenants console counts hub attention rows THROUGH a.locationId; the
 // Shelly card's card-level row is pinned to a real id so that count works.
@@ -478,7 +479,6 @@ describe('assembleIntegrationsHub — Phase-2 presence flags + secret non-leak',
     thinq_pat: 'SECRET_PAT',
     thinq_client_id: 'cid-1',
     thinq_country_code: 'IE',
-    twilio_alpha_sender_id: 'UN1T STILL',
     bca_config: { send_from: 'a@ccf.com', send_to: 'b@bca.com', documents: [{ slug: 'doc_01', label: 'x' }] },
     features: { bca_submit: true },
   }
@@ -497,7 +497,8 @@ describe('assembleIntegrationsHub — Phase-2 presence flags + secret non-leak',
     expect(c.thinq).toEqual({ hasPat: true, clientId: 'cid-1', countryCode: 'IE' })
 
     expect(data.bca[0]).toMatchObject({ sendFrom: 'a@ccf.com', sendTo: 'b@bca.com', documentCount: 1 })
-    expect(data.sms[0].senderId).toBe('UN1T STILL')
+    // TWILIO-RETIRE.1 — the SMS card left with the channel.
+    expect(data.sms).toBeUndefined()
 
     // The whole payload must not contain a single raw secret.
     const json = JSON.stringify(data)
@@ -590,7 +591,6 @@ describe('assembleIntegrationsHub — Shelly plugs card', () => {
       message: null,
       host: 'shelly-77-eu.shelly.cloud',
       hasAuthKey: true,
-      keyHint: 'ab12',
       lastOkAt: '2026-07-19T11:58:00Z',
       // last ATTEMPT (updated_at) is carried separately from last SUCCESS:
       // the pair is what distinguishes "still retrying" from "abandoned".
@@ -608,9 +608,10 @@ describe('assembleIntegrationsHub — Shelly plugs card', () => {
     const json = JSON.stringify(data)
     expect(json).not.toContain('SECRET_SHELLY')
     expect(json).not.toContain('FP_SECRET')
-    // The hint IS non-secret (publicConnectionView returns it) — pinned so a
-    // future over-correction that strips it fails loudly rather than quietly.
-    expect(json).toContain('ab12')
+    // SECRETTAILS.1 — the row still carries a hint (as before mig 659); the
+    // card carries presence only, never a character of the key.
+    expect(data.shelly[0]).not.toHaveProperty('keyHint')
+    expect(json).not.toContain('ab12')
   })
 
   it('a location that never connected yields a not_connected row with zero counts', async () => {
@@ -623,7 +624,6 @@ describe('assembleIntegrationsHub — Shelly plugs card', () => {
       message: null,
       host: null,
       hasAuthKey: false,
-      keyHint: null,
       lastOkAt: null,
       lastAttemptAt: null,
       // Zero here is a READING, not an absence of one — countsKnown says so.
@@ -768,8 +768,10 @@ describe('assembleIntegrationsHub — Shelly plugs card', () => {
 
     const a = data.shelly.find((r) => r.locationId === LOC_A.id)
     const b = data.shelly.find((r) => r.locationId === LOC_B.id)
-    expect(a).toMatchObject({ status: 'connected', countsKnown: true, deviceCount: 3, enabledCount: 2, onlineCount: 1, keyHint: 'ab12' })
-    expect(b).toMatchObject({ status: 'action_needed', countsKnown: true, deviceCount: 1, enabledCount: 0, onlineCount: 1, keyHint: 'cd34' })
+    expect(a).toMatchObject({ status: 'connected', countsKnown: true, deviceCount: 3, enabledCount: 2, onlineCount: 1 })
+    expect(a.hasAuthKey).toBe(true)
+    expect(b).toMatchObject({ status: 'action_needed', countsKnown: true, deviceCount: 1, enabledCount: 0, onlineCount: 1 })
+    expect(b.hasAuthKey).toBe(true)
     expect(b.message).toMatch(/re-paste/i)
 
     // B's action_needed lands in the warning band with the re-paste prompt;
@@ -777,5 +779,209 @@ describe('assembleIntegrationsHub — Shelly plugs card', () => {
     const nag = data.attention.filter((n) => n.cardKey === 'shelly')
     expect(nag).toHaveLength(1)
     expect(nag[0]).toMatchObject({ severity: 'warning', locationId: LOC_B.id, label: 'Shelly plugs' })
+  })
+})
+
+// ── HUBREAD.1 — a failed read is 'unknown', never not_connected/connected ──
+describe('worstStatus — unknown (HUBREAD.1)', () => {
+  it('an unknown row outranks connected, not_connected and action_needed', () => {
+    expect(worstStatus(['connected', 'unknown'])).toBe('unknown')
+    expect(worstStatus(['not_connected', 'unknown'])).toBe('unknown')
+    expect(worstStatus(['action_needed', 'unknown'])).toBe('unknown')
+  })
+
+  it('a real error still outranks unknown', () => {
+    expect(worstStatus(['unknown', 'error'])).toBe('error')
+  })
+
+  it('exports the status the UI keys on', () => {
+    expect(HUB_UNKNOWN).toBe('unknown')
+  })
+})
+
+describe('buildAttention — unreadable rows (HUBREAD.1)', () => {
+  it('keeps an unknown row, after real errors and before expiring tokens, marked unreadable', () => {
+    const rows = [
+      { cardKey: 'instagram', locationId: 'l1', locationName: 'A', status: 'connected', tokenExpiresAt: '2026-07-22T00:00:00Z', href: '/i' },
+      { cardKey: 'xero', locationId: 'l1', locationName: 'All locations', status: 'unknown', message: 'Could not load Xero just now. Try again in a moment.', href: null },
+      { cardKey: 'glofox', locationId: 'l1', locationName: 'A', status: 'error', message: 'boom', href: '/g' },
+    ]
+    const out = buildAttention(rows, { now: NOW })
+    expect(out.map((a) => a.cardKey)).toEqual(['glofox', 'xero', 'instagram'])
+    expect(out[1]).toMatchObject({
+      severity: 'warning',
+      label: 'Xero',
+      locationName: 'All locations',
+      message: 'Could not load Xero just now. Try again in a moment.',
+      unreadable: true,
+    })
+  })
+
+  it('labels the registry and email rows', () => {
+    const out = buildAttention([
+      { cardKey: 'registry', locationId: 'l1', locationName: 'All locations', status: 'unknown', href: null },
+      { cardKey: 'email', locationId: 'l1', locationName: 'All locations', status: 'unknown', href: null },
+    ], { now: NOW })
+    expect(out.map((a) => a.label)).toEqual(['Connections', 'Email delivery'])
+    expect(out[1].message).toBe('Could not load Email delivery just now. Try again in a moment.')
+  })
+})
+
+describe('assembleIntegrationsHub — a failed read is never "not connected" (HUBREAD.1)', () => {
+  // Live legacy Glofox + UniFi + BCA on A: on main a failed registry read
+  // falls back to these and paints them green.
+  const LIVE_A = {
+    ...LOC_A,
+    settings: {
+      glofox: { branch_id: 'br-1', api_key: 'k', api_token: 't' },
+      unifi: { host: 'https://u:12445', api_token: 'u' },
+    },
+    bca_config: { send_from: 'a@ccf.com' },
+  }
+
+  it('registry read fails → every registry-derived row is unknown, for every location', async () => {
+    const db = tableDb({ channel_connections: { error: { message: 'db exploded' } } })
+    const data = await assembleIntegrationsHub(db, [LIVE_A, LOC_B], { now: NOW })
+    for (const key of ['glofox', 'instagram', 'unifi', 'climate', 'bca']) {
+      expect(data[key].map((r) => r.locationId)).toEqual([LIVE_A.id, LOC_B.id])
+      for (const r of data[key]) {
+        expect(r.status).toBe('unknown')
+        expect(r.message).toBe('Could not load this just now. Try again in a moment.')
+      }
+    }
+    // ONE attention row for the one failed read.
+    const nag = data.attention.filter((a) => a.unreadable)
+    expect(nag).toHaveLength(1)
+    expect(nag[0]).toMatchObject({
+      cardKey: 'registry',
+      label: 'Connections',
+      locationId: LIVE_A.id,
+      locationName: 'All locations',
+      message: 'Could not load the Glofox, Instagram and studio device connections just now. Try again in a moment.',
+    })
+    expect(JSON.stringify(data)).not.toContain('db exploded')
+  })
+
+  for (const [table, key, label] of [
+    ['xero_connections', 'xero', 'Xero'],
+    ['whatsapp_numbers', 'whatsapp', 'WhatsApp'],
+    ['ad_accounts', 'ads', 'Meta Ads'],
+  ]) {
+    it(`${table} read fails → ${key} rows unknown per location + one attention row`, async () => {
+      const db = tableDb({ [table]: { error: { message: 'db exploded' } } })
+      const data = await assembleIntegrationsHub(db, [LOC_A, LOC_B], { now: NOW })
+      expect(data[key].map((r) => [r.locationId, r.status])).toEqual([
+        [LOC_A.id, 'unknown'],
+        [LOC_B.id, 'unknown'],
+      ])
+      const nag = data.attention.filter((a) => a.cardKey === key)
+      expect(nag).toHaveLength(1)
+      expect(nag[0]).toMatchObject({
+        unreadable: true,
+        locationId: LOC_A.id,
+        message: `Could not load ${label} just now. Try again in a moment.`,
+      })
+      // The other cards still read normally.
+      expect(data.glofox.every((r) => r.status === 'not_connected')).toBe(true)
+    })
+  }
+
+  it('a WhatsApp unknown row carries no numbers and no budget', async () => {
+    const db = tableDb({ whatsapp_numbers: { error: { message: 'x' } } })
+    const data = await assembleIntegrationsHub(db, [LOC_A], { now: NOW })
+    expect(data.whatsapp[0]).toMatchObject({ status: 'unknown', numbers: [], budget: null })
+  })
+
+  it('healthy reads are unchanged: no unknown rows, no unreadable attention', async () => {
+    const data = await assembleIntegrationsHub(tableDb(), [LIVE_A, LOC_B], { now: NOW })
+    const all = ['glofox', 'whatsapp', 'instagram', 'xero', 'ads', 'unifi', 'climate', 'bca'].flatMap((k) => data[k])
+    expect(all.some((r) => r.status === 'unknown')).toBe(false)
+    expect(data.attention.some((a) => a.unreadable)).toBe(false)
+    expect(data.glofox.find((r) => r.locationId === LIVE_A.id).status).toBe('connected')
+  })
+})
+
+describe('assembleIntegrationsHub — email + plan strip reads (HUBREAD.1)', () => {
+  const ORG_A = { ...LOC_A, organization_id: 'org-1' }
+  const TIER_PIN = {
+    location_id: LOC_A.id,
+    version: {
+      id: 'v1', plan_id: 'p1', effective_from: '2026-01-01', price_cents: 4900, currency: 'EUR',
+      allowances: {}, unit_rates_cents: {}, features: {},
+      plan: { id: 'p1', slug: 'growth', name: 'Growth', kind: 'tier' },
+    },
+  }
+
+  it('a failed sending-domain read is unknown, never "Platform email" + Set up domain', async () => {
+    const db = tableDb({ tenant_email_domains: { error: { message: 'db exploded' } } })
+    const data = await assembleIntegrationsHub(db, [ORG_A], { now: NOW })
+    expect(data.email).toHaveLength(1)
+    expect(data.email[0]).toMatchObject({ organizationId: 'org-1', status: 'unknown', sendingDomain: null })
+    const nag = data.attention.filter((a) => a.cardKey === 'email')
+    expect(nag).toHaveLength(1)
+    expect(nag[0]).toMatchObject({ unreadable: true, message: 'Could not load Email delivery just now. Try again in a moment.' })
+  })
+
+  it('a failed organisations read only drops the label (log only)', async () => {
+    const db = tableDb({ organizations: { error: { message: 'x' } } })
+    const data = await assembleIntegrationsHub(db, [ORG_A], { now: NOW })
+    expect(data.email[0]).toMatchObject({ status: 'platform', orgName: null })
+    expect(data.attention.some((a) => a.cardKey === 'email')).toBe(false)
+  })
+
+  it('a failed plan-pin read is unreadable, never "No platform plan"', async () => {
+    const db = tableDb({ location_plans: { error: { message: 'x' } } })
+    const data = await assembleIntegrationsHub(db, [LOC_A, LOC_B], { now: NOW })
+    expect(data.billing).toEqual([
+      { locationId: LOC_A.id, plan: null, unreadable: true },
+      { locationId: LOC_B.id, plan: null, unreadable: true },
+    ])
+  })
+
+  for (const table of ['wallets', 'usage_rollups_daily', 'wallet_transactions', 'usage_events']) {
+    it(`a failed ${table} read makes the PINNED row unreadable, never a zero balance/usage`, async () => {
+      const db = tableDb({ location_plans: { data: [TIER_PIN] }, [table]: { error: { message: 'x' } } })
+      const data = await assembleIntegrationsHub(db, [LOC_A, LOC_B], { now: NOW })
+      expect(data.billing).toEqual([
+        { locationId: LOC_A.id, plan: null, unreadable: true },
+        { locationId: LOC_B.id, plan: null }, // unpinned: the pin read succeeded, so this is true
+      ])
+    })
+  }
+
+  it('a pinned row with healthy reads still renders its plan (pin)', async () => {
+    const db = tableDb({ location_plans: { data: [TIER_PIN] } })
+    const data = await assembleIntegrationsHub(db, [LOC_A], { now: NOW })
+    expect(data.billing[0].plan).toMatchObject({ name: 'Growth' })
+    expect(data.billing[0].unreadable).toBeUndefined()
+  })
+})
+
+// C141 ORGROLE.2 — the plan & wallet strip is organisation-level billing
+// data (C18's rule: organisation admins only). The hub stays open to studio
+// owners for their integrations, so the assembler builds the strip only for
+// the locations the caller may see billing for (`billingFor`).
+describe('assembleIntegrationsHub — plan & wallet strip is organisation-admin only (C141)', () => {
+  it('billingFor narrows the strip AND its reads to the admitted locations', async () => {
+    const db = tableDb()
+    const data = await assembleIntegrationsHub(db, [LOC_A, LOC_B], {
+      now: NOW, billingFor: (loc) => loc.id === LOC_B.id,
+    })
+    expect(data.billing.map((r) => r.locationId)).toEqual([LOC_B.id])
+    expect(db.inCalls.location_plans[0]).toEqual(['location_id', [LOC_B.id]])
+    // The rest of the hub is untouched.
+    expect(data.shelly.map((r) => r.locationId)).toEqual([LOC_A.id, LOC_B.id])
+  })
+
+  it('no admitted location: no strip rows and no plan read at all', async () => {
+    const db = tableDb()
+    const data = await assembleIntegrationsHub(db, [LOC_A, LOC_B], { now: NOW, billingFor: () => false })
+    expect(data.billing).toEqual([])
+    expect(db.inCalls.location_plans || []).toEqual([])
+  })
+
+  it('without billingFor every location keeps its row (the master tenants console)', async () => {
+    const data = await assembleIntegrationsHub(tableDb(), [LOC_A, LOC_B], { now: NOW })
+    expect(data.billing.map((r) => r.locationId)).toEqual([LOC_A.id, LOC_B.id])
   })
 })

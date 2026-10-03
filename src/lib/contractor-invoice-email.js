@@ -2,7 +2,7 @@
 //
 // Both emails go to the contractor's email on their profile via
 // Postmark. Branded with the location's logo when one is configured
-// (mirrors the approach used by deposit-receipts.js / roster-email).
+// (mirrors the approach used by roster-email).
 //
 // Sent best-effort: if the email send fails we still record the
 // approval/decline status in the DB and return a warning to the

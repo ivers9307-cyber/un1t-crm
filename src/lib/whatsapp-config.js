@@ -1,7 +1,7 @@
 // WA-MULTI.1 — per-location WhatsApp configuration resolution.
 //
 // Single entry point for "give me the WhatsApp credentials I should
-// use for this location". Three resolution tiers, in order:
+// use for this location". Resolution, in order:
 //
 //   1. whatsapp_numbers row for this location, is_default=true.
 //      Multi-number locations (e.g. CRM-driven broadcasts via
@@ -14,42 +14,24 @@
 //      recently-updated one. Safety net so a location with WA rows
 //      but no default still works.
 //
-//   3. Global env vars (WHATSAPP_ACCESS_TOKEN etc.). Backwards-
-//      compatibility for any location that hasn't migrated yet —
-//      the existing single-number setup keeps working unchanged
-//      until the operator adds a row in the per-location settings.
+//   Nothing else. WACONFIGFALLBACK.1 retired the third tier (the global
+//   WHATSAPP_ACCESS_TOKEN / WHATSAPP_PHONE_NUMBER_ID env number): a
+//   location with no active row of its own now gets a
+//   WhatsAppNumberMissingError (./whatsapp-number-missing.js), never
+//   another studio's number. Per-location comms model: row absent = may
+//   never send. Each caller's decision is tabled in
+//   tests/whatsapp-config-callers.test.js.
 //
 // The webhook router (`resolveWhatsAppNumberByPhoneNumberId`)
 // goes the other direction — given the phone_number_id Meta sent
 // in the inbound payload, find the location that owns it.
 
 import { createServerClient } from './supabase'
+import { WhatsAppNumberMissingError } from './whatsapp-number-missing'
+import { logWarn } from './log'
 
 const META_API_VERSION = 'v21.0'
 export const META_API_URL = `https://graph.facebook.com/${META_API_VERSION}`
-
-/**
- * Build the env-fallback config object. Throws if env vars aren't
- * set — callers can decide whether to surface or fall through.
- */
-function envConfig() {
-  const token = process.env.WHATSAPP_ACCESS_TOKEN
-  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID
-  const businessAccountId = process.env.WHATSAPP_BUSINESS_ACCOUNT_ID
-  const appId = process.env.WHATSAPP_APP_ID
-
-  if (!token || !phoneNumberId) {
-    return null
-  }
-  return {
-    source: 'env',
-    token,
-    phoneNumberId,
-    businessAccountId: businessAccountId || null,
-    appId: appId || null,
-    label: 'Global env-var config',
-  }
-}
 
 /**
  * Map a whatsapp_numbers row to the config shape callers expect.
@@ -68,57 +50,143 @@ function rowToConfig(row) {
     sourceKind: row.source,        // 'cloud_api' | 'coexistence'
     // WA-QUALITY.2 — Meta quality rating as of the last webhook/poll
     // (GREEN/YELLOW/RED, null = never fetched). sendBroadcast's preflight
-    // gate reads this; env-fallback configs carry no rating (no gate).
+    // gate reads this.
     qualityRating: row.quality_rating ?? null,
     // WA-BUDGET — Meta messaging-limit tier as of the last webhook/poll
     // (TIER_250 … UNLIMITED, null = never fetched). The blast/drip tier-budget
-    // gates read this; env-fallback configs carry no tier (no gate).
+    // gates read this.
     messagingLimitTier: row.messaging_limit_tier ?? null,
   }
 }
 
 /**
- * Resolve the WhatsApp config to use for outbound sends from
- * `locationId`. Walks the three tiers above and returns the first
- * hit, or throws with a clear message naming what's missing.
+ * WAROLE.1 — the location's OWN number (tiers 1-2). Returns null when the
+ * location has no active whatsapp_numbers row (or no location id is given);
+ * throws when the lookup itself fails, so a DB blip is never read as "no
+ * number". Routes that act AT META for a location use it through
+ * ownNumberOrRefusal (./whatsapp-own-number.js) to answer 409 / 500 before
+ * any Meta call.
  *
- * @param {string | null | undefined} locationId  When null/undefined,
- *   skips DB tiers and goes straight to env (matches the historical
- *   pre-WA-MULTI behaviour).
+ * @param {string | null | undefined} locationId
+ * @returns {Promise<object | null>}
+ */
+export async function getLocationWhatsAppNumberConfig(locationId) {
+  if (!locationId) return null
+  const db = createServerClient()
+  const { data: rows, error } = await db
+    .from('whatsapp_numbers')
+    .select('*')
+    .eq('location_id', locationId)
+    .eq('is_active', true)
+    .order('is_default', { ascending: false })   // default first
+    .order('updated_at', { ascending: false })   // then newest
+    .limit(1)
+
+  if (error) {
+    throw new Error(`Failed to load WhatsApp config for location ${locationId}: ${error.message}`)
+  }
+  return rows && rows.length > 0 ? rowToConfig(rows[0]) : null
+}
+
+/**
+ * Resolve the WhatsApp config to use for outbound sends from
+ * `locationId`: the location's own active number (default first).
+ *
+ * WACONFIGFALLBACK.1 — there is no env tier any more. A location with no
+ * active whatsapp_numbers row, or no location at all, throws
+ * WhatsAppNumberMissingError (code WA_NO_NUMBER): the caller decides what
+ * that means for it (see tests/whatsapp-config-callers.test.js). A failed
+ * lookup throws a plain Error, so a DB blip is never read as "no number".
+ *
+ * @param {string | null | undefined} locationId
  * @returns {Promise<object>}  Config object with .token + .phoneNumberId
  *   at minimum.
  */
 export async function getWhatsAppConfig(locationId) {
-  // Tier 1: explicit DB row for this location, default-flagged.
-  if (locationId) {
+  const own = await getLocationWhatsAppNumberConfig(locationId)
+  if (own) return own
+  throw new WhatsAppNumberMissingError(locationId)
+}
+
+/**
+ * WAREPLYNUMBER.1 (C86) — the number a REPLY into a conversation goes from:
+ * the number the customer wrote to. The inbound webhook stamps it on
+ * whatsapp_conversations.whatsapp_number_id (mig 696). Used when it is still
+ * an active row AT this location; otherwise the location default
+ * (getWhatsAppConfig, which refuses a number-less studio as ever). A single-
+ * number studio resolves the same number either way.
+ *
+ * A TEMPLATE goes from the thread number only when it shares the default's
+ * WABA: templates are synced per location from the default number's account,
+ * and Meta only sends a number's own-WABA templates.
+ *
+ * Any failed read here (including the column not existing yet, before 696 is
+ * applied) falls back to the default, logged: losing a reply is worse than
+ * sending it from the studio's default number, which is what every reply did
+ * before this.
+ *
+ * @param {string|null|undefined} locationId  the conversation's location
+ * @param {string|null|undefined} conversationId
+ * @param {{ template?: boolean }} [opts]
+ */
+export async function getConversationReplyConfig(locationId, conversationId, { template = false } = {}) {
+  const thread = await getConversationNumberConfig(locationId, conversationId)
+  if (!thread) return getWhatsAppConfig(locationId)
+  if (!template) return thread
+  return pickReplyConfig(thread, await getWhatsAppConfig(locationId), { template: true })
+}
+
+/**
+ * WAREPLYNUMBER.1 — the number recorded on the thread
+ * (whatsapp_conversations.whatsapp_number_id) while it is an ACTIVE row AT
+ * this location, as a config; null when none is recorded, it is inactive,
+ * gone or another studio's. Never throws: a failed read (the column missing
+ * before mig 696 included) is null, logged, so the caller replies from the
+ * default as it did before.
+ *
+ * @param {string|null|undefined} locationId
+ * @param {string|null|undefined} conversationId
+ * @returns {Promise<object|null>}
+ */
+export async function getConversationNumberConfig(locationId, conversationId) {
+  if (!conversationId || !locationId) return null
+  try {
     const db = createServerClient()
-    const { data: rows, error } = await db
-      .from('whatsapp_numbers')
+    const { data: conv, error: convErr } = await db.from('whatsapp_conversations')
+      .select('whatsapp_number_id')
+      .eq('id', conversationId)
+      .eq('location_id', locationId)
+      .maybeSingle()
+    if (convErr) throw convErr
+    if (!conv?.whatsapp_number_id) return null
+    const { data: num, error: numErr } = await db.from('whatsapp_numbers')
       .select('*')
+      .eq('id', conv.whatsapp_number_id)
       .eq('location_id', locationId)
       .eq('is_active', true)
-      .order('is_default', { ascending: false })   // default first
-      .order('updated_at', { ascending: false })   // then newest
-      .limit(1)
-
-    if (error) {
-      throw new Error(`Failed to load WhatsApp config for location ${locationId}: ${error.message}`)
-    }
-    if (rows && rows.length > 0) {
-      return rowToConfig(rows[0])
-    }
+      .maybeSingle()
+    if (numErr) throw numErr
+    return num ? rowToConfig(num) : null
+  } catch (e) {
+    logWarn('wa-config', 'reply number unreadable; replying from the default number', { conversationId, err: e?.message || String(e) })
+    return null
   }
+}
 
-  // Tier 3: env fallback.
-  const env = envConfig()
-  if (env) return env
-
-  // No config anywhere — caller gets a precise error message.
-  throw new Error(
-    `WhatsApp not configured for location ${locationId || '(no-location-context)'}. ` +
-    'Add a number under Settings → Locations → Integrations → WhatsApp, ' +
-    'or set the global WHATSAPP_* env vars in Vercel.'
-  )
+/**
+ * WAREPLYNUMBER.1 — pure: the config a reply goes from, given the thread's
+ * own number (or null) and the location default. Free text/media/interactive
+ * → the thread number. A TEMPLATE → the thread number only when it shares the
+ * default's WABA (templates are synced per location from the default's
+ * account, and Meta sends only a number's own-WABA templates); else the
+ * default.
+ */
+export function pickReplyConfig(threadConfig, defaultConfig, { template = false } = {}) {
+  if (!threadConfig) return defaultConfig
+  if (!template) return threadConfig
+  if (defaultConfig && threadConfig.id === defaultConfig.id) return defaultConfig
+  if (threadConfig.businessAccountId && threadConfig.businessAccountId === defaultConfig?.businessAccountId) return threadConfig
+  return defaultConfig
 }
 
 /**
@@ -147,12 +215,12 @@ export async function getWhatsAppConfigById(numberId) {
  * the message.
  *
  * Returns null ONLY when the phone_number_id is authoritatively
- * unknown (the global env config is checked too — if a webhook
- * arrives for the env-config number we return a synthetic
- * location-less config). Throws when the lookup itself fails
- * (transient DB error) and the id doesn't match the env config —
- * callers must treat a throw as "owner undetermined", never as
- * "unknown number", so the two cases stay separately loggable.
+ * unknown (no active row). Throws when the lookup itself fails
+ * (transient DB error) — callers must treat a throw as "owner
+ * undetermined", never as "unknown number", so the two cases stay
+ * separately loggable (WA-TECHPROV.4b). WACONFIGFALLBACK.1: the env
+ * number is no longer consulted; it could only ever produce a config
+ * with no location, which classifyInboundOwner drops anyway.
  */
 export async function resolveWhatsAppNumberByPhoneNumberId(phoneNumberId) {
   if (!phoneNumberId) return null
@@ -165,39 +233,30 @@ export async function resolveWhatsAppNumberByPhoneNumberId(phoneNumberId) {
     .eq('is_active', true)
     .maybeSingle()
   if (error) {
-    // WA-TECHPROV.4b — a transient lookup error must NEVER be
-    // reported as "unknown number" (null): the webhook drops
-    // unknowns, and a dropped message is permanently lost (we 200
-    // + dedup, so Meta never retries). If the id matches the env
-    // config we can still answer authoritatively; otherwise throw
-    // so the webhook logs a resolver failure, not an unknown number.
+    // A transient lookup error must NEVER be reported as "unknown number"
+    // (null): the webhook drops unknowns, and a dropped message is
+    // permanently lost (we 200 + dedup, so Meta never retries). Throw so the
+    // webhook logs a resolver failure, not an unknown number.
     console.warn('[wa-config] phone_number_id lookup failed:', error.message)
-    const env = envConfig()
-    if (env && env.phoneNumberId === phoneNumberId) return env  // authoritative: the id is ours (env)
-    throw new Error(`whatsapp_numbers lookup failed: ${error.message}`)  // webhook catch → drop + log
+    throw new Error(`whatsapp_numbers lookup failed: ${error.message}`)
   }
-  if (row) return rowToConfig(row)
-
-  // Check env-var config — if the inbound matches the env-configured
-  // number, the webhook is still "ours" and should be processed.
-  const env = envConfig()
-  if (env && env.phoneNumberId === phoneNumberId) return env
-
-  return null
+  return row ? rowToConfig(row) : null
 }
 
 /**
  * WA-TECHPROV.4 / SAAS-2 — inbound routing decision for the webhook.
  *
  * Only an active whatsapp_numbers row may own inbound traffic. Anything
- * else — an unknown phone_number_id, or an env-var config (which carries
- * no location) — is dropped by the webhook. The historical first-location
+ * else — an unknown phone_number_id, or any config without a location —
+ * is dropped by the webhook. The historical first-location
  * fallback routed a foreign number's messages (and the contact + Mia
  * reply they spawned) into an arbitrary tenant.
  */
 export function classifyInboundOwner(owningNumber) {
   if (owningNumber?.source === 'db' && owningNumber.locationId) {
-    return { action: 'location', locationId: owningNumber.locationId }
+    // WAREPLYNUMBER.1 — the receiving row, stamped on the conversation so a
+    // reply goes from the number the customer wrote to.
+    return { action: 'location', locationId: owningNumber.locationId, numberId: owningNumber.id || null }
   }
   return { action: 'drop' }
 }

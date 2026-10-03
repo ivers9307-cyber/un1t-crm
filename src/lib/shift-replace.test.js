@@ -6,6 +6,7 @@ import { describe, it, expect } from 'vitest'
 import {
   replaceRefusal, replaceRefusalResponse, replaceShiftStarted, replaceChanges,
   replaceNoticeWhen, replaceResponseOutcome, replacePickerCopy, netReplaceChanges, bandSeenBetween,
+  replaceLogDetails, replaceRowStartTime,
   REPLACE_VIA, REPLACE_SWAP_CLOSE_NOTE, REPLACE_UNDONE_REASON, REPLACE_STARTED_REASON,
 } from './shift-replace'
 // The phone's Alert says the same words (mobile cannot import src/lib).
@@ -249,5 +250,54 @@ describe('constants', () => {
     // told; roster-change-log.js passes it by value and the drawer reads it.
     expect(REPLACE_UNDONE_REASON).toBe('replace_undone')
     expect(REPLACE_STARTED_REASON).toBe('replace_shift_started')
+  })
+})
+
+// C5 REPLACENITS.1 — a replace row records the shift's start, so a notice
+// held overnight still knows it after the slot is DELETED (block_id goes NULL,
+// the block embed goes null). Without it the arm could not tell a 06:00 slot
+// had started, and told coach A at 07:00, with no time in the words.
+describe('the start time a replace row carries (REPLACENITS.1)', () => {
+  it('replaceLogDetails: via replace, plus the shift start', () => {
+    expect(replaceLogDetails({ startTime: '06:00:00' })).toEqual({ via: 'replace', start_time: '06:00:00' })
+    expect(replaceLogDetails({ startTime: '06:00' })).toEqual({ via: 'replace', start_time: '06:00' })
+  })
+
+  it('no readable start: via alone, never a junk time on the row', () => {
+    expect(replaceLogDetails({ startTime: null })).toEqual({ via: 'replace' })
+    expect(replaceLogDetails({ startTime: '6am' })).toEqual({ via: 'replace' })
+    expect(replaceLogDetails({ startTime: '25:00' })).toEqual({ via: 'replace' })
+    expect(replaceLogDetails(undefined)).toEqual({ via: 'replace' })
+  })
+
+  it('both rows of a replace carry the block start', () => {
+    for (const c of replaceChanges({ block: BLOCK, fromProfileId: 'coach-a', toProfileId: 'coach-b' })) {
+      expect(replaceLogDetails(c)).toEqual({ via: 'replace', start_time: '06:00:00' })
+    }
+  })
+
+  it('replaceRowStartTime: the live block wins (a time edit after the replace moved it)', () => {
+    expect(replaceRowStartTime({ shift_blocks: { start_time: '10:00:00' }, details: { via: 'replace', start_time: '06:00:00' } })).toBe('10:00:00')
+  })
+
+  it('the block deleted: the start logged at the replace', () => {
+    expect(replaceRowStartTime({ block_id: null, shift_blocks: null, details: { via: 'replace', start_time: '06:00:00' } })).toBe('06:00:00')
+  })
+
+  it('an older row with no logged start, or a junk one: null, exactly as before', () => {
+    expect(replaceRowStartTime({ shift_blocks: null, details: { via: 'replace' } })).toBeNull()
+    expect(replaceRowStartTime({ shift_blocks: null, details: { via: 'replace', start_time: 'soon' } })).toBeNull()
+    expect(replaceRowStartTime({ shift_blocks: null })).toBeNull()
+    expect(replaceRowStartTime(null)).toBeNull()
+  })
+
+  it('netReplaceChanges: a deleted slot\'s "removed" pile carries the logged start', () => {
+    const r = {
+      id: 'r1', location_id: 'loc-1', block_id: null, block_date: '2026-09-29', actor_id: 'mgr-1', coach_id: 'coach-a',
+      action: 'unassigned', created_at: '2026-09-28T22:10:00Z', shift_blocks: null, details: { via: 'replace', start_time: '06:00:00' },
+    }
+    expect(netReplaceChanges([r]).send).toEqual([
+      { locationId: 'loc-1', actorId: 'mgr-1', coachId: 'coach-a', blockId: null, blockDate: '2026-09-29', startTime: '06:00:00', action: 'unassigned', rowIds: ['r1'] },
+    ])
   })
 })

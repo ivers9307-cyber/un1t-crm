@@ -5,6 +5,7 @@ import { getCurrentUser, getUserLocationIds, hasRoleAtLocation, hasRoleAtAnyLoca
 import { validateBody } from '@/lib/validate'
 import { uuidLike, days , MANAGER_ROLES} from '@/lib/schemas'
 import { getEmploymentType, getLeaveEntitlement, getPendingHolidayDays } from '@/lib/time-off-leave'
+import { ALLOWANCE_YEAR_MIN, ALLOWANCE_YEAR_MAX, parseAllowanceYear } from '@/lib/allowance-year'
 
 // ROSTER-FIX.2 — a profile is in scope when it shares a location with the
 // caller (master = everywhere). Detail-style 404 on miss so a cross-tenant
@@ -30,7 +31,7 @@ async function profileScope(db, user, profileId) {
 
 const AllowanceUpdateSchema = z.object({
   profile_id: uuidLike,
-  year: z.number().int().min(2020).max(2100),
+  year: z.number().int().min(ALLOWANCE_YEAR_MIN).max(ALLOWANCE_YEAR_MAX),
   total_days: days.optional(),
   carried_over: days.optional(),
 })
@@ -42,7 +43,11 @@ export async function GET(request) {
 
   const { searchParams } = new URL(request.url)
   const profileId = searchParams.get('profile_id') || user.id
-  const year = searchParams.get('year') || new Date().getFullYear()
+  // RANGEVALID.1 — a four-digit year in the PUT's window, before any read, and
+  // "this year" is Dublin's. It went to .eq('year', …) as given: 'abc' came back
+  // as Postgres's own text, 99999 as a made-up entitlement.
+  const { year, error: yearError } = parseAllowanceYear(searchParams.get('year'))
+  if (yearError) return NextResponse.json({ success: false, error: yearError }, { status: 400 })
   const db = createServerClient()
 
   // Staff can only view their own allowance. SCHEDROLES.1 — "staff" means

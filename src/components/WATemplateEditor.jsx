@@ -5,9 +5,10 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, Save, Send, Trash2, Upload, FileText, Video, X } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
-import { validateTemplateMedia } from '@/lib/template-media'
+import { validateTemplateMedia, resubmitMediaFields } from '@/lib/template-media'
 import { extractVariableIndexes, extractNamedVariables, buildBodyExample, buildNamedBodyExample, buildHeaderTextExample, missingSampleError, samplesFromExample, samplesFromNamedExample } from '@/lib/whatsapp-template-samples'
 import { templateButtonsError, normalizeButtonsForMeta } from '@/lib/whatsapp-template-buttons'
+import { isTemplateSubmitted } from '@/lib/whatsapp-template-fields'
 
 // Meta accepts one variable in a URL button, at the very end of the link.
 const URL_VARIABLE_AT_END = /\{\{\s*[^{}]+\s*\}\}$/
@@ -58,11 +59,19 @@ const HEADER_FORMATS = [
   { value: 'DOCUMENT', label: 'Document' },
 ]
 
-export default function WATemplateEditor({ template, locationId, userId, events = [] }) {
+// WATPLROLE.1 — `canManage` is MANAGER_ROLES at the template's location (the
+// new page: the active studio), computed by the page with the routes' rule.
+// Without it: no Submit/Update, no Delete, no resubmit, and a rejected
+// template's fields stay read-only. The display group still self-saves.
+// Defaults to false so a caller that forgets it offers nothing the route refuses.
+export default function WATemplateEditor({ template, locationId, userId, events = [], canManage = false }) {
   const router = useRouter()
   const isEditing = !!template
-  const isSubmitted = template?.status && template.status !== 'draft'
-  const canResubmit = ['REJECTED', 'PAUSED'].includes(template?.status)
+  // WATPLPUT.1 — the PUT route's own reading (a Meta id counts too), so Update
+  // is never offered for a template the route answers 409.
+  const isSubmitted = isTemplateSubmitted(template)
+  const isRejectedOrPaused = ['REJECTED', 'PAUSED'].includes(template?.status)
+  const canResubmit = canManage && isRejectedOrPaused
   const MANAGER_URL = 'https://business.facebook.com/wa/manage/message-templates/'
 
   const [name, setName] = useState(template?.name || '')
@@ -376,7 +385,13 @@ export default function WATemplateEditor({ template, locationId, userId, events 
       const result = await fetch(`/api/whatsapp/templates/${template.id}/resubmit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ category, components: buildComponents() }),
+        // WATPLRESUBMEDIA.1 — a newly uploaded header file goes too, or the
+        // row keeps the old header_media_url and every send the old picture.
+        body: JSON.stringify({
+          category,
+          components: buildComponents(),
+          ...resubmitMediaFields(template, { handle: mediaHandle, url: mediaUrl, path: mediaPath }, headerFormat),
+        }),
       }).then(readJson)
       if (!result.success) throw new Error(errorMessageFrom(result, 'Resubmit failed'))
       router.push('/communications/templates?channel=whatsapp')
@@ -449,7 +464,7 @@ export default function WATemplateEditor({ template, locationId, userId, events 
         </div>
 
         <div className="flex items-center gap-2">
-          {isEditing && (
+          {isEditing && canManage && (
             <button
               type="button"
               onClick={handleDelete}
@@ -460,21 +475,29 @@ export default function WATemplateEditor({ template, locationId, userId, events 
               {deleting ? 'Deleting...' : 'Delete'}
             </button>
           )}
-          <button
-            type="button"
-            onClick={handleSave}
-            disabled={saving || isSubmitted}
-            className="flex items-center gap-1.5 text-sm bg-un1t-text text-un1t-bg font-medium px-4 py-1.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
-          >
-            {isEditing ? <Save size={14} /> : <Send size={14} />}
-            {saving ? 'Submitting...' : isEditing ? 'Update' : 'Submit to Meta'}
-          </button>
+          {canManage && (
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={saving || isSubmitted}
+              className="flex items-center gap-1.5 text-sm bg-un1t-text text-un1t-bg font-medium px-4 py-1.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
+            >
+              {isEditing ? <Save size={14} /> : <Send size={14} />}
+              {saving ? 'Submitting...' : isEditing ? 'Update' : 'Submit to Meta'}
+            </button>
+          )}
         </div>
       </div>
 
       {error && (
         <div className="bg-red-500/10 border-b border-red-500/30 text-red-700 text-sm px-5 py-2">
           {error}
+        </div>
+      )}
+
+      {!canManage && (
+        <div className="bg-un1t-surface border-b border-un1t-border text-un1t-subtle text-sm px-5 py-2" role="note">
+          Only a manager, head coach, owner or master at this studio can submit, resubmit or delete WhatsApp templates.
         </div>
       )}
 
@@ -495,19 +518,23 @@ export default function WATemplateEditor({ template, locationId, userId, events 
         <div className="flex gap-6 p-6 max-w-6xl">
           {/* Left: Form */}
           <div className="flex-1 space-y-5">
-            {template && (canResubmit || events.length > 0) && (
+            {template && (isRejectedOrPaused || events.length > 0) && (
               <div className="mb-4 rounded-lg border border-un1t-border bg-un1t-surface p-4 space-y-3">
-                {canResubmit && (
+                {isRejectedOrPaused && (
                   <div className="flex items-center justify-between gap-3">
                     <div className="text-sm">
                       <span className="font-medium text-amber-700">{template.status}</span>
                       {template.rejection_reason ? <span className="text-un1t-subtle"> — {template.rejection_reason}</span> : null}
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
-                      <button type="button" onClick={handleResubmit} disabled={resubmitting}
-                        className="text-sm bg-green-600 text-white px-3 py-1.5 rounded-md hover:bg-green-700 disabled:opacity-50">
-                        {resubmitting ? 'Resubmitting…' : 'Edit & resubmit'}
-                      </button>
+                      {/* WATPLROLE.1 — resubmit is MANAGER_ROLES only; the appeal
+                          link (Meta's own page) stays for everyone, as in the list. */}
+                      {canResubmit && (
+                        <button type="button" onClick={handleResubmit} disabled={resubmitting}
+                          className="text-sm bg-green-600 text-white px-3 py-1.5 rounded-md hover:bg-green-700 disabled:opacity-50">
+                          {resubmitting ? 'Resubmitting…' : 'Edit & resubmit'}
+                        </button>
+                      )}
                       <a href={MANAGER_URL} target="_blank" rel="noopener noreferrer"
                         className="text-sm text-un1t-subtle hover:text-un1t-text underline">Appeal in WhatsApp Manager ↗</a>
                     </div>

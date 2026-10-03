@@ -6,6 +6,7 @@ import { validateBody, uuidLike } from '@/lib/validate'
 import { timeOffTypeSchema, MANAGER_ROLES, realIsoDate, isRealCalendarDate } from '@/lib/schemas'
 import { notifyUsersOnce } from '@/lib/push-dedup'
 import { dublinTodayStr } from '@/lib/dublin-time'
+import { rangeQueryError } from '@/lib/report-period'
 import {
   getLocationMemberIds, getProfileLocationIds, leaveScopeOrFilter, canDecideTimeOff,
   resolveTimeOffApproverIds, getEmploymentType, getHolidayAllowance, ensureHolidayAllowanceRow,
@@ -69,11 +70,11 @@ export async function GET(request) {
   // refuses 2026-02-30 with a 400 carrying its own text (after the member read
   // had run). Refuse it first, in change-log's words. The preview above has its
   // own check. Absent or empty = no bound, as before.
-  for (const [name, value] of [['start_date', startDate], ['end_date', endDate]]) {
-    if (value && !isRealCalendarDate(value)) {
-      return NextResponse.json({ success: false, error: `${name}: not a real date` }, { status: 400 })
-    }
-  }
+  // RANGEVALID.1 — and, when both are given, in order and at most a year (the
+  // POST's own cap): the overlap filters below answered a reversed range with
+  // only the leave spanning the gap between the two dates.
+  const rangeError = rangeQueryError(startDate, endDate)
+  if (rangeError) return NextResponse.json({ success: false, error: rangeError }, { status: 400 })
   const db = createServerClient()
 
   // Every filter is recorded, then applied to whichever select is sent, so the

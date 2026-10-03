@@ -1,47 +1,46 @@
 'use client'
 
-// AC Devices integration tab — replaces the older SensiboIntegrationTab.
-// Unifies Sensibo + LG ThinQ credentials + per-device configuration.
+// AC Devices integration tab — Sensibo + LG ThinQ credentials and the AC
+// units of THIS location (the one in the URL, `location.id`).
 //
 // STUDIO-AC-DEVICES.3. Three sections:
-//   1. Sensibo credentials (API key only; pod-specific settings are
-//      now per-device, not per-location).
-//   2. LG ThinQ credentials (PAT + auto-generated client_id, country
-//      code).
-//   3. Devices — table of ac_devices rows for this location, with
-//      Add-device flow (discovery + create) and per-row enable /
-//      disable / rename / defaults.
+//   1. Sensibo credentials (API key only).
+//   2. LG ThinQ credentials (PAT + client id, country code).
+//   3. The units at this location: discovery + add, and per-row
+//      enable / disable / rename / defaults.
 //
-// Master + owner can view; master can edit credentials and add /
-// remove devices. The dispatcher route enforces master-only at the
-// server side too.
+// ACDEVLOC.1 — everything here acts on `location.id`, never the caller's
+// active studio: list, discovery, add and edits go through
+// /api/locations/[id]/ac-devices…, credentials through
+// PUT /api/locations/[id]/integrations/ac (write-only secrets, masked echo,
+// registry re-sync in the handler). This tab never reads or renders the
+// stored key or PAT: its `location` prop carries only has_sensibo_key /
+// has_thinq_pat, a typed secret travels once in a request BODY, and a URL
+// never carries one. Nor does the `user` object any more: SECFIX.3a made
+// getCurrentUser() load only the named, credential-free location columns
+// (plus `settings`, masked). The page's `location` prop still carries the
+// `settings` credentials (Glofox, UniFi) until SECFIX.3b.
+//
+// Master + owner can view (`canEdit`); only a master manages (`canManage`),
+// the same rule every route behind this tab enforces.
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { createBrowserClient } from '@/lib/supabase'
 import {
   Save, Loader2, Check, AlertCircle, Plus, Power, PowerOff, Edit3, X,
 } from 'lucide-react'
+import ReadFailedNote from '@/components/settings/ReadFailedNote'
 
-// uuid4 generated client-side for ThinQ client_id. crypto.randomUUID
-// is available in every browser the CRM supports (set in middleware).
-function newClientId() {
-  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID()
-  // Defensive fallback — unlikely path.
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0
-    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16)
-  })
-}
+const JSON_HEADERS = { 'Content-Type': 'application/json' }
 
-export default function AcDevicesIntegrationTab({ location, canEdit }) {
+export default function AcDevicesIntegrationTab({ location, canEdit, canManage = false }) {
   const router = useRouter()
 
-  // ---- Sensibo creds ----
-  const [sensiboApiKey, setSensiboApiKey] = useState(location.sensibo_api_key || '')
-
-  // ---- ThinQ creds ----
-  const [thinqPat, setThinqPat] = useState(location.thinq_pat || '')
+  // ---- Credentials: write-only. Stored values are never in this tab's props. ----
+  const [hasSensiboKey, setHasSensiboKey] = useState(!!location.has_sensibo_key)
+  const [hasThinqPat, setHasThinqPat] = useState(!!location.has_thinq_pat)
+  const [sensiboApiKey, setSensiboApiKey] = useState('')
+  const [thinqPat, setThinqPat] = useState('')
   const [thinqClientId, setThinqClientId] = useState(location.thinq_client_id || '')
   const [thinqCountryCode, setThinqCountryCode] = useState(location.thinq_country_code || 'IE')
 
@@ -51,9 +50,13 @@ export default function AcDevicesIntegrationTab({ location, canEdit }) {
   const [credsSavedAt, setCredsSavedAt] = useState(null)
 
   // ---- Devices ----
-  const [devices, setDevices] = useState([])
-  const [devicesLoading, setDevicesLoading] = useState(false)
-  const [devicesError, setDevicesError] = useState(null)
+  // CHANNELREAD.1 — `devices` is null until a read SUCCEEDS, and a failed
+  // read puts it back to null: no "No devices configured", no Add buttons
+  // over a list we could not read.
+  const [devices, setDevices] = useState(null)
+  // true from the first render: with `devices` null and loading false, the
+  // "could not load" note would flash before the mount effect starts the read.
+  const [devicesLoading, setDevicesLoading] = useState(true)
 
   // ---- Add-device flow ----
   const [adding, setAdding] = useState(null)  // 'sensibo' | 'thinq' | null
@@ -61,18 +64,20 @@ export default function AcDevicesIntegrationTab({ location, canEdit }) {
   const [discoveryError, setDiscoveryError] = useState(null)
   const [discoveryResults, setDiscoveryResults] = useState(null)
 
-  // Hydrate the devices table after creds are saved or on mount.
   useEffect(() => { loadDevices() }, [])
 
-  async function loadDevices() {
-    setDevicesLoading(true); setDevicesError(null)
+  // silent: the Try again re-read keeps ReadFailedNote mounted, so a retry
+  // that fails again can say so ("Still could not load").
+  async function loadDevices({ silent = false } = {}) {
+    if (!silent) setDevicesLoading(true)
     try {
-      const r = await fetch('/api/studio-management/ac/devices', { cache: 'no-store' })
+      // include_disabled: a disabled unit must stay listed so it can be re-enabled.
+      const r = await fetch(`/api/locations/${location.id}/ac-devices?include_disabled=1`, { cache: 'no-store' })
       const j = await r.json()
-      if (!r.ok || j.success === false) throw new Error(j.error || `Failed (${r.status})`)
-      setDevices(j.data || [])
-    } catch (e) {
-      setDevicesError(e.message || 'Failed to load devices')
+      if (!r.ok || j.success !== true || !Array.isArray(j.devices)) throw new Error(j.error || `Failed (${r.status})`)
+      setDevices(j.devices)
+    } catch {
+      setDevices(null)
     } finally {
       setDevicesLoading(false)
     }
@@ -80,33 +85,34 @@ export default function AcDevicesIntegrationTab({ location, canEdit }) {
 
   async function saveCreds() {
     setSavingCreds(true); setCredsError(null); setCredsSavedAt(null)
-    // If the operator typed a PAT but client_id is still empty,
-    // generate one now so the next /lg-devices call has something to
-    // present. The dispatcher requires a non-empty client_id.
-    let clientId = thinqClientId
-    if (thinqPat.trim() && !clientId.trim()) {
-      clientId = newClientId()
-      setThinqClientId(clientId)
-    }
-    const db = createBrowserClient()
-    const { error: upErr } = await db
-      .from('locations')
-      .update({
-        sensibo_api_key: sensiboApiKey.trim() || null,
-        thinq_pat: thinqPat.trim() || null,
-        thinq_client_id: clientId.trim() || null,
-        thinq_country_code: thinqCountryCode.trim() || 'IE',
-        updated_at: new Date().toISOString(),
+    // Only what was typed is sent. A secret left blank keeps the stored one
+    // (the route's write-only merge); a blank client id is left out too, so
+    // the stored one is kept (the route generates one when a PAT first
+    // arrives without it).
+    const body = {}
+    if (sensiboApiKey.trim()) body.sensibo_api_key = sensiboApiKey.trim()
+    if (thinqPat.trim()) body.thinq_pat = thinqPat.trim()
+    if (thinqClientId.trim()) body.thinq_client_id = thinqClientId.trim()
+    if (thinqCountryCode.trim()) body.thinq_country_code = thinqCountryCode.trim()
+    try {
+      const r = await fetch(`/api/locations/${location.id}/integrations/ac`, {
+        method: 'PUT', headers: JSON_HEADERS, body: JSON.stringify(body),
       })
-      .eq('id', location.id)
-    setSavingCreds(false)
-    if (upErr) { setCredsError(upErr.message); return }
-    setCredsSavedAt(new Date())
-    // INTEG-A2: re-sync this location's channel_connections registry
-    // rows from the legacy fields just saved (fire-and-forget — the
-    // registry write needs the service role, which lives server-side).
-    fetch(`/api/locations/${location.id}/connections/refresh`, { method: 'POST' }).catch(() => {})
-    router.refresh()
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok || j.success !== true) throw new Error(j.error || `Save failed (${r.status})`)
+      setHasSensiboKey(!!j.data?.has_sensibo_key)
+      setHasThinqPat(!!j.data?.has_thinq_pat)
+      setThinqClientId(j.data?.thinq_client_id || '')
+      setThinqCountryCode(j.data?.thinq_country_code || 'IE')
+      setSensiboApiKey('')
+      setThinqPat('')
+      setCredsSavedAt(new Date())
+      router.refresh()
+    } catch (e) {
+      setCredsError(e.message || 'Save failed')
+    } finally {
+      setSavingCreds(false)
+    }
   }
 
   async function startDiscovery(provider) {
@@ -114,14 +120,22 @@ export default function AcDevicesIntegrationTab({ location, canEdit }) {
     setDiscoveryResults(null)
     setDiscoveryError(null)
     setDiscoveryLoading(true)
+    // POST, credential in the BODY and only when just typed; otherwise the
+    // server uses what is stored on this location.
+    const body = { provider }
+    if (provider === 'sensibo' && sensiboApiKey.trim()) body.api_key = sensiboApiKey.trim()
+    if (provider === 'thinq') {
+      if (thinqPat.trim()) body.pat = thinqPat.trim()
+      if (thinqClientId.trim()) body.client_id = thinqClientId.trim()
+      if (thinqCountryCode.trim()) body.country_code = thinqCountryCode.trim()
+    }
     try {
-      const path = provider === 'sensibo'
-        ? `/api/studio-management/ac/pods${sensiboApiKey ? `?api_key=${encodeURIComponent(sensiboApiKey.trim())}` : ''}`
-        : `/api/studio-management/ac/lg-devices` // server falls back to saved location values
-      const r = await fetch(path, { cache: 'no-store' })
-      const j = await r.json()
-      if (!r.ok || j.success === false) throw new Error(j.error || `Discovery failed (${r.status})`)
-      setDiscoveryResults(j.data || [])
+      const r = await fetch(`/api/locations/${location.id}/ac-devices/discover`, {
+        method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(body),
+      })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok || j.success !== true || !Array.isArray(j.data)) throw new Error(j.error || `Discovery failed (${r.status})`)
+      setDiscoveryResults(j.data)
     } catch (e) {
       setDiscoveryError(e.message || 'Discovery failed')
     } finally {
@@ -131,13 +145,12 @@ export default function AcDevicesIntegrationTab({ location, canEdit }) {
 
   async function addDevice(provider, providerDeviceId, label) {
     try {
-      const r = await fetch('/api/studio-management/ac/devices', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const r = await fetch(`/api/locations/${location.id}/ac-devices`, {
+        method: 'POST', headers: JSON_HEADERS,
         body: JSON.stringify({ provider, provider_device_id: providerDeviceId, label }),
       })
-      const j = await r.json()
-      if (!r.ok || j.success === false) {
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok || j.success !== true) {
         alert(j.error || `Add failed (${r.status})`)
         return
       }
@@ -149,39 +162,25 @@ export default function AcDevicesIntegrationTab({ location, canEdit }) {
     }
   }
 
-  async function disableDevice(deviceId, label) {
-    if (!confirm(`Disable "${label}"? Staff will lose access. You can re-enable from this same screen.`)) return
+  async function patchDevice(deviceId, patch, verb = 'Save') {
     try {
-      const r = await fetch(`/api/studio-management/ac/devices/${deviceId}`, {
-        method: 'DELETE',
+      const r = await fetch(`/api/locations/${location.id}/ac-devices/${deviceId}`, {
+        method: 'PATCH', headers: JSON_HEADERS, body: JSON.stringify(patch),
       })
-      const j = await r.json()
-      if (!r.ok || j.success === false) {
-        alert(j.error || `Disable failed (${r.status})`)
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok || j.success !== true) {
+        alert(j.error || `${verb} failed (${r.status})`)
         return
       }
       await loadDevices()
     } catch (e) {
-      alert(e.message || 'Disable failed')
+      alert(e.message || `${verb} failed`)
     }
   }
 
-  async function patchDevice(deviceId, patch) {
-    try {
-      const r = await fetch(`/api/studio-management/ac/devices/${deviceId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(patch),
-      })
-      const j = await r.json()
-      if (!r.ok || j.success === false) {
-        alert(j.error || `Save failed (${r.status})`)
-        return
-      }
-      await loadDevices()
-    } catch (e) {
-      alert(e.message || 'Save failed')
-    }
+  function disableDevice(deviceId, label) {
+    if (!confirm(`Disable "${label}"? Staff will lose access. You can re-enable it from this same screen.`)) return
+    return patchDevice(deviceId, { enabled: false }, 'Disable')
   }
 
   if (!canEdit) {
@@ -192,6 +191,13 @@ export default function AcDevicesIntegrationTab({ location, canEdit }) {
     )
   }
 
+  const sensiboReady = hasSensiboKey || !!sensiboApiKey.trim()
+  const thinqReady = (hasThinqPat || !!thinqPat.trim()) && !!thinqClientId.trim()
+  // Discovery takes a just-typed secret in its body, but adding a unit needs
+  // it SAVED on this location (the add route answers 412 otherwise).
+  const unsavedSecret = !!sensiboApiKey.trim() || !!thinqPat.trim()
+  const inputClass = 'w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text'
+
   return (
     <div className="space-y-8">
       <p className="text-xs text-un1t-subtle">
@@ -200,7 +206,7 @@ export default function AcDevicesIntegrationTab({ location, canEdit }) {
         controls all pods on that account; one ThinQ PAT controls all
         LG devices on that account); the device list below is per
         physical unit and gets a per-staff allowlist on the staff edit
-        screen.
+        screen. Saved keys are never shown here.
       </p>
 
       {/* ============================================================
@@ -208,14 +214,25 @@ export default function AcDevicesIntegrationTab({ location, canEdit }) {
       ============================================================ */}
       <section className="space-y-3">
         <h4 className="text-xs font-bold text-un1t-text uppercase tracking-wider">Sensibo credentials</h4>
-        <Field label="API key" hint="From Sensibo Web → Profile → API Keys.">
-          <input
-            type="text"
-            value={sensiboApiKey}
-            onChange={(e) => setSensiboApiKey(e.target.value)}
-            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text"
-            placeholder="paste Sensibo API key"
-          />
+        <Field
+          label="API key"
+          hint={hasSensiboKey
+            ? 'Saved. It is never shown here; paste a new key to replace it.'
+            : 'From Sensibo Web → Profile → API Keys.'}
+        >
+          {canManage ? (
+            <input
+              type="password"
+              autoComplete="new-password"
+              aria-label="Sensibo API key"
+              value={sensiboApiKey}
+              onChange={(e) => setSensiboApiKey(e.target.value)}
+              className={inputClass}
+              placeholder={hasSensiboKey ? 'Saved (hidden)' : 'paste Sensibo API key'}
+            />
+          ) : (
+            <div className="text-sm text-un1t-text">{hasSensiboKey ? 'Saved' : 'Not set'}</div>
+          )}
         </Field>
       </section>
 
@@ -225,41 +242,57 @@ export default function AcDevicesIntegrationTab({ location, canEdit }) {
       <section className="space-y-3">
         <h4 className="text-xs font-bold text-un1t-text uppercase tracking-wider">LG ThinQ credentials</h4>
         <p className="text-[11px] text-un1t-muted">
-          Generate a PAT at <a href="https://connect-pat.lgthinq.com/" target="_blank" rel="noopener noreferrer" className="text-un1t-text underline">connect-pat.lgthinq.com</a> scoped to Air Conditioner status + control. Client id is auto-generated when you first save a PAT.
+          Generate a PAT at <a href="https://connect-pat.lgthinq.com/" target="_blank" rel="noopener noreferrer" className="text-un1t-text underline">connect-pat.lgthinq.com</a> scoped to Air Conditioner status + control. The client id is generated when you first save a PAT.
         </p>
-        <Field label="Personal Access Token (PAT)">
-          <input
-            type="text"
-            value={thinqPat}
-            onChange={(e) => setThinqPat(e.target.value)}
-            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text"
-            placeholder="paste LG ThinQ PAT"
-          />
+        <Field label="Personal Access Token (PAT)" hint={hasThinqPat ? 'Saved. It is never shown here; paste a new PAT to replace it.' : undefined}>
+          {canManage ? (
+            <input
+              type="password"
+              autoComplete="new-password"
+              aria-label="LG ThinQ PAT"
+              value={thinqPat}
+              onChange={(e) => setThinqPat(e.target.value)}
+              className={inputClass}
+              placeholder={hasThinqPat ? 'Saved (hidden)' : 'paste LG ThinQ PAT'}
+            />
+          ) : (
+            <div className="text-sm text-un1t-text">{hasThinqPat ? 'Saved' : 'Not set'}</div>
+          )}
         </Field>
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Client ID" hint="uuid4 — auto-generated on first save.">
-            <input
-              type="text"
-              value={thinqClientId}
-              onChange={(e) => setThinqClientId(e.target.value)}
-              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text"
-              placeholder="auto-generated on save"
-            />
+          <Field label="Client ID" hint="uuid4, generated on the first PAT save.">
+            {canManage ? (
+              <input
+                type="text"
+                aria-label="ThinQ client ID"
+                value={thinqClientId}
+                onChange={(e) => setThinqClientId(e.target.value)}
+                className={inputClass}
+                placeholder="generated on save"
+              />
+            ) : (
+              <div className="text-sm font-mono text-un1t-text">{thinqClientId || 'Not set'}</div>
+            )}
           </Field>
           <Field label="Country code" hint="Two-letter ISO. Defaults to IE.">
-            <input
-              type="text"
-              value={thinqCountryCode}
-              onChange={(e) => setThinqCountryCode(e.target.value.toUpperCase())}
-              maxLength={2}
-              className="w-24 bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono uppercase text-un1t-text"
-            />
+            {canManage ? (
+              <input
+                type="text"
+                aria-label="ThinQ country code"
+                value={thinqCountryCode}
+                onChange={(e) => setThinqCountryCode(e.target.value.toUpperCase())}
+                maxLength={2}
+                className="w-24 bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono uppercase text-un1t-text"
+              />
+            ) : (
+              <div className="text-sm font-mono text-un1t-text">{thinqCountryCode}</div>
+            )}
           </Field>
         </div>
       </section>
 
       {/* ============================================================
-          Save credentials
+          Save credentials (master only)
       ============================================================ */}
       {credsError && (
         <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-xs rounded-md p-2 flex items-start gap-2">
@@ -271,19 +304,21 @@ export default function AcDevicesIntegrationTab({ location, canEdit }) {
           <Check size={12} /> Credentials saved at {credsSavedAt.toLocaleTimeString()}
         </div>
       )}
-      <div className="flex justify-end">
-        <button
-          type="button"
-          onClick={saveCreds}
-          disabled={savingCreds}
-          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-un1t-text text-un1t-bg text-sm font-semibold hover:bg-un1t-accent disabled:opacity-50"
-        >
-          {savingCreds
-            ? <><Loader2 size={12} className="animate-spin" /> Saving…</>
-            : <><Save size={12} /> Save credentials</>
-          }
-        </button>
-      </div>
+      {canManage && (
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={saveCreds}
+            disabled={savingCreds}
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-un1t-text text-un1t-bg text-sm font-semibold hover:bg-un1t-accent disabled:opacity-50"
+          >
+            {savingCreds
+              ? <><Loader2 size={12} className="animate-spin" /> Saving…</>
+              : <><Save size={12} /> Save credentials</>
+            }
+          </button>
+        </div>
+      )}
 
       {/* ============================================================
           3. Devices table
@@ -291,30 +326,36 @@ export default function AcDevicesIntegrationTab({ location, canEdit }) {
       <section className="space-y-3 pt-4 border-t border-un1t-border/40">
         <div className="flex items-center justify-between">
           <h4 className="text-xs font-bold text-un1t-text uppercase tracking-wider">Devices</h4>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => startDiscovery('sensibo')}
-              disabled={!sensiboApiKey.trim() || discoveryLoading}
-              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-un1t-border text-xs text-un1t-subtle hover:text-un1t-text disabled:opacity-50"
-              title={!sensiboApiKey.trim() ? 'Save a Sensibo API key first' : ''}
-            >
-              <Plus size={11} /> Add Sensibo
-            </button>
-            <button
-              type="button"
-              onClick={() => startDiscovery('thinq')}
-              disabled={!thinqPat.trim() || !thinqClientId.trim() || discoveryLoading}
-              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-un1t-border text-xs text-un1t-subtle hover:text-un1t-text disabled:opacity-50"
-              title={!thinqPat.trim() ? 'Save a ThinQ PAT first' : ''}
-            >
-              <Plus size={11} /> Add LG ThinQ
-            </button>
-          </div>
+          {canManage && devices !== null && (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => startDiscovery('sensibo')}
+                disabled={!sensiboReady || discoveryLoading}
+                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-un1t-border text-xs text-un1t-subtle hover:text-un1t-text disabled:opacity-50"
+                title={!sensiboReady ? 'Save or paste a Sensibo API key first' : ''}
+              >
+                <Plus size={11} /> Add Sensibo
+              </button>
+              <button
+                type="button"
+                onClick={() => startDiscovery('thinq')}
+                disabled={!thinqReady || discoveryLoading}
+                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-un1t-border text-xs text-un1t-subtle hover:text-un1t-text disabled:opacity-50"
+                title={!thinqReady ? 'Save a ThinQ PAT first (a client id is generated then)' : ''}
+              >
+                <Plus size={11} /> Add LG ThinQ
+              </button>
+            </div>
+          )}
         </div>
 
-        {/* Add-device discovery panel */}
-        {adding && (
+        {canManage && devices !== null && unsavedSecret && (
+          <p className="text-[11px] text-un1t-muted">Save the key first, then add units.</p>
+        )}
+
+        {/* Add-device discovery panel (never over an unread device list) */}
+        {adding && devices !== null && (
           <div className="bg-un1t-bg/60 border border-un1t-border rounded-md p-3 space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold text-un1t-text">
@@ -370,27 +411,26 @@ export default function AcDevicesIntegrationTab({ location, canEdit }) {
         )}
 
         {/* Devices list */}
-        {devicesLoading && devices.length === 0 && (
+        {devicesLoading && devices === null && (
           <div className="text-xs text-un1t-subtle inline-flex items-center gap-2">
             <Loader2 size={12} className="animate-spin" /> Loading…
           </div>
         )}
-        {devicesError && (
-          <div className="text-xs text-red-700 bg-red-500/10 border border-red-500/30 rounded p-2 inline-flex items-start gap-2">
-            <AlertCircle size={11} className="mt-0.5" /> {devicesError}
-          </div>
+        {!devicesLoading && devices === null && (
+          <ReadFailedNote what="this studio's AC devices" onRetry={() => loadDevices({ silent: true })} />
         )}
-        {!devicesLoading && devices.length === 0 && (
+        {devices !== null && devices.length === 0 && (
           <div className="text-xs text-un1t-subtle">
-            No devices configured. Add one above after saving credentials.
+            No devices configured.{canManage ? ' Add one above after saving credentials.' : ''}
           </div>
         )}
-        {devices.length > 0 && (
+        {devices !== null && devices.length > 0 && (
           <div className="space-y-2">
             {devices.map((d) => (
               <DeviceRow
                 key={d.id}
                 device={d}
+                readOnly={!canManage}
                 onPatch={(patch) => patchDevice(d.id, patch)}
                 onDisable={() => disableDevice(d.id, d.label)}
               />
@@ -406,7 +446,7 @@ export default function AcDevicesIntegrationTab({ location, canEdit }) {
 // DeviceRow — inline-editable per-device card
 // ============================================================
 
-function DeviceRow({ device, onPatch, onDisable }) {
+function DeviceRow({ device, readOnly = false, onPatch, onDisable }) {
   const [editing, setEditing] = useState(false)
   const [label, setLabel] = useState(device.label)
   const [deviceGroup, setDeviceGroup] = useState(device.device_group || '')
@@ -476,40 +516,42 @@ function DeviceRow({ device, onPatch, onDisable }) {
               : <span className="text-blue-300">{device.external_auto_off_minutes} min</span>}
           </div>
         </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <button
-            type="button"
-            onClick={() => { reset(); setEditing(!editing) }}
-            className="text-un1t-subtle hover:text-un1t-text"
-            aria-label={editing ? 'Cancel edit' : 'Edit device'}
-          >
-            {editing ? <X size={14} /> : <Edit3 size={14} />}
-          </button>
-          {device.enabled ? (
+        {!readOnly && (
+          <div className="flex items-center gap-2 shrink-0">
             <button
               type="button"
-              onClick={onDisable}
-              className="text-red-300 hover:text-red-200"
-              aria-label="Disable device"
-              title="Disable"
+              onClick={() => { reset(); setEditing(!editing) }}
+              className="text-un1t-subtle hover:text-un1t-text"
+              aria-label={editing ? 'Cancel edit' : 'Edit device'}
             >
-              <PowerOff size={14} />
+              {editing ? <X size={14} /> : <Edit3 size={14} />}
             </button>
-          ) : (
-            <button
-              type="button"
-              onClick={() => onPatch({ enabled: true })}
-              className="text-green-300 hover:text-green-200"
-              aria-label="Re-enable device"
-              title="Re-enable"
-            >
-              <Power size={14} />
-            </button>
-          )}
-        </div>
+            {device.enabled ? (
+              <button
+                type="button"
+                onClick={onDisable}
+                className="text-red-300 hover:text-red-200"
+                aria-label="Disable device"
+                title="Disable"
+              >
+                <PowerOff size={14} />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => onPatch({ enabled: true })}
+                className="text-green-300 hover:text-green-200"
+                aria-label="Re-enable device"
+                title="Re-enable"
+              >
+                <Power size={14} />
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
-      {editing && (
+      {editing && !readOnly && (
         <div className="mt-3 pt-3 border-t border-un1t-border/40 space-y-2">
           <Field label="Label">
             <input

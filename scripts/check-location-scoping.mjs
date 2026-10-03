@@ -63,6 +63,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { sqlCode } from './lib/sql-code.mjs'
 
 const API_ROOT = 'src/app/api'
 const APP_ROOT = 'src/app'
@@ -127,6 +128,17 @@ const SCOPING_HELPERS = [
   // hands back, which is why the handlers that use it look unscoped in
   // isolation.
   'loadSendingMailbox(',
+  // src/lib/booking-web-writes.js — C134 WEBBOOKINGWRITES.1. Reads the
+  // booking by id, resolves its studio (location_id, else its booking type's),
+  // runs assertLocationAccessOr404 there and then hasPermissionForLocation
+  // ('bookings') there, and returns that row; the routes' write is then by
+  // that row's id, which is why the handlers look unscoped in isolation.
+  'loadBookingForWebWrite(',
+  // src/lib/activity-web-writes.js — C148 ACTWRITEGATEWEB.1. Reads the task
+  // by id (kind='task' only; no studio = 404), runs assertLocationAccessOr404
+  // at its location_id and then canWriteActivitiesAt there, and returns that
+  // row; POST /api/activities/tasks/[id]/status then writes by that row's id.
+  'loadTaskForWebWrite(',
   // src/lib/audience-filter.js — every send audience goes through the
   // whitelist filter, which applies the location scope with the audience.
   'applyAudienceFilter(',
@@ -139,6 +151,22 @@ const SCOPING_HELPERS = [
   // src/app/api/invoices-inbox/_helpers.js — getCurrentUser + master/owner-
   // at-location + invoice fetched via its location (401/403/404).
   'loadInvoiceForUser(',
+  // src/lib/campaign-session-access.js (MEMBERWRITESWEEP.1e) — reads the
+  // campaign by pk, 404s a campaign with no location_id, then runs
+  // assertLocationAccessOr404 at the CAMPAIGN's location_id and
+  // hasPermissionForLocation(…, 'email') there; the handlers then write only
+  // by that campaign's id (/api/communications/campaigns/[id]*).
+  'loadCampaignForUser(',
+  // src/lib/tv-admin.js (MEMBERWRITESWEEP.1f) — authoriseTvLocation runs
+  // assertLocationAccessOr404 at the given studio, then web OR mobile
+  // tv_displays there; loadTvDisplayForUser / loadTvTemplateForUser read the
+  // TV / template by pk, 404 a row with no location_id, and run
+  // authoriseTvLocation at the ROW's location_id. The handlers then list by
+  // that studio or write by that row's id AND location_id
+  // (/api/admin/tv-displays*, /api/admin/tv-templates*).
+  'authoriseTvLocation(',
+  'loadTvDisplayForUser(',
+  'loadTvTemplateForUser(',
   // src/app/api/accounting/coverage/[id]/_line.js — permission check +
   // active-location scoping + 404-not-403 line lookup.
   'loadLineForUser(',
@@ -157,6 +185,16 @@ const SCOPING_HELPERS = [
   // src/lib/auth.js — org ids the caller OWNS; used for
   // row.organization_id membership compares (contracts revoke/detail).
   'getOwnerOrganizationIds(',
+  // src/lib/contract-gates.js (GATES-2) — master, or
+  // getOwnerOrganizationIds(user).includes(row.organization_id): the same
+  // row-org membership compare, used by contracts revoke/resend/send/discard
+  // after their fetch-by-id (404 on a foreign org).
+  'canManageContractsInOrg(',
+  // src/lib/org-admin.js (C18 ORGROLE.1) — master, or an org_admin grant on
+  // the organisation passed. The wallet routes (settings/billing/topup,
+  // auto-topup) fetch the location by pk and 404 unless
+  // isOrgAdmin(user, location.organization_id): the same row-org compare.
+  'isOrgAdmin(',
   // src/lib/hosts.js — loads an event host and returns null unless
   // host.organization_id === orgId (events review surface).
   'loadHostForOrg(',
@@ -250,10 +288,6 @@ export const EXEMPT = {
   // ——— SAAS-9 triage (2026-07-19). Category (b) = cross-tenant/public by
   // design; TODO-LEAK = real finding, needs its own fix PR. ———
 
-  'src/app/api/admin/backfill-host-contacts/route.js': {
-    race_events:
-      'Master/owner-gated one-off admin backfill that walks EVERY hosted event to link host contacts at each host\'s anchor location — hosted-events hosts are a platform-level surface, and the route returns counts only (no tenant rows).',
-  },
   'src/app/api/unsubscribe/host/[token]/route.js': {
     contacts:
       'HOST-CONSENT.1 — RFC 8058 one-click target for host marketing mail. The contacts row is reached ONLY via the HMAC host-unsubscribe token (src/lib/host-unsubscribe.js) that names exactly one (host, contact) pair; the capability IS the scoping, the same argument as /api/unsubscribe/[token]. The query reads a single email column to push the Postmark suppression on the host\'s own stream and returns nothing about the contact.',
@@ -356,6 +390,10 @@ export const EXEMPT = {
     sale_offers:
       'Public sale product page: row resolved by its globally-unique slug; price is rendered server-side from the row so the client can never supply an amount.',
   },
+  'src/app/start/[path]/page.js': {
+    landing_page_settings:
+      "Public per-studio class-booking page (proxy publicPaths via '/start'): resolves ONE row by its sanitised public_path and renders only its published blocks + logo — public marketing content; the public_path IS the tenant selector (same rationale as /start and /welcome/[location]). MANUALFUNNEL.1.",
+  },
   'src/app/start/page.js': {
     landing_page_settings:
       "Public Meta-ads landing (proxy publicPaths): reads the fixed hatch-street row's published blocks + the landing logo — public marketing content; the public_path IS the tenant selector (same rationale as /api/public/classes).",
@@ -367,12 +405,6 @@ export const EXEMPT = {
   'src/app/welcome/[location]/status/page.js': {
     landing_page_settings:
       'Public status page: public_path → location resolution (the path IS the published tenant selector); renders only the coy member view from buildStatusView(), never internal detail.',
-  },
-
-  // Settings fleet dashboard — deliberately estate-wide.
-  'src/app/settings/notifications/health/page.js': {
-    profile_locations:
-      'Push-delivery fleet dashboard (NOTIF.4 + STAFF-DEV.4) gated by hasPermission(settings): groups active staff under EVERY location on purpose — it is the estate-wide device/app-version fleet view. Single-org estate today; revisit when a second org onboards (same caveat as public/branding).',
   },
 
   // The first page scan's four real findings needed NO exemption in the end:
@@ -388,10 +420,12 @@ export const EXEMPT = {
 // Pure functions (exported for tests)
 // ---------------------------------------------------------------------------
 
-/** Strip `-- …` line comments so commented-out DDL can't add tables. */
-function stripSqlComments(sql) {
-  return sql.replace(/--[^\n]*/g, '')
-}
+/**
+ * Blank `-- …` and `/* … *\/` comments so commented-out DDL can't add tables,
+ * by the one quote-aware, $tag$-pairing scan (scripts/lib/sql-code.mjs), not a
+ * regex: a '--' inside a string ended the old strip early (GUARDSTRIP.1).
+ */
+const stripSqlComments = (sql) => sqlCode(sql)
 
 /**
  * Derive the tables that gain a location_id column from one migration file's

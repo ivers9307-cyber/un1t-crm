@@ -238,3 +238,34 @@ describe('GET /api/schedule/shifts — own arrival (ARRIVALSHOW.1)', () => {
     expect(fetchOwnArrivalFacts).toHaveBeenCalledTimes(1)
   })
 })
+
+// RANGEVALID.1 — the phone's Schedule and Home feed. Reversed was an empty 200,
+// and a wide range an unordered, unpaged read the reader flags `capped` at
+// 1,000 rows and this route ignored: an arbitrary subset of the roster.
+describe('GET /api/schedule/shifts — in order and at most 92 days (RANGEVALID.1)', () => {
+  const COACH = { id: 'c', role: 'staff', profileRole: 'staff', rolesByLocation: { 'loc-1': 'staff' }, locations: [{ id: 'loc-1' }] }
+  const url = (qs) => `http://x/api/schedule/shifts?location_id=loc-1${qs}`
+
+  it('a reversed range is a 400 before any read', async () => {
+    getCurrentUser.mockResolvedValue(COACH)
+    const res = await GET(req(url('&start_date=2026-09-28&end_date=2026-09-27')))
+    expect(res.status).toBe(400)
+    expect(await res.json()).toEqual({ success: false, error: 'end_date must be on or after start_date' })
+    expect(fetchApiShiftRows).not.toHaveBeenCalled()
+  })
+
+  it('93 days is a 400 before any read; 92 still reads', async () => {
+    getCurrentUser.mockResolvedValue(COACH)
+    const res = await GET(req(url('&start_date=2026-01-01&end_date=2026-04-03')))
+    expect(res.status).toBe(400)
+    expect(await res.json()).toEqual({ success: false, error: 'The range can cover at most 92 days' })
+    expect(fetchApiShiftRows).not.toHaveBeenCalled()
+    expect((await GET(req(url('&start_date=2026-01-01&end_date=2026-04-02')))).status).toBe(200)
+  })
+
+  it('the phone\'s day and week still read, and no location still fans out', async () => {
+    getCurrentUser.mockResolvedValue(COACH)
+    expect((await GET(req(url('&start_date=2026-09-28&end_date=2026-09-28')))).status).toBe(200)
+    expect((await GET(req('http://x/api/schedule/shifts?profile_id=c&start_date=2026-09-28&end_date=2026-10-04'))).status).toBe(200)
+  })
+})

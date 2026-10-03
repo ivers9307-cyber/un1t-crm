@@ -34,3 +34,98 @@ describe('RosterSummaryPanel contractor spend month', () => {
     expect(screen.getByText('This week runs into August. Showing September, which has most of its days.')).toBeTruthy()
   })
 })
+
+// CONTRACTORSPEND.1 — the headline is PUBLISHED shifts; anything not yet
+// published is one line beside it, so a month being drafted still shows where
+// it is heading.
+describe('RosterSummaryPanel contractor spend: published and not yet published', () => {
+  it('labels the headline Published', () => {
+    renderPanel()
+    expect(screen.getByText('Published')).toBeTruthy()
+    expect(screen.queryByText('Spent')).toBeNull()
+  })
+
+  it('says nothing about unpublished shifts when there are none (or an older server sent no figure)', () => {
+    const { container } = renderPanel({ contractorSpend: { ...SPEND, unpublishedContractorCostEur: 0 } })
+    expect(container.textContent).not.toMatch(/not yet published/)
+    cleanup()
+    const { container: old } = renderPanel()
+    expect(old.textContent).not.toMatch(/not yet published/)
+  })
+
+  it('shows the unpublished amount when the month stays within budget', () => {
+    const { container } = renderPanel({
+      contractorSpend: { ...SPEND, unpublishedContractorCostEur: 300, projectedContractorCostEur: 1500, projectedOverBudget: false },
+    })
+    expect(container.textContent).toContain('€300 more in shifts not yet published.')
+    expect(container.textContent).not.toMatch(/over budget once published/)
+  })
+
+  it('says how far over budget the month goes once published, when only the projection is over', () => {
+    const { container } = renderPanel({
+      contractorSpend: { ...SPEND, unpublishedContractorCostEur: 1300, projectedContractorCostEur: 2500, projectedOverBudget: true },
+    })
+    expect(container.textContent).toContain('€1,300 more in shifts not yet published: €500 over budget once published.')
+  })
+
+  it('does not repeat "over budget" when the published figure is already over', () => {
+    const { container } = renderPanel({
+      contractorSpend: {
+        ...SPEND, contractorCostEur: 2100, remainingEur: -100, overBudget: true, utilisationPct: 105,
+        unpublishedContractorCostEur: 200, projectedContractorCostEur: 2300, projectedOverBudget: true,
+      },
+    })
+    expect(container.textContent).toContain('€200 more in shifts not yet published.')
+    expect(container.textContent).not.toMatch(/over budget once published/)
+  })
+
+  // Amounts render to the whole euro: gate on what is SHOWN, never "€0 more".
+  it('hides a sub-euro unpublished amount that would render as €0', () => {
+    const { container } = renderPanel({ contractorSpend: { ...SPEND, unpublishedContractorCostEur: 0.3 } })
+    expect(container.textContent).not.toMatch(/not yet published/)
+  })
+
+  it('shows an unpublished amount that rounds up to €1', () => {
+    const { container } = renderPanel({ contractorSpend: { ...SPEND, unpublishedContractorCostEur: 0.6 } })
+    expect(container.textContent).toContain('€1 more in shifts not yet published.')
+  })
+
+  it('drops the over-budget phrase when the overshoot would render as €0', () => {
+    const { container } = renderPanel({
+      contractorSpend: { ...SPEND, unpublishedContractorCostEur: 800.3, projectedContractorCostEur: 2000.3, projectedOverBudget: true },
+    })
+    expect(container.textContent).toContain('€800 more in shifts not yet published.')
+    expect(container.textContent).not.toMatch(/over budget once published/)
+  })
+
+  it('shows an over-budget overshoot that rounds up to €1', () => {
+    const { container } = renderPanel({
+      contractorSpend: { ...SPEND, unpublishedContractorCostEur: 800.6, projectedContractorCostEur: 2000.6, projectedOverBudget: true },
+    })
+    expect(container.textContent).toContain('€801 more in shifts not yet published: €1 over budget once published.')
+  })
+})
+
+// FTECOSTVIS.1 (Richard, 28 Sep 2026: "keep the cost hidden") — the server
+// sends fteImplicitCostEur only to owner / manager / master at the studio. The
+// panel shows the line only when the figure came, and never fills in a €0.
+describe('RosterSummaryPanel FTE labour line (FTECOSTVIS.1)', () => {
+  const withheld = Object.fromEntries(Object.entries(SPEND).filter(([k]) => k !== 'fteImplicitCostEur'))
+
+  it('shows the FTE labour total when the server sent it', () => {
+    const { container } = renderPanel({ contractorSpend: { ...SPEND, fteImplicitCostEur: 850 } })
+    expect(container.textContent).toContain('FTE labour (sunk cost): €850')
+  })
+
+  it('says nothing about FTE labour when the figure was withheld (a head coach), and keeps the rest', () => {
+    const { container } = renderPanel({ contractorSpend: withheld })
+    expect(container.textContent).not.toMatch(/FTE labour|sunk cost/)
+    expect(container.textContent).toContain('€800 remaining')
+    expect(screen.getByText('Published')).toBeTruthy()
+  })
+
+  it('treats a null figure as withheld, never as €0', () => {
+    const { container } = renderPanel({ contractorSpend: { ...SPEND, fteImplicitCostEur: null } })
+    expect(container.textContent).not.toMatch(/FTE labour|sunk cost/)
+  })
+})

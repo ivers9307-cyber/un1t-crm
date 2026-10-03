@@ -4,7 +4,8 @@ import { getCurrentUser, assertLocationAccess, getUserLocationIds, hasRoleAtLoca
 import { fetchApiShiftRows } from '@/lib/roster-read'
 import { fetchOwnOpenSwaps, annotateOwnOpenSwaps, ownShiftIds } from '@/lib/shift-open-swaps'
 import { fetchOwnArrivalFacts, annotateOwnArrivals, ownLocationIds } from '@/lib/shift-arrivals'
-import { MANAGER_ROLES, isRealCalendarDate } from '@/lib/schemas'
+import { MANAGER_ROLES } from '@/lib/schemas'
+import { rangeQueryError, MAX_LIST_RANGE_DAYS } from '@/lib/report-period'
 import { logError } from '@/lib/log'
 
 // RETIRE-SHIFTS-MIRROR.5d — GET reads the Roster v2 model (shift_blocks +
@@ -33,11 +34,11 @@ export async function GET(request) {
   // DATECHECK.1 — these bounds reach Postgres as they are, and it refuses
   // 2026-02-30 (the route used to hand back its error text as the 400). Refuse
   // it here, in change-log's words. Absent or empty = no bound, as before.
-  for (const [name, value] of [['start_date', startDate], ['end_date', endDate]]) {
-    if (value && !isRealCalendarDate(value)) {
-      return NextResponse.json({ success: false, error: `${name}: not a real date` }, { status: 400 })
-    }
-  }
+  // RANGEVALID.1 — and, when both are given, in order and at most
+  // MAX_LIST_RANGE_DAYS apart, before any read: reversed was an empty 200, and
+  // a wide range one unpaged select PostgREST silently cut at 1,000 rows.
+  const rangeError = rangeQueryError(startDate, endDate, { maxDays: MAX_LIST_RANGE_DAYS })
+  if (rangeError) return NextResponse.json({ success: false, error: rangeError }, { status: 400 })
   const db = createServerClient()
 
   // Specific location, or fall back to all of the caller's own locations.

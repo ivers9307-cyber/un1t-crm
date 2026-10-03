@@ -26,7 +26,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Plus, Clock, X, ArrowLeftRight, CalendarOff, Palmtree, ThermometerSun, Ban, Wallet, CircleEllipsis, AlertTriangle, AlertCircle, Pencil, Check, CalendarX, Repeat } from 'lucide-react'
 import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import { indexByDate } from '@/lib/bank-holidays'
-import { MANAGER_ROLES } from '@/lib/schemas'
+import { MANAGER_ROLES, ADMIN_ROLES } from '@/lib/schemas'
 // REPLACE.1a — the replace picker's words and the toast after it.
 import { replacePickerCopy, replaceResponseOutcome } from '@/lib/shift-replace'
 // ROSTER-FIX.6c — getMonday / addDays / formatDate were re-implemented here,
@@ -77,6 +77,10 @@ import SchedulePartialLoadNote, {
   STAFF_UNAVAILABLE_MESSAGE, TEMPLATES_UNAVAILABLE_MESSAGE,
 } from './schedule/SchedulePartialLoadNote'
 import RosterChangeLogDrawer from './schedule/RosterChangeLogDrawer'
+// REPLACE.1b — "Offer to team" in the block dialog.
+import { useShiftOffers } from './schedule/useShiftOffers'
+import OfferToTeamControl from './schedule/OfferToTeamControl'
+import { offerPostResultText } from '@shared/offer-to-team'
 import { publishedRosterIdsIn } from '@/lib/roster-compare-format'
 import PublicationStatusChip from './schedule/PublicationStatusChip'
 import { timeOffLeaveLabel } from '@shared/time-off'
@@ -377,6 +381,15 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
 
   const locationId = user.activeLocation?.id
   const isManager = canManage(user.role)
+  // CONTRACTVIS.1 (Richard, 27 Sep) — a colleague's contracted hours are for
+  // owner / manager / master at THIS studio only, judged AT the calendar's
+  // studio (hasRoleAtLocation, as SCHEDROLES does) rather than by user.role:
+  // the two agree while the calendar only shows the active studio, but the
+  // per-studio check survives a studio switcher and a user.role that fell back
+  // to a role held elsewhere. It gates the staff read's include=contract, the
+  // week-cost read, the Weekly hours notice and the FTE bars; the servers
+  // enforce the same rule on their own.
+  const canSeeContract = hasRoleAtLocation(user, locationId, ADMIN_ROLES)
   const todayStr = formatDate(new Date())
 
   const weekEnd = addDays(weekStart, 6)
@@ -442,6 +455,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
     canReadSpend: isManager,
     // AVAIL.1 — manager-only, same gate as spend (the route is MANAGER_ROLES at the studio).
     canReadAvailability: isManager,
+    canReadContract: canSeeContract,
   })
   // ROSTERLOAD.1 — a side read can fail now without failing the roster, so
   // the actions that depend on it must not offer an empty list as if it were
@@ -455,12 +469,13 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
   const availabilityMissing = Boolean(partialErrors?.availability && !partialErrors.availability.kept)
   // ROSTER-FIX.6c — its own hook, not a seventh slice of the fan-out above: a
   // summary panel must not be able to take the roster down with it. See its
-  // header. Manager-gated on the client too, so a coach's calendar never fires
-  // a request the route would answer 403 anyway.
+  // header. Owner/manager/master-gated on the client too (CONTRACTVIS.1): a
+  // coach's calendar never fires a request the route would answer 403, and a
+  // head coach's never asks for contract-measured hours the route withholds.
   const { weekCost, refreshWeekCost } = useWeekCost({
     locationId,
     weekStart: formatDate(weekStart),
-    enabled: isManager,
+    enabled: canSeeContract,
   })
   // ROSTERVIS.1 — drafts awaiting approval, for the publication chip. Manager
   // only: a coach's feed is published-only, so there is nothing to tell them.
@@ -625,6 +640,9 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
   // publish modal's month scope uses.
   const visiblePeriodStart = viewType === 'month' ? formatDate(monthStart) : formatDate(weekStart)
   const visiblePeriodEnd = viewType === 'month' ? formatDate(visibleMonthEnd) : formatDate(weekEnd)
+  // REPLACE.1b — the open "Offer to team" offers on screen, keyed by shift
+  // (managers only; a coach never asks).
+  const offers = useShiftOffers({ locationId, startDate: visiblePeriodStart, endDate: visiblePeriodEnd, enabled: isManager })
 
   // CHANGELOG.1 — what the publication chip calls. Named, so the chip can move
   // (it lives in its own component) and carry one prop with it. A plain
@@ -683,6 +701,10 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
       }
       setAssignTarget(null)
       refreshAfterMutation()
+      // REPLACE.1b — a filled shift's offer drops out of the list at once (the
+      // manage view filters on still-needed live; the sweep closes it within
+      // five minutes); re-read so the dialog's offer line goes.
+      offers.reload()
     } catch {
       showToast('Network error, please try again')
     }
@@ -720,6 +742,40 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
     showToast(outcome.message, outcome.tone, { sticky: outcome.sticky === true })
     setReplaceTarget(null)
     refreshAfterMutation()
+    offers.reload()
+  }
+
+  // REPLACE.1b — offer a shift to the team, or withdraw an open offer. The
+  // words are shared/offer-to-team.js (the phone says the same).
+  async function handleOfferBlock(block) {
+    if (rowBusy) return
+    setRowBusy(true)
+    try {
+      const res = await fetch(`/api/schedule/blocks/${block.id}/offer`, { method: 'POST' })
+      const json = await res.json().catch(() => ({}))
+      const out = offerPostResultText(res.status, json)
+      showToast(out.text, out.tone)
+      offers.reload()
+    } catch {
+      showToast('Network error, please try again')
+    } finally {
+      setRowBusy(false)
+    }
+  }
+  async function handleWithdrawOffer(offer) {
+    if (rowBusy || !confirm('Withdraw this offer? Coaches will no longer see it.')) return
+    setRowBusy(true)
+    try {
+      const res = await fetch(`/api/schedule/offers/${offer.id}`, { method: 'DELETE' })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok || !json.success) showToast(json.error || 'Could not withdraw the offer')
+      else showToast('Offer withdrawn.', 'success')
+      offers.reload()
+    } catch {
+      showToast('Network error, please try again')
+    } finally {
+      setRowBusy(false)
+    }
   }
 
   // (handleUnassign was dead code — assignment-removal logic now lives
@@ -1254,7 +1310,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
           scoped to one Mon-Sun week, which is what the caption underneath has
           always claimed — the browser version summed whatever range was loaded,
           so in month view it billed six weeks against a weekly contract. */}
-      {!loading && canManage(user.role) && (() => {
+      {!loading && canSeeContract && (() => {
         const overOrAt = (weekCost?.coaches || []).filter((c) => c.status !== 'under')
         if (overOrAt.length === 0) return null
 
@@ -1564,8 +1620,10 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
       {/* Roster v2 phase 4 — week + month summary. Manager-only. */}
       {/* Phase 6: passes `timeOff` so FTE utilisation is leave-aware. */}
       {/* SCHEDULE-SPEND-AGG.1: contractorSpend comes from a server-
-          computed aggregate so head_coach sees real totals + over-
-          budget signals without being granted hourly_rate visibility. */}
+          computed aggregate so head_coach sees real contractor totals +
+          over-budget signals without being granted hourly_rate visibility.
+          FTECOSTVIS.1: the FTE labour total is owner/manager/master only;
+          the server leaves it out for a head coach. */}
       {/* ROSTER-FIX.6c: `staff` is the pay-free picker shape now, so no role
           gets rates here and the canSeePay prop had nothing left to gate. */}
       {!loading && isManager && (
@@ -1581,6 +1639,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
           staffUnavailable={Boolean(staffUnavailable)}
           leaveMissing={leaveMissing}
           spendOtherMonthStart={spendMonth.straddles ? formatDate(spendMonth.otherMonthStart) : null}
+          contractVisible={canSeeContract}
         />
       )}
 
@@ -1648,6 +1707,12 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
           onReplace={isManager && blockDetail.block_date >= todayStr
             ? (assignment) => setReplaceTarget({ block: blockDetail, assignment })
             : null}
+          // REPLACE.1b — "Offer to team": the shared rule decides whether the
+          // button shows; an open offer shows its state and Withdraw.
+          offer={offers.byBlockId[blockDetail.id] ?? null}
+          todayIso={todayStr}
+          onOffer={() => handleOfferBlock(blockDetail)}
+          onWithdrawOffer={(o) => handleWithdrawOffer(o)}
           busy={rowBusy}
           onUnassign={async (assignmentId) => {
             if (rowBusy) return
@@ -1661,6 +1726,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
                 return
               }
               await refreshAfterMutation()
+              offers.reload()
             } catch {
               showToast('Network error, please try again')
             } finally {
@@ -2609,6 +2675,7 @@ const DELETE_SLOT_CONFIRM =
 function BlockDetailModal({
   block, user, isManager, busy,
   onClose, onAddCoach, onUnassign, onReplace = null, onPartialSave, onDeleteBlock, onSwapRequest, onEditBlock,
+  offer = null, todayIso, onOffer, onWithdrawOffer,
 }) {
   const tmpl = block.shift_templates || {}
   const assignments = liveAssignments(block.shift_assignments)
@@ -2703,6 +2770,14 @@ function BlockDetailModal({
             ))
           )}
         </div>
+
+        {/* REPLACE.1b — Offer to team (managers). The shared rule decides whether it shows. */}
+        {isManager && onOffer && (
+          <div className="mb-4">
+            <OfferToTeamControl block={block} offer={offer} todayIso={todayIso} busy={busy}
+              onOffer={onOffer} onWithdraw={() => offer && onWithdrawOffer?.(offer)} />
+          </div>
+        )}
 
         {/* Action footer */}
         <div className="border-t border-un1t-border pt-4 flex items-center justify-between gap-2">

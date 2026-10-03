@@ -14,6 +14,14 @@
 // stops the loop. Push delivery itself is best-effort; sendPush
 // returns counts and never throws.
 //
+// C21 PUSHDONE.1 — the "claim" here is the business write (pending →
+// incomplete), and it is the truth whatever the pushes do, so it is never
+// undone and the pushes are not retried (nothing re-reads an incomplete
+// instance, and a retry column for a feature with 0 instances on prod is not
+// worth a migration). What changed: a push that reached nobody because
+// something broke is no longer silent — it is counted in `push_failed` (in
+// the response and the heartbeat's last_outcome) and logged with logWarn.
+//
 // COVERLOOP.1 — SECOND ARM: the swap cover sweep (src/lib/swap-cover-server.js
 // runSwapCoverSweep). It re-pushes a studio's approvers about an unresolved
 // swap at T-48h and T-12h, and closes a swap whose shift has started; outside
@@ -59,6 +67,7 @@ import { sendPush, sendPushToRolesAtLocation } from '@/lib/push'
 import { logAuditEvent } from '@/lib/audit'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { logWarn, logError } from '@/lib/log'
+import { pushOutcome } from '@/lib/push-outcome'
 import {
   COMPLIANCE_ROLES,
   listMissedItems,
@@ -88,6 +97,7 @@ export async function GET(request) {
     skipped: 0,
     push_overdue: 0,
     push_compliance: 0,
+    push_failed: 0,
     errors: 0,
   }
 
@@ -220,6 +230,10 @@ async function sweepChecklists(db, stats) {
         },
       })
       stats.push_overdue += r.sent || 0
+      if (pushOutcome(r) === 'failed') {
+        stats.push_failed++
+        logWarn('cron-checklist-sweep', 'overdue push reached nobody; not retried', { id: row.id, read_failed: !!r?.read_failed })
+      }
     } catch (e) {
       logWarn('cron-checklist-sweep', 'overdue push failed', { id: row.id, err: e?.message })
       stats.errors++
@@ -249,6 +263,12 @@ async function sweepChecklists(db, stats) {
         }
       )
       stats.push_compliance += r.sent || 0
+      if (pushOutcome(r) === 'failed') {
+        stats.push_failed++
+        logWarn('cron-checklist-sweep', 'compliance push reached nobody; not retried', {
+          id: row.id, read_failed: !!r?.read_failed, recipients_failed: !!r?.recipients_failed,
+        })
+      }
     } catch (e) {
       logWarn('cron-checklist-sweep', 'compliance push failed', { id: row.id, err: e?.message })
       stats.errors++

@@ -45,6 +45,7 @@ import {
 import MonthRoster from '@/components/dashboard/MonthRoster'
 import MyRequests from '@/components/dashboard/MyRequests'
 import SwapActions from '@/components/dashboard/SwapActions'
+import OfferedShifts from '@/components/dashboard/OfferedShifts'
 
 // Icon per triage row id (assembleTodayFeed in shared/today-feed.js owns
 // the ids). Kept here — icons are a web rendering concern. HOME.3 —
@@ -174,7 +175,9 @@ export default async function PersonalDashboardPage() {
   // getPendingApprovalsCount fired once here and once more inside
   // assembleHomeQueue, every page load).
   const [res, feedRows, queue] = await Promise.all([
-    fetchPersonalDashboardData(db, user.id, user.activeLocation?.id),
+    // A4 REVENUEMTD.1 — the same Dublin today as the month grid, so "This
+    // week" never lags a day behind it between 00:00 and 01:00 Dublin.
+    fetchPersonalDashboardData(db, user.id, user.activeLocation?.id, { todayIso }),
     fetchTodayFeed(db, user, user.activeLocation?.id, { skip: QUEUE_MIGRATED_IDS }),
     assembleHomeQueue(db, user),
   ])
@@ -454,6 +457,10 @@ export default async function PersonalDashboardPage() {
           </div>
         </Link>
       )}
+
+      {/* REPLACE.1b — shifts a manager offered to the team that I could take
+          ("Shifts up for grabs", Claim). Renders nothing when none is. */}
+      <OfferedShifts locationId={user.activeLocation?.id} />
 
       {/* CT-P3b — coach self-service swap surfaces: accept/decline swaps
           offered to you, claim open-pool swaps, and "on with you today".

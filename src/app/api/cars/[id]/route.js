@@ -4,7 +4,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { money } from '@/lib/schemas'
 
@@ -46,7 +46,7 @@ export async function GET(_request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!hasPermission(user, 'car_processing')) {
+  if (!hasPermissionAtAnyLocation(user, 'car_processing')) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
@@ -56,6 +56,10 @@ export async function GET(_request, props) {
 
   const guard = assertLocationAccessOr404(user, car.location_id)
   if (guard) return guard
+  // ROLESWEEP.1b — judged at the car's location, not the caller's active studio.
+  if (!hasPermissionForLocation(user, car.location_id, 'car_processing')) {
+    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  }
   return NextResponse.json({ success: true, data: car })
 }
 
@@ -63,7 +67,7 @@ export async function PATCH(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!hasPermission(user, 'car_processing')) {
+  if (!hasPermissionAtAnyLocation(user, 'car_processing')) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
@@ -76,6 +80,10 @@ export async function PATCH(request, props) {
   if (!existing) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, existing.location_id)
   if (guard) return guard
+  // ROLESWEEP.1b — judged at the car's location, not the caller's active studio.
+  if (!hasPermissionForLocation(user, existing.location_id, 'car_processing')) {
+    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  }
 
   // Stamp uk_vat_refund_received_at on the transition to true so we
   // know when it landed without needing an audit table.
@@ -95,7 +103,7 @@ export async function DELETE(_request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!hasPermission(user, 'car_processing')) {
+  if (!hasPermissionAtAnyLocation(user, 'car_processing')) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
@@ -104,6 +112,10 @@ export async function DELETE(_request, props) {
   if (!existing) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, existing.location_id)
   if (guard) return guard
+  // ROLESWEEP.1b — judged at the car's location, not the caller's active studio.
+  if (!hasPermissionForLocation(user, existing.location_id, 'car_processing')) {
+    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  }
 
   // Hard-delete on purpose for now — there's no archived view yet.
   // Storage objects orphan if not cleaned up; we walk the documents

@@ -4,11 +4,17 @@ import { createServerClient as createSSRClient } from '@supabase/ssr'
 import { cookies, headers } from 'next/headers'
 import { NextResponse } from 'next/server'
 import { isApiKeyToken } from './api-keys'
-import { hasPermission } from './permissions'
+import {
+  hasPermission, hasPermissionForLocation, hasPermissionAtAnyLocation,
+  hasMobilePermissionForLocation, hasMobilePermissionAtAnyLocation,
+} from './permissions'
 import { loadRoleTemplatesForLocations } from './role-templates.js'
 import { SUPPORT_COOKIE, verifySupportCookie } from './support-session-edge'
 import { hasRoleAtLocation, hasRoleAtAnyLocation } from './role-at-location'
 import { isTombstone } from './staff-tombstone.js'
+import { PROFILE_AUTH_SELECT, pickUserProfile, pickAuthUser } from './user-profile.js'
+import { logError } from './log.js'
+import { USER_LOCATION_COLUMNS, toUserLocation, toUserLinkedLocations } from './location-secrets.js'
 
 // React 18's `cache()` is only exported from the server build of react.
 // In the Vitest (Node) environment we get the client build which omits
@@ -278,10 +284,20 @@ export const getCurrentUser = cache(async function getCurrentUser() {
   // don't know whether to fetch it until realProfile is loaded
   // (only masters can impersonate), but the cookie read is cheap and
   // doesn't depend on the profile fetch.
-  const [{ data: realProfile }, { readImpersonationTarget }] = await Promise.all([
-    db.from('profiles').select('*').eq('id', user.id).single(),
+  //
+  // PROFILESPREAD.1 — NAME the columns: the result is spread into the user
+  // object, which every page serialises (AppShell). PROFILE_AUTH_SELECT is
+  // the ten fields readers use + deleted_at (tombstone check, never spread).
+  const [{ data: realProfile, error: profileErr }, { readImpersonationTarget }] = await Promise.all([
+    db.from('profiles').select(PROFILE_AUTH_SELECT).eq('id', user.id).single(),
     import('./impersonation.js'),
   ])
+  // A failed read still resolves "signed out", as before, but not silently:
+  // a column-name mistake here would sign EVERYONE out. PGRST116 (no row) is
+  // the normal answer for a member who has no staff profile.
+  if (profileErr && profileErr.code !== 'PGRST116') {
+    logError('auth', 'profile read failed; request resolves signed out', { code: profileErr.code || null })
+  }
 
   // STAFFDELETE.1 — a permanently deleted staff member keeps a profiles row (a
   // tombstone, so history still names them) but is nobody: the auth user is
@@ -323,11 +339,14 @@ export const getCurrentUser = cache(async function getCurrentUser() {
   if (realProfile.role === 'master') {
     const targetId = await readImpersonationTarget()
     if (targetId && targetId !== realProfile.id) {
-      const { data: target } = await db
+      const { data: target, error: targetErr } = await db
         .from('profiles')
-        .select('*')
+        .select(PROFILE_AUTH_SELECT) // PROFILESPREAD.1
         .eq('id', targetId)
         .single()
+      if (targetErr && targetErr.code !== 'PGRST116') {
+        logError('auth', 'impersonation target read failed; master stays themselves', { code: targetErr.code || null })
+      }
       // Only treat this as a live impersonation if there's an OPEN
       // impersonation_log row for this master+target. A leftover
       // un1t_impersonate cookie (e.g. the browser kept it after a
@@ -371,12 +390,17 @@ export const getCurrentUser = cache(async function getCurrentUser() {
   // regardless of profile_locations, but the rows are still fetched
   // for the is_default flag used by active-location resolution.
   const effectiveProfileId = profile.id
+  // SECFIX.3a — NAME the location columns: this object is serialised into
+  // every page (AppShell). USER_LOCATION_COLUMNS is the public identity every
+  // consumer reads (id, name, organization_id, features, active,
+  // is_host_anchor, slug, country, timezone, …): the client identity; no
+  // `settings` (PROFILESPREAD.1). The credential columns are never loaded.
   const linksPromise = db
     .from('profile_locations')
-    .select('*, locations(*)')
+    .select(`*, locations(${USER_LOCATION_COLUMNS})`)
     .eq('profile_id', effectiveProfileId)
   const allLocsPromise = profile.role === 'master'
-    ? db.from('locations').select('*').eq('active', true).order('name')
+    ? db.from('locations').select(USER_LOCATION_COLUMNS).eq('active', true).order('name')
     : Promise.resolve({ data: null })
   // Organizations (mig 079). Master sees every active org; non-master
   // sees the orgs whose locations they're a member of (resolved
@@ -394,12 +418,22 @@ export const getCurrentUser = cache(async function getCurrentUser() {
     ? Promise.resolve({ data: null })
     : db.from('profile_organizations').select('*').eq('profile_id', effectiveProfileId)
 
-  const [{ data: locationLinks }, { data: allLocs }, { data: allOrgs }, { data: orgAdminLinks }] = await Promise.all([
+  const [{ data: rawLocationLinks }, { data: rawAllLocs }, { data: allOrgs }, { data: orgAdminLinks }] = await Promise.all([
     linksPromise,
     allLocsPromise,
     allOrgsPromise,
     orgAdminLinksPromise,
   ])
+
+  // SECFIX.3a / PROFILESPREAD.1 — this object is serialised into EVERY page
+  // (layout → AppShellServer → <AppShell user={user}>). The selects name the
+  // client identity only (no settings, no credential column); the pick is
+  // the second lock. Server code that needs settings or a credential reads
+  // the row fresh by id (readGlofoxAutomationStatus,
+  // glofoxCredentialsForLocation, getUnifiConfig, …) and never takes one off
+  // `user`.
+  const locationLinks = toUserLinkedLocations(rawLocationLinks)
+  const allLocs = Array.isArray(rawAllLocs) ? rawAllLocs.map(toUserLocation) : rawAllLocs
 
   let locations = (locationLinks || []).map(pl => pl.locations).filter(Boolean)
 
@@ -437,11 +471,15 @@ export const getCurrentUser = cache(async function getCurrentUser() {
   if (orgAdminOrgIds.length > 0) {
     const { data: orgLocs } = await db
       .from('locations')
-      .select('*')
+      .select(USER_LOCATION_COLUMNS) // SECFIX.3a
       .in('organization_id', orgAdminOrgIds)
       .eq('active', true)
       .order('name')
-    const expanded = expandOrgAdminAccess({ locations, rolesByLocation, orgLocations: orgLocs })
+    const expanded = expandOrgAdminAccess({
+      locations,
+      rolesByLocation,
+      orgLocations: Array.isArray(orgLocs) ? orgLocs.map(toUserLocation) : orgLocs, // SECFIX.3a / PROFILESPREAD.1
+    })
     locations = expanded.locations
     rolesByLocation = expanded.rolesByLocation
     orgAdminSyntheticLocationIds = expanded.syntheticLocationIds
@@ -621,8 +659,14 @@ export const getCurrentUser = cache(async function getCurrentUser() {
   }
 
   return {
-    ...profile,
-    user,
+    // PROFILESPREAD.1 — only the ten listed fields (src/lib/user-profile.js),
+    // never pin_hash / pay / UniFi id / tombstone bookkeeping.
+    ...pickUserProfile(profile),
+    // AUTHUSERPICK.1 — { id, email } of the Supabase auth user, never the
+    // whole thing (identities, app_metadata, user_metadata, phone, factors):
+    // this object is serialised into every page. Under "View as" it is the
+    // MASTER's auth user. Nothing reads another field (plan C58 §2).
+    user: pickAuthUser(user),
     locations,
     activeLocation,
     // { [org_id]: org row } — every org reachable by this caller.
@@ -848,6 +892,90 @@ export function requireInboxPermission(user, channel) {
     return NextResponse.json({ success: false, error: 'Forbidden — inbox permission required' }, { status: 403 })
   }
   return null
+}
+
+// ─── INBOXLOC.1 (C37) — WhatsApp thread routes judge at the THREAD's studio ──
+// requireInboxPermission(user, 'wa') resolves `whatsapp` at the ACTIVE studio
+// (the phone's x-active-location header, the web's cookie). The thread routes
+// under /api/whatsapp/conversations/[id] (and /start) act on ONE studio's
+// conversation, so they judge there: a coarse pre-check before any read, then
+// the decision at the conversation's (or contact's) location once the row is
+// read and membership has passed. Web OR mobile `whatsapp`, the rule the
+// contact routes use (contactChannelFlags, /api/contacts/[id]/whatsapp): the
+// phone calls these routes, and its own reads of the same rows (RLS
+// wa_conv_select) already judge the mobile toggle at the row's studio.
+// (Since INBOXWEBONLY3.1 the three the phone never calls, /add-contact,
+// /agent and /start, use the web-only pair below instead.)
+
+const FORBIDDEN_INBOX = () =>
+  NextResponse.json({ success: false, error: 'Forbidden — inbox permission required' }, { status: 403 })
+
+/**
+ * Coarse pre-check: does the caller hold WhatsApp (web or mobile) at ANY
+ * studio? Run before the conversation is read; the real decision is
+ * requireWhatsAppInboxAt at the conversation's studio.
+ *
+ * @param {object|null} user
+ * @returns {NextResponse | null}
+ */
+export function requireWhatsAppInboxAnywhere(user) {
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (hasPermissionAtAnyLocation(user, 'whatsapp') || hasMobilePermissionAtAnyLocation(user, 'whatsapp')) return null
+  return FORBIDDEN_INBOX()
+}
+
+/**
+ * The decision: WhatsApp (web or mobile) at `locationId`, the studio the
+ * conversation belongs to. No location, or a studio the caller does not
+ * belong to, is refused (fail closed). Call it after assertLocationAccessOr404.
+ *
+ * @param {object|null} user
+ * @param {string|null|undefined} locationId
+ * @returns {NextResponse | null}
+ */
+export function requireWhatsAppInboxAt(user, locationId) {
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (!locationId) return FORBIDDEN_INBOX()
+  if (hasPermissionForLocation(user, locationId, 'whatsapp') || hasMobilePermissionForLocation(user, locationId, 'whatsapp')) return null
+  return FORBIDDEN_INBOX()
+}
+
+// ─── INBOXWEBONLY3.1 (C119) — the web-only thread actions keep the WEB key ──
+// Richard, 30 Sep: the thread routes the PHONE calls take web OR mobile
+// `whatsapp` (the pair above); the ones only the WEB calls
+// (/conversations/[id]/add-contact, /conversations/[id]/agent — pause/resume
+// Mia — and /conversations/start) take the WEB key only, judged at the same
+// studio. Same order and shapes: the any-studio pre-check before any read,
+// membership (404) once the row is read, then the decision at its studio.
+
+/**
+ * Coarse pre-check: does the caller hold the WEB `whatsapp` permission at ANY
+ * studio? Run before the record is read; the decision is
+ * requireWebWhatsAppInboxAt at the conversation's (or contact's) studio.
+ *
+ * @param {object|null} user
+ * @returns {NextResponse | null}
+ */
+export function requireWebWhatsAppInboxAnywhere(user) {
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (hasPermissionAtAnyLocation(user, 'whatsapp')) return null
+  return FORBIDDEN_INBOX()
+}
+
+/**
+ * The decision: the WEB `whatsapp` permission at `locationId`. No location,
+ * or a studio the caller does not belong to, is refused (fail closed). Call
+ * it after the membership guard.
+ *
+ * @param {object|null} user
+ * @param {string|null|undefined} locationId
+ * @returns {NextResponse | null}
+ */
+export function requireWebWhatsAppInboxAt(user, locationId) {
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (!locationId) return FORBIDDEN_INBOX()
+  if (hasPermissionForLocation(user, locationId, 'whatsapp')) return null
+  return FORBIDDEN_INBOX()
 }
 
 // ─── Organization guards (SAAS-4, mig 417) ──────────────────────────

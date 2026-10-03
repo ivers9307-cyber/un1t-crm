@@ -21,7 +21,7 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody, uuidLike } from '@/lib/validate'
 import { withFreshToken, listConnectedTenants } from '@/lib/xero/client'
@@ -39,8 +39,19 @@ const SelectSchema = z.object({
 
 // Owner/master only — same bar as connecting or disconnecting, since this
 // decides which company's books the location's bills land in.
+//
+// SECFIX.1 (security) — owner is judged AT the location acted on, never at
+// the caller's ACTIVE studio (`user.role`). Before this, an owner at A who is
+// staff at B could, with A active, re-bind B's Xero organisation and purge
+// B's account/tax/contact mirrors. `permitted` is now only the coarse
+// pre-check (owner somewhere; masters via profileRole); `permittedAt` is the
+// decision, run after the membership 404.
 function permitted(user) {
-  return user?.role === 'owner' || user?.role === 'master'
+  return hasRoleAtAnyLocation(user, ['owner'])
+}
+
+function permittedAt(user, locationId) {
+  return hasRoleAtLocation(user, locationId, ['owner'])
 }
 
 async function loadExisting(db) {
@@ -63,6 +74,7 @@ export async function GET(request) {
   if (!locationId) return NextResponse.json({ success: false, error: 'location_id is required' }, { status: 400 })
   const guard = assertLocationAccessOr404(user, locationId)
   if (guard) return guard
+  if (!permittedAt(user, locationId)) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
 
   const db = createServerClient()
   const { data: conn } = await db
@@ -104,6 +116,7 @@ export async function POST(request) {
   const { location_id: locationId, tenant_id: tenantId } = v.data
   const guard = assertLocationAccessOr404(user, locationId)
   if (guard) return guard
+  if (!permittedAt(user, locationId)) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
 
   const db = createServerClient()
   const { data: conn } = await db

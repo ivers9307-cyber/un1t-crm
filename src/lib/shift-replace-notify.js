@@ -30,6 +30,9 @@
 // 'replace_shift_deleted'). A deleted shift's rows have block_id null (ON
 // DELETE SET NULL): each is its own pile by row id, and a "removed" among them
 // is still told, on the row's date, then stamped by id like every other.
+// REPLACENITS.1 — its start comes from details.start_time (logged by the
+// replace route), so a deleted shift that has STARTED is stamped silently
+// (review 3's reason) instead of told at 07:00.
 //
 // Everything else goes through notifyRosterChanges (NOTIFY.1's message and
 // send path) with markNotified: false, and THIS arm stamps exactly its own
@@ -56,8 +59,10 @@ import {
   netReplaceChanges, replacePileKey, bandSeenBetween, REPLACE_VIA, REPLACE_UNDONE_REASON, REPLACE_STARTED_REASON, REPLACE_DELETED_REASON, REPLACE_NOTICE_ROUTE_OWNS_MS, REPLACE_NOTICE_MAX_AGE_MS,
 } from './shift-replace'
 
-// Literal: check:select-columns resolves only literal selects.
-const HELD_SELECT = 'id, location_id, block_id, block_date, actor_id, coach_id, action, created_at, shift_blocks!block_id(start_time)'
+// Literal: check:select-columns resolves only literal selects. `details`
+// carries the shift start logged at the replace (REPLACENITS.1), the only
+// start left once the slot is deleted.
+const HELD_SELECT = 'id, location_id, block_id, block_date, actor_id, coach_id, action, created_at, details, shift_blocks!block_id(start_time)'
 // Replaces are a handful a night. A guard, not a page size: past it the
 // oldest are sent and the rest wait a tick.
 const HELD_LIMIT = 500

@@ -3,13 +3,16 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess, hasRoleAtLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { isoDate, MANAGER_ROLES } from '@/lib/schemas'
+import { realIsoDate, MANAGER_ROLES } from '@/lib/schemas'
+import { rangeQueryError } from '@/lib/report-period'
 import { mergeHolidays } from '@/lib/bank-holidays'
 
 export const runtime = 'nodejs'
 
 const HolidayCreateSchema = z.object({
-  date: isoDate,
+  // RANGEVALID.1 — a real date, not only the shape: 2026-02-30 reached the
+  // upsert and came back as Postgres's own text.
+  date: realIsoDate,
   name: z.string().min(1).max(200),
 })
 
@@ -33,6 +36,13 @@ export async function GET(request, props) {
   const { searchParams } = new URL(request.url)
   const start = searchParams.get('start') || undefined
   const end = searchParams.get('end') || undefined
+  // RANGEVALID.1 — both bounds optional (the settings list sends neither, the
+  // calendar its visible range). Each one given must be a real date, and
+  // together in order and at most a year, before any read: they went to
+  // Postgres as given, so 2026-02-30 or 'abc' came back as a 500 carrying the
+  // database's text, and a reversed range as an empty list.
+  const rangeError = rangeQueryError(start, end, { startName: 'start', endName: 'end' })
+  if (rangeError) return NextResponse.json({ success: false, error: rangeError }, { status: 400 })
 
   const db = createServerClient()
 

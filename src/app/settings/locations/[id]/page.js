@@ -8,9 +8,9 @@
 // (which keeps its own ?tab= sub-strip — the two params compose).
 //
 // SETTINGS.1 reorganized the page: every credential-bearing integration
-// (Xero / Glofox / UniFi / Sensibo / BCA Submit / Twilio / WhatsApp)
+// (Xero / Glofox / UniFi / Sensibo / BCA Submit / WhatsApp)
 // lives in the Integrations tab. The Details tab (LocationForm) owns
-// location identity + Twilio alpha + contractor budget.
+// location identity + contractor budget.
 
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess, guardMasterOrOwner } from '@/lib/auth'
@@ -19,12 +19,15 @@ import Link from 'next/link'
 import { ToggleRight, Image as ImageIcon, Clock, CalendarDays, ChevronRight, Bell, Mail } from 'lucide-react'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
 import { canEditLocationFeatures } from '@/lib/staff-access'
+import { logError } from '@/lib/log'
+import { toClientLocation } from '@/lib/location-client-shape'
 import LocationForm from '@/components/LocationForm'
 import LocationFeatures from '@/components/LocationFeatures'
 import RolePermissions from '@/components/RolePermissions'
 import CarDepositSettings from '@/components/CarDepositSettings'
 import BrandingSettings from '@/components/BrandingSettings'
 import OrgBrandingSettings from '@/components/OrgBrandingSettings'
+import { isOrgAdmin } from '@/lib/org-admin'
 import LocationIntegrations from '@/components/settings/LocationIntegrations'
 import NotificationConfigCard from '@/components/settings/NotificationConfigCard'
 import EmailMailboxesCard from '@/components/settings/EmailMailboxesCard'
@@ -34,6 +37,7 @@ import GeofenceAttendanceCard from '@/components/settings/GeofenceAttendanceCard
 import SendQuietHoursCard from '@/components/settings/SendQuietHoursCard'
 import EmailCopyCard from '@/components/settings/EmailCopyCard'
 import EmailSpamFilterCard from '@/components/settings/EmailSpamFilterCard'
+import ReadFailedNote from '@/components/settings/ReadFailedNote'
 
 export const dynamic = 'force-dynamic'
 
@@ -78,9 +82,37 @@ export default async function EditLocationPage(props) {
   if (guardMasterOrOwner(user, params.id)) redirect('/')
 
   const db = createServerClient()
-  const { data: location } = await db.from('locations').select('*').eq('id', params.id).single()
+  const { data: locationRow, error: locationErr } = await db.from('locations').select('*').eq('id', params.id).single()
 
-  if (!location) notFound()
+  // REVIEWNITS.1 (D5, from CHANNELREAD.1): a failed read is not "no such
+  // location". Say so, with Try again, and render nothing that could act on
+  // the unread state. No row at all is still a 404.
+  if (locationErr && locationErr.code !== 'PGRST116') {
+    logError('settings/locations/[id]', 'location read failed', { locationId: params.id, err: locationErr.message })
+    return (
+      <div className="p-8 max-w-3xl">
+        <h2 className="text-2xl font-bold mb-4">Edit Location</h2>
+        <ReadFailedNote what="this location" href={`/settings/locations/${params.id}`} />
+      </div>
+    )
+  }
+  if (!locationRow) notFound()
+
+  // ACDEVLOC.1 — every component below is a CLIENT component, so whatever
+  // `location` holds is serialised into this page's HTML. This PROP no longer
+  // carries the Sensibo key or ThinQ PAT: the AC tab gets has_sensibo_key /
+  // has_thinq_pat and saves through the masked
+  // PUT /api/locations/[id]/integrations/ac.
+  //
+  // The `user` prop no longer carries them either (SECFIX.3a):
+  // getCurrentUser() loads only USER_LOCATION_COLUMNS: the client identity,
+  // no `settings` and no credential column (SECFIX.3a, PROFILESPREAD.1).
+  // SECFIX.3b: this `location` prop masks every other credential too (the
+  // Glofox and UniFi ones in `settings`), keeping presence only. Those tabs
+  // start their secret inputs blank and save through the masked
+  // PUT /api/locations/[id]/integrations/[provider]. bca_config (no
+  // credential) crosses as stored; see src/lib/location-client-shape.js.
+  const location = toClientLocation(locationRow)
 
   // This location's OWN organisation (mig 079) — powers the read-only org
   // line in LocationForm and the org-level branding defaults above the
@@ -93,7 +125,7 @@ export default async function EditLocationPage(props) {
   //
   // Pull the Xero connection row (if any) and a sample car for the BCA
   // template preview. Both feed into LocationIntegrations.
-  const [{ data: org }, { data: xeroConnection }, { data: sampleBcaCar }] = await Promise.all([
+  const [{ data: org }, { data: xeroConnection, error: xeroErr }, { data: sampleBcaCar }] = await Promise.all([
     location.organization_id
       ? db.from('organizations').select('*').eq('id', location.organization_id).maybeSingle()
       : Promise.resolve({ data: null }),
@@ -119,6 +151,11 @@ export default async function EditLocationPage(props) {
           .maybeSingle()
       : Promise.resolve({ data: null }),
   ])
+
+  // CHANNELREAD.1 — a failed xero_connections read is not "not connected":
+  // the Xero tab would offer Connect (an OAuth rebind) over a live
+  // connection. The tab renders "Could not load" instead.
+  if (xeroErr) logError('location-settings', 'xero_connections read failed', { locationId: location.id, err: xeroErr.message })
 
   // Build the visible tab list. Features is master-only (per the mig 092
   // audit it's a master knob); Deposits only shows when car_processing is
@@ -273,7 +310,12 @@ export default async function EditLocationPage(props) {
             <ImageIcon size={16} className="text-un1t-subtle" />
             <h3 className="text-lg font-semibold">Branding</h3>
           </div>
-          <OrgBrandingSettings orgId={location.organization_id} orgName={org?.name} />
+          {/* C18 ORGROLE.1 — organisation branding is for organisation admins of
+              this studio's org (the /api/settings/org-branding rule); a studio
+              owner keeps the studio branding below. */}
+          {isOrgAdmin(user, location.organization_id) && (
+            <OrgBrandingSettings orgId={location.organization_id} orgName={org?.name} />
+          )}
           <BrandingSettings user={user} locationId={location.id} />
         </section>
       )}
@@ -338,13 +380,14 @@ export default async function EditLocationPage(props) {
         </section>
       )}
 
-      {/* Tabbed Integrations — Xero / Glofox / Twilio / UniFi / Sensibo /
+      {/* Tabbed Integrations — Xero / Glofox / UniFi / Sensibo /
           BCA / WhatsApp. Keeps its own ?tab= sub-strip; each tab is
           visible only when its feature is on at this location. */}
       {active === 'integrations' && (
         <LocationIntegrations
           location={location}
           xeroConnection={xeroConnection || null}
+          xeroReadFailed={Boolean(xeroErr)}
           user={user}
           sampleBcaCar={sampleBcaCar || null}
         />

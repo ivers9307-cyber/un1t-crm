@@ -16,20 +16,27 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
+import { stripComments } from './helpers/js-code.js'
 import { dublinTodayStr } from '../src/lib/dublin-time.js'
 
 const PAGE = path.resolve(import.meta.dirname, '../src/app/dashboard/today/page.js')
 const source = readFileSync(PAGE, 'utf8')
 
 // Comments explain the defect by name; they must not count as the defect.
-// Whole-line `//` comments go FIRST: one of them contains a glob
-// ("providers/*.js"), and stripping block comments first would read that as an
-// opening `/*` and swallow a third of the file.
-const code = source
-  .replace(/^\s*\/\/.*$/gm, '')
-  .replace(/\/\*[\s\S]*?\*\//g, '')
+// They are blanked by the TypeScript parser's comment ranges
+// (tests/helpers/js-code.js), never a regex: one comment contains a glob
+// ("providers/*.js") that a block-comment regex reads as an opening `/*`,
+// swallowing a third of the file (GUARDSTRIP.1).
+const code = stripComments(source)
 
 describe('/dashboard/today — "today" is a Dublin day', () => {
+  it('the comment blanking keeps every line of code (GUARDSTRIP.1)', () => {
+    const lines = (s) => s.split('\n').filter((l) => /\S/.test(l)).length
+    expect(code).toHaveLength(source.length)
+    expect(code).toMatch(/export default/)
+    expect(lines(stripComments('// see providers/*.js\nconst a = 1\n/* x */\n'))).toBe(1)
+  })
+
   it('imports and calls dublinTodayStr()', () => {
     expect(code).toMatch(/import\s*\{[^}]*\bdublinTodayStr\b[^}]*\}\s*from\s*['"]@\/lib\/dublin-time['"]/)
     expect(code).toMatch(/dublinTodayStr\(\)/)
@@ -51,6 +58,13 @@ describe('/dashboard/today — "today" is a Dublin day', () => {
     expect(code).toMatch(/todayIso=\{todayIso\}/)
     // Exactly one call site, so the two cannot drift or straddle midnight.
     expect(code.match(/dublinTodayStr\(\)/g)).toHaveLength(1)
+  })
+
+  // A4 REVENUEMTD.1 — fetchPersonalDashboardData runs HERE on the server (UTC),
+  // so from 00:00 to 01:00 Dublin on a Monday in summer its "This week" was
+  // last week while the grid above highlighted Dublin's Monday. Same today.
+  it('hands the same Dublin today to fetchPersonalDashboardData', () => {
+    expect(code).toMatch(/fetchPersonalDashboardData\(\s*db\s*,\s*user\.id\s*,\s*user\.activeLocation\?\.id\s*,\s*\{\s*todayIso\s*\}\s*\)/)
   })
 
   it('dublinTodayStr really answers a Dublin calendar day', () => {

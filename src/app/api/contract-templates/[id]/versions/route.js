@@ -1,6 +1,6 @@
 // /api/contract-templates/[id]/versions
 //   GET   list archived body/variables snapshots for one template,
-//         newest version first (master / owner of the template's org)
+//         newest version first (master / org admin of the template's org)
 //
 // CONTRACTS-TPLVER.1 (mig 446): PATCH /api/contract-templates/[id]
 // archives the pre-overwrite row into contract_template_versions
@@ -16,18 +16,18 @@
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getOwnerOrganizationIds } from '@/lib/auth'
+import { getCurrentUser } from '@/lib/auth'
+import { adminOrganizationIds } from '@/lib/org-admin'
+import { canManageContractsSomewhere } from '@/lib/contract-gates'
 
 export const runtime = 'nodejs'
 
-// Master, the owner role, or any caller who owns at least one org.
-// Mirrors canManageTemplates() in ../route.js — kept as a local copy
-// (matches the sibling-subresource convention elsewhere, e.g.
-// /api/races/[id]/teams's local loadRaceForAccess()) rather than a
-// cross-route import.
+// C18 ORGROLE.1 — contract templates are an organisation-level surface:
+// master, or an org admin of SOME organisation (an org_admin grant; a studio
+// owner is not one). The org filter below (adminOrganizationIds) does the
+// real per-row work.
 function canManageTemplates(user) {
-  return user?.role === 'master' || user?.role === 'owner'
-    || getOwnerOrganizationIds(user).length > 0
+  return canManageContractsSomewhere(user)
 }
 
 export async function GET(_request, props) {
@@ -35,7 +35,7 @@ export async function GET(_request, props) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   if (!canManageTemplates(user)) {
-    return NextResponse.json({ success: false, error: 'Master or owner only' }, { status: 403 })
+    return NextResponse.json({ success: false, error: 'Master or organisation admin only' }, { status: 403 })
   }
 
   const db = createServerClient()
@@ -46,13 +46,13 @@ export async function GET(_request, props) {
   if (!user.isMaster) {
     // Org scoping (mirrors the parent template GET). NULL
     // organization_id never matches `.in`, so unanchored templates
-    // 404 for non-masters. An owner of no org can match nothing —
+    // 404 for non-masters. An admin of no org can match nothing —
     // 404 without querying.
-    const ownerOrgIds = getOwnerOrganizationIds(user)
-    if (ownerOrgIds.length === 0) {
+    const adminOrgIds = adminOrganizationIds(user)
+    if (adminOrgIds.length === 0) {
       return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
     }
-    templateQuery = templateQuery.in('organization_id', ownerOrgIds)
+    templateQuery = templateQuery.in('organization_id', adminOrgIds)
   }
   const { data: template, error: templateErr } = await templateQuery.maybeSingle()
   if (templateErr) return NextResponse.json({ success: false, error: templateErr.message }, { status: 500 })

@@ -4,12 +4,17 @@
 // full-screen surfaces — the template editors under (editors)/templates/
 // email|whatsapp — share this gate without inheriting the chrome.
 //
-// hasPermission() honours the location feature gate (mig 032), so
-// disabling a channel at a location's settings closes the whole tree.
+// GATES-2 — this is the COARSE gate: email, whatsapp or email_inbox at SOME
+// studio (src/lib/communications-access.js). It decided at the ACTIVE studio,
+// which bounced pages that judge a record's studio (sent/[channel]/[id], the
+// template editors, Mail across studios) before they ran. Every page carries
+// its own decision; the ones about the active studio keep this layout's old
+// rule (canUseCommunicationsHere). The feature gate (mig 032) still applies
+// per studio inside each permission check.
 
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { canUseCommunicationsSomewhere } from '@/lib/communications-access'
 import { staffTabMetadata } from '@/lib/staff-tab-title'
 
 export const dynamic = 'force-dynamic'
@@ -26,15 +31,9 @@ export default async function CommunicationsLayout({ children }) {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
 
-  const canEmail = hasPermission(user, 'email')
-  const canWhatsapp = hasPermission(user, 'whatsapp')
-  const canSms = hasPermission(user, 'sms')
-  // EMAIL-TICKET.4 — the email surface lives at /communications/mail and is
-  // gated on `email_inbox`, a DIFFERENT key from the marketing `email` one.
-  // Without it in this OR, someone granted only the ticket surface gets
-  // bounced off their own page by this layout before it ever renders.
-  const canEmailInbox = hasPermission(user, 'email_inbox')
-  if (!canEmail && !canWhatsapp && !canSms && !canEmailInbox) redirect('/')
+  // EMAIL-TICKET.4 — `email_inbox` (Mail) is in the set, a DIFFERENT key
+  // from the marketing `email` one.
+  if (!canUseCommunicationsSomewhere(user)) redirect('/')
 
   return children
 }

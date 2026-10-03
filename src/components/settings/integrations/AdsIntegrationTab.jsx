@@ -12,8 +12,9 @@
 //       (endpoint lands in a later task; a 404/400 here is expected
 //       and just surfaces as an error string, not a crash)
 //
-// Tokens are never echoed in plain: the GET response has them masked
-// (`••••••••ttok`) plus a `has_access_token` boolean. We only send a
+// Tokens are never echoed: the GET returns a fixed mask (no character
+// of the token; N8NECHO.1) plus a `has_access_token` boolean, and the
+// field's placeholder says "Saved (hidden)" or "Not set". We only send a
 // fresh `access_token` in the PUT when the operator actually typed a
 // new value (tracked per-card via `tokenEdited`) — the server ignores
 // a re-submitted mask anyway (`isFreshSecret`), but there's no reason
@@ -23,6 +24,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { AlertCircle, Check, Loader2, Plug, Save } from 'lucide-react'
 import { Field } from '@/components/ui'
+import ReadFailedNote from '@/components/settings/ReadFailedNote'
 
 const PROVIDERS = [
   { key: 'meta', label: 'Meta (Facebook & Instagram)', comingSoon: false },
@@ -35,23 +37,29 @@ const PROVIDERS = [
 // unchanged (router.refresh() re-runs the tab's server data + status dots).
 export default function AdsIntegrationTab({ location, canEdit, onChanged }) {
   const router = useRouter()
-  const [rows, setRows] = useState({}) // provider -> masked row (or null)
+  // CHANNELREAD.1 — `rows` is null until a read SUCCEEDS, and a failed read
+  // puts it back to null. null renders ReadFailedNote and no form: the old
+  // code rendered every provider form with row=null (Account ID blank,
+  // Active off) under a red banner, so a Save could deactivate a live account.
+  const [rows, setRows] = useState(null) // provider -> masked row, or null = not read
   const [recipients, setRecipients] = useState('')
+  // METADATASET.1 — { dataset_id, has_token } as the GET last answered.
+  const [conversions, setConversions] = useState({ dataset_id: '', has_token: false })
   const [loading, setLoading] = useState(true)
-  const [loadError, setLoadError] = useState(null)
 
-  async function load() {
-    setLoading(true); setLoadError(null)
+  async function load({ silent = false } = {}) {
+    if (!silent) setLoading(true)
     try {
       const res = await fetch(`/api/settings/ads?locationId=${location.id}`, { credentials: 'same-origin' })
       const j = await res.json().catch(() => ({}))
-      if (!j.success) throw new Error(j.error || 'Failed to load ad accounts')
+      if (!res.ok || !j.success || !Array.isArray(j.data)) throw new Error(j.error || 'Failed to load ad accounts')
       const byProvider = {}
-      for (const row of j.data || []) byProvider[row.provider] = row
+      for (const row of j.data) byProvider[row.provider] = row
       setRows(byProvider)
       setRecipients((j.report_recipients || []).join(', '))
-    } catch (e) {
-      setLoadError(e.message)
+      setConversions({ dataset_id: j.conversions?.dataset_id || '', has_token: j.conversions?.has_token === true })
+    } catch {
+      setRows(null)
     } finally {
       setLoading(false)
     }
@@ -66,16 +74,12 @@ export default function AdsIntegrationTab({ location, canEdit, onChanged }) {
         stored server-side and never shown in full once saved.
       </p>
 
-      {loadError && (
-        <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-xs rounded-md p-2 flex items-start gap-2">
-          <AlertCircle size={12} className="mt-0.5" /> {loadError}
-        </div>
-      )}
-
       {loading ? (
         <div className="text-xs text-un1t-subtle inline-flex items-center gap-2">
           <Loader2 size={12} className="animate-spin" /> Loading…
         </div>
+      ) : rows === null ? (
+        <ReadFailedNote what="this location's ad accounts" onRetry={() => load({ silent: true })} />
       ) : (
         <div className="space-y-4">
           <ReportRecipientsSection
@@ -83,6 +87,13 @@ export default function AdsIntegrationTab({ location, canEdit, onChanged }) {
             recipients={recipients}
             setRecipients={setRecipients}
             canEdit={canEdit}
+          />
+
+          <ConversionsSection
+            locationId={location.id}
+            conversions={conversions}
+            canEdit={canEdit}
+            onSaved={setConversions}
           />
 
           {PROVIDERS.map((p) => (
@@ -102,6 +113,120 @@ export default function AdsIntegrationTab({ location, canEdit, onChanged }) {
             />
           ))}
         </div>
+      )}
+    </div>
+  )
+}
+
+// METADATASET.1 — where this location's website events (a booking made on its
+// landing page) are reported to Meta. The token is write-only: the field is
+// always blank and a blank save keeps whatever is stored.
+function ConversionsSection({ locationId, conversions, canEdit, onSaved }) {
+  const [datasetId, setDatasetId] = useState(conversions.dataset_id || '')
+  const [token, setToken] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState(null)
+  const [savedAt, setSavedAt] = useState(null)
+
+  async function save() {
+    setSaving(true); setError(null); setSavedAt(null)
+    try {
+      const payload = { dataset_id: datasetId.trim() }
+      if (token.trim()) payload.capi_access_token = token.trim()
+      const res = await fetch('/api/settings/ads', {
+        method: 'PUT',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ locationId, conversions: payload }),
+      })
+      const j = await res.json().catch(() => ({}))
+      if (!j.success) throw new Error(j.error || 'Failed to save')
+      setDatasetId(j.conversions?.dataset_id || '')
+      setToken('')
+      onSaved({ dataset_id: j.conversions?.dataset_id || '', has_token: j.conversions?.has_token === true })
+      setSavedAt(new Date())
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="bg-un1t-bg border border-un1t-border rounded-md p-3 space-y-3">
+      <h4 className="text-sm font-semibold text-un1t-text">Website conversions (Meta dataset)</h4>
+      <p className="text-[11px] text-un1t-muted">
+        When someone books or leaves their details on this studio&apos;s landing page, the CRM tells Meta so ads can
+        optimise for leads. Enter the dataset (pixel) ID from Meta Events Manager. Leave the ID blank to send nothing.
+      </p>
+
+      {!canEdit ? (
+        <div className="text-xs text-un1t-subtle">
+          Ads integration settings are owner/master-only.
+        </div>
+      ) : (
+        <>
+          <Field id="conversions-dataset-id" label="Dataset ID">
+            {(props) => (
+              <input
+                {...props}
+                type="text"
+                inputMode="numeric"
+                value={datasetId}
+                onChange={(e) => setDatasetId(e.target.value)}
+                disabled={saving}
+                placeholder="e.g. 1234567890123456"
+                className="w-full bg-un1t-surface border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text disabled:opacity-50"
+              />
+            )}
+          </Field>
+
+          <Field
+            id="conversions-access-token"
+            label="Dataset access token"
+            hint={conversions.has_token
+              ? 'Leave blank to keep the current token.'
+              : 'In Events Manager: the dataset, Settings, Conversions API, Generate access token. If left blank, this studio\'s WhatsApp number token is used.'}
+          >
+            {(props) => (
+              <input
+                {...props}
+                type="password"
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                disabled={saving}
+                placeholder={conversions.has_token ? 'Saved (hidden)' : 'Not set'}
+                autoComplete="off"
+                className="w-full bg-un1t-surface border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text disabled:opacity-50"
+              />
+            )}
+          </Field>
+
+          {error && (
+            <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-xs rounded-md p-2 flex items-start gap-2">
+              <AlertCircle size={12} className="mt-0.5" /> {error}
+            </div>
+          )}
+          {savedAt && !error && (
+            <div className="bg-green-500/10 border border-green-500/30 text-green-700 text-xs rounded-md p-2 inline-flex items-center gap-2">
+              <Check size={12} /> Saved at {savedAt.toLocaleTimeString()}
+            </div>
+          )}
+
+          <div className="flex justify-end pt-2 border-t border-un1t-border/40">
+            <button
+              type="button"
+              onClick={save}
+              disabled={saving}
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-un1t-text text-un1t-bg text-sm font-semibold hover:bg-un1t-accent disabled:opacity-50"
+            >
+              {saving
+                ? <><Loader2 size={12} className="animate-spin" /> Saving…</>
+                : <><Save size={12} /> Save</>
+              }
+            </button>
+          </div>
+        </>
       )}
     </div>
   )
@@ -251,7 +376,7 @@ function ProviderCard({ locationId, provider, label, comingSoon, row, canEdit, o
     }
   }
 
-  const tokenPlaceholder = row?.has_access_token ? row.access_token : 'Not set'
+  const tokenPlaceholder = row?.has_access_token ? 'Saved (hidden)' : 'Not set'
 
   return (
     <div className="bg-un1t-bg border border-un1t-border rounded-md p-3 space-y-3">

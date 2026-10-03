@@ -11,7 +11,7 @@ import { z } from 'zod'
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { validateAudienceFilter, InvalidAudienceFilterError } from '@/lib/audience-filter'
@@ -49,7 +49,7 @@ export async function POST(request) {
 
   const guard = assertLocationAccess(user, location_id)
   if (guard) return guard
-  if (!hasPermission(user, 'email')) {
+  if (!hasPermissionForLocation(user, location_id, 'email')) {
     return NextResponse.json({ success: false, error: 'No email permission at this location' }, { status: 403 })
   }
   if (action === 'schedule' && !scheduled_at) {

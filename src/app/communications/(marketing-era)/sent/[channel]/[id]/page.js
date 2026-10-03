@@ -1,6 +1,7 @@
 // /communications/sent/[channel]/[id] — the ONE detail route for every send.
 //
-// COMMS-IA.1. The Sends table used to exit into three unrelated chromes:
+// COMMS-IA.1. The Sends table used to exit into three unrelated chromes
+// (SMS left with Twilio in TWILIO-RETIRE.1; an sms/<id> URL is now a 404):
 //
 //   SMS       /communications/sms/broadcasts/[id]   in the Communications shell
 //   WhatsApp  /whatsapp/broadcasts/[id]             bare, outside the shell
@@ -12,10 +13,10 @@
 // strip, and its auth gate) wraps every one of them and SendDetailHeader gives
 // them a single header and back-link.
 //
-// The BODIES stay per-channel — an SMS broadcast, a WhatsApp drip and an email
-// campaign report genuinely different things — so this file is a dispatcher:
-// auth, channel validation, the per-channel permission gate, then the loader
-// for that channel. All three loaders live in this file rather than in sibling
+// The BODIES stay per-channel — a WhatsApp drip and an email campaign report
+// genuinely different things — so this file is a dispatcher: auth, channel
+// validation, the per-channel permission gate, then the loader for that
+// channel. Both loaders live in this file rather than in sibling
 // modules on purpose: check:location-scoping reads tenant scoping as
 // FILE-LEVEL evidence (`assertLocationAccess(` anywhere in the page), so
 // splitting them would move the guards out of the scanner's view.
@@ -28,8 +29,7 @@
 import { notFound, redirect } from 'next/navigation'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
-import { overlayConnections } from '@/lib/connection-registry'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { dripWindowStatus } from '@/lib/whatsapp-drip'
 import { loadCampaignRecipientStats, campaignDisplayStats } from '@/lib/campaign-display-stats'
 import { isCampaignContentEditable } from '@/lib/campaign-editability'
@@ -38,7 +38,6 @@ import {
   countWhatsappSentToday,
   whatsappBroadcastDisplayStats,
 } from '@/lib/whatsapp-broadcast-stats'
-import SMSBroadcastEditor from '@/components/SMSBroadcastEditor'
 import WABroadcastEditor from '@/components/WABroadcastEditor'
 import CampaignDetail from '@/components/CampaignDetail'
 import CampaignEditor from '@/components/CampaignEditor'
@@ -48,7 +47,7 @@ export const dynamic = 'force-dynamic'
 // Channel → the permission that gates it. Same keys /communications/sent uses
 // to decide whether a channel's rows appear in the list at all, so a row you
 // can see is a row you can open and nothing else is reachable by typing a URL.
-const CHANNEL_PERMISSION = { sms: 'sms', whatsapp: 'whatsapp', email: 'email' }
+const CHANNEL_PERMISSION = { whatsapp: 'whatsapp', email: 'email' }
 
 export default async function SendDetailPage(props) {
   const params = await props.params
@@ -62,56 +61,21 @@ export default async function SendDetailPage(props) {
 
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  if (!hasPermission(user, permission)) redirect('/communications')
+  // PAGEGATES.1 — coarse pre-check only; each renderer decides the channel
+  // permission at the row's own location, as the send routes do.
+  if (!hasPermissionAtAnyLocation(user, permission)) redirect('/communications')
 
   const db = createServerClient()
 
-  if (channel === 'sms') return renderSms(db, user, id)
   if (channel === 'whatsapp') return renderWhatsapp(db, user, id)
   return renderEmail(db, user, id, searchParams)
 }
 
-// ── SMS ────────────────────────────────────────────────────────────
-async function renderSms(db, user, id) {
-  const { data: broadcast } = await db
-    .from('sms_broadcasts')
-    .select('*, locations:location_id(id, name, twilio_alpha_sender_id)')
-    .eq('id', id)
-    .single()
-
-  // IDOR — 404 (not 403) so foreign ids aren't enumerable. This is a change
-  // from the old /communications/sms/broadcasts/[id], which redirected to the
-  // retired list on a foreign id and so confirmed the row existed; the two
-  // sibling channels already did the right thing.
-  if (!broadcast || assertLocationAccess(user, broadcast.location_id)) notFound()
-
-  // INTEG-A2 dual-read: registry twilio_sender row first (sender preview
-  // matches what sendBroadcast will actually use).
-  if (broadcast.locations) {
-    broadcast.locations = await overlayConnections(db, broadcast.locations, ['twilio_sender'])
-  }
-
-  // COMMS-DETAIL-FIX.5 — the contact join. Without it the recipients list had
-  // nothing but contact_id and rendered a truncated UUID for every row, while
-  // the email and WhatsApp lists both showed a person. `sms_broadcast_recipients`
-  // has exactly one FK to contacts, so the bare embed is unambiguous (the
-  // PGRST201 trap needs ≥2).
-  const { data: recipients } = await db
-    .from('sms_broadcast_recipients')
-    .select('id, contact_id, status, twilio_message_sid, error_message, sent_at, failed_at, contacts(name, phone)')
-    .eq('broadcast_id', id)
-    .order('created_at', { ascending: false })
-    .limit(500)
-
-  return (
-    <SMSBroadcastEditor
-      broadcast={broadcast}
-      recipients={recipients || []}
-      locationId={broadcast.location_id}
-      locationSenderId={broadcast.locations?.twilio_alpha_sender_id}
-      userId={user.id}
-    />
-  )
+// PAGEGATES.1 — membership 404s (as before); the channel permission is
+// judged at the row's location, the one its send route judges at.
+function gateRow(user, row, permission) {
+  if (!row || assertLocationAccess(user, row.location_id)) notFound()
+  if (!hasPermissionForLocation(user, row.location_id, permission)) redirect('/communications')
 }
 
 // ── WhatsApp ───────────────────────────────────────────────────────
@@ -124,11 +88,12 @@ async function renderWhatsapp(db, user, id) {
   // IDOR guard — a broadcast (and its recipients' names/numbers) must belong to
   // a location the user can access. 404 (not 403) so foreign ids aren't
   // enumerable.
-  if (!broadcast || assertLocationAccess(user, broadcast.location_id)) notFound()
+  gateRow(user, broadcast, 'whatsapp')
 
+  // PAGEGATES.1 — the broadcast's own studio's templates, not the active one's.
   const { data: templates } = await db.from('whatsapp_templates')
     .select('*')
-    .eq('location_id', user.activeLocation?.id)
+    .eq('location_id', broadcast.location_id)
     .eq('status', 'APPROVED')
     .order('name')
 
@@ -173,7 +138,7 @@ async function renderWhatsapp(db, user, id) {
     <WABroadcastEditor
       broadcast={broadcast}
       templates={templates || []}
-      locationId={user.activeLocation?.id}
+      locationId={broadcast.location_id}
       userId={user.id}
       failedRecipients={failedRecipients || []}
       stats={stats}
@@ -193,16 +158,18 @@ async function renderEmail(db, user, id, searchParams) {
   // user can access. 404 (not 403) so foreign ids aren't enumerable. Must run
   // BEFORE the draft/edit branch below, or a foreign draft would open in the
   // editor.
-  if (!campaign || assertLocationAccess(user, campaign.location_id)) notFound()
+  gateRow(user, campaign, 'email')
 
   // CAMPAIGN.4 — drafts (and any URL with ?edit=1) open in the editor.
   //
   // CAMPHIST.1 — but ONLY while the campaign's content may still change.
   // `?edit=1` used to open the full editor on any status, including 'sent'.
-  // That is not a cosmetic problem: CampaignEditor saves by writing the
-  // `campaigns` row directly from the browser Supabase client, so the 409
-  // guard on PUT /api/campaigns/[id] never runs and the mig 014 RLS policy
-  // (FOR ALL, no status predicate) permits it. The campaign's recipients,
+  // That is not a cosmetic problem: CampaignEditor then saved by writing the
+  // `campaigns` row directly from the browser Supabase client, so no route's
+  // 409 ran and the mig 014 RLS policy (FOR ALL, no status predicate)
+  // permitted it (since MEMBERWRITESWEEP.1e it saves through
+  // PUT /api/communications/campaigns/[id], which refuses a locked campaign,
+  // and mig 684 closes the table to clients). The campaign's recipients,
   // opens, clicks and monthly rollups then describe an email nobody was sent,
   // with no copy of the real one anywhere. Reuse goes through
   // POST /api/campaigns/[id]/duplicate instead.
@@ -262,7 +229,7 @@ async function renderEmail(db, user, id, searchParams) {
       abStats={abStats}
       resendChild={resendChild}
       resendParent={resendParent}
-      locationId={user.activeLocation?.id}
+      locationId={campaign.location_id}
       userId={user.id}
     />
   )

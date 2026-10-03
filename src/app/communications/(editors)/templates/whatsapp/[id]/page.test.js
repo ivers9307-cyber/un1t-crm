@@ -23,6 +23,13 @@ vi.mock('@/lib/auth', () => ({
   },
 }))
 
+// GATES-2 — the page's area gate (the old layout rule, now per page) is
+// covered by tests/communications-pages-gate.test.js; these role-only fixtures
+// carry no per-location permission data, so it passes here.
+vi.mock('@/lib/communications-access', () => ({
+  canUseCommunicationsHere: () => true,
+  canUseCommunicationsForRecord: () => true,
+}))
 vi.mock('@/lib/supabase', () => ({
   createServerClient: vi.fn(),
 }))
@@ -48,6 +55,7 @@ import EditWATemplatePage from './page.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { notFound } from 'next/navigation'
+import { LOC_A, LOC_B, person, MASTER } from '../../../../../../../tests/helpers/owner-at-location-callers.js'
 
 // The page hits two tables: whatsapp_templates (fetch-by-id → single) and
 // whatsapp_template_events (history list → order → limit). Dispatch on the
@@ -131,5 +139,48 @@ describe('/communications/templates/whatsapp/[id] page', () => {
     const el = await EditWATemplatePage(props())
     expect(el).toBeTruthy()
     expect(notFound).not.toHaveBeenCalled()
+  })
+})
+
+// WATPLROLE.1 — resubmit, edit and delete decide MANAGER_ROLES at the
+// TEMPLATE's location, so the editor's canManage is judged there too, never
+// on the active studio's role.
+describe('/communications/templates/whatsapp/[id] — canManage at the template\'s location (WATPLROLE.1)', () => {
+  it.each([
+    ['a manager there: can manage', person({ [LOC_B]: 'manager' }, LOC_B), true],
+    ['a head coach there: can manage', person({ [LOC_B]: 'head_coach' }, LOC_B), true],
+    ['staff at the active studio, manager at the template\'s: can manage', person({ [LOC_A]: 'staff', [LOC_B]: 'manager' }, LOC_A), true],
+    ['a master: can manage', MASTER, true],
+    ['staff there: cannot', person({ [LOC_B]: 'staff' }, LOC_B), false],
+    ['a manager at the active studio who is staff at the template\'s: cannot', person({ [LOC_A]: 'manager', [LOC_B]: 'staff' }, LOC_A), false],
+    // GATES-3 (b) — the routes also ask `whatsapp` at the template's studio.
+    ['a manager there with WhatsApp switched off for them there: cannot', {
+      ...person({ [LOC_A]: 'manager', [LOC_B]: 'manager' }, LOC_A),
+      assignmentsByLocation: {
+        [LOC_A]: { role: 'manager', permissions: {} },
+        [LOC_B]: { role: 'manager', permissions: { whatsapp: false } },
+      },
+    }, false],
+  ])('%s', async (_label, caller, expected) => {
+    getCurrentUser.mockResolvedValue(caller)
+    createServerClient.mockReturnValue(mockDb({ template: { id: 'wa-tpl-1', location_id: LOC_B } }))
+    const el = await EditWATemplatePage(props())
+    expect(el.props.canManage).toBe(expected)
+  })
+})
+
+// WATPLPUT.1 — the editor gets the TEMPLATE's location, never the active
+// studio's: it loads group suggestions and signs header-media uploads (with
+// that location's own WhatsApp number) from it.
+describe('/communications/templates/whatsapp/[id] — the editor works at the template\'s location (WATPLPUT.1)', () => {
+  it.each([
+    ['active studio is another one', person({ [LOC_A]: 'manager', [LOC_B]: 'manager' }, LOC_A)],
+    ['active studio is the template\'s', person({ [LOC_B]: 'manager' }, LOC_B)],
+    ['a master with another active studio', MASTER],
+  ])('%s: locationId is the template\'s', async (_label, caller) => {
+    getCurrentUser.mockResolvedValue(caller)
+    createServerClient.mockReturnValue(mockDb({ template: { id: 'wa-tpl-1', location_id: LOC_B } }))
+    const el = await EditWATemplatePage(props())
+    expect(el.props.locationId).toBe(LOC_B)
   })
 })

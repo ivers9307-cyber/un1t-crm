@@ -215,7 +215,9 @@ export function deliveryChannel(pushSent, emailsSent) {
  * `notifyUsers` under the `schedule` category, which since PUBNOTIFY.1 has an
  * email fallback too, so a coach with no push token is emailed rather than
  * silently skipped. Every collected row is stamped notified regardless of
- * delivery, so there is no later retry beyond this call.
+ * delivery, so there is no later retry beyond this call — EXCEPT when a read
+ * inside notifyUsers failed (C16 PUSHREADERR.1) or it threw: then nothing is
+ * stamped and the next publish tries again.
  *
  * A collected change row's block_date can be in the past by the time this
  * runs (an old, never-notified row, or a re-publish of a period that has
@@ -244,16 +246,32 @@ export async function renotifyChangedCoaches(db, { locationId, periodStart, peri
     const changes = await collectUnnotifiedChanges(db, { locationId, periodStart, periodEnd })
     const futureChanges = changes.filter((c) => c.block_date >= today)
     const coachIds = distinctCoachIds(futureChanges)
+    let totals = null
     if (coachIds.length > 0) {
       const body = periodStart === periodEnd
         ? `Your shifts for ${formatShiftDate(periodStart)} have been updated.`
         : `Your shifts between ${formatShiftDate(periodStart)} and ${formatShiftDate(periodEnd)} have been updated.`
-      await notifyUsers(coachIds, {
+      totals = await notifyUsers(coachIds, {
         title: 'Roster updated',
         body,
         category: 'schedule',
         data: { type: 'schedule_updated', start_date: periodStart, end_date: periodEnd, location_id: locationId },
       })
+    }
+    // C16 PUSHREADERR.1 — a read inside notifyUsers failed AND somebody was
+    // left untold by it (counted in `failed` / `email_failed`). This is the
+    // final attempt for these rows, so stamping them now would lose the notice
+    // for good: leave them for the next publish, as a throw (below) already
+    // does. A coach who WAS told may hear it again then; a duplicate beats a
+    // loss. A read that failed with nobody lost (a template read where every
+    // coach was allowed by default anyway; a fallback device read after which
+    // everyone was emailed) stamps as normal — skipping it would only buy a
+    // certain duplicate "Roster updated" on the next publish.
+    if (totals?.read_failed && ((totals.failed || 0) + (totals.email_failed || 0) > 0)) {
+      logWarn('roster-notify', 'republish change-notify hit a failed read; rows left for the next publish', {
+        locationId, coaches: coachIds.length,
+      })
+      return { notified: 0 }
     }
     await markChangesNotified(db, changes.map((c) => c.id))
     return { notified: coachIds.length }

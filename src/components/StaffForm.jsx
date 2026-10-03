@@ -64,6 +64,13 @@ export default function StaffForm({
   // Only the edit page passes these (and only for master callers).
   organizations = [],
   orgAdminOrgIds = [],
+  // STAFFFORMSETTINGS.1 (review N1) — the page's studios read failed, so
+  // `locations` is empty for a reason other than "there are none". The form
+  // still renders (never louder than before); it just says so.
+  locationsLoadFailed = false,
+  // C18 ORGROLE.1 — the staff device fleet (GET /api/staff-devices) is for
+  // organisation admins of the active org; the page decides and passes it.
+  canSeeDevices = false,
 }) {
   const isEdit = !!staff
   const router = useRouter()
@@ -120,6 +127,11 @@ export default function StaffForm({
     permissions: hydratePermissions(a.permissions, a.role, templateFor(a.location_id, a.role, targetEmploymentType)),
   }))
 
+  // STAFFPROFILEPICK.1 — every `staff.<field>` read here must be in
+  // STAFF_EDITOR_FIELDS (src/lib/staff-fields.js): the edit page selects and
+  // passes exactly that list, and tests/staff-profile-to-client.test.js
+  // fails until a new field is added there too (a field the page does not
+  // send would render as a default and be saved back over the real value).
   const [form, setForm] = useState({
     full_name: staff?.full_name || '',
     email: staff?.email || '',
@@ -202,12 +214,18 @@ export default function StaffForm({
   const addableLocations = locations
     .filter(l => callerScope.has(l.id) && !assignedIds.has(l.id))
 
+  // STAFFFORMSETTINGS.1 — computed on the server (loadStaffFormLocations,
+  // the save path's own rule: registry overlay + getLocationUnifiConfig).
+  // The form never receives a location's settings.
   function isUnifiConfigured(loc) {
-    const cfg = loc?.settings?.unifi || {}
-    return Boolean(
-      cfg.host && cfg.api_token &&
-      cfg.staff_policy_id && cfg.manager_policy_id
-    )
+    return loc?.unifi_configured === true
+  }
+
+  // ACALLOWLISTGATE.1 — AC units (Sensibo / LG ThinQ) have nothing to do with
+  // UniFi. ac_configured is computed on the server (loadStaffFormLocations:
+  // the AC control path's credential rule after the registry overlay).
+  function isAcConfigured(loc) {
+    return loc?.ac_configured === true
   }
 
   // All toggle helpers now operate on the SELECTED assignment's
@@ -488,6 +506,12 @@ export default function StaffForm({
         </div>
       )}
 
+      {locationsLoadFailed && (
+        <div role="status" className="bg-amber-500/10 border border-amber-500/30 text-amber-700 text-sm rounded-lg p-3">
+          Couldn&apos;t load studios. Reload before editing.
+        </div>
+      )}
+
       {/* Account Details */}
       <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">Account Details</h3>
@@ -604,6 +628,7 @@ export default function StaffForm({
           const loc = locations.find(l => l.id === a.location_id)
           if (!loc) return null
           const configured = isUnifiConfigured(loc)
+          const acConfigured = isAcConfigured(loc)
           const isManagerRole = a.role === 'owner' || a.role === 'manager'
           return (
             <div key={a.location_id} className="border border-un1t-border/70 rounded-lg p-4 space-y-3">
@@ -749,8 +774,10 @@ export default function StaffForm({
               {/* STUDIO-AC-DEVICES.3 / AC-ROLE.1 — per-location AC device
                   allowlist. Tri-state: null = inherit the role-template
                   (or code) default, [] = this user explicitly sees no
-                  AC, [ids] = this user sees exactly those. */}
-              {isEdit && configured && (
+                  AC, [ids] = this user sees exactly those.
+                  ACALLOWLISTGATE.1 — gated on the studio's AC set-up, not
+                  UniFi's (it used `configured`, the UniFi flag). */}
+              {isEdit && acConfigured && (
                 <AcDeviceAllowlistPicker
                   locationId={a.location_id}
                   locationName={loc.name}
@@ -1148,7 +1175,7 @@ export default function StaffForm({
       {/* STAFF-DEV.6 — which devices this person actually has, what
           version they run and whether background location is granted.
           Edit-only: a profile that doesn't exist yet has no devices. */}
-      {isEdit && staff?.id && <StaffDevicesCard profileId={staff.id} />}
+      {isEdit && staff?.id && canSeeDevices && <StaffDevicesCard profileId={staff.id} />}
 
       <button
         type="submit"

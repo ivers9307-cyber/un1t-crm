@@ -106,7 +106,7 @@ function reExportTarget(src) {
 
 // Webhooks authenticate the SENDER (HMAC / shared secret / provider
 // signature). Matches verifyMetaSignature, verifySharedSecret,
-// verifyTwilioSignature, verifyPostmarkRequest, verifyWebhookSignature,
+// verifyPostmarkRequest, verifyWebhookSignature,
 // verifyXeroSignature, verifyGlofoxSignature, verifyUnifi*Request, etc.
 const WEBHOOK_GUARD = /verify[A-Z][A-Za-z]*\(/
 
@@ -214,6 +214,30 @@ const INBOX_ROUTE_PREFIXES = [
 //                              — the exact #1266 failure mode, live again.
 const INBOX_PERMISSION_GUARDS = [
   'requireInboxPermission(',
+  // INBOXLOC.1 (C37) —
+  //   requireWhatsAppInboxAt(  src/lib/auth.js. VERIFIED: 401 with no user,
+  //                            403 with no location, otherwise 403 unless
+  //                            hasPermissionForLocation OR
+  //                            hasMobilePermissionForLocation grants
+  //                            `whatsapp` AT the location passed. The
+  //                            /api/whatsapp/conversations/[id]* handlers the
+  //                            phone calls (all but /add-contact and /agent,
+  //                            which use the web-only pair below, as does
+  //                            /start) call it with the conversation's
+  //                            location after the row is read, and
+  //                            requireWhatsAppInboxAnywhere before it.
+  'requireWhatsAppInboxAt(',
+  // INBOXWEBONLY3.1 (C119) —
+  //   requireWebWhatsAppInboxAt(  src/lib/auth.js. VERIFIED: 401 with no
+  //                               user, 403 with no location, otherwise 403
+  //                               unless hasPermissionForLocation grants the
+  //                               WEB `whatsapp` key AT the location passed.
+  //                               The web-only thread actions
+  //                               (/conversations/[id]/add-contact, /agent,
+  //                               /conversations/start) call it after the row
+  //                               is read, and requireWebWhatsAppInboxAnywhere
+  //                               before it.
+  'requireWebWhatsAppInboxAt(',
   'hasPermission(',
   'hasPermissionForLocation(',
   'loadTicketForUser(',

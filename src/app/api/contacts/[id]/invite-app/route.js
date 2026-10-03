@@ -23,7 +23,7 @@
 // don't get to invite customers — keeps the surface tight.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser, getUserLocationIds, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { logInfo, logError } from '@/lib/log'
 // URLSEAM.1 — the member app is a DIFFERENT deployment; its base is
@@ -42,7 +42,8 @@ export async function POST(_request, props) {
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   }
-  if (!user.isMaster && !ALLOWED_INVITE_ROLES.includes(user.role)) {
+  // ROLESWEEP.1c — coarse pre-check; the role is judged at the contact's location below.
+  if (!user.isMaster && !hasRoleAtAnyLocation(user, ALLOWED_INVITE_ROLES)) {
     return NextResponse.json({ success: false, error: 'Admin only' }, { status: 403 })
   }
 
@@ -74,6 +75,10 @@ export async function POST(_request, props) {
     if (!allowed) {
       return NextResponse.json({ success: false, error: 'Location not in your scope' }, { status: 403 })
     }
+  }
+  // ROLESWEEP.1c — owner/manager at the contact's location.
+  if (!user.isMaster && !hasRoleAtLocation(user, contact.location_id, ALLOWED_INVITE_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Admin only' }, { status: 403 })
   }
 
   const redirectTo = `${getMemberAppUrl()}/auth/callback`

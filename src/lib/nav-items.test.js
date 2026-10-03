@@ -59,7 +59,8 @@ describe('ALL_NAV structure', () => {
     // 19 Aug 2026 — see the entry's comment in nav-items.js).
     const pinned = ALL_NAV.filter((i) => !i.section)
     expect(pinned.map((i) => i.href)).toEqual(['/portfolio', '/dashboard', '/approvals'])
-    expect(pinned[0].masterOrOwnerOnly).toBe(true) // owner+/master only
+    expect(pinned[0].orgAdminOnly).toBe(true) // C141 ORGROLE.2: organisation admins only
+    expect(pinned[0].masterOrOwnerOnly).toBeUndefined()
     expect(pinned[1].dashboardGroup).toBe(true)
     expect(pinned[2].permission).toBe('approvals_inbox')
   })
@@ -67,7 +68,7 @@ describe('ALL_NAV structure', () => {
   it('gives every entry a label, an icon, and a visibility gate', () => {
     const gated = (i) =>
       i.openToAll || i.dashboardGroup || i.anyPermission || i.permission ||
-      i.masterOrOwnerOnly || i.masterOnly
+      i.orgAdminOnly || i.masterOnly
     for (const item of ALL_NAV) {
       expect(item.label, item.href).toBeTruthy()
       expect(item.icon, item.href).toBeTruthy()
@@ -97,10 +98,10 @@ describe('Messages hub', () => {
     expect(hrefsIn('messages')).toEqual(['/communications'])
   })
 
-  it('the Messages entry ORs all four channel permissions', () => {
+  it('the Messages entry ORs all three channel permissions (sms left with TWILIO-RETIRE.1)', () => {
     const messages = ALL_NAV.find(i => i.href === '/communications')
     expect(messages.label).toBe('Messages')
-    expect(messages.anyPermission).toEqual(['email', 'whatsapp', 'sms', 'email_inbox'])
+    expect(messages.anyPermission).toEqual(['email', 'whatsapp', 'email_inbox'])
     expect(messages.extraActivePaths).toBeUndefined()
   })
 })
@@ -176,7 +177,7 @@ describe('Marketing hub', () => {
 
   it('the Marketing hub entry ORs its member permissions and lights on the automations path', () => {
     const marketing = ALL_NAV.find(i => i.href === '/marketing')
-    expect(marketing.anyPermission).toEqual(['automations', 'email', 'whatsapp', 'device_control', 'landing_page', 'sms'])
+    expect(marketing.anyPermission).toEqual(['automations', 'email', 'whatsapp', 'device_control', 'landing_page'])
     expect(marketing.extraActivePaths).toEqual(['/automations', '/communications/send', '/communications/sent', '/communications/templates', '/communications/segments', '/communications/list-health'])
   })
 
@@ -282,7 +283,7 @@ describe('Operations hub', () => {
 describe('every hub sidebar union key reaches a real surface', () => {
   // Entries that gate on a union but are NOT redirect indexes. Messages
   // (/communications) renders a real landing page whose own layout admits
-  // all four of its union keys and whose cards are per-channel, so every
+  // all three of its union keys and whose cards are per-channel, so every
   // member of that union genuinely lands somewhere it can use.
   const RENDERED_LANDINGS = ['/communications']
 

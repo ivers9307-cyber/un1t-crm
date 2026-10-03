@@ -216,8 +216,16 @@ describe('summariseHubForLocation', () => {
     expect(summariseHubForLocation(hub, 'loc-2').attention[0].cardKey).toBe('xero')
   })
 
-  it('degrades to empty when hub assembly was skipped/failed (null)', () => {
-    expect(summariseHubForLocation(null, 'loc-1')).toEqual({ connections: [], attention: [] })
+  it('says so when hub assembly failed (null): unreadable, never "none configured" (HUBREAD.1)', () => {
+    expect(summariseHubForLocation(null, 'loc-1')).toEqual({ connections: [], attention: [], unreadable: true })
+  })
+
+  it('shows a card-level unreadable row on every location, not just the one it is pinned to', () => {
+    const withBlip = {
+      ...hub,
+      attention: [...hub.attention, { cardKey: 'xero', locationId: 'loc-1', label: 'Xero', message: 'Could not load Xero just now.', unreadable: true }],
+    }
+    expect(summariseHubForLocation(withBlip, 'loc-2').attention.map((a) => a.cardKey)).toEqual(['xero', 'xero'])
   })
 })
 

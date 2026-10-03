@@ -1,21 +1,33 @@
 // Public class listing for the /start wizard. Reuses the Glofox event fetch
 // the agent uses, but shapes each class with a structured day (YYYY-MM-DD,
 // Europe/Dublin) + HH:MM time so the UI can group by day. No auth — display-
-// safe class data only (name/time/spots), same as the agent's class list.
+// safe class data only: name and time. PUBCAP.1: NEVER a capacity figure
+// (Richard's rule: class/event capacity is never surfaced to customers — no
+// spots left, no size, no booked count, not even a "full" flag). Fullness is
+// judged on the RAW Glofox event before shaping, and a full class is simply
+// left out of the list.
 import { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, fetchUpcomingEvents } from '@/lib/glofox'
-import { getGlofoxConfig } from '@/lib/connection-registry'
+import { parseManualTimetable, manualClassOccurrences, manualTimetableConfigFromBlocks } from '@/lib/manual-timetable'
 
 const DUBLIN = 'Europe/Dublin'
 const dayFmt = new Intl.DateTimeFormat('en-CA', { timeZone: DUBLIN, year: 'numeric', month: '2-digit', day: '2-digit' })
 const timeFmt = new Intl.DateTimeFormat('en-GB', { timeZone: DUBLIN, hour: '2-digit', minute: '2-digit', hour12: false })
 const labelFmt = new Intl.DateTimeFormat('en-IE', { timeZone: DUBLIN, weekday: 'short', day: 'numeric', month: 'short' })
 
+// The ONLY keys a public class carries. tests/public-classes pin this list so
+// a new field has to be added here on purpose, never leak in via a spread.
+export const PUBLIC_CLASS_KEYS = Object.freeze(['event_id', 'name', 'starts_at', 'day', 'day_label', 'time'])
+
+// Server-side only: is this raw Glofox event full? Never sent to a client.
+export function isEventFull(e) {
+  const size = Number(e?.size) || 0
+  const booked = Number(e?.booked) || 0
+  return size > 0 && booked >= size
+}
+
 export function shapePublicClass(e) {
   const startSec = Number(e.time_start) || 0
   const ms = startSec * 1000
-  const size = Number(e.size) || 0
-  const booked = Number(e.booked) || 0
-  const spots = Math.max(0, size - booked)
   const d = new Date(ms)
   return {
     event_id: e._id || e.id,
@@ -24,15 +36,13 @@ export function shapePublicClass(e) {
     day: dayFmt.format(d),
     day_label: labelFmt.format(d),
     time: timeFmt.format(d),
-    spots_left: spots,
-    full: size > 0 && spots === 0,
   }
 }
 
 // Operator deny-list. Hide classes whose name contains any configured keyword
 // (case-insensitive), stored at locations.settings.glofox.hidden_class_keywords
 // — keeps free-trial leads out of e.g. ELITES / members-only sessions. Applied
-// inside listPublicClasses so it governs BOTH the public picker AND the booking
+// inside readPublicClasses so it governs BOTH the public picker AND the booking
 // enqueue (both go through here): a hidden class can be neither seen nor booked.
 export function parseHiddenKeywords(raw) {
   const arr = Array.isArray(raw) ? raw : typeof raw === 'string' ? raw.split(/[\n,]/) : []
@@ -44,25 +54,59 @@ export function isClassHidden(name, keywords) {
   return keywords.some((k) => n.includes(k))
 }
 
-// Resolve a location's live, bookable classes for the next `days` days.
-export async function listPublicClasses(db, locationId, days = 7) {
+/**
+ * Resolve a location's live, bookable classes for the next `days` days.
+ * Never throws.
+ * @returns {Promise<{ classes: object[], error: (string|null) }>}
+ *   error 'glofox_settings_unreadable' — the studio's Glofox settings could
+ *     not be READ (a DB blip): not "no classes", not "not configured".
+ *   error 'glofox_unreachable' — Glofox did not answer.
+ *   error 'manual_timetable_unreadable' — a studio with no Glofox whose
+ *     landing row (where its hand-written timetable lives) could not be read.
+ *   A studio with no Glofox lists the timetable written on its class_funnel
+ *   block (MANUALFUNNEL.1), or { classes: [], error: null } when it has none.
+ */
+export async function readPublicClasses(db, locationId, days = 7) {
   const creds = await glofoxCredentialsForLocation(db, locationId)
-  if (missingGlofoxCredentialsForLocation(creds).length) return []
-  let hidden = []
-  try {
-    // INTEG-A2 dual-read: registry config first, legacy settings.glofox otherwise.
-    const glofoxCfg = await getGlofoxConfig(db, locationId)
-    hidden = parseHiddenKeywords(glofoxCfg?.hidden_class_keywords)
-  } catch { /* no-op: a read failure just means no deny-list applied */ }
+  if (creds.readError) return { classes: [], error: creds.readError }
+  if (missingGlofoxCredentialsForLocation(creds).length) return readManualClasses(db, locationId, days)
+  // REGISTRYREAD.1a: the deny-list rides on the SAME read as the credentials.
+  // A second read used to fail OPEN — a blip answered {} and listed (and let
+  // the funnel book) every hidden class.
+  const hidden = parseHiddenKeywords(creds.hiddenClassKeywords)
   const start = Math.floor(Date.now() / 1000)
   const end = start + Math.min(14, Math.max(1, days)) * 86400
   const { ok, events } = await fetchUpcomingEvents(creds, { start, end, limit: 100 })
-  if (!ok || !Array.isArray(events)) return []
+  if (!ok || !Array.isArray(events)) return { classes: [], error: 'glofox_unreachable' }
   const now = Date.now()
-  return events
+  const classes = events
     .filter((e) => e && e.active !== false && e.private !== true && (Number(e.time_start) || 0) * 1000 > now)
+    .filter((e) => !isEventFull(e))
     .map(shapePublicClass)
-    .filter((c) => !c.full)
     .filter((c) => !isClassHidden(c.name, hidden))
     .sort((a, b) => a.starts_at.localeCompare(b.starts_at))
+  return { classes, error: null }
+}
+
+// MANUALFUNNEL.1 — a studio with no Glofox (Hatch Street) lists the weekly
+// timetable its operator wrote on the class_funnel block. Same shape as a
+// Glofox class, and the booking route validates against this same read, so a
+// time the operator removed can be neither seen nor requested. A landing row
+// that could not be READ is an error, never "no classes": the booking route
+// then answers timetable_unavailable and keeps what the customer typed.
+async function readManualClasses(db, locationId, days) {
+  const { data, error } = await db.from('landing_page_settings')
+    .select('blocks').eq('location_id', locationId).maybeSingle()
+  if (error) return { classes: [], error: 'manual_timetable_unreadable' }
+  const cfg = manualTimetableConfigFromBlocks(data?.blocks)
+  if (!cfg) return { classes: [], error: null }
+  const { slots } = parseManualTimetable(cfg.text)
+  const classes = manualClassOccurrences({ slots, startDate: cfg.startDate, minNoticeHours: cfg.minNoticeHours, days })
+  return { classes, error: null }
+}
+
+// Old contract ([] on any failure) for the public list route and the
+// WhatsApp Flow, where an empty screen is the honest fallback.
+export async function listPublicClasses(db, locationId, days = 7) {
+  return (await readPublicClasses(db, locationId, days)).classes
 }

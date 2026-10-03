@@ -32,8 +32,9 @@
 // support tickets, into "look at this offer" texts. Anything the token can
 // resolve is therefore readable by whoever ends up holding it. Binding a
 // contact to it turns a forwarded link into a disclosure of that person's
-// name, email, phone, pipeline stage and Glofox passcode, and hands the holder
-// their working unsubscribe capability too.
+// name, email, phone and pipeline stage, and hands the holder their working
+// unsubscribe capability too. (It also named their Glofox passcode until
+// PASSCODEREAD.1 retired {{glofox_passcode}}: passwords are no longer stored.)
 //
 // So the token names the campaign only, and the merge tags are rendered
 // against an EMPTY contact. The hosted copy is byte-identical for every
@@ -288,7 +289,7 @@ export function renderCampaignWebView(campaign, opts = {}) {
   // future fails loudly in review here instead of silently rendering.
   const anonymousContact = {
     first_name: '', last_name: '', name: '', email: '', phone: '',
-    pipeline_stage_slug: '', glofox_passcode: '',
+    pipeline_stage_slug: '',
   }
 
   const merged = applyMergeTags(html, anonymousContact, {

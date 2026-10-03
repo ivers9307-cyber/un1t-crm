@@ -24,7 +24,7 @@ import { evaluateSequenceAudience } from './audience.js'
 import {
   sendEmailStep,
   sendWhatsappStep,
-  sendSmsStep,
+  retiredSmsStep,
   applyTagStep,
   updateFieldStep,
   webhookStep,
@@ -373,7 +373,7 @@ export async function runSequences({ now = new Date() } = {}) {
   const { data: due, error: dueErr } = await db
     .from('sequence_enrollments')
     // PRESEND.1 — this column list IS the handlers' view of the enrolment: the
-    // row is handed to sendEmailStep / sendWhatsappStep / sendSmsStep verbatim
+    // row is handed to sendEmailStep / sendWhatsappStep verbatim
     // as `enrollment`. Three columns were missing and each failure was silent.
     // `source_type` is what isTransactionalEnrolment reads, so without it the
     // predicate was ALWAYS false here: DUNNING.3's transactional lane (the
@@ -515,8 +515,6 @@ export async function runSequences({ now = new Date() } = {}) {
           last_processed_at: now.toISOString(),
           next_step_at: null,
         }).eq('id', enrollment.id)
-        // supabase-js builders don't have .catch — try/catch around await.
-        try { await db.rpc('increment_sequence_completed', { p_sequence_id: sequence.id, p_delta: 1 }) } catch {}
         stats.completed++
         continue
       }
@@ -553,7 +551,9 @@ export async function runSequences({ now = new Date() } = {}) {
         const frequencyCap = await capSettingFor(sequence.location_id)
         sendId = await sendWhatsappStep(db, { enrollment, step, sequence, contact, frequencyCap })
       } else if (step.step_type === 'sms') {
-        sendId = await sendSmsStep(db, { enrollment, step, sequence, contact })
+        // RETIRED (TWILIO-RETIRE.1) — records a skip and advances, so a
+        // legacy SMS step never reaches the unknown-step throw below.
+        sendId = await retiredSmsStep(db, { step, sequence, contact })
       } else if (step.step_type === 'apply_tag') {
         // Mig 087: apply a contact_tags row. Config: { tag }.
         // No send_id since nothing went out the door.
@@ -716,8 +716,6 @@ export async function runSequences({ now = new Date() } = {}) {
       }
 
       if (newStatus === 'completed') {
-        // supabase-js builders don't have .catch — try/catch around await.
-        try { await db.rpc('increment_sequence_completed', { p_sequence_id: sequence.id, p_delta: 1 }) } catch {}
         stats.completed++
       }
       stats.sent++

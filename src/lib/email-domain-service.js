@@ -3,14 +3,14 @@
 // resolver, which must not import auth/next) — this module is imported only
 // by the /api/settings/email-domain routes, so it may pull in auth.
 //
-// It owns: org-target resolution (owner-of-org / master, cross-org 404),
+// It owns: org-target resolution (organisation admin / master, cross-org 404),
 // the raw row load (service-role — the row carries the SECRET server token,
 // callers redact via tenantEmailStatePayload before returning), and the
 // Postmark provisioning + verify orchestration (idempotent, persists ids +
 // token the moment they are minted).
 
-import { getOwnerOrganizationIds } from '@/lib/auth'
-import { logWarn } from '@/lib/log'
+import { resolveAdminOrgId } from '@/lib/org-admin'
+import { logWarn, logError } from '@/lib/log'
 import {
   createTenantServer,
   createTenantDomain,
@@ -22,23 +22,22 @@ import {
 
 /**
  * Resolve the target org for a caller (mirrors resolveBillingOrgId):
- *   - master:  any org (?organization_id, defaults to active)
- *   - owner:   orgs they own ONLY (getOwnerOrganizationIds — includes
- *              SAAS-4 org admins); a foreign organization_id resolves to
- *              { notFound: true } so ids can't be existence-probed.
- * Role gating (owner/master) is done by the route BEFORE calling this.
+ *   - master:     any org (?organization_id, defaults to active)
+ *   - org admin:  their admin orgs ONLY (org_admin grant, mig 417; C18
+ *                 ORGROLE.1 — a studio owner is not an org admin); a foreign
+ *                 organization_id resolves to { notFound: true } so ids
+ *                 can't be existence-probed; nothing to act on is
+ *                 { orgId: null }.
+ * The routes' coarse gate (isOrgAdminSomewhere) runs BEFORE calling this.
  * @returns {{ orgId?: string|null, notFound?: boolean }}
  */
 export function resolveEmailDomainOrgId(user, requested) {
-  if (user.role === 'master') {
-    return { orgId: requested || user.activeOrganization?.id || null }
-  }
-  const owned = getOwnerOrganizationIds(user)
-  const target = requested || user.activeOrganization?.id || owned[0] || null
-  if (!target) return { orgId: null }
-  if (!owned.includes(target)) return { notFound: true }
-  return { orgId: target }
+  // C18 ORGROLE.1 — organisation admins only (master or an org_admin grant).
+  return resolveAdminOrgId(user, requested)
 }
+
+// CHANNELREAD.1 — what a failed tenant_email_domains read says to operators.
+export const EMAIL_DOMAIN_READ_FAILED = 'Could not read the email domain just now, so nothing was changed. Try again.'
 
 /**
  * Load the raw tenant_email_domains row for an org (service-role client).
@@ -46,11 +45,22 @@ export function resolveEmailDomainOrgId(user, requested) {
  * tenantEmailStatePayload before returning it to a client.
  */
 export async function loadEmailDomainRow(db, orgId) {
-  const { data } = await db
+  const { data, error } = await db
     .from('tenant_email_domains')
     .select('*')
     .eq('organization_id', orgId)
     .maybeSingle()
+  // CHANNELREAD.1 — a failed read is not "no domain". Returning null here
+  // showed the set-up wizard over a provisioned domain, and made
+  // provisionEmailDomain mint a SECOND Postmark server and overwrite the
+  // stored server id + token. Callers turn the throw into a 500/502.
+  // The message is plain copy because it reaches operators: the POST route
+  // stores it as last_error and answers it in its 502. The Postgres text is
+  // logged here, structurally, and never shown.
+  if (error) {
+    logError('tenant-email-domain', 'tenant_email_domains read failed', { orgId, err: error.message })
+    throw new Error(EMAIL_DOMAIN_READ_FAILED)
+  }
   return data || null
 }
 
@@ -162,10 +172,15 @@ export async function provisionEmailDomain(db, { orgId, orgName, sendingDomain, 
  * and flip status → 'live' when both verify. IDEMPOTENT — re-running once
  * live keeps it live.
  *
- * @returns {Promise<{ row?: object, notProvisioned?: boolean, error?: string }>}
+ * @returns {Promise<{ row?: object, notProvisioned?: boolean, readFailed?: boolean, error?: string }>}
  */
 export async function verifyEmailDomain(db, orgId) {
-  const row = await loadEmailDomainRow(db, orgId)
+  let row
+  try {
+    row = await loadEmailDomainRow(db, orgId)
+  } catch (e) {
+    return { readFailed: true, error: e.message }
+  }
   if (!row?.postmark_domain_id) return { notProvisioned: true }
 
   // Best-effort re-checks: Postmark rejects these while DNS is still

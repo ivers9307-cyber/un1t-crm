@@ -19,6 +19,11 @@ vi.mock('@/lib/whatsapp', () => ({
   getTemplates: vi.fn(),
 }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+// WACONFIGFALLBACK.1 — the sync resolves the location's OWN number first
+// (route.own-number.test.js covers a location without one).
+vi.mock('@/lib/whatsapp-config', () => ({
+  getLocationWhatsAppNumberConfig: vi.fn(async () => ({ source: 'db', id: 'n1', phoneNumberId: 'PNI-SYNTH', token: 'tok-synth', businessAccountId: 'WABA-SYNTH' })),
+}))
 
 import { GET } from './route.js'
 import { getTemplates as getMetaTemplates } from '@/lib/whatsapp'

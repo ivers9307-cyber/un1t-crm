@@ -117,6 +117,18 @@ describe('findOrCreateGlofoxMember — guard clauses', () => {
     expect(out.status).toBe('failed')
     expect(out.error).toMatch(/credentials/)
   })
+
+  it('REGISTRYREAD.1a: an unreadable settings row is "could not be read — retry", not "not configured"', async () => {
+    glofoxCredentialsForLocation.mockResolvedValueOnce({ branchId: null, apiKey: null, apiToken: null, readError: 'glofox_settings_unreadable' })
+    const out = await findOrCreateGlofoxMember({
+      db: makeFakeDb(), locationId: 'loc1', source: 'dup_check',
+      contact: { id: 'c1', email: 'a@b.com' },
+    })
+    expect(out.status).toBe('failed')
+    expect(out.error).toMatch(/could not be read/)
+    expect(out.error).not.toMatch(/not configured/)
+    expect(searchGlofoxByEmail).not.toHaveBeenCalled()
+  })
 })
 
 describe('findOrCreateGlofoxMember — search-and-link (createIfMissing=false)', () => {
@@ -229,6 +241,7 @@ describe('findOrCreateGlofoxMember — create-and-trial (createIfMissing=true)',
     expect(out.status).toBe('created')
     expect(purchaseGlofoxMembership).toHaveBeenCalledWith(VALID_CREDS, 'gx-new', 'mem-trial', 999)
     expect(out.error).toBeNull()
+    expect(out.trial_failed).toBe(false)
   })
 
   it('marks needs_review when trial config missing', async () => {
@@ -245,6 +258,7 @@ describe('findOrCreateGlofoxMember — create-and-trial (createIfMissing=true)',
     expect(out.status).toBe('needs_review')
     expect(out.error).toMatch(/Trial membership not configured/)
     expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
+    expect(out.trial_failed).toBe(true)
   })
 
   it('marks needs_review when trial purchase fails', async () => {
@@ -264,6 +278,36 @@ describe('findOrCreateGlofoxMember — create-and-trial (createIfMissing=true)',
     })
     expect(out.status).toBe('needs_review')
     expect(out.error).toMatch(/Glofox 422/)
+    // TRIALGRANT.1 — the processor files needs_credit_grant on this, not
+    // account_needs_review.
+    expect(out.trial_failed).toBe(true)
+    // A refusal Glofox answered is a known outcome: the card may buy again.
+    expect(out.trial_outcome_unknown).toBeUndefined()
+  })
+
+  it('a trial purchase with no clear answer (a 5xx) says it may have gone through (GLOFOXPOSTRETRY.1)', async () => {
+    registerGlofoxMember.mockResolvedValueOnce({ ok: true, member: { _id: 'gx-new' } })
+    purchaseGlofoxMembership.mockResolvedValueOnce({ ok: false, error: 'Glofox HTTP 503', http_status: 503, outcome_unknown: true })
+    const db = makeFakeDb({
+      locationSelect: {
+        data: { settings: { glofox: { trial_membership_id: 'mem-trial', trial_plan_code: 999 } } },
+        error: null,
+      },
+    })
+    const out = await findOrCreateGlofoxMember({
+      db, locationId: 'loc1', source: 'booking_form',
+      contact: { id: 'c1', email: 'a@b.com', first_name: 'Alice', last_name: 'Smith' },
+      createIfMissing: true,
+      attachTrial: true,
+    })
+    expect(out.status).toBe('needs_review')
+    expect(out.trial_failed).toBe(true)
+    expect(out.error).toMatch(/may have gone through/)
+    expect(out.error).toMatch(/€0 trial invoice/)
+    expect(purchaseGlofoxMembership).toHaveBeenCalledTimes(1)
+    // Review: the doubt must reach the card the processor files, or its
+    // first approval could buy a second trial.
+    expect(out.trial_outcome_unknown).toBe(true)
   })
 
   it('reports register failure as failed', async () => {
@@ -321,6 +365,20 @@ describe('findOrCreateGlofoxMember — create-and-trial (createIfMissing=true)',
     })
     expect(out.status).toBe('created')
     expect(purchaseGlofoxMembership).toHaveBeenCalledWith(VALID_CREDS, 'gx-new', 'mem-trial', 999)
+  })
+
+  it('REGISTRYREAD.1a: a failed trial-settings read says so (not "Trial membership not configured")', async () => {
+    registerGlofoxMember.mockResolvedValueOnce({ ok: true, member: { _id: 'gx-new' } })
+    const db = makeFakeDb({ locationSelect: { data: null, error: { message: 'boom' } } })
+    const out = await findOrCreateGlofoxMember({
+      db, locationId: 'loc1', source: 'booking_form',
+      contact: { id: 'c1', email: 'a@b.com', first_name: 'Alice', last_name: 'Smith' },
+      createIfMissing: true,
+      attachTrial: true,
+    })
+    expect(out.status).toBe('needs_review')
+    expect(out.error).toMatch(/Could not read the trial membership settings/)
+    expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
   })
 })
 
@@ -444,5 +502,111 @@ describe('findOrCreateGlofoxMember — a failed audit insert is logged, never si
     expect(out.push_event_id).toBe('evt-1')
     expect(warn).not.toHaveBeenCalled()
     warn.mockRestore()
+  })
+})
+
+// PASSCODEREAD.1 — the generated password registers the member and is handed
+// back ONCE (the manual Create-in-Glofox button shows it to the staff member
+// who pressed it). It is never written anywhere: it used to land on
+// contacts.glofox_passcode and glofox_push_events.passcode_sent, where every
+// staff member at the location could read it from their own session, for a
+// welcome email that was never switched on. Mig 651 now refuses both columns.
+describe('findOrCreateGlofoxMember — the initial password is never stored (PASSCODEREAD.1)', () => {
+  function recordingDb() {
+    const contactUpdates = []
+    const pushEvents = []
+    const db = {
+      from(table) {
+        if (table === 'contacts') {
+          return {
+            update: (patch) => {
+              contactUpdates.push(patch)
+              return { eq: () => Promise.resolve({ error: null }) }
+            },
+          }
+        }
+        if (table === 'glofox_push_events') {
+          return {
+            insert: (row) => {
+              pushEvents.push(row)
+              return { select: () => ({ single: () => Promise.resolve({ data: { id: 'evt-1' }, error: null }) }) }
+            },
+          }
+        }
+        if (table === 'contact_tags') return { insert: () => Promise.resolve({ error: null }) }
+        if (table === 'locations') {
+          return { select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: { settings: {} }, error: null }) }) }) }
+        }
+        throw new Error(`fake db: unhandled table ${table}`)
+      },
+    }
+    return { db, contactUpdates, pushEvents }
+  }
+
+  beforeEach(() => {
+    searchGlofoxByEmail.mockResolvedValue({ found: false })
+  })
+
+  it('registers with the generated password, returns it once, and writes it nowhere', async () => {
+    registerGlofoxMember.mockResolvedValueOnce({ ok: true, member: { _id: 'gx-new' } })
+    const { db, contactUpdates, pushEvents } = recordingDb()
+    const out = await findOrCreateGlofoxMember({
+      db, locationId: 'loc1', source: 'booking_form',
+      contact: { id: 'c1', email: 'a@b.com', first_name: 'Alice', last_name: 'Smith' },
+      createIfMissing: true,
+      attachTrial: false,
+    })
+
+    expect(out.status).toBe('created')
+    expect(registerGlofoxMember).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ password: 'TEST-1234' }))
+    expect(out.passcode).toBe('TEST-1234')
+
+    expect(contactUpdates).toEqual([{ glofox_member_id: 'gx-new', glofox_synced_at: expect.any(String) }])
+    expect(pushEvents).toHaveLength(1)
+    expect(pushEvents[0]).not.toHaveProperty('passcode_sent')
+    expect(JSON.stringify({ contactUpdates, pushEvents })).not.toContain('TEST-1234')
+  })
+
+  it('stores nothing on the needs_review path either (trial not configured)', async () => {
+    registerGlofoxMember.mockResolvedValueOnce({ ok: true, member: { _id: 'gx-new' } })
+    const { db, contactUpdates, pushEvents } = recordingDb()
+    const out = await findOrCreateGlofoxMember({
+      db, locationId: 'loc1', source: 'manual_button',
+      contact: { id: 'c1', email: 'a@b.com', first_name: 'Alice', last_name: 'Smith' },
+      createIfMissing: true,
+      attachTrial: true,
+      trialOverride: { membershipId: null, planCode: null },
+    })
+
+    expect(out.status).toBe('needs_review')
+    // The create path was reached: a needs_review from an earlier step (an
+    // ambiguous search, a phone match) would pass the "stores nothing" check
+    // without ever minting a password.
+    expect(registerGlofoxMember).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ password: 'TEST-1234' }))
+    expect(out.glofox_member_id).toBe('gx-new')
+    // The desk button shows it on needs_review too, so it is still returned once.
+    expect(out.passcode).toBe('TEST-1234')
+    expect(contactUpdates).toEqual([{ glofox_member_id: 'gx-new', glofox_synced_at: expect.any(String) }])
+    expect(JSON.stringify({ contactUpdates, pushEvents })).not.toContain('TEST-1234')
+  })
+
+  it('a failed CRM link write after the create still returns the password once (it exists nowhere else)', async () => {
+    registerGlofoxMember.mockResolvedValueOnce({ ok: true, member: { _id: 'gx-new' } })
+    const { db, pushEvents } = recordingDb()
+    const realFrom = db.from
+    db.from = (table) => table === 'contacts'
+      ? { update: () => ({ eq: () => Promise.resolve({ error: { message: 'link failed' } }) }) }
+      : realFrom(table)
+    const out = await findOrCreateGlofoxMember({
+      db, locationId: 'loc1', source: 'manual_button',
+      contact: { id: 'c1', email: 'a@b.com', first_name: 'Alice', last_name: 'Smith' },
+      createIfMissing: true,
+      attachTrial: false,
+    })
+
+    expect(out.status).toBe('needs_review')
+    expect(out.glofox_member_id).toBe('gx-new')
+    expect(out.passcode).toBe('TEST-1234')
+    expect(JSON.stringify(pushEvents)).not.toContain('TEST-1234')
   })
 })

@@ -27,13 +27,18 @@ import {
   cancelSwapRequest, cancelTimeOffRequest,
   getSwapsForMe, getOpenSwaps, getTeamShifts, respondToSwap,
   getLocationStaff, getBlockCandidates,
+  getOffersForMe, claimShiftOffer,
 } from '../../lib/schedule-api'
+// REPLACE.1b — "Shifts up for grabs": the card's lines and the claim alert.
+import { offerCardLines, offerClaimAlert } from '../../lib/offer-cards'
 import { myLeaveCancelOutcome } from '../../lib/my-leave'
 import { leaveRequestEntry } from '../../lib/leave-form'
 // CT-P3b — reuse the schedule Manage-mode colleague picker for targeted swaps.
 import CoachPickerSheet from '../schedule/CoachPickerSheet'
 // CANDIDATES.1 — colleagues ranked free-first for the shift being covered.
 import { NO_CANDIDATES, candidatesStarted, candidatesSettled, candidatesFor } from '../../lib/candidates-view'
+// D4 UINITS.1 — the staff read settles the way Manage mode's does.
+import { staffLoadOutcome } from '../../lib/schedule-manage'
 // COVERLOOP.2 — the confirm step, and every swap-card decision (pure, tested).
 import SwapConfirmSheet from '../schedule/SwapConfirmSheet'
 import {
@@ -422,12 +427,18 @@ export default function PersonalDashboard({ refreshKey }) {
   // shared dashboard data (which can't embed profiles on mobile).
   const [offered, setOffered] = useState([])
   const [openPool, setOpenPool] = useState([])
+  const [upForGrabs, setUpForGrabs] = useState([]) // REPLACE.1b — offered shifts I could take
   const [onToday, setOnToday] = useState([])
   const [swapBusy, setSwapBusy] = useState(null) // `${id}:${verb}` while mutating
   // Targeted-swap colleague picker state (reuses CoachPickerSheet).
   const [swapPickerShift, setSwapPickerShift] = useState(null)
   const [swapStaff, setSwapStaff] = useState(null) // null = not loaded
   const [swapStaffLoading, setSwapStaffLoading] = useState(false)
+  // D4 UINITS.1 — why the staff read failed (null = it did not). The sheet
+  // shows it only when the picker has nothing else to show: no ranked
+  // answer and no row (candidatePickerView). It used to be an Alert that
+  // fired even when the ranked colleagues had arrived.
+  const [swapStaffError, setSwapStaffError] = useState(null)
   // CANDIDATES.1 — the ranked colleagues for the shift the picker is open on
   // (the server gives a coach free/working only).
   const [swapCandidates, setSwapCandidates] = useState(NO_CANDIDATES)
@@ -480,16 +491,18 @@ export default function PersonalDashboard({ refreshKey }) {
   // empty rather than blocking the roster.
   const loadSwaps = useCallback(async () => {
     const locationId = activeLocation?.id
-    if (!locationId) { setOffered([]); setOpenPool([]); return }
+    if (!locationId) { setOffered([]); setOpenPool([]); setUpForGrabs([]); return }
     try {
-      const [forMe, open] = await Promise.all([
+      const [forMe, open, offers] = await Promise.all([
         getSwapsForMe({ locationId }),
         getOpenSwaps({ locationId }),
+        getOffersForMe({ locationId }),
       ])
       setOffered(forMe.success ? (forMe.data || []) : [])
       setOpenPool(open.success ? (open.data || []) : [])
+      setUpForGrabs(offers.success ? (offers.data || []) : [])
     } catch {
-      setOffered([]); setOpenPool([])
+      setOffered([]); setOpenPool([]); setUpForGrabs([])
     }
   }, [activeLocation])
 
@@ -639,6 +652,23 @@ export default function PersonalDashboard({ refreshKey }) {
     }
   }
 
+  // REPLACE.1b — claim a shift a manager offered to the team. First to claim
+  // gets it; the server's words say who won (offer-cards.js offerClaimAlert).
+  // Same in-flight latch as the swap buttons, so one tap at a time.
+  async function claimOfferPress(offer) {
+    if (swapBusy) return
+    setSwapBusy(`${offer.id}:claim-offer`)
+    try {
+      const res = await claimShiftOffer(offer.id, { locationId: activeLocation?.id })
+      const out = offerClaimAlert(res)
+      await loadSwaps()
+      if (res.success) load()
+      Alert.alert(out.title, out.message)
+    } finally {
+      setSwapBusy(null)
+    }
+  }
+
   // COVERLOOP.2 — every move of the picker -> confirm-sheet flow goes through
   // swapFlowRef (lib/swap-flow.js: pure decision + timer, tested). iOS will
   // not present the confirm sheet while the picker is still animating out, so
@@ -667,13 +697,24 @@ export default function PersonalDashboard({ refreshKey }) {
     swapFlowRef.current.dispatch('start')
     setSwapPickerShift(shift)
     loadSwapCandidates(shift) // not awaited: the staff list below is the fallback
-    if (swapStaff === null && !swapStaffLoading) {
-      setSwapStaffLoading(true)
-      const res = await getLocationStaff({ locationId: activeLocation?.id })
-      setSwapStaffLoading(false)
-      setSwapStaff(res.success ? (res.data || []) : [])
-      if (!res.success) Alert.alert('Could not load staff', res.error || 'Unknown error')
+    if (swapStaff === null && !swapStaffLoading) await loadSwapStaff()
+  }
+
+  // D4 UINITS.1 — a failed first read keeps the pool null (the next open, or
+  // the sheet's Try again, retries) and hands the sheet a reason; see
+  // staffLoadOutcome (lib/schedule-manage.js) and candidatePickerView.
+  async function loadSwapStaff() {
+    setSwapStaffLoading(true)
+    let res
+    try {
+      res = await getLocationStaff({ locationId: activeLocation?.id })
+    } catch (e) {
+      res = { success: false, error: e?.message }
     }
+    setSwapStaffLoading(false)
+    const out = staffLoadOutcome({ res, current: swapStaff })
+    setSwapStaff(out.staff)
+    setSwapStaffError(out.error)
   }
 
   // COVERLOOP.2 — picking a colleague used to POST on that one tap. It now
@@ -885,6 +926,39 @@ export default function PersonalDashboard({ refreshKey }) {
                       </Pressable>
                     </View>
                   )}
+                </View>
+              )
+            })}
+          </View>
+        </>
+      )}
+
+      {/* REPLACE.1b — Shifts a manager offered to the team that I could take.
+          When, what, where only; Claim is first come, first served. */}
+      {upForGrabs.length > 0 && (
+        <>
+          <SectionHeader title="Shifts up for grabs" count={upForGrabs.length} />
+          <View className="bg-un1t-surface border border-un1t-border rounded-2xl overflow-hidden mb-3">
+            {upForGrabs.map((o, i) => {
+              const { title, when } = offerCardLines(o)
+              return (
+                <View key={o.id} className={`flex-row items-center px-4 py-3 ${i < upForGrabs.length - 1 ? 'border-b border-un1t-border' : ''}`}>
+                  <View className="w-8 h-8 rounded-full bg-un1t-border/40 items-center justify-center mr-3">
+                    <Ionicons name="megaphone-outline" size={16} color="#111827" />
+                  </View>
+                  <View className="flex-1">
+                    <Text className="text-sm font-medium text-un1t-text" numberOfLines={1}>{title}</Text>
+                    {when ? <Text className="text-xs text-un1t-subtle" numberOfLines={1}>{when}</Text> : null}
+                  </View>
+                  <Pressable
+                    disabled={!!swapBusy}
+                    onPress={() => claimOfferPress(o)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Claim ${title}, ${when}`}
+                    className="px-2.5 py-1 rounded-lg bg-un1t-text active:opacity-70"
+                  >
+                    <Text className="text-xs font-semibold text-un1t-bg">{swapBusy === `${o.id}:claim-offer` ? '…' : 'Claim'}</Text>
+                  </Pressable>
                 </View>
               )
             })}
@@ -1120,6 +1194,8 @@ export default function PersonalDashboard({ refreshKey }) {
         locationId={activeLocation?.id}
         staff={swapStaff}
         loading={swapStaffLoading}
+        error={swapStaff === null ? swapStaffError : null}
+        onRetry={loadSwapStaff}
         {...candidatesFor(swapCandidates, swapPickerShift?.block_id)}
         onPick={pickSwapCoach}
         onClose={cancelSwapPicker}

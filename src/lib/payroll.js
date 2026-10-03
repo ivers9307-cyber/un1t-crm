@@ -14,12 +14,15 @@
 // Time format expected:
 //   shifts: array of objects with `start_time` (HH:MM[:SS]) and `end_time`
 //   (HH:MM[:SS]). Optional override fields take precedence:
-//   start_time_override / end_time_override.
+//   start_time_override / end_time_override. '24:00[:00]' is midnight at the
+//   END of the day (Postgres `time` stores it), PAYROLL24.1.
 
 import { effectiveShiftStart, effectiveShiftEnd } from '@shared/roster-month'
 
 /**
  * Convert a HH:MM[:SS] string to fractional hours since midnight.
+ * '24:00' / '24:00:00' is 24: midnight at the END of the day, the largest
+ * value a Postgres `time` holds (PAYROLL24.1). Anything past it is null.
  * Returns null if the input is missing or malformed.
  */
 export function timeToHours(t) {
@@ -29,6 +32,9 @@ export function timeToHours(t) {
   const h = Number(m[1])
   const mm = Number(m[2])
   const ss = m[3] ? Number(m[3]) : 0
+  // PAYROLL24.1 — refusing hour 24 made every shift ending at 24:00 0 hours
+  // in payroll and in every report built on shiftHours.
+  if (h === 24 && mm === 0 && ss === 0) return 24
   if (h > 23 || mm > 59 || ss > 59) return null
   return h + mm / 60 + ss / 3600
 }
@@ -37,6 +43,10 @@ export function timeToHours(t) {
  * Compute the duration of a single shift in hours.
  * Honours start_time_override / end_time_override when set.
  * Treats overnight shifts (end < start) as crossing midnight.
+ * A 24:00 end runs to the end of the day (22:00-24:00 = 2h, 00:00-24:00 =
+ * 24h); a 24:00 start is that same midnight, so 24:00-02:00 wraps to 2h
+ * (PAYROLL24.1; the same reading as shared/roster-month.js and
+ * roster-compare.js windowHours, pinned in hours-24.test.js).
  *
  * @param {object} shift  A shift row joined with its shift_template.
  * @returns {number} duration in hours, 0 if either time is missing/malformed.

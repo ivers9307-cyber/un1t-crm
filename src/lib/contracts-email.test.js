@@ -13,7 +13,7 @@ vi.mock('./supabase.js', () => ({ createServerClient: vi.fn() }))
 
 import { createServerClient } from './supabase.js'
 import { sendEmail } from './postmark.js'
-import { sendContractIssuedEmail, sendContractSignedEmails, sendContractDeclinedEmail } from './contracts-email.js'
+import { sendContractIssuedEmail, sendContractSignedEmails, sendContractDeclinedEmail, sendContractReminderEmail } from './contracts-email.js'
 
 // Table-aware supabase-builder mock. getLocationBranding does
 // from('company_settings').select(...).eq(...).limit(1); the legacy
@@ -257,5 +257,52 @@ describe('link base follows the NEXT_PUBLIC_APP_URL seam (URLSEAM.1)', () => {
 
     await expect(sendContractIssuedEmail(baseArgs)).rejects.toThrow(/NEXT_PUBLIC_APP_URL is not set/)
     expect(sendEmail).not.toHaveBeenCalled()
+  })
+})
+
+// PUSHDONE.1a — the reminder cron holds its stamp back for a TRANSIENT email
+// failure (tomorrow retries). A Postmark rejection that no retry can fix must
+// say so (`permanent: true`), or a hard-bounced address is retried forever
+// and never reaches the normal 2-reminder cap. sendEmail carries Postmark's
+// ErrorCode on the thrown error (postmark.js, EMAIL-OUTBOUND-SERVER.1).
+describe('sendContractReminderEmail — permanent vs transient failures (PUSHDONE.1a)', () => {
+  const postmarkError = (errorCode, message = 'rejected') =>
+    Object.assign(new Error(message), { errorCode, httpStatus: 422 })
+
+  beforeEach(() => { createServerClient.mockReturnValue(makeDb({})) })
+
+  it('no recipient address is permanent, and nothing is sent', async () => {
+    const out = await sendContractReminderEmail({ ...baseArgs, recipient: { full_name: 'Sarah Test', email: null } })
+    expect(out).toEqual({ ok: false, error: 'No recipient email', permanent: true })
+    expect(sendEmail).not.toHaveBeenCalled()
+  })
+
+  it('406 inactive recipient (a prior hard bounce) is permanent', async () => {
+    sendEmail.mockRejectedValueOnce(postmarkError(406, 'You tried to send to a recipient that has been marked as inactive.'))
+    const out = await sendContractReminderEmail(baseArgs)
+    expect(out).toMatchObject({ ok: false, permanent: true })
+    expect(out.error).toMatch(/inactive/)
+  })
+
+  it('300 invalid email request is permanent', async () => {
+    sendEmail.mockRejectedValueOnce(postmarkError(300, 'Invalid To address'))
+    const out = await sendContractReminderEmail(baseArgs)
+    expect(out).toMatchObject({ ok: false, permanent: true, error: 'Invalid To address' })
+  })
+
+  it.each([
+    ['a network throw (no ErrorCode)', Object.assign(new Error('fetch failed'), {})],
+    ['429 rate limit', postmarkError(429, 'Rate limit exceeded')],
+    ['100 maintenance', postmarkError(100, 'Maintenance')],
+    ['400 sender signature not found (operator-fixable)', postmarkError(400, 'Sender signature not found')],
+  ])('%s stays transient (tomorrow retries)', async (_label, err) => {
+    sendEmail.mockRejectedValueOnce(err)
+    const out = await sendContractReminderEmail(baseArgs)
+    expect(out.ok).toBe(false)
+    expect(out.permanent).toBeUndefined()
+  })
+
+  it('a delivered reminder is ok', async () => {
+    expect(await sendContractReminderEmail(baseArgs)).toEqual({ ok: true })
   })
 })

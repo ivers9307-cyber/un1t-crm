@@ -19,7 +19,7 @@ describe('parseEchoMessages', () => {
       { id: 'wamid.ECHO1', from: '353111', to: '353222', type: 'text', text: { body: 'sent from phone' }, timestamp: '1700000000' },
     ] }
     expect(parseEchoMessages(value)).toEqual([
-      { waMessageId: 'wamid.ECHO1', peerPhone: '353222', direction: 'outbound', messageType: 'text', body: 'sent from phone', tsSeconds: 1700000000 },
+      { waMessageId: 'wamid.ECHO1', peerPhone: '353222', direction: 'outbound', messageType: 'text', body: 'sent from phone', tsSeconds: 1700000000, origin: 'echo' },
     ])
   })
   it('returns [] when no echoes', () => {
@@ -50,8 +50,8 @@ describe('parseHistoryMessages', () => {
     ] } ], metadata: { phone_number_id: '999' } }
     const out = parseHistoryMessages(value, '353111')
     expect(out).toEqual([
-      { waMessageId: 'wamid.H1', peerPhone: '353222', direction: 'inbound', messageType: 'text', body: 'old inbound', tsSeconds: 1699000000 },
-      { waMessageId: 'wamid.H2', peerPhone: '353222', direction: 'outbound', messageType: 'text', body: 'old outbound', tsSeconds: 1699000100 },
+      { waMessageId: 'wamid.H1', peerPhone: '353222', direction: 'inbound', messageType: 'text', body: 'old inbound', tsSeconds: 1699000000, origin: 'history' },
+      { waMessageId: 'wamid.H2', peerPhone: '353222', direction: 'outbound', messageType: 'text', body: 'old outbound', tsSeconds: 1699000100, origin: 'history' },
     ])
   })
 })

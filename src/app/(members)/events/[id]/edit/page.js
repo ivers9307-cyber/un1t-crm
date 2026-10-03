@@ -1,7 +1,7 @@
 import { redirect, notFound } from 'next/navigation'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import RaceEventForm from '@/components/RaceEventForm'
 
 export const dynamic = 'force-dynamic'
@@ -10,7 +10,9 @@ export default async function EditRacePage(props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  if (!hasPermission(user, 'races')) redirect('/')
+  // PAGEGATES.1 — coarse pre-check only; the decision is at the event's
+  // location below, the same one every /api/events/[id]* route makes.
+  if (!hasPermissionAtAnyLocation(user, 'races')) redirect('/')
 
   const db = createServerClient()
   // CRITICAL: pull waves alongside the race. `select('*')` only
@@ -30,8 +32,8 @@ export default async function EditRacePage(props) {
     .single()
 
   if (!race) notFound()
-  const guard = assertLocationAccess(user, race.location_id)
-  if (guard) redirect('/')
+  if (assertLocationAccess(user, race.location_id)) notFound()
+  if (!hasPermissionForLocation(user, race.location_id, 'races')) redirect('/')
 
   return (
     <div className="p-8 max-w-2xl">

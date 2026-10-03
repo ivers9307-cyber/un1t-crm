@@ -784,3 +784,63 @@ describe('generateReport — a period out of order or too long', () => {
     expect(days[365].date).toBe('2027-01-01')
   })
 })
+
+// ─── PAYROLL24.1 — a shift ending at 24:00 is in every report ────────────────
+//
+// payroll.timeToHours refused hour 24, so these three reports counted a
+// 22:00-24:00 shift as 0 hours (and €0).
+
+describe('generateReport — a shift ending at 24:00 (PAYROLL24.1)', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+
+  const late = () => assignmentRow('p-here', { startOverride: '22:00:00', endOverride: '24:00:00' })
+
+  it('staff_hours counts its 2 hours', async () => {
+    const { db, captured } = makeReportDb({ shift_assignments: [late()] })
+    createServerClient.mockReturnValue(db)
+
+    const res = await generateReport({ report_type: 'staff_hours', ...PERIOD })
+    expect(res.success).toBe(true)
+    expect(captured.inserted.summary.total_hours).toBe(2)
+    expect(captured.inserted.report_data.staff[0].total).toBe(2)
+    expect(captured.inserted.report_data.staff[0].days['2026-05-04']).toBe(2)
+  })
+
+  it('staff_cost costs its 2 hours', async () => {
+    const { db, captured } = makeReportDb({
+      profile_locations: PL_ROWS,
+      profiles: [PROFILES[0]],
+      shift_assignments: [late()],
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await generateReport({ report_type: 'staff_cost', ...PERIOD })
+    expect(res.success).toBe(true)
+    expect(captured.inserted.summary.total_hours).toBe(2)
+    expect(captured.inserted.summary.total_cost).toBe(100) // 2h × €50
+    expect(captured.inserted.report_data.staff[0].regular_hours).toBe(2)
+  })
+
+  it('utilisation counts its 2 hours', async () => {
+    const { db, captured } = makeReportDb({
+      profile_locations: PL_ROWS,
+      profiles: [PROFILES[0]],
+      shift_assignments: [late()],
+    })
+    createServerClient.mockReturnValue(db)
+
+    await generateReport({ report_type: 'utilisation', ...PERIOD })
+    expect(captured.inserted.report_data.staff[0].actual_hours).toBe(2)
+    expect(captured.inserted.report_data.staff[0].utilisation_pct).toBe(20) // 2 of 10
+  })
+
+  it('the block\'s own 24:00 end counts too (no override)', async () => {
+    const row = assignmentRow('p-here')
+    row.shift_blocks = { ...row.shift_blocks, start_time: '22:00:00', end_time: '24:00:00' }
+    const { db, captured } = makeReportDb({ shift_assignments: [row] })
+    createServerClient.mockReturnValue(db)
+
+    await generateReport({ report_type: 'staff_hours', ...PERIOD })
+    expect(captured.inserted.summary.total_hours).toBe(2)
+  })
+})

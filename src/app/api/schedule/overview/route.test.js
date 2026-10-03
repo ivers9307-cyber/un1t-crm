@@ -119,3 +119,26 @@ describe('GET /api/schedule/overview — role at the requested studio', () => {
     expect(db.tables).toEqual([])
   })
 })
+
+// RANGEVALID.1 — the overview was already right (in order, at most 60 days)
+// but checked it inline; it now uses the shared rule, so the guard can see it.
+describe('GET /api/schedule/overview — the shared range rule (RANGEVALID.1)', () => {
+  const at = (qs) => ({ url: `http://test/api/schedule/overview?${qs}&location_id=${LOC_A}` })
+
+  it('61 days is a 400 in the shared words, before any read; 60 still reads', async () => {
+    getCurrentUser.mockResolvedValue(MGR_A_STAFF_B(LOC_A))
+    const res = await GET(at('from=2026-09-01&to=2026-10-31'))
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toBe('The overview can cover at most 60 days')
+    expect(db.tables).toEqual([])
+    expect((await GET(at('from=2026-09-01&to=2026-10-30'))).status).toBe(200)
+  })
+
+  it('reversed keeps its words', async () => {
+    getCurrentUser.mockResolvedValue(MGR_A_STAFF_B(LOC_A))
+    const res = await GET(at('from=2026-09-20&to=2026-09-14'))
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toBe('to must be on or after from')
+    expect(db.tables).toEqual([])
+  })
+})

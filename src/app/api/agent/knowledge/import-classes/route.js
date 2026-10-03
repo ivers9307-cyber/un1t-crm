@@ -3,6 +3,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { importClassKnowledge } from '@/lib/agent/knowledge-import'
+import { GLOFOX_SETTINGS_UNREADABLE, GLOFOX_SETTINGS_UNREADABLE_MESSAGE } from '@/lib/glofox-settings-read'
 
 // KNOWLEDGE-IMPORT.1 — POST: pull the Glofox timetable's class types +
 // descriptions into knowledge for the active location. Existing titles
@@ -25,8 +26,15 @@ export async function POST() {
       ? 'Glofox is not connected for this location.'
       : result.reason === 'glofox_unreachable'
         ? 'Could not load the Glofox timetable just now.'
-        : result.reason
-    return NextResponse.json({ success: false, error: msg }, { status: result.reason === 'glofox_not_connected' ? 400 : 502 })
+        : result.reason === GLOFOX_SETTINGS_UNREADABLE
+          ? GLOFOX_SETTINGS_UNREADABLE_MESSAGE
+          : result.reason
+    // REGISTRYREAD.1b: a failed settings read is a 503 (try again), not a
+    // 400 "not connected".
+    const status = result.reason === 'glofox_not_connected' ? 400
+      : result.reason === GLOFOX_SETTINGS_UNREADABLE ? 503
+        : 502
+    return NextResponse.json({ success: false, error: msg }, { status })
   }
 
   return NextResponse.json({

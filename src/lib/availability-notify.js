@@ -4,9 +4,9 @@
 //
 // WHO: the roster builders (owner, manager, head coach: the runway alert's
 // roles) and masters linked to each studio the coach belongs to, active only,
-// never the coach. Read here with its own query: resolveRoleRecipientIds
-// (push.js) discards its read error, and "the read failed" must never be
-// stamped as "nobody to tell".
+// never the coach. Read here with its own query (the roles and the studios
+// differ from readRoleRecipientIds' single-studio read), keeping the error:
+// "the read failed" must never be stamped as "nobody to tell".
 //
 // WHEN: staff quiet hours (src/lib/staff-push-hours.js) gate the NOTICE, never
 // the save. The route calls deliverOwedAvailabilityNotices straight after a

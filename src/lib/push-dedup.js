@@ -16,9 +16,11 @@
 //      with nothing delivered), RELEASE the claims so a later retry
 //      (webhook redelivery, client retry) can still notify — mirrors
 //      the nudge-claim release in send-class-booking-reminders (#755).
-//      "sent=0, failed=0" (recipient has no tokens) KEEPS the claim:
-//      there is nothing to retry against, and for notifyUsers callers
-//      the email fallback already ran.
+//      That includes a READ that failed inside sendPush/notifyUsers:
+//      since C16 PUSHREADERR.1 it comes back as failed>0 + read_failed,
+//      not as zeros. "sent=0, failed=0" (recipient has no tokens, or
+//      opted out) KEEPS the claim: there is nothing to retry against,
+//      and for notifyUsers callers the email fallback already ran.
 //
 // event_key must be stable + replay-safe: derived from the entity that
 // caused the notification, never from timestamps or invocation state.
@@ -31,12 +33,19 @@
 // losing a "shift claimed" push outright is worse than a rare double.
 // Same call as webhook-events.js takes on an unexpected insert error.
 //
+// C1 RECIPIENTS.1 — the ROLE variants read "who holds these roles here"
+// first. A FAILED read is not "nobody": it is logged once with logError,
+// nothing is claimed and nothing is sent, and the result carries
+// `recipients_failed: 1` beside the EMPTY counts. Because nothing was
+// claimed, the next call with the same key (a retry, tomorrow's cron run)
+// still sends. Never throws, like everything here.
+//
 // All senders return the underlying result shape plus `deduped` — the
 // number of recipients skipped because their claim already existed.
 
-import { sendPush, resolveRoleRecipientIds } from './push'
+import { sendPush, readRoleRecipientIds } from './push'
 import { notifyUsers } from './notify'
-import { logWarn } from './log'
+import { logWarn, logError } from './log'
 
 const EMPTY = Object.freeze({ sent: 0, skipped: 0, invalidated: 0, failed: 0, deduped: 0 })
 
@@ -143,20 +152,37 @@ export async function notifyUsersOnce(db, eventKey, userIds, payload) {
 }
 
 /**
+ * Resolve the role set to profile ids, keeping a failed read apart from
+ * "nobody holds the role". `failure` is the result the caller returns as-is.
+ */
+async function roleRecipients(db, eventKey, locationId, roles) {
+  const { ids, error } = await readRoleRecipientIds(db, locationId, roles)
+  if (!error) return { ids, failure: null }
+  logError('push-dedup', 'role recipients read failed; nothing claimed, nobody told on this call', {
+    event_key: eventKey, locationId, roles, err: error?.message ?? String(error),
+  })
+  return { ids: [], failure: { ...EMPTY, recipients_failed: 1 } }
+}
+
+/**
  * sendPushToRolesAtLocation(), deduped. The role set is resolved to
  * profile ids FIRST so each recipient gets their own claim row — a
  * manager added between webhook replays still gets exactly one push.
+ * A failed read returns `recipients_failed: 1` and claims nothing.
  */
 export async function sendPushToRolesAtLocationOnce(db, eventKey, locationId, roles, payload) {
-  const ids = await resolveRoleRecipientIds(db, locationId, roles)
+  const { ids, failure } = await roleRecipients(db, eventKey, locationId, roles)
+  if (failure) return failure
   return sendOnce(db, eventKey, ids, payload, sendPush, 'sendPush')
 }
 
 /**
- * notifyUsersAtRoles(), deduped. Same id-resolution story as
- * sendPushToRolesAtLocationOnce.
+ * The role fan-out through notifyUsers (push + registry-gated email
+ * fallback), deduped. Same id-resolution story, and the same failed-read
+ * result, as sendPushToRolesAtLocationOnce.
  */
 export async function notifyUsersAtRolesOnce(db, eventKey, locationId, roles, payload) {
-  const ids = await resolveRoleRecipientIds(db, locationId, roles)
+  const { ids, failure } = await roleRecipients(db, eventKey, locationId, roles)
+  if (failure) return failure
   return sendOnce(db, eventKey, ids, payload, notifyUsers, 'notifyUsers')
 }

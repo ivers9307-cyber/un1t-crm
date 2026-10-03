@@ -22,7 +22,8 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { stampTenantHeartbeat } from '@/lib/tenant-heartbeat'
-import { glofoxCredentialsForLocation, fetchAllMembersPage } from '@/lib/glofox'
+import { glofoxCredentialsForLocation, fetchAllMembersPage, glofoxHttpStats, glofoxHttpStatsSince } from '@/lib/glofox'
+import { GLOFOX_SETTINGS_UNREADABLE_MESSAGE } from '@/lib/glofox-settings-read'
 import { syncMembershipCatalog } from '@/lib/glofox-catalog'
 import { applyMemberSync } from '@/lib/glofox-sync'
 
@@ -125,7 +126,9 @@ export async function GET(request) {
  */
 async function syncOneLocation(db, location, filters, lookbackSec) {
   const startedAt = Date.now()
-  const summary = { create: 0, update: 0, ambiguous: 0, invalid: 0, error: 0, leave: 0 }
+  const summary = { create: 0, update: 0, ambiguous: 0, invalid: 0, error: 0, leave: 0, credits_unread: 0 }
+  // CREDITSREAD.1 — Glofox traffic for this location's run (instance-wide counters).
+  const httpBefore = glofoxHttpStats()
   let firstError = null
   let pagesFetched = 0
   let leadsProcessed = 0
@@ -152,6 +155,10 @@ async function syncOneLocation(db, location, filters, lookbackSec) {
 
   try {
     const creds = await glofoxCredentialsForLocation(db, location.id)
+    if (creds.readError) {
+      // REGISTRYREAD.1b: same failed-location row, true text; the next run retries.
+      throw new Error(GLOFOX_SETTINGS_UNREADABLE_MESSAGE)
+    }
     if (!creds.branchId || !creds.apiKey || !creds.apiToken) {
       throw new Error('Glofox credentials missing on this location.')
     }
@@ -198,6 +205,8 @@ async function syncOneLocation(db, location, filters, lookbackSec) {
             creds, membershipCache,
           })
           summary[result.action] = (summary[result.action] || 0) + 1
+          // CREDITSREAD.1 — synced, but the stored credits/label were kept.
+          if (result.credits_unread) summary.credits_unread++
           if (result.error && !firstError) {
             firstError = `[${m._id || 'unknown'}] ${result.error}`
           }
@@ -228,7 +237,9 @@ async function syncOneLocation(db, location, filters, lookbackSec) {
         pages_fetched: pagesFetched,
         leads_processed: leadsProcessed,
         total_available: totalAvailable,
-        summary,
+        // glofox_http lives on the run row only: the returned summary is
+        // summed key by key into `totals`, which an object would break.
+        summary: { ...summary, glofox_http: glofoxHttpStatsSince(httpBefore) },
         first_error: firstError,
         status: 'completed',
       }).eq('id', runId)

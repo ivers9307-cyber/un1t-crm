@@ -15,6 +15,8 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { MANAGER_ROLES, ADMIN_ROLES, isRealCalendarDate } from '@/lib/schemas'
+import { reportPeriodError } from '@/lib/report-period'
+import { parseAllowanceYear } from '@/lib/allowance-year'
 import {
   splitSSEEvents,
   initTurn,
@@ -22,6 +24,7 @@ import {
   finalizeTurn,
   encodeClientEvent,
 } from '@/lib/assistant-stream'
+import { normaliseChatTurns } from '@/lib/assistant-turns'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -121,16 +124,23 @@ export async function executeTool(toolName, input, context) {
       // Scope to the active location — an unscoped search would match
       // contacts in every tenant. No location → no unscoped read.
       if (!locationId) return { contacts: [], count: 0 }
-      const { data } = await db.from('contacts')
+      // A failed read is an error, never "no contact by that name" (which
+      // the model would answer by offering to create one).
+      const { data, error } = await db.from('contacts')
         .select('id, name, email, phone, pipeline_stage_slug, lead_source')
         .eq('location_id', locationId)
         .or(`name.ilike.%${input.query}%,email.ilike.%${input.query}%`)
         .limit(10)
+      if (error) return { error: `Failed to load contacts: ${error.message}` }
       return { contacts: data || [], count: (data || []).length }
     }
 
     case 'create_shift': {
       if (!locationId) return { error: 'No active location — switch to a location before creating a shift.' }
+      // RANGEVALID.1 — the model writes this date. One the calendar does not
+      // have used to run three reads and then reach Postgres, whose raw text
+      // came back; say what is wrong, before any read, so the model can ask again.
+      if (!isRealCalendarDate(input.shift_date)) return { error: 'shift_date must be a real date, YYYY-MM-DD.' }
       // RETIRE-SHIFTS-MIRROR.4 — writes the Roster v2 model (find-or-create
       // block + upsert assignment) instead of the legacy shifts table.
       // The helper validates template + profile against the location
@@ -181,8 +191,9 @@ export async function executeTool(toolName, input, context) {
     }
 
     case 'get_shifts_for_week': {
-      // No location → no unscoped read.
-      if (!locationId) return { shifts: [] }
+      // No location → no unscoped read, and an error rather than
+      // { shifts: [] }, which the model read out as "nobody is on shift".
+      if (!locationId) return { error: 'No active location — switch to a location before looking up shifts.' }
       if (!isRealCalendarDate(input.start_date)) return { error: 'start_date must be a real date, YYYY-MM-DD.' }
       // SCHEDHYGIENE.1 — pure date arithmetic, snapped to the Monday of the
       // week the date falls in (the tool promises Monday to Sunday; a model
@@ -276,6 +287,16 @@ export async function executeTool(toolName, input, context) {
     }
 
     case 'get_time_off': {
+      // RANGEVALID.1 — no studio is an error: `.eq('location_id', null)` failed in
+      // Postgres, and the discarded error read as "nobody is off".
+      if (!locationId) return { error: 'No active location — switch to a location before looking up time off.' }
+      // The model supplies the range: real dates, in order, at most a year,
+      // before any read. It went to Postgres as given, so 2026-02-30 failed
+      // there, and a reversed range matched only leave spanning the gap.
+      const periodError = reportPeriodError(input.start_date, input.end_date, {
+        startName: 'start_date', endName: 'end_date', what: 'A time-off lookup',
+      })
+      if (periodError) return { error: periodError }
       let query = db.from('time_off_requests')
         .select('start_date, end_date, type, status, total_days, reason, profile_id, profiles!profile_id(full_name)')
         .eq('location_id', locationId)
@@ -289,7 +310,10 @@ export async function executeTool(toolName, input, context) {
         query = query.eq('profile_id', userId)
       }
 
-      const { data } = await query
+      // RANGEVALID.1 — a failed read is an error, never an empty list the model
+      // would read out as "nobody is off" (ROSTER-FIX.5's rule for this route).
+      const { data, error } = await query
+      if (error) return { error: `Failed to load time off: ${error.message}` }
       return {
         time_off: (data || []).map(t => ({
           staff: t.profiles?.full_name,
@@ -304,6 +328,10 @@ export async function executeTool(toolName, input, context) {
     }
 
     case 'get_holiday_allowance': {
+      // RANGEVALID.1 — the model supplies the year: the allowances route's rule,
+      // before any read ('abc' used to answer the 20-day default for year 'abc').
+      const { year, error: yearError } = parseAllowanceYear(input.year)
+      if (yearError) return { error: yearError }
       // Staff can only check their own allowance
       const profileId = input.profile_id || userId
       if (!MANAGER_ROLES.includes(role) && profileId !== userId) {
@@ -322,24 +350,33 @@ export async function executeTool(toolName, input, context) {
           .maybeSingle()
         if (!link) return { error: 'Staff member not found in your active location.' }
       }
-      const year = input.year || new Date().getFullYear()
       // K8 — `.maybeSingle()`: no allowance row for this person/year is the
       // ordinary case (the defaults below ARE the answer), so 0 rows must not
       // arrive as an error we discard. (profile_id, year) is uniquely indexed,
       // so at most one row is real; the discarded error was hiding only the
       // query-failed case, which now surfaces as an error instead of silently
       // handing back the 20-day default.
-      const { data } = await db.from('staff_allowances')
+      const { data, error: allowanceError } = await db.from('staff_allowances')
         .select('total_days, used_days, carried_over')
         .eq('profile_id', profileId)
         .eq('year', year)
         .maybeSingle()
+      // RANGEVALID.1 — K8 above says a failed read "now surfaces as an error";
+      // it did not (the error was never destructured), so a failed read answered
+      // the 20-day default. It does now.
+      if (allowanceError) return { error: `Failed to load the holiday allowance: ${allowanceError.message}` }
       if (!data) return { total_days: 20, used_days: 0, carried_over: 0, remaining: 20, year }
       return { ...data, remaining: data.total_days + data.carried_over - data.used_days, year }
     }
 
     case 'generate_report': {
       if (!locationId) return { error: 'No active location for this action.' }
+      // RANGEVALID.1 — the model supplies the period; hold it to the Reporting
+      // tab's rule (real dates, in order, at most 366 days), before any read. It
+      // went straight to the shift read: 2026-02-30 came back as Postgres's text,
+      // and a reversed period as a report of zero hours ("nobody worked").
+      const periodError = reportPeriodError(input.period_start, input.period_end)
+      if (periodError) return { error: periodError }
       // We can't easily call /api/schedule/reports internally with the
       // caller's auth context, so generate the report inline here.
       const reportType = input.report_type
@@ -496,11 +533,21 @@ export async function POST(request) {
   // server-trusted role, not the client-supplied one.
   const allowedTools = TOOLS.filter(tool => checkToolPermission(tool.name, userContext.role))
 
-  // Call Claude API
-  let claudeMessages = messages.map(m => ({
-    role: m.role,
-    content: m.content,
-  }))
+  // STAFFASSISTPREFILL.1 (C108) — the list is client-sent. The API refuses a
+  // request that opens on an assistant turn or ends on one (the "assistant
+  // message prefill" 400), so normalise it before any call: open and end on a
+  // user turn, alternate. A list ending on the assistant has nothing new to
+  // answer; refuse it here rather than re-answer (and maybe re-run a write
+  // tool for) the previous question.
+  const turns = normaliseChatTurns(messages)
+  if (turns.reason) {
+    return NextResponse.json({
+      success: false,
+      code: turns.reason,
+      error: 'Nothing to answer: the conversation must end on your message.',
+    }, { status: 400 })
+  }
+  let claudeMessages = turns.messages
 
   const toolContext = {
     locationId: userContext.locationId,

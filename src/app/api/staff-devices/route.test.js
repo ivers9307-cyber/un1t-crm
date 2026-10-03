@@ -48,7 +48,10 @@ const recorded = (calls, ...prefix) =>
 const DAY = 86400_000
 const daysAgo = (n) => new Date(Date.now() - n * DAY).toISOString()
 
-const settingsUser = { id: 'u-admin', profileRole: 'owner' }
+// A master: the fleet is the whole fixture, so these tests stay about
+// verdict shaping. Tenant scoping (TENANTSCOPE.1) is pinned against the
+// two-tenant double in tests/cross-tenant/tenantscope-routes.test.js.
+const settingsUser = { id: 'u-admin', profileRole: 'master', isMaster: true }
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -66,6 +69,15 @@ describe('GET /api/staff-devices', () => {
   it('403s without the settings permission, before touching the DB', async () => {
     getCurrentUser.mockResolvedValue({ id: 'u2', profileRole: 'staff' })
     hasPermission.mockReturnValue(false)
+    const res = await GET()
+    expect(res.status).toBe(403)
+    expect(createServerClient).not.toHaveBeenCalled()
+  })
+
+  // C18 ORGROLE.1 — the fleet is the organisation's: a studio owner holding
+  // `settings` but no org_admin grant is refused; an org admin is not.
+  it('403s a studio owner who is not an organisation admin', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'u3', role: 'owner', isMaster: false, orgAdminOrgIds: [], activeOrganization: { id: 'org-1' } })
     const res = await GET()
     expect(res.status).toBe(403)
     expect(createServerClient).not.toHaveBeenCalled()

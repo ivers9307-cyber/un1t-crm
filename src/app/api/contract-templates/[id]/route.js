@@ -1,6 +1,6 @@
 // /api/contract-templates/[id]
-//   GET     fetch one template (master / owner of the template's org)
-//   PATCH   update (master / owner of the template's org)
+//   GET     fetch one template (master / org admin of the template's org)
+//   PATCH   update (master / org admin of the template's org)
 //   DELETE  soft-delete (active=false). We don't hard-delete because
 //           contracts.template_id has on delete restrict — issued
 //           contracts must keep their template-row anchor for audit.
@@ -23,20 +23,20 @@
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getOwnerOrganizationIds } from '@/lib/auth'
+import { getCurrentUser } from '@/lib/auth'
+import { adminOrganizationIds } from '@/lib/org-admin'
+import { canManageContractsSomewhere } from '@/lib/contract-gates'
 import { contractTemplateSchema } from '@/lib/schemas'
 import { validateBody } from '@/lib/validate'
 
 export const runtime = 'nodejs'
 
-// Master, the owner role, or any caller who owns at least one org.
-// The membership arm matters for composability: SAAS-4 extends
-// getOwnerOrganizationIds() to org-admin grants, and those callers
-// must clear this gate without carrying the 'owner' role label.
-// The org filter below still does the real per-row work.
+// C18 ORGROLE.1 — contract templates are an organisation-level surface:
+// master, or an org admin of SOME organisation (an org_admin grant; a studio
+// owner is not one). The org filter below (adminOrganizationIds) does the
+// real per-row work.
 function canManageTemplates(user) {
-  return user?.role === 'master' || user?.role === 'owner'
-    || getOwnerOrganizationIds(user).length > 0
+  return canManageContractsSomewhere(user)
 }
 
 export async function GET(_request, props) {
@@ -44,7 +44,7 @@ export async function GET(_request, props) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   if (!canManageTemplates(user)) {
-    return NextResponse.json({ success: false, error: 'Master or owner only' }, { status: 403 })
+    return NextResponse.json({ success: false, error: 'Master or organisation admin only' }, { status: 403 })
   }
   const db = createServerClient()
   let query = db
@@ -54,12 +54,12 @@ export async function GET(_request, props) {
   if (!user.isMaster) {
     // Org scoping (mirrors the list route). NULL organization_id never
     // matches `.in`, so unanchored templates 404 for non-masters. An
-    // owner of no org can match nothing — 404 without querying.
-    const ownerOrgIds = getOwnerOrganizationIds(user)
-    if (ownerOrgIds.length === 0) {
+    // admin of no org can match nothing — 404 without querying.
+    const adminOrgIds = adminOrganizationIds(user)
+    if (adminOrgIds.length === 0) {
       return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
     }
-    query = query.in('organization_id', ownerOrgIds)
+    query = query.in('organization_id', adminOrgIds)
   }
   const { data, error } = await query.maybeSingle()
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
@@ -72,7 +72,7 @@ export async function PATCH(request, props) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   if (!canManageTemplates(user)) {
-    return NextResponse.json({ success: false, error: 'Master or owner only' }, { status: 403 })
+    return NextResponse.json({ success: false, error: 'Master or organisation admin only' }, { status: 403 })
   }
 
   // Accept partial updates — re-use the schema with `.partial()` so
@@ -85,8 +85,8 @@ export async function PATCH(request, props) {
   // Resolve the caller's org scope once — it constrains BOTH the
   // version preflight and the UPDATE itself, so even a race between
   // the two can't let the write land on a foreign row.
-  const ownerOrgIds = user.isMaster ? null : getOwnerOrganizationIds(user)
-  if (ownerOrgIds && ownerOrgIds.length === 0) {
+  const adminOrgIds = user.isMaster ? null : adminOrganizationIds(user)
+  if (adminOrgIds && adminOrgIds.length === 0) {
     return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   }
 
@@ -106,7 +106,7 @@ export async function PATCH(request, props) {
       .from('contract_templates')
       .select('version, body_markdown, variables_schema')
       .eq('id', params.id)
-    if (ownerOrgIds) preflight = preflight.in('organization_id', ownerOrgIds)
+    if (adminOrgIds) preflight = preflight.in('organization_id', adminOrgIds)
     const { data: current, error: curErr } = await preflight.maybeSingle()
     if (curErr) return NextResponse.json({ success: false, error: curErr.message }, { status: 500 })
     if (!current) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
@@ -135,7 +135,7 @@ export async function PATCH(request, props) {
     .from('contract_templates')
     .update(updates)
     .eq('id', params.id)
-  if (ownerOrgIds) update = update.in('organization_id', ownerOrgIds)
+  if (adminOrgIds) update = update.in('organization_id', adminOrgIds)
   const { data, error } = await update.select().maybeSingle()
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   // No row matched → missing id or a foreign/NULL-org template; same 404.
@@ -148,7 +148,7 @@ export async function DELETE(_request, props) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   if (!canManageTemplates(user)) {
-    return NextResponse.json({ success: false, error: 'Master or owner only' }, { status: 403 })
+    return NextResponse.json({ success: false, error: 'Master or organisation admin only' }, { status: 403 })
   }
   // Soft-delete via active=false. Hard-delete would fail on the
   // FK (contracts.template_id on delete restrict) the moment a
@@ -162,11 +162,11 @@ export async function DELETE(_request, props) {
   if (!user.isMaster) {
     // Same org scoping as GET/PATCH, applied to the write itself so
     // there is no read-then-write window to race.
-    const ownerOrgIds = getOwnerOrganizationIds(user)
-    if (ownerOrgIds.length === 0) {
+    const adminOrgIds = adminOrganizationIds(user)
+    if (adminOrgIds.length === 0) {
       return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
     }
-    update = update.in('organization_id', ownerOrgIds)
+    update = update.in('organization_id', adminOrgIds)
   }
   const { data, error } = await update.select('id')
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })

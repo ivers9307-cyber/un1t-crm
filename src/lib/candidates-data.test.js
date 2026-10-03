@@ -137,6 +137,22 @@ describe('readContractedHours', () => {
 })
 
 describe('loadBlockCandidates — manager', () => {
+  // REPLACE.1b review 4 (owner decision) — an "Offer to team" audience and a
+  // claim count PUBLISHED shifts only: a coach is never skipped or refused over
+  // a draft they cannot see. Everything else about the manager answer stays.
+  it('publishedShiftsOnly: the manager answer (leave, availability) over published shifts only', async () => {
+    const db = mockDb()
+    const out = await loadBlockCandidates(db, { block: BLOCK, audience: 'manager', publishedShiftsOnly: true })
+    expect(readOrgShiftRows.mock.calls[0][1].publishedOnly).toBe(true)
+    expect(read(db, 'time_off_requests')).toBeTruthy()
+    expect(readStudioAvailability).toHaveBeenCalled()
+    expect(out.checked).toMatchObject({ shifts: true, cross_studio: true, leave: true, availability: true })
+  })
+  it('without it a manager still counts drafts (the picker plans them)', async () => {
+    await loadBlockCandidates(mockDb(), { block: BLOCK, audience: 'manager' })
+    expect(readOrgShiftRows.mock.calls[0][1].publishedOnly).toBe(false)
+  })
+
   it('reads the week at every studio of the organisation, leave on the day, availability, and employees\' contracts', async () => {
     const db = mockDb()
     const out = await loadBlockCandidates(db, { block: BLOCK, audience: 'manager', withContract: true })

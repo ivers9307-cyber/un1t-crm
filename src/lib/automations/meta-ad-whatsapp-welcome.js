@@ -16,7 +16,7 @@
 // one legitimate way to set wa_phone from phone — see the broadcast-
 // reachability note in MEMORY).
 
-import { toE164Ireland } from '@/lib/twilio'
+import { toE164Ireland } from '@/lib/phone-validate'
 import {
   sendTemplateMessage,
   buildTemplateComponents,
@@ -24,6 +24,8 @@ import {
   getOrCreateConversation,
 } from '@/lib/whatsapp'
 import { logWarn } from '@/lib/log'
+import { flowTokenFor } from '@/lib/whatsapp-flow/config'
+import { flowButtonComponentFor } from '@/lib/whatsapp-template-buttons'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
 
 // The template's only body variable {{1}} is the lead's first name.
@@ -49,9 +51,13 @@ export async function maybeSendCampaignWhatsappWelcome({ db, locationId, contact
       const { data: loc } = await db.from('locations').select('settings, features').eq('id', locationId).maybeSingle()
       location = loc
       const flowCfg = loc?.settings?.whatsapp_flow
-      if (flowCfg?.enabled && flowCfg.template_name) {
+      // FLOWTOKENDEDUP.1 — THE token format lives in flowTokenFor. It is null
+      // without a contact id; the lead then gets the classic welcome rather
+      // than a Flow whose token the endpoint could never resolve.
+      const token = flowCfg?.enabled && flowCfg.template_name ? flowTokenFor(contact?.id, locationId) : null
+      if (token) {
         templateName = flowCfg.template_name
-        flowToken = `${contact?.id}.${locationId}`
+        flowToken = token
       }
     } catch (e) { logWarn('meta-ad-wa-welcome', 'flow config read failed', { err: e }) }
 
@@ -89,10 +95,10 @@ export async function maybeSendCampaignWhatsappWelcome({ db, locationId, contact
       template.header_media_url || null,
     )
     // FLOW-button template: attach the per-lead flow_token to the button so the
-    // tapped Flow round-trips it back to /api/whatsapp/flow.
-    if (flowToken) {
-      components.push({ type: 'button', sub_type: 'flow', index: '0', parameters: [{ type: 'action', action: { flow_token: flowToken } }] })
-    }
+    // tapped Flow round-trips it back to /api/whatsapp/flow. The shared builder
+    // puts it on the FLOW button's real index (it was hard-coded '0').
+    const flowComponent = flowButtonComponentFor(template.components, flowToken)
+    if (flowComponent) components.push(flowComponent)
 
     const result = await sendTemplateMessage(
       waPhone,

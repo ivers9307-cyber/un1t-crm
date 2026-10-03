@@ -222,7 +222,9 @@ export default function TimeOffManager({ user, canApprove, canDecideCancellation
         setError({ title: 'Could not unassign', message: data.error || 'The shifts were not changed.', retry: false })
         return
       }
-      const removed = data.data?.removed?.length || 0
+      // REPLACENITS.1 — a double submit answers success with the rows the first
+      // request already took off (already_removed). The coach is off them either way.
+      const removed = (data.data?.removed?.length || 0) + (data.data?.already_removed?.length || 0)
       const skipped = data.data?.skipped?.length || 0
       setClashFollowUp(null)
       setNotice(

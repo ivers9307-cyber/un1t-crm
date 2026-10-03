@@ -31,6 +31,9 @@ export function parseEchoMessages(value) {
     messageType: m.type || 'text',
     body: textBody(m),
     tsSeconds: m.timestamp ? parseInt(m.timestamp, 10) : null,
+    // C106 (d) — a live reply from the phone app: the ingest stores it as
+    // source 'app_echo' (staff) and takes the thread over from Mia.
+    origin: 'echo',
   }))
 }
 
@@ -63,6 +66,7 @@ export function parseHistoryMessages(value, ownPhone) {
           waMessageId: m.id, peerPhone, direction,
           messageType: m.type || 'text', body: textBody(m),
           tsSeconds: m.timestamp ? parseInt(m.timestamp, 10) : null,
+          origin: 'history',
         })
       }
     }

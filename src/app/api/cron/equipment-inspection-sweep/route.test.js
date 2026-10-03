@@ -34,18 +34,19 @@ vi.mock('@/lib/equipment-db', () => ({
   listSubmittedSince: vi.fn(),
 }))
 vi.mock('@/lib/push', () => ({
-  resolveRoleRecipientIds: vi.fn(),
+  readRoleRecipientIds: vi.fn(),
 }))
 vi.mock('@/lib/push-dedup', () => ({
   sendPushOnce: vi.fn(async () => ({ sent: 1 })),
 }))
 vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: vi.fn(async () => {}) }))
 vi.mock('@/lib/audit', () => ({ logAuditEvent: vi.fn(async () => ({ logged: true })) }))
-vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
+vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
 
 import { GET } from './route.js'
 import { listEnabledSettings, listActiveEquipment, listSubmittedSince } from '@/lib/equipment-db'
-import { resolveRoleRecipientIds } from '@/lib/push'
+import { readRoleRecipientIds } from '@/lib/push'
+import { logError, logWarn } from '@/lib/log'
 import { sendPushOnce } from '@/lib/push-dedup'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 
@@ -67,7 +68,7 @@ beforeEach(() => {
   listEnabledSettings.mockResolvedValue([])
   listActiveEquipment.mockResolvedValue([])
   listSubmittedSince.mockResolvedValue([])
-  resolveRoleRecipientIds.mockResolvedValue([])
+  readRoleRecipientIds.mockResolvedValue({ ids: [], error: null })
 })
 
 describe('GET /api/cron/equipment-inspection-sweep', () => {
@@ -86,7 +87,7 @@ describe('GET /api/cron/equipment-inspection-sweep', () => {
   it("runs a location whose inspection weekday is NOT today — unlike the reminder, overdue can hit any day", async () => {
     listEnabledSettings.mockResolvedValue([SETTINGS_B])
     listActiveEquipment.mockResolvedValue(OVERDUE_ASSETS)
-    resolveRoleRecipientIds.mockResolvedValue(['prof-owner'])
+    readRoleRecipientIds.mockResolvedValue({ ids: ['prof-owner'], error: null })
     await GET(req())
     expect(listActiveEquipment).toHaveBeenCalledWith(fakeDb, 'loc-b')
     expect(sendPushOnce).toHaveBeenCalledTimes(1)
@@ -96,16 +97,16 @@ describe('GET /api/cron/equipment-inspection-sweep', () => {
     listEnabledSettings.mockResolvedValue([SETTINGS_A])
     listActiveEquipment.mockResolvedValue([])
     await GET(req())
-    expect(resolveRoleRecipientIds).not.toHaveBeenCalled()
+    expect(readRoleRecipientIds).not.toHaveBeenCalled()
     expect(sendPushOnce).not.toHaveBeenCalled()
   })
 
   it('resolves recipients for owner+master only, and dedups via sendPushOnce with the bare category inspection_overdue', async () => {
     listEnabledSettings.mockResolvedValue([SETTINGS_A])
     listActiveEquipment.mockResolvedValue(OVERDUE_ASSETS)
-    resolveRoleRecipientIds.mockResolvedValue(['prof-owner', 'prof-master'])
+    readRoleRecipientIds.mockResolvedValue({ ids: ['prof-owner', 'prof-master'], error: null })
     await GET(req())
-    expect(resolveRoleRecipientIds).toHaveBeenCalledWith(fakeDb, 'loc-a', ['owner', 'master'])
+    expect(readRoleRecipientIds).toHaveBeenCalledWith(fakeDb, 'loc-a', ['owner', 'master'])
     expect(sendPushOnce).toHaveBeenCalledWith(
       fakeDb,
       expect.stringContaining('loc-a'),
@@ -118,7 +119,7 @@ describe('GET /api/cron/equipment-inspection-sweep', () => {
   it('skips the push (but still audits) when the resolved recipient list is empty', async () => {
     listEnabledSettings.mockResolvedValue([SETTINGS_A])
     listActiveEquipment.mockResolvedValue(OVERDUE_ASSETS)
-    resolveRoleRecipientIds.mockResolvedValue([])
+    readRoleRecipientIds.mockResolvedValue({ ids: [], error: null })
     await GET(req())
     expect(sendPushOnce).not.toHaveBeenCalled()
   })
@@ -130,7 +131,7 @@ describe('GET /api/cron/equipment-inspection-sweep', () => {
       if (locationId === 'loc-a') throw new Error('boom')
       return OVERDUE_ASSETS
     })
-    resolveRoleRecipientIds.mockResolvedValue(['prof-owner'])
+    readRoleRecipientIds.mockResolvedValue({ ids: ['prof-owner'], error: null })
 
     const res = await GET(req())
     const body = await res.json()
@@ -144,13 +145,54 @@ describe('GET /api/cron/equipment-inspection-sweep', () => {
   it('flips no state — no update is ever issued against equipment or equipment_inspections', async () => {
     listEnabledSettings.mockResolvedValue([SETTINGS_A])
     listActiveEquipment.mockResolvedValue(OVERDUE_ASSETS)
-    resolveRoleRecipientIds.mockResolvedValue(['prof-owner'])
+    readRoleRecipientIds.mockResolvedValue({ ids: ['prof-owner'], error: null })
     await GET(req())
     expect(updateSpy).not.toHaveBeenCalled()
+  })
+
+  // C1 RECIPIENTS.1 — a failed owner/master read looked exactly like a studio
+  // with nobody to chase: pushed:false, no log, nothing said.
+  it('a failed owner/master read chases nobody, claims no key, says so, and still stamps', async () => {
+    listEnabledSettings.mockResolvedValue([SETTINGS_A])
+    listActiveEquipment.mockResolvedValue(OVERDUE_ASSETS)
+    readRoleRecipientIds.mockResolvedValue({ ids: [], error: { message: 'down' } })
+    const res = await GET(req())
+    const body = await res.json()
+    expect(sendPushOnce).not.toHaveBeenCalled()
+    expect(body.data.locations).toEqual([
+      { locationId: 'loc-a', overdue: 1, pushed: false, recipients_failed: true },
+    ])
+    expect(logError).toHaveBeenCalledWith('equipment-cron', expect.stringContaining('read failed'),
+      expect.objectContaining({ locationId: 'loc-a', err: 'down' }))
+    // A whole-cron row: one studio's blip does not page the cron (D8).
+    expect(stampHeartbeat).toHaveBeenCalledWith('equipment-inspection-sweep')
   })
 
   it('calls stampHeartbeat with the exact mig-470 name', async () => {
     await GET(req())
     expect(stampHeartbeat).toHaveBeenCalledWith('equipment-inspection-sweep')
+  })
+
+  // C21 PUSHDONE.1 — a push that reached nobody was reported pushed: true.
+  it('a push that reached nobody because it failed is reported push_failed, not pushed, and logged', async () => {
+    listEnabledSettings.mockResolvedValue([SETTINGS_A])
+    listActiveEquipment.mockResolvedValue(OVERDUE_ASSETS)
+    readRoleRecipientIds.mockResolvedValue({ ids: ['prof-owner'], error: null })
+    sendPushOnce.mockResolvedValueOnce({ sent: 0, skipped: 0, invalidated: 0, failed: 1, deduped: 0, read_failed: 1 })
+    const body = await (await GET(req())).json()
+    expect(body.data.locations).toEqual([
+      { locationId: 'loc-a', overdue: 1, pushed: false, push_failed: true },
+    ])
+    expect(logWarn).toHaveBeenCalledWith('equipment-cron', 'overdue push reached nobody; the day key was released, the next run chases again',
+      { locationId: 'loc-a', overdue: 1, read_failed: true })
+  })
+
+  it('a same-day re-run that finds the key already claimed is still pushed (deduped is settled, not failed)', async () => {
+    listEnabledSettings.mockResolvedValue([SETTINGS_A])
+    listActiveEquipment.mockResolvedValue(OVERDUE_ASSETS)
+    readRoleRecipientIds.mockResolvedValue({ ids: ['prof-owner'], error: null })
+    sendPushOnce.mockResolvedValueOnce({ sent: 0, skipped: 0, invalidated: 0, failed: 0, deduped: 1 })
+    const body = await (await GET(req())).json()
+    expect(body.data.locations[0]).toEqual({ locationId: 'loc-a', overdue: 1, pushed: true })
   })
 })

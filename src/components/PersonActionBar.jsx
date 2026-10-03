@@ -21,7 +21,7 @@ import { useRouter } from 'next/navigation'
 import { useState, useRef, useEffect } from 'react'
 import { MoreVertical, MessageSquare, CheckSquare, Repeat, Snowflake, RotateCcw, FileX } from 'lucide-react'
 import dynamic from 'next/dynamic'
-import { createBrowserClient } from '@/lib/supabase'
+import { postActivityWrite } from '@/lib/activity-write-gate'
 
 // SequencePicker is heavy + only needed once the operator opens an
 // action — lazy-load it (mirrors the DealCard PERF.3 note).
@@ -54,6 +54,7 @@ export default function PersonActionBar({
   const [menuOpen, setMenuOpen] = useState(false)
   const [overlay, setOverlay] = useState(null) // 'task' | 'sequence' | 'cancel_form' | null
   const [saving, setSaving] = useState(false)
+  const [taskError, setTaskError] = useState(null)
   // Two refs — trigger + dropdown — so the outside-click handler skips
   // closing when the click lands in either (the DealCard v1 bug:
   // mousedown closed the menu before the item's click could fire).
@@ -80,6 +81,7 @@ export default function PersonActionBar({
       return
     }
     if (action === 'cold') { toggleCold() ; return }
+    setTaskError(null)
     setOverlay(action)
   }
 
@@ -108,6 +110,10 @@ export default function PersonActionBar({
     }
   }
 
+  // C148 ACTWRITEGATEWEB.1 — POST /api/activities/tasks (web Tasks AND
+  // Contacts at the studio, and the contact must be AT that studio). It used
+  // to be a browser insert judged by RLS on the phone keys, and it never read
+  // the answer: a refused save closed the overlay as if it had worked.
   async function addTask(e) {
     e.preventDefault()
     e.stopPropagation()
@@ -115,23 +121,21 @@ export default function PersonActionBar({
     const subject = (fd.get('subject') || '').toString().trim()
     if (!subject) return
     setSaving(true)
-    const db = createBrowserClient()
-    try {
-      await db.from('activities').insert({
-        contact_id: contactId,
-        subject,
-        type: fd.get('type') || 'call',
-        kind: 'task', // manual form always creates a task (mig 073)
-        due_date: fd.get('due_date') || null,
-        due_time: fd.get('due_time') || null,
-        note: fd.get('note') || null,
-        location_id: locationId,
-      })
-    } finally {
-      setSaving(false)
-      setOverlay(null)
-      router.refresh()
-    }
+    setTaskError(null)
+    // The route makes it a task (mig 073: the manual form always does).
+    const outcome = await postActivityWrite('/api/activities/tasks', {
+      contact_id: contactId,
+      subject,
+      type: fd.get('type') || 'call',
+      due_date: fd.get('due_date') || null,
+      due_time: fd.get('due_time') || null,
+      note: fd.get('note') || null,
+      location_id: locationId,
+    })
+    setSaving(false)
+    if (!outcome.ok) { setTaskError(outcome.message); return }
+    setOverlay(null)
+    router.refresh()
   }
 
   const items = actions.filter((a) => ACTION_DEFS[a])
@@ -235,6 +239,7 @@ export default function PersonActionBar({
               placeholder="Optional note..."
               className="w-full bg-un1t-bg border border-un1t-border rounded p-2 text-sm text-un1t-text placeholder:text-un1t-muted resize-none focus:outline-none focus:border-un1t-muted"
             />
+            {taskError && <p role="alert" className="text-xs text-red-400">{taskError}</p>}
             <div className="flex justify-end gap-2">
               <button type="button" onClick={() => setOverlay(null)} className="text-xs text-un1t-subtle hover:text-un1t-text">
                 Cancel

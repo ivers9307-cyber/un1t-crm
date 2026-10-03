@@ -26,7 +26,7 @@
  *   - 'cron'      — fires from a scheduled job. May have configurable
  *                   lead times.
  *   - 'webhook'   — fires from an inbound webhook (Postmark,
- *                   Twilio, WhatsApp, Calendly).
+ *                   WhatsApp, Calendly).
  *
  * `recipients` tells the UI who gets it:
  *   - 'assignee'              — single user the entity is assigned to
@@ -105,7 +105,7 @@ export const NOTIFICATION_REGISTRY = Object.freeze([
     // says so. Same argument ROSTER-FIX.8d used to flip `swap`: volume is one
     // message per published period, not per event, so this is not the noise
     // case bookings/leads are. The per-user notify_schedule toggle still gates
-    // the email (notifyUsers → resolvePushAllowedIds), so an opt-out is not
+    // the email (notifyUsers → readPushAllowedIds), so an opt-out is not
     // routed around.
     fallbackEmail: true,
     emailSubject: 'Your schedule has been published',
@@ -113,9 +113,9 @@ export const NOTIFICATION_REGISTRY = Object.freeze([
   {
     category: 'swap',
     label: 'Swap requests',
-    description: 'Inbound swap requests for managers, the open pool for every coach at the studio who could take the shift, reminders to managers while a swap is unresolved (48h and 12h before the shift, only between 07:00 and 22:00 studio time), and the outcome for the requester and taker, including a swap that expired when its shift started.',
+    description: 'Inbound swap requests for managers, the open pool for every coach at the studio who could take the shift, reminders to managers while a swap is unresolved (48h and 12h before the shift, only between 07:00 and 22:00 studio time), and the outcome for the requester and taker, including a swap that expired when its shift started. Also "Offer to team" (REPLACE.1b): a shift a manager offers goes to every coach at the studio who is free then (07:00-22:00 studio time), and the managers are told who took it.',
     trigger: { kind: 'event', source: 'POST/PUT /api/schedule/swaps + the checklist-sweep cron' },
-    recipients: { kind: 'individual_or_creator', detail: 'Managers (new request, reminders), coaches at the studio who are free and not on leave (open pool), or the requester / taker (decision, expiry)' },
+    recipients: { kind: 'individual_or_creator', detail: 'Managers (new request, reminders), coaches at the studio who are free and not on leave (open pool), or the requester / taker (decision, expiry), coaches free for an offered shift, managers when it is taken' },
     configurable: { leadTimes: false, roles: false },
     // ROSTER-FIX.8d — was false, so every swap notification was push-only and
     // reached nobody without the app installed. A swap is a request somebody

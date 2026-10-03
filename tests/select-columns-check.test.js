@@ -8,7 +8,10 @@
 // The shape of every fixture is the ENROLFIX.1 incident (#1685): a select
 // naming `created_at` on a table whose timestamp is `enrolled_at`.
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import {
   applyMigrationSql,
   splitSqlStatements,
@@ -22,14 +25,21 @@ import {
   lineOf,
   validateAllowlist,
   classifyHits,
+  parseForeignKeys,
+  evaluateStringExpr,
+  findConstInitializer,
+  resolveSelectArg,
+  walkSources,
+  SOURCE_ROOTS,
 } from '../scripts/check-select-columns.mjs'
 
-/** Replay migration texts in order into a schema map. */
+/** Replay migration texts in order into a schema map (and the FK map). */
 function schemaOf(...sqls) {
   const schema = new Map()
   const skippedViews = new Set()
-  for (const sql of sqls) applyMigrationSql(sql, schema, skippedViews)
-  return { schema, skippedViews }
+  const fks = new Map()
+  for (const sql of sqls) applyMigrationSql(sql, schema, skippedViews, fks)
+  return { schema, skippedViews, fks }
 }
 
 const ENROLMENTS_SQL = `
@@ -320,5 +330,271 @@ describe('allowlist', () => {
   it('reports an entry that no longer matches a hit as stale', () => {
     const { stale } = classifyHits([], [entry], '2026-09-13')
     expect(stale).toEqual([entry])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// SELCOLS2.1 — the two things SELECTCOLS.1 skipped in silence.
+// ---------------------------------------------------------------------------
+
+const LOCATIONS_SQL = 'CREATE TABLE public.locations (id uuid PRIMARY KEY, name text, settings jsonb);'
+const PROFILES_SQL = 'CREATE TABLE public.profiles (id uuid PRIMARY KEY, full_name text);'
+const BLOCKS_SQL = `
+  CREATE TABLE public.shift_blocks (
+    id uuid PRIMARY KEY,
+    location_id uuid NOT NULL REFERENCES public.locations(id) ON DELETE CASCADE,
+    created_by uuid REFERENCES auth.users(id),
+    title text
+  );
+`
+
+describe('foreign-key replay (SELCOLS2.1)', () => {
+  it('reads an inline REFERENCES with Postgres\'s default constraint name', () => {
+    expect(parseForeignKeys('shift_blocks', 'id uuid, location_id uuid NOT NULL REFERENCES public.locations(id) ON DELETE CASCADE'))
+      .toEqual([{ column: 'location_id', target: 'locations', constraint: 'shift_blocks_location_id_fkey' }])
+  })
+
+  it('reads a table-level FOREIGN KEY, keeping its explicit name', () => {
+    expect(parseForeignKeys('shift_assignments',
+      'id uuid, block_id uuid, CONSTRAINT sa_block_fk FOREIGN KEY (block_id) REFERENCES shift_blocks(id)'))
+      .toEqual([{ column: 'block_id', target: 'shift_blocks', constraint: 'sa_block_fk' }])
+  })
+
+  it('leaves out FKs into another schema and composite FKs — neither can name an embed', () => {
+    expect(parseForeignKeys('t',
+      'created_by uuid REFERENCES auth.users(id), a uuid, b uuid, FOREIGN KEY (a, b) REFERENCES pairs(x, y)'))
+      .toEqual([])
+  })
+
+  it('replays ADD COLUMN … REFERENCES, ADD CONSTRAINT … FOREIGN KEY and DROP CONSTRAINT', () => {
+    const { fks } = schemaOf(LOCATIONS_SQL, PROFILES_SQL, 'CREATE TABLE rosters (id uuid);', `
+      ALTER TABLE public.rosters
+        ADD COLUMN location_id uuid REFERENCES locations(id),
+        ADD COLUMN owner_id uuid;
+    `, 'ALTER TABLE rosters ADD CONSTRAINT rosters_owner_fk FOREIGN KEY (owner_id) REFERENCES profiles(id);')
+    expect(fks.get('rosters').get('location_id').target).toBe('locations')
+    expect(fks.get('rosters').get('owner_id').target).toBe('profiles')
+
+    const after = schemaOf(LOCATIONS_SQL, 'CREATE TABLE rosters (id uuid, location_id uuid REFERENCES locations(id));',
+      'ALTER TABLE rosters DROP CONSTRAINT IF EXISTS rosters_location_id_fkey;').fks
+    expect(after.get('rosters').has('location_id')).toBe(false)
+  })
+
+  it('follows RENAME COLUMN, DROP COLUMN, and a RENAME TO of the target table', () => {
+    const { fks } = schemaOf(
+      'CREATE TABLE inbound_invoices (id uuid);',
+      'CREATE TABLE lines (id uuid, invoice uuid REFERENCES inbound_invoices(id), dead uuid REFERENCES inbound_invoices(id));',
+      'ALTER TABLE lines RENAME COLUMN invoice TO invoice_id;',
+      'ALTER TABLE lines DROP COLUMN dead;',
+      'ALTER TABLE inbound_invoices RENAME TO invoices_queue;',
+    )
+    expect([...fks.get('lines').keys()]).toEqual(['invoice_id'])
+    expect(fks.get('lines').get('invoice_id').target).toBe('invoices_queue')
+  })
+})
+
+describe('embed named by its FK column (SELCOLS2.1, found building LABOUR.1)', () => {
+  const { schema, fks } = schemaOf(LOCATIONS_SQL, PROFILES_SQL, BLOCKS_SQL)
+  const cols = (sel, table = 'shift_blocks') =>
+    parseSelect(sel, table, schema, fks).map((r) => `${r.table}.${r.column}`)
+  const hits = (src) =>
+    collectFileRefs(src, schema, fks)
+      .filter((r) => !schema.get(r.table).has(r.column))
+      .map((r) => `${r.table}.${r.column}`)
+
+  it('THE LABOUR.1 SHAPE: `locations:location_id ( … )` is checked against locations', () => {
+    expect(cols('id, locations:location_id ( name, city )'))
+      .toEqual(['shift_blocks.id', 'locations.name', 'locations.city'])
+    expect(hits(`db.from('shift_blocks').select('id, locations:location_id ( name, city )')`))
+      .toEqual(['locations.city'])
+  })
+
+  it('resolves the bare FK-column form and the spread form', () => {
+    expect(cols('location_id(name)')).toEqual(['locations.name'])
+    expect(cols('...location_id(name)')).toEqual(['locations.name'])
+  })
+
+  it('still resolves a table-named embed with an FK hint (regression)', () => {
+    expect(cols('loc:locations!location_id(name)')).toEqual(['locations.name'])
+  })
+
+  it('stays silent on an FK into auth.users rather than inventing a table', () => {
+    expect(cols('id, creator:created_by(email)')).toEqual(['shift_blocks.id'])
+  })
+
+  it('without the FK map, behaves exactly as before (callers that pass none)', () => {
+    expect(parseSelect('locations:location_id(name)', 'shift_blocks', schema).map((r) => r.column)).toEqual([])
+  })
+})
+
+describe('select string held in a constant (SELCOLS2.1, found building REPLACE.1b)', () => {
+  const { schema, fks } = schemaOf(ENROLMENTS_SQL, CONTACTS_SQL, LOCATIONS_SQL, BLOCKS_SQL)
+  const hits = (src) =>
+    collectFileRefs(src, schema, fks)
+      .filter((r) => !schema.get(r.table).has(r.column))
+      .map((r) => `${r.table}.${r.column}@${lineOf(src, r.offset)}`)
+
+  it('THE REPLACE.1b SHAPE: `const COLS = \'…\'` then `.select(COLS)`, reported at the .select line', () => {
+    expect(hits([
+      "const COLS = 'id, status, created_at'",
+      '',
+      "const { data } = await db.from('sequence_enrollments')",
+      '  .select(COLS)',
+    ].join('\n'))).toEqual(['sequence_enrollments.created_at@4'])
+  })
+
+  it('reads a multi-line template constant and a second options argument', () => {
+    expect(hits([
+      'const COLS = `',
+      '  id,',
+      '  created_at',
+      '`',
+      "db.from('sequence_enrollments').select(COLS, { count: 'exact' })",
+    ].join('\n'))).toEqual(['sequence_enrollments.created_at@5'])
+  })
+
+  it('reads templates of constants, at the declaration and at the call site', () => {
+    const src = [
+      "const BASE = 'id, status'",
+      'const MORE = `${BASE}, created_at`',
+      "db.from('sequence_enrollments').select(MORE)",
+      "db.from('sequence_enrollments').select(`${BASE}, nope`)",
+    ].join('\n')
+    expect(hits(src)).toEqual(['sequence_enrollments.created_at@3', 'sequence_enrollments.nope@4'])
+  })
+
+  it('reads + concatenation, across lines', () => {
+    expect(hits([
+      "const BASE = 'id, status'",
+      "const ALL = BASE +",
+      "  ', created_at'",
+      "db.from('sequence_enrollments').select(ALL)",
+    ].join('\n'))).toEqual(['sequence_enrollments.created_at@4'])
+  })
+
+  it("reads an array literal joined into a column list: [ 'a', 'b' ].join(', ')", () => {
+    expect(hits([
+      'const COLS = [',
+      "  'id', 'status',",
+      "  'created_at',",
+      "].join(', ')",
+      "db.from('sequence_enrollments').select(COLS)",
+    ].join('\n'))).toEqual(['sequence_enrollments.created_at@5'])
+  })
+
+  it('checks an FK-column embed inside a constant (both fixes together)', () => {
+    expect(hits([
+      "const BLOCK_COLS = 'id, locations:location_id ( name, city )'",
+      "db.from('shift_blocks').select(BLOCK_COLS)",
+    ].join('\n'))).toEqual(['locations.city@2'])
+  })
+
+  it('refuses what it cannot prove, and stays silent', () => {
+    const silent = [
+      // imported: another file
+      "import { COLS } from './cols'\ndb.from('sequence_enrollments').select(COLS)",
+      // let is reassignable
+      "let COLS = 'created_at'\ndb.from('sequence_enrollments').select(COLS)",
+      // declared twice: we cannot tell which one reaches the call
+      "const COLS = 'id'\nfunction f() { const COLS = 'created_at'; return db.from('sequence_enrollments').select(COLS) }",
+      // a parameter, a member, a call
+      "function f(COLS) { return db.from('sequence_enrollments').select(COLS) }",
+      "db.from('sequence_enrollments').select(opts.cols)",
+      "const LIST = ['created_at']\ndb.from('sequence_enrollments').select(LIST.join(','))",
+      // an initializer that keeps going after the literal
+      "const COLS = 'created_at'.trim()\ndb.from('sequence_enrollments').select(COLS)",
+      "const COLS = pick() || 'created_at'\ndb.from('sequence_enrollments').select(COLS)",
+      // an interpolation that is not a bare identifier
+      "const X = { a: 'created_at' }\ndb.from('sequence_enrollments').select(`id, ${X.a}`)",
+      // a cycle
+      "const A = B\nconst B = A\ndb.from('sequence_enrollments').select(A)",
+      // a declaration that only lives in a comment
+      "// const COLS = 'created_at'\ndb.from('sequence_enrollments').select(COLS)",
+    ]
+    for (const src of silent) expect(hits(src), src).toEqual([])
+  })
+})
+
+describe('evaluateStringExpr', () => {
+  const none = () => null
+
+  it('reads literals and + in full mode, refusing any trailing text', () => {
+    expect(evaluateStringExpr(`'a, ' + "b"`, none)).toBe('a, b')
+    expect(evaluateStringExpr("'a'.trim()", none)).toBeNull()
+    expect(evaluateStringExpr('', none)).toBeNull()
+  })
+
+  it('in prefix mode, stops where the initializer ends', () => {
+    expect(evaluateStringExpr("'a';\nconst y = 1", none, new Set(), true)).toBe('a')
+    expect(evaluateStringExpr("'a'\nexport const y = 1", none, new Set(), true)).toBe('a')
+    expect(evaluateStringExpr("'a', B = 'b'", none, new Set(), true)).toBe('a')
+    expect(evaluateStringExpr("'a'\n  .trim()", none, new Set(), true)).toBeNull()
+    expect(evaluateStringExpr("'a' ?? b", none, new Set(), true)).toBeNull()
+  })
+
+  it('maps \\n / \\t escapes to whitespace (which the select parser then strips)', () => {
+    expect(cleanSelectString(evaluateStringExpr("'id,\\n  name'", none))).toBe('id,name')
+  })
+})
+
+describe('resolveSelectArg', () => {
+  it('returns null for an empty .select() (that means *) and for a bare unknown name', () => {
+    expect(resolveSelectArg('', '')).toBeNull()
+    expect(resolveSelectArg('COLUMNS', 'db.from(x).select(COLUMNS)')).toBeNull()
+  })
+
+  it('findConstInitializer insists on exactly one declaration, and a const', () => {
+    expect(findConstInitializer("const A = 'x'", 'A')).toBe(" 'x'")
+    expect(findConstInitializer("const A = 'x'\nconst A = 'y'", 'A')).toBeNull()
+    expect(findConstInitializer("var A = 'x'", 'A')).toBeNull()
+    expect(findConstInitializer("const AB = 'x'", 'A')).toBeNull()
+    expect(findConstInitializer("obj.const A = 'x'", 'A')).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// WATPLPICKER.1 — the gate reads the phone and the shared seam too.
+// ---------------------------------------------------------------------------
+
+describe('which files the gate reads', () => {
+  let tmp = null
+  afterEach(() => { if (tmp) fs.rmSync(tmp, { recursive: true, force: true }); tmp = null })
+
+  function tree(files) {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'selcols-walk-'))
+    for (const f of files) {
+      fs.mkdirSync(path.join(tmp, path.dirname(f)), { recursive: true })
+      fs.writeFileSync(path.join(tmp, f), '')
+    }
+    return tmp
+  }
+  const rel = (root, files) => files.map((f) => path.relative(root, f).split(path.sep).join('/')).sort()
+
+  it('scans src, mobile and shared — the phone picker phantom lived in mobile/lib', () => {
+    expect(SOURCE_ROOTS).toEqual(['src', 'mobile', 'shared'])
+  })
+
+  it('reads .js and .jsx at any depth, and nothing else', () => {
+    const root = tree(['a.js', 'lib/b.jsx', 'app/(staff)/whatsapp/[id].jsx', 'c.ts', 'd.json', 'e.md'])
+    expect(rel(root, walkSources(root))).toEqual(['a.js', 'app/(staff)/whatsapp/[id].jsx', 'lib/b.jsx'])
+  })
+
+  it('skips installed packages, native projects, build output and dot-directories', () => {
+    const root = tree([
+      'lib/keep.js',
+      'node_modules/pkg/index.js',
+      'ios/Pods/x.js',
+      'android/app/y.js',
+      'dist/bundle.js',
+      'web-build/z.js',
+      '.expo/cache.js',
+      '.eas/w.js',
+    ])
+    expect(rel(root, walkSources(root))).toEqual(['lib/keep.js'])
+  })
+
+  it('skips those names only as directories, never a file that shares one', () => {
+    const root = tree(['lib/dist.js', 'lib/ios.jsx'])
+    expect(rel(root, walkSources(root))).toEqual(['lib/dist.js', 'lib/ios.jsx'])
   })
 })

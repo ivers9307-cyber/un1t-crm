@@ -7,7 +7,7 @@
 //   - whatsapp_numbers: Meta quality/tier + token validity (per location).
 //   - webhook_dead_letter (mig 315): unresolved captured events (this
 //     location's rows + the NULL-location orphans — see block 3).
-//   - channel_connections (getConnection): Glofox connection state (per loc).
+//   - channel_connections (readConnection): Glofox connection state (per loc).
 //   - xero_connections: Xero OAuth binding + last sync error (per location).
 //   - email_sends: Postmark bounce/complaint rate over 24h (per location).
 //
@@ -17,7 +17,7 @@
 //
 // Status vocabulary: 'ok' | 'warn' | 'down' | 'unknown'.
 
-import { getConnection } from '@/lib/connection-registry'
+import { readConnection } from '@/lib/connection-registry'
 import { gradeXeroConnection } from '@/lib/integrations-hub'
 // MAILBOX-UNREACHABLE.1 — the structural "can this address receive at all"
 // verdict. Node-only (it resolves MX), which is fine here: every caller of
@@ -348,7 +348,10 @@ export async function getIntegrationHealth(db, locationId) {
   // 4. Glofox — connection registry (only Stillorgan is connected today; other
   // locations legitimately read 'not connected' → unknown, not broken).
   try {
-    const conn = await getConnection(db, locationId, 'glofox')
+    const { conn, error: connErr } = await readConnection(db, locationId, 'glofox')
+    // REGISTRYREAD.1a: an unreadable settings row lands in the catch below
+    // ('Unavailable'), never "Not connected".
+    if (connErr) throw connErr
     rows.push({
       key: 'glofox',
       name: 'Glofox',

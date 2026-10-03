@@ -288,3 +288,23 @@ describe('applyMetaUserPreference — same upsert semantics', () => {
     expect(r).toMatchObject({ applied: false, reason: 'no_suppression_signal_landed' })
   })
 })
+
+// WACONFIGFALLBACK.1 — the STOP acknowledgement at a location whose number has
+// gone (the keyword arrived on it, then it was removed). The ack used to go out
+// on the global env number; the resolver now refuses. The opt-out itself MUST
+// still land in full (the louder-failure rule: losing the suppression would be
+// far worse than losing the ack), and the ack is simply skipped and logged.
+describe('WACONFIGFALLBACK.1 — STOP ack refused for a missing number', () => {
+  it('opt-out still applied in full; no ack row recorded; never throws', async () => {
+    const { WhatsAppNumberMissingError } = await import('./whatsapp-number-missing.js')
+    sendTextMessage.mockRejectedValueOnce(new WhatsAppNumberMissingError('loc1'))
+    const writes = []
+    const r = await applyWhatsappConsentKeyword({
+      db: stubDb({ writes }), contact: { id: 'c1' }, waPhone: '353871234567',
+      locationId: 'loc1', conversationId: 'conv1', keyword: 'stop',
+    })
+    expect(r).toMatchObject({ applied: true, action: 'opt_out' })
+    expect(writes.some((w) => w.table === 'contact_preferences')).toBe(true)
+    expect(writes.some((w) => w.table === 'whatsapp_messages')).toBe(false)
+  })
+})

@@ -62,12 +62,11 @@ describe('windowHours', () => {
     expect(windowHours({ start: '18:00', end: '01:00' })).toBe(7)
   })
 
-  it("reads a '24:00' end as midnight", () => {
+  it("reads a '24:00' end as midnight, exactly as payroll does (PAYROLL24.1)", () => {
     expect(windowHours({ start: '22:00', end: '24:00' })).toBe(2)
-    // payroll.timeToHours refuses hour 24, so payroll counts this 0h. Pinned
-    // so the day someone fixes payroll, this line tells them to delete it
-    // (the follow-up in 32-SNAPSHOT.1.md).
-    expect(shiftHours({ start_time: '22:00', end_time: '24:00' })).toBe(0)
+    for (const [start, end] of [['22:00', '24:00'], ['00:00', '24:00'], ['18:30', '24:00'], ['24:00', '02:00']]) {
+      expect(windowHours({ start, end }), `${start}-${end}`).toBe(shiftHours({ start_time: start, end_time: end }))
+    }
   })
 
   it('is 0 for an unreadable window, never NaN', () => {

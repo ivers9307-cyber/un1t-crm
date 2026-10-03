@@ -21,7 +21,7 @@ You MUST respect the user's role. Never attempt a tool the user's role does not 
 
 **Head Coach** — Can do everything except:
 - Cannot create contacts (create_contact)
-- Cannot see pay rates or staff cost: cannot run the staff_cost report (generate_report with report_type staff_cost), and must not be told any staff member's salary, hourly rate, overtime rate or labour cost. Head coaches CAN run staff_hours reports and see hours, time off, roster coverage and utilisation
+- Cannot see pay rates or staff cost: cannot run the staff_cost report (generate_report with report_type staff_cost), and must not be told any staff member's salary, hourly rate, overtime rate or labour cost. Head coaches CAN run staff_hours reports and see hours, time off and roster coverage. They cannot see colleagues' contracted hours or the utilisation report (owners and managers only)
 
 **Staff** — Can view the published schedule but cannot make changes:
 - CAN use: navigate_user, get_holiday_allowance (own only), get_time_off (own only)
@@ -37,7 +37,7 @@ You MUST respect the user's role. Never attempt a tool the user's role does not 
 - Staff cannot see other staff members' salary, hourly rate, or HR data
 - Staff cannot see team-wide reports or cost breakdowns
 - Managers/owners can see and modify all staff data for their location, including pay rates and staff cost
-- Head coaches can see staff hours, time off, roster coverage and utilisation for their location, but NOT pay rates (salary, hourly rate, overtime rate) or staff cost — if asked, say only owners and managers can see pay, and suggest they ask one
+- Head coaches can see staff hours, time off and roster coverage for their location, but NOT pay rates (salary, hourly rate, overtime rate), staff cost, colleagues' contracted hours or utilisation — if asked, say only owners and managers can see those, and suggest they ask one
 
 ## Current User Context
 The user's details, current page, role, and permissions are provided in each message. Use this to:
@@ -227,7 +227,7 @@ export const TOOLS = [
       properties: {
         profile_id: { type: 'string', description: 'The staff member UUID' },
         shift_template_id: { type: 'string', description: 'The shift template UUID' },
-        shift_date: { type: 'string', description: 'Date in YYYY-MM-DD format' },
+        shift_date: { type: 'string', description: 'A real calendar date, YYYY-MM-DD' },
       },
       required: ['profile_id', 'shift_template_id', 'shift_date'],
     },
@@ -295,8 +295,8 @@ export const TOOLS = [
     input_schema: {
       type: 'object',
       properties: {
-        start_date: { type: 'string', description: 'Start date (YYYY-MM-DD)' },
-        end_date: { type: 'string', description: 'End date (YYYY-MM-DD)' },
+        start_date: { type: 'string', description: 'Start date, a real date (YYYY-MM-DD)' },
+        end_date: { type: 'string', description: 'End date (YYYY-MM-DD), on or after start_date and at most 366 days after it' },
         status: { type: 'string', enum: ['pending', 'approved', 'rejected', 'cancelled'], description: 'Filter by status (default: all)' },
       },
       required: ['start_date', 'end_date'],
@@ -309,7 +309,7 @@ export const TOOLS = [
       type: 'object',
       properties: {
         profile_id: { type: 'string', description: 'Staff member UUID (defaults to current user)' },
-        year: { type: 'number', description: 'Year (defaults to current year)' },
+        year: { type: 'number', description: 'Four-digit year from 2020 to 2100 (defaults to the current year)' },
       },
     },
   },
@@ -320,8 +320,8 @@ export const TOOLS = [
       type: 'object',
       properties: {
         report_type: { type: 'string', enum: ['staff_hours', 'staff_cost', 'time_off_summary', 'roster_coverage', 'utilisation'], description: 'Type of report to generate' },
-        period_start: { type: 'string', description: 'Start date (YYYY-MM-DD)' },
-        period_end: { type: 'string', description: 'End date (YYYY-MM-DD)' },
+        period_start: { type: 'string', description: 'Start date, a real date (YYYY-MM-DD)' },
+        period_end: { type: 'string', description: 'End date (YYYY-MM-DD), on or after period_start; the period is at most 366 days' },
       },
       required: ['report_type', 'period_start', 'period_end'],
     },

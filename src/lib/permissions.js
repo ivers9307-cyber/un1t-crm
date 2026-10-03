@@ -189,3 +189,97 @@ export function hasPermissionInOrganization(user, organizationId, key) {
     (l) => l?.organization_id === organizationId && hasPermissionForLocation(user, l.id, key)
   )
 }
+
+/**
+ * ROLESWEEP.1 — does this user hold `key` at ANY location they belong to?
+ *
+ * A COARSE pre-check only, never the authority decision: the permission twin
+ * of hasRoleAtAnyLocation (src/lib/role-at-location.js). A route whose target
+ * location is not known until it has parsed the body or fetched a row keeps
+ * its cheap early refusal with this ("you hold `key` nowhere"), then judges
+ * the real target with hasPermissionForLocation(user, loc, key).
+ *
+ * It replaces `hasPermission(user, key)` in that position. hasPermission
+ * resolves at the ACTIVE location (its features, the active assignment's
+ * overrides, the active role template), so as a pre-check it both refused a
+ * caller who holds the key at the target but not at their active studio, and,
+ * followed only by a membership check, admitted one who holds it at the active
+ * studio but not at the target.
+ *
+ * Each location goes through hasPermissionForLocation, so the full tier order
+ * (feature gate → per-user override → role template → code default) applies
+ * at that location.
+ *
+ * Two ways it differs from its neighbours, both inherited from
+ * hasPermissionForLocation:
+ *   • No derived `approvals_inbox`. hasPermission derives that key from the
+ *     per-category approval grants; this resolves it as a plain key. Don't
+ *     pass it `approvals_inbox`: gate on the category keys instead.
+ *   • Masters are SCORED per location, not short-circuited. Unlike
+ *     hasPermissionInOrganization (which returns true for any master), a
+ *     master passes only if some location getCurrentUser gives them (every
+ *     active one) has the feature on: the feature gate binds masters too.
+ *     The master `settings` escape hatch still applies.
+ *
+ * @param {object|null} user  — getCurrentUser() result
+ * @param {string} key        — WEB_PERMISSIONS key
+ * @returns {boolean}
+ */
+export function hasPermissionAtAnyLocation(user, key) {
+  if (!user) return false
+  return (user.locations || []).some((l) => l?.id && hasPermissionForLocation(user, l.id, key))
+}
+
+/**
+ * ROLESWEEP.1c — the per-location twin of hasMobilePermission(), exactly as
+ * hasPermissionForLocation() is the per-location twin of hasPermission().
+ *
+ * hasMobilePermission() resolves at the ACTIVE location (user.role, the
+ * active location's features, the active assignment's `.mobile` overrides,
+ * the active role template's `.mobile` half). A route that acts on a contact
+ * at another studio must ask the question AT that studio: the role the caller
+ * holds there, `assignmentsByLocation[loc].permissions.mobile`,
+ * `roleTemplatesByLocation[loc].mobile`, the target location's features, then
+ * DEFAULT_MOBILE_PERMISSIONS_BY_ROLE for the role there.
+ *
+ * No master `settings` escape hatch (the mobile app has no settings UI — same
+ * as hasMobilePermission); the shared resolver still lets master through once
+ * the location's feature gate says yes.
+ *
+ * @param {object} user        — getCurrentUser() result
+ * @param {string} locationId  — the TARGET location
+ * @param {string} key         — MOBILE_PERMISSIONS key
+ * @returns {boolean}
+ */
+export function hasMobilePermissionForLocation(user, locationId, key) {
+  if (!user || !locationId) return false
+
+  const assignment = user.assignmentsByLocation?.[locationId] || null
+  const location   = (user.locations || []).find((l) => l.id === locationId) || null
+  const roleHere   = user.role === 'master' ? 'master' : (assignment?.role || location?.role || null)
+  if (!roleHere) return false
+
+  return resolvePermission({
+    role: roleHere,
+    location, // location.features carries the tier-1 gate
+    permissions: assignment?.permissions?.mobile || {},
+    roleTemplate: user.roleTemplatesByLocation?.[locationId]?.mobile || null,
+    defaults: DEFAULT_MOBILE_PERMISSIONS_BY_ROLE,
+    key,
+  })
+}
+
+/**
+ * ROLESWEEP.1c — does this user hold the MOBILE `key` at ANY location they
+ * belong to? The coarse pre-check twin of hasPermissionAtAnyLocation, for the
+ * routes that accept the web OR the mobile toggle; the real decision is
+ * hasMobilePermissionForLocation(user, loc, key) at the target.
+ *
+ * @param {object|null} user
+ * @param {string} key
+ * @returns {boolean}
+ */
+export function hasMobilePermissionAtAnyLocation(user, key) {
+  if (!user) return false
+  return (user.locations || []).some((l) => l?.id && hasMobilePermissionForLocation(user, l.id, key))
+}

@@ -16,10 +16,18 @@ vi.mock('@/lib/auth', async (importOriginal) => {
   return { ...actual, getCurrentUser: vi.fn() }
 })
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+// Real registry sync by default; a test can make one call fail.
+vi.mock('@/lib/connection-registry', async (importOriginal) => {
+  const actual = await importOriginal()
+  return { ...actual, syncConnectionFromLegacy: vi.fn(actual.syncConnectionFromLegacy) }
+})
+vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
 
 import { PUT, DELETE } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { syncConnectionFromLegacy } from '@/lib/connection-registry'
+import { logError } from '@/lib/log'
 
 const LOC = 'loc-still'
 
@@ -44,7 +52,6 @@ function liveGlofoxLocation() {
     thinq_pat: null,
     thinq_client_id: null,
     thinq_country_code: null,
-    twilio_alpha_sender_id: null,
     bca_config: null,
   }
 }
@@ -162,6 +169,37 @@ describe('Glofox null-collapse guard (the core regression)', () => {
     expect(locRow.settings.glofox.trial_membership_id).toBe('mem-1') // non-exposed field survives
   })
 
+  it('SECFIX.3b: the settings tab\'s trial, hidden-class and trainer fields are saved, secrets untouched', async () => {
+    getCurrentUser.mockResolvedValue(OWNER)
+    const { db, locRow } = makeDb({ location: liveGlofoxLocation() })
+    createServerClient.mockReturnValue(db)
+
+    const res = await PUT(req({
+      branch_id: 'branch-abc', namespace: 'untstillorgan',
+      trial_membership_id: 'mem-2', trial_plan_code: 'plan-9',
+      hidden_class_keywords: ['EL1TES', 'OPEN GYM'],
+      trainer_names: { '0123456789abcdef01234567': 'Coach A' },
+    }), props(LOC, 'glofox'))
+
+    expect(res.status).toBe(200)
+    expect(locRow.settings.glofox).toMatchObject({
+      trial_membership_id: 'mem-2', trial_plan_code: 'plan-9',
+      hidden_class_keywords: ['EL1TES', 'OPEN GYM'],
+      trainer_names: { '0123456789abcdef01234567': 'Coach A' },
+      api_key: 'LIVE_KEY', api_token: 'LIVE_TOKEN', webhook_secret: 'LIVE_SECRET',
+    })
+  })
+
+  it('SECFIX.3b: a drawer save that omits the tab fields leaves them alone', async () => {
+    getCurrentUser.mockResolvedValue(OWNER)
+    const { db, locRow } = makeDb({ location: liveGlofoxLocation() })
+    createServerClient.mockReturnValue(db)
+
+    await PUT(req({ branch_id: 'branch-abc', namespace: 'untstillorgan' }), props(LOC, 'glofox'))
+
+    expect(locRow.settings.glofox.trial_membership_id).toBe('mem-1')
+  })
+
   it('DELETE disconnect clears the slice AND deactivates the registry row', async () => {
     getCurrentUser.mockResolvedValue(OWNER)
     const { db, log, locRow, cc } = makeDb({
@@ -253,14 +291,45 @@ describe('role gates + access', () => {
     expect(m.locRow.thinq_client_id).toMatch(/^[0-9a-f-]{36}$/)
   })
 
-  it('Twilio: sender ID is returned in full (not a secret)', async () => {
+  // TWILIO-RETIRE.1 — the Twilio sender provider left with the SMS channel.
+  it('twilio is an unknown provider now (404, nothing written)', async () => {
     getCurrentUser.mockResolvedValue(OWNER)
     const m = makeDb({ location: liveGlofoxLocation() })
     createServerClient.mockReturnValue(m.db)
     const res = await PUT(req({ sender_id: 'UN1T STILL' }), props(LOC, 'twilio'))
+    expect(res.status).toBe(404)
+    expect(m.locRow.twilio_alpha_sender_id).toBeUndefined()
+  })
+})
+
+// REGISTRYREAD.1a — a failed registry sync used to surface only as an error
+// string in the response; on a disconnect that can leave the registry row
+// ACTIVE after the legacy slice was cleared. It is now logged; the response
+// is unchanged.
+describe('a failed registry sync is logged, the response unchanged', () => {
+  it('DELETE: logError fires with location + platform; still 200 disconnected with the error string', async () => {
+    getCurrentUser.mockResolvedValue(OWNER)
+    const { db } = makeDb({ location: liveGlofoxLocation() })
+    createServerClient.mockReturnValue(db)
+    const boom = new Error('registry write failed')
+    syncConnectionFromLegacy.mockRejectedValueOnce(boom)
+
+    const res = await DELETE(req(), props(LOC, 'glofox'))
     const body = await res.json()
+
     expect(res.status).toBe(200)
-    expect(m.locRow.twilio_alpha_sender_id).toBe('UN1T STILL')
-    expect(body.data.sender_id).toBe('UN1T STILL')
+    expect(body.data.disconnected).toBe(true)
+    expect(body.data.registry).toEqual({ glofox: 'error: registry write failed' })
+    expect(logError).toHaveBeenCalledWith('integrations', 'registry sync failed', { locationId: LOC, platform: 'glofox', err: boom })
+  })
+
+  it('a clean sync logs nothing', async () => {
+    getCurrentUser.mockResolvedValue(OWNER)
+    const { db } = makeDb({ location: liveGlofoxLocation() })
+    createServerClient.mockReturnValue(db)
+
+    await DELETE(req(), props(LOC, 'glofox'))
+
+    expect(logError).not.toHaveBeenCalled()
   })
 })

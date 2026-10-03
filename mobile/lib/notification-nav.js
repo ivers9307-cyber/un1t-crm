@@ -15,6 +15,10 @@
 //     accept/decline, "Open swaps you can take" + "my posted swaps" cards live
 //     on the personal dashboard, not /schedule. That dashboard moved off Home
 //     onto its own Dashboard tab in HOME-LOC.7.
+//   shift_offer (REPLACE.1b, "A shift is up for grabs") — Claim is in the
+//     Dashboard's "Shifts up for grabs" section. shift_offer_taken (to the
+//     managers) opens that day in Manage mode. A phone without the REPLACE.1b
+//     update gets undefined for both: the push shows, the tap only opens the app.
 //   swap_open / swap_awaiting / time_off_inbound / expense_submitted — sent
 //     to managers/owners; their decision queue is the /approvals inbox.
 //     The payload id (swap_id / request_id / claim_id) equals the pending-
@@ -71,6 +75,13 @@ export function routeForNotification(data) {
     case 'swap_decision':  // requester/taker: final decision — roster changed
       // on the requester-shift's date; preselect that week+day.
       return isIsoDay(data.block_date) ? `/(tabs)/schedule?date=${data.block_date}` : '/(tabs)/schedule'
+
+    // ── Offer to team (REPLACE.1b) ──────────────────────────────────
+    case 'shift_offer':       // coach: "A shift is up for grabs" — Claim is on the Dashboard
+      return '/(tabs)/dashboard'
+    case 'shift_offer_taken': // manager: "Coach B took …" — that day in Manage mode
+      // (schedule.jsx honours view=manage for manager roles only).
+      return isIsoDay(data.block_date) ? `/(tabs)/schedule?date=${data.block_date}&view=manage` : '/(tabs)/schedule?view=manage'
 
     // ── Time off ────────────────────────────────────────────────────
     case 'time_off_inbound': // manager: new request

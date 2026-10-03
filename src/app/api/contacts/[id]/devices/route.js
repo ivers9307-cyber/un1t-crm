@@ -8,7 +8,7 @@
 // Validation lives in src/lib/contact-devices.js (validateDeviceInput).
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser, getUserLocationIds, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { validateDeviceInput, listForContacts } from '@/lib/contact-devices'
 import { getPersonGroup } from '@/lib/person-links'
@@ -80,7 +80,9 @@ export async function POST(request, props) {
   if (!user) {
     return NextResponse.json({ ok: false, error: 'Unauthorised' }, { status: 401 })
   }
-  if (!user.isMaster && !WRITE_ROLES.includes(user.role)) {
+  // SECFIX.1 — coarse pre-check only; the role is judged at the contact's
+  // location below, never at the caller's ACTIVE studio (`user.role`).
+  if (!user.isMaster && !hasRoleAtAnyLocation(user, WRITE_ROLES)) {
     return NextResponse.json({ ok: false, error: 'Admin only' }, { status: 403 })
   }
 
@@ -112,6 +114,10 @@ export async function POST(request, props) {
     if (!allowed) {
       return NextResponse.json({ ok: false, error: 'Location not in your scope' }, { status: 403 })
     }
+  }
+  // SECFIX.1 — WRITE_ROLES at the contact's location (master exempt).
+  if (!user.isMaster && !hasRoleAtLocation(user, contact.location_id, WRITE_ROLES)) {
+    return NextResponse.json({ ok: false, error: 'Admin only' }, { status: 403 })
   }
 
   const { data, error } = await db

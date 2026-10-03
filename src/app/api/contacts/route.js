@@ -7,6 +7,7 @@ import { uuidLike, email, phone, leadSourceSchema, MANAGER_ROLES } from '@/lib/s
 import { sendPushToRolesAtLocationOnce } from '@/lib/push-dedup'
 import { triggerSequencesForPipelineStageChange } from '@/lib/sequences'
 import { logWarn } from '@/lib/log'
+import { assertLocationAccess, hasRoleAtLocation } from '@/lib/auth'
 
 const ContactCreateSchema = z.object({
   name: z.string().min(1).max(200),
@@ -40,6 +41,29 @@ export async function POST(request) {
   if (!body.location_id && auth.user?.activeLocation?.id) {
     body.location_id = auth.user.activeLocation.id
   }
+  // SECFIX.2 — a cookie caller creates only at a location they belong to.
+  // requireApiKeyOrManager judges the role at the ACTIVE studio and nothing
+  // checked the body's location_id, so a cookie manager could create a
+  // contact (firing its new-lead push, contact-created sequences and Glofox
+  // lead provisioning) at ANY location id, another organisation's included.
+  // A body location, not a row, so a non-member gets assertLocationAccess's
+  // 403. Masters reach every location. API-key callers are unchanged.
+  if (auth.user) {
+    if (!body.location_id) {
+      return NextResponse.json({ success: false, error: 'location_id required' }, { status: 400 })
+    }
+    if (!auth.user.isMaster) {
+      const guard = assertLocationAccess(auth.user, body.location_id)
+      if (guard) return guard
+    }
+    // ROLESWEEP.2 — requireApiKeyOrManager's cookie branch only says
+    // "Manager+ somewhere"; THIS is the decision: MANAGER_ROLES at the
+    // location the contact is created at, after membership. A refusal keeps
+    // the helper's 401 body.
+    if (!hasRoleAtLocation(auth.user, body.location_id, MANAGER_ROLES)) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+    }
+  }
   const db = createServerClient()
 
   // APIKEYS.3 — a per-org key may only create contacts at a location
@@ -63,7 +87,12 @@ export async function POST(request) {
     phone: body.phone,
     label: body.label,
     glofox_member_id: body.glofox_member_id,
-    trial_credits_remaining: body.trial_credits_remaining ?? 3,
+    // C145 TRIALDEFAULT.1 (Richard, 2 Oct) — no default trial credits: a new
+    // contact has NO credit count until Glofox says otherwise (the sync sets
+    // it on link). It used to be `?? 3`, shown as "3 credits" before any
+    // Glofox account existed. An explicit NULL, not an omitted key, so the
+    // column's old DEFAULT 3 (mig 001, dropped in mig 702) never applies.
+    trial_credits_remaining: body.trial_credits_remaining ?? null,
     lead_source: body.lead_source,
     lead_created_at: body.lead_created_at || new Date().toISOString(),
     ...(body.location_id ? { location_id: body.location_id } : {}),

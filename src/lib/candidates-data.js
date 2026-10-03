@@ -130,11 +130,18 @@ export async function readContractedHours(db, profileIds) {
 }
 
 /**
+ * `publishedShiftsOnly` (REPLACE.1b review 4, owner decision): the manager
+ * answer — leave, availability, every studio — but "free" judged on PUBLISHED
+ * shifts only, as the colleague audience already is. "Offer to team" asks it
+ * this way for its push audience, its coach list and a claim: a coach is never
+ * skipped or refused over a draft shift they cannot see. The pickers keep
+ * the default (a manager plans drafts, so drafts count there).
+ *
  * @param {{ block: { id, location_id, block_date, start_time, end_time, shift_templates, shift_assignments },
- *   audience: 'manager'|'colleague' }} opts
+ *   audience: 'manager'|'colleague', withContract?: boolean, publishedShiftsOnly?: boolean }} opts
  * @returns {Promise<{ candidates?: object[], untimed?: number, checked?: object, error: object|null }>}
  */
-export async function loadBlockCandidates(db, { block, audience = 'manager', withContract = false } = {}) {
+export async function loadBlockCandidates(db, { block, audience = 'manager', withContract = false, publishedShiftsOnly = false } = {}) {
   const manager = audience !== 'colleague'
   const who = manager ? 'manager' : 'colleague'
   // CANDIDATES.1 review 4 — contracted hours reach an owner, a manager or a
@@ -169,7 +176,7 @@ export async function loadBlockCandidates(db, { block, audience = 'manager', wit
       // only for the colleague audience. A manager counts drafts, as WORKTIME.
       settle(() => readOrgShiftRows(db, {
         locationId: block.location_id, scopeIds, profileIds: ids,
-        from: addDaysISO(monday, -1), to: addDaysISO(monday, 7), publishedOnly: !manager,
+        from: addDaysISO(monday, -1), to: addDaysISO(monday, 7), publishedOnly: !manager || publishedShiftsOnly === true,
       })),
       manager ? settle(() => readApprovedLeaveOn(db, ids, block.block_date)) : null,
       manager ? settle(() => readStudioAvailability(db, { locationId: block.location_id, startDate: block.block_date, endDate: block.block_date })) : null,

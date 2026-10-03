@@ -87,11 +87,13 @@ export const DASHBOARD_LINK_PERM_KEYS = [
 export const ALL_NAV = [
   // REPSET-ACCOUNT.1 — ACCOUNT-tier home (org portfolio). Pinned above
   // the Dashboard link and section headers because it sits ABOVE the
-  // studio surfaces in the tier model (Account → Studio). Owner+/master
-  // only (role-gated, like the other privileged config surfaces — no
-  // per-user permission key). `/account` is the personal account page,
-  // so the org portfolio lives at /portfolio.
-  { href: '/portfolio',  label: 'Account home', icon: Building2,       masterOrOwnerOnly: true },
+  // studio surfaces in the tier model (Account → Studio). Organisation
+  // admins only (C141 ORGROLE.2, C18's rule: master or an org_admin grant
+  // on the active organisation — the /portfolio page's and
+  // GET /api/account/overview's rule; no per-user permission key).
+  // `/account` is the personal account page, so the org portfolio lives
+  // at /portfolio.
+  { href: '/portfolio',  label: 'Account home', icon: Building2,       orgAdminOnly: true },
   { href: '/dashboard',  label: 'Dashboard',   icon: LayoutDashboard, dashboardGroup: true },
 
   // HOME.3 retired this row in favour of the needs-attention queue;
@@ -136,7 +138,7 @@ export const ALL_NAV = [
   // sidebar's visible-sections sense (holding `email` alone satisfies
   // both unions) while only ONE is highlighted active at a time.
   { href: '/communications', label: 'Messages', icon: MessagesSquare,
-    anyPermission: ['email', 'whatsapp', 'sms', 'email_inbox'], section: 'messages' },
+    anyPermission: ['email', 'whatsapp', 'email_inbox'], section: 'messages' },
 
   // HOME.3 — the standalone Approvals + Issues sidebar entries (the old
   // "queues" holding pen) retired here. The needs-attention queue on
@@ -333,6 +335,9 @@ export const ALL_NAV = [
   //    Landing page (SIDEBAR-IA.1); this was always just the public
   //    preview link.
   //
+  // TWILIO-RETIRE.1 — `sms` LEFT both unions with the SMS channel; the
+  // paragraph below is the history of why it was ever here.
+  //
   // DEEP.4 Task 2 (4B) — `sms` joins the union: it had NO conversational
   // surface of its own (no SMS inbox — the channel is broadcast-only),
   // so unlike `email`/`whatsapp` it was never in this union via the
@@ -369,7 +374,7 @@ export const ALL_NAV = [
   // exclude the editor sub-paths would just make the *list* page light
   // up while its own editor doesn't — worse, not better.
   { href: '/marketing', label: 'Marketing', icon: Megaphone,
-    anyPermission: ['automations', 'email', 'whatsapp', 'device_control', 'landing_page', 'sms'],
+    anyPermission: ['automations', 'email', 'whatsapp', 'device_control', 'landing_page'],
     extraActivePaths: ['/automations', '/communications/send', '/communications/sent', '/communications/templates', '/communications/segments', '/communications/list-health'],
     section: 'marketing' },
 

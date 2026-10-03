@@ -3,9 +3,13 @@
 // below their personal baseline but who are still visiting occasionally.
 // Idempotent per member per calendar month via customer_engagement_nudges.
 // Reachable members only (push token).
+// C21 PUSHDONE.1b — claim, send and release through sendNudgeOnce: a nudge
+// that reached nobody because something broke gives its claim back, so the
+// next daily run (same month key) tries again while the member still
+// qualifies. It used to keep the claim, and the month's nudge was gone.
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { sendCustomerPush } from '@/lib/customer-push'
+import { sendNudgeOnce, readReachableContacts, nudgeFailed } from '@/lib/customer-nudge-claim'
 import { attendanceDrop, buildWinbackPush } from '@/lib/customer-notifications'
 import { logInfo, logWarn } from '@/lib/log'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
@@ -80,33 +84,25 @@ export async function GET(request) {
     return NextResponse.json({ ok: true, candidates: ids.length, dropping: 0, nudged: 0 })
   }
 
-  // 4. Keep only reachable (has a push token).
-  const reachable = new Set()
-  for (let i = 0; i < dropping.length; i += 200) {
-    const chunk = dropping.slice(i, i + 200)
-    const { data: toks } = await db.from('champ_push_tokens').select('contact_id').in('contact_id', chunk)
-    for (const t of toks || []) reachable.add(t.contact_id)
-  }
+  // 4. Keep only reachable (has a push token). A failed token read skips
+  //    that chunk (counted), it is not "unreachable".
+  const { reachable, failed: reachabilityFailed } = await readReachableContacts(db, dropping, 'cron-winback')
 
-  // 5. Record (idempotent, monthly dedup_key) + push.
+  // 5. Claim (idempotent, monthly dedup_key) + push, released if nothing reached them.
   let nudged = 0
+  let failed = 0
   for (const cid of dropping) {
     if (!reachable.has(cid)) continue
-    const { data: ins, error: insErr } = await db
-      .from('customer_engagement_nudges')
-      .insert({ contact_id: cid, type: 'winback', dedup_key: dedupKey })
-      .select('id')
-    if (insErr || !ins || !ins.length) continue // already nudged this month, or error
-    try {
-      await sendCustomerPush(db, cid, buildWinbackPush())
-      nudged++
-    } catch (err) {
-      logWarn('cron-winback', 'push threw', { err, cid })
-    }
+    const { status } = await sendNudgeOnce(db, {
+      contactId: cid, type: 'winback', dedupKey, payload: buildWinbackPush(), module: 'cron-winback',
+    })
+    if (status === 'sent') nudged++
+    else if (nudgeFailed(status)) failed++
   }
 
-  logInfo('cron-winback', 'tick', { candidates: ids.length, dropping: dropping.length, nudged })
+  const summary = { candidates: ids.length, dropping: dropping.length, nudged, failed, reachability_failed: reachabilityFailed }
+  logInfo('cron-winback', 'tick', summary)
   await stampHeartbeat('notify-winback').catch((err) =>
     logWarn('cron-winback', 'heartbeat failed', { err }))
-  return NextResponse.json({ ok: true, candidates: ids.length, dropping: dropping.length, nudged })
+  return NextResponse.json({ ok: true, ...summary })
 }

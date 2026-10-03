@@ -13,7 +13,10 @@ import { briefingOf } from 'shared/shift-briefing'
 const CHIP_BG = { empty: 'bg-red-500/10', short: 'bg-amber-500/10', over: 'bg-red-500/10', admin: 'bg-slate-500/10', ok: 'bg-un1t-border' }
 const CHIP_TX = { empty: 'text-red-700', short: 'text-amber-700', over: 'text-red-700', admin: 'text-slate-700', ok: 'text-un1t-subtle' }
 
-export default function BlockCard({ block, busy, onAddCoach, onCoachPress }) {
+// REPLACE.1b — offerControl (mobile/lib/offer-cards.js blockOfferControl):
+// { kind: 'offer' } draws "Offer to team"; { kind: 'offered', label } draws the
+// offer's state line, which opens the Withdraw sheet; null draws nothing.
+export default function BlockCard({ block, busy, onAddCoach, onCoachPress, offerControl = null, onOffer, onOfferPress }) {
   const tpl = block.shift_templates
   // Live coaches only: a cancelled row is a tombstone, not someone on the shift.
   const coaches = liveBlockAssignments(block)
@@ -64,6 +67,22 @@ export default function BlockCard({ block, busy, onAddCoach, onCoachPress }) {
         <Ionicons name="add" size={16} color="#111827" />
         <Text className="text-sm font-medium text-un1t-text ml-1">Add coach</Text>
       </Pressable>
+
+      {offerControl?.kind === 'offer' ? (
+        <Pressable onPress={onOffer} disabled={busy} accessibilityRole="button"
+          className="flex-row items-center justify-center mt-2 py-2 rounded-xl border border-un1t-border active:opacity-60">
+          <Ionicons name="megaphone-outline" size={15} color="#111827" />
+          <Text className="text-sm font-medium text-un1t-text ml-1">Offer to team</Text>
+        </Pressable>
+      ) : null}
+      {offerControl?.kind === 'offered' ? (
+        <Pressable onPress={onOfferPress} disabled={busy} accessibilityRole="button"
+          accessibilityHint="Opens the option to withdraw the offer"
+          className="flex-row items-start mt-2 py-1.5 active:opacity-60">
+          <Ionicons name="megaphone-outline" size={14} color="#64748B" />
+          <Text className="text-[12px] text-un1t-subtle ml-1 flex-1" numberOfLines={2}>{offerControl.label}</Text>
+        </Pressable>
+      ) : null}
     </View>
   )
 }

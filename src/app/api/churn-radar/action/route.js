@@ -47,6 +47,7 @@ import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { sendTextMessage } from '@/lib/whatsapp'
 import { sendRadarOutreach } from '@/lib/radar-outreach'
+import { whatsappErrorStatus, isWhatsAppNumberMissing } from '@/lib/whatsapp-number-missing'
 import { enrolContacts } from '@/lib/sequences'
 import { capturePaymentForRun, refreshActiveRunPayment } from '@/lib/dunning-payment'
 import { isMembershipInvoice } from '@/lib/glofox-arrears'
@@ -158,6 +159,12 @@ export async function POST(request) {
       await sendTextMessage(to, message, { locationId })
     } catch (e) {
       logWarn('churn-radar', 'winback whatsapp failed', { err: e, contactId })
+      // WACONFIGFALLBACK.1 — no WhatsApp number at this location: say so (409).
+      // The copy below would blame the member's message window, and the send
+      // used to go out on the env number.
+      if (isWhatsAppNumberMissing(e)) {
+        return NextResponse.json({ success: false, error: e.message }, { status: 409 })
+      }
       return NextResponse.json({
         success: false,
         error: 'Couldn\'t send the WhatsApp — the member has no open message window. Reach out manually.',
@@ -175,10 +182,11 @@ export async function POST(request) {
       await sendRadarOutreach({ db, contact, templateName, locationId, sentBy: user.id })
     } catch (e) {
       logWarn('churn-radar', 'outreach send failed', { err: e, contactId })
+      // WACONFIGFALLBACK.1 — no WhatsApp number at this location → 409.
       return NextResponse.json({
         success: false,
         error: e.message || 'Could not send the WhatsApp template.',
-      }, { status: 502 })
+      }, { status: whatsappErrorStatus(e, 502) })
     }
     logRow.template_name = templateName
   }

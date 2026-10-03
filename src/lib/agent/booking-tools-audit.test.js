@@ -236,6 +236,20 @@ describe('in-body Glofox rejections (MIA-BOOK.1)', () => {
     expect(trace[1]).toMatchObject({ status: 'actioned' })
   })
 
+  // GLOFOXWRITEJUDGE.1 — Glofox: a 200 with success:false is a bad request.
+  // With no code and no id Mia used to tell the customer "booked".
+  it('a 200 success:false with no code and no id is never booked:true; staff get the card', async () => {
+    const trace = []
+    glofox.createBooking.mockResolvedValue({ ok: true, status: 200, body: { success: false } })
+    const res = await executeBookingTool('book_class', { event_id: EVENT_ID, class_name: 'SQUAD' }, ctx(trace))
+    expect(res.booked).not.toBe(true)
+    expect(res.requested).toBe(true)
+    expect(trace[1]).toMatchObject({ status: 'pending' })
+    expect(trace[1].details.reason).toBe('booking_rejected')
+    expect(trace[1].details.summary).toContain('status_200')
+    expect(trace[1].details.result).toMatchObject({ ok: false, status: 200, message_code: null, glofox_booking_id: null })
+  })
+
   it('a success stores the glofox booking id on the audit row', async () => {
     const trace = []
     glofox.createBooking.mockResolvedValue({ ok: true, status: 200, body: { id: 'gfb-1' } })

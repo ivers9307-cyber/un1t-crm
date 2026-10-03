@@ -23,6 +23,7 @@
 
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { sqlCode } from '../../tests/helpers/sql-code.js'
 import { describe, it, expect } from 'vitest'
 import { ADDRESS_BOUND_EMAIL_STATUSES } from './email-reputation.js'
 
@@ -31,14 +32,12 @@ const SQL = readFileSync(
   'utf8',
 )
 
-// The EXECUTABLE trigger body, with `--` comments stripped. The what-it-does
-// assertions run against this, not the whole file: the file's prose names the
-// consent columns precisely to say it does not touch them, and a naive
-// substring search over the comments would read that as a violation.
-const BODY = (SQL.match(/AS\s+\$\$([\s\S]*?)\$\$/i)?.[1] || '')
-  .split('\n')
-  .map((line) => line.replace(/--.*$/, ''))
-  .join('\n')
+// The EXECUTABLE trigger body, with its comments blanked (the quote-aware
+// tests/helpers/sql-code.js scan, not a per-line regex; GUARDSTRIP.1). The
+// what-it-does assertions run against this, not the whole file: the file's
+// prose names the consent columns precisely to say it does not touch them, and
+// a naive substring search over the comments would read that as a violation.
+const BODY = sqlCode(SQL.match(/AS\s+\$\$([\s\S]*?)\$\$/i)?.[1] || '')
 
 describe('mig 528 — the trigger fires on exactly the right writes', () => {
   it('is a BEFORE UPDATE OF email trigger on contacts', () => {

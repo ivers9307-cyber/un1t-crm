@@ -1,31 +1,18 @@
-// /api/studio-management/ac/devices/[id]
+// GET /api/studio-management/ac/devices/[id]
 //
-//   GET    → device row + live state (or null/error if vendor
-//            unreachable). Permission-gated via the dispatcher.
-//   PATCH  → master-only: rename, change defaults, enable/disable.
-//            Body keys: label, default_mode, default_temp_c,
-//            default_fan, session_minutes, enabled.
-//   DELETE → master-only: soft-disable (set enabled=false). Hard
-//            delete only via DB — keeps audit trail intact for
-//            past sessions.
+//   Device row + cached live state (or ?live=1 for a vendor read), gated per
+//   device by the dispatcher (loadDeviceForUser). Polled by the web control
+//   panel and the phone.
+//
+// ACDEVLOC.1 — PATCH (edit) and DELETE (disable) moved to
+// PATCH /api/locations/[id]/ac-devices/[deviceId], which acts on the path
+// location and can re-enable a disabled unit (this route's loadDeviceForUser
+// refuses one with 409, so Re-enable never worked from here).
 
 import { NextResponse } from 'next/server'
-import { z } from 'zod'
 import { withAuth } from '@/lib/with-auth'
 import { getState as dispatchGetState, loadDeviceForUser } from '@/lib/ac-devices'
 import { AC_SESSION_ACTIVE_STATUSES } from '@/lib/enums'
-import { validateBody } from '@/lib/validate'
-
-const AcDevicePatchSchema = z.object({
-  label: z.string().optional(),
-  device_group: z.string().nullable().optional(),
-  default_mode: z.string().optional(),
-  default_temp_c: z.union([z.number(), z.string()]).optional(),
-  default_fan: z.string().optional(),
-  session_minutes: z.union([z.number(), z.string()]).optional(),
-  external_auto_off_minutes: z.union([z.number(), z.string()]).nullable().optional(),
-  enabled: z.boolean().optional(),
-}).passthrough()
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -108,110 +95,5 @@ export const GET = withAuth(
         external_start: externalStartRow || null,
       },
     })
-  }
-)
-
-// ---- PATCH ----
-
-export const PATCH = withAuth(
-  { permission: 'studio_management' },
-  async ({ user, db, params, request }) => {
-    if (user.role !== 'master') {
-      return NextResponse.json(
-        { success: false, error: 'Only master can edit AC devices.' },
-        { status: 403 }
-      )
-    }
-    // Master needs to have access to the device's location, which
-    // is implicit (master sees every location). We still pass
-    // through loadDeviceForUser so the device id is validated and
-    // exists at all.
-    const loaded = await loadDeviceForUser(params?.id, { user, db })
-    if (!loaded.ok) {
-      return NextResponse.json(
-        { success: false, error: loaded.error, code: loaded.code },
-        { status: loaded.status || 500 }
-      )
-    }
-
-    const validation = await validateBody(request, AcDevicePatchSchema)
-    if (!validation.ok) return validation.response
-    const body = validation.data
-
-    // Whitelist of editable columns. Anything not in here is silently
-    // ignored — we never let the operator overwrite provider /
-    // provider_device_id / location_id (which would corrupt the
-    // device's identity).
-    const patch = {}
-    for (const key of [
-      'label', 'device_group',
-      'default_mode', 'default_temp_c', 'default_fan',
-      'session_minutes',
-      'external_auto_off_minutes',  // STUDIO-AC-EXTERNAL-RULE.1
-      'enabled',
-    ]) {
-      if (key in body) patch[key] = body[key]
-    }
-    // Normalise device_group: trim, treat empty string as null so a
-    // master clearing the field unsets the group rather than saving
-    // an empty-string sentinel (which would render as its own
-    // section in the panel).
-    if ('device_group' in patch) {
-      const v = String(patch.device_group ?? '').trim()
-      patch.device_group = v || null
-    }
-    if (Object.keys(patch).length === 0) {
-      return NextResponse.json({ success: false, error: 'No editable fields supplied.' }, { status: 400 })
-    }
-    if ('default_temp_c'  in patch) patch.default_temp_c  = Number(patch.default_temp_c)
-    if ('session_minutes' in patch) patch.session_minutes = Number(patch.session_minutes)
-    // external_auto_off_minutes — allow null (master clearing the
-    // field to disable the rule for this device). Empty string,
-    // null, undefined → null. Otherwise coerce to integer.
-    if ('external_auto_off_minutes' in patch) {
-      const raw = patch.external_auto_off_minutes
-      if (raw === null || raw === '' || raw === undefined) {
-        patch.external_auto_off_minutes = null
-      } else {
-        const n = Number(raw)
-        patch.external_auto_off_minutes = Number.isFinite(n) && n > 0 ? Math.round(n) : null
-      }
-    }
-
-    const { data: row, error: updErr } = await db
-      .from('ac_devices')
-      .update(patch)
-      .eq('id', params.id)
-      .select()
-      .single()
-    if (updErr) {
-      return NextResponse.json({ success: false, error: updErr.message }, { status: 500 })
-    }
-    return NextResponse.json({ success: true, data: row })
-  }
-)
-
-// ---- DELETE ----
-
-export const DELETE = withAuth(
-  { permission: 'studio_management' },
-  async ({ user, db, params }) => {
-    if (user.role !== 'master') {
-      return NextResponse.json(
-        { success: false, error: 'Only master can remove AC devices.' },
-        { status: 403 }
-      )
-    }
-    // Soft-disable. Sessions referencing this device keep their FK
-    // intact, so /admin/audit-log can still resolve the device
-    // label for historical events.
-    const { error: updErr } = await db
-      .from('ac_devices')
-      .update({ enabled: false })
-      .eq('id', params?.id)
-    if (updErr) {
-      return NextResponse.json({ success: false, error: updErr.message }, { status: 500 })
-    }
-    return NextResponse.json({ success: true })
   }
 )

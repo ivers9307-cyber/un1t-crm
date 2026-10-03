@@ -71,8 +71,8 @@ describe('rollupAttention', () => {
   })
 })
 
-// getOwnerOrganizationIds derives owner orgs from rolesByLocation +
-// locations, so build users with that real shape.
+// C141 ORGROLE.2 — the Account Home is organisation-level: a master or an
+// org_admin grant (user.orgAdminOrgIds). An owner at a studio is not enough.
 function ownerUser(orgId, locId = 'loc-1') {
   return {
     role: 'owner',
@@ -80,7 +80,11 @@ function ownerUser(orgId, locId = 'loc-1') {
     activeOrganization: { id: orgId },
     rolesByLocation: { [locId]: 'owner' },
     locations: [{ id: locId, organization_id: orgId }],
+    orgAdminOrgIds: [],
   }
+}
+function orgAdminUser(orgId, locId = 'loc-1') {
+  return { ...ownerUser(orgId, locId), orgAdminOrgIds: [orgId] }
 }
 
 describe('resolveAccountScope — org access matrix', () => {
@@ -98,12 +102,25 @@ describe('resolveAccountScope — org access matrix', () => {
     expect(resolveAccountScope(master, null)).toEqual({ ok: true, orgId: 'org-a', isMaster: true })
   })
 
-  it('owner defaults to (and is allowed) their own org', () => {
-    expect(resolveAccountScope(ownerUser('org-a'), null)).toEqual({ ok: true, orgId: 'org-a', isMaster: false })
+  it('org admin defaults to (and is allowed) their own org', () => {
+    expect(resolveAccountScope(orgAdminUser('org-a'), null)).toEqual({ ok: true, orgId: 'org-a', isMaster: false })
   })
 
-  it('owner requesting a FOREIGN org gets 404 (not 403 — no existence probe)', () => {
-    expect(resolveAccountScope(ownerUser('org-a'), 'org-b')).toEqual({ ok: false, status: 404 })
+  it('org admin requesting a FOREIGN org gets 404 (not 403 — no existence probe)', () => {
+    expect(resolveAccountScope(orgAdminUser('org-a'), 'org-b')).toEqual({ ok: false, status: 404 })
+  })
+
+  it('C141 — an owner at a studio without an org_admin grant → 403 (not an organisation admin)', () => {
+    expect(resolveAccountScope(ownerUser('org-a'), null)).toEqual({ ok: false, status: 403 })
+  })
+
+  it('C141 — an owner asking for their own org by id, without a grant → 404', () => {
+    expect(resolveAccountScope(ownerUser('org-a'), 'org-a')).toEqual({ ok: false, status: 404 })
+  })
+
+  it('C141 — an org admin of another org, working in a studio of this one → 403', () => {
+    const u = { ...ownerUser('org-a'), orgAdminOrgIds: ['org-b'] }
+    expect(resolveAccountScope(u, null)).toEqual({ ok: false, status: 403 })
   })
 
   it('manager / staff (own no org, not master) → 403', () => {

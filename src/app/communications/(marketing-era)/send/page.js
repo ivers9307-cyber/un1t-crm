@@ -1,5 +1,5 @@
 // PILLAR2 Phase 1 — the unified "send a message off the cuff" surface.
-// Audience-first, channel-aware (SMS + WhatsApp; email joins in Phase 2).
+// Audience-first, channel-aware (WhatsApp + email; SMS retired in TWILIO-RETIRE.1).
 // A facade over the existing broadcast records + send routes — see
 // UnifiedSendComposer + docs/PILLAR2_UNIFIED_SEND_2026-06.md.
 import { getCurrentUser } from '@/lib/auth'
@@ -17,7 +17,6 @@ export default async function SendPage(props) {
   if (!user) redirect('/login')
 
   const channels = []
-  if (hasPermission(user, 'sms')) channels.push('sms')
   if (hasPermission(user, 'whatsapp')) channels.push('whatsapp')
   if (hasPermission(user, 'email')) channels.push('email')
   if (channels.length === 0) redirect('/communications')
@@ -57,7 +56,7 @@ export default async function SendPage(props) {
       <div className="mb-5">
         <Link href="/communications" className="text-xs text-un1t-subtle hover:text-un1t-text">← Communications</Link>
         <h1 className="text-xl font-semibold text-un1t-text mt-1">Send a message</h1>
-        <p className="text-sm text-un1t-subtle">Pick who, write once, send now{(channels.includes('sms') || channels.includes('email')) ? ' or schedule' : ''}.</p>
+        <p className="text-sm text-un1t-subtle">Pick who, write once, send now or schedule.</p>
       </div>
       <UnifiedSendComposer locationId={locationId} channels={channels} templates={templates} initialAudienceFilter={initialAudienceFilter} initialSegmentId={initialSegmentId} />
     </div>

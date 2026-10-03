@@ -5,7 +5,7 @@
 // single location. Returns { success, results, synced_at }.
 import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { syncAccount } from '@/lib/ads/sync'
 import * as meta from '@/lib/ads/providers/meta'
@@ -29,7 +29,7 @@ export async function POST(request) {
   if (!locationId) return NextResponse.json({ success: false, error: 'locationId required' }, { status: 400 })
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
-  if (!hasPermission(user, 'dashboard_ads')) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  if (!hasPermissionForLocation(user, locationId, 'dashboard_ads')) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
 
   const db = createServerClient()
   const since = dublinDateStr(-1), until = dublinDateStr(0)

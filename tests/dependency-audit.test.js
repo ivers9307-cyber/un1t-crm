@@ -285,13 +285,27 @@ describe('the shipped allowlist files', () => {
   // break its string-path call in metro/src/Assets.js (2.x's sync API is
   // Uint8Array-only) even if a patched 2.x existed. See CHANGELOG 533.
   //
+  //
+  // DEPAUDIT.5 (2026-09-30) added the two brace-expansion advisories, and
+  // they are a DIFFERENT kind of accept: a patched 2.1.7 exists and
+  // minimatch@9's `^2.0.2` admits it, so a mobile lockfile bump would fix
+  // them. They are accepted only because mobile/package-lock.json is an OTA
+  // publish path and the vulnerable copy sits under a build-time Expo config
+  // plugin (@bacons/apple-targets) whose glob patterns are all hard-coded.
+  // Take the lockfile bump with the next native release and drop them here.
+  //
   // Exact-match on sorted ids, so ANY additional accept — or a swap to a
   // different id — still fails here and forces a reviewed decision.
-  it('mobile accepts exactly the two unpatchable image-size advisories', () => {
+  it('mobile accepts exactly the image-size and build-time brace-expansion advisories', () => {
     const ids = load('../mobile/.audit-allowlist.json')
       .accepted.map((e) => e.id)
       .sort()
-    expect(ids).toEqual(['GHSA-5p2g-fcmc-qvqq', 'GHSA-w3rx-r6r6-pgpr'])
+    expect(ids).toEqual([
+      'GHSA-5p2g-fcmc-qvqq', // image-size
+      'GHSA-6j4f-fj2g-mc7p', // brace-expansion (DEPAUDIT.5)
+      'GHSA-qhr7-859c-m2p7', // brace-expansion (DEPAUDIT.5)
+      'GHSA-w3rx-r6r6-pgpr', // image-size
+    ])
   })
 })
 

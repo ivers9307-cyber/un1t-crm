@@ -6,9 +6,10 @@
 //      already in Glofox under a different glofox_member_id.
 //   2. Opt-in create-and-trial — only when a booking form / event
 //      / manual button explicitly elects to push. Creates a fresh
-//      Glofox account, attaches the studio's trial membership,
-//      generates a one-time passcode, tags the contact for
-//      welcome-sequence onboarding.
+//      Glofox account with a random initial password, attaches the
+//      studio's trial membership, tags the contact for
+//      welcome-sequence onboarding. The password is returned ONCE to
+//      the caller and never stored (PASSCODEREAD.1, mig 651).
 //
 // Both paths land an audit row in glofox_push_events.
 //
@@ -34,7 +35,7 @@ import {
 import { applyMemberSync } from './glofox-sync.js'
 import { glofoxFetch } from './glofox.js'
 import { writeContactTag } from './contact-tags.js'
-import { getGlofoxConfig } from './connection-registry.js'
+import { readGlofoxConfig } from './connection-registry.js'
 import { logWarn } from './log.js'
 import { toMobileE164 } from './phone-validate.js'
 
@@ -87,6 +88,16 @@ export async function findOrCreateGlofoxMember({
 
   // Resolve credentials.
   const creds = await glofoxCredentialsForLocation(db, locationId)
+  if (creds.readError) {
+    // REGISTRYREAD.1a: a failed settings read is not "not configured" — the
+    // audit row says so, and the admin retry route can re-run it.
+    const error = 'Glofox settings could not be read (a temporary database error). Retry this push.'
+    const ev = await audit(db, {
+      contact_id: contact.id, location_id: locationId, source,
+      status: 'failed', error_message: error,
+    })
+    return { status: 'failed', error, push_event_id: ev?.id }
+  }
   if (!creds.branchId || !creds.apiKey || !creds.apiToken) {
     const ev = await audit(db, {
       contact_id: contact.id, location_id: locationId, source,
@@ -176,8 +187,8 @@ export async function findOrCreateGlofoxMember({
   }
 
   // Step 3 — create a fresh Glofox account. Generate a passcode
-  // first (used as the initial password + emailed to the member
-  // for first-login).
+  // first (the initial password; returned once to the caller, never
+  // stored or emailed: PASSCODEREAD.1).
   if (!contact.first_name || !contact.last_name) {
     const ev = await audit(db, {
       contact_id: contact.id, location_id: locationId, source,
@@ -197,27 +208,35 @@ export async function findOrCreateGlofoxMember({
     lead_status: 'LEAD',
   })
   if (!reg.ok || !reg.member?._id) {
+    // GLOFOXWRITEJUDGE.1 — Glofox refused because the email already has an
+    // account, although our search above found none (live 21 Aug 2026: an
+    // account the member search cannot see, or one made between the search
+    // and the register). Search once more: link a single account, else ask a
+    // human. Never a second account, never a trial on a found one.
+    // A string literal, not an import: glofox-push tests mock glofox.js whole.
+    if (reg.code === 'EMAIL_ALREADY_IN_USE') {
+      return resolveEmailInUse({ db, locationId, contact, source, creds, reg })
+    }
     const ev = await audit(db, {
       contact_id: contact.id, location_id: locationId, source,
       status: 'failed',
-      error_message: `Register failed: ${reg.error || 'unknown'}`,
+      error_message: `Register failed: ${reg.error || reg.code || 'no reason given by Glofox'}`,
       glofox_response: reg.glofox_response,
     })
-    return { status: 'failed', error: reg.error, push_event_id: ev?.id }
+    return { status: 'failed', error: reg.error, code: reg.code, push_event_id: ev?.id }
   }
   const newGlofoxId = String(reg.member._id)
 
   // Step 4 — write the link to the CRM contact row immediately
   // (before the trial purchase) so even if the membership write
   // fails, we don't leave the contact unlinked.
-  // GLOFOX3.5 (mig 146): stash the passcode on contacts so the
-  // welcome-sequence merge tag {{glofox_passcode}} can read it
-  // at send time. Cleared either by the welcome-sequence
-  // enrolment hook or a future 30-day TTL cron.
+  // PASSCODEREAD.1: the password is NOT written here. GLOFOX3.5 stored it on
+  // contacts.glofox_passcode for a welcome email that was never switched on,
+  // and every staff member at the location could read it from their own
+  // session. Mig 651 CHECKs the column NULL, so writing it now fails the link.
   const { error: linkErr } = await db.from('contacts').update({
     glofox_member_id: newGlofoxId,
     glofox_synced_at: new Date().toISOString(),
-    glofox_passcode: passcode,
   }).eq('id', contact.id)
   if (linkErr) {
     // The Glofox member exists but the CRM link write failed — don't
@@ -230,33 +249,56 @@ export async function findOrCreateGlofoxMember({
       status: 'needs_review', glofox_member_id: newGlofoxId,
       error_message: `Glofox member created but CRM link write failed: ${linkErr.message}`,
     })
-    return { status: 'needs_review', glofox_member_id: newGlofoxId, error: linkErr.message, push_event_id: ev?.id }
+    // The member's first password exists only in this response: return it so
+    // the desk button can show it (callers that don't display it drop it).
+    return { status: 'needs_review', glofox_member_id: newGlofoxId, passcode, error: linkErr.message, push_event_id: ev?.id }
   }
 
   // Step 5 — optional trial-membership purchase. Per-location
   // config; if not set, skip with a warning.
   let trialPurchaseError = null
+  let trialOutcomeUnknown = false
   if (attachTrial) {
     // INTEG-A2 dual-read: registry row first, legacy settings.glofox
     // otherwise — same settings-shaped object either way.
     // Per-funnel override (from the class_funnel block, captured on the booking
     // row) wins over the location default when BOTH ids are present.
-    const trial = (trialOverride?.membershipId && trialOverride?.planCode)
-      ? { membershipId: trialOverride.membershipId, planCode: trialOverride.planCode }
-      : getLocationTrialConfig({ settings: { glofox: await getGlofoxConfig(db, locationId) } })
-    if (!trial.membershipId || !trial.planCode) {
+    let trial = null
+    let trialReadFailed = false
+    if (trialOverride?.membershipId && trialOverride?.planCode) {
+      trial = { membershipId: trialOverride.membershipId, planCode: trialOverride.planCode }
+    } else {
+      const { cfg, error: cfgErr } = await readGlofoxConfig(db, locationId)
+      if (cfgErr) trialReadFailed = true
+      else trial = getLocationTrialConfig({ settings: { glofox: cfg } })
+    }
+    if (trialReadFailed) {
+      // REGISTRYREAD.1a: the member now exists and the contact is linked, so
+      // a retry of this push would skip ("already linked"). Say what to do.
+      logWarn('glofox-push', 'trial settings unreadable after create', { contactId: contact.id, locationId })
+      trialPurchaseError = 'Could not read the trial membership settings (a temporary database error), so no trial was attached. Attach it in Glofox by hand.'
+    } else if (!trial.membershipId || !trial.planCode) {
       trialPurchaseError = 'Trial membership not configured for this location (Settings → Locations → Glofox Integration → Trial membership picker)'
     } else {
       const purchase = await purchaseGlofoxMembership(creds, newGlofoxId, trial.membershipId, trial.planCode)
       if (!purchase.ok) {
-        trialPurchaseError = `Trial membership purchase failed: ${purchase.error}`
+        // GLOFOXPOSTRETRY.1 — a 5xx or no reply is not a refusal: Glofox may
+        // have bought it. The doubt is returned (trial_outcome_unknown) so the
+        // /start processor stamps it on the needs_credit_grant card, whose
+        // approval then books only if credits show and never buys a second
+        // trial over it (grantTrialBeforeBooking's unsettled path).
+        trialOutcomeUnknown = purchase.outcome_unknown === true
+        trialPurchaseError = purchase.outcome_unknown === true
+          ? `Trial membership purchase got no clear answer from Glofox (${purchase.error}); it may have gone through. Check Glofox for a €0 trial invoice before adding one by hand.`
+          : `Trial membership purchase failed: ${purchase.error}`
       }
     }
   }
 
   // Step 6 — fire the welcome-sequence trigger via tag. The
   // welcome sequence template (GLOFOX3.5) listens for
-  // 'glofox_account_created' and renders {{glofox_passcode}}.
+  // 'glofox_account_created' (it no longer carries a password:
+  // PASSCODEREAD.1).
   // writeContactTag is idempotent AND fires the tag_added
   // sequence trigger — earlier versions of this code wrote the
   // tag directly to contact_tags but never called the trigger,
@@ -268,18 +310,12 @@ export async function findOrCreateGlofoxMember({
     tag: 'glofox_account_created',
   })
 
-  // Stash the passcode on the contact temporarily (the welcome
-  // sequence email reads it, then it's cleared after first use OR
-  // after a 30-day TTL — TODO follow-up). For now, just store it
-  // on the audit row + via the welcome-sequence merge tag system.
-
   const status = trialPurchaseError ? 'needs_review' : 'created'
   const ev = await audit(db, {
     contact_id: contact.id, location_id: locationId, source,
     status, glofox_member_id: newGlofoxId,
     glofox_response: reg.glofox_response,
     error_message: trialPurchaseError,
-    passcode_sent: passcode,
   })
 
   // Pull the new Glofox state into CRM via the existing
@@ -305,8 +341,64 @@ export async function findOrCreateGlofoxMember({
     passcode,
     push_event_id: ev?.id,
     error: trialPurchaseError,
+    // TRIALGRANT.1 — the account exists but its trial did not attach (the
+    // purchase was refused, or the trial settings were unreadable / unset).
+    // The /start processor files needs_credit_grant on it: approving that card
+    // buys the trial (judged) and books.
+    trial_failed: !!trialPurchaseError,
+    // GLOFOXPOSTRETRY.1 — the purchase got no clear answer (a 5xx or no
+    // reply): the trial may be on the account. Set only then.
+    ...(trialOutcomeUnknown ? { trial_outcome_unknown: true } : {}),
     sync_result: syncResult,
   }
+}
+
+/**
+ * GLOFOXWRITEJUDGE.1 — /2.0/register answered EMAIL_ALREADY_IN_USE. One more
+ * email search: exactly one account → link it like the step-1 search hit
+ * (status 'linked': no new account, no trial, no password, no welcome tag);
+ * none, several, or a failed search → needs_review with the reason in the
+ * Review tab (staff set the member ID on the contact; the tab has no link
+ * action). Never guesses between accounts, never creates on a failed search.
+ */
+async function resolveEmailInUse({ db, locationId, contact, source, creds, reg }) {
+  const again = await searchGlofoxByEmail(creds, contact.email)
+  const single = again.found && again.member?._id && again.error !== 'multiple_glofox_matches'
+  if (single) {
+    const memberId = String(again.member._id)
+    const linkResult = await linkExistingGlofoxMember({ db, locationId, contact, creds, glofoxMember: again.member })
+    if (linkResult?.link_write_failed) {
+      // Found, but the CRM could not save the link: never report it linked.
+      const message = `Glofox said this email already has an account, and a second search found it, but the CRM could not save the link (${linkResult.error}). Nothing was created. Put its member ID on the contact, then dismiss this row.`
+      const ev = await audit(db, {
+        contact_id: contact.id, location_id: locationId, source,
+        status: 'needs_review', glofox_member_id: memberId,
+        glofox_response: reg.glofox_response,
+        error_message: message,
+      })
+      return { status: 'needs_review', glofox_member_id: memberId, error: message, reason: 'email_in_use_link_failed', push_event_id: ev?.id }
+    }
+    const ev = await audit(db, {
+      contact_id: contact.id, location_id: locationId, source,
+      status: 'linked', glofox_member_id: memberId,
+      glofox_response: reg.glofox_response,
+      error_message: 'Glofox said this email already has an account, and a second search found it, so the contact was linked to it. No new account or trial was made.',
+    })
+    return { status: 'linked', glofox_member_id: memberId, error: null, push_event_id: ev?.id, sync_result: linkResult }
+  }
+  const why = again.error && !again.found
+    ? `the search to find it failed (${again.error})`
+    : again.error === 'multiple_glofox_matches'
+      ? `the search finds ${again.allMatches?.length || 'several'} accounts under it`
+      : 'the search cannot see it (it may be a staff login, or held in another way the member search does not return)'
+  const message = `Glofox says this email already has an account, but ${why}. Nothing was created or linked. Find the account in Glofox and put its member ID on the contact, then dismiss this row.`
+  const ev = await audit(db, {
+    contact_id: contact.id, location_id: locationId, source,
+    status: 'needs_review',
+    glofox_response: reg.glofox_response,
+    error_message: message,
+  })
+  return { status: 'needs_review', error: message, reason: 'email_in_use_not_linked', push_event_id: ev?.id }
 }
 
 /**
@@ -324,7 +416,7 @@ async function linkExistingGlofoxMember({ db, locationId, contact, creds, glofox
   }).eq('id', contact.id)
   if (linkErr) {
     console.warn('[glofox-push] existing-member CRM link write failed:', linkErr.message)
-    return { error: `link write failed: ${linkErr.message}` }
+    return { error: `link write failed: ${linkErr.message}`, link_write_failed: true }
   }
   // Then fully sync from Glofox so the contact is populated.
   // Uses the canonical /2.0/members/{id} fetch via applyMemberSync

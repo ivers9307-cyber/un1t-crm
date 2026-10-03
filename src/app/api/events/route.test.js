@@ -70,10 +70,10 @@ describe('events CreateSchema email config', () => {
   })
 })
 
-// EVENTS-SMS-TOGGLE (mig 552) — per-event opt-in for the registration SMS
-// confirmation. Optional boolean on the schema; the POST route defaults it
-// to false when omitted, so a legacy/default event never texts.
-describe('events CreateSchema SMS confirmation toggle', () => {
+// EVENTS-SMS-TOGGLE (mig 552) was retired with the SMS channel
+// (TWILIO-RETIRE.1): the flag is no longer on the schema, so a stale client
+// that still sends it is stripped, never written.
+describe('events CreateSchema — the retired SMS confirmation toggle', () => {
   const base = {
     location_id: '00000000-0000-0000-0000-000000000001',
     name: 'Hyrox Sim',
@@ -81,17 +81,8 @@ describe('events CreateSchema SMS confirmation toggle', () => {
     waves: [{ start_time: '09:00' }],
   }
 
-  it('parses clean with the flag absent (route defaults it off)', () => {
-    expect(CreateSchema.parse({ ...base }).confirmation_sms_enabled).toBeUndefined()
-  })
-
-  it('accepts an explicit boolean either way', () => {
-    expect(CreateSchema.parse({ ...base, confirmation_sms_enabled: true }).confirmation_sms_enabled).toBe(true)
-    expect(CreateSchema.parse({ ...base, confirmation_sms_enabled: false }).confirmation_sms_enabled).toBe(false)
-  })
-
-  it('rejects a non-boolean', () => {
-    expect(() => CreateSchema.parse({ ...base, confirmation_sms_enabled: 'yes' })).toThrow()
+  it('strips confirmation_sms_enabled', () => {
+    expect(CreateSchema.parse({ ...base, confirmation_sms_enabled: true }).confirmation_sms_enabled).toBeUndefined()
   })
 })
 

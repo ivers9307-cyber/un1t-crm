@@ -14,7 +14,7 @@
 import { z } from 'zod'
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser, getUserLocationIds, hasRoleAtLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import {
@@ -22,6 +22,7 @@ import {
   RECEIPT_MIME_TYPES, sniffReceiptMime, loadQueueRowsForInvoices,
 } from '@/lib/contractor-invoices'
 import { contractorInvoiceLifecycle } from '@shared/contractor-invoice-review'
+import { logError } from '@/lib/log'
 
 // JSON submit mode (INVOICE-UPLOAD.1): the PDF is already in storage via
 // /api/invoices/upload-sign + a signed direct upload; the body carries a
@@ -43,8 +44,16 @@ const MAX_RECEIPT_BYTES = 10 * 1024 * 1024 // 10 MB
 // SPEND.P1 — an invoice may be a PDF or a phone photo of a paper receipt.
 const ALLOWED_MIME = RECEIPT_MIME_TYPES
 
-function isOwnerOrMaster(user) {
-  return user?.role === 'master' || user?.role === 'owner'
+// The 409 for "this period already has an active invoice". `status` is
+// null when the unique index (23505) refused the insert and the row's
+// status is unknown. Approval writes awaiting_accountant_review (the
+// accountant's step comes after it), so that status reads as approved too.
+function activeInvoiceConflict(period, status) {
+  let error
+  if (status === 'approved' || status === 'awaiting_accountant_review') error = `An invoice for ${period.label} has already been approved.`
+  else if (status) error = `You already have a submission pending review for ${period.label}.`
+  else error = `You already have an invoice for ${period.label} that is pending review or approved.`
+  return NextResponse.json({ success: false, error }, { status: 409 })
 }
 
 // ── POST: contractor submits an invoice ───────────────────────────
@@ -154,24 +163,33 @@ export async function POST(request) {
 
   const db = createServerClient()
 
-  // Pre-check: existing active row blocks resubmit.
-  const { data: existingActive } = await db
+  // Pre-check: existing active row blocks resubmit. "Active" is EXACTLY the
+  // unique index's predicate — contractor_invoices_one_active_per_period
+  // (mig 101, redefined by mig 102) is WHERE status NOT IN ('declined',
+  // 'revoked'): a declined OR revoked row makes way for a fresh submission.
+  // INVOICEHOURS.1 — this excluded only 'declined', so a revoked row answered
+  // a false 409. The pre-check is only the friendlier early answer: the
+  // unique index is the authoritative guard. So a failed read is logged
+  // structurally and falls through to the insert (main discarded the error
+  // and did the same); failing it closed would refuse a submission main
+  // filed and orphan the already-uploaded PDF. A real duplicate then comes
+  // back from the insert as 23505, answered below with the same 409.
+  const { data: existingActive, error: activeErr } = await db
     .from('contractor_invoices')
     .select('id, status')
     .eq('contractor_id', user.id)
     .eq('period_start', period.period_start)
-    .neq('status', 'declined')
+    .not('status', 'in', '(declined,revoked)')
     .maybeSingle()
+  if (activeErr) {
+    logError('invoice-submit', 'active-invoice pre-check failed; leaving it to the unique index', {
+      err: activeErr.message || String(activeErr),
+      contractorId: user.id,
+      periodStart: period.period_start,
+    })
+  }
   if (existingActive) {
-    return NextResponse.json(
-      {
-        success: false,
-        error: existingActive.status === 'approved'
-          ? `An invoice for ${period.label} has already been approved.`
-          : `You already have a submission pending review for ${period.label}.`,
-      },
-      { status: 409 }
-    )
+    return activeInvoiceConflict(period, existingActive.status)
   }
 
   // PDF: verify the direct-to-storage object (JSON mode) or upload the
@@ -257,7 +275,19 @@ export async function POST(request) {
     // `.catch(() => {})` here threw a TypeError at runtime and turned a
     // clean insert-failure response into a 500 (repo lesson: two-arg
     // .then is the safe best-effort form).
-    await db.storage.from(STORAGE_BUCKET).remove([pdfPath]).then(() => {}, () => {})
+    //
+    // 23505 = contractor_invoices_one_active_per_period refused a second
+    // active row (the pre-check read failed, or a concurrent submit won):
+    // the same friendly 409 as the pre-check, never the raw Postgres text.
+    // In JSON mode the pdf_path is client-supplied, and a retried request
+    // carries the SAME path as the row that won the index, so it is left
+    // alone exactly as the pre-check's 409 leaves it. Multipart paths are
+    // minted fresh above, so removing one never touches another row's PDF.
+    const duplicate = error.code === '23505'
+    if (!(duplicate && isJsonMode)) {
+      await db.storage.from(STORAGE_BUCKET).remove([pdfPath]).then(() => {}, () => {})
+    }
+    if (duplicate) return activeInvoiceConflict(period, null)
     return NextResponse.json({ success: false, error: error.message }, { status: 400 })
   }
 
@@ -297,18 +327,21 @@ export async function GET(request) {
   //     another studio. (Master can still override via ?location_id
   //     query param below.)
   //   • everyone else → only their own invoices.
-  if (isOwnerOrMaster(user)) {
-    const isMaster = user.role === 'master'
-    const ownerLocations = Object.entries(user.rolesByLocation || {})
-      .filter(([, r]) => r === 'owner').map(([loc]) => loc)
-    const explicit = new URL(request.url).searchParams.get('location_id')
-    const activeId = user.activeLocation?.id || null
-    const target = explicit || activeId
+  //
+  // ROLESWEEP.1c — "owner" is judged AT THE TARGET location. The branch used
+  // to be chosen on user.role (the ACTIVE studio's role), so an owner at B
+  // whose active studio is A asking for ?location_id=B got only their own
+  // rows. An owner at the active studio asking for a location they do not own
+  // keeps the old 403; everyone else keeps the "own rows" branch.
+  const isMaster = user.role === 'master'
+  const explicit = new URL(request.url).searchParams.get('location_id')
+  const activeId = user.activeLocation?.id || null
+  const target = explicit || activeId
+  if (isMaster || (target && hasRoleAtLocation(user, target, ['owner']))) {
     if (!target) return NextResponse.json({ success: true, data: [] })
-    if (!isMaster && !ownerLocations.includes(target)) {
-      return NextResponse.json({ success: false, error: 'Forbidden — not your location' }, { status: 403 })
-    }
     query = query.eq('location_id', target)
+  } else if (hasRoleAtLocation(user, activeId, ['owner'])) {
+    return NextResponse.json({ success: false, error: 'Forbidden — not your location' }, { status: 403 })
   } else {
     // Everyone else — only their own.
     query = query.eq('contractor_id', user.id)

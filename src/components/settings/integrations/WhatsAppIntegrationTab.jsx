@@ -7,10 +7,10 @@
 // row is a `whatsapp_numbers` record. Operators add/edit/remove
 // numbers and pick which is default for outbound.
 //
-// Tokens are NEVER returned in plain by the API — the list shows
-// the last 6 chars masked behind dots. Editing the token requires
-// pasting the new full value; the field starts empty and is only
-// sent on the wire when non-empty.
+// Tokens are NEVER returned in plain by the API, and the stored token
+// is never shown (the API returns a fixed mask; N8NECHO.1). Editing
+// the token requires pasting the new full value; the field starts
+// empty and is only sent on the wire when non-empty.
 
 import { useEffect, useRef, useState } from 'react'
 import {
@@ -21,14 +21,20 @@ import { createBrowserClient } from '@/lib/supabase'
 import { validateTemplateMedia } from '@/lib/template-media'
 import { normalizeUrlish } from '@/lib/urlish'
 import { effectiveHistorySyncStatus } from '@/lib/whatsapp-coexistence'
+import { NO_ACTIVE_NUMBER_NOTE, ACTIVE_CHECKBOX_LABEL, removeNumberConfirm, deactivateNumberConfirm } from '@/lib/whatsapp-number-copy'
 // INTEG hub inline #4 (Phase 3): the Connect-with-WhatsApp Embedded Signup
 // card was extracted VERBATIM into a shared module so the Integrations-hub
 // Manage drawer imports the IDENTICAL component. This tab keeps working —
 // same card, same flow, just imported instead of defined inline.
 import { ConnectWhatsAppCard } from './ConnectWhatsAppCard'
+import ReadFailedNote from '@/components/settings/ReadFailedNote'
 
 export default function WhatsAppIntegrationTab({ location, canEdit }) {
-  const [numbers, setNumbers] = useState([])
+  // CHANNELREAD.1 — `numbers` is null until a read SUCCEEDS, and a failed
+  // read puts it back to null: no "No numbers configured", no Add, no
+  // Connect card over a list we could not read. `error` stays for the row
+  // actions (set default, remove, save), which report through it.
+  const [numbers, setNumbers] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [adding, setAdding] = useState(false)
@@ -43,10 +49,10 @@ export default function WhatsAppIntegrationTab({ location, canEdit }) {
     try {
       const res = await fetch(`/api/locations/${location.id}/whatsapp/numbers`)
       const j = await res.json()
-      if (!j.success) throw new Error(j.error || 'Failed to load numbers')
-      setNumbers(j.numbers || [])
-    } catch (e) {
-      setError(e.message)
+      if (!res.ok || !j.success || !Array.isArray(j.numbers)) throw new Error(j.error || 'Failed to load numbers')
+      setNumbers(j.numbers)
+    } catch {
+      setNumbers(null)
     } finally {
       setLoading(false)
     }
@@ -91,48 +97,55 @@ export default function WhatsAppIntegrationTab({ location, canEdit }) {
         </div>
       ) : (
         <>
-          <div className="space-y-2">
-            {numbers.length === 0 && (
-              <div className="text-xs text-un1t-subtle bg-un1t-bg border border-un1t-border rounded p-3">
-                No numbers configured. This location falls back to the global
-                <code className="text-un1t-muted"> WHATSAPP_*</code> env vars (legacy single-number setup).
-                Add a number below to migrate.
+          {numbers === null ? (
+            <ReadFailedNote what="this location's WhatsApp numbers" onRetry={() => load({ silent: true })} />
+          ) : (
+            <>
+              <div className="space-y-2">
+                {numbers.length === 0 && (
+                  <div className="text-xs text-un1t-subtle bg-un1t-bg border border-un1t-border rounded p-3">
+                    No numbers configured. {NO_ACTIVE_NUMBER_NOTE} Add a number below to
+                    connect one. Chat openers can only be saved once this location has its own
+                    number.
+                  </div>
+                )}
+                {numbers.map((n) => (
+                  <NumberRow
+                    key={n.id}
+                    location={location}
+                    number={n}
+                    numbers={numbers}
+                    canEdit={canEdit}
+                    expanded={expandedId === n.id}
+                    onExpand={() => setExpandedId(expandedId === n.id ? null : n.id)}
+                    onReload={load}
+                    onError={setError}
+                  />
+                ))}
               </div>
-            )}
-            {numbers.map((n) => (
-              <NumberRow
-                key={n.id}
-                location={location}
-                number={n}
-                canEdit={canEdit}
-                expanded={expandedId === n.id}
-                onExpand={() => setExpandedId(expandedId === n.id ? null : n.id)}
-                onReload={load}
-                onError={setError}
-              />
-            ))}
-          </div>
 
-          {canEdit && (
-            adding ? (
-              <AddNumberForm
-                locationId={location.id}
-                onCancel={() => setAdding(false)}
-                onSaved={() => { setAdding(false); load() }}
-                onError={setError}
-              />
-            ) : (
-              <button
-                type="button"
-                onClick={() => setAdding(true)}
-                className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md bg-un1t-text text-un1t-bg font-semibold hover:bg-un1t-accent"
-              >
-                <Plus size={12} /> Add WhatsApp number
-              </button>
-            )
+              {canEdit && (
+                adding ? (
+                  <AddNumberForm
+                    locationId={location.id}
+                    onCancel={() => setAdding(false)}
+                    onSaved={() => { setAdding(false); load() }}
+                    onError={setError}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setAdding(true)}
+                    className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md bg-un1t-text text-un1t-bg font-semibold hover:bg-un1t-accent"
+                  >
+                    <Plus size={12} /> Add WhatsApp number
+                  </button>
+                )
+              )}
+
+              <ConnectWhatsAppCard location={location} canEdit={canEdit} onConnected={() => load({ silent: true })} />
+            </>
           )}
-
-          <ConnectWhatsAppCard location={location} canEdit={canEdit} onConnected={() => load({ silent: true })} />
 
           <ChatOpenersCard location={location} canEdit={canEdit} />
 
@@ -631,7 +644,7 @@ const HISTORY_SYNC_NOTES = {
   expired: 'History import window expired',
 }
 
-function NumberRow({ location, number, canEdit, expanded, onExpand, onReload, onError }) {
+function NumberRow({ location, number, numbers, canEdit, expanded, onExpand, onReload, onError }) {
   const [busy, setBusy] = useState(false)
   const isCoexistence = number.source === 'coexistence'
   const effectiveHistoryStatus = isCoexistence
@@ -656,7 +669,9 @@ function NumberRow({ location, number, canEdit, expanded, onExpand, onReload, on
 
   async function remove() {
     if (!canEdit) return
-    if (!confirm(`Remove "${number.label}"? Any sends to / from this number will fall back to the location's other configured number, or the env-var default.`)) return
+    // WACONFIGFALLBACK.1 — no env fallback: removing the last active number
+    // turns WhatsApp off at this studio, and the confirm says so.
+    if (!confirm(removeNumberConfirm(number, numbers))) return
     setBusy(true)
     try {
       const res = await fetch(`/api/locations/${location.id}/whatsapp/numbers/${number.id}`, { method: 'DELETE' })
@@ -714,7 +729,7 @@ function NumberRow({ location, number, canEdit, expanded, onExpand, onReload, on
             </button>
           )}
           {canEdit && (
-            <button type="button" onClick={remove} disabled={busy} className="text-un1t-subtle hover:text-red-500 p-1 disabled:opacity-50">
+            <button type="button" onClick={remove} disabled={busy} title="Remove this number" aria-label="Remove this number" className="text-un1t-subtle hover:text-red-500 p-1 disabled:opacity-50">
               <Trash2 size={12} />
             </button>
           )}
@@ -724,6 +739,7 @@ function NumberRow({ location, number, canEdit, expanded, onExpand, onReload, on
         <EditNumberForm
           locationId={location.id}
           number={number}
+          numbers={numbers}
           canEdit={canEdit}
           onSaved={onReload}
           onError={onError}
@@ -820,7 +836,7 @@ function AddNumberForm({ locationId, onCancel, onSaved, onError }) {
   )
 }
 
-function EditNumberForm({ locationId, number, canEdit, onSaved, onError }) {
+function EditNumberForm({ locationId, number, numbers, canEdit, onSaved, onError }) {
   const [form, setForm] = useState({
     label: number.label || '',
     display_phone: number.display_phone || '',
@@ -832,6 +848,12 @@ function EditNumberForm({ locationId, number, canEdit, onSaved, onError }) {
   const [saving, setSaving] = useState(false)
 
   async function save() {
+    // WACONFIGFALLBACK.1 — deactivating the last active number turns
+    // WhatsApp off at this studio (no env fallback): ask first.
+    if (number.is_active && !form.is_active) {
+      const warning = deactivateNumberConfirm(number, numbers)
+      if (warning && !confirm(warning)) return
+    }
     setSaving(true)
     try {
       const updates = {
@@ -873,17 +895,22 @@ function EditNumberForm({ locationId, number, canEdit, onSaved, onError }) {
       <Row label="App ID">
         <input disabled={!canEdit} className="w-full bg-un1t-surface border border-un1t-border rounded px-2 py-1 text-[11px] text-un1t-text font-mono" value={form.app_id} onChange={(e) => setForm({ ...form, app_id: e.target.value.trim() })} />
       </Row>
-      <Row label="Current token" hint="Stored value (last 6 chars shown). To change, paste a new token below.">
-        <code className="block w-full bg-un1t-surface/50 border border-un1t-border rounded px-2 py-1 text-[11px] text-un1t-muted">
-          {number.access_token_redacted || '••••'}
-        </code>
+      <Row
+        label="Current token"
+        hint={number.access_token_redacted
+          ? 'A token is stored and never shown. To change it, paste a new token below.'
+          : 'No token is saved yet. Paste one below to connect this number.'}
+      >
+        <p className="block w-full bg-un1t-surface/50 border border-un1t-border rounded px-2 py-1 text-[11px] text-un1t-muted">
+          {number.access_token_redacted ? 'Saved (hidden)' : 'Not set'}
+        </p>
       </Row>
       <Row label="New access token (leave blank to keep current)">
         <textarea disabled={!canEdit} rows={2} className="w-full bg-un1t-surface border border-un1t-border rounded px-2 py-1 text-[11px] text-un1t-text font-mono" value={form.new_access_token} onChange={(e) => setForm({ ...form, new_access_token: e.target.value })} />
       </Row>
       <label className="flex items-center gap-2 text-[11px] text-un1t-subtle">
         <input type="checkbox" disabled={!canEdit} checked={form.is_active} onChange={(e) => setForm({ ...form, is_active: e.target.checked })} />
-        Active (uncheck to disable without deleting — useful for temporary maintenance)
+        {ACTIVE_CHECKBOX_LABEL}
       </label>
       {canEdit && (
         <div className="flex items-center gap-2 pt-1">

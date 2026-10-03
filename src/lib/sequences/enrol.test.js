@@ -267,24 +267,16 @@ describe('enrolContacts — insert errors', () => {
   })
 })
 
-describe('enrolContacts — counter RPC', () => {
-  it('fires increment_sequence_enrolled with the insert count', async () => {
+// SEQCOUNTERS.1 — increment_sequence_enrolled never existed (no migration,
+// 0 in pg_proc; every call 404'd and the resolved { error } was dropped).
+// Enrolment counts are computed from sequence_enrollments where shown.
+describe('enrolContacts — no counter RPC (SEQCOUNTERS.1)', () => {
+  it('enrols without calling any rpc', async () => {
     const { db, rpcCalls } = mockDb()
     createServerClient.mockReturnValue(db)
-    await enrolContacts({ sequenceId: 's1', contactIds: ['a', 'b', 'c'] })
-    expect(rpcCalls).toHaveLength(1)
-    expect(rpcCalls[0]).toEqual({
-      name: 'increment_sequence_enrolled',
-      args: { p_sequence_id: 's1', p_delta: 3 },
-    })
-  })
-
-  it('does not throw when the RPC fails (best-effort accounting)', async () => {
-    const { db } = mockDb({ rpcError: new Error('rpc not present') })
-    createServerClient.mockReturnValue(db)
-    // Should resolve normally despite the RPC rejection.
-    const out = await enrolContacts({ sequenceId: 's1', contactIds: ['a'] })
-    expect(out.enrolled).toBe(1)
+    const out = await enrolContacts({ sequenceId: 's1', contactIds: ['a', 'b', 'c'] })
+    expect(out.enrolled).toBe(3)
+    expect(rpcCalls).toEqual([])
   })
 })
 
@@ -438,14 +430,14 @@ describe('ENROLDEDUP.1 — the write is idempotent, not all-or-nothing', () => {
     expect(out.skipped).toBe(1)
   })
 
-  it('reports enrolled from rows actually inserted, and bumps the counter by that number', async () => {
-    // The old return counted toInsert.length, so conflicts inflated both
-    // the reported figure and the dashboard counter.
+  it('reports enrolled from rows actually inserted', async () => {
+    // The old return counted toInsert.length, so conflicts inflated the
+    // reported figure. (SEQCOUNTERS.1 — there is no counter bump any more.)
     const { db, rpcCalls } = mockDb({ conflictedContactIds: ['a', 'b'] })
     createServerClient.mockReturnValue(db)
     const out = await enrolContacts({ sequenceId: 's1', contactIds: ['a', 'b', 'c'] })
     expect(out.enrolled).toBe(1)
-    expect(rpcCalls[0].args.p_delta).toBe(1)
+    expect(rpcCalls).toEqual([])
   })
 
   it('still throws on a genuine write failure', async () => {
@@ -498,7 +490,7 @@ describe('allowReenrol — re-activate a terminal enrolment (DUNNING.2)', () => 
       source_type: 'invoice_past_due', source_ref: 'inv-old', status: 'completed',
       enrolled_at: '2026-06-24T00:00:00.000Z', ended_at: '2026-07-01T00:00:00.000Z', exit_reason: null,
     }])
-    expect(m.rpcCalls).toEqual([{ name: 'increment_sequence_enrolled', args: { p_sequence_id: 's', p_delta: 1 } }])
+    expect(m.rpcCalls).toEqual([])
   })
 
   it('appends to an existing previous_runs list and preserves other metadata', async () => {

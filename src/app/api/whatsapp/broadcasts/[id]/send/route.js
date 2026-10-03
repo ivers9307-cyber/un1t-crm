@@ -1,15 +1,16 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { sendBroadcast } from '@/lib/whatsapp'
+import { whatsappErrorStatus } from '@/lib/whatsapp-number-missing'
 
 // POST /api/whatsapp/broadcasts/[id]/send
 export async function POST(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!hasPermission(user, 'whatsapp')) {
+  if (!hasPermissionAtAnyLocation(user, 'whatsapp')) {
     return NextResponse.json({ success: false, error: 'Forbidden — WhatsApp not enabled' }, { status: 403 })
   }
 
@@ -22,6 +23,10 @@ export async function POST(request, props) {
   if (!row) return NextResponse.json({ success: false, error: 'Broadcast not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, row.location_id)
   if (guard) return guard
+  // ROLESWEEP.1a — the permission is judged at the broadcast's location.
+  if (!hasPermissionForLocation(user, row.location_id, 'whatsapp')) {
+    return NextResponse.json({ success: false, error: 'Forbidden — WhatsApp not enabled' }, { status: 403 })
+  }
 
   // WA-QUALITY.2 — optional JSON body `{ force: true }` bypasses the
   // number-quality preflight refusal inside sendBroadcast (explicit
@@ -39,9 +44,11 @@ export async function POST(request, props) {
     return NextResponse.json({ success: true, ...result })
   } catch (error) {
     console.error('Broadcast send error:', error)
+    // WACONFIGFALLBACK.1 — no WhatsApp number at the broadcast's location is a
+    // 409 (the blast used to go out on the env number); nothing was flipped.
     return NextResponse.json(
       { success: false, error: error.message },
-      { status: 400 }
+      { status: whatsappErrorStatus(error, 400) }
     )
   }
 }

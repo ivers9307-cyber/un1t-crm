@@ -9,39 +9,50 @@
 // it the override field is un-fillable (ids appear nowhere else in
 // the UI; unresolved ids render as null instructors, not labels).
 //
-// Auth: master / owner / manager only (mirrors /glofox-memberships —
-// both touch integration data).
+// Auth (TRAINERSROLE.1): master, or owner/manager AT THIS LOCATION —
+// ADMIN_ROLES, the tier the Glofox credentials write uses
+// (integrations/[provider]). Membership first (404, so a stranger cannot
+// learn the id exists), then the role judged at the PATH id with
+// hasRoleAtLocation. Never `user.role`: that is the caller's ACTIVE studio's
+// role, so a manager at Stillorgan who is plain staff at Hatch read Hatch's
+// list from a Stillorgan session, and a manager was refused at their own
+// studio while another was active (the SCHEDROLES.1 class).
 
 import { NextResponse } from 'next/server'
+import { GLOFOX_SETTINGS_UNREADABLE, GLOFOX_SETTINGS_UNREADABLE_MESSAGE } from '@/lib/glofox-settings-read'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation } from '@/lib/auth'
+import { ADMIN_ROLES } from '@/lib/schemas'
+import { logError } from '@/lib/log'
 import { glofoxCredentialsForLocation } from '@/lib/glofox'
 import { extractTrainerIds, resolveTrainerNames } from '@/lib/class-occurrences'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-const ALLOWED_ROLES = new Set(['master', 'owner', 'manager'])
+const MODULE = 'locations-glofox-trainers'
 const WINDOW_DAYS = 28
 
 export async function GET(_request, { params }) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'unauthenticated' }, { status: 401 })
-  if (!ALLOWED_ROLES.has(user.role)) {
-    return NextResponse.json({ success: false, error: 'forbidden' }, { status: 403 })
-  }
 
   const { id: locationId } = await params
   if (!locationId) {
     return NextResponse.json({ success: false, error: 'missing_location_id' }, { status: 400 })
   }
-  if (user.role !== 'master') {
-    const allowed = (user.locations || []).some((l) => l.id === locationId)
-    if (!allowed) return NextResponse.json({ success: false, error: 'forbidden' }, { status: 403 })
+  const denied = assertLocationAccessOr404(user, locationId)
+  if (denied) return denied
+  if (!hasRoleAtLocation(user, locationId, ADMIN_ROLES)) {
+    return NextResponse.json({ success: false, error: 'forbidden' }, { status: 403 })
   }
 
   const db = createServerClient()
   const creds = await glofoxCredentialsForLocation(db, locationId)
+  // REGISTRYREAD.1b: a failed settings read is not "not configured".
+  if (creds.readError) {
+    return NextResponse.json({ success: false, error: GLOFOX_SETTINGS_UNREADABLE, message: GLOFOX_SETTINGS_UNREADABLE_MESSAGE }, { status: 503 })
+  }
   if (!creds.branchId || !creds.apiKey || !creds.apiToken) {
     return NextResponse.json({
       success: false, error: 'glofox_not_configured',
@@ -49,10 +60,11 @@ export async function GET(_request, { params }) {
     }, { status: 400 })
   }
 
-  // 28d of Stillorgan is ~850 rows, under the 1000-row select cap; the
-  // list is a distinct-id reference, so a truncated deep tail (order:
-  // newest first) would only ever hide a trainer who hasn't taught in
-  // weeks anyway.
+  // 28 days of Stillorgan is about 190 rows (191 counted live on
+  // 27 Sep 2026, including the 48 hours ahead the sync keeps), well under
+  // the 1000-row select cap. The list is a distinct-id reference, so a
+  // truncated deep tail (order: newest first) would only ever hide a
+  // trainer who hasn't taught in weeks anyway.
   const sinceIso = new Date(Date.now() - WINDOW_DAYS * 86_400_000).toISOString()
   // eslint-disable-next-line guardrails/no-uncapped-supabase-limit -- deliberate cap: distinct-id reference list, newest-first; a truncated tail only hides trainers idle for weeks
   const { data: rows, error } = await db
@@ -63,7 +75,10 @@ export async function GET(_request, { params }) {
     .order('starts_at', { ascending: false })
     .limit(1000)
   if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    // Review 2: logged, and a fixed code rather than the raw PostgREST
+    // message (which names columns and SQL state to the browser).
+    logError(MODULE, 'could not read class_occurrences', { locationId, error: error.message })
+    return NextResponse.json({ success: false, error: 'class_occurrences_read_failed' }, { status: 500 })
   }
 
   const ids = extractTrainerIds(rows || [])

@@ -36,6 +36,21 @@ describe('getOpenApiSpec', () => {
     expect(path.put.description).toMatch(/only its end date moved/)
   })
 
+  it('documents contractor spend and who gets the FTE labour total (FTECOSTVIS.1)', () => {
+    const get = spec.paths['/api/schedule/contractor-spend']?.get
+    expect(get).toBeDefined()
+    expect(get.security).toEqual([{ CookieAuth: [] }])
+    expect(get.description).toMatch(/fteImplicitCostEur/)
+    expect(get.description).toMatch(/owner, manager or master AT location_id/)
+    expect(get.responses).toHaveProperty('404')
+  })
+
+  it('no longer documents the retired working-time route (D1 DEADCODE.1)', () => {
+    expect(spec.paths['/api/schedule/working-time']).toBeUndefined()
+    // CANDIDATES.1's replacement is still documented.
+    expect(spec.paths['/api/schedule/blocks/{id}/candidates']).toHaveProperty('get')
+  })
+
   it('documents staff qualifications (QUALS.1): records, the catalogue and template requirements', () => {
     expect(spec.paths['/api/qualifications']).toHaveProperty('get')
     expect(spec.paths['/api/qualifications']).toHaveProperty('post')
@@ -98,6 +113,15 @@ describe('getOpenApiSpec', () => {
 
   // SEQGAPS.1 — the manual exit is irreversible and 409s on the second
   // call; both facts belong in the spec, not just in the route header.
+  // REVIEWNITS.1 (D5): contact create refuses a location outside the key's
+  // organisation, or one a cookie caller is not a member of (403); update
+  // answers 404 for an unknown id and 503 when the contact could not be read.
+  it('documents the contact create 403 and the update 404/503', () => {
+    expect(spec.paths['/api/contacts'].post.responses).toHaveProperty('403')
+    const put = spec.paths['/api/contacts/{id}'].put.responses
+    for (const code of ['401', '404', '503']) expect(put, code).toHaveProperty(code)
+  })
+
   it('documents the manual enrolment exit, including its 409', () => {
     const p = '/api/sequences/{id}/enrollments/{enrollmentId}/exit'
     expect(spec.paths, `missing ${p}`).toHaveProperty(p)
@@ -195,7 +219,7 @@ describe('getOpenApiSpec', () => {
     // The connection view is the allowlist — no key, no fingerprint.
     const conn = spec.components.schemas.ShellyConnectionPublic
     expect(Object.keys(conn.properties).sort()).toEqual(
-      ['has_auth_key', 'host', 'key_hint', 'last_error', 'last_error_at', 'last_ok_at', 'status'],
+      ['has_auth_key', 'host', 'last_error', 'last_error_at', 'last_ok_at', 'status'],
     )
   })
 
@@ -251,6 +275,64 @@ describe('getOpenApiSpec', () => {
     expect(checked).toBeGreaterThan(40)
   })
 
+  // WATPLPUT.1 — the six /api/whatsapp/templates* route files (8 operations)
+  // were never registered. The PUT documents that Meta's fields are refused
+  // (400) and a submitted template's content, header media included, is
+  // locked (409).
+  it('documents the six WhatsApp template routes (WATPLPUT.1)', () => {
+    const expected = {
+      '/api/whatsapp/templates': ['get', 'post'],
+      '/api/whatsapp/templates/{id}': ['get', 'put', 'delete'],
+      '/api/whatsapp/templates/{id}/resubmit': ['post'],
+      '/api/whatsapp/templates/upload-media/sign': ['post'],
+      '/api/whatsapp/templates/upload-media': ['post'],
+    }
+    let registered = 0
+    for (const [p, methods] of Object.entries(expected)) {
+      expect(spec.paths, `missing ${p}`).toHaveProperty(p)
+      for (const m of methods) {
+        const op = spec.paths[p][m]
+        expect(op, `${p} is not registered as ${m.toUpperCase()}`).toBeTruthy()
+        expect(op.tags).toContain('WhatsApp')
+        expect(op.security).toContainEqual({ CookieAuth: [] })
+        expect(op.responses, `${m} ${p} must document its 401`).toHaveProperty('401')
+        registered += 1
+      }
+    }
+    expect(registered).toBe(8)
+
+    const put = spec.paths['/api/whatsapp/templates/{id}'].put
+    expect(put.responses).toHaveProperty('400')
+    expect(put.responses).toHaveProperty('403')
+    expect(put.responses).toHaveProperty('409')
+    expect(put.responses['400'].description).toMatch(/status/)
+    expect(put.responses['409'].description).toMatch(/resubmit/i)
+    expect(put.description).not.toMatch(/replaced/)
+    expect(put.responses['409'].description).toMatch(/header media/)
+    expect(put.responses['409'].description).not.toMatch(/replaced/)
+    const putBody = spec.components.schemas.WaTemplateUpdate
+    expect(Object.keys(putBody.properties)).not.toContain('status')
+    for (const m of ['post', 'delete']) {
+      const op = m === 'post' ? spec.paths['/api/whatsapp/templates'].post : spec.paths['/api/whatsapp/templates/{id}'].delete
+      expect(op.responses).toHaveProperty('403')
+    }
+    expect(spec.paths['/api/whatsapp/templates/{id}/resubmit'].post.responses).toHaveProperty('403')
+  })
+
+  it('documents the two web task writes (C148 ACTWRITEGATEWEB.1), cookie only', () => {
+    const create = spec.paths['/api/activities/tasks']?.post
+    const status = spec.paths['/api/activities/tasks/{id}/status']?.post
+    for (const [name, op, codes] of [
+      ['create', create, ['200', '400', '401', '403', '404', '500']],
+      ['status', status, ['200', '400', '401', '403', '404', '500']],
+    ]) {
+      expect(op, `${name} is not registered`).toBeTruthy()
+      expect(op.tags).toContain('Tasks')
+      expect(op.security).toEqual([{ CookieAuth: [] }])
+      for (const c of codes) expect(op.responses, `${name} must document its ${c}`).toHaveProperty(c)
+    }
+  })
+
   it('caches the spec object across calls (same reference)', async () => {
     expect(await getOpenApiSpec()).toBe(spec)
   })
@@ -274,9 +356,11 @@ describe('getOpenApiSpec', () => {
   })
 
   it('documents inbound webhooks with provider auth', () => {
-    for (const p of ['/api/webhooks/glofox', '/api/webhooks/whatsapp', '/api/webhooks/postmark', '/api/webhooks/twilio/status']) {
+    for (const p of ['/api/webhooks/glofox', '/api/webhooks/whatsapp', '/api/webhooks/postmark']) {
       expect(spec.paths, `missing ${p}`).toHaveProperty(p)
     }
+    // TWILIO-RETIRE.1 — the SMS delivery-status webhook is gone.
+    expect(spec.paths).not.toHaveProperty('/api/webhooks/twilio/status')
     const glofox = spec.paths['/api/webhooks/glofox'].post
     expect(glofox.tags).toContain('Webhooks (Inbound)')
     expect(glofox.security).toContainEqual({ GlofoxHmac: [] })
@@ -343,6 +427,13 @@ describe('getOpenApiSpec', () => {
     expect(path?.post?.responses).toHaveProperty('409')
     expect(path.post.description).toMatch(/swap_conflicts/)
     expect(path.post.description).toMatch(/manager/i)
+  })
+
+  it('REPLACE.1b — documents the four offer paths', () => {
+    expect(spec.paths['/api/schedule/blocks/{id}/offer']?.post?.responses).toHaveProperty('409')
+    expect(spec.paths['/api/schedule/offers']?.get).toBeTruthy()
+    expect(spec.paths['/api/schedule/offers/{id}/claim']?.post?.responses).toHaveProperty('503')
+    expect(spec.paths['/api/schedule/offers/{id}']?.delete).toBeTruthy()
   })
 
   // DATECHECK.1 — every schedule read that now refuses an impossible date
@@ -462,5 +553,58 @@ describe('getOpenApiSpec', () => {
     const op = spec.paths['/api/schedule/rosters/{id}/compare'].get
     expect(op.description).toMatch(/outside_window/)
     expect(op.responses['409'].description).toMatch(/against snapshot covers none/)
+  })
+
+  // TRAINERSROLE.1 — the /api/locations/{id} lookup routes judge the role AT
+  // the path location, and a non-member gets a 404 (not a 403).
+  it.each([
+    '/api/locations/{id}/glofox-trainers',
+    '/api/locations/{id}/glofox-memberships',
+    '/api/locations/{id}/unifi-users',
+    '/api/locations/{id}/unifi-doors',
+  ])('documents %s as owner/manager at the path location, 404 for a non-member', (p) => {
+    const op = spec.paths[p]?.get
+    expect(op).toBeDefined()
+    expect(op.description).toMatch(/owner\/manager AT this location/)
+    expect(op.responses['403'].description).toMatch(/at this location/)
+    expect(op.responses['404'].description).toMatch(/Not a member/)
+    expect(op.responses['401'].description).toMatch(/unauthenticated/)
+  })
+
+  it('documents the glofox-trainers class_occurrences read failure as a 500', () => {
+    const op = spec.paths['/api/locations/{id}/glofox-trainers'].get
+    expect(op.responses['500'].description).toMatch(/class_occurrences_read_failed/)
+  })
+
+  it.each([
+    '/api/locations/{id}/unifi-users',
+    '/api/locations/{id}/unifi-doors',
+  ])('documents %s: a failed location read is a 500, a missing row a 404', (p) => {
+    const op = spec.paths[p].get
+    expect(op.responses['500'].description).toMatch(/location_read_failed/)
+    expect(op.responses['404'].description).toMatch(/location_not_found/)
+  })
+
+  // SEQROUTEGATE.1 — every sequence BUILDER route now answers 403 when the
+  // caller lacks email or WhatsApp at the sequence's studio (and POST
+  // /api/sequences 400s with no location). The enrolment routes (enrol, clone,
+  // exit, resume, audience/seed) keep their own email rule and are excluded.
+  it('documents the builder permission 403 on every sequence builder path', () => {
+    const ENROLMENT = /^\/api\/sequences\/\{id\}\/(enrol|clone|enrollments|audience)(\/|$)/
+    const builderPaths = Object.keys(spec.paths).filter((p) => p.startsWith('/api/sequences') && !ENROLMENT.test(p))
+    expect(builderPaths.length).toBeGreaterThan(0)
+    for (const p of builderPaths) {
+      for (const [method, op] of Object.entries(spec.paths[p])) {
+        expect(op.responses?.['403']?.description, `${method.toUpperCase()} ${p}`).toBe('Email or WhatsApp permission required')
+      }
+    }
+    const create = spec.paths['/api/sequences']?.post
+    if (create) expect(create.responses['400'].description).toMatch(/location_id required/)
+  })
+
+  it('documents the car Documents signed upload (CARDOCUPLOAD.1)', () => {
+    expect(spec.paths['/api/cars/{id}/documents/sign']).toHaveProperty('post')
+    expect(spec.paths['/api/cars/{id}/documents/finalise']).toHaveProperty('post')
+    expect(spec.paths['/api/cars/{id}/documents/finalise'].post.responses).toHaveProperty('409')
   })
 })

@@ -5,7 +5,8 @@
 //                                        server + sending domain, return the
 //                                        DNS records to add (NEVER the token)
 //
-// Access: owner-of-org or master (staff never manage it). Cross-org probes
+// Access: an organisation admin (C18 ORGROLE.1: master or an org_admin
+// grant; a studio owner is not one, staff never). Cross-org probes
 // by non-masters answer 404, not 403 (resolveEmailDomainOrgId). The whole
 // feature is gated by the custom_email_domain plan add-on — POST requires
 // it (403 'add-on required'); GET returns status either way with an
@@ -20,6 +21,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
+import { isOrgAdminSomewhere } from '@/lib/org-admin'
 import { validateBody, uuidLike } from '@/lib/validate'
 import { isPostmarkAccountConfigured, sanitizeSendingDomain } from '@/lib/postmark-account'
 import { orgHasEmailDomainAddon, tenantEmailStatePayload } from '@/lib/tenant-email'
@@ -33,13 +35,14 @@ import { logError } from '@/lib/log'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-// Gate to owner-of-org or master. Staff/manager/head_coach never manage the
-// sending domain (it holds a live sending credential). Returns a
+// Gate to organisation admins (master or an org_admin grant). Nobody else
+// manages the sending domain (it holds a live sending credential); the
+// organisation itself is judged by resolveEmailDomainOrgId below. Returns a
 // NextResponse to short-circuit, or null to continue.
-function guardOwnerOrMaster(user) {
+function guardOrgAdmin(user) {
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (user.role !== 'owner' && user.role !== 'master') {
-    return NextResponse.json({ success: false, error: 'Owner or master role required.' }, { status: 403 })
+  if (!isOrgAdminSomewhere(user)) {
+    return NextResponse.json({ success: false, error: 'Organisation admin role required.' }, { status: 403 })
   }
   return null
 }
@@ -63,7 +66,7 @@ function resolveOrgOr503(user, requested) {
 // GET /api/settings/email-domain?organization_id=xxx
 export async function GET(request) {
   const user = await getCurrentUser()
-  const guard = guardOwnerOrMaster(user)
+  const guard = guardOrgAdmin(user)
   if (guard) return guard
 
   const { searchParams } = new URL(request.url)
@@ -71,10 +74,18 @@ export async function GET(request) {
   if (response) return response
 
   const db = createServerClient()
-  const [row, addonActive] = await Promise.all([
-    loadEmailDomainRow(db, orgId),
-    orgHasEmailDomainAddon(db, orgId),
-  ])
+  let row
+  let addonActive
+  try {
+    ;[row, addonActive] = await Promise.all([
+      loadEmailDomainRow(db, orgId),
+      orgHasEmailDomainAddon(db, orgId),
+    ])
+  } catch (e) {
+    // CHANNELREAD.1 — never answer "not configured" off a failed read.
+    logError('tenant-email-domain', 'status read failed', { orgId, err: e?.message })
+    return NextResponse.json({ success: false, error: 'Could not load the sending domain just now.' }, { status: 500 })
+  }
   return NextResponse.json({
     success: true,
     data: tenantEmailStatePayload(row, { addonActive, accountConfigured: true }),
@@ -91,7 +102,7 @@ const InitiateSchema = z.object({
 // POST /api/settings/email-domain — initiate provisioning
 export async function POST(request) {
   const user = await getCurrentUser()
-  const guard = guardOwnerOrMaster(user)
+  const guard = guardOrgAdmin(user)
   if (guard) return guard
 
   const validation = await validateBody(request, InitiateSchema)

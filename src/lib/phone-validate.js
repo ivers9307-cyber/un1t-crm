@@ -2,7 +2,7 @@
 // public funnels only capture WhatsApp/SMS-reachable leads. Irish-first (the
 // audience), with UK + generic E.164 international accepted. Prefix rules
 // mirror normalizePhone() in glofox-sync.js (08* = IE mobile, 07* = UK mobile),
-// plus the bare no-country-code Irish mobile that toE164Ireland() in twilio.js
+// plus the bare no-country-code Irish mobile that toE164Ireland() below
 // accepts — see IE_MOBILE_BARE. normalizePhone() still passes that shape through
 // unchanged; it is a sync-side normaliser, not a gate, so it is left alone here.
 //
@@ -55,8 +55,8 @@ export function toMobileE164(raw) {
     if (IE_MOBILE_NATIONAL.test(digits)) return `+353${digits.slice(1)}`
     if (UK_MOBILE_NATIONAL.test(digits)) return `+44${digits.slice(1)}`
     // No trunk zero to strip — the country code is simply absent. toE164Ireland()
-    // in twilio.js already accepts this shape for SMS; this gate was the strictest
-    // of the three normalisers and the only public-facing one.
+    // below already accepts this shape; this gate was the strictest of the three
+    // normalisers and the only public-facing one.
     if (IE_MOBILE_BARE.test(digits)) return `+353${digits}`
     return null // bare national digits that aren't a recognised mobile
   }
@@ -70,4 +70,31 @@ export function toMobileE164(raw) {
 
 export function isValidMobileNumber(raw) {
   return toMobileE164(raw) != null
+}
+
+/**
+ * Normalise an Irish phone number to E.164 (+353…). Best-effort —
+ * if the input doesn't look like an Irish number, returns the cleaned
+ * digits unchanged so the downstream sender gets a chance to reject
+ * explicitly. Unlike toMobileE164 this is not a mobile gate.
+ * (Moved here from the retired twilio.js; the WhatsApp automations use it.)
+ *
+ *   '0871234567'    → '+353871234567'
+ *   '+353871234567' → '+353871234567'  (unchanged)
+ *   '353871234567'  → '+353871234567'
+ *   '871234567'     → '+353871234567'
+ *
+ * @param {string} raw
+ * @returns {string}
+ */
+export function toE164Ireland(raw) {
+  if (!raw) return raw
+  const digits = String(raw).replace(/[^\d+]/g, '')
+  if (digits.startsWith('+')) return digits
+  if (digits.startsWith('00')) return '+' + digits.slice(2)
+  if (digits.startsWith('353')) return '+' + digits
+  if (digits.startsWith('0')) return '+353' + digits.slice(1)
+  // Bare mobile prefix without leading 0 (e.g. just '87…' or '85…')
+  if (/^[1-9]\d{7,8}$/.test(digits)) return '+353' + digits
+  return digits
 }

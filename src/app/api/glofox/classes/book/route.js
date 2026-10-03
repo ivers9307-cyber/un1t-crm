@@ -5,20 +5,26 @@
 // The BookingRequest sent to Glofox is { user_id, model, model_id }
 // per the 2026-06-11 dry-run probe (see GLOFOX_BOOKING_MODEL in
 // src/lib/glofox.js). Glofox enforces capacity / double-booking /
-// waitlist server-side; its message_code is surfaced VERBATIM so the
-// operator sees exactly what Glofox said (design-doc requirement).
+// waitlist server-side; its message_code is surfaced verbatim on a
+// failure; the result is judged by interpretBookingResult() like every
+// other booking path (GLOFOXWRITEJUDGE.1).
 
 import { NextResponse } from 'next/server'
+import { GLOFOX_SETTINGS_UNREADABLE, GLOFOX_SETTINGS_UNREADABLE_MESSAGE } from '@/lib/glofox-settings-read'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { validateBody, uuidLike } from '@/lib/validate'
+import { readBookChatTemplate } from '@/lib/book-chat-copy'
+import { logWarn } from '@/lib/log'
 import {
   createBooking,
   GLOFOX_BOOKING_MODEL,
   glofoxCredentialsForLocation,
+  interpretBookingResult,
   missingGlofoxCredentialsForLocation,
 } from '@/lib/glofox'
+import { serverErrorResponse } from '@/lib/error-events'
 
 export const runtime = 'nodejs'
 
@@ -40,10 +46,17 @@ export async function POST(request) {
   const body = validation.data
 
   const db = createServerClient()
-  const { data: contact } = await db.from('contacts')
+  const { data: contact, error: contactErr } = await db.from('contacts')
     .select('id, name, first_name, location_id, glofox_member_id')
     .eq('id', body.contact_id)
     .maybeSingle()
+  // GLOFOXWRITEJUDGE.1 — a failed read is not "no such contact".
+  if (contactErr) {
+    return serverErrorResponse({
+      module: 'glofox-classes-book', error: contactErr, request, status: 500,
+      publicMessage: 'Could not read the contact just now. Nothing was booked. Try again.',
+    })
+  }
   if (!contact) {
     return NextResponse.json({ success: false, error: 'Contact not found' }, { status: 404 })
   }
@@ -57,6 +70,10 @@ export async function POST(request) {
   }
 
   const creds = await glofoxCredentialsForLocation(db, contact.location_id)
+  // REGISTRYREAD.1b: a failed settings read is not "not configured".
+  if (creds.readError) {
+    return NextResponse.json({ success: false, code: GLOFOX_SETTINGS_UNREADABLE, error: GLOFOX_SETTINGS_UNREADABLE_MESSAGE }, { status: 503 })
+  }
   const missing = missingGlofoxCredentialsForLocation(creds)
   if (missing.length > 0) {
     return NextResponse.json({ success: false, error: 'Glofox is not configured for this studio.' }, { status: 400 })
@@ -110,24 +127,47 @@ export async function POST(request) {
     }
   }
 
-  if (!result.ok || result.body?.success === false) {
-    // Surface Glofox's own words — message_code values like
-    // YOU_HAVE_BOOKED_FOR_THIS_EVENT are exactly what the operator
-    // needs to see.
+  // GLOFOXWRITEJUDGE.1 — judged like the /start processor, Mia and the approval
+  // route: Glofox answers 200 with a failure code, and its success body wraps
+  // the booking as { success, Booking }. Already booked (Glofox's member+event
+  // dedupe) is a success: the member IS in the class.
+  const verdict = interpretBookingResult(result)
+  const discovered = discoveredModel ? { discovered_model: discoveredModel } : {}
+  if (verdict.alreadyBooked) {
+    return NextResponse.json({
+      success: true,
+      already_booked: true,
+      glofox_booking_id: verdict.bookingId,
+      glofox_body: result.body,
+      ...discovered,
+    })
+  }
+  if (!verdict.booked) {
+    // Surface Glofox's own words: exactly what the operator needs to see.
     const msg = result.body?.message || result.body?.message_code || `Glofox booking failed (HTTP ${result.status})`
     return NextResponse.json({
       success: false,
       error: msg,
       glofox_status: result.status,
       glofox_body: result.body,
-      ...(discoveredModel ? { discovered_model: discoveredModel } : {}),
+      ...discovered,
     }, { status: 502 })
+  }
+
+  // BOOKCHATCOPY.1 — the studio's editable chat confirmation for the panel.
+  // The member IS booked, so a failed read never fails this: logged, and the
+  // panel sends the default words.
+  const chat = await readBookChatTemplate(db, contact.location_id)
+  if (chat.error) {
+    logWarn('glofox-classes-book', 'chat confirmation template read failed; the default is used', { locationId: contact.location_id, err: chat.error })
   }
 
   return NextResponse.json({
     success: true,
-    glofox_booking_id: result.body?._id || result.body?.data?._id || null,
+    glofox_booking_id: verdict.bookingId,
     glofox_body: result.body,
-    ...(discoveredModel ? { discovered_model: discoveredModel } : {}),
+    chat_template: chat.template,
+    ...(result.recovered ? { recovered: result.recovered } : {}),
+    ...discovered,
   })
 }

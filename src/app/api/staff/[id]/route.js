@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, hasRoleAtAnyLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import {
   employmentTypeSchema, money, hours, days, permissionsSchema,
@@ -17,6 +17,7 @@ import { getStaffForUser } from '@/lib/staff'
 import { logAuditEvent } from '@/lib/audit'
 import { isTombstone } from '@/lib/staff-tombstone'
 import { suspendStaffLogin, restoreStaffLogin } from '@/lib/staff-login-access'
+import { STAFF_MANAGED_SELECT, pickManagedStaffRow } from '@/lib/staff-fields'
 
 export const runtime = 'nodejs'
 
@@ -75,7 +76,9 @@ export async function PUT(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!user.isMaster && user.role !== 'owner') {
+  // ROLESWEEP.1c — coarse pre-check (owner SOMEWHERE); canEditStaffMember and
+  // assertOwnerAssignmentScope below judge ownership at the target's locations.
+  if (!user.isMaster && !hasRoleAtAnyLocation(user, ['owner'])) {
     return NextResponse.json({
       success: false,
       error: 'Forbidden — must be an owner at this location (or a master) to edit staff',
@@ -344,7 +347,7 @@ export async function PUT(request, props) {
   // Final re-fetch for the response.
   const { data: final } = await db
     .from('profiles')
-    .select('*, profile_locations(*, locations(*))')
+    .select(STAFF_MANAGED_SELECT)
     .eq('id', id)
     .single()
 
@@ -401,7 +404,10 @@ export async function PUT(request, props) {
 
   return NextResponse.json({
     success: true,
-    data: final,
+    // STAFFPROFILEPICK.1 — the echo is the named managed shape. targetBefore
+    // and refreshed stay whole on the server (the UniFi revoke/sync and the
+    // role recompute read them); nothing from them is returned.
+    data: pickManagedStaffRow(final),
     ...login.flags,
     // Deactivating revoked every door policy and cleared the toggles, and
     // reactivating deliberately does not guess them back.
@@ -460,7 +466,9 @@ export async function DELETE(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!user.isMaster && user.role !== 'owner') {
+  // ROLESWEEP.1c — coarse pre-check (owner SOMEWHERE); the owner-overlap check
+  // and canEditStaffMember below judge ownership at the target's locations.
+  if (!user.isMaster && !hasRoleAtAnyLocation(user, ['owner'])) {
     return NextResponse.json({
       success: false,
       error: 'Forbidden — must be an owner at this location (or a master) to deactivate staff',

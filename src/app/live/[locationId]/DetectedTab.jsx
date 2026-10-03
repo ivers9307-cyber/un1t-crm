@@ -16,7 +16,9 @@ import { Plug, ChevronDown, ChevronRight, Link2, Check } from 'lucide-react'
 
 const POLL_MS = 12000
 
-export default function DetectedTab({ locationId }) {
+// GATES-2 — `canClaim` (the page's canMutate): Claim calls register-device,
+// which needs a coach role at the location. Defaults closed.
+export default function DetectedTab({ locationId, canClaim = false }) {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -97,12 +99,12 @@ export default function DetectedTab({ locationId }) {
       ) : (
         <ul className="mt-3 divide-y divide-un1t-border rounded-2xl border border-un1t-border bg-white">
           {filtered.map((r) => (
-            <DetectionRow key={r.id} row={r} locationId={locationId} onLink={() => setLinking(r)} />
+            <DetectionRow key={r.id} row={r} locationId={locationId} onLink={canClaim ? () => setLinking(r) : null} />
           ))}
         </ul>
       )}
 
-      {linking && (
+      {canClaim && linking && (
         <ClaimModal
           row={linking}
           locationId={locationId}
@@ -149,7 +151,7 @@ function DetectionRow({ row, locationId, onLink }) {
         <div className="text-right">
           {row.linked_contact ? (
             <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700"><Check size={12} /> {row.linked_contact.name}</span>
-          ) : (
+          ) : onLink && (
             <button type="button" onClick={onLink} className="inline-flex items-center gap-1 rounded-md bg-indigo-600 px-2 py-0.5 text-xs font-medium text-white hover:bg-indigo-500">
               <Link2 size={12} /> Claim
             </button>

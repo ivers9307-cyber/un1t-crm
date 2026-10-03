@@ -19,7 +19,8 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess, getUserLocationIds, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { uuidLike, realIsoDate, isRealCalendarDate, timeOfDay, MANAGER_ROLES } from '@/lib/schemas'
+import { uuidLike, realIsoDate, timeOfDay, MANAGER_ROLES } from '@/lib/schemas'
+import { rangeQueryError, MAX_LIST_RANGE_DAYS } from '@/lib/report-period'
 import { findPublishedRosterFor } from '@/lib/roster'
 import { logWarn } from '@/lib/log'
 import { adminMinimumRefusal } from '@/lib/shift-template-kind'
@@ -48,11 +49,11 @@ export async function GET(request) {
   // DATECHECK.1 — these bounds reach Postgres as they are, and it refuses
   // 2026-02-30 (the route used to hand back its error text as the 400). Refuse
   // it here, in change-log's words. Absent or empty = no bound, as before.
-  for (const [name, value] of [['start_date', startDate], ['end_date', endDate]]) {
-    if (value && !isRealCalendarDate(value)) {
-      return NextResponse.json({ success: false, error: `${name}: not a real date` }, { status: 400 })
-    }
-  }
+  // RANGEVALID.1 — and, when both are given, in order and at most
+  // MAX_LIST_RANGE_DAYS apart, before any read: reversed was an empty 200, and
+  // a wide range one unpaged select PostgREST silently cut at 1,000 rows.
+  const rangeError = rangeQueryError(startDate, endDate, { maxDays: MAX_LIST_RANGE_DAYS })
+  if (rangeError) return NextResponse.json({ success: false, error: rangeError }, { status: 400 })
   const db = createServerClient()
 
   let query = db

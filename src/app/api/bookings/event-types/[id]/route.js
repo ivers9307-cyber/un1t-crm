@@ -2,12 +2,13 @@
 // See src/app/api/bookings/event-types/route.js header for context.
 
 import { NextResponse } from 'next/server'
-import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { requireApiKeyOrManager, assertRowInOrg } from '@/lib/api-auth'
-import { assertLocationAccessOr404 } from '@/lib/auth'
+import { assertLocationAccessOr404, hasRoleAtLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { hexColor, url } from '@/lib/schemas'
+import { MANAGER_ROLES } from '@/lib/schemas'
+import { EventTypeUpdateSchema, eventTypeSlug } from '@/lib/event-type-schema'
+import { logError } from '@/lib/log'
 
 // SAAS-12 — cookie/session location guard for this detail route.
 // assertRowInOrg only scopes per-org API keys (it no-ops when orgId is
@@ -18,38 +19,34 @@ import { hexColor, url } from '@/lib/schemas'
 // NextResponse (not 403) so a cross-tenant probe can't confirm an id
 // exists — same convention as assertRowInOrg. No-op for the API-key
 // paths (user is null). Mirrors the cookie guard in /api/contacts/[id].
+//
+// ROLESWEEP.2 — requireApiKeyOrManager's cookie branch only says "Manager+
+// somewhere"; THIS decides: MANAGER_ROLES at the event type's location, 404
+// like a non-member. A missing row is 404 too (it used to pass: a null
+// location_id reads as "no specific location" to assertLocationAccessOr404),
+// and a failed read is a 500, never a pass.
 async function assertEventTypeSessionAccess(db, user, id) {
   if (!user || user.role === 'master') return null
-  const { data: row } = await db.from('event_types').select('location_id').eq('id', id).maybeSingle()
-  return assertLocationAccessOr404(user, row?.location_id)
+  const { data: row, error } = await db.from('event_types').select('location_id').eq('id', id).maybeSingle()
+  if (error) {
+    logError('event-types', 'session access read failed', { id, err: error })
+    return NextResponse.json({ success: false, error: 'Could not load event type' }, { status: 500 })
+  }
+  const guard = assertLocationAccessOr404(user, row?.location_id)
+  if (guard) return guard
+  if (!hasRoleAtLocation(user, row?.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  }
+  return null
 }
-
-const EventUpdateSchema = z.object({
-  name: z.string().min(1).max(200).optional(),
-  slug: z.string().max(100).optional(),
-  description: z.string().max(5000).nullable().optional(),
-  duration_minutes: z.number().int().min(1).max(1440).optional(),
-  color: hexColor.optional(),
-  availability: z.unknown().optional(),
-  buffer_minutes: z.number().int().min(0).max(1440).optional(),
-  max_advance_days: z.number().int().min(0).max(3650).optional(),
-  custom_fields: z.array(z.unknown()).optional(),
-  webhook_url: url.nullable().optional(),
-  active: z.boolean().optional(),
-  // Mig 125: editable on update. See POST schema for semantics.
-  staff_required: z.number().int().min(0).max(50).optional(),
-  // Mig 144 (GLOFOX3.2): editable on update. See POST schema.
-  create_in_glofox: z.boolean().optional(),
-})
 
 // GET /api/bookings/event-types/:id — Get single event type with bookings count
 //
-// Auth: requireApiKeyOrManager — accepts both the n8n bearer-token
-// (CRM_API_KEY) AND a manager+ cookie session. The original handler
-// (relocated from /api/events/[id]) used requireApiKey-only because
-// the only consumer was n8n; once the in-CRM operator UI started
-// invoking these (EventActions delete button), cookie auth had to
-// be allowed. Same pattern as /api/contacts/[id] (mig 109 contact CRUD).
+// Auth: requireApiKeyOrManager — the n8n bearer-token (CRM_API_KEY / per-org
+// key) AND a manager+ cookie session. Cookie callers: the booking-type form's
+// PUT (EVENTTYPERLS.1, the only way the UI edits a booking type) and
+// EventActions' DELETE, both judged by assertEventTypeSessionAccess at the
+// row's location — the same rule as canManageEventType on the pages.
 export async function GET(request, props) {
   const params = await props.params;
   const auth = await requireApiKeyOrManager(request)
@@ -72,7 +69,7 @@ export async function PUT(request, props) {
   const auth = await requireApiKeyOrManager(request)
   if (!auth.ok) return auth.response
 
-  const validation = await validateBody(request, EventUpdateSchema)
+  const validation = await validateBody(request, EventTypeUpdateSchema)
   if (!validation.ok) return validation.response
   const body = validation.data
   const db = createServerClient()
@@ -83,9 +80,10 @@ export async function PUT(request, props) {
 
   const updates = { ...body }
 
-  // Re-generate slug if name changed and slug not explicitly set
+  // Re-generate slug if name changed and slug not explicitly set. The
+  // booking-type form sends no slug (EVENTTYPERLS.1): it is always this one.
   if (updates.name && !updates.slug) {
-    updates.slug = updates.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
+    updates.slug = eventTypeSlug(updates.name)
   }
 
   const { data, error } = await db.from('event_types').update(updates).eq('id', params.id).select().single()

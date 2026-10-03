@@ -29,13 +29,18 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission, hasMobilePermission } from '@/lib/permissions'
+import {
+  hasPermissionAtAnyLocation, hasPermissionForLocation,
+  hasMobilePermissionAtAnyLocation, hasMobilePermissionForLocation,
+} from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { getAppUrl } from '@/lib/app-url'
 import { sendTransactionalEmail } from '@/lib/postmark'
 import { sendCtaUrlMessage, sendTemplateMessage, isWindowOpen, buildTemplateComponents, renderTemplateBody } from '@/lib/whatsapp'
 import { URL_BUTTON_MAPPING_KEY } from '@/lib/whatsapp-template-buttons'
 import { getOrCreateContactConversation } from '@/lib/whatsapp-conversations'
+import { ownNumberOrRefusal } from '@/lib/whatsapp-own-number'
+import { whatsappErrorStatus } from '@/lib/whatsapp-number-missing'
 import { manualTakeoverPatch } from '@/lib/agent/core'
 import { issueLink, revokeLink, latestLinkForContact } from '@/lib/cancellation-form/links'
 import { resolveCancellationFormCopy } from '@/lib/cancellation-form/copy'
@@ -51,8 +56,16 @@ const SendSchema = z.object({
 const BLOCKED_EMAIL_STATUSES = ['bounced', 'complained']
 const CONTACT_COLUMNS = 'id, name, first_name, email, email_status, phone, wa_phone, location_id, glofox_membership_plan'
 
-function channelPermitted(user, channel) {
-  return hasPermission(user, channel) || hasMobilePermission(user, channel)
+// ROLESWEEP.1c — the channel is judged AT the contact's location (web OR
+// mobile toggle there), never at the caller's active studio.
+function channelPermitted(user, locationId, channel) {
+  return hasPermissionForLocation(user, locationId, channel) || hasMobilePermissionForLocation(user, locationId, channel)
+}
+
+// Coarse pre-check only: the caller holds the channel (web or mobile) at SOME
+// location. The real decision is channelPermitted at the contact's location.
+function channelPermittedAnywhere(user, channel) {
+  return hasPermissionAtAnyLocation(user, channel) || hasMobilePermissionAtAnyLocation(user, channel)
 }
 
 async function loadContext(db, contactId) {
@@ -86,7 +99,7 @@ export async function GET(request, props) {
   const { id: contactId } = await props.params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!channelPermitted(user, 'email') && !channelPermitted(user, 'whatsapp')) {
+  if (!channelPermittedAnywhere(user, 'email') && !channelPermittedAnywhere(user, 'whatsapp')) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
   const db = createServerClient()
@@ -94,6 +107,10 @@ export async function GET(request, props) {
   if (!ctx.contact) return NextResponse.json({ success: false, error: 'Contact not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, ctx.contact.location_id)
   if (guard) return guard
+  // ROLESWEEP.1c — email OR whatsapp judged at the contact's location.
+  if (!channelPermitted(user, ctx.contact.location_id, 'email') && !channelPermitted(user, ctx.contact.location_id, 'whatsapp')) {
+    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  }
   const { contact, locationName, copy, baseUrl } = ctx
 
   const [latest, template] = await Promise.all([
@@ -119,8 +136,8 @@ export async function GET(request, props) {
     data: {
       latest,
       can: {
-        email: emailOk && channelPermitted(user, 'email'),
-        whatsapp: hasPhone && channelPermitted(user, 'whatsapp') && (windowOpen || templateReady),
+        email: emailOk && channelPermitted(user, contact.location_id, 'email'),
+        whatsapp: hasPhone && channelPermitted(user, contact.location_id, 'whatsapp') && (windowOpen || templateReady),
         whatsapp_window_open: windowOpen,
         whatsapp_template_ready: templateReady,
         has_phone: hasPhone,
@@ -151,7 +168,8 @@ export async function POST(request, props) {
   if (!ctx.contact) return NextResponse.json({ success: false, error: 'Contact not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, ctx.contact.location_id)
   if (guard) return guard
-  if (!channelPermitted(user, channel)) {
+  // ROLESWEEP.1c — the channel is judged at the contact's location.
+  if (!channelPermitted(user, ctx.contact.location_id, channel)) {
     return NextResponse.json({ success: false, error: `Forbidden — ${channel} not enabled at this location for your role` }, { status: 403 })
   }
   const { contact, locationName, copy, baseUrl } = ctx
@@ -160,6 +178,8 @@ export async function POST(request, props) {
   let conversation = null
   let waPhone = null
   let template = null
+  // WACONFIGFALLBACK.1 — the number checked below; the WhatsApp send uses it.
+  let numberConfig = null
   if (channel === 'email') {
     if (!contact.email) return NextResponse.json({ success: false, error: 'Contact has no email address on file' }, { status: 400 })
     if (BLOCKED_EMAIL_STATUSES.includes(contact.email_status || '')) {
@@ -169,6 +189,13 @@ export async function POST(request, props) {
     if (!contact.wa_phone && !contact.phone) {
       return NextResponse.json({ success: false, error: 'Contact has no phone number on file' }, { status: 400 })
     }
+    // WACONFIGFALLBACK.1 — the contact's location must have a WhatsApp number
+    // of its own before a thread is opened or a link minted: the send used to
+    // go out on the global env number (another studio's). 409 / 500. The
+    // send carries this checked config: one lookup, no check-then-send gap.
+    const own = await ownNumberOrRefusal(contact.location_id, 'cancel-form-send')
+    if (!own.ok) return NextResponse.json({ success: false, error: own.error }, { status: own.status })
+    numberConfig = own.config
     const opened = await getOrCreateContactConversation(db, contact)
     if (!opened.ok) return NextResponse.json({ success: false, error: opened.error }, { status: opened.status })
     conversation = opened.conversation
@@ -217,14 +244,14 @@ export async function POST(request, props) {
       let body
       let templateName = null
       if (!template) {
-        result = await sendCtaUrlMessage(waPhone, { bodyText: texts.whatsappText, buttonText: texts.whatsappButtonText, url: issued.url }, { locationId: contact.location_id })
+        result = await sendCtaUrlMessage(waPhone, { bodyText: texts.whatsappText, buttonText: texts.whatsappButtonText, url: issued.url }, { config: numberConfig })
         messageType = 'interactive'
         body = `${texts.whatsappText}\n${issued.url}`
       } else {
         // The token rides the dynamic URL button; resolveContactField falls
         // through to the literal because 'TOKEN' is not a contact field.
         const components = buildTemplateComponents(template, contact, { [URL_BUTTON_MAPPING_KEY]: issued.token }, null, { locationId: contact.location_id })
-        result = await sendTemplateMessage(waPhone, template.name, template.language || 'en', components, { locationId: contact.location_id })
+        result = await sendTemplateMessage(waPhone, template.name, template.language || 'en', components, { config: numberConfig })
         messageType = 'template'
         templateName = template.name
         body = renderTemplateBody(template, contact, {}, { locationId: contact.location_id }) || `[Template: ${template.name}]`
@@ -257,7 +284,7 @@ export async function POST(request, props) {
     }
   } catch (e) {
     await revokeLink(db, issued.linkId, e?.message || 'send failed')
-    return NextResponse.json({ success: false, error: e?.message || 'Failed to send the form link' }, { status: 502 })
+    return NextResponse.json({ success: false, error: e?.message || 'Failed to send the form link' }, { status: whatsappErrorStatus(e, 502) })
   }
 
   // Timeline activity — best-effort, the link is already delivered.

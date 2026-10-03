@@ -1,0 +1,16 @@
+{
+  "_readme": [
+    "Accepted findings for `npm run check:rpc-names` (STEPSENTRPC.1).",
+    "An entry means: the checker reports this `.rpc()` name as absent from the functions replayed from supabase/migrations, and we have DECIDED, for a stated reason, to let it through until the expiry.",
+    "Empty is the healthy state. Correct the name, create the function in a forward-only migration, or delete the call, before reaching for this file.",
+    "",
+    "Entry shape (all four fields required):",
+    "  file     repo-relative path exactly as the checker prints it, e.g. \"src/lib/sequences/enrol.js\"",
+    "  name     the function name passed to .rpc() (covers every call of that name in that file)",
+    "  reason   WHY it may pass. For a function that exists in prod but whose DDL this replay cannot read: say you read pg_proc on the live project, and when. For a known phantom awaiting its fix: name the row and the PR.",
+    "  expires  YYYY-MM-DD. Past this date the gate FAILS until someone re-decides. A month at most.",
+    "",
+    "Entries cannot rot: an expired entry fails exactly like an unlisted name."
+  ],
+  "entries": []
+}

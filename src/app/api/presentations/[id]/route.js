@@ -3,7 +3,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -22,16 +22,19 @@ async function loadOwned(db, user, id) {
     .maybeSingle()
   if (!row) return { notFound: true }
   if (assertLocationAccess(user, row.location_id)) return { notFound: true }
+  // ROLESWEEP.1a — the permission is judged at the deck's location.
+  if (!hasPermissionForLocation(user, row.location_id, 'presentations')) return { denied: true }
   return { row }
 }
 
 export async function GET(_request, { params }) {
   const user = await getCurrentUser()
-  if (!user || !hasPermission(user, 'presentations')) return deny()
+  if (!user || !hasPermissionAtAnyLocation(user, 'presentations')) return deny()
   const { id } = await params
   const db = createServerClient()
-  const { row, notFound } = await loadOwned(db, user, id)
+  const { row, notFound, denied } = await loadOwned(db, user, id)
   if (notFound) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  if (denied) return deny()
   const { data: slides } = await db
     .from('presentation_slides')
     .select('id, position, image_path')
@@ -45,11 +48,12 @@ export async function GET(_request, { params }) {
 
 export async function DELETE(_request, { params }) {
   const user = await getCurrentUser()
-  if (!user || !hasPermission(user, 'presentations')) return deny()
+  if (!user || !hasPermissionAtAnyLocation(user, 'presentations')) return deny()
   const { id } = await params
   const db = createServerClient()
-  const { notFound } = await loadOwned(db, user, id)
+  const { notFound, denied } = await loadOwned(db, user, id)
   if (notFound) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  if (denied) return deny()
   // Best-effort storage cleanup, then the row (cascade removes slide rows).
   const { data: slides } = await db.from('presentation_slides').select('image_path').eq('presentation_id', id)
   const paths = (slides || []).map((s) => s.image_path)

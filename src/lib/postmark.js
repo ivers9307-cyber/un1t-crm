@@ -469,10 +469,9 @@ export async function sendBatch(emails, { locationId, sender } = {}) {
  *   {{lead_status}} is a deprecated alias of {{pipeline_stage}} (CLASSIFY.2)
  *     — both read contacts.pipeline_stage_slug. Kept so email bodies written
  *     before the rename keep rendering.
- *   {{glofox_passcode}} (GLOFOX3.5) is the one-time passcode minted when CRM
- *     creates a Glofox account; glofox-push.js stores it on
- *     contacts.glofox_passcode and the welcome sequence reads it. It is empty
- *     for everyone else, so it is not offered in the editors.
+ *   {{glofox_passcode}} is RETIRED (PASSCODEREAD.1, mig 651): Glofox
+ *     passwords are no longer stored, so it always renders empty. It stays in
+ *     the table so an old body renders nothing rather than literal braces.
  */
 export function applyMergeTags(html, contact, extras = {}) {
   if (!html) return html
@@ -501,7 +500,8 @@ export function applyMergeTags(html, contact, extras = {}) {
     // works, just without the prefill.
     '{{booking_token}}': extras.booking_token || '',
     '{{current_year}}': new Date().getFullYear().toString(),
-    '{{glofox_passcode}}': contact.glofox_passcode || '',
+    // PASSCODEREAD.1 — retired: always empty, never reads the column.
+    '{{glofox_passcode}}': '',
     // PAYLINK.7 — the overdue-payment reminder's pay link, resolved by the
     // sequence email step from the run's metadata (dunning-payment.js). Both
     // empty for any other email, so a body that uses them still renders.

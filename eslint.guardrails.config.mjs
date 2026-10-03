@@ -324,6 +324,102 @@ const config = [
       'src/lib/shift-replace-server.js',
       'src/lib/shift-replace-notify.js',
       'src/app/api/schedule/assignments/*/replace/**',
+      // REPLACE.1b — the offer sender / sweep and the four offer routes. Born
+      // clean: every write destructures error; guarded UPDATEs judge rows.
+      'src/lib/shift-offer-server.js',
+      'src/app/api/schedule/offers/**',
+      'src/app/api/schedule/blocks/*/offer/**',
+      // REGISTRYREAD.1a — the registry's dual-write sync. Its deactivate was a
+      // bare UPDATE answering "deactivated"; now every write judges its error.
+      'src/lib/connection-registry.js',
+      // DETAILBACKFILL.1 — the detail backfill's due-date stamp is its cursor:
+      // a stamp that silently fails re-reads the same contacts every tick
+      // (the ~288k-calls-a-day loop this PR removed). Armed clean.
+      'src/app/api/cron/glofox-detail-backfill/route.js',
+      // CRONREADERR.1 — the crons whose failed reads used to pass for a quiet
+      // run, plus the class-sync lib and the push-reminder cron (clean on main).
+      // Measured: 5 findings in the first three on main (ad-insights ×2,
+      // class-bookings ×2, contact-imports ×1), 0 after.
+      'src/app/api/cron/ad-insights-sync/route.js',
+      'src/app/api/cron/process-contact-imports/route.js',
+      'src/app/api/cron/process-class-bookings/route.js',
+      'src/app/api/cron/sync-class-occurrences/route.js',
+      'src/app/api/cron/send-push-reminders/route.js',
+      'src/lib/class-occurrences.js',
+      // PUSHREADERR.1 — the staff and customer push pipeline: a failed read
+      // here used to pass for "nobody to tell"; the write half is guarded so
+      // it cannot come back as a silent failed claim/prune. Measured clean
+      // (0 findings on main 12f3d019, 0 after).
+      'src/lib/push.js',
+      'src/lib/notify.js',
+      'src/lib/push-dedup.js',
+      'src/lib/customer-push.js',
+      // PUSHDONE.1a — the staff callers that record "done" around a push: the
+      // stamp now follows the send, so a lost stamp write must be said.
+      // Measured on main aea71b1f: approvals-sla 3 (the escalate stamp F6,
+      // the expire claim, the funnel-row sync), handoff-sla 2 (the escalate
+      // stamp, the auto-resolve write), reminder-runner 2 (F3), WhatsApp
+      // health 4, the other three 0; 0 after.
+      'src/lib/push-outcome.js',
+      'src/lib/agent/approvals-sla.js',
+      'src/lib/agent/handoff-sla.js',
+      'src/lib/hyrox/reminder-runner.js',
+      'src/app/api/cron/refresh-whatsapp-health/route.js',
+      'src/app/api/cron/contract-reminders/route.js',
+      'src/app/api/cron/checklist-sweep/route.js',
+      'src/app/api/cron/equipment-inspection-sweep/route.js',
+      // PUSHDONE.1b — the member engagement pushes and their claim helper.
+      // Measured on main 4c991179: run-challenge-events 3 (the three
+      // announced_* stamps), the four nudge crons 0; 0 after. live-class.js
+      // was left out with three bare writes (session patch, strap close,
+      // achievement stamp); C31 PUSHNITS.1 judged all three and armed it.
+      'src/lib/customer-nudge-claim.js',
+      'src/app/api/cron/notify-streak-at-risk/route.js',
+      'src/app/api/cron/notify-winback/route.js',
+      'src/app/api/cron/notify-onboarding-pace/route.js',
+      'src/app/api/cron/send-class-booking-reminders/route.js',
+      'src/app/api/cron/run-challenge-events/route.js',
+      'src/lib/live-class.js',
+      // SETTINGSWIPE.1 — the one writer of locations.settings and the seven
+      // routes that used to wipe it (three of them with bare or discarded
+      // writes that answered success). Measured on main 6c6775ee: 3 findings
+      // (card-sets PUT, conversational-automation POST, status-page PUT); 0 after.
+      'src/lib/location-settings.js',
+      'src/app/api/whatsapp/card-sets/route.js',
+      'src/app/api/whatsapp/conversational-automation/route.js',
+      'src/app/api/settings/customer-agent/route.js',
+      'src/app/api/settings/scoring/route.js',
+      'src/app/api/settings/status-page/route.js',
+      'src/app/api/hyrox/settings/route.js',
+      'src/app/api/hyrox/sessions/*/exemplar/route.js',
+      // WATPLSEND.1 — the inbox send route. Its message insert and conversation
+      // update ran AFTER Meta had delivered the message, as bare awaits inside a
+      // try whose catch answered 400 "failed": a lost write was either silent or
+      // told staff a delivered message had failed (inviting a duplicate). Both
+      // are now log-and-warn; nothing after the Meta call may fail the request.
+      // `[[]id]`: files entries are minimatch globs, a bare `[id]` is a class.
+      'src/app/api/whatsapp/conversations/[[]id]/send/route.js',
+      // CHECKINRISKS.1 (C106 e) — the react and send-flow thread rows were
+      // inserted inside a try/catch that could never see a resolved { error }.
+      // Now log-and-warn, never a failure after Meta has sent.
+      'src/app/api/whatsapp/conversations/[[]id]/react/route.js',
+      // FLOWTOKENDEDUP.1 (C73) — the inbox booking-Flow send. Its thread-row
+      // insert ran after Meta had accepted the Flow, inside a try whose catch
+      // could never fire for it: a lost row was silent. Now log-and-warn, like
+      // the send route above.
+      'src/app/api/whatsapp/conversations/[[]id]/send-flow/route.js',
+      // MEMBERWRITESWEEP.1e — the campaign editor's session routes, new in this
+      // PR (they replace browser-direct writes on campaigns): born clean, every
+      // write reads its error and the rows it touched.
+      'src/app/api/communications/campaigns/**',
+      'src/lib/campaign-session-access.js',
+      // MEMBERWRITESWEEP.1f — the TV admin's session routes, new in this PR
+      // (they replace client-session writes on tv_displays / tv_content /
+      // tv_templates): born clean, every write reads its error.
+      'src/app/api/admin/tv-displays/route.js',
+      'src/app/api/admin/tv-displays/[[]id]/**',
+      'src/app/api/admin/tv-templates/**',
+      'src/lib/tv-admin.js',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },
@@ -371,6 +467,34 @@ const config = [
     },
     rules: {
       'guardrails/no-substring-redirect-assertion': 'error',
+    },
+  },
+  {
+    // D2 EXPECTLINT.1 — `expect(…).resolves/.rejects` and `expect.poll` return a
+    // promise, and one nothing waits for races the test's end: it passes
+    // without checking, or fails a LATER test. #1762 lost a CI run that way.
+    // Test files plus the helpers they import (a helper that asserts is test
+    // code too). Measured on main 91ab55bf with this rule: 0 findings, across
+    // the 755 lines in 202 test files that use .resolves/.rejects (97 of them
+    // multi-line chains a grep would miss). mobile/lib's tests are armed in
+    // eslint.mobile.config.mjs, since mobile/** is outside this config.
+    files: [
+      '**/*.test.js',
+      '**/*.test.jsx',
+      '**/*.test-helpers.js',
+      '**/_test-*.js',
+      'tests/helpers/**/*.js',
+    ],
+    plugins: { guardrails },
+    linterOptions: { reportUnusedDisableDirectives: 'off' },
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: 'module',
+      parserOptions: { ecmaFeatures: { jsx: true } },
+      globals: { ...globals.node, ...globals.browser },
+    },
+    rules: {
+      'guardrails/no-unawaited-async-expect': 'error',
     },
   },
 ]

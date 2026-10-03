@@ -110,6 +110,7 @@ const VIA_NOTE = {
   swap: 'shift swap',
   swap_drop: 'dropped shift approved',
   replace: 'coach replaced', // REPLACE.1a
+  offer: 'took an offered shift', // REPLACE.1b — a coach claimed an "Offer to team" shift
 }
 
 function dateParts(iso) {

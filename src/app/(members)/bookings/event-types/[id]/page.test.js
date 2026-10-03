@@ -48,8 +48,15 @@ vi.mock('next/navigation', () => ({
 }))
 
 // Client components — stubs; the test asserts on the server-rendered shell.
-vi.mock('@/components/EventActions', () => ({ default: () => null }))
-vi.mock('@/components/BookingStatusToggle', () => ({ default: () => null }))
+// ROLEUI.1 — the stub prints the canDelete it was handed, so the page's
+// decision is visible in the markup.
+vi.mock('@/components/EventActions', () => ({
+  default: ({ canDelete }) => <span data-testid="event-actions" data-can-delete={String(canDelete)} />,
+}))
+// C134 — the stub prints the canEdit it was handed.
+vi.mock('@/components/BookingStatusToggle', () => ({
+  default: ({ canEdit }) => <span data-testid="status-toggle" data-can-edit={String(canEdit)} />,
+}))
 vi.mock('next/link', () => ({
   default: ({ href, children }) => <a href={typeof href === 'string' ? href : ''}>{children}</a>,
 }))
@@ -136,5 +143,61 @@ describe('/bookings/event-types/[id] page', () => {
     const html = renderToStaticMarkup(await BookingTypeDetailPage(props()))
     expect(html).toContain('PT Consult')
     expect(html).not.toContain('Booking type not found')
+  })
+
+  // ROLEUI.1 — Edit and Delete show exactly when /api/bookings/event-types/[id]
+  // would act (a master, or MANAGER_ROLES at the booking type's location).
+  // The page used to render both for anyone who could open it.
+  describe('ROLEUI.1 — Edit and Delete follow the route', () => {
+    const at = (role) => ({ ...user, rolesByLocation: { 'loc-mine': role } })
+
+    it('a manager at the booking type\'s studio gets Edit and Delete', async () => {
+      getCurrentUser.mockResolvedValue(at('manager'))
+      createServerClient.mockReturnValue(mockDb({ event: myEvent, bookings: [] }))
+      const html = renderToStaticMarkup(await BookingTypeDetailPage(props()))
+      expect(html).toContain('data-can-delete="true"')
+      expect(html).toContain('href="/bookings/event-types/evt-1/edit"')
+    })
+
+    it('staff there get neither (main: both, and Delete answered "Not found")', async () => {
+      getCurrentUser.mockResolvedValue(at('staff'))
+      createServerClient.mockReturnValue(mockDb({ event: myEvent, bookings: [] }))
+      const html = renderToStaticMarkup(await BookingTypeDetailPage(props()))
+      expect(html).toContain('data-can-delete="false"')
+      expect(html).not.toContain('href="/bookings/event-types/evt-1/edit"')
+    })
+
+    it('a master gets both', async () => {
+      getCurrentUser.mockResolvedValue({ ...user, isMaster: true, profileRole: 'master', role: 'master' })
+      createServerClient.mockReturnValue(mockDb({ event: myEvent, bookings: [] }))
+      const html = renderToStaticMarkup(await BookingTypeDetailPage(props()))
+      expect(html).toContain('data-can-delete="true"')
+      expect(html).toContain('href="/bookings/event-types/evt-1/edit"')
+    })
+  })
+
+  // C134 WEBBOOKINGWRITES.1 — the status pill writes through
+  // POST /api/bookings/[id]/status, which asks the WEB `bookings` key at the
+  // booking's studio; this page opens on membership, so it passes canEdit.
+  describe('C134 — the status pill is editable only with web bookings at the studio', () => {
+    const booking = { id: 'b1', status: 'confirmed', booking_date: '2999-01-01', start_time: '09:00', end_time: '10:00', customer_name: 'A Customer' }
+    const at = (permissions) => ({
+      ...user,
+      locations: [{ id: 'loc-mine', role: 'staff' }],
+      rolesByLocation: { 'loc-mine': 'staff' },
+      assignmentsByLocation: { 'loc-mine': { role: 'staff', permissions } },
+    })
+    it('with it: editable', async () => {
+      getCurrentUser.mockResolvedValue(at({ bookings: true }))
+      createServerClient.mockReturnValue(mockDb({ event: myEvent, bookings: [booking] }))
+      const html = renderToStaticMarkup(await BookingTypeDetailPage(props()))
+      expect(html).toContain('data-can-edit="true"')
+    })
+    it('switched off for them there: read-only', async () => {
+      getCurrentUser.mockResolvedValue(at({ bookings: false }))
+      createServerClient.mockReturnValue(mockDb({ event: myEvent, bookings: [booking] }))
+      const html = renderToStaticMarkup(await BookingTypeDetailPage(props()))
+      expect(html).toContain('data-can-edit="false"')
+    })
   })
 })

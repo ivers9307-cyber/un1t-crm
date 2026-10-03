@@ -57,16 +57,15 @@ export function sendText(conversationId, text, locationId) {
   })
 }
 
-export function sendTemplate(conversationId, templateName, components, locationId) {
+// WATPLPICKER.1 — `payload` is buildTemplateSend(...).payload from
+// shared/wa-template-send.js: the row's own language (not a hard-coded 'en',
+// which Meta refuses for an en_US template) and one body parameter per {{n}}
+// (Meta refuses a template sent without them). Sent exactly as built.
+export function sendTemplate(conversationId, payload, locationId) {
   return api(`/api/whatsapp/conversations/${conversationId}/send`, {
     method: 'POST',
     locationId,
-    body: {
-      type: 'template',
-      template_name: templateName,
-      template_language: 'en',
-      template_components: components || [],
-    },
+    body: payload,
   })
 }
 
@@ -159,9 +158,17 @@ export function getNeedsActionCount(locationId) {
   return api('/api/whatsapp/unread-count', { locationId })
 }
 
+// Approved templates for the picker, read under RLS (wa_tmpl_select: the
+// same mobile 'whatsapp' permission as the conversation list). The text lives
+// in `components` (Meta's definition); there is no body_text/header_text
+// column. Selecting them 400'd EVERY call from 2026-04-30 (3eeef77e) until
+// WATPLPICKER.1, so the phone's picker never opened. check:select-columns now
+// scans mobile/ and fails on that shape. header_media_url tells the picker
+// whether the send route can attach a media header. Kept a literal so every
+// version of the gate can read it.
 export async function listTemplates(locationId) {
   let q = supabase.from('whatsapp_templates')
-    .select('id, name, status, category, language, body_text, header_text, display_group')
+    .select('id, name, status, category, language, components, header_media_url, display_group')
     .eq('status', 'APPROVED')
     .order('name', { ascending: true })
   if (locationId) q = q.eq('location_id', locationId)

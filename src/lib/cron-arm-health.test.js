@@ -20,12 +20,14 @@ const {
   SHIFT_TIME_CHANGES_HEARTBEAT, TIME_CHANGE_ARM_FAULT_KEYS, timeChangeArmHealthy,
   QUALIFICATION_DIGEST_HEARTBEAT, qualificationDigestArmHealthy,
   REPLACE_NOTICES_HEARTBEAT, replaceNoticeArmHealthy,
+  SHIFT_OFFER_SWEEP_HEARTBEAT, offerSweepArmHealthy,
 } = await import('./cron-arm-health')
 const { runShiftReminders } = await import('./shift-reminders')
 const { runRosterRunwayAlerts } = await import('./roster-runway-notify')
 const { runShiftTimeChangeNotices } = await import('./block-edit-notify')
 const { runQualificationDigest } = await import('./qualification-digest')
 const { runReplaceNotices } = await import('./shift-replace-notify')
+const { runShiftOfferSweep } = await import('./shift-offer-server')
 
 const SHIFT_CLEAN = {
   quiet_hours: 0, shift_candidates: 2, shift_pushed: 1, shift_emailed: 0, shift_skipped_dup: 1,
@@ -41,6 +43,10 @@ describe('heartbeat row names', () => {
 
   it('REPLACE.1a — the held replace-notice arm has its own row, the name mig 640 seeds (the migration test cross-checks the SQL)', () => {
     expect(REPLACE_NOTICES_HEARTBEAT).toBe('replace-notices')
+  })
+
+  it('REPLACE.1b — the shift-offer arm has its own row, the name mig 642 seeds (the migration test cross-checks the SQL)', () => {
+    expect(SHIFT_OFFER_SWEEP_HEARTBEAT).toBe('shift-offer-sweep')
   })
 })
 
@@ -88,6 +94,13 @@ describe('runwayArmHealthy', () => {
     expect(runwayArmHealthy({ ...RUNWAY_CLEAN, failed: 1 })).toBe(true)
   })
 
+  it('a failed recipients read is a fault: nobody was told, and the week waits for tomorrow (C1 RECIPIENTS.1)', () => {
+    expect(runwayArmHealthy({ ...RUNWAY_CLEAN, recipients_failed: 1 })).toBe(false)
+    expect(runwayArmHealthy({ ...RUNWAY_CLEAN, recipients_failed: 0 })).toBe(true)
+    // An outcome from before the counter existed is judged as it was.
+    expect(runwayArmHealthy(RUNWAY_CLEAN)).toBe(true)
+  })
+
   it('the parent\'s error outcome ({ error }) is not healthy, whatever else it carries', () => {
     expect(runwayArmHealthy({ error: 'runway read failed: blocks down' })).toBe(false)
     expect(runwayArmHealthy({ ...RUNWAY_CLEAN, error: 'x' })).toBe(false)
@@ -124,6 +137,31 @@ describe('replaceNoticeArmHealthy (REPLACE.1a)', () => {
   })
 })
 
+describe('offerSweepArmHealthy (REPLACE.1b)', () => {
+  const CLEAN = { open: 2, claimed_owed: 1, none: 1, quiet_hours: 0, sent: 2, busy: 0, retry: 0, stamp_failed: 0, gave_up: 0, capped: 0, errors: 0 }
+
+  it('a clean run is healthy, and so are a quiet-hours tick, a busy lease and a tick with no offers', () => {
+    expect(offerSweepArmHealthy(CLEAN)).toBe(true)
+    expect(offerSweepArmHealthy({ ...CLEAN, sent: 0, quiet_hours: 3 })).toBe(true)
+    expect(offerSweepArmHealthy({ ...CLEAN, busy: 1 })).toBe(true)
+    expect(offerSweepArmHealthy({ open: 0, claimed_owed: 0, errors: 0 })).toBe(true)
+  })
+
+  it('a released-lease retry and a loud give-up are not arm faults', () => {
+    expect(offerSweepArmHealthy({ ...CLEAN, retry: 2 })).toBe(true)
+    expect(offerSweepArmHealthy({ ...CLEAN, gave_up: 1 })).toBe(true)
+  })
+
+  it('errors > 0 (an unreadable or capped list, a failed write) and a lost post-delivery stamp are faults', () => {
+    expect(offerSweepArmHealthy({ ...CLEAN, errors: 1 })).toBe(false)
+    expect(offerSweepArmHealthy({ ...CLEAN, stamp_failed: 1 })).toBe(false)
+  })
+
+  it.each([undefined, null, 'ok', 0, [CLEAN]])('a run that returned %j has not shown it ran: not healthy', (v) => {
+    expect(offerSweepArmHealthy(v)).toBe(false)
+  })
+})
+
 // Drift guards: the arms' REAL zero-work outcomes must read as healthy.
 describe('the real arms, on their zero-work paths', () => {
   it('runShiftReminders with no locations returns its full summary shape, every fault key 0, and it is healthy', async () => {
@@ -145,7 +183,7 @@ describe('the real arms, on their zero-work paths', () => {
   it('runRosterRunwayAlerts with no locations returns its outcome, and it is healthy', async () => {
     const b = { select: () => b, then: (res, rej) => Promise.resolve({ data: [], error: null }).then(res, rej) }
     const outcome = await runRosterRunwayAlerts({ from: () => b }, { nowMs: Date.UTC(2026, 8, 25, 8, 0) })
-    expect(outcome).toEqual({ locations: 0, alerts: 0, quiet_hours: 0, sent: 0, emailed: 0, deduped: 0, failed: 0 })
+    expect(outcome).toEqual({ locations: 0, alerts: 0, quiet_hours: 0, sent: 0, emailed: 0, deduped: 0, failed: 0, recipients_failed: 0 })
     expect(runwayArmHealthy(outcome)).toBe(true)
   })
 
@@ -156,6 +194,15 @@ describe('the real arms, on their zero-work paths', () => {
     const stats = await runReplaceNotices({ from: () => b }, { nowMs: Date.UTC(2026, 8, 25, 8, 0), todayStr: '2026-09-25' })
     expect(stats).toEqual({ rows: 0, groups: 0, told: 0, silent: 0, started: 0, gone: 0, quiet: 0, fresh: 0, undelivered: 0, send_failed: 0, stamp_failed: 0, errors: 0 })
     expect(replaceNoticeArmHealthy(stats)).toBe(true)
+  })
+
+  it('runShiftOfferSweep with no offers returns its counts, errors 0, and it is healthy', async () => {
+    const b = {}
+    for (const m of ['select', 'is', 'eq', 'gte', 'order', 'limit']) b[m] = () => b
+    b.then = (res, rej) => Promise.resolve({ data: [], error: null }).then(res, rej)
+    const stats = await runShiftOfferSweep({ from: () => b }, { nowMs: Date.UTC(2026, 8, 25, 8, 0) })
+    expect(stats).toMatchObject({ open: 0, claimed_owed: 0, errors: 0, stamp_failed: 0 })
+    expect(offerSweepArmHealthy(stats)).toBe(true)
   })
 })
 
@@ -221,5 +268,71 @@ describe('qualification-digest', () => {
     const outcome = await runQualificationDigest(db, { nowMs: Date.parse('2026-09-28T08:00:00Z') })
     expect(outcome).toMatchObject({ organizations: 0, recipients: 0, sent: 0 })
     expect(qualificationDigestArmHealthy(outcome)).toBe(true)
+  })
+})
+
+// C5 REPLACENITS.1 — the */5 send-push-reminders tick log line. The two arms
+// that report a NESTED outcome (replace_notices, shift_offers) never reached
+// it: the old predicate asked `v > 0` of an object, which is always false.
+// Each nested outcome is now judged by its own news keys; counters that
+// repeat every tick while nothing changes (a held notice, an open offer) are
+// not news, or the line would fire 108 times a night.
+const { pushReminderTickIsNews, REPLACE_NOTICE_NEWS_KEYS, OFFER_SWEEP_NEWS_KEYS } = await import('./cron-arm-health')
+
+describe('pushReminderTickIsNews (REPLACENITS.1)', () => {
+  const idle = { task_pushed: 0, booking_pushed: 0, shift_arm_failed: 0, replace_arm_failed: 0, offer_arm_failed: 0, lead_time_buckets: [] }
+
+  it('an idle tick is not news; quiet_hours and time_change_quiet alone are not news', () => {
+    expect(pushReminderTickIsNews(idle)).toBe(false)
+    expect(pushReminderTickIsNews({ ...idle, quiet_hours: 1, time_change_quiet: 1 })).toBe(false)
+  })
+
+  it('a top-level count or a non-empty list is news, as before', () => {
+    expect(pushReminderTickIsNews({ ...idle, task_pushed: 1 })).toBe(true)
+    expect(pushReminderTickIsNews({ ...idle, lead_time_buckets: [60] })).toBe(true)
+    expect(pushReminderTickIsNews({ ...idle, replace_arm_failed: 1 })).toBe(true)
+  })
+
+  it.each(['told', 'silent', 'started', 'gone', 'send_failed', 'stamp_failed', 'errors'])(
+    'replace_notices.%s > 0 is news', (key) => {
+      expect(pushReminderTickIsNews({ ...idle, replace_notices: { rows: 1, [key]: 1 } })).toBe(true)
+    })
+
+  it('replace notices merely held, fresh or undeliverable are not news (they repeat every tick)', () => {
+    expect(pushReminderTickIsNews({
+      ...idle, replace_notices: { rows: 3, groups: 1, quiet: 2, fresh: 1, undelivered: 1, told: 0, errors: 0 },
+    })).toBe(false)
+  })
+
+  it.each(['expired', 'filled', 'raced', 'retry', 'sent', 'stamp_failed', 'gave_up', 'capped', 'errors'])(
+    'shift_offers.%s > 0 is news', (key) => {
+      expect(pushReminderTickIsNews({ ...idle, shift_offers: { open: 1, [key]: 1 } })).toBe(true)
+    })
+
+  it('an offer waiting (open, none, busy, leased, quiet_hours, owed) is not news', () => {
+    expect(pushReminderTickIsNews({
+      ...idle, shift_offers: { open: 2, claimed_owed: 1, none: 1, busy: 1, leased: 1, quiet_hours: 1 },
+    })).toBe(false)
+  })
+
+  it('a missing or non-object nested outcome, or no summary, is not news (a throw is flagged at the top level)', () => {
+    expect(pushReminderTickIsNews({ ...idle, replace_notices: null, shift_offers: undefined })).toBe(false)
+    expect(pushReminderTickIsNews({ ...idle, replace_notices: [1] })).toBe(false)
+    expect(pushReminderTickIsNews(null)).toBe(false)
+  })
+
+  it('the key lists are exactly these (the drift guard below proves each is a real counter)', () => {
+    expect(REPLACE_NOTICE_NEWS_KEYS).toEqual(['told', 'silent', 'started', 'gone', 'send_failed', 'stamp_failed', 'errors'])
+    expect(OFFER_SWEEP_NEWS_KEYS).toEqual(['expired', 'filled', 'raced', 'retry', 'sent', 'stamp_failed', 'gave_up', 'capped', 'errors'])
+  })
+
+  it('drift guard: every news key is a counter the REAL arm returns on its zero-work path', async () => {
+    const b = {}
+    for (const m of ['select', 'is', 'eq', 'gte', 'order', 'limit']) b[m] = () => b
+    b.then = (res, rej) => Promise.resolve({ data: [], error: null }).then(res, rej)
+    const replace = await runReplaceNotices({ from: () => b }, { nowMs: Date.UTC(2026, 8, 25, 8, 0), todayStr: '2026-09-25' })
+    const offers = await runShiftOfferSweep({ from: () => b }, { nowMs: Date.UTC(2026, 8, 25, 8, 0) })
+    for (const k of REPLACE_NOTICE_NEWS_KEYS) expect(replace).toHaveProperty(k, 0)
+    for (const k of OFFER_SWEEP_NEWS_KEYS) expect(offers).toHaveProperty(k, 0)
   })
 })

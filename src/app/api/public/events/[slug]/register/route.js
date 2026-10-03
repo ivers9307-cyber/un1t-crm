@@ -34,7 +34,7 @@ import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
 import { writeContactTags } from '@/lib/contact-tags'
 import { triggerSequencesForRaceRegistered } from '@/lib/sequences'
 import { logWarn } from '@/lib/log'
-import { wouldFit, spotsLeft } from '@/lib/event-signups'
+import { wouldFit } from '@/lib/event-signups'
 import { LIVE_REGISTRATION_STATUSES } from '@/lib/audience-filter'
 import { eventIsPublic, resolveMasterLocationId } from '@/lib/host-events'
 
@@ -303,10 +303,10 @@ export async function POST(request, props) {
         .in('status', LIVE_REGISTRATION_STATUSES)
         .limit(2000)
       if (!wouldFit(wave.capacity, waveRegs || [], 'people', body.team_size)) {
-        const left = spotsLeft(wave.capacity, waveRegs || [], 'people')
-        const error = left > 0
-          ? `Only ${left} ${left === 1 ? 'spot' : 'spots'} left in the ${waveLabel} wave — a group of ${body.team_size} won't fit. Pick another.`
-          : `The ${waveLabel} wave is full. Pick another.`
+        // PUBCAP.1 — never tell the public how many places are left (Richard's
+        // rule: capacity is never surfaced to customers). Say it won't fit,
+        // not by how much. Full and "too big for what's left" read alike.
+        const error = `A group of ${body.team_size} won't fit in the ${waveLabel} wave. Pick another wave.`
         return NextResponse.json({ success: false, error, code: 'wave_full' }, { status: 409 })
       }
     } else {

@@ -21,14 +21,15 @@
 //   thinq          thinq_pat                      ⇄ access_token
 //                  thinq_client_id                ⇄ config.client_id
 //                  thinq_country_code             ⇄ config.country_code
-//   twilio_sender  twilio_alpha_sender_id         ⇄ config.sender_id
 //   bca            bca_config                     ⇄ config
 //
 // Design notes:
-//   - Reads are FAIL-OPEN: any error talking to the registry falls
-//     back to the legacy fields, so a registry outage can never break
-//     a provider that legacy config still serves. (Write paths still
-//     write legacy during this phase, so legacy stays complete.)
+//   - Reads are FAIL-OPEN to legacy: a registry error falls back to the
+//     legacy fields, so a registry outage can never break a provider that
+//     legacy config still serves. (Write paths still write legacy during
+//     this phase, so legacy stays complete.) REGISTRYREAD.1: that fallback
+//     is logged, and a read NEITHER source answered is an error the caller
+//     sees ({ value, error } readers) — never "not configured".
 //   - `status` is NOT consulted on the read path — legacy had no
 //     status, so an 'error'/'action_needed' row is still used exactly
 //     like its legacy equivalent would be. Status is for the hub UI +
@@ -40,9 +41,13 @@
 // writes and the read policy is staff-per-location, so pass the
 // createServerClient() db. Never call from browser code.
 
+import { logError, logWarn } from './log'
+
 export const DUAL_READ_PLATFORMS = Object.freeze([
-  'glofox', 'unifi', 'sensibo', 'thinq', 'twilio_sender', 'bca',
+  'glofox', 'unifi', 'sensibo', 'thinq', 'bca',
 ])
+// 'twilio_sender' left this list with the SMS channel (TWILIO-RETIRE.1); its
+// registry rows are deactivated by mig 664 and nothing reads them.
 
 const ROW_COLUMNS =
   'id, location_id, platform, status, is_active, label, display_name, ' +
@@ -72,7 +77,7 @@ function stripNulls(obj) {
 // ─────────────────────────────────────────────────────────────
 //
 // Each provider descriptor:
-//   legacySelect          columns getConnection() fetches on fallback
+//   legacySelect          columns readConnection() fetches on fallback
 //   rowFromLegacy(loc)    → { external_account_id?, access_token?,
 //                             app_secret?, config } or null when the
 //                             location has no legacy config (mirrors
@@ -170,20 +175,6 @@ const PROVIDERS = {
         thinq_pat: row.access_token ?? null,
         thinq_client_id: row.config?.client_id ?? null,
         thinq_country_code: row.config?.country_code ?? null,
-      }
-    },
-  },
-
-  twilio_sender: {
-    legacySelect: 'id, twilio_alpha_sender_id',
-    rowFromLegacy(location) {
-      if (!location?.twilio_alpha_sender_id) return null
-      return { config: { sender_id: location.twilio_alpha_sender_id } }
-    },
-    applyRow(location, row) {
-      return {
-        ...location,
-        twilio_alpha_sender_id: row.config?.sender_id ?? null,
       }
     },
   },
@@ -286,15 +277,27 @@ export function normalizeLegacyConnection(platform, location) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Async: registry reads (fail-open to legacy)
+// Async: registry reads
 // ─────────────────────────────────────────────────────────────
+//
+// REGISTRYREAD.1 — a read that FAILED is never an empty answer.
+//   readActiveConnections / readConnection / readGlofoxConfig return
+//   { value, error } and never log: the caller decides what a failure means.
+//   The registry→legacy fallback stays fail-OPEN (legacy is the written
+//   source of truth this phase and serves the same values — 0 of 8 active
+//   rows differed, measured 28 Sep 2026) and says so with logWarn. Only a
+//   read that NO source answered is an error.
+//   The old-contract wrappers (fetchActiveConnections, getGlofoxConfig,
+//   overlayConnections, overlayConnectionsMany, findGlofoxConfigByBranchId)
+//   return exactly what they always did, and now log what they swallow.
 
 /**
- * Fetch the active registry rows for one location. Returns [] on any
- * error (fail-open — callers then keep the legacy values).
+ * Read the active registry rows for one location. Never throws.
+ * @returns {Promise<{ rows: object[], error: (object|null) }>} `error` set
+ *   means the registry did not answer; `rows` is then [] and is NOT "no rows".
  */
-export async function fetchActiveConnections(db, locationId, platforms = DUAL_READ_PLATFORMS) {
-  if (!db || !locationId) return []
+export async function readActiveConnections(db, locationId, platforms = DUAL_READ_PLATFORMS) {
+  if (!db || !locationId) return { rows: [], error: null }
   try {
     const { data, error } = await db
       .from('channel_connections')
@@ -302,35 +305,98 @@ export async function fetchActiveConnections(db, locationId, platforms = DUAL_RE
       .eq('location_id', locationId)
       .eq('is_active', true)
       .in('platform', platforms)
-    if (error || !Array.isArray(data)) return []
-    return data
-  } catch {
-    return []
+    if (error) return { rows: [], error }
+    return { rows: Array.isArray(data) ? data : [], error: null }
+  } catch (e) {
+    return { rows: [], error: e }
   }
 }
 
 /**
- * THE dual-read accessor: normalized connection for one
- * (location, platform) — active registry row first, legacy location
- * fields otherwise.
+ * Old contract: the active rows, or [] on any error (fail-open — callers then
+ * keep the legacy values, which is correct while legacy is the written source
+ * of truth). Logs the error it swallows.
  */
-export async function getConnection(db, locationId, platform) {
+export async function fetchActiveConnections(db, locationId, platforms = DUAL_READ_PLATFORMS) {
+  const { rows, error } = await readActiveConnections(db, locationId, platforms)
+  if (error) {
+    logWarn('connection-registry', 'registry read failed; serving legacy config', { locationId, platforms, err: error })
+  }
+  return rows
+}
+
+/**
+ * THE dual-read accessor: the normalised connection for one
+ * (location, platform) — active registry row first, legacy location fields
+ * otherwise. Throws only on an unknown platform (a programming error).
+ *
+ * @returns {Promise<{ conn: (object|null), error: (object|null) }>}
+ *   conn  — a registry or legacy connection. A location with no config is
+ *           { source: 'legacy', status: 'not_connected' }: a real answer.
+ *   error — set ONLY when no source answered: the registry gave no row (none,
+ *           or its read failed) AND the legacy `locations` read failed. conn
+ *           is then null — never "not connected".
+ */
+export async function readConnection(db, locationId, platform) {
   const provider = PROVIDERS[platform]
-  if (!provider) throw new Error(`getConnection: unknown platform '${platform}'`)
-  const rows = await fetchActiveConnections(db, locationId, [platform])
-  if (rows[0]) return normalizeConnectionRow(rows[0])
+  if (!provider) throw new Error(`readConnection: unknown platform '${platform}'`)
+  const reg = await readActiveConnections(db, locationId, [platform])
+  if (reg.rows[0]) return { conn: normalizeConnectionRow(reg.rows[0]), error: null }
+  if (reg.error) {
+    logWarn('connection-registry', 'registry read failed; serving legacy config', { locationId, platform, err: reg.error })
+  }
+  if (!db || !locationId) {
+    return { conn: normalizeLegacyConnection(platform, { id: locationId ?? null }), error: null }
+  }
   let location = null
   try {
-    const { data } = await db
+    const { data, error } = await db
       .from('locations')
       .select(provider.legacySelect)
       .eq('id', locationId)
       .maybeSingle()
+    if (error) return { conn: null, error }
     location = data || null
-  } catch {
-    location = null
+  } catch (e) {
+    return { conn: null, error: e }
   }
-  return normalizeLegacyConnection(platform, { id: locationId, ...(location || {}) })
+  return { conn: normalizeLegacyConnection(platform, { id: locationId, ...(location || {}) }), error: null }
+}
+
+// settings.glofox shape from a normalised connection. An unconfigured legacy
+// location → {} (matches the `settings?.glofox || {}` reads it replaced).
+function glofoxConfigFromConnection(conn) {
+  if (conn.source === 'legacy' && conn.status === 'not_connected') return {}
+  return {
+    ...conn.config,
+    branch_id: conn.externalAccountId,
+    api_key: conn.accessToken,
+    webhook_secret: conn.appSecret,
+  }
+}
+
+/**
+ * The settings.glofox-shaped config for a location — registry first, legacy
+ * otherwise. Never throws.
+ * @returns {Promise<{ cfg: object, error: (object|null) }>} cfg is {} for an
+ *   unconfigured location AND on error; only `error` tells the two apart.
+ */
+export async function readGlofoxConfig(db, locationId) {
+  const { conn, error } = await readConnection(db, locationId, 'glofox')
+  if (error) return { cfg: {}, error }
+  return { cfg: glofoxConfigFromConnection(conn), error: null }
+}
+
+/**
+ * Old contract: always an object (may be empty). A failed read answers {} —
+ * which reads as "not configured" — so prefer readGlofoxConfig. Logs it.
+ */
+export async function getGlofoxConfig(db, locationId) {
+  const { cfg, error } = await readGlofoxConfig(db, locationId)
+  if (error) {
+    logError('connection-registry', 'glofox settings unreadable; answering {} (reads as not configured)', { locationId, err: error })
+  }
+  return cfg
 }
 
 /**
@@ -365,9 +431,13 @@ export async function overlayConnectionsMany(db, locations, platforms = DUAL_REA
       .in('location_id', ids)
       .eq('is_active', true)
       .in('platform', platforms)
-    rows = !error && Array.isArray(data) ? data : []
-  } catch {
-    rows = []
+    if (error) {
+      logWarn('connection-registry', 'registry batch read failed; serving legacy config', { locationIds: ids, platforms, err: error })
+    } else if (Array.isArray(data)) {
+      rows = data
+    }
+  } catch (e) {
+    logWarn('connection-registry', 'registry batch read failed; serving legacy config', { locationIds: ids, platforms, err: e })
   }
   if (!rows.length) return list
   const byLocation = new Map()
@@ -387,23 +457,6 @@ export async function overlayConnectionsMany(db, locations, platforms = DUAL_REA
 // ─────────────────────────────────────────────────────────────
 
 /**
- * The settings.glofox-shaped config object for a location —
- * registry-first, legacy fallback. Always an object (may be empty),
- * matching the `data?.settings?.glofox || {}` reads it replaces.
- */
-export async function getGlofoxConfig(db, locationId) {
-  const conn = await getConnection(db, locationId, 'glofox')
-  // Unconfigured legacy location → {} (matches `settings?.glofox || {}`).
-  if (conn.source === 'legacy' && conn.status === 'not_connected') return {}
-  return {
-    ...conn.config,
-    branch_id: conn.externalAccountId,
-    api_key: conn.accessToken,
-    webhook_secret: conn.appSecret,
-  }
-}
-
-/**
  * Registry-side reverse lookup for the Glofox webhook receiver:
  * active glofox connection by branch id. Returns the settings.glofox
  * shape + locationId, or null (caller falls back to the legacy
@@ -419,7 +472,11 @@ export async function findGlofoxConfigByBranchId(db, branchId) {
       .eq('external_account_id', branchId)
       .eq('is_active', true)
       .limit(1)
-    if (error || !data?.[0]) return null
+    if (error) {
+      logWarn('connection-registry', 'registry branch lookup failed; caller falls back to legacy', { branchId, err: error })
+      return null
+    }
+    if (!data?.[0]) return null
     const conn = normalizeConnectionRow(data[0])
     return {
       locationId: conn.locationId,
@@ -430,7 +487,8 @@ export async function findGlofoxConfigByBranchId(db, branchId) {
         webhook_secret: conn.appSecret,
       },
     }
-  } catch {
+  } catch (e) {
+    logWarn('connection-registry', 'registry branch lookup failed; caller falls back to legacy', { branchId, err: e })
     return null
   }
 }
@@ -457,20 +515,26 @@ export async function findGlofoxConfigByBranchId(db, branchId) {
  */
 export async function syncConnectionFromLegacy(db, locationId, platform, location) {
   const fields = registryRowFromLegacy(platform, location)
-  const { data: existing } = await db
+  const { data: existing, error: readErr } = await db
     .from('channel_connections')
     .select('id')
     .eq('location_id', locationId)
     .eq('platform', platform)
     .eq('is_active', true)
     .maybeSingle()
+  // REGISTRYREAD.1: a failed read is not "no active row". Read that way, a
+  // disconnect answered 'noop' and left the old credentials ACTIVE (and
+  // registry-first reads kept serving them), and a save tried to INSERT a
+  // second active row. Every caller catches a throw from here.
+  if (readErr) throw new Error(`registry sync (${platform}): read failed: ${readErr.message}`)
 
   if (!fields) {
     if (existing) {
-      await db
+      const { error: deErr } = await db
         .from('channel_connections')
         .update({ is_active: false, updated_at: new Date().toISOString() })
         .eq('id', existing.id)
+      if (deErr) throw new Error(`registry sync (${platform}): deactivate failed: ${deErr.message}`)
     }
     return { action: existing ? 'deactivated' : 'noop' }
   }

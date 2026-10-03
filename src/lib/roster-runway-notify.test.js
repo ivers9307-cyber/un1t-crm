@@ -203,7 +203,7 @@ describe('runRosterRunwayAlerts', () => {
         data: { type: 'roster_runway', location_id: NORTH.id, week_start: '2026-09-28', severity: 'amber' },
       },
     )
-    expect(outcome).toEqual({ locations: 2, alerts: 1, quiet_hours: 0, sent: 2, emailed: 0, deduped: 0, failed: 0 })
+    expect(outcome).toEqual({ locations: 2, alerts: 1, quiet_hours: 0, sent: 2, emailed: 0, deduped: 0, failed: 0, recipients_failed: 0 })
   })
 
   it('"today" follows Dublin across midnight: 23:30 UTC on the 19th is already the 20th there (IST)', async () => {
@@ -214,7 +214,7 @@ describe('runRosterRunwayAlerts', () => {
   it('outside the band: NOTHING is sent and the dedup sender is never reached, so no key is claimed', async () => {
     const outcome = await runRosterRunwayAlerts(makeDb([NORTH, SOUTH]), { nowMs: Date.UTC(2026, 8, 19, 2, 20) })
     expect(notifyUsersAtRolesOnce).not.toHaveBeenCalled()
-    expect(outcome).toEqual({ locations: 2, alerts: 1, quiet_hours: 1, sent: 0, emailed: 0, deduped: 0, failed: 0 })
+    expect(outcome).toEqual({ locations: 2, alerts: 1, quiet_hours: 1, sent: 0, emailed: 0, deduped: 0, failed: 0, recipients_failed: 0 })
   })
 
   it('the band is per studio: one asleep, one awake', async () => {
@@ -270,6 +270,14 @@ describe('runRosterRunwayAlerts', () => {
     const outcome = await runRosterRunwayAlerts(makeDb([NORTH, SOUTH]), { nowMs: CRON_TICK })
     expect(notifyUsersAtRolesOnce).toHaveBeenCalledTimes(2)
     expect(outcome).toMatchObject({ alerts: 2, failed: 1, sent: 2 })
+  })
+
+  // C1 RECIPIENTS.1 — a failed recipients read used to come back as EMPTY and
+  // the run read as clean.
+  it('a failed recipients read is counted apart from delivery', async () => {
+    notifyUsersAtRolesOnce.mockResolvedValue({ sent: 0, skipped: 0, invalidated: 0, failed: 0, deduped: 0, recipients_failed: 1 })
+    const outcome = await runRosterRunwayAlerts(makeDb([NORTH]), { nowMs: CRON_TICK })
+    expect(outcome).toEqual({ locations: 1, alerts: 1, quiet_hours: 0, sent: 0, emailed: 0, deduped: 0, failed: 0, recipients_failed: 1 })
   })
 
   it('a failed read throws BEFORE anything is sent, so the cron can record it', async () => {

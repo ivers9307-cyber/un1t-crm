@@ -18,7 +18,7 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { ADMIN_ROLES } from '@/lib/schemas'
@@ -96,7 +96,8 @@ export async function PATCH(request, props) {
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   }
-  if (!user.isMaster && !ADMIN_ROLES.includes(user.role)) {
+  // ROLESWEEP.1c — coarse pre-check; the role is judged at the contact's location below.
+  if (!user.isMaster && !hasRoleAtAnyLocation(user, ADMIN_ROLES)) {
     return NextResponse.json({ success: false, error: 'Admin only' }, { status: 403 })
   }
 
@@ -123,6 +124,10 @@ export async function PATCH(request, props) {
   }
   const guard = assertLocationAccessOr404(user, contact.location_id)
   if (guard) return guard
+  // ROLESWEEP.1c — ADMIN_ROLES at the contact's location.
+  if (!user.isMaster && !hasRoleAtLocation(user, contact.location_id, ADMIN_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Admin only' }, { status: 403 })
+  }
 
   const validation = await validateBody(request, Schema)
   if (!validation.ok) return validation.response

@@ -331,4 +331,46 @@ describe('renotifyChangedCoaches (NOTIFY.1 safety net)', () => {
     expect(res).toEqual({ notified: 0 })
     expect(logWarn).toHaveBeenCalled()
   })
+
+  // C16 PUSHREADERR.1 — a read inside notifyUsers failed, so some or all of
+  // these coaches were never judged or told. This is the FINAL attempt for
+  // these rows: stamping them would lose the notice for good. Same as a throw.
+  it('when notifyUsers reports a failed read, the rows are left for the next publish', async () => {
+    collectUnnotifiedChanges.mockResolvedValue([
+      { id: 'ch1', coach_id: 'c1', block_date: '2026-09-21' },
+      { id: 'ch2', coach_id: 'c2', block_date: '2026-09-22' },
+    ])
+    notifyUsers.mockResolvedValueOnce({ sent: 0, skipped: 0, invalidated: 0, failed: 2, emailed: 0, email_failed: 0, read_failed: 1 })
+    const res = await renotifyChangedCoaches({}, range)
+    expect(markChangesNotified).not.toHaveBeenCalled()
+    expect(res).toEqual({ notified: 0 })
+    expect(logWarn).toHaveBeenCalledWith('roster-notify', 'republish change-notify hit a failed read; rows left for the next publish',
+      expect.objectContaining({ locationId: 'loc-1', coaches: 2 }))
+  })
+
+  // Review: a failed read with NOBODY lost (templates unreadable but every
+  // coach allowed by default; the fallback device read failed and everyone was
+  // emailed) is not a loss — skipping the stamp would only buy a certain
+  // duplicate "Roster updated" on the next publish.
+  it('a failed read that lost nobody (0 failed, 0 email_failed) still stamps the rows', async () => {
+    collectUnnotifiedChanges.mockResolvedValue([
+      { id: 'ch1', coach_id: 'c1', block_date: '2026-09-21' },
+      { id: 'ch2', coach_id: 'c2', block_date: '2026-09-22' },
+    ])
+    notifyUsers.mockResolvedValueOnce({ sent: 0, skipped: 0, invalidated: 0, failed: 0, emailed: 2, email_failed: 0, read_failed: 1 })
+    const res = await renotifyChangedCoaches({}, range)
+    expect(markChangesNotified).toHaveBeenCalledWith({}, ['ch1', 'ch2'])
+    expect(res).toEqual({ notified: 2 })
+    expect(logWarn).not.toHaveBeenCalled()
+  })
+
+  it('a failed read where only the fallback email was lost leaves the rows', async () => {
+    collectUnnotifiedChanges.mockResolvedValue([
+      { id: 'ch1', coach_id: 'c1', block_date: '2026-09-21' },
+    ])
+    notifyUsers.mockResolvedValueOnce({ sent: 0, skipped: 0, invalidated: 0, failed: 0, emailed: 0, email_failed: 1, read_failed: 1 })
+    const res = await renotifyChangedCoaches({}, range)
+    expect(markChangesNotified).not.toHaveBeenCalled()
+    expect(res).toEqual({ notified: 0 })
+  })
 })

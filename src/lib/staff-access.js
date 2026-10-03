@@ -40,6 +40,8 @@
 // All page guards + UI hides should call these instead of reinventing
 // the rule each time.
 
+import { hasRoleAtAnyLocation } from './role-at-location'
+
 /**
  * Map a profile_locations row from the API into the shape the
  * StaffForm component expects, INCLUDING the permissions blob.
@@ -158,7 +160,10 @@ export function canEditStaffMember(caller, target) {
 export function canOverrideStaffPassword(caller, target) {
   if (!caller || !target) return false
   if (caller.isMaster || caller.role === 'master') return true
-  if (caller.role !== 'owner') return false
+  // ROLESWEEP.1c — owner SOMEWHERE (a coarse pre-check); canEditStaffMember
+  // below requires owner AT one of the target's locations. `caller.role` is
+  // the ACTIVE studio's role and refused an owner at B whose active studio is A.
+  if (!hasRoleAtAnyLocation(caller, ['owner'])) return false
   // Only a master may reset another master's password.
   if (target.role === 'master') return false
   // Reuse the staff-editor rule — blocks owner→self, owner→peer-owner, and
