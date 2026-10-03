@@ -10,8 +10,15 @@
 //     the session user (reactions deliberately do not, see react/route.js); or
 //   - source is a person source: 'app_echo' is a reply typed in the studio's
 //     linked WhatsApp Business phone app (coexistence smb_message_echoes,
-//     whatsapp-coexistence-ingest.js); 'history_sync' and 'operator' are
-//     allowed by the CHECK (mig 259) and nothing writes them today.
+//     whatsapp-coexistence-ingest.js); 'operator' is allowed by the CHECK
+//     (mig 259) and nothing writes it on WhatsApp today.
+// 'history_sync' is deliberately NOT a person source (WA-APPECHO.2). Nothing
+// writes it (the history ingest keeps the column default), and if anything
+// ever did, created_at would be the IMPORT time: every reader of this rule
+// orders or windows on created_at, so a weeks-old phone message would read
+// as "staff just replied" (Mia aborts her turn, the SLA sweep counts a reply
+// and auto-resolves the handoff, the first-class check-in is blocked). It
+// stays a phone-app source for the tier budget, which it never touched.
 // Mia's own rows (source 'agent') are never staff. Automations (booking
 // confirmations, sequence steps, broadcasts, consent prompts) insert the
 // column default source 'api' with no sent_by, so they are not staff.
@@ -21,7 +28,7 @@ export const WA_APP_ECHO_SOURCE = 'app_echo'
 export const WA_HISTORY_SYNC_SOURCE = 'history_sync'
 
 /** Sources that mean "a person wrote this", with or without a sent_by. */
-export const WA_PERSON_SOURCES = Object.freeze(['operator', WA_APP_ECHO_SOURCE, WA_HISTORY_SYNC_SOURCE])
+export const WA_PERSON_SOURCES = Object.freeze(['operator', WA_APP_ECHO_SOURCE])
 
 /**
  * Rows that came from the studio's phone app, not through the Cloud API: not

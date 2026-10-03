@@ -2,7 +2,8 @@
 // CHECKINSTALL.1 — who "spoke" in a WhatsApp thread. Automations (booking
 // confirmations, sequences, broadcasts, end-of-trial) insert source='api'
 // (the column default) with NO sent_by; operator routes stamp sent_by; the
-// studio phone's WhatsApp app shows up as app_echo/history_sync.
+// studio phone's WhatsApp app shows up as app_echo (history_sync is not staff
+// since WA-APPECHO.2: its created_at would be the import time).
 import { describe, it, expect, vi, afterEach } from 'vitest'
 
 vi.mock('@/lib/location-branding', () => ({ getLocationBranding: vi.fn().mockResolvedValue({ companyName: 'UN1T' }) }))
@@ -20,8 +21,10 @@ describe('isStaffOutbound', () => {
   it('an operator send (sent_by set) is staff', () => expect(isStaffOutbound(staff(1))).toBe(true))
   it('the studio phone app is staff', () => {
     expect(isStaffOutbound({ direction: 'outbound', source: 'app_echo', sent_by: null })).toBe(true)
-    expect(isStaffOutbound({ direction: 'outbound', source: 'history_sync', sent_by: null })).toBe(true)
     expect(isStaffOutbound({ direction: 'outbound', source: 'operator', sent_by: null })).toBe(true)
+  })
+  it('a history-sync row is not staff: created_at is the import time, not the send', () => {
+    expect(isStaffOutbound({ direction: 'outbound', source: 'history_sync', sent_by: null })).toBe(false)
   })
   it('Mia is never staff, even with a sent_by', () => expect(isStaffOutbound({ ...mia(1), sent_by: 'x' })).toBe(false))
   it('an inbound is never staff', () => expect(isStaffOutbound({ ...inbound(1), sent_by: 'x' })).toBe(false))

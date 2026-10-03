@@ -24,6 +24,14 @@ describe('isWhatsAppStaffAuthored', () => {
     expect(isWhatsAppStaffAuthored({ source: 'agent', sent_by: null })).toBe(false)
     expect(isWhatsAppStaffAuthored({ source: 'agent', sent_by: 'staff-1' })).toBe(false)
   })
+  // WA-APPECHO.2 — history_sync is NOT staff. Nothing writes it today, and if
+  // anything ever did, created_at would be the IMPORT time: every staff reader
+  // orders or windows on created_at, so a weeks-old message would read as
+  // "staff just replied" (Mia aborts a turn, the SLA sweep sees a reply and
+  // auto-resolves the handoff, the check-in is blocked).
+  it('a history-sync row is not staff (its created_at is the import time)', () => {
+    expect(isWhatsAppStaffAuthored({ source: 'history_sync', sent_by: null })).toBe(false)
+  })
   it('a missing row is not staff', () => {
     expect(isWhatsAppStaffAuthored(null)).toBe(false)
     expect(isWhatsAppStaffAuthored(undefined)).toBe(false)
@@ -43,6 +51,6 @@ describe('the source vocabulary', () => {
     expect(WA_PHONE_APP_SOURCES).toEqual(['app_echo', 'history_sync'])
   })
   it('the PostgREST filter says the same thing as the JS predicate', () => {
-    expect(WA_STAFF_OUTBOUND_OR_FILTER).toBe('sent_by.not.is.null,source.in.(operator,app_echo,history_sync)')
+    expect(WA_STAFF_OUTBOUND_OR_FILTER).toBe('sent_by.not.is.null,source.in.(operator,app_echo)')
   })
 })

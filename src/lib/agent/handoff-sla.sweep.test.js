@@ -277,7 +277,7 @@ describe('the WhatsApp human-reply read counts phone-app echoes (C106 d)', () =>
     const { db, reads } = sweepDb({ convs: [conv()] })
     await runHandoffSlaSweep(db, { nowMs: NOW })
     const replyRead = reads.find(r => r.table === 'whatsapp_messages')
-    expect(replyRead.or).toEqual(['sent_by.not.is.null,source.in.(operator,app_echo,history_sync)'])
+    expect(replyRead.or).toEqual(['sent_by.not.is.null,source.in.(operator,app_echo)'])
     expect(replyRead.not).toEqual([])
   })
 

@@ -14,7 +14,8 @@ function makeDb(handlers) {
       const builder = {
         select() { return builder }, insert(v) { ctx.op = 'insert'; ctx.values = v; return builder },
         update(v) { ctx.op = 'update'; ctx.values = v; return builder },
-        eq() { return builder }, is() { return builder }, or() { return builder },
+        eq(c, v) { ctx.filters.push(['eq', c, v]); return builder }, is() { return builder },
+        or(f) { ctx.filters.push(['or', f]); return builder },
         limit() { return builder }, order() { return builder },
         maybeSingle() { return Promise.resolve(handlers(ctx)) },
         single() { return Promise.resolve(handlers(ctx)) },
@@ -132,15 +133,18 @@ describe('ingestCoexistenceMessage — phone-app echoes are staff (C106 d)', () 
   beforeEach(() => { vi.clearAllMocks() })
 
   // A new peer thread: no dupe, no contact, the conversation insert wins.
-  function echoDb({ convUpdateError = null } = {}) {
+  function echoDb({ convUpdateError = null, stampError = null } = {}) {
     const writes = []
     const db = makeDb((ctx) => {
-      if (ctx.op) writes.push({ table: ctx.table, op: ctx.op, values: ctx.values })
+      if (ctx.op) writes.push({ table: ctx.table, op: ctx.op, values: ctx.values, filters: ctx.filters })
       if (ctx.table === 'whatsapp_messages') return { data: ctx.op === 'insert' ? { id: 'm1' } : null, error: null }
       if (ctx.table === 'contacts') return { data: null, error: null }
       if (ctx.table === 'whatsapp_conversations') {
         if (ctx.op === 'insert') return { data: { id: 'conv1' }, error: null }
-        if (ctx.op === 'update') return { data: null, error: convUpdateError }
+        if (ctx.op === 'update') {
+          const isStamp = 'last_message_at' in (ctx.values || {})
+          return { data: null, error: isStamp ? stampError : convUpdateError }
+        }
         return { data: null, error: null }
       }
       return { data: null, error: null }
@@ -206,5 +210,55 @@ describe('ingestCoexistenceMessage — phone-app echoes are staff (C106 d)', () 
     const r = await ingestCoexistenceMessage(db, { locationId: 'L1', descriptor: echo })
     expect(r).toEqual({ inserted: false, reason: 'boom' })
     expect(writes.some(w => w.op === 'update')).toBe(false)
+  })
+
+  // WA-APPECHO.2 — the inbox ordering. Every other send path (the inbox send
+  // route, Mia, the inbound webhook) stamps the conversation's last_message_*
+  // columns; an echo did not, so a thread answered from the phone stayed in
+  // "Needs reply" (last_message_direction 'inbound') and never moved up.
+  const stampOf = (writes) => writes.find(w => w.table === 'whatsapp_conversations' && w.op === 'update' && 'last_message_at' in w.values)
+
+  it('an echo bumps the thread: last_message_at / direction / preview, at the echo time', async () => {
+    const { db, writes } = echoDb()
+    const r = await ingestCoexistenceMessage(db, { locationId: 'L1', descriptor: { ...echo, body: 'y'.repeat(150) } })
+    expect(r).toEqual({ inserted: true, conversationId: 'conv1', contactId: null })
+    const stamp = stampOf(writes)
+    expect(stamp.values).toEqual({
+      last_message_at: new Date(1700000000 * 1000).toISOString(),
+      last_message_direction: 'outbound',
+      last_message_preview: 'y'.repeat(100),
+    })
+    expect(stamp.filters).toContainEqual(['eq', 'id', 'conv1'])
+  })
+
+  it('the bump never moves a thread backwards past a newer message (ordering guard)', async () => {
+    const { db, writes } = echoDb()
+    await ingestCoexistenceMessage(db, { locationId: 'L1', descriptor: echo })
+    const iso = new Date(1700000000 * 1000).toISOString()
+    expect(stampOf(writes).filters).toContainEqual(['or', `last_message_at.is.null,last_message_at.lt.${iso}`])
+  })
+
+  it('a caption-less media echo previews as its type, like the inbound webhook', async () => {
+    const { db, writes } = echoDb()
+    await ingestCoexistenceMessage(db, { locationId: 'L1', descriptor: { ...echo, messageType: 'image', body: '' } })
+    expect(stampOf(writes).values.last_message_preview).toBe('[image]')
+  })
+
+  it('the take-over still applies when the bump is skipped or fails', async () => {
+    const { db, writes } = echoDb({ stampError: { message: 'stamp refused' } })
+    const r = await ingestCoexistenceMessage(db, { locationId: 'L1', descriptor: echo })
+    expect(r).toMatchObject({ inserted: true, conversationId: 'conv1', stampFailed: true })
+    const takeover = writes.find(w => w.table === 'whatsapp_conversations' && w.op === 'update' && 'agent_active' in w.values)
+    expect(takeover.values.agent_active).toBe(false)
+    expect(logError).toHaveBeenCalledWith('wa-coexistence', expect.stringMatching(/inbox/i),
+      expect.objectContaining({ conversationId: 'conv1', err: 'stamp refused' }))
+    // never a message body in a log line
+    for (const call of logError.mock.calls) expect(JSON.stringify(call)).not.toContain('"x"')
+  })
+
+  it('a history row does not bump the thread (weeks old)', async () => {
+    const { db, writes } = echoDb()
+    await ingestCoexistenceMessage(db, { locationId: 'L1', descriptor: history })
+    expect(stampOf(writes)).toBeUndefined()
   })
 })

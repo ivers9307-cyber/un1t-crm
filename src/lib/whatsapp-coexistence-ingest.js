@@ -42,11 +42,12 @@ export async function syncContactMatchOnly(db, { phone }) {
  * stored as source 'app_echo' (no sent_by: there is no CRM user behind it),
  * which every staff reader counts as staff (whatsapp-staff-sources.js), and
  * it takes the thread over from Mia exactly as an inbox send does
- * (manualTakeoverPatch; she re-arms after handoff_cooldown_hours). History
- * rows (origin 'history', or no origin) keep the column default and take
- * nothing over: they are weeks old, and created_at is the IMPORT time, so a
- * staff tag would read as "staff just spoke" in every created_at-ordered
- * reader.
+ * (manualTakeoverPatch; she re-arms after handoff_cooldown_hours), and it
+ * bumps the thread's last_message_* columns like any send (WA-APPECHO.2).
+ * History rows (origin 'history', or no origin) keep the column default,
+ * take nothing over and bump nothing: they are weeks old, and created_at is
+ * the IMPORT time, so a staff tag would read as "staff just spoke" in every
+ * created_at-ordered reader.
  */
 export async function ingestCoexistenceMessage(db, { locationId, descriptor }) {
   const { waMessageId, peerPhone, direction, messageType, body, tsSeconds } = descriptor
@@ -111,7 +112,33 @@ export async function ingestCoexistenceMessage(db, { locationId, descriptor }) {
     logError('wa-coexistence', 'phone-app echo stored but the take-over write failed (Mia not paused)', {
       conversationId, locationId, waMessageId, err: takeoverErr.message,
     })
-    return { inserted: true, conversationId, contactId, takeoverFailed: true }
   }
-  return { inserted: true, conversationId, contactId }
+
+  // WA-APPECHO.2 — bump the thread like every other send path (the inbox send
+  // route, Mia, the inbound webhook): last_message_direction 'outbound' is
+  // what takes it out of "Needs reply" (inbox-queues.js / mobile inbox.js),
+  // and last_message_at is the inbox sort key. A SEPARATE write from the
+  // take-over because it is guarded: the echo's own time, and only when it is
+  // newer than what the thread holds. Echoes can arrive late or out of order,
+  // and stamping 'outbound' over a customer's newer message would hide a
+  // member who is waiting. Same guard as the mail sent-lane bump.
+  const { error: stampErr } = await db.from('whatsapp_conversations')
+    .update({
+      last_message_at: sentAt,
+      last_message_direction: 'outbound',
+      last_message_preview: (body || `[${messageType}]`).substring(0, 100),
+    })
+    .eq('id', conversationId)
+    .or(`last_message_at.is.null,last_message_at.lt.${sentAt}`)
+  if (stampErr) {
+    logError('wa-coexistence', 'phone-app echo stored but the inbox stamp failed (thread will not rise in the inbox)', {
+      conversationId, locationId, waMessageId, err: stampErr.message,
+    })
+  }
+
+  return {
+    inserted: true, conversationId, contactId,
+    ...(takeoverErr ? { takeoverFailed: true } : {}),
+    ...(stampErr ? { stampFailed: true } : {}),
+  }
 }
