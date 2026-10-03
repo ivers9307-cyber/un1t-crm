@@ -93,6 +93,14 @@ describe('instagram-feed-sync', () => {
     expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 
+  it('a rate limit (HTTP 400, OAuthException code 4/17/613) does not flag a healthy connection', async () => {
+    for (const code of [4, 17, 613]) {
+      syncLocationIgFeed.mockRejectedValueOnce(graphFailure(400, { message: '(#4) Application request limit reached', type: 'OAuthException', code }))
+      await GET(req())
+    }
+    expect(stampConnectionError).not.toHaveBeenCalled()
+  })
+
   it('401s without the secret', async () => {
     expect((await GET(req('wrong'))).status).toBe(401)
     expect(syncLocationIgFeed).not.toHaveBeenCalled()
