@@ -24,6 +24,12 @@
 --              person is not tombstoned (profiles.deleted_at IS NULL).
 --              Rejected / cancelled rows, rows that ended, other types and a
 --              tombstone's rows are NOT touched.
+--              PENDING rows move AS IF APPROVED: Richard, 3 Oct 2026, on the
+--              one pending request (filed 1 Oct): "approve it and proceed".
+--              Availability needs no approval, so the move IS that decision;
+--              nobody approves it separately in SQL. The ledger keeps the row
+--              exactly as it was (status pending), so a restore puts back a
+--              pending request.
 --   FUTURE     (start_date >= today) the row is DELETED from time_off_requests
 --              after its full row is copied into the ledger.
 --   STARTED    (start_date < today) the row is SPLIT: it keeps
@@ -36,6 +42,15 @@
 --              distinct (person, start, end); an identical all-day rule the
 --              person already has is reused. The earliest request's note wins
 --              a collapse; every other note stays in the ledger's copy.
+--
+-- AFTER THE MOVE THE DAYS STILL COUNT AS TIME OFF (D1, Richard 3 Oct 2026:
+-- "treat like leave"). Every reader that read approved time off only (week
+-- and month copy, publish budget + clash advisory, assign and bulk-assign
+-- warnings, swap conflicts, open-pool cover, shift reminders, the overview,
+-- working time, the Time Off Summary and Roster Coverage reports) also reads
+-- all-day dated availability through shared/unavailable-days.js +
+-- src/lib/availability-leave.js, shipped in the SAME PR and deployed BEFORE
+-- the move. tests/leave-readers-availability-guard.test.js holds the line.
 --
 -- WHAT IT MUST NOT DO, AND WHY IT CAN'T
 -- ─────────────────────────────────────
@@ -131,7 +146,8 @@
 --     25 Sep: 11 rows, 5 people, 9 moved + 2 split, all approved,
 --     reason_chars <= 9, open_cancel_ask false everywhere.
 --     3 Oct (re-measured): 10 rows, 4 people, 8 moved + 2 split, 9 approved
---     + 1 PENDING, reason_chars <= 20, open_cancel_ask false everywhere.
+--     + 1 PENDING (carried as if approved, Richard 3 Oct), reason_chars <= 20,
+--     open_cancel_ask false everywhere.
 -- (d) The guards, each expected 0:
 --       WITH t AS (SELECT (now() AT TIME ZONE 'Europe/Dublin')::date AS d),
 --       c AS (SELECT r.* FROM public.time_off_requests r JOIN public.profiles p ON p.id = r.profile_id, t
@@ -239,6 +255,13 @@
 --     carried dates with their notes.
 -- (q) 30 minutes later: cron_heartbeats 'availability-notice-sweep' fresh,
 --     and availability_pushes still equal to (e).
+-- (r) THE ONE-TIME NOTICE to the people carried (the move itself tells
+--     nobody). Only once Richard has seen the words, from a master's signed-in
+--     crm.repset.ie tab: POST /api/admin/availability-move-notice with {}
+--     first (a PREVIEW: counts only, sends nothing), then {"send": true}
+--     between 07:00 and 22:00 Dublin (quiet hours gate the NOTICE, never the
+--     STATE; anyone deferred is told on a later run, and nobody is told
+--     twice: push_event_sends key availability_moved:<profile_id>).
 --
 -- ROLLBACK (data): SELECT public.restore_moved_unavailable_time_off();
 --   then all_unavailable_fp must equal (e) again (a restored_rule_changed

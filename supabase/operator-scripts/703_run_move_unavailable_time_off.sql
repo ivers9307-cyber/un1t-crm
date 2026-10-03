@@ -5,7 +5,7 @@
 --
 -- Carries every current time_off_requests row of type 'unavailable'
 -- (approved or pending, ending today or later in Dublin, person not
--- tombstoned) into staff_unavailability as all-day dated rules: future rows
+-- tombstoned; a pending one moves as if approved, Richard 3 Oct 2026) into staff_unavailability as all-day dated rules: future rows
 -- are deleted (full row kept in the ledger), started rows are split at today
 -- (the elapsed days stay time off). No staff_availability_changes row, so no
 -- manager notice; the allowance trigger acts on 'holiday' only, so no balance
@@ -33,7 +33,10 @@
 -- only rows not already in the ledger (a straggler), else returns zeros.
 --
 -- THEN: post-checks (i)-(o) at once, (p) in the browser, (q) 30 minutes on,
--- and get_advisors security AND performance.
+-- and get_advisors security AND performance. Then (r): the one-time push to
+-- the people carried, POST /api/admin/availability-move-notice ({} previews,
+-- {"send": true} sends; 07:00-22:00 Dublin only), once Richard has seen the
+-- words. This script sends nothing.
 --
 -- ROLLBACK (data):  SELECT public.restore_moved_unavailable_time_off();
 --   then all_unavailable_fp must equal pre-check (e) again.
