@@ -1,6 +1,9 @@
 // src/lib/whatsapp-coexistence-ingest.test.js
-import { describe, it, expect } from 'vitest'
-import { syncContactMatchOnly, ingestCoexistenceMessage } from './whatsapp-coexistence-ingest.js'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
+const { logError } = await import('@/lib/log')
+const { syncContactMatchOnly, ingestCoexistenceMessage } = await import('./whatsapp-coexistence-ingest.js')
 
 // Minimal chainable mock db. Each .from() returns a builder whose terminal
 // awaited call resolves to the queued result for that table+op.
@@ -116,5 +119,92 @@ describe('ingestCoexistenceMessage', () => {
     })
     expect(r).toEqual({ inserted: false, reason: 'bad_direction' })
     expect(inserts).toEqual([]) // guarded before any write
+  })
+})
+
+// C106 CHECKINRISKS.1 (d) — a reply typed in the studio's linked WhatsApp
+// Business phone app reaches us as an smb_message_echoes webhook. It is a
+// STAFF message: stored as source 'app_echo' (the CHECK has allowed it since
+// mig 259; nothing wrote it), and it takes the thread over from Mia exactly
+// like an inbox send (manualTakeoverPatch). History-sync rows stay as they
+// were: the column default, and no take-over (they are weeks old).
+describe('ingestCoexistenceMessage — phone-app echoes are staff (C106 d)', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+
+  // A new peer thread: no dupe, no contact, the conversation insert wins.
+  function echoDb({ convUpdateError = null } = {}) {
+    const writes = []
+    const db = makeDb((ctx) => {
+      if (ctx.op) writes.push({ table: ctx.table, op: ctx.op, values: ctx.values })
+      if (ctx.table === 'whatsapp_messages') return { data: ctx.op === 'insert' ? { id: 'm1' } : null, error: null }
+      if (ctx.table === 'contacts') return { data: null, error: null }
+      if (ctx.table === 'whatsapp_conversations') {
+        if (ctx.op === 'insert') return { data: { id: 'conv1' }, error: null }
+        if (ctx.op === 'update') return { data: null, error: convUpdateError }
+        return { data: null, error: null }
+      }
+      return { data: null, error: null }
+    })
+    return { db, writes }
+  }
+  const echo = { waMessageId: 'wamid.E1', peerPhone: '353000', direction: 'outbound', messageType: 'text', body: 'x', tsSeconds: 1700000000, origin: 'echo' }
+  const history = { ...echo, waMessageId: 'wamid.H1', origin: 'history' }
+
+  it("stores an echo with source 'app_echo' and no sent_by", async () => {
+    const { db, writes } = echoDb()
+    const r = await ingestCoexistenceMessage(db, { locationId: 'L1', descriptor: echo })
+    expect(r).toMatchObject({ inserted: true, conversationId: 'conv1' })
+    const msg = writes.find(w => w.table === 'whatsapp_messages' && w.op === 'insert')
+    expect(msg.values.source).toBe('app_echo')
+    expect(msg.values).not.toHaveProperty('sent_by')
+  })
+
+  it('an echo takes the thread over from Mia, like an inbox send', async () => {
+    const { db, writes } = echoDb()
+    await ingestCoexistenceMessage(db, { locationId: 'L1', descriptor: echo })
+    const upd = writes.find(w => w.table === 'whatsapp_conversations' && w.op === 'update')
+    expect(upd).toBeTruthy()
+    expect(upd.values.agent_active).toBe(false)
+    expect(typeof upd.values.agent_handed_off_at).toBe('string')
+  })
+
+  it('a history-sync row keeps the column default and takes nothing over', async () => {
+    const { db, writes } = echoDb()
+    const r = await ingestCoexistenceMessage(db, { locationId: 'L1', descriptor: history })
+    expect(r).toEqual({ inserted: true, conversationId: 'conv1', contactId: null })
+    const msg = writes.find(w => w.table === 'whatsapp_messages' && w.op === 'insert')
+    expect(msg.values).not.toHaveProperty('source')
+    expect(writes.some(w => w.table === 'whatsapp_conversations' && w.op === 'update')).toBe(false)
+  })
+
+  it('a descriptor with no origin is treated as history (never staff by accident)', async () => {
+    const { db, writes } = echoDb()
+    const { origin, ...bare } = echo
+    expect(origin).toBe('echo')
+    await ingestCoexistenceMessage(db, { locationId: 'L1', descriptor: bare })
+    const msg = writes.find(w => w.table === 'whatsapp_messages' && w.op === 'insert')
+    expect(msg.values).not.toHaveProperty('source')
+    expect(writes.some(w => w.op === 'update')).toBe(false)
+  })
+
+  it('a failed take-over write is logged and reported; the message is still stored', async () => {
+    const { db } = echoDb({ convUpdateError: { message: 'update refused' } })
+    const r = await ingestCoexistenceMessage(db, { locationId: 'L1', descriptor: echo })
+    expect(r).toMatchObject({ inserted: true, conversationId: 'conv1', takeoverFailed: true })
+    expect(logError).toHaveBeenCalledWith('wa-coexistence', expect.stringMatching(/take-over/i),
+      expect.objectContaining({ conversationId: 'conv1', locationId: 'L1', err: 'update refused' }))
+  })
+
+  it('a failed message insert takes nothing over', async () => {
+    const writes = []
+    const db = makeDb((ctx) => {
+      if (ctx.op) writes.push({ table: ctx.table, op: ctx.op })
+      if (ctx.table === 'whatsapp_messages') return ctx.op === 'insert' ? { data: null, error: { message: 'boom' } } : { data: null, error: null }
+      if (ctx.table === 'whatsapp_conversations') return ctx.op === 'insert' ? { data: { id: 'conv1' }, error: null } : { data: null, error: null }
+      return { data: null, error: null }
+    })
+    const r = await ingestCoexistenceMessage(db, { locationId: 'L1', descriptor: echo })
+    expect(r).toEqual({ inserted: false, reason: 'boom' })
+    expect(writes.some(w => w.op === 'update')).toBe(false)
   })
 })

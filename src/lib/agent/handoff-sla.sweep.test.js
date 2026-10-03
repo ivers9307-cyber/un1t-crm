@@ -22,11 +22,16 @@ const NOW = Date.parse('2026-09-28T12:00:00Z')
 // still holds, so several ticks can run against the same fake.
 function sweepDb({ convs, updateError = null, readErrors = {}, replies = [] } = {}) {
   const updates = []
+  const reads = [] // filters on each read, for the human-reply filter test (C106 d)
   const db = {
     from(table) {
       const state = { eqs: {}, is: {} }
+      const read = { table, or: [], not: [] }
+      reads.push(read)
       const b = {
-        select: () => b, not: () => b, lt: () => b, gte: () => b, neq: () => b,
+        select: () => b, lt: () => b, gte: () => b, neq: () => b,
+        not: (...a) => { read.not.push(a); return b },
+        or: (f) => { read.or.push(f); return b },
         order: () => b, limit: () => b,
         eq: (c, v) => { state.eqs[c] = v; return b },
         is: (c, v) => { state.is[c] = v; return b },
@@ -50,7 +55,7 @@ function sweepDb({ convs, updateError = null, readErrors = {}, replies = [] } = 
       return b
     },
   }
-  return { db, updates }
+  return { db, updates, reads }
 }
 
 const conv = (handedOffAgoMs = 2 * H) => ({
@@ -260,5 +265,26 @@ describe('a failed read is not "no reply" / "no candidates" (C31 PUSHNITS.1)', (
     const out = await run(db, { nowMs: NOW })
     expect(out.locations_unread).toBe(1)
     expect(logError).toHaveBeenCalledWith('handoff-sla', expect.stringMatching(/locations read failed/), expect.objectContaining({ err: 'down' }))
+  })
+})
+
+// C106 CHECKINRISKS.1 (d) — a reply typed in the studio's linked WhatsApp
+// Business phone app arrives as an 'app_echo' row with no sent_by. It is a
+// human reply: the SLA must not escalate a thread staff answered from the
+// phone, and the after-reply auto-resolve must see it.
+describe('the WhatsApp human-reply read counts phone-app echoes (C106 d)', () => {
+  it('filters on sent_by OR a person source, not sent_by alone', async () => {
+    const { db, reads } = sweepDb({ convs: [conv()] })
+    await runHandoffSlaSweep(db, { nowMs: NOW })
+    const replyRead = reads.find(r => r.table === 'whatsapp_messages')
+    expect(replyRead.or).toEqual(['sent_by.not.is.null,source.in.(operator,app_echo,history_sync)'])
+    expect(replyRead.not).toEqual([])
+  })
+
+  it('a thread answered from the phone app is not escalated', async () => {
+    const { db } = sweepDb({ convs: [conv()], replies: [{ created_at: new Date(NOW - 90 * 60_000).toISOString() }] })
+    const out = await runHandoffSlaSweep(db, { nowMs: NOW })
+    expect(sendPushToRolesAtLocation).not.toHaveBeenCalled()
+    expect(out).toMatchObject({ escalated: 0 })
   })
 })

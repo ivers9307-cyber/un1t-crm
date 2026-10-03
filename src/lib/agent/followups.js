@@ -28,6 +28,7 @@ import { anthropicMessages } from '@/lib/anthropic'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { logError, logWarn } from '@/lib/log'
 import { countCheckinSends, readCheckinSendsToday, checkinDayStartIso } from './checkin-counts'
+import { isWhatsAppStaffOutbound } from '@/lib/whatsapp-staff-sources'
 
 // MIA-SONNET5 — kept in step with the inbound reply path so a nudge sounds
 // like the same person who answers the thread.
@@ -221,19 +222,15 @@ const NUDGE_INSTRUCTION =
 
 // CHECKINSTALL.1 — who a person is, in a WhatsApp thread. Operator send
 // routes stamp sent_by (the session's profile id); the studio phone's
-// WhatsApp Business app arrives as app_echo / history_sync; 'operator' is
-// allowed by the source CHECK (mig 259). Automations — booking confirmations,
-// sequence steps, broadcasts, end-of-trial, consent prompts — insert the column
-// default source='api' with NO sent_by, so they are not a person owning the
-// thread. Same line the live reply path draws (auto-reply.js whatsappAdapter
-// .isHumanOutbound, AGENT-REARM.2), plus the phone-app sources. Pure.
+// WhatsApp Business app arrives as app_echo (written since C106 d). Automations
+// — booking confirmations, sequence steps, broadcasts, end-of-trial, consent
+// prompts — insert the column default source='api' with NO sent_by, so they
+// are not a person owning the thread. The rule lives in whatsapp-staff-sources
+// .js (C106 d), shared with the live reply path (auto-reply.js whatsappAdapter
+// .isHumanOutbound) and the handoff SLA. Pure.
 // Used by the check-in runner since CHECKINSTALL.2 (Richard's call D1); the
 // follow-up ladder still reads humanSpokeAfterInbound.
-const PERSON_SOURCES = new Set(['operator', 'app_echo', 'history_sync'])
-export function isStaffOutbound(m) {
-  if (!m || m.direction !== 'outbound' || m.source === 'agent') return false
-  return PERSON_SOURCES.has(m.source) || m.sent_by != null
-}
+export const isStaffOutbound = isWhatsAppStaffOutbound
 
 /**
  * Oldest-first rows → what happened since the customer's last message. Pure.
