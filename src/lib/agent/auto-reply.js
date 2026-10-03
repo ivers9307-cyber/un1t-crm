@@ -24,6 +24,7 @@ import { recordAgentDecision, compactDecisionMeta } from './decision-log'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { sendPushToRolesAtLocation, sendPushToInboxStaffAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
+import { isWhatsAppStaffAuthored } from '@/lib/whatsapp-staff-sources'
 import { buildCachedSystem } from './prompt'
 import { getLocationBranding } from '@/lib/location-branding'
 import {
@@ -1199,12 +1200,12 @@ export async function sendAndLog(db, adapter, { conversationId, locationId, reci
   let recordedText = text
   try {
     if (opts && adapter.sendOptions) {
-      const r = await adapter.sendOptions(recipient, text, opts, { locationId, connection })
+      const r = await adapter.sendOptions(recipient, text, opts, { locationId, connection, conversationId })
       messageId = r?.messageId || null
       recordedText = `${text}\n[Options: ${opts.join(' | ')}]`
     } else {
       const sendText = opts ? `${text}\n\n${opts.map(o => `• ${o}`).join('\n')}` : text
-      const r = await adapter.send(recipient, sendText, { locationId, connection, settings })
+      const r = await adapter.send(recipient, sendText, { locationId, connection, settings, conversationId })
       messageId = r?.messageId || null
       recordedText = sendText
     }
@@ -1259,7 +1260,7 @@ async function handoff(db, adapter, { conversationId, locationId, recipient, con
   }).eq('id', conversationId)
 
   try {
-    const r = await adapter.send(recipient, holding, { locationId, connection, settings })
+    const r = await adapter.send(recipient, holding, { locationId, connection, settings, conversationId })
     await recordAgentMessage(db, adapter,
       adapter.outboundRow({ conversationId, locationId, contactId, messageId: r?.messageId || null, text: holding, now })
     )
@@ -1403,7 +1404,7 @@ async function softHandoff(db, adapter, { conversationId, locationId, recipient,
   const holding = (settings?.holding_message || '').trim() || DEFAULT_HOLDING_MESSAGE
   const now = new Date().toISOString()
   try {
-    const r = await adapter.send(recipient, holding, { locationId, connection, settings })
+    const r = await adapter.send(recipient, holding, { locationId, connection, settings, conversationId })
     await recordAgentMessage(db, adapter,
       adapter.outboundRow({ conversationId, locationId, contactId, messageId: r?.messageId || null, text: holding, now })
     )
@@ -1430,6 +1431,13 @@ async function softHandoff(db, adapter, { conversationId, locationId, recipient,
 }
 
 // ── WhatsApp adapter ────────────────────────────────────────────────
+// WAREPLYNUMBER.1 (C86) — every send names the conversation, so it goes from
+// the number the customer wrote to (recorded by the webhook), else the
+// studio default. No conversation id → exactly the old options.
+const waReplyOpts = (locationId, conversationId) => (conversationId
+  ? { locationId, replyInConversation: conversationId }
+  : { locationId })
+
 export const whatsappAdapter = {
   name: 'whatsapp',
   label: 'WhatsApp',
@@ -1441,33 +1449,35 @@ export const whatsappAdapter = {
   // Meta authenticates the sender's phone number — safe to use as identity.
   trustsSenderIdentity: true,
   // AGENT-REARM.2 — operator send routes stamp sent_by; agent + sequence /
-  // automation sends leave it null, so sent_by IS the human signal.
+  // automation sends leave it null, so sent_by IS the human signal. C106 (d):
+  // plus a reply typed in the studio's linked phone app (source 'app_echo',
+  // no sent_by). One rule, shared with the check-in runner and handoff SLA.
   humanOutboundColumns: 'source, sent_by',
-  isHumanOutbound: (m) => m.source !== 'agent' && m.sent_by != null,
+  isHumanOutbound: isWhatsAppStaffAuthored,
   // Fires once the agent has committed to replying (gating + claim passed):
   // marks the inbound read and shows "typing…" while Claude composes.
-  onEngage: async ({ waMessageId, locationId }) => {
+  onEngage: async ({ waMessageId, locationId, conversationId }) => {
     if (!waMessageId) return
-    try { await sendTypingIndicator(waMessageId, { locationId }) }
+    try { await sendTypingIndicator(waMessageId, waReplyOpts(locationId, conversationId)) }
     catch (e) { console.warn('[agent] typing indicator failed:', e?.message) }
   },
   // C3 — a reply that ends in a URL becomes a cta_url button message (body +
   // tappable button) instead of a raw link. Operator-editable button text;
   // plain text is byte-identical to before when no trailing URL.
-  send: async (recipient, text, { locationId, settings }) => {
+  send: async (recipient, text, { locationId, settings, conversationId }) => {
     const split = splitTrailingUrl(text)
     if (split) {
       const buttonText = (settings?.link_button_text || '').trim() || 'Open link'
       try {
-        return await sendCtaUrlMessage(recipient, { bodyText: split.body, buttonText, url: split.url }, { locationId })
+        return await sendCtaUrlMessage(recipient, { bodyText: split.body, buttonText, url: split.url }, waReplyOpts(locationId, conversationId))
       } catch (e) {
         // cta_url rejected (rare) — fall back to the plain text send below.
         console.warn('[agent] cta_url send failed, falling back to text:', e?.message)
       }
     }
-    return sendTextMessage(recipient, text, { locationId })
+    return sendTextMessage(recipient, text, waReplyOpts(locationId, conversationId))
   },
-  sendOptions: (recipient, text, options, { locationId }) => sendInteractiveOptions(recipient, text, options, { locationId }),
+  sendOptions: (recipient, text, options, { locationId, conversationId }) => sendInteractiveOptions(recipient, text, options, waReplyOpts(locationId, conversationId)),
   outboundRow: ({ conversationId, locationId, contactId, messageId, text, now }) => ({
     conversation_id: conversationId,
     contact_id: contactId || null,

@@ -26,7 +26,8 @@ describe('phone WhatsApp thread: template picker', () => {
     // The old call: sendTemplate(conversationId, tpl.name, [], …) with 'en' fixed
     // inside the helper. 17 of 18 live templates need body parameters.
     expect(SCREEN).not.toMatch(/sendTemplate\([^)]*,\s*\[\]\s*,/)
-    expect(SCREEN).toMatch(/sendTemplate\(conversationId, built\.payload, activeLocation\?\.id\)/)
+    // INBOXLOC.1 (C37) — sent at the conversation's studio (threadLocationId).
+    expect(SCREEN).toMatch(/sendTemplate\(conversationId, built\.payload, locationId\)/)
   })
 
   it('builds the send, the preview and the greyed-out rows with the shared helpers', () => {

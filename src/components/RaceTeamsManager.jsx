@@ -10,7 +10,9 @@
 import { useEffect, useState } from 'react'
 import { Plus, Trash2, Loader2, AlertCircle, Users, Check, X, Pencil, Star, BadgeCheck, Clock, Copy, Ban, Download } from 'lucide-react'
 
-export default function RaceTeamsManager({ race }) {
+// GATES-2 — `canCancelEntries` (the page's MANAGER_ROLES-at-the-event's-studio
+// decision, the cancel route's rule) gates Cancel entry. Defaults closed.
+export default function RaceTeamsManager({ race, canCancelEntries = false }) {
   const [registrations, setRegistrations] = useState(null)
   const [loadError, setLoadError] = useState(null)
   const [showAddForm, setShowAddForm] = useState(false)
@@ -112,6 +114,7 @@ export default function RaceTeamsManager({ race }) {
             waves={waves}
             onChanged={load}
             onError={setActionError}
+            canCancel={canCancelEntries}
           />
         ))}
       </div>
@@ -256,7 +259,7 @@ function AddTeamForm({ race, waves, onCancel, onAdded, onError }) {
 
 // ─── One-team card ───────────────────────────────────────────────
 
-function TeamCard({ registration, waves, onChanged, onError }) {
+function TeamCard({ registration, waves, onChanged, onError, canCancel = false }) {
   const team = registration.teams
   const wave = registration.wave
   const members = (team?.team_members || []).slice().sort((a, b) =>
@@ -382,7 +385,7 @@ function TeamCard({ registration, waves, onChanged, onError }) {
             <span className="text-[11px] text-red-700 inline-flex items-center gap-1 font-medium">
               <Ban size={11} /> Cancelled
             </span>
-          ) : (
+          ) : canCancel && (
             <button
               type="button"
               onClick={cancelRegistration}

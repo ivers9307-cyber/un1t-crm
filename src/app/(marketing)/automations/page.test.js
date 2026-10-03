@@ -15,6 +15,7 @@ vi.mock('@/components/automations/AutomationsView', () => ({
 const seen = vi.hoisted(() => ({ flows: null }))
 vi.mock('@/components/automations/AutomationsFlowList', () => ({ default: (p) => { seen.flows = p; return null } }))
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
+vi.mock('@/lib/sequence-access', () => ({ canCloneSequenceAt: vi.fn(() => false) }))
 vi.mock('@/components/automations/ClassClimateCard', () => ({ default: (p) => <div>{`climate:${p.glofoxConnected}:${p.glofoxUnknown ? 'unknown' : 'known'}`}</div> }))
 vi.mock('@/components/automations/BathroomClimateCard', () => ({ default: (p) => <div>{`bathroom:${p.glofoxConnected}:${p.glofoxUnknown ? 'unknown' : 'known'}`}</div> }))
 
@@ -24,6 +25,7 @@ import { createServerClient } from '@/lib/supabase'
 import { readGlofoxAutomationStatus } from '@/lib/automations/glofox-status'
 import { hasPermission } from '@/lib/permissions'
 import { logError } from '@/lib/log'
+import { canCloneSequenceAt } from '@/lib/sequence-access'
 
 const LOC = 'a0000000-0000-4000-8000-00000000000a'
 // A db whose every chain resolves to { data: [] } (location_automations, ac_devices).
@@ -160,5 +162,23 @@ describe('/automations — flows (SEQCOUNTERS.1)', () => {
     createServerClient.mockReturnValue(db)
     renderToStaticMarkup(await AutomationsPage())
     expect(reads[0].eq).toEqual([['location_id', '00000000-0000-0000-0000-000000000000']])
+  })
+})
+
+// C123 GATES-4 (b) — the flow list gets canClone from the clone route's rule
+// at the ACTIVE studio (the list is that studio's sequences).
+describe('/automations — Clone button gate (C123 b)', () => {
+  beforeEach(() => {
+    seen.flows = null
+    hasPermission.mockImplementation((_u, k) => k === 'whatsapp')
+  })
+  it('asks canCloneSequenceAt at the active studio and passes its answer', async () => {
+    canCloneSequenceAt.mockReturnValue(false)
+    renderToStaticMarkup(await AutomationsPage())
+    expect(canCloneSequenceAt).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), LOC)
+    expect(seen.flows.canClone).toBe(false)
+    canCloneSequenceAt.mockReturnValue(true)
+    renderToStaticMarkup(await AutomationsPage())
+    expect(seen.flows.canClone).toBe(true)
   })
 })

@@ -5,7 +5,9 @@
 // Personal + Studio go direct to Supabase via the shared fetchers
 // (RLS-scoped reads) — except Studio's pending time-off + swap lists,
 // which need names from `profiles` and so come from the service-role
-// /api/schedule routes (STUDIODASH.1, see fetchStudioDashboard). Business goes through /api/dashboard/business
+// /api/schedule routes (STUDIODASH.1, see fetchStudioDashboard), and
+// Studio's contact numbers, which come from /api/dashboard/studio-contacts
+// (CONTACTREADSCOPE.1a). Business goes through /api/dashboard/business
 // (DASH-M.1) — the command-centre payload is a heavy server-side
 // composition (approvals registry fan-out, radar scoring, paginated
 // invoice sums) and its gating lives server-side; api() attaches auth
@@ -75,9 +77,61 @@ export async function fetchRosterRunway(locationId) {
   }
 }
 
+// CONTACTREADSCOPE.1a — the Studio dashboard's contact numbers (new leads this
+// week, the funnel, the total) come from the service-role route, never from
+// this phone's own session: from mig 690 that session reads a studio's
+// contacts only while holding Contacts there, and this screen is gated by
+// dashboard_studio. null = the route did not answer (failed, thrown, an HTML
+// 404 while the web deploy lags the OTA, or a malformed body). The screen
+// shows dashes and says so: a failed read is never zeros. (Not named
+// fetchStudioContactCounts: that is shared/dashboard-data's service-role
+// reader, which the phone must never call.)
+export async function fetchStudioContactCountsFromRoute(locationId) {
+  const qs = new URLSearchParams({ location_id: locationId })
+  try {
+    const res = await api(`/api/dashboard/studio-contacts?${qs.toString()}`, { locationId })
+    const d = res?.success ? res.data : null
+    if (!d || typeof d.newLeadsThisWeek !== 'number' || typeof d.totalContacts !== 'number'
+        || !d.funnel || typeof d.funnel !== 'object' || Array.isArray(d.funnel)) return null
+    return d
+  } catch {
+    return null
+  }
+}
+
+// What the Studio dashboard shows for the contact numbers. The decision lives
+// here, not in the component (there is no RN component test runner).
+export function studioContactNumbers(counts, headlineStatuses) {
+  if (!counts) {
+    return {
+      failed: true,
+      newLeads: '—',
+      // No "contacts added" under a dash: it would read as a count.
+      newLeadsSublabel: null,
+      total: null,
+      headline: headlineStatuses.map((key) => ({ key, count: '—' })),
+    }
+  }
+  return {
+    failed: false,
+    newLeads: counts.newLeadsThisWeek,
+    newLeadsSublabel: counts.newLeadsThisWeek === 1 ? 'contact added' : 'contacts added',
+    total: counts.totalContacts,
+    headline: headlineStatuses.map((key) => ({ key, count: counts.funnel[key] || 0 })),
+  }
+}
+
+// What the Studio dashboard's WhatsApp unread card shows. null = the read
+// failed (shared fetchStudioDashboardData): a dash and no tap, never "0".
+export function studioWhatsappUnread(total) {
+  if (total == null) return { value: '—', sublabel: "Couldn't load", accent: 'text-un1t-muted', pressable: false }
+  return { value: total, sublabel: 'across the inbox', accent: total > 0 ? 'text-un1t-text' : 'text-un1t-muted', pressable: total > 0 }
+}
+
 export async function fetchStudioDashboard(locationId) {
-  const [base, pendingTimeOff, pendingSwaps, rosterRunway] = await Promise.all([
+  const [base, contactCounts, pendingTimeOff, pendingSwaps, rosterRunway] = await Promise.all([
     fetchStudioDashboardData(supabase, locationId),
+    fetchStudioContactCountsFromRoute(locationId),
     // Manager scope (incl. LEAVE.2's "leave taken by anyone who belongs
     // here") and the expired-pending cut are the route's, not ours.
     pendingList('/api/schedule/time-off', locationId),
@@ -85,7 +139,7 @@ export async function fetchStudioDashboard(locationId) {
     fetchRosterRunway(locationId),
   ])
   if (!base.success) return base
-  return { ...base, data: { ...base.data, pendingTimeOff, pendingSwaps, rosterRunway } }
+  return { ...base, data: { ...base.data, contactCounts, pendingTimeOff, pendingSwaps, rosterRunway } }
 }
 
 /**

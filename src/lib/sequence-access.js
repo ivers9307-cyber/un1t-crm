@@ -29,6 +29,30 @@ export function canBuildSequencesSomewhere(user) {
   return SEQUENCE_BUILDER_PERMISSIONS.some((key) => hasPermissionAtAnyLocation(user, key))
 }
 
+/**
+ * C116 GATES-2 — the enrolment routes' own rule (resume, exit; also enrol,
+ * clone, audience/seed): `email` at the sequence's studio. The builder page
+ * opens on email OR whatsapp, so its Resume/Exit buttons ask this instead.
+ */
+export function canManageEnrolmentsAt(user, locationId) {
+  if (!user || !locationId) return false
+  return hasPermissionForLocation(user, locationId, 'email')
+}
+
+/**
+ * C123 GATES-4 (b) — POST /api/sequences/[id]/clone's rule, for its button:
+ * a member of the sequence's studio (masters are listed there too) holding
+ * `email` there. That implies the route's coarse `email` somewhere, so a true
+ * here is exactly the route getting past its gates
+ * (tests/sequence-clone-button-gate.test.js runs both). The flow list opens
+ * on email OR whatsapp, so a WhatsApp-only builder gets no Clone button.
+ */
+export function canCloneSequenceAt(user, locationId) {
+  if (!user || !locationId) return false
+  if (!(user.locations || []).some((l) => l?.id === locationId)) return false
+  return canManageEnrolmentsAt(user, locationId)
+}
+
 export function sequencePermissionRequired() {
   return NextResponse.json({ success: false, error: SEQUENCE_PERMISSION_ERROR }, { status: 403 })
 }

@@ -93,11 +93,14 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
     if (!conversation?.id || !msg.wa_message_id) return
     setReactingId(msg.id)
     try {
-      await fetch(`/api/whatsapp/conversations/${conversation.id}/react`, {
+      const res = await fetch(`/api/whatsapp/conversations/${conversation.id}/react`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message_id: msg.wa_message_id, emoji }),
       })
+      const data = await res.json()
+      // Sent, but the thread row was lost: say so rather than show nothing.
+      if (data.success && data.warnings?.length) alert(data.warnings.join('\n\n'))
     } catch {} finally {
       setReactingId(null)
     }
@@ -138,6 +141,11 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
   // FLOW-SEND — drop the location's booking Flow into an open conversation
   // (availability comes back on the conversation GET).
   const [flowAvailable, setFlowAvailable] = useState(false)
+  // C126 INBOXCONTROLS.1 — the thread GET's canUseWebControls: web `whatsapp`
+  // at the thread's studio, the rule of the web-only /agent (Handled-by) and
+  // /add-contact routes. The thread itself opens on web OR mobile `whatsapp`,
+  // so without this those two controls were offered and then failed.
+  const [canUseWebControls, setCanUseWebControls] = useState(false)
   const [sendingFlow, setSendingFlow] = useState(false)
   const [showTemplatePicker, setShowTemplatePicker] = useState(false)
   const [selectedTemplate, setSelectedTemplate] = useState(null)
@@ -378,6 +386,7 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
         setConversation(data.conversation)
         setMessages(msgs)
         setFlowAvailable(Boolean(data.flow_available))
+        setCanUseWebControls(data.canUseWebControls === true)
 
         // Pre-fill add contact form with WA profile name
         if (!data.conversation.contact_id && data.conversation.wa_profile_name) {
@@ -553,6 +562,8 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
       const res = await fetch(`/api/whatsapp/conversations/${selectedId}/send-flow`, { method: 'POST' })
       const data = await res.json()
       if (data.success) {
+        // FLOWTOKENDEDUP.1 — sent, but the thread row could not be saved.
+        if (data.warnings?.length) alert(data.warnings.join('\n\n'))
         await fetchMessages(selectedId)
         await fetchApprovals(selectedId)
         await fetchConversations()
@@ -853,7 +864,7 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
                 </div>
               </div>
               <div className="flex items-center gap-2 shrink-0">
-                {conversation && (
+                {conversation && canUseWebControls && (
                   <HandledByControl
                     channel="wa"
                     conversation={conversation}
@@ -906,7 +917,7 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
                         >
                           {conversation.is_blocked ? 'Blocked — unblock' : 'Block'}
                         </button>
-                        {isUnknown ? (
+                        {isUnknown ? (canUseWebControls && (
                           <button
                             type="button"
                             role="menuitem"
@@ -916,7 +927,7 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
                             <UserPlus size={13} />
                             Add to Contacts
                           </button>
-                        ) : conversation?.contacts?.id && (
+                        )) : conversation?.contacts?.id && (
                           <Link
                             href={`/contacts/${conversation.contacts.id}`}
                             role="menuitem"
@@ -945,7 +956,7 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
             )}
 
             {/* Add to Contacts form — slides in below header */}
-            {showAddContact && isUnknown && (
+            {showAddContact && isUnknown && canUseWebControls && (
               <div className="border-b border-un1t-border bg-un1t-surface/80 px-5 py-4 shrink-0">
                 <div className="flex items-center justify-between mb-3">
                   <h4 className="text-sm font-semibold flex items-center gap-2">

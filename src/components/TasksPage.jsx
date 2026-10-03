@@ -10,15 +10,16 @@
 // Filters (apply in both views): assignee, project, priority.
 // Free-text project tags are auto-discovered from existing rows.
 //
-// Source-of-truth: activities table, kind='task'. RLS already lets
-// authenticated-in-location operators CRUD the location's rows
-// (campaigns + activities share the same policy pattern), so all
-// mutations go through the browser Supabase client directly. No
-// /api/tasks layer needed for the UI itself.
+// Source-of-truth: activities table, kind='task'. C148 ACTWRITEGATEWEB.1:
+// the writes post to service-role routes judged on the WEB rule at the
+// task's studio (POST /api/activities/tasks, POST
+// /api/activities/tasks/[id]/status). They used to go through the browser
+// client, where RLS judged the PHONE Tasks / Pipeline keys and refused
+// people who hold web Tasks without them. /api/tasks is the API-key surface.
 
 import { useState, useMemo, useCallback, useEffect } from 'react'
-import { createBrowserClient } from '@/lib/supabase'
 import { dublinTodayStr } from '@/lib/dublin-time'
+import { postActivityWrite } from '@/lib/activity-write-gate'
 import Link from 'next/link'
 import {
   DndContext, DragOverlay, PointerSensor, useSensor, useSensors,
@@ -40,6 +41,10 @@ const STATUSES = [
   { key: 'cancelled',   label: 'Cancelled',   Icon: MinusCircle,   bg: 'bg-un1t-border/40' },
 ]
 
+// C146 — with no sensors a card cannot be picked up, so a read-only board
+// offers no drag at all (module-level so the reference is stable).
+const NO_SENSORS = []
+
 const PRIORITIES = [
   { key: 'urgent', label: 'Urgent', cls: 'text-red-400' },
   { key: 'high',   label: 'High',   cls: 'text-orange-400' },
@@ -47,8 +52,11 @@ const PRIORITIES = [
   { key: 'low',    label: 'Low',    cls: 'text-un1t-subtle' },
 ]
 
-export default function TasksPage({ initialTasks, locationId, profiles, projectsSeed }) {
-  const db = createBrowserClient()
+// C146 TASKSNEEDCONTACTS.1 / C148 — `canWrite` is the page's
+// canWriteActivitiesAt at this studio (src/lib/activity-write-gate.js): web
+// Tasks AND Contacts here, the rule the write routes apply. Without it the
+// page shows the list but offers no write. Defaults false: fail closed.
+export default function TasksPage({ initialTasks, locationId, profiles, projectsSeed, canWrite = false }) {
   const [tasks, setTasks] = useState(initialTasks || [])
   const [view, setView] = useState('board')   // 'board' | 'list'
   const [createOpen, setCreateOpen] = useState(false)
@@ -91,31 +99,28 @@ export default function TasksPage({ initialTasks, locationId, profiles, projects
   }, [visibleTasks])
 
   const updateStatus = useCallback(async (taskId, newStatus) => {
+    if (!canWrite) return
+    const before = tasks.find(t => t.id === taskId)
     // Optimistic update — UI changes immediately, DB call follows.
     setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: newStatus, done: newStatus === 'done' } : t))
-    const { error } = await db.from('activities')
-      .update({ status: newStatus })
-      .eq('id', taskId)
-    if (error) {
-      // Rollback on failure — pull the fresh row.
-      const { data } = await db.from('activities').select('*').eq('id', taskId).single()
-      if (data) setTasks(prev => prev.map(t => t.id === taskId ? data : t))
+    // A refusal, a zero-row write (the route's 404) or a network error is
+    // never a silent success: the board puts the card back and says why.
+    const outcome = await postActivityWrite(`/api/activities/tasks/${taskId}/status`, { status: newStatus })
+    if (!outcome.ok) {
+      // Roll back to what was on screen before the optimistic move.
+      if (before) setTasks(prev => prev.map(t => t.id === taskId ? before : t))
+      alert(outcome.message)
     }
-  }, [db])
+  }, [canWrite, tasks])
 
   const addTask = useCallback(async (payload) => {
-    const insert = {
-      kind: 'task',
-      status: 'todo',
-      location_id: locationId,
-      source: 'manual',
-      ...payload,
-    }
-    const { data, error } = await db.from('activities').insert(insert).select('*, contacts(id, name), profiles!activities_assignee_id_fkey(id, full_name)').single()
-    if (error) throw new Error(error.message)
-    setTasks(prev => [data, ...prev])
-    return data
-  }, [db, locationId])
+    if (!canWrite) throw new Error('Tasks are read-only for you at this studio.')
+    // kind / status / source are the route's to set.
+    const outcome = await postActivityWrite('/api/activities/tasks', { ...payload, location_id: locationId })
+    if (!outcome.ok) throw new Error(outcome.message)
+    setTasks(prev => [outcome.data, ...prev])
+    return outcome.data
+  }, [locationId, canWrite])
 
   // Drag-drop handlers — only used in board view.
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
@@ -123,6 +128,7 @@ export default function TasksPage({ initialTasks, locationId, profiles, projects
   function onDragStart(e) { setActiveDragId(e.active.id) }
   function onDragEnd(e) {
     setActiveDragId(null)
+    if (!canWrite) return
     const { active, over } = e
     if (!over) return
     const taskId = active.id
@@ -144,20 +150,28 @@ export default function TasksPage({ initialTasks, locationId, profiles, projects
         <h2 className="text-2xl font-bold">Tasks</h2>
         <div className="flex items-center gap-2">
           <ViewSwitcher value={view} onChange={setView} />
-          <button
-            onClick={() => setCreateOpen(true)}
-            className="inline-flex items-center gap-1.5 text-sm bg-un1t-text text-un1t-bg font-medium px-3 py-1.5 rounded-md hover:bg-un1t-accent"
-          >
-            <Plus size={14} /> New task
-          </button>
+          {canWrite && (
+            <button
+              type="button"
+              onClick={() => setCreateOpen(true)}
+              className="inline-flex items-center gap-1.5 text-sm bg-un1t-text text-un1t-bg font-medium px-3 py-1.5 rounded-md hover:bg-un1t-accent"
+            >
+              <Plus size={14} /> New task
+            </button>
+          )}
         </div>
       </div>
       <p className="text-sm text-un1t-subtle mb-4">Manual follow-ups, calls, reminders, and project work.</p>
+      {!canWrite && (
+        <p className="text-sm text-un1t-subtle bg-un1t-surface border border-un1t-border rounded-md px-3 py-2 mb-4">
+          Read-only here: tasks need Contacts access at this studio.
+        </p>
+      )}
 
       <FiltersBar filter={filter} setFilter={setFilter} profiles={profiles} projects={projects} />
 
       {view === 'board' ? (
-        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={onDragStart} onDragEnd={onDragEnd}>
+        <DndContext sensors={canWrite ? sensors : NO_SENSORS} collisionDetection={closestCenter} onDragStart={onDragStart} onDragEnd={onDragEnd}>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
             {STATUSES.map(col => (
               <Column key={col.key} status={col} tasks={byStatus[col.key]} />
@@ -178,7 +192,7 @@ export default function TasksPage({ initialTasks, locationId, profiles, projects
                 <col.Icon size={12} /> {col.label} <span className="text-un1t-muted">· {byStatus[col.key].length}</span>
               </h3>
               <div className="bg-un1t-surface border border-un1t-border rounded-lg divide-y divide-un1t-border">
-                {byStatus[col.key].map(t => <TaskListRow key={t.id} task={t} onStatus={updateStatus} />)}
+                {byStatus[col.key].map(t => <TaskListRow key={t.id} task={t} onStatus={canWrite ? updateStatus : null} />)}
               </div>
             </div>
           ))}
@@ -190,7 +204,7 @@ export default function TasksPage({ initialTasks, locationId, profiles, projects
         </div>
       )}
 
-      {createOpen && (
+      {createOpen && canWrite && (
         <NewTaskModal
           onClose={() => setCreateOpen(false)}
           onCreate={addTask}
@@ -360,8 +374,10 @@ function TaskListRow({ task, onStatus }) {
   return (
     <div className="flex items-start gap-3 p-3">
       <button
-        onClick={() => onStatus(task.id, task.status === 'done' ? 'todo' : 'done')}
-        className="mt-0.5 text-un1t-subtle hover:text-un1t-text"
+        type="button"
+        onClick={() => onStatus?.(task.id, task.status === 'done' ? 'todo' : 'done')}
+        disabled={!onStatus}
+        className="mt-0.5 text-un1t-subtle hover:text-un1t-text disabled:cursor-default disabled:hover:text-un1t-subtle"
         aria-label="Toggle done"
       >
         {task.status === 'done' ? <CheckCircle2 size={16} /> : <Circle size={16} />}

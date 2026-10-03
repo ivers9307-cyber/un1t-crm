@@ -1,6 +1,6 @@
 import { createServerClient } from './supabase'
 import { applyAudienceFilter, applyAudienceFilterAsync } from './audience-filter'
-import { getWhatsAppConfig, META_API_URL } from './whatsapp-config'
+import { getWhatsAppConfig, getConversationReplyConfig, META_API_URL } from './whatsapp-config'
 import { isWhatsAppNumberMissing } from './whatsapp-number-missing'
 import {
   PER_TICK_MAX, AUTO_PAUSE_CONSECUTIVE_FAILURES,
@@ -15,6 +15,7 @@ import { extractNamedVariables } from './whatsapp-template-samples.js'
 import { formatMetaError } from './whatsapp-meta-error.js'
 import { dynamicUrlButtonIndex, urlButtonSendBlock, URL_BUTTON_MAPPING_KEY, flowButtonComponentFor } from './whatsapp-template-buttons.js'
 import { flowTokenFor } from './whatsapp-flow/config.js'
+import { bodyVariableSlots, renderSentTemplateBody } from '@shared/wa-template-send'
 import { sendPushToRolesAtLocation } from './push'
 import { MANAGER_ROLES } from './schemas'
 import { splitMessageText, WHATSAPP_TEXT_LIMIT } from './message-split.js'
@@ -38,8 +39,15 @@ import { splitMessageText, WHATSAPP_TEXT_LIMIT } from './message-split.js'
 // WhatsAppNumberMissingError BEFORE any Meta call; every caller's handling
 // of that refusal is tabled in tests/whatsapp-config-callers.test.js.
 
-async function resolveConfig(opts = {}) {
+//   opts.replyInConversation — WAREPLYNUMBER.1 (C86): a reply into this
+//                       whatsapp_conversations id goes from the number the
+//                       customer wrote to (getConversationReplyConfig), else
+//                       the location default. Needs opts.locationId.
+async function resolveConfig(opts = {}, { template = false } = {}) {
   if (opts.config) return opts.config
+  if (opts.replyInConversation) {
+    return await getConversationReplyConfig(opts.locationId || null, opts.replyInConversation, { template })
+  }
   return await getWhatsAppConfig(opts.locationId || null)
 }
 
@@ -295,7 +303,7 @@ export async function sendMediaCarousel(to, { bodyText, cards }, opts = {}) {
  * Send a template message (works anytime — no 24h window needed)
  */
 export async function sendTemplateMessage(to, templateName, language = 'en', components = [], opts = {}) {
-  const config = await resolveConfig(opts)
+  const config = await resolveConfig(opts, { template: true })
 
   const body = {
     messaging_product: 'whatsapp',
@@ -1054,7 +1062,8 @@ export async function fetchDripDoneContactIds(db, broadcastId) {
  * what makes the CAS exclusive: a second tick arriving after the first has
  * re-claimed no longer matches `created_at < cutoff`. Nothing reads
  * `created_at` on this table for any other purpose (checked across src/ —
- * the only recipient-row ordering is on `sms_broadcast_recipients`).
+ * the only other recipient-row ordering was on `sms_broadcast_recipients`,
+ * dropped with SMS in mig 688).
  *
  * Any other existing status ('sent' / 'delivered' / 'read' / 'failed', or a
  * 'pending' still inside its lease) means somebody else holds it — skip,
@@ -1175,6 +1184,17 @@ export async function sendBroadcast(broadcastId, { force = false, maxRecipients 
     throw new Error(`Broadcast is in '${broadcast.status}' state — only draft / sending can be sent`)
   }
 
+  // C120 GATES-3 (e) — a DRIP is STARTED here, never blasted: the operator's
+  // Send (and the composer's send-now drip, created as a draft since GATES-3)
+  // runs the entry checks below, flips draft→sending, and returns; the
+  // run-whatsapp-broadcasts cron paces it inside its window from there
+  // (sendDripChunk). One already 'sending' belongs to the cron: return without
+  // touching it (this used to blast the whole remaining audience at once).
+  const isDrip = broadcast.delivery_mode === 'drip'
+  if (isDrip && broadcast.status === 'sending') {
+    return { status: 'sending', mode: 'drip', sent: 0, failed: 0, total: 0, skipped: 'already-sending' }
+  }
+
   // WA-MULTI.1 — resolve the location's WA config ONCE upfront and
   // reuse for every recipient. Cheaper than re-resolving per-send;
   // also ensures the whole broadcast goes from one consistent
@@ -1216,15 +1236,21 @@ export async function sendBroadcast(broadcastId, { force = false, maxRecipients 
   // claim below de-dupes that path), so fall through. Clearing paused_at here
   // re-opens a breaker-aborted broadcast the operator re-sends (WA-QUALITY.3).
   if (broadcast.status !== 'sending') {
-    const { data: claimed } = await db.from('whatsapp_broadcasts')
+    const { data: claimed, error: claimErr } = await db.from('whatsapp_broadcasts')
       .update({ status: 'sending', paused_at: null })
       .eq('id', broadcastId)
       .eq('status', broadcast.status)
       .select('id')
+    // GATES-3 (e) — a failed flip is not "someone else claimed it": throw
+    // (the row is still in its entry state, like every refusal above).
+    if (claimErr) throw new Error(`Could not start the broadcast: ${claimErr.message}`)
     if (!claimed?.length) {
       return { sent: 0, failed: 0, total: 0, skipped: 'already-sending' }
     }
   }
+
+  // GATES-3 (e) — the drip is started; the cron sends it.
+  if (isDrip) return { status: 'sending', mode: 'drip', sent: 0, failed: 0, total: 0 }
 
   // Get audience — AUDIT P1-2: route the blast through the paginated
   // fetchAllWhatsAppAudience (the drip path already does) instead of awaiting
@@ -1918,9 +1944,12 @@ export function buildTemplateComponents(template, contact, variableMapping, head
  * what was actually sent instead of a "[template]" placeholder).
  */
 export function resolveTemplateVariableValues(template, contact, variableMapping, opts = {}) {
-  const bodyComp = (template.components || []).find(c => c.type === 'BODY')
-  const varMatches = bodyComp?.text?.match(/\{\{\d+\}\}/g) || []
-  return varMatches.map((_, i) => resolveContactField((variableMapping || {})[String(i + 1)], contact, opts))
+  // TPLVARORDER.1 — one value per DISTINCT {{n}}, ascending, each resolved
+  // from mapping key n. Meta fills a positional template by number (parameter
+  // i is the i-th distinct slot), so mapping occurrence i to key i+1 sent the
+  // wrong value once a template repeated a variable or put {{2}} before {{1}}.
+  // Same slot order the inbox send uses (shared/wa-template-send.js).
+  return bodyVariableSlots(template).map((n) => resolveContactField((variableMapping || {})[String(n)], contact, opts))
 }
 
 /**
@@ -1944,14 +1973,21 @@ function resolveContactField(fieldName, contact, opts = {}) {
   return contact[fieldName] || fieldName // literal fallback, as today
 }
 
-/** Positionally substitute {{n}} placeholders with resolved values. */
+/**
+ * Substitute {{n}} placeholders BY NUMBER. `values` holds one value per
+ * distinct slot in ascending order (what resolveTemplateVariableValues
+ * returns and what Meta receives); every occurrence of {{n}} gets slot n's
+ * value, a missing one renders blank. TPLVARORDER.1 — fills through the same
+ * renderSentTemplateBody the inbox send route logs with, so the two cannot drift.
+ */
 export function substituteTemplateBody(bodyText, values) {
   if (!bodyText) return null
-  let i = 0
-  return bodyText.replace(/\{\{\d+\}\}/g, () => {
-    const v = values?.[i++]
-    return v == null ? '' : String(v)
-  })
+  const tpl = { components: [{ type: 'BODY', text: bodyText }] }
+  const parameters = bodyVariableSlots(tpl).map((_, i) => ({
+    type: 'text',
+    text: values?.[i] == null ? '' : String(values[i]),
+  }))
+  return renderSentTemplateBody(tpl, [{ type: 'body', parameters }])
 }
 
 /**

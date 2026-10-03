@@ -18,7 +18,7 @@ import Link from 'next/link'
 import { ChevronRight, ChevronLeft, FileText, AlertCircle, Info, Search } from 'lucide-react'
 import {
   renderTemplate, profileVariables, unresolvedPlaceholders, unresolvedPlaceholdersUnion,
-  eligibleTemplatesFor, extractPlaceholders, customVariablesFrom, LOCATION_VAR_KEYS,
+  eligibleTemplatesFor, recipientsForTemplate, extractPlaceholders, customVariablesFrom, LOCATION_VAR_KEYS,
 } from '@/lib/contracts'
 import ContractBody from '@/components/ContractBody'
 
@@ -38,7 +38,11 @@ const LOCATION_VAR_PREVIEW = {
   company_name: '[company name]',
 }
 
-export default function ContractIssueWizard({ issuerName, fromContractId }) {
+// C140 CONTRACTRECIPIENT.1 (folds C138 d) — `locationOrgs` is the issuer's own
+// { location_id: organization_id } (from the host page). The recipient list
+// narrows to the chosen template's org and the template list to orgs every
+// selected person belongs to, the rule POST /api/contracts enforces.
+export default function ContractIssueWizard({ issuerName, fromContractId, locationOrgs = {} }) {
   const router = useRouter()
   const [step, setStep] = useState(1)
   const [staff, setStaff] = useState([])
@@ -155,23 +159,25 @@ export default function ContractIssueWizard({ issuerName, fromContractId }) {
   // old `profileId`-derived `recipient` produced.
   const recipient = recipients[0] || null
 
-  const filteredStaff = useMemo(() => {
-    const q = recipientFilter.trim().toLowerCase()
-    if (!q) return staff
-    return staff.filter(s => {
-      const hay = `${s.full_name || ''} ${s.email || ''} ${s.employment_type || ''}`.toLowerCase()
-      return hay.includes(q)
-    })
-  }, [staff, recipientFilter])
-
   const template = useMemo(
     () => templates.find(t => t.id === templateId) || null,
     [templates, templateId],
   )
   const eligibleTemplates = useMemo(
-    () => eligibleTemplatesFor(recipients, templates),
-    [templates, recipients],
+    () => eligibleTemplatesFor(recipients, templates, locationOrgs),
+    [templates, recipients, locationOrgs],
   )
+
+  const filteredStaff = useMemo(() => {
+    // C140 — only the chosen template's org's people.
+    const inOrg = recipientsForTemplate(staff, template, locationOrgs)
+    const q = recipientFilter.trim().toLowerCase()
+    if (!q) return inOrg
+    return inOrg.filter(s => {
+      const hay = `${s.full_name || ''} ${s.email || ''} ${s.employment_type || ''}`.toLowerCase()
+      return hay.includes(q)
+    })
+  }, [staff, recipientFilter, template, locationOrgs])
 
   // CONTRACTS-BULK.1 — if a recipient is added/removed such that the
   // currently-chosen template is no longer eligible for every
@@ -527,7 +533,11 @@ export default function ContractIssueWizard({ issuerName, fromContractId }) {
             </div>
             <div className="border border-un1t-border rounded-md max-h-64 overflow-y-auto divide-y divide-un1t-border">
               {filteredStaff.length === 0 ? (
-                <p className="text-xs text-un1t-muted italic p-3">No staff match &quot;{recipientFilter}&quot;.</p>
+                <p className="text-xs text-un1t-muted italic p-3">
+                  {recipientFilter.trim()
+                    ? <>No staff match &quot;{recipientFilter}&quot;.</>
+                    : 'No staff in this template\'s organisation.'}
+                </p>
               ) : (
                 filteredStaff.map(s => (
                   <label
@@ -568,8 +578,8 @@ export default function ContractIssueWizard({ issuerName, fromContractId }) {
             </select>
             {profileIds.length > 0 && eligibleTemplates.length === 0 && (
               <p className="text-xs text-amber-700 mt-1">
-                No active templates match every selected recipient&apos;s employment type. Create one
-                first, or narrow the selection.
+                No active templates match every selected recipient&apos;s employment type and
+                organisation. Create one first, or narrow the selection.
               </p>
             )}
           </div>

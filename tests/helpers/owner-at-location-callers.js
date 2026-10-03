@@ -16,7 +16,10 @@ export const person = (roles, active) => ({
   profileRole: 'staff',
   role: roles[active],
   activeLocation: { id: active },
-  locations: Object.keys(roles).map((id) => ({ id })),
+  // Each location carries the caller's role there, as getCurrentUser's do, so
+  // a permission resolved at a location (hasPermissionForLocation) takes the
+  // role's code default (GATES-3: the WhatsApp template routes ask `whatsapp`).
+  locations: Object.keys(roles).map((id) => ({ id, role: roles[id] })),
   rolesByLocation: { ...roles },
 })
 

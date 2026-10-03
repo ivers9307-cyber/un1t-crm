@@ -6,8 +6,9 @@
 // tests/shift-column-grants-guard.test.js, which keeps its inline copy).
 
 import {
-  extractChainLinks, firstArgText, firstStringArg, maskComments, resolveSelectArg,
+  extractChainLinks, firstArgText, firstStringArg, resolveSelectArg,
 } from '../../scripts/check-select-columns.mjs'
+import { codeOf } from './js-code.js'
 
 /**
  * FK column → target table, for every single-column FK (learned by the
@@ -134,7 +135,11 @@ export function columnUses(text, tables, fkAliases = {}) {
   const reads = []
   const writes = []
   const unresolved = []
-  const src = maskComments(text)
+  // Comments, JSX text and regex literals blanked by the TypeScript parser
+  // (GUARDSTRIP.1): check-select-columns' maskComments, used here before, read
+  // the '/*' in `<p>files/*.csv</p>` or `/\/\*/` as a comment and hid every
+  // call up to the next '*/'. Idempotent, so a caller may pass codeOf output.
+  const src = codeOf(text)
   // A select string is a literal or (as check:select-columns reads it since
   // SELCOLS2.1) a same-file const, a template of consts, `+` or `[…].join()`.
   const readSelect = (args) => firstStringArg(args) ?? resolveSelectArg(args, src)

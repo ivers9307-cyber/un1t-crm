@@ -53,7 +53,10 @@ vi.mock('next/navigation', () => ({
 vi.mock('@/components/EventActions', () => ({
   default: ({ canDelete }) => <span data-testid="event-actions" data-can-delete={String(canDelete)} />,
 }))
-vi.mock('@/components/BookingStatusToggle', () => ({ default: () => null }))
+// C134 — the stub prints the canEdit it was handed.
+vi.mock('@/components/BookingStatusToggle', () => ({
+  default: ({ canEdit }) => <span data-testid="status-toggle" data-can-edit={String(canEdit)} />,
+}))
 vi.mock('next/link', () => ({
   default: ({ href, children }) => <a href={typeof href === 'string' ? href : ''}>{children}</a>,
 }))
@@ -170,6 +173,31 @@ describe('/bookings/event-types/[id] page', () => {
       const html = renderToStaticMarkup(await BookingTypeDetailPage(props()))
       expect(html).toContain('data-can-delete="true"')
       expect(html).toContain('href="/bookings/event-types/evt-1/edit"')
+    })
+  })
+
+  // C134 WEBBOOKINGWRITES.1 — the status pill writes through
+  // POST /api/bookings/[id]/status, which asks the WEB `bookings` key at the
+  // booking's studio; this page opens on membership, so it passes canEdit.
+  describe('C134 — the status pill is editable only with web bookings at the studio', () => {
+    const booking = { id: 'b1', status: 'confirmed', booking_date: '2999-01-01', start_time: '09:00', end_time: '10:00', customer_name: 'A Customer' }
+    const at = (permissions) => ({
+      ...user,
+      locations: [{ id: 'loc-mine', role: 'staff' }],
+      rolesByLocation: { 'loc-mine': 'staff' },
+      assignmentsByLocation: { 'loc-mine': { role: 'staff', permissions } },
+    })
+    it('with it: editable', async () => {
+      getCurrentUser.mockResolvedValue(at({ bookings: true }))
+      createServerClient.mockReturnValue(mockDb({ event: myEvent, bookings: [booking] }))
+      const html = renderToStaticMarkup(await BookingTypeDetailPage(props()))
+      expect(html).toContain('data-can-edit="true"')
+    })
+    it('switched off for them there: read-only', async () => {
+      getCurrentUser.mockResolvedValue(at({ bookings: false }))
+      createServerClient.mockReturnValue(mockDb({ event: myEvent, bookings: [booking] }))
+      const html = renderToStaticMarkup(await BookingTypeDetailPage(props()))
+      expect(html).toContain('data-can-edit="false"')
     })
   })
 })

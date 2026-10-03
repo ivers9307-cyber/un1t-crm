@@ -37,6 +37,14 @@ vi.mock('@/lib/agent/notify', () => ({
   agentConfirmationTemplates: vi.fn(async () => ({})),
 }))
 
+// MANUALSCHEDULE.1 — only the HTTP send is mocked; the manual-booking tests
+// assert what the route hands it.
+vi.mock('@/lib/meta-capi', async (importOriginal) => ({
+  ...(await importOriginal()),
+  sendWebsiteConversion: vi.fn(async () => ({ sent: true })),
+}))
+import { sendWebsiteConversion } from '@/lib/meta-capi'
+
 import { createBooking, cancelBooking, glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, purchaseGlofoxMembership, fetchUserCreditsResult } from '@/lib/glofox'
 import { readGlofoxConfig } from '@/lib/connection-registry'
 import { failureExplanation } from '@/lib/approvals/agent-request-why'
@@ -58,13 +66,25 @@ const ROW = {
 // final outcome update. Every update patch is recorded for assertions.
 // MIA-BOARD.2 — parameterised so the past-start guard tests can vary
 // details.starts_at without mutating the shared ROW.
-function makeDbFor(row, updates) {
+// TRIALPURCHASE.2 — `lists` answers an AWAITED list read per table (the trial
+// grant's reads of other cards and of the queue row); empty by default.
+function makeDbFor(row, updates, lists = {}) {
   return {
     from(table) {
       let patch = null
       const b = {
         select: () => b,
         eq: () => b,
+        neq: () => b,
+        contains: () => b,
+        // TRIALCLAIM.1 — the trial claim's insert (answered by single()
+        // below, so it lands) and its release's .is() filter.
+        insert: () => b,
+        is: () => b,
+        limit: () => b,
+        then(resolve, reject) {
+          return Promise.resolve({ data: lists[table] || [], error: null }).then(resolve, reject)
+        },
         update(p) { patch = p; updates.push({ table, patch: p }); return b },
         async maybeSingle() {
           if (patch) return { data: { id: row.id }, error: null } // claim succeeded
@@ -554,6 +574,54 @@ describe('PATCH class_booking approval — the trial grant is judged (TRIALGRANT
     expect(failureExplanation({ status: 'failed', details: final.details })).toMatch(/PURCHASE_NOT_ALLOWED/)
   })
 
+  // TRIALPURCHASE.2 (d) — the same member's trial was already bought on
+  // ANOTHER card (a second class, approved later): no second trial, no
+  // booking, no customer message; the card fails with its own reason.
+  it('another card already granted this member a trial → failed TRIAL_ALREADY_GRANTED, nothing bought or booked', async () => {
+    const otherCard = { id: 'r0', details: { trial_grant: { ok: true, at: '2026-08-23T09:00:00.000Z', glofox_member_id: 'gm1', invoice_id: 'inv-0' } } }
+    db = makeDbFor(grantRow(), updates, { agent_membership_requests: [otherCard] })
+
+    const json = await (await approve()).json()
+
+    expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
+    expect(createBooking).not.toHaveBeenCalled()
+    expect(sendAgentThreadMessage).not.toHaveBeenCalled()
+    expect(json.executed).toMatchObject({ ok: false, message_code: 'TRIAL_ALREADY_GRANTED', prior_request_id: 'r0' })
+    const final = updates.at(-1).patch
+    expect(final.status).toBe('failed')
+    expect(final.details.trial_grant).toMatchObject({ ok: false, code: 'TRIAL_ALREADY_GRANTED', glofox_member_id: 'gm1' })
+    expect(updates.find((u) => u.table === 'class_booking_requests').patch).toEqual({ status: 'failed', last_error: 'TRIAL_ALREADY_GRANTED' })
+    expect(failureExplanation({ status: 'failed', details: final.details })).toMatch(/earlier approval/i)
+  })
+
+  // The /start mint created this member's account WITH its trial (a
+  // glofox_push_events 'created' row): a later needs_credit_grant card buys
+  // no second one.
+  it('a member minted with a trial → failed TRIAL_ALREADY_GRANTED, nothing bought or booked', async () => {
+    const mint = { id: 'gpe-1', location_id: 'L1', glofox_member_id: 'gm1', status: 'created' }
+    db = makeDbFor(grantRow(), updates, { glofox_push_events: [mint] })
+
+    const json = await (await approve()).json()
+
+    expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
+    expect(createBooking).not.toHaveBeenCalled()
+    expect(sendAgentThreadMessage).not.toHaveBeenCalled()
+    expect(json.executed).toMatchObject({ ok: false, message_code: 'TRIAL_ALREADY_GRANTED', prior_push_event_id: 'gpe-1' })
+    expect(updates.at(-1).patch.status).toBe('failed')
+  })
+
+  // TRIALPURCHASE.2 (a) — a card with no funnel stamp buys the funnel's trial
+  // from the queue row that points at it, not the location default.
+  it('a card with no trial stamp buys the funnel trial named on its queue row', async () => {
+    createBooking.mockResolvedValueOnce({ ok: true, status: 200, body: { success: true, Booking: { _id: 'gfb-8' } } })
+    db = makeDbFor(grantRow(), updates, { class_booking_requests: [{ trial_membership_id: 'tm-funnel', trial_plan_code: 'tp-funnel' }] })
+
+    await approve()
+
+    expect(purchaseGlofoxMembership).toHaveBeenCalledWith(expect.anything(), 'gm1', 'tm-funnel', 'tp-funnel')
+    expect(createBooking).toHaveBeenCalledTimes(1)
+  })
+
   it('purchase granted → books; the grant is recorded on details and on executed', async () => {
     purchaseGlofoxMembership.mockResolvedValueOnce({ ok: true, http_status: 200, purchase_status: 'SUCCESS', invoice_id: 'inv-1' })
     createBooking.mockResolvedValueOnce({ ok: true, status: 200, body: { success: true, Booking: { _id: 'gfb-7' } } })
@@ -677,6 +745,15 @@ describe('PATCH class_booking approval — the trial grant is written ahead (TRI
         const b = {
           select: () => b,
           eq: (col, val) => { eqs.push([col, val]); return b },
+          // TRIALPURCHASE.2 — the helper's list reads (other cards, the queue
+          // row) find nothing here.
+          neq: () => b,
+          contains: () => b,
+          // TRIALCLAIM.1 — the claim insert lands (single() answers an id).
+          insert: () => b,
+          is: () => b,
+          limit: () => b,
+          then(resolve, reject) { return Promise.resolve({ data: [], error: null }).then(resolve, reject) },
           update(p) { patch = p; log.push({ table, patch: p, eqs }); return b },
           async maybeSingle() {
             if (patch) {
@@ -708,7 +785,7 @@ describe('PATCH class_booking approval — the trial grant is written ahead (TRI
 
     const recs = records(updates)
     expect(recs.map((u) => u.patch.details.trial_grant)).toEqual([
-      { stage: 'purchasing', at: expect.any(String) },
+      { stage: 'purchasing', at: expect.any(String), glofox_member_id: 'gm1' },
       expect.objectContaining({ ok: true, invoice_id: 'inv-1' }),
     ])
     const claim = updates.find((u) => u.table === 'agent_membership_requests' && u.patch.status === 'approved')
@@ -761,7 +838,7 @@ describe('PATCH class_booking approval — the trial grant is written ahead (TRI
     // Only the marker landed; the trial is queued behind a membership they
     // hold, so no credits show yet.
     const held = lastDetails(updates, (g) => g?.stage === 'purchasing')
-    expect(held.trial_grant).toEqual({ stage: 'purchasing', at: expect.any(String) })
+    expect(held.trial_grant).toEqual({ stage: 'purchasing', at: expect.any(String), glofox_member_id: 'gm1' })
     const stuck = { ...ROW, status: 'approved', details: { ...held, execution: { ...held.execution, started_at: STALE } } }
     const retryLog = []
     db = makeGrantDb(stuck, retryLog)
@@ -771,5 +848,157 @@ describe('PATCH class_booking approval — the trial grant is written ahead (TRI
     expect(createBooking).toHaveBeenCalledTimes(1)
     expect(retryLog.at(-1).patch.status).toBe('failed')
     expect(retryLog.at(-1).patch.details.result).toMatchObject({ ok: false, message_code: 'TRIAL_GRANT_UNVERIFIED' })
+  })
+})
+
+// MANUALFUNNEL.1 — a class off a studio's hand-written timetable (no Glofox
+// there). Approving records that staff booked it by hand; nothing executes.
+describe('PATCH class_booking approval — manual timetable booking', () => {
+  const manualRow = (over = {}) => ({
+    ...ROW,
+    conversation_id: null,
+    channel: null,
+    details: {
+      event_id: 'manual-20261005-0615-strength', class_name: 'Strength', class_time: 'Mon 5 Oct, 06:15',
+      starts_at: new Date(Date.now() + 86_400_000).toISOString(),
+      mode: 'draft', source: 'start_funnel', reason: 'manual_booking',
+      ...over,
+    },
+  })
+
+  it('approve → actioned with a manual result; no Glofox read or write, no trial, no message; queue row booked', async () => {
+    db = makeDbFor(manualRow(), updates)
+    const res = await approve()
+    const json = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(json.executed).toEqual({ ok: true, manual: true })
+    const final = updates.at(-1)
+    expect(final.table).toBe('agent_membership_requests')
+    expect(final.patch.status).toBe('actioned')
+    expect(final.patch.details.result).toEqual({ ok: true, manual: true })
+    expect(updates.find((u) => u.table === 'class_booking_requests').patch).toEqual({ status: 'booked', last_error: null })
+    expect(glofoxCredentialsForLocation).not.toHaveBeenCalled()
+    expect(createBooking).not.toHaveBeenCalled()
+    expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
+    expect(sendAgentThreadMessage).not.toHaveBeenCalled()
+  })
+
+  it('is judged on the event id, not the reason: a card filed by the retry path records the same way', async () => {
+    db = makeDbFor(manualRow({ reason: 'processing_error' }), updates)
+    const json = await (await approve()).json()
+    expect(json.executed).toEqual({ ok: true, manual: true })
+    expect(updates.at(-1).patch.status).toBe('actioned')
+    expect(createBooking).not.toHaveBeenCalled()
+  })
+
+  it('recording it after the class has run is still actioned, never expired', async () => {
+    db = makeDbFor(manualRow({ starts_at: new Date(Date.now() - 3_600_000).toISOString() }), updates)
+    await approve()
+    expect(updates.at(-1).patch.status).toBe('actioned')
+    expect(updates.find((u) => u.table === 'class_booking_requests').patch).toEqual({ status: 'booked', last_error: null })
+  })
+})
+
+// MANUALSCHEDULE.1 — approving a manual-timetable booking tells Meta the
+// booking was made (a website Schedule event), as the Glofox path does when
+// its booking lands.
+describe('PATCH class_booking approval — manual booking sends Schedule to Meta', () => {
+  const manualRow = (over = {}, rowOver = {}) => ({
+    ...ROW,
+    conversation_id: null,
+    channel: null,
+    ...rowOver,
+    details: {
+      event_id: 'manual-20261005-0615-strength', class_name: 'Strength', class_time: 'Mon 5 Oct, 06:15',
+      starts_at: new Date(Date.now() + 86_400_000).toISOString(),
+      mode: 'draft', source: 'start_funnel', reason: 'manual_booking',
+      ...over,
+    },
+  })
+
+  // A double that answers each table: the card, the contact's email + phone,
+  // the studio's landing row, and the queue row the sync returns.
+  function manualDb(row, log, { contact = { email: 'sam@example.com', phone: '0871234567' }, page = { public_path: 'hatch-street', blocks: [{ type: 'class_funnel', event_source_url: 'https://www.un1tdublin.com/start/hatch-street' }] }, queueRows = [{ id: 'cbr-9' }] } = {}) {
+    return {
+      from(table) {
+        let patch = null
+        const b = {
+          select: () => b, eq: () => b, neq: () => b, contains: () => b, limit: () => b,
+          update(p) { patch = p; log.push({ table, patch: p }); return b },
+          then(resolve, reject) {
+            const data = table === 'class_booking_requests' ? queueRows : []
+            return Promise.resolve({ data, error: null }).then(resolve, reject)
+          },
+          async maybeSingle() {
+            if (patch) return { data: { id: row.id }, error: null }
+            if (table === 'contacts') return { data: contact, error: null }
+            if (table === 'landing_page_settings') return { data: page, error: null }
+            return { data: row, error: null }
+          },
+          async single() {
+            return { data: { id: row.id, status: patch?.status, decided_at: null, decision_note: null, details: patch?.details }, error: null }
+          },
+        }
+        return b
+      },
+    }
+  }
+
+  it('approve → one Schedule with the contact, the class, the funnel URL and a per-booking event id', async () => {
+    db = manualDb(manualRow(), updates)
+    const res = await approve()
+    expect(res.status).toBe(200)
+    expect(sendWebsiteConversion).toHaveBeenCalledTimes(1)
+    expect(sendWebsiteConversion.mock.calls[0][1]).toEqual({
+      locationId: 'L1', eventName: 'Schedule',
+      email: 'sam@example.com', phone: '0871234567',
+      eventSourceUrl: 'https://www.un1tdublin.com/start/hatch-street',
+      eventId: 'classbooking-cbr-9',
+      contentName: 'Strength',
+    })
+    expect(updates.at(-1).patch.status).toBe('actioned')
+  })
+
+  it('no queue row came back → still sent, keyed on the card instead', async () => {
+    db = manualDb(manualRow(), updates, { queueRows: [] })
+    await approve()
+    expect(sendWebsiteConversion.mock.calls[0][1].eventId).toBe('classbooking-approval-r1')
+  })
+
+  it('a contact with neither email nor phone sends nothing, and the approval still lands', async () => {
+    db = manualDb(manualRow(), updates, { contact: { email: null, phone: null } })
+    const res = await approve()
+    expect(res.status).toBe(200)
+    expect(sendWebsiteConversion).not.toHaveBeenCalled()
+    expect(updates.at(-1).patch.status).toBe('actioned')
+  })
+
+  it('a send that throws never fails the decision', async () => {
+    sendWebsiteConversion.mockRejectedValueOnce(new Error('meta down'))
+    db = manualDb(manualRow(), updates)
+    const res = await approve()
+    expect(res.status).toBe(200)
+    expect((await res.json()).executed).toEqual({ ok: true, manual: true })
+    expect(updates.at(-1).patch.status).toBe('actioned')
+  })
+
+  it('declining a manual card sends nothing', async () => {
+    db = manualDb(manualRow(), updates)
+    const res = await PATCH(
+      new Request('http://localhost/api/agent/membership-requests/r1', {
+        method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ status: 'declined' }),
+      }),
+      { params: Promise.resolve({ id: 'r1' }) },
+    )
+    expect(res.status).toBe(200)
+    expect(sendWebsiteConversion).not.toHaveBeenCalled()
+  })
+
+  it('a Glofox booking approval sends nothing from here (its Schedule is the processor\'s)', async () => {
+    createBooking.mockResolvedValueOnce({ ok: true, status: 200, body: { _id: 'gfb-9' } })
+    db = makeDbFor(ROW, updates)
+    await approve()
+    expect(sendWebsiteConversion).not.toHaveBeenCalled()
   })
 })

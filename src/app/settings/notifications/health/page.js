@@ -33,8 +33,9 @@
 // PUSH-TEST.1 and the route's header. Same delivery path as real
 // notifications, so it's still a true end-to-end test.
 //
-// Auth: master or owner. /settings/notifications already gates on
-// hasPermission(user, 'settings') — same gate inherited here.
+// Auth (C18 ORGROLE.1, Richard 1 Oct 2026): an organisation admin of the
+// active org (master or an org_admin grant), the rule of GET /api/staff-devices
+// and the nudge this page drives. It used to be `settings` at the active studio.
 //
 // TENANTSCOPE.1 — the fleet is the ACTIVE organisation's studios and staff
 // (loadFleetScope; a master keeps the estate). The target version still
@@ -49,7 +50,7 @@
 
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { isActiveOrgAdmin } from '@/lib/org-admin'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, ShieldCheck, Smartphone, Mail } from 'lucide-react'
@@ -79,7 +80,7 @@ function fmtRelative(iso) {
 export default async function PushHealthPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  if (!hasPermission(user, 'settings')) redirect('/')
+  if (!isActiveOrgAdmin(user)) redirect('/')
 
   const db = createServerClient()
 

@@ -10,9 +10,12 @@
 // computed against a single "now").
 //
 // SECURITY: this is a service-role read — RLS does nothing here. The
-// getCurrentUser + hasPermission(user,'settings') gate below is the ONLY
-// thing keeping the fleet (names, emails, devices) away from ordinary
-// staff. Same gate as /settings/notifications/health, which this backs.
+// getCurrentUser + organisation-admin gate below is the ONLY thing keeping
+// the fleet (names, emails, devices) away from ordinary staff. C18
+// ORGROLE.1 (Richard, 1 Oct 2026): the fleet is the organisation's, so an
+// admin of the active organisation (master or an org_admin grant), not
+// `settings` at the active studio. Same gate as
+// /settings/notifications/health, which this backs.
 // TENANTSCOPE.1 — and the fleet is the ACTIVE organisation's people
 // (loadFleetScope; a master keeps the estate), never another tenant's.
 // The target version still comes from every active person's devices: one
@@ -25,7 +28,7 @@
 
 import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { isActiveOrgAdmin } from '@/lib/org-admin'
 import { createServerClient } from '@/lib/supabase'
 import { deriveTargetVersion, deviceVerdict, currentDevice, isStale } from '@/lib/staff-devices'
 import { loadFleetScope, inFleetScope } from '@/lib/staff-fleet-scope'
@@ -41,7 +44,7 @@ const PAGE_MAX = 1000
 export async function GET() {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!hasPermission(user, 'settings')) {
+  if (!isActiveOrgAdmin(user)) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 

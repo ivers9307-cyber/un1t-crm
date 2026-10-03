@@ -13,8 +13,7 @@ import { Plus, FileText, Mail, MessageCircle } from 'lucide-react'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
-import { hasRoleAtLocation } from '@/lib/role-at-location'
-import { MANAGER_ROLES } from '@/lib/schemas'
+import { canManageWaTemplatesAt } from '@/lib/wa-template-access'
 import WhatsappTemplatesList from '@/components/WhatsappTemplatesList'
 
 export const dynamic = 'force-dynamic'
@@ -39,7 +38,8 @@ export default async function TemplatesListPage(props) {
   // WATPLROLE.1 — creating, resubmitting and deleting a WhatsApp template
   // decide MANAGER_ROLES at the location (the routes' rule); this list is the
   // active studio's, so that is where it is judged. Nobody else is offered them.
-  const canManageWaTemplates = canWhatsapp && hasRoleAtLocation(user, locationId, MANAGER_ROLES)
+  // GATES-3 (b) — the routes' one rule: MANAGER_ROLES AND `whatsapp` there.
+  const canManageWaTemplates = canWhatsapp && canManageWaTemplatesAt(user, locationId)
 
   const [emailRes] = await Promise.all([
     canEmail && (channel === 'all' || channel === 'email')

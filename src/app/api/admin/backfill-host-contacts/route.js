@@ -4,19 +4,20 @@
 // events' confirmed registrations. The confirm-time hooks (race-payments free
 // + webhook paths, the operator manual-add) keep the list fresh going forward;
 // this fills it for registrations confirmed before the feature shipped.
-// Master/owner only. Idempotent — the underlying upsert ignores duplicates,
+// Organisation admins only (C18 ORGROLE.1). Idempotent — the underlying upsert ignores duplicates,
 // so re-running is always safe. Returns per-event counts.
 //
-// TENANTSCOPE.1 — an owner back-fills THEIR organisation's hosts only: the
-// ACTIVE studio's organisation, where the gate below judged them owner
-// (whether an owner elsewhere in the organisation also qualifies is C18
-// ORGROLE.1's question). A master keeps the estate-wide one-shot this was
-// written as. The response names every event it touched, so an unscoped
+// TENANTSCOPE.1 — an org admin back-fills THEIR organisation's hosts only:
+// the ACTIVE organisation, which the gate below requires them to administer
+// (C18 ORGROLE.1, Richard 1 Oct 2026: an org_admin grant; a studio owner is
+// not an organisation admin). A master keeps the estate-wide one-shot this
+// was written as. The response names every event it touched, so an unscoped
 // run also handed one tenant's owner another tenant's event names.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
+import { activeOrganizationId, isOrgAdmin } from '@/lib/org-admin'
 import { addEventAttendeesToHostList } from '@/lib/host-contact-list'
 
 export const runtime = 'nodejs'
@@ -30,7 +31,7 @@ export async function POST() {
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   }
-  if (!['master', 'owner'].includes(user.role)) {
+  if (!isOrgAdmin(user, activeOrganizationId(user))) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
@@ -39,7 +40,7 @@ export async function POST() {
   // null = every host (a master's run); otherwise the active organisation's.
   let hostIds = null
   if (!user.isMaster) {
-    const organizationId = user.activeOrganization?.id || null
+    const organizationId = activeOrganizationId(user)
     if (!organizationId) {
       return NextResponse.json({ success: false, error: 'No active organisation' }, { status: 400 })
     }

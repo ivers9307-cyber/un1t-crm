@@ -9,7 +9,7 @@ import { View, Text, ActivityIndicator } from 'react-native'
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter, useFocusEffect } from 'expo-router'
 import { useAuth } from '../../lib/auth-context'
-import { fetchStudioDashboard, swapRowTitle } from '../../lib/dashboard-api'
+import { fetchStudioDashboard, swapRowTitle, studioContactNumbers, studioWhatsappUnread } from '../../lib/dashboard-api'
 // COVERLOOP.2 — pending rows open the approval itself (the same place the
 // manager pushes go), and a swap row says when the shift is.
 import { teamApprovalRoute } from '../../lib/notification-nav'
@@ -71,10 +71,8 @@ export default function StudioDashboard({ refreshKey }) {
     )
   }
 
-  const {
-    newLeadsThisWeek, funnel, totalContacts,
-    totalUnreadWhatsapp,
-  } = data
+  // null = the unread read failed: a dash, not 0 (dashboard-api.js decides).
+  const unread = studioWhatsappUnread(data.totalUnreadWhatsapp)
   // STUDIODASH.1 — null = the list couldn't be read (see dashboard-api.js).
   // Say so; an empty card would claim nothing is pending.
   const timeOffFailed = data.pendingTimeOff == null
@@ -87,7 +85,10 @@ export default function StudioDashboard({ refreshKey }) {
   // else is rolled into the contact total. FUNNEL.1 taxonomy — the old
   // keys (active_trial / active_member / lapsed) no longer exist.
   const headlineStatuses = ['new_lead', 'first_class', 'trial_done', 'converted']
-  const headline = headlineStatuses.map(k => ({ key: k, count: funnel[k] || 0 }))
+  // CONTACTREADSCOPE.1a — from /api/dashboard/studio-contacts; null → dashes
+  // + a retry line, never zeros (dashboard-api.js decides).
+  const contactNumbers = studioContactNumbers(data.contactCounts, headlineStatuses)
+  const headline = contactNumbers.headline
 
   return (
     <View>
@@ -98,15 +99,15 @@ export default function StudioDashboard({ refreshKey }) {
       <KpiRow>
         <KpiCard
           label="New leads this week"
-          value={newLeadsThisWeek}
-          sublabel={newLeadsThisWeek === 1 ? 'contact added' : 'contacts added'}
+          value={contactNumbers.newLeads}
+          sublabel={contactNumbers.newLeadsSublabel}
         />
         <KpiCard
           label="WhatsApp unread"
-          value={totalUnreadWhatsapp}
-          sublabel="across the inbox"
-          accent={totalUnreadWhatsapp > 0 ? 'text-un1t-text' : 'text-un1t-muted'}
-          onPress={totalUnreadWhatsapp > 0 ? () => router.push('/(tabs)/whatsapp') : undefined}
+          value={unread.value}
+          sublabel={unread.sublabel}
+          accent={unread.accent}
+          onPress={unread.pressable ? () => router.push('/(tabs)/whatsapp') : undefined}
         />
       </KpiRow>
 
@@ -123,7 +124,9 @@ export default function StudioDashboard({ refreshKey }) {
         </KpiRow>
       </View>
       <Text className="text-xs text-un1t-muted mt-1 px-1">
-        {totalContacts} total contacts at {activeLocation?.name || 'this location'}
+        {contactNumbers.failed
+          ? "Couldn't load the contact numbers. Pull down to retry."
+          : `${contactNumbers.total} total contacts at ${activeLocation?.name || 'this location'}`}
       </Text>
 
       {/* Approvals queue — time off */}

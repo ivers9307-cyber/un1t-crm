@@ -32,12 +32,15 @@ vi.mock('@/lib/auth', () => ({
   },
   // Inbox channel gate (INBOX-PERM.1): 403 when the channel permission is
   // explicitly off, null otherwise (real resolver pinned in auth.test.js).
-  requireInboxPermission: (user, _channel) => {
+  requireWhatsAppInboxAnywhere: (user) => {
     if (user?.permissions?.whatsapp === false) {
       return new Response(JSON.stringify({ success: false, error: 'forbidden' }), { status: 403 })
     }
     return null
   },
+  // INBOXLOC.1 — the decision at the conversation's studio; its real
+  // behaviour is pinned in src/lib/auth.test.js and inbox-location.test.js.
+  requireWhatsAppInboxAt: () => null,
 }))
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
@@ -61,7 +64,7 @@ vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.f
 import { POST } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
-import { sendTextMessage, sendTemplateMessage, isWindowOpen, headerComponentFor } from '@/lib/whatsapp'
+import { sendTextMessage, sendTemplateMessage, sendMediaMessage, isWindowOpen, headerComponentFor } from '@/lib/whatsapp'
 import { logError } from '@/lib/log'
 import { SEND_BLOCK_TEXT } from '@shared/wa-template-send'
 
@@ -250,7 +253,7 @@ describe('template sends (WATPLSEND.1)', () => {
     const [, name, language, components, opts] = sendTemplateMessage.mock.calls[0]
     expect(name).toBe('book_first_visit')
     expect(language).toBe('en')
-    expect(opts).toEqual({ locationId: LOC_ID })
+    expect(opts).toEqual({ locationId: LOC_ID, replyInConversation: CONV_ID })
     expect(components).toEqual([
       bodyParams('ALPHA'),
       { type: 'button', sub_type: 'flow', index: '0', parameters: [{ type: 'action', action: { flow_token: `${CONTACT_ID}.${LOC_ID}` } }] },
@@ -499,5 +502,24 @@ describe('no WhatsApp number at the conversation location (WACONFIGFALLBACK.1)',
     expect(res.status).toBe(409)
     expect(await res.json()).toEqual({ success: false, error: 'No WhatsApp number is connected at this location.' })
     expect(insertSpy).not.toHaveBeenCalled()
+  })
+})
+
+// WAREPLYNUMBER.1 (C86) — every send from the thread replies from the number
+// the customer wrote to: the sender resolves it from the conversation
+// (replyInConversation), falling back to the studio default.
+describe('the reply goes from the thread number (C86)', () => {
+  it('a text, a media message and a template all name the conversation', async () => {
+    sendMediaMessage.mockResolvedValue({ messageId: 'wamid.MEDIA' })
+    createServerClient.mockReturnValue(makeDb())
+    expect((await POST(postReq({ type: 'text', text: 'hello' }), props)).status).toBe(200)
+    createServerClient.mockReturnValue(makeDb())
+    expect((await POST(postReq({ type: 'image', media_url: 'https://example.test/a.jpg', caption: 'c' }), props)).status).toBe(200)
+    createServerClient.mockReturnValue(makeDb({ template: { data: TPL_PLAIN, error: null } }))
+    expect((await POST(templateReq(TPL_PLAIN, [bodyParams('ALPHA')]), props)).status).toBe(200)
+    const want = { locationId: LOC_ID, replyInConversation: CONV_ID }
+    expect(sendTextMessage.mock.calls[0][2]).toEqual(want)
+    expect(sendMediaMessage.mock.calls[0][4]).toEqual(want)
+    expect(sendTemplateMessage.mock.calls[0][4]).toEqual(want)
   })
 })

@@ -4,6 +4,7 @@ import {
   guardLiveLocation,
   guardLiveSession,
   roleAtLocation,
+  canMutateLiveAt,
   LIVE_MUTATION_ROLES,
   LIVE_PERMISSION,
 } from './live-access'
@@ -198,5 +199,34 @@ describe('guardLiveSession — mutation role resolves at the session location', 
 
   it('is a no-op when no roles are passed (read callers keep their shape)', () => {
     expect(guardLiveSession(multiLocationUser(), { location_id: LOC })).toBeNull()
+  })
+})
+
+// C116 GATES-2 — the /live page's End / Pair / test-mode / Claim buttons ask
+// the mutation routes' question: a LIVE_MUTATION_ROLES role at the location
+// (masters pass). The guards use the same predicate, so they cannot drift.
+describe('canMutateLiveAt', () => {
+  it.each(LIVE_MUTATION_ROLES)('%s at the location: yes', (role) => {
+    expect(canMutateLiveAt(userAt(LOC, role), LOC)).toBe(true)
+  })
+  it.each(['staff', 'reception'])('%s at the location: no', (role) => {
+    expect(canMutateLiveAt(userAt(LOC, role), LOC)).toBe(false)
+  })
+  it('judged at the location, not the active one: head coach elsewhere, staff here', () => {
+    const u = userAt(LOC, 'staff', { extra: [{ id: OTHER, role: 'head_coach', studio: true }] })
+    expect(canMutateLiveAt(u, LOC)).toBe(false)
+    expect(canMutateLiveAt(u, OTHER)).toBe(true)
+  })
+  it('a master: yes; nobody: no', () => {
+    expect(canMutateLiveAt(userAt(LOC, 'staff', { isMaster: true }), LOC)).toBe(true)
+    expect(canMutateLiveAt(null, LOC)).toBe(false)
+  })
+})
+
+describe('canMutateLiveAt agrees with the mutation guards', () => {
+  it.each(['owner', 'manager', 'head_coach', 'staff', 'reception'])('%s', (role) => {
+    const u = userAt(LOC, role) // member, studio_management on
+    expect(guardLiveLocation(u, LOC, { roles: LIVE_MUTATION_ROLES }) === null).toBe(canMutateLiveAt(u, LOC))
+    expect(guardLiveSession(u, { location_id: LOC }, { roles: LIVE_MUTATION_ROLES }) === null).toBe(canMutateLiveAt(u, LOC))
   })
 })

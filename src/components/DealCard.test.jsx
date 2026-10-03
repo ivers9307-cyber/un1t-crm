@@ -58,3 +58,14 @@ describe('DealCard — Cold is hidden on a manual board', () => {
     expect(actions).toContain('sequence')
   })
 })
+
+describe('DealCard — Task follows Contacts at the board\'s studio (C146 TASKSNEEDCONTACTS.1)', () => {
+  it('drops Task when canTask is false, on either board', () => {
+    expect(actionsOf(render({ canTask: false }))).toEqual(['message', 'sequence', 'cold'])
+    expect(actionsOf(render({ manual: true, canTask: false }))).toEqual(['message', 'sequence'])
+  })
+
+  it('keeps Task when canTask is true', () => {
+    expect(actionsOf(render({ canTask: true }))).toContain('task')
+  })
+})

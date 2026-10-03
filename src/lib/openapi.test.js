@@ -113,6 +113,15 @@ describe('getOpenApiSpec', () => {
 
   // SEQGAPS.1 — the manual exit is irreversible and 409s on the second
   // call; both facts belong in the spec, not just in the route header.
+  // REVIEWNITS.1 (D5): contact create refuses a location outside the key's
+  // organisation, or one a cookie caller is not a member of (403); update
+  // answers 404 for an unknown id and 503 when the contact could not be read.
+  it('documents the contact create 403 and the update 404/503', () => {
+    expect(spec.paths['/api/contacts'].post.responses).toHaveProperty('403')
+    const put = spec.paths['/api/contacts/{id}'].put.responses
+    for (const code of ['401', '404', '503']) expect(put, code).toHaveProperty(code)
+  })
+
   it('documents the manual enrolment exit, including its 409', () => {
     const p = '/api/sequences/{id}/enrollments/{enrollmentId}/exit'
     expect(spec.paths, `missing ${p}`).toHaveProperty(p)
@@ -308,6 +317,20 @@ describe('getOpenApiSpec', () => {
       expect(op.responses).toHaveProperty('403')
     }
     expect(spec.paths['/api/whatsapp/templates/{id}/resubmit'].post.responses).toHaveProperty('403')
+  })
+
+  it('documents the two web task writes (C148 ACTWRITEGATEWEB.1), cookie only', () => {
+    const create = spec.paths['/api/activities/tasks']?.post
+    const status = spec.paths['/api/activities/tasks/{id}/status']?.post
+    for (const [name, op, codes] of [
+      ['create', create, ['200', '400', '401', '403', '404', '500']],
+      ['status', status, ['200', '400', '401', '403', '404', '500']],
+    ]) {
+      expect(op, `${name} is not registered`).toBeTruthy()
+      expect(op.tags).toContain('Tasks')
+      expect(op.security).toEqual([{ CookieAuth: [] }])
+      for (const c of codes) expect(op.responses, `${name} must document its ${c}`).toHaveProperty(c)
+    }
   })
 
   it('caches the spec object across calls (same reference)', async () => {
@@ -578,5 +601,10 @@ describe('getOpenApiSpec', () => {
     const create = spec.paths['/api/sequences']?.post
     if (create) expect(create.responses['400'].description).toMatch(/location_id required/)
   })
-})
 
+  it('documents the car Documents signed upload (CARDOCUPLOAD.1)', () => {
+    expect(spec.paths['/api/cars/{id}/documents/sign']).toHaveProperty('post')
+    expect(spec.paths['/api/cars/{id}/documents/finalise']).toHaveProperty('post')
+    expect(spec.paths['/api/cars/{id}/documents/finalise'].post.responses).toHaveProperty('409')
+  })
+})

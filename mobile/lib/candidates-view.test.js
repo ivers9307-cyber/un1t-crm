@@ -6,6 +6,7 @@ import {
   NO_CANDIDATES, candidatesStarted, candidatesSettled, candidatesFor, candidatePickerView, CANDIDATE_TONE_CLASS,
 } from './candidates-view'
 import { CANDIDATES_RANKING_NOTE, CANDIDATES_UNRANKED_NOTE } from 'shared/candidates'
+import { staffLoadOutcome, STAFF_LOAD_FAILED } from './schedule-manage'
 
 const LOC = 'loc1'
 const block = { id: 'b1', shift_assignments: [{ profile_id: 'on', status: 'scheduled' }] }
@@ -92,7 +93,7 @@ describe('candidatePickerView', () => {
 
   it('while ranking: the studio A–Z (never the coach already on it), labelled', () => {
     const view = candidatePickerView({ answer: null, pending: true, staff, block, locationId: LOC })
-    expect(view.rows.map((r) => r.id)).toEqual(['amy', 'zed'])
+    expect(view.rows.map((r) => r.id).sort()).toEqual(['amy', 'zed'])
     expect(view.rows[0]).toEqual({ id: 'amy', full_name: 'Amy', role: 'manager', reason: null, tone: null })
     expect(view.note).toBe(CANDIDATES_RANKING_NOTE)
     expect(view.waiting).toBe(false)
@@ -114,5 +115,32 @@ describe('candidatePickerView', () => {
 
   it('tones map to readable -700 text on the light theme', () => {
     expect(CANDIDATE_TONE_CLASS).toEqual({ good: 'text-emerald-700', warn: 'text-amber-700', bad: 'text-red-700', muted: 'text-un1t-subtle' })
+  })
+})
+
+// D4 UINITS.1 — Today's "Ask a coach to cover" sheet: a failed staff read
+// (staffLoadOutcome → null pool + reason) must not cover a ranked list, and
+// must show when nothing else can.
+
+describe('the swap picker when the staff read fails (D4 UINITS.1)', () => {
+  const answerOf = (res) => candidatesSettled(candidatesStarted('b1', 1), { blockId: 'b1', requestId: 1, res }).answer
+  const failedStaff = staffLoadOutcome({ res: { success: false, error: 'HTTP 500' }, current: null })
+
+  it('a ranked answer arrived: the ranking shows, no error', () => {
+    const view = candidatePickerView({ answer: answerOf(RANKED), staff: failedStaff.staff, block, locationId: LOC, error: failedStaff.error })
+    expect(view.error).toBeNull()
+    expect(view.ranked).toBe(true)
+    expect(view.rows.map((r) => r.id).sort()).toEqual(['amy', 'zed'])
+  })
+
+  it('the ranking is still coming: a spinner, not the error', () => {
+    const view = candidatePickerView({ answer: null, pending: true, staff: failedStaff.staff, block, locationId: LOC, error: failedStaff.error })
+    expect(view.waiting).toBe(true)
+  })
+
+  it('no ranking either: the error, with the server\'s reason', () => {
+    const view = candidatePickerView({ answer: answerOf({ success: false }), staff: failedStaff.staff, block, locationId: LOC, error: failedStaff.error })
+    expect(view.error).toBe(`${STAFF_LOAD_FAILED} (HTTP 500)`)
+    expect(view.rows).toEqual([])
   })
 })

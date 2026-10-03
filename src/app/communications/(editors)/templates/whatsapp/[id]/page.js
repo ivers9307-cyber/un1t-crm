@@ -1,9 +1,9 @@
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { redirect, notFound } from 'next/navigation'
-import { hasRoleAtLocation } from '@/lib/role-at-location'
-import { MANAGER_ROLES } from '@/lib/schemas'
+import { canManageWaTemplatesAt } from '@/lib/wa-template-access'
 import WATemplateEditor from '@/components/WATemplateEditor'
+import { canUseCommunicationsForRecord } from '@/lib/communications-access'
 
 export const dynamic = 'force-dynamic'
 
@@ -22,6 +22,9 @@ export default async function EditWATemplatePage(props) {
   // 404 (not 403) so foreign ids aren't enumerable. Mirrors email/campaigns/[id].
   // Runs BEFORE the events query below so a foreign id fetches nothing else.
   if (!template || assertLocationAccess(user, template.location_id)) notFound()
+  // GATES-2 — the layout's area rule, judged at the TEMPLATE's studio (the
+  // layout now only checks the area at SOME studio).
+  if (!canUseCommunicationsForRecord(user, template.location_id)) redirect('/communications/templates')
 
   const { data: events } = await db.from('whatsapp_template_events')
     .select('kind, from_value, to_value, reason, created_at')
@@ -40,7 +43,8 @@ export default async function EditWATemplatePage(props) {
       events={events || []}
       // WATPLROLE.1 — resubmit, edit and delete decide MANAGER_ROLES at the
       // TEMPLATE's location (not the active studio's role); so does the editor.
-      canManage={hasRoleAtLocation(user, template.location_id, MANAGER_ROLES)}
+      // GATES-3 (b) — with `whatsapp` there too (canManageWaTemplatesAt).
+      canManage={canManageWaTemplatesAt(user, template.location_id)}
     />
   )
 }

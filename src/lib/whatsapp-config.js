@@ -28,6 +28,7 @@
 
 import { createServerClient } from './supabase'
 import { WhatsAppNumberMissingError } from './whatsapp-number-missing'
+import { logWarn } from './log'
 
 const META_API_VERSION = 'v21.0'
 export const META_API_URL = `https://graph.facebook.com/${META_API_VERSION}`
@@ -108,6 +109,87 @@ export async function getWhatsAppConfig(locationId) {
 }
 
 /**
+ * WAREPLYNUMBER.1 (C86) — the number a REPLY into a conversation goes from:
+ * the number the customer wrote to. The inbound webhook stamps it on
+ * whatsapp_conversations.whatsapp_number_id (mig 696). Used when it is still
+ * an active row AT this location; otherwise the location default
+ * (getWhatsAppConfig, which refuses a number-less studio as ever). A single-
+ * number studio resolves the same number either way.
+ *
+ * A TEMPLATE goes from the thread number only when it shares the default's
+ * WABA: templates are synced per location from the default number's account,
+ * and Meta only sends a number's own-WABA templates.
+ *
+ * Any failed read here (including the column not existing yet, before 696 is
+ * applied) falls back to the default, logged: losing a reply is worse than
+ * sending it from the studio's default number, which is what every reply did
+ * before this.
+ *
+ * @param {string|null|undefined} locationId  the conversation's location
+ * @param {string|null|undefined} conversationId
+ * @param {{ template?: boolean }} [opts]
+ */
+export async function getConversationReplyConfig(locationId, conversationId, { template = false } = {}) {
+  const thread = await getConversationNumberConfig(locationId, conversationId)
+  if (!thread) return getWhatsAppConfig(locationId)
+  if (!template) return thread
+  return pickReplyConfig(thread, await getWhatsAppConfig(locationId), { template: true })
+}
+
+/**
+ * WAREPLYNUMBER.1 — the number recorded on the thread
+ * (whatsapp_conversations.whatsapp_number_id) while it is an ACTIVE row AT
+ * this location, as a config; null when none is recorded, it is inactive,
+ * gone or another studio's. Never throws: a failed read (the column missing
+ * before mig 696 included) is null, logged, so the caller replies from the
+ * default as it did before.
+ *
+ * @param {string|null|undefined} locationId
+ * @param {string|null|undefined} conversationId
+ * @returns {Promise<object|null>}
+ */
+export async function getConversationNumberConfig(locationId, conversationId) {
+  if (!conversationId || !locationId) return null
+  try {
+    const db = createServerClient()
+    const { data: conv, error: convErr } = await db.from('whatsapp_conversations')
+      .select('whatsapp_number_id')
+      .eq('id', conversationId)
+      .eq('location_id', locationId)
+      .maybeSingle()
+    if (convErr) throw convErr
+    if (!conv?.whatsapp_number_id) return null
+    const { data: num, error: numErr } = await db.from('whatsapp_numbers')
+      .select('*')
+      .eq('id', conv.whatsapp_number_id)
+      .eq('location_id', locationId)
+      .eq('is_active', true)
+      .maybeSingle()
+    if (numErr) throw numErr
+    return num ? rowToConfig(num) : null
+  } catch (e) {
+    logWarn('wa-config', 'reply number unreadable; replying from the default number', { conversationId, err: e?.message || String(e) })
+    return null
+  }
+}
+
+/**
+ * WAREPLYNUMBER.1 — pure: the config a reply goes from, given the thread's
+ * own number (or null) and the location default. Free text/media/interactive
+ * → the thread number. A TEMPLATE → the thread number only when it shares the
+ * default's WABA (templates are synced per location from the default's
+ * account, and Meta sends only a number's own-WABA templates); else the
+ * default.
+ */
+export function pickReplyConfig(threadConfig, defaultConfig, { template = false } = {}) {
+  if (!threadConfig) return defaultConfig
+  if (!template) return threadConfig
+  if (defaultConfig && threadConfig.id === defaultConfig.id) return defaultConfig
+  if (threadConfig.businessAccountId && threadConfig.businessAccountId === defaultConfig?.businessAccountId) return threadConfig
+  return defaultConfig
+}
+
+/**
  * Resolve by a SPECIFIC whatsapp_numbers.id — used when a caller
  * wants to send from a non-default number (e.g. multi-number
  * location and the operator picked one in the inbox).
@@ -172,7 +254,9 @@ export async function resolveWhatsAppNumberByPhoneNumberId(phoneNumberId) {
  */
 export function classifyInboundOwner(owningNumber) {
   if (owningNumber?.source === 'db' && owningNumber.locationId) {
-    return { action: 'location', locationId: owningNumber.locationId }
+    // WAREPLYNUMBER.1 — the receiving row, stamped on the conversation so a
+    // reply goes from the number the customer wrote to.
+    return { action: 'location', locationId: owningNumber.locationId, numberId: owningNumber.id || null }
   }
   return { action: 'drop' }
 }

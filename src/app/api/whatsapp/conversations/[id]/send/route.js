@@ -2,7 +2,7 @@ import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { sendTextMessage, sendTemplateMessage, sendMediaMessage, isWindowOpen, headerComponentFor } from '@/lib/whatsapp'
-import { getCurrentUser, assertLocationAccessOr404, requireInboxPermission } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404, requireWhatsAppInboxAnywhere, requireWhatsAppInboxAt } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { url } from '@/lib/schemas'
 import { manualTakeoverPatch } from '@/lib/agent/core'
@@ -51,8 +51,9 @@ export async function POST(request, props) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
-  // Channel permission — service-role client, so this IS the gate (INBOX-PERM.1).
-  const perm = requireInboxPermission(user, 'wa')
+  // INBOXLOC.1 — coarse pre-check (WhatsApp at any studio); the decision is
+  // requireWhatsAppInboxAt at the conversation's studio, once the row is read.
+  const perm = requireWhatsAppInboxAnywhere(user)
   if (perm) return perm
 
   const validation = await validateBody(request, SendMessageSchema)
@@ -73,6 +74,9 @@ export async function POST(request, props) {
   // Caller must belong to the conversation's location.
   const guard = assertLocationAccessOr404(user, conversation.location_id)
   if (guard) return guard
+  // INBOXLOC.1 — WhatsApp (web or mobile) judged at THIS studio, not the active one.
+  const permHere = requireWhatsAppInboxAt(user, conversation.location_id)
+  if (permHere) return permHere
 
   const contact = conversation.contacts
   const phone = contact?.wa_phone || conversation.wa_phone
@@ -86,6 +90,9 @@ export async function POST(request, props) {
   let templateName = null
   let templateVariables = null
   let send // () => Promise<{ messageId }>: the ONE call that reaches Meta
+  // WAREPLYNUMBER.1 (C86) — reply from the number the customer wrote to
+  // (recorded on the thread by the webhook), else the studio default.
+  const replyOpts = { locationId: conversation.location_id, replyInConversation: conversation.id }
 
   if (messageType === 'template') {
     // Template message — works outside the 24h window.
@@ -167,20 +174,22 @@ export async function POST(request, props) {
     messageBody = renderSentTemplateBody(tplRow, components) || `[Template: ${templateName}]`
     // Route from THIS location's WhatsApp number (whatsapp_numbers); a
     // location with none is refused (WACONFIGFALLBACK.1), never another's.
-    send = () => sendTemplateMessage(phone, templateName, language, components, { locationId: conversation.location_id })
+    // WAREPLYNUMBER.1 — the number this thread was written to when it
+    // shares the default's WABA, else the default (getConversationReplyConfig).
+    send = () => sendTemplateMessage(phone, templateName, language, components, replyOpts)
   } else if (['image', 'video', 'document', 'audio'].includes(messageType)) {
     // Media message — 24h window only
     if (!isWindowOpen(conversation)) {
       return NextResponse.json({ success: false, error: WINDOW_EXPIRED, window_expired: true }, { status: 400 })
     }
     messageBody = body.caption || `[${messageType}]`
-    send = () => sendMediaMessage(phone, messageType, body.media_url, body.caption, { locationId: conversation.location_id })
+    send = () => sendMediaMessage(phone, messageType, body.media_url, body.caption, replyOpts)
   } else {
     // Text message — 24h window only
     if (!isWindowOpen(conversation)) {
       return NextResponse.json({ success: false, error: WINDOW_EXPIRED, window_expired: true }, { status: 400 })
     }
-    send = () => sendTextMessage(phone, messageBody, { locationId: conversation.location_id })
+    send = () => sendTextMessage(phone, messageBody, replyOpts)
   }
 
   let result

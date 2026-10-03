@@ -119,7 +119,8 @@ export async function sendAgentThreadMessage(db, { channel, conversationId, text
       const { sendTextMessage, isWindowOpen } = await import('@/lib/whatsapp')
       if (!isWindowOpen(conversation)) return { sent: false, reason: 'window_closed' }
 
-      const result = await sendTextMessage(phone, text, { locationId: conversation.location_id })
+      // WAREPLYNUMBER.1 (C86) — from the number this thread was written to.
+      const result = await sendTextMessage(phone, text, { locationId: conversation.location_id, replyInConversation: conversation.id })
       // source='agent' (allowed since mig 259) so the agent sees this
       // confirmation in its own history and it counts toward the caps.
       const { error: insertError } = await db.from('whatsapp_messages').insert({

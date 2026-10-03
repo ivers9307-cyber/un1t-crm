@@ -14,6 +14,7 @@ import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
 import { hasBookableMembership, personRowsForContact, corroborated, reusableSibling, electWriteAccount, chunkIds } from '@/lib/person-accounts'
 import { maybeSendBookingWhatsappConfirm, CLASS_CONFIRM_TEMPLATE } from '@/lib/automations/booking-whatsapp-confirm'
 import { sendCtwaConversion, sendWebsiteConversion } from '@/lib/meta-capi'
+import { isManualEventId } from '@/lib/manual-timetable'
 import { logWarn } from '@/lib/log'
 
 const labelFmt = new Intl.DateTimeFormat('en-IE', { timeZone: 'Europe/Dublin', weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false })
@@ -198,6 +199,11 @@ export async function processClassBookingRequest(db, request) {
   // customer's class.
   if (creds.readError) throw new Error(creds.readError)
   if (missingGlofoxCredentialsForLocation(creds).length) {
+    // MANUALFUNNEL.1 — a class off a hand-written timetable (a studio with no
+    // Glofox: Hatch Street books on its own platform) is never booked from
+    // here. It goes straight to staff, who create the account and the booking
+    // by hand and then approve the card to record it.
+    if (isManualEventId(request.glofox_event_id)) return routeToReview(db, request, 'manual_booking')
     await setStatus(db, request.id, { status: 'failed', last_error: 'glofox_not_configured' })
     return { outcome: 'failed', detail: 'glofox_not_configured' }
   }
@@ -503,7 +509,9 @@ export async function processClassBookingRequest(db, request) {
       // first approval (priorGrant null, not a retry) would buy blind when
       // the balance reads empty or unreadable, stacking a second trial.
       return toReview('needs_credit_grant', res.trial_outcome_unknown === true
-        ? { trialGrant: { ok: false, code: 'TRIAL_GRANT_FAILED', outcome_unknown: true } }
+        // TRIALPURCHASE.2 (d): named by member, so another card for the same
+        // person finds the doubt (grantTrialBeforeBooking) and buys nothing.
+        ? { trialGrant: { ok: false, code: 'TRIAL_GRANT_FAILED', outcome_unknown: true, glofox_member_id: res.glofox_member_id } }
         : {})
     }
     if (!res.glofox_member_id || (res.status !== 'created' && res.status !== 'linked')) {

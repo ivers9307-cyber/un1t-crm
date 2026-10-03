@@ -270,8 +270,10 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
         if (scheduled) {
           setResult({ channel, mode: 'scheduled', when: scheduledIso, drip, id: broadcast.id, detail: `/communications/sent/whatsapp/${broadcast.id}` })
         } else if (drip) {
-          // Create set status='sending'; the run-whatsapp-broadcasts cron drives
-          // it during the window. No /send call for a drip.
+          // C120 GATES-3 (e) — the create made a draft; /send runs the entry
+          // checks and starts the drip (draft→sending), sending nothing itself.
+          // The run-whatsapp-broadcasts cron drives it during the window.
+          await postJson(`/api/whatsapp/broadcasts/${broadcast.id}/send`, {})
           setResult({ channel, mode: 'drip', id: broadcast.id, detail: `/communications/sent/whatsapp/${broadcast.id}`,
             dailyCap: Number(dailyCap) || 500, windowStart, windowEnd })
         } else {

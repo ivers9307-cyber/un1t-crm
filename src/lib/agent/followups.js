@@ -26,7 +26,9 @@ import { formatHistoryForClaude, parseAgentResponse, phoneMatchesAllowlist, isSk
 import { getLocationBranding } from '@/lib/location-branding'
 import { anthropicMessages } from '@/lib/anthropic'
 import { dublinTodayStr } from '@/lib/dublin-time'
-import { logError } from '@/lib/log'
+import { logError, logWarn } from '@/lib/log'
+import { countCheckinSends, readCheckinSendsToday, checkinDayStartIso } from './checkin-counts'
+import { isWhatsAppStaffOutbound } from '@/lib/whatsapp-staff-sources'
 
 // MIA-SONNET5 — kept in step with the inbound reply path so a nudge sounds
 // like the same person who answers the thread.
@@ -53,6 +55,17 @@ export const CHECKIN_DEFAULTS = {
 // FUNNEL.1 — the four lead columns of the derived funnel.
 const CHECKIN_STAGES = new Set(['new_lead', 'first_class', 'second_class', 'trial_done'])
 const CHECKIN_MAX_AGE_H = 24
+
+/**
+ * CHECKINRISKS.1 (C106 a) — how long a check-in CLAIM holds before a later
+ * tick may re-open it. The runner stamps first_class_checkin_at BEFORE the
+ * send (the claim) and records the outcome after it (an agent_checkin
+ * activity, plus the thread row). A claim older than this with neither record
+ * is a send that died between claim and outcome, so it is re-opened and the
+ * contact becomes a candidate again. The claim-to-outcome gap is seconds; the
+ * cron runs every 15 min; the check-in window is 24 h.
+ */
+export const CHECKIN_CLAIM_LEASE_MS = 30 * 60_000
 
 /**
  * AGENT-CHECKIN.1 — is this contact due their (once-ever) post-first-
@@ -209,19 +222,15 @@ const NUDGE_INSTRUCTION =
 
 // CHECKINSTALL.1 — who a person is, in a WhatsApp thread. Operator send
 // routes stamp sent_by (the session's profile id); the studio phone's
-// WhatsApp Business app arrives as app_echo / history_sync; 'operator' is
-// allowed by the source CHECK (mig 259). Automations — booking confirmations,
-// sequence steps, broadcasts, end-of-trial, consent prompts — insert the column
-// default source='api' with NO sent_by, so they are not a person owning the
-// thread. Same line the live reply path draws (auto-reply.js whatsappAdapter
-// .isHumanOutbound, AGENT-REARM.2), plus the phone-app sources. Pure.
+// WhatsApp Business app arrives as app_echo (written since C106 d). Automations
+// — booking confirmations, sequence steps, broadcasts, end-of-trial, consent
+// prompts — insert the column default source='api' with NO sent_by, so they
+// are not a person owning the thread. The rule lives in whatsapp-staff-sources
+// .js (C106 d), shared with the live reply path (auto-reply.js whatsappAdapter
+// .isHumanOutbound) and the handoff SLA. Pure.
 // Used by the check-in runner since CHECKINSTALL.2 (Richard's call D1); the
 // follow-up ladder still reads humanSpokeAfterInbound.
-const PERSON_SOURCES = new Set(['operator', 'app_echo', 'history_sync'])
-export function isStaffOutbound(m) {
-  if (!m || m.direction !== 'outbound' || m.source === 'agent') return false
-  return PERSON_SOURCES.has(m.source) || m.sent_by != null
-}
+export const isStaffOutbound = isWhatsAppStaffOutbound
 
 /**
  * Oldest-first rows → what happened since the customer's last message. Pure.
@@ -582,14 +591,10 @@ function checkinInstruction(className) {
   )
 }
 
-/**
- * How many of today's check-in activity rows were actual SENDS. Pure.
- * stampCheckin writes the `via` label into the note ('in-window' / 'template'
- * for a send, 'skipped — …' for a non-send).
- */
-export function countCheckinSends(rows) {
-  return (rows || []).filter((r) => !/skipped/i.test(String(r?.note || ''))).length
-}
+// How many of today's check-in activity rows were actual SENDS. Moved to
+// ./checkin-counts.js (CHECKINRISKS.1) so the settings card counts with the
+// same rule; re-exported for existing callers.
+export { countCheckinSends }
 
 // MIA-REVIEW.3 — the daily cap must measure SENDS. contacts
 // .first_class_checkin_at is the once-ever marker and stampCheckin stamps it
@@ -598,37 +603,160 @@ export function countCheckinSends(rows) {
 // genuine check-ins early. The activities row carries the via label, so count
 // those; if that read fails we fall back to the old stamp count (over-counting
 // under-sends, which is the safe direction).
+//
+// Returns null when BOTH reads fail: the cap is unknown, and the caller skips
+// the location this tick. Reading that as 0 let the tick send past the cap.
 async function checkinsSentToday(db, locationId, nowMs) {
-  const d = new Date(nowMs)
-  const dayStart = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())).toISOString()
-  const { data, error } = await db.from('activities')
-    .select('note')
-    .eq('location_id', locationId)
-    .eq('type', 'agent_checkin')
-    .gte('created_at', dayStart)
-    .limit(500)
-  if (!error && Array.isArray(data)) return countCheckinSends(data)
-  const { count } = await db.from('contacts')
+  const sends = await readCheckinSendsToday(db, locationId, nowMs)
+  if (sends.count !== null) return sends.count
+  const { count, error } = await db.from('contacts')
     .select('id', { count: 'exact', head: true })
     .eq('location_id', locationId)
-    .gte('first_class_checkin_at', dayStart)
-  return count || 0
+    .gte('first_class_checkin_at', checkinDayStartIso(nowMs))
+  if (error || typeof count !== 'number') {
+    logError('agent-followups', 'checkin daily cap unreadable; location skipped this tick', {
+      locationId, err: error || { message: 'no count returned' }, activitiesErr: sends.error,
+    })
+    return null
+  }
+  return count
 }
 
-async function stampCheckin(db, contact, locationId, className, via) {
-  await db.from('contacts')
-    .update({ first_class_checkin_at: new Date().toISOString() })
-    .eq('id', contact.id)
-  try {
-    await db.from('activities').insert({
-      contact_id: contact.id,
-      location_id: locationId,
-      type: 'agent_checkin',
-      kind: 'event',
-      subject: 'Mia checked in after their first class',
-      note: `${className}${via ? ` (${via})` : ''}`,
+// CHECKINRISKS.1 (C106 a) — the once-ever stamp is now a CLAIM taken before
+// the send, not a bookkeeping write after it. It used to be a bare update
+// after the send whose { error } nobody read: a failed stamp left the contact
+// a candidate and every tick re-sent the check-in for up to 24 h. Per
+// CLAUDE.md ("Removing a silent failure", case c) a claim taken BEFORE the
+// send needs a lease something later re-opens, or a process kill turns a
+// possible duplicate into a silent loss: reopenStaleCheckinClaims below.
+//
+// Conditional on the column still being NULL, so two overlapping ticks cannot
+// both send. A claim that cannot be written sends nothing this tick: sending
+// without a working stamp is what re-sent every 15 minutes.
+async function claimCheckin(db, contactId) {
+  const at = new Date().toISOString()
+  const { data, error } = await db.from('contacts')
+    .update({ first_class_checkin_at: at })
+    .eq('id', contactId)
+    .is('first_class_checkin_at', null)
+    .select('id')
+  if (error) {
+    logError('agent-followups', 'checkin claim failed; nothing sent this tick', { contactId, err: error })
+    return { ok: false, reason: 'claim_failed' }
+  }
+  if (!data?.length) return { ok: false, reason: 'claim_taken' }
+  return { ok: true, at }
+}
+
+// Undo OUR claim after a send Meta did not accept, so the next tick retries.
+// Pinned to the claim's own value, so it can never clear a later one. If this
+// write fails, the lease re-opens the claim instead.
+async function releaseCheckinClaim(db, contactId, claimAt) {
+  const { error } = await db.from('contacts')
+    .update({ first_class_checkin_at: null })
+    .eq('id', contactId)
+    .eq('first_class_checkin_at', claimAt)
+  if (error) logError('agent-followups', 'checkin claim release failed; the lease re-opens it', { contactId, err: error })
+}
+
+// The outcome record: one agent_checkin activity per stamped outcome (a send
+// or a deliberate skip). The stale-claim lease reads it as "this claim
+// finished", and the daily cap and the settings card count sends from it
+// (checkin-counts.js). A lost one is logged: if the thread row is lost too,
+// the lease re-opens the contact and the check-in can go twice (a duplicate
+// beats a lost message).
+async function recordCheckinOutcome(db, contact, locationId, className, via) {
+  const { error } = await db.from('activities').insert({
+    contact_id: contact.id,
+    location_id: locationId,
+    type: 'agent_checkin',
+    kind: 'event',
+    subject: 'Mia checked in after their first class',
+    note: `${className}${via ? ` (${via})` : ''}`,
+  })
+  if (error) logError('agent-followups', 'checkin outcome record failed', { contactId: contact.id, via, err: error })
+}
+
+// A deliberate skip ('already discussed', 'no marketing consent') is stamped
+// once-ever too, through the same conditional claim; no message is involved.
+async function stampCheckinSkip(db, contact, locationId, className, via) {
+  const claim = await claimCheckin(db, contact.id)
+  if (!claim.ok) return claim
+  await recordCheckinOutcome(db, contact, locationId, className, via)
+  return claim
+}
+
+/**
+ * CHECKINRISKS.1 — the lease. Re-open (set back to NULL) every claim at this
+ * location older than CHECKIN_CLAIM_LEASE_MS, still inside the check-in
+ * window, with no recorded outcome: no agent_checkin activity for the contact
+ * and no agent-sourced outbound message since the claim. That is a send that
+ * died between claim and outcome. The candidate query then picks the contact
+ * up again. A failed read of either record re-opens nothing this tick: unknown
+ * is not "unsent", and a wrong re-open is a duplicate message.
+ *
+ * Accepted edge: a live Mia reply after the claim also counts as an outcome,
+ * so a check-in lost to a process kill while Mia is already talking to the
+ * customer is not retried.
+ */
+async function reopenStaleCheckinClaims(db, locationId, nowMs, bump) {
+  const sinceIso = new Date(nowMs - CHECKIN_MAX_AGE_H * H_MS).toISOString()
+  const staleBeforeMs = nowMs - CHECKIN_CLAIM_LEASE_MS
+  // Stale is filtered in SQL, oldest first: filtering a .limit(50) of every
+  // claim in the window let 50 fresh claims crowd a stale one out for good.
+  const { data: claimed, error } = await db.from('contacts')
+    .select('id, first_class_checkin_at')
+    .eq('location_id', locationId)
+    .in('pipeline_stage_slug', [...CHECKIN_STAGES])
+    .gte('last_attended_at', sinceIso)
+    .gte('first_class_checkin_at', sinceIso)
+    .lte('first_class_checkin_at', new Date(staleBeforeMs).toISOString())
+    .order('first_class_checkin_at', { ascending: true })
+    .limit(50)
+  if (error) {
+    logError('agent-followups', 'checkin stale-claim scan failed', { locationId, err: error })
+    bump('claim_reopen_read_failed')
+    return
+  }
+  const stale = (claimed || []).filter((c) => {
+    const t = Date.parse(c.first_class_checkin_at)
+    return Number.isFinite(t) && t <= staleBeforeMs
+  })
+  if (!stale.length) return
+  const ids = stale.map((c) => c.id)
+  const earliest = new Date(Math.min(...stale.map((c) => Date.parse(c.first_class_checkin_at)))).toISOString()
+  const [acts, msgs] = await Promise.all([
+    db.from('activities').select('contact_id').eq('type', 'agent_checkin').in('contact_id', ids).limit(500),
+    db.from('whatsapp_messages').select('contact_id, created_at')
+      .in('contact_id', ids).eq('direction', 'outbound').eq('source', 'agent')
+      .gte('created_at', earliest).limit(500),
+  ])
+  if (acts.error || msgs.error) {
+    logError('agent-followups', 'checkin outcome read failed; no claim re-opened this tick', {
+      locationId, err: acts.error || msgs.error,
     })
-  } catch { /* timeline entry is best-effort */ }
+    bump('claim_reopen_read_failed')
+    return
+  }
+  const recorded = new Set((acts.data || []).map((a) => a.contact_id))
+  for (const c of stale) {
+    if (recorded.has(c.id)) continue
+    const claimMs = Date.parse(c.first_class_checkin_at)
+    if ((msgs.data || []).some((m) => m.contact_id === c.id && Date.parse(m.created_at) >= claimMs)) continue
+    const { data: reopened, error: reopenErr } = await db.from('contacts')
+      .update({ first_class_checkin_at: null })
+      .eq('id', c.id)
+      .eq('first_class_checkin_at', c.first_class_checkin_at)
+      .select('id')
+    if (reopenErr) {
+      logError('agent-followups', 'checkin stale-claim re-open failed', { contactId: c.id, err: reopenErr })
+      continue
+    }
+    if (reopened?.length) {
+      logWarn('agent-followups', 'checkin claim re-opened: no outcome recorded within the lease', { contactId: c.id, claimedAt: c.first_class_checkin_at })
+      bump('claim_reopened')
+    }
+  }
 }
 
 /**
@@ -659,6 +787,10 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
     // MIA-REVIEW.3 — operator quiet_hours apply to check-ins too.
     const window = proactiveWindowOpen(nowMs, settings)
     if (!window.open) { bump(window.reason); continue }
+
+    // CHECKINRISKS.1 — the claim's lease: re-open claims that never recorded
+    // an outcome, before the candidate query, so they are picked up this tick.
+    await reopenStaleCheckinClaims(db, location.id, nowMs, bump)
 
     const sinceIso = new Date(nowMs - CHECKIN_MAX_AGE_H * H_MS).toISOString()
     // wa_status, NOT opted_out — same phantom-column trap as the followups
@@ -699,7 +831,9 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
             !phoneMatchesAllowlist(to, settings?.test_phones)) {
           bump('test_allowlist'); results.skipped++; continue
         }
-        if ((await checkinsSentToday(db, location.id, nowMs)) >= checkin.daily_cap) {
+        const sentToday = await checkinsSentToday(db, location.id, nowMs)
+        if (sentToday === null) { bump('cap_read_failed'); break } // unknown is not 0: skip this location
+        if (sentToday >= checkin.daily_cap) {
           console.warn('[radar-agent] checkin-skip', JSON.stringify({ locationId: location.id, reason: 'daily_cap' }))
           bump('daily_cap')
           break
@@ -761,18 +895,27 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
             bump('compose_error'); results.skipped++; continue
           }
           if (isSkipResponse(composed.text)) {
-            await stampCheckin(db, contact, location.id, className, 'skipped — already discussed')
-            bump('already_discussed'); results.skipped++; continue
+            const stamp = await stampCheckinSkip(db, contact, location.id, className, 'skipped — already discussed')
+            bump(stamp.ok ? 'already_discussed' : stamp.reason); results.skipped++; continue
           }
           const parsed = parseAgentResponse(composed.text)
           if (parsed.handoff || !parsed.text) { bump('compose_handoff'); results.skipped++; continue }
+          // CHECKINRISKS.1 — claim, then send, then record the outcome.
+          const claim = await claimCheckin(db, contact.id)
+          if (!claim.ok) { bump(claim.reason); results.skipped++; continue }
           const { sendTextMessage } = await import('@/lib/whatsapp')
+          // A throw is an unknown outcome (a timeout may have been delivered):
+          // the claim stays and the lease re-opens it. A clean "no id" is a
+          // refusal: release, so the next tick retries.
           const res = await sendTextMessage(to, parsed.text, { locationId: location.id })
-          if (!res?.messageId) { bump('send_failed'); results.skipped++; continue }
+          if (!res?.messageId) {
+            await releaseCheckinClaim(db, contact.id, claim.at)
+            bump('send_failed'); results.skipped++; continue
+          }
           await recordProactiveMessage(db, { id: existingConv.id, contact_id: contact.id, location_id: location.id }, {
             body: parsed.text, waMessageId: res.messageId, messageType: 'text',
           })
-          await stampCheckin(db, contact, location.id, className, 'in-window')
+          await recordCheckinOutcome(db, contact, location.id, className, 'in-window')
           results.freeform++
           continue
         }
@@ -794,8 +937,8 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
           bump('consent_read_failed'); results.skipped++; continue
         }
         if (prefs?.whatsapp_marketing !== true) {
-          await stampCheckin(db, contact, location.id, className, 'skipped — no marketing consent')
-          bump('no_marketing_consent'); results.skipped++; continue
+          const stamp = await stampCheckinSkip(db, contact, location.id, className, 'skipped — no marketing consent')
+          bump(stamp.ok ? 'no_marketing_consent' : stamp.reason); results.skipped++; continue
         }
         const { data: tRows, error: tError } = await db.from('whatsapp_templates')
           .select('name, language, status, components, header_media_url')
@@ -820,10 +963,16 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
         const components = buildFollowupComponents(varCount, values)
         const headerComponent = headerComponentFor(template.components, template.header_media_url)
         if (headerComponent) components.unshift(headerComponent)
+        // CHECKINRISKS.1 — claim, then send, then record the outcome (as Case A).
+        const claim = await claimCheckin(db, contact.id)
+        if (!claim.ok) { bump(claim.reason); results.skipped++; continue }
         const res = await sendTemplateMessage(to, template.name, template.language || 'en', components, {
           locationId: location.id,
         })
-        if (!res?.messageId) { bump('send_failed'); results.skipped++; continue }
+        if (!res?.messageId) {
+          await releaseCheckinClaim(db, contact.id, claim.at)
+          bump('send_failed'); results.skipped++; continue
+        }
         const conversationId = existingConv?.id
           || await getOrCreateConversation(db, { id: contact.id, wa_phone: contact.wa_phone, phone: contact.phone, name: contact.name }, location.id)
         if (conversationId) {
@@ -832,7 +981,7 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
             waMessageId: res.messageId, messageType: 'template', templateName: template.name,
           })
         }
-        await stampCheckin(db, contact, location.id, className, 'template')
+        await recordCheckinOutcome(db, contact, location.id, className, 'template')
         results.templates++
       } catch (e) {
         bump('error')

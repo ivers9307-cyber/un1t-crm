@@ -97,7 +97,7 @@ describe('maybeSendWelcomeGreeting', () => {
     const r = await maybeSendWelcomeGreeting(db, CTX)
     expect(r).toEqual({ sent: true })
     expect(sendTextMessage).toHaveBeenCalledTimes(1)
-    expect(sendTextMessage).toHaveBeenCalledWith(PHONE, DEFAULT_WELCOME_GREETING, { locationId: 'loc1' })
+    expect(sendTextMessage).toHaveBeenCalledWith(PHONE, DEFAULT_WELCOME_GREETING, { locationId: 'loc1', replyInConversation: 'conv1' })
     expect(db.inserted).toHaveLength(1)
     expect(db.inserted[0]).toMatchObject({
       conversation_id: 'conv1',
@@ -121,7 +121,7 @@ describe('maybeSendWelcomeGreeting', () => {
   it('scrubs an em dash out of an operator-set greeting before sending', async () => {
     const db = fakeDb({ customerAgent: { enabled: true, welcome_greeting: "Hi — I'm Mia, ask away." } })
     await maybeSendWelcomeGreeting(db, CTX)
-    expect(sendTextMessage).toHaveBeenCalledWith(PHONE, "Hi, I'm Mia, ask away.", { locationId: 'loc1' })
+    expect(sendTextMessage).toHaveBeenCalledWith(PHONE, "Hi, I'm Mia, ask away.", { locationId: 'loc1', replyInConversation: 'conv1' })
     expect(db.inserted[0].body).toBe("Hi, I'm Mia, ask away.")
   })
 
@@ -129,7 +129,7 @@ describe('maybeSendWelcomeGreeting', () => {
     const db = fakeDb({ customerAgent: { enabled: true, welcome_greeting: '  Howdy from UN1T!  ' } })
     const r = await maybeSendWelcomeGreeting(db, CTX)
     expect(r).toEqual({ sent: true })
-    expect(sendTextMessage).toHaveBeenCalledWith(PHONE, 'Howdy from UN1T!', { locationId: 'loc1' })
+    expect(sendTextMessage).toHaveBeenCalledWith(PHONE, 'Howdy from UN1T!', { locationId: 'loc1', replyInConversation: 'conv1' })
     expect(db.inserted[0].body).toBe('Howdy from UN1T!')
   })
 

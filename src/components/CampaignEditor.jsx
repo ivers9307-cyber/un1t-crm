@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { createBrowserClient } from '@/lib/supabase'
+import { campaignPath, campaignRequest } from '@/lib/campaign-route-client'
 import { isoToLocalDatetime, localDatetimeToIso } from '@/lib/datetime-local'
 import { Save, Send, Users, Code, Paintbrush, Mail, Loader2, CheckCircle2, AlertCircle, Calendar, X, Trash2 } from 'lucide-react'
 import SendDetailHeader from './communications/SendDetailHeader'
@@ -10,7 +10,7 @@ import AudienceBuilder from './AudienceBuilder'
 import SendQuietHoursNotice from './communications/SendQuietHoursNotice'
 import CopyAssist from './communications/CopyAssist'
 import { stripUnsetFilterRows } from '@/lib/audience-filter'
-import { isCampaignContentEditable, campaignLockedReason, campaignUndeletableReason } from '@/lib/campaign-editability'
+import { isCampaignContentEditable, campaignLockedReason } from '@/lib/campaign-editability'
 import { UNLAYER_MERGE_TAGS, MERGE_TAG_REFERENCE } from '@/lib/merge-tags'
 
 // FILTER-P1.6 — what the send path ACTUALLY gates on, per
@@ -28,9 +28,8 @@ const AUDIENCE_GATES = {
 // One POST per pause, not one per keystroke.
 const COUNT_DEBOUNCE_MS = 400
 
-export default function CampaignEditor({ campaign, locationId, userId, initialAudienceFilter = null }) {
+export default function CampaignEditor({ campaign, locationId, userId: _userId, initialAudienceFilter = null }) {
   const router = useRouter()
-  const db = createBrowserClient()
   const editorRef = useRef(null)
 
   const [tab, setTab] = useState('design')  // design, code, audience, settings
@@ -42,8 +41,8 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
   const [emailType, setEmailType] = useState(campaign?.postmark_stream === 'outbound' ? 'utility' : 'marketing')
   const [replyTo, setReplyTo] = useState(campaign?.reply_to || '')
   // CAMPAIGN-AB — optional subject-line A/B test (mig 398). Enabled ⇔
-  // ab_subject_b is saved non-null; pct/wait are clamped client-side
-  // and CHECK-bounded in the DB (this editor writes columns directly).
+  // ab_subject_b is saved non-null; pct/wait are clamped client-side,
+  // bounded again by the save route's schema and CHECK-bounded in the DB.
   const [abEnabled, setAbEnabled] = useState(!!campaign?.ab_subject_b)
   const [abSubjectB, setAbSubjectB] = useState(campaign?.ab_subject_b || '')
   const [abTestPct, setAbTestPct] = useState(campaign?.ab_test_pct ?? 10)
@@ -66,14 +65,16 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
 
   // CAMPHIST.1 — may this campaign's content still change?
   //
-  // This editor persists by writing the `campaigns` row DIRECTLY from the
-  // browser Supabase client (see handleSave), so neither the 409 guard on
-  // PUT /api/campaigns/[id] nor the mig 014 RLS policy (FOR ALL, no status
-  // predicate) constrains it. That is how `?edit=1` on a sent campaign came to
-  // silently overwrite the record its recipients, opens and clicks describe.
-  // The detail page no longer routes a locked campaign here at all; this is
-  // the second lock, for the two other entry points (UnifiedSendComposer's
-  // "open full editor" and CampaignDetail's draft redirect).
+  // This editor used to persist by writing the `campaigns` row DIRECTLY from
+  // the browser Supabase client, so no route's 409 guard constrained it. That
+  // is how `?edit=1` on a sent campaign came to silently overwrite the record
+  // its recipients, opens and clicks describe. MEMBERWRITESWEEP.1e moved every
+  // read and write here to /api/communications/campaigns* (session auth, email
+  // at the campaign's studio), where the same predicate runs on the server
+  // (and mig 684 closes the table to clients). This check stays as the UX
+  // lock: the detail page no longer routes a locked campaign here at all, and
+  // this covers the two other entry points (UnifiedSendComposer's "open full
+  // editor" and CampaignDetail's draft redirect).
   const contentEditable = isCampaignContentEditable(campaignStatus)
   const lockedReason = campaignLockedReason(campaignStatus)
   const [progress, setProgress] = useState({
@@ -248,14 +249,15 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
     }
   }, [tab, editorMode, exportFromUnlayer, htmlContent, designJson])
 
+  // Save. Resolves to the campaign id on success and null on failure (the
+  // error is already in the error slot), so Schedule and Send never act on a
+  // save that did not land.
   async function handleSave() {
-    // CAMPHIST.1 — last line of defence before the direct browser write. The
-    // Save button is not rendered when the content is locked, but this runs
-    // whatever called it, and the cost of being wrong here is an unrecoverable
-    // rewrite of what was actually sent.
+    // CAMPHIST.1 — the Save button is not rendered when the content is
+    // locked, but this runs whatever called it; the route refuses too (409).
     if (!contentEditable) {
       setError(lockedReason)
-      return
+      return null
     }
     setSaving(true)
     setError(null)
@@ -263,6 +265,9 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
     try {
       const { html, design } = await stashUnlayerToState()
 
+      // MEMBERWRITESWEEP.1e — through the session routes. created_by, status
+      // and scheduled_at are never sent: the route sets created_by from the
+      // session on create and never rewrites it (DECISION 3).
       const payload = {
         name: name || 'Untitled Campaign',
         subject,
@@ -273,11 +278,8 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
         design_json: design,
         html_content: html,
         audience_filter: stripUnsetFilterRows(audienceFilter),
-        location_id: locationId,
-        created_by: userId,
         // Marketing → broadcast stream; Utility → outbound (transactional)
-        // stream + email_administrative gate. Direct column write (this
-        // editor persists via the browser Supabase client, not the API).
+        // stream + email_administrative gate.
         postmark_stream: emailType === 'utility' ? 'outbound' : 'broadcast',
         // CAMPAIGN-AB — a blank/disabled variant B saves NULL (test off).
         // Bounds mirror the DB CHECKs (pct 5-50, wait 1-24h).
@@ -286,25 +288,29 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
         ab_wait_hours: Math.min(24, Math.max(1, Math.round(Number(abWaitHours) || 4))),
       }
 
-      let result
-      if (campaignId) {
-        result = await db.from('campaigns').update(payload).eq('id', campaignId).select().single()
-      } else {
-        result = await db.from('campaigns').insert({ ...payload, status: 'draft' }).select().single()
+      const result = campaignId
+        ? await campaignRequest(campaignPath(campaignId), { method: 'PUT', body: payload })
+        : await campaignRequest(campaignPath(), { method: 'POST', body: { ...payload, location_id: locationId } })
+
+      if (!result.ok) {
+        if (result.data?.status !== undefined) setCampaignStatus(result.data.status)
+        setError(result.error)
+        return null
       }
 
-      if (result.error) throw new Error(result.error.message)
-
-      if (!campaignId) {
-        setCampaignId(result.data.id)
+      const savedId = campaignId || result.data?.id
+      if (!campaignId && savedId) {
+        setCampaignId(savedId)
         // Update URL without navigation
-        window.history.replaceState(null, '', `/communications/sent/email/${result.data.id}`)
+        window.history.replaceState(null, '', `/communications/sent/email/${savedId}`)
       }
 
       // CAMPAIGN.2 — visible save confirmation. Cleared after 3s.
       setSavedAt(new Date())
+      return savedId
     } catch (err) {
-      setError(err.message)
+      setError(err?.message || 'Could not save this campaign.')
+      return null
     } finally {
       setSaving(false)
     }
@@ -332,7 +338,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
   // Send campaign
   async function handleSend() {
     if (!campaignId) {
-      await handleSave()
+      if (!(await handleSave())) return
     }
 
     if (!confirm(`Send this campaign to ${audienceCount || 'all matching'} contacts? This cannot be undone.`)) return
@@ -341,10 +347,14 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
     setError(null)
 
     try {
-      // Save latest content first
-      await handleSave()
+      // Save latest content first; never send content that did not save.
+      const savedId = await handleSave()
+      if (!savedId) {
+        setSending(false)
+        return
+      }
 
-      const response = await fetch(`/api/campaigns/${campaignId}/send`, {
+      const response = await fetch(`/api/campaigns/${savedId}/send`, {
         method: 'POST',
       })
 
@@ -361,10 +371,11 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
     }
   }
 
-  // CAMPAIGN.13 — schedule the campaign to send at a future time.
-  // Same write the run-campaigns cron's promote-step picks up
-  // (status='scheduled' AND scheduled_at <= now()). No call to the
-  // send endpoint — the cron will promote and dispatch.
+  // CAMPAIGN.13 — schedule the campaign to send at a future time. The
+  // run-campaigns cron's promote step picks it up (status='scheduled' AND
+  // scheduled_at <= now()). MEMBERWRITESWEEP.1e — through the schedule route,
+  // which applies the send route's status rule and subject/body guard; the
+  // checks here are UX only.
   async function handleSchedule() {
     if (!scheduleAt) {
       setError('Pick a date and time first.')
@@ -386,11 +397,13 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
     setSending(true)
     setError(null)
     try {
-      await handleSave()
-      const { error: upErr } = await db.from('campaigns')
-        .update({ status: 'scheduled', scheduled_at: iso, cancel_requested_at: null })
-        .eq('id', campaignId)
-      if (upErr) throw new Error(upErr.message)
+      const savedId = await handleSave()
+      if (!savedId) return
+      const result = await campaignRequest(campaignPath(savedId, 'schedule'), { method: 'POST', body: { scheduled_at: iso } })
+      if (!result.ok) {
+        if (result.data?.status !== undefined) setCampaignStatus(result.data.status)
+        throw new Error(result.error)
+      }
       setCampaignStatus('scheduled')
       setScheduleOpen(false)
       router.refresh()
@@ -402,27 +415,25 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
   }
 
   // CAMPAIGN.13 — cancel a queued/sending/scheduled campaign.
-  // For 'scheduled' we flip back to 'draft' so it stops being a
-  // promotion candidate. For 'queued' / 'sending' we set
+  // For 'scheduled' it flips back to 'draft' so it stops being a
+  // promotion candidate. For 'queued' / 'sending' it sets
   // cancel_requested_at; the run-campaigns cron sees the flag
   // between chunks and transitions status='cancelled' + flips
   // remaining queued recipients to 'cancelled'.
+  // MEMBERWRITESWEEP.1e — the stop route picks the branch from the CURRENT
+  // status on the server, not from this component's copy of it.
   async function handleCancel() {
     if (!confirm('Stop this campaign? Already-sent emails cannot be unsent.')) return
     setError(null)
     try {
-      if (campaignStatus === 'scheduled') {
-        const { error: e } = await db.from('campaigns')
-          .update({ status: 'draft', scheduled_at: null })
-          .eq('id', campaignId)
-        if (e) throw new Error(e.message)
-        setCampaignStatus('draft')
-      } else {
-        const { error: e } = await db.from('campaigns')
-          .update({ cancel_requested_at: new Date().toISOString() })
-          .eq('id', campaignId)
-        if (e) throw new Error(e.message)
-        setProgress((p) => ({ ...p, cancel_requested_at: new Date().toISOString() }))
+      const result = await campaignRequest(campaignPath(campaignId, 'stop'), { method: 'POST' })
+      if (!result.ok) {
+        if (result.data?.status !== undefined) setCampaignStatus(result.data.status)
+        throw new Error(result.error)
+      }
+      setCampaignStatus(result.data.status)
+      if (result.data.cancel_requested_at) {
+        setProgress((p) => ({ ...p, cancel_requested_at: result.data.cancel_requested_at }))
       }
       router.refresh()
     } catch (err) {
@@ -432,68 +443,46 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
 
   // CAMPAIGN.13 — delete the campaign.
   //
-  // CAMPDEL.1 — this used to refuse only ['queued','sending'] and then delete
-  // straight from the browser Supabase client. Two problems, the same pair
-  // CAMPHIST.1 found on save:
-  //
-  //   • The 409 on DELETE /api/campaigns/[id] never runs, because this does not
-  //     call that route. It cannot: `authenticateApiKey` is Bearer-only, so an
-  //     operator's session cookie gets a 401 there. And campaigns_location_scoped
-  //     (mig 014) is `FOR ALL ... USING auth_is_in_location(location_id)` with no
-  //     status predicate, so the database allows the delete too.
-  //   • `campaignStatus` is React state read at load. An operator sitting on a
-  //     'scheduled' campaign while the run-campaigns cron sends it still holds
-  //     'scheduled' here, so the old check would have happily deleted a campaign
-  //     that had just gone out, cascading away every campaign_recipients and
-  //     campaign_link_clicks row with it.
-  //
-  // So re-read the status from the database immediately before deleting and
-  // apply the same predicate the route does. If the re-read yields nothing
-  // (row gone, transient error) fall back to the loaded status: that is the
-  // freshest thing we have, and failing closed on a blip would block a
-  // legitimate draft delete for no safety gain.
+  // CAMPDEL.1 — this used to delete straight from the browser Supabase client
+  // after re-reading the status itself (the n8n route is Bearer-only), because
+  // `campaignStatus` is React state read at load: an operator sitting on a
+  // 'scheduled' campaign while the run-campaigns cron sends it still holds
+  // 'scheduled' here, and deleting then would cascade away every
+  // campaign_recipients and campaign_link_clicks row of a campaign that had
+  // just gone out. MEMBERWRITESWEEP.1e — DELETE /api/communications/campaigns/
+  // [id] now does that re-read on the server and applies the same predicate
+  // (isCampaignContentEditable); its 409 carries the real status and the
+  // operator-facing reason, shown here.
   async function handleDelete() {
     setError(null)
-    const { data: fresh } = await db.from('campaigns').select('status').eq('id', campaignId).single()
-    const status = fresh?.status ?? campaignStatus
-    if (!isCampaignContentEditable(status)) {
-      if (['queued', 'sending'].includes(status)) {
-        setError('This campaign is sending. Cancel the send first, then delete.')
-      } else {
-        setError(campaignUndeletableReason(status))
-      }
-      setCampaignStatus(status)
+    if (!confirm(`Delete "${name}"? This can't be undone.`)) return
+    const result = await campaignRequest(campaignPath(campaignId), { method: 'DELETE' })
+    if (!result.ok) {
+      if (result.data?.status !== undefined) setCampaignStatus(result.data.status)
+      setError(result.error)
       return
     }
-    if (!confirm(`Delete "${name}"? This can't be undone.`)) return
-    try {
-      const { error: e } = await db.from('campaigns').delete().eq('id', campaignId)
-      if (e) throw new Error(e.message)
-      // COMMSFIX.D.3c — deleting a draft used to land the operator on
-      // /email/campaigns, which has no page.js (the list was retired), so they
-      // got the Next.js 404 and read it as "did the delete break something?".
-      // The Sent list is where the draft was opened from; go straight there.
-      router.push('/communications/sent')
-    } catch (err) {
-      setError(err.message)
-    }
+    // COMMSFIX.D.3c — deleting a draft used to land the operator on
+    // /email/campaigns, which has no page.js (the list was retired), so they
+    // got the Next.js 404 and read it as "did the delete break something?".
+    // The Sent list is where the draft was opened from; go straight there.
+    router.push('/communications/sent')
   }
 
   // CAMPAIGN.13 — poll for live progress while a send is in flight.
   // Poll every 3s; stop when status transitions out of queued/sending.
-  // GET /api/campaigns/[id] returns the latest row (status + the
-  // total_* counters that CAMPAIGN.12's recalculate_campaign_stats
-  // keeps in sync mid-send).
+  // MEMBERWRITESWEEP.1e — GET /api/communications/campaigns/[id] returns the
+  // status + the total_* counters that CAMPAIGN.12's
+  // recalculate_campaign_stats keeps in sync mid-send (it used to be a
+  // browser-direct read of campaigns). A failed poll keeps the last state.
   useEffect(() => {
     if (!campaignId) return
     if (!['queued', 'sending'].includes(campaignStatus)) return
     let cancelled = false
     const tick = async () => {
-      const { data, error } = await db.from('campaigns')
-        .select('status, total_sent, total_recipients, cancel_requested_at')
-        .eq('id', campaignId)
-        .single()
-      if (cancelled || error || !data) return
+      const result = await campaignRequest(campaignPath(campaignId))
+      const data = result.ok ? result.data : null
+      if (cancelled || !data) return
       setCampaignStatus(data.status)
       setProgress({
         total_sent: data.total_sent || 0,
@@ -504,11 +493,6 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
     const handle = setInterval(tick, 3000)
     tick() // immediate first hit
     return () => { cancelled = true; clearInterval(handle) }
-    // `db` is captured from the closure and is stable for the
-    // component's lifetime. We only want the polling loop to reset
-    // when campaignId / status change — not on every render that
-    // re-resolves the db client.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [campaignId, campaignStatus])
 
   // CAMPAIGN.1 — fire a test send to the operator's chosen address

@@ -1,9 +1,9 @@
-// /policies/manage — master/owner-only admin for the policies hub.
+// /policies/manage — master-only (C141 ORGROLE.2; policies are estate-wide) admin for the policies hub.
 // ADMIN.2h Task 1 — moved out of /admin (was /admin/policies) to sit
 // alongside the staff-facing read surface at /policies (that page and
 // its [slug] detail predate this move and are untouched — this CRUD
 // tree lives at /policies/manage so the two don't collide). Gate is
-// standalone below (owner|master), unaffected by the move.
+// standalone below (master only), unaffected by the move.
 // Lists policies with current version + view counts (POLICIES-VIEWS.1
 // replaced the previous acknowledgement model). Click a row to drill
 // into version history, viewer report, and the publish-new-version form.
@@ -13,12 +13,14 @@ import { redirect } from 'next/navigation'
 import { ChevronRight, FileText } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { currentVersionOpenCounts } from '@/lib/policies'
+import { canManagePolicies } from '@/lib/policies-access'
 
 export const dynamic = 'force-dynamic'
 
-function isOwnerOrMaster(user) {
-  return user?.role === 'master' || user?.role === 'owner' || user?.profileRole === 'master'
-}
+// C141 ORGROLE.2 — managing policies is MASTER ONLY (Richard, 2 Oct): the
+// policies table has no organisation, so a version reaches every studio.
+// canManagePolicies lives in src/lib/policies-access.js.
 
 function fmtDate(iso) {
   if (!iso) return ''
@@ -28,7 +30,7 @@ function fmtDate(iso) {
 export default async function AdminPoliciesPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  if (!isOwnerOrMaster(user)) redirect('/')
+  if (!canManagePolicies(user)) redirect('/')
 
   const db = createServerClient()
   const { data: policies } = await db
@@ -45,28 +47,11 @@ export default async function AdminPoliciesPage() {
     .filter(Boolean)
 
   // Count UNIQUE viewers (distinct profile_id with at least one
-  // completed view of the current version). One row per session
-  // would over-count repeat readers.
-  const viewerCount = new Map()
-  if (currentVersionIds.length > 0) {
-    const { data: views } = await db
-      .from('policy_views')
-      .select('policy_version_id, profile_id, ended_at')
-      .in('policy_version_id', currentVersionIds)
-      .not('ended_at', 'is', null)
-    const setsByVersion = new Map()
-    for (const v of views || []) {
-      const set = setsByVersion.get(v.policy_version_id) || new Set()
-      set.add(v.profile_id)
-      setsByVersion.set(v.policy_version_id, set)
-    }
-    for (const [vid, set] of setsByVersion) viewerCount.set(vid, set.size)
-  }
-
-  const { count: activeStaffCount } = await db
-    .from('profiles')
-    .select('id', { count: 'exact', head: true })
-    .eq('active', true)
+  // completed view of the current version) against the active people.
+  // C115 POLICYVIEWERS.1 — both numbers count the caller's organisation's
+  // people only (a master: the estate), the same people the version page
+  // lists; a failed read throws to the error page.
+  const { viewerCount, activeStaffCount } = await currentVersionOpenCounts(currentVersionIds, user)
 
   return (
     <div className="p-6 md:p-8 max-w-4xl">

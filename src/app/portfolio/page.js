@@ -10,7 +10,8 @@
 // (landing preference, password, PIN, contracts). Overwriting it would
 // break every signed-in user, so the org portfolio lives at /portfolio.
 //
-// Guard: owner-of-active-org or master → else redirect to /dashboard.
+// Guard: organisation admin of the active org (master or an org_admin
+// grant; C141 ORGROLE.2) → else redirect to /dashboard.
 // LOOP-SAFETY: this page only ever redirects to /dashboard (never to /
 // or back to /portfolio), and /dashboard never redirects here, so the
 // login router ↔ portfolio ↔ studio-drill-in path cannot loop.
@@ -31,11 +32,8 @@ export default async function PortfolioPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
 
-  // Owner+/master gate — mirrors the sidebar's masterOrOwnerOnly entry.
-  // `user.role` is the active-location role (an org owner reads 'owner').
-  const canView = user.isMaster || user.role === 'master' || user.role === 'owner'
-  if (!canView) redirect('/dashboard')
-
+  // C141 ORGROLE.2 — organisation admins only (C18's rule): the sidebar's
+  // orgAdminOnly entry and GET /api/account/overview ask the same question.
   // Authorise the active org (no ?organization_id switching from the UI in
   // this phase — master org selection is via the API param).
   const scope = resolveAccountScope(user, null)

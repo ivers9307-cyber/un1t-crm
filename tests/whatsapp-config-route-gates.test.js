@@ -110,8 +110,17 @@ export function blankNonCode(text, sf = parse(text)) {
 // Strongest first. Each test is a CALL shape, not a bare name.
 export function classify(handlerSrc) {
   if (/guardMasterOrOwner\(\s*user\b/.test(handlerSrc)) return 'owner'
+  // GATES-3 (b) — MANAGER_ROLES AND `whatsapp` at the template's studio.
+  if (/canManageWaTemplatesAt\(\s*user\b/.test(handlerSrc)) return 'manager-whatsapp'
   if (/hasRoleAtLocation\(\s*user\b[^)]*MANAGER_ROLES/.test(handlerSrc)) return 'manager'
   if (/hasPermissionForLocation\(\s*user\b[^)]*'whatsapp'/.test(handlerSrc)) return 'whatsapp-permission'
+  // INBOXLOC.1 — the thread routes' decision: whatsapp (web or mobile) AT the
+  // conversation's (or contact's) studio. Above 'inbox', which judges the
+  // ACTIVE studio; below the role gates.
+  if (/requireWhatsAppInboxAt\(\s*user\b/.test(handlerSrc)) return 'inbox-at-location'
+  // INBOXWEBONLY3.1 — the same decision on the WEB key only, for the thread
+  // actions only the web calls.
+  if (/requireWebWhatsAppInboxAt\(\s*user\b/.test(handlerSrc)) return 'web-inbox-at-location'
   if (/requireInboxPermission\(\s*user\s*,\s*'wa'\s*\)/.test(handlerSrc)) return 'inbox'
   if (/assertLocationAccess(Or404)?\(\s*user\b/.test(handlerSrc)) return 'membership'
   if (!/getCurrentUser\(/.test(handlerSrc)) return 'no-session'
@@ -198,30 +207,32 @@ export const EXPECTED = {
   'PUT whatsapp/card-sets/route.js': ['owner', 'WAROLE.1: replaces the carousel card sets staff and Mia send.'],
 
   // ── Templates ──
-  'POST whatsapp/templates/[id]/resubmit/route.js': ['manager', 'Edits a rejected/paused template at Meta.'],
-  'POST whatsapp/templates/route.js': ['manager', 'WATPLROLE.1: creates a template and submits it to Meta; MANAGER_ROLES at the location created at (the resubmit rule).'],
-  'PUT whatsapp/templates/[id]/route.js': ['manager', 'WATPLROLE.1: components, header media, name and category drive what is sent, so MANAGER_ROLES at the template; a display_group-only edit (picker grouping) stays membership. WATPLPUT.1: Meta-owned fields (status, rejection_reason, quality_rating, meta_template_id) are refused (400) and a submitted template\'s content is locked (409).'],
-  'DELETE whatsapp/templates/[id]/route.js': ['manager', 'WATPLROLE.1: deletes the template AT META by name; MANAGER_ROLES at the template (the resubmit rule).'],
+  'POST whatsapp/templates/[id]/resubmit/route.js': ['manager-whatsapp', 'Edits a rejected/paused template at Meta; GATES-3: MANAGER_ROLES and whatsapp at the template.'],
+  'POST whatsapp/templates/route.js': ['manager-whatsapp', 'WATPLROLE.1: creates a template and submits it to Meta; MANAGER_ROLES at the location created at (the resubmit rule); GATES-3: whatsapp there too.'],
+  'PUT whatsapp/templates/[id]/route.js': ['manager-whatsapp', 'GATES-3: whatsapp at the template beside the role. WATPLROLE.1: components, header media, name and category drive what is sent, so MANAGER_ROLES at the template; a display_group-only edit (picker grouping) stays membership. WATPLPUT.1: Meta-owned fields (status, rejection_reason, quality_rating, meta_template_id) are refused (400) and a submitted template\'s content is locked (409).'],
+  'DELETE whatsapp/templates/[id]/route.js': ['manager-whatsapp', 'WATPLROLE.1: deletes the template AT META by name; MANAGER_ROLES at the template (the resubmit rule); GATES-3: whatsapp there too.'],
   'POST whatsapp/templates/upload-media/route.js': ['membership', 'Uploads header media for a template draft (no Meta state).'],
   'POST whatsapp/templates/upload-media/sign/route.js': ['membership', 'Signs a storage upload for template media (no Meta state).'],
 
   // ── Broadcasts: drafting is membership, SENDING needs the whatsapp permission ──
-  'POST whatsapp/broadcasts/route.js': ['membership', 'Creates a draft; nothing is sent.'],
-  'PUT whatsapp/broadcasts/[id]/route.js': ['membership', 'Edits a draft/scheduled broadcast.'],
-  'DELETE whatsapp/broadcasts/[id]/route.js': ['membership', 'Deletes a broadcast row.'],
-  'POST whatsapp/broadcasts/[id]/pause/route.js': ['membership', 'Pauses/resumes a drip (stopping sends is never the risk).'],
+  'POST whatsapp/broadcasts/route.js': ['whatsapp-permission', 'Creates a draft or scheduled broadcast; GATES-3: the [id] routes\' rule, at the studio it creates at.'],
+  'PUT whatsapp/broadcasts/[id]/route.js': ['whatsapp-permission', 'Edits a draft/scheduled broadcast; GATES-2: /send\'s rule, at the broadcast\'s studio.'],
+  'DELETE whatsapp/broadcasts/[id]/route.js': ['whatsapp-permission', 'Deletes a broadcast row; GATES-2: /send\'s rule, at the broadcast\'s studio.'],
+  'POST whatsapp/broadcasts/[id]/pause/route.js': ['whatsapp-permission', 'Pauses/resumes a drip; resuming restarts sends, so GATES-2 gives it /send\'s rule.'],
   'POST whatsapp/broadcasts/[id]/send/route.js': ['whatsapp-permission', 'Sends to the audience.'],
 
-  // ── The inbox: the whatsapp channel permission (INBOX-PERM.1) ──
-  'POST whatsapp/conversations/start/route.js': ['inbox', 'Starts a thread.'],
-  'PATCH whatsapp/conversations/[id]/route.js': ['inbox', 'Read/resolve a thread.'],
-  'POST whatsapp/conversations/[id]/add-contact/route.js': ['inbox', 'Links a thread to a contact.'],
-  'PATCH whatsapp/conversations/[id]/agent/route.js': ['inbox', 'Mia pause / take-over.'],
-  'POST whatsapp/conversations/[id]/block/route.js': ['inbox', 'Blocks a sender.'],
-  'POST whatsapp/conversations/[id]/react/route.js': ['inbox', 'Reacts to a message.'],
-  'POST whatsapp/conversations/[id]/send/route.js': ['inbox', 'Sends a text or an approved template in the thread (WATPLSEND.1: template rows judged, Flow token minted); membership at the thread\'s location after the inbox permission.'],
-  'POST whatsapp/conversations/[id]/send-carousel/route.js': ['inbox', 'Sends a card set.'],
-  'POST whatsapp/conversations/[id]/send-flow/route.js': ['inbox', 'Sends a Flow.'],
+  // ── The inbox: the whatsapp channel permission (INBOX-PERM.1), judged AT the
+  // thread's studio since INBOXLOC.1 (web or mobile whatsapp there, after
+  // membership; a coarse any-studio check runs before the row is read) ──
+  'POST whatsapp/conversations/start/route.js': ['web-inbox-at-location', 'INBOXWEBONLY3.1: starts a thread at the contact\'s studio; web only, so the WEB key there.'],
+  'PATCH whatsapp/conversations/[id]/route.js': ['inbox-at-location', 'Read/resolve a thread.'],
+  'POST whatsapp/conversations/[id]/add-contact/route.js': ['web-inbox-at-location', 'INBOXWEBONLY3.1: links a thread to a contact; web only, so the WEB key at the thread\'s studio.'],
+  'PATCH whatsapp/conversations/[id]/agent/route.js': ['web-inbox-at-location', 'INBOXWEBONLY3.1: Mia pause / take-over; web only, so the WEB key at the thread\'s studio.'],
+  'POST whatsapp/conversations/[id]/block/route.js': ['inbox-at-location', 'Blocks a sender.'],
+  'POST whatsapp/conversations/[id]/react/route.js': ['inbox-at-location', 'Reacts to a message.'],
+  'POST whatsapp/conversations/[id]/send/route.js': ['inbox-at-location', 'Sends a text or an approved template in the thread (WATPLSEND.1: template rows judged, Flow token minted); membership at the thread\'s location, then the whatsapp permission there.'],
+  'POST whatsapp/conversations/[id]/send-carousel/route.js': ['inbox-at-location', 'Sends a card set.'],
+  'POST whatsapp/conversations/[id]/send-flow/route.js': ['inbox-at-location', 'Sends a Flow.'],
 
   // ── Outside the two trees ──
   'POST contacts/[id]/whatsapp/route.js': ['whatsapp-permission', 'Sends a WhatsApp to one contact: the whatsapp permission (web or mobile) at the contact\'s location, after membership.'],
@@ -234,8 +245,13 @@ describe('WhatsApp mutation handlers — each one\'s gate (WAROLE.1)', () => {
   it('the classifier reads call shapes, strongest first', () => {
     expect(classify('const g = guardMasterOrOwner(user, id)\nassertLocationAccess(user, id)')).toBe('owner')
     expect(classify('if (!hasRoleAtLocation(user, t.location_id, MANAGER_ROLES)) {}')).toBe('manager')
+    expect(classify('if (!canManageWaTemplatesAt(user, t.location_id)) {}')).toBe('manager-whatsapp')
     expect(classify("if (!hasPermissionForLocation(user, row.location_id, 'whatsapp')) {}")).toBe('whatsapp-permission')
     expect(classify("const p = requireInboxPermission(user, 'wa')")).toBe('inbox')
+    expect(classify("const p = requireWhatsAppInboxAt(user, conversation.location_id)\nconst q = requireInboxPermission(user, 'wa')")).toBe('inbox-at-location')
+    expect(classify('getCurrentUser()\nconst p = requireWhatsAppInboxAnywhere(user)')).toBe('session-only')
+    expect(classify('const p = requireWebWhatsAppInboxAt(user, conversation.location_id)')).toBe('web-inbox-at-location')
+    expect(classify('getCurrentUser()\nconst p = requireWebWhatsAppInboxAnywhere(user)')).toBe('session-only')
     expect(classify('const g = assertLocationAccessOr404(user, loc)\ngetCurrentUser()')).toBe('membership')
     expect(classify('getCurrentUser()')).toBe('session-only')
     expect(classify('const x = 1')).toBe('no-session')
@@ -358,14 +374,15 @@ describe('WhatsApp mutation handlers — each one\'s gate (WAROLE.1)', () => {
   // is sent decides with the resubmit rule: MANAGER_ROLES at the template's
   // (or, on create, the target) location. Header-media upload stays
   // membership: it changes nothing at Meta until a create or resubmit uses it.
-  it('template create, edit, delete and resubmit decide with the resubmit rule (MANAGER_ROLES at the location)', () => {
+  // GATES-3 (b) — and the `whatsapp` permission there (canManageWaTemplatesAt).
+  it('template create, edit, delete and resubmit decide with the resubmit rule (MANAGER_ROLES and whatsapp at the location)', () => {
     const got = actual()
     for (const k of [
       'POST whatsapp/templates/route.js',
       'PUT whatsapp/templates/[id]/route.js',
       'DELETE whatsapp/templates/[id]/route.js',
       'POST whatsapp/templates/[id]/resubmit/route.js',
-    ]) expect([k, got[k]]).toEqual([k, 'manager'])
+    ]) expect([k, got[k]]).toEqual([k, 'manager-whatsapp'])
   })
 
   it('every row carries a reason', () => {

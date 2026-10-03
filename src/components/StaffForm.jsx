@@ -68,6 +68,9 @@ export default function StaffForm({
   // `locations` is empty for a reason other than "there are none". The form
   // still renders (never louder than before); it just says so.
   locationsLoadFailed = false,
+  // C18 ORGROLE.1 — the staff device fleet (GET /api/staff-devices) is for
+  // organisation admins of the active org; the page decides and passes it.
+  canSeeDevices = false,
 }) {
   const isEdit = !!staff
   const router = useRouter()
@@ -1172,7 +1175,7 @@ export default function StaffForm({
       {/* STAFF-DEV.6 — which devices this person actually has, what
           version they run and whether background location is granted.
           Edit-only: a profile that doesn't exist yet has no devices. */}
-      {isEdit && staff?.id && <StaffDevicesCard profileId={staff.id} />}
+      {isEdit && staff?.id && canSeeDevices && <StaffDevicesCard profileId={staff.id} />}
 
       <button
         type="submit"

@@ -171,8 +171,10 @@ describe('POST /api/staff-devices/nudge', () => {
     expect(sendPush).not.toHaveBeenCalled()
   })
 
-  it('403s without the settings permission, before touching the DB', async () => {
-    hasPermission.mockReturnValue(false)
+  // C18 ORGROLE.1 — an organisation admin of the active org, never `settings`
+  // at the active studio: a studio owner holding `settings` is refused.
+  it('403s anyone who is not an organisation admin, before touching the DB', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'u2', role: 'owner', isMaster: false, orgAdminOrgIds: [], activeOrganization: { id: 'org-1' } })
     const res = await POST(req({ profile_ids: allIds }))
     expect(res.status).toBe(403)
     expect(createServerClient).not.toHaveBeenCalled()

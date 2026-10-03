@@ -13,14 +13,15 @@
 // the column default balance 0 (the same row wallet_apply would
 // lazily create).
 //
-// Access: owner-of-that-org (getOwnerOrganizationIds, incl. SAAS-4
-// org admins) or master. A foreign/unknown location_id answers 404,
+// Access: an organisation admin of the location's org (C18 ORGROLE.1:
+// master or an org_admin grant; a studio owner is not one). A foreign/unknown location_id answers 404,
 // never 403 (no cross-tenant existence probing).
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getOwnerOrganizationIds } from '@/lib/auth'
+import { getCurrentUser } from '@/lib/auth'
+import { isOrgAdmin, isOrgAdminSomewhere } from '@/lib/org-admin'
 import { validateBody, uuidLike } from '@/lib/validate'
 
 export const runtime = 'nodejs'
@@ -41,9 +42,11 @@ export async function PATCH(request) {
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   }
-  if (user.role !== 'owner' && user.role !== 'master') {
+  // C18 ORGROLE.1 — organisation admins only (master or an org_admin grant);
+  // the coarse check here, the location's organisation below.
+  if (!isOrgAdminSomewhere(user)) {
     return NextResponse.json(
-      { success: false, error: 'Auto-top-up is configured by an owner' },
+      { success: false, error: 'Auto-top-up is configured by an organisation admin' },
       { status: 403 }
     )
   }
@@ -55,19 +58,20 @@ export async function PATCH(request) {
   const db = createServerClient()
 
   // Resolve the location's org; foreign or missing → identical 404.
-  const { data: location } = await db
+  const { data: location, error: locationError } = await db
     .from('locations')
     .select('id, organization_id')
     .eq('id', body.location_id)
     .maybeSingle()
+  if (locationError) {
+    return NextResponse.json({ success: false, error: 'Could not read the location just now. Try again.' }, { status: 500 })
+  }
   if (!location) {
     return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   }
-  if (user.role !== 'master') {
-    const owned = getOwnerOrganizationIds(user)
-    if (!location.organization_id || !owned.includes(location.organization_id)) {
-      return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
-    }
+  // An org-less location is master-only (isOrgAdmin answers false for null).
+  if (!isOrgAdmin(user, location.organization_id)) {
+    return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   }
 
   const patch = {

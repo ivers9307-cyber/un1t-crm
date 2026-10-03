@@ -5,6 +5,14 @@ import { getCurrentUser, assertLocationAccess, hasRoleAtLocation } from '@/lib/a
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { maskConnectionRow, buildConnectionPatch } from '@/lib/agent/channels'
 import { validateBody } from '@/lib/validate'
+import { canEditMiaSettings } from '@/lib/agent/settings-access'
+
+// MIANITS (Richard's call, 30 Sep) — Mia's on/off switch for a channel
+// (agent_enabled) is owner-only, like Mia's settings: canEditMiaSettings at the
+// target. Only a CHANGE to it is gated; every other field keeps the
+// MANAGER_ROLES gate, and a form echoing the stored value unchanged passes.
+// DELETE is not gated here: removing a connection is channel management.
+const MIA_SWITCH_OWNER_ONLY = 'Only an owner can switch the customer agent on or off for a channel.'
 
 const ChannelPatchSchema = z.object({
   label: z.string().optional(),
@@ -54,13 +62,18 @@ export async function PATCH(request, props) {
   const body = validation.data
   const db = createServerClient()
 
-  // Look up the row's platform for the one-active deactivation step.
+  // Look up the row's platform for the one-active deactivation step, and its
+  // agent_enabled for the owner-only switch.
   const { data: existing } = await db.from('channel_connections')
-    .select('platform')
+    .select('platform, agent_enabled')
     .eq('id', connId)
     .eq('location_id', locationId)
     .maybeSingle()
   if (!existing) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  if (typeof body.agent_enabled === 'boolean' && body.agent_enabled !== !!existing.agent_enabled &&
+      !canEditMiaSettings(user, locationId)) {
+    return NextResponse.json({ success: false, error: MIA_SWITCH_OWNER_ONLY }, { status: 403 })
+  }
 
   const patch = buildConnectionPatch(body, {
     fields: ['label', 'external_account_id', 'page_id', 'app_id', 'display_name', 'is_active', 'agent_enabled'],
