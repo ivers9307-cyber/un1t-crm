@@ -9,7 +9,7 @@
 // predicate itself is assertable.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { FAILED_RETRY_BACKOFF_MS } from '@/lib/ac-auto-off'
+import { FAILED_RETRY_BACKOFF_MS, FAST_RETRY_BACKOFF_MS } from '@/lib/ac-auto-off'
 
 // One recording builder per from() call. Selects on a table consume rowsets
 // from a per-table queue (the route issues TWO ac_sessions selects — live
@@ -85,7 +85,7 @@ describe('GET /api/cron/ac-auto-off', () => {
     expect(upd.ops.find(([m]) => m === 'update')[1]).toMatchObject({ status: 'auto_off' })
   })
 
-  it('picks up failed rows on a SEPARATE query gated by updated_at < now − backoff', async () => {
+  it('picks up failed rows on a SEPARATE query gated by updated_at < now − FAST backoff (the hourly lane is applied per row)', async () => {
     const before = Date.now()
     queues = { ac_sessions: [[], []] }
     await GET(req())
@@ -102,8 +102,8 @@ describe('GET /api/cron/ac-auto-off', () => {
     const lt = failedOps.find(([m, col]) => m === 'lt' && col === 'updated_at')
     expect(lt).toBeTruthy()
     const cutoffMs = new Date(lt[2]).getTime()
-    expect(before - cutoffMs).toBeGreaterThanOrEqual(FAILED_RETRY_BACKOFF_MS - 1000)
-    expect(Date.now() - cutoffMs).toBeLessThanOrEqual(FAILED_RETRY_BACKOFF_MS + 1000)
+    expect(before - cutoffMs).toBeGreaterThanOrEqual(FAST_RETRY_BACKOFF_MS - 1000)
+    expect(Date.now() - cutoffMs).toBeLessThanOrEqual(FAST_RETRY_BACKOFF_MS + 1000)
   })
 
   it('SENSIBO-RATE.1: skips a row a NEWER active session has superseded — no vendor call', async () => {
@@ -134,14 +134,18 @@ describe('GET /api/cron/ac-auto-off', () => {
   })
 
   it('still self-heals: a due failed row is retried and turned off', async () => {
-    queues = { ac_sessions: [[], [{ ...SESSION, status: 'failed' }]] }
+    const dueHourly = {
+      ...SESSION, status: 'failed', failure_reason: 'Pod not found',
+      updated_at: new Date(Date.now() - FAILED_RETRY_BACKOFF_MS - 60_000).toISOString(),
+    }
+    queues = { ac_sessions: [[], [dueHourly]] }
     const res = await GET(req())
     const body = await res.json()
     expect(body.stats).toMatchObject({ found: 1, off: 1, failed: 0 })
     expect(sendOpsAlert).not.toHaveBeenCalled()
   })
 
-  it('vendor failure: row stays failed AND an org-routed ops alert fires with device + reason', async () => {
+  it('vendor failure (persistent): row stays failed, attempt counter = 1, AND an org-routed ops alert fires on the FIRST miss', async () => {
     vendorTurnOff.mockResolvedValue({ ok: false, error: 'pod offline' })
     queues = { ac_sessions: [[SESSION], []] }
     const res = await GET(req())
@@ -152,6 +156,8 @@ describe('GET /api/cron/ac-auto-off', () => {
     const payload = upd.ops.find(([m]) => m === 'update')[1]
     expect(payload.status).toBe('failed')
     expect(payload.failure_reason).toContain('pod offline')
+    expect(payload.auto_off_attempts).toBe(1)
+    expect(payload.auto_off_alerted_at).toBeTruthy()
 
     expect(sendOpsAlert).toHaveBeenCalledTimes(1)
     const [alert, deps] = sendOpsAlert.mock.calls[0]
@@ -165,5 +171,89 @@ describe('GET /api/cron/ac-auto-off', () => {
     expect(deps.db).toBe(fakeDb)
     // The cron still finishes and stamps its heartbeat despite the failure.
     expect(stampHeartbeat).toHaveBeenCalledWith('ac-auto-off')
+  })
+
+  // ── AC-RETRY.1 ────────────────────────────────────────────────────
+  const TIMEOUT = 'AC vendor refused the request: Sensibo network error: The operation was aborted due to timeout'
+  const agoIso = (ms) => new Date(Date.now() - ms).toISOString()
+
+  it('AC-RETRY.1: a transient failure on a live row is counted but NOT alerted (miss #1)', async () => {
+    vendorTurnOff.mockResolvedValue({ ok: false, error: TIMEOUT })
+    queues = { ac_sessions: [[SESSION], []] }
+    const res = await GET(req())
+    expect((await res.json()).stats).toMatchObject({ failed: 1 })
+    const payload = sessionUpdates().at(0).ops.find(([m]) => m === 'update')[1]
+    expect(payload.status).toBe('failed')
+    expect(payload.auto_off_attempts).toBe(1)
+    expect(payload.auto_off_alerted_at).toBeUndefined()
+    expect(sendOpsAlert).not.toHaveBeenCalled()
+  })
+
+  it('AC-RETRY.1: a transient failed row written one tick ago is retried on THIS tick (fast lane)', async () => {
+    const fast = {
+      ...SESSION, status: 'failed', failure_reason: TIMEOUT, auto_off_attempts: 1,
+      updated_at: agoIso(FAST_RETRY_BACKOFF_MS + 46_000), // written at :05:46, now :10:32
+    }
+    queues = { ac_sessions: [[], [fast]] }
+    const res = await GET(req())
+    const body = await res.json()
+    expect(vendorTurnOff).toHaveBeenCalledTimes(1)
+    expect(body.stats).toMatchObject({ found: 1, off: 1, waiting: 0 })
+  })
+
+  it('AC-RETRY.1: a PERSISTENT failed row written one tick ago is left waiting — hourly lane, no vendor call', async () => {
+    const slow = {
+      ...SESSION, status: 'failed', failure_reason: 'Pod not found', auto_off_attempts: 1,
+      updated_at: agoIso(FAST_RETRY_BACKOFF_MS + 46_000),
+    }
+    queues = { ac_sessions: [[], [slow]] }
+    const res = await GET(req())
+    const body = await res.json()
+    expect(vendorTurnOff).not.toHaveBeenCalled()
+    expect(body.stats).toMatchObject({ found: 0, off: 0, failed: 0, waiting: 1 })
+  })
+
+  it('AC-RETRY.1: the THIRD consecutive transient miss alerts, stamps auto_off_alerted_at, and names the count', async () => {
+    vendorTurnOff.mockResolvedValue({ ok: false, error: TIMEOUT })
+    const third = {
+      ...SESSION, status: 'failed', failure_reason: TIMEOUT, auto_off_attempts: 2, auto_off_alerted_at: null,
+      updated_at: agoIso(FAST_RETRY_BACKOFF_MS + 46_000),
+    }
+    queues = { ac_sessions: [[], [third]] }
+    await GET(req())
+    const payload = sessionUpdates().at(-1).ops.find(([m]) => m === 'update')[1]
+    expect(payload.auto_off_attempts).toBe(3)
+    expect(payload.auto_off_alerted_at).toBeTruthy()
+    expect(sendOpsAlert).toHaveBeenCalledTimes(1)
+    const [alert] = sendOpsAlert.mock.calls[0]
+    expect(alert.htmlBody).toContain('3 attempts so far')
+    expect(alert.htmlBody).toMatch(/every 5 minutes/)
+  })
+
+  it('AC-RETRY.1: a miss within an hour of the last alert is counted but stays quiet', async () => {
+    vendorTurnOff.mockResolvedValue({ ok: false, error: TIMEOUT })
+    const fourth = {
+      ...SESSION, status: 'failed', failure_reason: TIMEOUT, auto_off_attempts: 3,
+      auto_off_alerted_at: agoIso(5 * 60_000),
+      updated_at: agoIso(FAST_RETRY_BACKOFF_MS + 46_000),
+    }
+    queues = { ac_sessions: [[], [fourth]] }
+    await GET(req())
+    const payload = sessionUpdates().at(-1).ops.find(([m]) => m === 'update')[1]
+    expect(payload.auto_off_attempts).toBe(4)
+    expect(payload.auto_off_alerted_at).toBeUndefined()
+    expect(sendOpsAlert).not.toHaveBeenCalled()
+  })
+
+  it('AC-RETRY.1: a success leaves the attempt history on the row (counter is not reset)', async () => {
+    const recovered = {
+      ...SESSION, status: 'failed', failure_reason: TIMEOUT, auto_off_attempts: 2,
+      updated_at: agoIso(FAST_RETRY_BACKOFF_MS + 46_000),
+    }
+    queues = { ac_sessions: [[], [recovered]] }
+    await GET(req())
+    const payload = sessionUpdates().at(-1).ops.find(([m]) => m === 'update')[1]
+    expect(payload.status).toBe('auto_off')
+    expect(payload).not.toHaveProperty('auto_off_attempts')
   })
 })
