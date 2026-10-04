@@ -1,13 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/postmark', () => ({ sendTransactionalEmail: vi.fn(async () => ({ ok: true })) }))
+vi.mock('@/lib/postmark', () => ({ sendTransactionalEmail: vi.fn(async () => ({ ok: true })), getLocationInboxReplyTo: vi.fn(async () => 'hatchstreet@example.test') }))
 vi.mock('@/lib/transactional-consent', async (importOriginal) => ({
   ...(await importOriginal()),
   loadTransactionalConsent: vi.fn(async () => ({ contact: { id: 'c1', email_status: 'active', contact_preferences: { email_administrative: true } }, unreadable: false })),
 }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 
-import { sendTransactionalEmail } from '@/lib/postmark'
+import { sendTransactionalEmail, getLocationInboxReplyTo } from '@/lib/postmark'
 import { loadTransactionalConsent } from '@/lib/transactional-consent'
 import {
   sendManualBookingConfirmEmail,
@@ -68,11 +68,17 @@ describe('sendManualBookingConfirmEmail', () => {
     expect(r).toEqual({ sent: true, channel: 'email' })
     expect(sendTransactionalEmail).toHaveBeenCalledTimes(1)
     const call = sendTransactionalEmail.mock.calls[0][0]
-    expect(call).toMatchObject({ to: 'sam@example.com', contactId: 'c1', locationId: 'L1', tag: 'class_booking_confirmation', subject: 'You are booked in at UN1T Hatch Street' })
+    expect(call).toMatchObject({ to: 'sam@example.com', contactId: 'c1', locationId: 'L1', tag: 'class_booking_confirmation', subject: 'You are booked in at UN1T Hatch Street', replyTo: 'hatchstreet@example.test' })
     expect(call.htmlBody).toContain('Hi Sam,')
     expect(call.htmlBody).toContain('DUO - STRENGTH on Monday 5 October at 06:00 at UN1T Hatch Street')
     expect(call.htmlBody).toContain('Vault 8, Hatch Street Upper, Dublin 2')
     expect(call.htmlBody).not.toMatch(/\{[a-z_]+\}/)
+  })
+
+  it('a studio with no inbox address sends with no Reply-To rather than failing', async () => {
+    getLocationInboxReplyTo.mockResolvedValueOnce(null)
+    expect(await sendManualBookingConfirmEmail({}, args)).toEqual({ sent: true, channel: 'email' })
+    expect(sendTransactionalEmail.mock.calls[0][0].replyTo).toBeUndefined()
   })
 
   it("uses the operator's copy when the block has it, and strips em-dashes", async () => {

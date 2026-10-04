@@ -18,7 +18,7 @@
 // the result on the card and never fails the approval over it.
 import { renderCopy } from '@/lib/cancellation-form/copy'
 import { DEFAULT_MANUAL_CONFIRM_EMAIL, formatClassTime, manualConfirmEmailFromBlocks, confirmEmailHtml } from './manual-booking-confirm-copy.js'
-import { sendTransactionalEmail } from '@/lib/postmark'
+import { sendTransactionalEmail, getLocationInboxReplyTo } from '@/lib/postmark'
 import { transactionalEmailSuppression, loadTransactionalConsent } from '@/lib/transactional-consent'
 import { logWarn } from '@/lib/log'
 
@@ -47,6 +47,11 @@ export async function sendManualBookingConfirmEmail(db, { locationId, contact, c
   const subject = renderCopy(tpl.subject, vars) || renderCopy(DEFAULT_MANUAL_CONFIRM_EMAIL.subject, vars)
   const body = renderCopy(tpl.body, vars)
   try {
+    // The default copy says "reply to this email": without a Reply-To the
+    // reply would go to the global From mailbox, which nobody at the studio
+    // reads. The studio's inbox address routes it into the unified inbox.
+    // Best-effort (null on any miss → Postmark sets no Reply-To).
+    const replyTo = await getLocationInboxReplyTo(locationId)
     await sendTransactionalEmail({
       to: email,
       subject,
@@ -54,6 +59,7 @@ export async function sendManualBookingConfirmEmail(db, { locationId, contact, c
       contactId: contact.id,
       locationId,
       tag: 'class_booking_confirmation',
+      replyTo: replyTo || undefined,
     })
     return { sent: true, channel: 'email' }
   } catch (e) {
