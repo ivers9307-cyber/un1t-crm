@@ -133,7 +133,12 @@ export async function POST(request) {
   // Sibling locations in the same org are fine — and necessary, since
   // `contacts_email_unique` is global and a location-only match left a known
   // email unable to insert (23505 → 500).
-  const contactId = await findOrCreateRaceContact({ db, locationId, email: b.email.toLowerCase(), name, phone: b.phone, restrictToOrg: true })
+  // SOURCE-LABEL.1 — the helper's INSERT defaults to the race shape
+  // (source 'race_signup'), which is wrong for a class-booking lead and
+  // made every Hatch ad lead look like a race entrant in the contacts
+  // list. insertFields applies on CREATE only; a matched contact keeps
+  // whatever source it already has.
+  const contactId = await findOrCreateRaceContact({ db, locationId, email: b.email.toLowerCase(), name, phone: b.phone, restrictToOrg: true, insertFields: { source: 'class_booking' } })
   if (!contactId) return NextResponse.json({ success: false, error: 'Could not capture your details. Please try again.' }, { status: 500 })
 
   try { await db.from('contacts').update({ lead_source: leadSource }).eq('id', contactId).is('lead_source', null) } catch (e) { logWarn('classbook', 'lead_source failed', { err: e }) }
