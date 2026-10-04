@@ -68,7 +68,7 @@ export default function BlockRenderer({ block, onEdit, locationId, publicPath, c
     case 'pillars':     return <PillarsBlock     block={block} {...editProps} />
     case 'gallery':     return <GalleryBlock     block={block} {...editProps} />
     case 'event':       return <EventBlock       block={block} />
-    case 'lead_form':   return <LeadFormBlock    block={block} onEdit={localOnEdit} publicPath={publicPath} campaign={campaign} />
+    case 'lead_form':   return <LeadFormBlock    block={block} onEdit={localOnEdit} publicPath={publicPath} campaign={campaign} ctaSecondaryHref={ctaSecondaryHref} ctaSecondaryLabel={ctaSecondaryLabel} />
     // MANUALFUNNEL.1 — a funnel switched off the main page still renders in
     // the editor (so its copy and timetable stay editable) and at /start/{path}.
     case 'class_funnel': return (localOnEdit || classFunnelShownOnLanding(block))
@@ -318,12 +318,20 @@ export function EventBlock({ block }) {
   )
 }
 
-export function LeadFormBlock({ block, onEdit, publicPath, campaign }) {
+export function LeadFormBlock({ block, onEdit, publicPath, campaign, ctaSecondaryHref, ctaSecondaryLabel }) {
   // offerOf() is the one place that decides whether there is an offer
   // to show; a malformed group returns null and we render exactly
   // what this section rendered before the group existed.
   const offer = offerOf(block)
   const eyebrow = offer ? (offer.section_eyebrow || 'Two ways in') : 'Join us'
+  // HATCH-OPEN.1 — the panel beside the offer is a button to the class
+  // funnel when the operator asked for it AND pageCtas resolved that
+  // path (it only does so while the funnel is shown on this page). One
+  // decision, made once in pageCtas: the hero's ghost button and this
+  // panel can never point at different places.
+  const funnelLink = offer && block.second_path === 'class_funnel' && ctaSecondaryHref === '#start'
+    ? { href: ctaSecondaryHref, label: ctaSecondaryLabel || 'Book a class' }
+    : null
   return (
     <section id="waitlist" className="scroll-mt-20 relative bg-black text-white py-24 md:py-32 border-t border-white/10 overflow-hidden">
       {/* Faint outlined watermark drifting behind the form — depth
@@ -354,13 +362,20 @@ export function LeadFormBlock({ block, onEdit, publicPath, campaign }) {
                 </p>
               )}
               <div className="mt-auto">
-                <WaitlistWidget
-                  publicPath={publicPath}
-                  campaign={campaign}
-                  buttonLabel={block.button_label}
-                  successMessage={block.success_message}
-                  consentLabel={block.consent_label}
-                />
+                {funnelLink ? (
+                  <a href={funnelLink.href} className="lp-btn">
+                    {funnelLink.label}
+                    <span className="lp-btn-arrow" aria-hidden="true">→</span>
+                  </a>
+                ) : (
+                  <WaitlistWidget
+                    publicPath={publicPath}
+                    campaign={campaign}
+                    buttonLabel={block.button_label}
+                    successMessage={block.success_message}
+                    consentLabel={block.consent_label}
+                  />
+                )}
               </div>
             </div>
           </div>

@@ -138,6 +138,11 @@ const LEAD_FORM_DEFAULT = () => ({
   tag:             'hatch-founding-member',
   lead_source:     'hatch_launch',
   offer:           OFFER_DEFAULT(),
+  // HATCH-OPEN.1 — what sits beside a live offer card: 'form' (this
+  // block's own capture form, the pre-opening waitlist) or
+  // 'class_funnel' (a button to the class funnel shown on this page,
+  // i.e. the free class). 'form' is every block saved before the switch.
+  second_path:     'form',
 })
 
 // Single reader for the offer group — every consumer (pageCtas, the
@@ -326,6 +331,14 @@ export function pageCtas(blocks) {
   // A live offer with no URL is an operator half-edit, not a reason
   // to ship <a href="">. Fall through to the form.
   if (offer && offer.cta_url) {
+    // HATCH-OPEN.1 — once the studio is open the second way in is the
+    // free class, not the waitlist. Operator-chosen on the lead form
+    // (`second_path`), and honoured only while the funnel is actually
+    // shown on this page: otherwise #start is a dead anchor and the
+    // form keeps the slot.
+    const funnelSecond = leadForm.second_path === 'class_funnel' && list.some((b) => classFunnelShownOnLanding(b))
+      ? { href: '#start', label: classFunnelCtaLabel(list) }
+      : null
     return {
       primary: {
         href: offer.cta_url,
@@ -335,7 +348,7 @@ export function pageCtas(blocks) {
         labelShort: (typeof offer.cta_label_short === 'string' && offer.cta_label_short.trim()) || '',
         external: true,
       },
-      secondary: waitlist,
+      secondary: funnelSecond || waitlist,
     }
   }
   if (waitlist) return { primary: waitlist, secondary: null }
