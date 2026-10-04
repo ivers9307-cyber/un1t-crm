@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server'
 import { refreshWindow, parseConsentKeyword, pickInboundContact, markUndeliverableIfPermanent } from '@/lib/whatsapp'
 import { applyWhatsappConsentKeyword, applyMetaUserPreference } from '@/lib/whatsapp-consent'
 import { handleFlowCompletion } from '@/lib/whatsapp-flow/completion.js'
-import { resolveWhatsAppNumberByPhoneNumberId, classifyInboundOwner } from '@/lib/whatsapp-config'
+import { resolveWhatsAppNumberByPhoneNumberId, classifyInboundOwner, getLocationWhatsAppNumberConfig } from '@/lib/whatsapp-config'
 import { verifyMetaSignature, safeEqual } from '@/lib/webhook-auth'
 import { sendPush, sendPushToRolesAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
@@ -268,7 +268,29 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
 
   // Determine location: contact's location wins if known (their
   // existing CRM placement), otherwise the WA-number owner.
-  const locationId = contact?.location_id || defaultLocationId
+  //
+  // WANUMBERLESS.1 — unless that studio has no WhatsApp number of its own.
+  // Every reply into a thread goes from the thread's studio's number
+  // (getConversationReplyConfig → getWhatsAppConfig), and a number-less
+  // studio is refused there (WACONFIGFALLBACK.1), so a thread filed at one
+  // could be read but never answered: Hatch Street's first opening-week
+  // replies to a Stillorgan broadcast landed in the Hatch inbox behind
+  // "No WhatsApp number is connected at this location." The thread lives at
+  // the studio whose number the customer wrote to instead, where the
+  // receiving-number stamp below applies and the reply path works. A studio
+  // with an active number keeps its own threads exactly as before. A failed
+  // lookup files the thread at the receiving studio too, logged: a thread
+  // that can be answered beats one that cannot.
+  let locationId = contact?.location_id || defaultLocationId
+  if (locationId !== defaultLocationId) {
+    let ownNumber = null
+    try {
+      ownNumber = await getLocationWhatsAppNumberConfig(locationId)
+    } catch (e) {
+      console.error(`[wa-webhook] WhatsApp number lookup for location ${locationId} failed (thread filed at the receiving number's studio ${defaultLocationId}):`, e?.message || String(e))
+    }
+    if (!ownNumber) locationId = defaultLocationId
+  }
 
   // Get or create conversation (keyed by phone number, NOT by contact)
   const { data: existingConv } = await db.from('whatsapp_conversations')

@@ -492,6 +492,26 @@ describe('pageCtas (HATCH-OFFER.1)', () => {
       secondary: null,
     })
   })
+  // HATCH-OPEN.1
+  const shownFunnel = { id: 'f', type: 'class_funnel', cta_label: 'Book free class' }
+  const hiddenFunnel = { ...shownFunnel, show_on_landing: false }
+  it('points the secondary at the class funnel when the lead form asks for it and the funnel is on the page', () => {
+    expect(pageCtas([{ ...leadForm(liveOffer), second_path: 'class_funnel' }, shownFunnel]).secondary)
+      .toEqual({ href: '#start', label: 'Book free class' })
+  })
+  it('keeps the form as secondary when the funnel is hidden from this page (no dead #start anchor)', () => {
+    expect(pageCtas([{ ...leadForm(liveOffer), second_path: 'class_funnel' }, hiddenFunnel]).secondary)
+      .toEqual({ href: '#waitlist', label: 'Keep me posted' })
+    expect(pageCtas([{ ...leadForm(liveOffer), second_path: 'class_funnel' }]).secondary)
+      .toEqual({ href: '#waitlist', label: 'Keep me posted' })
+  })
+  it('ignores second_path when the offer is off: the form is primary as before', () => {
+    expect(pageCtas([{ ...leadForm({ ...liveOffer, enabled: false }), second_path: 'class_funnel' }, shownFunnel]))
+      .toEqual({ primary: { href: '#waitlist', label: 'Keep me posted' }, secondary: null })
+  })
+  it('a block without second_path behaves exactly as before even with a funnel on the page', () => {
+    expect(pageCtas([leadForm(liveOffer), shownFunnel]).secondary).toEqual({ href: '#waitlist', label: 'Keep me posted' })
+  })
   it('never returns a secondary when there is no lead form', () => {
     expect(pageCtas([{ id: 'b', type: 'booking', slug: 'x' }]).secondary).toBeNull()
     expect(pageCtas([]).secondary).toBeNull()

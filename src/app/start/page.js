@@ -18,6 +18,7 @@ import { blocksOrDefault } from '@/lib/landing-page-blocks'
 import BlockRenderer, { SiteHeader, SiteFooter } from '@/components/landing-page/BlockRenderers'
 import RevealManager from '@/components/landing-page/RevealManager'
 import { RevealArmScript } from '@/components/landing-page/reveal-arm'
+import VisitOriginCapture from '@/components/VisitOriginCapture'
 import ClassFunnel from '@/components/ClassFunnel'
 import { getLandingLogo, STILLORGAN_LANDING_LOGO } from '@/lib/landing-logo'
 
@@ -65,6 +66,7 @@ export default async function StartPage() {
   return (
     <div className="min-h-screen bg-black text-white antialiased">
       <RevealArmScript />
+      <VisitOriginCapture />
       <RevealManager />
       <SiteHeader
         logoUrl={logoUrl}

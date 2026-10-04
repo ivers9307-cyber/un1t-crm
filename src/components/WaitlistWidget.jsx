@@ -12,6 +12,7 @@
 // the visitor gets an unmistakable "done" moment.
 
 import { useState } from 'react'
+import { readVisitOrigin } from '@/lib/visit-origin'
 
 export default function WaitlistWidget({ publicPath, campaign, buttonLabel, successMessage, consentLabel }) {
   const [form, setForm] = useState({ first_name: '', email: '', phone: '', consent: false })
@@ -28,7 +29,8 @@ export default function WaitlistWidget({ publicPath, campaign, buttonLabel, succ
       const r = await fetch('/api/public/leads', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...form, public_path: publicPath, ...(campaign ? { campaign } : {}) }),
+        // VISIT-ORIGIN.1 — first page of the visit + referrer, if remembered.
+        body: JSON.stringify({ ...form, public_path: publicPath, ...(campaign ? { campaign } : {}), visit: readVisitOrigin() || undefined }),
       })
       const j = await r.json().catch(() => ({}))
       if (!r.ok || j.success === false) {

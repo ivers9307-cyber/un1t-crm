@@ -13,6 +13,7 @@ import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit
 import { validateBody } from '@/lib/validate'
 import { LeadSchema, normaliseLead, leadConfigFromBlocks, resolveCampaign } from '@/lib/leads'
 import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
+import { sanitiseVisitOrigin } from '@/lib/visit-origin'
 import { writeContactTag } from '@/lib/contact-tags'
 import { logWarn } from '@/lib/log'
 import { placeWaitlistEntry } from '@/lib/waitlist-entry'
@@ -27,7 +28,7 @@ export async function POST(request) {
   if (!validation.ok) return validation.response
   const body = validation.data
 
-  const { firstName, email, phone, publicPath, campaign } = normaliseLead(body)
+  const { firstName, email, phone, publicPath, campaign, visit } = normaliseLead(body)
 
   // SAAS-6: tenant-keyed (the landing public_path, resolved to a studio
   // just below) — one tenant's lead traffic can never consume another
@@ -69,7 +70,9 @@ export async function POST(request) {
   // but `contacts_email_unique` is a GLOBAL index — so an existing Stillorgan
   // member joining the Hatch Street waitlist found no match, hit 23505 on the
   // insert, and got a 500. Org scope keeps the cross-TENANT IDOR closed.
-  const contactId = await findOrCreateRaceContact({ db, locationId, email, name: firstName, phone, restrictToOrg: true })
+  // SOURCE-LABEL.1 — see class-booking: a website lead form is not a race
+  // signup. CREATE only; matched contacts are untouched.
+  const contactId = await findOrCreateRaceContact({ db, locationId, email, name: firstName, phone, restrictToOrg: true, insertFields: { source: 'lead_form' } })
   if (!contactId) {
     return NextResponse.json({ success: false, error: 'Could not capture your details. Please try again.' }, { status: 500 })
   }
@@ -84,6 +87,16 @@ export async function POST(request) {
       .update({ last_lead_source: leadSource, last_lead_source_at: new Date().toISOString() })
       .eq('id', contactId)
   } catch (e) { logWarn('leads', 'lead_source set failed', { err: e }) }
+  // VISIT-ORIGIN.1 — first touch, stamp-if-null, best-effort.
+  try {
+    const v = sanitiseVisitOrigin(visit)
+    if (v) {
+      await db.from('contacts')
+        .update({ visit_referrer: v.referrer, visit_landing_path: v.landing_path, visit_captured_at: new Date().toISOString() })
+        .eq('id', contactId)
+        .is('visit_captured_at', null)
+    }
+  } catch (e) { logWarn('leads', 'visit origin failed', { err: e }) }
 
   // CAPI: paid-funnel website Lead event. Contact-keyed event_id so repeat
   // submits dedupe at Meta; dataset gating lives in the helper.

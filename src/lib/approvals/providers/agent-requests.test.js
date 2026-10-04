@@ -46,6 +46,20 @@ describe('agentRequestsProvider.fetchPending — AGENT-REQ-UX.1 decide-card fiel
     })
   })
 
+  // VISIT-ORIGIN.1
+  it('labels where the contact came from, and omits the line when nothing is known', async () => {
+    const db = stubDb([
+      { id: 'r3', kind: 'class_booking', details: {}, created_at: '2026-10-04T10:00:00Z', location_id: 'loc1',
+        contact: { id: 'ct3', name: 'A', ad_provider: 'meta', utm_content: 'why-un1t-city-centre' } },
+      { id: 'r4', kind: 'class_booking', details: {}, created_at: '2026-10-04T10:00:00Z', location_id: 'loc1',
+        contact: { id: 'ct4', name: 'B', visit_referrer: 'https://l.instagram.com', visit_landing_path: '/hatch-street' } },
+      { id: 'r5', kind: 'class_booking', details: {}, created_at: '2026-10-04T10:00:00Z', location_id: 'loc1',
+        contact: { id: 'ct5', name: 'C' } },
+    ])
+    const { items } = await agentRequestsProvider.fetchPending(db, { activeLocation: { id: 'loc1' } })
+    expect(items.map((i) => i.contactOrigin)).toEqual(['Meta ad (why-un1t-city-centre)', 'Instagram, landed on /hatch-street', null])
+  })
+
   it('nulls the contact fields when the embed is empty', async () => {
     const db = stubDb([{ id: 'r2', kind: 'class_booking', details: {}, created_at: '2026-08-24T10:00:00Z', location_id: 'loc1' }])
     const { items } = await agentRequestsProvider.fetchPending(db, { activeLocation: { id: 'loc1' } })

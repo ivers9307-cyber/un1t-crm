@@ -17,6 +17,7 @@
 // dev preview harness — so the editor previews exactly what ships.
 
 import { poppinsBody as poppins } from '@/fonts/poppins'
+import VisitOriginCapture from '@/components/VisitOriginCapture'
 
 export default function WelcomeLayout({ children }) {
   // id="lp-shell": the reveal arming script (reveal-arm.js) adds the
@@ -30,6 +31,8 @@ export default function WelcomeLayout({ children }) {
       suppressHydrationWarning
       className={`${poppins.variable} font-body`}
     >
+      {/* VISIT-ORIGIN.1 — first public page of the visit remembers its referrer. */}
+      <VisitOriginCapture />
       {children}
     </div>
   )

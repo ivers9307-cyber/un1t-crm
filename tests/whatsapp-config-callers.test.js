@@ -96,9 +96,9 @@ const CALLERS = {
     why: 'inbound media fetched with the message location’s own token; none → null (the inbox’s graceful gap). whatsapp-media-server.test.js.',
   },
   'src/app/api/webhooks/whatsapp/route.js': {
-    calls: { resolveWhatsAppNumberByPhoneNumberId: 2 },
+    calls: { resolveWhatsAppNumberByPhoneNumberId: 2, getLocationWhatsAppNumberConfig: 1 },
     decision: 'resolver',
-    why: 'inbound routing: only an active row owns inbound (classifyInboundOwner); the env branch is gone (it could only produce a location-less config, which was dropped anyway).',
+    why: 'inbound routing: only an active row owns inbound (classifyInboundOwner); the env branch is gone (it could only produce a location-less config, which was dropped anyway). WANUMBERLESS.1: a contact filed at a studio with no active row (getLocationWhatsAppNumberConfig → null, or a failed lookup, logged) gets the thread at the receiving number’s studio, which can answer it; route.reply-number.test.js.',
   },
   'src/app/api/whatsapp/conversational-automation/route.js': {
     calls: { setConversationalAutomation: 1, ownNumberOrRefusal: 1 },

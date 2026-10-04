@@ -45,6 +45,24 @@ describe('LeadFormBlock offer branch (HATCH-OFFER.1)', () => {
     const html = renderToStaticMarkup(<LeadFormBlock block={{ ...base, offer }} publicPath="hatch-street" />)
     expect(html).toContain('id="waitlist"')
   })
+  // HATCH-OPEN.1
+  it('swaps the capture form for a funnel button when asked and pageCtas resolved #start', () => {
+    const html = renderToStaticMarkup(
+      <LeadFormBlock block={{ ...base, offer, heading: 'Try us first', second_path: 'class_funnel' }} publicPath="hatch-street" ctaSecondaryHref="#start" ctaSecondaryLabel="Book free class" />
+    )
+    expect(html).toContain('€189')
+    expect(html).toContain('Try us first')
+    expect(html).toContain('href="#start"')
+    expect(html).toContain('Book free class')
+    expect(html).not.toContain('<form')
+  })
+  it('keeps the form when second_path asks for the funnel but pageCtas did not resolve it', () => {
+    const html = renderToStaticMarkup(
+      <LeadFormBlock block={{ ...base, offer, second_path: 'class_funnel' }} publicPath="hatch-street" ctaSecondaryHref="#waitlist" ctaSecondaryLabel="Keep me posted" />
+    )
+    expect(html).toContain('<form')
+    expect(html).not.toContain('href="#start"')
+  })
   it('renders no offer markup at all when the offer is off', () => {
     const html = renderToStaticMarkup(<LeadFormBlock block={{ ...base, offer: { ...offer, enabled: false } }} publicPath="hatch-street" />)
     expect(html).not.toContain('€189')
