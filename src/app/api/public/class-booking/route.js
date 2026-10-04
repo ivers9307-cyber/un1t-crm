@@ -46,6 +46,8 @@ const Schema = z.object({
     // METADATASET.1 — the ad click id off the landing URL. Never stored: it
     // only rides on the Lead event sent to Meta below.
     fbclid: z.string().max(500).optional(),
+    // MATCHQUALITY.1 — the Pixel's browser id cookie, when consent let it set.
+    fbp: z.string().max(100).optional(),
   }).optional(),
   // VISIT-ORIGIN.1 — first page of the visit + its referrer. Low-trust;
   // sanitiseVisitOrigin reduces it before anything is stored.
@@ -281,6 +283,9 @@ export async function POST(request) {
       fbc: fbcFromFbclid(b.attribution?.fbclid),
       clientIp: ip,
       userAgent: request.headers.get('user-agent') || undefined,
+      // MATCHQUALITY.1 — name, our contact id and the browser id cookie.
+      firstName: b.first_name, lastName: b.last_name, externalId: contactId,
+      fbp: b.attribution?.fbp,
     })
   } catch (e) { logWarn('classbook', 'capi lead failed', { err: e }) }
 

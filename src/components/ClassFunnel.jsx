@@ -16,6 +16,16 @@ import { trackFunnelStep } from '@/lib/funnel-track'
 import { readVisitOrigin } from '@/lib/visit-origin'
 import ClassFunnelCheckout from '@/components/landing-page/ClassFunnelCheckout'
 
+// MATCHQUALITY.1 — Meta's `_fbp` cookie, or null. Never throws (no document
+// during SSR, cookies blocked, no Pixel yet).
+function readFbpCookie() {
+  try {
+    if (typeof document === 'undefined') return null
+    const m = document.cookie.match(/(?:^|;\s*)_fbp=([^;]+)/)
+    return m ? decodeURIComponent(m[1]) : null
+  } catch { return null }
+}
+
 // Default copy = today's live Stillorgan /start funnel, so a bare
 // <ClassFunnel /> is unchanged from the old StartFunnel.
 const DEFAULTS = {
@@ -92,11 +102,21 @@ export default function ClassFunnel(props) {
   function buildAttribution() {
     const p = attributionRef.current || {}
     const hasSignal = p.meta_ad_id || p.utm_campaign || p.utm_content || p.utm_term || p.fbclid
-    return hasSignal ? {
-      utm_campaign: p.utm_campaign, utm_content: p.utm_content, utm_term: p.utm_term,
-      ad_provider: 'meta', ad_external_id: p.meta_ad_id,
-      fbclid: p.fbclid,
-    } : undefined
+    // MATCHQUALITY.1 — the Pixel's browser id cookie (_fbp), read at submit
+    // time because the Pixel only loads after cookie consent. Sent for
+    // organic visitors too: it raises Meta's match quality on the server
+    // Lead and does not make anyone an ad lead (ad_provider stays tied to
+    // an actual ad signal).
+    const fbp = readFbpCookie()
+    if (!hasSignal && !fbp) return undefined
+    return {
+      ...(hasSignal ? {
+        utm_campaign: p.utm_campaign, utm_content: p.utm_content, utm_term: p.utm_term,
+        ad_provider: 'meta', ad_external_id: p.meta_ad_id,
+        fbclid: p.fbclid,
+      } : {}),
+      ...(fbp ? { fbp } : {}),
+    }
   }
 
   // Fire one funnel step to the Pixel + Vercel (diagnostics) AND to the CRM's

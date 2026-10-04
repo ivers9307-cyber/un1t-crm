@@ -967,6 +967,13 @@ describe('PATCH class_booking approval — manual booking sends Schedule to Meta
     expect(updates.at(-1).patch.status).toBe('actioned')
   })
 
+  // MATCHQUALITY.1
+  it('the Schedule carries the contact\'s names and id, so Meta joins it to the Lead', async () => {
+    db = manualDb(manualRow(), updates, { contact: { id: 'c1', first_name: 'Sam', last_name: 'Byrne', email: 'sam@example.com', phone: '0871234567' } })
+    await approve()
+    expect(sendWebsiteConversion.mock.calls[0][1]).toMatchObject({ firstName: 'Sam', lastName: 'Byrne', externalId: 'c1' })
+  })
+
   it('no queue row came back → still sent, keyed on the card instead', async () => {
     db = manualDb(manualRow(), updates, { queueRows: [] })
     await approve()
