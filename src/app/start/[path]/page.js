@@ -24,6 +24,7 @@ import { blocksOrDefault } from '@/lib/landing-page-blocks'
 import BlockRenderer, { SiteHeader, SiteFooter } from '@/components/landing-page/BlockRenderers'
 import RevealManager from '@/components/landing-page/RevealManager'
 import { RevealArmScript } from '@/components/landing-page/reveal-arm'
+import VisitOriginCapture from '@/components/VisitOriginCapture'
 import ClassFunnel from '@/components/ClassFunnel'
 import { resolveLandingPath, classFunnelCtaLabel } from '@/lib/public-landing'
 import { isPubliclyVisible } from '@/lib/landing-page-visibility'
@@ -85,6 +86,7 @@ export default async function StudioStartPage(props) {
   return (
     <div className="min-h-screen bg-black text-white antialiased">
       <RevealArmScript />
+      <VisitOriginCapture />
       <RevealManager />
       <SiteHeader
         logoUrl={row.logo_url || null}

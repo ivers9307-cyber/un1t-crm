@@ -80,3 +80,46 @@ describe('POST /api/public/class-booking — the Lead event sent to Meta', () =>
     expect(sendWebsiteConversion.mock.calls[0][1].fbc).toBeNull()
   })
 })
+
+// VISIT-ORIGIN.1 — the visit origin the form sends is sanitised and stamped
+// on the contact (first touch: .is('visit_captured_at', null)).
+describe('POST /api/public/class-booking — visit origin', () => {
+  const stubFrom = (updates) => (table) => {
+    const b = {
+      select: () => b, eq: () => b, in: () => b, limit: () => b,
+      is: (col) => { b._is = col; return b },
+      update: (patch) => { updates.push({ table, patch, b }); return b },
+      insert: () => ({ select: () => ({ maybeSingle: async () => ({ data: { id: 'cbr-1', class_name: 'Strength' }, error: null }) }) }),
+      maybeSingle: async () => (table === 'landing_page_settings'
+        ? { data: { location_id: 'L1', blocks: [{ type: 'class_funnel' }] }, error: null }
+        : { data: null, error: null }),
+      then: (resolve, reject) => Promise.resolve({ data: null, error: null }).then(resolve, reject),
+    }
+    return b
+  }
+  it('stamps the sanitised referrer and landing path on the contact, once', async () => {
+    const updates = []
+    const spy = vi.spyOn(db, 'from').mockImplementation(stubFrom(updates))
+    try {
+      await POST(new Request('http://localhost/api/public/class-booking', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          path: 'hatch-street', event_id: 'ev-1', first_name: 'Sam', last_name: 'Byrne',
+          email: 'sam@example.com', phone: '0871234567', consent: true,
+          visit: { referrer: 'https://l.instagram.com/?u=x', landing_path: '/hatch-street?utm_campaign=y' },
+        }),
+      }))
+    } finally { spy.mockRestore() }
+    const stamp = updates.find((u) => u.table === 'contacts' && u.patch.visit_referrer !== undefined)
+    expect(stamp).toBeTruthy()
+    expect(stamp.patch).toMatchObject({ visit_referrer: 'https://l.instagram.com', visit_landing_path: '/hatch-street' })
+    expect(typeof stamp.patch.visit_captured_at).toBe('string')
+    expect(stamp.b._is).toBe('visit_captured_at')
+  })
+  it('a submission without a visit stamps nothing', async () => {
+    const updates = []
+    const spy = vi.spyOn(db, 'from').mockImplementation(stubFrom(updates))
+    try { await book(undefined) } finally { spy.mockRestore() }
+    expect(updates.some((u) => u.table === 'contacts' && u.patch.visit_referrer !== undefined)).toBe(false)
+  })
+})
