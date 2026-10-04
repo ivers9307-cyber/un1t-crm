@@ -264,6 +264,14 @@ export default function AgentRequestDecideCard({ item, onDecided }) {
         </div>
       )}
 
+      {/* VISIT-ORIGIN.1 — where this person came from, when known. */}
+      {item.contactOrigin && (
+        <p className="text-xs text-un1t-muted mt-2">
+          <span className="text-[10px] uppercase tracking-wide text-un1t-subtle mr-2">Came via</span>
+          {item.contactOrigin}
+        </p>
+      )}
+
       {outcome && (
         <p className={`text-sm mt-3 ${outcome.tone === 'ok' ? 'text-green-700' : outcome.tone === 'bad' ? 'text-red-700' : 'text-un1t-muted'}`}>
           {outcome.text}

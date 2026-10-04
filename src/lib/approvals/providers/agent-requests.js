@@ -27,6 +27,7 @@
 // query needed — unlike host_events (org-scoped).
 
 import { viewerActiveLocationId } from '../registry'
+import { visitOriginLabel } from '@/lib/visit-origin'
 import { formatMoneyMinor } from '@/lib/money-format'
 import { retryOffered, RETRYABLE_KINDS } from '@/lib/agent/request-recovery'
 import { failureExplanation, accountSummaryLine, whyFlagged, accountMismatchWarning } from '@/lib/approvals/agent-request-why'
@@ -36,7 +37,8 @@ import { failureExplanation, accountSummaryLine, whyFlagged, accountMismatchWarn
 // what the account can book with before deciding. glofox_member_id
 // (PERSON-ACCT.8) is read only for accountMismatchWarning's comparison
 // against details.elected_glofox_member_id — never displayed itself.
-const CONTACT_EMBED = 'contact:contacts!contact_id ( id, name, email, phone, glofox_member_id, glofox_membership_plan, glofox_membership_status, glofox_membership_state, trial_credits_remaining )'
+// VISIT-ORIGIN.1 adds ad_provider/utm_content/visit_* for the "Came via" line.
+const CONTACT_EMBED = 'contact:contacts!contact_id ( id, name, email, phone, glofox_member_id, glofox_membership_plan, glofox_membership_status, glofox_membership_state, trial_credits_remaining, ad_provider, utm_content, visit_referrer, visit_landing_path )'
 
 const KIND_LABELS = {
   pause: 'Pause membership',
@@ -87,6 +89,9 @@ function toItem(r) {
     // For the operator's Glofox lookup — shown on the decide card.
     contactEmail: r.contact?.email || null,
     contactPhone: r.contact?.phone || null,
+    // VISIT-ORIGIN.1 — one line: "Meta ad (…)", "Instagram, landed on /…",
+    // "Direct link to /…", or null when nothing is known.
+    contactOrigin: visitOriginLabel(r.contact) || null,
     retentionFlagged: !!r.retention_flagged,
     channel: r.channel || null,
     conversationId: r.conversation_id || null,

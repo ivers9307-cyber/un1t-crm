@@ -8,6 +8,7 @@ import { Mail, Phone } from 'lucide-react'
 import LinkedAccountsCard from '@/components/LinkedAccountsCard'
 import ContactMarketingPreferencesCard from '@/components/ContactMarketingPreferencesCard'
 import GlofoxProfileCard from './GlofoxProfileCard'
+import { visitOriginLabel } from '@/lib/visit-origin'
 
 function InfoRow({ label, value }) {
   return (
@@ -57,6 +58,8 @@ export default function ContactWhoRail({ contact, person, identityEmails, identi
       <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4 space-y-3">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-2">Details</h3>
         <InfoRow label="Source" value={contact.lead_source || contact.source} />
+        {/* VISIT-ORIGIN.1 — only when something is known; no "unknown" row. */}
+        {visitOriginLabel(contact) && <InfoRow label="Came via" value={visitOriginLabel(contact)} />}
         <InfoRow label="Label" value={contact.label || '—'} />
         <InfoRow label="Created" value={new Date(contact.created_at).toLocaleDateString('en-IE')} />
       </div>

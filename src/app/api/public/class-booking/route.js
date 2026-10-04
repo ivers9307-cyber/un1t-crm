@@ -12,6 +12,7 @@ import { createServerClient } from '@/lib/supabase'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { validateBody } from '@/lib/validate'
 import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
+import { sanitiseVisitOrigin } from '@/lib/visit-origin'
 import { writeContactTag } from '@/lib/contact-tags'
 import { isValidMobileNumber } from '@/lib/phone-validate'
 import { publishQueuePush, CLASS_BOOKINGS_WORKER_PATH } from '@/lib/qstash'
@@ -45,6 +46,12 @@ const Schema = z.object({
     // METADATASET.1 — the ad click id off the landing URL. Never stored: it
     // only rides on the Lead event sent to Meta below.
     fbclid: z.string().max(500).optional(),
+  }).optional(),
+  // VISIT-ORIGIN.1 — first page of the visit + its referrer. Low-trust;
+  // sanitiseVisitOrigin reduces it before anything is stored.
+  visit: z.object({
+    referrer: z.string().max(2000).optional(),
+    landing_path: z.string().max(500).optional(),
   }).optional(),
 })
 
@@ -166,6 +173,18 @@ export async function POST(request) {
       await db.from('contacts').update(patch).eq('id', contactId).is('ad_external_id', null)
     }
   } catch (e) { logWarn('attribution', 'utm persist failed', { err: e }) }
+  // VISIT-ORIGIN.1 — first touch, stamp-if-null, best-effort. Stamped for
+  // organic visitors too: that is the whole point (an ad lead already has
+  // ad_provider; the label helper lets the ad win).
+  try {
+    const v = sanitiseVisitOrigin(b.visit)
+    if (v) {
+      await db.from('contacts')
+        .update({ visit_referrer: v.referrer, visit_landing_path: v.landing_path, visit_captured_at: new Date().toISOString() })
+        .eq('id', contactId)
+        .is('visit_captured_at', null)
+    }
+  } catch (e) { logWarn('attribution', 'visit origin failed', { err: e }) }
   try { await writeContactTag(db, { contactId, locationId, tag }) } catch (e) { logWarn('classbook', 'tag failed', { err: e }) }
   try {
     const { applyFormMarketingConsent } = await import('@/lib/marketing-consent')

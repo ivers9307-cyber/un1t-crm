@@ -13,6 +13,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { isValidMobileNumber } from '@/lib/phone-validate'
 import { trackFunnelStep } from '@/lib/funnel-track'
+import { readVisitOrigin } from '@/lib/visit-origin'
 import ClassFunnelCheckout from '@/components/landing-page/ClassFunnelCheckout'
 
 // Default copy = today's live Stillorgan /start funnel, so a bare
@@ -293,6 +294,8 @@ export default function ClassFunnel(props) {
           first_name: form.first_name.trim(), last_name: form.last_name.trim(),
           email: form.email.trim(), phone: form.phone.trim(), consent: form.consent,
           attribution: buildAttribution(),
+          // VISIT-ORIGIN.1 — first page of the visit + referrer, if remembered.
+          visit: readVisitOrigin() || undefined,
         }),
       })
       const j = await r.json().catch(() => ({}))

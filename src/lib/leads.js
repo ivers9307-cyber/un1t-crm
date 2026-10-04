@@ -25,6 +25,12 @@ export const LeadSchema = z.object({
   // against the LEAD_CAMPAIGNS allowlist server-side — an unknown or
   // studio-mismatched value is ignored, never trusted to set a tag.
   campaign: z.string().trim().min(1).max(80).optional(),
+  // VISIT-ORIGIN.1 — first page of the visit + its referrer. Low-trust;
+  // sanitiseVisitOrigin reduces it before anything is stored.
+  visit: z.object({
+    referrer: z.string().max(2000).optional(),
+    landing_path: z.string().max(500).optional(),
+  }).optional(),
 })
 
 // Normalise a validated body into the fields the handler stores.
@@ -35,6 +41,7 @@ export function normaliseLead(data) {
     phone: data.phone.trim(),
     publicPath: data.public_path.trim(),
     campaign: data.campaign ? data.campaign.trim() : null,
+    visit: data.visit || null,
   }
 }
 
