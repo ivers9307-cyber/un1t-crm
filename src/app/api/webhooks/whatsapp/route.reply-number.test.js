@@ -25,6 +25,8 @@ vi.mock('@/lib/whatsapp-flow/completion.js', () => ({ handleFlowCompletion: vi.f
 vi.mock('@/lib/whatsapp-config', async (importOriginal) => ({
   ...(await importOriginal()),
   resolveWhatsAppNumberByPhoneNumberId: vi.fn(),
+  // WANUMBERLESS.1 — the contact's own studio's number; null = no number there.
+  getLocationWhatsAppNumberConfig: vi.fn(async () => null),
 }))
 vi.mock('@/lib/webhook-auth', () => ({ verifyMetaSignature: vi.fn(() => ({ ok: true })), safeEqual: vi.fn(() => true) }))
 vi.mock('@/lib/push', () => ({ sendPush: vi.fn(), sendPushToRolesAtLocation: vi.fn() }))
@@ -52,7 +54,7 @@ vi.mock('@/lib/whatsapp-coexistence-ingest', () => ({ syncContactMatchOnly: vi.f
 
 import { POST } from './route'
 import { createServerClient } from '@/lib/supabase'
-import { resolveWhatsAppNumberByPhoneNumberId } from '@/lib/whatsapp-config'
+import { resolveWhatsAppNumberByPhoneNumberId, getLocationWhatsAppNumberConfig } from '@/lib/whatsapp-config'
 import { maybeAutoReply } from '@/lib/agent/auto-reply'
 import { pickInboundContact } from '@/lib/whatsapp'
 
@@ -165,13 +167,47 @@ describe('POST /api/webhooks/whatsapp — the receiving number is recorded on th
     expect(stampedFirst).toBe(true)
   })
 
-  it('a contact filed at ANOTHER studio keeps that studio’s thread, and the thread is not stamped with this number', async () => {
+  it('a contact filed at ANOTHER studio that has its own number keeps that studio’s thread, and the thread is not stamped with this number', async () => {
     pickInboundContact.mockReturnValueOnce({ id: 'contact-9', location_id: 'loc-other' })
+    getLocationWhatsAppNumberConfig.mockResolvedValueOnce({ source: 'db', id: 'wn-other', locationId: 'loc-other', phoneNumberId: '555', token: 'tok2' })
     resolveWhatsAppNumberByPhoneNumberId.mockResolvedValue(STILLORGAN)
     await POST(reqFor(inboundText(REGISTERED_PNI)))
+    expect(getLocationWhatsAppNumberConfig).toHaveBeenCalledWith('loc-other')
     const insert = db.calls.find((c) => c.table === 'whatsapp_conversations' && c.ops.some(([m]) => m === 'insert'))
     expect(insert.ops.find(([m]) => m === 'insert')[1]).toMatchObject({ location_id: 'loc-other' })
     expect(stamps()).toEqual([])
+  })
+
+  // WANUMBERLESS.1 — a studio with no number cannot answer a thread filed
+  // there (the reply path refuses it), so the thread goes to the studio
+  // whose number the customer wrote to, and is stamped with that number.
+  it('a contact filed at a studio with NO WhatsApp number gets the thread at the receiving studio, stamped with its number', async () => {
+    pickInboundContact.mockReturnValueOnce({ id: 'contact-9', location_id: 'loc-hatch' })
+    getLocationWhatsAppNumberConfig.mockResolvedValueOnce(null)
+    resolveWhatsAppNumberByPhoneNumberId.mockResolvedValue(STILLORGAN)
+    await POST(reqFor(inboundText(REGISTERED_PNI)))
+    expect(getLocationWhatsAppNumberConfig).toHaveBeenCalledWith('loc-hatch')
+    const lookup = db.calls.find((c) => c.table === 'whatsapp_conversations' && c.ops.some(([m]) => m === 'select'))
+    expect(lookup.ops).toContainEqual(['eq', 'location_id', 'loc-still'])
+    const insert = db.calls.find((c) => c.table === 'whatsapp_conversations' && c.ops.some(([m]) => m === 'insert'))
+    expect(insert.ops.find(([m]) => m === 'insert')[1]).toMatchObject({ location_id: 'loc-still', contact_id: 'contact-9' })
+    const msgInsert = db.calls.find((c) => c.table === 'whatsapp_messages' && c.ops.some(([m]) => m === 'insert'))
+    expect(msgInsert.ops.find(([m]) => m === 'insert')[1]).toMatchObject({ location_id: 'loc-still' })
+    expect(stamps().map((c) => c.ops)).toEqual([[['update', { whatsapp_number_id: 'wn-1' }], ['eq', 'id', 'conv-1']]])
+  })
+
+  it('a failed number lookup for the contact’s studio is logged and files the thread at the receiving studio', async () => {
+    pickInboundContact.mockReturnValueOnce({ id: 'contact-9', location_id: 'loc-hatch' })
+    getLocationWhatsAppNumberConfig.mockRejectedValueOnce(new Error('Failed to load WhatsApp config for location loc-hatch: boom'))
+    resolveWhatsAppNumberByPhoneNumberId.mockResolvedValue(STILLORGAN)
+    const res = await POST(reqFor(inboundText(REGISTERED_PNI)))
+    expect(res.status).toBe(200)
+    const insert = db.calls.find((c) => c.table === 'whatsapp_conversations' && c.ops.some(([m]) => m === 'insert'))
+    expect(insert.ops.find(([m]) => m === 'insert')[1]).toMatchObject({ location_id: 'loc-still' })
+    expect(errSpy).toHaveBeenCalledWith(
+      '[wa-webhook] WhatsApp number lookup for location loc-hatch failed (thread filed at the receiving number\'s studio loc-still):',
+      'Failed to load WhatsApp config for location loc-hatch: boom',
+    )
   })
 
   it('a failed stamp (e.g. 696 not applied yet) is logged and costs nothing else: message stored, Mia runs', async () => {

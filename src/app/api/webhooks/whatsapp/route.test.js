@@ -24,6 +24,8 @@ vi.mock('@/lib/whatsapp-flow/completion.js', () => ({ handleFlowCompletion: vi.f
 vi.mock('@/lib/whatsapp-config', async (importOriginal) => ({
   ...(await importOriginal()),
   resolveWhatsAppNumberByPhoneNumberId: vi.fn(),
+  // WANUMBERLESS.1 — the contact's own studio's number; null = no number there.
+  getLocationWhatsAppNumberConfig: vi.fn(async () => null),
 }))
 vi.mock('@/lib/webhook-auth', () => ({ verifyMetaSignature: vi.fn(() => ({ ok: true })), safeEqual: vi.fn(() => true) }))
 vi.mock('@/lib/push', () => ({ sendPush: vi.fn(), sendPushToRolesAtLocation: vi.fn() }))
