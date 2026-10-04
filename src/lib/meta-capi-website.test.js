@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { normalizeEmailForMeta, normalizePhoneForMeta, sha256Hex, buildWebsiteEvent, sendWebsiteConversion, fbcFromFbclid } from './meta-capi.js'
+import { normalizeEmailForMeta, normalizePhoneForMeta, sha256Hex, buildWebsiteEvent, sendWebsiteConversion, fbcFromFbclid, normalizeNameForMeta, fbpIfValid } from './meta-capi.js'
 
 describe('normalizeEmailForMeta', () => {
   it('trims and lowercases', () => {
@@ -47,6 +47,8 @@ describe('buildWebsiteEvent', () => {
       user_data: {
         em: [sha256Hex('test@example.com')],
         ph: [sha256Hex('353871234567')],
+        // MATCHQUALITY.1 — an Irish phone implies the country, nothing else does.
+        country: [sha256Hex('ie')],
       },
       custom_data: { content_name: 'FUS1ON' },
     })
@@ -239,3 +241,40 @@ describe('sendWebsiteConversion — the dataset\'s own token', () => {
     expect(db.tables).toEqual(['locations', 'whatsapp_numbers'])
   })
 })
+
+describe('MATCHQUALITY.1 — more identifiers on the website event', () => {
+  const base = { eventName: 'Lead', eventTime: 1, email: 'sam@example.com', phone: '0871234567' }
+  it('normalises names the way Meta wants: lower-case, punctuation gone, letters and spaces kept', () => {
+    expect(normalizeNameForMeta("  Seán O'Brien-Murphy ")).toBe('seán obrienmurphy')
+    expect(normalizeNameForMeta('Sam 2')).toBe('sam')
+    expect(normalizeNameForMeta('!!!')).toBeNull()
+    expect(normalizeNameForMeta(null)).toBeNull()
+  })
+  it('accepts only the documented _fbp shape', () => {
+    expect(fbpIfValid('fb.1.1759600000000.1234567890')).toBe('fb.1.1759600000000.1234567890')
+    expect(fbpIfValid('fb.1.abc.1')).toBeNull()
+    expect(fbpIfValid('<script>')).toBeNull()
+    expect(fbpIfValid(undefined)).toBeNull()
+  })
+  it('hashes first name, last name, country (from an Irish phone) and our contact id; fbp unhashed', () => {
+    const ev = buildWebsiteEvent({ ...base, firstName: 'Sam', lastName: 'Byrne', externalId: 'c1', fbp: 'fb.1.1759600000000.1234567890' })
+    expect(ev.user_data.fn).toEqual([sha256Hex('sam')])
+    expect(ev.user_data.ln).toEqual([sha256Hex('byrne')])
+    expect(ev.user_data.country).toEqual([sha256Hex('ie')])
+    expect(ev.user_data.external_id).toEqual([sha256Hex('c1')])
+    expect(ev.user_data.fbp).toBe('fb.1.1759600000000.1234567890')
+  })
+  it('never guesses a country from a non-Irish phone, and leaves every new field out when absent', () => {
+    const ev = buildWebsiteEvent({ ...base, phone: '+44 7700 900123' })
+    expect(ev.user_data.country).toBeUndefined()
+    expect(ev.user_data.fn).toBeUndefined()
+    expect(ev.user_data.ln).toBeUndefined()
+    expect(ev.user_data.external_id).toBeUndefined()
+    expect(ev.user_data.fbp).toBeUndefined()
+  })
+  it('a junk fbp is dropped, never forwarded', () => {
+    const ev = buildWebsiteEvent({ ...base, fbp: 'javascript:alert(1)' })
+    expect(ev.user_data.fbp).toBeUndefined()
+  })
+})
+

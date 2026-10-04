@@ -114,6 +114,26 @@ export function sha256Hex(value) {
 }
 
 /**
+ * MATCHQUALITY.1 — Meta match normalisation for a name: lower-case, trimmed,
+ * punctuation and digits removed (letters, marks and spaces survive, so
+ * "Seán O'Brien" → "seán obrien"). Null when nothing is left.
+ */
+export function normalizeNameForMeta(name) {
+  const n = String(name || '').toLowerCase().replace(/[^\p{L}\p{M}\s]/gu, '').replace(/\s+/g, ' ').trim()
+  return n || null
+}
+
+/**
+ * MATCHQUALITY.1 — Meta's browser id cookie value (`_fbp`), read by the form
+ * from document.cookie once the Pixel has loaded (consent-gated, so often
+ * absent). Sent unhashed. Null for anything but the documented shape.
+ */
+export function fbpIfValid(fbp) {
+  const v = typeof fbp === 'string' ? fbp.trim() : ''
+  return /^fb\.1\.\d{6,}\.\d{1,}$/.test(v) && v.length <= 100 ? v : null
+}
+
+/**
  * METADATASET.1 — Meta's click id cookie value for an ad click, built from the
  * `fbclid` the landing URL carried: `fb.1.<ms>.<fbclid>`. It is what lets
  * Meta credit a server-side event to the ad that was clicked, and the funnel
@@ -131,13 +151,26 @@ export function fbcFromFbclid(fbclid, nowMs = Date.now()) {
  * Returns null when neither email nor phone normalizes — an event Meta
  * can't match is not worth sending.
  */
-export function buildWebsiteEvent({ eventName, eventTime, email, phone, eventSourceUrl, eventId, contentName, fbc, clientIp, userAgent }) {
+export function buildWebsiteEvent({ eventName, eventTime, email, phone, eventSourceUrl, eventId, contentName, fbc, clientIp, userAgent, firstName, lastName, externalId, fbp }) {
   const em = normalizeEmailForMeta(email)
   const ph = normalizePhoneForMeta(phone)
   if (!em && !ph) return null
   const user_data = {}
   if (em) user_data.em = [sha256Hex(em)]
   if (ph) user_data.ph = [sha256Hex(ph)]
+  // MATCHQUALITY.1 — more hashed identifiers raise Meta's event match
+  // quality, which is what decides how well it can find more people like
+  // the ones who convert. Name as given on the form; country inferred only
+  // from an Irish-prefixed phone (never guessed otherwise); our contact id
+  // as external_id so every later event about the same person joins up.
+  const fn = normalizeNameForMeta(firstName)
+  const ln = normalizeNameForMeta(lastName)
+  if (fn) user_data.fn = [sha256Hex(fn)]
+  if (ln) user_data.ln = [sha256Hex(ln)]
+  if (ph && ph.startsWith('353')) user_data.country = [sha256Hex('ie')]
+  if (typeof externalId === 'string' && externalId.trim()) user_data.external_id = [sha256Hex(externalId.trim())]
+  const fbpValue = fbpIfValid(fbp)
+  if (fbpValue) user_data.fbp = fbpValue
   // METADATASET.1 — the three things that tie a server event back to the ad
   // click and the browser it came from. All optional and sent as given (Meta
   // does not want these hashed); an event without them is still sent.
@@ -160,13 +193,14 @@ export function buildWebsiteEvent({ eventName, eventTime, email, phone, eventSou
  * Fire a website conversion event for a lead/booking. Same gates as the CTWA
  * path: no dataset_id or no number token → clean no-op. Never throws.
  */
-export async function sendWebsiteConversion(db, { locationId, eventName, email, phone, eventSourceUrl, eventId, contentName, fbc, clientIp, userAgent }) {
+export async function sendWebsiteConversion(db, { locationId, eventName, email, phone, eventSourceUrl, eventId, contentName, fbc, clientIp, userAgent, firstName, lastName, externalId, fbp }) {
   try {
     if (!locationId) return { sent: false, reason: 'no_location' }
     const event = buildWebsiteEvent({
       eventName,
       eventTime: Math.floor(Date.now() / 1000),
       email, phone, eventSourceUrl, eventId, contentName, fbc, clientIp, userAgent,
+      firstName, lastName, externalId, fbp,
     })
     if (!event) return { sent: false, reason: 'no_identifiers' }
 

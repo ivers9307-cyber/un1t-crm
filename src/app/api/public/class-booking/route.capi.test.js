@@ -135,3 +135,20 @@ describe('POST /api/public/class-booking — visit origin', () => {
     expect(updates.some((u) => u.table === 'contacts' && u.patch.visit_referrer !== undefined)).toBe(false)
   })
 })
+
+// MATCHQUALITY.1 — the Lead carries the form's name, our contact id and the
+// Pixel's browser id when the form had it.
+describe('POST /api/public/class-booking — match-quality identifiers on the Lead', () => {
+  it('passes first name, last name, the contact id and fbp to the Lead', async () => {
+    await book({ fbp: 'fb.1.1759600000000.1234567890' })
+    const args = sendWebsiteConversion.mock.calls[0][1]
+    expect(args).toMatchObject({ firstName: 'Sam', lastName: 'Byrne', externalId: 'c1', fbp: 'fb.1.1759600000000.1234567890' })
+  })
+  it('an organic visitor with no cookie still sends name and contact id, fbp undefined', async () => {
+    await book(undefined)
+    const args = sendWebsiteConversion.mock.calls[0][1]
+    expect(args).toMatchObject({ firstName: 'Sam', lastName: 'Byrne', externalId: 'c1' })
+    expect(args.fbp).toBeUndefined()
+  })
+})
+

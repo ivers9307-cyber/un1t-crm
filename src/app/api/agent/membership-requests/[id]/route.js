@@ -363,7 +363,7 @@ export async function PATCH(request, { params }) {
     let manualLocation = null
     try {
       const [{ data: c }, { data: page }, { data: loc }] = await Promise.all([
-        db.from('contacts').select('id, first_name, name, email, phone').eq('id', row.contact_id).maybeSingle(),
+        db.from('contacts').select('id, first_name, last_name, name, email, phone').eq('id', row.contact_id).maybeSingle(),
         db.from('landing_page_settings').select('public_path, blocks').eq('location_id', row.location_id).maybeSingle(),
         db.from('locations').select('name, address').eq('id', row.location_id).maybeSingle(),
       ])
@@ -380,6 +380,8 @@ export async function PATCH(request, { params }) {
           // Stable per booking, so a re-run of this approval is deduped by Meta.
           eventId: queueRowId ? `classbooking-${queueRowId}` : `classbooking-approval-${id}`,
           contentName: details?.class_name || 'Class',
+          // MATCHQUALITY.1 — same identifiers as the Lead, so Meta joins them.
+          firstName: c.first_name, lastName: c.last_name, externalId: c.id,
         })
       }
     } catch (e) { logWarn('agent-requests', 'manual booking: Schedule event failed', { requestId: id, err: e }) }
