@@ -862,11 +862,17 @@ function Tile({ session, rank }) {
         </span>
       )}
 
-      {/* Name — clear of the rank/burn pills above. */}
-      <p className="mt-6 text-lg font-semibold leading-tight" style={{ color: BONE }}>{session.displayName}</p>
+      {/* Name — clear of the rank/burn pills above.
+          TV-FIT.1: every direct child below is shrink-0. The tile is a
+          shrinkable flex column now, and without this a squeezed tile gave
+          up its only compressible child first: the empty 6px zone bar went
+          to 0 height while the text kept its size (measured on the 4 Oct
+          preview). Fixed children mean a short tile clips at the bottom
+          edge — zone bar, then chips — which is the order we want. */}
+      <p className="mt-6 shrink-0 text-lg font-semibold leading-tight" style={{ color: BONE }}>{session.displayName}</p>
 
       {/* BPM — the hero number */}
-      <div className="mt-2 flex items-baseline gap-1.5">
+      <div className="mt-2 flex shrink-0 items-baseline gap-1.5">
         <span
           className="text-5xl leading-none tabular-nums sm:text-6xl"
           style={{ fontFamily: FONT_DISPLAY, fontWeight: 800, letterSpacing: '-0.01em', color: zoneColor || BONE_3 }}
@@ -877,7 +883,7 @@ function Tile({ session, rank }) {
       </div>
 
       {/* Zone chip + UN1T points */}
-      <div className="mt-3 flex items-center justify-between">
+      <div className="mt-3 flex shrink-0 items-center justify-between">
         {session.stale ? (
           <span className="text-xs uppercase tracking-[0.1em]" style={{ fontFamily: FONT_MONO, color: BONE_3 }}>strap silent</span>
         ) : zoneColor ? (
@@ -908,7 +914,7 @@ function ZoneBar({ zonesSeconds }) {
   const sum = totals.reduce((a, b) => a + b, 0)
   if (sum === 0) return null
   return (
-    <div className="mt-2 flex h-1.5 w-full gap-[2px]">
+    <div className="mt-2 flex h-1.5 w-full shrink-0 gap-[2px]">
       {totals.map((sec, i) => {
         if (sec === 0) return null
         return (
