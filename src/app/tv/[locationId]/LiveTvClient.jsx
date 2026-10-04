@@ -286,7 +286,7 @@ export default function LiveTvClient({ locationId, endpoint, device }) {
 
   return (
     <main
-      className={`${repsetDisplay.variable} ${repsetBody.variable} ${repsetMono.variable} relative flex min-h-screen flex-col`}
+      className={`${repsetDisplay.variable} ${repsetBody.variable} ${repsetMono.variable} relative flex h-screen flex-col overflow-hidden`}
       style={{
         background: INK,
         color: BONE,
@@ -313,7 +313,7 @@ export default function LiveTvClient({ locationId, endpoint, device }) {
           ● reconnecting…
         </div>
       )}
-      <header className={`relative flex items-start justify-between ${portrait ? 'px-4 py-3' : 'px-6 py-4'}`} style={{ borderBottom: `1px solid ${HAIRLINE}` }}>
+      <header className={`relative flex shrink-0 items-start justify-between ${portrait ? 'px-4 py-3' : 'px-6 py-4'}`} style={{ borderBottom: `1px solid ${HAIRLINE}` }}>
         <div>
           <p className="flex items-center gap-2">
             <span
@@ -360,7 +360,7 @@ export default function LiveTvClient({ locationId, endpoint, device }) {
       </header>
 
       {!kiosk && error && (
-        <p className="m-4 rounded-lg p-3 text-sm" style={{ border: `1px solid ${REDLINE}66`, background: SURFACE, color: BONE_2 }}>
+        <p className="m-4 shrink-0 rounded-lg p-3 text-sm" style={{ border: `1px solid ${REDLINE}66`, background: SURFACE, color: BONE_2 }}>
           Connection issue: {error}. Retrying…
         </p>
       )}
@@ -375,9 +375,22 @@ export default function LiveTvClient({ locationId, endpoint, device }) {
           ? <TimerBanner placement="hero" portrait={portrait} timer={data?.timer} serverTime={data?.server_time} />
           : <EmptyBoard />
       ) : (
+        // TV-FIT.1 — the grid is the one part of the board that yields.
+        // The page is exactly one screen tall (h-screen above), the header,
+        // strap row, timer and signature are shrink-0, and this grid is the
+        // flex item that gives way: content-sized while there is room (rows
+        // pack at the top, the timer rides the foot), squeezed to whatever
+        // height is left when there isn't — min-h-0 lets it shrink, and the
+        // minmax(0,1fr) rows split that height equally so every tile loses
+        // the same slice. Seen live at Stillorgan on 4 Oct: four tiles plus
+        // the unpaired-strap row on a 1280×720 kiosk viewport pushed the
+        // countdown off the bottom of the TV mid-class.
         <div
-          className="grid gap-3 p-4"
-          style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
+          className="grid min-h-0 gap-3 p-4"
+          style={{
+            gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
+            gridAutoRows: 'minmax(0, 1fr)',
+          }}
         >
           {tiles.map((s) => (
             // key = the STABLE tile key, so React reuses the same DOM node
@@ -389,20 +402,24 @@ export default function LiveTvClient({ locationId, endpoint, device }) {
         </div>
       )}
 
+      {/* TV-FIT.1 — one fixed-height line, label inline, chips in a row
+          that clips at the right edge rather than wrapping: an unpaired
+          strap is a footnote, and a footnote must never cost the room its
+          tiles or its countdown. */}
       {availableStraps.length > 0 && (
-        <div className="mt-6 px-4 pb-4">
-          <p className="mb-2 text-xs uppercase tracking-[0.18em]" style={{ fontFamily: FONT_MONO, color: BONE_3 }}>Unpaired straps</p>
-          <div className="flex flex-wrap gap-3">
+        <div className="flex shrink-0 items-center gap-3 overflow-hidden px-4 py-2">
+          <p className="shrink-0 text-[10px] uppercase tracking-[0.18em]" style={{ fontFamily: FONT_MONO, color: BONE_3 }}>Unpaired straps</p>
+          <div className="flex min-w-0 flex-nowrap gap-2 overflow-hidden">
             {availableStraps.map((s, i) => (
               <div
                 key={`strap-${i}`}
-                className="flex items-center gap-3 rounded-xl px-4 py-3 opacity-70"
+                className="flex shrink-0 items-center gap-2 rounded-lg px-3 py-1.5 opacity-70"
                 style={{ background: SURFACE, border: `1px solid ${HAIRLINE}` }}
               >
-                <span className="text-sm" style={{ fontFamily: FONT_MONO, color: BONE_2 }}>{s.label}</span>
-                <span className="text-lg tabular-nums" style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: BONE }}>
+                <span className="text-xs" style={{ fontFamily: FONT_MONO, color: BONE_2 }}>{s.label}</span>
+                <span className="text-sm tabular-nums" style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: BONE }}>
                   {s.currentBpm ?? '—'}
-                  <span className="ml-1 text-[10px] tracking-[0.12em]" style={{ fontFamily: FONT_MONO, fontWeight: 400, color: BONE_3 }}>BPM</span>
+                  <span className="ml-1 text-[9px] tracking-[0.12em]" style={{ fontFamily: FONT_MONO, fontWeight: 400, color: BONE_3 }}>BPM</span>
                 </span>
               </div>
             ))}
@@ -413,8 +430,10 @@ export default function LiveTvClient({ locationId, endpoint, device }) {
       {/* TV-TIMER.1 — timer and signature ride down together.
           mt-auto on the WRAPPER, not on the signature: it keeps the pair
           welded to the bottom whether or not a timer is running, and leaves
-          the tile grid the whole middle of the screen. */}
-      <div className="mt-auto">
+          the tile grid the whole middle of the screen. shrink-0 (TV-FIT.1):
+          when the column runs out of height it is the grid that gives, never
+          the countdown. */}
+      <div className="mt-auto shrink-0">
         {tiles.length > 0 && (
           <TimerBanner placement="bottom" portrait={portrait} timer={data?.timer} serverTime={data?.server_time} />
         )}
@@ -812,7 +831,7 @@ function Tile({ session, rank }) {
 
   return (
     <div
-      className={`relative flex flex-col rounded-[14px] p-4 sm:p-5 transition-all duration-500 ${
+      className={`relative flex min-h-0 flex-col overflow-hidden rounded-[14px] p-4 sm:p-5 transition-all duration-500 ${
         session.stale ? 'opacity-40' : ''
       }`}
       style={{
@@ -843,11 +862,17 @@ function Tile({ session, rank }) {
         </span>
       )}
 
-      {/* Name — clear of the rank/burn pills above. */}
-      <p className="mt-6 text-lg font-semibold leading-tight" style={{ color: BONE }}>{session.displayName}</p>
+      {/* Name — clear of the rank/burn pills above.
+          TV-FIT.1: every direct child below is shrink-0. The tile is a
+          shrinkable flex column now, and without this a squeezed tile gave
+          up its only compressible child first: the empty 6px zone bar went
+          to 0 height while the text kept its size (measured on the 4 Oct
+          preview). Fixed children mean a short tile clips at the bottom
+          edge — zone bar, then chips — which is the order we want. */}
+      <p className="mt-6 shrink-0 text-lg font-semibold leading-tight" style={{ color: BONE }}>{session.displayName}</p>
 
       {/* BPM — the hero number */}
-      <div className="mt-2 flex items-baseline gap-1.5">
+      <div className="mt-2 flex shrink-0 items-baseline gap-1.5">
         <span
           className="text-5xl leading-none tabular-nums sm:text-6xl"
           style={{ fontFamily: FONT_DISPLAY, fontWeight: 800, letterSpacing: '-0.01em', color: zoneColor || BONE_3 }}
@@ -858,7 +883,7 @@ function Tile({ session, rank }) {
       </div>
 
       {/* Zone chip + UN1T points */}
-      <div className="mt-3 flex items-center justify-between">
+      <div className="mt-3 flex shrink-0 items-center justify-between">
         {session.stale ? (
           <span className="text-xs uppercase tracking-[0.1em]" style={{ fontFamily: FONT_MONO, color: BONE_3 }}>strap silent</span>
         ) : zoneColor ? (
@@ -889,7 +914,7 @@ function ZoneBar({ zonesSeconds }) {
   const sum = totals.reduce((a, b) => a + b, 0)
   if (sum === 0) return null
   return (
-    <div className="mt-2 flex h-1.5 w-full gap-[2px]">
+    <div className="mt-2 flex h-1.5 w-full shrink-0 gap-[2px]">
       {totals.map((sec, i) => {
         if (sec === 0) return null
         return (
