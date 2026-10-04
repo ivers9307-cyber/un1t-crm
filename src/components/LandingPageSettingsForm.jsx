@@ -46,6 +46,7 @@ import { buildTrialOptions } from '@/lib/glofox-trial-options'
 import { centsToEuros, eurosToCents } from '@/lib/price-format'
 import { DEFAULT_TIMETABLE_UNAVAILABLE_MESSAGE, DEFAULT_CLASS_FUNNEL_CTA_LABEL } from '@/lib/public-landing'
 import { parseManualTimetable, DEFAULT_MIN_NOTICE_HOURS } from '@/lib/manual-timetable'
+import { DEFAULT_MANUAL_CONFIRM_EMAIL } from '@/lib/manual-booking-confirm-copy'
 
 // PostMessage namespace shared with src/components/landing-page/
 // EditModeOverlay.jsx so the iframe and the parent only react to
@@ -980,6 +981,13 @@ function ManualTimetableFields({ block, onUpdate, publicPath }) {
           maxLength={3}
           placeholder={String(DEFAULT_MIN_NOTICE_HOURS)}
         />
+      </Field>
+      {/* MANUALCONFIRM.1 — the email the customer gets when staff approve. */}
+      <Field label="Confirmation email subject" hint="Sent when staff approve a request. You can use {first_name}, {class_name}, {class_time}, {studio_name} and {address}. Blank keeps the default.">
+        <Input value={block.confirm_email_subject || ''} onChange={(v) => onUpdate({ confirm_email_subject: v })} maxLength={150} placeholder={DEFAULT_MANUAL_CONFIRM_EMAIL.subject} />
+      </Field>
+      <Field label="Confirmation email body" hint="Plain text; line breaks are kept. Same placeholders as the subject. Blank keeps the default.">
+        <Textarea value={block.confirm_email_body || ''} onChange={(v) => onUpdate({ confirm_email_body: v })} maxLength={2000} rows={8} placeholder={DEFAULT_MANUAL_CONFIRM_EMAIL.body} />
       </Field>
       <label className="flex items-start gap-2 cursor-pointer">
         <input

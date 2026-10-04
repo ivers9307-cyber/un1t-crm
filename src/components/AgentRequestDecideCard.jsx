@@ -75,10 +75,13 @@ function outcomeLine(status, item, executed, notified = null, plannedEndDate = n
   if (status === 'actioned' && item.kind === 'cancellation') {
     return { tone: 'ok', text: `Done. The cancellation was sent to Glofox${plannedEndDate ? ` (ends ${plannedEndDate})` : ''}.${notifiedSentence(notified)}` }
   }
-  // MANUALFUNNEL.1 — a studio that books by hand: approving sent nothing
-  // anywhere, so the line must not claim Glofox or a customer message.
+  // MANUALFUNNEL.1 / MANUALCONFIRM.1 — a studio that books by hand: nothing
+  // went to Glofox; the customer is emailed, and the line says whether it went.
   if (status === 'actioned' && executed?.manual) {
-    return { tone: 'ok', text: 'Recorded as booked. Nothing was sent to the customer, so make sure they know.' }
+    if (notified?.sent) return { tone: 'ok', text: 'Recorded as booked and the customer has been emailed.' }
+    if (notified?.reason === 'no_email') return { tone: 'ok', text: 'Recorded as booked. The customer has NOT been emailed (no email address), so make sure they know.' }
+    if (notified?.reason === 'email_blocked') return { tone: 'ok', text: 'Recorded as booked. The customer has NOT been emailed (their address bounced or they opted out), so make sure they know.' }
+    return { tone: 'ok', text: 'Recorded as booked. The customer has NOT been emailed, so make sure they know.' }
   }
   if (status === 'actioned') {
     return { tone: 'ok', text: hasThread ? 'Done — executed in Glofox and the customer was told in-thread.' : 'Done — executed in Glofox and the customer was notified.' }
