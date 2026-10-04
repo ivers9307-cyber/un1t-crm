@@ -40,6 +40,7 @@ vi.mock('@/lib/meta-capi', async (importOriginal) => ({
 
 import { POST } from './route.js'
 import { sendWebsiteConversion } from '@/lib/meta-capi'
+import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
 
 const book = (attribution, headers = {}) => POST(new Request('http://localhost/api/public/class-booking', {
   method: 'POST',
@@ -52,6 +53,17 @@ const book = (attribution, headers = {}) => POST(new Request('http://localhost/a
 }))
 
 beforeEach(() => { vi.clearAllMocks() })
+
+// SOURCE-LABEL.1 — a class-booking lead is not a race entrant. The helper's
+// INSERT default is source 'race_signup'; this route must override it on
+// CREATE (insertFields) so new contacts read 'class_booking'.
+describe('POST /api/public/class-booking — new-contact source label', () => {
+  it('creates the contact with source class_booking, never the race default', async () => {
+    await book(undefined)
+    expect(findOrCreateRaceContact).toHaveBeenCalledTimes(1)
+    expect(findOrCreateRaceContact.mock.calls[0][0]).toMatchObject({ restrictToOrg: true, insertFields: { source: 'class_booking' } })
+  })
+})
 
 describe('POST /api/public/class-booking — the Lead event sent to Meta', () => {
   it('carries the ad click id as fbc, the client IP and the user agent', async () => {

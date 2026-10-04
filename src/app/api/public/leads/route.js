@@ -69,7 +69,9 @@ export async function POST(request) {
   // but `contacts_email_unique` is a GLOBAL index — so an existing Stillorgan
   // member joining the Hatch Street waitlist found no match, hit 23505 on the
   // insert, and got a 500. Org scope keeps the cross-TENANT IDOR closed.
-  const contactId = await findOrCreateRaceContact({ db, locationId, email, name: firstName, phone, restrictToOrg: true })
+  // SOURCE-LABEL.1 — see class-booking: a website lead form is not a race
+  // signup. CREATE only; matched contacts are untouched.
+  const contactId = await findOrCreateRaceContact({ db, locationId, email, name: firstName, phone, restrictToOrg: true, insertFields: { source: 'lead_form' } })
   if (!contactId) {
     return NextResponse.json({ success: false, error: 'Could not capture your details. Please try again.' }, { status: 500 })
   }
