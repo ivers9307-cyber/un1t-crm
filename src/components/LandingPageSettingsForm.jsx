@@ -836,6 +836,19 @@ function LeadFormEdit({ block, onUpdate }) {
       <Field label="Consent checkbox text" hint="Shown beside the opt-in checkbox. Keep it explicit for GDPR — name the channels (email/SMS/WhatsApp).">
         <Textarea value={block.consent_label || ''} onChange={(v) => onUpdate({ consent_label: v })} maxLength={400} rows={3} />
       </Field>
+      <Field
+        label="Panel beside the offer"
+        hint="Only applies while the offer below is on. The class-funnel button needs that funnel shown on this page; if it is hidden, the form stays."
+      >
+        <select
+          value={block.second_path === 'class_funnel' ? 'class_funnel' : 'form'}
+          onChange={(e) => onUpdate({ second_path: e.target.value })}
+          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+        >
+          <option value="form">This form (heading, sub-copy, button)</option>
+          <option value="class_funnel">Button to the class booking funnel (heading and sub-copy still show)</option>
+        </select>
+      </Field>
 
       <div className="pt-4 mt-2 border-t border-un1t-border">
         <label className="flex items-start gap-2 cursor-pointer">
