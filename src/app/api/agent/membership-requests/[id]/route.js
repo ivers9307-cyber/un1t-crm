@@ -334,6 +334,7 @@ export async function PATCH(request, { params }) {
   // Nothing is sent to Glofox (the studio has none) and no trial is bought.
   // Judged on the event id, never on details.reason: a request that reached
   // its card through the queue's retry path carries 'processing_error'.
+  let manualNotified = null
   if (executing && manualBooking) {
     executed = { ok: true, manual: true }
     details = { ...details, result: executed }
@@ -357,11 +358,18 @@ export async function PATCH(request, { params }) {
     // who fills the form. Sent only on approve: a declined or expired card
     // sends nothing. Best-effort and gated inside the helper on the
     // location's settings.meta_ads.dataset_id; it never fails the decision.
+    let manualContact = null
+    let manualPage = null
+    let manualLocation = null
     try {
-      const [{ data: c }, { data: page }] = await Promise.all([
-        db.from('contacts').select('email, phone').eq('id', row.contact_id).maybeSingle(),
+      const [{ data: c }, { data: page }, { data: loc }] = await Promise.all([
+        db.from('contacts').select('id, first_name, name, email, phone').eq('id', row.contact_id).maybeSingle(),
         db.from('landing_page_settings').select('public_path, blocks').eq('location_id', row.location_id).maybeSingle(),
+        db.from('locations').select('name, address').eq('id', row.location_id).maybeSingle(),
       ])
+      manualContact = c || null
+      manualPage = page || null
+      manualLocation = loc || null
       if (c && (c.email || c.phone)) {
         const { sendWebsiteConversion } = await import('@/lib/meta-capi')
         const { classFunnelConfigFromBlocks } = await import('@/lib/public-landing')
@@ -375,6 +383,27 @@ export async function PATCH(request, { params }) {
         })
       }
     } catch (e) { logWarn('agent-requests', 'manual booking: Schedule event failed', { requestId: id, err: e }) }
+    // MANUALCONFIRM.1 — tell the customer. The studio has no WhatsApp number,
+    // so this email is the only confirmation they get; the card shows whether
+    // it went (customer_notified, like the membership kinds). Copy is the
+    // class_funnel block's, defaults otherwise. Best-effort: never fails the
+    // approval, and a failure reads "NOT been emailed" on the card.
+    try {
+      const { sendManualBookingConfirmEmail } = await import('@/lib/manual-booking-confirm')
+      manualNotified = await sendManualBookingConfirmEmail(db, {
+        locationId: row.location_id,
+        contact: manualContact,
+        className: details?.class_name,
+        startsAt: details?.starts_at,
+        blocks: manualPage?.blocks,
+        studioName: manualLocation?.name,
+        address: manualLocation?.address,
+        requestId: id,
+      })
+    } catch (e) {
+      logWarn('agent-requests', 'manual booking: confirmation email threw', { requestId: id, err: e })
+      manualNotified = { sent: false, channel: 'email', reason: 'send_error' }
+    }
   }
 
   // AGENT-HANDS.1 — approving a drafted class booking executes it.
@@ -604,6 +633,8 @@ export async function PATCH(request, { params }) {
   } else if (isMembershipKind) {
     customerNotified = { sent: false, channel: row.channel || null, reason: finalStatus === 'failed' ? 'not_executed' : 'not_applicable' }
   }
+  // MANUALCONFIRM.1 — the manual booking's email result rides the same field.
+  if (manualNotified) customerNotified = manualNotified
 
   // APPROVALS-STUDIO.1 — a decline is never silence: tell the customer
   // in-thread (operator-editable approval_decline_text). Best-effort; only

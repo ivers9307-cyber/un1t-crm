@@ -44,6 +44,12 @@ vi.mock('@/lib/meta-capi', async (importOriginal) => ({
   sendWebsiteConversion: vi.fn(async () => ({ sent: true })),
 }))
 import { sendWebsiteConversion } from '@/lib/meta-capi'
+// MANUALCONFIRM.1 — the confirmation email is a lib call; the route tests
+// assert what it is handed and that its result rides customer_notified.
+vi.mock('@/lib/manual-booking-confirm', () => ({
+  sendManualBookingConfirmEmail: vi.fn(async () => ({ sent: true, channel: 'email' })),
+}))
+import { sendManualBookingConfirmEmail } from '@/lib/manual-booking-confirm'
 
 import { createBooking, cancelBooking, glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, purchaseGlofoxMembership, fetchUserCreditsResult } from '@/lib/glofox'
 import { readGlofoxConfig } from '@/lib/connection-registry'
@@ -934,6 +940,7 @@ describe('PATCH class_booking approval — manual booking sends Schedule to Meta
             if (patch) return { data: { id: row.id }, error: null }
             if (table === 'contacts') return { data: contact, error: null }
             if (table === 'landing_page_settings') return { data: page, error: null }
+            if (table === 'locations') return { data: { name: 'UN1T Hatch Street', address: 'Vault 8, Hatch Street Upper, Dublin 2' }, error: null }
             return { data: row, error: null }
           },
           async single() {
@@ -1000,5 +1007,103 @@ describe('PATCH class_booking approval — manual booking sends Schedule to Meta
     db = makeDbFor(ROW, updates)
     await approve()
     expect(sendWebsiteConversion).not.toHaveBeenCalled()
+  })
+})
+
+// MANUALCONFIRM.1 — approving a manual booking emails the customer, and the
+// card is told whether it went.
+describe('PATCH class_booking approval — manual booking emails the customer', () => {
+  const manualRow = (over = {}) => ({
+    ...ROW,
+    conversation_id: null,
+    channel: null,
+    details: {
+      event_id: 'manual-20261005-0600-duo-strength', class_name: 'DUO - STRENGTH', class_time: 'Mon 5 Oct, 06:00',
+      starts_at: '2026-10-05T05:00:00.000Z',
+      mode: 'draft', source: 'start_funnel', reason: 'manual_booking',
+      ...over,
+    },
+  })
+  function manualDb(row, log, { contact = { id: 'c1', first_name: 'Sam', name: 'Sam Byrne', email: 'sam@example.com', phone: '0871234567' } } = {}) {
+    const page = { public_path: 'hatch-street', blocks: [{ type: 'class_funnel', confirm_email_subject: 'See you soon' }] }
+    return {
+      from(table) {
+        let patch = null
+        const b = {
+          select: () => b, eq: () => b, neq: () => b, contains: () => b, limit: () => b,
+          update(p) { patch = p; log.push({ table, patch: p }); return b },
+          then(resolve, reject) { return Promise.resolve({ data: table === 'class_booking_requests' ? [{ id: 'cbr-9' }] : [], error: null }).then(resolve, reject) },
+          async maybeSingle() {
+            if (patch) return { data: { id: row.id }, error: null }
+            if (table === 'contacts') return { data: contact, error: null }
+            if (table === 'landing_page_settings') return { data: page, error: null }
+            if (table === 'locations') return { data: { name: 'UN1T Hatch Street', address: 'Vault 8, Hatch Street Upper, Dublin 2' }, error: null }
+            return { data: row, error: null }
+          },
+          async single() {
+            return { data: { id: row.id, status: patch?.status, decided_at: null, decision_note: null, details: patch?.details }, error: null }
+          },
+        }
+        return b
+      },
+    }
+  }
+
+  it('approve → one email with the contact, the class, its start, the block copy and the studio name + address; customer_notified says sent', async () => {
+    db = manualDb(manualRow(), updates)
+    const res = await approve()
+    const json = await res.json()
+    expect(res.status).toBe(200)
+    expect(sendManualBookingConfirmEmail).toHaveBeenCalledTimes(1)
+    const [, a] = sendManualBookingConfirmEmail.mock.calls[0]
+    expect(a).toMatchObject({
+      locationId: 'L1',
+      contact: { id: 'c1', first_name: 'Sam', email: 'sam@example.com' },
+      className: 'DUO - STRENGTH',
+      startsAt: '2026-10-05T05:00:00.000Z',
+      blocks: [{ type: 'class_funnel', confirm_email_subject: 'See you soon' }],
+      studioName: 'UN1T Hatch Street',
+      address: 'Vault 8, Hatch Street Upper, Dublin 2',
+      requestId: 'r1',
+    })
+    expect(json.customer_notified).toEqual({ sent: true, channel: 'email' })
+    expect(updates.at(-1).patch.status).toBe('actioned')
+  })
+
+  it('a contact with no email → the approval still lands and customer_notified says why', async () => {
+    sendManualBookingConfirmEmail.mockResolvedValueOnce({ sent: false, channel: 'email', reason: 'no_email' })
+    db = manualDb(manualRow(), updates, { contact: { id: 'c1', first_name: 'Sam', email: null, phone: '0871234567' } })
+    const json = await (await approve()).json()
+    expect(json.customer_notified).toEqual({ sent: false, channel: 'email', reason: 'no_email' })
+    expect(updates.at(-1).patch.status).toBe('actioned')
+  })
+
+  it('the email helper throwing never fails the approval', async () => {
+    sendManualBookingConfirmEmail.mockRejectedValueOnce(new Error('boom'))
+    db = manualDb(manualRow(), updates)
+    const res = await approve()
+    const json = await res.json()
+    expect(res.status).toBe(200)
+    expect(json.executed).toEqual({ ok: true, manual: true })
+    expect(json.customer_notified).toEqual({ sent: false, channel: 'email', reason: 'send_error' })
+    expect(updates.at(-1).patch.status).toBe('actioned')
+  })
+
+  it('declining sends no email', async () => {
+    db = manualDb(manualRow(), updates)
+    await PATCH(
+      new Request('http://localhost/api/agent/membership-requests/r1', {
+        method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ status: 'declined' }),
+      }),
+      { params: Promise.resolve({ id: 'r1' }) },
+    )
+    expect(sendManualBookingConfirmEmail).not.toHaveBeenCalled()
+  })
+
+  it('a Glofox booking approval sends no email from here', async () => {
+    createBooking.mockResolvedValueOnce({ ok: true, status: 200, body: { _id: 'gfb-9' } })
+    db = makeDbFor(ROW, updates)
+    await approve()
+    expect(sendManualBookingConfirmEmail).not.toHaveBeenCalled()
   })
 })

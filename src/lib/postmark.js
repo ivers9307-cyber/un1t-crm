@@ -772,6 +772,11 @@ export async function buildAudienceQueryAsync(db, filter, locationId, { columns 
  */
 export async function sendTransactionalEmail({
   to, subject, htmlBody, contactId, locationId, tag,
+  // MANUALCONFIRM.1 — optional Reply-To. Omitted (every caller before this)
+  // → undefined → sendEmail sets none, exactly as before. A confirmation
+  // that invites a reply passes the studio's inbox address so the reply
+  // lands in the unified inbox, not at the global From mailbox.
+  replyTo,
   // Optional attribution written ATOMICALLY with the email_sends row.
   // Callers that send on behalf of a sequence pass these so an open/click
   // webhook can never beat the attribution (the sequence runner used to
@@ -789,6 +794,7 @@ export async function sendTransactionalEmail({
     to,
     subject,
     htmlBody,
+    replyTo: replyTo || undefined,
     stream: 'outbound',  // Postmark transactional stream
     tag: tag || 'transactional',
     sender: sender || undefined,
