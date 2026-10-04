@@ -14,19 +14,27 @@
 //
 // Per-row error handling: a vendor blip on one device shouldn't
 // stop the loop for others. Failed rows get status='failed' +
-// failure_reason and self-heal — but on a BACKOFF, not every tick
-// (C7 remainder): a failed row is only re-picked once its
-// updated_at (bumped by the mig 103 touch trigger on each failure
-// write) is older than FAILED_RETRY_BACKOFF_MS, and each vendor
-// failure raises a sendOpsAlert (org email / master-push fallback,
-// the glofox-data-quality convention) instead of a bare
-// console.warn. The backoff doubles as the alert rate limit:
-// at most ~one alert per hour per failing row.
+// failure_reason and self-heal on a backoff (C7 remainder), keyed
+// off updated_at (bumped by the mig 103 touch trigger on each
+// failure write). AC-RETRY.1 split that backoff in two: a
+// TRANSIENT failure (timeout / abort / network / rate-limit — the
+// gym-floor pod not acking an OFF, which Sensibo's own history
+// records as Failed/Timeout and which clears in minutes) is retried
+// at the NEXT tick for up to an hour, then hourly; anything else
+// stays hourly. The ops alert (org email / master-push fallback)
+// is gated separately: a transient failure alerts from the 3rd
+// consecutive miss, a persistent one from the 1st, and either
+// repeats at most hourly — tracked on the row itself
+// (auto_off_attempts / auto_off_alerted_at, mig 704) because
+// failure_reason is overwritten every attempt.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { vendorTurnOff, loadDeviceWithLocation } from '@/lib/ac-devices'
-import { failedRetryCutoffIso, buildAutoOffFailureAlert } from '@/lib/ac-auto-off'
+import {
+  failedRetryCutoffIso, buildAutoOffFailureAlert,
+  FAST_RETRY_BACKOFF_MS, isTransientVendorFailure, shouldRetryFailedRow, shouldAlertFailure,
+} from '@/lib/ac-auto-off'
 import { sendOpsAlert } from '@/lib/ops-alerts'
 import { AC_SESSION_STATUS, AC_SESSION_ACTIVE_STATUSES } from '@/lib/enums'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
@@ -63,7 +71,7 @@ export async function GET(request) {
   // 'extended') are picked up every tick.
   const { data: liveRows, error } = await db
     .from('ac_sessions')
-    .select('id, location_id, device_id, sensibo_pod_id, auto_off_at, status, started_at')
+    .select('id, location_id, device_id, sensibo_pod_id, auto_off_at, status, started_at, auto_off_attempts, auto_off_alerted_at')
     .in('status', AC_SESSION_ACTIVE_STATUSES)
     .not('auto_off_at', 'is', null)
     .lte('auto_off_at', nowIso)
@@ -74,17 +82,19 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   }
 
-  // 'failed' rows self-heal on a backoff, not every tick: only rows
-  // whose last write is older than the retry window get re-picked.
-  // Separate query so a pile-up of failed rows can never starve the
-  // live pickup out of its limit.
+  // 'failed' rows self-heal on a backoff, not every tick. The query
+  // casts the WIDE net — anything written more than the FAST backoff
+  // ago — and shouldRetryFailedRow() then decides per row whether it
+  // is really due: a transient failure after one tick, anything else
+  // only after the hourly window. Separate query so a pile-up of
+  // failed rows can never starve the live pickup out of its limit.
   const { data: failedRows, error: failedErr } = await db
     .from('ac_sessions')
-    .select('id, location_id, device_id, sensibo_pod_id, auto_off_at, status, started_at')
+    .select('id, location_id, device_id, sensibo_pod_id, auto_off_at, status, started_at, updated_at, failure_reason, auto_off_attempts, auto_off_alerted_at')
     .eq('status', AC_SESSION_STATUS.FAILED)
     .not('auto_off_at', 'is', null)
     .lte('auto_off_at', nowIso)
-    .lt('updated_at', failedRetryCutoffIso(nowMs))
+    .lt('updated_at', failedRetryCutoffIso(nowMs, FAST_RETRY_BACKOFF_MS))
     .order('auto_off_at', { ascending: true })
     .limit(20)
 
@@ -92,8 +102,13 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: failedErr.message }, { status: 500 })
   }
 
-  const expired = [...(liveRows || []), ...(failedRows || [])]
-  const stats = { found: expired.length, off: 0, failed: 0, skipped: 0, deferred: 0 }
+  const dueFailed = (failedRows || []).filter((row) => shouldRetryFailedRow(row, nowMs))
+  const expired = [...(liveRows || []), ...dueFailed]
+  const stats = {
+    found: expired.length, off: 0, failed: 0, skipped: 0, deferred: 0,
+    // Failed rows seen but not yet due under their lane's backoff.
+    waiting: (failedRows || []).length - dueFailed.length,
+  }
 
   for (const row of expired) {
     // SENSIBO-RATE.1 — vendor calls are now spaced (min 1.5s apart)
@@ -174,27 +189,40 @@ export async function GET(request) {
 
     const off = await vendorTurnOff(loaded.device, loaded.location)
     if (!off.ok) {
-      // Vendor refused (offline, rate-limited, creds wiped, etc.).
-      // Stay in 'failed' — this write bumps updated_at (touch
-      // trigger), so the row is re-picked only after the retry
-      // backoff elapses.
+      // Vendor refused (pod did not ack, rate-limited, creds wiped…).
+      // Stay in 'failed' — this write bumps updated_at (touch trigger)
+      // and the attempt counter, which together pick the row's lane on
+      // the next tick (see shouldRetryFailedRow).
+      const attempts = (Number(row.auto_off_attempts) || 0) + 1
+      const transient = isTransientVendorFailure(off.error)
+      const alert = shouldAlertFailure({
+        transient, attempts, alertedAt: row.auto_off_alerted_at, nowMs,
+      })
       await db
         .from('ac_sessions')
         .update({
           status: AC_SESSION_STATUS.FAILED,
           failure_reason: `Auto-off failed at ${nowIso}: ${String(off.error).slice(0, 500)}`,
+          auto_off_attempts: attempts,
+          ...(alert ? { auto_off_alerted_at: nowIso } : {}),
         })
         .eq('id', row.id)
       stats.failed++
-      logWarn('cron-ac-auto-off', `device ${row.device_id} (${loaded.device.label}) auto-off failed`, { err: off.error })
-      // Tell an operator the unit may still be running — sendOpsAlert
-      // is best-effort/never throws, and the backoff pickup caps this
-      // at ~one alert per hour per row while the vendor stays down.
-      await sendOpsAlert(buildAutoOffFailureAlert({
-        device: loaded.device,
-        location: loaded.location,
-        failureReason: off.error,
-      }), { db })
+      logWarn('cron-ac-auto-off', `device ${row.device_id} (${loaded.device.label}) auto-off failed`, {
+        err: off.error, attempts, transient, alerted: alert,
+      })
+      // Tell an operator the unit may still be running — but not on a
+      // single transient miss: the pod recovers in minutes and the next
+      // tick retries. sendOpsAlert is best-effort/never throws.
+      if (alert) {
+        await sendOpsAlert(buildAutoOffFailureAlert({
+          device: loaded.device,
+          location: loaded.location,
+          failureReason: off.error,
+          attempts,
+          transient,
+        }), { db })
+      }
       continue
     }
 
