@@ -7,6 +7,7 @@ import { NextResponse } from 'next/server'
 import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
 import { HostEventSchema, computeEditTransition } from '@/lib/host-events'
+import { eventSlug, uniqueEventSlug, shouldRederiveSlug } from '@/lib/event-slug'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -65,7 +66,14 @@ export async function PUT(request, props) {
   }
   const transition = computeEditTransition(currentForDiff, changes)
 
+  // EVENT-SLUG.1 — a draft's URL follows its venue/date/time; once
+  // published the slug is frozen (the link may be out).
+  const slugPatch = shouldRederiveSlug(current.status)
+    ? { slug: await uniqueEventSlug(db, eventSlug({ place: input.venue_name, date: input.race_date, time: input.session_start_time, name: input.name }), { excludeId: current.id }) }
+    : {}
+
   const { error } = await db.from('race_events').update({
+    ...slugPatch,
     kind: input.kind,
     name: input.name,
     description: input.description ?? null,
