@@ -23,7 +23,7 @@ import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/perm
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { ADMIN_ROLES, uuidLike } from '@/lib/schemas'
-import { toSlug } from '@/lib/slug'
+import { eventSlug, uniqueEventSlug } from '@/lib/event-slug'
 import { formatSignupSummary, sumWaveCapacity } from '@/lib/event-signups'
 import { isRaceKind, orderEventsForBrowse, todayIsoDublin } from '@shared/events'
 
@@ -233,25 +233,38 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
   }
 
-  const slug = body.slug || toSlug(body.name)
-  if (!slug) {
-    return NextResponse.json({
-      success: false,
-      error: 'Could not derive a valid slug from the name. Provide one explicitly.',
-    }, { status: 400 })
-  }
-
   const db = createServerClient()
 
-  // HOST-APPROVALS.1 — slugs are globally unique (public /event/[slug] has
-  // no location filter; mig 451 enforces it). Pre-check for a clean 409
-  // instead of a raw constraint error.
-  const { data: slugClash } = await db.from('race_events').select('id').eq('slug', slug).maybeSingle()
-  if (slugClash) {
-    return NextResponse.json({
-      success: false,
-      error: `The URL slug "${slug}" is already used by another event. Pick a different name or slug.`,
-    }, { status: 409 })
+  // EVENT-SLUG.1 — the public URL reads as place-date-time
+  // (/event/stillorgan-oct17-1030): studio name + race_date + the earliest
+  // wave. An explicit body.slug still wins (and clashes 409 as before);
+  // the derived one takes a -2/-3 suffix instead. lead_gen (no date, no
+  // waves) falls back to the name-based slug exactly as before.
+  let slug = body.slug || null
+  if (!slug) {
+    const { data: studio } = await db
+      .from('locations')
+      .select('name')
+      .eq('id', body.location_id)
+      .maybeSingle()
+    const base = eventSlug({
+      place: studio?.name,
+      date: body.kind === 'lead_gen' ? null : body.race_date,
+      times: (body.waves || []).map((w) => w.start_time),
+      name: body.name,
+    })
+    slug = await uniqueEventSlug(db, base)
+  } else {
+    // HOST-APPROVALS.1 — slugs are globally unique (public /event/[slug] has
+    // no location filter; mig 451 enforces it). Pre-check for a clean 409
+    // instead of a raw constraint error.
+    const { data: slugClash } = await db.from('race_events').select('id').eq('slug', slug).maybeSingle()
+    if (slugClash) {
+      return NextResponse.json({
+        success: false,
+        error: `The URL slug "${slug}" is already used by another event. Pick a different name or slug.`,
+      }, { status: 409 })
+    }
   }
 
   // EVENTS-HOST.4 — assigning a payee routes ticket money DIRECTLY to that
