@@ -2,8 +2,9 @@
 // host-branded hero (image + accent) and a grid of upcoming-event cards,
 // each linking to the existing /event/[slug] page to book and pay. Server
 // component; dark like the rest of the public surfaces. Cards carry date,
-// time, venue, price and a "Sold out" / "Opens <date>" badge — never a
-// count or a capacity (that boolean is all that leaves the server).
+// time, venue, price and a "Sold out" (red, white text — Richard, 7 Oct) /
+// "Opens <date>" badge — never a count or a capacity (that boolean is all
+// that leaves the server).
 import Link from 'next/link'
 
 export default function HostPublicEvents({ hostName, headline, blurb, heroUrl, accentHex, cards }) {
@@ -45,7 +46,7 @@ export default function HostPublicEvents({ hostName, headline, blurb, heroUrl, a
                   <div className="mb-4 flex items-center justify-between gap-3">
                     <span className="rounded-full border border-white/20 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-white/70">{c.kindLabel}</span>
                     {c.badge && (
-                      <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${soldOut ? 'bg-white/10 text-white/50' : 'bg-white/15 text-white'}`}>{c.badge}</span>
+                      <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${soldOut ? 'bg-red-600 text-white' : 'bg-white/15 text-white'}`}>{c.badge}</span>
                     )}
                   </div>
                   <p className="mb-1 text-xs text-white/55">
