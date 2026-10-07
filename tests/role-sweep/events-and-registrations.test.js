@@ -111,7 +111,9 @@ gate('POST /api/events — races at body.location_id', {
 })
 gate('POST /api/events with a payee — ADMIN_ROLES at body.location_id', {
   call: (loc) => events.POST(json('POST', EVENT_BODY(loc, { host_id: HOST }))),
-  gateReads: () => [{ data: null, error: null }], // the slug-clash pre-check runs first
+  // EVENT-SLUG.1 moved the slug derivation (studio name, slug probes) after every
+  // authorisation check, so a refused caller costs no read at all.
+  gateReads: () => [],
   forbidden: { status: 403, body: { success: false, error: 'Assigning a payment host requires manager access.' } },
   hidden: FORBIDDEN_PLAIN, cases: roleCases(ADMIN_ROLES, 'races'),
 })
