@@ -41,7 +41,6 @@ export default function HostPublicEvents({ hostName, headline, blurb, heroUrl, a
                 <Link
                   href={`/event/${c.slug}`}
                   className="group block h-full rounded-2xl border border-white/15 p-6 transition-colors hover:border-white/40"
-                  style={{ borderColor: soldOut ? undefined : undefined }}
                 >
                   <div className="mb-4 flex items-center justify-between gap-3">
                     <span className="rounded-full border border-white/20 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-white/70">{c.kindLabel}</span>
