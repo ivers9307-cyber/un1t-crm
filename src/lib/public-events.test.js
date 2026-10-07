@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatEventDate, eventPriceLabel, isEventSoldOut, toBrowseCard } from './public-events.js'
+import { formatEventDate, eventPriceLabel, isEventSoldOut, toBrowseCard, formatEventTime } from './public-events.js'
 
 describe('formatEventDate', () => {
   it('formats an ISO date as "Sun 12 Jul" (noon-UTC anchored, TZ-safe)', () => {
@@ -73,5 +73,27 @@ describe('toBrowseCard', () => {
   it('"Opens" takes precedence over sold-out', () => {
     const c = toBrowseCard({ ...base, registration_opens_at: '2026-07-05T09:00:00Z' }, { soldOut: true, now: NOW })
     expect(c.badge).toBe('Opens 5 Jul')
+  })
+})
+
+describe('formatEventTime (HOST-EVENTS-PAGE.1)', () => {
+  it('takes the earliest wave start and drops the seconds', () => {
+    expect(formatEventTime({ waves: [{ start_time: '12:30:00' }, { start_time: '11:00:00' }] })).toBe('11:00')
+  })
+  it('falls back to the event start_time, then empty', () => {
+    expect(formatEventTime({ waves: [], start_time: '18:35' })).toBe('18:35')
+    expect(formatEventTime({ waves: [] })).toBe('')
+    expect(formatEventTime(null)).toBe('')
+  })
+})
+
+describe('toBrowseCard time + venue (HOST-EVENTS-PAGE.1)', () => {
+  it('carries timeLabel and a trimmed venue', () => {
+    const c = toBrowseCard({ slug: 'hatch-oct18-1100', name: 'PTC', kind: 'masterclass', race_date: '2026-10-18', venue_name: ' UN1T Hatch Street ', waves: [{ start_time: '11:00:00', capacity: 30 }], non_member_fee_cents: 1500 })
+    expect(c.timeLabel).toBe('11:00')
+    expect(c.venue).toBe('UN1T Hatch Street')
+  })
+  it('venue is null when absent', () => {
+    expect(toBrowseCard({ slug: 'x', name: 'X', kind: 'race', race_date: '2026-10-18', waves: [] }).venue).toBeNull()
   })
 })

@@ -1,7 +1,8 @@
 'use client'
 
-// Signup-page copy editor (HOST-GROWTH.B). Collapsible panel under the
-// "Your signup page" card: four capped text fields, per-field default
+// Public-page editor (HOST-GROWTH.B; branding + events copy since
+// HOST-EVENTS-PAGE.1). Collapsible panel under the "Your public page" card:
+// capped text fields, per-field default
 // placeholders, save via PATCH /api/host/list-page. Empty field = use the
 // default (stored as NULL).
 
@@ -12,6 +13,11 @@ const FIELDS = [
   { key: 'list_blurb', label: 'Intro text', max: 500, multiline: true, placeholder: 'Default: "Get emails about your events. Unsubscribe anytime."' },
   { key: 'list_button_label', label: 'Button label', max: 40, multiline: false, placeholder: 'Default: "Join the list"' },
   { key: 'list_success_message', label: 'Success message', max: 500, multiline: true, placeholder: "Default: \"We'll email you about upcoming events…\"" },
+  // HOST-EVENTS-PAGE.1 — the events section + branding (mig 707).
+  { key: 'events_headline', label: 'Events headline', max: 120, multiline: false, placeholder: 'Default: "Upcoming events"' },
+  { key: 'events_blurb', label: 'Events intro', max: 500, multiline: true, placeholder: 'Default: none' },
+  { key: 'hero_image_url', label: 'Hero image URL', max: 2000, multiline: false, placeholder: 'Default: the hero of your nearest upcoming event' },
+  { key: 'accent_hex', label: 'Accent colour (#rrggbb)', max: 7, multiline: false, placeholder: 'Default: white' },
 ]
 
 const INPUT = 'w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-white/40'

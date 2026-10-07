@@ -53,7 +53,18 @@ export function isEventSoldOut(waves, registrations, capacityMode) {
   })
 }
 
-/** Row → card view-model. `now` injectable for tests. */
+/** Earliest wave start ("HH:MM:SS" from Postgres TIME, or "HH:MM") → "11:00".
+ *  Falls back to the event's own start_time; '' when neither is set. */
+export function formatEventTime(e) {
+  const times = (e?.waves || []).map((w) => w?.start_time).filter(Boolean).map(String).sort()
+  const t = times[0] || (e?.start_time ? String(e.start_time) : '')
+  const m = /^(\d{2}):(\d{2})/.exec(t)
+  return m ? `${m[1]}:${m[2]}` : ''
+}
+
+/** Row → card view-model. `now` injectable for tests.
+ *  HOST-EVENTS-PAGE.1 added `timeLabel` + `venue` (additive; the studio
+ *  listing ignores them). */
 export function toBrowseCard(e, { soldOut = false, now = Date.now() } = {}) {
   const opensAt = e?.registration_opens_at ? Date.parse(e.registration_opens_at) : null
   let badge = null
@@ -64,6 +75,8 @@ export function toBrowseCard(e, { soldOut = false, now = Date.now() } = {}) {
     title: e.name,
     kindLabel: eventKindLabel(e.kind),
     dateLabel: formatEventDate(e.race_date),
+    timeLabel: formatEventTime(e),
+    venue: typeof e?.venue_name === 'string' && e.venue_name.trim() ? e.venue_name.trim() : null,
     priceLabel: eventPriceLabel(e),
     badge,
   }

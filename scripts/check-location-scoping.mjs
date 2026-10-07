@@ -382,6 +382,10 @@ export const EXEMPT = {
     race_events:
       'Public iframe-embeddable signup for a published slug — same resolution and surface as /event/[slug].',
   },
+  'src/app/h/[slug]/page.js': {
+    race_events:
+      'HOST-EVENTS-PAGE.1 — public host page: event_hosts row resolved by its published slug (the same public selector as /event/[slug]), then race_events filtered to THAT host_id + active=true + status=published + upcoming. Host events sit on a hidden anchor location, so host_id is their tenancy boundary (HOST-PORTAL.1); published content by design, and the embedded waves/registrations feed only the sold-out boolean — no count or capacity is rendered. Verified in src/app/h/[slug]/page.js loadHostEvents().',
+  },
   'src/app/offers/page.js': {
     sale_offers:
       'Public sale catalogue (OFFERS.7): active offers are deliberately world-readable — they ARE the landing-page content (same rationale as /api/public/offers/[slug]/checkout).',
