@@ -344,9 +344,21 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  check:
-    name: Test & lint
+  # CI-SHARD.1 (2026-10-07) — the suite is ~41k tests in ~2,070 files and took
+  # 14 of the job's 17 minutes on the free 4-vCPU runner (4 minutes on an M3
+  # Air), so it runs as four parallel shards. `--shard` is vitest's own
+  # deterministic split by file list, so every file runs in exactly one
+  # shard and the four together ARE `npm test`. `fail-fast: false` keeps
+  # the other shards reporting when one fails (you want the whole picture,
+  # not the first red). Nothing here is required by branch protection —
+  # the aggregator job below is.
+  vitest:
+    name: Vitest (shard ${{ matrix.shard }} of 4)
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v7
 
@@ -360,10 +372,39 @@ jobs:
         run: npm ci
 
       - name: Vitest
-        run: npm test
+        run: npx vitest run --shard=${{ matrix.shard }}/4
+
+  # CI-SHARD.1 — ESLint and the check:* gates, run beside the shards rather
+  # than after them. ESLint keeps its file cache between runs (keyed on the
+  # lockfile + the config files, refined by commit so the newest compatible
+  # cache restores) — a PR touching a handful of files lints those, not the
+  # repo. The guardrails run is a second ESLint config and stays uncached:
+  # its own file set is small and a shared cache would mix two rule sets.
+  lint:
+    name: Lint & gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Restore ESLint cache
+        uses: actions/cache@v6
+        with:
+          path: .eslintcache
+          key: eslint-${{ hashFiles('package-lock.json', 'eslint.config.*') }}-${{ github.sha }}
+          restore-keys: |
+            eslint-${{ hashFiles('package-lock.json', 'eslint.config.*') }}-
 
       - name: ESLint
-        run: npm run lint
+        run: npm run lint -- --cache --cache-location .eslintcache
 
       - name: Web/mobile parity
         run: npm run check:mobile-parity
@@ -479,6 +520,29 @@ jobs:
   # job so it doesn't lengthen the test/lint feedback loop. The build
   # needs no env secrets — env reads (getAppUrl etc.) throw at request
   # time, not build time; all pages are dynamic.
+  # CI-SHARD.1 — THE required check. Branch protection requires a check
+  # named "Test & lint"; this job keeps that name and goes green only when
+  # every vitest shard AND the lint job succeeded. `if: always()` is
+  # load-bearing: without it a failed shard SKIPS this job, and GitHub
+  # treats a skipped required check as satisfied — the gate would open on
+  # red. The step below fails on any `needs` result that is not `success`
+  # (failure, cancelled, skipped), so a cancelled shard blocks too. The
+  # fork-PR caveat in the trigger notes above is unchanged by this shape:
+  # a fork can still forge a green "Test & lint" by editing this file.
+  check:
+    name: Test & lint
+    runs-on: ubuntu-latest
+    needs: [vitest, lint]
+    if: always()
+    steps:
+      - name: Every shard and the lint job passed
+        env:
+          VITEST_RESULT: ${{ needs.vitest.result }}
+          LINT_RESULT: ${{ needs.lint.result }}
+        run: |
+          echo "vitest: $VITEST_RESULT   lint: $LINT_RESULT"
+          test "$VITEST_RESULT" = success && test "$LINT_RESULT" = success
+
   build:
     name: Next build
     runs-on: ubuntu-latest

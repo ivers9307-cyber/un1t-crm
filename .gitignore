@@ -33,3 +33,6 @@ test-results/
 # FCM-SETUP.1 — local google-services.json fallback (Route A: the real one
 # is an EAS file secret; this repo is public, never commit it)
 mobile/google-services.json
+
+# CI-SHARD.1 — ESLint file cache (web-ci.yml restores it between runs)
+.eslintcache
