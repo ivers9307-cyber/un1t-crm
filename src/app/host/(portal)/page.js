@@ -67,7 +67,7 @@ export default async function HostDashboard() {
   try {
     const { data: hostRow } = await db
       .from('event_hosts')
-      .select('id, name, slug, list_headline, list_blurb, list_button_label, list_success_message')
+      .select('id, name, slug, list_headline, list_blurb, list_button_label, list_success_message, hero_image_url, accent_hex, events_headline, events_blurb')
       .eq('id', session.host.id)
       .maybeSingle()
     if (hostRow) {
@@ -84,6 +84,10 @@ export default async function HostDashboard() {
         list_blurb: hostRow.list_blurb,
         list_button_label: hostRow.list_button_label,
         list_success_message: hostRow.list_success_message,
+        events_headline: hostRow.events_headline,
+        events_blurb: hostRow.events_blurb,
+        hero_image_url: hostRow.hero_image_url,
+        accent_hex: hostRow.accent_hex,
       }
     }
   } catch (e) {

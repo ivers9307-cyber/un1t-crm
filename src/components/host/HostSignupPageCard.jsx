@@ -29,7 +29,7 @@ export default function HostSignupPageCard({ url, signupCount, copyValues }) {
   return (
     <div className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 flex flex-wrap items-center justify-between gap-3">
       <div className="min-w-0">
-        <p className="text-sm font-medium">Your signup page</p>
+        <p className="text-sm font-medium">Your public page</p>
         <p className="mt-1 text-xs text-white/50 break-all">
           {url}
           {signupCount != null && (

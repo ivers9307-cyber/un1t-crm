@@ -9143,6 +9143,10 @@ const HostListPageCopy = z.object({
   list_blurb: z.string().max(500).nullable().optional(),
   list_button_label: z.string().max(40).nullable().optional(),
   list_success_message: z.string().max(500).nullable().optional(),
+  events_headline: z.string().max(120).nullable().optional(),
+  events_blurb: z.string().max(500).nullable().optional(),
+  hero_image_url: z.string().max(2000).nullable().optional(),
+  accent_hex: z.string().max(7).nullable().optional(),
 }).openapi('HostListPageCopy')
 
 const HostListPageUpdate = z.object({
@@ -9150,6 +9154,10 @@ const HostListPageUpdate = z.object({
   list_blurb: z.string().max(500).optional(),
   list_button_label: z.string().max(40).optional(),
   list_success_message: z.string().max(500).optional(),
+  events_headline: z.string().max(120).optional(),
+  events_blurb: z.string().max(500).optional(),
+  hero_image_url: z.string().max(2000).optional(),
+  accent_hex: z.string().max(7).optional(),
 }).openapi('HostListPageUpdate')
 
 const HostSendTestBody = z.object({
