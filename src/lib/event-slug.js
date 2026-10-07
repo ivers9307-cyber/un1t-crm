@@ -72,19 +72,56 @@ export function shouldRederiveSlug(status) {
 }
 
 /**
- * First free slug among base, base-2, base-3… Probes `race_events` globally
- * (mig 451 makes slugs unique across locations). `excludeId` lets an edit
- * keep its own slug. A failed probe counts as taken: this never hands back
- * a slug it could not check. The unique index remains the backstop.
+ * Does any event hold `slug` today, or did one hold it before a rename
+ * (`race_event_slug_aliases`, mig 706)? Either way a new event may not
+ * take it. A failed probe reads as taken: this never says "free" about a
+ * slug it could not check.
+ */
+async function slugTaken(db, slug, { excludeId = null } = {}) {
+  let live = db.from('race_events').select('id').eq('slug', slug)
+  if (excludeId) live = live.neq('id', excludeId)
+  // .maybeSingle(): 0 rows is the answer we want; slug is unique (mig 451).
+  const liveRes = await live.maybeSingle()
+  if (liveRes.error || liveRes.data) return true
+  // .maybeSingle(): old_slug is the primary key, so 0-or-1 rows.
+  const aliasRes = await db.from('race_event_slug_aliases').select('race_event_id').eq('old_slug', slug).maybeSingle()
+  return Boolean(aliasRes.error || aliasRes.data)
+}
+
+/**
+ * First free slug among base, base-2, base-3… Probes live slugs globally
+ * (mig 451 makes them unique across locations) AND retired ones (mig 706),
+ * so a new event never shadows a redirect. `excludeId` lets an edit keep
+ * its own slug. The unique index remains the backstop.
  */
 export async function uniqueEventSlug(db, base, { excludeId = null } = {}) {
   for (let n = 1; n < 1000; n++) {
     const candidate = n === 1 ? base : `${base}-${n}`
-    let q = db.from('race_events').select('id').eq('slug', candidate)
-    if (excludeId) q = q.neq('id', excludeId)
-    // .maybeSingle(): 0 rows is the answer we want; slug is unique (mig 451).
-    const { data, error } = await q.maybeSingle()
-    if (!error && !data) return candidate
+    if (!(await slugTaken(db, candidate, { excludeId }))) return candidate
   }
   return `${base}-${Date.now()}`
+}
+
+/**
+ * Where should /event/[slug] send a visitor? `null` when the slug is live
+ * (or unknown, or the lookup failed — the page then renders as before and
+ * the widget shows its own not-found); the LIVE slug when `slug` is a
+ * retired alias of a renamed event. Live always wins over an alias.
+ */
+export async function redirectTargetForSlug(db, slug) {
+  try {
+    // .maybeSingle(): slug is unique (mig 451); 0 rows means "not live".
+    const live = await db.from('race_events').select('id').eq('slug', slug).maybeSingle()
+    if (live.error || live.data) return null
+    // .maybeSingle(): old_slug is the primary key.
+    const alias = await db
+      .from('race_event_slug_aliases')
+      .select('race_events:race_event_id ( slug )')
+      .eq('old_slug', slug)
+      .maybeSingle()
+    const target = alias.data?.race_events?.slug
+    return target && target !== slug ? target : null
+  } catch {
+    return null
+  }
 }

@@ -1,6 +1,6 @@
 # EVENT-SLUG.1 — event URLs read as place, date and time
 
-**Ask (Richard, 7 Oct 2026):** "For events we need to update the slug and the URL for each upcoming event. It should show location, date & time. Something like `/stillorganNov22_1100`." Fix the upcoming events now and change the template going forward. Links have not been given to customers yet, so no redirects.
+**Ask (Richard, 7 Oct 2026):** "For events we need to update the slug and the URL for each upcoming event. It should show location, date & time. Something like `/stillorganNov22_1100`." Fix the upcoming events now and change the template going forward. **Amended same day:** a host campaign sent on 7 Sep to 164 people carried `/event/pride-training-club-4`, and the two 18 Oct events hold 24 and 27 sign-ups, so renamed events keep their old slugs as redirecting aliases (Richard's pick over leaving those two alone).
 
 ## What already existed
 - `race_events.slug` is derived ONCE from the event name at creation: staff path `toSlug(body.name)` in `POST /api/events`, host path `deriveSlug(input.name)` in `POST /api/host/events`. Neither `PUT` accepts a slug and neither form shows one. It is globally unique (mig 451) and exact-match, case-sensitive, in every public resolver (`/event/[slug]`, `/api/public/events/[slug]/*`, `/book/[slug]`, `/embed/event/[slug]`).
@@ -22,6 +22,12 @@
 2. **`POST /api/host/events`**: derive from `input.venue_name` + `input.race_date` + `input.session_start_time`.
 3. **`PUT /api/host/events/[id]`**: while `current.status !== 'published'`, re-derive the slug from the new venue/date/time and update it (clash-suffixed, ignoring the event's own row). Once published the slug is frozen. Staff events are published on creation, so the staff `PUT` is untouched.
 
+### Old slugs keep working — `race_event_slug_aliases` (mig 706)
+- One row per retired slug → `race_event_id`. Service-role only (no client grant, RLS on, no policy).
+- `/event/[slug]` page: if the slug is not live, look it up as an alias and `redirect()` to `/event/<live slug>`. Live always wins; a failed lookup renders as before. Only the `/event/` path redirects (the emailed links are all that shape); `/book/`, `/embed/event/` and the public API do not.
+- `uniqueEventSlug` also treats an aliased slug as taken, so a new event can never shadow a redirect.
+- The data fix inserts an alias for every old slug it retires, in the same transaction as the rename.
+
 ### Data fix (direct SQL after the code deploys; slugs are not editable in the app)
 
 | Event | Today | New |
@@ -39,11 +45,11 @@
 
 - The 25 Oct "11.00AM" event's only wave is stored as **23:00**; set it to 11:00 (what the name says) in the same pass.
 - The Hatch Street lead-gen form (`un1t-hatch-street`, no date) keeps its slug.
-- Before renaming, check `landing_pages`/landing-page blocks and campaign bodies for the old slugs and update any hit in the same pass.
+- Checked 7 Oct: the old slugs appear in one unsent CRM campaign (a test draft), one unsent host campaign draft (`pride-training-club-5`) and one SENT host campaign (`pride-training-club-4`, 164 recipients). The two drafts get their links rewritten in the same pass; the sent one is covered by the alias redirect.
 - After renaming, GET each new `/event/<slug>` and confirm 200.
 
 ### Testing
 `src/lib/event-slug.test.js`: each venue shape above, "the" skipping, single-digit day, `HH:MM:SS` input, no-date and no-time fallbacks, the clash-suffix helper, and the publish freeze decision (`shouldRederiveSlug(status)`).
 
 ## Out of scope
-Redirects from old slugs (links not sent), an editable slug field in either form, changing the `/event/` path, case-insensitive lookups.
+An editable slug field in either form, changing the `/event/` path, case-insensitive lookups, alias redirects on `/book/`, `/embed/event/` or the public API.

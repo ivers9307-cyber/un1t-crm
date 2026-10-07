@@ -351,6 +351,16 @@ git commit -m "EVENT-SLUG.1 — host events derive place-date-time slugs; drafts
 
 ---
 
+### Task 3b: Old slugs redirect (added 7 Oct after the sent-campaign finding)
+
+**Files:**
+- Create: `supabase/migrations/706_race_event_slug_aliases.sql` — `race_event_slug_aliases(old_slug pk, race_event_id fk cascade, created_at)`, RLS on, `revoke all … from anon, authenticated`.
+- Modify: `src/lib/event-slug.js` — `uniqueEventSlug` also probes the alias table; new `redirectTargetForSlug(db, slug)` (null when live/unknown/failed, the live slug for an alias).
+- Modify: `src/app/event/[slug]/page.js` — `const target = await redirectTargetForSlug(createServerClient(), params.slug); if (target) redirect(\`/event/${target}\`)` before render.
+- Test: `src/lib/event-slug.test.js` — alias counts as taken; redirect cases (live wins, alias → live, unknown, orphan alias, lookup failure).
+
+- [x] Done; gates green (`vitest`, eslint, `check:select-columns`, `check:location-scoping`, `check:rls-restrictive`, `tests/table-default-acl-guard.test.js`).
+
 ### Task 4: CI mirror, build, PR
 
 - [ ] **Step 1:** full thirteen-command CI mirror from CLAUDE.md, all exit 0.
@@ -371,8 +381,8 @@ Run SQL through the Supabase MCP on project `iyvtbjjxdggiadzwwvdj`, one call per
 begin;
 update race_waves set start_time = '11:00'
   where race_event_id = (select id from race_events where slug = 'pride-training-club-10-30am') and start_time = '23:00';
-update race_events set slug = v.new_slug
-from (values
+create temp table ren(old_slug text, new_slug text) on commit drop;
+insert into ren values
   ('hyrox-sim-october', 'stillorgan-oct17-1030'),
   ('pride-training-club-5', 'hatch-oct18-1100'),
   ('pride-training-club-4', 'hatch-oct18-1230'),
@@ -383,15 +393,22 @@ from (values
   ('pride-training-club-7', 'stillorgan-nov22-1345'),
   ('pride-training-club-christmas-edition-10-30', 'hatch-dec5-1030'),
   ('pride-training-club-12-30pm', 'stillorgan-dec20-1230')
-) as v(old_slug, new_slug)
-where race_events.slug = v.old_slug;
+;
+insert into race_event_slug_aliases (old_slug, race_event_id)
+  select r.old_slug, e.id from ren r join race_events e on e.slug = r.old_slug;
+update race_events e set slug = r.new_slug from ren r where e.slug = r.old_slug;
+update host_campaigns set body_html = replace(body_html, '/event/pride-training-club-5', '/event/hatch-oct18-1100'),
+  design_json = replace(design_json::text, '/event/pride-training-club-5', '/event/hatch-oct18-1100')::jsonb
+  where id = '2c015b2e-66dc-4acd-a0bd-8f2222de23b5' and status = 'draft';
+update campaigns set html_content = replace(html_content, '/event/pride-training-club-4', '/event/hatch-oct18-1230')
+  where id = '96b951df-ea1d-43e8-a96d-44c21a994c35' and status = 'draft';
 select slug, race_date, (select min(start_time) from race_waves w where w.race_event_id = e.id) as t
   from race_events e where race_date >= current_date order by race_date, t;
 commit;
 ```
 
-Expected: 10 events + 1 wave updated; the select lists the ten new slugs.
+Expected: 10 events + 1 wave updated, 10 alias rows, 2 draft bodies rewritten; the select lists the ten new slugs.
 
-- [ ] **Step 3: Verify** each `https://crm.repset.ie/api/public/events/<slug>` returns 200 (curl loop over the ten), and open one `/event/<slug>` page in the browser.
+- [ ] **Step 3: Verify** each `https://crm.repset.ie/api/public/events/<slug>` returns 200 (curl loop over the ten), `curl -sI https://crm.repset.ie/event/pride-training-club-4` answers 307 to `/event/hatch-oct18-1230`, and open one `/event/<slug>` page in the browser.
 
 - [ ] **Step 4: Report** the new URLs to Richard as a table, noting the 23:00 → 11:00 wave fix.

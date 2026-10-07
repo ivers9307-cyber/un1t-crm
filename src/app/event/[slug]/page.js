@@ -1,4 +1,6 @@
+import { redirect } from 'next/navigation'
 import RaceSignupWidget from '@/components/RaceSignupWidget'
+import { redirectTargetForSlug } from '@/lib/event-slug'
 import { createServerClient } from '@/lib/supabase'
 import { poppinsBody as poppins } from '@/fonts/poppins'
 
@@ -65,6 +67,13 @@ export async function generateMetadata(props) {
 
 export default async function PublicRaceSignupPage(props) {
   const params = await props.params;
+  // EVENT-SLUG.1 — a renamed event keeps its old slugs as aliases (mig 706):
+  // /event/pride-training-club-4 (emailed to 164 people) sends the visitor
+  // to /event/hatch-oct18-1230. Live slugs never redirect; a failed lookup
+  // renders the page as before. redirect() throws by design — keep it
+  // outside the helper's try/catch.
+  const target = await redirectTargetForSlug(createServerClient(), params.slug)
+  if (target) redirect(`/event/${target}`)
   return (
     <div className={`${poppins.variable} font-body min-h-screen bg-black text-white`}>
       <RaceSignupWidget slug={params.slug} />

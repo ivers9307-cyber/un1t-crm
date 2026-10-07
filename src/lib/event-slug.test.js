@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { placeToken, dateToken, timeToken, eventSlug, shouldRederiveSlug, uniqueEventSlug } from './event-slug'
+import { placeToken, dateToken, timeToken, eventSlug, shouldRederiveSlug, uniqueEventSlug, redirectTargetForSlug } from './event-slug'
 
 describe('placeToken', () => {
   it('strips UN1T and bracketed text and keeps the first word, lowercase', () => {
@@ -81,37 +81,73 @@ describe('shouldRederiveSlug', () => {
   })
 })
 
-describe('uniqueEventSlug', () => {
-  function dbWithTaken(taken) {
-    return {
-      from: () => ({
-        select: () => {
-          const q = { _slug: null, _neq: null }
-          q.eq = (col, v) => { q._slug = v; return q }
-          q.neq = (col, v) => { q._neq = v; return q }
-          q.maybeSingle = async () => {
-            const hit = taken.find((t) => t.slug === q._slug && t.id !== q._neq)
+// Fake db: `live` = race_events rows {id, slug}; `aliases` = {old_slug, race_event_id}.
+function fakeDb({ live = [], aliases = [], failFirst = false } = {}) {
+  let calls = 0
+  return {
+    from: (table) => ({
+      select: () => {
+        const q = { _eq: null, _neq: null }
+        q.eq = (col, v) => { q._eq = v; return q }
+        q.neq = (col, v) => { q._neq = v; return q }
+        q.maybeSingle = async () => {
+          if (failFirst && calls++ === 0) return { data: null, error: { message: 'boom' } }
+          if (table === 'race_events') {
+            const hit = live.find((r) => r.slug === q._eq && r.id !== q._neq)
             return { data: hit ? { id: hit.id } : null, error: null }
           }
-          return q
-        },
-      }),
-    }
+          if (table === 'race_event_slug_aliases') {
+            const hit = aliases.find((r) => r.old_slug === q._eq)
+            if (!hit) return { data: null, error: null }
+            const ev = live.find((r) => r.id === hit.race_event_id)
+            return { data: { race_event_id: hit.race_event_id, race_events: ev ? { slug: ev.slug } : null }, error: null }
+          }
+          throw new Error(`unexpected table ${table}`)
+        }
+        return q
+      },
+    }),
   }
+}
+
+describe('uniqueEventSlug', () => {
   it('returns the base when free', async () => {
-    expect(await uniqueEventSlug(dbWithTaken([]), 'hatch-oct18-1100')).toBe('hatch-oct18-1100')
+    expect(await uniqueEventSlug(fakeDb(), 'hatch-oct18-1100')).toBe('hatch-oct18-1100')
   })
   it('suffixes -2, -3 until free', async () => {
-    const db = dbWithTaken([{ id: 'a', slug: 'hatch-oct18-1100' }, { id: 'b', slug: 'hatch-oct18-1100-2' }])
+    const db = fakeDb({ live: [{ id: 'a', slug: 'hatch-oct18-1100' }, { id: 'b', slug: 'hatch-oct18-1100-2' }] })
     expect(await uniqueEventSlug(db, 'hatch-oct18-1100')).toBe('hatch-oct18-1100-3')
   })
   it('ignores the event being edited', async () => {
-    const db = dbWithTaken([{ id: 'me', slug: 'hatch-oct18-1100' }])
+    const db = fakeDb({ live: [{ id: 'me', slug: 'hatch-oct18-1100' }] })
     expect(await uniqueEventSlug(db, 'hatch-oct18-1100', { excludeId: 'me' })).toBe('hatch-oct18-1100')
   })
+  it('never reuses a retired slug that still redirects (mig 706)', async () => {
+    const db = fakeDb({ live: [{ id: 'a', slug: 'hatch-oct18-1230' }], aliases: [{ old_slug: 'pride-training-club-4', race_event_id: 'a' }] })
+    expect(await uniqueEventSlug(db, 'pride-training-club-4')).toBe('pride-training-club-4-2')
+  })
   it('treats a read error as taken (never hands back a slug it could not check)', async () => {
-    let n = 0
-    const db = { from: () => ({ select: () => { const q = {}; q.eq = () => q; q.neq = () => q; q.maybeSingle = async () => (n++ === 0 ? { data: null, error: { message: 'boom' } } : { data: null, error: null }); return q } }) }
-    expect(await uniqueEventSlug(db, 'x')).toBe('x-2')
+    expect(await uniqueEventSlug(fakeDb({ failFirst: true }), 'x')).toBe('x-2')
+  })
+})
+
+describe('redirectTargetForSlug', () => {
+  const db = () => fakeDb({
+    live: [{ id: 'a', slug: 'hatch-oct18-1230' }],
+    aliases: [{ old_slug: 'pride-training-club-4', race_event_id: 'a' }, { old_slug: 'orphan', race_event_id: 'gone' }],
+  })
+  it('is null for a live slug (live always wins)', async () => {
+    expect(await redirectTargetForSlug(db(), 'hatch-oct18-1230')).toBeNull()
+  })
+  it('returns the live slug for a retired alias', async () => {
+    expect(await redirectTargetForSlug(db(), 'pride-training-club-4')).toBe('hatch-oct18-1230')
+  })
+  it('is null for an unknown slug and for an alias whose event is gone', async () => {
+    expect(await redirectTargetForSlug(db(), 'nope')).toBeNull()
+    expect(await redirectTargetForSlug(db(), 'orphan')).toBeNull()
+  })
+  it('is null when the lookup fails (the page renders as before)', async () => {
+    expect(await redirectTargetForSlug(fakeDb({ failFirst: true }), 'pride-training-club-4')).toBeNull()
+    expect(await redirectTargetForSlug({ from: () => { throw new Error('down') } }, 'x')).toBeNull()
   })
 })
