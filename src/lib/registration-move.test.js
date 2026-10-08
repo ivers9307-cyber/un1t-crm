@@ -4,8 +4,7 @@ import {
   listMoveTargets, moveRegistration, loadRegistrationForMove,
 } from './registration-move.js'
 
-// The moved email is loaded lazily by moveRegistration; here it always fails,
-// which is the case the move must survive.
+// The moved email always fails here, which is the case the move must survive.
 const sendMovedEmail = vi.hoisted(() => vi.fn(async () => { throw new Error('postmark down') }))
 vi.mock('./race-confirmations', () => ({ sendRegistrationMovedEmail: sendMovedEmail }))
 const syncHostList = vi.hoisted(() => vi.fn(async () => ({})))
@@ -459,10 +458,13 @@ describe('moveRegistration', () => {
       expect(emitted(db)).toEqual([])
     })
   })
-  it('a conflict raised under the row lock is conflict; any other function error is write_failed', async () => {
+  it('a conflict raised under the row lock (P0003) is conflict; any other function error is write_failed', async () => {
     const answers = [
       [{ code: 'P0003', message: 'conflict' }, 'conflict'],
-      [{ message: 'conflict' }, 'conflict'],
+      // The SQLSTATE decides, never the wording: a message that merely says
+      // "conflict" (a unique violation, a PostgREST 409) is a failed write.
+      [{ message: 'conflict' }, 'write_failed'],
+      [{ code: '23505', message: 'duplicate key value violates unique constraint; conflict' }, 'write_failed'],
       [{ code: 'P0002', message: 'not_found' }, 'write_failed'],
     ]
     for (const [err, expected] of answers) {

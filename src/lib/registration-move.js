@@ -17,6 +17,7 @@ import { dublinTodayStr } from './dublin-time'
 import { logError, logWarn } from './log'
 import { emitEvent, EVENT_TYPES } from './contact-events'
 import { addEventAttendeesToHostList } from './host-contact-list'
+import { sendRegistrationMovedEmail } from './race-confirmations'
 import {
   MOVE_ERRORS, MOVE_ERROR_MESSAGES, membersOf,
   entryLabel, entryHeadcount, perPersonFeeCents, computePriceGapCents,
@@ -317,10 +318,13 @@ export async function listMoveTargets(db, { registrationId, allowedEventIds = nu
   }
 }
 
-/** move_race_registration's re-check under the row lock (mig 708): P0003. */
+/**
+ * move_race_registration's re-check under the row lock (mig 708) raises
+ * SQLSTATE P0003, which PostgREST passes through in `code`. The code alone
+ * decides: a message that happens to say "conflict" is not this.
+ */
 function isConflict(err) {
-  if (!err) return false
-  return err.code === 'P0003' || /\bconflict\b/i.test(String(err.message || ''))
+  return err?.code === 'P0003'
 }
 
 /**
@@ -433,7 +437,6 @@ export async function moveRegistration(db, {
   } catch (e) { logWarn('registration-move', 'host contact list sync failed', { err: e, targetEventId }) }
   if (notify) {
     try {
-      const { sendRegistrationMovedEmail } = await import('./race-confirmations')
       await sendRegistrationMovedEmail(db, { registrationId, moveId: move.id })
     } catch (e) { logError('registration-move', 'moved email threw; the move stands', { err: e, registrationId, moveId: move.id }) }
   }
