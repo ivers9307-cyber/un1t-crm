@@ -287,6 +287,8 @@ export default function RaceEventForm({ race, locationId }) {
   const [reminderSubject, setReminderSubject] = useState(race?.reminder_email_subject || '')
   const [reminderIntro, setReminderIntro] = useState(race?.reminder_email_intro || '')
   const [reminderTemplateId, setReminderTemplateId] = useState(race?.reminder_email_template_id || '')
+  const [movedSubject, setMovedSubject] = useState(race?.moved_email_subject || '')
+  const [movedIntro, setMovedIntro] = useState(race?.moved_email_intro || '')
   // The location's saved email templates, for the "Advanced: use a full
   // template" pickers. Fetched from the shared templates list endpoint,
   // scoped to this event's location. A fetch failure just leaves the list
@@ -574,6 +576,8 @@ export default function RaceEventForm({ race, locationId }) {
       reminder_email_subject: reminderSubject.trim() || null,
       reminder_email_intro: reminderIntro.trim() || null,
       reminder_email_template_id: reminderTemplateId || null,
+      moved_email_subject: movedSubject.trim() || null,
+      moved_email_intro: movedIntro.trim() || null,
       ...(meta.isLeadGen ? {} : {
         waves: outboundWaves.map((w, i) => ({
           ...(w.id ? { id: w.id } : {}),
@@ -1402,6 +1406,21 @@ export default function RaceEventForm({ race, locationId }) {
               templates={emailTemplates}
             />
           </div>
+
+          <div className="pt-4 border-t border-un1t-border">
+            <EventEmailFields
+              title="Entry moved"
+              description="Sent when staff move an entry onto this event from another one. Carries the new date, time and fresh QR codes."
+              subject={movedSubject}
+              onSubject={setMovedSubject}
+              subjectPlaceholder="Your entry has moved to {{event_name}}"
+              intro={movedIntro}
+              onIntro={setMovedIntro}
+              introPlaceholder="Your entry for {{old_event_name}} ({{old_when}}) is now on {{event_name}}. Your new tickets are below."
+              showTemplate={false}
+              extraTags={['{{old_event_name}}', '{{old_when}}']}
+            />
+          </div>
         </div>
       )}
 
@@ -1535,6 +1554,8 @@ function EventEmailFields({
   templateId,
   onTemplateId,
   templates,
+  showTemplate = true,
+  extraTags = [],
 }) {
   return (
     <div className="space-y-3">
@@ -1565,26 +1586,29 @@ function EventEmailFields({
           className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
         />
         <p className="text-[11px] text-un1t-muted mt-1">
-          Merge tags: <code>{'{{event_name}}'}</code>, <code>{'{{team_name}}'}</code>, <code>{'{{when}}'}</code>, <code>{'{{location}}'}</code>. Blank = the default copy.
+          Merge tags: <code>{'{{event_name}}'}</code>, <code>{'{{team_name}}'}</code>, <code>{'{{when}}'}</code>, <code>{'{{location}}'}</code>
+          {extraTags.map((t) => (<span key={t}>, <code>{t}</code></span>))}. Blank = the default copy.
         </p>
       </div>
 
-      <div>
-        <label className="block text-sm text-un1t-subtle mb-1">Advanced: use a full template</label>
-        <select
-          value={templateId}
-          onChange={(e) => onTemplateId(e.target.value)}
-          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
-        >
-          <option value="">Branded default (uses this event&apos;s colour + hero image)</option>
-          {templates.map((t) => (
-            <option key={t.id} value={t.id}>{t.name}</option>
-          ))}
-        </select>
-        <p className="text-[11px] text-un1t-muted mt-1">
-          Overrides the intro/body above with a saved email template&apos;s full HTML. The subject line still applies.
-        </p>
-      </div>
+      {showTemplate && (
+        <div>
+          <label className="block text-sm text-un1t-subtle mb-1">Advanced: use a full template</label>
+          <select
+            value={templateId}
+            onChange={(e) => onTemplateId(e.target.value)}
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+          >
+            <option value="">Branded default (uses this event&apos;s colour + hero image)</option>
+            {templates.map((t) => (
+              <option key={t.id} value={t.id}>{t.name}</option>
+            ))}
+          </select>
+          <p className="text-[11px] text-un1t-muted mt-1">
+            Overrides the intro/body above with a saved email template&apos;s full HTML. The subject line still applies.
+          </p>
+        </div>
+      )}
     </div>
   )
 }
