@@ -126,7 +126,7 @@ async function loadMoveHistory(db, eventId, regIds) {
     try {
       const { data: movesIn, error: movesInErr } = await db
         .from('registration_moves')
-        .select('id, registration_id, created_at, actor_name, price_gap_cents, forced, from_event:from_event_id ( id, name, race_date )')
+        .select('id, registration_id, created_at, actor_name, price_gap_cents, forced, notified_at, from_event:from_event_id ( id, name, race_date )')
         .in('registration_id', regIds)
         .eq('to_event_id', eventId)
         .order('created_at', { ascending: false })

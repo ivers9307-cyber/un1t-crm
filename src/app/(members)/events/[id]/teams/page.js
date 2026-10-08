@@ -53,8 +53,14 @@ export default async function RaceTeamsPage(props) {
         </p>
       </header>
       {/* GATES-2 — Cancel entry calls POST /api/registrations/[id]/cancel,
-          which requires MANAGER_ROLES at the event's studio. */}
-      <RaceTeamsManager race={race} canCancelEntries={hasRoleAtLocation(user, race.location_id, MANAGER_ROLES)} />
+          which requires MANAGER_ROLES at the event's studio. EVENT-MOVE.1 —
+          Move to event calls POST /api/event-registrations/[id]/move, same
+          rule at the source studio (and again at the target's). */}
+      <RaceTeamsManager
+        race={race}
+        canCancelEntries={hasRoleAtLocation(user, race.location_id, MANAGER_ROLES)}
+        canMoveEntries={hasRoleAtLocation(user, race.location_id, MANAGER_ROLES)}
+      />
     </div>
   )
 }

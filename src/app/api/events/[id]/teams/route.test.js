@@ -51,8 +51,8 @@ const REGS = [
   { id: 'r1', status: 'confirmed', teams: { name: 'Fast Pair', size: 2, team_members: [{ name: 'A', role: 'captain' }, { name: 'B', role: 'member' }] } },
   { id: 'r2', status: 'confirmed', teams: { name: 'Solo', size: 1, team_members: [{ name: 'Cara', role: 'captain' }] } },
 ]
-const MOVE_IN_NEW = { id: 'm2', registration_id: 'r1', created_at: '2026-10-07T10:00:00Z', actor_name: 'Richard', price_gap_cents: 500, forced: false, from_event: { id: 'e9', name: 'Old', race_date: '2026-10-01' } }
-const MOVE_IN_OLD = { id: 'm1', registration_id: 'r1', created_at: '2026-10-05T10:00:00Z', actor_name: 'Richard', price_gap_cents: 0, forced: false, from_event: { id: 'e8', name: 'Older', race_date: '2026-09-01' } }
+const MOVE_IN_NEW = { id: 'm2', registration_id: 'r1', created_at: '2026-10-07T10:00:00Z', actor_name: 'Richard', price_gap_cents: 500, forced: false, notified_at: null, from_event: { id: 'e9', name: 'Old', race_date: '2026-10-01' } }
+const MOVE_IN_OLD = { id: 'm1', registration_id: 'r1', created_at: '2026-10-05T10:00:00Z', actor_name: 'Richard', price_gap_cents: 0, forced: false, notified_at: '2026-10-05T10:00:05Z', from_event: { id: 'e8', name: 'Older', race_date: '2026-09-01' } }
 const MOVE_OUT = {
   id: 'm3', created_at: '2026-10-06T09:00:00Z', actor_name: 'Colm',
   registration: { id: 'r7', teams: { name: 'Gone Team', size: 2, team_members: [{ name: 'X', role: 'captain' }, { name: 'Y', role: 'member' }] } },
@@ -87,6 +87,13 @@ describe('GET /api/events/[id]/teams — move history', () => {
     expect(json.data.find((r) => r.id === 'r2').last_move).toBeNull()
     const movesIn = globalThis.__calls.find((c) => c.table === 'registration_moves' && has(c.ops, 'eq', 'to_event_id', EV))
     expect(has(movesIn.ops, 'in', 'registration_id', ['r1', 'r2'])).toBe(true)
+  })
+
+  it('reads notified_at on the move in, so the card can say it was not emailed', async () => {
+    await GET(req(), props)
+    const movesIn = globalThis.__calls.find((c) => c.table === 'registration_moves' && has(c.ops, 'eq', 'to_event_id', EV))
+    const select = movesIn.ops.find((o) => o[0] === 'select')[1]
+    expect(select.split(',').map((c) => c.trim())).toContain('notified_at')
   })
 
   it('lists every move out of this event with the entry label and target', async () => {
