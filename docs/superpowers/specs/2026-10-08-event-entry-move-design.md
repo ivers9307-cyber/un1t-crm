@@ -26,6 +26,8 @@ tool tells the customer that a different event means cancel plus rebook.
 | Customer email | **Yes, ticked by default.** A "your entry has moved" email with the new date, wave and fresh QR codes. Staff can untick it per move. Copy is operator-editable. |
 | Scope | **Staff first, host next.** PR 1 is the migration, the shared move function, the staff route, dialog and chips. PR 2 adds the host portal action on the same function. Mia later, through approvals. |
 | Unit of move | **The entry (one `race_registrations` row), not the team.** Today every entry is a team (a solo is a team of one). Soon there will be single-person bookings with no team. Code and copy must not assume a team. |
+| Across studios | **Allowed** (Richard, 8 Oct, second pass). Same payee is still required. Teams are unique per studio and team-member edits are authorised on the team's home studio, so a cross-studio move **clones the team into the target studio** inside the same transaction and points the entry at the clone. The original team row stays with its history. |
+| Full wave | **Staff may force it** (Richard, 8 Oct, second pass). Without `force` a full wave refuses with `wave_full`. The dialog then shows "This wave is full" with two choices: **Move anyway** (resends with `force: true`) or **Don't move**. A forced move is recorded as `forced = true` on the history row. |
 
 ## Terminology
 
@@ -56,15 +58,15 @@ error code so the dialog can say exactly why.
 | `same_event` | Target event differs from the source event | Wave changes use the existing wave select. |
 | `target_unavailable` | Target is `active`, `status = 'published'` and its date is today or later | Never move someone onto a draft or a past event. |
 | `different_payee` | Target `host_id` equals source `host_id` (NULL equals NULL) | UN1T and each host are different merchants. Money cannot follow across them. |
-| `different_location` | Target `location_id` equals source `location_id` | Teams are unique per location; RLS on entries is keyed on the event's location. Cross-studio moves are a later feature. |
-| `already_entered` | No live entry on the target for the same `team_id` (when the entry has a team) | `UNIQUE (race_event_id, team_id)` would reject it anyway; refuse first with a clear message. |
+| `already_entered` | No live entry on the target for the same `team_id` (when the entry has a team and the target is at the same studio) | `UNIQUE (race_event_id, team_id)` would reject it anyway; refuse first with a clear message. A cross-studio move gets a fresh team row, so it cannot collide. |
 | `headcount_not_allowed` | Target `allowed_team_sizes` includes the entry's headcount (when the array is set) | A team of four cannot move to a solo-only event. |
 | `wave_required` | A target wave is given when the target has waves | |
 | `wrong_event` | The target wave belongs to the target event | |
-| `wave_full` | The target wave has room for the entry's headcount, using the target's `capacity_mode` and the existing `event-signups.js` helpers | Same arithmetic the public register route uses. |
+| `wave_full` | The target wave has room for the entry's headcount, using the target's `capacity_mode` and the existing `event-signups.js` helpers, **unless `force` is true** | Same arithmetic the public register route uses. The refusal carries `spots_left` so the dialog can say how full it is. |
 
-Staff have no override for `wave_full`. If they need the move, they raise the
-wave capacity on the event first.
+A move across studios is allowed. The caller must hold the `races` permission
+and a manager role at **both** studios (the staff route checks both; the host
+route's `allowedEventIds` already restricts hosts to their own events).
 
 A **price gap** is `(target per-person fee − source per-person fee) × headcount`,
 using the member or non-member fee per person according to each person's
@@ -92,6 +94,9 @@ One row per move, written in the same transaction as the move itself.
 | `actor_name` | text | Snapshot for display, so the chip never needs a join. |
 | `note` | text null | Internal, optional. |
 | `notified_at` | timestamptz null | Set when the moved email was sent. |
+| `forced` | boolean default false | True when the wave was full and the operator chose Move anyway. |
+| `from_team_id` | uuid → `teams` ON DELETE SET NULL | The team before the move. Equals `to_team_id` unless the move crossed studios. |
+| `to_team_id` | uuid → `teams` ON DELETE SET NULL | The team after the move. |
 | `created_at` | timestamptz default now() | |
 
 Indexes on `registration_id`, `from_event_id`, `to_event_id`. RLS enabled,
@@ -128,7 +133,17 @@ defence and raises if it fires.
 
 Writes, in order:
 
-1. `race_registrations`: set `race_event_id`, `wave_id`, `updated_at`.
+0. **Only when the target studio differs from the source studio:** insert a
+   new `teams` row at the target `location_id` with the same `name`, `size`
+   and `captain_contact_id` (on a name clash under `UNIQUE(location_id, name)`
+   append ` (2)`, ` (3)`, … until it fits), copy every `team_members` row
+   (`name`, `email`, `phone`, `role`, `contact_id`, `is_member`,
+   `member_validation_status`, `member_contact_id`, `member_validated_at`)
+   onto it, and use the new id as `to_team_id`. The original team row and
+   its members stay untouched for the source event's history. Entries with
+   no team (future) skip this step.
+1. `race_registrations`: set `race_event_id`, `wave_id`, `team_id`
+   (`to_team_id`), `updated_at`.
 2. `race_payments` where `race_registration_id = $reg`: set `race_event_id`.
    Amounts, provider refs and the connected account stay as they are.
    `orders` rows need no change: they hold no event id, only the location,
@@ -137,8 +152,8 @@ Writes, in order:
    and 1-day reminders fire again for the new date.
 4. `registration_moves`: insert the history row. Return it.
 
-Nothing is written to `teams`, `team_members`, `race_checkins`,
-`race_penalties` or `promo_codes`. `promo_code_id` stays on the entry as a
+Nothing is written to `race_checkins`, `race_penalties` or `promo_codes`;
+`teams` and `team_members` are only ever inserted (the clone), never updated. `promo_code_id` stays on the entry as a
 record of what was redeemed.
 
 ## Shared function
@@ -151,6 +166,7 @@ export async function moveRegistration(db, {
   actor: { type, id, name },
   note,
   notify,            // boolean; default true
+  force,             // boolean; default false. True skips the wave_full rule
   allowedEventIds,   // optional Set; the host caller passes its own event ids
 })
 // → { ok: true, move, registration } | { ok: false, error: <code>, detail? }
@@ -171,10 +187,11 @@ after-effects and never let one of them fail the move:
 
 Also exported:
 
-- `listMoveTargets(db, { registrationId, allowedEventIds })` → the eligible
-  target events (same payee, same location, published, upcoming, not the
-  source) each with its waves and `spots_left` per wave in the target's
-  capacity unit. Used by both dialogs. Staff and hosts are operators, so spots
+- `listMoveTargets(db, { registrationId, allowedEventIds, allowedLocationIds })`
+  → the eligible target events (same payee, published, upcoming, not the
+  source; at any studio in `allowedLocationIds`, null meaning every studio)
+  each with its waves and `spots_left` per wave in the target's capacity
+  unit, plus the studio name so the picker can show it. Used by both dialogs. Staff and hosts are operators, so spots
   are shown to them; this endpoint is never public.
 - `entryLabel(registration)` and `entryHeadcount(registration)`.
 - `computePriceGapCents({ sourceEvent, targetEvent, members })`.
@@ -202,12 +219,14 @@ route.
 
 - `GET /api/event-registrations/[id]/move-targets` → `listMoveTargets`.
 - `POST /api/event-registrations/[id]/move` body
-  `{ target_event_id, target_wave_id, notify, note }` → `moveRegistration`.
+  `{ target_event_id, target_wave_id, notify, note, force }` → `moveRegistration`.
+  A `wave_full` refusal returns 409 with `{ error: 'wave_full', spots_left }`.
 
-Auth on both: `getCurrentUser`, `hasPermission(user, 'races')`,
-`MANAGER_ROLES` (matches the cancel route), `assertLocationAccessOr404` on the
-source event's location. The same-location rule means the target is covered by
-the same check. Zod schema for the body. Errors map to 4xx with the code and a
+Auth on both: `getCurrentUser`, the `races` permission and a `MANAGER_ROLES`
+role at the source event's studio (matches the cancel route) with
+`assertLocationAccessOr404` on it. The move route repeats the permission,
+role and access checks on the **target** event's studio. The targets route
+passes `getUserLocationIds(user)` as `allowedLocationIds`. Zod schema for the body. Errors map to 4xx with the code and a
 plain-English message.
 
 - `GET /api/events/[id]/teams` additionally returns `moved_out`: moves whose
@@ -221,11 +240,16 @@ plain-English message.
   select. Hidden when status is cancelled or no-show. It opens
   `MoveEntryDialog`.
 - `src/components/events/MoveEntryDialog.jsx`: title "Move <entry label> to
-  another event"; target event select (from move-targets); wave select showing
-  spots left and "full"; price-gap notice when non-zero (warning tint, states
-  the per-person and total difference and that nothing is charged by the move);
-  "Email <lead first name> the new tickets" checkbox, ticked; optional internal
-  note; Cancel / Move entry. Empty-state copy when there are no eligible targets:
+  another event"; target event select (from move-targets, grouped by studio
+  when more than one studio is listed); wave select showing spots left and
+  "full"; price-gap notice when non-zero (warning tint, states the per-person
+  and total difference and that nothing is charged by the move); a studio
+  notice when the target is at another studio ("This moves the entry to
+  <studio>. The team is copied there."); "Email <lead first name> the new
+  tickets" checkbox, ticked; optional internal note; Cancel / Move entry.
+  When the server answers `wave_full`, the dialog replaces its footer with a
+  warning, "This wave is full (N of M)", and two buttons: **Move anyway**
+  (resends with `force: true`) and **Don't move** (back to the form). Empty-state copy when there are no eligible targets:
   "No other upcoming events are paid to the same host at this location."
 - Card chip after a move in: "Moved from <date> · by <actor> · <when>", plus
   "€X difference outstanding" in the subtitle when the gap is positive.
@@ -247,6 +271,7 @@ plain-English message.
 - Same `MoveEntryDialog`, dark-skinned through the existing host portal
   classes. Same price-gap notice, since the host's own prices differ between
   their events; the copy says the difference is between them and the customer.
+  Hosts may force a full wave too (it is their capacity); recorded the same way.
 - Footer "N entries moved out" as on the staff page.
 
 ## Mia (later, not in these PRs)
@@ -274,14 +299,12 @@ the entry, instead of "cancel and rebook".
 ## Non-goals (v1)
 
 - Moving money in either direction, or minting a payment link automatically.
-- Moves across locations or across payees.
+- Moves across payees.
 - Moving one person out of a team onto a different event.
 - Customer self-service moves on the public event page.
 - SMS or WhatsApp on move.
 
 ## Open follow-ups
 
-- Cross-studio moves for UN1T's own events (both Revolut): needs a decision on
-  re-homing the team row.
 - Collect the price gap in one click from the chip (a "Send payment link for
   €X" action) once the first real gap turns up.
