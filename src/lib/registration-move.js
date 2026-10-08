@@ -229,6 +229,26 @@ function sortWaves(waves) {
     (a.display_order ?? 0) - (b.display_order ?? 0) || String(a.start_time || '').localeCompare(String(b.start_time || '')))
 }
 
+/**
+ * The first name of the person the moved email is written to, for the
+ * dialog's "Email <name>" box. The SAME order as entryLeadEmail: the lead
+ * contact if it has an email, else the captain if they have one, else the
+ * first member with one. Whoever holds the address is the person named, so a
+ * contact with an email but no first name answers null, never someone else.
+ * null (the dialog says "the customer") when no one on the entry has an email.
+ */
+function entryLeadFirstName(registration) {
+  const clean = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null)
+  const first = (name) => clean(name)?.split(/\s+/)[0] || null
+  const contact = registration?.contact
+  if (clean(contact?.email)) return first(contact.first_name)
+  const members = membersOf(registration)
+  const captain = members.find((m) => m?.role === 'captain')
+  if (clean(captain?.email)) return first(captain.name)
+  const withEmail = members.find((m) => clean(m?.email))
+  return withEmail ? first(withEmail.name) : null
+}
+
 function entrySummary(registration) {
   const members = membersOf(registration)
   return {
@@ -236,6 +256,7 @@ function entrySummary(registration) {
     status: registration.status,
     label: entryLabel(registration),
     headcount: entryHeadcount(registration),
+    lead_first_name: entryLeadFirstName(registration),
     member_count: members.filter((m) => m?.is_member === true).length,
     non_member_count: members.filter((m) => m?.is_member !== true).length,
     team_id: registration.team_id || null,

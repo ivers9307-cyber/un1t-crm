@@ -587,3 +587,34 @@ describe('moveRegistration', () => {
     expect(sendMovedEmail).toHaveBeenCalledWith(db, { registrationId: 'r1', moveId: 'mv1' })
   })
 })
+
+describe('listMoveTargets — lead_first_name follows entryLeadEmail', () => {
+  const targetsFor = async (registration) => {
+    const db = fakeDb({
+      race_registrations: (q) => (q.ops.some((o) => o[0] === 'eq' && o[1] === 'id') ? { data: registration } : { data: [] }),
+      race_events: { data: [TARGET] },
+    })
+    return listMoveTargets(db, { registrationId: 'r1', allowedLocationIds: ['L1'], today: '2026-10-08' })
+  }
+  const members = (list) => ({ ...REG.teams, team_members: list })
+  it('the lead contact when it has an email', async () => {
+    const r = await targetsFor({ ...REG, contact: { ...REG.contact, first_name: 'Siobhan Mary' } })
+    expect(r.entry.lead_first_name).toBe('Siobhan')
+  })
+  it('the captain when the contact has no email', async () => {
+    const r = await targetsFor({ ...REG, contact: { ...REG.contact, email: '  ' }, teams: members([{ name: 'Dan Ryan', role: 'member', email: 'dan@example.test' }, { name: 'Ciara Walsh', role: 'captain', email: 'ciara@example.test' }]) })
+    expect(r.entry.lead_first_name).toBe('Ciara')
+  })
+  it('the first member with an email when neither contact nor captain has one', async () => {
+    const r = await targetsFor({ ...REG, contact: null, teams: members([{ name: 'Ciara Walsh', role: 'captain', email: null }, { name: 'Noel', role: 'member' }, { name: 'Dan Ryan', role: 'member', email: 'dan@example.test' }]) })
+    expect(r.entry.lead_first_name).toBe('Dan')
+  })
+  it('null when nobody on the entry has an email', async () => {
+    const r = await targetsFor({ ...REG, contact: { first_name: 'Aoife', email: null }, teams: members([{ name: 'Ciara', role: 'captain' }]) })
+    expect(r.entry.lead_first_name).toBeNull()
+  })
+  it('null when the contact is written to but has no first name (never another person)', async () => {
+    const r = await targetsFor({ ...REG, contact: { first_name: '', email: 'lead@example.test' } })
+    expect(r.entry.lead_first_name).toBeNull()
+  })
+})

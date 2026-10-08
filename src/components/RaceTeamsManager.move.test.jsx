@@ -36,9 +36,10 @@ describe('RaceTeamsManager — Move to event', () => {
   })
   it('lists entries moved out of this event', async () => {
     render(<RaceTeamsManager race={race} />)
-    await screen.findByText(/1 entry moved to other events/)
-    expect(screen.getByText(/Wolves/)).toBeTruthy()
-    expect(screen.getByText(/Hatch Nov 1/)).toBeTruthy()
+    await screen.findByText(/^1 move to other events$/)
+    const line = screen.getByText(/Wolves/)
+    expect(line.textContent).toContain('Hatch Nov 1 (1 Nov)')
+    expect(line.textContent).toContain('· Richard')
   })
   it('says Not emailed when the move in was not emailed', async () => {
     const unsent = { ...reg, last_move: { ...reg.last_move, notified_at: null } }
@@ -93,5 +94,28 @@ describe('RaceTeamsManager — Move to event', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     fireEvent.click(screen.getByRole('button', { name: /Dismiss notice/ }))
     expect(screen.queryByText(/could not be emailed/)).toBeNull()
+  })
+  const withMoves = (data, moved_out = []) => vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ success: true, data, moved_out }) })))
+  it('counts moves in the footer heading, plural past one', async () => {
+    withMoves([reg], [...movedOut, { ...movedOut[0], id: 'mv3', label: 'Hares' }])
+    render(<RaceTeamsManager race={race} />)
+    await screen.findByText(/^2 moves to other events$/)
+  })
+  it('a move with no actor name reads "staff"', async () => {
+    withMoves([{ ...reg, last_move: { ...reg.last_move, actor_name: '' } }], [{ ...movedOut[0], actor_name: null }])
+    render(<RaceTeamsManager race={race} />)
+    const chip = await screen.findByText(/Moved from Hatch Oct 18/)
+    expect(chip.getAttribute('title')).toMatch(/ by staff on /)
+    expect(screen.getByText(/Wolves/).textContent).toMatch(/· staff$/)
+  })
+  it('no outstanding chip when the gap is zero or the target was cheaper', async () => {
+    withMoves([
+      { ...reg, last_move: { ...reg.last_move, price_gap_cents: 0 } },
+      { ...reg, id: 'r2', teams: { ...reg.teams, id: 't2', name: 'Hares' }, last_move: { ...reg.last_move, id: 'mv4', price_gap_cents: -500 } },
+    ])
+    render(<RaceTeamsManager race={race} />)
+    await screen.findByText(/2 teams registered/)
+    expect(screen.getAllByText(/Moved from Hatch Oct 18/)).toHaveLength(2)
+    expect(screen.queryByText(/difference outstanding/)).toBeNull()
   })
 })

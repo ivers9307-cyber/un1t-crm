@@ -129,6 +129,8 @@ async function loadMoveHistory(db, eventId, regIds) {
         .select('id, registration_id, created_at, actor_name, price_gap_cents, forced, notified_at, from_event:from_event_id ( id, name, race_date )')
         // Filtered on the event alone: an .in() over every entry id grows the
         // URL with the event and can outrun the request-line limit on a big one.
+        // The 1,000-row cap is per event and the read is newest first, so only
+        // an event with over 1,000 moves in could lose its OLDEST chips.
         .eq('to_event_id', eventId)
         .order('created_at', { ascending: false })
       if (movesInErr) logError('events-teams', 'moves-in read failed; chips omitted', { err: movesInErr, eventId })

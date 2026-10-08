@@ -138,12 +138,13 @@ export default function RaceTeamsManager({ race, canCancelEntries = false, canMo
       {movedOut.length > 0 && (
         <details className="text-sm text-un1t-subtle">
           <summary className="cursor-pointer select-none">
-            {movedOut.length} {movedOut.length === 1 ? 'entry' : 'entries'} moved to other events
+            {/* Counts moves, not entries: an entry moved out, back and out again is two. */}
+            {movedOut.length} {movedOut.length === 1 ? 'move' : 'moves'} to other events
           </summary>
           <ul className="mt-2 space-y-1 pl-4">
             {movedOut.map((m) => (
               <li key={m.id}>
-                {m.label} → {m.to_event?.name || 'another event'}{m.to_event?.race_date ? ` (${m.to_event.race_date})` : ''} · {new Date(m.created_at).toLocaleDateString('en-IE')} · {m.actor_name}
+                {m.label} → {m.to_event?.name || 'another event'}{m.to_event?.race_date ? ` (${shortRaceDate(m.to_event.race_date)})` : ''} · {new Date(m.created_at).toLocaleDateString('en-IE')} · {actorOf(m)}
               </li>
             ))}
           </ul>
@@ -151,6 +152,20 @@ export default function RaceTeamsManager({ race, canCancelEntries = false, canMo
       )}
     </div>
   )
+}
+
+// EVENT-MOVE.1 — who made a move, for the chip and footer. A blank name
+// (an actor with no profile name) reads "staff", never an empty gap.
+function actorOf(move) {
+  const name = typeof move?.actor_name === 'string' ? move.actor_name.trim() : ''
+  return name || 'staff'
+}
+
+// A race_date ('YYYY-MM-DD') as "1 Nov". Read at noon so no timezone can tip
+// it onto the day before.
+function shortRaceDate(d) {
+  const at = new Date(`${String(d).slice(0, 10)}T12:00:00`)
+  return Number.isNaN(at.getTime()) ? String(d) : at.toLocaleDateString('en-IE', { day: 'numeric', month: 'short' })
 }
 
 // ─── Add team form ───────────────────────────────────────────────
@@ -389,7 +404,7 @@ function TeamCard({ registration, waves, onChanged, onError, onNotice, canCancel
           {registration.last_move && (
             <span
               className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-sky-500/10 text-sky-700 inline-flex items-center gap-1"
-              title={`Moved from ${registration.last_move.from_event?.name || 'another event'} by ${registration.last_move.actor_name} on ${new Date(registration.last_move.created_at).toLocaleDateString('en-IE')}${registration.last_move.forced ? ' (wave was full)' : ''}`}
+              title={`Moved from ${registration.last_move.from_event?.name || 'another event'} by ${actorOf(registration.last_move)} on ${new Date(registration.last_move.created_at).toLocaleDateString('en-IE')}${registration.last_move.forced ? ' (wave was full)' : ''}`}
             >
               <ArrowRightCircle size={10} /> Moved from {registration.last_move.from_event?.name || 'another event'}
             </span>
@@ -506,7 +521,6 @@ function TeamCard({ registration, waves, onChanged, onError, onNotice, canCancel
           registration={registration}
           onClose={() => setMoving(false)}
           onMoved={() => { setMoving(false); onChanged() }}
-          onError={onError}
           onNotice={onNotice}
         />
       )}

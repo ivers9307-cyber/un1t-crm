@@ -5,9 +5,11 @@
 //
 // Never moves money: a price gap is shown, the move records it, staff collect
 // or waive it afterwards. A full wave is a warning with two choices; any other
-// refusal (a `conflict` 409 included) is the server's plain-English message in
-// the form. A move that lands but could not be emailed is reported through
-// onNotice (a warning, not a failure) before onMoved, so staff tell the customer.
+// refusal (a `conflict` 409 included), an answer that is not JSON and a request
+// that never answered all stay IN the dialog, as the form's error: the page's
+// banner is for the page. A move that lands but could not be emailed is
+// reported through onNotice (a warning, not a failure) before onMoved, so
+// staff tell the customer.
 //
 // Spots left per time are shown: this is a staff surface (and the host's own
 // portal in PR 2), never a customer one.
@@ -32,7 +34,7 @@ function waveLabel(w) {
 }
 
 export default function MoveEntryDialog({
-  open, registration, onClose, onMoved, onError, onNotice,
+  open, registration, onClose, onMoved, onNotice,
   targetsUrl = `/api/event-registrations/${registration?.id}/move-targets`,
   moveUrl = `/api/event-registrations/${registration?.id}/move`,
 }) {
@@ -53,9 +55,9 @@ export default function MoveEntryDialog({
     ;(async () => {
       try {
         const r = await fetch(targetsUrl, { cache: 'no-store' })
-        const j = await r.json()
+        const j = await r.json().catch(() => null)
         if (cancelled) return
-        if (!r.ok || j.success === false) { setLoadError(j.error || `Could not load events (${r.status})`); return }
+        if (!r.ok || !j || j.success === false || !j.data) { setLoadError(j?.message || j?.error || `Could not load events (${r.status}).`); return }
         setData(j.data)
       } catch (e) {
         if (!cancelled) setLoadError(e.message || 'Network error')
@@ -65,8 +67,8 @@ export default function MoveEntryDialog({
   }, [open, targetsUrl])
 
   const label = data?.entry?.label || entryLabel(registration || {})
-  const leadFirstName = (registration?.teams?.team_members || []).find((m) => m?.role === 'captain')?.name?.split(' ')[0]
-    || registration?.contact?.first_name || 'the customer'
+  // The server names whoever the email goes to (entryLeadEmail's order).
+  const leadFirstName = data?.entry?.lead_first_name || 'the customer'
   const target = useMemo(() => (data?.targets || []).find((t) => t.id === targetEventId) || null, [data, targetEventId])
   const studios = useMemo(() => Array.from(new Set((data?.targets || []).map((t) => t.location_name))), [data])
   const gap = target?.price_gap_cents || 0
@@ -76,6 +78,7 @@ export default function MoveEntryDialog({
   const perPerson = headcount > 0 ? Math.round(gap / headcount) : gap
 
   async function submit(force) {
+    if (busy) return
     if (!targetEventId) { setFormError('Pick a target event.'); return }
     if (target && target.waves.length > 0 && !targetWaveId) { setFormError('Pick a time on the target event.'); return }
     setBusy(true); setFormError(null)
@@ -84,14 +87,21 @@ export default function MoveEntryDialog({
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ target_event_id: targetEventId, target_wave_id: targetWaveId || null, notify, note: note.trim() || null, force }),
       })
-      const j = await r.json()
+      const j = await r.json().catch(() => null)
+      if (!j) {
+        // An HTML error page or a cut-off body: the move may or may not have landed.
+        setFullWarning(null)
+        setFormError(`The server did not answer clearly (status ${r.status}). Reload the page to check whether the entry moved before trying again.`)
+        return
+      }
       if (r.status === 409 && j.error === 'wave_full') { setFullWarning({ spots_left: j.spots_left, message: j.message }); return }
-      if (!r.ok || j.success === false) { setFormError(j.message || j.error || 'The move could not be completed.'); return }
+      if (!r.ok || j.success === false) { setFullWarning(null); setFormError(j.message || j.error || 'The move could not be completed.'); return }
       // The move stands either way; say so when the email the operator asked for did not go.
       if (notify && j.data?.notified === false) onNotice?.(NOT_EMAILED_MESSAGE)
       onMoved?.(j.data)
     } catch (e) {
-      onError?.(e.message || 'Network error')
+      setFullWarning(null)
+      setFormError(`The move could not be confirmed (${e?.message || 'network error'}). Reload the page to check whether the entry moved before trying again.`)
     } finally {
       setBusy(false)
     }
@@ -101,7 +111,7 @@ export default function MoveEntryDialog({
 
   const footer = fullWarning ? (
     <div className="flex items-center justify-between gap-3 flex-wrap">
-      <div className="text-sm text-amber-700 inline-flex items-center gap-2">
+      <div role="alert" className="text-sm text-amber-700 inline-flex items-center gap-2">
         <AlertTriangle size={14} /> This time is full{Number.isFinite(fullWarning.spots_left) ? ` (${fullWarning.spots_left} left)` : ''}. Move anyway?
       </div>
       <div className="flex gap-2">
@@ -121,11 +131,11 @@ export default function MoveEntryDialog({
   )
 
   return (
-    <Modal open={open} onClose={onClose} title={`Move ${label} to another event`} footer={footer} size="md">
+    <Modal open={open} onClose={onClose} dismissable={!busy} title={`Move ${label} to another event`} footer={footer} size="md">
       <p className="text-sm text-un1t-subtle mb-4">
         The entry, its people and its payment travel together. Nothing is charged or refunded by this move.
       </p>
-      {loadError && <div className="text-sm text-red-700 mb-3">{loadError}</div>}
+      {loadError && <div role="alert" className="text-sm text-red-700 mb-3">{loadError}</div>}
       {!data && !loadError && (
         <div className="text-sm text-un1t-subtle inline-flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Loading events…</div>
       )}
@@ -210,7 +220,7 @@ export default function MoveEntryDialog({
             />
           </div>
 
-          {formError && <div className="text-sm text-red-700">{formError}</div>}
+          {formError && <div role="alert" className="text-sm text-red-700">{formError}</div>}
         </form>
       )}
     </Modal>
