@@ -1416,7 +1416,7 @@ export default function RaceEventForm({ race, locationId }) {
               subjectPlaceholder="Your entry has moved to {{event_name}}"
               intro={movedIntro}
               onIntro={setMovedIntro}
-              introPlaceholder="Your entry for {{old_event_name}} ({{old_when}}) is now on {{event_name}}. Your new tickets are below."
+              introPlaceholder="What's next: arrive 30 minutes before your start, bring water and a towel. Your old tickets no longer work."
               showTemplate={false}
               extraTags={['{{old_event_name}}', '{{old_when}}']}
             />

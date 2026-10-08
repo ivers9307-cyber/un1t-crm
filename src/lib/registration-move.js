@@ -132,12 +132,6 @@ export async function readRegistrationForMove(db, registrationId) {
   return { registration: data || null, error: null }
 }
 
-/** The entry for the routes: the row, or null (missing or unreadable). */
-export async function loadRegistrationForMove(db, registrationId) {
-  const { registration } = await readRegistrationForMove(db, registrationId)
-  return registration
-}
-
 /** The not_found / load_failed refusal for a read that produced no entry. */
 function entryReadRefusal(error) {
   return { ok: false, error: error ? MOVE_ERRORS.LOAD_FAILED : MOVE_ERRORS.NOT_FOUND }

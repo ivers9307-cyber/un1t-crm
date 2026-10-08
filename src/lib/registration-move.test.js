@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   entryLabel, entryHeadcount, computePriceGapCents, evaluateMove, MOVE_ERRORS, MOVE_ERROR_MESSAGES,
-  listMoveTargets, moveRegistration, loadRegistrationForMove, entryLeadEmail,
+  listMoveTargets, moveRegistration, readRegistrationForMove, entryLeadEmail,
 } from './registration-move.js'
 import { entryLeadEmail as entryLeadEmailBrowserSafe } from './registration-entry.js'
 
@@ -328,15 +328,17 @@ describe('listMoveTargets', () => {
   })
 })
 
-describe('loadRegistrationForMove', () => {
-  it('returns the row, or null for both no row and a failed read', async () => {
-    expect(await loadRegistrationForMove(fakeDb({ race_registrations: { data: REG } }), 'r1')).toBe(REG)
-    expect(await loadRegistrationForMove(fakeDb({ race_registrations: { data: null } }), 'r1')).toBeNull()
-    expect(await loadRegistrationForMove(fakeDb({ race_registrations: { data: null, error: { message: 'timeout' } } }), 'r1')).toBeNull()
+describe('readRegistrationForMove', () => {
+  it('returns the row, null for no row, and the error for a failed read', async () => {
+    expect(await readRegistrationForMove(fakeDb({ race_registrations: { data: REG } }), 'r1')).toEqual({ registration: REG, error: null })
+    expect(await readRegistrationForMove(fakeDb({ race_registrations: { data: null } }), 'r1')).toEqual({ registration: null, error: null })
+    const failed = await readRegistrationForMove(fakeDb({ race_registrations: { data: null, error: { message: 'timeout' } } }), 'r1')
+    expect(failed.registration).toBeNull()
+    expect(failed.error).toEqual({ message: 'timeout' })
   })
   it('embeds the lead contact', async () => {
     const db = fakeDb({ race_registrations: { data: REG } })
-    await loadRegistrationForMove(db, 'r1')
+    await readRegistrationForMove(db, 'r1')
     const select = db.calls[0].ops.find((o) => o[0] === 'select')[1]
     expect(select).toMatch(/contact:contact_id\s*\(\s*id, first_name, last_name, email, location_id\s*\)/)
     expect(select).toMatch(/\brace_started_at\b/)

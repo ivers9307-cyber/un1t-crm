@@ -118,4 +118,9 @@ describe('RaceTeamsManager — Move to event', () => {
     expect(screen.getAllByText(/Moved from Hatch Oct 18/)).toHaveLength(2)
     expect(screen.queryByText(/difference outstanding/)).toBeNull()
   })
+  it('the outstanding gap is in the event currency', async () => {
+    render(<RaceTeamsManager race={race} currency="GBP" />)
+    await screen.findByText(/£10\.00 difference outstanding/)
+    expect(screen.queryByText(/€10\.00/)).toBeNull()
+  })
 })

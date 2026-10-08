@@ -15,7 +15,8 @@ import MoveEntryDialog from './MoveEntryDialog'
 // decision, the cancel route's rule) gates Cancel entry. Defaults closed.
 // EVENT-MOVE.1 — `canMoveEntries` gates Move to event the same way (the move
 // route's rule: races + MANAGER_ROLES at the studio). Defaults closed.
-export default function RaceTeamsManager({ race, canCancelEntries = false, canMoveEntries = false }) {
+// `currency` is the event's payment_currency, for the outstanding-gap chip.
+export default function RaceTeamsManager({ race, canCancelEntries = false, canMoveEntries = false, currency = 'EUR' }) {
   const [registrations, setRegistrations] = useState(null)
   const [loadError, setLoadError] = useState(null)
   const [showAddForm, setShowAddForm] = useState(false)
@@ -131,6 +132,7 @@ export default function RaceTeamsManager({ race, canCancelEntries = false, canMo
             onNotice={setActionNotice}
             canCancel={canCancelEntries}
             canMove={canMoveEntries}
+            currency={currency}
           />
         ))}
       </div>
@@ -159,6 +161,12 @@ export default function RaceTeamsManager({ race, canCancelEntries = false, canMo
 function actorOf(move) {
   const name = typeof move?.actor_name === 'string' ? move.actor_name.trim() : ''
   return name || 'staff'
+}
+
+// Cents in the event's currency (same rendering as MoveEntryDialog).
+function money(cents, currency = 'EUR') {
+  const major = (Math.abs(cents) / 100).toFixed(2)
+  return currency === 'EUR' ? `€${major}` : currency === 'GBP' ? `£${major}` : `${major} ${currency}`
 }
 
 // A race_date ('YYYY-MM-DD') as "1 Nov". Read at noon so no timezone can tip
@@ -305,7 +313,7 @@ function AddTeamForm({ race, waves, onCancel, onAdded, onError }) {
 
 // ─── One-team card ───────────────────────────────────────────────
 
-function TeamCard({ registration, waves, onChanged, onError, onNotice, canCancel = false, canMove = false }) {
+function TeamCard({ registration, waves, onChanged, onError, onNotice, canCancel = false, canMove = false, currency = 'EUR' }) {
   const team = registration.teams
   const wave = registration.wave
   const members = (team?.team_members || []).slice().sort((a, b) =>
@@ -419,7 +427,7 @@ function TeamCard({ registration, waves, onChanged, onError, onNotice, canCancel
           )}
           {registration.last_move?.price_gap_cents > 0 && (
             <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-amber-500/10 text-amber-700">
-              €{(registration.last_move.price_gap_cents / 100).toFixed(2)} difference outstanding
+              {money(registration.last_move.price_gap_cents, currency)} difference outstanding
             </span>
           )}
         </div>

@@ -28,7 +28,7 @@ export default async function RaceTeamsPage(props) {
   const { data: race } = await db
     .from('race_events')
     .select(`
-      id, name, slug, location_id, race_date, allowed_team_sizes,
+      id, name, slug, location_id, race_date, allowed_team_sizes, payment_currency,
       waves:race_waves ( id, start_time, capacity, label, display_order )
     `)
     .eq('id', params.id)
@@ -60,6 +60,7 @@ export default async function RaceTeamsPage(props) {
         race={race}
         canCancelEntries={hasRoleAtLocation(user, race.location_id, MANAGER_ROLES)}
         canMoveEntries={hasRoleAtLocation(user, race.location_id, MANAGER_ROLES)}
+        currency={race.payment_currency || 'EUR'}
       />
     </div>
   )
