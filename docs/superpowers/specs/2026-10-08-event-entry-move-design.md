@@ -285,22 +285,30 @@ real caller.
 - `RaceTeamsManager.jsx` card: a new **Move to event** action beside the wave
   select. Hidden when status is cancelled or no-show. It opens
   `MoveEntryDialog`.
-- `src/components/events/MoveEntryDialog.jsx`: title "Move <entry label> to
-  another event"; target event select (from move-targets, grouped by studio
-  when more than one studio is listed); wave select showing spots left and
-  "full"; price-gap notice when non-zero (warning tint, states the per-person
-  and total difference and that nothing is charged by the move); a studio
-  notice when the target is at another studio ("This moves the entry to
-  <studio>. The team is copied there."); "Email <lead first name> the new
-  tickets" checkbox, ticked; optional internal note; Cancel / Move entry.
-  When the server answers `wave_full`, the dialog replaces its footer with a
-  warning, "This wave is full (N of M)", and two buttons: **Move anyway**
-  (resends with `force: true`) and **Don't move** (back to the form). Empty-state copy when there are no eligible targets:
-  "No other upcoming events are paid to the same host at this location."
-- Card chip after a move in: "Moved from <date> · by <actor> · <when>", plus
-  "€X difference outstanding" in the subtitle when the gap is positive.
-- Source event footer: "N entries moved to other events" expanding to one line
-  per move. Hidden when zero.
+- `src/components/MoveEntryDialog.jsx` (flat `components/` dir, the repo
+  convention): title "Move <entry label> to another event"; target event
+  select (from move-targets, grouped by studio when more than one studio is
+  listed); time select showing "N left" or "full"; price-gap notice when
+  non-zero (warning tint, per-person average and total, and that nothing is
+  charged or refunded by the move); a studio notice when the target is at
+  another studio ("This moves the entry to <studio>." plus "<team> is copied
+  there." only for a team of two or more); "Email <lead first name> the new
+  tickets" checkbox, ticked, naming the person `entryLeadEmail` resolves;
+  optional internal note; Cancel / Move entry. When the server answers
+  `wave_full`, the dialog replaces its footer with "This time is full (N
+  left). Move anyway?" and two buttons: **Move anyway** (resends with
+  `force: true`) and **Don't move** (back to the form, no second request).
+  Every other refusal, `conflict` included, shows its `message` inside the
+  dialog; a non-JSON answer tells staff to reload and check before retrying.
+  After a move whose email did not go out, the dialog hands the teams page
+  an amber notice ("Moved. The customer could not be emailed; tell them
+  yourself."), never the red error banner. Empty-state copy when there are no eligible targets:
+  "No other upcoming events are paid to the same host."
+- Card chips after a move in: "Moved from <event>" (tooltip: actor, date,
+  and "wave was full" when forced), "€X difference outstanding" when the gap
+  is positive, and "Not emailed" when `notified_at` is null.
+- Source event footer: "N moves to other events" expanding to one line per
+  move (label → event, date, actor). Hidden when zero.
 - The event form's Emails section gains the two moved-email fields.
 
 ## Host surface (PR 2)
