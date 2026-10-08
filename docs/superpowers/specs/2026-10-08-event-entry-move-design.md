@@ -1,7 +1,7 @@
 # Move an event entry to another event (EVENT-MOVE)
 
 **Date:** 2026-10-08
-**Status:** design agreed with Richard (decisions below), awaiting spec review
+**Status:** approved 8 Oct 2026; built on branch `event-registration-move` (PR 1, staff). Updated during the build to match what shipped.
 **Repo:** un1t-crm · Events applet (`race_events` system)
 
 ## Problem
@@ -45,7 +45,8 @@ tool tells the customer that a different event means cancel plus rebook.
   who receives the email. Called "captain" only inside team UI. The address
   used for the email and the contact event is one rule, `entryLeadEmail`:
   the lead contact's email, else the captain's, else the first member with
-  one, else the completed payment's `contact_email`; none at all is logged
+  one, else the `contact_email` of the completed payment (or, failing that,
+  the newest payment row); none at all is logged
   at error level and the move still stands.
 - **Not emailed** — a move whose email failed or was skipped leaves
   `registration_moves.notified_at` null; the move route returns
@@ -201,7 +202,7 @@ export async function moveRegistration(db, {
   force,             // boolean; default false. True skips the wave_full rule
   allowedEventIds,   // optional Set; the host caller passes its own event ids
 })
-// → { ok: true, move, registration } | { ok: false, error: <code>, detail? }
+// → { ok: true, move, registration, notified } | { ok: false, error: <code>, spots_left? }
 ```
 
 Steps: load source entry with team, members, wave and event; load target
