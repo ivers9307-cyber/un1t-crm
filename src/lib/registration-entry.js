@@ -1,7 +1,7 @@
 // registration-entry — the BROWSER-SAFE half of the event-entry move
 // (EVENT-MOVE.1). Pure helpers and constants only: what an entry is called,
-// how many people it holds, the per-person fee and the price gap of a move,
-// and the refusal codes with their plain-English copy.
+// how many people it holds, who the lead is written to, the per-person fee
+// and the price gap of a move, and the refusal codes with their copy.
 //
 // Why a separate file: registration-move.js loads rows and runs the move, so
 // it imports server modules (host-contact-list reaches contact-tags,
@@ -74,6 +74,22 @@ export function entryLabel(registration) {
   if (contactName) return contactName
   if (team?.name) return team.name
   return 'Entry'
+}
+
+/**
+ * The address the entry's lead is written to: the lead contact's email, else
+ * the captain's, else the first member with one, else the payment's
+ * contact_email, else null. Blank strings count as missing.
+ */
+export function entryLeadEmail({ registration, payment } = {}) {
+  const clean = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null)
+  const members = membersOf(registration)
+  const captain = members.find((m) => m?.role === 'captain')
+  return clean(registration?.contact?.email)
+    || clean(captain?.email)
+    || members.map((m) => clean(m?.email)).find(Boolean)
+    || clean(payment?.contact_email)
+    || null
 }
 
 /** People on the entry: the loaded roster, else teams.size, else 1. */

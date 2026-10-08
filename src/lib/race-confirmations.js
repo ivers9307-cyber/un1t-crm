@@ -24,6 +24,8 @@ import { resolveEventCommsLocation, pickAudienceVenueName } from './event-comms-
 import { checkTransactionalConsent } from './transactional-consent'
 import { logError } from './log'
 import { timeRowLabel } from './event-time-slots'
+import { isRaceKind } from '@shared/events'
+import { entryLeadEmail } from './registration-entry'
 
 function fmtRaceDate(dateStr) {
   if (!dateStr) return ''
@@ -41,6 +43,29 @@ function fmtMoney(cents, currency = 'EUR') {
 function fmtWaveTime(t) {
   if (!t || typeof t !== 'string') return ''
   return t.slice(0, 5) // "09:30:00" → "09:30"
+}
+
+/** "Heat A · 09:30", "09:30", or '' with no wave. */
+function waveText(wave) {
+  if (!wave) return ''
+  return wave.label ? `${wave.label} · ${fmtWaveTime(wave.start_time)}` : fmtWaveTime(wave.start_time)
+}
+
+/**
+ * EVENT-CHECKIN.B — give each member a per-person check-in QR. The image is a
+ * public signed-token endpoint (renders reliably in email clients); the QR
+ * opens a staff-only scan page, so it's safe to expose. The token carries
+ * `eventId`, so it scans only at that event. Without an app origin, event,
+ * registration or secret every member gets qrSrc '' (no QR block renders).
+ */
+function mintMemberQrs({ eventId, registrationId, members }) {
+  const appOrigin = (() => { try { return new URL(getAppUrl()).origin } catch { return '' } })()
+  const secret = process.env.SUPABASE_SERVICE_ROLE_KEY || null
+  return (members || []).map((m) => {
+    if (!appOrigin || !eventId || !registrationId || !secret) return { ...m, qrSrc: '' }
+    const token = signCheckinToken({ eventId, registrationId, memberId: m.id }, secret)
+    return { ...m, qrSrc: `${appOrigin}/api/public/events/checkin-qr?t=${encodeURIComponent(token)}` }
+  })
 }
 
 /**
@@ -142,25 +167,12 @@ export async function sendRaceConfirmations({ db, paymentId }) {
     (a.name || '').localeCompare(b.name || '')
   )
 
-  // EVENT-CHECKIN.B — give each member a per-person check-in QR. The image is
-  // a public signed-token endpoint (renders reliably in email clients); the
-  // QR opens a staff-only scan page, so it's safe to expose.
-  const appOrigin = (() => { try { return new URL(getAppUrl()).origin } catch { return '' } })()
-  const checkinSecret = process.env.SUPABASE_SERVICE_ROLE_KEY || null
-  const checkinEventId = race?.id || null
-  const checkinRegistrationId = reg?.id || null
-  const teamMembersWithQr = teamMembers.map((m) => {
-    if (!appOrigin || !checkinEventId || !checkinRegistrationId || !checkinSecret) return { ...m, qrSrc: '' }
-    const token = signCheckinToken({ eventId: checkinEventId, registrationId: checkinRegistrationId, memberId: m.id }, checkinSecret)
-    return { ...m, qrSrc: `${appOrigin}/api/public/events/checkin-qr?t=${encodeURIComponent(token)}` }
-  })
+  const teamMembersWithQr = mintMemberQrs({ eventId: race?.id || null, registrationId: reg?.id || null, members: teamMembers })
 
   const ctx = {
     raceName: race?.name || 'UN1T Race',
     raceDateLabel: fmtRaceDate(race?.race_date),
-    waveLabel: wave
-      ? (wave.label ? `${wave.label} · ${fmtWaveTime(wave.start_time)}` : fmtWaveTime(wave.start_time))
-      : '',
+    waveLabel: waveText(wave),
     // EVENT-MULTITIME.1 — "Wave" for races, "Time" for a class/workshop.
     waveRowLabel: timeRowLabel(race?.kind),
     // EVENT-COPY.1 — this value reaches the customer three times: the "Where"
@@ -287,6 +299,36 @@ async function stampSendOnce(db, paymentId, column, result, leg) {
 }
 
 /**
+ * The info table's rows. The confirmation always shows "Team size"; the moved
+ * email drops it for a solo entry. With teamSizeRow true the output is the
+ * confirmation's historic markup byte-for-byte (event-email.test.js).
+ */
+function buildInfoRows(ctx, breakdownLine, { teamSizeRow }) {
+  const teamSize = teamSizeRow
+    ? `<tr><td style="padding:8px 0;color:#666">Team size</td><td style="padding:8px 0;font-weight:600">${ctx.teamSize}-person</td></tr>
+    `
+    : ''
+  return `    <tr><td style="padding:8px 0;color:#666;width:120px">Date</td><td style="padding:8px 0;font-weight:600">${escapeHtml(ctx.raceDateLabel)}</td></tr>
+    ${ctx.waveLabel ? `<tr><td style="padding:8px 0;color:#666">${ctx.waveRowLabel || 'Wave'}</td><td style="padding:8px 0;font-weight:600">${escapeHtml(ctx.waveLabel)}</td></tr>` : ''}
+    ${ctx.locationName ? `<tr><td style="padding:8px 0;color:#666">Where</td><td style="padding:8px 0;font-weight:600">${escapeHtml(ctx.locationName)}</td></tr>` : ''}
+    ${teamSize}<tr><td style="padding:8px 0;color:#666;vertical-align:top">Total paid</td><td style="padding:8px 0;font-weight:600">${escapeHtml(ctx.amountLabel)}${breakdownLine}</td></tr>`
+}
+
+/** "1 × member €20.00 · 1 × non-member €30.00" under Total paid, or ''. */
+function buildBreakdownLine(ctx) {
+  const breakdown = []
+  if (ctx.memberCount > 0 && ctx.memberFeeLabel) {
+    breakdown.push(`${ctx.memberCount} × member ${ctx.memberFeeLabel}`)
+  }
+  if (ctx.nonMemberCount > 0 && ctx.nonMemberFeeLabel) {
+    breakdown.push(`${ctx.nonMemberCount} × non-member ${ctx.nonMemberFeeLabel}`)
+  }
+  return breakdown.length > 0
+    ? `<p style="color:#666;font-size:13px;margin:4px 0 0">${breakdown.join(' &nbsp;·&nbsp; ')}</p>`
+    : ''
+}
+
+/**
  * Compose the DEFAULT (unconfigured) shell slots for the confirmation email
  * from the `ctx` sendRaceConfirmations builds. Each *Html slot is the exact raw
  * fragment the old inline template produced, so buildEventEmailShell reproduces
@@ -301,22 +343,8 @@ export function buildConfirmationDefaults(ctx) {
     .map((m) => `<li>${escapeHtml(m.name)}${m.role === 'captain' ? ' <em>(captain)</em>' : ''}${m.is_member ? ' <span style="color:#7a5a00;font-size:11px;background:#fff4cc;padding:1px 6px;border-radius:9999px;margin-left:6px">UN1T member</span>' : ''}</li>`)
     .join('')
 
-  const breakdown = []
-  if (ctx.memberCount > 0 && ctx.memberFeeLabel) {
-    breakdown.push(`${ctx.memberCount} × member ${ctx.memberFeeLabel}`)
-  }
-  if (ctx.nonMemberCount > 0 && ctx.nonMemberFeeLabel) {
-    breakdown.push(`${ctx.nonMemberCount} × non-member ${ctx.nonMemberFeeLabel}`)
-  }
-  const breakdownLine = breakdown.length > 0
-    ? `<p style="color:#666;font-size:13px;margin:4px 0 0">${breakdown.join(' &nbsp;·&nbsp; ')}</p>`
-    : ''
-
-  const infoRows = `    <tr><td style="padding:8px 0;color:#666;width:120px">Date</td><td style="padding:8px 0;font-weight:600">${escapeHtml(ctx.raceDateLabel)}</td></tr>
-    ${ctx.waveLabel ? `<tr><td style="padding:8px 0;color:#666">${ctx.waveRowLabel || 'Wave'}</td><td style="padding:8px 0;font-weight:600">${escapeHtml(ctx.waveLabel)}</td></tr>` : ''}
-    ${ctx.locationName ? `<tr><td style="padding:8px 0;color:#666">Where</td><td style="padding:8px 0;font-weight:600">${escapeHtml(ctx.locationName)}</td></tr>` : ''}
-    <tr><td style="padding:8px 0;color:#666">Team size</td><td style="padding:8px 0;font-weight:600">${ctx.teamSize}-person</td></tr>
-    <tr><td style="padding:8px 0;color:#666;vertical-align:top">Total paid</td><td style="padding:8px 0;font-weight:600">${escapeHtml(ctx.amountLabel)}${breakdownLine}</td></tr>`
+  const breakdownLine = buildBreakdownLine(ctx)
+  const infoRows = buildInfoRows(ctx, breakdownLine, { teamSizeRow: true })
 
   const afterInfoHtml = `
 
@@ -451,16 +479,29 @@ async function sendEmail({ db, payment, ctx, commsLocationId }) {
 /**
  * Default shell slots for the moved email. Mirrors buildConfirmationDefaults so
  * resolveEventEmail({ kind: 'moved' }) can layer operator copy on top.
- * @param {object} ctx  buildConfirmationDefaults' ctx plus { oldEventName, oldWhen }
+ * @param {object} ctx  buildConfirmationDefaults' ctx plus { oldEventName, oldWhen, isRace }
  */
 export function buildMovedDefaults(ctx) {
   const base = buildConfirmationDefaults(ctx)
+  const solo = (ctx.teamMembers || []).length <= 1
+  const who = escapeHtml(ctx.captainFirstName || 'there')
+  const from = `<strong>${escapeHtml(ctx.oldEventName || '')}</strong>${ctx.oldWhen ? ` (${escapeHtml(ctx.oldWhen)})` : ''}`
+  const to = `<strong>${escapeHtml(ctx.raceName)}</strong>`
+  const footerHtml = ctx.isRace
+    ? `<strong>What's next:</strong> arrive 30 minutes before your wave. Bring water, a towel, and your race-day energy. We'll send a reminder the day before.`
+    : `<strong>What's next:</strong> arrive 30 minutes before your start. Bring water and a towel. We'll send a reminder the day before.`
   return {
     ...base,
     subject: `Your entry has moved to ${ctx.raceName}`,
-    heading: `Your entry has moved, ${escapeHtml(ctx.captainFirstName || 'there')}.`,
-    introHtml: `Your entry for <strong>${escapeHtml(ctx.oldEventName || '')}</strong>${ctx.oldWhen ? ` (${escapeHtml(ctx.oldWhen)})` : ''} is now on <strong>${escapeHtml(ctx.raceName)}</strong>. Your new tickets are below; the old ones no longer work.`,
-    footerHtml: `<strong>What's next:</strong> arrive 30 minutes before your ${(ctx.waveRowLabel || 'wave').toLowerCase()}. Bring water, a towel, and your race-day energy. We'll send a reminder the day before.`,
+    heading: solo ? `Your entry has moved, ${who}.` : `Your team's entry has moved, ${who}.`,
+    introHtml: solo
+      ? `Your entry for ${from} is now on ${to}. Your new ticket is below; the old one no longer works.`
+      : `Your team's entry for ${from} is now on ${to}. Your new tickets are below; the old ones no longer work.`,
+    // Solo: no one-line "Your team" list and no "Team size" row; the QR block
+    // still shows the one person.
+    infoRows: solo ? buildInfoRows(ctx, buildBreakdownLine(ctx), { teamSizeRow: false }) : base.infoRows,
+    afterInfoHtml: solo ? '' : base.afterInfoHtml,
+    footerHtml,
   }
 }
 
@@ -499,7 +540,7 @@ export async function sendRegistrationMovedEmail(db, { registrationId, moveId })
       id, status, contact_id, race_event_id,
       contact:contact_id ( id, first_name, last_name, email, phone ),
       wave:wave_id ( id, start_time, label ),
-      teams:team_id ( id, name, size, team_members ( id, name, role, is_member ) ),
+      teams:team_id ( id, name, size, team_members ( id, name, role, is_member, email ) ),
       race:race_event_id (
         id, name, slug, kind, race_date, location_id, host_id, sending_location_id,
         venue_name, accent_hex, hero_image_url,
@@ -516,17 +557,21 @@ export async function sendRegistrationMovedEmail(db, { registrationId, moveId })
   }
   const { data: payments, error: payErr } = await db
     .from('race_payments')
-    .select('id, amount_cents, currency, status, member_count, non_member_count, member_fee_cents, non_member_fee_cents, created_at')
+    .select('id, amount_cents, currency, status, contact_email, member_count, non_member_count, member_fee_cents, non_member_fee_cents, created_at')
     .eq('race_registration_id', registrationId)
     .order('created_at', { ascending: false })
     .limit(5)
-  if (payErr) logError('race-confirmations', 'moved email: payment read failed; sending without the amount', { err: payErr, registrationId, moveId })
+  if (payErr) logError('race-confirmations', 'moved email: payment read failed; Total paid says "See your original receipt"', { err: payErr, registrationId, moveId })
   const payment = (payments || []).find((p) => p.status === 'completed') || null
 
   const race = reg.race || {}
   const contact = reg.contact || {}
-  const toEmail = contact.email || null
-  if (!toEmail) { result.skipped.push('email:no_email'); return result }
+  const toEmail = entryLeadEmail({ registration: reg, payment: payment || (payments || [])[0] || null })
+  if (!toEmail) {
+    logError('race-confirmations', 'moved email: no address for the lead contact', { registrationId, moveId })
+    result.skipped.push('email:no_email')
+    return result
+  }
 
   // Same fallback as sendRaceConfirmations: a resolver failure never costs the email.
   let commsLocation = null
@@ -548,30 +593,26 @@ export async function sendRegistrationMovedEmail(db, { registrationId, moveId })
   const wave = reg.wave
   const teamMembers = (team?.team_members || []).slice().sort((a, b) =>
     (a.role === 'captain' ? 0 : 1) - (b.role === 'captain' ? 0 : 1) || (a.name || '').localeCompare(b.name || ''))
-  // Tokens carry the TARGET event id: the new tickets scan at the new event and
-  // the old ones are refused at the old one.
-  const appOrigin = (() => { try { return new URL(getAppUrl()).origin } catch { return '' } })()
-  const checkinSecret = process.env.SUPABASE_SERVICE_ROLE_KEY || null
-  const teamMembersWithQr = teamMembers.map((m) => {
-    if (!appOrigin || !race.id || !checkinSecret) return { ...m, qrSrc: '' }
-    const token = signCheckinToken({ eventId: race.id, registrationId: reg.id, memberId: m.id }, checkinSecret)
-    return { ...m, qrSrc: `${appOrigin}/api/public/events/checkin-qr?t=${encodeURIComponent(token)}` }
-  })
-  const waveText = (w) => (w ? (w.label ? `${w.label} · ${fmtWaveTime(w.start_time)}` : fmtWaveTime(w.start_time)) : '')
+  // Minted against the TARGET event (the entry's event now): the new tickets
+  // scan at the new event and the old ones are refused at the old one.
+  const teamMembersWithQr = mintMemberQrs({ eventId: race.id || null, registrationId: reg.id, members: teamMembers })
   const oldWhen = [fmtRaceDate(move.from_event?.race_date), waveText(move.from_wave)].filter(Boolean).join(' · ')
   const captainFirstName = contact.first_name || (teamMembers[0]?.name || '').split(' ')[0] || ''
   const currency = payment?.currency || 'EUR'
   // A free entry has a completed €0 payment (race-payments.js), so no completed
-  // payment on a pending_payment entry means it is unpaid, not free.
-  const amountLabel = payment
-    ? (payment.amount_cents > 0 ? fmtMoney(payment.amount_cents, currency) : 'Free entry')
-    : (reg.status === 'pending_payment' ? 'Payment pending' : 'Free entry')
+  // payment on a pending_payment entry means it is unpaid, not free. An
+  // unreadable payment proves nothing either way.
+  let amountLabel
+  if (payErr) amountLabel = 'See your original receipt'
+  else if (payment) amountLabel = payment.amount_cents > 0 ? fmtMoney(payment.amount_cents, currency) : 'Free entry'
+  else amountLabel = reg.status === 'pending_payment' ? 'Payment pending' : 'Free entry'
 
   const ctx = {
     raceName: race.name || 'UN1T Race',
     raceDateLabel: fmtRaceDate(race.race_date),
     waveLabel: waveText(wave),
     waveRowLabel: timeRowLabel(race.kind),
+    isRace: isRaceKind(race.kind),
     locationName: pickAudienceVenueName({ venueName: race.venue_name, eventLocation: race.locations }),
     teamName: team?.name || '',
     teamSize: team?.size || teamMembers.length || 1,
