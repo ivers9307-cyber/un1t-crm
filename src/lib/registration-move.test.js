@@ -8,6 +8,8 @@ import {
 // which is the case the move must survive.
 const sendMovedEmail = vi.hoisted(() => vi.fn(async () => { throw new Error('postmark down') }))
 vi.mock('./race-confirmations', () => ({ sendRegistrationMovedEmail: sendMovedEmail }))
+const syncHostList = vi.hoisted(() => vi.fn(async () => ({})))
+vi.mock('./host-contact-list', () => ({ addEventAttendeesToHostList: syncHostList }))
 
 describe('entryLabel', () => {
   it('names a team of two or more by the team name', () => {
@@ -305,6 +307,14 @@ describe('listMoveTargets', () => {
     const ranges = db.calls.filter((c) => c.ops.some((o) => o[0] === 'range')).map((c) => c.ops.find((o) => o[0] === 'range').slice(1))
     expect(ranges).toEqual([[0, 999], [1000, 1999]])
   })
+  it('drops an event that does not accept the entry\'s headcount', async () => {
+    const db = fakeDb({
+      race_registrations: (q) => (q.ops.some((o) => o[0] === 'eq' && o[1] === 'id') ? { data: REG } : { data: [] }),
+      race_events: { data: [TARGET, { ...TARGET, id: 'e6', allowed_team_sizes: [1, 4] }, { ...TARGET, id: 'e7', allowed_team_sizes: null }] },
+    })
+    const r = await listMoveTargets(db, { registrationId: 'r1', today: '2026-10-08' })
+    expect(r.targets.map((t) => t.id)).toEqual(['e2', 'e7'])
+  })
   it('load_failed when the wave read fails, never a wave that looks empty', async () => {
     const db = fakeDb({
       race_registrations: (q) => (q.ops.some((o) => o[0] === 'eq' && o[1] === 'id') ? { data: REG } : { data: null, error: { message: 'timeout' } }),
@@ -451,6 +461,61 @@ describe('moveRegistration', () => {
       const r = await moveRegistration(db, { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9', actor })
       expect(r).toEqual({ ok: false, error: expected })
     }
+  })
+  it('actor.type is required: a missing one is a programming error, thrown before any read', async () => {
+    const { db, rpc } = happyDb()
+    await expect(moveRegistration(db, { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9', actor: { id: 'u1', name: 'R' } }))
+      .rejects.toThrow(new TypeError('actor.type is required'))
+    await expect(moveRegistration(db, { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9' })).rejects.toThrow(TypeError)
+    expect(db.calls).toHaveLength(0)
+    expect(rpc).not.toHaveBeenCalled()
+  })
+  it('wrong_event when the wave is not one of the target\'s waves', async () => {
+    const { db, rpc } = happyDb()
+    expect(await moveRegistration(db, { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w-elsewhere', actor }))
+      .toMatchObject({ ok: false, error: 'wrong_event' })
+    expect(rpc).not.toHaveBeenCalled()
+  })
+  it('a cross-studio move goes ahead even when the team has an entry on the target', async () => {
+    const target = { ...TARGET, location_id: 'L2', locations: { id: 'L2', name: 'Stillorgan' } }
+    const { db, rpc } = happyDb({ target, existingOnTarget: { id: 'r7', status: 'confirmed' } })
+    const r = await moveRegistration(db, { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9', actor, notify: false })
+    expect(r.ok).toBe(true)
+    expect(rpc).toHaveBeenCalledTimes(1)
+    const same = happyDb({ existingOnTarget: { id: 'r7', status: 'confirmed' } })
+    expect(await moveRegistration(same.db, { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9', actor }))
+      .toMatchObject({ ok: false, error: 'already_entered' })
+  })
+  describe('the timeline line', () => {
+    const activity = (db) => db.calls.find((c) => c.table === 'activities')?.ops.find((o) => o[0] === 'insert')?.[1]
+    it('lands on the lead contact at their home studio, saying from, to and who', async () => {
+      const reg = { ...REG, contact: { ...REG.contact, location_id: 'L-home' } }
+      const { db } = happyDb({ reg })
+      await moveRegistration(db, { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9', actor, note: 'Asked by phone', notify: false })
+      expect(activity(db)).toEqual({
+        contact_id: 'c1', location_id: 'L-home', kind: 'event', type: 'event',
+        subject: 'Entry moved from Hatch Oct 18 to Hatch Oct 25 by Richard',
+        note: 'From Hatch Oct 18 (2026-10-18) to Hatch Oct 25 (2026-10-25). Note: Asked by phone',
+        done: true,
+      })
+    })
+    it('falls back to the source event\'s studio when the contact has none', async () => {
+      const target = { ...TARGET, location_id: 'L2', locations: { id: 'L2', name: 'Stillorgan' } }
+      const { db } = happyDb({ reg: { ...REG, contact: { ...REG.contact, location_id: null } }, target })
+      await moveRegistration(db, { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9', actor, notify: false })
+      expect(activity(db).location_id).toBe('L1')
+    })
+  })
+  it('syncs the host contact list only when the target has a host', async () => {
+    syncHostList.mockClear()
+    const plain = happyDb()
+    await moveRegistration(plain.db, { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9', actor, notify: false })
+    expect(syncHostList).not.toHaveBeenCalled()
+    const hostedReg = { ...REG, race: { ...REG.race, host_id: 'h1' } }
+    const hosted = happyDb({ reg: hostedReg, target: { ...TARGET, host_id: 'h1' } })
+    const r = await moveRegistration(hosted.db, { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9', actor, notify: false })
+    expect(r.ok).toBe(true)
+    expect(syncHostList).toHaveBeenCalledWith(hosted.db, 'e2')
   })
   it('a failing moved email never fails the move', async () => {
     const { db, rpc } = happyDb()

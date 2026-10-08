@@ -278,6 +278,9 @@ export async function listMoveTargets(db, { registrationId, allowedEventIds = nu
     if (!samePayee(source, ev)) return false
     if (allowedEventIds && !allowedEventIds.has(ev.id)) return false
     if (Array.isArray(allowedLocationIds) && !allowedLocationIds.includes(ev.location_id)) return false
+    // The same rule as evaluateMove's headcount_not_allowed: never offer it.
+    const sizes = ev.allowed_team_sizes
+    if (Array.isArray(sizes) && sizes.length > 0 && !sizes.includes(headcount)) return false
     return true
   })
 
@@ -328,6 +331,10 @@ export async function moveRegistration(db, {
   actor, note = null, notify = true, force = false, allowedEventIds = null,
   today = dublinTodayStr(),
 }) {
+  // Who moved it is recorded on every move (registration_moves.actor_type
+  // is NOT NULL, checked to staff/host/agent): a caller that omits it is a
+  // bug, not a refusal to show the operator.
+  if (!actor?.type) throw new TypeError('actor.type is required')
   const { registration, error: readErr } = await readRegistrationForMove(db, registrationId)
   if (!registration) return entryReadRefusal(readErr)
   // Outside the host's own events: 404, the host fence.
@@ -366,7 +373,7 @@ export async function moveRegistration(db, {
     p_headcount: headcount,
     p_price_gap_cents: priceGapCents,
     p_forced: force === true,
-    p_actor_type: actor?.type || 'staff',
+    p_actor_type: actor.type,
     p_actor_id: actor?.id || null,
     p_actor_name: actor?.name || '',
     p_note: note || null,
@@ -400,9 +407,12 @@ export async function moveRegistration(db, {
     } catch (e) { logWarn('registration-move', 'contact event failed', { err: e, registrationId }) }
   }
   try {
-    if (registration.contact_id && targetEvent.location_id) {
+    // The timeline line sits at the contact's home studio (where staff read
+    // their timeline), else the studio the entry was booked at.
+    const timelineLocationId = registration.contact?.location_id || registration.race?.location_id || null
+    if (registration.contact_id && timelineLocationId) {
       const { error: actErr } = await db.from('activities').insert({
-        contact_id: registration.contact_id, location_id: targetEvent.location_id, kind: 'event', type: 'event',
+        contact_id: registration.contact_id, location_id: timelineLocationId, kind: 'event', type: 'event',
         subject: `Entry moved from ${registration.race?.name || 'event'} to ${targetEvent.name} by ${actor?.name || 'staff'}`,
         note: `From ${registration.race?.name || 'event'} (${registration.race?.race_date || ''}) to ${targetEvent.name} (${targetEvent.race_date || ''}).${note ? ` Note: ${note}` : ''}`,
         done: true,
