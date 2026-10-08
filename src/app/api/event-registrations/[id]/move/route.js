@@ -45,14 +45,32 @@ const STATUS_FOR = Object.freeze({
 const notFound = () => NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
 const forbidden = () => NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
 
+// load_failed's own copy is about the entry; a failed TARGET read keeps the
+// code and says which row could not be read.
+const TARGET_LOAD_FAILED_MESSAGE = 'The target event could not be read. Try again.'
+
 /** A refusal with its code and the dialog's plain-English copy. */
-function refusal(code, extra = {}) {
+function refusal(code, extra = {}, message = null) {
   return NextResponse.json({
     success: false,
     error: code,
-    message: MOVE_ERROR_MESSAGES[code] || 'The move could not be completed.',
+    message: message || MOVE_ERROR_MESSAGES[code] || 'The move could not be completed.',
     ...extra,
   }, { status: STATUS_FOR[code] || 400 })
+}
+
+/**
+ * Who moved it. Under impersonation (a master acting as someone, see
+ * getCurrentUser's impersonatingFrom) the REAL caller is recorded: their id,
+ * and "<master> as <user>" so the history reads true.
+ */
+function actorFor(user) {
+  const userName = user.full_name || user.email || 'staff'
+  const imp = user.impersonatingFrom
+  if (imp?.masterId) {
+    return { type: 'staff', id: imp.masterId, name: `${imp.masterName || imp.masterEmail || 'master'} as ${userName}` }
+  }
+  return { type: 'staff', id: user.id, name: userName }
 }
 
 /**
@@ -94,7 +112,7 @@ export async function POST(request, props) {
     .from('race_events').select('id, location_id').eq('id', body.target_event_id).maybeSingle()
   if (targetErr) {
     logError('event-registration-move', 'target event read failed', { err: targetErr, registrationId: params.id, targetEventId: body.target_event_id })
-    return refusal(MOVE_ERRORS.LOAD_FAILED)
+    return refusal(MOVE_ERRORS.LOAD_FAILED, {}, TARGET_LOAD_FAILED_MESSAGE)
   }
   if (!target) return notFound()
   const targetRefusal = refuseAt(user, target.location_id)
@@ -104,7 +122,7 @@ export async function POST(request, props) {
     registrationId: params.id,
     targetEventId: body.target_event_id,
     targetWaveId: body.target_wave_id || null,
-    actor: { type: 'staff', id: user.id, name: user.full_name || user.email || 'staff' },
+    actor: actorFor(user),
     note: body.note || null,
     notify: body.notify,
     force: body.force,

@@ -114,7 +114,8 @@ describe('POST /api/event-registrations/[id]/move', () => {
     globalThis.__target = { data: null, error: { message: 'boom' } }
     const res = await POST(post(BODY), props())
     expect(res.status).toBe(500)
-    expect(await res.json()).toMatchObject({ success: false, error: 'load_failed' })
+    // Same code, but the copy names the TARGET: the entry itself read fine.
+    expect(await res.json()).toMatchObject({ success: false, error: 'load_failed', message: 'The target event could not be read. Try again.' })
     expect(moveRegistration).not.toHaveBeenCalled()
   })
   it('404 when the caller cannot see the TARGET studio, before the lib runs', async () => {
@@ -207,6 +208,57 @@ describe('POST /api/event-registrations/[id]/move', () => {
     moveRegistration.mockResolvedValue({ ok: false, error: 'conflict' })
     expect((await POST(post(BODY), props())).status).toBe(409)
     expect(moveRegistration.mock.calls[0][1].expectedSourceEventId).toBe(E1)
+  })
+  it('a master passes at both studios with no per-location rows', async () => {
+    globalThis.__target = targetAt(L2)
+    getCurrentUser.mockResolvedValue({
+      id: 'm1', full_name: 'Master', email: 'm@x.ie', role: 'master', profileRole: 'master',
+      activeLocation: { id: L1 }, rolesByLocation: {}, assignmentsByLocation: {},
+      locations: [L1, L2].map((id) => ({ id, features: { races: true } })),
+    })
+    moveRegistration.mockResolvedValue({ ok: true, move: { id: 'mv1' }, registration: { id: R1 }, notified: true })
+    expect((await POST(post(BODY), props())).status).toBe(200)
+    expect(moveRegistration).toHaveBeenCalledTimes(1)
+  })
+  it('an org admin passes at a target studio held only through the synthetic owner role', async () => {
+    // Shape per getCurrentUser's SAAS-4 expansion (src/lib/auth.js
+    // expandOrgAdminAccess + the synthetic assignments): an explicit
+    // manager row at L1; at L2 the org admin is 'owner' in rolesByLocation
+    // with an assignment of { role: 'owner', permissions: {} }, so `races`
+    // resolves from the owner default.
+    globalThis.__target = targetAt(L2)
+    getCurrentUser.mockResolvedValue({
+      id: 'u2', full_name: 'Org Admin', email: 'oa@x.ie', role: 'manager', profileRole: 'manager',
+      activeLocation: { id: L1 },
+      rolesByLocation: { [L1]: 'manager', [L2]: 'owner' },
+      assignmentsByLocation: {
+        [L1]: { role: 'manager', permissions: { races: true } },
+        [L2]: { role: 'owner', permissions: {}, is_default: false, unifi_door_access: false },
+      },
+      locations: [{ id: L1, role: 'manager', features: { races: true } }, { id: L2, features: { races: true } }],
+      orgAdminOrgIds: ['o1'],
+    })
+    moveRegistration.mockResolvedValue({ ok: true, move: { id: 'mv1' }, registration: { id: R1 }, notified: false })
+    expect((await POST(post(BODY), props())).status).toBe(200)
+    expect(moveRegistration).toHaveBeenCalledTimes(1)
+  })
+  it('records the REAL caller when a master is impersonating', async () => {
+    getCurrentUser.mockResolvedValue({
+      ...manager([L1]), id: 'u1', full_name: 'Colm',
+      impersonatingFrom: { masterId: 'm1', masterName: 'Richard', masterEmail: 'r@x.ie' },
+    })
+    moveRegistration.mockResolvedValue({ ok: true, move: { id: 'mv1' }, registration: { id: R1 }, notified: true })
+    expect((await POST(post(BODY), props())).status).toBe(200)
+    expect(moveRegistration.mock.calls[0][1].actor).toEqual({ type: 'staff', id: 'm1', name: 'Richard as Colm' })
+  })
+  it('falls back to emails in the impersonation actor name', async () => {
+    getCurrentUser.mockResolvedValue({
+      ...manager([L1]), id: 'u1', full_name: null, email: 'colm@x.ie',
+      impersonatingFrom: { masterId: 'm1', masterName: null, masterEmail: 'r@x.ie' },
+    })
+    moveRegistration.mockResolvedValue({ ok: true, move: { id: 'mv1' }, registration: { id: R1 }, notified: true })
+    await POST(post(BODY), props())
+    expect(moveRegistration.mock.calls[0][1].actor).toEqual({ type: 'staff', id: 'm1', name: 'r@x.ie as colm@x.ie' })
   })
   it('defaults notify to true, force to false, and a blank note to null', async () => {
     getCurrentUser.mockResolvedValue(manager([L1]))
