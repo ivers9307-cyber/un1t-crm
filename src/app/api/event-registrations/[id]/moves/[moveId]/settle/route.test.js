@@ -52,7 +52,8 @@ const manager = (locs, role = 'manager', races = true) => ({
 })
 const props = (id = R1, moveId = MV) => ({ params: Promise.resolve({ id, moveId }) })
 const post = (body) => new Request(`http://localhost/api/event-registrations/${R1}/moves/${MV}/settle`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-const MOVE = { id: MV, registration_id: R1, price_gap_cents: 1000, gap_settled_at: null, gap_settled_how: null, gap_settled_by_name: null }
+const E2 = 'e0000000-0000-0000-0000-000000000002'
+const MOVE = { id: MV, registration_id: R1, to_event_id: E1, price_gap_cents: 1000, gap_settled_at: null, gap_settled_how: null, gap_settled_by_name: null }
 const writes = () => globalThis.__ops.filter((ops) => ops.some((o) => o[0] === 'update'))
 
 beforeEach(() => {
@@ -132,6 +133,18 @@ describe('POST /api/event-registrations/[id]/moves/[moveId]/settle', () => {
     expect((await POST(post({ how: 'collected' }), props())).status).toBe(404)
     expect(writes()).toHaveLength(0)
   })
+  it('404 when the move is not INTO the entry\'s current event (an earlier move of it)', async () => {
+    getCurrentUser.mockResolvedValue(manager([L1]))
+    globalThis.__move = { data: { ...MOVE, to_event_id: E2 }, error: null }
+    expect((await POST(post({ how: 'collected' }), props())).status).toBe(404)
+    expect(writes()).toHaveLength(0)
+  })
+  it('the move read selects to_event_id', async () => {
+    getCurrentUser.mockResolvedValue(manager([L1]))
+    await POST(post({ how: 'collected' }), props())
+    const cols = globalThis.__ops[0].find((o) => o[0] === 'select')[1].split(',').map((c) => c.trim())
+    expect(cols).toContain('to_event_id')
+  })
   it('500 load_failed when the move read fails', async () => {
     getCurrentUser.mockResolvedValue(manager([L1]))
     globalThis.__move = { data: null, error: { message: 'boom' } }
@@ -190,7 +203,9 @@ describe('POST /api/event-registrations/[id]/moves/[moveId]/settle', () => {
     globalThis.__write = { data: [], error: null }
     const res = await POST(post({ how: 'collected' }), props())
     expect(res.status).toBe(200)
-    expect(await res.json()).toMatchObject({ success: true, data: { unchanged: true } })
+    // The row read before the write: someone else's answer is in the list
+    // the card reloads, not in this reply.
+    expect(await res.json()).toEqual({ success: true, data: { unchanged: true, move: MOVE } })
     expect(globalThis.__tables).toEqual(['registration_moves', 'registration_moves'])
   })
   it('records the REAL caller when a master is impersonating', async () => {

@@ -29,7 +29,7 @@ export const dynamic = 'force-dynamic'
 
 export const SettleSchema = z.object({ how: z.enum(['collected', 'waived']) })
 
-const MOVE_COLUMNS = 'id, registration_id, price_gap_cents, gap_settled_at, gap_settled_how, gap_settled_by_name'
+const MOVE_COLUMNS = 'id, registration_id, to_event_id, price_gap_cents, gap_settled_at, gap_settled_how, gap_settled_by_name'
 
 const notFound = () => NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
 const forbidden = () => NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
@@ -79,8 +79,10 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: 'load_failed', message: 'The move could not be read. Try again.' }, { status: 500 })
   }
   // A move of another entry is as unseen as a missing one: the gate above
-  // judged THIS entry's studio, not that one's.
-  if (!move || move.registration_id !== params.id) return notFound()
+  // judged THIS entry's studio, not that one's. So is an earlier move of this
+  // entry INTO another event: the difference is settled only on the move that
+  // brought it to the event it sits on now (the one the teams page shows).
+  if (!move || move.registration_id !== params.id || move.to_event_id !== registration.race_event_id) return notFound()
   if (!(move.price_gap_cents > 0)) {
     return NextResponse.json({ success: false, error: 'no_gap', message: 'This move has no outstanding difference.' }, { status: 400 })
   }

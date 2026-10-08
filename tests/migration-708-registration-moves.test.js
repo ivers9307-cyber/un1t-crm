@@ -257,6 +257,16 @@ describe('mig 709 — gap_settled_* on registration_moves', () => {
     await run(MIG_709)
   })
 
+  it.each([
+    ['a time with no how', 'gap_settled_at = now()'],
+    ['a how with no time', "gap_settled_how = 'waived'"],
+  ])('refuses a half-settled row: %s', async (_name, set) => {
+    const { id } = await one(MOVE, [R1, E1, E2, W2])
+    const err = await db.query(`UPDATE registration_moves SET ${set} WHERE id = $1`, [id]).then(() => null, (e) => e)
+    expect(err?.code).toBe('23514')
+    expect(err?.message).toMatch(/registration_moves_gap_settled_consistent/)
+  })
+
   it('stays closed to clients', async () => {
     for (const role of ['anon', 'authenticated']) {
       expect((await one(`SELECT has_table_privilege('${role}', 'public.registration_moves', 'SELECT') AS ok`)).ok).toBe(false)

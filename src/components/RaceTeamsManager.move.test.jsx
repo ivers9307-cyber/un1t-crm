@@ -187,6 +187,32 @@ describe('RaceTeamsManager — settle the difference', () => {
     expect(msg.className).toContain('text-red-700')
     expect(teamsCalls(fetchMock)).toBe(1)
   })
+  it('a stale click (already settled another way) says so in the amber notice, and still reloads', async () => {
+    vi.stubGlobal('confirm', vi.fn(() => true))
+    const fetchMock = settleFetch({ ok: true, status: 200, json: async () => ({ success: true, data: { unchanged: true, move: { id: 'mv1', gap_settled_at: '2026-10-09T10:00:00Z', gap_settled_how: 'waived', gap_settled_by_name: 'Colm' } } }) })
+    render(<RaceTeamsManager race={race} canMoveEntries />)
+    fireEvent.click(await screen.findByRole('button', { name: /^Collected$/ }))
+    const notice = await screen.findByText(/Already marked waived by Colm\./)
+    expect(notice.closest('[role="status"]').className).toContain('bg-amber-500/10')
+    await waitFor(() => expect(teamsCalls(fetchMock)).toBe(2))
+  })
+  it('an unchanged answer that agrees with the click raises no notice', async () => {
+    vi.stubGlobal('confirm', vi.fn(() => true))
+    const fetchMock = settleFetch({ ok: true, status: 200, json: async () => ({ success: true, data: { unchanged: true, move: { id: 'mv1', gap_settled_at: '2026-10-09T10:00:00Z', gap_settled_how: 'collected', gap_settled_by_name: 'Colm' } } }) })
+    render(<RaceTeamsManager race={race} canMoveEntries />)
+    fireEvent.click(await screen.findByRole('button', { name: /^Collected$/ }))
+    await waitFor(() => expect(teamsCalls(fetchMock)).toBe(2))
+    expect(screen.queryByText(/Already marked/)).toBeNull()
+  })
+  it('in GBP the chip and the confirm say £10.00', async () => {
+    const confirmMock = vi.fn(() => false)
+    vi.stubGlobal('confirm', confirmMock)
+    settleFetch({ ok: true, status: 200, json: async () => ({ success: true, data: {} }) })
+    render(<RaceTeamsManager race={race} canMoveEntries currency="GBP" />)
+    await screen.findByText(/£10\.00 difference outstanding/)
+    fireEvent.click(screen.getByRole('button', { name: /^Waived$/ }))
+    expect(confirmMock).toHaveBeenCalledWith('Mark the £10.00 difference as waived?')
+  })
   it('a settled gap hides the chip and the buttons, and the Moved from tooltip says how, who and when', async () => {
     const settled = { ...reg, last_move: { ...reg.last_move, gap_settled_at: '2026-10-09T10:00:00Z', gap_settled_how: 'collected', gap_settled_by_name: 'Richard' } }
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ success: true, data: [settled], moved_out: [] }) })))

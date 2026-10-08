@@ -403,7 +403,15 @@ function TeamCard({ registration, waves, onChanged, onError, onNotice, canCancel
       })
       const j = await r.json()
       if (!r.ok || j.success === false) onError(j.message || j.error || 'Could not save the difference')
-      else onChanged()
+      else {
+        // Someone settled it first, the other way: say so rather than let
+        // the reload quietly show an answer that is not the one clicked.
+        const stood = j.data?.unchanged ? j.data.move : null
+        if (stood?.gap_settled_how && stood.gap_settled_how !== how) {
+          onNotice(`Already marked ${stood.gap_settled_how} by ${(typeof stood.gap_settled_by_name === 'string' && stood.gap_settled_by_name.trim()) || 'staff'}.`)
+        }
+        onChanged()
+      }
     } catch (e) {
       onError(e.message || 'Network error')
     } finally {
