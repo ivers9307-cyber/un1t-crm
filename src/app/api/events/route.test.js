@@ -103,3 +103,19 @@ describe('events CreateSchema sending_location_id', () => {
     expect(() => CreateSchema.parse({ ...base, sending_location_id: 'nope' })).toThrow()
   })
 })
+
+describe('events CreateSchema — EVENT-MOVE.1 moved-email copy', () => {
+  const base = {
+    location_id: '00000000-0000-0000-0000-000000000001',
+    name: 'Hyrox Sim',
+    race_date: '2026-08-01',
+    waves: [{ start_time: '09:00' }],
+  }
+
+  it('accepts, clears and bounds the two fields', () => {
+    expect(CreateSchema.parse({ ...base, moved_email_subject: 'New date for {{event_name}}' }).moved_email_subject).toContain('event_name')
+    expect(CreateSchema.parse({ ...base, moved_email_intro: null }).moved_email_intro).toBeNull()
+    expect(CreateSchema.parse({ ...base }).moved_email_subject).toBeUndefined()
+    expect(() => CreateSchema.parse({ ...base, moved_email_intro: 'y'.repeat(4001) })).toThrow()
+  })
+})

@@ -95,6 +95,9 @@ export const CreateSchema = z.object({
   confirmation_email_intro: z.string().max(4000).nullable().optional(),
   reminder_email_subject: z.string().max(4000).nullable().optional(),
   reminder_email_intro: z.string().max(4000).nullable().optional(),
+  // EVENT-MOVE.1 (mig 708) — copy for the "your entry has moved" email.
+  moved_email_subject: z.string().max(4000).nullable().optional(),
+  moved_email_intro: z.string().max(4000).nullable().optional(),
   confirmation_email_template_id: uuidLike.nullable().optional(),
   reminder_email_template_id: uuidLike.nullable().optional(),
   // EVENT-COMMS-LOC (mig 553) — the real UN1T location this event's SMS + email
@@ -376,6 +379,8 @@ export async function POST(request) {
       confirmation_email_intro: body.confirmation_email_intro ?? null,
       reminder_email_subject: body.reminder_email_subject ?? null,
       reminder_email_intro: body.reminder_email_intro ?? null,
+      moved_email_subject: body.moved_email_subject ?? null,
+      moved_email_intro: body.moved_email_intro ?? null,
       confirmation_email_template_id: body.confirmation_email_template_id ?? null,
       reminder_email_template_id: body.reminder_email_template_id ?? null,
       sending_location_id: body.sending_location_id ?? null,

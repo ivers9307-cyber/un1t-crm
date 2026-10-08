@@ -1,5 +1,6 @@
 // EVENTS-EMAILCFG.1 — the shared branded shell + per-event resolution for the
-// standalone events-platform emails (signup CONFIRMATION + pre-event REMINDER).
+// standalone events-platform emails (signup CONFIRMATION + pre-event REMINDER,
+// and the EVENT-MOVE.1 "your entry has moved" notice).
 //
 // Two entry points:
 //   buildEventEmailShell(...) — the branded HTML skeleton. With accentHex /
@@ -17,7 +18,8 @@
 //        (falling back to the caller's default copy when blank).
 //
 // Merge tags available in copy + templates: the standard applyMergeTags contact
-// tags PLUS {{event_name}}, {{team_name}}, {{when}}, {{location}}.
+// tags PLUS {{event_name}}, {{team_name}}, {{when}}, {{location}}, and (the
+// moved email only, EVENT-MOVE.1) {{old_event_name}}, {{old_when}}.
 //
 // LIVE EMAILS: with no per-event config (all columns NULL) the shell output is
 // identical to the pre-refactor builders — locked by event-email.test.js.
@@ -58,6 +60,9 @@ export function applyEventMergeTags(text, contact, extras = {}) {
   out = out.replaceAll('{{team_name}}', extras.team_name || '')
   out = out.replaceAll('{{when}}', extras.when || '')
   out = out.replaceAll('{{location}}', extras.location || '')
+  // EVENT-MOVE.1 — only the "your entry has moved" email sets these.
+  out = out.replaceAll('{{old_event_name}}', extras.old_event_name || '')
+  out = out.replaceAll('{{old_when}}', extras.old_when || '')
   return out
 }
 
@@ -79,6 +84,8 @@ export function applyEventMergeTagsHtml(html, contact, extras = {}) {
     team_name: escapeHtml(extras.team_name || ''),
     when: escapeHtml(extras.when || ''),
     location: escapeHtml(extras.location || ''),
+    old_event_name: escapeHtml(extras.old_event_name || ''),
+    old_when: escapeHtml(extras.old_when || ''),
   }
   return applyEventMergeTags(html, safeContact, safeExtras)
 }
@@ -193,7 +200,7 @@ function renderOperatorIntro(text, contact, extras) {
 }
 
 /**
- * Resolve one event email (kind = 'confirmation' | 'reminder') against the
+ * Resolve one event email (kind = 'confirmation' | 'reminder' | 'moved') against the
  * per-event configuration on the race row. Returns { subject, htmlBody }.
  *
  * Precedence (see module header):
@@ -211,10 +218,10 @@ function renderOperatorIntro(text, contact, extras) {
  *
  * @param {object} args
  * @param {import('@supabase/supabase-js').SupabaseClient} [args.db]
- * @param {'confirmation'|'reminder'} args.kind
+ * @param {'confirmation'|'reminder'|'moved'} args.kind
  * @param {object} args.race     the race_events row (new EVENTS-EMAILCFG columns + accent_hex/hero_image_url)
  * @param {object} args.contact  merge contact ({ first_name, name, email, ... })
- * @param {object} args.extras   { event_name, team_name, when, location }
+ * @param {object} args.extras   { event_name, team_name, when, location, old_event_name?, old_when? }
  * @param {object} args.defaults default subject + shell slots for this email
  * @returns {Promise<{ subject: string, htmlBody: string }>}
  */

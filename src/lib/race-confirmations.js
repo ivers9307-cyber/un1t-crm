@@ -24,6 +24,8 @@ import { resolveEventCommsLocation, pickAudienceVenueName } from './event-comms-
 import { checkTransactionalConsent } from './transactional-consent'
 import { logError } from './log'
 import { timeRowLabel } from './event-time-slots'
+import { isRaceKind } from '@shared/events'
+import { entryLeadEmail } from './registration-entry'
 
 function fmtRaceDate(dateStr) {
   if (!dateStr) return ''
@@ -41,6 +43,29 @@ function fmtMoney(cents, currency = 'EUR') {
 function fmtWaveTime(t) {
   if (!t || typeof t !== 'string') return ''
   return t.slice(0, 5) // "09:30:00" → "09:30"
+}
+
+/** "Heat A · 09:30", "09:30", or '' with no wave. */
+function waveText(wave) {
+  if (!wave) return ''
+  return wave.label ? `${wave.label} · ${fmtWaveTime(wave.start_time)}` : fmtWaveTime(wave.start_time)
+}
+
+/**
+ * EVENT-CHECKIN.B — give each member a per-person check-in QR. The image is a
+ * public signed-token endpoint (renders reliably in email clients); the QR
+ * opens a staff-only scan page, so it's safe to expose. The token carries
+ * `eventId`, so it scans only at that event. Without an app origin, event,
+ * registration or secret every member gets qrSrc '' (no QR block renders).
+ */
+function mintMemberQrs({ eventId, registrationId, members }) {
+  const appOrigin = (() => { try { return new URL(getAppUrl()).origin } catch { return '' } })()
+  const secret = process.env.SUPABASE_SERVICE_ROLE_KEY || null
+  return (members || []).map((m) => {
+    if (!appOrigin || !eventId || !registrationId || !secret) return { ...m, qrSrc: '' }
+    const token = signCheckinToken({ eventId, registrationId, memberId: m.id }, secret)
+    return { ...m, qrSrc: `${appOrigin}/api/public/events/checkin-qr?t=${encodeURIComponent(token)}` }
+  })
 }
 
 /**
@@ -142,25 +167,12 @@ export async function sendRaceConfirmations({ db, paymentId }) {
     (a.name || '').localeCompare(b.name || '')
   )
 
-  // EVENT-CHECKIN.B — give each member a per-person check-in QR. The image is
-  // a public signed-token endpoint (renders reliably in email clients); the
-  // QR opens a staff-only scan page, so it's safe to expose.
-  const appOrigin = (() => { try { return new URL(getAppUrl()).origin } catch { return '' } })()
-  const checkinSecret = process.env.SUPABASE_SERVICE_ROLE_KEY || null
-  const checkinEventId = race?.id || null
-  const checkinRegistrationId = reg?.id || null
-  const teamMembersWithQr = teamMembers.map((m) => {
-    if (!appOrigin || !checkinEventId || !checkinRegistrationId || !checkinSecret) return { ...m, qrSrc: '' }
-    const token = signCheckinToken({ eventId: checkinEventId, registrationId: checkinRegistrationId, memberId: m.id }, checkinSecret)
-    return { ...m, qrSrc: `${appOrigin}/api/public/events/checkin-qr?t=${encodeURIComponent(token)}` }
-  })
+  const teamMembersWithQr = mintMemberQrs({ eventId: race?.id || null, registrationId: reg?.id || null, members: teamMembers })
 
   const ctx = {
     raceName: race?.name || 'UN1T Race',
     raceDateLabel: fmtRaceDate(race?.race_date),
-    waveLabel: wave
-      ? (wave.label ? `${wave.label} · ${fmtWaveTime(wave.start_time)}` : fmtWaveTime(wave.start_time))
-      : '',
+    waveLabel: waveText(wave),
     // EVENT-MULTITIME.1 — "Wave" for races, "Time" for a class/workshop.
     waveRowLabel: timeRowLabel(race?.kind),
     // EVENT-COPY.1 — this value reaches the customer three times: the "Where"
@@ -287,6 +299,36 @@ async function stampSendOnce(db, paymentId, column, result, leg) {
 }
 
 /**
+ * The info table's rows. The confirmation always shows "Team size"; the moved
+ * email drops it for a solo entry. With teamSizeRow true the output is the
+ * confirmation's historic markup byte-for-byte (event-email.test.js).
+ */
+function buildInfoRows(ctx, breakdownLine, { teamSizeRow }) {
+  const teamSize = teamSizeRow
+    ? `<tr><td style="padding:8px 0;color:#666">Team size</td><td style="padding:8px 0;font-weight:600">${ctx.teamSize}-person</td></tr>
+    `
+    : ''
+  return `    <tr><td style="padding:8px 0;color:#666;width:120px">Date</td><td style="padding:8px 0;font-weight:600">${escapeHtml(ctx.raceDateLabel)}</td></tr>
+    ${ctx.waveLabel ? `<tr><td style="padding:8px 0;color:#666">${ctx.waveRowLabel || 'Wave'}</td><td style="padding:8px 0;font-weight:600">${escapeHtml(ctx.waveLabel)}</td></tr>` : ''}
+    ${ctx.locationName ? `<tr><td style="padding:8px 0;color:#666">Where</td><td style="padding:8px 0;font-weight:600">${escapeHtml(ctx.locationName)}</td></tr>` : ''}
+    ${teamSize}<tr><td style="padding:8px 0;color:#666;vertical-align:top">Total paid</td><td style="padding:8px 0;font-weight:600">${escapeHtml(ctx.amountLabel)}${breakdownLine}</td></tr>`
+}
+
+/** "1 × member €20.00 · 1 × non-member €30.00" under Total paid, or ''. */
+function buildBreakdownLine(ctx) {
+  const breakdown = []
+  if (ctx.memberCount > 0 && ctx.memberFeeLabel) {
+    breakdown.push(`${ctx.memberCount} × member ${ctx.memberFeeLabel}`)
+  }
+  if (ctx.nonMemberCount > 0 && ctx.nonMemberFeeLabel) {
+    breakdown.push(`${ctx.nonMemberCount} × non-member ${ctx.nonMemberFeeLabel}`)
+  }
+  return breakdown.length > 0
+    ? `<p style="color:#666;font-size:13px;margin:4px 0 0">${breakdown.join(' &nbsp;·&nbsp; ')}</p>`
+    : ''
+}
+
+/**
  * Compose the DEFAULT (unconfigured) shell slots for the confirmation email
  * from the `ctx` sendRaceConfirmations builds. Each *Html slot is the exact raw
  * fragment the old inline template produced, so buildEventEmailShell reproduces
@@ -301,22 +343,8 @@ export function buildConfirmationDefaults(ctx) {
     .map((m) => `<li>${escapeHtml(m.name)}${m.role === 'captain' ? ' <em>(captain)</em>' : ''}${m.is_member ? ' <span style="color:#7a5a00;font-size:11px;background:#fff4cc;padding:1px 6px;border-radius:9999px;margin-left:6px">UN1T member</span>' : ''}</li>`)
     .join('')
 
-  const breakdown = []
-  if (ctx.memberCount > 0 && ctx.memberFeeLabel) {
-    breakdown.push(`${ctx.memberCount} × member ${ctx.memberFeeLabel}`)
-  }
-  if (ctx.nonMemberCount > 0 && ctx.nonMemberFeeLabel) {
-    breakdown.push(`${ctx.nonMemberCount} × non-member ${ctx.nonMemberFeeLabel}`)
-  }
-  const breakdownLine = breakdown.length > 0
-    ? `<p style="color:#666;font-size:13px;margin:4px 0 0">${breakdown.join(' &nbsp;·&nbsp; ')}</p>`
-    : ''
-
-  const infoRows = `    <tr><td style="padding:8px 0;color:#666;width:120px">Date</td><td style="padding:8px 0;font-weight:600">${escapeHtml(ctx.raceDateLabel)}</td></tr>
-    ${ctx.waveLabel ? `<tr><td style="padding:8px 0;color:#666">${ctx.waveRowLabel || 'Wave'}</td><td style="padding:8px 0;font-weight:600">${escapeHtml(ctx.waveLabel)}</td></tr>` : ''}
-    ${ctx.locationName ? `<tr><td style="padding:8px 0;color:#666">Where</td><td style="padding:8px 0;font-weight:600">${escapeHtml(ctx.locationName)}</td></tr>` : ''}
-    <tr><td style="padding:8px 0;color:#666">Team size</td><td style="padding:8px 0;font-weight:600">${ctx.teamSize}-person</td></tr>
-    <tr><td style="padding:8px 0;color:#666;vertical-align:top">Total paid</td><td style="padding:8px 0;font-weight:600">${escapeHtml(ctx.amountLabel)}${breakdownLine}</td></tr>`
+  const breakdownLine = buildBreakdownLine(ctx)
+  const infoRows = buildInfoRows(ctx, breakdownLine, { teamSizeRow: true })
 
   const afterInfoHtml = `
 
@@ -435,6 +463,197 @@ async function sendEmail({ db, payment, ctx, commsLocationId }) {
     tag: 'race-registration-confirmation',
   })
   return { status: 'sent' }
+}
+
+// ─── EVENT-MOVE.1 — "your entry has moved" ───────────────────────────────
+//
+// Same shell, consent gate, QR minting and Postmark path as the confirmation,
+// with kind:'moved' copy (race_events.moved_email_subject/intro, mig 708).
+// The send-once guard is registration_moves.notified_at, stamped AFTER the
+// send for the reasons stampSendOnce spells out. Not gated by the payment's
+// confirmation stamp: this is a different message. Email only; no SMS.
+//
+// moveRegistration ignores the result, so every failure here is logged with
+// logError: a lost "your entry has moved" email must never be silent.
+
+/**
+ * Default shell slots for the moved email. Mirrors buildConfirmationDefaults so
+ * resolveEventEmail({ kind: 'moved' }) can layer operator copy on top.
+ * @param {object} ctx  buildConfirmationDefaults' ctx plus { oldEventName, oldWhen, isRace }
+ */
+export function buildMovedDefaults(ctx) {
+  const base = buildConfirmationDefaults(ctx)
+  const solo = (ctx.teamMembers || []).length <= 1
+  const who = escapeHtml(ctx.captainFirstName || 'there')
+  const from = `<strong>${escapeHtml(ctx.oldEventName || '')}</strong>${ctx.oldWhen ? ` (${escapeHtml(ctx.oldWhen)})` : ''}`
+  const to = `<strong>${escapeHtml(ctx.raceName)}</strong>`
+  const footerHtml = ctx.isRace
+    ? `<strong>What's next:</strong> arrive 30 minutes before your wave. Bring water, a towel, and your race-day energy. We'll send a reminder the day before.`
+    : `<strong>What's next:</strong> arrive 30 minutes before your start. Bring water and a towel. We'll send a reminder the day before.`
+  return {
+    ...base,
+    subject: `Your entry has moved to ${ctx.raceName}`,
+    heading: solo ? `Your entry has moved, ${who}.` : `Your team's entry has moved, ${who}.`,
+    introHtml: solo
+      ? `Your entry for ${from} is now on ${to}. Your new ticket is below; the old one no longer works.`
+      : `Your team's entry for ${from} is now on ${to}. Your new tickets are below; the old ones no longer work.`,
+    // Solo: no one-line "Your team" list and no "Team size" row; the QR block
+    // still shows the one person.
+    infoRows: solo ? buildInfoRows(ctx, buildBreakdownLine(ctx), { teamSizeRow: false }) : base.infoRows,
+    afterInfoHtml: solo ? '' : base.afterInfoHtml,
+    footerHtml,
+  }
+}
+
+/**
+ * Email the lead contact their new tickets after a move. Best-effort: never
+ * throws for an expected failure; reports it on the result and logs it.
+ * @param {object} db  service-role client
+ * @param {{ registrationId: string, moveId: string }} args
+ * @returns {Promise<{ sent: string[], skipped: string[], failed: string[] }>}
+ */
+export async function sendRegistrationMovedEmail(db, { registrationId, moveId }) {
+  const result = { sent: [], skipped: [], failed: [] }
+
+  const { data: move, error: moveErr } = await db
+    .from('registration_moves')
+    .select(`
+      id, registration_id, notified_at,
+      from_event:from_event_id ( id, name, race_date ),
+      from_wave:from_wave_id ( start_time, label )
+    `)
+    .eq('id', moveId)
+    .maybeSingle()
+  if (moveErr || !move || move.registration_id !== registrationId) {
+    result.failed.push(`load:${moveErr?.message || 'move_not_found'}`)
+    logError('race-confirmations', 'moved email: move row unreadable or not this entry\'s; nothing sent', { err: moveErr, registrationId, moveId })
+    return result
+  }
+  if (move.notified_at) {
+    result.skipped.push('email:already_sent')
+    return result
+  }
+
+  const { data: reg, error: regErr } = await db
+    .from('race_registrations')
+    .select(`
+      id, status, contact_id, race_event_id,
+      contact:contact_id ( id, first_name, last_name, email, phone ),
+      wave:wave_id ( id, start_time, label ),
+      teams:team_id ( id, name, size, team_members ( id, name, role, is_member, email ) ),
+      race:race_event_id (
+        id, name, slug, kind, race_date, location_id, host_id, sending_location_id,
+        venue_name, accent_hex, hero_image_url,
+        moved_email_subject, moved_email_intro,
+        locations:location_id ( id, name, is_host_anchor, organization_id )
+      )
+    `)
+    .eq('id', registrationId)
+    .maybeSingle()
+  if (regErr || !reg) {
+    result.failed.push(`load:${regErr?.message || 'registration_not_found'}`)
+    logError('race-confirmations', 'moved email: registration unreadable; nothing sent', { err: regErr, registrationId, moveId })
+    return result
+  }
+  const { data: payments, error: payErr } = await db
+    .from('race_payments')
+    .select('id, amount_cents, currency, status, contact_email, member_count, non_member_count, member_fee_cents, non_member_fee_cents, created_at')
+    .eq('race_registration_id', registrationId)
+    .order('created_at', { ascending: false })
+    .limit(5)
+  if (payErr) logError('race-confirmations', 'moved email: payment read failed; Total paid says "See your original receipt"', { err: payErr, registrationId, moveId })
+  const payment = (payments || []).find((p) => p.status === 'completed') || null
+
+  const race = reg.race || {}
+  const contact = reg.contact || {}
+  const toEmail = entryLeadEmail({ registration: reg, payment: payment || (payments || [])[0] || null })
+  if (!toEmail) {
+    logError('race-confirmations', 'moved email: no address for the lead contact', { registrationId, moveId })
+    result.skipped.push('email:no_email')
+    return result
+  }
+
+  // Same fallback as sendRaceConfirmations: a resolver failure never costs the email.
+  let commsLocation = null
+  try {
+    commsLocation = await resolveEventCommsLocation(db, { location_id: race.location_id, host_id: race.host_id, sending_location_id: race.sending_location_id })
+  } catch (e) {
+    logError('race-confirmations', 'moved email: comms location resolver threw; sending from the event location', { err: e, registrationId, moveId })
+  }
+  const commsLocationId = commsLocation?.id || race.location_id || null
+
+  // ADMINISTRATIVE + unrecoverable, as for the confirmation (see sendEmail):
+  // nothing re-runs this after the move, so every suppression logs at error.
+  const gate = await checkTransactionalConsent({
+    db, contactId: reg.contact_id, channel: 'email', module: 'race-confirmations', meta: { moveId }, unrecoverable: true,
+  })
+  if (!gate.allowed) { result.skipped.push(`email:${gate.reason}`); return result }
+
+  const team = reg.teams
+  const wave = reg.wave
+  const teamMembers = (team?.team_members || []).slice().sort((a, b) =>
+    (a.role === 'captain' ? 0 : 1) - (b.role === 'captain' ? 0 : 1) || (a.name || '').localeCompare(b.name || ''))
+  // Minted against the TARGET event (the entry's event now): the new tickets
+  // scan at the new event and the old ones are refused at the old one.
+  const teamMembersWithQr = mintMemberQrs({ eventId: race.id || null, registrationId: reg.id, members: teamMembers })
+  const oldWhen = [fmtRaceDate(move.from_event?.race_date), waveText(move.from_wave)].filter(Boolean).join(' · ')
+  const captainFirstName = contact.first_name || (teamMembers[0]?.name || '').split(' ')[0] || ''
+  const currency = payment?.currency || 'EUR'
+  // A free entry has a completed €0 payment (race-payments.js), so no completed
+  // payment on a pending_payment entry means it is unpaid, not free. An
+  // unreadable payment proves nothing either way.
+  let amountLabel
+  if (payErr) amountLabel = 'See your original receipt'
+  else if (payment) amountLabel = payment.amount_cents > 0 ? fmtMoney(payment.amount_cents, currency) : 'Free entry'
+  else amountLabel = reg.status === 'pending_payment' ? 'Payment pending' : 'Free entry'
+
+  const ctx = {
+    raceName: race.name || 'UN1T Race',
+    raceDateLabel: fmtRaceDate(race.race_date),
+    waveLabel: waveText(wave),
+    waveRowLabel: timeRowLabel(race.kind),
+    isRace: isRaceKind(race.kind),
+    locationName: pickAudienceVenueName({ venueName: race.venue_name, eventLocation: race.locations }),
+    teamName: team?.name || '',
+    teamSize: team?.size || teamMembers.length || 1,
+    teamMembers: teamMembersWithQr,
+    captainFirstName,
+    amountLabel,
+    memberCount: payment?.member_count || 0,
+    nonMemberCount: payment?.non_member_count || 0,
+    memberFeeLabel: payment?.member_fee_cents != null ? fmtMoney(payment.member_fee_cents, currency) : null,
+    nonMemberFeeLabel: payment?.non_member_fee_cents != null ? fmtMoney(payment.non_member_fee_cents, currency) : null,
+    oldEventName: move.from_event?.name || '',
+    oldWhen,
+  }
+  const mergeContact = { first_name: contact.first_name || '', name: [contact.first_name, contact.last_name].filter(Boolean).join(' '), email: toEmail, phone: contact.phone || '' }
+  const extras = { event_name: ctx.raceName, team_name: ctx.teamName, when: ctx.waveLabel || ctx.raceDateLabel, location: ctx.locationName, old_event_name: ctx.oldEventName, old_when: ctx.oldWhen }
+
+  try {
+    const { subject, htmlBody } = await resolveEventEmail({ db, kind: 'moved', race, contact: mergeContact, extras, defaults: buildMovedDefaults(ctx) })
+    await sendTransactionalEmail({ to: toEmail, subject, htmlBody, contactId: reg.contact_id || null, locationId: commsLocationId, tag: 'event-moved' })
+  } catch (e) {
+    result.failed.push(`email:${e?.message || 'failed'}`)
+    logError('race-confirmations', 'moved email failed to send; the entrant has no new tickets', { err: e, registrationId, moveId })
+    return result
+  }
+  result.sent.push('email')
+
+  // Stamp after the send (see stampSendOnce). Zero rows = a concurrent send already stamped it.
+  const { data: stamped, error: stampErr } = await db
+    .from('registration_moves')
+    .update({ notified_at: new Date().toISOString() })
+    .eq('id', moveId)
+    .is('notified_at', null)
+    .select('id')
+  if (stampErr) {
+    result.failed.push(`email:stamp_failed:${stampErr.message}`)
+    logError('race-confirmations', 'moved email sent but notified_at was NOT written', { err: stampErr, registrationId, moveId })
+  } else if (!Array.isArray(stamped) || stamped.length === 0) {
+    result.failed.push('email:duplicate_send')
+    logError('race-confirmations', 'a concurrent invocation had already stamped this move; the entrant received a DUPLICATE moved email', { registrationId, moveId })
+  }
+  return result
 }
 
 function escapeHtml(s) {

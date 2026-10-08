@@ -70,3 +70,11 @@ describe('events UpdateSchema sending_location_id', () => {
     expect(() => UpdateSchema.parse({ sending_location_id: 'nope' })).toThrow()
   })
 })
+
+describe('events UpdateSchema — EVENT-MOVE.1 moved-email copy', () => {
+  it('accepts, clears and bounds the two fields', () => {
+    expect(UpdateSchema.parse({ moved_email_subject: 'New date for {{event_name}}' }).moved_email_subject).toContain('event_name')
+    expect(UpdateSchema.parse({ moved_email_intro: null }).moved_email_intro).toBeNull()
+    expect(() => UpdateSchema.parse({ moved_email_intro: 'y'.repeat(4001) })).toThrow()
+  })
+})

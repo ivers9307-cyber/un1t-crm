@@ -420,6 +420,13 @@ const config = [
       'src/app/api/admin/tv-displays/[[]id]/**',
       'src/app/api/admin/tv-templates/**',
       'src/lib/tv-admin.js',
+      // EVENT-MOVE.1 — the entry move: born clean; the move is one SQL
+      // function and every after-effect write reads its error.
+      'src/lib/registration-move.js',
+      // EVENT-MOVE.1 — the orders projection: an existing order keeps its
+      // studio, and the retry-recovery writes now read their error (logged,
+      // never thrown: they run after a committed payment).
+      'src/lib/orders.js',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },

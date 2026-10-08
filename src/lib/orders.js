@@ -16,6 +16,8 @@
 // them via retry_of_order_id (forward) + superseded_by_order_id
 // (backward, also flips the older row to status='recovered').
 
+import { logError } from './log'
+
 const RETRY_WINDOW_DAYS = 7
 
 /**
@@ -31,10 +33,28 @@ export async function syncOrderFromRacePayment({ db, payment }) {
   if (!payment) throw new Error('syncOrderFromRacePayment: payment is required')
   if (!payment.id) throw new Error('syncOrderFromRacePayment: payment.id is required')
 
-  // Resolve location_id + organization_id via the parent race.
-  let locationId = payment.location_id || null
-  let organizationId = null
+  // An EXISTING order keeps its studio and organisation: the money was
+  // taken there, and an entry moved to another studio's event (EVENT-MOVE.1)
+  // re-points race_payments.race_event_id, which would otherwise re-home the
+  // order on its next status change. Only a missing row is a new order.
+  const { data: found, error: existingErr } = await db
+    .from('orders')
+    .select('id, location_id, organization_id')
+    .eq('source_type', 'race_registration')
+    .eq('source_id', payment.id)
+    .maybeSingle() // UNIQUE (source_type, source_id): at most one
+  if (existingErr) {
+    // Fall back to deriving from the event, as before EVENT-MOVE.1: a wrong
+    // studio on a rare moved order is the lesser harm next to a skipped
+    // ledger update (and the contact event callers emit in the same try).
+    logError('orders', 'existing-order lookup failed; deriving the studio from the event', { err: existingErr, paymentId: payment.id })
+  }
+  const existing = existingErr ? null : found
+
+  let locationId = existing?.location_id || payment.location_id || null
+  let organizationId = existing?.location_id ? (existing.organization_id || null) : null
   if (!locationId && payment.race_event_id) {
+    // Resolve location_id + organization_id via the parent race.
     const { data: race } = await db
       .from('race_events')
       .select('location_id, locations:location_id(organization_id)')
@@ -44,7 +64,9 @@ export async function syncOrderFromRacePayment({ db, payment }) {
       locationId = race.location_id
       organizationId = race.locations?.organization_id || null
     }
-  } else if (locationId) {
+  } else if (locationId && !organizationId) {
+    // A known studio (the existing order's own, or the payment's) with no
+    // organisation yet: read it from that studio, never from the event.
     const { data: loc } = await db
       .from('locations')
       .select('organization_id')
@@ -225,14 +247,20 @@ export async function detectRetryRecovery({ db, order }) {
   // Mark each candidate as recovered + point at the new order.
   // Use the most recent candidate as the "primary" recovery
   // for the forward-pointer on the new order (retry_of_order_id).
+  // Bookkeeping on an order that is already synced: a failed write is
+  // logged, never thrown (the callers run it after a committed payment).
   const ids = candidates.map((c) => c.id)
-  await db
+  const { error: markErr } = await db
     .from('orders')
     .update({
       status: 'recovered',
       superseded_by_order_id: order.id,
     })
     .in('id', ids)
+  if (markErr) {
+    logError('orders', 'retry recovery: marking earlier orders recovered failed', { err: markErr, orderId: order.id, candidateIds: ids })
+    return { recoveredCount: 0 }
+  }
 
   // Sort newest-first to pick the primary retry_of pointer.
   const { data: sorted } = await db
@@ -242,10 +270,11 @@ export async function detectRetryRecovery({ db, order }) {
     .order('created_at', { ascending: false })
   const primary = sorted?.[0]
   if (primary) {
-    await db
+    const { error: pointerErr } = await db
       .from('orders')
       .update({ retry_of_order_id: primary.id })
       .eq('id', order.id)
+    if (pointerErr) logError('orders', 'retry recovery: retry_of pointer write failed', { err: pointerErr, orderId: order.id, retryOf: primary.id })
   }
 
   return { recoveredCount: candidates.length }

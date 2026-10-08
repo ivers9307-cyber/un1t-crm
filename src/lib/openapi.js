@@ -737,6 +737,55 @@ registry.registerPath({
   },
 })
 
+// EVENT-MOVE.1 — staff move an event entry (a race_registrations row) to
+// another event, possibly at another studio. Money never moves.
+registry.registerPath({
+  method: 'get',
+  path: '/api/event-registrations/{id}/move-targets',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Events an entry may move to, with per-wave spots and the price gap (staff, manager+ with races at the source studio)',
+  description:
+    'Targets are the same payee, published and upcoming, and only at studios where the caller holds `races` and a manager role. ' +
+    'Shows capacity, so it is never public.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Entry, source and targets', content: { 'application/json': { schema: z.object({}).passthrough().openapi('EntryMoveTargets') } } },
+    403: { description: 'No races permission or manager role at the source studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (or at a studio the caller cannot see)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'load_failed: the entry or the events could not be read', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/event-registrations/{id}/move',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Move an entry to another event; never moves money (staff, manager+ with races at both studios)',
+  description:
+    'Every refusal carries `error` (the code) and `message` (plain English). ' +
+    '404 not_found, 409 wave_full (with `spots_left`; resend with `force: true`) or conflict, 500 load_failed / write_failed, 400 any other rule.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      target_event_id: uuidLike,
+      target_wave_id: uuidLike.nullable().optional(),
+      notify: z.boolean().optional().openapi({ description: 'Email the lead the new tickets (default true)' }),
+      note: z.string().max(1000).nullable().optional().openapi({ description: 'Internal note' }),
+      force: z.boolean().optional().openapi({ description: 'Skip the wave_full check (default false)' }),
+    }).openapi('EntryMoveRequest') } } },
+  },
+  responses: {
+    200: { description: 'Moved', content: { 'application/json': { schema: z.object({}).passthrough().openapi('EntryMoveResult') } } },
+    400: { description: 'A rule refused the move, or a bad body', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'No races permission or manager role at the source or target studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Entry or target event not found (or at a studio the caller cannot see)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'wave_full (resend with force) or conflict (the entry changed mid-move)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'load_failed or write_failed; nothing changed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // RACE-TAB.1 — the race-day tab probe. Sits alongside the public race
 // signup below because it is the other half of the same feature's HTTP
 // surface; everything else about races is authored on the web.

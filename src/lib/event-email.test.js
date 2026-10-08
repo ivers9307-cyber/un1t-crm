@@ -451,3 +451,19 @@ describe('event merge tags', () => {
     expect(applyEventMergeTagsHtml(undefined, contact, extras)).toBe(undefined)
   })
 })
+
+describe('event merge tags — EVENT-MOVE.1', () => {
+  const contact = { first_name: 'Aoife', name: 'Aoife Byrne', email: 'a@x.ie' }
+  it('fills old_event_name and old_when in plain text', () => {
+    const out = applyEventMergeTags('Moved from {{old_event_name}} ({{old_when}}) to {{event_name}}', contact,
+      { event_name: 'Oct 25', old_event_name: 'Oct 18', old_when: 'Saturday 18 October · 11:00' })
+    expect(out).toBe('Moved from Oct 18 (Saturday 18 October · 11:00) to Oct 25')
+  })
+  it('escapes them in HTML', () => {
+    const out = applyEventMergeTagsHtml('<p>{{old_event_name}}</p>', contact, { old_event_name: '<b>x</b>', old_when: '' })
+    expect(out).toBe('<p>&lt;b&gt;x&lt;/b&gt;</p>')
+  })
+  it('blank when absent', () => {
+    expect(applyEventMergeTags('[{{old_event_name}}]', contact, {})).toBe('[]')
+  })
+})

@@ -8,15 +8,23 @@
 // adjust without context-switching.
 
 import { useEffect, useState } from 'react'
-import { Plus, Trash2, Loader2, AlertCircle, Users, Check, X, Pencil, Star, BadgeCheck, Clock, Copy, Ban, Download } from 'lucide-react'
+import { Plus, Trash2, Loader2, AlertCircle, Users, Check, X, Pencil, Star, BadgeCheck, Clock, Copy, Ban, Download, ArrowRightCircle } from 'lucide-react'
+import MoveEntryDialog from './MoveEntryDialog'
 
 // GATES-2 — `canCancelEntries` (the page's MANAGER_ROLES-at-the-event's-studio
 // decision, the cancel route's rule) gates Cancel entry. Defaults closed.
-export default function RaceTeamsManager({ race, canCancelEntries = false }) {
+// EVENT-MOVE.1 — `canMoveEntries` gates Move to event the same way (the move
+// route's rule: races + MANAGER_ROLES at the studio). Defaults closed.
+// `currency` is the event's payment_currency, for the outstanding-gap chip.
+export default function RaceTeamsManager({ race, canCancelEntries = false, canMoveEntries = false, currency = 'EUR' }) {
   const [registrations, setRegistrations] = useState(null)
   const [loadError, setLoadError] = useState(null)
   const [showAddForm, setShowAddForm] = useState(false)
   const [actionError, setActionError] = useState(null)
+  // EVENT-MOVE.1 — a warning that is not a failure (a move that landed but
+  // could not be emailed). Amber, dismissable, separate from actionError.
+  const [actionNotice, setActionNotice] = useState(null)
+  const [movedOut, setMovedOut] = useState([])
 
   const waves = (race?.waves || []).slice().sort((a, b) =>
     (a.display_order ?? 0) - (b.display_order ?? 0) || (a.start_time || '').localeCompare(b.start_time || '')
@@ -31,6 +39,7 @@ export default function RaceTeamsManager({ race, canCancelEntries = false }) {
         return
       }
       setRegistrations(j.data || [])
+      setMovedOut(Array.isArray(j.moved_out) ? j.moved_out : [])
       setLoadError(null)
     } catch (e) {
       setLoadError(e.message || 'Network error')
@@ -60,6 +69,12 @@ export default function RaceTeamsManager({ race, canCancelEntries = false }) {
         <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-sm rounded-md p-3 inline-flex items-start gap-2">
           <AlertCircle size={14} className="mt-0.5 shrink-0" /> {actionError}
           <button onClick={() => setActionError(null)} className="ml-auto"><X size={12} /></button>
+        </div>
+      )}
+      {actionNotice && (
+        <div role="status" className="bg-amber-500/10 border border-amber-500/30 text-amber-700 text-sm rounded-md p-3 inline-flex items-start gap-2">
+          <AlertCircle size={14} className="mt-0.5 shrink-0" /> {actionNotice}
+          <button type="button" onClick={() => setActionNotice(null)} className="ml-auto" aria-label="Dismiss notice"><X size={12} /></button>
         </div>
       )}
 
@@ -114,12 +129,51 @@ export default function RaceTeamsManager({ race, canCancelEntries = false }) {
             waves={waves}
             onChanged={load}
             onError={setActionError}
+            onNotice={setActionNotice}
             canCancel={canCancelEntries}
+            canMove={canMoveEntries}
+            currency={currency}
           />
         ))}
       </div>
+
+      {movedOut.length > 0 && (
+        <details className="text-sm text-un1t-subtle">
+          <summary className="cursor-pointer select-none">
+            {/* Counts moves, not entries: an entry moved out, back and out again is two. */}
+            {movedOut.length} {movedOut.length === 1 ? 'move' : 'moves'} to other events
+          </summary>
+          <ul className="mt-2 space-y-1 pl-4">
+            {movedOut.map((m) => (
+              <li key={m.id}>
+                {m.label} → {m.to_event?.name || 'another event'}{m.to_event?.race_date ? ` (${shortRaceDate(m.to_event.race_date)})` : ''} · {new Date(m.created_at).toLocaleDateString('en-IE')} · {actorOf(m)}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
     </div>
   )
+}
+
+// EVENT-MOVE.1 — who made a move, for the chip and footer. A blank name
+// (an actor with no profile name) reads "staff", never an empty gap.
+function actorOf(move) {
+  const name = typeof move?.actor_name === 'string' ? move.actor_name.trim() : ''
+  return name || 'staff'
+}
+
+// Cents in the event's currency (same rendering as MoveEntryDialog).
+function money(cents, currency = 'EUR') {
+  const major = (Math.abs(cents) / 100).toFixed(2)
+  return currency === 'EUR' ? `€${major}` : currency === 'GBP' ? `£${major}` : `${major} ${currency}`
+}
+
+// A race_date ('YYYY-MM-DD') as "1 Nov". Read at noon so no timezone can tip
+// it onto the day before.
+function shortRaceDate(d) {
+  const at = new Date(`${String(d).slice(0, 10)}T12:00:00`)
+  return Number.isNaN(at.getTime()) ? String(d) : at.toLocaleDateString('en-IE', { day: 'numeric', month: 'short' })
 }
 
 // ─── Add team form ───────────────────────────────────────────────
@@ -259,7 +313,7 @@ function AddTeamForm({ race, waves, onCancel, onAdded, onError }) {
 
 // ─── One-team card ───────────────────────────────────────────────
 
-function TeamCard({ registration, waves, onChanged, onError, canCancel = false }) {
+function TeamCard({ registration, waves, onChanged, onError, onNotice, canCancel = false, canMove = false, currency = 'EUR' }) {
   const team = registration.teams
   const wave = registration.wave
   const members = (team?.team_members || []).slice().sort((a, b) =>
@@ -268,6 +322,7 @@ function TeamCard({ registration, waves, onChanged, onError, canCancel = false }
   const [showAddMember, setShowAddMember] = useState(false)
   const [busy, setBusy] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [moving, setMoving] = useState(false)
 
   async function moveWave(newWaveId) {
     if (newWaveId === registration.wave_id) return
@@ -354,6 +409,27 @@ function TeamCard({ registration, waves, onChanged, onError, canCancel = false }
               <BadgeCheck size={10} /> Members
             </span>
           )}
+          {registration.last_move && (
+            <span
+              className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-sky-500/10 text-sky-700 inline-flex items-center gap-1"
+              title={`Moved from ${registration.last_move.from_event?.name || 'another event'} by ${actorOf(registration.last_move)} on ${new Date(registration.last_move.created_at).toLocaleDateString('en-IE')}${registration.last_move.forced ? ' (wave was full)' : ''}`}
+            >
+              <ArrowRightCircle size={10} /> Moved from {registration.last_move.from_event?.name || 'another event'}
+            </span>
+          )}
+          {registration.last_move && registration.last_move.notified_at === null && (
+            <span
+              className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-amber-500/10 text-amber-700"
+              title="The customer was not emailed about this move. Tell them yourself."
+            >
+              Not emailed
+            </span>
+          )}
+          {registration.last_move?.price_gap_cents > 0 && (
+            <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-amber-500/10 text-amber-700">
+              {money(registration.last_move.price_gap_cents, currency)} difference outstanding
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <select
@@ -379,6 +455,17 @@ function TeamCard({ registration, waves, onChanged, onError, canCancel = false }
               title="Copy the payment link to send to the customer"
             >
               <Copy size={11} /> {copied ? 'Copied!' : 'Payment link'}
+            </button>
+          )}
+          {canMove && (registration.status === 'confirmed' || registration.status === 'pending_payment') && (
+            <button
+              type="button"
+              onClick={() => setMoving(true)}
+              disabled={busy}
+              className="text-[11px] text-un1t-accent hover:underline inline-flex items-center gap-1 disabled:opacity-40"
+              title="Move this entry to another event"
+            >
+              <ArrowRightCircle size={11} /> Move to event
             </button>
           )}
           {registration.status === 'cancelled' ? (
@@ -435,6 +522,16 @@ function TeamCard({ registration, waves, onChanged, onError, canCancel = false }
           </button>
         )}
       </div>
+
+      {moving && (
+        <MoveEntryDialog
+          open
+          registration={registration}
+          onClose={() => setMoving(false)}
+          onMoved={() => { setMoving(false); onChanged() }}
+          onNotice={onNotice}
+        />
+      )}
     </div>
   )
 }

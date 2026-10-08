@@ -47,6 +47,8 @@ export const CLOSED_FUNCTIONS = [
     why: 'AVAIL.3 data move: deletes and splits time_off_requests rows; an operator runs it as postgres' },
   { fn: 'public.restore_moved_unavailable_time_off', args: '(uuid)', closedBy: 703,
     why: 'AVAIL.3 rollback: re-inserts time_off_requests rows and deletes availability rules; operator only' },
+  { fn: 'public.move_race_registration', args: '(uuid, uuid, uuid, uuid, int, int, boolean, text, uuid, text, text)', closedBy: 708,
+    why: 'EVENT-MOVE.1: re-points any event entry (and its payment) to another event and clones its team; the staff/host routes judge every rule first' },
 ]
 
 /** The client roles a closed function is closed to. */
