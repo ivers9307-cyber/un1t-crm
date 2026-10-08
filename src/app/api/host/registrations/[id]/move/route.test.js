@@ -24,8 +24,10 @@ const BODY = { target_event_id: E2, target_wave_id: W9 }
 
 // The route reads the host's own event ids once: `from('race_events').select('id').eq('host_id', H1)`.
 function dbWith({ ownEvents = [E1, E2], eventsError = null } = {}) {
-  const b = { select: () => b, eq: () => b, then: (res, rej) => Promise.resolve({ data: eventsError ? null : ownEvents.map((id) => ({ id })), error: eventsError }).then(res, rej) }
-  return { from: vi.fn(() => b) }
+  const calls = []
+  const b = { then: (res, rej) => Promise.resolve({ data: eventsError ? null : ownEvents.map((id) => ({ id })), error: eventsError }).then(res, rej) }
+  for (const name of ['select', 'eq', 'gte']) b[name] = (...a) => { calls.push([name, ...a]); return b }
+  return { calls, from: vi.fn(() => b) }
 }
 
 beforeEach(() => {
@@ -39,6 +41,7 @@ describe('POST /api/host/registrations/[id]/move', () => {
   it('401 without a host session', async () => {
     mocks.getCurrentHost.mockResolvedValue(null)
     expect((await POST(post(BODY), props)).status).toBe(401)
+    expect(mocks.readRegistrationForMove).not.toHaveBeenCalled()
     expect(mocks.moveRegistration).not.toHaveBeenCalled()
   })
   it('404 for an entry on another host\'s event', async () => {
@@ -81,8 +84,15 @@ describe('POST /api/host/registrations/[id]/move', () => {
   })
   it('passes the own-event fence, the host actor and expectedSourceEventId to the lib', async () => {
     mocks.getCurrentHost.mockResolvedValue(session())
+    const db = dbWith()
+    mocks.createServerClient.mockReturnValue(db)
     const res = await POST(post({ ...BODY, force: true, note: ' moved by host ' }), props)
     expect(res.status).toBe(200)
+    expect(db.from).toHaveBeenCalledWith('race_events')
+    expect(db.calls).toContainEqual(['eq', 'host_id', H1])
+    expect(db.calls).toContainEqual(['eq', 'active', true])
+    expect(db.calls).toContainEqual(['eq', 'status', 'published'])
+    expect(db.calls.some((c) => c[0] === 'gte' && c[1] === 'race_date' && /^\d{4}-\d{2}-\d{2}$/.test(c[2]))).toBe(true)
     expect(await res.json()).toMatchObject({ success: true, data: { notified: true } })
     const args = mocks.moveRegistration.mock.calls[0][1]
     expect(args).toMatchObject({ registrationId: R1, targetEventId: E2, targetWaveId: W9, force: true, notify: true, note: 'moved by host', expectedSourceEventId: E1, actor: { type: 'host', id: H1, name: 'Pride Training Club' } })

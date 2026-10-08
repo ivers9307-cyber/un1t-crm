@@ -10,6 +10,7 @@ import { createServerClient } from './supabase'
 import { uuidLike } from './schemas'
 import { readRegistrationForMove, MOVE_ERRORS, MOVE_ERROR_MESSAGES } from './registration-move'
 import { logError } from './log'
+import { dublinTodayStr } from './dublin-time'
 
 const OWN_EVENTS_LOAD_FAILED_MESSAGE = 'Your events could not be read. Try again.'
 
@@ -48,8 +49,19 @@ export async function resolveHostMoveContext(session, registrationId) {
     return { response: notFound() }
   }
 
-  // A host's own events are a handful, far under the 1,000-row cap.
-  const { data: events, error: evErr } = await db.from('race_events').select('id').eq('host_id', session.host.id)
+  // The TARGET fence: the host's own events a move could land on (active,
+  // published, today or later; anything else fails target_unavailable in the
+  // lib anyway), which keeps a prolific host under the 1,000-row cap. It
+  // never judges the SOURCE: the entry's own event may be past or
+  // unpublished, and is fenced by host_id above; the lib applies
+  // allowedEventIds to the target only.
+  const { data: events, error: evErr } = await db
+    .from('race_events')
+    .select('id')
+    .eq('host_id', session.host.id)
+    .eq('active', true)
+    .eq('status', 'published')
+    .gte('race_date', dublinTodayStr())
   if (evErr) {
     logError('host-move', 'own events read failed', { err: evErr, hostId: session.host.id, registrationId })
     return { response: json(500, { success: false, error: MOVE_ERRORS.LOAD_FAILED, message: OWN_EVENTS_LOAD_FAILED_MESSAGE }) }

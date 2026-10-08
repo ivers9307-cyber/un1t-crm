@@ -21,7 +21,8 @@ const get = () => new Request(`http://localhost/api/host/registrations/${R1}/mov
 
 function dbWith({ ownEvents = [E1, E2], eventsError = null } = {}) {
   const calls = []
-  const b = { select: (...a) => { calls.push(['select', ...a]); return b }, eq: (...a) => { calls.push(['eq', ...a]); return b }, then: (res, rej) => Promise.resolve({ data: eventsError ? null : ownEvents.map((id) => ({ id })), error: eventsError }).then(res, rej) }
+  const b = { then: (res, rej) => Promise.resolve({ data: eventsError ? null : ownEvents.map((id) => ({ id })), error: eventsError }).then(res, rej) }
+  for (const name of ['select', 'eq', 'gte']) b[name] = (...a) => { calls.push([name, ...a]); return b }
   return { calls, from: vi.fn(() => b) }
 }
 
@@ -68,7 +69,11 @@ describe('GET /api/host/registrations/[id]/move-targets', () => {
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ success: true, data: { entry: { id: R1 }, source: { id: E1 }, targets: [{ id: E2 }] } })
     expect(db.from).toHaveBeenCalledWith('race_events')
+    expect(db.calls).toContainEqual(['select', 'id'])
     expect(db.calls).toContainEqual(['eq', 'host_id', H1])
+    expect(db.calls).toContainEqual(['eq', 'active', true])
+    expect(db.calls).toContainEqual(['eq', 'status', 'published'])
+    expect(db.calls.some((c) => c[0] === 'gte' && c[1] === 'race_date' && /^\d{4}-\d{2}-\d{2}$/.test(c[2]))).toBe(true)
     const args = mocks.listMoveTargets.mock.calls[0][1]
     expect(args.registrationId).toBe(R1)
     expect(args.allowedLocationIds).toBeNull()
