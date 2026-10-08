@@ -194,7 +194,7 @@ function fakeDb(answers, { rpc } = {}) {
         return Promise.resolve(v ?? { data: null, error: null })
       }
       const b = {}
-      for (const name of ['select', 'eq', 'neq', 'in', 'gte', 'order', 'limit', 'is', 'update', 'insert', 'not']) {
+      for (const name of ['select', 'eq', 'neq', 'in', 'gte', 'order', 'limit', 'range', 'is', 'update', 'insert', 'not']) {
         b[name] = (...args) => { q.ops.push([name, ...args]); return b }
       }
       b.maybeSingle = () => answer()
@@ -269,6 +269,49 @@ describe('listMoveTargets', () => {
     const r = await listMoveTargets(fakeDb({ race_registrations: { data: null } }), { registrationId: 'nope' })
     expect(r).toEqual({ ok: false, error: 'not_found' })
   })
+  it('reads every wave of every eligible event in ONE query, grouped by wave', async () => {
+    const twoWaves = { ...TARGET, waves: [...TARGET.waves, { id: 'w8', race_event_id: 'e2', start_time: '09:00:00', label: null, capacity: 5 }] }
+    const other = { ...TARGET, id: 'e5', waves: [{ id: 'w7', race_event_id: 'e5', start_time: '10:00:00', label: null, capacity: 3 }] }
+    const rows = [
+      { id: 'a', status: 'confirmed', wave_id: 'w9', team: { size: 2 } },
+      { id: 'b', status: 'confirmed', wave_id: 'w9', team: { size: 1 } },
+      { id: 'c', status: 'confirmed', wave_id: 'w7', team: { size: 1 } },
+      { id: 'd', status: 'pending_payment', wave_id: 'w8', team: { size: 1 } },
+    ]
+    const db = fakeDb({
+      race_registrations: (q) => (q.ops.some((o) => o[0] === 'eq' && o[1] === 'id') ? { data: REG } : { data: rows }),
+      race_events: { data: [twoWaves, other] },
+    })
+    const r = await listMoveTargets(db, { registrationId: 'r1', today: '2026-10-08' })
+    const spots = Object.fromEntries(r.targets.flatMap((t) => t.waves.map((w) => [w.id, w.spots_left])))
+    expect(spots).toEqual({ w9: 8, w8: 5, w7: 2 }) // pending_payment does not take a spot
+    const waveQueries = db.calls.filter((c) => c.table === 'race_registrations' && c.ops.some((o) => o[0] === 'in' && o[1] === 'wave_id'))
+    expect(waveQueries).toHaveLength(1)
+    expect(waveQueries[0].ops.find((o) => o[0] === 'in' && o[1] === 'wave_id')[2].sort()).toEqual(['w7', 'w8', 'w9'])
+    expect(waveQueries[0].ops).toContainEqual(['order', 'id'])
+  })
+  it('pages the wave read 1000 rows at a time', async () => {
+    const page = (from, n) => Array.from({ length: n }, (_, i) => ({ id: `x${from + i}`, status: 'confirmed', wave_id: 'w9', team: { size: 1 } }))
+    const db = fakeDb({
+      race_registrations: (q) => {
+        if (q.ops.some((o) => o[0] === 'eq' && o[1] === 'id')) return { data: REG }
+        const range = q.ops.find((o) => o[0] === 'range')
+        return { data: range[1] === 0 ? page(0, 1000) : page(1000, 3) }
+      },
+      race_events: { data: [{ ...TARGET, waves: [{ ...TARGET.waves[0], capacity: 2000 }] }] },
+    })
+    const r = await listMoveTargets(db, { registrationId: 'r1', today: '2026-10-08' })
+    expect(r.targets[0].waves[0].spots_left).toBe(2000 - 1003)
+    const ranges = db.calls.filter((c) => c.ops.some((o) => o[0] === 'range')).map((c) => c.ops.find((o) => o[0] === 'range').slice(1))
+    expect(ranges).toEqual([[0, 999], [1000, 1999]])
+  })
+  it('load_failed when the wave read fails, never a wave that looks empty', async () => {
+    const db = fakeDb({
+      race_registrations: (q) => (q.ops.some((o) => o[0] === 'eq' && o[1] === 'id') ? { data: REG } : { data: null, error: { message: 'timeout' } }),
+      race_events: { data: [TARGET] },
+    })
+    expect(await listMoveTargets(db, { registrationId: 'r1', today: '2026-10-08' })).toEqual({ ok: false, error: 'load_failed' })
+  })
   it('load_failed when the entry cannot be read', async () => {
     const r = await listMoveTargets(fakeDb({ race_registrations: { data: null, error: { message: 'timeout' } } }), { registrationId: 'r1' })
     expect(r).toEqual({ ok: false, error: 'load_failed' })
@@ -298,7 +341,7 @@ describe('moveRegistration', () => {
       race_registrations: (q) => {
         if (q.ops.some((o) => o[0] === 'eq' && o[1] === 'id')) return over.regAnswer ?? { data: over.reg ?? REG }
         if (q.ops.some((o) => o[0] === 'eq' && o[1] === 'team_id')) return { data: over.existingOnTarget ?? null }
-        return { data: over.waveRegs ?? [] }
+        return over.waveAnswer ?? { data: over.waveRegs ?? [] }
       },
       race_events: over.targetAnswer ?? { data: over.target ?? TARGET },
       race_checkins: { data: null, count: over.checkins ?? 0, error: null },
@@ -353,6 +396,11 @@ describe('moveRegistration', () => {
     expect(await moveRegistration(b.db, { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9', actor })).toEqual({ ok: false, error: 'load_failed' })
     expect(a.rpc).not.toHaveBeenCalled()
     expect(b.rpc).not.toHaveBeenCalled()
+  })
+  it('load_failed when the target wave cannot be read, before any write', async () => {
+    const { db, rpc } = happyDb({ waveAnswer: { data: null, error: { message: 'timeout' } } })
+    expect(await moveRegistration(db, { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9', actor })).toEqual({ ok: false, error: 'load_failed' })
+    expect(rpc).not.toHaveBeenCalled()
   })
   it('target_unavailable when the target is missing or cannot be read', async () => {
     for (const targetAnswer of [{ data: null }, { data: null, error: { message: 'timeout' } }]) {

@@ -150,18 +150,42 @@ async function loadEvent(db, eventId) {
   return data || null
 }
 
-/** Live rows in a wave, shaped for event-signups' counters. */
-async function loadWaveRegistrations(db, waveId) {
-  const { data, error } = await db
-    .from('race_registrations')
-    .select('id, status, team:teams!team_id ( size )')
-    .eq('wave_id', waveId)
-    .in('status', ['confirmed', 'pending_payment'])
-  if (error) {
-    logError('registration-move', 'wave load failed', { err: error, waveId })
-    return []
+const WAVE_PAGE = 1000
+
+/**
+ * Live rows in the given waves, shaped for event-signups' counters, in ONE
+ * query paged past the 1,000-row cap. { rows, error }: on a failed read the
+ * caller refuses (load_failed); an empty-looking wave would pass a full one.
+ */
+async function loadWaveRegistrations(db, waveIds) {
+  const ids = [...new Set((waveIds || []).filter(Boolean))]
+  if (ids.length === 0) return { rows: [], error: null }
+  const rows = []
+  for (let from = 0; ; from += WAVE_PAGE) {
+    const { data, error } = await db
+      .from('race_registrations')
+      .select('id, status, wave_id, team:teams!team_id ( size )')
+      .in('wave_id', ids)
+      .in('status', ['confirmed', 'pending_payment'])
+      .order('id')
+      .range(from, from + WAVE_PAGE - 1)
+    if (error) {
+      logError('registration-move', 'wave load failed', { err: error, waveCount: ids.length })
+      return { rows: null, error }
+    }
+    rows.push(...(data || []))
+    if (!data || data.length < WAVE_PAGE) break
   }
-  return data || []
+  return { rows, error: null }
+}
+
+function groupByWave(rows) {
+  const byWave = new Map()
+  for (const r of rows || []) {
+    if (!byWave.has(r.wave_id)) byWave.set(r.wave_id, [])
+    byWave.get(r.wave_id).push(r)
+  }
+  return byWave
 }
 
 async function countCheckins(db, registrationId) {
@@ -249,18 +273,25 @@ export async function listMoveTargets(db, { registrationId, allowedEventIds = nu
 
   const members = membersOf(registration)
   const headcount = entryHeadcount(registration)
+  const eligible = (events || []).filter((ev) => {
+    if (ev.id === source?.id) return false
+    if (!samePayee(source, ev)) return false
+    if (allowedEventIds && !allowedEventIds.has(ev.id)) return false
+    if (Array.isArray(allowedLocationIds) && !allowedLocationIds.includes(ev.location_id)) return false
+    return true
+  })
+
+  const { rows: waveRows, error: waveErr } = await loadWaveRegistrations(db, eligible.flatMap((ev) => (ev.waves || []).map((w) => w.id)))
+  if (waveErr) return { ok: false, error: MOVE_ERRORS.LOAD_FAILED }
+  const byWave = groupByWave(waveRows)
+
   const targets = []
-  for (const ev of events || []) {
-    if (ev.id === source?.id) continue
-    if (!samePayee(source, ev)) continue
-    if (allowedEventIds && !allowedEventIds.has(ev.id)) continue
-    if (Array.isArray(allowedLocationIds) && !allowedLocationIds.includes(ev.location_id)) continue
+  for (const ev of eligible) {
     const mode = ev.capacity_mode === 'people' ? 'people' : 'teams'
-    const waves = []
-    for (const w of sortWaves(ev.waves)) {
-      const regs = await loadWaveRegistrations(db, w.id)
-      waves.push({ id: w.id, start_time: w.start_time, label: w.label, capacity: w.capacity, spots_left: spotsLeft(w.capacity, regs, mode) })
-    }
+    const waves = sortWaves(ev.waves).map((w) => ({
+      id: w.id, start_time: w.start_time, label: w.label, capacity: w.capacity,
+      spots_left: spotsLeft(w.capacity, byWave.get(w.id) || [], mode),
+    }))
     targets.push({
       id: ev.id, name: ev.name, race_date: ev.race_date, kind: ev.kind,
       location_id: ev.location_id, location_name: ev.locations?.name || '',
@@ -307,11 +338,14 @@ export async function moveRegistration(db, {
   if (!targetEvent) return { ok: false, error: MOVE_ERRORS.TARGET_UNAVAILABLE }
   const targetWave = targetWaveId ? (targetEvent.waves || []).find((w) => w.id === targetWaveId) || { id: targetWaveId, race_event_id: null } : null
 
-  const [targetWaveRegistrations, checkinCount, existingOnTarget] = await Promise.all([
-    targetWave?.race_event_id ? loadWaveRegistrations(db, targetWave.id) : Promise.resolve([]),
+  const [waveRead, checkinCount, existingOnTarget] = await Promise.all([
+    targetWave?.race_event_id ? loadWaveRegistrations(db, [targetWave.id]) : Promise.resolve({ rows: [], error: null }),
     countCheckins(db, registrationId),
     findExistingOnTarget(db, { teamId: registration.team_id, targetEventId, registrationId }),
   ])
+  if (waveRead.error) return { ok: false, error: MOVE_ERRORS.LOAD_FAILED }
+  // One wave was asked for, so every row is that wave's.
+  const targetWaveRegistrations = waveRead.rows
 
   const verdict = evaluateMove({
     registration, sourceEvent: registration.race, targetEvent, targetWave,
