@@ -37,8 +37,10 @@ tool tells the customer that a different event means cancel plus rebook.
   entry has a team of two or more, otherwise the lead person's name. One helper,
   `entryLabel(registration)`, owns this.
 - **Headcount** — the number of people on the entry. Derived from
-  `team_members` today; for a future team-less entry it is 1. One helper,
-  `entryHeadcount(registration)`, owns this. Never read `teams.size` directly.
+  `team_members` today, falling back to `teams.size` when the roster is not
+  loaded; for a future team-less entry it is 1. One helper,
+  `entryHeadcount(registration)`, owns this and is the only place that may
+  read `teams.size`.
 - **Lead contact** — `race_registrations.contact_id`. The person who booked and
   who receives the email. Called "captain" only inside team UI.
 - **Payee** — who the money went to: `race_events.host_id` (NULL = UN1T on
@@ -54,7 +56,7 @@ error code so the dialog can say exactly why.
 |---|---|---|
 | `not_found` | Source entry exists | |
 | `not_active` | Source status is `confirmed` or `pending_payment` | Cancelled and no-show entries are history. |
-| `checked_in` | No `race_checkins` row for the source entry | The customer already attended. |
+| `checked_in` | No `race_checkins` row for the source entry, and `race_started_at` / `race_finished_at` are both null | The customer already attended or raced; results and penalties must not follow an entry to another event. |
 | `same_event` | Target event differs from the source event | Wave changes use the existing wave select. |
 | `target_unavailable` | Target is `active`, `status = 'published'` and its date is today or later | Never move someone onto a draft or a past event. |
 | `different_payee` | Target `host_id` equals source `host_id` (NULL equals NULL) | UN1T and each host are different merchants. Money cannot follow across them. |
@@ -63,7 +65,8 @@ error code so the dialog can say exactly why.
 | `wave_required` | A target wave is given when the target has waves | |
 | `wrong_event` | The target wave belongs to the target event | |
 | `wave_full` | The target wave has room for the entry's headcount, using the target's `capacity_mode` and the existing `event-signups.js` helpers, **unless `force` is true** | Same arithmetic the public register route uses: it counts **confirmed** entries only, so an entry awaiting payment holds no spot (a pre-existing property of `computeSignupCounts`, kept for consistency). The refusal carries `spots_left` so the dialog can say how full it is. |
-| `load_failed` / `write_failed` | The entry could be read / the SQL function succeeded | Database errors are named, never folded into `not_found`. A missing or unreadable target is `target_unavailable`. |
+| `load_failed` / `write_failed` | The entry and the target waves could be read / the SQL function succeeded | Database errors are named, never folded into `not_found`, and a failed wave read **fails closed** (no move, "try again"). A missing or unreadable target is `target_unavailable`. |
+| `conflict` | Under the row lock, the SQL function re-checks that the source event is the one the caller judged, the status is still live, nobody has checked in or raced, and the wave belongs to the target | Two staff moving the same entry at once, or a check-in landing between the JS checks and the write, must not produce a bogus history row or a second email. |
 
 A move across studios is allowed. The caller must hold the `races` permission
 and a manager role at **both** studios (the staff route checks both; the host
@@ -127,10 +130,12 @@ Supabase JS has no transactions, so the writes run inside one Postgres function
 called through `db.rpc(...)`. It is created in the migration (so
 `check:rpc-names` can see it) with
 `REVOKE EXECUTE ... FROM PUBLIC, anon, authenticated`; only the service role
-calls it. It performs only the writes; every eligibility
-check above runs in JS first, where it is readable and unit-tested. The
-function still relies on the existing unique constraint as a last line of
-defence and raises if it fires.
+calls it. Every eligibility check above runs in JS first, where it is
+readable and unit-tested; the function takes `p_from_event_id` (the source
+the caller judged) and, under `SELECT ... FOR UPDATE`, re-checks the cheap
+invariants (source unchanged, status live, not checked in or raced, wave on
+the target) and raises `conflict` if any moved underneath. The existing
+unique constraint remains the last line of defence.
 
 Writes, in order:
 
@@ -152,8 +157,18 @@ Writes, in order:
    that took the money. On a cross-studio move that stays as it is on
    purpose: the money landed under the source studio's books, so the order
    record stays there while the entry and its payment follow the move.
+   `syncOrderFromRacePayment` therefore keeps an EXISTING order's
+   `location_id` and `organization_id` on every later upsert (it used to
+   re-derive them from the payment's event each time, which would have
+   silently re-homed the order at the next status change). **Open for
+   Richard:** whether a cross-studio move should instead carry the order to
+   the target studio's books.
 3. `event_reminder_sends` where `registration_id = $reg`: delete, so the 3-day
-   and 1-day reminders fire again for the new date.
+   and 1-day reminders fire again for the new date. For the same reason delete
+   the `race.starts_in_24h` / `race.starts_in_1h` rows in `contact_events` for
+   this registration (they are keyed per registration by
+   `uq_contact_events_time_anchored`), so the timing cron can emit them for
+   the new date.
 4. `registration_moves`: insert the history row. Return it.
 
 Nothing is written to `race_checkins`, `race_penalties` or `promo_codes`;
@@ -196,7 +211,8 @@ Also exported:
   → the eligible target events (same payee, published, upcoming, not the
   source; at any studio in `allowedLocationIds`, null meaning every studio)
   each with its waves and `spots_left` per wave in the target's capacity
-  unit, plus the studio name so the picker can show it. Used by both dialogs. Staff and hosts are operators, so spots
+  unit, plus the studio name so the picker can show it. Events whose
+  `allowed_team_sizes` exclude the entry's headcount are left out. Used by both dialogs. Staff and hosts are operators, so spots
   are shown to them; this endpoint is never public.
 - `entryLabel(registration)`, `entryHeadcount(registration)` and the error
   tables live in `src/lib/registration-entry.js`, the browser-safe half (no
@@ -299,8 +315,8 @@ the entry, instead of "cancel and rebook".
   location), schema rejection, error-code mapping, happy path calls the lib
   with the actor from the session.
 - `check:select-columns` covers the new selects.
-- Migration: applied by Claude through the Supabase MCP after the PR merges,
-  forward-only. The SQL function is exercised once against a real entry on a
+- Migration: applied by Claude through the Supabase MCP BEFORE the PR merges
+  (the code selects the new columns), forward-only, then `get_advisors`. The SQL function is exercised once against a real entry on a
   Vercel preview after apply, and the resulting rows checked by hand.
 - Host PR adds the host auth matrix and the `allowedEventIds` fence test.
 
