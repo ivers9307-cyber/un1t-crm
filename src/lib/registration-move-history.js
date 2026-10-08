@@ -22,7 +22,7 @@ export async function loadMoveHistory(db, { eventId, regIds }) {
     try {
       const { data: movesIn, error: movesInErr } = await db
         .from('registration_moves')
-        .select('id, registration_id, created_at, actor_name, price_gap_cents, forced, notified_at, from_event:from_event_id ( id, name, race_date )')
+        .select('id, registration_id, created_at, actor_name, price_gap_cents, forced, notified_at, gap_settled_at, gap_settled_how, gap_settled_by_name, from_event:from_event_id ( id, name, race_date )')
         // Filtered on the event alone: an .in() over every entry id grows the
         // URL with the event and can outrun the request-line limit on a big one.
         // The 1,000-row cap is per event and the read is newest first, so only
