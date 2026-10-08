@@ -29,7 +29,7 @@ export async function loadMoveHistory(db, { eventId, regIds }) {
         // an event with over 1,000 moves in could lose its OLDEST chips.
         .eq('to_event_id', eventId)
         .order('created_at', { ascending: false })
-      if (movesInErr) logError('events-teams', 'moves-in read failed; chips omitted', { err: movesInErr, eventId })
+      if (movesInErr) logError('registration-move-history', 'moves-in read failed; chips omitted', { err: movesInErr, eventId })
       // Newest first, so the first row seen per entry is its latest move in.
       // A move in whose entry has since left this event is not on the list.
       const onList = new Set(regIds)
@@ -37,7 +37,7 @@ export async function loadMoveHistory(db, { eventId, regIds }) {
         if (onList.has(m.registration_id) && !lastMoveByReg[m.registration_id]) lastMoveByReg[m.registration_id] = m
       }
     } catch (err) {
-      logError('events-teams', 'moves-in read threw; chips omitted', { err, eventId })
+      logError('registration-move-history', 'moves-in read threw; chips omitted', { err, eventId })
     }
   }
   try {
@@ -50,14 +50,14 @@ export async function loadMoveHistory(db, { eventId, regIds }) {
       .eq('from_event_id', eventId)
       .order('created_at', { ascending: false })
       .limit(200)
-    if (movesOutErr) logError('events-teams', 'moves-out read failed; footer omitted', { err: movesOutErr, eventId })
+    if (movesOutErr) logError('registration-move-history', 'moves-out read failed; footer omitted', { err: movesOutErr, eventId })
     movedOut = (movesOut || []).map((m) => ({
       id: m.id, created_at: m.created_at, actor_name: m.actor_name,
       label: entryLabel(m.registration || {}),
       to_event: m.to_event || null,
     }))
   } catch (err) {
-    logError('events-teams', 'moves-out read threw; footer omitted', { err, eventId })
+    logError('registration-move-history', 'moves-out read threw; footer omitted', { err, eventId })
     movedOut = []
   }
   return { lastMoveByReg, movedOut }
