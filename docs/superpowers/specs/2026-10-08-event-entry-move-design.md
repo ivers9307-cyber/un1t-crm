@@ -42,7 +42,15 @@ tool tells the customer that a different event means cancel plus rebook.
   `entryHeadcount(registration)`, owns this and is the only place that may
   read `teams.size`.
 - **Lead contact** — `race_registrations.contact_id`. The person who booked and
-  who receives the email. Called "captain" only inside team UI.
+  who receives the email. Called "captain" only inside team UI. The address
+  used for the email and the contact event is one rule, `entryLeadEmail`:
+  the lead contact's email, else the captain's, else the first member with
+  one, else the completed payment's `contact_email`; none at all is logged
+  at error level and the move still stands.
+- **Not emailed** — a move whose email failed or was skipped leaves
+  `registration_moves.notified_at` null; the move route returns
+  `notified: false` and the teams page chip says "not emailed" so staff can
+  tell the customer themselves.
 - **Payee** — who the money went to: `race_events.host_id` (NULL = UN1T on
   Revolut). Two events share a payee when their `host_id` values are equal,
   treating NULL as equal to NULL.
