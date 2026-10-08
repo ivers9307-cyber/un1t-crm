@@ -108,9 +108,10 @@ const EVENT_COLUMNS = `
  * The entry with its lead contact, team, roster and source event.
  * { registration, error }: error is set only when the read FAILED, so the
  * caller can tell "no such entry" (not_found) from "could not read it"
- * (load_failed).
+ * (load_failed). Exported for the move routes' own access lookup, so a
+ * failed read answers 500 there rather than a 404 that hides an outage.
  */
-async function readRegistrationForMove(db, registrationId) {
+export async function readRegistrationForMove(db, registrationId) {
   const { data, error } = await db
     .from('race_registrations')
     .select(`
