@@ -1,25 +1,23 @@
 // Host event detail (HOST-PORTAL.1) — the roster for ONE of the host's events,
 // plus an Export CSV button. Server-rendered + scoped: getCurrentHost() then
 // race.host_id === host.id (notFound() otherwise, so ids can't be enumerated).
-// Roster is read-only (attendee fetch shared with the CSV export via
-// attendee-export); a self-serve promo-codes section (HOST-PORTAL.9) sits below.
+// Roster: one row per entry (attendee fetch shared with the CSV export via
+// attendee-export), with a Move action per paid entry (EVENT-MOVE.2, the
+// HostAttendeeTable client component + the /api/host/registrations/[id]/move*
+// routes); a self-serve promo-codes section (HOST-PORTAL.9) sits below.
 // Header actions include take-off-sale / delete (HOST-PORTAL.10).
 
 import { notFound, redirect } from 'next/navigation'
 import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
 import { fetchEventAttendees } from '@/lib/attendee-export'
+import { loadMoveHistory } from '@/lib/registration-move-history'
+import { entryLabel } from '@/lib/registration-entry'
+import HostAttendeeTable from '@/components/host/HostAttendeeTable'
 import HostPromoCodes from '@/components/host/HostPromoCodes'
 import HostEventActions from '@/components/host/HostEventActions'
 
 export const dynamic = 'force-dynamic'
-
-const STATUS_LABEL = {
-  confirmed: 'Confirmed',
-  pending_payment: 'Pending',
-  cancelled: 'Cancelled',
-  no_show: 'No-show',
-}
 
 export default async function HostEventDetail(props) {
   const params = await props.params
@@ -35,35 +33,39 @@ export default async function HostEventDetail(props) {
   if (!race || race.host_id !== session.host.id) notFound()
 
   const regs = await fetchEventAttendees(db, params.id)
+  const { lastMoveByReg, movedOut } = await loadMoveHistory(db, { eventId: params.id, regIds: regs.map((r) => r.id) })
 
-  // Flatten to one row per person (mirrors the CSV export exactly).
-  const rows = []
-  for (const reg of regs) {
-    const team = reg.teams || {}
-    const wave = reg.wave || {}
-    const waveLabel = wave.label || wave.start_time || '—'
-    const phone = reg.payment?.contact_phone || ''
-    const members = Array.isArray(team.team_members) ? team.team_members : []
-    if (members.length === 0) {
-      rows.push({ key: reg.id, team: team.name || '—', wave: waveLabel, status: reg.status, name: '—', email: '', phone })
-    } else {
-      for (const m of members) {
-        rows.push({
-          key: `${reg.id}:${m.id}`,
-          team: team.name || '—',
-          wave: waveLabel,
-          status: reg.status,
-          name: m.name || '—',
-          email: m.email || '',
-          phone,
-        })
-      }
+  // One row per ENTRY (a team or a single person), people listed in a cell.
+  // Only JSON-safe plain objects cross into the client table.
+  const entries = regs.map((reg) => {
+    const members = Array.isArray(reg.teams?.team_members) ? reg.teams.team_members : []
+    const moveIn = lastMoveByReg[reg.id]
+    return {
+      id: reg.id,
+      status: reg.status,
+      label: entryLabel(reg),
+      people: members.map((m) => ({ name: m.name || '', email: m.email || '' })),
+      wave: reg.wave?.label || (reg.wave?.start_time || '').slice(0, 5) || '',
+      phone: reg.payment?.contact_phone || '',
+      last_move: moveIn
+        ? { created_at: moveIn.created_at, actor_name: moveIn.actor_name, forced: moveIn.forced, notified_at: moveIn.notified_at, from_event: moveIn.from_event || null }
+        : null,
+      // What the dialog needs to label the entry before the targets load
+      // (entryLabel's inputs only; emails travel in `people`).
+      registration: {
+        id: reg.id,
+        status: reg.status,
+        teams: reg.teams
+          ? { name: reg.teams.name, size: reg.teams.size, team_members: members.map((m) => ({ name: m.name, role: m.role })) }
+          : null,
+        contact: reg.contact ? { first_name: reg.contact.first_name, last_name: reg.contact.last_name } : null,
+      },
     }
-  }
+  })
   const confirmed = regs.filter((r) => r.status === 'confirmed').length
-
-  const th = 'px-3 py-2 font-medium'
-  const td = 'px-3 py-2'
+  // People, as the old one-row-per-person table counted them: a member-less
+  // entry still counts as one.
+  const people = entries.reduce((n, e) => n + Math.max(1, e.people.length), 0)
 
   return (
     <div>
@@ -73,11 +75,11 @@ export default async function HostEventDetail(props) {
         <div className="min-w-0">
           <h1 className="text-2xl font-bold truncate">{race.name}</h1>
           <p className="text-white/55 text-sm mt-1">
-            {race.race_date || '—'} · {regs.length} booking{regs.length === 1 ? '' : 's'} · {confirmed} confirmed · {rows.length} attendee{rows.length === 1 ? '' : 's'}
+            {race.race_date || '—'} · {regs.length} booking{regs.length === 1 ? '' : 's'} · {confirmed} confirmed · {people} attendee{people === 1 ? '' : 's'}
           </p>
         </div>
         <div className="shrink-0 flex items-center gap-2 flex-wrap">
-          {rows.length > 0 && (
+          {regs.length > 0 && (
             <a
               href={`/api/host/events/${race.id}/attendees/export`}
               className="rounded-lg bg-white text-black text-sm font-semibold px-4 py-2 hover:bg-white/90"
@@ -89,38 +91,7 @@ export default async function HostEventDetail(props) {
         </div>
       </div>
 
-      <section className="mt-8">
-        {rows.length === 0 ? (
-          <p className="text-white/50 text-sm">No attendees yet.</p>
-        ) : (
-          <div className="overflow-x-auto rounded-xl border border-white/10">
-            <table className="w-full text-sm whitespace-nowrap">
-              <thead>
-                <tr className="text-left text-xs uppercase tracking-wide text-white/40 border-b border-white/10">
-                  <th className={th}>Name</th>
-                  <th className={th}>Team</th>
-                  <th className={th}>Wave</th>
-                  <th className={th}>Status</th>
-                  <th className={th}>Email</th>
-                  <th className={th}>Phone</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((r) => (
-                  <tr key={r.key} className="border-b border-white/5 last:border-0">
-                    <td className={td}>{r.name}</td>
-                    <td className={`${td} text-white/70`}>{r.team}</td>
-                    <td className={`${td} text-white/70`}>{r.wave}</td>
-                    <td className={`${td} text-white/70`}>{STATUS_LABEL[r.status] || r.status}</td>
-                    <td className={`${td} text-white/60`}>{r.email}</td>
-                    <td className={`${td} text-white/60`}>{r.phone}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+      <HostAttendeeTable entries={entries} movedOut={movedOut} />
 
       <HostPromoCodes eventId={race.id} />
     </div>
