@@ -58,7 +58,7 @@ error code so the dialog can say exactly why.
 | `same_event` | Target event differs from the source event | Wave changes use the existing wave select. |
 | `target_unavailable` | Target is `active`, `status = 'published'` and its date is today or later | Never move someone onto a draft or a past event. |
 | `different_payee` | Target `host_id` equals source `host_id` (NULL equals NULL) | UN1T and each host are different merchants. Money cannot follow across them. |
-| `already_entered` | No live entry on the target for the same `team_id` (when the entry has a team and the target is at the same studio) | `UNIQUE (race_event_id, team_id)` would reject it anyway; refuse first with a clear message. A cross-studio move gets a fresh team row, so it cannot collide. |
+| `already_entered` | No entry of ANY status on the target for the same `team_id` (when the entry has a team and the target is at the same studio) | `UNIQUE (race_event_id, team_id)` has no status condition, so a cancelled row would still reject the write; refuse first with a clear message that says a cancelled one counts. A cross-studio move gets a fresh team row, so it cannot collide. |
 | `headcount_not_allowed` | Target `allowed_team_sizes` includes the entry's headcount (when the array is set) | A team of four cannot move to a solo-only event. |
 | `wave_required` | A target wave is given when the target has waves | |
 | `wrong_event` | The target wave belongs to the target event | |
@@ -139,15 +139,18 @@ Writes, in order:
    append ` (2)`, ` (3)`, … until it fits), copy every `team_members` row
    (`name`, `email`, `phone`, `role`, `contact_id`, `is_member`,
    `member_validation_status`, `member_contact_id`, `member_validated_at`)
-   onto it, and use the new id as `to_team_id`. The original team row and
+   onto it, and use the new id as `to_team_id`. (`team_members` has no
+   `phone` column; the booking phone lives on `race_payments`.) The original team row and
    its members stay untouched for the source event's history. Entries with
    no team (future) skip this step.
 1. `race_registrations`: set `race_event_id`, `wave_id`, `team_id`
    (`to_team_id`), `updated_at`.
 2. `race_payments` where `race_registration_id = $reg`: set `race_event_id`.
    Amounts, provider refs and the connected account stay as they are.
-   `orders` rows need no change: they hold no event id, only the location,
-   which the same-location rule keeps constant.
+   `orders` rows need no change: they hold no event id, only the studio
+   that took the money. On a cross-studio move that stays as it is on
+   purpose: the money landed under the source studio's books, so the order
+   record stays there while the entry and its payment follow the move.
 3. `event_reminder_sends` where `registration_id = $reg`: delete, so the 3-day
    and 1-day reminders fire again for the new date.
 4. `registration_moves`: insert the history row. Return it.
@@ -177,8 +180,9 @@ event with waves; run every rule in the table; compute headcount and price
 gap; call the SQL function; then, outside the transaction, run the
 after-effects and never let one of them fail the move:
 
-- `emitEvent` a new `race_registration_moved` contact event for the lead
-  contact (added to `EVENT_TYPES` in `contact-events.js`), with from/to ids.
+- `emitEvent` a new `race.moved` contact event (`EVENT_TYPES.RACE_MOVED` in
+  `contact-events.js`, matching the existing `race.*` names) for the lead
+  contact, with from/to ids.
 - Insert an `activities` timeline line on the lead contact:
   "Entry moved from <from event> to <to event> by <actor>".
 - `addEventAttendeesToHostList(db, targetEventId)` when the target has a host.
@@ -193,7 +197,10 @@ Also exported:
   each with its waves and `spots_left` per wave in the target's capacity
   unit, plus the studio name so the picker can show it. Used by both dialogs. Staff and hosts are operators, so spots
   are shown to them; this endpoint is never public.
-- `entryLabel(registration)` and `entryHeadcount(registration)`.
+- `entryLabel(registration)`, `entryHeadcount(registration)` and the error
+  tables live in `src/lib/registration-entry.js`, the browser-safe half (no
+  server imports), re-exported from `registration-move.js`. The dialog
+  imports from `registration-entry` so no server code reaches the bundle.
 - `computePriceGapCents({ sourceEvent, targetEvent, members })`.
 
 `moveRegistrationWave` in `race-cancel.js` stays as it is for same-event wave
