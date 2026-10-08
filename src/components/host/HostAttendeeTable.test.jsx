@@ -22,7 +22,8 @@ describe('HostAttendeeTable', () => {
   it('renders one row per entry with its people, Move for paid and Pay first for unpaid', () => {
     render(<HostAttendeeTable entries={entries} movedOut={[]} />)
     expect(screen.getAllByRole('row')).toHaveLength(3) // header + 2
-    expect(screen.getByText(/Aoife Byrne, Dan Walsh/).getAttribute('title')).toBe('a@x.ie')
+    expect(screen.getByText('Aoife Byrne')).toBeTruthy()
+    expect(screen.getByText('Dan Walsh')).toBeTruthy()
     expect(screen.getAllByRole('button', { name: /^Move$/ })).toHaveLength(1)
     expect(screen.getByText(/Pay first/)).toBeTruthy()
   })
@@ -32,6 +33,12 @@ describe('HostAttendeeTable', () => {
     expect(screen.queryByRole('button', { name: /^Move$/ })).toBeNull()
     expect(screen.queryByText(/Pay first/)).toBeNull()
     expect(screen.getByText('Cancelled')).toBeTruthy()
+  })
+  it('shows each person on their own line with their email as visible text', () => {
+    render(<HostAttendeeTable entries={entries} movedOut={[]} />)
+    expect(screen.getByText(/a@x\.ie/)).toBeTruthy()
+    expect(screen.getByText(/m@x\.ie/)).toBeTruthy()
+    expect(screen.getByText('Aoife Byrne').closest('td').getAttribute('title')).toBeNull()
   })
   it('shows moved-in and not-emailed chips', () => {
     render(<HostAttendeeTable entries={entries} movedOut={[]} />)

@@ -75,7 +75,14 @@ export default function HostAttendeeTable({ entries, movedOut }) {
                       <span className="ml-2 text-[11px] text-amber-300" title="The customer was not emailed about this move. Tell them yourself.">Not emailed</span>
                     )}
                   </td>
-                  <td className={`${td} text-white/70`} title={(e.people || []).map((p) => p.email).filter(Boolean).join(', ') || undefined}>{(e.people || []).map((p) => p.name).filter(Boolean).join(', ') || '—'}</td>
+                  <td className={`${td} text-white/70 whitespace-normal`}>
+                    {(e.people || []).filter((p) => p.name || p.email).length === 0 ? '—' : (e.people || []).filter((p) => p.name || p.email).map((p, i) => (
+                      <div key={i}>
+                        {p.name || '—'}
+                        {p.email && <span className="text-white/45 text-xs"> · {p.email}</span>}
+                      </div>
+                    ))}
+                  </td>
                   <td className={`${td} text-white/70`}>{e.wave || '—'}</td>
                   <td className={`${td} text-white/70`}>{STATUS_LABEL[e.status] || e.status}</td>
                   <td className={`${td} text-white/60`}>{e.phone || ''}</td>
