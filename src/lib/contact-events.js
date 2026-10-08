@@ -35,6 +35,7 @@ export const EVENT_TYPES = Object.freeze({
   RACE_STARTED:         'race.started',
   RACE_FINISHED:        'race.finished',
   RACE_NO_SHOW:         'race.no_show',
+  RACE_MOVED:           'race.moved',
   RACE_STARTS_IN_24H:   'race.starts_in_24h',
   RACE_STARTS_IN_1H:    'race.starts_in_1h',
   RACE_COMPLETED_24H_AGO: 'race.completed_24h_ago',
