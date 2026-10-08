@@ -1348,7 +1348,7 @@ export default function RaceEventForm({ race, locationId }) {
             <div>
               <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">Emails</h3>
               <p className="text-[11px] text-un1t-subtle mt-1">
-                Style the signup confirmation and the pre-event reminder this {meta.value === 'race' ? 'race' : 'event'} sends.
+                Style the signup confirmation, the pre-event reminder and the entry-moved notice this {meta.value === 'race' ? 'race' : 'event'} sends.
                 Leave a field blank to keep the current default. The accent colour + hero image set above already brand these emails.
               </p>
             </div>
