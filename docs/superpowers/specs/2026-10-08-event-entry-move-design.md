@@ -62,7 +62,8 @@ error code so the dialog can say exactly why.
 | `headcount_not_allowed` | Target `allowed_team_sizes` includes the entry's headcount (when the array is set) | A team of four cannot move to a solo-only event. |
 | `wave_required` | A target wave is given when the target has waves | |
 | `wrong_event` | The target wave belongs to the target event | |
-| `wave_full` | The target wave has room for the entry's headcount, using the target's `capacity_mode` and the existing `event-signups.js` helpers, **unless `force` is true** | Same arithmetic the public register route uses. The refusal carries `spots_left` so the dialog can say how full it is. |
+| `wave_full` | The target wave has room for the entry's headcount, using the target's `capacity_mode` and the existing `event-signups.js` helpers, **unless `force` is true** | Same arithmetic the public register route uses: it counts **confirmed** entries only, so an entry awaiting payment holds no spot (a pre-existing property of `computeSignupCounts`, kept for consistency). The refusal carries `spots_left` so the dialog can say how full it is. |
+| `load_failed` / `write_failed` | The entry could be read / the SQL function succeeded | Database errors are named, never folded into `not_found`. A missing or unreadable target is `target_unavailable`. |
 
 A move across studios is allowed. The caller must hold the `races` permission
 and a manager role at **both** studios (the staff route checks both; the host
