@@ -119,9 +119,19 @@ const snapshot = async () => ({
   events: (await one('SELECT count(*)::int AS n FROM contact_events')).n,
 })
 
+// Open by default, like a Supabase project before mig 677: every table the
+// owner creates in public is readable by the client roles unless the
+// migration revokes it. Set BEFORE 708 runs, so the closed-to-clients test
+// below proves 708's own REVOKE closes registration_moves (PGlite honours
+// ALTER DEFAULT PRIVILEGES; the control table checks it took effect).
+const OPEN_DEFAULTS = `
+  ALTER DEFAULT PRIVILEGES FOR ROLE current_user IN SCHEMA public GRANT SELECT ON TABLES TO anon, authenticated;
+`
+
 beforeEach(async () => {
   db = new PGlite()
   await run(SCHEMA)
+  await run(OPEN_DEFAULTS)
   await run(MIG_708)
   await run(SEED)
 })
@@ -190,6 +200,14 @@ describe('move_race_registration — conflicts under the row lock change nothing
     expect(await snapshot()).toEqual(before)
   })
 
+  it('an unknown target event raises target_not_found (P0002) and changes nothing', async () => {
+    const before = await snapshot()
+    const err = await db.query(MOVE, [R1, E1, 'e0000000-0000-0000-0000-0000000000ff', null]).then(() => null, (e) => e)
+    expect(err?.code).toBe('P0002')
+    expect(err?.message).toMatch(/target_not_found/)
+    expect(await snapshot()).toEqual(before)
+  })
+
   it('an unknown entry raises not_found (P0002)', async () => {
     const err = await db.query(MOVE, ['80000000-0000-0000-0000-0000000000ff', E1, E2, W2]).then(() => null, (e) => e)
     expect(err?.code).toBe('P0002')
@@ -198,6 +216,11 @@ describe('move_race_registration — conflicts under the row lock change nothing
 
 describe('move_race_registration — closed to clients', () => {
   it('anon and authenticated cannot execute it or read the history table', async () => {
+    // Control: the open defaults are live, so a table created now IS readable.
+    await run('CREATE TABLE public.control_open (id int)')
+    for (const role of ['anon', 'authenticated']) {
+      expect((await one(`SELECT has_table_privilege('${role}', 'public.control_open', 'SELECT') AS ok`)).ok).toBe(true)
+    }
     const fn = 'public.move_race_registration(uuid, uuid, uuid, uuid, int, int, boolean, text, uuid, text, text)'
     for (const role of ['anon', 'authenticated']) {
       expect((await one(`SELECT has_function_privilege('${role}', '${fn}', 'EXECUTE') AS ok`)).ok).toBe(false)

@@ -198,10 +198,30 @@ describe('syncOrderFromRacePayment — the order stays with its studio', () => {
     expect(db.calls.some((c) => c.table === 'race_events')).toBe(false)
   })
 
-  it('a failed lookup of the existing order throws rather than guessing a studio', async () => {
-    const db = fakeDb({ orders: { data: null, error: { message: 'timeout' } } })
-    await expect(syncOrderFromRacePayment({ db, payment })).rejects.toThrow(/orders lookup \(race\) failed/)
-    expect(db.calls.some((c) => c.ops.some((o) => o[0] === 'upsert'))).toBe(false)
+  it('a failed lookup of the existing order still syncs it, deriving the studio from the event', async () => {
+    // The ledger update (and the contact event the callers emit after it, in
+    // the same try) matter more than a wrong studio on a rare moved order.
+    const db = fakeDb({
+      orders: { data: null, error: { message: 'timeout' } },
+      race_events: { data: { location_id: 'L-hatch', locations: { organization_id: 'org-1' } }, error: null },
+    })
+    await expect(syncOrderFromRacePayment({ db, payment })).resolves.toMatchObject({ id: 'o1' })
+    expect(upserted(db)).toMatchObject({ location_id: 'L-hatch', organization_id: 'org-1', source_id: 'p1' })
+  })
+
+  it('an existing order with no organisation takes it from its OWN studio, not the event\'s', async () => {
+    const db = fakeDb({
+      orders: (q) => (q.ops.some((o) => o[0] === 'in')
+        ? { data: [], error: null }
+        : { data: { id: 'o1', location_id: 'L-stillorgan', organization_id: null }, error: null }),
+      locations: (q) => (q.ops.some((o) => o[0] === 'eq' && o[1] === 'id' && o[2] === 'L-stillorgan')
+        ? { data: { organization_id: 'org-stillorgan' }, error: null }
+        : { data: null, error: null }),
+      race_events: { data: { location_id: 'L-hatch', locations: { organization_id: 'org-hatch' } }, error: null },
+    })
+    await syncOrderFromRacePayment({ db, payment })
+    expect(upserted(db)).toMatchObject({ location_id: 'L-stillorgan', organization_id: 'org-stillorgan' })
+    expect(db.calls.some((c) => c.table === 'race_events')).toBe(false)
   })
 })
 

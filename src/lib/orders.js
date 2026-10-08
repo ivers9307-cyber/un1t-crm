@@ -36,22 +36,25 @@ export async function syncOrderFromRacePayment({ db, payment }) {
   // An EXISTING order keeps its studio and organisation: the money was
   // taken there, and an entry moved to another studio's event (EVENT-MOVE.1)
   // re-points race_payments.race_event_id, which would otherwise re-home the
-  // order on its next status change. Only a new order derives them.
-  const { data: existing, error: existingErr } = await db
+  // order on its next status change. Only a missing row is a new order.
+  const { data: found, error: existingErr } = await db
     .from('orders')
     .select('id, location_id, organization_id')
     .eq('source_type', 'race_registration')
     .eq('source_id', payment.id)
     .maybeSingle() // UNIQUE (source_type, source_id): at most one
-  if (existingErr) throw new Error(`orders lookup (race) failed: ${existingErr.message}`)
+  if (existingErr) {
+    // Fall back to deriving from the event, as before EVENT-MOVE.1: a wrong
+    // studio on a rare moved order is the lesser harm next to a skipped
+    // ledger update (and the contact event callers emit in the same try).
+    logError('orders', 'existing-order lookup failed; deriving the studio from the event', { err: existingErr, paymentId: payment.id })
+  }
+  const existing = existingErr ? null : found
 
-  // Resolve location_id + organization_id via the parent race.
-  let locationId = payment.location_id || null
-  let organizationId = null
-  if (existing?.location_id) {
-    locationId = existing.location_id
-    organizationId = existing.organization_id || null
-  } else if (!locationId && payment.race_event_id) {
+  let locationId = existing?.location_id || payment.location_id || null
+  let organizationId = existing?.location_id ? (existing.organization_id || null) : null
+  if (!locationId && payment.race_event_id) {
+    // Resolve location_id + organization_id via the parent race.
     const { data: race } = await db
       .from('race_events')
       .select('location_id, locations:location_id(organization_id)')
@@ -61,7 +64,9 @@ export async function syncOrderFromRacePayment({ db, payment }) {
       locationId = race.location_id
       organizationId = race.locations?.organization_id || null
     }
-  } else if (locationId) {
+  } else if (locationId && !organizationId) {
+    // A known studio (the existing order's own, or the payment's) with no
+    // organisation yet: read it from that studio, never from the event.
     const { data: loc } = await db
       .from('locations')
       .select('organization_id')
