@@ -1730,7 +1730,7 @@ git commit -m "EVENT-MOVE.1 — staff routes: move-targets + move, judged at bot
   return NextResponse.json({ success: true, data: regs, moved_out: movedOut })
 ```
 
-Replace the existing `return NextResponse.json({ success: true, data: regs })` with the one above, and add `import { entryLabel } from '@/lib/registration-move'` at the top. Note: the registration embed here carries `teams` for the (possibly cloned) team the entry now sits on, which is the right name to show.
+Replace the existing `return NextResponse.json({ success: true, data: regs })` with the one above, and add `import { entryLabel } from '@/lib/registration-entry' // browser-safe half; never '@/lib/registration-move' in a client component` at the top. Note: the registration embed here carries `teams` for the (possibly cloned) team the entry now sits on, which is the right name to show.
 
 - [ ] **Step 2: Run the existing route test and the column gate**
 
@@ -1961,7 +1961,7 @@ Expected: FAIL, cannot resolve `./MoveEntryDialog.jsx`.
 import { useEffect, useMemo, useState } from 'react'
 import { Loader2, AlertTriangle, Coins, MapPin } from 'lucide-react'
 import { Modal, Button } from '@/components/ui'
-import { entryLabel } from '@/lib/registration-move'
+import { entryLabel } from '@/lib/registration-entry' // browser-safe half; never '@/lib/registration-move' in a client component
 
 function money(cents, currency = 'EUR') {
   const major = (Math.abs(cents) / 100).toFixed(2)
