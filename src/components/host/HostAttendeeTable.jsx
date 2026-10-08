@@ -68,7 +68,7 @@ export default function HostAttendeeTable({ entries, movedOut }) {
                     <span className="text-white">{e.label}</span>
                     {e.last_move && (
                       <span className="ml-2 text-[11px] text-sky-300" title={`Moved in from ${e.last_move.from_event?.name || 'another event'} on ${fmtDate(e.last_move.created_at)} by ${e.last_move.actor_name || 'staff'}${e.last_move.forced ? ' (time was full)' : ''}`}>
-                        moved in {fmtDate(e.last_move.created_at)}
+                        moved in from {e.last_move.from_event?.name || 'another event'} {fmtDate(e.last_move.created_at)}
                       </span>
                     )}
                     {e.last_move && e.last_move.notified_at === null && (
@@ -79,7 +79,7 @@ export default function HostAttendeeTable({ entries, movedOut }) {
                     {(e.people || []).filter((p) => p.name || p.email).length === 0 ? '—' : (e.people || []).filter((p) => p.name || p.email).map((p, i) => (
                       <div key={i}>
                         {p.name || '—'}
-                        {p.email && <span className="text-white/45 text-xs"> · {p.email}</span>}
+                        {p.email && <span className="text-white/55 text-xs"> · {p.email}</span>}
                       </div>
                     ))}
                   </td>
@@ -88,9 +88,9 @@ export default function HostAttendeeTable({ entries, movedOut }) {
                   <td className={`${td} text-white/60`}>{e.phone || ''}</td>
                   <td className={`${td} text-right`}>
                     {e.status === 'confirmed' && (
-                      <button type="button" onClick={() => setMoving(e)} className="rounded-md border border-white/20 text-white text-xs px-2.5 py-1 hover:bg-white/5">Move</button>
+                      <button type="button" onClick={() => { setNotice(null); setMoving(e) }} className="rounded-md border border-white/20 text-white text-xs px-2.5 py-1 hover:bg-white/5">Move</button>
                     )}
-                    {e.status === 'pending_payment' && <span className="text-xs text-white/35">Pay first</span>}
+                    {e.status === 'pending_payment' && <span className="text-xs text-white/55">Pay first</span>}
                   </td>
                 </tr>
               ))}
@@ -111,13 +111,16 @@ export default function HostAttendeeTable({ entries, movedOut }) {
       )}
 
       {moving && (
+        // `moving` is captured by these closures, so the notice can name the
+        // entry even though onMoved clears it right after: the moved row
+        // leaves this event's list on refresh.
         <MoveEntryDialog
           open
           registration={moving.registration}
           targetsUrl={`/api/host/registrations/${moving.id}/move-targets`}
           moveUrl={`/api/host/registrations/${moving.id}/move`}
           onClose={() => setMoving(null)}
-          onNotice={(msg) => setNotice(msg || NOT_EMAILED_MESSAGE)}
+          onNotice={(msg) => setNotice(`${moving.label}: ${msg || NOT_EMAILED_MESSAGE}`)}
           onMoved={() => { setMoving(null); router.refresh() }}
         />
       )}

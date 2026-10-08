@@ -39,6 +39,7 @@ export default async function HostEventDetail(props) {
   // Only JSON-safe plain objects cross into the client table.
   const entries = regs.map((reg) => {
     const members = Array.isArray(reg.teams?.team_members) ? reg.teams.team_members : []
+    const moveIn = lastMoveByReg[reg.id]
     return {
       id: reg.id,
       status: reg.status,
@@ -46,14 +47,18 @@ export default async function HostEventDetail(props) {
       people: members.map((m) => ({ name: m.name || '', email: m.email || '' })),
       wave: reg.wave?.label || (reg.wave?.start_time || '').slice(0, 5) || '',
       phone: reg.payment?.contact_phone || '',
-      last_move: lastMoveByReg[reg.id] || null,
-      // What the dialog needs to label the entry before the targets load.
+      last_move: moveIn
+        ? { created_at: moveIn.created_at, actor_name: moveIn.actor_name, forced: moveIn.forced, notified_at: moveIn.notified_at, from_event: moveIn.from_event || null }
+        : null,
+      // What the dialog needs to label the entry before the targets load
+      // (entryLabel's inputs only; emails travel in `people`).
       registration: {
         id: reg.id,
         status: reg.status,
         teams: reg.teams
-          ? { name: reg.teams.name, size: reg.teams.size, team_members: members.map((m) => ({ name: m.name, role: m.role, email: m.email })) }
+          ? { name: reg.teams.name, size: reg.teams.size, team_members: members.map((m) => ({ name: m.name, role: m.role })) }
           : null,
+        contact: reg.contact ? { first_name: reg.contact.first_name, last_name: reg.contact.last_name } : null,
       },
     }
   })

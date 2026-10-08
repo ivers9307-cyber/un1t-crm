@@ -42,7 +42,7 @@ describe('HostAttendeeTable', () => {
   })
   it('shows moved-in and not-emailed chips', () => {
     render(<HostAttendeeTable entries={entries} movedOut={[]} />)
-    expect(screen.getByText(/moved in/i)).toBeTruthy()
+    expect(screen.getByText(/moved in from PTC Oct 4/i)).toBeTruthy()
     expect(screen.getByText(/Not emailed/)).toBeTruthy()
   })
   it('lists moves out', () => {
@@ -70,10 +70,14 @@ describe('HostAttendeeTable', () => {
     const select = await screen.findByLabelText(/event/i, { selector: 'select' })
     fireEvent.change(select, { target: { value: 'e2' } })
     fireEvent.click(screen.getByRole('button', { name: /Move entry/ }))
-    await screen.findByText(/could not be emailed/)
+    // The notice names the entry: the moved row has left this event's list.
+    await screen.findByText('The Crushers: Moved. The customer could not be emailed; tell them yourself.')
     expect(fetchMock.mock.calls[1][0]).toBe('/api/host/registrations/r1/move')
     expect(refresh).toHaveBeenCalledTimes(1)
     expect(screen.queryByText(/Move The Crushers to another event/)).toBeNull()
+    // Starting another move clears the old notice.
+    fireEvent.click(screen.getByRole('button', { name: /^Move$/ }))
+    expect(screen.queryByText(/could not be emailed/)).toBeNull()
   })
   it('renders nothing but the empty line with no entries', () => {
     render(<HostAttendeeTable entries={[]} movedOut={[]} />)
