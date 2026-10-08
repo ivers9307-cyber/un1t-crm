@@ -263,8 +263,17 @@ Auth on both: `getCurrentUser`, the `races` permission and a `MANAGER_ROLES`
 role at the source event's studio (matches the cancel route) with
 `assertLocationAccessOr404` on it. The move route repeats the permission,
 role and access checks on the **target** event's studio. The targets route
-passes `getUserLocationIds(user)` as `allowedLocationIds`. Zod schema for the body. Errors map to 4xx with the code and a
-plain-English message.
+passes `getUserLocationIds(user)` as `allowedLocationIds`. Zod schema for the body, validated AFTER the source-studio gate so an
+unauthorised caller never learns the body was bad. Every refusal carries
+`error` (the code) and `message` (from `MOVE_ERROR_MESSAGES`): `not_found`
+404, `wave_full` and `conflict` 409, `load_failed` and `write_failed` 500,
+every other rule 400. A non-UUID id is a 404 with no read. The move route
+passes `expectedSourceEventId` so the lib refuses `conflict` if the entry
+moved between the route's own read and the lib's. The Move action on the
+teams page is gated by the same rule as the route (manager role plus
+`races` at the event's studio), so staff who may cancel but not move never
+see a button that would 403. Under impersonation the recorded actor is the
+real caller.
 
 - `GET /api/events/[id]/teams` additionally returns `moved_out`: moves whose
   `from_event_id` is this event, with the entry label, target event name and
