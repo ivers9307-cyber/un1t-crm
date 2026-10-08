@@ -786,6 +786,58 @@ registry.registerPath({
   },
 })
 
+// EVENT-MOVE.2 — a host moves one of their own entries to another of their
+// OWN events. Same lib and shapes as the staff routes above.
+registry.registerPath({
+  method: 'get',
+  path: '/api/host/registrations/{id}/move-targets',
+  tags: ['Host Portal'],
+  security: [{ CookieAuth: [] }],
+  summary: "Events a host's entry may move to: the host's own published, upcoming events, with per-wave spots and the price gap",
+  description:
+    'Host session (getCurrentHost). The entry must sit on one of the session host\'s events (404 otherwise). ' +
+    'Targets are limited to the host\'s own events. Shows capacity, so it is never public.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Entry, source and targets', content: { 'application/json': { schema: z.object({}).passthrough() } } },
+    401: { description: 'Unauthorized: no host session', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: "Not found, or not on this host's events", content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: "load_failed: the entry, the host's events or the targets could not be read", content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/host/registrations/{id}/move',
+  tags: ['Host Portal'],
+  security: [{ CookieAuth: [] }],
+  summary: "Move a host's own entry to another of the host's own events; never moves money",
+  description:
+    'Host session. The entry must sit on one of the session host\'s events (404 otherwise) and the target must be another of them (404 not_found). ' +
+    'An entry awaiting payment is refused with `pending_payment` (400) before the body is read: a host cannot collect or waive money. ' +
+    'Every refusal carries `error` (the code) and `message` (plain English). ' +
+    '409 wave_full (with `spots_left`; resend with `force: true`) or conflict, 500 load_failed / write_failed, 400 any other rule. ' +
+    'Recorded with actor_type host (the admin is named under view-as).',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      target_event_id: uuidLike,
+      target_wave_id: uuidLike.nullable().optional(),
+      notify: z.boolean().optional().openapi({ description: 'Email the lead the new tickets (default true)' }),
+      note: z.string().max(1000).nullable().optional().openapi({ description: 'Internal note' }),
+      force: z.boolean().optional().openapi({ description: 'Skip the wave_full check (default false)' }),
+    }) } } },
+  },
+  responses: {
+    200: { description: 'Moved', content: { 'application/json': { schema: z.object({}).passthrough() } } },
+    400: { description: 'pending_payment, a rule refused the move, or a bad body', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized: no host session', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: "Entry or target event not found, or not this host's", content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'wave_full (resend with force) or conflict (the entry changed mid-move)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'load_failed or write_failed; nothing changed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // RACE-TAB.1 — the race-day tab probe. Sits alongside the public race
 // signup below because it is the other half of the same feature's HTTP
 // surface; everything else about races is authored on the web.
