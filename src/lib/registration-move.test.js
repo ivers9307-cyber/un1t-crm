@@ -350,11 +350,11 @@ describe('moveRegistration', () => {
     const db = fakeDb({
       race_registrations: (q) => {
         if (q.ops.some((o) => o[0] === 'eq' && o[1] === 'id')) return over.regAnswer ?? { data: over.reg ?? REG }
-        if (q.ops.some((o) => o[0] === 'eq' && o[1] === 'team_id')) return { data: over.existingOnTarget ?? null }
+        if (q.ops.some((o) => o[0] === 'eq' && o[1] === 'team_id')) return over.existingAnswer ?? { data: over.existingOnTarget ?? null }
         return over.waveAnswer ?? { data: over.waveRegs ?? [] }
       },
       race_events: over.targetAnswer ?? { data: over.target ?? TARGET },
-      race_checkins: { data: null, count: over.checkins ?? 0, error: null },
+      race_checkins: over.checkinAnswer ?? { data: null, count: over.checkins ?? 0, error: null },
       ...over.answers,
     }, { rpc })
     return { db, rpc }
@@ -406,6 +406,16 @@ describe('moveRegistration', () => {
     expect(await moveRegistration(b.db, { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9', actor })).toEqual({ ok: false, error: 'load_failed' })
     expect(a.rpc).not.toHaveBeenCalled()
     expect(b.rpc).not.toHaveBeenCalled()
+  })
+  it('load_failed when the check-in count fails (a real check-in is still checked_in)', async () => {
+    const { db, rpc } = happyDb({ checkinAnswer: { data: null, count: null, error: { message: 'timeout' } } })
+    expect(await moveRegistration(db, { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9', actor })).toEqual({ ok: false, error: 'load_failed' })
+    expect(rpc).not.toHaveBeenCalled()
+  })
+  it('load_failed when the already-entered lookup fails (a real entry is still already_entered)', async () => {
+    const { db, rpc } = happyDb({ existingAnswer: { data: null, error: { message: 'timeout' } } })
+    expect(await moveRegistration(db, { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9', actor })).toEqual({ ok: false, error: 'load_failed' })
+    expect(rpc).not.toHaveBeenCalled()
   })
   it('load_failed when the target wave cannot be read, before any write', async () => {
     const { db, rpc } = happyDb({ waveAnswer: { data: null, error: { message: 'timeout' } } })

@@ -188,6 +188,7 @@ function groupByWave(rows) {
   return byWave
 }
 
+/** Check-ins on the entry. { count, error }: a failed count is load_failed. */
 async function countCheckins(db, registrationId) {
   const { count, error } = await db
     .from('race_checkins')
@@ -195,14 +196,17 @@ async function countCheckins(db, registrationId) {
     .eq('race_registration_id', registrationId)
   if (error) {
     logError('registration-move', 'check-in count failed', { err: error, registrationId })
-    // Fail toward "checked in": a move we cannot judge must not proceed.
-    return 1
+    return { count: null, error }
   }
-  return count || 0
+  return { count: count || 0, error: null }
 }
 
+/**
+ * Another row of the same team on the target, any status.
+ * { existing, error }: a failed lookup is load_failed, never a guess.
+ */
 async function findExistingOnTarget(db, { teamId, targetEventId, registrationId }) {
-  if (!teamId) return null
+  if (!teamId) return { existing: null, error: null }
   const { data, error } = await db
     .from('race_registrations')
     .select('id, status')
@@ -213,9 +217,9 @@ async function findExistingOnTarget(db, { teamId, targetEventId, registrationId 
     .maybeSingle()
   if (error) {
     logError('registration-move', 'existing-entry check failed', { err: error, teamId, targetEventId })
-    return { id: null, status: 'confirmed' } // fail closed: treat as taken
+    return { existing: null, error }
   }
-  return data || null
+  return { existing: data || null, error: null }
 }
 
 function sortWaves(waves) {
@@ -345,12 +349,16 @@ export async function moveRegistration(db, {
   if (!targetEvent) return { ok: false, error: MOVE_ERRORS.TARGET_UNAVAILABLE }
   const targetWave = targetWaveId ? (targetEvent.waves || []).find((w) => w.id === targetWaveId) || { id: targetWaveId, race_event_id: null } : null
 
-  const [waveRead, checkinCount, existingOnTarget] = await Promise.all([
+  const [waveRead, checkinRead, existingRead] = await Promise.all([
     targetWave?.race_event_id ? loadWaveRegistrations(db, [targetWave.id]) : Promise.resolve({ rows: [], error: null }),
     countCheckins(db, registrationId),
     findExistingOnTarget(db, { teamId: registration.team_id, targetEventId, registrationId }),
   ])
-  if (waveRead.error) return { ok: false, error: MOVE_ERRORS.LOAD_FAILED }
+  // A read that failed refuses the move as load_failed (fail closed, and
+  // honestly: "try again", not a rule the entry did not break).
+  if (waveRead.error || checkinRead.error || existingRead.error) return { ok: false, error: MOVE_ERRORS.LOAD_FAILED }
+  const checkinCount = checkinRead.count
+  const existingOnTarget = existingRead.existing
   // One wave was asked for, so every row is that wave's.
   const targetWaveRegistrations = waveRead.rows
 
