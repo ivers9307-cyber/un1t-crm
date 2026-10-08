@@ -49,7 +49,7 @@ const targetAt = (location_id) => ({ data: { id: E2, location_id }, error: null 
 beforeEach(() => {
   vi.clearAllMocks()
   globalThis.__target = targetAt(L1)
-  readRegistrationForMove.mockResolvedValue({ registration: { id: R1, race: { id: E1, location_id: L1 } }, error: null })
+  readRegistrationForMove.mockResolvedValue({ registration: { id: R1, race_event_id: E1, race: { id: E1, location_id: L1 } }, error: null })
 })
 
 describe('POST /api/event-registrations/[id]/move', () => {
@@ -181,17 +181,32 @@ describe('POST /api/event-registrations/[id]/move', () => {
   })
   it('hands the lib the actor, force and note, and answers the move', async () => {
     getCurrentUser.mockResolvedValue(manager([L1, L2]))
-    moveRegistration.mockResolvedValue({ ok: true, move: { id: 'mv1' }, registration: { id: R1 } })
+    moveRegistration.mockResolvedValue({ ok: true, move: { id: 'mv1' }, registration: { id: R1 }, notified: true })
     const res = await POST(post({ ...BODY, force: true, note: ' asked for Saturday ' }), props())
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ success: true, data: { move: { id: 'mv1' }, registration: { id: R1 } } })
+    expect(await res.json()).toEqual({ success: true, data: { move: { id: 'mv1' }, registration: { id: R1 }, notified: true } })
     expect(moveRegistration).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       registrationId: R1, targetEventId: E2, targetWaveId: W9, force: true, notify: true, note: 'asked for Saturday',
       actor: { type: 'staff', id: 'u1', name: 'Richard' },
+      // The event the route authorised: the lib answers conflict if the
+      // entry moved between the two reads.
+      expectedSourceEventId: E1,
     }))
     // The staff route never passes the host fence: the target studio is
     // judged by the route itself, from the target event's own row.
     expect(moveRegistration.mock.calls[0][1].allowedEventIds).toBeNull()
+  })
+  it('reports notified: false when the email did not go', async () => {
+    getCurrentUser.mockResolvedValue(manager([L1]))
+    moveRegistration.mockResolvedValue({ ok: true, move: { id: 'mv1' }, registration: { id: R1 }, notified: false })
+    const json = await (await POST(post(BODY), props())).json()
+    expect(json.data.notified).toBe(false)
+  })
+  it('409 conflict when the entry left the authorised event before the lib read it', async () => {
+    getCurrentUser.mockResolvedValue(manager([L1]))
+    moveRegistration.mockResolvedValue({ ok: false, error: 'conflict' })
+    expect((await POST(post(BODY), props())).status).toBe(409)
+    expect(moveRegistration.mock.calls[0][1].expectedSourceEventId).toBe(E1)
   })
   it('defaults notify to true, force to false, and a blank note to null', async () => {
     getCurrentUser.mockResolvedValue(manager([L1]))

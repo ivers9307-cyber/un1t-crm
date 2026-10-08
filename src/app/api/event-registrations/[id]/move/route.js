@@ -110,9 +110,12 @@ export async function POST(request, props) {
     force: body.force,
     // The host fence; staff are fenced by the two studio gates above.
     allowedEventIds: null,
+    // The event this route authorised on: if the entry moved between this
+    // read and the lib's, the lib answers conflict (409) before any write.
+    expectedSourceEventId: reg.race_event_id,
   })
   if (!result.ok) {
     return refusal(result.error, result.spots_left !== undefined ? { spots_left: result.spots_left } : {})
   }
-  return NextResponse.json({ success: true, data: { move: result.move, registration: result.registration } })
+  return NextResponse.json({ success: true, data: { move: result.move, registration: result.registration, notified: result.notified === true } })
 }

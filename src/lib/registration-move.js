@@ -20,7 +20,7 @@ import { addEventAttendeesToHostList } from './host-contact-list'
 import { sendRegistrationMovedEmail } from './race-confirmations'
 import {
   MOVE_ERRORS, MOVE_ERROR_MESSAGES, membersOf,
-  entryLabel, entryHeadcount, perPersonFeeCents, computePriceGapCents,
+  entryLabel, entryHeadcount, entryLeadEmail, perPersonFeeCents, computePriceGapCents,
 } from './registration-entry'
 
 // The pure, browser-safe helpers live in registration-entry.js (a client
@@ -28,7 +28,7 @@ import {
 // tests have one import path.
 export {
   MOVE_ERRORS, MOVE_ERROR_MESSAGES,
-  entryLabel, entryHeadcount, perPersonFeeCents, computePriceGapCents,
+  entryLabel, entryHeadcount, entryLeadEmail, perPersonFeeCents, computePriceGapCents,
 }
 
 const LIVE_STATUSES = new Set(['confirmed', 'pending_payment'])
@@ -332,12 +332,23 @@ function isConflict(err) {
  * Move one entry. Rules first (pure), then the SQL function, then best-effort
  * after-effects that never fail the move.
  *
- * @returns {{ ok: true, move: object, registration: object }
+ * `expectedSourceEventId`: the event the CALLER judged the entry on (a
+ * route authorises on its own read, then this function reads again). When
+ * given and the entry is no longer there, the answer is `conflict` before
+ * any further read or write, so a move is never authorised at one studio
+ * and carried out from another.
+ *
+ * `notified` is true only when the moved email was sent ('email' in the
+ * sender's `sent`); false when notify was off or the sender skipped,
+ * failed or threw.
+ *
+ * @returns {{ ok: true, move: object, registration: object, notified: boolean }
  *         | { ok: false, error: string, spots_left?: number|null }}
  */
 export async function moveRegistration(db, {
   registrationId, targetEventId, targetWaveId = null,
   actor, note = null, notify = true, force = false, allowedEventIds = null,
+  expectedSourceEventId = null,
   today = dublinTodayStr(),
 }) {
   // Who moved it is recorded on every move (registration_moves.actor_type
@@ -346,6 +357,10 @@ export async function moveRegistration(db, {
   if (!actor?.type) throw new TypeError('actor.type is required')
   const { registration, error: readErr } = await readRegistrationForMove(db, registrationId)
   if (!registration) return entryReadRefusal(readErr)
+  if (expectedSourceEventId && registration.race_event_id !== expectedSourceEventId) {
+    logWarn('registration-move', 'entry left the event the caller authorised; refused as conflict', { registrationId, expectedSourceEventId, actualEventId: registration.race_event_id })
+    return { ok: false, error: MOVE_ERRORS.CONFLICT }
+  }
   // Outside the host's own events: 404, the host fence.
   if (allowedEventIds && !allowedEventIds.has(targetEventId)) return { ok: false, error: MOVE_ERRORS.NOT_FOUND }
 
@@ -401,12 +416,10 @@ export async function moveRegistration(db, {
   }
 
   // After-effects: each in its own try, none may fail the move.
-  // The lead contact's email; a team is never assumed, so the roster is
-  // only a fallback (captain, then the first member with an email).
-  const leadEmail = registration.contact?.email
-    || members.find((m) => m?.role === 'captain')?.email
-    || members.find((m) => m?.email)?.email
-    || null
+  // The lead's email by the one rule (entryLeadEmail): the lead contact,
+  // then the captain, then the first member with one. A team is never
+  // assumed. No payment is loaded here, so its address is not a fallback.
+  const leadEmail = entryLeadEmail({ registration, payment: null })
   if (!leadEmail) {
     logWarn('registration-move', 'no email on the entry; race.moved contact event skipped', { registrationId, moveId: move.id })
   } else {
@@ -436,10 +449,12 @@ export async function moveRegistration(db, {
   try {
     if (targetEvent.host_id) await addEventAttendeesToHostList(db, targetEventId)
   } catch (e) { logWarn('registration-move', 'host contact list sync failed', { err: e, targetEventId }) }
+  let notified = false
   if (notify) {
     try {
-      await sendRegistrationMovedEmail(db, { registrationId, moveId: move.id })
+      const sent = await sendRegistrationMovedEmail(db, { registrationId, moveId: move.id })
+      notified = Array.isArray(sent?.sent) && sent.sent.includes('email')
     } catch (e) { logError('registration-move', 'moved email threw; the move stands', { err: e, registrationId, moveId: move.id }) }
   }
-  return { ok: true, move, registration: { id: registrationId, race_event_id: targetEventId, wave_id: targetWave?.id || null } }
+  return { ok: true, move, registration: { id: registrationId, race_event_id: targetEventId, wave_id: targetWave?.id || null }, notified }
 }

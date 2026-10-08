@@ -1,8 +1,9 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   entryLabel, entryHeadcount, computePriceGapCents, evaluateMove, MOVE_ERRORS, MOVE_ERROR_MESSAGES,
-  listMoveTargets, moveRegistration, loadRegistrationForMove,
+  listMoveTargets, moveRegistration, loadRegistrationForMove, entryLeadEmail,
 } from './registration-move.js'
+import { entryLeadEmail as entryLeadEmailBrowserSafe } from './registration-entry.js'
 
 // The moved email always fails here, which is the case the move must survive.
 const sendMovedEmail = vi.hoisted(() => vi.fn(async () => { throw new Error('postmark down') }))
@@ -435,7 +436,56 @@ describe('moveRegistration', () => {
     expect(r.ok).toBe(true)
     expect(rpc.mock.calls[0][1]).toMatchObject({ p_headcount: 4, p_price_gap_cents: 4 * 500 })
   })
+  describe('expectedSourceEventId (the row the caller authorised)', () => {
+    it('conflict, before any write, when the entry is no longer on that event', async () => {
+      const { db, rpc } = happyDb()
+      const r = await moveRegistration(db, { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9', actor, expectedSourceEventId: 'e-elsewhere' })
+      expect(r).toEqual({ ok: false, error: 'conflict' })
+      expect(rpc).not.toHaveBeenCalled()
+      expect(db.calls.filter((c) => c.table !== 'race_registrations')).toEqual([])
+    })
+    it('goes ahead when it matches, and when it is not given', async () => {
+      const a = happyDb()
+      expect((await moveRegistration(a.db, { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9', actor, notify: false, expectedSourceEventId: 'e1' })).ok).toBe(true)
+      const b = happyDb()
+      expect((await moveRegistration(b.db, { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9', actor, notify: false })).ok).toBe(true)
+    })
+  })
+  describe('notified (the moved email outcome)', () => {
+    const run = (notify = true) => moveRegistration(happyDb().db, { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9', actor, notify })
+    it('true only when the sender reports an email sent', async () => {
+      sendMovedEmail.mockResolvedValueOnce({ sent: ['email'], skipped: [], failed: [] })
+      const r = await run()
+      expect(r).toMatchObject({ ok: true, notified: true })
+      expect(sendMovedEmail).toHaveBeenCalledWith(expect.anything(), { registrationId: 'r1', moveId: 'mv1' })
+    })
+    it('false when the sender skipped or failed', async () => {
+      sendMovedEmail.mockResolvedValueOnce({ sent: [], skipped: ['email:already_sent'], failed: [] })
+      expect(await run()).toMatchObject({ ok: true, notified: false })
+      sendMovedEmail.mockResolvedValueOnce({ sent: [], skipped: [], failed: ['email'] })
+      expect(await run()).toMatchObject({ ok: true, notified: false })
+      sendMovedEmail.mockResolvedValueOnce(undefined)
+      expect(await run()).toMatchObject({ ok: true, notified: false })
+    })
+    it('false when the sender threw, and the move stands', async () => {
+      // The default mock throws.
+      expect(await run()).toMatchObject({ ok: true, notified: false })
+    })
+    it('false without calling the sender when notify is false', async () => {
+      sendMovedEmail.mockClear()
+      expect(await run(false)).toMatchObject({ ok: true, notified: false })
+      expect(sendMovedEmail).not.toHaveBeenCalled()
+    })
+  })
   describe('the race.moved contact event', () => {
+    it('resolves the lead with entryLeadEmail, the one rule (re-exported here)', async () => {
+      expect(entryLeadEmail).toBe(entryLeadEmailBrowserSafe)
+      // A blank contact email is no email: entryLeadEmail falls through to the captain.
+      const { db } = happyDb({ reg: { ...REG, contact: { id: 'c1', email: '   ' } } })
+      await moveRegistration(db, { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9', actor, notify: false })
+      const ins = db.calls.filter((c) => c.table === 'contact_events').map((c) => c.ops.find((o) => o[0] === 'insert')[1])
+      expect(ins[0].contact_email).toBe('captain@example.test')
+    })
     const emitted = (db) => db.calls.filter((c) => c.table === 'contact_events').map((c) => c.ops.find((o) => o[0] === 'insert')[1])
     it('goes to the lead contact', async () => {
       const { db } = happyDb()
