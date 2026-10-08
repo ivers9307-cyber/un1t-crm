@@ -12,6 +12,9 @@
 //
 // Spec: docs/superpowers/specs/2026-10-08-event-entry-move-design.md
 
+import { wouldFit, spotsLeft } from './event-signups'
+import { dublinTodayStr } from './dublin-time'
+
 export const MOVE_ERRORS = Object.freeze({
   NOT_FOUND: 'not_found',
   NOT_ACTIVE: 'not_active',
@@ -34,7 +37,7 @@ export const MOVE_ERROR_MESSAGES = Object.freeze({
   same_event: 'That is the event the entry is already on. Use the wave select to change its time.',
   target_unavailable: 'The target event is not published or has already happened.',
   different_payee: 'The target event is paid to a different host, so the payment cannot follow.',
-  already_entered: 'This team already has an entry on the target event.',
+  already_entered: 'This team already has an entry on the target event (a cancelled one counts).',
   headcount_not_allowed: 'The target event does not accept an entry of this size.',
   wave_required: 'Pick a time on the target event.',
   wrong_event: 'That time does not belong to the target event.',
@@ -92,4 +95,66 @@ export function computePriceGapCents({ sourceEvent, targetEvent, members }) {
     gap += perPersonFeeCents(targetEvent, isMember) - perPersonFeeCents(sourceEvent, isMember)
   }
   return gap
+}
+
+const LIVE_STATUSES = new Set(['confirmed', 'pending_payment'])
+
+/** Same payee when host_id matches, NULL (UN1T on Revolut) equal to NULL. */
+export function samePayee(a, b) {
+  return (a?.host_id || null) === (b?.host_id || null)
+}
+
+/**
+ * Every rule in the spec's table, in order, on already-loaded rows. Pure.
+ *
+ * @param {object} args
+ * @param {object} args.registration   race_registrations row with teams.team_members
+ * @param {object} args.sourceEvent    race_events row
+ * @param {object} args.targetEvent    race_events row with waves[]
+ * @param {object|null} args.targetWave   race_waves row (null when none given)
+ * @param {Array} args.targetWaveRegistrations  live rows in that wave ({status, team:{size}})
+ * @param {number} args.checkinCount   race_checkins rows for the entry
+ * @param {object|null} args.existingOnTarget  another entry of the same team on the target, any status
+ * @param {boolean} [args.force]       true = skip wave_full
+ * @param {string} [args.today]        YYYY-MM-DD in Europe/Dublin
+ * @returns {{ ok: true } | { ok: false, error: string, spots_left?: number|null }}
+ */
+export function evaluateMove({
+  registration, sourceEvent, targetEvent, targetWave, targetWaveRegistrations,
+  checkinCount, existingOnTarget, force = false, today = dublinTodayStr(),
+}) {
+  const fail = (error, extra = {}) => ({ ok: false, error, ...extra })
+  if (!registration) return fail(MOVE_ERRORS.NOT_FOUND)
+  if (!LIVE_STATUSES.has(registration.status)) return fail(MOVE_ERRORS.NOT_ACTIVE)
+  if ((checkinCount || 0) > 0) return fail(MOVE_ERRORS.CHECKED_IN)
+  if (!targetEvent) return fail(MOVE_ERRORS.TARGET_UNAVAILABLE)
+  if (targetEvent.id === registration.race_event_id) return fail(MOVE_ERRORS.SAME_EVENT)
+  if (targetEvent.active !== true || targetEvent.status !== 'published') return fail(MOVE_ERRORS.TARGET_UNAVAILABLE)
+  if (!targetEvent.race_date || String(targetEvent.race_date).slice(0, 10) < today) return fail(MOVE_ERRORS.TARGET_UNAVAILABLE)
+  if (!samePayee(sourceEvent, targetEvent)) return fail(MOVE_ERRORS.DIFFERENT_PAYEE)
+
+  // Any row of the same team on the target, cancelled included: UNIQUE
+  // (race_event_id, team_id) is not partial, so the write would refuse it.
+  // A cross-studio move clones the team, so it cannot collide.
+  const crossesStudio = (sourceEvent?.location_id || null) !== (targetEvent.location_id || null)
+  if (!crossesStudio && registration.team_id && existingOnTarget) {
+    return fail(MOVE_ERRORS.ALREADY_ENTERED)
+  }
+
+  const headcount = entryHeadcount(registration)
+  const sizes = targetEvent.allowed_team_sizes
+  if (Array.isArray(sizes) && sizes.length > 0 && !sizes.includes(headcount)) return fail(MOVE_ERRORS.HEADCOUNT_NOT_ALLOWED)
+
+  const targetHasWaves = Array.isArray(targetEvent.waves) && targetEvent.waves.length > 0
+  if (targetHasWaves && !targetWave) return fail(MOVE_ERRORS.WAVE_REQUIRED)
+  if (targetWave && targetWave.race_event_id !== targetEvent.id) return fail(MOVE_ERRORS.WRONG_EVENT)
+
+  if (targetWave && !force) {
+    const mode = targetEvent.capacity_mode === 'people' ? 'people' : 'teams'
+    const regs = Array.isArray(targetWaveRegistrations) ? targetWaveRegistrations : []
+    if (!wouldFit(targetWave.capacity, regs, mode, headcount)) {
+      return fail(MOVE_ERRORS.WAVE_FULL, { spots_left: spotsLeft(targetWave.capacity, regs, mode) })
+    }
+  }
+  return { ok: true }
 }
