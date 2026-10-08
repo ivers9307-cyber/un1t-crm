@@ -92,35 +92,14 @@ export async function sendCtwaConversion(db, { locationId, contactId, eventName,
 // ——— Website events (the /start + /free-class funnels) ———
 
 /** Meta match normalization: trimmed + lowercased; null when not an email. */
-export function normalizeEmailForMeta(email) {
-  const e = String(email || '').trim().toLowerCase()
-  return e.includes('@') ? e : null
-}
-
-/**
- * Meta match normalization: digits only with country code — Irish national
- * format (08x…) becomes 3538x…, international 00-prefixes are stripped.
- * Null when too short to be a real number.
- */
-export function normalizePhoneForMeta(phone) {
-  let d = String(phone || '').replace(/\D/g, '')
-  if (d.startsWith('00')) d = d.slice(2)
-  else if (d.startsWith('0')) d = `353${d.slice(1)}`
-  return d.length >= 8 ? d : null
-}
+// Match-key normalisation lives in meta-match-normalize.js (client-safe, the
+// Pixel's manual advanced matching uses the same rules); re-exported here so
+// every existing importer keeps working.
+export { normalizeEmailForMeta, normalizePhoneForMeta, normalizeNameForMeta } from '@/lib/meta-match-normalize'
+import { normalizeEmailForMeta, normalizePhoneForMeta, normalizeNameForMeta } from '@/lib/meta-match-normalize'
 
 export function sha256Hex(value) {
   return createHash('sha256').update(value).digest('hex')
-}
-
-/**
- * MATCHQUALITY.1 — Meta match normalisation for a name: lower-case, trimmed,
- * punctuation and digits removed (letters, marks and spaces survive, so
- * "Seán O'Brien" → "seán obrien"). Null when nothing is left.
- */
-export function normalizeNameForMeta(name) {
-  const n = String(name || '').toLowerCase().replace(/[^\p{L}\p{M}\s]/gu, '').replace(/\s+/g, ' ').trim()
-  return n || null
 }
 
 /**

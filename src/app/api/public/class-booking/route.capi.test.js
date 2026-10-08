@@ -152,3 +152,35 @@ describe('POST /api/public/class-booking — match-quality identifiers on the Le
   })
 })
 
+// BROWSERLEAD.1 — the server Lead carries the browser's event id when the
+// form sent one, so the Pixel's Lead and this one dedupe at Meta.
+describe('POST /api/public/class-booking — shared event id with the browser Lead', () => {
+  it('uses lead_event_id as the CAPI event id', async () => {
+    await POST(new Request('http://localhost/api/public/class-booking', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        path: 'hatch-street', event_id: 'ev-1', first_name: 'Sam', last_name: 'Byrne',
+        email: 'sam@example.com', phone: '0871234567', consent: true,
+        lead_event_id: '3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b',
+      }),
+    }))
+    expect(sendWebsiteConversion.mock.calls[0][1].eventId).toBe('3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b')
+  })
+  it('falls back to the contact + class key when the form sent none', async () => {
+    await book(undefined)
+    expect(sendWebsiteConversion.mock.calls[0][1].eventId).toBe('classlead-c1-ev-1')
+  })
+  it('rejects a malformed id instead of forwarding it', async () => {
+    const res = await POST(new Request('http://localhost/api/public/class-booking', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        path: 'hatch-street', event_id: 'ev-1', first_name: 'Sam', last_name: 'Byrne',
+        email: 'sam@example.com', phone: '0871234567', consent: true,
+        lead_event_id: '<script>alert(1)</script>',
+      }),
+    }))
+    expect(res.status).toBe(400)
+    expect(sendWebsiteConversion).not.toHaveBeenCalled()
+  })
+})
+
