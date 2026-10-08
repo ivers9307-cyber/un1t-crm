@@ -326,13 +326,19 @@ real caller.
   `actor_name = host.name` ("<admin email> as <host name>" under admin
   view-as). An entry awaiting payment is refused with `pending_payment`
   (400) before the body is read: a host cannot collect or waive money. The
-  same status mapping as the staff route otherwise.
+  same status mapping as the staff route otherwise, except that host routes
+  have no 403 at all: there is no permission concept, every refusal is a 404.
+  The own-events fence query is limited to published, active, upcoming
+  events (targets only; the source may be past or unpublished).
 - Same `MoveEntryDialog`, unchanged, with `targetsUrl`/`moveUrl` pointed at
   the host routes. It keeps its light panel on the dark host page (the shared
   Modal primitive); the table around it is host-dark. Same price-gap notice,
   since the host's own prices differ between their events. Hosts may force a
   full wave too (it is their capacity); recorded the same way. After a move
-  the page reloads (the host portal convention).
+  the page re-renders with `router.refresh()` (not a full reload, which
+  would wipe the "not emailed" notice before the host could read it; the
+  moved entry has left this page's rows, so the notice is the only trace).
+  The People cell lists each person with their email, as the old table did.
 - The move-history reads (`last_move` per entry, moves out of the event) are
   one shared loader, `src/lib/registration-move-history.js`, used by the
   staff teams route and the host page. Footer "N moves to other events" as
