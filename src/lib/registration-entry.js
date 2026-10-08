@@ -27,6 +27,8 @@ export const MOVE_ERRORS = Object.freeze({
   WAVE_REQUIRED: 'wave_required',
   WRONG_EVENT: 'wrong_event',
   WAVE_FULL: 'wave_full',
+  LOAD_FAILED: 'load_failed',
+  WRITE_FAILED: 'write_failed',
 })
 
 // Plain-English for the dialog. Keyed by code so the route never invents copy.
@@ -42,6 +44,8 @@ export const MOVE_ERROR_MESSAGES = Object.freeze({
   wave_required: 'Pick a time on the target event.',
   wrong_event: 'That time does not belong to the target event.',
   wave_full: 'That time is full.',
+  load_failed: 'The entry could not be read. Try again.',
+  write_failed: 'The move could not be saved. Nothing changed. Try again.',
 })
 
 /**
@@ -87,11 +91,15 @@ export function perPersonFeeCents(event, isMember) {
 
 /**
  * (target per-person − source per-person) summed over the people on the
- * entry. Signed; 0 when prices match. A roster of zero (team-less entry)
- * counts as one non-member.
+ * entry. Signed; 0 when prices match. With no roster loaded (a team-less
+ * entry, or a team whose member rows are missing) it prices `headcount`
+ * non-members, so the gap covers the same people as the move's headcount.
  */
-export function computePriceGapCents({ sourceEvent, targetEvent, members }) {
-  const roster = Array.isArray(members) && members.length > 0 ? members : [{ is_member: false }]
+export function computePriceGapCents({ sourceEvent, targetEvent, members, headcount = 1 }) {
+  const n = Number.isFinite(Number(headcount)) && Number(headcount) > 0 ? Math.floor(Number(headcount)) : 1
+  const roster = Array.isArray(members) && members.length > 0
+    ? members
+    : Array.from({ length: n }, () => ({ is_member: false }))
   let gap = 0
   for (const m of roster) {
     const isMember = m?.is_member === true

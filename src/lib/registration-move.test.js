@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
-  entryLabel, entryHeadcount, computePriceGapCents, evaluateMove, MOVE_ERRORS,
-  listMoveTargets, moveRegistration,
+  entryLabel, entryHeadcount, computePriceGapCents, evaluateMove, MOVE_ERRORS, MOVE_ERROR_MESSAGES,
+  listMoveTargets, moveRegistration, loadRegistrationForMove,
 } from './registration-move.js'
 
 // The moved email is loaded lazily by moveRegistration; here it always fails,
@@ -56,6 +56,24 @@ describe('computePriceGapCents', () => {
   })
   it('counts one person for a team-less entry', () => {
     expect(computePriceGapCents({ sourceEvent: source, targetEvent: target, members: [] })).toBe(500)
+  })
+  it('prices `headcount` non-members when no roster is loaded', () => {
+    expect(computePriceGapCents({ sourceEvent: source, targetEvent: target, members: [], headcount: 3 })).toBe(1500)
+  })
+  it('the roster wins over headcount when it is loaded', () => {
+    expect(computePriceGapCents({ sourceEvent: source, targetEvent: target, members: [{ is_member: true }], headcount: 3 })).toBe(500)
+  })
+})
+
+describe('MOVE_ERRORS', () => {
+  it('carries load_failed and write_failed', () => {
+    expect(MOVE_ERRORS.LOAD_FAILED).toBe('load_failed')
+    expect(MOVE_ERRORS.WRITE_FAILED).toBe('write_failed')
+  })
+  it('has plain-English copy for every code', () => {
+    for (const code of Object.values(MOVE_ERRORS)) expect(MOVE_ERROR_MESSAGES[code], code).toMatch(/\S/)
+    expect(MOVE_ERROR_MESSAGES.load_failed).toBe('The entry could not be read. Try again.')
+    expect(MOVE_ERROR_MESSAGES.write_failed).toBe('The move could not be saved. Nothing changed. Try again.')
   })
 })
 
@@ -181,7 +199,8 @@ function fakeDb(answers, { rpc } = {}) {
 
 const REG = {
   id: 'r1', status: 'confirmed', race_event_id: 'e1', wave_id: 'w1', team_id: 't1', contact_id: 'c1',
-  teams: { id: 't1', name: 'The Crushers', size: 2, team_members: [{ id: 'm1', name: 'Aoife', role: 'captain', is_member: true }, { id: 'm2', name: 'Dan', role: 'member', is_member: false }] },
+  contact: { id: 'c1', first_name: 'Aoife', last_name: 'Byrne', email: 'lead@example.test' },
+  teams: { id: 't1', name: 'The Crushers', size: 2, team_members: [{ id: 'm1', name: 'Aoife', role: 'captain', is_member: true, email: 'captain@example.test' }, { id: 'm2', name: 'Dan', role: 'member', is_member: false, email: 'dan@example.test' }] },
   race: { id: 'e1', name: 'Hatch Oct 18', race_date: '2026-10-18', location_id: 'L1', host_id: null, member_pricing_enabled: true, member_fee_cents: 2000, non_member_fee_cents: 3000 },
 }
 const TARGET = { id: 'e2', name: 'Hatch Oct 25', race_date: '2026-10-25', location_id: 'L1', host_id: null, active: true, status: 'published',
@@ -208,10 +227,57 @@ describe('listMoveTargets', () => {
     })
     const r = await listMoveTargets(db, { registrationId: 'r1', allowedLocationIds: null, today: '2026-10-08' })
     expect(r.targets.map((t) => t.id)).toEqual(['e2', 'e4'])
+    const q = db.calls.find((c) => c.table === 'race_events')
+    expect(q.ops.some((o) => o[0] === 'in' && o[1] === 'location_id')).toBe(false)
+  })
+  it('filters payee and studio in the query, before the row cap', async () => {
+    const db = fakeDb({
+      race_registrations: (q) => (q.ops.some((o) => o[0] === 'eq' && o[1] === 'id') ? { data: REG } : { data: [] }),
+      race_events: { data: [TARGET] },
+    })
+    await listMoveTargets(db, { registrationId: 'r1', allowedLocationIds: ['L1'], today: '2026-10-08' })
+    const ops = db.calls.find((c) => c.table === 'race_events').ops
+    const at = (pred) => ops.findIndex(pred)
+    const payee = at((o) => o[0] === 'is' && o[1] === 'host_id' && o[2] === null)
+    const studio = at((o) => o[0] === 'in' && o[1] === 'location_id' && o[2].join() === 'L1')
+    const cap = at((o) => o[0] === 'limit')
+    expect(payee).toBeGreaterThanOrEqual(0)
+    expect(studio).toBeGreaterThanOrEqual(0)
+    expect(payee).toBeLessThan(cap)
+    expect(studio).toBeLessThan(cap)
+  })
+  it('a hosted source filters the query on its host', async () => {
+    const hosted = { ...REG, race: { ...REG.race, host_id: 'h1' } }
+    const db = fakeDb({
+      race_registrations: (q) => (q.ops.some((o) => o[0] === 'eq' && o[1] === 'id') ? { data: hosted } : { data: [] }),
+      race_events: { data: [TARGET, { ...TARGET, id: 'e3', host_id: 'h1' }] },
+    })
+    const r = await listMoveTargets(db, { registrationId: 'r1', today: '2026-10-08' })
+    const ops = db.calls.find((c) => c.table === 'race_events').ops
+    expect(ops).toContainEqual(['eq', 'host_id', 'h1'])
+    expect(r.targets.map((t) => t.id)).toEqual(['e3']) // the JS belt still drops e2
   })
   it('not_found for an unknown entry', async () => {
     const r = await listMoveTargets(fakeDb({ race_registrations: { data: null } }), { registrationId: 'nope' })
     expect(r).toEqual({ ok: false, error: 'not_found' })
+  })
+  it('load_failed when the entry cannot be read', async () => {
+    const r = await listMoveTargets(fakeDb({ race_registrations: { data: null, error: { message: 'timeout' } } }), { registrationId: 'r1' })
+    expect(r).toEqual({ ok: false, error: 'load_failed' })
+  })
+})
+
+describe('loadRegistrationForMove', () => {
+  it('returns the row, or null for both no row and a failed read', async () => {
+    expect(await loadRegistrationForMove(fakeDb({ race_registrations: { data: REG } }), 'r1')).toBe(REG)
+    expect(await loadRegistrationForMove(fakeDb({ race_registrations: { data: null } }), 'r1')).toBeNull()
+    expect(await loadRegistrationForMove(fakeDb({ race_registrations: { data: null, error: { message: 'timeout' } } }), 'r1')).toBeNull()
+  })
+  it('embeds the lead contact', async () => {
+    const db = fakeDb({ race_registrations: { data: REG } })
+    await loadRegistrationForMove(db, 'r1')
+    const select = db.calls[0].ops.find((o) => o[0] === 'select')[1]
+    expect(select).toMatch(/contact:contact_id\s*\(\s*id, first_name, last_name, email\s*\)/)
   })
 })
 
@@ -220,11 +286,11 @@ describe('moveRegistration', () => {
     const rpc = vi.fn(async () => ({ data: { id: 'mv1', registration_id: 'r1', to_event_id: 'e2', price_gap_cents: 1000 }, error: null }))
     const db = fakeDb({
       race_registrations: (q) => {
-        if (q.ops.some((o) => o[0] === 'eq' && o[1] === 'id')) return { data: REG }
+        if (q.ops.some((o) => o[0] === 'eq' && o[1] === 'id')) return over.regAnswer ?? { data: over.reg ?? REG }
         if (q.ops.some((o) => o[0] === 'eq' && o[1] === 'team_id')) return { data: over.existingOnTarget ?? null }
         return { data: over.waveRegs ?? [] }
       },
-      race_events: { data: over.target ?? TARGET },
+      race_events: over.targetAnswer ?? { data: over.target ?? TARGET },
       race_checkins: { data: null, count: over.checkins ?? 0, error: null },
       ...over.answers,
     }, { rpc })
@@ -269,6 +335,51 @@ describe('moveRegistration', () => {
     const r = await moveRegistration(db, { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9', actor })
     expect(r.ok).toBe(false)
     expect(r.error).toBe('write_failed')
+  })
+  it('not_found when the entry has no row; load_failed when it cannot be read', async () => {
+    const a = happyDb({ regAnswer: { data: null } })
+    expect(await moveRegistration(a.db, { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9', actor })).toEqual({ ok: false, error: 'not_found' })
+    const b = happyDb({ regAnswer: { data: null, error: { message: 'timeout' } } })
+    expect(await moveRegistration(b.db, { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9', actor })).toEqual({ ok: false, error: 'load_failed' })
+    expect(a.rpc).not.toHaveBeenCalled()
+    expect(b.rpc).not.toHaveBeenCalled()
+  })
+  it('target_unavailable when the target is missing or cannot be read', async () => {
+    for (const targetAnswer of [{ data: null }, { data: null, error: { message: 'timeout' } }]) {
+      const { db, rpc } = happyDb({ targetAnswer })
+      expect(await moveRegistration(db, { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9', actor })).toMatchObject({ ok: false, error: 'target_unavailable' })
+      expect(rpc).not.toHaveBeenCalled()
+    }
+  })
+  it('prices a roster-less team for its whole size, matching p_headcount', async () => {
+    const reg = { ...REG, teams: { ...REG.teams, size: 4, team_members: [] } }
+    const { db, rpc } = happyDb({ reg })
+    const r = await moveRegistration(db, { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9', actor, notify: false })
+    expect(r.ok).toBe(true)
+    expect(rpc.mock.calls[0][1]).toMatchObject({ p_headcount: 4, p_price_gap_cents: 4 * 500 })
+  })
+  describe('the race.moved contact event', () => {
+    const emitted = (db) => db.calls.filter((c) => c.table === 'contact_events').map((c) => c.ops.find((o) => o[0] === 'insert')[1])
+    it('goes to the lead contact', async () => {
+      const { db } = happyDb()
+      await moveRegistration(db, { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9', actor, notify: false })
+      expect(emitted(db)).toEqual([expect.objectContaining({ event_type: 'race.moved', contact_email: 'lead@example.test', contact_id: 'c1' })])
+    })
+    it('falls back to the captain, then the first member', async () => {
+      const a = happyDb({ reg: { ...REG, contact: null } })
+      await moveRegistration(a.db, { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9', actor, notify: false })
+      expect(emitted(a.db)[0].contact_email).toBe('captain@example.test')
+      const members = [{ id: 'm2', name: 'Dan', role: 'member', is_member: false, email: 'dan@example.test' }, { id: 'm3', name: 'Eve', role: 'member', is_member: false }]
+      const b = happyDb({ reg: { ...REG, contact: null, teams: { ...REG.teams, team_members: members } } })
+      await moveRegistration(b.db, { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9', actor, notify: false })
+      expect(emitted(b.db)[0].contact_email).toBe('dan@example.test')
+    })
+    it('is skipped when nobody on the entry has an email, and the move stands', async () => {
+      const { db } = happyDb({ reg: { ...REG, contact: { id: 'c1' }, teams: null, team_id: null } })
+      const r = await moveRegistration(db, { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9', actor, notify: false })
+      expect(r.ok).toBe(true)
+      expect(emitted(db)).toEqual([])
+    })
   })
   it('a failing moved email never fails the move', async () => {
     const { db, rpc } = happyDb()

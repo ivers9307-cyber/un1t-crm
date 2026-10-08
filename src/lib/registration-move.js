@@ -102,12 +102,18 @@ const EVENT_COLUMNS = `
   locations:location_id ( id, name, is_host_anchor, organization_id )
 `
 
-/** The entry with its team, roster and source event. null when missing. */
-export async function loadRegistrationForMove(db, registrationId) {
+/**
+ * The entry with its lead contact, team, roster and source event.
+ * { registration, error }: error is set only when the read FAILED, so the
+ * caller can tell "no such entry" (not_found) from "could not read it"
+ * (load_failed).
+ */
+async function readRegistrationForMove(db, registrationId) {
   const { data, error } = await db
     .from('race_registrations')
     .select(`
       id, status, race_event_id, wave_id, team_id, contact_id, registered_at,
+      contact:contact_id ( id, first_name, last_name, email ),
       teams:team_id ( id, name, size, location_id,
         team_members ( id, name, email, role, is_member, contact_id ) ),
       wave:wave_id ( id, start_time, label ),
@@ -117,9 +123,20 @@ export async function loadRegistrationForMove(db, registrationId) {
     .maybeSingle()
   if (error) {
     logError('registration-move', 'entry load failed', { err: error, registrationId })
-    return null
+    return { registration: null, error }
   }
-  return data || null
+  return { registration: data || null, error: null }
+}
+
+/** The entry for the routes: the row, or null (missing or unreadable). */
+export async function loadRegistrationForMove(db, registrationId) {
+  const { registration } = await readRegistrationForMove(db, registrationId)
+  return registration
+}
+
+/** The not_found / load_failed refusal for a read that produced no entry. */
+function entryReadRefusal(error) {
+  return { ok: false, error: error ? MOVE_ERRORS.LOAD_FAILED : MOVE_ERRORS.NOT_FOUND }
 }
 
 async function loadEvent(db, eventId) {
@@ -206,24 +223,30 @@ function entrySummary(registration) {
  * @param {string} [args.today]
  */
 export async function listMoveTargets(db, { registrationId, allowedEventIds = null, allowedLocationIds = null, today = dublinTodayStr() }) {
-  const registration = await loadRegistrationForMove(db, registrationId)
-  if (!registration) return { ok: false, error: MOVE_ERRORS.NOT_FOUND }
+  const { registration, error: readErr } = await readRegistrationForMove(db, registrationId)
+  if (!registration) return entryReadRefusal(readErr)
   const source = registration.race
 
-  const { data: events, error } = await db
+  // Payee and studio are filtered in the query so the row cap applies to
+  // eligible events only; the JS checks below stay as a belt.
+  let query = db
     .from('race_events')
     .select(EVENT_COLUMNS)
     .eq('active', true)
     .eq('status', 'published')
     .gte('race_date', today)
+  query = source?.host_id ? query.eq('host_id', source.host_id) : query.is('host_id', null)
+  if (Array.isArray(allowedLocationIds)) query = query.in('location_id', allowedLocationIds)
+  const { data: events, error } = await query
     .order('race_date', { ascending: true })
     .limit(200)
   if (error) {
     logError('registration-move', 'targets load failed', { err: error, registrationId })
-    return { ok: false, error: 'load_failed' }
+    return { ok: false, error: MOVE_ERRORS.LOAD_FAILED }
   }
 
   const members = membersOf(registration)
+  const headcount = entryHeadcount(registration)
   const targets = []
   for (const ev of events || []) {
     if (ev.id === source?.id) continue
@@ -241,7 +264,7 @@ export async function listMoveTargets(db, { registrationId, allowedEventIds = nu
       location_id: ev.location_id, location_name: ev.locations?.name || '',
       crosses_studio: (ev.location_id || null) !== (source?.location_id || null),
       capacity_mode: mode,
-      price_gap_cents: computePriceGapCents({ sourceEvent: source, targetEvent: ev, members }),
+      price_gap_cents: computePriceGapCents({ sourceEvent: source, targetEvent: ev, members, headcount }),
       currency: ev.payment_currency || source?.payment_currency || 'EUR',
       waves,
     })
@@ -266,12 +289,14 @@ export async function moveRegistration(db, {
   actor, note = null, notify = true, force = false, allowedEventIds = null,
   today = dublinTodayStr(),
 }) {
-  const registration = await loadRegistrationForMove(db, registrationId)
-  if (!registration) return { ok: false, error: MOVE_ERRORS.NOT_FOUND }
+  const { registration, error: readErr } = await readRegistrationForMove(db, registrationId)
+  if (!registration) return entryReadRefusal(readErr)
+  // Outside the host's own events: 404, the host fence.
   if (allowedEventIds && !allowedEventIds.has(targetEventId)) return { ok: false, error: MOVE_ERRORS.NOT_FOUND }
 
+  // A missing or unreadable target is the target's problem, not the entry's.
   const targetEvent = await loadEvent(db, targetEventId)
-  if (!targetEvent) return { ok: false, error: MOVE_ERRORS.NOT_FOUND }
+  if (!targetEvent) return { ok: false, error: MOVE_ERRORS.TARGET_UNAVAILABLE }
   const targetWave = targetWaveId ? (targetEvent.waves || []).find((w) => w.id === targetWaveId) || { id: targetWaveId, race_event_id: null } : null
 
   const [targetWaveRegistrations, checkinCount, existingOnTarget] = await Promise.all([
@@ -287,12 +312,13 @@ export async function moveRegistration(db, {
   if (!verdict.ok) return verdict
 
   const members = membersOf(registration)
-  const priceGapCents = computePriceGapCents({ sourceEvent: registration.race, targetEvent, members })
+  const headcount = entryHeadcount(registration)
+  const priceGapCents = computePriceGapCents({ sourceEvent: registration.race, targetEvent, members, headcount })
   const { data: move, error: rpcErr } = await db.rpc('move_race_registration', {
     p_registration_id: registrationId,
     p_to_event_id: targetEventId,
     p_to_wave_id: targetWave?.id || null,
-    p_headcount: entryHeadcount(registration),
+    p_headcount: headcount,
     p_price_gap_cents: priceGapCents,
     p_forced: force === true,
     p_actor_type: actor?.type || 'staff',
@@ -302,19 +328,28 @@ export async function moveRegistration(db, {
   })
   if (rpcErr || !move) {
     logError('registration-move', 'move_race_registration failed', { err: rpcErr, registrationId, targetEventId })
-    return { ok: false, error: 'write_failed' }
+    return { ok: false, error: MOVE_ERRORS.WRITE_FAILED }
   }
 
   // After-effects: each in its own try, none may fail the move.
-  const leadEmail = members.find((m) => m?.role === 'captain')?.email || members[0]?.email || null
-  try {
-    await emitEvent({
-      db, eventType: EVENT_TYPES.RACE_MOVED, contactEmail: leadEmail || '',
-      contactId: registration.contact_id || null, locationId: targetEvent.location_id || null,
-      sourceType: 'race_registration', sourceId: registrationId,
-      metadata: { from_event_id: registration.race_event_id, to_event_id: targetEventId, move_id: move.id, forced: force === true, price_gap_cents: priceGapCents },
-    })
-  } catch (e) { logWarn('registration-move', 'contact event failed', { err: e, registrationId }) }
+  // The lead contact's email; a team is never assumed, so the roster is
+  // only a fallback (captain, then the first member with an email).
+  const leadEmail = registration.contact?.email
+    || members.find((m) => m?.role === 'captain')?.email
+    || members.find((m) => m?.email)?.email
+    || null
+  if (!leadEmail) {
+    logWarn('registration-move', 'no email on the entry; race.moved contact event skipped', { registrationId, moveId: move.id })
+  } else {
+    try {
+      await emitEvent({
+        db, eventType: EVENT_TYPES.RACE_MOVED, contactEmail: leadEmail,
+        contactId: registration.contact_id || null, locationId: targetEvent.location_id || null,
+        sourceType: 'race_registration', sourceId: registrationId,
+        metadata: { from_event_id: registration.race_event_id, to_event_id: targetEventId, move_id: move.id, forced: force === true, price_gap_cents: priceGapCents },
+      })
+    } catch (e) { logWarn('registration-move', 'contact event failed', { err: e, registrationId }) }
+  }
   try {
     if (registration.contact_id && targetEvent.location_id) {
       const { error: actErr } = await db.from('activities').insert({
