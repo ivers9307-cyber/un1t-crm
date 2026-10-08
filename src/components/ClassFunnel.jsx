@@ -14,6 +14,8 @@ import { useState, useEffect, useRef } from 'react'
 import { isValidMobileNumber } from '@/lib/phone-validate'
 import { trackFunnelStep } from '@/lib/funnel-track'
 import { readVisitOrigin } from '@/lib/visit-origin'
+import { newLeadEventId, pixelUserData, fireBrowserLead } from '@/lib/meta-pixel-lead'
+import { metaPixelIdsForPath } from '@/lib/meta-pixel-paths'
 import ClassFunnelCheckout from '@/components/landing-page/ClassFunnelCheckout'
 
 // MATCHQUALITY.1 — Meta's `_fbp` cookie, or null. Never throws (no document
@@ -305,6 +307,10 @@ export default function ClassFunnel(props) {
     if (submitting) return
     if (!c) { setError('Pick a class first.'); setStep('classpick'); return }
     setSubmitting(true); setError(null)
+    // BROWSERLEAD.1 — one id for this lead, sent to the server (its CAPI Lead
+    // uses it as event_id) and used by the Pixel's Lead below, so Meta
+    // dedupes the pair and keeps the better-matched copy.
+    const leadEventId = newLeadEventId()
     try {
       const r = await fetch('/api/public/class-booking', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -316,6 +322,7 @@ export default function ClassFunnel(props) {
           attribution: buildAttribution(),
           // VISIT-ORIGIN.1 — first page of the visit + referrer, if remembered.
           visit: readVisitOrigin() || undefined,
+          lead_event_id: leadEventId,
         }),
       })
       const j = await r.json().catch(() => ({}))
@@ -332,6 +339,15 @@ export default function ClassFunnel(props) {
         }
         setError(j.error || 'Something went wrong — please try again.'); return
       }
+      // BROWSERLEAD.1 — the server has sent its Lead; send the browser twin
+      // (no-op without consent). Before any payment step: the lead exists
+      // from here whether or not the intro is paid for.
+      fireBrowserLead({
+        pixelIds: typeof window !== 'undefined' ? metaPixelIdsForPath(window.location.pathname) : [],
+        eventId: leadEventId,
+        userData: pixelUserData({ email: form.email, phone: form.phone, firstName: form.first_name, lastName: form.last_name }),
+        contentName: c.name,
+      })
       if (j.data?.requiresPayment) {
         setPayment({ paymentId: j.data.paymentId, checkout: j.data.checkout })
         fireStep('payment_view')

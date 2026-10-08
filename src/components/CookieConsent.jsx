@@ -23,6 +23,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { SITE_META_PIXEL_ID, metaPixelIdsForPath } from '@/lib/meta-pixel-paths'
+import { reportConsent } from '@/lib/consent-telemetry'
 
 const STORAGE_KEY = 'un1t_cookie_consent_v1'
 const EXPIRY_DAYS = 180
@@ -211,6 +212,9 @@ export default function CookieConsent() {
       setMarketing(!!existing.marketing)
     } else {
       setVisible(true)
+      // CONSENTRATE.1 — one row per banner shown, so accept/reject/ignore
+      // rates can be read from funnel_events.
+      reportConsent('consent_shown')
     }
 
     // Allow reopening preferences from anywhere (e.g. a footer link
@@ -229,6 +233,7 @@ export default function CookieConsent() {
   function acceptAll() {
     const c = { essential: true, analytics: true, marketing: true }
     saveConsent(c)
+    reportConsent('consent_accept', c)
     applyConsent(c)
     setVisible(false)
     setPrefsOpen(false)
@@ -237,6 +242,7 @@ export default function CookieConsent() {
   function rejectAll() {
     const c = { essential: true, analytics: false, marketing: false }
     saveConsent(c)
+    reportConsent('consent_reject', c)
     setVisible(false)
     setPrefsOpen(false)
   }
@@ -244,6 +250,7 @@ export default function CookieConsent() {
   function saveSelected() {
     const c = { essential: true, analytics, marketing }
     saveConsent(c)
+    reportConsent('consent_custom', c)
     applyConsent(c)
     setVisible(false)
     setPrefsOpen(false)

@@ -49,6 +49,9 @@ const Schema = z.object({
     // MATCHQUALITY.1 — the Pixel's browser id cookie, when consent let it set.
     fbp: z.string().max(100).optional(),
   }).optional(),
+  // BROWSERLEAD.1 — the id the browser's Pixel Lead will carry, so the CAPI
+  // Lead below shares it and Meta dedupes the pair. Opaque, shape-checked.
+  lead_event_id: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/).optional(),
   // VISIT-ORIGIN.1 — first page of the visit + its referrer. Low-trust;
   // sanitiseVisitOrigin reduces it before anything is stored.
   visit: z.object({
@@ -277,7 +280,9 @@ export async function POST(request) {
     await sendWebsiteConversion(db, {
       locationId, eventName: 'Lead', email: b.email, phone: b.phone,
       eventSourceUrl,
-      eventId: `classlead-${contactId}-${b.event_id}`,
+      // BROWSERLEAD.1 — the browser's id when it sent one (dedupe with the
+      // Pixel's Lead); the old contact+class key otherwise.
+      eventId: b.lead_event_id || `classlead-${contactId}-${b.event_id}`,
       contentName: chosen.name,
       // METADATASET.1 — what lets Meta credit this lead to the ad click.
       fbc: fbcFromFbclid(b.attribution?.fbclid),
