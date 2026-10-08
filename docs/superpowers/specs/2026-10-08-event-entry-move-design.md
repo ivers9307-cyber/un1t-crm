@@ -117,12 +117,17 @@ Two new nullable columns, following the existing `confirmation_email_*` and
 - `moved_email_subject text`
 - `moved_email_intro text`
 
-Defaults live in code, not the column: subject
-`Your entry has moved to {{event_name}}`, intro
-`Your entry for {{old_event_name}} has moved to {{event_name}} on {{event_date}} at {{wave_time}}. Your new tickets are below.`
-Both are editable on the event form's Emails section beside the existing two.
-The merge tags `old_event_name`, `old_event_date` and `old_wave_time` are added
-to `applyEventMergeTags` extras for this kind only.
+Defaults live in code, not the column (`buildMovedDefaults` in
+`race-confirmations.js`): subject `Your entry has moved to <new event>`, and an
+intro paragraph naming the old event with its date and wave and the new event,
+above the new date, wave and place in the info rows and the fresh QR codes. As
+with the other two kinds, `moved_email_intro` replaces the grey "what's next"
+box. Both are editable on the event form's Emails section beside the existing
+two. The merge tags `old_event_name` and `old_when` (the old date and wave
+together, e.g. `Saturday 18 October 2026 · 11:00`) are added to
+`applyEventMergeTags` extras; only this kind sets them, so they render blank
+elsewhere. The new event is `{{event_name}}` and `{{when}}` (its wave, or its
+date when it has none), as in the other two.
 
 ### SQL function `move_race_registration`
 
