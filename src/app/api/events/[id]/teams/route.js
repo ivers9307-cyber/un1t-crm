@@ -1,6 +1,8 @@
 // /api/events/[id]/teams
 //
-// GET   — list all registrations for a race with team + members
+// GET   — list all registrations for a race with team + members, plus the
+//         move history (EVENT-MOVE.1): `last_move` per registration and a
+//         top-level `moved_out`
 // POST  — manually create a team registration (no payment flow)
 //
 // Manager+ at the race's location.
@@ -15,6 +17,8 @@ import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
 import { triggerSequencesForRaceRegistered } from '@/lib/sequences'
 import { addEventAttendeesToHostList } from '@/lib/host-contact-list'
 import { logError } from '@/lib/log'
+// Browser-safe half of the move lib; never '@/lib/registration-move' in a client component.
+import { entryLabel } from '@/lib/registration-entry'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -103,7 +107,57 @@ export async function GET(_request, props) {
     for (const r of regs) r.payment = byReg[r.id] || null
   }
 
-  return NextResponse.json({ success: true, data: regs })
+  const { lastMoveByReg, movedOut } = await loadMoveHistory(db, params.id, regIds)
+  for (const r of regs) r.last_move = lastMoveByReg[r.id] || null
+
+  return NextResponse.json({ success: true, data: regs, moved_out: movedOut })
+}
+
+/**
+ * EVENT-MOVE.1 — the latest move INTO this event per entry (the "Moved from"
+ * chip) and every move OUT of it (the footer), both from registration_moves.
+ * Decoration only: a failed (or throwing) read costs the chip or the footer,
+ * logged, and never the teams list.
+ */
+async function loadMoveHistory(db, eventId, regIds) {
+  const lastMoveByReg = {}
+  let movedOut = []
+  if (regIds.length > 0) {
+    try {
+      const { data: movesIn, error: movesInErr } = await db
+        .from('registration_moves')
+        .select('id, registration_id, created_at, actor_name, price_gap_cents, forced, from_event:from_event_id ( id, name, race_date )')
+        .in('registration_id', regIds)
+        .eq('to_event_id', eventId)
+        .order('created_at', { ascending: false })
+      if (movesInErr) logError('events-teams', 'moves-in read failed; chips omitted', { err: movesInErr, eventId })
+      // Newest first, so the first row seen per entry is its latest move in.
+      for (const m of movesIn || []) if (!lastMoveByReg[m.registration_id]) lastMoveByReg[m.registration_id] = m
+    } catch (err) {
+      logError('events-teams', 'moves-in read threw; chips omitted', { err, eventId })
+    }
+  }
+  try {
+    // The registration embed carries the team the entry sits on NOW (a
+    // cross-studio move clones it), which is the right name to show; the
+    // contact is there for an entry with no team.
+    const { data: movesOut, error: movesOutErr } = await db
+      .from('registration_moves')
+      .select('id, created_at, actor_name, registration:registration_id ( id, contact:contact_id ( first_name, last_name ), teams:team_id ( name, size, team_members ( name, role ) ) ), to_event:to_event_id ( id, name, race_date )')
+      .eq('from_event_id', eventId)
+      .order('created_at', { ascending: false })
+      .limit(200)
+    if (movesOutErr) logError('events-teams', 'moves-out read failed; footer omitted', { err: movesOutErr, eventId })
+    movedOut = (movesOut || []).map((m) => ({
+      id: m.id, created_at: m.created_at, actor_name: m.actor_name,
+      label: entryLabel(m.registration || {}),
+      to_event: m.to_event || null,
+    }))
+  } catch (err) {
+    logError('events-teams', 'moves-out read threw; footer omitted', { err, eventId })
+    movedOut = []
+  }
+  return { lastMoveByReg, movedOut }
 }
 
 export async function POST(request, props) {
