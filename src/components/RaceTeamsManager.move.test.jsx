@@ -2,7 +2,7 @@
 // EVENT-MOVE.1 — Move to event is gated like Cancel entry, the chip reads the
 // last move in, and the footer lists moves out.
 import { describe, it, expect, afterEach, vi, beforeEach } from 'vitest'
-import { render, cleanup, screen } from '@testing-library/react'
+import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/react'
 import RaceTeamsManager from './RaceTeamsManager.jsx'
 
 const race = { id: 'e2', allowed_team_sizes: [2], waves: [{ id: 'w9', start_time: '11:00:00', label: null, display_order: 0 }] }
@@ -64,5 +64,34 @@ describe('RaceTeamsManager — Move to event', () => {
     render(<RaceTeamsManager race={race} canMoveEntries />)
     await screen.findByText(/1 team registered/)
     expect(screen.queryByRole('button', { name: /Move to event/ })).toBeNull()
+  })
+  it('a move that could not be emailed leaves an amber notice, dismissable, not the error banner', async () => {
+    const TARGETS = {
+      entry: { id: 'r1', label: 'The Crushers', headcount: 2, status: 'confirmed' },
+      source: { event_id: 'e2', event_name: 'Hatch Oct 25', race_date: '2026-10-25', wave_id: 'w9', location_id: 'L1' },
+      targets: [{ id: 'e7', name: 'Hatch Nov 8', race_date: '2026-11-08', location_id: 'L1', location_name: 'Hatch St', crosses_studio: false, price_gap_cents: 0, currency: 'EUR',
+        waves: [{ id: 'w70', start_time: '11:00:00', label: null, capacity: 10, spots_left: 4 }] }],
+    }
+    const fetchMock = vi.fn(async (url, init) => {
+      if (url.endsWith('/move-targets')) return { ok: true, status: 200, json: async () => ({ success: true, data: TARGETS }) }
+      if (url.endsWith('/move') && init?.method === 'POST') return { ok: true, status: 200, json: async () => ({ success: true, data: { move: { id: 'mv9' }, registration: { id: 'r1' }, notified: false } }) }
+      return { ok: true, status: 200, json: async () => ({ success: true, data: [reg], moved_out: [] }) }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<RaceTeamsManager race={race} canMoveEntries />)
+    fireEvent.click(await screen.findByRole('button', { name: /Move to event/ }))
+    await screen.findByText(/to another event/)
+    fireEvent.change(screen.getByLabelText(/Target event/), { target: { value: 'e7' } })
+    fireEvent.change(screen.getByLabelText(/^Time$/), { target: { value: 'w70' } })
+    fireEvent.click(screen.getByRole('button', { name: /^Move entry$/ }))
+    const notice = await screen.findByText(/The customer could not be emailed; tell them yourself\./)
+    const banner = notice.closest('[role="status"]')
+    expect(banner).toBeTruthy()
+    expect(banner.className).toContain('bg-amber-500/10')
+    expect(banner.className).toContain('text-amber-700')
+    expect(banner.className).not.toContain('red')
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    fireEvent.click(screen.getByRole('button', { name: /Dismiss notice/ }))
+    expect(screen.queryByText(/could not be emailed/)).toBeNull()
   })
 })

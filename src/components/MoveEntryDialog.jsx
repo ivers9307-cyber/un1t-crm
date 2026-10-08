@@ -7,7 +7,7 @@
 // or waive it afterwards. A full wave is a warning with two choices; any other
 // refusal (a `conflict` 409 included) is the server's plain-English message in
 // the form. A move that lands but could not be emailed is reported through
-// onError (the page's banner) before onMoved, so staff tell the customer.
+// onNotice (a warning, not a failure) before onMoved, so staff tell the customer.
 //
 // Spots left per time are shown: this is a staff surface (and the host's own
 // portal in PR 2), never a customer one.
@@ -32,7 +32,7 @@ function waveLabel(w) {
 }
 
 export default function MoveEntryDialog({
-  open, registration, onClose, onMoved, onError,
+  open, registration, onClose, onMoved, onError, onNotice,
   targetsUrl = `/api/event-registrations/${registration?.id}/move-targets`,
   moveUrl = `/api/event-registrations/${registration?.id}/move`,
 }) {
@@ -88,7 +88,7 @@ export default function MoveEntryDialog({
       if (r.status === 409 && j.error === 'wave_full') { setFullWarning({ spots_left: j.spots_left, message: j.message }); return }
       if (!r.ok || j.success === false) { setFormError(j.message || j.error || 'The move could not be completed.'); return }
       // The move stands either way; say so when the email the operator asked for did not go.
-      if (notify && j.data?.notified === false) onError?.(NOT_EMAILED_MESSAGE)
+      if (notify && j.data?.notified === false) onNotice?.(NOT_EMAILED_MESSAGE)
       onMoved?.(j.data)
     } catch (e) {
       onError?.(e.message || 'Network error')

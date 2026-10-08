@@ -20,6 +20,9 @@ export default function RaceTeamsManager({ race, canCancelEntries = false, canMo
   const [loadError, setLoadError] = useState(null)
   const [showAddForm, setShowAddForm] = useState(false)
   const [actionError, setActionError] = useState(null)
+  // EVENT-MOVE.1 — a warning that is not a failure (a move that landed but
+  // could not be emailed). Amber, dismissable, separate from actionError.
+  const [actionNotice, setActionNotice] = useState(null)
   const [movedOut, setMovedOut] = useState([])
 
   const waves = (race?.waves || []).slice().sort((a, b) =>
@@ -65,6 +68,12 @@ export default function RaceTeamsManager({ race, canCancelEntries = false, canMo
         <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-sm rounded-md p-3 inline-flex items-start gap-2">
           <AlertCircle size={14} className="mt-0.5 shrink-0" /> {actionError}
           <button onClick={() => setActionError(null)} className="ml-auto"><X size={12} /></button>
+        </div>
+      )}
+      {actionNotice && (
+        <div role="status" className="bg-amber-500/10 border border-amber-500/30 text-amber-700 text-sm rounded-md p-3 inline-flex items-start gap-2">
+          <AlertCircle size={14} className="mt-0.5 shrink-0" /> {actionNotice}
+          <button type="button" onClick={() => setActionNotice(null)} className="ml-auto" aria-label="Dismiss notice"><X size={12} /></button>
         </div>
       )}
 
@@ -119,6 +128,7 @@ export default function RaceTeamsManager({ race, canCancelEntries = false, canMo
             waves={waves}
             onChanged={load}
             onError={setActionError}
+            onNotice={setActionNotice}
             canCancel={canCancelEntries}
             canMove={canMoveEntries}
           />
@@ -280,7 +290,7 @@ function AddTeamForm({ race, waves, onCancel, onAdded, onError }) {
 
 // ─── One-team card ───────────────────────────────────────────────
 
-function TeamCard({ registration, waves, onChanged, onError, canCancel = false, canMove = false }) {
+function TeamCard({ registration, waves, onChanged, onError, onNotice, canCancel = false, canMove = false }) {
   const team = registration.teams
   const wave = registration.wave
   const members = (team?.team_members || []).slice().sort((a, b) =>
@@ -497,6 +507,7 @@ function TeamCard({ registration, waves, onChanged, onError, canCancel = false, 
           onClose={() => setMoving(false)}
           onMoved={() => { setMoving(false); onChanged() }}
           onError={onError}
+          onNotice={onNotice}
         />
       )}
     </div>

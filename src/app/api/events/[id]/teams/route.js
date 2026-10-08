@@ -127,12 +127,17 @@ async function loadMoveHistory(db, eventId, regIds) {
       const { data: movesIn, error: movesInErr } = await db
         .from('registration_moves')
         .select('id, registration_id, created_at, actor_name, price_gap_cents, forced, notified_at, from_event:from_event_id ( id, name, race_date )')
-        .in('registration_id', regIds)
+        // Filtered on the event alone: an .in() over every entry id grows the
+        // URL with the event and can outrun the request-line limit on a big one.
         .eq('to_event_id', eventId)
         .order('created_at', { ascending: false })
       if (movesInErr) logError('events-teams', 'moves-in read failed; chips omitted', { err: movesInErr, eventId })
       // Newest first, so the first row seen per entry is its latest move in.
-      for (const m of movesIn || []) if (!lastMoveByReg[m.registration_id]) lastMoveByReg[m.registration_id] = m
+      // A move in whose entry has since left this event is not on the list.
+      const onList = new Set(regIds)
+      for (const m of movesIn || []) {
+        if (onList.has(m.registration_id) && !lastMoveByReg[m.registration_id]) lastMoveByReg[m.registration_id] = m
+      }
     } catch (err) {
       logError('events-teams', 'moves-in read threw; chips omitted', { err, eventId })
     }

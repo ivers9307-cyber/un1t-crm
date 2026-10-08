@@ -86,7 +86,18 @@ describe('GET /api/events/[id]/teams — move history', () => {
     expect(json.data.find((r) => r.id === 'r1').last_move).toEqual(MOVE_IN_NEW)
     expect(json.data.find((r) => r.id === 'r2').last_move).toBeNull()
     const movesIn = globalThis.__calls.find((c) => c.table === 'registration_moves' && has(c.ops, 'eq', 'to_event_id', EV))
-    expect(has(movesIn.ops, 'in', 'registration_id', ['r1', 'r2'])).toBe(true)
+    // One filter on the event, never a URL that grows with the entry list.
+    expect(movesIn.ops.some((o) => o[0] === 'in')).toBe(false)
+    expect(has(movesIn.ops, 'order', 'created_at', { ascending: false })).toBe(true)
+  })
+
+  it('ignores a move in whose entry is no longer on this event', async () => {
+    const gone = { ...MOVE_IN_NEW, id: 'm9', registration_id: 'r-left-again', created_at: '2026-10-08T10:00:00Z' }
+    moves.in = { data: [gone, MOVE_IN_NEW, MOVE_IN_OLD], error: null }
+    const json = await (await GET(req(), props)).json()
+    expect(json.data.find((r) => r.id === 'r1').last_move).toEqual(MOVE_IN_NEW)
+    expect(json.data.find((r) => r.id === 'r2').last_move).toBeNull()
+    expect(json.data.some((r) => r.last_move?.id === 'm9')).toBe(false)
   })
 
   it('reads notified_at on the move in, so the card can say it was not emailed', async () => {
@@ -102,6 +113,9 @@ describe('GET /api/events/[id]/teams — move history', () => {
       id: 'm3', created_at: '2026-10-06T09:00:00Z', actor_name: 'Colm',
       label: 'Gone Team', to_event: { id: 'e2', name: 'Saturday', race_date: '2026-10-11' },
     }])
+    const movesOut = globalThis.__calls.find((c) => c.table === 'registration_moves' && has(c.ops, 'eq', 'from_event_id', EV))
+    expect(has(movesOut.ops, 'order', 'created_at', { ascending: false })).toBe(true)
+    expect(has(movesOut.ops, 'limit', 200)).toBe(true)
   })
 
   it('labels a team-less moved-out entry by its lead contact', async () => {
