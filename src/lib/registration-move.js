@@ -60,6 +60,7 @@ export function evaluateMove({
   if (!registration) return fail(MOVE_ERRORS.NOT_FOUND)
   if (!LIVE_STATUSES.has(registration.status)) return fail(MOVE_ERRORS.NOT_ACTIVE)
   if ((checkinCount || 0) > 0) return fail(MOVE_ERRORS.CHECKED_IN)
+  if (registration.race_started_at || registration.race_finished_at) return fail(MOVE_ERRORS.CHECKED_IN)
   if (!targetEvent) return fail(MOVE_ERRORS.TARGET_UNAVAILABLE)
   if (targetEvent.id === registration.race_event_id) return fail(MOVE_ERRORS.SAME_EVENT)
   if (targetEvent.active !== true || targetEvent.status !== 'published') return fail(MOVE_ERRORS.TARGET_UNAVAILABLE)
@@ -113,7 +114,8 @@ async function readRegistrationForMove(db, registrationId) {
     .from('race_registrations')
     .select(`
       id, status, race_event_id, wave_id, team_id, contact_id, registered_at,
-      contact:contact_id ( id, first_name, last_name, email ),
+      race_started_at, race_finished_at,
+      contact:contact_id ( id, first_name, last_name, email, location_id ),
       teams:team_id ( id, name, size, location_id,
         team_members ( id, name, email, role, is_member, contact_id ) ),
       wave:wave_id ( id, start_time, label ),
@@ -277,6 +279,12 @@ export async function listMoveTargets(db, { registrationId, allowedEventIds = nu
   }
 }
 
+/** move_race_registration's re-check under the row lock (mig 708): P0003. */
+function isConflict(err) {
+  if (!err) return false
+  return err.code === 'P0003' || /\bconflict\b/i.test(String(err.message || ''))
+}
+
 /**
  * Move one entry. Rules first (pure), then the SQL function, then best-effort
  * after-effects that never fail the move.
@@ -316,6 +324,9 @@ export async function moveRegistration(db, {
   const priceGapCents = computePriceGapCents({ sourceEvent: registration.race, targetEvent, members, headcount })
   const { data: move, error: rpcErr } = await db.rpc('move_race_registration', {
     p_registration_id: registrationId,
+    // The event the rules were judged against: the function re-checks it
+    // under the row lock and raises 'conflict' if the entry moved meanwhile.
+    p_from_event_id: registration.race_event_id,
     p_to_event_id: targetEventId,
     p_to_wave_id: targetWave?.id || null,
     p_headcount: headcount,
@@ -327,6 +338,10 @@ export async function moveRegistration(db, {
     p_note: note || null,
   })
   if (rpcErr || !move) {
+    if (isConflict(rpcErr)) {
+      logWarn('registration-move', 'entry changed under the move; refused as conflict', { err: rpcErr, registrationId, targetEventId })
+      return { ok: false, error: MOVE_ERRORS.CONFLICT }
+    }
     logError('registration-move', 'move_race_registration failed', { err: rpcErr, registrationId, targetEventId })
     return { ok: false, error: MOVE_ERRORS.WRITE_FAILED }
   }

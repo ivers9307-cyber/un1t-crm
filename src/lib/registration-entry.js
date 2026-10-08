@@ -29,13 +29,14 @@ export const MOVE_ERRORS = Object.freeze({
   WAVE_FULL: 'wave_full',
   LOAD_FAILED: 'load_failed',
   WRITE_FAILED: 'write_failed',
+  CONFLICT: 'conflict',
 })
 
 // Plain-English for the dialog. Keyed by code so the route never invents copy.
 export const MOVE_ERROR_MESSAGES = Object.freeze({
   not_found: 'That entry no longer exists.',
   not_active: 'Only a confirmed entry or one awaiting payment can be moved.',
-  checked_in: 'Someone on this entry has already checked in, so it cannot move.',
+  checked_in: 'Someone on this entry has already checked in or raced, so it cannot move.',
   same_event: 'That is the event the entry is already on. Use the wave select to change its time.',
   target_unavailable: 'The target event is not published or has already happened.',
   different_payee: 'The target event is paid to a different host, so the payment cannot follow.',
@@ -46,6 +47,7 @@ export const MOVE_ERROR_MESSAGES = Object.freeze({
   wave_full: 'That time is full.',
   load_failed: 'The entry could not be read. Try again.',
   write_failed: 'The move could not be saved. Nothing changed. Try again.',
+  conflict: 'This entry changed while you were moving it. Reload and try again.',
 })
 
 /**

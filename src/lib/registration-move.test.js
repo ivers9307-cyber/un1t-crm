@@ -66,9 +66,12 @@ describe('computePriceGapCents', () => {
 })
 
 describe('MOVE_ERRORS', () => {
-  it('carries load_failed and write_failed', () => {
+  it('carries load_failed, write_failed and conflict', () => {
     expect(MOVE_ERRORS.LOAD_FAILED).toBe('load_failed')
     expect(MOVE_ERRORS.WRITE_FAILED).toBe('write_failed')
+    expect(MOVE_ERRORS.CONFLICT).toBe('conflict')
+    expect(MOVE_ERROR_MESSAGES.conflict).toBe('This entry changed while you were moving it. Reload and try again.')
+    expect(MOVE_ERROR_MESSAGES.checked_in).toBe('Someone on this entry has already checked in or raced, so it cannot move.')
   })
   it('has plain-English copy for every code', () => {
     for (const code of Object.values(MOVE_ERRORS)) expect(MOVE_ERROR_MESSAGES[code], code).toMatch(/\S/)
@@ -108,6 +111,11 @@ describe('evaluateMove', () => {
   })
   it('checked_in when anyone has checked in', () => {
     expect(evaluateMove(base({ checkinCount: 1 })).error).toBe(MOVE_ERRORS.CHECKED_IN)
+  })
+  it('checked_in when the entry has started or finished racing', () => {
+    const reg = base().registration
+    expect(evaluateMove(base({ registration: { ...reg, race_started_at: '2026-10-08T10:00:00Z' } })).error).toBe(MOVE_ERRORS.CHECKED_IN)
+    expect(evaluateMove(base({ registration: { ...reg, race_finished_at: '2026-10-08T10:20:00Z' } })).error).toBe(MOVE_ERRORS.CHECKED_IN)
   })
   it('same_event when the target is the source', () => {
     expect(evaluateMove(base({ targetEvent: { ...base().targetEvent, id: 'e1' } })).error).toBe(MOVE_ERRORS.SAME_EVENT)
@@ -277,7 +285,9 @@ describe('loadRegistrationForMove', () => {
     const db = fakeDb({ race_registrations: { data: REG } })
     await loadRegistrationForMove(db, 'r1')
     const select = db.calls[0].ops.find((o) => o[0] === 'select')[1]
-    expect(select).toMatch(/contact:contact_id\s*\(\s*id, first_name, last_name, email\s*\)/)
+    expect(select).toMatch(/contact:contact_id\s*\(\s*id, first_name, last_name, email, location_id\s*\)/)
+    expect(select).toMatch(/\brace_started_at\b/)
+    expect(select).toMatch(/\brace_finished_at\b/)
   })
 })
 
@@ -303,7 +313,7 @@ describe('moveRegistration', () => {
     const r = await moveRegistration(db, { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9', actor, notify: false })
     expect(r.ok).toBe(true)
     expect(rpc).toHaveBeenCalledWith('move_race_registration', expect.objectContaining({
-      p_registration_id: 'r1', p_to_event_id: 'e2', p_to_wave_id: 'w9', p_headcount: 2, p_price_gap_cents: 1000,
+      p_registration_id: 'r1', p_from_event_id: 'e1', p_to_event_id: 'e2', p_to_wave_id: 'w9', p_headcount: 2, p_price_gap_cents: 1000,
       p_forced: false, p_actor_type: 'staff', p_actor_id: 'u1', p_actor_name: 'Richard',
     }))
   })
@@ -380,6 +390,19 @@ describe('moveRegistration', () => {
       expect(r.ok).toBe(true)
       expect(emitted(db)).toEqual([])
     })
+  })
+  it('a conflict raised under the row lock is conflict; any other function error is write_failed', async () => {
+    const answers = [
+      [{ code: 'P0003', message: 'conflict' }, 'conflict'],
+      [{ message: 'conflict' }, 'conflict'],
+      [{ code: 'P0002', message: 'not_found' }, 'write_failed'],
+    ]
+    for (const [err, expected] of answers) {
+      const { db } = happyDb()
+      db.rpc = vi.fn(async () => ({ data: null, error: err }))
+      const r = await moveRegistration(db, { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9', actor })
+      expect(r).toEqual({ ok: false, error: expected })
+    }
   })
   it('a failing moved email never fails the move', async () => {
     const { db, rpc } = happyDb()

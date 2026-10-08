@@ -11,8 +11,10 @@
 -- moved" email (NULL = the built-in default, same pattern as mig 385).
 -- (3) move_race_registration(): the writes of a move in ONE transaction.
 -- Every eligibility rule runs in JS first (src/lib/registration-move.js);
--- the function only writes, and leans on UNIQUE(race_event_id, team_id) as
--- the last line of defence. When the target studio differs from the source
+-- the function writes, and under the row lock re-checks the invariants a
+-- concurrent write could break (still on p_from_event_id, still live, not
+-- raced or checked in, wave on the target): any failure raises 'conflict'
+-- (P0003). UNIQUE(race_event_id, team_id) stays the last line of defence. When the target studio differs from the source
 -- studio the team is CLONED into the target studio (teams are unique per
 -- studio, and team-member edits are authorised on the team's home studio);
 -- the original team row keeps the source event's history.
@@ -60,6 +62,7 @@ comment on column public.race_events.moved_email_intro is 'EVENT-MOVE.1 — intr
 
 create or replace function public.move_race_registration(
   p_registration_id uuid,
+  p_from_event_id   uuid,
   p_to_event_id     uuid,
   p_to_wave_id      uuid,
   p_headcount       int,
@@ -86,6 +89,22 @@ begin
   select * into v_reg from race_registrations where id = p_registration_id for update;
   if not found then
     raise exception 'not_found' using errcode = 'P0002';
+  end if;
+
+  -- The JS rules ran on rows read BEFORE this lock. Re-check, under it, the
+  -- invariants a concurrent write could have broken since: the entry is
+  -- still on the event the caller judged, still live, has not raced or
+  -- checked in, and the target wave belongs to the target event. Any of
+  -- them failing is 'conflict' (P0003): the caller says "reload and retry".
+  if v_reg.race_event_id is distinct from p_from_event_id
+     or v_reg.status not in ('confirmed', 'pending_payment')
+     or v_reg.race_started_at is not null
+     or v_reg.race_finished_at is not null
+     or exists (select 1 from race_checkins where race_registration_id = p_registration_id)
+     or (p_to_wave_id is not null
+         and not exists (select 1 from race_waves where id = p_to_wave_id and race_event_id = p_to_event_id))
+  then
+    raise exception 'conflict' using errcode = 'P0003';
   end if;
   select location_id into v_from_loc from race_events where id = v_reg.race_event_id;
   select location_id into v_to_loc from race_events where id = p_to_event_id;
@@ -127,6 +146,15 @@ begin
 
   delete from event_reminder_sends where registration_id = p_registration_id;
 
+  -- The pre-race milestone events are keyed per registration (mig 085
+  -- uq_contact_events_time_anchored on (source_type, source_id,
+  -- event_type)), like the reminder sends: left in place, they would stop
+  -- the timing cron emitting them for the new date.
+  delete from contact_events
+   where source_type = 'race_registration'
+     and source_id = p_registration_id
+     and event_type in ('race.starts_in_24h', 'race.starts_in_1h');
+
   insert into registration_moves (
     registration_id, from_event_id, from_wave_id, to_event_id, to_wave_id,
     from_team_id, to_team_id, headcount, price_gap_cents, forced,
@@ -141,8 +169,8 @@ begin
 end
 $$;
 
-revoke execute on function public.move_race_registration(uuid, uuid, uuid, int, int, boolean, text, uuid, text, text)
+revoke execute on function public.move_race_registration(uuid, uuid, uuid, uuid, int, int, boolean, text, uuid, text, text)
   from public, anon, authenticated;
 
-comment on function public.move_race_registration(uuid, uuid, uuid, int, int, boolean, text, uuid, text, text) is
+comment on function public.move_race_registration(uuid, uuid, uuid, uuid, int, int, boolean, text, uuid, text, text) is
   'EVENT-MOVE.1 (mig 708): the writes of an entry move in one transaction. Rules are checked in src/lib/registration-move.js before calling. Service role only.';
