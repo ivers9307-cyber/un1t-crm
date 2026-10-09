@@ -99,7 +99,16 @@ export async function POST(request) {
   }).select().single()
 
   if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+    // W0.6 — a duplicate email answers a generic 409, never the raw unique
+    // violation (it named the index and confirmed the address existed, an
+    // existence oracle across tenants). contacts_email_org_unique (mig 712)
+    // is per organisation, so this is "yours already has them". Any other
+    // failure is a generic 400: the Postgres message is for the logs.
+    if (error.code === '23505') {
+      return NextResponse.json({ success: false, error: 'A contact with this email already exists in your organisation' }, { status: 409 })
+    }
+    logWarn('contacts', 'insert failed', { err: error })
+    return NextResponse.json({ success: false, error: 'Could not create contact' }, { status: 400 })
   }
 
   // Fire the pipeline_stage_change sequence trigger with oldStage=null
