@@ -23,7 +23,7 @@ const { GET } = await import('./route.js')
 const SECRET = 'svc-key'
 const R1 = 'c0000000-0000-0000-0000-000000000001'
 const ENTRY = {
-  id: R1, status: 'confirmed', registered_at: '2026-10-01T10:00:00Z', team_composition: null, race_started_at: null, race_finished_at: null,
+  id: R1, status: 'confirmed', race_event_id: 'e1', registered_at: '2026-10-01T10:00:00Z', team_composition: null, race_started_at: null, race_finished_at: null,
   race: { id: 'e1', name: 'Hatch Oct 18', slug: 'hatch-oct18-1100', kind: 'hyrox_sim', race_date: '2026-10-18', location_id: 'L1', locations: { name: 'UN1T Hatch', address: '1 Hatch St' } },
   wave: { id: 'w1', start_time: '11:00:00', label: null },
   teams: { id: 't1', name: 'The Crushers', size: 2, team_members: [
@@ -73,19 +73,19 @@ describe('GET /api/public/entry/[token]', () => {
     globalThis.__db = fakeDb({ entry: { data: null, error: { message: 'down' } } })
     expect((await GET(get(), props())).status).toBe(500)
   })
-  it('answers the public summary with can_move, names only, check-in codes for a confirmed entry', async () => {
+  it('answers the public summary with can_move and names only (no check-in codes: the page never shows them)', async () => {
     const res = await GET(get(), props())
     expect(res.status).toBe(200)
     const { data } = await res.json()
     expect(data).toMatchObject({
-      id: R1, status: 'confirmed', can_move: true, move_blocked_reason: null, date_change_pending: false,
+      id: R1, status: 'confirmed', can_move: true, move_blocked_reason: null, date_change_pending: false, date_change_failed: false,
       race: { name: 'Hatch Oct 18', race_date: '2026-10-18' }, wave: { start_time: '11:00:00' },
       team: { name: 'The Crushers', size: 2 },
     })
     expect(data.team.team_members.map((m) => Object.keys(m).sort())).toEqual([
-      ['id', 'is_member', 'name', 'qr_url', 'role'], ['id', 'is_member', 'name', 'qr_url', 'role'],
+      ['id', 'is_member', 'name', 'role'], ['id', 'is_member', 'name', 'role'],
     ])
-    expect(JSON.stringify(data)).not.toMatch(/@|phone|capacity|spots/i)
+    expect(JSON.stringify(data)).not.toMatch(/@|phone|capacity|spots|qr|checkin/i)
     const select = globalThis.__db.queries.find((q) => q.table === 'race_registrations').ops.find((o) => o[0] === 'select')[1]
     expect(select).not.toMatch(/email|phone/)
   })
@@ -112,20 +112,46 @@ describe('GET /api/public/entry/[token]', () => {
     expect(data.move_blocked_reason).toMatch(/try again/i)
   })
   it('refreshes a pending date-change payment first (the checkout returns here before the webhook)', async () => {
-    const pendingRow = { id: 'gp1', kind: 'move_gap', status: 'pending', payment_provider: 'stripe_connect', payment_provider_ref: 'cs_1' }
+    const pendingRow = { id: 'gp1', kind: 'move_gap', status: 'pending', payment_provider: 'stripe_connect', payment_provider_ref: 'cs_1',
+      metadata: { pending_move: { target_event_id: 'e2', expected_source_event_id: 'e1' } } }
     globalThis.__db = fakeDb({ pending: { data: [pendingRow], error: null } })
     const { data } = await (await GET(get(), props())).json()
     expect(refreshRacePaymentFromProvider).toHaveBeenCalledWith(globalThis.__db, pendingRow)
     const q = globalThis.__db.queries.find((x) => x.table === 'race_payments')
     expect(q.ops).toContainEqual(['eq', 'race_registration_id', R1])
     expect(q.ops).toContainEqual(['eq', 'kind', 'move_gap'])
-    expect(q.ops).toContainEqual(['eq', 'status', 'pending'])
     expect(q.ops).toContainEqual(['is', 'registration_move_id', null])
     expect(data.date_change_pending).toBe(true)
   })
   it('a refresh that throws never breaks the page', async () => {
     refreshRacePaymentFromProvider.mockRejectedValueOnce(new Error('stripe down'))
-    globalThis.__db = fakeDb({ pending: { data: [{ id: 'gp1', status: 'pending', payment_provider: 'revolut', payment_provider_ref: 'o1' }], error: null } })
+    globalThis.__db = fakeDb({ pending: { data: [{ id: 'gp1', status: 'pending', payment_provider: 'revolut', payment_provider_ref: 'o1', metadata: { pending_move: {} } }], error: null } })
     expect((await GET(get(), props())).status).toBe(200)
+  })
+})
+
+// Review minor — a paid change that was refused shows on the page as "we are
+// looking into it", while the entry is still where the change started.
+describe('GET /api/public/entry/[token] — a refused date change', () => {
+  const PM = { target_event_id: 'e2', target_wave_id: 'w2', expected_source_event_id: 'e1', actor: { type: 'customer' } }
+  const failed = (over = {}) => ({ id: 'gp1', kind: 'move_gap', status: 'completed', payment_provider: 'stripe_connect', payment_provider_ref: 'cs_1',
+    metadata: { pending_move: PM, pending_move_failed: { error: 'wave_full', at: '2026-10-09T10:00:00Z' } }, ...over })
+  it('date_change_failed while the entry is still on the event the change started from', async () => {
+    globalThis.__db = fakeDb({ pending: { data: [failed()], error: null } })
+    const { data } = await (await GET(get(), props())).json()
+    expect(data.date_change_failed).toBe(true)
+    expect(data.date_change_pending).toBe(false)
+    expect(refreshRacePaymentFromProvider).not.toHaveBeenCalled()
+  })
+  it('not once staff have moved the entry by hand, or refunded it', async () => {
+    globalThis.__db = fakeDb({ pending: { data: [failed()], error: null }, entry: { data: { ...ENTRY, race_event_id: 'e9' }, error: null } })
+    expect((await (await GET(get(), props())).json()).data.date_change_failed).toBe(false)
+    globalThis.__db = fakeDb({ pending: { data: [failed({ status: 'refunded' })], error: null } })
+    expect((await (await GET(get(), props())).json()).data.date_change_failed).toBe(false)
+  })
+  it('never echoes the payment or its metadata', async () => {
+    globalThis.__db = fakeDb({ pending: { data: [failed()], error: null } })
+    const text = JSON.stringify(await (await GET(get(), props())).json())
+    expect(text).not.toMatch(/pending_move|wave_full|gp1|cs_1/)
   })
 })

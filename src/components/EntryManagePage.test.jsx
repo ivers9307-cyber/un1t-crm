@@ -4,7 +4,7 @@
 // at once when the price is the same or lower, sends them to checkout when it
 // is higher, and says plainly why an entry cannot move.
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, cleanup, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import EntryManagePage from './EntryManagePage.jsx'
 
 const TOKEN = 'tok.sig'
@@ -157,5 +157,57 @@ describe('EntryManagePage', () => {
     stubFetch({ [ENTRY_URL]: ok(ENTRY), [OPTIONS_URL]: ok({ can_move: true, move_blocked_reason: null, options: [] }) })
     render(<EntryManagePage token={TOKEN} />)
     await screen.findByText(/no other dates you can move to right now/i)
+  })
+})
+
+describe('EntryManagePage — review minors', () => {
+  it('a failed options read shows the server\'s message, never "no other dates"', async () => {
+    stubFetch({ [ENTRY_URL]: ok(ENTRY), [OPTIONS_URL]: { status: 500, body: { success: false, error: 'load_failed', message: 'Something went wrong on our side. Please try again.' } } })
+    render(<EntryManagePage token={TOKEN} />)
+    await screen.findByText('Something went wrong on our side. Please try again.')
+    expect(screen.queryByText(/no other dates/i)).toBeNull()
+  })
+
+  it('a paid change that was refused says we are looking into it', async () => {
+    stubFetch({ [ENTRY_URL]: ok({ ...ENTRY, date_change_failed: true }), [OPTIONS_URL]: ok(OPTIONS) })
+    render(<EntryManagePage token={TOKEN} />)
+    await screen.findByText(/We are looking into your date change/)
+  })
+
+  it('while a paid change settles it re-reads the entry every 5 seconds, then stops once it has landed', async () => {
+    vi.useFakeTimers()
+    try {
+      let reads = 0
+      stubFetch({
+        [ENTRY_URL]: () => { reads += 1; return ok(reads === 1 ? { ...ENTRY, date_change_pending: true } : MOVED_ENTRY) },
+        [OPTIONS_URL]: ok(OPTIONS),
+      })
+      render(<EntryManagePage token={TOKEN} />)
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      expect(screen.getByText(/If you have just paid/)).toBeTruthy()
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+      expect(reads).toBe(2)
+      expect(screen.queryByText(/If you have just paid/)).toBeNull()
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
+      expect(reads).toBe(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('gives up polling after about a minute', async () => {
+    vi.useFakeTimers()
+    try {
+      let reads = 0
+      stubFetch({ [ENTRY_URL]: () => { reads += 1; return ok({ ...ENTRY, date_change_pending: true }) }, [OPTIONS_URL]: ok(OPTIONS) })
+      render(<EntryManagePage token={TOKEN} />)
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      for (let i = 0; i < 20; i += 1) {
+        await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+      }
+      expect(reads).toBe(13) // the first read and 12 polls, then it stops
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

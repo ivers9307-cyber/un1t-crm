@@ -16,7 +16,13 @@
 //     → { moved: true, registration, notified }
 //   - dearer target: nothing moves yet. A move_gap payment (EVENT-MOVE.5)
 //     is minted carrying metadata.pending_move; paying it makes the move
-//     (completeGapPayment). → { moved: false, pay_url }
+//     (completeGapPayment). → { moved: false, pay_url }. pay_url carries
+//     `#back=<this token>`: the checkout reads the fragment (never sent to a
+//     server) to return here once paid. No token is minted anywhere else.
+//   - after an immediate move, any open dearer link on the entry is closed.
+//
+// Targets are fenced to the entry's organisation (moveLocationIds): a move
+// may cross studios, never organisations. An unreadable fence fails closed.
 //
 // Every refusal carries `error` (the code) and `message` (customer copy,
 // src/lib/registration-move-public.js). Status: 404 bad link / gone entry;
@@ -31,10 +37,10 @@ import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { verifyEntryManageTokenFromEnv } from '@/lib/entry-manage-tokens'
-import { readRegistrationForMove, checkMove, moveRegistration } from '@/lib/registration-move'
+import { readRegistrationForMove, checkMove, moveRegistration, moveLocationIds } from '@/lib/registration-move'
 import { entryLeadName } from '@/lib/registration-entry'
 import { entryMoveBlock, customerMoveMessage, CUSTOMER_MOVE_STATUS } from '@/lib/registration-move-public'
-import { createGapPayment } from '@/lib/race-gap-payment'
+import { createGapPayment, closeCustomerGapLinks } from '@/lib/race-gap-payment'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { getAppUrl } from '@/lib/app-url'
 
@@ -54,6 +60,17 @@ function refusal(code) {
     { success: false, error: code, message: customerMoveMessage(code) },
     { status: CUSTOMER_MOVE_STATUS[code] || 400 },
   )
+}
+
+/**
+ * The studios this entry may move to: its organisation's (moveLocationIds),
+ * from the organisation already embedded on the entry's event. null = could
+ * not read it (fail closed).
+ */
+async function entryOrganisationLocations(db, reg) {
+  const loc = reg.race?.locations
+  const organizationId = loc ? (loc.organization_id || null) : undefined
+  return moveLocationIds(db, reg.race?.location_id || null, { organizationId })
 }
 
 export async function POST(request, props) {
@@ -80,10 +97,13 @@ export async function POST(request, props) {
   const block = entryMoveBlock({ registration: reg, checkinCount: 0, today: dublinTodayStr() })
   if (block) return refusal(block.code)
 
+  const allowedLocationIds = await entryOrganisationLocations(db, reg)
+  if (!allowedLocationIds) return refusal('load_failed')
+
   // Every rule, fresh, with nothing written: so nobody pays for a move the
   // rules would refuse, and the difference is the server's, never the client's.
   const checked = await checkMove(db, {
-    registrationId: reg.id, targetEventId, targetWaveId, force: false, expectedSourceEventId: reg.race_event_id,
+    registrationId: reg.id, targetEventId, targetWaveId, force: false, allowedLocationIds, expectedSourceEventId: reg.race_event_id,
   })
   if (!checked.ok) return refusal(checked.error)
 
@@ -92,9 +112,16 @@ export async function POST(request, props) {
   if (!(checked.priceGapCents > 0)) {
     const moved = await moveRegistration(db, {
       registrationId: reg.id, targetEventId, targetWaveId, actor,
-      notify: true, force: false, expectedSourceEventId: reg.race_event_id,
+      notify: true, force: false, allowedLocationIds, expectedSourceEventId: reg.race_event_id,
     })
     if (!moved.ok) return refusal(moved.error)
+    // An older dearer change still open on this entry no longer applies:
+    // close its link so it cannot be paid (and then refused). Best-effort.
+    try {
+      await closeCustomerGapLinks(db, reg.id)
+    } catch {
+      // closeCustomerGapLinks logs its own failures; the move stands.
+    }
     return NextResponse.json({ success: true, data: { moved: true, registration: moved.registration, notified: moved.notified === true } })
   }
 
@@ -115,5 +142,5 @@ export async function POST(request, props) {
     cancelUrl: pageUrl,
   })
   if (!created.ok) return refusal(created.error)
-  return NextResponse.json({ success: true, data: { moved: false, pay_url: created.checkoutUrl } })
+  return NextResponse.json({ success: true, data: { moved: false, pay_url: `${created.checkoutUrl}#back=${token}` } })
 }

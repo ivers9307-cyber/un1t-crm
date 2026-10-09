@@ -15,13 +15,14 @@ vi.mock('@/lib/registration-move', async (importOriginal) => ({
   readRegistrationForMove: vi.fn(),
   checkMove: vi.fn(),
   moveRegistration: vi.fn(),
+  moveLocationIds: vi.fn(),
 }))
-vi.mock('@/lib/race-gap-payment', () => ({ createGapPayment: vi.fn() }))
+vi.mock('@/lib/race-gap-payment', () => ({ createGapPayment: vi.fn(), closeCustomerGapLinks: vi.fn(async () => {}) }))
 vi.mock('@/lib/dublin-time', async (importOriginal) => ({ ...(await importOriginal()), dublinTodayStr: () => '2026-10-09' }))
 
 const { checkRateLimit } = await import('@/lib/rate-limit')
-const { readRegistrationForMove, checkMove, moveRegistration } = await import('@/lib/registration-move')
-const { createGapPayment } = await import('@/lib/race-gap-payment')
+const { readRegistrationForMove, checkMove, moveRegistration, moveLocationIds } = await import('@/lib/registration-move')
+const { createGapPayment, closeCustomerGapLinks } = await import('@/lib/race-gap-payment')
 const { signEntryManageToken } = await import('@/lib/entry-manage-tokens')
 const { POST } = await import('./route.js')
 
@@ -34,8 +35,10 @@ const REG = {
   id: R1, status: 'confirmed', race_event_id: E1, contact_id: 'k1', race_started_at: null, race_finished_at: null,
   contact: { id: 'k1', first_name: 'Aoife', last_name: 'Byrne', email: 'aoife@x.ie' },
   teams: { id: 't1', name: 'Aoife Byrne', size: 1, team_members: [{ id: 'm1', name: 'Aoife Byrne', role: 'captain', email: 'aoife@x.ie' }] },
-  race: { id: E1, name: 'Hatch Oct 18', race_date: '2026-10-18', location_id: 'L1', host_id: null, payment_currency: 'EUR' },
+  race: { id: E1, name: 'Hatch Oct 18', race_date: '2026-10-18', location_id: 'L1', host_id: null, payment_currency: 'EUR',
+    locations: { id: 'L1', name: 'UN1T Hatch', organization_id: 'O1' } },
 }
+const ORG_LOCS = ['L1', 'L2']
 const tokenFor = (id = R1) => signEntryManageToken({ registrationId: id }, SECRET)
 const props = (token = tokenFor()) => ({ params: Promise.resolve({ token }) })
 const post = (body) => new Request('http://localhost/api/public/entry/x/move', {
@@ -50,6 +53,7 @@ beforeEach(() => {
   vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', SECRET)
   vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://crm.test')
   readRegistrationForMove.mockResolvedValue({ registration: REG, error: null })
+  moveLocationIds.mockResolvedValue(ORG_LOCS)
   checkMove.mockResolvedValue(checked(0))
   moveRegistration.mockResolvedValue({ ok: true, move: { id: 'mv1' }, registration: { id: R1, race_event_id: E2, wave_id: W9 }, notified: true })
   createGapPayment.mockResolvedValue({ ok: true, payment: { id: 'gp1' }, checkoutUrl: 'https://crm.test/event-pay/gp1', reused: false })
@@ -132,11 +136,14 @@ describe('POST /api/public/entry/[token]/move — equal or cheaper moves at once
     const res = await POST(post(BODY), props())
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ success: true, data: { moved: true, registration: { id: R1, race_event_id: E2, wave_id: W9 }, notified: true } })
-    expect(checkMove).toHaveBeenCalledWith(expect.anything(), { registrationId: R1, targetEventId: E2, targetWaveId: W9, force: false, expectedSourceEventId: E1 })
+    expect(checkMove).toHaveBeenCalledWith(expect.anything(), { registrationId: R1, targetEventId: E2, targetWaveId: W9, force: false, allowedLocationIds: ORG_LOCS, expectedSourceEventId: E1 })
     expect(moveRegistration).toHaveBeenCalledWith(expect.anything(), {
-      registrationId: R1, targetEventId: E2, targetWaveId: W9, actor: CUSTOMER, notify: true, force: false, expectedSourceEventId: E1,
+      registrationId: R1, targetEventId: E2, targetWaveId: W9, actor: CUSTOMER, notify: true, force: false,
+      allowedLocationIds: ORG_LOCS, expectedSourceEventId: E1,
     })
     expect(createGapPayment).not.toHaveBeenCalled()
+    // review I5: an older dearer link for this entry can no longer be paid.
+    expect(closeCustomerGapLinks).toHaveBeenCalledWith(expect.anything(), R1)
   })
   it('a refusal at the write is mapped (conflict 409, write_failed 500)', async () => {
     moveRegistration.mockResolvedValueOnce({ ok: false, error: 'conflict' })
@@ -152,7 +159,9 @@ describe('POST /api/public/entry/[token]/move — dearer pays first', () => {
     const token = tokenFor()
     const res = await POST(post(BODY), props(token))
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ success: true, data: { moved: false, pay_url: 'https://crm.test/event-pay/gp1' } })
+    // The checkout learns its way back from the fragment (never sent to a server).
+    expect(await res.json()).toEqual({ success: true, data: { moved: false, pay_url: `https://crm.test/event-pay/gp1#back=${token}` } })
+    expect(closeCustomerGapLinks).not.toHaveBeenCalled()
     expect(moveRegistration).not.toHaveBeenCalled()
     expect(createGapPayment).toHaveBeenCalledWith({
       db: expect.anything(),
@@ -174,5 +183,35 @@ describe('POST /api/public/entry/[token]/move — dearer pays first', () => {
     const body = await res.json()
     expect(body.error).toBe(error)
     expect(body.message).not.toMatch(/—|–/)
+  })
+})
+
+describe('POST /api/public/entry/[token]/move — the organisation fence (review I2)', () => {
+  it('reads the fence from the entry\'s own organisation', async () => {
+    await POST(post(BODY), props())
+    expect(moveLocationIds).toHaveBeenCalledWith(expect.anything(), 'L1', { organizationId: 'O1' })
+  })
+  it('an entry studio with no organisation is fenced to itself', async () => {
+    readRegistrationForMove.mockResolvedValue({ registration: { ...REG, race: { ...REG.race, locations: { id: 'L1', organization_id: null } } }, error: null })
+    await POST(post(BODY), props())
+    expect(moveLocationIds).toHaveBeenCalledWith(expect.anything(), 'L1', { organizationId: null })
+  })
+  it('fails closed (500, nothing checked or moved) when the fence cannot be read', async () => {
+    moveLocationIds.mockResolvedValue(null)
+    const res = await POST(post(BODY), props())
+    expect(res.status).toBe(500)
+    expect(checkMove).not.toHaveBeenCalled()
+    expect(moveRegistration).not.toHaveBeenCalled()
+  })
+  it('a target in another organisation is refused like any unavailable date', async () => {
+    checkMove.mockResolvedValue({ ok: false, error: 'target_unavailable' })
+    const res = await POST(post(BODY), props())
+    expect(res.status).toBe(400)
+    expect((await res.json()).message).toMatch(/no longer available/)
+  })
+  it('a refused immediate move closes no links', async () => {
+    moveRegistration.mockResolvedValueOnce({ ok: false, error: 'conflict' })
+    await POST(post(BODY), props())
+    expect(closeCustomerGapLinks).not.toHaveBeenCalled()
   })
 })

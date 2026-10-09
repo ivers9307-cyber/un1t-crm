@@ -13,7 +13,7 @@ vi.mock('@/lib/revolut-embed', () => ({
   revolutPublicKey: () => 'pk_test',
 }))
 
-const { default: RaceCheckoutPage } = await import('./RaceCheckoutPage.jsx')
+const { default: RaceCheckoutPage, backPathFromHash } = await import('./RaceCheckoutPage.jsx')
 const { loadRevolutSdk } = await import('@/lib/revolut-embed')
 
 const BASE = { id: 'gp1', status: 'pending', amount_cents: 1000, booking_fee_cents: 0, currency: 'EUR', provider: 'revolut',
@@ -66,37 +66,70 @@ describe('RaceCheckoutPage — a difference link that cannot be paid', () => {
   })
 })
 
-// EVENT-MOVE.6 — a customer's own date change goes back to their entry page.
-describe('RaceCheckoutPage — return_path (customer date change)', () => {
-  const RETURN = '/event/entry/PAYLOAD.SIG'
+// EVENT-MOVE.6 — a customer's own date change goes back to their entry page:
+// the pay link carries #back=<entry token>, read only in the token's shape.
+describe('RaceCheckoutPage — #back (customer date change)', () => {
+  const TOKEN = 'PAYLOAD.SIG'
+  const RETURN = `/event/entry/${TOKEN}`
+  const withHash = (hash) => { window.location.hash = hash }
+  afterEach(() => { window.location.hash = '' })
+  const mountRevolut = () => {
+    const box = { opts: null }
+    loadRevolutSdk.mockResolvedValueOnce({ embeddedCheckout: (o) => { box.opts = o; return { destroy() {} } } })
+    return box
+  }
+
+  it('backPathFromHash accepts only the token shape', () => {
+    expect(backPathFromHash('#back=PAYLOAD.SIG')).toBe(RETURN)
+    expect(backPathFromHash('#x=1&back=a_b-c.d_e-f')).toBe('/event/entry/a_b-c.d_e-f')
+    for (const bad of ['', '#back=', '#back=javascript:alert(1)', '#back=//evil.example/x.y', '#back=a.b.c', '#back=../x.y', '#back=%E0%A4%A', '#other=a.b']) {
+      expect(backPathFromHash(bad), bad).toBeNull()
+    }
+  })
   it('an already-paid change goes straight back to the entry page', async () => {
-    serve({ ...BASE, kind: 'move_gap', status: 'completed', return_path: RETURN })
+    withHash(`#back=${TOKEN}`)
+    serve({ ...BASE, kind: 'move_gap', status: 'completed' })
     render(<RaceCheckoutPage paymentId="gp1" />)
     await vi.waitFor(() => expect(router.replace).toHaveBeenCalledWith(RETURN))
   })
   it('a successful payment goes to the entry page, not the confirmed page', async () => {
-    let opts = null
-    loadRevolutSdk.mockResolvedValueOnce({ embeddedCheckout: (o) => { opts = o; return { destroy() {} } } })
-    serve({ ...BASE, kind: 'move_gap', status: 'pending', expired: false, settled: false, return_path: RETURN })
-    render(<RaceCheckoutPage paymentId="gp1" />)
-    await vi.waitFor(() => expect(opts).toBeTruthy())
-    opts.onSuccess()
-    expect(router.push).toHaveBeenCalledWith(RETURN)
-  })
-  it('without return_path the confirmed page stands (entry payments, staff difference links)', async () => {
-    let opts = null
-    loadRevolutSdk.mockResolvedValueOnce({ embeddedCheckout: (o) => { opts = o; return { destroy() {} } } })
+    withHash(`#back=${TOKEN}`)
+    const box = mountRevolut()
     serve({ ...BASE, kind: 'move_gap', status: 'pending', expired: false, settled: false })
     render(<RaceCheckoutPage paymentId="gp1" />)
-    await vi.waitFor(() => expect(opts).toBeTruthy())
-    opts.onSuccess()
+    await vi.waitFor(() => expect(box.opts).toBeTruthy())
+    box.opts.onSuccess()
+    expect(router.push).toHaveBeenCalledWith(RETURN)
+  })
+  it('a malformed #back is ignored: the confirmed page stands (no open redirect)', async () => {
+    withHash('#back=https://evil.example/phish')
+    const box = mountRevolut()
+    serve({ ...BASE, kind: 'move_gap', status: 'pending', expired: false, settled: false })
+    render(<RaceCheckoutPage paymentId="gp1" />)
+    await vi.waitFor(() => expect(box.opts).toBeTruthy())
+    box.opts.onSuccess()
     expect(router.push).toHaveBeenCalledWith('/event/hatch-oct25-1100/confirmed?registration=r1')
   })
+  it('an entry payment ignores #back', async () => {
+    withHash(`#back=${TOKEN}`)
+    serve({ ...BASE, kind: 'entry', status: 'completed' })
+    render(<RaceCheckoutPage paymentId="p1" />)
+    await vi.waitFor(() => expect(router.replace).toHaveBeenCalledWith('/event/hatch-oct25-1100/confirmed?registration=r1'))
+  })
   it('an expired date-change link sends the customer back to their entry to choose again', async () => {
-    serve({ ...BASE, kind: 'move_gap', status: 'abandoned', expired: true, settled: false, return_path: RETURN })
+    withHash(`#back=${TOKEN}`)
+    serve({ ...BASE, kind: 'move_gap', status: 'abandoned', expired: true, settled: false })
     render(<RaceCheckoutPage paymentId="gp1" />)
     await screen.findByText('This payment link has expired. Go back to your entry to choose your date again.')
     expect(screen.getByRole('link', { name: 'Back to your entry' }).getAttribute('href')).toBe(RETURN)
     expect(loadRevolutSdk).not.toHaveBeenCalled()
+  })
+  it('without #back the confirmed page stands (staff difference links)', async () => {
+    const box = mountRevolut()
+    serve({ ...BASE, kind: 'move_gap', status: 'pending', expired: false, settled: false })
+    render(<RaceCheckoutPage paymentId="gp1" />)
+    await vi.waitFor(() => expect(box.opts).toBeTruthy())
+    box.opts.onSuccess()
+    expect(router.push).toHaveBeenCalledWith('/event/hatch-oct25-1100/confirmed?registration=r1')
   })
 })

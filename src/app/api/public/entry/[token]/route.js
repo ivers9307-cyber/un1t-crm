@@ -5,18 +5,21 @@
 // /event/entry/[token] page. The token is the only credential: a bad,
 // expired or forged one, or an entry that no longer exists, is a 404.
 //
-// Same public shape as /api/public/event-registrations/[id] (team name,
-// size, wave, member names, roles, member flag, the check-in QR for a
-// confirmed entry; never an email or a phone) plus:
+// The public shape of /api/public/event-registrations/[id] (team name,
+// size, wave, member names, roles, member flag; never an email or a phone;
+// no check-in codes, which this page does not show) plus:
 //   can_move             the holder may change the date now
 //   move_blocked_reason  a plain sentence when they may not (unpaid,
 //                        cancelled, checked in, past)
 //   date_change_pending  a dearer date change is waiting on its payment
+//   date_change_failed   a paid date change was refused (the time filled);
+//                        shown while the entry is still where it started and
+//                        the payment stands (a hand move or refund clears it)
 //
 // A paid date change returns the buyer HERE, often before the payment
-// webhook: the newest pending date-change payment is refreshed from the
-// provider first (as /api/public/event-payments/[id] does), which completes
-// it and makes the move, so the page shows the new date.
+// webhook: the newest date-change payment, if still pending, is refreshed
+// from the provider first (as /api/public/event-payments/[id] does), which
+// completes it and makes the move, so the page shows the new date.
 //
 // Rate limited per IP: 60 per 5 minutes (bucket shared with move-options).
 
@@ -24,7 +27,6 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { verifyEntryManageTokenFromEnv } from '@/lib/entry-manage-tokens'
-import { signCheckinToken } from '@/lib/event-checkin-tokens'
 import { countEntryCheckins } from '@/lib/registration-move'
 import { entryMoveBlock, customerMoveMessage } from '@/lib/registration-move-public'
 import { refreshRacePaymentFromProvider } from '@/lib/race-payments'
@@ -38,32 +40,32 @@ export const dynamic = 'force-dynamic'
 const fail = (code, status) => NextResponse.json({ success: false, error: code, message: customerMoveMessage(code) }, { status })
 
 /**
- * The newest customer date-change payment still pending on this entry,
- * refreshed from the provider. true when one is still pending afterwards.
- * Best-effort: a failure here never costs the page.
+ * The newest customer date-change payment on this entry (move_gap with no
+ * move yet), refreshed from the provider when still pending. Its state for
+ * the page: { pending, failed }. `failed` needs the move's source event,
+ * checked by the caller. Best-effort: a failure here never costs the page.
  */
-async function settlePendingDateChange(db, registrationId) {
+async function latestDateChange(db, registrationId) {
   try {
     const { data: rows, error } = await db
       .from('race_payments')
-      .select('id, kind, status, payment_provider, payment_provider_ref')
+      .select('id, kind, status, payment_provider, payment_provider_ref, metadata')
       .eq('race_registration_id', registrationId)
       .eq('kind', GAP_PAYMENT_KIND)
-      .eq('status', 'pending')
       .is('registration_move_id', null)
       .order('created_at', { ascending: false })
       .limit(1)
     if (error) {
-      logWarn('public-entry', 'pending date-change read failed; page shows the entry as stored', { err: error, registrationId })
-      return false
+      logWarn('public-entry', 'date-change read failed; page shows the entry as stored', { err: error, registrationId })
+      return null
     }
-    const pending = Array.isArray(rows) ? rows[0] : null
-    if (!pending) return false
-    const live = await refreshRacePaymentFromProvider(db, pending)
-    return (live?.status || pending.status) === 'pending'
+    let latest = Array.isArray(rows) ? rows[0] : null
+    if (!latest || !latest.metadata?.pending_move) return null
+    if (latest.status === 'pending') latest = (await refreshRacePaymentFromProvider(db, latest)) || latest
+    return latest
   } catch (e) {
-    logWarn('public-entry', 'pending date-change refresh threw; page shows the entry as stored', { err: e, registrationId })
-    return false
+    logWarn('public-entry', 'date-change refresh threw; page shows the entry as stored', { err: e, registrationId })
+    return null
   }
 }
 
@@ -77,12 +79,12 @@ export async function GET(request, props) {
   const claim = verifyEntryManageTokenFromEnv(token)
   if (!claim) return fail('not_found', 404)
 
-  const dateChangePending = await settlePendingDateChange(db, claim.registrationId)
+  const change = await latestDateChange(db, claim.registrationId)
 
   const { data, error } = await db
     .from('race_registrations')
     .select(`
-      id, status, registered_at, team_composition, race_started_at, race_finished_at,
+      id, status, race_event_id, registered_at, team_composition, race_started_at, race_finished_at,
       race:race_event_id (
         id, name, slug, kind, race_date, location_id,
         locations:location_id ( name, address )
@@ -101,17 +103,11 @@ export async function GET(request, props) {
     ? { code: 'load_failed', message: customerMoveMessage('load_failed') }
     : entryMoveBlock({ registration: data, checkinCount: checkins.count, today: dublinTodayStr() })
 
-  // The check-in QR, exactly as /api/public/event-registrations/[id] mints it
-  // (same exposure as the email the holder already has; confirmed only).
-  const secret = process.env.SUPABASE_SERVICE_ROLE_KEY || null
-  const eventId = data.race?.id || null
-  const canMintQr = data.status === 'confirmed' && !!secret && !!eventId
-  const members = (data.teams?.team_members || []).map((m) => {
-    const base = { id: m.id, name: m.name, role: m.role, is_member: m.is_member }
-    if (!canMintQr || !m?.id) return base
-    const t = signCheckinToken({ eventId, registrationId: data.id, memberId: m.id }, secret)
-    return { ...base, qr_url: `/api/public/events/checkin-qr?t=${encodeURIComponent(t)}` }
-  })
+  const members = (data.teams?.team_members || []).map((m) => ({ id: m.id, name: m.name, role: m.role, is_member: m.is_member }))
+  const dateChangePending = change?.status === 'pending'
+  const dateChangeFailed = change?.status === 'completed'
+    && !!change.metadata?.pending_move_failed
+    && change.metadata?.pending_move?.expected_source_event_id === data.race_event_id
 
   return NextResponse.json({
     success: true,
@@ -126,6 +122,7 @@ export async function GET(request, props) {
       can_move: !block,
       move_blocked_reason: block ? block.message : null,
       date_change_pending: dateChangePending,
+      date_change_failed: dateChangeFailed,
     },
   })
 }

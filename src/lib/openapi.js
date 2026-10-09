@@ -747,7 +747,7 @@ registry.registerPath({
   path: '/api/public/entry/{token}',
   tags: ['Public'],
   summary: 'The token holder\'s event entry, and whether they may change its date',
-  description: 'Anonymous; the token is the credential. Public entry shape (names only, no emails or phones, check-in QR for a confirmed entry) plus `can_move`, `move_blocked_reason` (unpaid, cancelled, checked in, past) and `date_change_pending`. A pending date-change payment is refreshed from the provider first. Rate limited: 60 per IP per 5 minutes.',
+  description: 'Anonymous; the token is the credential. Public entry shape (names only, no emails, phones or check-in codes) plus `can_move`, `move_blocked_reason` (unpaid, cancelled, checked in, past), `date_change_pending` and `date_change_failed` (a paid change was refused; shown until staff move or refund it). A pending date-change payment is refreshed from the provider first. Rate limited: 60 per IP per 5 minutes.',
   request: { params: z.object({ token: EntryManageToken }) },
   responses: {
     200: { description: 'The entry', content: { 'application/json': { schema: z.object({}).passthrough().openapi('PublicEntrySummary') } } },
@@ -761,7 +761,7 @@ registry.registerPath({
   path: '/api/public/entry/{token}/move-options',
   tags: ['Public'],
   summary: 'Dates and times the token holder may move their entry to',
-  description: 'Anonymous; the token is the credential. Same eligibility as the staff picker (same payee, published, upcoming, any studio, the entry size accepted) but only times with room are listed and NO capacity or count is ever returned. Each option carries `price_difference_cents` and `price_note`. A blocked entry answers `can_move: false`, its reason and no options. Rate limited with the summary: 60 per IP per 5 minutes.',
+  description: 'Anonymous; the token is the credential. Same eligibility as the staff picker (same payee, published, upcoming, the entry size accepted) at a studio of the entry\'s own organisation (fails closed when that cannot be read) but only times with room are listed and NO capacity or count is ever returned. Each option carries `price_difference_cents` and `price_note`. A blocked entry answers `can_move: false`, its reason and no options. Rate limited with the summary: 60 per IP per 5 minutes.',
   request: { params: z.object({ token: EntryManageToken }) },
   responses: {
     200: { description: 'The options', content: { 'application/json': { schema: z.object({}).passthrough().openapi('PublicEntryMoveOptions') } } },
@@ -776,7 +776,7 @@ registry.registerPath({
   path: '/api/public/entry/{token}/move',
   tags: ['Public'],
   summary: 'The token holder moves their entry to another date (pays the difference first when dearer)',
-  description: 'Anonymous; the token is the credential. Only a confirmed, unchecked entry on an upcoming event; the same rules as staff, never forced. Equal or cheaper: moved at once as actor `customer`, new tickets emailed, nothing refunded → `{ moved: true, registration, notified }`. Dearer: a price-difference payment carrying the pending move is minted and the move lands when it is paid → `{ moved: false, pay_url }`. Every refusal carries `error` and a customer `message`. Rate limited: 10 per IP per 15 minutes.',
+  description: 'Anonymous; the token is the credential. Only a confirmed, unchecked entry on an upcoming event; the same rules as staff, never forced. Equal or cheaper: moved at once as actor `customer`, new tickets emailed, nothing refunded → `{ moved: true, registration, notified }`. Dearer: a price-difference payment carrying the pending move is minted and the move lands when it is paid → `{ moved: false, pay_url }`, where pay_url ends `#back=<this token>` so the checkout can return to the entry page. Targets are fenced to the entry\'s organisation. An immediate move closes any open dearer link on the entry. Every refusal carries `error` and a customer `message`. Rate limited: 10 per IP per 15 minutes.',
   request: {
     params: z.object({ token: EntryManageToken }),
     body: { content: { 'application/json': { schema: z.object({

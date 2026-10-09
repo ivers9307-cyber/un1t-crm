@@ -17,9 +17,14 @@
 //
 // Styling follows RaceConfirmedPage (the dark public event pages).
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Loader2, AlertCircle, BadgeCheck, CalendarClock } from 'lucide-react'
 import { timeRowLabel } from '@/lib/event-time-slots'
+
+// While a paid date change settles (the provider tells us within seconds),
+// re-read the entry every 5 seconds, for about a minute at most.
+const PENDING_POLL_MS = 5000
+const PENDING_POLL_MAX = 12
 
 function dateLabel(raceDate, opts = { weekday: 'short', day: 'numeric', month: 'short' }) {
   if (!raceDate) return ''
@@ -56,6 +61,8 @@ export default function EntryManagePage({ token, navigate = (url) => window.loca
   const [entry, setEntry] = useState(null)
   const [loadError, setLoadError] = useState(null)
   const [options, setOptions] = useState(null)
+  const [optionsError, setOptionsError] = useState(null)
+  const polls = useRef(0)
   const [choice, setChoice] = useState(null) // { option, time }
   const [busy, setBusy] = useState(false)
   const [moveError, setMoveError] = useState(null)
@@ -73,7 +80,14 @@ export default function EntryManagePage({ token, navigate = (url) => window.loca
       if (j.data.can_move) {
         const r2 = await fetch(`${base}/move-options`, { cache: 'no-store' })
         const j2 = await readJson(r2)
-        setOptions(r2.ok && j2?.success ? (j2.data.options || []) : [])
+        if (r2.ok && j2?.success) {
+          setOptionsError(null)
+          setOptions(j2.data.options || [])
+        } else {
+          // Never "no other dates" for a read that failed: say what happened.
+          setOptionsError(j2?.message || 'The dates could not be loaded. Please try again.')
+          setOptions([])
+        }
       } else {
         setOptions([])
       }
@@ -83,6 +97,12 @@ export default function EntryManagePage({ token, navigate = (url) => window.loca
   }, [base])
 
   useEffect(() => { load() }, [load])
+
+  useEffect(() => {
+    if (!entry?.date_change_pending || polls.current >= PENDING_POLL_MAX) return undefined
+    const t = setTimeout(() => { polls.current += 1; load() }, PENDING_POLL_MS)
+    return () => clearTimeout(t)
+  }, [entry, load])
 
   async function confirmMove() {
     if (!choice) return
@@ -154,6 +174,13 @@ export default function EntryManagePage({ token, navigate = (url) => window.loca
             <p className="text-sm text-emerald-300">{notice}</p>
           </div>
         )}
+        {entry.date_change_failed && !notice && (
+          <div role="status" className="mb-5 p-4 rounded-xl bg-amber-500/10 border border-amber-500/30">
+            <p className="text-sm text-amber-200">
+              We received your payment for a date change but could not move your entry. We are looking into your date change and will be in touch.
+            </p>
+          </div>
+        )}
         {entry.date_change_pending && !notice && (
           <div role="status" className="mb-5 p-4 rounded-xl bg-amber-500/10 border border-amber-500/30">
             <p className="text-sm text-amber-200">
@@ -210,6 +237,8 @@ export default function EntryManagePage({ token, navigate = (url) => window.loca
             <p className="p-4 rounded-xl bg-white/[0.03] border border-white/10 text-sm text-white/70">{entry.move_blocked_reason}</p>
           ) : options === null ? (
             <Loader2 size={22} className="animate-spin text-white/40" aria-label="Loading dates" />
+          ) : optionsError ? (
+            <p role="alert" className="p-4 rounded-xl bg-white/[0.03] border border-white/10 text-sm text-white/70">{optionsError}</p>
           ) : options.length === 0 ? (
             <p className="p-4 rounded-xl bg-white/[0.03] border border-white/10 text-sm text-white/70">
               There are no other dates you can move to right now.

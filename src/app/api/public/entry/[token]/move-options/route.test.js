@@ -13,17 +13,19 @@ vi.mock('@/lib/registration-move', async (importOriginal) => ({
   readRegistrationForMove: vi.fn(),
   countEntryCheckins: vi.fn(),
   listMoveTargets: vi.fn(),
+  moveLocationIds: vi.fn(),
 }))
 vi.mock('@/lib/dublin-time', async (importOriginal) => ({ ...(await importOriginal()), dublinTodayStr: () => '2026-10-09' }))
 
 const { checkRateLimit } = await import('@/lib/rate-limit')
-const { readRegistrationForMove, countEntryCheckins, listMoveTargets } = await import('@/lib/registration-move')
+const { readRegistrationForMove, countEntryCheckins, listMoveTargets, moveLocationIds } = await import('@/lib/registration-move')
 const { signEntryManageToken } = await import('@/lib/entry-manage-tokens')
 const { GET } = await import('./route.js')
 
 const SECRET = 'svc-key'
 const R1 = 'c0000000-0000-0000-0000-000000000001'
-const REG = { id: R1, status: 'confirmed', race_event_id: 'e1', race: { id: 'e1', race_date: '2026-10-18' }, race_started_at: null, race_finished_at: null }
+const REG = { id: R1, status: 'confirmed', race_event_id: 'e1', race_started_at: null, race_finished_at: null,
+  race: { id: 'e1', race_date: '2026-10-18', location_id: 'L1', locations: { id: 'L1', organization_id: 'O1' } } }
 const TARGETS = {
   ok: true,
   entry: { id: R1, headcount: 2, label: 'The Crushers', member_count: 1, non_member_count: 1 },
@@ -46,6 +48,7 @@ beforeEach(() => {
   readRegistrationForMove.mockResolvedValue({ registration: REG, error: null })
   countEntryCheckins.mockResolvedValue({ count: 0, error: null })
   listMoveTargets.mockResolvedValue(TARGETS)
+  moveLocationIds.mockResolvedValue(['L1', 'L2'])
 })
 afterEach(() => { vi.unstubAllEnvs() })
 
@@ -58,7 +61,9 @@ describe('GET /api/public/entry/[token]/move-options', () => {
     const res = await GET(get(), props())
     expect(res.status).toBe(200)
     const body = await res.json()
-    expect(listMoveTargets).toHaveBeenCalledWith(expect.anything(), { registrationId: R1, allowedLocationIds: null })
+    // review I2: the entry's organisation, never every studio.
+    expect(moveLocationIds).toHaveBeenCalledWith(expect.anything(), 'L1', { organizationId: 'O1' })
+    expect(listMoveTargets).toHaveBeenCalledWith(expect.anything(), { registrationId: R1, allowedLocationIds: ['L1', 'L2'] })
     expect(body.data.can_move).toBe(true)
     expect(body.data.options).toHaveLength(1)
     expect(body.data.options[0].times.map((t) => t.wave_id)).toEqual(['w1'])
@@ -73,7 +78,7 @@ describe('GET /api/public/entry/[token]/move-options', () => {
   it.each([
     ['unpaid', { status: 'pending_payment' }, 0],
     ['checked in', {}, 1],
-    ['past', { race: { id: 'e1', race_date: '2026-10-01' } }, 0],
+    ['past', { race: { ...REG.race, race_date: '2026-10-01' } }, 0],
   ])('%s: can_move false with a reason, and no options looked up', async (_w, over, checkins) => {
     readRegistrationForMove.mockResolvedValue({ registration: { ...REG, ...over }, error: null })
     countEntryCheckins.mockResolvedValue({ count: checkins, error: null })
@@ -86,5 +91,13 @@ describe('GET /api/public/entry/[token]/move-options', () => {
     expect((await GET(get(), props())).status).toBe(500)
     countEntryCheckins.mockResolvedValue({ count: null, error: { message: 'down' } })
     expect((await GET(get(), props())).status).toBe(500)
+  })
+})
+
+describe('GET /api/public/entry/[token]/move-options — the organisation fence fails closed', () => {
+  it('an unreadable fence is a 500 with no options looked up', async () => {
+    moveLocationIds.mockResolvedValue(null)
+    expect((await GET(get(), props())).status).toBe(500)
+    expect(listMoveTargets).not.toHaveBeenCalled()
   })
 })
