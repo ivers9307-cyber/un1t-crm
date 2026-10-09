@@ -36,7 +36,7 @@ export async function GET(request, props) {
   const { data, error } = await db
     .from('race_payments')
     .select(`
-      id, status, amount_cents, currency,
+      id, status, amount_cents, currency, kind, registration_move_id,
       payment_provider, payment_provider_ref,
       payment_checkout_token, payment_checkout_url, connected_account_id,
       application_fee_cents,
@@ -54,7 +54,10 @@ export async function GET(request, props) {
 
   // If the front-end is asking and the payment is still pending,
   // refresh from the provider in case the webhook hasn't landed yet.
-  // Side effect: markRacePaymentStatus may update the row inline.
+  // Side effect: markRacePaymentStatus may update the row inline. `kind` and
+  // `registration_move_id` are selected above for it: a paid price
+  // difference (EVENT-MOVE.5) must take its move_gap branch here too, never
+  // the entry side effects.
   let row = data
   if (
     data.status === 'pending' &&
@@ -68,7 +71,7 @@ export async function GET(request, props) {
         const { data: re } = await db
           .from('race_payments')
           .select(`
-            id, status, amount_cents, currency,
+            id, status, amount_cents, currency, kind, registration_move_id,
             payment_provider, payment_provider_ref,
             payment_checkout_token, payment_checkout_url,
             race_event_id, race_registration_id,

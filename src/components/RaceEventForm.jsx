@@ -289,6 +289,8 @@ export default function RaceEventForm({ race, locationId }) {
   const [reminderTemplateId, setReminderTemplateId] = useState(race?.reminder_email_template_id || '')
   const [movedSubject, setMovedSubject] = useState(race?.moved_email_subject || '')
   const [movedIntro, setMovedIntro] = useState(race?.moved_email_intro || '')
+  const [gapSubject, setGapSubject] = useState(race?.gap_email_subject || '')
+  const [gapIntro, setGapIntro] = useState(race?.gap_email_intro || '')
   // The location's saved email templates, for the "Advanced: use a full
   // template" pickers. Fetched from the shared templates list endpoint,
   // scoped to this event's location. A fetch failure just leaves the list
@@ -578,6 +580,8 @@ export default function RaceEventForm({ race, locationId }) {
       reminder_email_template_id: reminderTemplateId || null,
       moved_email_subject: movedSubject.trim() || null,
       moved_email_intro: movedIntro.trim() || null,
+      gap_email_subject: gapSubject.trim() || null,
+      gap_email_intro: gapIntro.trim() || null,
       ...(meta.isLeadGen ? {} : {
         waves: outboundWaves.map((w, i) => ({
           ...(w.id ? { id: w.id } : {}),
@@ -1419,6 +1423,21 @@ export default function RaceEventForm({ race, locationId }) {
               introPlaceholder="What's next: arrive 30 minutes before your start, bring water and a towel. Your old tickets no longer work."
               showTemplate={false}
               extraTags={['{{old_event_name}}', '{{old_when}}']}
+            />
+          </div>
+
+          <div className="pt-4 border-t border-un1t-border">
+            <EventEmailFields
+              title="Pay the difference"
+              description="Sent when staff send a payment link for a moved entry's price difference, and again as the receipt once it is paid. The same copy serves both, so keep it neutral. The pay button is always included."
+              subject={gapSubject}
+              onSubject={setGapSubject}
+              subjectPlaceholder="The price difference for {{event_name}}"
+              intro={gapIntro}
+              onIntro={setGapIntro}
+              introPlaceholder="Questions about the difference? Reply to this email."
+              showTemplate={false}
+              extraTags={['{{difference}}', '{{old_event_name}}']}
             />
           </div>
         </div>

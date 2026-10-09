@@ -35,6 +35,7 @@ import { emitEvent, applyTagRules, EVENT_TYPES } from './contact-events'
 import { triggerSequencesForOrderStatus } from './sequences'
 import { addEventAttendeesToHostList } from './host-contact-list'
 import { logWarn, logError } from './log'
+import { GAP_PAYMENT_KIND } from './race-gap-payment'
 
 /**
  * Resolve which Revolut credentials to use for race payments. For
@@ -336,6 +337,14 @@ export async function markRacePaymentStatus({ db, payment, revolutState, revolut
 
   await db.from('race_payments').update(updates).eq('id', payment.id)
 
+  // EVENT-MOVE.5 — a PRICE DIFFERENCE landed, not an entry. It settles the
+  // move and nothing else: the entry is already confirmed, its people are
+  // already on the host's list, its tags and sequences already ran. (Failed
+  // and abandoned gap payments take the generic path below, unchanged.)
+  if (payment.kind === GAP_PAYMENT_KIND && updates.status === 'completed') {
+    return completeGapPayment({ db, payment, updates, nowIso })
+  }
+
   // Roll the registration's status forward when the payment lands.
   if (updates.status === 'completed' && payment.race_registration_id) {
     await db.from('race_registrations')
@@ -394,6 +403,55 @@ export async function markRacePaymentStatus({ db, payment, revolutState, revolut
   }
 
   return { applied: updates, state_changed: true }
+}
+
+/**
+ * EVENT-MOVE.5 — the completed branch for kind='move_gap'. Projects the order
+ * and emits ORDER_COMPLETED (the money is real), then settles the move with
+ * the same compare-and-set as the staff settle route (EVENT-MOVE.3), so a
+ * difference staff already marked by hand keeps their answer. Never: the
+ * registration status, the host contact list, tag rules, order_completed
+ * sequences. The caller (the payment webhooks) sends the gap receipt instead
+ * of the entry confirmation, and skips the Glofox push.
+ */
+async function completeGapPayment({ db, payment, updates, nowIso }) {
+  try {
+    const refreshed = { ...payment, ...updates }
+    await syncOrderFromRacePayment({ db, payment: refreshed })
+    await emitEvent({
+      db,
+      eventType: EVENT_TYPES.ORDER_COMPLETED,
+      contactEmail: payment.contact_email,
+      contactId: payment.contact_id || null,
+      locationId: payment.race?.location_id || null,
+      sourceType: 'race_registration',
+      sourceId: payment.id,
+      metadata: { amount_cents: refreshed.amount_cents, currency: payment.currency, kind: GAP_PAYMENT_KIND },
+    })
+  } catch (e) {
+    logWarn('race-payments', 'orders/events sync (gap completed) failed', { err: e, paymentId: payment.id })
+  }
+
+  const moveId = payment.registration_move_id || null
+  if (!moveId) {
+    logError('race-payments', 'a move_gap payment completed with no move to settle; mark the difference collected by hand', { paymentId: payment.id })
+  } else {
+    const { data: settled, error: settleErr } = await db
+      .from('registration_moves')
+      .update({ gap_settled_at: nowIso, gap_settled_how: 'collected', gap_settled_by_name: 'Customer (paid online)' })
+      .eq('id', moveId)
+      .is('gap_settled_at', null)
+      .select('id')
+    if (settleErr) {
+      logError('race-payments', 'the difference was paid but the move was NOT marked collected; mark it by hand', { err: settleErr, paymentId: payment.id, moveId })
+    } else if (!Array.isArray(settled) || settled.length === 0) {
+      // Staff settled it first (collected by hand, or waived) and the customer
+      // paid anyway: their answer stands, and the money may need refunding.
+      logError('race-payments', 'the difference was paid online after the move was already settled; check whether to refund', { paymentId: payment.id, moveId })
+    }
+  }
+
+  return { applied: { ...updates, kind: GAP_PAYMENT_KIND }, state_changed: true }
 }
 
 /**

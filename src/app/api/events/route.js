@@ -98,6 +98,10 @@ export const CreateSchema = z.object({
   // EVENT-MOVE.1 (mig 708) — copy for the "your entry has moved" email.
   moved_email_subject: z.string().max(4000).nullable().optional(),
   moved_email_intro: z.string().max(4000).nullable().optional(),
+  // EVENT-MOVE.5 (mig 710) — copy for the two price-difference emails (the
+  // payment link and the receipt share it).
+  gap_email_subject: z.string().max(4000).nullable().optional(),
+  gap_email_intro: z.string().max(4000).nullable().optional(),
   confirmation_email_template_id: uuidLike.nullable().optional(),
   reminder_email_template_id: uuidLike.nullable().optional(),
   // EVENT-COMMS-LOC (mig 553) — the real UN1T location this event's SMS + email
@@ -381,6 +385,8 @@ export async function POST(request) {
       reminder_email_intro: body.reminder_email_intro ?? null,
       moved_email_subject: body.moved_email_subject ?? null,
       moved_email_intro: body.moved_email_intro ?? null,
+      gap_email_subject: body.gap_email_subject ?? null,
+      gap_email_intro: body.gap_email_intro ?? null,
       confirmation_email_template_id: body.confirmation_email_template_id ?? null,
       reminder_email_template_id: body.reminder_email_template_id ?? null,
       sending_location_id: body.sending_location_id ?? null,

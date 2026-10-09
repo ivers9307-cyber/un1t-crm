@@ -87,7 +87,7 @@ export async function sendRaceConfirmations({ db, paymentId }) {
     .select(`
       id, contact_id, contact_email, contact_phone, contact_name,
       amount_cents, currency, member_count, non_member_count,
-      member_fee_cents, non_member_fee_cents, status,
+      member_fee_cents, non_member_fee_cents, status, kind,
       confirmation_email_sent_at,
       race_event_id, race_registration_id,
       race:race_event_id (
@@ -109,6 +109,12 @@ export async function sendRaceConfirmations({ db, paymentId }) {
 
   if (error || !payment) {
     result.failed.push(`load:${error?.message || 'payment_not_found'}`)
+    return result
+  }
+  // EVENT-MOVE.5 — a price-difference payment is not an entry: no "you're
+  // in" email, no fresh QR codes. Its receipt is sendGapPaidEmail.
+  if (payment.kind && payment.kind !== 'entry') {
+    result.skipped.push(`kind=${payment.kind}`)
     return result
   }
   if (payment.status !== 'completed') {
@@ -653,6 +659,207 @@ export async function sendRegistrationMovedEmail(db, { registrationId, moveId })
     result.failed.push('email:duplicate_send')
     logError('race-confirmations', 'a concurrent invocation had already stamped this move; the entrant received a DUPLICATE moved email', { registrationId, moveId })
   }
+  return result
+}
+
+// ─── EVENT-MOVE.5 — the price difference: the link, and the receipt ──────
+//
+// Two emails about a move_gap payment (race_payments.kind, mig 710), both
+// from the payment row: the LINK staff send (sendGapLinkEmail, every click
+// sends: staff may resend it) and the RECEIPT when it is paid
+// (sendGapPaidEmail, send-once on confirmation_email_sent_at, stamped after
+// the send as stampSendOnce explains). ONE operator copy pair serves both,
+// kind 'gap' (race_events.gap_email_subject/intro); the defaults differ.
+// Neither carries QR codes: the tickets from the moved email still stand.
+
+const GAP_PAYMENT_COLUMNS = `
+  id, kind, status, contact_id, contact_email, contact_name,
+  amount_cents, currency, confirmation_email_sent_at,
+  race_event_id, race_registration_id, registration_move_id,
+  race:race_event_id (
+    id, name, slug, kind, race_date, location_id, host_id, sending_location_id,
+    venue_name, accent_hex, hero_image_url,
+    gap_email_subject, gap_email_intro,
+    locations:location_id ( id, name, is_host_anchor, organization_id )
+  ),
+  registration:race_registration_id ( id, wave:wave_id ( id, start_time, label ) ),
+  move:registration_move_id ( id, from_event:from_event_id ( id, name ) )
+`
+
+/**
+ * Default shell slots for the two price-difference emails.
+ * @param {{ raceName, raceDateLabel, waveLabel, waveRowLabel, locationName,
+ *   firstName, differenceLabel, oldEventName, payUrl }} ctx
+ * @param {'link'|'paid'} stage
+ */
+export function buildGapDefaults(ctx, stage) {
+  const who = escapeHtml(ctx.firstName || 'there')
+  const from = `<strong>${escapeHtml(ctx.oldEventName || 'your old event')}</strong>`
+  const to = `<strong>${escapeHtml(ctx.raceName)}</strong>`
+  const diff = `<strong>${escapeHtml(ctx.differenceLabel)}</strong>`
+  const row = (label, value) => `<tr><td style="padding:8px 0;color:#666;width:120px">${label}</td><td style="padding:8px 0;font-weight:600">${escapeHtml(value)}</td></tr>`
+  const infoRows = [
+    `    ${row('Event', ctx.raceName)}`,
+    ctx.raceDateLabel ? `    ${row('Date', ctx.raceDateLabel)}` : '',
+    ctx.waveLabel ? `    ${row(ctx.waveRowLabel || 'Wave', ctx.waveLabel)}` : '',
+    ctx.locationName ? `    ${row('Where', ctx.locationName)}` : '',
+    `    ${row(stage === 'paid' ? 'Paid' : 'To pay', ctx.differenceLabel)}`,
+  ].filter(Boolean).join('\n')
+  const base = { infoRows, memberQrs: [], locationName: ctx.locationName || '' }
+
+  if (stage === 'paid') {
+    return {
+      ...base,
+      subject: `Thanks, the ${ctx.differenceLabel} difference for ${ctx.raceName} is paid`,
+      heading: `Thanks, ${who}.`,
+      introHtml: `The ${diff} difference for your move from ${from} to ${to} is paid.`,
+      afterInfoHtml: '',
+      footerHtml: `<strong>Nothing more to do.</strong> The tickets in your "entry has moved" email still work.`,
+    }
+  }
+  const href = escapeHtml(ctx.payUrl || '')
+  return {
+    ...base,
+    subject: `Pay the difference for ${ctx.raceName}`,
+    heading: `One thing left, ${who}.`,
+    introHtml: `Your entry moved from ${from} to ${to}, which costs ${diff} more. Pay it here:`,
+    afterInfoHtml: `
+
+  <p style="margin:0 0 12px;text-align:center"><a href="${href}" style="display:inline-block;background:#111;color:#fff;padding:12px 28px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px">Pay ${escapeHtml(ctx.differenceLabel)}</a></p>
+  <p style="margin:0 0 24px;text-align:center;color:#666;font-size:12px;word-break:break-all">Or open this link: ${href}</p>`,
+    footerHtml: `<strong>Your entry is safe either way.</strong> The tickets in your "entry has moved" email still work; this only settles the price difference.`,
+  }
+}
+
+async function loadGapPayment(db, paymentId, result, what) {
+  const { data: payment, error } = await db
+    .from('race_payments')
+    .select(GAP_PAYMENT_COLUMNS)
+    .eq('id', paymentId)
+    .maybeSingle()
+  if (error || !payment) {
+    result.failed.push(`load:${error?.message || 'payment_not_found'}`)
+    logError('race-confirmations', `${what}: payment unreadable; nothing sent`, { err: error, paymentId })
+    return null
+  }
+  return payment
+}
+
+/** The ctx + merge extras both gap emails render from. */
+function gapContext(payment, payUrl) {
+  const race = payment.race || {}
+  const differenceLabel = fmtMoney(Number(payment.amount_cents) || 0, payment.currency || 'EUR')
+  const ctx = {
+    raceName: race.name || 'UN1T Race',
+    raceDateLabel: fmtRaceDate(race.race_date),
+    waveLabel: waveText(payment.registration?.wave),
+    waveRowLabel: timeRowLabel(race.kind),
+    locationName: pickAudienceVenueName({ venueName: race.venue_name, eventLocation: race.locations }),
+    firstName: (payment.contact_name || '').split(' ')[0] || '',
+    differenceLabel,
+    oldEventName: payment.move?.from_event?.name || '',
+    payUrl: payUrl || '',
+  }
+  const contact = {
+    first_name: ctx.firstName,
+    name: payment.contact_name || '',
+    email: payment.contact_email || '',
+    phone: '',
+  }
+  const extras = {
+    event_name: ctx.raceName,
+    when: ctx.waveLabel || ctx.raceDateLabel,
+    location: ctx.locationName,
+    old_event_name: ctx.oldEventName,
+    difference: differenceLabel,
+    pay_url: ctx.payUrl,
+  }
+  return { race, ctx, contact, extras }
+}
+
+async function gapCommsLocationId(db, race, paymentId) {
+  // Same fallback as sendRaceConfirmations: a resolver failure never costs the email.
+  let commsLocation = null
+  try {
+    commsLocation = await resolveEventCommsLocation(db, { location_id: race.location_id, host_id: race.host_id, sending_location_id: race.sending_location_id })
+  } catch (e) {
+    logError('race-confirmations', 'gap email: comms location resolver threw; sending from the event location', { err: e, paymentId })
+  }
+  return commsLocation?.id || race.location_id || null
+}
+
+/**
+ * Email the payer the link to pay a move's price difference. Not send-once:
+ * staff may send it again (the route reuses the pending payment). Best-effort:
+ * reports, logs, never throws.
+ * @param {{ db: object, paymentId: string, payUrl: string }} args
+ * @returns {Promise<{ sent: string[], skipped: string[], failed: string[] }>}
+ */
+export async function sendGapLinkEmail({ db, paymentId, payUrl }) {
+  const result = { sent: [], skipped: [], failed: [] }
+  const payment = await loadGapPayment(db, paymentId, result, 'gap link email')
+  if (!payment) return result
+  if (payment.kind !== 'move_gap') { result.skipped.push(`kind=${payment.kind || 'entry'}`); return result }
+  if (payment.status !== 'pending') { result.skipped.push(`status=${payment.status}`); return result }
+  if (!payment.contact_email) { result.skipped.push('email:no_email'); return result }
+
+  // Staff are told at once when this does not go (and hold the link), so a
+  // suppression here is recoverable: no unrecoverable flag.
+  const gate = await checkTransactionalConsent({
+    db, contactId: payment.contact_id, channel: 'email', module: 'race-confirmations', meta: { paymentId },
+  })
+  if (!gate.allowed) { result.skipped.push(`email:${gate.reason}`); return result }
+
+  const { race, ctx, contact, extras } = gapContext(payment, payUrl)
+  const locationId = await gapCommsLocationId(db, race, paymentId)
+  try {
+    const { subject, htmlBody } = await resolveEventEmail({ db, kind: 'gap', race, contact, extras, defaults: buildGapDefaults(ctx, 'link') })
+    await sendTransactionalEmail({ to: payment.contact_email, subject, htmlBody, contactId: payment.contact_id || null, locationId, tag: 'event-gap-link' })
+  } catch (e) {
+    result.failed.push(`email:${e?.message || 'failed'}`)
+    logError('race-confirmations', 'gap link email failed to send', { err: e, paymentId })
+    return result
+  }
+  result.sent.push('email')
+  return result
+}
+
+/**
+ * The receipt for a paid price difference. Send-once on the payment row's
+ * confirmation_email_sent_at (the customer-facing email for THIS row went),
+ * stamped after the send. Called by the payment webhooks on a FRESH
+ * completion of a move_gap payment, instead of sendRaceConfirmations.
+ * @param {{ db: object, paymentId: string }} args
+ * @returns {Promise<{ sent: string[], skipped: string[], failed: string[] }>}
+ */
+export async function sendGapPaidEmail({ db, paymentId }) {
+  const result = { sent: [], skipped: [], failed: [] }
+  const payment = await loadGapPayment(db, paymentId, result, 'gap receipt')
+  if (!payment) return result
+  if (payment.kind !== 'move_gap') { result.skipped.push(`kind=${payment.kind || 'entry'}`); return result }
+  if (payment.status !== 'completed') { result.skipped.push(`status=${payment.status}`); return result }
+  if (payment.confirmation_email_sent_at) { result.skipped.push('email:already_sent'); return result }
+  if (!payment.contact_email) { result.skipped.push('email:no_email'); return result }
+
+  // ADMINISTRATIVE + unrecoverable, as for the confirmation (see sendEmail):
+  // the webhook calls this once, on the fresh transition, and nothing re-runs it.
+  const gate = await checkTransactionalConsent({
+    db, contactId: payment.contact_id, channel: 'email', module: 'race-confirmations', meta: { paymentId }, unrecoverable: true,
+  })
+  if (!gate.allowed) { result.skipped.push(`email:${gate.reason}`); return result }
+
+  const { race, ctx, contact, extras } = gapContext(payment, '')
+  const locationId = await gapCommsLocationId(db, race, paymentId)
+  try {
+    const { subject, htmlBody } = await resolveEventEmail({ db, kind: 'gap', race, contact, extras, defaults: buildGapDefaults(ctx, 'paid') })
+    await sendTransactionalEmail({ to: payment.contact_email, subject, htmlBody, contactId: payment.contact_id || null, locationId, tag: 'event-gap-paid' })
+  } catch (e) {
+    result.failed.push(`email:${e?.message || 'failed'}`)
+    logError('race-confirmations', 'gap receipt failed to send', { err: e, paymentId })
+    return result
+  }
+  result.sent.push('email')
+  await stampSendOnce(db, payment.id, 'confirmation_email_sent_at', result, 'email')
   return result
 }
 

@@ -30,7 +30,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { verifyWebhookSignature, getOrder } from '@/lib/revolut'
 import { resolveRacePaymentByProviderRef, markRacePaymentStatus } from '@/lib/race-payments'
-import { sendRaceConfirmations } from '@/lib/race-confirmations'
+import { sendRaceConfirmations, sendGapPaidEmail } from '@/lib/race-confirmations'
 import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
 
 export const runtime = 'nodejs'
@@ -105,7 +105,18 @@ export async function POST(request) {
   // sendRaceConfirmations via the *_sent_at stamps so a Revolut retry
   // can't double-send.
   let confirmations = null
-  if (result.applied?.status === 'completed') {
+  // EVENT-MOVE.5 — a paid PRICE DIFFERENCE (kind move_gap) settled its move
+  // inside markRacePaymentStatus; it gets the short gap receipt, never the
+  // entry confirmation, and never the Glofox push (its people were pushed
+  // when the entry was paid).
+  if (result.applied?.status === 'completed' && payment.kind === 'move_gap') {
+    try {
+      confirmations = await sendGapPaidEmail({ db, paymentId: payment.id })
+    } catch (e) {
+      console.warn(`[revolut-race-webhook] gap receipt failed for ${payment.id}: ${e.message}`)
+      confirmations = { failed: [`unhandled:${e.message}`] }
+    }
+  } else if (result.applied?.status === 'completed') {
     try {
       confirmations = await sendRaceConfirmations({ db, paymentId: payment.id })
     } catch (e) {
