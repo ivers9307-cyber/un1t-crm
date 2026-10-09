@@ -16,9 +16,13 @@ export const dynamic = 'force-dynamic'
 
 export default async function TvLiveTokenChallengesPage(props) {
   const params = await props.params
+  const searchParams = await props.searchParams
   const { token } = params
+  // FLEET-CMD.2 — forwarded like /tv/live/[token] so a kiosk's URL shape is
+  // the same for both boards. A string or nothing (a repeated param is ignored).
+  const device = typeof searchParams?.device === 'string' ? searchParams.device : null
   // locationId is unused when an endpoint is supplied; pass the token through
   // as a stable key. The client polls the token endpoint and reads the studio
   // name out of the payload.
-  return <ChallengeTvClient locationId={token} endpoint={`/api/public/tv-challenges/${token}`} />
+  return <ChallengeTvClient locationId={token} endpoint={`/api/public/tv-challenges/${token}`} device={device} />
 }

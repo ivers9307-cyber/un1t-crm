@@ -30,6 +30,7 @@ import { useSearchParams } from 'next/navigation'
 import { pageSlice } from '@/lib/tv-roll'
 import { repsetDisplay, repsetBody, repsetMono } from '@/fonts/repset'
 import { ZONE_COLORS_DARK } from '@/lib/tv-zone-colors'
+import { withDevice } from '@/lib/tv-data-url'
 
 const POLL_MS = 45_000
 const ROLL_MS = 2_600
@@ -77,7 +78,7 @@ function filledPips(value, leaderValue) {
   return Math.min(10, Math.max(1, Math.round((value / leaderValue) * 10)))
 }
 
-export default function ChallengeTvClient({ locationId, endpoint }) {
+export default function ChallengeTvClient({ locationId, endpoint, device }) {
   const searchParams = useSearchParams()
   const forcedOrientation = searchParams.get('orientation') // 'portrait' | 'landscape' | null
   const [portrait, setPortrait] = useState(false)
@@ -104,8 +105,11 @@ export default function ChallengeTvClient({ locationId, endpoint }) {
   // the live /tv/[locationId]/challenges TV). The token-gated
   // /tv/live/[token]/challenges page passes an explicit `endpoint` so the same
   // client polls /api/public/tv-challenges/[token] instead. Same payload either
-  // way — the client is agnostic to which it hits.
-  const dataUrl = endpoint || `/api/public/challenges/${locationId}`
+  // way — the client is agnostic to which it hits. FLEET-CMD.2 ?device= is
+  // forwarded the same way LiveTvClient does so a kiosk showing this board
+  // carries its device name on the poll (the challenge routes do not stamp
+  // the heartbeat today; forwarding keeps the two boards' URLs symmetric).
+  const dataUrl = withDevice(endpoint || `/api/public/challenges/${locationId}`, device)
 
   // Poll the public endpoint.
   const fetchData = useCallback(async () => {
