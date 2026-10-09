@@ -3,7 +3,8 @@
 // /policies page (server-rendered) and the unread-policies banner.
 //
 // No permission gate beyond authentication — every employee can read
-// the policies (mig 178 RLS).
+// their own organisation's policies (W0.5, mig 713: listPoliciesWithStatus
+// scopes to the caller's active organisation; no organisation reads nothing).
 
 import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
