@@ -185,6 +185,19 @@ describe('sendCoverageReportForOrg', () => {
     expect(result).toEqual({ channel: 'email', recipients: 2 })
   })
 
+  it('throws when sendOpsAlert reports no delivery channel, so the finalizer retries next tick', async () => {
+    sendOpsAlert.mockResolvedValueOnce({ channel: 'none' })
+    await expect(sendCoverageReportForOrg({ db: {}, organizationId: 'org-1', locationId: 'loc-1', html: '<p/>', dateStr: '2026-10-09' }))
+      .rejects.toThrow(/no delivery channel for organisation org-1/)
+    expect(sendOpsAlert).toHaveBeenCalledTimes(1)
+  })
+
+  it('a push fallback counts as delivered', async () => {
+    sendOpsAlert.mockResolvedValueOnce({ channel: 'push_fallback' })
+    await expect(sendCoverageReportForOrg({ db: {}, organizationId: 'org-1', locationId: 'loc-1', html: '<p/>', dateStr: '2026-10-09' }))
+      .resolves.toEqual({ channel: 'push_fallback' })
+  })
+
   it('refuses a report with no organisation (nobody to send to) without calling sendOpsAlert', async () => {
     await expect(sendCoverageReportForOrg({ db: {}, organizationId: null, locationId: 'loc-1', html: '<p/>', dateStr: '2026-10-09' }))
       .rejects.toThrow(/without an organisation/)

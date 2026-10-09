@@ -135,11 +135,19 @@ export function renderCoverageReportHtml({ appUrl, dateStr, sections, errors }) 
   </div>`
 }
 
-/** W0.7 — one report per organisation, to its own ops_alert_emails (push fallback inside sendOpsAlert). */
+/**
+ * W0.7 — one report per organisation, to its own ops_alert_emails (push
+ * fallback inside sendOpsAlert). sendOpsAlert never throws: it answers
+ * `{ channel: 'none' }` when delivery failed, so that is turned into a
+ * throw here so the finalizer returns email_failed and retries next tick
+ * (a push_fallback counts as delivered).
+ */
 export async function sendCoverageReportForOrg({ db, organizationId, locationId, html, dateStr }) {
   if (!organizationId) throw new Error('coverage report: section without an organisation')
-  return sendOpsAlert(
+  const result = await sendOpsAlert(
     { organizationId, locationId, subject: `Receipt coverage — ${dateStr}`, htmlBody: html, pushBody: 'Weekly receipt coverage report is ready in Accounting.' },
     { db },
   )
+  if (!result || result.channel === 'none') throw new Error('coverage report: no delivery channel for organisation ' + organizationId)
+  return result
 }
