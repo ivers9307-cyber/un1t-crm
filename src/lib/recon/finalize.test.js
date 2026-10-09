@@ -239,7 +239,7 @@ describe('maybeFinalizeWeekly — compile + send', () => {
     expect(insertPayload.status).toBe('ok')
 
     expect(stampHeartbeat).toHaveBeenCalledWith('receipt-coverage-weekly')
-    expect(result).toEqual({ finalized: true, sections: 1 })
+    expect(result).toEqual({ finalized: true, sections: 1, failedOrgs: [] })
   })
 
   it('degraded cycle (a location cron run has anomalies/status error) still emails and inserts the report row, but does NOT stamp the heartbeat', async () => {
@@ -286,7 +286,7 @@ describe('maybeFinalizeWeekly — compile + send', () => {
     expect(sendCoverageReportForOrg).toHaveBeenCalledTimes(1)
     expect(reportInsert.insert).toHaveBeenCalledTimes(1)
     expect(stampHeartbeat).not.toHaveBeenCalled()
-    expect(result).toEqual({ finalized: true, sections: 1 })
+    expect(result).toEqual({ finalized: true, sections: 1, failedOrgs: [] })
   })
 
   it('email failure returns email_failed and does NOT insert a report row (retried next tick)', async () => {

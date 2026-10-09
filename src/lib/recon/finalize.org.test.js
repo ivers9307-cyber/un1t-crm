@@ -147,7 +147,7 @@ describe('maybeFinalizeWeekly — one report per organisation', () => {
     expect(reportInsert.insert).toHaveBeenCalledTimes(1)
     expect(reportInsert.insert.mock.calls[0][0]).toMatchObject({ trigger: 'report', status: 'ok', stats: { locations: 2 } })
     expect(stampHeartbeat).toHaveBeenCalledWith('receipt-coverage-weekly')
-    expect(result).toEqual({ finalized: true, sections: 2 })
+    expect(result).toEqual({ finalized: true, sections: 2, failedOrgs: [] })
   })
 
   it('a platform-level error with no organisation (connection whose location row is missing) is shown to EVERY organisation; heartbeat not stamped', async () => {
@@ -191,7 +191,7 @@ describe('maybeFinalizeWeekly — one report per organisation', () => {
     expect(reportInsert.insert).toHaveBeenCalledTimes(1)
     expect(reportInsert.insert.mock.calls[0][0]).toMatchObject({ trigger: 'report', status: 'error' })
     expect(stampHeartbeat).not.toHaveBeenCalled()
-    expect(result).toEqual({ finalized: true, sections: 2 })
+    expect(result).toEqual({ finalized: true, sections: 2, failedOrgs: [] })
   })
 
   it('an error that belongs to one organisation is shown only to that organisation', async () => {
@@ -261,10 +261,98 @@ describe('maybeFinalizeWeekly — one report per organisation', () => {
     expect(sendCoverageReportForOrg.mock.calls[0][0].organizationId).toBe(ORG_A)
     expect(logError).toHaveBeenCalledWith('recon-finalize', expect.stringContaining('no organisation'), expect.objectContaining({ locations: ['Unassigned'] }))
     expect(reportInsert.insert).toHaveBeenCalledTimes(1)
-    expect(result).toEqual({ finalized: true, sections: 2 })
+    expect(result).toEqual({ finalized: true, sections: 2, failedOrgs: [] })
   })
 
-  it('a send failure for one organisation returns email_failed and does NOT insert the report row (retried next tick)', async () => {
+  it('an organisation whose ONLY connection errored still gets its own report, and no other tenant sees its location name', async () => {
+    queueGates()
+    const connections = chainable({
+      data: [
+        { location_id: 'loc-a', location: { id: 'loc-a', name: 'Stillorgan', organization_id: ORG_A } },
+        { location_id: 'loc-b', location: { id: 'loc-b', name: 'Tenant B Garage', organization_id: ORG_B } },
+      ],
+      error: null,
+    }, 'select')
+    const foundHunts = chainable({ data: [], error: null }, 'gte')
+    const bNoRun = chainable({ data: null, error: null }, 'maybeSingle')
+    const reportInsert = chainable({ data: { id: 'report-row-1' }, error: null }, 'insert')
+
+    mockDb.from
+      .mockReturnValueOnce(connections)
+      .mockReturnValueOnce(foundHunts)
+      .mockReturnValueOnce(cleanRun('run-a'))
+      .mockReturnValueOnce(emptyLimit())
+      .mockReturnValueOnce(emptyLimit())
+      .mockReturnValueOnce(uncoveredFor('A-ONLY LINE'))
+      .mockReturnValueOnce(bNoRun)
+      .mockReturnValueOnce(reportInsert)
+
+    const result = await finalize.maybeFinalizeWeekly(mockDb)
+
+    expect(sendCoverageReportForOrg).toHaveBeenCalledTimes(2)
+    const byOrg = new Map(renderCoverageReportHtml.mock.calls.map(([arg], i) => [sendCoverageReportForOrg.mock.calls[i][0].organizationId, arg]))
+    expect([...byOrg.keys()].sort()).toEqual([ORG_A, ORG_B])
+
+    expect(byOrg.get(ORG_A).errors).toEqual([])
+    expect(byOrg.get(ORG_A).sections.map((s) => s.locationName)).toEqual(['Stillorgan'])
+    expect(JSON.stringify(byOrg.get(ORG_A))).not.toContain('Tenant B')
+
+    expect(byOrg.get(ORG_B).sections).toEqual([])
+    expect(byOrg.get(ORG_B).errors).toEqual([{ locationName: 'Tenant B Garage', error: 'no cron run this cycle' }])
+    expect(JSON.stringify(byOrg.get(ORG_B))).not.toContain('Stillorgan')
+    expect(JSON.stringify(byOrg.get(ORG_B))).not.toContain('A-ONLY')
+
+    const bSend = sendCoverageReportForOrg.mock.calls.find((c) => c[0].organizationId === ORG_B)[0]
+    expect(bSend.locationId).toBe('loc-b')
+
+    expect(reportInsert.insert).toHaveBeenCalledTimes(1)
+    expect(reportInsert.insert.mock.calls[0][0]).toMatchObject({ trigger: 'report', status: 'error' })
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+    expect(result).toEqual({ finalized: true, sections: 1, failedOrgs: [] })
+  })
+
+  it('a send failure for ONE organisation: the other is still sent once, the report row is written with failedOrgs, the heartbeat is NOT stamped', async () => {
+    queueGates()
+    const connections = chainable({
+      data: [
+        { location_id: 'loc-a', location: { id: 'loc-a', name: 'Stillorgan', organization_id: ORG_A } },
+        { location_id: 'loc-b', location: { id: 'loc-b', name: 'Tenant B Garage', organization_id: ORG_B } },
+      ],
+      error: null,
+    }, 'select')
+    const foundHunts = chainable({ data: [], error: null }, 'gte')
+    const reportInsert = chainable({ data: { id: 'report-row-1' }, error: null }, 'insert')
+
+    mockDb.from
+      .mockReturnValueOnce(connections)
+      .mockReturnValueOnce(foundHunts)
+      .mockReturnValueOnce(cleanRun('run-a'))
+      .mockReturnValueOnce(emptyLimit())
+      .mockReturnValueOnce(emptyLimit())
+      .mockReturnValueOnce(emptyLimit())
+      .mockReturnValueOnce(cleanRun('run-b'))
+      .mockReturnValueOnce(emptyLimit())
+      .mockReturnValueOnce(emptyLimit())
+      .mockReturnValueOnce(emptyLimit())
+      .mockReturnValueOnce(reportInsert)
+
+    sendCoverageReportForOrg.mockRejectedValueOnce(new Error('boom'))
+
+    const result = await finalize.maybeFinalizeWeekly(mockDb)
+
+    expect(sendCoverageReportForOrg).toHaveBeenCalledTimes(2)
+    expect(sendCoverageReportForOrg.mock.calls.map((c) => c[0].organizationId)).toEqual([ORG_A, ORG_B])
+    expect(reportInsert.insert).toHaveBeenCalledTimes(1)
+    expect(reportInsert.insert.mock.calls[0][0]).toMatchObject({
+      trigger: 'report',
+      stats: { failedOrgs: [{ organizationId: ORG_A, error: 'boom' }] },
+    })
+    expect(logError).toHaveBeenCalledWith('recon-finalize', expect.stringContaining('send failed'), expect.objectContaining({ organizationId: ORG_A }))
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+    expect(result).toEqual({ finalized: true, sections: 2, failedOrgs: [{ organizationId: ORG_A, error: 'boom' }] })
+  })
+
+  it('when EVERY send fails: email_failed, no report row (retried next tick), no heartbeat', async () => {
     queueGates()
     const connections = chainable({
       data: [
@@ -287,11 +375,17 @@ describe('maybeFinalizeWeekly — one report per organisation', () => {
       .mockReturnValueOnce(emptyLimit())
       .mockReturnValueOnce(emptyLimit())
 
-    sendCoverageReportForOrg.mockRejectedValueOnce(new Error('boom'))
+    sendCoverageReportForOrg.mockRejectedValue(new Error('boom'))
 
     const result = await finalize.maybeFinalizeWeekly(mockDb)
 
-    expect(result).toMatchObject({ finalized: false, reason: 'email_failed', error: 'boom' })
+    expect(sendCoverageReportForOrg).toHaveBeenCalledTimes(2)
+    expect(result).toMatchObject({
+      finalized: false,
+      reason: 'email_failed',
+      error: 'boom',
+      failedOrgs: [{ organizationId: ORG_A, error: 'boom' }, { organizationId: ORG_B, error: 'boom' }],
+    })
     // No insert registered: a stray from() call would return undefined and throw.
     expect(mockDb.from).toHaveBeenCalledTimes(13)
     expect(stampHeartbeat).not.toHaveBeenCalled()

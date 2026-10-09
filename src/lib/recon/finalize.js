@@ -223,7 +223,7 @@ export async function maybeFinalizeWeekly(db) {
       const organizationId = conn.location?.organization_id || null
       const run = await locationCronRun(db, locationId)
       if (!run) {
-        errors.push({ locationName, error: 'no cron run this cycle', organizationId })
+        errors.push({ locationName, locationId, error: 'no cron run this cycle', organizationId })
         allClean = false
         continue
       }
@@ -267,17 +267,29 @@ export async function maybeFinalizeWeekly(db) {
       byOrg.get(key).sections.push(s)
     }
     for (const e of errors) {
-      // An error carries the organisation of the connection that produced it;
-      // one without (a platform-level failure) is shown to every organisation.
-      const targets = e.organizationId && byOrg.has(e.organizationId) ? [byOrg.get(e.organizationId)] : [...byOrg.values()]
-      for (const bucket of targets) bucket.errors.push({ locationName: e.locationName, error: e.error })
+      if (e.organizationId) {
+        // An error that belongs to an organisation goes ONLY to that
+        // organisation, even when it produced no section (its only
+        // connection failed): it gets a report of its own error, and no
+        // other tenant ever sees that location's name.
+        if (!byOrg.has(e.organizationId)) byOrg.set(e.organizationId, { organizationId: e.organizationId, locationId: e.locationId, sections: [], errors: [] })
+        byOrg.get(e.organizationId).errors.push({ locationName: e.locationName, error: e.error })
+      } else {
+        // Platform-level (no organisation known): shown to every organisation.
+        for (const bucket of byOrg.values()) bucket.errors.push({ locationName: e.locationName, error: e.error })
+      }
     }
     if (byOrg.size === 0 && errors.length) {
       // Nothing rendered anywhere: still record the run so it is not retried forever, and log.
       logError('recon-finalize', 'coverage report: no organisation to send to', { errors })
     }
 
+    // Send every bucket and collect failures: a tenant whose report went
+    // out must not be mailed again next tick because another tenant's
+    // delivery failed.
     const dateStr = dublinTodayStr()
+    const failedOrgs = []
+    let delivered = 0
     for (const bucket of byOrg.values()) {
       if (!bucket.organizationId) {
         // sendCoverageReportForOrg would throw; there is nobody to send to.
@@ -289,10 +301,15 @@ export async function maybeFinalizeWeekly(db) {
       const html = renderCoverageReportHtml({ appUrl: getAppUrl(), dateStr, sections: bucket.sections, errors: bucket.errors })
       try {
         await sendCoverageReportForOrg({ db, organizationId: bucket.organizationId, locationId: bucket.locationId, html, dateStr })
+        delivered += 1
       } catch (e) {
-        // No report row on email failure — retried next tick.
-        return { finalized: false, reason: 'email_failed', error: String(e?.message || e) }
+        failedOrgs.push({ organizationId: bucket.organizationId, error: String(e?.message || e) })
+        logError('recon-finalize', 'coverage report: send failed for organisation', { organizationId: bucket.organizationId, err: e?.message || e })
       }
+    }
+    if (failedOrgs.length > 0 && delivered === 0) {
+      // Every send failed: no report row, so the next tick retries.
+      return { finalized: false, reason: 'email_failed', error: failedOrgs[0].error, failedOrgs }
     }
 
     const totalFound = sections.reduce((n, s) => n + s.found.length, 0)
@@ -302,14 +319,16 @@ export async function maybeFinalizeWeekly(db) {
       trigger: 'report',
       status: allClean ? 'ok' : 'error',
       finished_at: new Date().toISOString(),
-      stats: { locations: sections.length, found: totalFound, needsAttention: totalNeedsAttention, errors },
+      stats: { locations: sections.length, found: totalFound, needsAttention: totalNeedsAttention, errors, failedOrgs },
     })
 
-    if (allClean) {
+    // A partial delivery is recorded (the delivered tenants must not be
+    // re-mailed) but is not a healthy cycle: the heartbeat stays stale.
+    if (allClean && failedOrgs.length === 0) {
       await stampHeartbeat('receipt-coverage-weekly')
     }
 
-    return { finalized: true, sections: sections.length }
+    return { finalized: true, sections: sections.length, failedOrgs }
   } catch (e) {
     console.error('[maybeFinalizeWeekly] error', e)
     return { finalized: false, reason: 'error', error: String(e?.message || e) }
