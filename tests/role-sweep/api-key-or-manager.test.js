@@ -2,8 +2,8 @@
 // judge the cookie caller's role at the location they act on, never at the
 // caller's ACTIVE studio. The helper's cookie branch is now a COARSE pre-check
 // (Manager+ somewhere); each route decides at the target after its membership
-// check. The API-key paths (legacy CRM_API_KEY, per-org unitk_ keys) are
-// unchanged and never reach getCurrentUser.
+// check. The API-key paths (legacy CRM_API_KEY — scoped to CRM_API_KEY_ORG_ID
+// since W0.1 — and per-org unitk_ keys) never reach getCurrentUser.
 // Harness: tests/helpers/role-gate-probe.js (a refused caller never reaches a
 // DB/network call past the gate reads; an allowed one gets past the gate).
 
@@ -21,7 +21,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { describeGate, gateProbe, runProbed } from '../helpers/role-gate-probe.js'
 import {
-  roleCases, person, LOC_A, LOC_B, MASTER, MANAGER_A_STAFF_B, STAFF_A_MANAGER_B,
+  roleCases, person, ORG, LOC_A, LOC_B, MASTER, MANAGER_A_STAFF_B, STAFF_A_MANAGER_B,
 } from '../helpers/role-sweep-callers.js'
 import * as contact from '@/app/api/contacts/[id]/route.js'
 import * as contacts from '@/app/api/contacts/route.js'
@@ -54,6 +54,8 @@ const CASES = [
 beforeEach(() => {
   vi.clearAllMocks()
   vi.stubEnv('CRM_API_KEY', LEGACY_KEY)
+  // W0.1 — the legacy key is a per-org key for the callers' org.
+  vi.stubEnv('CRM_API_KEY_ORG_ID', ORG)
 })
 afterEach(() => vi.unstubAllEnvs())
 
@@ -176,14 +178,18 @@ describeGate('POST /api/bookings/event-types (MANAGER_ROLES at body.location_id)
   forbidden: UNAUTHORIZED, hidden: NOT_MEMBER, unauth: UNAUTHORIZED, cases: CASES,
 }, T)
 
-// ── the API-key paths are unchanged: no cookie lookup, no role judgement ──
+// ── the API-key paths: no cookie lookup, no role judgement ────────────────
+// W0.1 — the legacy key is org-scoped, so each route's org gate reads the
+// org's `locations` first (then the row's location_id on detail routes);
+// those reads are scripted so the probe trips past the gate as before.
 describe('the legacy CRM_API_KEY path never reaches getCurrentUser', () => {
   const auth = { authorization: `Bearer ${LEGACY_KEY}` }
+  const ORG_LOCS = { data: [{ id: LOC_A }, { id: LOC_B }], error: null }
   it.each([
-    ['PUT /api/contacts/[id]', () => contact.PUT(json('PUT', { label: 'VIP' }, auth), idParams(CONTACT_ID)), CONTACT_ROW(LOC_B)],
-    ['POST /api/contacts', () => contacts.POST(json('POST', NEW_CONTACT(LOC_B), auth)), []],
-    ['GET /api/stages', () => stages.GET(get(`location_id=${LOC_B}`, auth)), []],
-    ['GET /api/bookings/event-types/[id]', () => eventType.GET(new Request('http://localhost/api/x', { headers: auth }), idParams(EVENT_TYPE_ID)), []],
+    ['PUT /api/contacts/[id]', () => contact.PUT(json('PUT', { label: 'VIP' }, auth), idParams(CONTACT_ID)), [ORG_LOCS, ...CONTACT_ROW(LOC_B)]],
+    ['POST /api/contacts', () => contacts.POST(json('POST', NEW_CONTACT(LOC_B), auth)), [ORG_LOCS]],
+    ['GET /api/stages', () => stages.GET(get(`location_id=${LOC_B}`, auth)), [ORG_LOCS]],
+    ['GET /api/bookings/event-types/[id]', () => eventType.GET(new Request('http://localhost/api/x', { headers: auth }), idParams(EVENT_TYPE_ID)), [ORG_LOCS, { data: { location_id: LOC_B }, error: null }]],
   ])('%s', async (_label, call, reads) => {
     const probe = gateProbe(reads)
     createServerClient.mockReturnValue(probe.db)

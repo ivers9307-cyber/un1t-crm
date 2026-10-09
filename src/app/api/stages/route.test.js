@@ -1,6 +1,7 @@
 // SAAS-3 — GET /api/stages (requireApiKeyOrManager dual-auth route)
-// under per-org keys: the org filter really filters, the legacy shared
-// key stays unscoped. api-auth is real; only supabase/auth are faked.
+// under per-org keys: the org filter really filters; since W0.1 the
+// legacy shared key is scoped to CRM_API_KEY_ORG_ID and filtered the
+// same way. api-auth is real; only supabase/auth are faked.
 //
 // SAAS-12 — the cookie/manager path: orgScopeLocationIds no-ops for
 // cookie callers (orgId is null), so before the fix a manager cookie
@@ -45,6 +46,7 @@ const managerAt = (...locationIds) => ({
 
 beforeEach(() => {
   vi.stubEnv('CRM_API_KEY', GLOBAL_KEY)
+  vi.stubEnv('CRM_API_KEY_ORG_ID', 'org-1') // W0.1 — legacy key = org-1's key
   getCurrentUser.mockResolvedValue(null)
   const tables = twoOrgFixture()
   tables.pipeline_stages = [
@@ -66,10 +68,11 @@ describe('GET /api/stages — API-key callers', () => {
     expect(body.data.map((s) => s.id)).toEqual(['s1'])
   })
 
-  it('legacy CRM_API_KEY stays unscoped — sees both orgs (unchanged)', async () => {
+  it('legacy CRM_API_KEY is scoped to CRM_API_KEY_ORG_ID — sees org-1 only (W0.1)', async () => {
     const res = await GET(req(GLOBAL_KEY))
+    expect(res.status).toBe(200)
     const body = await res.json()
-    expect(body.data.map((s) => s.id).sort()).toEqual(['s1', 's2'])
+    expect(body.data.map((s) => s.id)).toEqual(['s1'])
   })
 })
 

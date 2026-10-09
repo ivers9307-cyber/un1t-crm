@@ -47,8 +47,9 @@ const NO_MATCH_UUID = '00000000-0000-0000-0000-000000000000'
 
 /**
  * SAAS-3 — org location filter for list queries on `location_id`-bearing
- * tables. Returns null when the caller is unscoped (legacy shared key /
- * cookie session — keep today's behaviour), else the org's location ids;
+ * tables. Returns null when the caller is unscoped (a cookie session —
+ * keep today's behaviour; since W0.1 the legacy shared key is scoped
+ * too), else the org's location ids;
  * an org with zero locations gets [NO_MATCH_UUID] so it matches NOTHING
  * rather than falling through unfiltered. Apply at the call site:
  *
@@ -109,6 +110,16 @@ export async function assertRowInOrg({ db, orgId, table, id }) {
   return null
 }
 
+// W0.1 — the legacy shared key is no longer unscoped. It acts as a per-org
+// key for ONE organisation named by CRM_API_KEY_ORG_ID (UN1T Group in prod).
+// No org id configured → the legacy key is refused outright (fail closed):
+// an unscoped integration key is the SaaS leak this closes. Retire both env
+// vars once n8n holds a unitk_ key.
+function legacyKeyOrgId() {
+  const id = (process.env.CRM_API_KEY_ORG_ID || '').trim()
+  return id || null
+}
+
 // Validates the API key sent by n8n in the Authorization header.
 // Comparison is constant-time so an attacker can't observe how many leading
 // bytes of CRM_API_KEY they got right by timing 401 responses. Vercel's edge
@@ -118,6 +129,11 @@ export async function assertRowInOrg({ db, orgId, table, id }) {
 // Note: token extraction now uses startsWith() instead of replace(), which
 // previously would strip "Bearer " from anywhere in the string (e.g.
 // "abcBearer xyz" became "abcxyz") rather than only the prefix.
+//
+// LEGACY and UNSCOPED: this returns no orgId, so a caller cannot tenant-filter.
+// As of W0.1 it has no route callers (check:route-guards still recognises it);
+// new routes use authenticateApiKey / requireApiKeyOrManager, which resolve the
+// organisation. Do not adopt this for a new route.
 //
 // Usage: const error = requireApiKey(request); if (error) return error;
 export function requireApiKey(request) {
@@ -173,13 +189,18 @@ export async function requireApiKeyOrManager(request) {
   const token = auth.startsWith('Bearer ') ? auth.slice('Bearer '.length) : ''
   const expected = process.env.CRM_API_KEY
   if (expected && token && safeEqual(token, expected)) {
-    // Legacy shared key — unscoped (orgId null) for back-compat.
-    return { ok: true, user: null, orgId: null }
+    // W0.1 — legacy shared key, scoped to CRM_API_KEY_ORG_ID; refused
+    // (no cookie fallback) when that org id is unset.
+    const orgId = legacyKeyOrgId()
+    if (!orgId) {
+      return { ok: false, response: NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 }) }
+    }
+    return { ok: true, user: null, orgId }
   }
 
   // APIKEYS.3 — per-org key. Returns the scoping org so handlers can
-  // filter by organization; legacy + cookie callers get orgId null and
-  // behave exactly as before.
+  // filter by organization; cookie callers get orgId null and behave
+  // exactly as before.
   const resolved = await resolveApiKeyOrg(token)
   if (resolved) {
     return { ok: true, user: null, orgId: resolved.orgId }
@@ -209,12 +230,13 @@ export async function requireApiKeyOrManager(request) {
  *
  *   - per-org key (`unitk_…`): looked up by SHA-256 hash in `api_keys`;
  *     returns { orgId } so handlers can scope queries by organization.
- *   - legacy shared `CRM_API_KEY`: still accepted, returns orgId=null
- *     (unscoped, all-org) so existing n8n flows keep working until they
- *     migrate. Retire by unsetting CRM_API_KEY once migration is done.
+ *   - legacy shared `CRM_API_KEY`: still accepted, but since W0.1 it is
+ *     scoped to the ONE organisation in CRM_API_KEY_ORG_ID (returned as
+ *     orgId, legacy: true) and refused when that env is unset. Retire by
+ *     unsetting both envs once n8n holds a unitk_ key.
  *
  * Return shape:
- *   { ok: true,  orgId: <uuid>|null, legacy: boolean, keyId?: uuid }
+ *   { ok: true,  orgId: <uuid>, legacy: boolean, keyId?: uuid }
  *   { ok: false, response: <NextResponse 401> }
  *
  * Note: async (per-org keys require a DB lookup). Routes adopting this
@@ -229,10 +251,12 @@ export async function authenticateApiKey(request) {
   })
   if (!token) return unauthorized()
 
-  // Legacy shared key first (cheap, header-only) — unscoped.
+  // Legacy shared key first (cheap, header-only) — scoped since W0.1.
   const expected = process.env.CRM_API_KEY
   if (expected && safeEqual(token, expected)) {
-    return { ok: true, orgId: null, legacy: true }
+    const orgId = legacyKeyOrgId()
+    if (!orgId) return unauthorized()
+    return { ok: true, orgId, legacy: true }
   }
 
   // Per-org key — look up by hash, must be active (not revoked).
