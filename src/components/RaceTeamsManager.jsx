@@ -522,7 +522,8 @@ function TeamCard({ registration, waves, onChanged, onError, onNotice, canCancel
               <Copy size={11} /> {copied ? 'Copied!' : 'Payment link'}
             </button>
           )}
-          {canMove && (registration.status === 'confirmed' || registration.status === 'pending_payment') && (
+          {/* Confirmed only: an unpaid entry's payment link is priced for this event (EVENT-MOVE.4). */}
+          {canMove && registration.status === 'confirmed' && (
             <button
               type="button"
               onClick={() => setMoving(true)}

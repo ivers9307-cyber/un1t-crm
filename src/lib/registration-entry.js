@@ -18,6 +18,7 @@
 export const MOVE_ERRORS = Object.freeze({
   NOT_FOUND: 'not_found',
   NOT_ACTIVE: 'not_active',
+  PENDING_PAYMENT: 'pending_payment',
   CHECKED_IN: 'checked_in',
   SAME_EVENT: 'same_event',
   TARGET_UNAVAILABLE: 'target_unavailable',
@@ -35,7 +36,8 @@ export const MOVE_ERRORS = Object.freeze({
 // Plain-English for the dialog. Keyed by code so the route never invents copy.
 export const MOVE_ERROR_MESSAGES = Object.freeze({
   not_found: 'That entry no longer exists.',
-  not_active: 'Only a confirmed entry or one awaiting payment can be moved.',
+  not_active: 'Only a confirmed entry can be moved.',
+  pending_payment: 'This entry is awaiting payment, so its payment link is priced for this event. Collect payment first, or cancel and rebook, then move it.',
   checked_in: 'Someone on this entry has already checked in or raced, so it cannot move.',
   same_event: 'That is the event the entry is already on. Use the wave select to change its time.',
   target_unavailable: 'The target event is not published or has already happened.',

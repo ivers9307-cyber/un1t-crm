@@ -60,6 +60,9 @@ export function evaluateMove({
   const fail = (error, extra = {}) => ({ ok: false, error, ...extra })
   if (!registration) return fail(MOVE_ERRORS.NOT_FOUND)
   if (!LIVE_STATUSES.has(registration.status)) return fail(MOVE_ERRORS.NOT_ACTIVE)
+  // EVENT-MOVE.4: an unpaid entry's payment link (Stripe session / Revolut order) is
+  // priced for the SOURCE event; paid after a move, it would confirm the target at that price.
+  if (registration.status === 'pending_payment') return fail(MOVE_ERRORS.PENDING_PAYMENT)
   if ((checkinCount || 0) > 0) return fail(MOVE_ERRORS.CHECKED_IN)
   if (registration.race_started_at || registration.race_finished_at) return fail(MOVE_ERRORS.CHECKED_IN)
   if (!targetEvent) return fail(MOVE_ERRORS.TARGET_UNAVAILABLE)

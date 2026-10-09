@@ -66,6 +66,13 @@ describe('RaceTeamsManager — Move to event', () => {
     await screen.findByText(/1 team registered/)
     expect(screen.queryByRole('button', { name: /Move to event/ })).toBeNull()
   })
+  it('Move to event is hidden on an entry awaiting payment (its Payment link stays)', async () => {
+    const pending = { ...reg, status: 'pending_payment', payment: { id: 'p1' } }
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ success: true, data: [pending], moved_out: [] }) })))
+    render(<RaceTeamsManager race={race} canMoveEntries />)
+    await screen.findByRole('button', { name: /Payment link/ })
+    expect(screen.queryByRole('button', { name: /Move to event/ })).toBeNull()
+  })
   it('a move that could not be emailed leaves an amber notice, dismissable, not the error banner', async () => {
     const TARGETS = {
       entry: { id: 'r1', label: 'The Crushers', headcount: 2, status: 'confirmed' },

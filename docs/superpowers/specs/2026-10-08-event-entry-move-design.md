@@ -64,7 +64,8 @@ error code so the dialog can say exactly why.
 | Code | Rule | Why |
 |---|---|---|
 | `not_found` | Source entry exists | |
-| `not_active` | Source status is `confirmed` or `pending_payment` | Cancelled and no-show entries are history. |
+| `not_active` | Source status is `confirmed` | Cancelled and no-show entries are history. |
+| `pending_payment` | Source status is not `pending_payment` (EVENT-MOVE.4; `force` does not skip it) | The customer's existing payment link (the Stripe Checkout session or Revolut order) still carries the source event's price and id; paid after a move, the webhook would confirm the entry on the target at the source's price. Collect payment first, or cancel and rebook, then move it. |
 | `checked_in` | No `race_checkins` row for the source entry, and `race_started_at` / `race_finished_at` are both null | The customer already attended or raced; results and penalties must not follow an entry to another event. |
 | `same_event` | Target event differs from the source event | Wave changes use the existing wave select. |
 | `target_unavailable` | Target is `active`, `status = 'published'` and its date is today or later | Never move someone onto a draft or a past event. |
@@ -148,7 +149,9 @@ calls it. Every eligibility check above runs in JS first, where it is
 readable and unit-tested; the function takes `p_from_event_id` (the source
 the caller judged) and, under `SELECT ... FOR UPDATE`, re-checks the cheap
 invariants (source unchanged, status live, not checked in or raced, wave on
-the target) and raises `conflict` if any moved underneath. The existing
+the target) and raises `conflict` if any moved underneath. "Live" there still
+includes `pending_payment` (as it does for `already_entered` and capacity
+counting); the JS `pending_payment` rule is what refuses an unpaid entry. The existing
 unique constraint remains the last line of defence.
 
 Writes, in order:
@@ -284,7 +287,9 @@ real caller.
 ### UI
 
 - `RaceTeamsManager.jsx` card: a new **Move to event** action beside the wave
-  select. Hidden when status is cancelled or no-show. It opens
+  select. Shown only when status is `confirmed`: hidden on cancelled and
+  no-show entries, and on entries awaiting payment (they keep their Payment
+  link / Text link actions; see the `pending_payment` rule). It opens
   `MoveEntryDialog`.
 - `src/components/MoveEntryDialog.jsx` (flat `components/` dir, the repo
   convention): title "Move <entry label> to another event"; target event
@@ -329,8 +334,8 @@ real caller.
 
 - `src/app/host/(portal)/events/[id]/page.js` attendee table regroups by entry
   (one row per entry, people listed in a cell) and gains a **Move** action per
-  live entry. Entries awaiting payment show "Pay first" instead, because a host
-  cannot collect or waive money.
+  live entry. Entries awaiting payment show "Pay first" instead: their payment
+  link is priced for the source event (the `pending_payment` rule).
 - `GET /api/host/registrations/[id]/move-targets` and
   `POST /api/host/registrations/[id]/move`: `getCurrentHost()`, the entry's
   event must have `host_id === session.host.id` (404 otherwise), and
@@ -338,7 +343,8 @@ real caller.
   rule is enforced twice. `actor_type = 'host'`, `actor_id = event_hosts.id`,
   `actor_name = host.name` ("<admin email> as <host name>" under admin
   view-as). An entry awaiting payment is refused with `pending_payment`
-  (400) before the body is read: a host cannot collect or waive money. The
+  (400, the lib's message) before the body is read, which the lib cannot do;
+  the lib refuses it for staff too (EVENT-MOVE.4). The
   same status mapping as the staff route otherwise, except that host routes
   have no 403 at all: there is no permission concept, every refusal is a 404.
   The own-events fence query is limited to published, active, upcoming
