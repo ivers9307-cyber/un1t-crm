@@ -79,8 +79,11 @@ export const DB_BRAND_DEFAULTS = Object.freeze({
   // for that reason; a tenant domain is newer than the E3 rename, so no
   // legacy /race link for one can exist. Least privilege — add them to a
   // tenant's own brand override if that ever stops being true.
+  // '/event/entry/' (EVENT-MOVE.6): the customer's own entry page from the
+  // confirmation email, with '/event-pay/' as its paid leg; covered by
+  // '/event/' today, listed so the flow survives a narrowing of it.
   // LATENT, not live: tenant_domains has zero rows today.
-  allowedPaths: Object.freeze(['/welcome', '/book/', '/event/', '/event-pay/', '/privacy', '/legal/', '/account-deletion', '/cancel/', '/api/public/', '/api/webhooks/']),
+  allowedPaths: Object.freeze(['/welcome', '/book/', '/event/', '/event/entry/', '/event-pay/', '/privacy', '/legal/', '/account-deletion', '/cancel/', '/api/public/', '/api/webhooks/']),
   rootHandler: 'rewrite',
   rootRewriteTo: '/welcome',
   fallbackHandler: 'rewrite',

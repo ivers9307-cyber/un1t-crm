@@ -26,6 +26,7 @@ import { logError } from './log'
 import { timeRowLabel } from './event-time-slots'
 import { isRaceKind } from '@shared/events'
 import { entryLeadEmail, GAP_PAYMENT_KIND } from './registration-entry'
+import { entryManageUrl } from './entry-manage-tokens'
 
 function fmtRaceDate(dateStr) {
   if (!dateStr) return ''
@@ -43,6 +44,18 @@ function fmtMoney(cents, currency = 'EUR') {
 function fmtWaveTime(t) {
   if (!t || typeof t !== 'string') return ''
   return t.slice(0, 5) // "09:30:00" → "09:30"
+}
+
+/**
+ * EVENT-MOVE.6 — the "Change your date" line closing the default "what's
+ * next" copy of the confirmation and moved emails: a signed link to the
+ * entry's own page (/event/entry/<token>). '' when no link could be built,
+ * so the default copy is then exactly as before. Operator copy that replaces
+ * the box can carry the same link with {{manage_url}}.
+ */
+function manageLineHtml(manageUrl) {
+  if (!manageUrl) return ''
+  return `<br><br>Need a different date? <a href="${escapeHtml(manageUrl)}" style="color:#111;font-weight:600">Change it here</a>.`
 }
 
 /** "Heat A · 09:30", "09:30", or '' with no wave. */
@@ -209,6 +222,8 @@ export async function sendRaceConfirmations({ db, paymentId }) {
     nonMemberCount: payment.non_member_count || 0,
     memberFeeLabel: payment.member_fee_cents != null ? fmtMoney(payment.member_fee_cents, payment.currency) : null,
     nonMemberFeeLabel: payment.non_member_fee_cents != null ? fmtMoney(payment.non_member_fee_cents, payment.currency) : null,
+    // EVENT-MOVE.6 — the entry's own page, where the booker can change the date.
+    manageUrl: entryManageUrl(reg?.id || payment.race_registration_id || null),
   }
 
   // Email — only if not already sent.
@@ -370,7 +385,7 @@ export function buildConfirmationDefaults(ctx) {
     infoRows,
     afterInfoHtml,
     memberQrs,
-    footerHtml: `<strong>What's next:</strong> arrive 30 minutes before your wave. Bring water, a towel, and your race-day energy. We'll send a reminder the day before with parking + check-in details.`,
+    footerHtml: `<strong>What's next:</strong> arrive 30 minutes before your wave. Bring water, a towel, and your race-day energy. We'll send a reminder the day before with parking + check-in details.${manageLineHtml(ctx.manageUrl)}`,
     locationName: ctx.locationName || '',
   }
 }
@@ -449,6 +464,7 @@ async function sendEmail({ db, payment, ctx, commsLocationId }) {
     team_name: ctx.teamName,
     when: ctx.waveLabel || ctx.raceDateLabel,
     location: ctx.locationName,
+    manage_url: ctx.manageUrl || '',
   }
 
   const { subject, htmlBody } = await resolveEventEmail({
@@ -493,9 +509,9 @@ export function buildMovedDefaults(ctx) {
   const who = escapeHtml(ctx.captainFirstName || 'there')
   const from = `<strong>${escapeHtml(ctx.oldEventName || '')}</strong>${ctx.oldWhen ? ` (${escapeHtml(ctx.oldWhen)})` : ''}`
   const to = `<strong>${escapeHtml(ctx.raceName)}</strong>`
-  const footerHtml = ctx.isRace
+  const footerHtml = (ctx.isRace
     ? `<strong>What's next:</strong> arrive 30 minutes before your wave. Bring water, a towel, and your race-day energy. We'll send a reminder the day before.`
-    : `<strong>What's next:</strong> arrive 30 minutes before your start. Bring water and a towel. We'll send a reminder the day before.`
+    : `<strong>What's next:</strong> arrive 30 minutes before your start. Bring water and a towel. We'll send a reminder the day before.`) + manageLineHtml(ctx.manageUrl)
   return {
     ...base,
     subject: `Your entry has moved to ${ctx.raceName}`,
@@ -634,9 +650,11 @@ export async function sendRegistrationMovedEmail(db, { registrationId, moveId })
     nonMemberFeeLabel: payment?.non_member_fee_cents != null ? fmtMoney(payment.non_member_fee_cents, currency) : null,
     oldEventName: move.from_event?.name || '',
     oldWhen,
+    // EVENT-MOVE.6 — the same entry, so the same page; a fresh 90-day link.
+    manageUrl: entryManageUrl(reg.id),
   }
   const mergeContact = { first_name: contact.first_name || '', name: [contact.first_name, contact.last_name].filter(Boolean).join(' '), email: toEmail, phone: contact.phone || '' }
-  const extras = { event_name: ctx.raceName, team_name: ctx.teamName, when: ctx.waveLabel || ctx.raceDateLabel, location: ctx.locationName, old_event_name: ctx.oldEventName, old_when: ctx.oldWhen }
+  const extras = { event_name: ctx.raceName, team_name: ctx.teamName, when: ctx.waveLabel || ctx.raceDateLabel, location: ctx.locationName, old_event_name: ctx.oldEventName, old_when: ctx.oldWhen, manage_url: ctx.manageUrl || '' }
 
   try {
     const { subject, htmlBody } = await resolveEventEmail({ db, kind: 'moved', race, contact: mergeContact, extras, defaults: buildMovedDefaults(ctx) })
@@ -678,7 +696,7 @@ export async function sendRegistrationMovedEmail(db, { registrationId, moveId })
 
 const GAP_PAYMENT_COLUMNS = `
   id, kind, status, contact_id, contact_email, contact_name,
-  amount_cents, currency, confirmation_email_sent_at,
+  amount_cents, currency, confirmation_email_sent_at, metadata,
   race_event_id, race_registration_id, registration_move_id,
   race:race_event_id (
     id, name, slug, kind, race_date, location_id, host_id, sending_location_id,
@@ -694,7 +712,8 @@ const GAP_PAYMENT_COLUMNS = `
  * Default shell slots for the two price-difference emails.
  * @param {{ raceName, raceDateLabel, waveLabel, waveRowLabel, locationName,
  *   firstName, differenceLabel, oldEventName, payUrl }} ctx
- * @param {'link'|'paid'} stage
+ * @param {'link'|'paid'|'paid_unmoved'} stage  'paid_unmoved' (EVENT-MOVE.6):
+ *   a customer paid for their own date change and the move was then refused
  */
 export function buildGapDefaults(ctx, stage) {
   const who = escapeHtml(ctx.firstName || 'there')
@@ -707,10 +726,23 @@ export function buildGapDefaults(ctx, stage) {
     ctx.raceDateLabel ? `    ${row('Date', ctx.raceDateLabel)}` : '',
     ctx.waveLabel ? `    ${row(ctx.waveRowLabel || 'Wave', ctx.waveLabel)}` : '',
     ctx.locationName ? `    ${row('Where', ctx.locationName)}` : '',
-    `    ${row(stage === 'paid' ? 'Paid' : 'To pay', ctx.differenceLabel)}`,
+    `    ${row(stage === 'link' ? 'To pay' : 'Paid', ctx.differenceLabel)}`,
   ].filter(Boolean).join('\n')
   const base = { infoRows, memberQrs: [], locationName: ctx.locationName || '' }
 
+  if (stage === 'paid_unmoved') {
+    // The entry is still on the event it was booked on (ctx.raceName): say
+    // what happened, plainly, and that a person will follow up. Never that
+    // it moved, never a refund promise (that is staff's call).
+    return {
+      ...base,
+      subject: `Your date change for ${ctx.raceName}`,
+      heading: `Thanks, ${who}.`,
+      introHtml: `We received your ${diff} payment to change the date of your entry for ${to}, but we could not move your entry.`,
+      afterInfoHtml: '',
+      footerHtml: `<strong>We will be in touch.</strong> Someone from the team will contact you about your date change and your payment. Your entry for ${to} is unchanged in the meantime.`,
+    }
+  }
   if (stage === 'paid') {
     return {
       ...base,
@@ -855,12 +887,17 @@ export async function sendGapPaidEmail({ db, paymentId }) {
 
   const { race, ctx, contact, extras } = gapContext(payment, '')
   const locationId = await gapCommsLocationId(db, race, paymentId)
+  // EVENT-MOVE.6 — a customer's own date change that was refused after they
+  // paid (completeGapPayment records metadata.pending_move_failed). Keyed on
+  // that record alone: a change that landed but lost its link write must not
+  // be told it did not move.
+  const unmoved = !!payment.metadata?.pending_move_failed
   // Fixed wording: race_events.gap_email_subject/intro are the LINK email's
   // copy ("pay here"), which would read wrong on a receipt. The event's
   // header styling still applies.
   const receiptRace = { ...race, gap_email_subject: null, gap_email_intro: null }
   try {
-    const { subject, htmlBody } = await resolveEventEmail({ db, kind: 'gap', race: receiptRace, contact, extras, defaults: buildGapDefaults(ctx, 'paid') })
+    const { subject, htmlBody } = await resolveEventEmail({ db, kind: 'gap', race: receiptRace, contact, extras, defaults: buildGapDefaults(ctx, unmoved ? 'paid_unmoved' : 'paid') })
     await sendTransactionalEmail({ to: payment.contact_email, subject, htmlBody, contactId: payment.contact_id || null, locationId, tag: 'event-gap-paid' })
   } catch (e) {
     result.failed.push(`email:${e?.message || 'failed'}`)

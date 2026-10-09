@@ -421,3 +421,59 @@ describe('tenant-domain brand defaults serve /account-deletion', () => {
     expect(DB_BRAND_DEFAULTS.allowedPaths).toContain('/account-deletion')
   })
 })
+
+// ── 7. EVENT-MOVE.6 — the customer's own entry page, as a FLOW ────────
+//
+// /event/entry/<token> is the "Change your date" link in every event
+// confirmation and moved email. Its audience never has a session: the signed
+// token in the path is the only credential. The page calls
+// /api/public/entry/<token>/*, and a dearer date change hands the browser to
+// /event-pay/<id>, whose checkout returns to the entry page. All three legs
+// must resolve anonymously on every host that may carry the link (the CRM
+// host mints it; the marketing and tenant hosts serve /event/ too).
+
+const ENTRY_FLOW_PATHS = [
+  { path: '/event/entry/eyJyIjoieCJ9.c2ln', why: 'the entry page itself' },
+  { path: '/api/public/entry/eyJyIjoieCJ9.c2ln/move-options', why: 'the page\'s data' },
+  { path: '/event-pay/00000000-0000-4000-8000-000000000002', why: 'a dearer change pays the difference here' },
+]
+
+describe('EVENT-MOVE.6 — the entry page flow is public on every host', () => {
+  beforeEach(() => {
+    tenantBrandImpl = async (hostname) =>
+      hostname && hostname.split(':')[0] === TENANT_HOST
+        ? { id: `tenant:${TENANT_HOST}`, hostnames: [TENANT_HOST], ...DB_BRAND_DEFAULTS }
+        : null
+  })
+
+  for (const { path, why } of ENTRY_FLOW_PATHS) {
+    it(`CRM host admits ${path} anonymously — ${why}`, async () => {
+      const res = await proxy(makeReq({ host: CRM_HOST, path }))
+      expect(admitted(res), `${path} 307s to /login: missing from proxy publicPaths`).toBe(true)
+      expect(ssrClient.auth.getUser).not.toHaveBeenCalled()
+    })
+
+    for (const host of [MARKETING_HOST, TENANT_HOST]) {
+      it(`${host} does not rewrite ${path} to /welcome`, async () => {
+        const res = await proxy(makeReq({ host, path }))
+        expect(rewrittenTo(res), `${path} fell through to the /welcome fallback on ${host}`).toBe(null)
+        expect(admitted(res)).toBe(true)
+      })
+    }
+  }
+
+  it('AppShell renders the entry page and its checkout with no session', () => {
+    for (const path of ['/event/entry/eyJyIjoieCJ9.c2ln', '/event-pay/00000000-0000-4000-8000-000000000002']) {
+      pathnameImpl = path
+      const html = renderToStaticMarkup(<AppShell user={null}><p>page-body</p></AppShell>)
+      expect(html, `${path} is missing from AppShell PUBLIC_PATHS`).toContain('page-body')
+    }
+  })
+
+  it('the marketing brand and the tenant defaults name the entry page AND its checkout explicitly', () => {
+    for (const [label, allowed] of [['un1t-marketing', marketingBrand().allowedPaths], ['DB_BRAND_DEFAULTS', DB_BRAND_DEFAULTS.allowedPaths]]) {
+      expect(allowed, `${label} lost '/event/entry/'`).toContain('/event/entry/')
+      expect(allowed, `${label} lost the checkout leg`).toContain('/event-pay/')
+    }
+  })
+})

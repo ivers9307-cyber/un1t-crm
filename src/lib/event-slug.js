@@ -72,12 +72,20 @@ export function shouldRederiveSlug(status) {
 }
 
 /**
+ * EVENT-MOVE.6 — slugs no event may take, because a static route under
+ * /event/ owns them: /event/entry/<token> is the customer's own entry page,
+ * which Next matches before /event/[slug].
+ */
+export const RESERVED_EVENT_SLUGS = Object.freeze(new Set(['entry']))
+
+/**
  * Does any event hold `slug` today, or did one hold it before a rename
  * (`race_event_slug_aliases`, mig 706)? Either way a new event may not
  * take it. A failed probe reads as taken: this never says "free" about a
  * slug it could not check.
  */
 async function slugTaken(db, slug, { excludeId = null } = {}) {
+  if (RESERVED_EVENT_SLUGS.has(slug)) return true
   let live = db.from('race_events').select('id').eq('slug', slug)
   if (excludeId) live = live.neq('id', excludeId)
   // .maybeSingle(): 0 rows is the answer we want; slug is unique (mig 451).

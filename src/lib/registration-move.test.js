@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   entryLabel, entryHeadcount, computePriceGapCents, evaluateMove, MOVE_ERRORS, MOVE_ERROR_MESSAGES,
-  listMoveTargets, moveRegistration, readRegistrationForMove, entryLeadEmail,
+  listMoveTargets, moveRegistration, readRegistrationForMove, entryLeadEmail, checkMove,
 } from './registration-move.js'
 import { entryLeadEmail as entryLeadEmailBrowserSafe } from './registration-entry.js'
 
@@ -621,5 +621,86 @@ describe('listMoveTargets — lead_first_name follows entryLeadEmail', () => {
   it('null when the contact is written to but has no first name (never another person)', async () => {
     const r = await targetsFor({ ...REG, contact: { first_name: '', email: 'lead@example.test' } })
     expect(r.entry.lead_first_name).toBeNull()
+  })
+})
+
+// EVENT-MOVE.6 — the dry run the customer route takes BEFORE money moves: the
+// same rules and the same gap as moveRegistration, and nothing written.
+describe('checkMove', () => {
+  function db(over = {}) {
+    const rpc = vi.fn()
+    const d = fakeDb({
+      race_registrations: (q) => {
+        if (q.ops.some((o) => o[0] === 'eq' && o[1] === 'id')) return { data: over.reg ?? REG }
+        if (q.ops.some((o) => o[0] === 'eq' && o[1] === 'team_id')) return { data: null }
+        return { data: over.waveRegs ?? [] }
+      },
+      race_events: { data: TARGET },
+      race_checkins: { data: null, count: over.checkins ?? 0, error: null },
+    }, { rpc })
+    return { d, rpc }
+  }
+
+  it('answers ok with the price gap and the loaded rows, and writes nothing', async () => {
+    const { d, rpc } = db()
+    const r = await checkMove(d, { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9', today: '2026-10-08' })
+    expect(r).toMatchObject({ ok: true, priceGapCents: 1000, headcount: 2 })
+    expect(r.registration.id).toBe('r1')
+    expect(r.targetEvent.id).toBe('e2')
+    expect(r.targetWave.id).toBe('w9')
+    expect(rpc).not.toHaveBeenCalled()
+    expect(d.calls.some((c) => c.ops.some((o) => o[0] === 'update' || o[0] === 'insert'))).toBe(false)
+  })
+  it('refuses a full time without force, the same as the move', async () => {
+    const full = Array.from({ length: 10 }, (_, i) => ({ id: `x${i}`, status: 'confirmed', team: { size: 1 } }))
+    const { d } = db({ waveRegs: full })
+    expect(await checkMove(d, { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9', today: '2026-10-08' }))
+      .toMatchObject({ ok: false, error: 'wave_full' })
+  })
+  it('refuses conflict when the entry left the event the caller judged', async () => {
+    const { d } = db()
+    expect(await checkMove(d, { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9', expectedSourceEventId: 'e9', today: '2026-10-08' }))
+      .toEqual({ ok: false, error: 'conflict' })
+  })
+})
+
+// EVENT-MOVE.6 (review I2) — the customer routes fence by organisation: a
+// target at a studio outside allowedLocationIds is refused, even with no
+// host (same payee) and room to spare.
+describe('checkMove — allowedLocationIds', () => {
+  const otherOrg = { ...TARGET, location_id: 'L9', locations: { id: 'L9', name: 'Another gym' } }
+  const db = () => fakeDb({
+    race_registrations: (q) => {
+      if (q.ops.some((o) => o[0] === 'eq' && o[1] === 'id')) return { data: REG }
+      return { data: [] }
+    },
+    race_events: { data: otherOrg },
+    race_checkins: { data: null, count: 0, error: null },
+  }, { rpc: vi.fn() })
+  it('a NULL-host event in another organisation is not movable to', async () => {
+    expect(await checkMove(db(), { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9', allowedLocationIds: ['L1'], today: '2026-10-08' }))
+      .toEqual({ ok: false, error: 'target_unavailable' })
+  })
+  it('moveRegistration passes the fence through and writes nothing', async () => {
+    const d = db()
+    const r = await moveRegistration(d, { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9', allowedLocationIds: ['L1'],
+      actor: { type: 'customer', id: 'c1', name: 'Aoife' }, today: '2026-10-08' })
+    expect(r).toEqual({ ok: false, error: 'target_unavailable' })
+    expect(d.rpc).not.toHaveBeenCalled()
+  })
+  it('null (staff, masters) means no studio fence', async () => {
+    expect((await checkMove(db(), { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9', allowedLocationIds: null, today: '2026-10-08' })).ok).toBe(true)
+  })
+  it('listMoveTargets leaves the other organisation\'s NULL-host event out', async () => {
+    const d = fakeDb({
+      race_registrations: (q) => (q.ops.some((o) => o[0] === 'eq' && o[1] === 'id') ? { data: REG } : { data: [] }),
+      race_events: { data: [TARGET, otherOrg] },
+    })
+    const r = await listMoveTargets(d, { registrationId: 'r1', allowedLocationIds: ['L1'], today: '2026-10-08' })
+    expect(r.targets.map((t) => t.location_id)).toEqual(['L1'])
+  })
+  it('re-exports moveLocationIds', async () => {
+    const mod = await import('./registration-move.js')
+    expect(typeof mod.moveLocationIds).toBe('function')
   })
 })
