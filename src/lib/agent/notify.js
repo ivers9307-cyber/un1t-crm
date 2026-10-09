@@ -106,6 +106,7 @@ export const EVENT_MOVE_FAILURE_REASONS = Object.freeze({
   load_failed: 'something went wrong on our side',
   write_failed: 'something went wrong on our side',
   conflict: 'the entry changed in the meantime',
+  pending_payment: 'the entry needs to be paid first',
 })
 const EVENT_MOVE_FALLBACK_REASON = 'something went wrong on our side'
 
