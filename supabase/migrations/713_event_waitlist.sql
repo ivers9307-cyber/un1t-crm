@@ -89,7 +89,7 @@ values (
   600,
   900,
   now(),
-  'EVENT-WAITLIST.1 (mig 713) — the waitlist offer round, Vercel cron */10 * * * * (src/lib/event-waitlist.js runWaitlistOffers). Stamped at the end of every completed run; per-row email/WhatsApp failures are counts in last_outcome { events, offered, expired, skipped, failed }, so a flaky Postmark does not page. STALE means the route threw or the cron stopped firing for 25 minutes.'
+  'EVENT-WAITLIST.1 (mig 713) — the waitlist offer round, Vercel cron */10 * * * * (src/lib/event-waitlist.js runWaitlistOffers). Stamped at the end of every completed run; per-row email/WhatsApp failures are counts in last_outcome { events, offered, expired, skipped, failed, no_room, claimed, reopened }, so a flaky Postmark does not page. STALE means the route threw or the cron stopped firing for 25 minutes.'
 )
 on conflict (name) do update
   set last_ok_at = now(),

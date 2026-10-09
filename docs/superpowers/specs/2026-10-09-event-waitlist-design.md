@@ -42,18 +42,28 @@ row for `event-waitlist-offers`.
    (confirmed-only arithmetic, the same as the public `is_full`). Everyone
    not offered in the last 24 hours gets the offer email
    (`resolveEventEmail({ kind: 'waitlist' })`, merge tag `{{claim_url}}`,
-   administrative consent, unrecoverable) and, when possible, the WhatsApp
+   administrative consent; the cron re-runs, so the gate is the normal one) and, when possible, the WhatsApp
    template. Rows move to `offered`; the event's passing expires them. One
    failed send never stops the round.
 3. **Claim.** The claim link opens the event's normal signup page with a
    signed 14-day token; the register route accepts `waitlist_token` and, on
    a successful registration, marks that row `claimed` with the registration
-   id. First to pay (or to confirm a free entry) wins; the rest stay offered
-   and are told again when room appears.
+   id. It also claims by the lead email (lower-cased, trimmed) with no token,
+   so someone who books from the normal page or another device leaves the
+   list too, and each round marks any waiting row that matches a live
+   registration (by contact or email) as claimed. First to pay (or to
+   confirm a free entry) wins; the rest stay offered and are told again when
+   room appears. A claim is made at pending payment; a round re-opens a
+   claimed row whose registration is since cancelled, a no-show, gone, or
+   moved to another event (a still-pending one is left alone), so an
+   abandoned checkout returns to the list. Events with no date never expire
+   or re-open rows. A studio with no WhatsApp number skips that leg quietly.
 4. **Staff and hosts.** The teams page and the host event page list the
    event's waitlist (name, email, phone, size, joined, last offered, status),
    let staff remove a person, and let staff or the host run an offer round
-   now. Counts are fine on these operator surfaces.
+   now ("Offer now (everyone)": it ignores the 24-hour rule and is limited to
+   three runs an hour per event, shared between staff and host). Counts are
+   fine on these operator surfaces.
 
 ## Non-goals
 
