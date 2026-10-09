@@ -737,6 +737,64 @@ registry.registerPath({
   },
 })
 
+// EVENT-MOVE.6 — the person who booked an entry manages it from the signed
+// link in their confirmation email (/event/entry/{token}). The token is the
+// only credential: a bad, expired or forged one is a 404, never 401/403.
+const EntryManageToken = z.string().min(10).openapi({ description: 'Signed entry-manage token (HMAC, 90-day TTL) from the confirmation or moved email' })
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/entry/{token}',
+  tags: ['Public'],
+  summary: 'The token holder\'s event entry, and whether they may change its date',
+  description: 'Anonymous; the token is the credential. Public entry shape (names only, no emails or phones, check-in QR for a confirmed entry) plus `can_move`, `move_blocked_reason` (unpaid, cancelled, checked in, past) and `date_change_pending`. A pending date-change payment is refreshed from the provider first. Rate limited: 60 per IP per 5 minutes.',
+  request: { params: z.object({ token: EntryManageToken }) },
+  responses: {
+    200: { description: 'The entry', content: { 'application/json': { schema: z.object({}).passthrough().openapi('PublicEntrySummary') } } },
+    404: { description: 'Bad or expired link, or the entry is gone', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/entry/{token}/move-options',
+  tags: ['Public'],
+  summary: 'Dates and times the token holder may move their entry to',
+  description: 'Anonymous; the token is the credential. Same eligibility as the staff picker (same payee, published, upcoming, any studio, the entry size accepted) but only times with room are listed and NO capacity or count is ever returned. Each option carries `price_difference_cents` and `price_note`. A blocked entry answers `can_move: false`, its reason and no options. Rate limited with the summary: 60 per IP per 5 minutes.',
+  request: { params: z.object({ token: EntryManageToken }) },
+  responses: {
+    200: { description: 'The options', content: { 'application/json': { schema: z.object({}).passthrough().openapi('PublicEntryMoveOptions') } } },
+    404: { description: 'Bad or expired link, or the entry is gone', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The options could not be read', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/entry/{token}/move',
+  tags: ['Public'],
+  summary: 'The token holder moves their entry to another date (pays the difference first when dearer)',
+  description: 'Anonymous; the token is the credential. Only a confirmed, unchecked entry on an upcoming event; the same rules as staff, never forced. Equal or cheaper: moved at once as actor `customer`, new tickets emailed, nothing refunded → `{ moved: true, registration, notified }`. Dearer: a price-difference payment carrying the pending move is minted and the move lands when it is paid → `{ moved: false, pay_url }`. Every refusal carries `error` and a customer `message`. Rate limited: 10 per IP per 15 minutes.',
+  request: {
+    params: z.object({ token: EntryManageToken }),
+    body: { content: { 'application/json': { schema: z.object({
+      target_event_id: uuidLike,
+      target_wave_id: uuidLike.nullable().optional(),
+    }).openapi('PublicEntryMoveRequest') } } },
+  },
+  responses: {
+    200: { description: 'Moved, or a pay URL for the difference', content: { 'application/json': { schema: z.object({}).passthrough().openapi('PublicEntryMoveResult') } } },
+    400: { description: 'A rule refused the move, or a bad body', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Bad or expired link, or the entry is gone', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'That time is full (no numbers), the entry changed, already paid, or the host cannot take payments', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'A read or write failed; nothing changed', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'The payment provider did not start the payment', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // EVENT-MOVE.1 — staff move an event entry (a race_registrations row) to
 // another event, possibly at another studio. Money never moves.
 registry.registerPath({

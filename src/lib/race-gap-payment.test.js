@@ -16,6 +16,9 @@ vi.mock('./app-url', () => ({ getAppUrl: () => 'https://crm.test' }))
 vi.mock('./log', async (importOriginal) => ({ ...(await importOriginal()), logError: vi.fn(), logWarn: vi.fn() }))
 vi.mock('./sequences', () => ({ triggerSequencesForOrderStatus: vi.fn(async () => {}) }))
 vi.mock('./host-contact-list', () => ({ addEventAttendeesToHostList: vi.fn(async () => {}) }))
+// EVENT-MOVE.6 — a customer's dearer move lands when its difference is paid.
+vi.mock('./registration-move', () => ({ moveRegistration: vi.fn() }))
+vi.mock('./error-events', () => ({ recordErrorEvent: vi.fn(async () => {}) }))
 
 const { paymentsFor } = await import('./payments')
 const { resolveEventHost } = await import('./event-hosts')
@@ -27,6 +30,8 @@ const { markRacePaymentStatus, refreshRacePaymentFromProvider } = await import('
 const { sendGapPaidEmail } = await import('./race-confirmations')
 const { triggerSequencesForOrderStatus } = await import('./sequences')
 const { addEventAttendeesToHostList } = await import('./host-contact-list')
+const { moveRegistration } = await import('./registration-move')
+const { recordErrorEvent } = await import('./error-events')
 
 const RACE = { id: 'e2', name: 'Hatch Oct 25', slug: 'hatch-oct25-1100', location_id: 'L1', host_id: null, payment_currency: 'EUR' }
 const REG = {
@@ -440,5 +445,150 @@ describe('createGapPayment — two clicks at once (the unique pending index)', (
   it('a 23505 whose winner cannot be read is write_failed', async () => {
     const db = fakeDb({ insert: { error: { code: '23505', message: 'duplicate key' } }, winner: { data: null, error: { message: 'down' } } })
     expect(await createGapPayment(args({ db }))).toEqual({ ok: false, error: 'write_failed' })
+  })
+})
+
+// ─── EVENT-MOVE.6 — a customer's own move to a dearer date ───────────────
+// The difference is paid FIRST: the payment carries metadata.pending_move
+// and no move yet; completing it runs the move, links the payment to the new
+// move row and settles it collected. A move refused after the money landed
+// leaves the payment completed and is loud.
+
+const PM = { target_event_id: 'e2', target_wave_id: 'w9', expected_source_event_id: 'e1', actor: { type: 'customer', id: 'c1', name: 'Aoife Byrne' } }
+const SRC_RACE = { ...RACE, id: 'e1', name: 'Hatch Oct 18', slug: 'hatch-oct18-1100' }
+const SRC_REG = { ...REG, race_event_id: 'e1' }
+const pmArgs = (over = {}) => ({
+  db: fakeDb(), registration: SRC_REG, race: SRC_RACE, pendingMove: PM, amountCents: 1000,
+  returnUrl: 'https://crm.test/event/entry/TOKEN', cancelUrl: 'https://crm.test/event/entry/TOKEN', ...over,
+})
+
+describe('createGapPayment — a pending move (customer, EVENT-MOVE.6)', () => {
+  it('refuses when the entry is no longer on the event the move was judged from, or there is no positive difference', async () => {
+    expect(await createGapPayment(pmArgs({ pendingMove: { ...PM, expected_source_event_id: 'e9' } }))).toEqual({ ok: false, error: 'not_current_move' })
+    expect(await createGapPayment(pmArgs({ amountCents: 0 }))).toEqual({ ok: false, error: 'no_gap' })
+    expect(await createGapPayment(pmArgs({ amountCents: -500 }))).toEqual({ ok: false, error: 'no_gap' })
+    expect(createPayment).not.toHaveBeenCalled()
+  })
+  it('mints a move_gap row with NO move yet and the pending move in metadata, on the entry\'s current event', async () => {
+    const a = pmArgs()
+    const r = await createGapPayment(a)
+    expect(r).toMatchObject({ ok: true, reused: false, checkoutUrl: 'https://crm.test/event-pay/gp1' })
+    const row = a.db.inserts.find((i) => i.table === 'race_payments').row
+    expect(row).toEqual(expect.objectContaining({
+      kind: 'move_gap', registration_move_id: null, race_event_id: 'e1', race_registration_id: 'r1', amount_cents: 1000, status: 'pending',
+      metadata: { pending_move: PM },
+    }))
+    expect(createPayment).toHaveBeenCalledWith(expect.objectContaining({
+      amountCents: 1000, applicationFeeCents: 0, idempotencyKey: 'pending-move:r1:0',
+      returnUrl: 'https://crm.test/event/entry/TOKEN',
+      metadata: { race_event_id: 'e1', race_registration_id: 'r1', pending_move_target_event_id: 'e2', domain: 'un1t_race_gap' },
+    }))
+  })
+  it('stores only the four pending-move fields, whatever else the caller passed', async () => {
+    const a = pmArgs({ pendingMove: { ...PM, force: true, price_gap_cents: 1 } })
+    await createGapPayment(a)
+    expect(a.db.inserts[0].row.metadata).toEqual({ pending_move: PM })
+  })
+  it('reuses a pending link for the same date, time and amount', async () => {
+    getPayment.mockResolvedValue({ state: 'pending', amountCents: 1000 })
+    const live = { id: 'gp0', kind: 'move_gap', status: 'pending', registration_move_id: null, amount_cents: 1000, metadata: { pending_move: PM },
+      payment_provider: 'revolut', payment_provider_ref: 'ord-0', created_at: '2026-10-09T00:00:00Z' }
+    const a = pmArgs({ db: fakeDb({ payments: { data: [live, ENTRY_PAY], error: null }, row: { data: live, error: null } }) })
+    expect(await createGapPayment(a)).toEqual({ ok: true, payment: live, checkoutUrl: 'https://crm.test/event-pay/gp0', reused: true })
+    expect(createPayment).not.toHaveBeenCalled()
+  })
+  it('closes a pending link for ANOTHER time (so two changes cannot both be paid) and mints a fresh key', async () => {
+    const stale = { id: 'gp0', kind: 'move_gap', status: 'pending', registration_move_id: null, amount_cents: 1000,
+      metadata: { pending_move: { ...PM, target_wave_id: 'w8' } }, created_at: '2026-10-09T00:00:00Z' }
+    const a = pmArgs({ db: fakeDb({ payments: { data: [stale, ENTRY_PAY], error: null } }) })
+    const r = await createGapPayment(a)
+    expect(r.reused).toBe(false)
+    const close = a.db.queries.find((q) => q.table === 'race_payments' && q.ops.some((o) => o[0] === 'update'))
+    expect(close.ops).toContainEqual(['update', expect.objectContaining({ status: 'abandoned', abandoned_at: expect.any(String) })])
+    expect(close.ops).toContainEqual(['in', 'id', ['gp0']])
+    expect(close.ops).toContainEqual(['eq', 'status', 'pending'])
+    expect(createPayment).toHaveBeenCalledWith(expect.objectContaining({ idempotencyKey: 'pending-move:r1:1' }))
+  })
+  it('never reuses a staff move\'s gap link for a customer move', async () => {
+    const staffLink = { id: 'gpS', kind: 'move_gap', status: 'pending', registration_move_id: 'mv0', amount_cents: 1000, created_at: '2026-10-09T00:00:00Z' }
+    const a = pmArgs({ db: fakeDb({ payments: { data: [staffLink, ENTRY_PAY], error: null } }) })
+    const r = await createGapPayment(a)
+    expect(r.reused).toBe(false)
+    expect(a.db.updates).toEqual([])
+  })
+})
+
+describe('markRacePaymentStatus — a paid pending move lands the move', () => {
+  const GAP_PM = { id: 'gp1', kind: 'move_gap', registration_move_id: null, status: 'pending', amount_cents: 1000, currency: 'EUR',
+    race_registration_id: 'r1', race_event_id: 'e1', contact_id: 'c1', contact_email: 'aoife@x.ie', race: { location_id: 'L1' },
+    metadata: { pending_move: PM, note: 'kept' } }
+  const complete = (db, payment = GAP_PM) => markRacePaymentStatus({ db, payment, revolutState: 'completed', revolutAmount: 1000 })
+
+  it('runs the move as the customer (notify, no force, from the judged event), links the payment to it and settles it collected', async () => {
+    moveRegistration.mockResolvedValue({ ok: true, move: { id: 'mvNew' }, registration: { id: 'r1' }, notified: true })
+    const db = fakeDb()
+    const r = await complete(db)
+    expect(r.applied.status).toBe('completed')
+    expect(moveRegistration).toHaveBeenCalledWith(db, {
+      registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9', actor: PM.actor,
+      notify: true, force: false, expectedSourceEventId: 'e1',
+    })
+    const link = db.queries.find((q) => q.table === 'race_payments' && q.ops.some((o) => o[0] === 'update' && o[1].registration_move_id))
+    expect(link.ops).toContainEqual(['update', { registration_move_id: 'mvNew' }])
+    expect(link.ops).toContainEqual(['eq', 'id', 'gp1'])
+    const settle = db.queries.find((q) => q.table === 'registration_moves')
+    expect(settle.ops).toContainEqual(['eq', 'id', 'mvNew'])
+    expect(settle.ops).toContainEqual(['update', expect.objectContaining({ gap_settled_how: 'collected', gap_settled_by_name: 'Customer (paid online)' })])
+    expect(recordErrorEvent).not.toHaveBeenCalled()
+    expect(logError).not.toHaveBeenCalled()
+  })
+  it('a move refused after payment (the time filled): payment stays completed, failure recorded in metadata, logged and paged', async () => {
+    moveRegistration.mockResolvedValue({ ok: false, error: 'wave_full', spots_left: 0 })
+    const db = fakeDb()
+    const r = await complete(db)
+    expect(r.applied.status).toBe('completed')
+    expect(r.pending_move_failed).toBe('wave_full')
+    const patches = db.updates.filter((u) => u.table === 'race_payments').map((u) => u.patch)
+    expect(patches.some((p) => p.status && p.status !== 'completed')).toBe(false)
+    expect(patches).toContainEqual({ metadata: { pending_move: PM, note: 'kept', pending_move_failed: { error: 'wave_full', at: expect.any(String) } } })
+    expect(db.queries.some((q) => q.table === 'registration_moves')).toBe(false)
+    expect(logError).toHaveBeenCalledWith('race-gap-payment', expect.stringContaining('refused'), expect.objectContaining({ paymentId: 'gp1', error: 'wave_full' }))
+    expect(recordErrorEvent).toHaveBeenCalledWith(expect.objectContaining({ route_type: 'move_gap', name: 'pending_move_failed' }))
+    expect(recordErrorEvent.mock.calls[0][0].message).toContain('gp1')
+  })
+  it('a move that throws is a failure too, never an unhandled error', async () => {
+    moveRegistration.mockRejectedValue(new Error('db down'))
+    const db = fakeDb()
+    const r = await complete(db)
+    expect(r.applied.status).toBe('completed')
+    expect(r.pending_move_failed).toBe('move_threw')
+    expect(recordErrorEvent).toHaveBeenCalled()
+  })
+  it('a payment already linked to its move never runs the move again', async () => {
+    const db = fakeDb()
+    await complete(db, { ...GAP_PM, registration_move_id: 'mv1' })
+    expect(moveRegistration).not.toHaveBeenCalled()
+    expect(db.queries.find((q) => q.table === 'registration_moves').ops).toContainEqual(['eq', 'id', 'mv1'])
+  })
+  it('a lost link write is logged loudly and the move is still settled', async () => {
+    moveRegistration.mockResolvedValue({ ok: true, move: { id: 'mvNew' }, registration: { id: 'r1' }, notified: true })
+    let n = 0
+    const db = fakeDb()
+    const orig = db.from.bind(db)
+    db.from = (table) => {
+      const b = orig(table)
+      if (table !== 'race_payments') return b
+      const update = b.update
+      b.update = (patch) => {
+        const r = update(patch)
+        if (patch.registration_move_id) { n++; r.then = (res, rej) => Promise.resolve({ data: null, error: { message: 'down' } }).then(res, rej) }
+        return r
+      }
+      return b
+    }
+    await complete(db)
+    expect(n).toBe(1)
+    expect(logError).toHaveBeenCalledWith('race-gap-payment', expect.stringContaining('NOT linked'), expect.objectContaining({ moveId: 'mvNew' }))
+    expect(db.queries.find((q) => q.table === 'registration_moves').ops).toContainEqual(['eq', 'id', 'mvNew'])
   })
 })

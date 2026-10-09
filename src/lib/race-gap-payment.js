@@ -29,6 +29,10 @@ import { emitEvent, EVENT_TYPES } from './contact-events'
 import { getAppUrl } from './app-url'
 import { entryLeadEmail, entryLeadName, GAP_PAYMENT_KIND } from './registration-entry'
 import { logError, logWarn } from './log'
+import { recordErrorEvent } from './error-events'
+// EVENT-MOVE.6 — a customer's dearer move runs when its difference is paid.
+// registration-move imports nothing from the payment modules, so no cycle.
+import { moveRegistration } from './registration-move'
 // A cycle (race-payments imports completeGapPayment from here); safe, since
 // neither module touches the other's bindings at load time.
 import { refreshRacePaymentFromProvider } from './race-payments'
@@ -38,11 +42,44 @@ export { GAP_PAYMENT_KIND }
 // The entry's payment rows, newest first. One read answers three questions:
 // is there a pending link for this move to reuse, how many links this move has
 // had (the idempotency key), and the latest entry payment (contact fallback).
-const PAYMENT_COLUMNS = 'id, kind, status, registration_move_id, amount_cents, currency, contact_email, contact_phone, contact_name, payment_provider, payment_provider_ref, payment_checkout_url, created_at'
+const PAYMENT_COLUMNS = 'id, kind, status, registration_move_id, amount_cents, currency, contact_email, contact_phone, contact_name, payment_provider, payment_provider_ref, payment_checkout_url, metadata, created_at'
+
+/**
+ * EVENT-MOVE.6 — the move a customer's payment is for, as stored in
+ * race_payments.metadata.pending_move. Exactly these four fields: the target,
+ * the event the move was judged from (the completion refuses as conflict if
+ * the entry left it) and who asked.
+ */
+function pendingMoveRecord(pm) {
+  return {
+    target_event_id: pm.target_event_id,
+    target_wave_id: pm.target_wave_id || null,
+    expected_source_event_id: pm.expected_source_event_id,
+    actor: pm.actor,
+  }
+}
+
+/** Is this pending payment for the same customer move (date, time, judged-from event, amount)? */
+function samePendingMove(payment, pm, amount) {
+  const stored = payment?.metadata?.pending_move
+  if (!stored) return false
+  return stored.target_event_id === pm.target_event_id
+    && (stored.target_wave_id || null) === (pm.target_wave_id || null)
+    && stored.expected_source_event_id === pm.expected_source_event_id
+    && Number(payment.amount_cents) === Number(amount)
+}
 
 
 /**
  * Mint (or reuse) the payment for a move's price difference.
+ *
+ * Two shapes. Staff (EVENT-MOVE.5): `move` is the registration_moves row the
+ * entry already made, and the payment settles it. Customer (EVENT-MOVE.6):
+ * `pendingMove` + `amountCents` instead of `move`, for a move NOT yet made;
+ * the row carries metadata.pending_move and no registration_move_id, and its
+ * completion (completeGapPayment) makes the move. A new customer link closes
+ * any other pending customer link on the entry, so two different changes
+ * cannot both be paid.
  *
  * @param {object} args
  * @param {import('@supabase/supabase-js').SupabaseClient} args.db  service-role client
@@ -51,14 +88,24 @@ const PAYMENT_COLUMNS = 'id, kind, status, registration_move_id, amount_cents, c
  * @param {object} args.race          the entry's CURRENT event (id, name, location_id, host_id, payment_currency)
  * @param {string} args.returnUrl
  * @param {string} args.cancelUrl
+ * @param {object} [args.pendingMove]  EVENT-MOVE.6: { target_event_id, target_wave_id, expected_source_event_id, actor }
+ * @param {number} [args.amountCents]  EVENT-MOVE.6: the difference, judged by checkMove (never the client)
  * @returns {Promise<{ ok: true, payment: object, checkoutUrl: string, reused: boolean }
  *   | { ok: false, error: 'not_this_entry'|'not_current_move'|'no_gap'|'already_settled'|'load_failed'|'no_email'|'host_not_ready'|'provider_failed'|'write_failed' }>}
  */
-export async function createGapPayment({ db, move, registration, race, returnUrl, cancelUrl }) {
-  if (!move || !registration || move.registration_id !== registration.id) return { ok: false, error: 'not_this_entry' }
-  if (move.to_event_id !== registration.race_event_id) return { ok: false, error: 'not_current_move' }
-  if (!(Number(move.price_gap_cents) > 0)) return { ok: false, error: 'no_gap' }
-  if (move.gap_settled_at) return { ok: false, error: 'already_settled' }
+export async function createGapPayment({ db, move = null, registration, race, returnUrl, cancelUrl, pendingMove = null, amountCents = null }) {
+  if (pendingMove) {
+    if (!pendingMove.target_event_id || !pendingMove.actor?.type) throw new TypeError('pendingMove needs target_event_id and actor.type')
+    if (!registration || move) return { ok: false, error: 'not_this_entry' }
+    if (pendingMove.expected_source_event_id !== registration.race_event_id) return { ok: false, error: 'not_current_move' }
+    if (!(Number(amountCents) > 0)) return { ok: false, error: 'no_gap' }
+  } else {
+    if (!move || !registration || move.registration_id !== registration.id) return { ok: false, error: 'not_this_entry' }
+    if (move.to_event_id !== registration.race_event_id) return { ok: false, error: 'not_current_move' }
+    if (!(Number(move.price_gap_cents) > 0)) return { ok: false, error: 'no_gap' }
+    if (move.gap_settled_at) return { ok: false, error: 'already_settled' }
+  }
+  const amount = pendingMove ? Number(amountCents) : Number(move.price_gap_cents)
 
   const { data: rows, error: readErr } = await db
     .from('race_payments')
@@ -67,12 +114,18 @@ export async function createGapPayment({ db, move, registration, race, returnUrl
     .order('created_at', { ascending: false })
     .limit(50)
   if (readErr) {
-    logError('race-gap-payment', 'payments read failed; no link minted', { err: readErr, registrationId: registration.id, moveId: move.id })
+    logError('race-gap-payment', 'payments read failed; no link minted', { err: readErr, registrationId: registration.id, moveId: move?.id || null })
     return { ok: false, error: 'load_failed' }
   }
   const payments = Array.isArray(rows) ? rows : []
-  const forThisMove = payments.filter((p) => p.kind === GAP_PAYMENT_KIND && p.registration_move_id === move.id)
-  const pending = forThisMove.find((p) => p.status === 'pending')
+  // The earlier attempts at THIS payment: the move's links (staff), or the
+  // entry's customer links (no move yet, a pending_move in metadata).
+  const forThisMove = pendingMove
+    ? payments.filter((p) => p.kind === GAP_PAYMENT_KIND && !p.registration_move_id && p.metadata?.pending_move)
+    : payments.filter((p) => p.kind === GAP_PAYMENT_KIND && p.registration_move_id === move.id)
+  const pending = pendingMove
+    ? forThisMove.find((p) => p.status === 'pending' && samePendingMove(p, pendingMove, amount))
+    : forThisMove.find((p) => p.status === 'pending')
   if (pending) {
     // Ask the provider first: a Stripe Checkout session expires after 24
     // hours, and a link may have been paid without the webhook landing yet.
@@ -85,6 +138,21 @@ export async function createGapPayment({ db, move, registration, race, returnUrl
     if (live.status === 'completed') return { ok: false, error: 'already_settled' }
     // abandoned / failed: mint a fresh link below.
   }
+  if (pendingMove) {
+    // A pending customer link for another date or time: close it before
+    // minting this one (local status, as the staff settle route does; the
+    // checkout then says it has expired). If it is paid anyway its move is
+    // refused on completion and the failure is loud.
+    const stale = forThisMove.filter((p) => p.status === 'pending' && p.id !== pending?.id).map((p) => p.id)
+    if (stale.length > 0) {
+      const { error: closeErr } = await db
+        .from('race_payments')
+        .update({ status: 'abandoned', abandoned_at: new Date().toISOString() })
+        .in('id', stale)
+        .eq('status', 'pending')
+      if (closeErr) logError('race-gap-payment', 'an older date-change link was NOT closed; the customer could pay two', { err: closeErr, registrationId: registration.id, paymentIds: stale })
+    }
+  }
   const entryPayment = payments.find((p) => (p.kind || 'entry') === 'entry') || null
 
   const email = entryLeadEmail({ registration, payment: entryPayment })
@@ -94,7 +162,6 @@ export async function createGapPayment({ db, move, registration, race, returnUrl
   const providerName = resolvePaymentProvider(host) // 'revolut' | 'stripe_connect'
   if (providerName === PROVIDER_STRIPE_CONNECT && !hostCanTakePayments(host)) return { ok: false, error: 'host_not_ready' }
 
-  const amount = Number(move.price_gap_cents)
   const currency = race?.payment_currency || 'EUR'
   const connectedAccountId = host?.stripe_connected_account_id || null
 
@@ -106,22 +173,31 @@ export async function createGapPayment({ db, move, registration, race, returnUrl
       description: `${race?.name || 'Event'} — price difference`,
       returnUrl,
       cancelUrl,
-      metadata: {
-        race_event_id: race?.id || registration.race_event_id,
-        race_registration_id: registration.id,
-        registration_move_id: move.id,
-        domain: 'un1t_race_gap',
-      },
+      metadata: pendingMove
+        ? {
+            race_event_id: race?.id || registration.race_event_id,
+            race_registration_id: registration.id,
+            pending_move_target_event_id: pendingMove.target_event_id,
+            domain: 'un1t_race_gap',
+          }
+        : {
+            race_event_id: race?.id || registration.race_event_id,
+            race_registration_id: registration.id,
+            registration_move_id: move.id,
+            domain: 'un1t_race_gap',
+          },
       // Scoped to the ATTEMPT, not just the move: Revolut answers a repeated
       // key with the ORIGINAL order, so after an abandoned or failed link a
       // bare `move:<id>` would hand back the dead order, and a second row with
       // the same provider ref would make the webhook lookup ambiguous.
-      idempotencyKey: `move:${move.id}:${forThisMove.length}`,
+      idempotencyKey: pendingMove
+        ? `pending-move:${registration.id}:${forThisMove.length}`
+        : `move:${move.id}:${forThisMove.length}`,
       connectedAccountId,
       applicationFeeCents: 0, // the per-ticket platform fee was taken on the entry
     })
   } catch (e) {
-    logError('race-gap-payment', 'provider refused the gap payment; no link minted', { err: e, provider: providerName, registrationId: registration.id, moveId: move.id })
+    logError('race-gap-payment', 'provider refused the gap payment; no link minted', { err: e, provider: providerName, registrationId: registration.id, moveId: move?.id || null })
     return { ok: false, error: 'provider_failed' }
   }
 
@@ -129,7 +205,8 @@ export async function createGapPayment({ db, move, registration, race, returnUrl
     .from('race_payments')
     .insert({
       kind: GAP_PAYMENT_KIND,
-      registration_move_id: move.id,
+      registration_move_id: move?.id || null,
+      ...(pendingMove ? { metadata: { pending_move: pendingMoveRecord(pendingMove) } } : {}),
       race_event_id: race?.id || registration.race_event_id,
       race_registration_id: registration.id,
       contact_id: registration.contact_id || null,
@@ -154,7 +231,7 @@ export async function createGapPayment({ db, move, registration, race, returnUrl
     })
     .select('*')
     .single()
-  if (insErr?.code === '23505') {
+  if (insErr?.code === '23505' && move) {
     // race_payments_one_pending_gap_per_move (mig 710): a concurrent click
     // minted the pending link first. Hand back theirs; ours is a provider
     // order nobody will pay (a Stripe session expires on its own).
@@ -176,7 +253,7 @@ export async function createGapPayment({ db, move, registration, race, returnUrl
     // The provider order exists with no ledger row: if it is ever paid the
     // webhook finds nothing. Log the ref so it can be found and cancelled.
     logError('race-gap-payment', 'gap payment insert failed after the provider order was created', {
-      err: insErr, provider: providerName, providerRef: created.providerRef, registrationId: registration.id, moveId: move.id,
+      err: insErr, provider: providerName, providerRef: created.providerRef, registrationId: registration.id, moveId: move?.id || null,
     })
     return { ok: false, error: 'write_failed' }
   }
@@ -210,6 +287,11 @@ export async function createGapPayment({ db, move, registration, race, returnUrl
  * registration status, the host contact list, tag rules, order_completed
  * sequences. The caller (the payment webhooks) sends the gap receipt instead
  * of the entry confirmation, and skips the Glofox push.
+ *
+ * EVENT-MOVE.6 — a customer's payment (metadata.pending_move, no move yet)
+ * makes its move first (landPendingMove), then settles that move. A move
+ * refused after the money landed answers `pending_move_failed: <code>`; the
+ * payment stays completed and the receipt says we will be in touch.
  */
 export async function completeGapPayment({ db, payment, updates, nowIso }) {
   try {
@@ -229,7 +311,16 @@ export async function completeGapPayment({ db, payment, updates, nowIso }) {
     logWarn('race-gap-payment', 'orders/events sync (gap completed) failed', { err: e, paymentId: payment.id })
   }
 
-  const moveId = payment.registration_move_id || null
+  let moveId = payment.registration_move_id || null
+  const pendingMove = moveId ? null : (payment.metadata?.pending_move || null)
+  if (pendingMove) {
+    const landed = await landPendingMove({ db, payment, pendingMove, nowIso })
+    if (!landed.ok) {
+      return { applied: { ...updates, kind: GAP_PAYMENT_KIND }, state_changed: true, pending_move_failed: landed.error }
+    }
+    moveId = landed.moveId
+  }
+
   if (!moveId) {
     logError('race-gap-payment', 'a move_gap payment completed with no move to settle; mark the difference collected by hand', { paymentId: payment.id })
   } else {
@@ -249,4 +340,70 @@ export async function completeGapPayment({ db, payment, updates, nowIso }) {
   }
 
   return { applied: { ...updates, kind: GAP_PAYMENT_KIND }, state_changed: true }
+}
+
+/**
+ * EVENT-MOVE.6 — the customer paid the difference: make the move they asked
+ * for, under the same rules as any move (no force: a time that filled while
+ * they paid is refused), from the event it was judged on. On success the
+ * payment is linked to the new move row (the receipt reads its old event
+ * from there). On a refusal the money is NOT given back by code: the payment
+ * stays completed, metadata.pending_move_failed records why, and it is loud
+ * (logError + an error_events row Sentinel pages on) because a person paid
+ * for something that did not happen.
+ *
+ * @returns {Promise<{ ok: true, moveId: string } | { ok: false, error: string }>}
+ */
+async function landPendingMove({ db, payment, pendingMove, nowIso }) {
+  let result
+  try {
+    result = await moveRegistration(db, {
+      registrationId: payment.race_registration_id,
+      targetEventId: pendingMove.target_event_id,
+      targetWaveId: pendingMove.target_wave_id || null,
+      actor: pendingMove.actor,
+      notify: true,
+      force: false,
+      expectedSourceEventId: pendingMove.expected_source_event_id || null,
+    })
+  } catch (e) {
+    logError('race-gap-payment', 'the paid date change threw while moving the entry', { err: e, paymentId: payment.id })
+    result = { ok: false, error: 'move_threw' }
+  }
+
+  if (result?.ok && result.move?.id) {
+    const moveId = result.move.id
+    const { data: linked, error: linkErr } = await db
+      .from('race_payments')
+      .update({ registration_move_id: moveId })
+      .eq('id', payment.id)
+      .select('id')
+    if (linkErr || !Array.isArray(linked) || linked.length === 0) {
+      logError('race-gap-payment', 'the entry moved and the difference is paid, but the payment was NOT linked to its move; set race_payments.registration_move_id by hand', {
+        err: linkErr || null, paymentId: payment.id, moveId,
+      })
+    }
+    return { ok: true, moveId }
+  }
+
+  const error = result?.error || 'move_failed'
+  const { error: metaErr } = await db
+    .from('race_payments')
+    .update({ metadata: { ...(payment.metadata || {}), pending_move_failed: { error, at: nowIso } } })
+    .eq('id', payment.id)
+  if (metaErr) logError('race-gap-payment', 'could not record the refused date change on the payment', { err: metaErr, paymentId: payment.id })
+  logError('race-gap-payment', 'a customer PAID for a date change that was then refused; the payment stands. Contact them: move the entry by hand or refund', {
+    paymentId: payment.id, registrationId: payment.race_registration_id, targetEventId: pendingMove.target_event_id, error,
+  })
+  await recordErrorEvent({
+    vercel_id: null,
+    runtime: process.env.NEXT_RUNTIME || null,
+    route_path: 'move_gap:pending_move',
+    route_type: 'move_gap',
+    method: null,
+    name: 'pending_move_failed',
+    message: `Customer paid a date-change difference (race_payments ${payment.id}) but the move was refused (${error}); the payment stands. Contact them: move by hand or refund.`.slice(0, 500),
+    digest: null,
+  })
+  return { ok: false, error }
 }

@@ -187,7 +187,14 @@ function groupByWave(rows) {
   return byWave
 }
 
-/** Check-ins on the entry. { count, error }: a failed count is load_failed. */
+/**
+ * Check-ins on the entry. { count, error }: a failed count is load_failed.
+ * Exported (EVENT-MOVE.6) for the public entry routes' "can this move" answer.
+ */
+export async function countEntryCheckins(db, registrationId) {
+  return countCheckins(db, registrationId)
+}
+
 async function countCheckins(db, registrationId) {
   const { count, error } = await db
     .from('race_checkins')
@@ -347,32 +354,19 @@ function isConflict(err) {
 }
 
 /**
- * Move one entry. Rules first (pure), then the SQL function, then best-effort
- * after-effects that never fail the move.
+ * EVENT-MOVE.6 — every rule of a move, on fresh reads, with NOTHING written:
+ * the dry run moveRegistration itself runs first, and the customer route runs
+ * before it takes money for a dearer target (so nobody pays for a move the
+ * rules would refuse). Same refusals as moveRegistration.
  *
- * `expectedSourceEventId`: the event the CALLER judged the entry on (a
- * route authorises on its own read, then this function reads again). When
- * given and the entry is no longer there, the answer is `conflict` before
- * any further read or write, so a move is never authorised at one studio
- * and carried out from another.
- *
- * `notified` is true only when the moved email was sent ('email' in the
- * sender's `sent`); false when notify was off or the sender skipped,
- * failed or threw.
- *
- * @returns {{ ok: true, move: object, registration: object, notified: boolean }
- *         | { ok: false, error: string, spots_left?: number|null }}
+ * @returns {Promise<{ ok: true, registration: object, targetEvent: object, targetWave: object|null, headcount: number, priceGapCents: number }
+ *         | { ok: false, error: string, spots_left?: number|null }>}
  */
-export async function moveRegistration(db, {
+export async function checkMove(db, {
   registrationId, targetEventId, targetWaveId = null,
-  actor, note = null, notify = true, force = false, allowedEventIds = null,
-  expectedSourceEventId = null,
+  force = false, allowedEventIds = null, expectedSourceEventId = null,
   today = dublinTodayStr(),
 }) {
-  // Who moved it is recorded on every move (registration_moves.actor_type
-  // is NOT NULL, checked to staff/host/agent): a caller that omits it is a
-  // bug, not a refusal to show the operator.
-  if (!actor?.type) throw new TypeError('actor.type is required')
   const { registration, error: readErr } = await readRegistrationForMove(db, registrationId)
   if (!registration) return entryReadRefusal(readErr)
   if (expectedSourceEventId && registration.race_event_id !== expectedSourceEventId) {
@@ -395,20 +389,50 @@ export async function moveRegistration(db, {
   // A read that failed refuses the move as load_failed (fail closed, and
   // honestly: "try again", not a rule the entry did not break).
   if (waveRead.error || checkinRead.error || existingRead.error) return { ok: false, error: MOVE_ERRORS.LOAD_FAILED }
-  const checkinCount = checkinRead.count
-  const existingOnTarget = existingRead.existing
-  // One wave was asked for, so every row is that wave's.
-  const targetWaveRegistrations = waveRead.rows
 
   const verdict = evaluateMove({
     registration, sourceEvent: registration.race, targetEvent, targetWave,
-    targetWaveRegistrations, checkinCount, existingOnTarget, force, today,
+    // One wave was asked for, so every row is that wave's.
+    targetWaveRegistrations: waveRead.rows, checkinCount: checkinRead.count, existingOnTarget: existingRead.existing,
+    force, today,
   })
   if (!verdict.ok) return verdict
 
-  const members = membersOf(registration)
   const headcount = entryHeadcount(registration)
-  const priceGapCents = computePriceGapCents({ sourceEvent: registration.race, targetEvent, members, headcount })
+  const priceGapCents = computePriceGapCents({ sourceEvent: registration.race, targetEvent, members: membersOf(registration), headcount })
+  return { ok: true, registration, targetEvent, targetWave, headcount, priceGapCents }
+}
+
+/**
+ * Move one entry. Rules first (checkMove: fresh reads, pure rules), then the
+ * SQL function, then best-effort after-effects that never fail the move.
+ *
+ * `expectedSourceEventId`: the event the CALLER judged the entry on (a
+ * route authorises on its own read, then this function reads again). When
+ * given and the entry is no longer there, the answer is `conflict` before
+ * any further read or write, so a move is never authorised at one studio
+ * and carried out from another.
+ *
+ * `notified` is true only when the moved email was sent ('email' in the
+ * sender's `sent`); false when notify was off or the sender skipped,
+ * failed or threw.
+ *
+ * @returns {{ ok: true, move: object, registration: object, notified: boolean }
+ *         | { ok: false, error: string, spots_left?: number|null }}
+ */
+export async function moveRegistration(db, {
+  registrationId, targetEventId, targetWaveId = null,
+  actor, note = null, notify = true, force = false, allowedEventIds = null,
+  expectedSourceEventId = null,
+  today = dublinTodayStr(),
+}) {
+  // Who moved it is recorded on every move (registration_moves.actor_type
+  // is NOT NULL, checked to staff/host/agent/customer, mig 712): a caller
+  // that omits it is a bug, not a refusal to show the operator.
+  if (!actor?.type) throw new TypeError('actor.type is required')
+  const checked = await checkMove(db, { registrationId, targetEventId, targetWaveId, force, allowedEventIds, expectedSourceEventId, today })
+  if (!checked.ok) return checked
+  const { registration, targetEvent, targetWave, headcount, priceGapCents } = checked
   const { data: move, error: rpcErr } = await db.rpc('move_race_registration', {
     p_registration_id: registrationId,
     // The event the rules were judged against: the function re-checks it

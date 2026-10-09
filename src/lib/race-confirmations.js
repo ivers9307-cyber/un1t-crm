@@ -678,7 +678,7 @@ export async function sendRegistrationMovedEmail(db, { registrationId, moveId })
 
 const GAP_PAYMENT_COLUMNS = `
   id, kind, status, contact_id, contact_email, contact_name,
-  amount_cents, currency, confirmation_email_sent_at,
+  amount_cents, currency, confirmation_email_sent_at, metadata,
   race_event_id, race_registration_id, registration_move_id,
   race:race_event_id (
     id, name, slug, kind, race_date, location_id, host_id, sending_location_id,
@@ -694,7 +694,8 @@ const GAP_PAYMENT_COLUMNS = `
  * Default shell slots for the two price-difference emails.
  * @param {{ raceName, raceDateLabel, waveLabel, waveRowLabel, locationName,
  *   firstName, differenceLabel, oldEventName, payUrl }} ctx
- * @param {'link'|'paid'} stage
+ * @param {'link'|'paid'|'paid_unmoved'} stage  'paid_unmoved' (EVENT-MOVE.6):
+ *   a customer paid for their own date change and the move was then refused
  */
 export function buildGapDefaults(ctx, stage) {
   const who = escapeHtml(ctx.firstName || 'there')
@@ -707,10 +708,23 @@ export function buildGapDefaults(ctx, stage) {
     ctx.raceDateLabel ? `    ${row('Date', ctx.raceDateLabel)}` : '',
     ctx.waveLabel ? `    ${row(ctx.waveRowLabel || 'Wave', ctx.waveLabel)}` : '',
     ctx.locationName ? `    ${row('Where', ctx.locationName)}` : '',
-    `    ${row(stage === 'paid' ? 'Paid' : 'To pay', ctx.differenceLabel)}`,
+    `    ${row(stage === 'link' ? 'To pay' : 'Paid', ctx.differenceLabel)}`,
   ].filter(Boolean).join('\n')
   const base = { infoRows, memberQrs: [], locationName: ctx.locationName || '' }
 
+  if (stage === 'paid_unmoved') {
+    // The entry is still on the event it was booked on (ctx.raceName): say
+    // what happened, plainly, and that a person will follow up. Never that
+    // it moved, never a refund promise (that is staff's call).
+    return {
+      ...base,
+      subject: `Your date change for ${ctx.raceName}`,
+      heading: `Thanks, ${who}.`,
+      introHtml: `We received your ${diff} payment to change the date of your entry for ${to}, but we could not move your entry.`,
+      afterInfoHtml: '',
+      footerHtml: `<strong>We will be in touch.</strong> Someone from the team will contact you about your date change and your payment. Your entry for ${to} is unchanged in the meantime.`,
+    }
+  }
   if (stage === 'paid') {
     return {
       ...base,
@@ -855,12 +869,17 @@ export async function sendGapPaidEmail({ db, paymentId }) {
 
   const { race, ctx, contact, extras } = gapContext(payment, '')
   const locationId = await gapCommsLocationId(db, race, paymentId)
+  // EVENT-MOVE.6 — a customer's own date change that did not land after they
+  // paid: recorded as failed, or never linked to a move (a lost failure
+  // write reads the same way, so the receipt never claims a move).
+  const pm = payment.metadata || {}
+  const unmoved = !!pm.pending_move_failed || (!!pm.pending_move && !payment.registration_move_id)
   // Fixed wording: race_events.gap_email_subject/intro are the LINK email's
   // copy ("pay here"), which would read wrong on a receipt. The event's
   // header styling still applies.
   const receiptRace = { ...race, gap_email_subject: null, gap_email_intro: null }
   try {
-    const { subject, htmlBody } = await resolveEventEmail({ db, kind: 'gap', race: receiptRace, contact, extras, defaults: buildGapDefaults(ctx, 'paid') })
+    const { subject, htmlBody } = await resolveEventEmail({ db, kind: 'gap', race: receiptRace, contact, extras, defaults: buildGapDefaults(ctx, unmoved ? 'paid_unmoved' : 'paid') })
     await sendTransactionalEmail({ to: payment.contact_email, subject, htmlBody, contactId: payment.contact_id || null, locationId, tag: 'event-gap-paid' })
   } catch (e) {
     result.failed.push(`email:${e?.message || 'failed'}`)
