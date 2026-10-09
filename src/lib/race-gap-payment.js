@@ -27,10 +27,10 @@ import {
 import { syncOrderFromRacePayment } from './orders'
 import { emitEvent, EVENT_TYPES } from './contact-events'
 import { getAppUrl } from './app-url'
-import { entryLeadEmail, membersOf } from './registration-entry'
+import { entryLeadEmail, membersOf, GAP_PAYMENT_KIND } from './registration-entry'
 import { logError, logWarn } from './log'
 
-export const GAP_PAYMENT_KIND = 'move_gap'
+export { GAP_PAYMENT_KIND }
 
 // The entry's payment rows, newest first. One read answers three questions:
 // is there a pending link for this move to reuse, how many links this move has
@@ -149,6 +149,24 @@ export async function createGapPayment({ db, move, registration, race, returnUrl
     })
     .select('*')
     .single()
+  if (insErr?.code === '23505') {
+    // race_payments_one_pending_gap_per_move (mig 710): a concurrent click
+    // minted the pending link first. Hand back theirs; ours is a provider
+    // order nobody will pay (a Stripe session expires on its own).
+    const { data: winner, error: winErr } = await db
+      .from('race_payments')
+      .select(PAYMENT_COLUMNS)
+      .eq('registration_move_id', move.id)
+      .eq('kind', GAP_PAYMENT_KIND)
+      .eq('status', 'pending')
+      .maybeSingle()
+    if (!winErr && winner) {
+      logWarn('race-gap-payment', 'lost the race to mint a gap link; reusing the winner, our provider order is unused', {
+        provider: providerName, providerRef: created.providerRef, paymentId: winner.id, moveId: move.id,
+      })
+      return { ok: true, payment: winner, checkoutUrl: `${getAppUrl()}/event-pay/${winner.id}`, reused: true }
+    }
+  }
   if (insErr || !row) {
     // The provider order exists with no ledger row: if it is ever paid the
     // webhook finds nothing. Log the ref so it can be found and cancelled.
@@ -177,4 +195,53 @@ export async function createGapPayment({ db, move, registration, race, returnUrl
   }
 
   return { ok: true, payment: row, checkoutUrl: `${getAppUrl()}/event-pay/${row.id}`, reused: false }
+}
+
+/**
+ * EVENT-MOVE.5 — the completed branch for kind='move_gap'. Projects the order
+ * and emits ORDER_COMPLETED (the money is real), then settles the move with
+ * the same compare-and-set as the staff settle route (EVENT-MOVE.3), so a
+ * difference staff already marked by hand keeps their answer. Never: the
+ * registration status, the host contact list, tag rules, order_completed
+ * sequences. The caller (the payment webhooks) sends the gap receipt instead
+ * of the entry confirmation, and skips the Glofox push.
+ */
+export async function completeGapPayment({ db, payment, updates, nowIso }) {
+  try {
+    const refreshed = { ...payment, ...updates }
+    await syncOrderFromRacePayment({ db, payment: refreshed })
+    await emitEvent({
+      db,
+      eventType: EVENT_TYPES.ORDER_COMPLETED,
+      contactEmail: payment.contact_email,
+      contactId: payment.contact_id || null,
+      locationId: payment.race?.location_id || null,
+      sourceType: 'race_registration',
+      sourceId: payment.id,
+      metadata: { amount_cents: refreshed.amount_cents, currency: payment.currency, kind: GAP_PAYMENT_KIND },
+    })
+  } catch (e) {
+    logWarn('race-gap-payment', 'orders/events sync (gap completed) failed', { err: e, paymentId: payment.id })
+  }
+
+  const moveId = payment.registration_move_id || null
+  if (!moveId) {
+    logError('race-gap-payment', 'a move_gap payment completed with no move to settle; mark the difference collected by hand', { paymentId: payment.id })
+  } else {
+    const { data: settled, error: settleErr } = await db
+      .from('registration_moves')
+      .update({ gap_settled_at: nowIso, gap_settled_how: 'collected', gap_settled_by_name: 'Customer (paid online)' })
+      .eq('id', moveId)
+      .is('gap_settled_at', null)
+      .select('id')
+    if (settleErr) {
+      logError('race-gap-payment', 'the difference was paid but the move was NOT marked collected; mark it by hand', { err: settleErr, paymentId: payment.id, moveId })
+    } else if (!Array.isArray(settled) || settled.length === 0) {
+      // Staff settled it first (collected by hand, or waived) and the customer
+      // paid anyway: their answer stands, and the money may need refunding.
+      logError('race-gap-payment', 'the difference was paid online after the move was already settled; check whether to refund', { paymentId: payment.id, moveId })
+    }
+  }
+
+  return { applied: { ...updates, kind: GAP_PAYMENT_KIND }, state_changed: true }
 }

@@ -40,7 +40,8 @@ const REG = {
 const MOVE = { id: 'mv1', registration_id: 'r1', to_event_id: 'e2', price_gap_cents: 1000, gap_settled_at: null }
 const ENTRY_PAY = { id: 'p1', kind: 'entry', status: 'completed', registration_move_id: null, contact_email: 'pay@x.ie', contact_phone: '+3531', contact_name: 'Aoife B', created_at: '2026-10-01T00:00:00Z' }
 
-function fakeDb({ payments = { data: [ENTRY_PAY], error: null }, insert = { error: null }, settle = { data: [{ id: 'mv1' }], error: null } } = {}) {
+function fakeDb({ payments = { data: [ENTRY_PAY], error: null }, insert = { error: null }, settle = { data: [{ id: 'mv1' }], error: null },
+  statusWrite = { data: [{ id: 'gp1' }], error: null }, winner = { data: null, error: null }, row = { data: null, error: null } } = {}) {
   const queries = []
   const inserts = []
   const updates = []
@@ -56,7 +57,11 @@ function fakeDb({ payments = { data: [ENTRY_PAY], error: null }, insert = { erro
       const answer = () => {
         if (q.ops.some((o) => o[0] === 'insert')) return insert.error ? { data: null, error: insert.error } : { data: { id: 'gp1', ...inserts[inserts.length - 1].row }, error: null }
         if (table === 'registration_moves') return settle
-        if (table === 'race_payments' && !q.ops.some((o) => o[0] === 'update')) return payments
+        const has = (col) => q.ops.some((o) => o[0] === 'eq' && o[1] === col)
+        if (table === 'race_payments' && q.ops.some((o) => o[0] === 'update')) return statusWrite
+        if (table === 'race_payments' && has('registration_move_id')) return winner
+        if (table === 'race_payments' && has('id')) return row
+        if (table === 'race_payments') return payments
         return { data: null, error: null }
       }
       b.single = async () => answer()
@@ -279,13 +284,13 @@ describe('markRacePaymentStatus — a completed move_gap payment', () => {
     const db = fakeDb({ settle: { data: [], error: null } })
     const r = await complete(db)
     expect(r.applied.status).toBe('completed')
-    expect(logError).toHaveBeenCalledWith('race-payments', expect.stringContaining('already settled'), expect.objectContaining({ moveId: 'mv1' }))
+    expect(logError).toHaveBeenCalledWith('race-gap-payment', expect.stringContaining('already settled'), expect.objectContaining({ moveId: 'mv1' }))
   })
   it('a failed settle write is logged, never thrown', async () => {
     const db = fakeDb({ settle: { data: null, error: { message: 'down' } } })
     const r = await complete(db)
     expect(r.applied.status).toBe('completed')
-    expect(logError).toHaveBeenCalledWith('race-payments', expect.stringContaining('NOT marked collected'), expect.objectContaining({ moveId: 'mv1' }))
+    expect(logError).toHaveBeenCalledWith('race-gap-payment', expect.stringContaining('NOT marked collected'), expect.objectContaining({ moveId: 'mv1' }))
   })
   it('an already-completed gap payment does nothing (idempotent retry)', async () => {
     const db = fakeDb()
@@ -329,10 +334,12 @@ describe('markRacePaymentStatus — tag rules and sequences never run for a move
 
 describe('refreshRacePaymentFromProvider — a move_gap payment completed by the refresh sends its receipt', () => {
   const GAP = { id: 'gp1', kind: 'move_gap', registration_move_id: 'mv1', status: 'pending', amount_cents: 1000, currency: 'EUR',
-    payment_provider: 'revolut', payment_provider_ref: 'ord-1', race_registration_id: 'r1', contact_id: 'c1', contact_email: 'aoife@x.ie' }
+    payment_provider: 'revolut', payment_provider_ref: 'ord-1', race_registration_id: 'r1', race_event_id: 'e2', contact_id: 'c1', contact_email: 'aoife@x.ie',
+    contact_name: 'Aoife Byrne', race: { location_id: 'L1' } }
+  const dbWith = (row = GAP) => fakeDb({ row: { data: row, error: null } })
   it('a fresh completion sends sendGapPaidEmail', async () => {
     getPayment.mockResolvedValue({ state: 'completed', amountCents: 1000 })
-    const db = fakeDb()
+    const db = dbWith()
     await refreshRacePaymentFromProvider(db, GAP)
     expect(sendGapPaidEmail).toHaveBeenCalledTimes(1)
     expect(sendGapPaidEmail).toHaveBeenCalledWith({ db, paymentId: 'gp1' })
@@ -340,25 +347,78 @@ describe('refreshRacePaymentFromProvider — a move_gap payment completed by the
   })
   it('still pending: no receipt', async () => {
     getPayment.mockResolvedValue({ state: 'pending', amountCents: 1000 })
-    await refreshRacePaymentFromProvider(fakeDb(), GAP)
+    await refreshRacePaymentFromProvider(dbWith(), GAP)
     expect(sendGapPaidEmail).not.toHaveBeenCalled()
   })
   it('already completed (the webhook won): no second receipt from here', async () => {
     getPayment.mockResolvedValue({ state: 'completed', amountCents: 1000 })
-    await refreshRacePaymentFromProvider(fakeDb(), { ...GAP, status: 'completed', completed_at: '2026-10-09T10:00:00Z' })
+    const done = { ...GAP, status: 'completed', completed_at: '2026-10-09T10:00:00Z' }
+    await refreshRacePaymentFromProvider(dbWith(done), done)
+    expect(sendGapPaidEmail).not.toHaveBeenCalled()
+  })
+  it('lost the status CAS to the webhook: no receipt from here', async () => {
+    getPayment.mockResolvedValue({ state: 'completed', amountCents: 1000 })
+    await refreshRacePaymentFromProvider(fakeDb({ row: { data: GAP, error: null }, statusWrite: { data: [], error: null } }), GAP)
     expect(sendGapPaidEmail).not.toHaveBeenCalled()
   })
   it('an entry payment completed by the refresh sends nothing here (unchanged)', async () => {
     getPayment.mockResolvedValue({ state: 'completed', amountCents: 1000 })
-    await refreshRacePaymentFromProvider(fakeDb(), { ...GAP, kind: 'entry', registration_move_id: null })
+    const entry = { ...GAP, kind: 'entry', registration_move_id: null }
+    await refreshRacePaymentFromProvider(dbWith(entry), entry)
     expect(sendGapPaidEmail).not.toHaveBeenCalled()
   })
   it('a thrown receipt is logged and the refresh still answers the row', async () => {
     getPayment.mockResolvedValue({ state: 'completed', amountCents: 1000 })
     sendGapPaidEmail.mockRejectedValueOnce(new Error('postmark down'))
-    const out = await refreshRacePaymentFromProvider(fakeDb(), GAP)
+    const out = await refreshRacePaymentFromProvider(dbWith(), GAP)
     expect(out).toBeTruthy()
     expect(logError).toHaveBeenCalledWith('race-payments', expect.stringContaining('gap receipt'), expect.objectContaining({ paymentId: 'gp1' }))
   })
 })
 
+describe('refreshRacePaymentFromProvider — reads the full row before applying (EVENT-MOVE.5)', () => {
+  // The public GET's select: no contact fields, an embedded race without location_id.
+  const PARTIAL = { id: 'gp1', status: 'pending', amount_cents: 1000, currency: 'EUR', kind: 'move_gap', payment_provider: 'revolut',
+    payment_provider_ref: 'ord-1', race: { id: 'e2', name: 'Hatch Oct 25', slug: 'hatch-oct25-1100' } }
+  const FULL = { ...PARTIAL, registration_move_id: 'mv1', race_registration_id: 'r1', race_event_id: 'e2', contact_id: 'c1',
+    contact_email: 'aoife@x.ie', contact_name: 'Aoife Byrne', contact_phone: '+3531', race: { location_id: 'L1' } }
+
+  it('re-reads the payment by id with * and the race studio, and the order sync gets the contact fields', async () => {
+    getPayment.mockResolvedValue({ state: 'completed', amountCents: 1000 })
+    const db = fakeDb({ row: { data: FULL, error: null } })
+    await refreshRacePaymentFromProvider(db, PARTIAL)
+    const read = db.queries.find((q) => q.table === 'race_payments' && q.ops.some((o) => o[0] === 'maybeSingle' || o[0] === 'select'))
+    expect(read.ops).toContainEqual(['eq', 'id', 'gp1'])
+    expect(read.ops.find((o) => o[0] === 'select')[1].replace(/\s+/g, ' ')).toBe('*, race:race_event_id ( location_id )')
+    expect(syncOrderFromRacePayment).toHaveBeenCalledWith(expect.objectContaining({
+      payment: expect.objectContaining({ id: 'gp1', status: 'completed', contact_email: 'aoife@x.ie', contact_id: 'c1', contact_name: 'Aoife Byrne' }),
+    }))
+    expect(emitEvent).toHaveBeenCalledWith(expect.objectContaining({ locationId: 'L1', contactEmail: 'aoife@x.ie' }))
+  })
+  it('an unreadable row applies nothing, is logged, and answers the input', async () => {
+    getPayment.mockResolvedValue({ state: 'completed', amountCents: 1000 })
+    const db = fakeDb({ row: { data: null, error: { message: 'down' } } })
+    const out = await refreshRacePaymentFromProvider(db, PARTIAL)
+    expect(out).toBe(PARTIAL)
+    expect(db.updates).toEqual([])
+    expect(getPayment).not.toHaveBeenCalled()
+    expect(logError).toHaveBeenCalledWith('race-payments', expect.stringContaining('refresh'), expect.objectContaining({ paymentId: 'gp1' }))
+  })
+})
+
+describe('createGapPayment — two clicks at once (the unique pending index)', () => {
+  it('a 23505 on insert hands back the winner as reused', async () => {
+    const winnerRow = { id: 'gpW', kind: 'move_gap', status: 'pending', registration_move_id: 'mv1', amount_cents: 1000 }
+    const db = fakeDb({ insert: { error: { code: '23505', message: 'duplicate key' } }, winner: { data: winnerRow, error: null } })
+    const r = await createGapPayment(args({ db }))
+    expect(r).toEqual({ ok: true, payment: winnerRow, checkoutUrl: 'https://crm.test/event-pay/gpW', reused: true })
+    const q = db.queries.find((x) => x.table === 'race_payments' && x.ops.some((o) => o[0] === 'eq' && o[1] === 'registration_move_id'))
+    expect(q.ops).toContainEqual(['eq', 'kind', 'move_gap'])
+    expect(q.ops).toContainEqual(['eq', 'status', 'pending'])
+    expect(emitEvent).not.toHaveBeenCalled()
+  })
+  it('a 23505 whose winner cannot be read is write_failed', async () => {
+    const db = fakeDb({ insert: { error: { code: '23505', message: 'duplicate key' } }, winner: { data: null, error: { message: 'down' } } })
+    expect(await createGapPayment(args({ db }))).toEqual({ ok: false, error: 'write_failed' })
+  })
+})

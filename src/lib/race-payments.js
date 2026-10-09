@@ -35,7 +35,7 @@ import { emitEvent, applyTagRules, EVENT_TYPES } from './contact-events'
 import { triggerSequencesForOrderStatus } from './sequences'
 import { addEventAttendeesToHostList } from './host-contact-list'
 import { logWarn, logError } from './log'
-import { GAP_PAYMENT_KIND } from './race-gap-payment'
+import { GAP_PAYMENT_KIND, completeGapPayment } from './race-gap-payment'
 import { sendGapPaidEmail } from './race-confirmations'
 
 /**
@@ -101,9 +101,14 @@ export async function createRacePayment({ db, race, registration, captain, prici
       .select('*')
       .single()
     if (error) throw new Error(`race_payments insert failed: ${error.message}`)
-    await db.from('race_registrations')
+    // The free payment row is committed; a failed confirm is logged, never
+    // thrown (the entry would otherwise sit on pending_payment unseen).
+    const { error: freeRegErr } = await db.from('race_registrations')
       .update({ active_payment_id: row.id, status: 'confirmed' })
       .eq('id', registration.id)
+    if (freeRegErr) {
+      logError('race-payments', 'free entry recorded but the registration was NOT confirmed; confirm it by hand', { err: freeRegErr, paymentId: row.id, registrationId: registration.id })
+    }
     // HOST-EMAIL.1 — the registration just confirmed: sync this event's
     // attendees into the host's contact list. Fire-and-forget with its own
     // catch — list upkeep must never affect the payment response.
@@ -211,9 +216,14 @@ export async function createRacePayment({ db, race, registration, captain, prici
     .single()
   if (error) throw new Error(`race_payments insert failed: ${error.message}`)
 
-  await db.from('race_registrations')
+  // The payment row is committed; a lost pointer is logged, never thrown
+  // (the caller still has the checkout to hand the buyer).
+  const { error: activeErr } = await db.from('race_registrations')
     .update({ active_payment_id: row.id })
     .eq('id', registration.id)
+  if (activeErr) {
+    logError('race-payments', 'active_payment_id NOT written for a new entry payment', { err: activeErr, paymentId: row.id, registrationId: registration.id })
+  }
 
   // Project into orders + emit lifecycle events (mig 085). The
   // race_payments row is already committed, so any failure here is
@@ -336,7 +346,23 @@ export async function markRacePaymentStatus({ db, payment, revolutState, revolut
     return { applied: null, state_changed: false }
   }
 
-  await db.from('race_payments').update(updates).eq('id', payment.id)
+  // Compare-and-set on the status this caller judged: a webhook and the
+  // return-page refresh can race, and only the one whose write lands may run
+  // the side effects (confirmations, a move settled, a receipt). Zero rows =
+  // someone else moved it first, so this caller applies nothing.
+  const { data: written, error: writeErr } = await db
+    .from('race_payments')
+    .update(updates)
+    .eq('id', payment.id)
+    .eq('status', payment.status)
+    .select('id')
+  if (writeErr) {
+    logError('race-payments', 'payment status write failed; nothing applied', { err: writeErr, paymentId: payment.id, from: payment.status, to: updates.status || null })
+    return { applied: null, state_changed: false }
+  }
+  if (!Array.isArray(written) || written.length === 0) {
+    return { applied: null, state_changed: false }
+  }
 
   // EVENT-MOVE.5 — a PRICE DIFFERENCE landed, not an entry. It settles the
   // move and nothing else: the entry is already confirmed, its people are
@@ -348,10 +374,15 @@ export async function markRacePaymentStatus({ db, payment, revolutState, revolut
 
   // Roll the registration's status forward when the payment lands.
   if (updates.status === 'completed' && payment.race_registration_id) {
-    await db.from('race_registrations')
+    // Zero rows is normal (already confirmed, or an operator edit stands).
+    // The payment is committed, so a failed write is logged, never thrown.
+    const { error: regErr } = await db.from('race_registrations')
       .update({ status: 'confirmed' })
       .eq('id', payment.race_registration_id)
       .eq('status', 'pending_payment') // don't clobber operator edits
+    if (regErr) {
+      logError('race-payments', 'payment completed but the registration was NOT confirmed; confirm it by hand', { err: regErr, paymentId: payment.id, registrationId: payment.race_registration_id })
+    }
     // HOST-EMAIL.1 — registration confirmed by the payment: sync the host's
     // contact list. Fire-and-forget with its own catch — never affects the
     // webhook/state-machine response. (Re-running is safe: ignoreDuplicates.)
@@ -410,72 +441,36 @@ export async function markRacePaymentStatus({ db, payment, revolutState, revolut
 }
 
 /**
- * EVENT-MOVE.5 — the completed branch for kind='move_gap'. Projects the order
- * and emits ORDER_COMPLETED (the money is real), then settles the move with
- * the same compare-and-set as the staff settle route (EVENT-MOVE.3), so a
- * difference staff already marked by hand keeps their answer. Never: the
- * registration status, the host contact list, tag rules, order_completed
- * sequences. The caller (the payment webhooks) sends the gap receipt instead
- * of the entry confirmation, and skips the Glofox push.
- */
-async function completeGapPayment({ db, payment, updates, nowIso }) {
-  try {
-    const refreshed = { ...payment, ...updates }
-    await syncOrderFromRacePayment({ db, payment: refreshed })
-    await emitEvent({
-      db,
-      eventType: EVENT_TYPES.ORDER_COMPLETED,
-      contactEmail: payment.contact_email,
-      contactId: payment.contact_id || null,
-      locationId: payment.race?.location_id || null,
-      sourceType: 'race_registration',
-      sourceId: payment.id,
-      metadata: { amount_cents: refreshed.amount_cents, currency: payment.currency, kind: GAP_PAYMENT_KIND },
-    })
-  } catch (e) {
-    logWarn('race-payments', 'orders/events sync (gap completed) failed', { err: e, paymentId: payment.id })
-  }
-
-  const moveId = payment.registration_move_id || null
-  if (!moveId) {
-    logError('race-payments', 'a move_gap payment completed with no move to settle; mark the difference collected by hand', { paymentId: payment.id })
-  } else {
-    const { data: settled, error: settleErr } = await db
-      .from('registration_moves')
-      .update({ gap_settled_at: nowIso, gap_settled_how: 'collected', gap_settled_by_name: 'Customer (paid online)' })
-      .eq('id', moveId)
-      .is('gap_settled_at', null)
-      .select('id')
-    if (settleErr) {
-      logError('race-payments', 'the difference was paid but the move was NOT marked collected; mark it by hand', { err: settleErr, paymentId: payment.id, moveId })
-    } else if (!Array.isArray(settled) || settled.length === 0) {
-      // Staff settled it first (collected by hand, or waived) and the customer
-      // paid anyway: their answer stands, and the money may need refunding.
-      logError('race-payments', 'the difference was paid online after the move was already settled; check whether to refund', { paymentId: payment.id, moveId })
-    }
-  }
-
-  return { applied: { ...updates, kind: GAP_PAYMENT_KIND }, state_changed: true }
-}
-
-/**
  * Convenience wrapper for the embedded checkout + return page.
  * Pulls the live order state from Revolut so the front-end can show
  * an accurate status without waiting for the webhook to land.
  */
-export async function refreshRacePaymentFromProvider(db, payment) {
-  if (!payment?.payment_provider_ref) return payment
-  const providerName = payment.payment_provider
-  if (providerName !== 'revolut' && providerName !== 'stripe_connect') return payment
+export async function refreshRacePaymentFromProvider(db, input) {
+  if (!input?.id || !input?.payment_provider_ref) return input
+  const providerName = input.payment_provider
+  if (providerName !== 'revolut' && providerName !== 'stripe_connect') return input
+  // Callers hand in whatever columns THEY needed (the public GET selects no
+  // contact fields). markRacePaymentStatus and the order sync need the whole
+  // row, or the order upsert writes null contact fields and the events lose
+  // their studio, so read it here.
+  const { data: payment, error: readErr } = await db
+    .from('race_payments')
+    .select(`*, race:race_event_id ( location_id )`)
+    .eq('id', input.id)
+    .maybeSingle()
+  if (readErr || !payment) {
+    logError('race-payments', 'refresh: payment unreadable; provider state not applied', { err: readErr, paymentId: input.id })
+    return input
+  }
   let normalized
   try {
     normalized = await paymentsFor(providerName).getPayment(payment.payment_provider_ref, {
       connectedAccountId: payment.connected_account_id || null,
     })
   } catch {
-    return payment
+    return input
   }
-  if (!normalized) return payment
+  if (!normalized) return input
   const result = await markRacePaymentStatus({
     db,
     payment,

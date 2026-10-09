@@ -15,6 +15,13 @@
 // The unit is the entry, never the team: nothing here may assume `teams` is
 // set. Spec: docs/superpowers/specs/2026-10-08-event-entry-move-design.md
 
+/**
+ * EVENT-MOVE.5 — race_payments.kind for a move's PRICE DIFFERENCE (mig 710).
+ * Lives here (imports nothing) so the checkout page and the email module can
+ * name it without pulling the payment lifecycle into their import graph.
+ */
+export const GAP_PAYMENT_KIND = 'move_gap'
+
 export const MOVE_ERRORS = Object.freeze({
   NOT_FOUND: 'not_found',
   NOT_ACTIVE: 'not_active',

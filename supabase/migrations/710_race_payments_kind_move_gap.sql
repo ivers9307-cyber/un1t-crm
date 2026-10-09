@@ -29,6 +29,14 @@ $$;
 create index if not exists race_payments_registration_move_idx
   on public.race_payments (registration_move_id) where registration_move_id is not null;
 
+-- At most ONE live link per move: two staff clicking "Send payment link" at
+-- once would otherwise mint two payable links for one difference. The loser's
+-- insert fails 23505 and createGapPayment hands back the winner. Abandoned,
+-- failed and completed rows are outside the predicate, so a new link can be
+-- minted after an expired one.
+create unique index if not exists race_payments_one_pending_gap_per_move
+  on public.race_payments (registration_move_id) where kind = 'move_gap' and status = 'pending';
+
 comment on column public.race_payments.kind is 'EVENT-MOVE.5 — entry (the ticket) | move_gap (the price difference of a move; never re-runs entry side effects).';
 comment on column public.race_payments.registration_move_id is 'EVENT-MOVE.5 — for kind=move_gap: the move this payment settles on completion.';
 
