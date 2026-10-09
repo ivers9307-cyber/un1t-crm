@@ -29,6 +29,7 @@ import { paymentsFor } from '@/lib/payments'
 import { emitEvent, applyTagRules, EVENT_TYPES } from '@/lib/contact-events'
 import { validateBody } from '@/lib/validate'
 import { logError } from '@/lib/log'
+import { GAP_PAYMENT_KIND } from '@/lib/registration-entry'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -256,7 +257,7 @@ export async function POST(request, props) {
         actor_id: user.id,
       },
     })
-    if (order.contact_id && sourceKind !== 'move_gap') {
+    if (order.contact_id && sourceKind !== GAP_PAYMENT_KIND) {
       await applyTagRules({ db, contactId: order.contact_id })
     }
   } catch (e) {

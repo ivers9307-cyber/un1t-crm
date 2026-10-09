@@ -320,6 +320,22 @@ describe('RaceTeamsManager — Send payment link (EVENT-MOVE.5)', () => {
     await screen.findByText(/already marked waived by Colm/)
     await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => url === '/api/events/e2/teams').length).toBe(2))
   })
+  it('the confirm names the person the email goes to (lead_name from the list), not just the captain', async () => {
+    const confirmMock = vi.fn(() => false)
+    vi.stubGlobal('confirm', confirmMock)
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ success: true, data: [{ ...withCaptain, lead_name: 'Payer Person' }], moved_out: [] }) })))
+    render(<RaceTeamsManager race={race} canMoveEntries />)
+    fireEvent.click(await screen.findByRole('button', { name: /^Send payment link$/ }))
+    expect(confirmMock).toHaveBeenCalledWith('Send Payer Person a payment link for €10.00?')
+  })
+  it('a cancelled entry shows the outstanding chip but no settle or link actions', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ success: true, data: [{ ...reg, status: 'cancelled' }], moved_out: [] }) })))
+    render(<RaceTeamsManager race={race} canMoveEntries />)
+    await screen.findByText(/€10\.00 difference outstanding/)
+    expect(screen.queryByRole('button', { name: /^Send payment link$/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /^Collected$/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /^Waived$/ })).toBeNull()
+  })
   it('with no roster the confirm names the team', async () => {
     const confirmMock = vi.fn(() => false)
     vi.stubGlobal('confirm', confirmMock)

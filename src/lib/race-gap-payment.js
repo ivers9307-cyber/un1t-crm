@@ -27,7 +27,7 @@ import {
 import { syncOrderFromRacePayment } from './orders'
 import { emitEvent, EVENT_TYPES } from './contact-events'
 import { getAppUrl } from './app-url'
-import { entryLeadEmail, membersOf, GAP_PAYMENT_KIND } from './registration-entry'
+import { entryLeadEmail, entryLeadName, GAP_PAYMENT_KIND } from './registration-entry'
 import { logError, logWarn } from './log'
 // A cycle (race-payments imports completeGapPayment from here); safe, since
 // neither module touches the other's bindings at load time.
@@ -40,14 +40,6 @@ export { GAP_PAYMENT_KIND }
 // had (the idempotency key), and the latest entry payment (contact fallback).
 const PAYMENT_COLUMNS = 'id, kind, status, registration_move_id, amount_cents, currency, contact_email, contact_phone, contact_name, payment_provider, payment_provider_ref, payment_checkout_url, created_at'
 
-function leadName(registration, entryPayment) {
-  const c = registration?.contact
-  const contactName = [c?.first_name, c?.last_name].filter(Boolean).join(' ').trim()
-  if (contactName) return contactName
-  const members = membersOf(registration)
-  const captain = members.find((m) => m?.role === 'captain') || members[0]
-  return captain?.name || entryPayment?.contact_name || null
-}
 
 /**
  * Mint (or reuse) the payment for a move's price difference.
@@ -143,7 +135,8 @@ export async function createGapPayment({ db, move, registration, race, returnUrl
       contact_id: registration.contact_id || null,
       contact_email: email,
       contact_phone: entryPayment?.contact_phone || null,
-      contact_name: leadName(registration, entryPayment),
+      // The person the address belongs to (the link email greets them).
+      contact_name: entryLeadName({ registration, payment: entryPayment }),
       amount_cents: amount,
       currency,
       // member_count / non_member_count are NOT NULL DEFAULT 0: left to the

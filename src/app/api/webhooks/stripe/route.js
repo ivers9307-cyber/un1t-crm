@@ -22,6 +22,7 @@ import { refundPatchFromCharge } from '@/lib/stripe-refund-sync'
 import { resolveClassBookingPaymentByRef, markClassBookingPaymentStatus } from '@/lib/class-booking-payments'
 import { publishQueuePush, CLASS_BOOKINGS_WORKER_PATH } from '@/lib/qstash'
 import { logWarn, logError } from '@/lib/log'
+import { GAP_PAYMENT_KIND } from '@/lib/registration-entry'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -102,7 +103,7 @@ export async function POST(request) {
           revolutState: 'completed',
           revolutAmount: Number.isFinite(session.amount_total) ? session.amount_total : null,
         })
-        if (result.applied?.status === 'completed' && payment.kind === 'move_gap') {
+        if (result.applied?.status === 'completed' && payment.kind === GAP_PAYMENT_KIND) {
           // EVENT-MOVE.5 — a paid price difference: markRacePaymentStatus
           // settled the move; the payer gets the gap receipt, never the
           // entry confirmation.
@@ -176,7 +177,7 @@ export async function POST(request) {
               account: event.account || null,
             })
           } else {
-            if (payment.kind === 'move_gap') {
+            if (payment.kind === GAP_PAYMENT_KIND) {
               // EVENT-MOVE.5 — a refunded price difference does NOT un-settle
               // its move: whether the customer still owes it is staff's call.
               logWarn('stripe-webhook', 'charge.refunded on a move_gap payment; the move stays settled, staff decide', {

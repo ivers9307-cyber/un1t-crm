@@ -1429,7 +1429,7 @@ export default function RaceEventForm({ race, locationId }) {
           <div className="pt-4 border-t border-un1t-border">
             <EventEmailFields
               title="Pay the difference"
-              description="Sent when staff send a payment link for a moved entry's price difference, and again as the receipt once it is paid. The same copy serves both, so keep it neutral. The pay button is always included."
+              description="The payment-link email staff send for a moved entry's price difference. The pay button and the 24-hour note are always included. The receipt sent once it is paid uses fixed wording."
               subject={gapSubject}
               onSubject={setGapSubject}
               subjectPlaceholder="The price difference for {{event_name}}"

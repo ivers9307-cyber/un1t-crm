@@ -14,10 +14,10 @@
 //      lifecycles in one route.
 //
 // Operationally: both URLs are valid and Revolut will deliver the
-// event to whichever webhook subscribed to it. We use payload
-// metadata.domain='un1t_race' as a defensive secondary check so a
-// misrouted webhook returns 200/skipped rather than mutating the
-// wrong domain.
+// event to whichever webhook subscribed to it. The order's metadata
+// (domain 'un1t_race', or 'un1t_race_gap' for a price difference) is
+// NOT checked here: the guard is the lookup itself, since an order id
+// with no race_payments row returns 200/skipped and mutates nothing.
 //
 // Auth: each Revolut webhook gets its OWN signing secret. We try
 // REVOLUT_RACE_WEBHOOK_SECRET first (the dedicated one for this
@@ -32,6 +32,7 @@ import { verifyWebhookSignature, getOrder } from '@/lib/revolut'
 import { resolveRacePaymentByProviderRef, markRacePaymentStatus } from '@/lib/race-payments'
 import { sendRaceConfirmations, sendGapPaidEmail } from '@/lib/race-confirmations'
 import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
+import { GAP_PAYMENT_KIND } from '@/lib/registration-entry'
 
 export const runtime = 'nodejs'
 
@@ -109,7 +110,7 @@ export async function POST(request) {
   // inside markRacePaymentStatus; it gets the short gap receipt, never the
   // entry confirmation, and never the Glofox push (its people were pushed
   // when the entry was paid).
-  if (result.applied?.status === 'completed' && payment.kind === 'move_gap') {
+  if (result.applied?.status === 'completed' && payment.kind === GAP_PAYMENT_KIND) {
     try {
       confirmations = await sendGapPaidEmail({ db, paymentId: payment.id })
     } catch (e) {

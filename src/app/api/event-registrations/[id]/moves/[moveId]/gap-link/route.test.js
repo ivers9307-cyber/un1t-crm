@@ -49,7 +49,7 @@ const props = (id = R1, moveId = MV) => ({ params: Promise.resolve({ id, moveId 
 const post = (body) => new Request(`http://localhost/api/event-registrations/${R1}/moves/${MV}/gap-link`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
 const MOVE = { id: MV, registration_id: R1, to_event_id: E1, price_gap_cents: 1000, gap_settled_at: null, gap_settled_how: null, gap_settled_by_name: null }
 const RACE = { id: E1, slug: 'hatch-oct25-1100', name: 'Hatch Oct 25', location_id: L1 }
-const REG = { id: R1, race_event_id: E1, race: RACE }
+const REG = { id: R1, status: 'confirmed', race_event_id: E1, race: RACE }
 const URL_ = 'https://crm.test/event-pay/gp1'
 
 beforeEach(() => {
@@ -110,6 +110,17 @@ describe('POST /api/event-registrations/[id]/moves/[moveId]/gap-link — the gat
   it.each([[{ email: 'yes' }], [{ email: 1 }]])('400 on a bad body %j', async (body) => {
     getCurrentUser.mockResolvedValue(manager([L1]))
     expect((await POST(post(body), props())).status).toBe(400)
+    expect(createGapPayment).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST …/gap-link — the entry must be confirmed', () => {
+  beforeEach(() => getCurrentUser.mockResolvedValue(manager([L1])))
+  it.each(['cancelled', 'pending_payment'])('400 not_active for a %s entry, minting nothing', async (status) => {
+    readRegistrationForMove.mockResolvedValue({ registration: { ...REG, status }, error: null })
+    const res = await POST(post({ email: true }), props())
+    expect(res.status).toBe(400)
+    expect(await res.json()).toMatchObject({ success: false, error: 'not_active', message: expect.any(String) })
     expect(createGapPayment).not.toHaveBeenCalled()
   })
 })

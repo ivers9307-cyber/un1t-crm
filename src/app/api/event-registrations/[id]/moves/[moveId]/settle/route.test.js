@@ -65,7 +65,7 @@ beforeEach(() => {
   globalThis.__move = { data: { ...MOVE }, error: null }
   globalThis.__write = { data: [{ ...MOVE, gap_settled_at: '2026-10-09T10:00:00Z', gap_settled_how: 'collected', gap_settled_by_name: 'Richard' }], error: null }
   globalThis.__gapWrite = { data: [], error: null }
-  readRegistrationForMove.mockResolvedValue({ registration: { id: R1, race_event_id: E1, race: { id: E1, location_id: L1 } }, error: null })
+  readRegistrationForMove.mockResolvedValue({ registration: { id: R1, status: 'confirmed', race_event_id: E1, race: { id: E1, location_id: L1 } }, error: null })
 })
 
 describe('POST /api/event-registrations/[id]/moves/[moveId]/settle', () => {
@@ -264,6 +264,17 @@ describe('settle — a live payment link for the difference (EVENT-MOVE.5)', () 
     globalThis.__move = { data: { ...MOVE, gap_settled_at: '2026-10-08T10:00:00Z', gap_settled_how: 'waived', gap_settled_by_name: 'Colm' }, error: null }
     await POST(post({ how: 'collected' }), props())
     expect(globalThis.__tables).not.toContain('race_payments')
+  })
+})
+
+describe('settle — the entry must be confirmed (EVENT-MOVE.5)', () => {
+  it.each(['cancelled', 'pending_payment'])('400 not_active for a %s entry, without a write', async (status) => {
+    getCurrentUser.mockResolvedValue(manager([L1]))
+    readRegistrationForMove.mockResolvedValue({ registration: { id: R1, status, race_event_id: E1, race: { id: E1, location_id: L1 } }, error: null })
+    const res = await POST(post({ how: 'waived' }), props())
+    expect(res.status).toBe(400)
+    expect(await res.json()).toMatchObject({ success: false, error: 'not_active', message: expect.any(String) })
+    expect(writes()).toHaveLength(0)
   })
 })
 

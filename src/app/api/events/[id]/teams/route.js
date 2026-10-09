@@ -18,6 +18,7 @@ import { triggerSequencesForRaceRegistered } from '@/lib/sequences'
 import { addEventAttendeesToHostList } from '@/lib/host-contact-list'
 import { logError } from '@/lib/log'
 import { loadMoveHistory } from '@/lib/registration-move-history'
+import { entryLeadName } from '@/lib/registration-entry'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -64,6 +65,7 @@ export async function GET(_request, props) {
     .select(`
       id, status, registered_at, team_composition, wave_id,
       race_started_at, race_finished_at,
+      contact:contact_id ( first_name, last_name, email ),
       teams:team_id (
         id, name, size, captain_contact_id,
         team_members ( id, name, email, role, is_member, member_validation_status )
@@ -85,7 +87,7 @@ export async function GET(_request, props) {
   if (regIds.length > 0) {
     const { data: payments } = await db
       .from('race_payments')
-      .select('id, race_registration_id, kind, status, payment_checkout_url, contact_phone, contact_name, created_at')
+      .select('id, race_registration_id, kind, status, payment_checkout_url, contact_email, contact_phone, contact_name, created_at')
       .in('race_registration_id', regIds)
       .order('created_at', { ascending: false })
     const byReg = {}
@@ -103,11 +105,15 @@ export async function GET(_request, props) {
           // server-side — this is just for render + the confirm dialog.
           contact_phone: pmt.contact_phone || null,
           contact_name: pmt.contact_name || null,
+          contact_email: pmt.contact_email || null,
         }
       }
     }
     for (const r of regs) r.payment = byReg[r.id] || null
   }
+  // EVENT-MOVE.5 — the person a payment link for the difference is emailed
+  // to, so the confirm names the recipient (entryLeadEmail's order).
+  for (const r of regs) r.lead_name = entryLeadName({ registration: r, payment: r.payment || null })
 
   const { lastMoveByReg, movedOut } = await loadMoveHistory(db, { eventId: params.id, regIds })
   for (const r of regs) r.last_move = lastMoveByReg[r.id] || null

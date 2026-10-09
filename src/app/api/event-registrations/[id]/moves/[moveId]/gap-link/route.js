@@ -10,7 +10,7 @@
 //
 // Status codes: 401 signed out; 403 races held nowhere, or no manager role /
 // no races at the entry's studio; 404 an id the caller may not see; 400 a bad
-// body, no_gap, or no_email (nobody on the entry has an address); 409
+// body, not_active (the entry is not confirmed), no_gap, or no_email (nobody on the entry has an address); 409
 // already_settled, or host_not_ready (a Stripe host not yet able to take
 // payments); 502 provider_failed; 500 load_failed / write_failed.
 // The email is best-effort: a link that was minted answers 200 with
@@ -70,6 +70,10 @@ export async function POST(request, props) {
   const guard = assertLocationAccessOr404(user, locationId)
   if (guard) return guard
   if (!hasPermissionForLocation(user, locationId, 'races') || !hasRoleAtLocation(user, locationId, MANAGER_ROLES)) return forbidden()
+  // EVENT-MOVE.5 — a cancelled (or unpaid) entry owes no difference.
+  if (registration.status !== 'confirmed') {
+    return NextResponse.json({ success: false, error: 'not_active', message: 'Only a confirmed entry has a difference to settle.' }, { status: 400 })
+  }
 
   const validation = await validateBody(request, GapLinkSchema)
   if (!validation.ok) return validation.response

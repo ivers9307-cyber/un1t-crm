@@ -101,6 +101,28 @@ export function entryLeadEmail({ registration, payment } = {}) {
     || null
 }
 
+/**
+ * EVENT-MOVE.5 — the NAME of the person entryLeadEmail writes to, in the same
+ * order: the lead contact (when it has the address), the captain, the first
+ * member with an address, the payer on the payment. With nobody to write to,
+ * the best name there is (contact, captain, first member, payer), else null.
+ * So a confirm that says "Send <name> a payment link" names the recipient.
+ */
+export function entryLeadName({ registration, payment } = {}) {
+  const clean = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null)
+  const members = membersOf(registration)
+  const captain = members.find((m) => m?.role === 'captain')
+  const c = registration?.contact
+  const contactName = clean([c?.first_name, c?.last_name].filter(Boolean).join(' '))
+  const rosterName = clean(captain?.name) || members.map((m) => clean(m?.name)).find(Boolean) || null
+  if (clean(c?.email)) return contactName || rosterName || clean(payment?.contact_name)
+  if (captain && clean(captain.email)) return clean(captain.name) || contactName
+  const withMail = members.find((m) => clean(m?.email))
+  if (withMail) return clean(withMail.name) || contactName
+  if (clean(payment?.contact_email)) return clean(payment?.contact_name) || contactName || rosterName
+  return contactName || rosterName || clean(payment?.contact_name) || null
+}
+
 /** People on the entry: the loaded roster, else teams.size, else 1. */
 export function entryHeadcount(registration) {
   const members = membersOf(registration)

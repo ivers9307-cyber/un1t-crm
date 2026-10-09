@@ -172,15 +172,17 @@ function settledNote(move) {
   return ` · difference ${how} by ${who} on ${new Date(move.gap_settled_at).toLocaleDateString('en-IE')}`
 }
 
-// Cents in the event's currency (same rendering as MoveEntryDialog).
-// EVENT-MOVE.5 — who the payment link goes to, by name: the captain, else
-// the first person, else the entry's payer, else the team.
+// EVENT-MOVE.5 — who the payment link goes to, by name: lead_name from the
+// teams list (the person entryLeadEmail writes to), else the captain, else
+// the first person, else the team.
 function leadOf(registration) {
+  if (typeof registration?.lead_name === 'string' && registration.lead_name.trim()) return registration.lead_name.trim()
   const members = registration?.teams?.team_members || []
   const lead = members.find((m) => m?.role === 'captain') || members[0]
   return lead?.name || registration?.payment?.contact_name || registration?.teams?.name || 'the customer'
 }
 
+// Cents in the event's currency (same rendering as MoveEntryDialog).
 function money(cents, currency = 'EUR') {
   const major = (Math.abs(cents) / 100).toFixed(2)
   return currency === 'EUR' ? `€${major}` : currency === 'GBP' ? `£${major}` : `${major} ${currency}`
@@ -516,7 +518,8 @@ function TeamCard({ registration, waves, onChanged, onError, onNotice, canCancel
               <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-amber-500/10 text-amber-700">
                 {money(registration.last_move.price_gap_cents, currency)} difference outstanding
               </span>
-              {canMove && (
+              {/* Confirmed only: a cancelled or unpaid entry owes no difference (the routes refuse not_active). */}
+              {canMove && registration.status === 'confirmed' && (
                 <>
                   <button
                     type="button"

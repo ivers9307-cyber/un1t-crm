@@ -25,7 +25,7 @@ import { checkTransactionalConsent } from './transactional-consent'
 import { logError } from './log'
 import { timeRowLabel } from './event-time-slots'
 import { isRaceKind } from '@shared/events'
-import { entryLeadEmail } from './registration-entry'
+import { entryLeadEmail, GAP_PAYMENT_KIND } from './registration-entry'
 
 function fmtRaceDate(dateStr) {
   if (!dateStr) return ''
@@ -671,8 +671,9 @@ export async function sendRegistrationMovedEmail(db, { registrationId, moveId })
 // from the payment row: the LINK staff send (sendGapLinkEmail, every click
 // sends: staff may resend it) and the RECEIPT when it is paid
 // (sendGapPaidEmail, send-once on confirmation_email_sent_at, stamped after
-// the send as stampSendOnce explains). ONE operator copy pair serves both,
-// kind 'gap' (race_events.gap_email_subject/intro); the defaults differ.
+// the send as stampSendOnce explains). The operator copy, kind 'gap'
+// (race_events.gap_email_subject/intro), is the LINK email's; the receipt
+// uses fixed wording with the event's styling.
 // Neither carries QR codes: the tickets from the moved email still stand.
 
 const GAP_PAYMENT_COLUMNS = `
@@ -713,7 +714,7 @@ export function buildGapDefaults(ctx, stage) {
   if (stage === 'paid') {
     return {
       ...base,
-      subject: `Thanks, the ${ctx.differenceLabel} difference for ${ctx.raceName} is paid`,
+      subject: `Difference paid for ${ctx.raceName}`,
       heading: `Thanks, ${who}.`,
       introHtml: `The ${diff} difference for your move from ${from} to ${to} is paid.`,
       afterInfoHtml: '',
@@ -803,7 +804,7 @@ export async function sendGapLinkEmail({ db, paymentId, payUrl }) {
   const result = { sent: [], skipped: [], failed: [] }
   const payment = await loadGapPayment(db, paymentId, result, 'gap link email')
   if (!payment) return result
-  if (payment.kind !== 'move_gap') { result.skipped.push(`kind=${payment.kind || 'entry'}`); return result }
+  if (payment.kind !== GAP_PAYMENT_KIND) { result.skipped.push(`kind=${payment.kind || 'entry'}`); return result }
   if (payment.status !== 'pending') { result.skipped.push(`status=${payment.status}`); return result }
   if (!payment.contact_email) { result.skipped.push('email:no_email'); return result }
 
@@ -840,7 +841,7 @@ export async function sendGapPaidEmail({ db, paymentId }) {
   const result = { sent: [], skipped: [], failed: [] }
   const payment = await loadGapPayment(db, paymentId, result, 'gap receipt')
   if (!payment) return result
-  if (payment.kind !== 'move_gap') { result.skipped.push(`kind=${payment.kind || 'entry'}`); return result }
+  if (payment.kind !== GAP_PAYMENT_KIND) { result.skipped.push(`kind=${payment.kind || 'entry'}`); return result }
   if (payment.status !== 'completed') { result.skipped.push(`status=${payment.status}`); return result }
   if (payment.confirmation_email_sent_at) { result.skipped.push('email:already_sent'); return result }
   if (!payment.contact_email) { result.skipped.push('email:no_email'); return result }
@@ -854,8 +855,12 @@ export async function sendGapPaidEmail({ db, paymentId }) {
 
   const { race, ctx, contact, extras } = gapContext(payment, '')
   const locationId = await gapCommsLocationId(db, race, paymentId)
+  // Fixed wording: race_events.gap_email_subject/intro are the LINK email's
+  // copy ("pay here"), which would read wrong on a receipt. The event's
+  // header styling still applies.
+  const receiptRace = { ...race, gap_email_subject: null, gap_email_intro: null }
   try {
-    const { subject, htmlBody } = await resolveEventEmail({ db, kind: 'gap', race, contact, extras, defaults: buildGapDefaults(ctx, 'paid') })
+    const { subject, htmlBody } = await resolveEventEmail({ db, kind: 'gap', race: receiptRace, contact, extras, defaults: buildGapDefaults(ctx, 'paid') })
     await sendTransactionalEmail({ to: payment.contact_email, subject, htmlBody, contactId: payment.contact_id || null, locationId, tag: 'event-gap-paid' })
   } catch (e) {
     result.failed.push(`email:${e?.message || 'failed'}`)

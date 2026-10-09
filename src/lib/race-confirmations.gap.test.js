@@ -82,7 +82,7 @@ describe('sendGapPaidEmail — the receipt', () => {
     expect(call.tag).toBe('event-gap-paid')
     expect(call.locationId).toBe('L-comms')
     expect(call.contactId).toBe('c1')
-    expect(call.subject).toBe('Thanks, the €10.00 difference for Hatch Oct 25 is paid')
+    expect(call.subject).toBe('Difference paid for Hatch Oct 25')
     expect(call.htmlBody).toContain('Hatch Oct 18')
     expect(call.htmlBody).toContain('€10.00')
     expect(call.htmlBody).not.toContain('checkin-qr')
@@ -92,11 +92,17 @@ describe('sendGapPaidEmail — the receipt', () => {
     expect(stamp.ops).toContainEqual(['is', 'confirmation_email_sent_at', null])
     expect(stamp.ops.some((o) => o[0] === 'select')).toBe(true)
   })
-  it('uses the operator gap subject and intro with the gap merge tags', async () => {
-    const payment = { ...GAP, race: { ...RACE, gap_email_subject: '{{difference}} for {{event_name}}', gap_email_intro: 'From {{old_event_name}}: {{difference}}.' } }
+  it('uses fixed wording: the operator gap copy is the LINK email\'s, never the receipt\'s', async () => {
+    const payment = { ...GAP, race: { ...RACE, gap_email_subject: 'Pay {{difference}} now', gap_email_intro: 'Pay it here: {{pay_url}}' } }
     await sendGapPaidEmail({ db: fakeDb({ payment }), paymentId: 'gp1' })
-    expect(sent().subject).toBe('€10.00 for Hatch Oct 25')
-    expect(sent().htmlBody).toContain('From Hatch Oct 18: €10.00.')
+    expect(sent().subject).toBe('Difference paid for Hatch Oct 25')
+    expect(sent().htmlBody).not.toContain('Pay it here')
+    expect(sent().htmlBody).toContain('Nothing more to do.')
+  })
+  it('keeps the event\'s header styling', async () => {
+    const payment = { ...GAP, race: { ...RACE, accent_hex: '#ff0066' } }
+    await sendGapPaidEmail({ db: fakeDb({ payment }), paymentId: 'gp1' })
+    expect(sent().htmlBody).toContain('background:#ff0066')
   })
   it('gates on ADMINISTRATIVE consent as an unrecoverable message', async () => {
     await sendGapPaidEmail({ db: fakeDb(), paymentId: 'gp1' })
@@ -209,7 +215,7 @@ describe('buildGapDefaults', () => {
   })
   it('paid: a receipt with no button', () => {
     const d = buildGapDefaults(ctx, 'paid')
-    expect(d.subject).toBe('Thanks, the €10.00 difference for B & co is paid')
+    expect(d.subject).toBe('Difference paid for B & co')
     expect(d.afterInfoHtml).toBe('')
     expect(d.infoRows).toContain('Paid')
   })

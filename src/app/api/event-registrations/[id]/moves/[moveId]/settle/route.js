@@ -12,7 +12,7 @@
 // Status codes: 401 signed out; 403 races held nowhere, or no manager role /
 // no races at the entry's studio; 404 an id the caller may not see (entry
 // missing or at another studio, move missing or not this entry's); 400 a bad
-// body, or no_gap (the move left nothing to settle); 500 a read or write
+// body, not_active (the entry is not confirmed), or no_gap (the move left nothing to settle); 500 a read or write
 // that FAILED (load_failed, write_failed), never dressed up as a 404.
 
 import { NextResponse } from 'next/server'
@@ -68,6 +68,10 @@ export async function POST(request, props) {
   const guard = assertLocationAccessOr404(user, locationId)
   if (guard) return guard
   if (!hasPermissionForLocation(user, locationId, 'races') || !hasRoleAtLocation(user, locationId, MANAGER_ROLES)) return forbidden()
+  // EVENT-MOVE.5 — a cancelled (or unpaid) entry owes no difference.
+  if (registration.status !== 'confirmed') {
+    return NextResponse.json({ success: false, error: 'not_active', message: 'Only a confirmed entry has a difference to settle.' }, { status: 400 })
+  }
 
   const validation = await validateBody(request, SettleSchema)
   if (!validation.ok) return validation.response

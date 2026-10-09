@@ -184,3 +184,19 @@ describe('GET /api/events/[id]/teams — the entry payment (EVENT-MOVE.5)', () =
     expect(json.data.find((r) => r.id === 'r1').payment).toEqual(expect.objectContaining({ id: 'p1', status: 'completed' }))
   })
 })
+
+describe('GET /api/events/[id]/teams — lead_name (EVENT-MOVE.5)', () => {
+  it('names the person the payment-link email goes to (entryLeadEmail\'s order)', async () => {
+    const answer = globalThis.__answer
+    globalThis.__answer = (table, ops) => {
+      if (table === 'race_registrations') return { data: REGS.map((r) => ({ ...r, contact: { first_name: 'Aoife', last_name: 'Byrne', email: null },
+        teams: { id: 't', name: 'Team', size: 2, team_members: [{ name: 'Dan', role: 'member', email: 'd@x.ie' }, { name: 'Cap', role: 'captain', email: 'c@x.ie' }] } })), error: null }
+      return answer(table, ops)
+    }
+    const json = await (await GET(req(), props)).json()
+    expect(json.data[0].lead_name).toBe('Cap')
+    const regRead = globalThis.__calls.find((c) => c.table === 'race_registrations')
+    expect(regRead.ops.find((o) => o[0] === 'select')[1]).toMatch(/contact:contact_id \( first_name, last_name, email \)/)
+  })
+})
+
