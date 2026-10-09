@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import {
   NUMBER_EVENT_FIELDS, numberColumnUpdate, numberNotification, broadcastPauseReason,
   applyNumberEvent, pauseLocationDrips, dripPauseNote,
@@ -107,11 +107,13 @@ function fakeDb({ numbers = [], pausedRows = [] } = {}) {
 }
 
 const STILLORGAN = {
-  id: 'n1', location_id: 'loc1', label: 'UN1T Stillorgan',
+  id: 'n1', location_id: 'loc1', label: 'UN1T Stillorgan', business_account_id: 'WABA-1',
   display_phone: '+353 1 578 9401', quality_rating: 'GREEN', messaging_limit_tier: 'TIER_1K', name_status: null,
 }
 
 describe('applyNumberEvent', () => {
+  afterEach(() => vi.restoreAllMocks())
+
   it('matches the row by digits despite Meta formatting, patches, notifies its location', async () => {
     const { db, calls } = fakeDb({ numbers: [STILLORGAN] })
     const res = await applyNumberEvent(db, 'phone_number_quality_update', { display_phone_number: '35315789401', event: 'FLAGGED' })
@@ -128,19 +130,65 @@ describe('applyNumberEvent', () => {
     expect(res.pausedBroadcasts).toEqual([])
   })
 
-  it('account-level events fan out to every number location', async () => {
-    const { db } = fakeDb({ numbers: [STILLORGAN, { ...STILLORGAN, id: 'n2', location_id: 'loc2', display_phone: '+353 1 111 2222' }] })
-    const res = await applyNumberEvent(db, 'account_update', { event: 'DISABLED_UPDATE' })
+  // W0.13 — account-level events carry no phone number. They are scoped to
+  // the distinct locations of the rows whose business_account_id matches the
+  // webhook entry's WABA id; never to every number in the estate.
+  it('account-level events reach the distinct locations of the identified WABA only', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { db } = fakeDb({ numbers: [
+      STILLORGAN,
+      { ...STILLORGAN, id: 'n2', location_id: 'loc2', display_phone: '+353 1 111 2222' },
+      { ...STILLORGAN, id: 'n3', location_id: 'loc2', display_phone: '+353 1 333 4444' },
+      { ...STILLORGAN, id: 'n4', location_id: 'locOtherTenant', display_phone: '+353 1 555 6666', business_account_id: 'WABA-OTHER' },
+    ] })
+    const res = await applyNumberEvent(db, 'account_update', { event: 'DISABLED_UPDATE' }, { wabaId: 'WABA-1' })
     expect(res.locations.sort()).toEqual(['loc1', 'loc2'])
+    expect(res.unmatched).toBe(false)
     expect(res.notify.body).toMatch(/disabled/i)
+    expect(errSpy).not.toHaveBeenCalled()
   })
 
-  it('unmatched number with a column patch still notifies (all locations) without updating', async () => {
-    const { db, calls } = fakeDb({ numbers: [STILLORGAN] })
-    const res = await applyNumberEvent(db, 'phone_number_quality_update', { display_phone_number: '999999', event: 'FLAGGED' })
-    expect(calls.updates).toEqual([])
-    expect(res.locations).toEqual(['loc1'])
+  it('an account-level event for an unknown WABA notifies NO location, logs, flags unmatched', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { db } = fakeDb({ numbers: [STILLORGAN, { ...STILLORGAN, id: 'n2', location_id: 'loc2', display_phone: '+353 1 111 2222' }] })
+    const res = await applyNumberEvent(db, 'account_update', { event: 'DISABLED_UPDATE' }, { wabaId: 'WABA-NOBODY' })
+    expect(res.locations).toEqual([])
+    expect(res.unmatched).toBe(true)
     expect(res.notify).not.toBeNull()
+    expect(res.notify.body).toMatch(/disabled/i)
+    expect(errSpy).toHaveBeenCalledTimes(1)
+    expect(errSpy.mock.calls[0][0]).toMatch(/unmatched account_update event/)
+  })
+
+  it('an account-level event with no WABA id at all is unmatched (never pages every tenant)', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { db } = fakeDb({ numbers: [STILLORGAN, { ...STILLORGAN, id: 'n2', location_id: 'loc2', display_phone: '+353 1 111 2222' }] })
+    const res = await applyNumberEvent(db, 'business_capability_update', { max_daily_conversation_per_phone: 1000 })
+    expect(res.locations).toEqual([])
+    expect(res.unmatched).toBe(true)
+    expect(res.notify).not.toBeNull()
+    expect(errSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('an unmatched number with a column patch notifies NO location, updates nothing, logs', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { db, calls } = fakeDb({ numbers: [STILLORGAN] })
+    const res = await applyNumberEvent(db, 'phone_number_quality_update', { display_phone_number: '999999', event: 'FLAGGED' }, { wabaId: 'WABA-1' })
+    expect(calls.updates).toEqual([])
+    expect(res.locations).toEqual([])
+    expect(res.unmatched).toBe(true)
+    expect(res.notify).not.toBeNull()
+    expect(errSpy).toHaveBeenCalledTimes(1)
+    expect(errSpy.mock.calls[0][0]).toMatch(/unmatched phone_number_quality_update event/)
+  })
+
+  it('a matched number is not flagged unmatched and logs nothing', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { db } = fakeDb({ numbers: [STILLORGAN] })
+    const res = await applyNumberEvent(db, 'phone_number_quality_update', { display_phone_number: '35315789401', event: 'FLAGGED' })
+    expect(res.locations).toEqual(['loc1'])
+    expect(res.unmatched).toBe(false)
+    expect(errSpy).not.toHaveBeenCalled()
   })
 })
 
