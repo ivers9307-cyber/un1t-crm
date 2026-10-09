@@ -1018,7 +1018,7 @@ registry.registerPath({
   tags: ['Races'],
   security: [{ CookieAuth: [] }, { BearerAuth: [] }],
   summary: "Run the waitlist offer round for this event now (staff, manager+ with races at the event's studio)",
-  description: 'If any time has room, everyone not offered in the last 24 h is offered at once (email; WhatsApp when the studio has an APPROVED event_waitlist_offer template). Answers the round counts; no_room 1 = every time is full, nobody offered.',
+  description: 'Forced: if any time has room, everyone still on the list is offered again at once, even if offered in the last 24 h (the cron keeps the 24 h rule). Email; WhatsApp when the studio has an APPROVED event_waitlist_offer template. Answers the round counts; no_room 1 = every time is full, nobody offered.',
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: '{ events, offered, expired, skipped, failed, no_room }', content: { 'application/json': { schema: z.object({}).passthrough().openapi('EventWaitlistOfferResult') } } },
@@ -1048,7 +1048,7 @@ registry.registerPath({
   path: '/api/host/events/{id}/waitlist/offer',
   tags: ['Host Portal'],
   security: [{ CookieAuth: [] }],
-  summary: "Run the waitlist offer round now for one of the host's own events",
+  summary: "Run the waitlist offer round now for one of the host's own events (forced past the 24 h rule: everyone on the list is offered again)",
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: '{ events, offered, expired, skipped, failed, no_room }', content: { 'application/json': { schema: z.object({}).passthrough() } } },

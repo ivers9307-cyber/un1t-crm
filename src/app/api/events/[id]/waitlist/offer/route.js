@@ -1,10 +1,11 @@
 // POST /api/events/[id]/waitlist/offer — EVENT-WAITLIST.1
 //
 // Run the offer round for this event now instead of waiting for the next
-// 10-minute tick: if any time has room, everyone on the list who has not been
-// offered in the last 24 h is offered at once (never-offered rows are always
-// due). Answers the round's counts; `no_room: 1` means every time is full and
-// nobody was offered. Manager+ holding `races` at the event's studio.
+// 10-minute tick, FORCED: if any time has room, everyone still on the list is
+// offered again at once, whether or not they were offered in the last 24 h
+// (the cron keeps the 24 h rule). Answers the round's counts; `no_room: 1`
+// means every time is full and nobody was offered. Manager+ holding `races`
+// at the event's studio.
 import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
 import { resolveStaffWaitlistEvent } from '@/lib/event-waitlist-access'
@@ -21,7 +22,7 @@ export async function POST(_request, props) {
   const ctx = await resolveStaffWaitlistEvent(user, params.id)
   if (ctx.response) return ctx.response
   try {
-    const data = await runWaitlistOffers(ctx.db, { eventId: ctx.race.id })
+    const data = await runWaitlistOffers(ctx.db, { eventId: ctx.race.id, force: true })
     return NextResponse.json({ success: true, data })
   } catch (e) {
     logError('event-waitlist', 'staff offer round failed', { err: e, eventId: ctx.race.id })

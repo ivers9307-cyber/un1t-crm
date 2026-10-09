@@ -491,19 +491,21 @@ async function readEvents(db, ids) {
  * in the last 24 h). One row's failure never stops the round.
  *
  * A row is stamped (status offered, last_offered_at, offer_count + 1) AFTER
- * its sends, and only when a channel sent or every channel was suppressed: a
- * row whose every attempt FAILED stays due and the next tick retries it (a
- * duplicate beats a lost offer).
+ * its sends, whatever they did: sent, suppressed on every channel, or FAILED
+ * on every channel (logged). So a dead address is retried once per 24 h by
+ * the cron, never on every 10-minute tick.
  *
  * Throws only when the list itself cannot be read (the cron then withholds its
  * heartbeat stamp).
  *
  * @param {object} db  service-role client
- * @param {{ now?: number, todayStr?: string, eventId?: string }} [opts]
- *   eventId limits the round to one event (staff / host "Offer now")
+ * @param {{ now?: number, todayStr?: string, eventId?: string, force?: boolean }} [opts]
+ *   eventId limits the round to one event (staff / host "Offer now");
+ *   force (only with "Offer now") ignores the 24 h rule for every row still on
+ *   the list, never-offered and already-offered alike. The cron never forces.
  * @returns {Promise<{ events: number, offered: number, expired: number, skipped: number, failed: number, no_room: number }>}
  */
-export async function runWaitlistOffers(db, { now = Date.now(), todayStr = dublinTodayStr(), eventId = null } = {}) {
+export async function runWaitlistOffers(db, { now = Date.now(), todayStr = dublinTodayStr(), eventId = null, force = false } = {}) {
   const counts = { events: 0, offered: 0, expired: 0, skipped: 0, failed: 0, no_room: 0 }
 
   const { rows, error: rowsErr } = await readActiveRows(db, eventId)
@@ -555,11 +557,14 @@ export async function runWaitlistOffers(db, { now = Date.now(), todayStr = dubli
     counts.events += 1
 
     for (const row of list) {
-      if (!isOfferDue(row, now)) { counts.skipped += 1; continue }
+      if (!(force ? ACTIVE_WAITLIST_STATUSES.includes(row.status) : isOfferDue(row, now))) { counts.skipped += 1; continue }
       const res = await sendWaitlistOffer(db, { race, row, now })
       const sent = res.email === 'sent' || res.whatsapp === 'sent'
       const failedAll = !sent && (res.email === 'failed' || res.whatsapp === 'failed')
-      if (failedAll) { counts.failed += 1; continue }
+      if (failedAll) {
+        // Stamped below all the same: retried once per 24 h, not every tick.
+        logError('event-waitlist', 'offer not delivered: every channel failed; next try in 24 h', { waitlistId: row.id, email: res.email, whatsapp: res.whatsapp })
+      }
 
       const { data: stamped, error: stampErr } = await db
         .from('event_waitlist')
@@ -575,6 +580,7 @@ export async function runWaitlistOffers(db, { now = Date.now(), todayStr = dubli
         logWarn('event-waitlist', 'row left the list while its offer went out', { waitlistId: row.id })
       }
       if (sent) counts.offered += 1
+      else if (failedAll) counts.failed += 1
       else counts.skipped += 1
     }
   }

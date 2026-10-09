@@ -41,7 +41,7 @@ describe('host waitlist routes', () => {
   it('offers now for the host\'s own event', async () => {
     const res = await OFFER(new Request('https://crm.test', { method: 'POST' }), props())
     expect(res.status).toBe(200)
-    expect(runWaitlistOffers).toHaveBeenCalledWith(db, { eventId: E1 })
+    expect(runWaitlistOffers).toHaveBeenCalledWith(db, { eventId: E1, force: true })
   })
 
   it('401 without a host session; 404 for another host\'s event, both routes', async () => {

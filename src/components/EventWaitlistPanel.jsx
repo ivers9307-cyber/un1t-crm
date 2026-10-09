@@ -2,8 +2,9 @@
 
 // EventWaitlistPanel — EVENT-WAITLIST.1. The waitlist of one event, for staff
 // (the teams page, light theme, with Remove) and hosts (their event page, dark
-// host-portal theme, read-only). Both can "Offer now": run the offer round for
-// this event at once instead of waiting for the 10-minute cron.
+// host-portal theme, read-only). Both can "Offer now (everyone)": run the
+// offer round for this event at once, forced past the 24 h rule, instead of
+// waiting for the 10-minute cron.
 //
 // Staff and host data: the count and the list are never shown to the public.
 // Status is plain text (no chip), so one component serves both themes.
@@ -32,12 +33,12 @@ export function offerResultMessage(counts) {
   if (!counts) return ''
   if (counts.no_room > 0) return 'Every time is still full, so nobody was offered.'
   const n = Number(counts.offered) || 0
-  const base = n === 0 ? 'Nobody was due an offer.' : `Offered to ${n} ${n === 1 ? 'person' : 'people'}.`
+  const base = n === 0 ? 'Nobody was offered.' : `Offered to ${n} ${n === 1 ? 'person' : 'people'}.`
   const skipped = Number(counts.skipped) || 0
   const failed = Number(counts.failed) || 0
   const extra = []
   if (skipped > 0) extra.push(`${skipped} skipped (offered in the last 24 hours, or opted out)`)
-  if (failed > 0) extra.push(`${failed} could not be sent and will be retried`)
+  if (failed > 0) extra.push(`${failed} could not be sent (logged; tried again in 24 hours)`)
   return extra.length ? `${base} ${extra.join('; ')}.` : base
 }
 
@@ -67,7 +68,7 @@ export default function EventWaitlistPanel({ listUrl, offerUrl, removeUrlFor = n
   useEffect(() => { load() }, [listUrl]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function offerNow() {
-    if (!confirm('Offer the spot to everyone waiting now? They are all told at once and the first to book gets it.')) return
+    if (!confirm('Offer the spot to everyone on the waitlist now? This emails everyone on the list again, even people offered in the last 24 hours. The first to book gets it.')) return
     setBusy('offer')
     setNotice(null)
     try {
@@ -138,7 +139,7 @@ export default function EventWaitlistPanel({ listUrl, offerUrl, removeUrlFor = n
         <h2 className={c.heading}>Waitlist{rows ? ` (${waiting} waiting)` : ''}</h2>
         {waiting > 0 && (
           <button type="button" onClick={offerNow} disabled={busy === 'offer'} className={c.button}>
-            {busy === 'offer' ? 'Offering…' : 'Offer now'}
+            {busy === 'offer' ? 'Offering…' : 'Offer now (everyone)'}
           </button>
         )}
       </div>

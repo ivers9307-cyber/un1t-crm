@@ -122,7 +122,7 @@ describe('POST /api/events/[id]/waitlist/offer', () => {
   it('runs the round for this event only and answers its counts', async () => {
     const res = await OFFER(new Request('https://crm.test', { method: 'POST' }), props())
     expect(res.status).toBe(200)
-    expect(runWaitlistOffers).toHaveBeenCalledWith(db, { eventId: E1 })
+    expect(runWaitlistOffers).toHaveBeenCalledWith(db, { eventId: E1, force: true })
     expect((await res.json()).data.offered).toBe(2)
   })
 

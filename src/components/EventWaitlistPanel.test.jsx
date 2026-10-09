@@ -48,15 +48,16 @@ describe('EventWaitlistPanel', () => {
 
   it('Offer now asks, runs the round, says what happened', async () => {
     staff()
-    fireEvent.click(await screen.findByRole('button', { name: 'Offer now' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Offer now (everyone)' }))
     await screen.findByText('Offered to 2 people.')
     expect(fetchMock).toHaveBeenCalledWith('/api/events/e1/waitlist/offer', { method: 'POST' })
+    expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/emails everyone on the list again/))
   })
 
   it('a cancelled confirm does nothing', async () => {
     confirm.mockReturnValue(false)
     staff()
-    fireEvent.click(await screen.findByRole('button', { name: 'Offer now' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Offer now (everyone)' }))
     expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false)
   })
 
@@ -64,14 +65,14 @@ describe('EventWaitlistPanel', () => {
     render(<EventWaitlistPanel dark listUrl="/api/host/events/e1/waitlist" offerUrl="/api/host/events/e1/waitlist/offer" />)
     await screen.findByText('Ann Example')
     expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull()
-    expect(screen.getByRole('button', { name: 'Offer now' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Offer now (everyone)' })).toBeTruthy()
   })
 
   it('nobody waiting: no Offer now, a plain empty line', async () => {
     fetchMock.mockImplementation(async () => jsonRes({ success: true, data: { rows: [], waiting: 0 } }))
     staff()
     await screen.findByText(/Nobody is waiting/)
-    expect(screen.queryByRole('button', { name: 'Offer now' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Offer now (everyone)' })).toBeNull()
   })
 
   it('a failed load shows the error', async () => {
@@ -85,7 +86,7 @@ describe('offerResultMessage', () => {
   it('reads the round counts', () => {
     expect(offerResultMessage({ no_room: 1 })).toBe('Every time is still full, so nobody was offered.')
     expect(offerResultMessage({ offered: 1, skipped: 0, failed: 0, no_room: 0 })).toBe('Offered to 1 person.')
-    expect(offerResultMessage({ offered: 0, skipped: 3, failed: 0, no_room: 0 })).toBe('Nobody was due an offer. 3 skipped (offered in the last 24 hours, or opted out).')
-    expect(offerResultMessage({ offered: 2, skipped: 0, failed: 1, no_room: 0 })).toBe('Offered to 2 people. 1 could not be sent and will be retried.')
+    expect(offerResultMessage({ offered: 0, skipped: 3, failed: 0, no_room: 0 })).toBe('Nobody was offered. 3 skipped (offered in the last 24 hours, or opted out).')
+    expect(offerResultMessage({ offered: 2, skipped: 0, failed: 1, no_room: 0 })).toBe('Offered to 2 people. 1 could not be sent (logged; tried again in 24 hours).')
   })
 })

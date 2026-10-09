@@ -290,13 +290,42 @@ describe('runWaitlistOffers', () => {
     }
   })
 
-  it('a row whose every send failed is not stamped, so the next tick retries it; the round goes on', async () => {
+  it('a row whose every send FAILED is still stamped and logged, so a dead address is retried once per 24 h, not every tick', async () => {
     sendTransactionalEmail.mockRejectedValueOnce(new Error('postmark down'))
     const rows = [{ ...ROW, phone: null }, { ...ROW, id: 'wl2', email: 'bo@example.test', phone: null }]
     const db = roundDb({ rows, regs: [] })
     const c = await runWaitlistOffers(db, { now: NOW, todayStr: '2026-10-09' })
-    expect(c).toMatchObject({ offered: 1, failed: 1 })
-    expect(stamps(db).map((q) => eqOf(q, 'id'))).toEqual(['wl2'])
+    expect(c).toMatchObject({ offered: 1, failed: 1, skipped: 0 })
+    const s = stamps(db)
+    expect(s.map((q) => eqOf(q, 'id'))).toEqual(['wl1', 'wl2'])
+    expect(s[0].payload).toEqual({ status: 'offered', last_offered_at: new Date(NOW).toISOString(), offer_count: 1 })
+    expect(logError).toHaveBeenCalledWith('event-waitlist', expect.stringMatching(/every channel failed/), expect.objectContaining({ waitlistId: 'wl1' }))
+  })
+
+  it('without force, a row offered within 24 h is skipped (the cron rule)', async () => {
+    const rows = [{ ...ROW, status: 'offered', last_offered_at: new Date(NOW - 2 * HOUR).toISOString(), offer_count: 1 }]
+    const db = roundDb({ rows, regs: [] })
+    const c = await runWaitlistOffers(db, { now: NOW, todayStr: '2026-10-09', eventId: 'e1' })
+    expect(c).toMatchObject({ offered: 0, skipped: 1 })
+    expect(sendTransactionalEmail).not.toHaveBeenCalled()
+  })
+
+  it('force (staff / host "Offer now") ignores the 24 h rule for every row on the list', async () => {
+    const rows = [
+      { ...ROW, phone: null },
+      { ...ROW, id: 'wl2', email: 'bo@example.test', phone: null, status: 'offered', last_offered_at: new Date(NOW - 2 * HOUR).toISOString(), offer_count: 1 },
+    ]
+    const db = roundDb({ rows, regs: [] })
+    const c = await runWaitlistOffers(db, { now: NOW, todayStr: '2026-10-09', eventId: 'e1', force: true })
+    expect(c).toMatchObject({ offered: 2, skipped: 0 })
+    expect(sendTransactionalEmail).toHaveBeenCalledTimes(2)
+    expect(stamps(db).find((q) => eqOf(q, 'id') === 'wl2').payload.offer_count).toBe(2)
+  })
+
+  it('force still never offers while every time is full', async () => {
+    const c = await runWaitlistOffers(roundDb(), { now: NOW, todayStr: '2026-10-09', eventId: 'e1', force: true })
+    expect(c).toMatchObject({ offered: 0, no_room: 1 })
+    expect(sendTransactionalEmail).not.toHaveBeenCalled()
   })
 
   it('a row the consent gate suppresses on every channel is stamped (not re-tried every 10 minutes)', async () => {

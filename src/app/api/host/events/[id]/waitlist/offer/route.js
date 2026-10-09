@@ -1,7 +1,8 @@
 // POST /api/host/events/[id]/waitlist/offer — EVENT-WAITLIST.1
 //
 // A host runs the offer round for one of their OWN events now (404
-// otherwise). Same round and answer as the staff route
+// otherwise), forced: everyone still on the list is offered again, ignoring
+// the 24 h rule. Same round and answer as the staff route
 // (/api/events/[id]/waitlist/offer).
 import { NextResponse } from 'next/server'
 import { getCurrentHost } from '@/lib/host-auth'
@@ -19,7 +20,7 @@ export async function POST(_request, props) {
   const ctx = await resolveHostWaitlistEvent(session, params.id)
   if (ctx.response) return ctx.response
   try {
-    const data = await runWaitlistOffers(ctx.db, { eventId: ctx.race.id })
+    const data = await runWaitlistOffers(ctx.db, { eventId: ctx.race.id, force: true })
     return NextResponse.json({ success: true, data })
   } catch (e) {
     logError('event-waitlist', 'host offer round failed', { err: e, eventId: ctx.race.id })
