@@ -118,8 +118,14 @@ export async function createGapPayment({ db, move = null, registration, race, re
     return { ok: false, error: 'load_failed' }
   }
   const payments = Array.isArray(rows) ? rows : []
-  // The earlier attempts at THIS payment: the move's links (staff), or the
-  // entry's customer links (no move yet, a pending_move in metadata).
+  // Every customer date-change payment this entry ever had, landed ones
+  // included: the Revolut idempotency key counts them all (review C1). A
+  // landed change is linked to its move, so a count of the unlinked ones
+  // alone would hand a SECOND change the first one's key, and Revolut would
+  // answer with that old, already-paid order.
+  const customerAttempts = payments.filter((p) => p.kind === GAP_PAYMENT_KIND && p.metadata?.pending_move).length
+  // The links still open for THIS payment (reuse, closing stale ones): the
+  // move's links (staff), or the entry's customer links with no move yet.
   const forThisMove = pendingMove
     ? payments.filter((p) => p.kind === GAP_PAYMENT_KIND && !p.registration_move_id && p.metadata?.pending_move)
     : payments.filter((p) => p.kind === GAP_PAYMENT_KIND && p.registration_move_id === move.id)
@@ -144,14 +150,7 @@ export async function createGapPayment({ db, move = null, registration, race, re
     // checkout then says it has expired). If it is paid anyway its move is
     // refused on completion and the failure is loud.
     const stale = forThisMove.filter((p) => p.status === 'pending' && p.id !== pending?.id).map((p) => p.id)
-    if (stale.length > 0) {
-      const { error: closeErr } = await db
-        .from('race_payments')
-        .update({ status: 'abandoned', abandoned_at: new Date().toISOString() })
-        .in('id', stale)
-        .eq('status', 'pending')
-      if (closeErr) logError('race-gap-payment', 'an older date-change link was NOT closed; the customer could pay two', { err: closeErr, registrationId: registration.id, paymentIds: stale })
-    }
+    if (stale.length > 0) await closeCustomerGapLinks(db, registration.id, { ids: stale })
   }
   const entryPayment = payments.find((p) => (p.kind || 'entry') === 'entry') || null
 
@@ -191,7 +190,7 @@ export async function createGapPayment({ db, move = null, registration, race, re
       // bare `move:<id>` would hand back the dead order, and a second row with
       // the same provider ref would make the webhook lookup ambiguous.
       idempotencyKey: pendingMove
-        ? `pending-move:${registration.id}:${forThisMove.length}`
+        ? `pending-move:${registration.id}:${customerAttempts}`
         : `move:${move.id}:${forThisMove.length}`,
       connectedAccountId,
       applicationFeeCents: 0, // the per-ticket platform fee was taken on the entry
@@ -280,6 +279,38 @@ export async function createGapPayment({ db, move = null, registration, race, re
 }
 
 /**
+ * EVENT-MOVE.6 — close the entry's open customer date-change links: pending
+ * move_gap payments with no move yet (a staff link always has its move).
+ * Local status, as the staff settle route does: the checkout then says the
+ * link has expired. Used when a newer change is minted (`ids`: the stale
+ * ones) and after an equal-or-cheaper change moved the entry at once (every
+ * open one), so an older dearer link cannot be paid for a change that no
+ * longer applies. Best-effort: logs, never throws.
+ *
+ * @param {object} db
+ * @param {string} registrationId
+ * @param {{ ids?: string[]|null }} [opts]
+ */
+export async function closeCustomerGapLinks(db, registrationId, { ids = null } = {}) {
+  let q = db.from('race_payments').update({ status: 'abandoned', abandoned_at: new Date().toISOString() })
+  q = Array.isArray(ids)
+    ? q.in('id', ids)
+    : q.eq('race_registration_id', registrationId).eq('kind', GAP_PAYMENT_KIND).is('registration_move_id', null)
+  const { data: closed, error } = await q.eq('status', 'pending').select('*')
+  if (error) {
+    logError('race-gap-payment', 'an open date-change link was NOT closed; the customer could still pay it', { err: error, registrationId, paymentIds: ids })
+    return
+  }
+  for (const payment of Array.isArray(closed) ? closed : []) {
+    try {
+      await syncOrderFromRacePayment({ db, payment })
+    } catch (e) {
+      logWarn('race-gap-payment', 'closed date-change link: order sync failed', { err: e, registrationId, paymentId: payment?.id })
+    }
+  }
+}
+
+/**
  * EVENT-MOVE.5 — the completed branch for kind='move_gap'. Projects the order
  * and emits ORDER_COMPLETED (the money is real), then settles the move with
  * the same compare-and-set as the staff settle route (EVENT-MOVE.3), so a
@@ -314,10 +345,14 @@ export async function completeGapPayment({ db, payment, updates, nowIso }) {
   let moveId = payment.registration_move_id || null
   const pendingMove = moveId ? null : (payment.metadata?.pending_move || null)
   if (pendingMove) {
-    const landed = await landPendingMove({ db, payment, pendingMove, nowIso })
+    const paidCents = Number({ ...payment, ...updates }.amount_cents)
+    const landed = await landPendingMove({ db, payment, pendingMove, nowIso, paidCents })
     if (!landed.ok) {
       return { applied: { ...updates, kind: GAP_PAYMENT_KIND }, state_changed: true, pending_move_failed: landed.error }
     }
+    // Underpaid against the move's own gap: leave it outstanding, so the
+    // teams page chip shows staff the difference (review I4).
+    if (landed.settle === false) return { applied: { ...updates, kind: GAP_PAYMENT_KIND }, state_changed: true }
     moveId = landed.moveId
   }
 
@@ -352,9 +387,14 @@ export async function completeGapPayment({ db, payment, updates, nowIso }) {
  * (logError + an error_events row Sentinel pages on) because a person paid
  * for something that did not happen.
  *
- * @returns {Promise<{ ok: true, moveId: string } | { ok: false, error: string }>}
+ * The move computes its own gap at the moment it lands; prices can change
+ * between the checkout and the webhook. A different gap is recorded on the
+ * payment (metadata.gap_mismatch = { paid, gap }) and warned; underpaid, the
+ * move is NOT settled (settle: false) so the difference stays visible.
+ *
+ * @returns {Promise<{ ok: true, moveId: string, settle: boolean } | { ok: false, error: string }>}
  */
-async function landPendingMove({ db, payment, pendingMove, nowIso }) {
+async function landPendingMove({ db, payment, pendingMove, nowIso, paidCents }) {
   let result
   try {
     result = await moveRegistration(db, {
@@ -373,9 +413,19 @@ async function landPendingMove({ db, payment, pendingMove, nowIso }) {
 
   if (result?.ok && result.move?.id) {
     const moveId = result.move.id
+    const gap = Number(result.move.price_gap_cents)
+    const paid = Number.isFinite(paidCents) ? paidCents : Number(payment.amount_cents)
+    const mismatch = Number.isFinite(gap) && Number.isFinite(paid) && gap !== paid
+    const patch = { registration_move_id: moveId }
+    if (mismatch) {
+      patch.metadata = { ...(payment.metadata || {}), gap_mismatch: { paid, gap } }
+      logWarn('race-gap-payment', 'the paid difference differs from the gap the move recorded; check the move', {
+        paymentId: payment.id, moveId, paid, gap, settled: paid >= gap,
+      })
+    }
     const { data: linked, error: linkErr } = await db
       .from('race_payments')
-      .update({ registration_move_id: moveId })
+      .update(patch)
       .eq('id', payment.id)
       .select('id')
     if (linkErr || !Array.isArray(linked) || linked.length === 0) {
@@ -383,7 +433,7 @@ async function landPendingMove({ db, payment, pendingMove, nowIso }) {
         err: linkErr || null, paymentId: payment.id, moveId,
       })
     }
-    return { ok: true, moveId }
+    return { ok: true, moveId, settle: !(mismatch && paid < gap) }
   }
 
   const error = result?.error || 'move_failed'

@@ -887,11 +887,11 @@ export async function sendGapPaidEmail({ db, paymentId }) {
 
   const { race, ctx, contact, extras } = gapContext(payment, '')
   const locationId = await gapCommsLocationId(db, race, paymentId)
-  // EVENT-MOVE.6 — a customer's own date change that did not land after they
-  // paid: recorded as failed, or never linked to a move (a lost failure
-  // write reads the same way, so the receipt never claims a move).
-  const pm = payment.metadata || {}
-  const unmoved = !!pm.pending_move_failed || (!!pm.pending_move && !payment.registration_move_id)
+  // EVENT-MOVE.6 — a customer's own date change that was refused after they
+  // paid (completeGapPayment records metadata.pending_move_failed). Keyed on
+  // that record alone: a change that landed but lost its link write must not
+  // be told it did not move.
+  const unmoved = !!payment.metadata?.pending_move_failed
   // Fixed wording: race_events.gap_email_subject/intro are the LINK email's
   // copy ("pay here"), which would read wrong on a receipt. The event's
   // header styling still applies.

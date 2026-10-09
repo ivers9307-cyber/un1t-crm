@@ -232,12 +232,10 @@ describe('sendGapPaidEmail — a customer date change', () => {
     expect(sent().subject).toBe('Difference paid for Hatch Oct 25')
     expect(sent().htmlBody).toContain('Nothing more to do.')
   })
-  it.each([
-    ['the failure was recorded', { pending_move: PM, pending_move_failed: { error: 'wave_full', at: '2026-10-09T10:00:00Z' } }, 'mv1'],
-    ['no move was ever linked', { pending_move: PM }, null],
-  ])('refused after payment (%s): says the payment arrived, the entry did not move, and we will be in touch', async (_w, metadata, moveId) => {
+  it('refused after payment: says the payment arrived, the entry did not move, and we will be in touch', async () => {
     const RACE_SRC = { ...RACE, id: 'e1', name: 'Hatch Oct 18' }
-    const payment = { ...GAP, race: RACE_SRC, race_event_id: 'e1', registration_move_id: moveId, move: moveId ? GAP.move : null, metadata }
+    const payment = { ...GAP, race: RACE_SRC, race_event_id: 'e1', registration_move_id: null, move: null,
+      metadata: { pending_move: PM, pending_move_failed: { error: 'wave_full', at: '2026-10-09T10:00:00Z' } } }
     const r = await sendGapPaidEmail({ db: fakeDb({ payment }), paymentId: 'gp1' })
     expect(r.sent).toEqual(['email'])
     const { subject, htmlBody } = sent()
@@ -247,6 +245,12 @@ describe('sendGapPaidEmail — a customer date change', () => {
     expect(htmlBody).toMatch(/We will be in touch/)
     expect(htmlBody).not.toContain('Nothing more to do.')
     expect(htmlBody).not.toMatch(/—|–/)
+  })
+  it('keys on pending_move_failed only: a change that landed but lost its link write still gets the normal receipt', async () => {
+    const payment = { ...GAP, registration_move_id: null, move: null, metadata: { pending_move: PM } }
+    await sendGapPaidEmail({ db: fakeDb({ payment }), paymentId: 'gp1' })
+    expect(sent().subject).toBe('Difference paid for Hatch Oct 25')
+    expect(sent().htmlBody).not.toMatch(/could not move/)
   })
   it('selects the metadata it decides on', async () => {
     const db = fakeDb()

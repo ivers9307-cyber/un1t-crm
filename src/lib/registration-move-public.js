@@ -7,8 +7,8 @@
 //     customer may see. Only times with room for the entry are listed; no
 //     capacity, no remaining places, no count of any kind ever leaves this
 //     function (a key or a sentence about room would tell a customer how
-//     empty an event is). Mia's list_event_move_options (EVENT-MOVE.7) is
-//     meant to adopt this mapper.
+//     empty an event is). Mia's list_event_move_options (EVENT-MOVE.7,
+//     shapeMoveOptionsForAgent) re-words this output: one mapper, one rule.
 //   - entryMoveBlock: why an entry cannot be moved by its holder (unpaid,
 //     cancelled, checked in, past), as a code and a plain sentence.
 //   - the customer copy and HTTP status for every refusal. Staff copy
@@ -51,6 +51,7 @@ function timeTakes(wave, mode, headcount) {
 export function publicMoveOptions(targets, headcount) {
   const out = []
   for (const t of Array.isArray(targets) ? targets : []) {
+    if (!t?.id || !t.race_date) continue
     const waves = Array.isArray(t.waves) ? t.waves : []
     const times = waves
       .filter((w) => timeTakes(w, t.capacity_mode, headcount))

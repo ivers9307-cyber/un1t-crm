@@ -21,6 +21,8 @@ import { linkedAccountsForContact } from '@/lib/person-accounts'
 import { formatMoneyMinor } from '@/lib/money-format'
 import { UUID_SHAPE } from '@/lib/uuid-shape'
 import { dateLabel, dublinToday } from './event-date-label'
+import { publicMoveOptions } from '@/lib/registration-move-public'
+import { moveLocationIds } from '@/lib/move-locations'
 
 export const EVENT_MOVE_TOOLS = [
   // Moving an entry to another event goes through staff approval: list the
@@ -88,40 +90,28 @@ export function priceDifferenceSentence(gapCents, headcount = 1, currency = 'EUR
   return team ? `${amount} less in total for the entry, not refunded.` : `${amount} less, not refunded.`
 }
 
-function waveTimeLabel(w) {
-  const time = String(w?.start_time || '').slice(0, 5)
-  if (time && w?.label) return `${time} (${w.label})`
-  return time || w?.label || 'Time to be confirmed'
+function waveTimeLabel(t) {
+  const time = String(t?.start_time || '').slice(0, 5)
+  if (time && t?.label) return `${time} (${t.label})`
+  return time || t?.label || 'Time to be confirmed'
 }
 
 /**
  * listMoveTargets' targets (staff-shaped, with spots_left) → what Mia may see:
  * name, date, the times this entry fits, and the price difference as a
  * sentence. NO capacity, spots or counts of any kind (never surface capacity
- * to a customer). A time is offered only when the entry fits it (the same
- * arithmetic as wouldFit: an entry takes one place in teams mode, its
- * headcount in people mode); an event whose times are all too full is
- * dropped; an event with no times at all is kept (nothing to fill). Pure.
+ * to a customer). The filtering (which times this entry fits, which events
+ * drop out) is publicMoveOptions, the ONE mapper the customer's own entry
+ * page uses too (EVENT-MOVE.6); this only re-words its output for Mia. Pure.
  */
 export function shapeMoveOptionsForAgent(targets, { headcount = 1 } = {}) {
-  const need = (mode) => (mode === 'people' ? Math.max(1, Number(headcount) || 1) : 1)
-  const out = []
-  for (const t of Array.isArray(targets) ? targets : []) {
-    if (!t?.id || !t.race_date) continue
-    const waves = Array.isArray(t.waves) ? t.waves : []
-    const times = waves
-      .filter((w) => w?.spots_left === null || w?.spots_left === undefined || Number(w.spots_left) >= need(t.capacity_mode))
-      .map((w) => ({ wave_id: w.id, label: waveTimeLabel(w) }))
-    if (waves.length > 0 && times.length === 0) continue
-    out.push({
-      event_id: t.id,
-      name: t.name || 'Event',
-      date_label: dateLabel(String(t.race_date)),
-      times,
-      price_difference_sentence: priceDifferenceSentence(t.price_gap_cents, headcount, t.currency),
-    })
-  }
-  return out
+  return publicMoveOptions(targets, headcount).map((o) => ({
+    event_id: o.event_id,
+    name: o.name || 'Event',
+    date_label: dateLabel(String(o.race_date)),
+    times: o.times.map((t) => ({ wave_id: t.wave_id, label: waveTimeLabel(t) })),
+    price_difference_sentence: priceDifferenceSentence(o.price_difference_cents, headcount, o.currency),
+  }))
 }
 
 // ── IO ──────────────────────────────────────────────────────────────
@@ -173,30 +163,8 @@ async function ownedConfirmedRegistration(db, ctx, registrationId) {
   return { reg }
 }
 
-/**
- * The studios a customer's entry may move to: every studio in this studio's
- * organisation (a move may cross studios, never organisations), or this
- * studio alone when it has none. null when the read failed (fail closed).
- */
-async function moveLocationIds(db, locationId) {
-  const { data: loc, error } = await db.from('locations').select('organization_id').eq('id', locationId).maybeSingle()
-  if (error) {
-    console.warn(`[agent][events] move: location read failed: ${error.message}`)
-    return null
-  }
-  if (!loc?.organization_id) return [locationId]
-  const { data: rows, error: orgErr } = await db.from('locations')
-    .select('id')
-    .eq('organization_id', loc.organization_id)
-    .order('id')
-    .limit(200)
-  if (orgErr) {
-    console.warn(`[agent][events] move: organisation locations read failed: ${orgErr.message}`)
-    return null
-  }
-  const ids = (rows || []).map((r) => r.id).filter(Boolean)
-  return ids.includes(locationId) ? ids : [locationId, ...ids]
-}
+// moveLocationIds (the organisation fence) lives in src/lib/move-locations.js,
+// shared with the public entry routes (EVENT-MOVE.6).
 
 /** listMoveTargets for this entry, plus the customer-safe options. */
 async function moveOptionsFor(db, ctx, reg) {

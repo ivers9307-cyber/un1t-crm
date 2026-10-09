@@ -663,3 +663,44 @@ describe('checkMove', () => {
       .toEqual({ ok: false, error: 'conflict' })
   })
 })
+
+// EVENT-MOVE.6 (review I2) — the customer routes fence by organisation: a
+// target at a studio outside allowedLocationIds is refused, even with no
+// host (same payee) and room to spare.
+describe('checkMove — allowedLocationIds', () => {
+  const otherOrg = { ...TARGET, location_id: 'L9', locations: { id: 'L9', name: 'Another gym' } }
+  const db = () => fakeDb({
+    race_registrations: (q) => {
+      if (q.ops.some((o) => o[0] === 'eq' && o[1] === 'id')) return { data: REG }
+      return { data: [] }
+    },
+    race_events: { data: otherOrg },
+    race_checkins: { data: null, count: 0, error: null },
+  }, { rpc: vi.fn() })
+  it('a NULL-host event in another organisation is not movable to', async () => {
+    expect(await checkMove(db(), { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9', allowedLocationIds: ['L1'], today: '2026-10-08' }))
+      .toEqual({ ok: false, error: 'target_unavailable' })
+  })
+  it('moveRegistration passes the fence through and writes nothing', async () => {
+    const d = db()
+    const r = await moveRegistration(d, { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9', allowedLocationIds: ['L1'],
+      actor: { type: 'customer', id: 'c1', name: 'Aoife' }, today: '2026-10-08' })
+    expect(r).toEqual({ ok: false, error: 'target_unavailable' })
+    expect(d.rpc).not.toHaveBeenCalled()
+  })
+  it('null (staff, masters) means no studio fence', async () => {
+    expect((await checkMove(db(), { registrationId: 'r1', targetEventId: 'e2', targetWaveId: 'w9', allowedLocationIds: null, today: '2026-10-08' })).ok).toBe(true)
+  })
+  it('listMoveTargets leaves the other organisation\'s NULL-host event out', async () => {
+    const d = fakeDb({
+      race_registrations: (q) => (q.ops.some((o) => o[0] === 'eq' && o[1] === 'id') ? { data: REG } : { data: [] }),
+      race_events: { data: [TARGET, otherOrg] },
+    })
+    const r = await listMoveTargets(d, { registrationId: 'r1', allowedLocationIds: ['L1'], today: '2026-10-08' })
+    expect(r.targets.map((t) => t.location_id)).toEqual(['L1'])
+  })
+  it('re-exports moveLocationIds', async () => {
+    const mod = await import('./registration-move.js')
+    expect(typeof mod.moveLocationIds).toBe('function')
+  })
+})

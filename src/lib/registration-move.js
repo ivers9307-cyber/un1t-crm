@@ -18,6 +18,7 @@ import { logError, logWarn } from './log'
 import { emitEvent, EVENT_TYPES } from './contact-events'
 import { addEventAttendeesToHostList } from './host-contact-list'
 import { sendRegistrationMovedEmail } from './race-confirmations'
+import { moveLocationIds } from './move-locations'
 import {
   MOVE_ERRORS, MOVE_ERROR_MESSAGES, membersOf,
   entryLabel, entryHeadcount, entryLeadEmail, perPersonFeeCents, computePriceGapCents,
@@ -26,6 +27,10 @@ import {
 // The pure, browser-safe helpers live in registration-entry.js (a client
 // component imports them from there); re-exported so server callers and
 // tests have one import path.
+// EVENT-MOVE.6 — the organisation fence for a customer's move (Mia and the
+// public entry routes); lives in move-locations.js, see its header.
+export { moveLocationIds }
+
 export {
   MOVE_ERRORS, MOVE_ERROR_MESSAGES,
   entryLabel, entryHeadcount, entryLeadEmail, perPersonFeeCents, computePriceGapCents,
@@ -364,7 +369,7 @@ function isConflict(err) {
  */
 export async function checkMove(db, {
   registrationId, targetEventId, targetWaveId = null,
-  force = false, allowedEventIds = null, expectedSourceEventId = null,
+  force = false, allowedEventIds = null, allowedLocationIds = null, expectedSourceEventId = null,
   today = dublinTodayStr(),
 }) {
   const { registration, error: readErr } = await readRegistrationForMove(db, registrationId)
@@ -379,6 +384,11 @@ export async function checkMove(db, {
   // A missing or unreadable target is the target's problem, not the entry's.
   const targetEvent = await loadEvent(db, targetEventId)
   if (!targetEvent) return { ok: false, error: MOVE_ERRORS.TARGET_UNAVAILABLE }
+  // EVENT-MOVE.6 — the customer's fence (moveLocationIds): a studio outside
+  // the entry's organisation is not a place this entry can go.
+  if (Array.isArray(allowedLocationIds) && !allowedLocationIds.includes(targetEvent.location_id)) {
+    return { ok: false, error: MOVE_ERRORS.TARGET_UNAVAILABLE }
+  }
   const targetWave = targetWaveId ? (targetEvent.waves || []).find((w) => w.id === targetWaveId) || { id: targetWaveId, race_event_id: null } : null
 
   const [waveRead, checkinRead, existingRead] = await Promise.all([
@@ -422,7 +432,7 @@ export async function checkMove(db, {
  */
 export async function moveRegistration(db, {
   registrationId, targetEventId, targetWaveId = null,
-  actor, note = null, notify = true, force = false, allowedEventIds = null,
+  actor, note = null, notify = true, force = false, allowedEventIds = null, allowedLocationIds = null,
   expectedSourceEventId = null,
   today = dublinTodayStr(),
 }) {
@@ -430,7 +440,7 @@ export async function moveRegistration(db, {
   // is NOT NULL, checked to staff/host/agent/customer, mig 712): a caller
   // that omits it is a bug, not a refusal to show the operator.
   if (!actor?.type) throw new TypeError('actor.type is required')
-  const checked = await checkMove(db, { registrationId, targetEventId, targetWaveId, force, allowedEventIds, expectedSourceEventId, today })
+  const checked = await checkMove(db, { registrationId, targetEventId, targetWaveId, force, allowedEventIds, allowedLocationIds, expectedSourceEventId, today })
   if (!checked.ok) return checked
   const { registration, targetEvent, targetWave, headcount, priceGapCents } = checked
   const { data: move, error: rpcErr } = await db.rpc('move_race_registration', {
