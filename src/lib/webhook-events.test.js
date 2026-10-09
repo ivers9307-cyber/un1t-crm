@@ -7,7 +7,14 @@
 //      seen=false so we don't silently drop a real webhook.
 
 import { describe, it, expect, vi } from 'vitest'
+
+vi.mock('./log', async (importOriginal) => ({
+  ...(await importOriginal()),
+  logError: vi.fn(),
+}))
+
 import { recordWebhookEvent, releaseWebhookEvent, WEBHOOK_PROVIDERS } from './webhook-events.js'
+import { logError } from './log'
 
 function mockDb({ insertResolves }) {
   const insertSpy = vi.fn(() => Promise.resolve(insertResolves))
@@ -112,28 +119,25 @@ describe('releaseWebhookEvent', () => {
     expect(eqs).toEqual([['provider', 'instagram'], ['event_id', 'msg:mid-1']])
   })
 
-  it('never throws: a failed delete is logged', async () => {
-    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    try {
-      const { db } = deleteDb({ error: { message: 'connection reset' } })
-      await expect(releaseWebhookEvent({ db, provider: WEBHOOK_PROVIDERS.INSTAGRAM, eventId: 'msg:mid-2' }))
-        .resolves.toBeUndefined()
-      expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('release failed for instagram:msg:mid-2'))
-      expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('connection reset'))
-    } finally {
-      errSpy.mockRestore()
-    }
+  it('never throws: a failed delete is logged through the structured logger', async () => {
+    logError.mockClear()
+    const err = { message: 'connection reset' }
+    const { db } = deleteDb({ error: err })
+    await expect(releaseWebhookEvent({ db, provider: WEBHOOK_PROVIDERS.INSTAGRAM, eventId: 'msg:mid-2' }))
+      .resolves.toBeUndefined()
+    expect(logError).toHaveBeenCalledWith('webhook-events', 'release failed', {
+      provider: 'instagram', eventId: 'msg:mid-2', err,
+    })
   })
 
-  it('never throws: a delete that rejects is logged', async () => {
-    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    try {
-      const db = { from: vi.fn(() => { throw new Error('client exploded') }) }
-      await expect(releaseWebhookEvent({ db, provider: WEBHOOK_PROVIDERS.INSTAGRAM, eventId: 'msg:mid-3' }))
-        .resolves.toBeUndefined()
-      expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('release threw for instagram:msg:mid-3'))
-    } finally {
-      errSpy.mockRestore()
-    }
+  it('never throws: a delete that throws is logged through the structured logger', async () => {
+    logError.mockClear()
+    const boom = new Error('client exploded')
+    const db = { from: vi.fn(() => { throw boom }) }
+    await expect(releaseWebhookEvent({ db, provider: WEBHOOK_PROVIDERS.INSTAGRAM, eventId: 'msg:mid-3' }))
+      .resolves.toBeUndefined()
+    expect(logError).toHaveBeenCalledWith('webhook-events', 'release threw', {
+      provider: 'instagram', eventId: 'msg:mid-3', err: boom,
+    })
   })
 })

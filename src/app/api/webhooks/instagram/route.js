@@ -84,6 +84,10 @@ export async function POST(request) {
         // W0.14 — undo this message's claim, then ask Meta to retry the
         // envelope. Messages already handled in this loop keep their
         // claims, so the retry skips them and reprocesses only this one.
+        // Every non-retryable path inside the handler (profile fetch,
+        // contact link, media re-host, agent turn, pushes) is already
+        // caught locally, so a throw reaching here is the retry path by
+        // design.
         if (ev.messageId) {
           await releaseWebhookEvent({ db, provider: WEBHOOK_PROVIDERS.INSTAGRAM, eventId: `msg:${ev.messageId}` })
         }

@@ -26,7 +26,7 @@
 //   path O(log n) on the small lookup we need. Rows older than 90d
 //   get pruned by a future TTL cron.
 
-import { logWarn } from './log'
+import { logWarn, logError } from './log'
 
 export const WEBHOOK_PROVIDERS = Object.freeze({
   POSTMARK: 'postmark',
@@ -127,8 +127,8 @@ export async function releaseWebhookEvent({ db, provider, eventId }) {
       .delete()
       .eq('provider', provider)
       .eq('event_id', eventId)
-    if (error) console.error(`[webhook-events] release failed for ${provider}:${eventId}: ${error.message}`)
+    if (error) logError('webhook-events', 'release failed', { provider, eventId, err: error })
   } catch (e) {
-    console.error(`[webhook-events] release threw for ${provider}:${eventId}: ${e?.message || e}`)
+    logError('webhook-events', 'release threw', { provider, eventId, err: e })
   }
 }
