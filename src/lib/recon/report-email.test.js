@@ -1,5 +1,8 @@
-import { describe, it, expect } from 'vitest'
-import { renderCoverageReportHtml, shouldRunFridayCron } from './report-email'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { renderCoverageReportHtml, shouldRunFridayCron, sendCoverageReportForOrg } from './report-email'
+
+const sendOpsAlert = vi.fn(async () => ({ channel: 'email', recipients: 2 }))
+vi.mock('@/lib/ops-alerts', () => ({ sendOpsAlert: (...args) => sendOpsAlert(...args) }))
 
 describe('renderCoverageReportHtml', () => {
   it('lists uncovered lines per location and links the board', () => {
@@ -154,5 +157,49 @@ describe('renderCoverageReportHtml — v2 sections', () => {
     expect(htmlOmitted).not.toContain('Found &amp; submitted this week')
     expect(htmlOmitted).not.toContain('In review — working through the invoice queue')
     expect(htmlOmitted).not.toContain('Needs your attention — submitted document was rejected')
+  })
+})
+
+// W0.7 — the report goes to the ORGANISATION's ops recipients through
+// sendOpsAlert; the env recipient RECEIPT_COVERAGE_REPORT_TO is retired.
+describe('sendCoverageReportForOrg', () => {
+  beforeEach(() => {
+    sendOpsAlert.mockClear()
+  })
+
+  it('sends one ops alert for the organisation with the rendered html, attributed to the location, and no env recipient', async () => {
+    const db = { from: vi.fn() }
+    const result = await sendCoverageReportForOrg({ db, organizationId: 'org-1', locationId: 'loc-1', html: '<p>hi</p>', dateStr: '2026-10-09' })
+
+    expect(sendOpsAlert).toHaveBeenCalledTimes(1)
+    const [alert, deps] = sendOpsAlert.mock.calls[0]
+    expect(alert).toEqual({
+      organizationId: 'org-1',
+      locationId: 'loc-1',
+      subject: 'Receipt coverage — 2026-10-09',
+      htmlBody: '<p>hi</p>',
+      pushBody: 'Weekly receipt coverage report is ready in Accounting.',
+    })
+    expect(deps).toEqual({ db })
+    expect(result).toEqual({ channel: 'email', recipients: 2 })
+  })
+
+  it('throws when sendOpsAlert reports no delivery channel, so the finalizer retries next tick', async () => {
+    sendOpsAlert.mockResolvedValueOnce({ channel: 'none' })
+    await expect(sendCoverageReportForOrg({ db: {}, organizationId: 'org-1', locationId: 'loc-1', html: '<p/>', dateStr: '2026-10-09' }))
+      .rejects.toThrow(/no delivery channel for organisation org-1/)
+    expect(sendOpsAlert).toHaveBeenCalledTimes(1)
+  })
+
+  it('a push fallback counts as delivered', async () => {
+    sendOpsAlert.mockResolvedValueOnce({ channel: 'push_fallback' })
+    await expect(sendCoverageReportForOrg({ db: {}, organizationId: 'org-1', locationId: 'loc-1', html: '<p/>', dateStr: '2026-10-09' }))
+      .resolves.toEqual({ channel: 'push_fallback' })
+  })
+
+  it('refuses a report with no organisation (nobody to send to) without calling sendOpsAlert', async () => {
+    await expect(sendCoverageReportForOrg({ db: {}, organizationId: null, locationId: 'loc-1', html: '<p/>', dateStr: '2026-10-09' }))
+      .rejects.toThrow(/without an organisation/)
+    expect(sendOpsAlert).not.toHaveBeenCalled()
   })
 })
