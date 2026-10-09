@@ -75,7 +75,10 @@ export default async function StudioEventsPage(props) {
   const row = await loadByPath(params.location)
   if (!row || !isPubliclyVisible(row.publish_state)) notFound()
 
+  // W0.3 — a page row with no location is a 404 before any query, never a
+  // `location_id.eq.undefined` reaching PostgREST.
   const locationId = row.locations?.id
+  if (!locationId) notFound()
   const studioName = row.locations?.name || 'UN1T Dublin'
   const today = todayIsoDublin()
   const nowMs = Date.now()

@@ -141,15 +141,20 @@ describe('events CreateSchema — EVENT-MOVE.1 moved-email copy', () => {
   })
 })
 
+// Ids are uuid-shaped: sharedEventsOrFilter refuses anything else.
+const STILL = 'aaaaaaaa-0000-0000-0000-000000000001'
+const HATCH = 'aaaaaaaa-0000-0000-0000-000000000002'
+const OTHER = 'bbbbbbbb-0000-0000-0000-000000000001'
+
 // W0.3 — `shared` means "visible across the OWNING organisation", not every
 // tenant. The fake evaluates the exact PostgREST .or() string the route
 // sends, so the assertion is on which rows come back, not on the string.
 describe('GET /api/events — W0.3 shared events stay inside the owning organisation', () => {
   const ROWS = [
-    { id: 'ev-own',            location_id: 'loc-still', shared: false, name: 'Own',            kind: 'race', race_date: '2099-01-01', registrations: [], waves: [] },
-    { id: 'ev-sibling-shared', location_id: 'loc-hatch', shared: true,  name: 'Sibling shared', kind: 'race', race_date: '2099-01-02', registrations: [], waves: [] },
-    { id: 'ev-sibling-private',location_id: 'loc-hatch', shared: false, name: 'Sibling private',kind: 'race', race_date: '2099-01-03', registrations: [], waves: [] },
-    { id: 'ev-foreign-shared', location_id: 'loc-other', shared: true,  name: 'Foreign shared', kind: 'race', race_date: '2099-01-04', registrations: [], waves: [] },
+    { id: 'ev-own',            location_id: STILL, shared: false, name: 'Own',            kind: 'race', race_date: '2099-01-01', registrations: [], waves: [] },
+    { id: 'ev-sibling-shared', location_id: HATCH, shared: true,  name: 'Sibling shared', kind: 'race', race_date: '2099-01-02', registrations: [], waves: [] },
+    { id: 'ev-sibling-private',location_id: HATCH, shared: false, name: 'Sibling private',kind: 'race', race_date: '2099-01-03', registrations: [], waves: [] },
+    { id: 'ev-foreign-shared', location_id: OTHER, shared: true,  name: 'Foreign shared', kind: 'race', race_date: '2099-01-04', registrations: [], waves: [] },
   ]
 
   // Minimal evaluator for the two shapes sharedEventsOrFilter can emit:
@@ -193,8 +198,8 @@ describe('GET /api/events — W0.3 shared events stay inside the owning organisa
     vi.clearAllMocks()
     getCurrentUser.mockResolvedValue({
       id: 'u1', role: 'manager',
-      activeLocation: { id: 'loc-still', organization_id: 'org-un1t' },
-      locations: [{ id: 'loc-still' }],
+      activeLocation: { id: STILL, organization_id: 'org-un1t' },
+      locations: [{ id: STILL }],
     })
   })
 
@@ -202,8 +207,8 @@ describe('GET /api/events — W0.3 shared events stay inside the owning organisa
     // The real siblingLocationIds runs against the fake: the active row, then
     // its organisation's other locations.
     const db = makeDb((ops, terminal) => terminal === 'maybeSingle'
-      ? { data: { id: 'loc-still', organization_id: 'org-un1t' }, error: null }
-      : { data: [{ id: 'loc-hatch' }], error: null })
+      ? { data: { id: STILL, organization_id: 'org-un1t' }, error: null }
+      : { data: [{ id: HATCH }], error: null })
     createServerClient.mockReturnValue(db)
 
     const res = await GET(req)
@@ -212,7 +217,7 @@ describe('GET /api/events — W0.3 shared events stay inside the owning organisa
     expect(body.data.map((r) => r.id).sort()).toEqual(['ev-own', 'ev-sibling-shared'])
 
     const listing = db.calls.find((c) => c.table === 'race_events' && c.ops.some(([m]) => m === 'or'))
-    expect(listing.ops).toContainEqual(['or', 'location_id.eq.loc-still,and(shared.eq.true,location_id.in.(loc-still,loc-hatch))'])
+    expect(listing.ops).toContainEqual(['or', `location_id.eq.${STILL},and(shared.eq.true,location_id.in.(${STILL},${HATCH}))`])
   })
 
   it('a sibling-lookup error narrows to own events only (never widens)', async () => {
@@ -227,6 +232,6 @@ describe('GET /api/events — W0.3 shared events stay inside the owning organisa
     const listing = db.calls.find((c) => c.table === 'race_events' && c.ops.some(([m]) => m === 'or'))
     // orgLocationIdsFor narrows to [locationId] on a lookup error, so the
     // shared half can only re-match the active studio's own rows.
-    expect(listing.ops).toContainEqual(['or', 'location_id.eq.loc-still,and(shared.eq.true,location_id.in.(loc-still))'])
+    expect(listing.ops).toContainEqual(['or', `location_id.eq.${STILL},and(shared.eq.true,location_id.in.(${STILL}))`])
   })
 })

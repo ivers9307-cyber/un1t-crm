@@ -5,11 +5,22 @@
 // three listings cannot drift.
 import { orgLocationIdsFor } from './inbound-contact-match'
 
+// The string is a PostgREST filter DSL built by interpolation, so every id is
+// shape-checked first: a bad locationId throws, a malformed org id is DROPPED
+// (never interpolated).
+const UUID_SHAPE = /^[0-9a-f-]{36}$/i
+
 /** Pure. @param {string} locationId @param {string[]} orgLocationIds (includes locationId) */
 export function sharedEventsOrFilter(locationId, orgLocationIds) {
+  if (typeof locationId !== 'string' || !UUID_SHAPE.test(locationId)) {
+    throw new Error('sharedEventsOrFilter: non-uuid location id')
+  }
   const own = `location_id.eq.${locationId}`
-  if (!Array.isArray(orgLocationIds) || orgLocationIds.length === 0) return own
-  return `${own},and(shared.eq.true,location_id.in.(${orgLocationIds.join(',')}))`
+  const ids = Array.isArray(orgLocationIds)
+    ? orgLocationIds.filter((id) => typeof id === 'string' && UUID_SHAPE.test(id))
+    : []
+  if (ids.length === 0) return own
+  return `${own},and(shared.eq.true,location_id.in.(${ids.join(',')}))`
 }
 
 /** Async: resolve the org scope then build the filter. Narrows to own location on error. */
