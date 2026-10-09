@@ -237,8 +237,8 @@ describe('the pending-approval dedupe is person-wide', () => {
 
   it('an UNGROUPED sibling matched by EMAIL counts too (the group forms later, the card exists now)', async () => {
     // c-2 is NOT in the group — only the direct search can find it, and only
-    // the EMAIL half of that search is identity (contacts_email_unique is
-    // global). Different phone, same address.
+    // the EMAIL half of that search is identity (contacts_email_org_unique:
+    // one address is one person within an org). Different phone, same address.
     const people = [
       acct('c-1', 'gf-1', { email: 'sam@example.com' }),
       acct('c-2', 'gf-2', { phone: '+353870000000', email: 'SAM@Example.com' }),
