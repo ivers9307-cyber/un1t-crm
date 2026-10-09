@@ -11,7 +11,8 @@
 //      already exists → bail, already_reported (idempotent).
 //   4. otherwise compile sections per xero_connections location from
 //      live state (that location's own latest cron run + hunts +
-//      submitted/needs_attention/uncovered lines), render v2, email,
+//      submitted/needs_attention/uncovered lines), render v2, email
+//      one report PER ORGANISATION (W0.7 — see finalize.org.test.js),
 //      audit a 'report' recon_runs row, and stamp the weekly heartbeat
 //      ONLY when every per-location cron run used was clean (status
 //      'ok', zero anomalies) AND the errors list is empty — a
@@ -29,10 +30,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 const mockDb = { from: vi.fn() }
 
 const renderCoverageReportHtml = vi.fn(() => '<html/>')
-const sendCoverageReport = vi.fn(async () => ({ ok: true }))
+const sendCoverageReportForOrg = vi.fn(async () => ({ ok: true }))
 vi.mock('./report-email', () => ({
   renderCoverageReportHtml: (...args) => renderCoverageReportHtml(...args),
-  sendCoverageReport: (...args) => sendCoverageReport(...args),
+  sendCoverageReportForOrg: (...args) => sendCoverageReportForOrg(...args),
 }))
 
 const getAppUrl = vi.fn(() => 'https://crm.un1tdublin.com')
@@ -62,8 +63,8 @@ beforeEach(async () => {
   mockDb.from.mockReset()
   renderCoverageReportHtml.mockReset()
   renderCoverageReportHtml.mockReturnValue('<html/>')
-  sendCoverageReport.mockReset()
-  sendCoverageReport.mockResolvedValue({ ok: true })
+  sendCoverageReportForOrg.mockReset()
+  sendCoverageReportForOrg.mockResolvedValue({ ok: true })
   getAppUrl.mockReset()
   getAppUrl.mockReturnValue('https://crm.un1tdublin.com')
   stampHeartbeat.mockReset()
@@ -88,7 +89,7 @@ describe('maybeFinalizeWeekly — gates', () => {
     expect(result).toEqual({ finalized: false, reason: 'hunts_pending' })
     expect(mockDb.from).toHaveBeenCalledTimes(1)
     expect(mockDb.from).toHaveBeenCalledWith('recon_bank_lines')
-    expect(sendCoverageReport).not.toHaveBeenCalled()
+    expect(sendCoverageReportForOrg).not.toHaveBeenCalled()
   })
 
   it('bails no_recent_cron when there is no cron run at all', async () => {
@@ -132,7 +133,7 @@ describe('maybeFinalizeWeekly — gates', () => {
 
     expect(result).toEqual({ finalized: false, reason: 'already_reported' })
     expect(mockDb.from).toHaveBeenCalledTimes(3)
-    expect(sendCoverageReport).not.toHaveBeenCalled()
+    expect(sendCoverageReportForOrg).not.toHaveBeenCalled()
   })
 })
 
@@ -148,7 +149,7 @@ describe('maybeFinalizeWeekly — compile + send', () => {
     const { pending, lastCron, noExistingReport } = setUpThroughGates()
 
     const connections = chainable({
-      data: [{ location_id: 'loc-1', location: { id: 'loc-1', name: 'Stillorgan' } }],
+      data: [{ location_id: 'loc-1', location: { id: 'loc-1', name: 'Stillorgan', organization_id: 'org-1' } }],
       error: null,
     }, 'select')
 
@@ -212,7 +213,7 @@ describe('maybeFinalizeWeekly — compile + send', () => {
 
     const result = await finalize.maybeFinalizeWeekly(mockDb)
 
-    expect(sendCoverageReport).toHaveBeenCalledTimes(1)
+    expect(sendCoverageReportForOrg).toHaveBeenCalledTimes(1)
     expect(renderCoverageReportHtml).toHaveBeenCalledTimes(1)
     const renderArg = renderCoverageReportHtml.mock.calls[0][0]
     expect(renderArg.appUrl).toBe('https://crm.un1tdublin.com')
@@ -245,7 +246,7 @@ describe('maybeFinalizeWeekly — compile + send', () => {
     const { pending, lastCron, noExistingReport } = setUpThroughGates()
 
     const connections = chainable({
-      data: [{ location_id: 'loc-1', location: { id: 'loc-1', name: 'Stillorgan' } }],
+      data: [{ location_id: 'loc-1', location: { id: 'loc-1', name: 'Stillorgan', organization_id: 'org-1' } }],
       error: null,
     }, 'select')
 
@@ -282,7 +283,7 @@ describe('maybeFinalizeWeekly — compile + send', () => {
 
     const result = await finalize.maybeFinalizeWeekly(mockDb)
 
-    expect(sendCoverageReport).toHaveBeenCalledTimes(1)
+    expect(sendCoverageReportForOrg).toHaveBeenCalledTimes(1)
     expect(reportInsert.insert).toHaveBeenCalledTimes(1)
     expect(stampHeartbeat).not.toHaveBeenCalled()
     expect(result).toEqual({ finalized: true, sections: 1 })
@@ -292,7 +293,7 @@ describe('maybeFinalizeWeekly — compile + send', () => {
     const { pending, lastCron, noExistingReport } = setUpThroughGates()
 
     const connections = chainable({
-      data: [{ location_id: 'loc-1', location: { id: 'loc-1', name: 'Stillorgan' } }],
+      data: [{ location_id: 'loc-1', location: { id: 'loc-1', name: 'Stillorgan', organization_id: 'org-1' } }],
       error: null,
     }, 'select')
 
@@ -317,7 +318,7 @@ describe('maybeFinalizeWeekly — compile + send', () => {
       .mockReturnValueOnce(needsAttentionLines)
       .mockReturnValueOnce(uncoveredLines)
 
-    sendCoverageReport.mockRejectedValueOnce(new Error('Postmark 500'))
+    sendCoverageReportForOrg.mockRejectedValueOnce(new Error('Postmark 500'))
 
     const result = await finalize.maybeFinalizeWeekly(mockDb)
 
@@ -350,7 +351,7 @@ describe('maybeFinalizeWeekly — wedge guards', () => {
     const lastCron = chainable({ data: { id: 'run-1', started_at: CRON_STARTED_AT }, error: null }, 'maybeSingle')
     const noExistingReport = chainable({ data: null, error: null }, 'maybeSingle')
     const connections = chainable({
-      data: [{ location_id: 'loc-1', location: { id: 'loc-1', name: 'Stillorgan' } }],
+      data: [{ location_id: 'loc-1', location: { id: 'loc-1', name: 'Stillorgan', organization_id: 'org-1' } }],
       error: null,
     }, 'select')
     const foundHunts = chainable({ data: [], error: null }, 'gte')

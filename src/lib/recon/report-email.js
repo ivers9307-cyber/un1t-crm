@@ -1,11 +1,11 @@
 // src/lib/recon/report-email.js
 //
 // RCOV.P0 — weekly coverage report. Pure renderer (unit-tested) +
-// thin send wrapper over the Postmark helper. Recipients come from
-// RECEIPT_COVERAGE_REPORT_TO (comma-separated) — REQUIRED, no silent
-// fallback per repo convention (the cron checks it up-front and fails
-// loudly).
-import { sendEmail } from '@/lib/postmark'
+// thin send wrapper. W0.7: one report per ORGANISATION, delivered
+// through sendOpsAlert to that organisation's org_settings
+// .ops_alert_emails (push fallback to the location's admins when none
+// are set). The env recipient RECEIPT_COVERAGE_REPORT_TO is retired.
+import { sendOpsAlert } from '@/lib/ops-alerts'
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
@@ -135,19 +135,11 @@ export function renderCoverageReportHtml({ appUrl, dateStr, sections, errors }) 
   </div>`
 }
 
-export function reportRecipients() {
-  const raw = process.env.RECEIPT_COVERAGE_REPORT_TO
-  if (!raw) throw new Error('RECEIPT_COVERAGE_REPORT_TO is not set (comma-separated recipient list)')
-  return raw.split(',').map((s) => s.trim()).filter(Boolean)
-}
-
-export async function sendCoverageReport({ html, dateStr }) {
-  const to = reportRecipients().join(',')
-  return sendEmail({
-    to,
-    subject: `Receipt coverage — ${dateStr}`,
-    htmlBody: html,
-    stream: 'outbound',
-    tag: 'receipt-coverage',
-  })
+/** W0.7 — one report per organisation, to its own ops_alert_emails (push fallback inside sendOpsAlert). */
+export async function sendCoverageReportForOrg({ db, organizationId, locationId, html, dateStr }) {
+  if (!organizationId) throw new Error('coverage report: section without an organisation')
+  return sendOpsAlert(
+    { organizationId, locationId, subject: `Receipt coverage — ${dateStr}`, htmlBody: html, pushBody: 'Weekly receipt coverage report is ready in Accounting.' },
+    { db },
+  )
 }

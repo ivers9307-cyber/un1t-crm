@@ -7,10 +7,20 @@
 // audits a recon_runs {trigger:'report'} row, and stamps the weekly
 // heartbeat (strict Phase-0 health rule: only when the source cron
 // run was clean AND the email sent).
-import { renderCoverageReportHtml, sendCoverageReport } from './report-email'
+//
+// W0.7 — ONE REPORT PER ORGANISATION. xero_connections spans every
+// tenant, so sections are bucketed by the connection's
+// locations.organization_id and each organisation's report goes
+// through sendCoverageReportForOrg (→ sendOpsAlert → that org's
+// org_settings.ops_alert_emails, push fallback to the location's
+// admins). The old single combined email to env
+// RECEIPT_COVERAGE_REPORT_TO put tenant B's bank lines in tenant A's
+// inbox; that env var is retired.
+import { renderCoverageReportHtml, sendCoverageReportForOrg } from './report-email'
 import { getAppUrl } from '@/lib/app-url'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { dublinTodayStr } from '@/lib/dublin-time'
+import { logError } from '@/lib/log'
 
 const CHUNK = 300 // house cap for .in()/bulk payloads (cf. coverage.js/statuses.js)
 const LINE_DISPLAY_CAP = 200 // deliberate display cap for a report email, not a pagination boundary
@@ -57,7 +67,7 @@ async function reportAlreadySent(db, sinceIso) {
 async function loadConnections(db) {
   const { data, error } = await db
     .from('xero_connections')
-    .select('location_id, location:location_id(id, name)')
+    .select('location_id, location:location_id(id, name, organization_id)')
   if (error) throw new Error(`connections load failed: ${error.message}`)
   return data || []
 }
@@ -208,9 +218,12 @@ export async function maybeFinalizeWeekly(db) {
     for (const conn of connections) {
       const locationId = conn.location_id
       const locationName = conn.location?.name || locationId
+      // null when the location row is missing or unassigned — such an
+      // error is platform-level and is shown to every organisation.
+      const organizationId = conn.location?.organization_id || null
       const run = await locationCronRun(db, locationId)
       if (!run) {
-        errors.push({ locationName, error: 'no cron run this cycle' })
+        errors.push({ locationName, error: 'no cron run this cycle', organizationId })
         allClean = false
         continue
       }
@@ -232,6 +245,8 @@ export async function maybeFinalizeWeekly(db) {
       const uncovered = await uncoveredSection(db, locationId)
 
       sections.push({
+        organizationId,
+        locationId,
         locationName,
         stats,
         anomalies,
@@ -244,13 +259,40 @@ export async function maybeFinalizeWeekly(db) {
 
     if (errors.length > 0) allClean = false
 
-    const html = renderCoverageReportHtml({ appUrl: getAppUrl(), dateStr: dublinTodayStr(), sections, errors })
+    // Bucket by organisation: each tenant sees only its own locations.
+    const byOrg = new Map()
+    for (const s of sections) {
+      const key = s.organizationId || 'unknown'
+      if (!byOrg.has(key)) byOrg.set(key, { organizationId: s.organizationId, locationId: s.locationId, sections: [], errors: [] })
+      byOrg.get(key).sections.push(s)
+    }
+    for (const e of errors) {
+      // An error carries the organisation of the connection that produced it;
+      // one without (a platform-level failure) is shown to every organisation.
+      const targets = e.organizationId && byOrg.has(e.organizationId) ? [byOrg.get(e.organizationId)] : [...byOrg.values()]
+      for (const bucket of targets) bucket.errors.push({ locationName: e.locationName, error: e.error })
+    }
+    if (byOrg.size === 0 && errors.length) {
+      // Nothing rendered anywhere: still record the run so it is not retried forever, and log.
+      logError('recon-finalize', 'coverage report: no organisation to send to', { errors })
+    }
 
-    try {
-      await sendCoverageReport({ html, dateStr: dublinTodayStr() })
-    } catch (e) {
-      // No report row on email failure — retried next tick.
-      return { finalized: false, reason: 'email_failed', error: String(e?.message || e) }
+    const dateStr = dublinTodayStr()
+    for (const bucket of byOrg.values()) {
+      if (!bucket.organizationId) {
+        // sendCoverageReportForOrg would throw; there is nobody to send to.
+        logError('recon-finalize', 'coverage report: sections with no organisation were not sent', {
+          locations: bucket.sections.map((s) => s.locationName),
+        })
+        continue
+      }
+      const html = renderCoverageReportHtml({ appUrl: getAppUrl(), dateStr, sections: bucket.sections, errors: bucket.errors })
+      try {
+        await sendCoverageReportForOrg({ db, organizationId: bucket.organizationId, locationId: bucket.locationId, html, dateStr })
+      } catch (e) {
+        // No report row on email failure — retried next tick.
+        return { finalized: false, reason: 'email_failed', error: String(e?.message || e) }
+      }
     }
 
     const totalFound = sections.reduce((n, s) => n + s.found.length, 0)

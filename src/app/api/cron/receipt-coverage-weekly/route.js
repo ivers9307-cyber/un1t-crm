@@ -3,9 +3,10 @@
 // RCOV.P0/P1 — Friday 08:00 Europe/Dublin. vercel.json fires this at
 // 07:00 AND 08:00 UTC on Fridays (DST straddle); the Dublin-hour gate
 // makes exactly one firing run, and the alreadyRanToday check absorbs
-// retries/manual re-fires. Env RECEIPT_COVERAGE_REPORT_TO is REQUIRED
-// — checked up-front so a misconfig fails loudly, before any pulls
-// (the finalizer below needs it too, once the hunt queue drains).
+// retries/manual re-fires. (W0.7: the report is sent per organisation
+// to org_settings.ops_alert_emails via sendOpsAlert; the old env
+// recipient RECEIPT_COVERAGE_REPORT_TO is retired, so nothing is
+// checked up-front here any more.)
 //
 // RE-SEQUENCED for P1's hunt engine: this cron now only pulls, sweeps,
 // and seeds — per location, runCoveragePull() → sweepSubmittedLines()
@@ -33,7 +34,7 @@ import { createServerClient } from '@/lib/supabase'
 import { dublinNowMinutes, dublinDayStr, dublinTodayStr } from '@/lib/dublin-time'
 import { runCoveragePull } from '@/lib/recon/pull'
 import { sweepSubmittedLines, seedHunts } from '@/lib/recon/statuses'
-import { shouldRunFridayCron, reportRecipients } from '@/lib/recon/report-email'
+import { shouldRunFridayCron } from '@/lib/recon/report-email'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -44,8 +45,6 @@ export async function GET(request) {
   if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   }
-  reportRecipients() // throws if env missing — fail loudly before any work
-
   const db = createServerClient()
 
   const { data: lastCron } = await db
