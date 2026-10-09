@@ -68,6 +68,7 @@ async function loadConnections(db) {
   const { data, error } = await db
     .from('xero_connections')
     .select('location_id, location:location_id(id, name, organization_id)')
+    .order('location_id') // deterministic: a multi-location org's bucket takes its first location for attribution
   if (error) throw new Error(`connections load failed: ${error.message}`)
   return data || []
 }
@@ -266,18 +267,22 @@ export async function maybeFinalizeWeekly(db) {
       if (!byOrg.has(key)) byOrg.set(key, { organizationId: s.organizationId, locationId: s.locationId, sections: [], errors: [] })
       byOrg.get(key).sections.push(s)
     }
+    // Two passes: every org-scoped error first (it may CREATE its org's
+    // bucket), then the platform-level ones, so a broadcast never runs
+    // before a bucket it must reach exists.
     for (const e of errors) {
-      if (e.organizationId) {
-        // An error that belongs to an organisation goes ONLY to that
-        // organisation, even when it produced no section (its only
-        // connection failed): it gets a report of its own error, and no
-        // other tenant ever sees that location's name.
-        if (!byOrg.has(e.organizationId)) byOrg.set(e.organizationId, { organizationId: e.organizationId, locationId: e.locationId, sections: [], errors: [] })
-        byOrg.get(e.organizationId).errors.push({ locationName: e.locationName, error: e.error })
-      } else {
-        // Platform-level (no organisation known): shown to every organisation.
-        for (const bucket of byOrg.values()) bucket.errors.push({ locationName: e.locationName, error: e.error })
-      }
+      if (!e.organizationId) continue
+      // An error that belongs to an organisation goes ONLY to that
+      // organisation, even when it produced no section (its only
+      // connection failed): it gets a report of its own error, and no
+      // other tenant ever sees that location's name.
+      if (!byOrg.has(e.organizationId)) byOrg.set(e.organizationId, { organizationId: e.organizationId, locationId: e.locationId, sections: [], errors: [] })
+      byOrg.get(e.organizationId).errors.push({ locationName: e.locationName, error: e.error })
+    }
+    for (const e of errors) {
+      if (e.organizationId) continue
+      // Platform-level (no organisation known): shown to every organisation.
+      for (const bucket of byOrg.values()) bucket.errors.push({ locationName: e.locationName, error: e.error })
     }
     if (byOrg.size === 0 && errors.length) {
       // Nothing rendered anywhere: still record the run so it is not retried forever, and log.
@@ -296,6 +301,7 @@ export async function maybeFinalizeWeekly(db) {
         logError('recon-finalize', 'coverage report: sections with no organisation were not sent', {
           locations: bucket.sections.map((s) => s.locationName),
         })
+        allClean = false // a location nobody was told about is not a healthy cycle
         continue
       }
       const html = renderCoverageReportHtml({ appUrl: getAppUrl(), dateStr, sections: bucket.sections, errors: bucket.errors })

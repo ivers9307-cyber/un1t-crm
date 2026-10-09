@@ -165,7 +165,6 @@ describe('renderCoverageReportHtml — v2 sections', () => {
 describe('sendCoverageReportForOrg', () => {
   beforeEach(() => {
     sendOpsAlert.mockClear()
-    delete process.env.RECEIPT_COVERAGE_REPORT_TO
   })
 
   it('sends one ops alert for the organisation with the rendered html, attributed to the location, and no env recipient', async () => {

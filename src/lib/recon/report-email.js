@@ -140,7 +140,9 @@ export function renderCoverageReportHtml({ appUrl, dateStr, sections, errors }) 
  * fallback inside sendOpsAlert). sendOpsAlert never throws: it answers
  * `{ channel: 'none' }` when delivery failed, so that is turned into a
  * throw here so the finalizer returns email_failed and retries next tick
- * (a push_fallback counts as delivered).
+ * (a push_fallback counts as delivered). On the push_fallback path the
+ * rendered HTML is NOT retained anywhere: the admins get a push pointing
+ * at /accounting and read the live board instead.
  */
 export async function sendCoverageReportForOrg({ db, organizationId, locationId, html, dateStr }) {
   if (!organizationId) throw new Error('coverage report: section without an organisation')

@@ -90,7 +90,6 @@ beforeEach(async () => {
   stampHeartbeat.mockReset()
   stampHeartbeat.mockResolvedValue()
   logError.mockReset()
-  delete process.env.RECEIPT_COVERAGE_REPORT_TO
   finalize = await import('./finalize')
 })
 
@@ -103,7 +102,7 @@ describe('maybeFinalizeWeekly — one report per organisation', () => {
         { location_id: 'loc-b', location: { id: 'loc-b', name: 'Tenant B Garage', organization_id: ORG_B } },
       ],
       error: null,
-    }, 'select')
+    }, 'order')
     const foundHunts = chainable({ data: [], error: null }, 'gte')
     const reportInsert = chainable({ data: { id: 'report-row-1' }, error: null }, 'insert')
 
@@ -159,7 +158,7 @@ describe('maybeFinalizeWeekly — one report per organisation', () => {
         { location_id: 'loc-orphan', location: null },
       ],
       error: null,
-    }, 'select')
+    }, 'order')
     const foundHunts = chainable({ data: [], error: null }, 'gte')
     const orphanNoRun = chainable({ data: null, error: null }, 'maybeSingle')
     const reportInsert = chainable({ data: { id: 'report-row-1' }, error: null }, 'insert')
@@ -203,7 +202,7 @@ describe('maybeFinalizeWeekly — one report per organisation', () => {
         { location_id: 'loc-b', location: { id: 'loc-b', name: 'Tenant B Garage', organization_id: ORG_B } },
       ],
       error: null,
-    }, 'select')
+    }, 'order')
     const foundHunts = chainable({ data: [], error: null }, 'gte')
     const hatchNoRun = chainable({ data: null, error: null }, 'maybeSingle')
     const reportInsert = chainable({ data: { id: 'report-row-1' }, error: null }, 'insert')
@@ -238,7 +237,7 @@ describe('maybeFinalizeWeekly — one report per organisation', () => {
         { location_id: 'loc-x', location: { id: 'loc-x', name: 'Unassigned', organization_id: null } },
       ],
       error: null,
-    }, 'select')
+    }, 'order')
     const foundHunts = chainable({ data: [], error: null }, 'gte')
     const reportInsert = chainable({ data: { id: 'report-row-1' }, error: null }, 'insert')
 
@@ -261,6 +260,8 @@ describe('maybeFinalizeWeekly — one report per organisation', () => {
     expect(sendCoverageReportForOrg.mock.calls[0][0].organizationId).toBe(ORG_A)
     expect(logError).toHaveBeenCalledWith('recon-finalize', expect.stringContaining('no organisation'), expect.objectContaining({ locations: ['Unassigned'] }))
     expect(reportInsert.insert).toHaveBeenCalledTimes(1)
+    expect(reportInsert.insert.mock.calls[0][0]).toMatchObject({ trigger: 'report', status: 'error' })
+    expect(stampHeartbeat).not.toHaveBeenCalled()
     expect(result).toEqual({ finalized: true, sections: 2, failedOrgs: [] })
   })
 
@@ -272,7 +273,7 @@ describe('maybeFinalizeWeekly — one report per organisation', () => {
         { location_id: 'loc-b', location: { id: 'loc-b', name: 'Tenant B Garage', organization_id: ORG_B } },
       ],
       error: null,
-    }, 'select')
+    }, 'order')
     const foundHunts = chainable({ data: [], error: null }, 'gte')
     const bNoRun = chainable({ data: null, error: null }, 'maybeSingle')
     const reportInsert = chainable({ data: { id: 'report-row-1' }, error: null }, 'insert')
@@ -311,6 +312,46 @@ describe('maybeFinalizeWeekly — one report per organisation', () => {
     expect(result).toEqual({ finalized: true, sections: 1, failedOrgs: [] })
   })
 
+  it('a platform-level error that PRECEDES an error-only organisation in row order still reaches that organisation', async () => {
+    queueGates()
+    const connections = chainable({
+      data: [
+        { location_id: 'loc-a', location: { id: 'loc-a', name: 'Stillorgan', organization_id: ORG_A } },
+        { location_id: 'loc-orphan', location: null },
+        { location_id: 'loc-b', location: { id: 'loc-b', name: 'Tenant B Garage', organization_id: ORG_B } },
+      ],
+      error: null,
+    }, 'order')
+    const foundHunts = chainable({ data: [], error: null }, 'gte')
+    const orphanNoRun = chainable({ data: null, error: null }, 'maybeSingle')
+    const bNoRun = chainable({ data: null, error: null }, 'maybeSingle')
+    const reportInsert = chainable({ data: { id: 'report-row-1' }, error: null }, 'insert')
+
+    mockDb.from
+      .mockReturnValueOnce(connections)
+      .mockReturnValueOnce(foundHunts)
+      .mockReturnValueOnce(cleanRun('run-a'))
+      .mockReturnValueOnce(emptyLimit())
+      .mockReturnValueOnce(emptyLimit())
+      .mockReturnValueOnce(emptyLimit())
+      .mockReturnValueOnce(orphanNoRun)
+      .mockReturnValueOnce(bNoRun)
+      .mockReturnValueOnce(reportInsert)
+
+    await finalize.maybeFinalizeWeekly(mockDb)
+
+    expect(connections.order).toHaveBeenCalledWith('location_id')
+    expect(sendCoverageReportForOrg).toHaveBeenCalledTimes(2)
+    const byOrg = new Map(renderCoverageReportHtml.mock.calls.map(([arg], i) => [sendCoverageReportForOrg.mock.calls[i][0].organizationId, arg]))
+    expect(byOrg.get(ORG_A).errors).toEqual([{ locationName: 'loc-orphan', error: 'no cron run this cycle' }])
+    expect(byOrg.get(ORG_B).errors).toEqual([
+      { locationName: 'Tenant B Garage', error: 'no cron run this cycle' },
+      { locationName: 'loc-orphan', error: 'no cron run this cycle' },
+    ])
+    expect(JSON.stringify(byOrg.get(ORG_A))).not.toContain('Tenant B')
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
   it('a send failure for ONE organisation: the other is still sent once, the report row is written with failedOrgs, the heartbeat is NOT stamped', async () => {
     queueGates()
     const connections = chainable({
@@ -319,7 +360,7 @@ describe('maybeFinalizeWeekly — one report per organisation', () => {
         { location_id: 'loc-b', location: { id: 'loc-b', name: 'Tenant B Garage', organization_id: ORG_B } },
       ],
       error: null,
-    }, 'select')
+    }, 'order')
     const foundHunts = chainable({ data: [], error: null }, 'gte')
     const reportInsert = chainable({ data: { id: 'report-row-1' }, error: null }, 'insert')
 
@@ -360,7 +401,7 @@ describe('maybeFinalizeWeekly — one report per organisation', () => {
         { location_id: 'loc-b', location: { id: 'loc-b', name: 'Tenant B Garage', organization_id: ORG_B } },
       ],
       error: null,
-    }, 'select')
+    }, 'order')
     const foundHunts = chainable({ data: [], error: null }, 'gte')
 
     mockDb.from

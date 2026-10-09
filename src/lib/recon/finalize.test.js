@@ -151,7 +151,7 @@ describe('maybeFinalizeWeekly — compile + send', () => {
     const connections = chainable({
       data: [{ location_id: 'loc-1', location: { id: 'loc-1', name: 'Stillorgan', organization_id: 'org-1' } }],
       error: null,
-    }, 'select')
+    }, 'order')
 
     const locationCronRun = chainable({
       data: {
@@ -248,7 +248,7 @@ describe('maybeFinalizeWeekly — compile + send', () => {
     const connections = chainable({
       data: [{ location_id: 'loc-1', location: { id: 'loc-1', name: 'Stillorgan', organization_id: 'org-1' } }],
       error: null,
-    }, 'select')
+    }, 'order')
 
     const locationCronRun = chainable({
       data: {
@@ -295,7 +295,7 @@ describe('maybeFinalizeWeekly — compile + send', () => {
     const connections = chainable({
       data: [{ location_id: 'loc-1', location: { id: 'loc-1', name: 'Stillorgan', organization_id: 'org-1' } }],
       error: null,
-    }, 'select')
+    }, 'order')
 
     const locationCronRun = chainable({
       data: { id: 'run-loc-1', status: 'ok', started_at: CRON_STARTED_AT, stats: { accounts: [], anomalies: [] } },
@@ -353,7 +353,7 @@ describe('maybeFinalizeWeekly — wedge guards', () => {
     const connections = chainable({
       data: [{ location_id: 'loc-1', location: { id: 'loc-1', name: 'Stillorgan', organization_id: 'org-1' } }],
       error: null,
-    }, 'select')
+    }, 'order')
     const foundHunts = chainable({ data: [], error: null }, 'gte')
     const locationCronRun = chainable({
       data: { id: 'run-loc-1', status: 'ok', started_at: CRON_STARTED_AT, stats: { accounts: [], anomalies: [] } },
