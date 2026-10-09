@@ -24,6 +24,7 @@ const req = (token, qs = '') =>
 
 beforeEach(() => {
   vi.stubEnv('CRM_API_KEY', GLOBAL_KEY)
+  vi.stubEnv('CRM_API_KEY_ORG_ID', 'org-1') // W0.1 — legacy key = org-1's key
   db = makeFakeDb(twoOrgFixture())
 })
 
@@ -47,12 +48,12 @@ describe('GET /api/bookings — per-org key scoping', () => {
     expect(body.data).toEqual([])
   })
 
-  it('legacy CRM_API_KEY stays unscoped — sees both orgs (unchanged)', async () => {
+  it('legacy CRM_API_KEY is scoped to CRM_API_KEY_ORG_ID — sees org-1 only (W0.1)', async () => {
     const res = await GET(req(GLOBAL_KEY))
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.success).toBe(true)
-    expect(body.data.map((b) => b.id).sort()).toEqual(['b1', 'b2'])
+    expect(body.data.map((b) => b.id)).toEqual(['b1'])
   })
 
   it('revoked per-org key → 401', async () => {
