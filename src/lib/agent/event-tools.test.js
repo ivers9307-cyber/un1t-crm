@@ -15,7 +15,7 @@ const now = Date.UTC(2026, 5, 12, 12, 0, 0)
 
 describe('EVENT_TOOLS', () => {
   it('declares the event tools', () => {
-    expect(EVENT_TOOLS.map(t => t.name)).toEqual(['list_upcoming_events', 'get_my_event_registrations', 'book_event', 'cancel_event_registration', 'reschedule_event_wave'])
+    expect(EVENT_TOOLS.map(t => t.name)).toEqual(['list_upcoming_events', 'get_my_event_registrations', 'book_event', 'cancel_event_registration', 'reschedule_event_wave', 'list_event_move_options', 'move_event_entry'])
   })
 })
 

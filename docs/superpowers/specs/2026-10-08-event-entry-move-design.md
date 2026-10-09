@@ -364,12 +364,32 @@ real caller.
   on the staff page; chips "moved in <date>" and "Not emailed". The gap chip
   is not shown on the host table in PR 2.
 
-## Mia (later, not in these PRs)
+## Mia (EVENT-MOVE.7, mig 711)
 
-A `move_event_entry` tool behind the existing `agent_membership_requests`
-approvals flow, `actor_type = 'agent'`. Until then, update the
-`reschedule_event_wave` tool's wrong-event reply to say a staff member can move
-the entry, instead of "cancel and rebook".
+Two agent tools. `list_event_move_options` shows a verified customer the
+dates their confirmed entry can move to: the same eligibility as staff's
+`listMoveTargets`, scoped to the conversation studio's organisation, with
+only the times the entry fits (teams-mode: one place; people-mode: its
+headcount), as name, date, time and a price-difference sentence (a team's
+difference is stated in total). It never returns capacity, spots or
+counts. `move_event_entry` never moves: it files an
+`agent_membership_requests` row of kind `event_move` (pending, one per
+entry at a time) and notifies approvals; Mia says the request is with the
+team and, when the new date costs more, that the team will send a link for
+the difference. `reschedule_event_wave` stays for a time change on the same
+event and points to these tools for a different event.
+
+Approving the card runs `moveRegistration` with
+`actor = { type: 'agent', name: 'Mia, approved by <staff>' }`, `notify: true`,
+no force, and `expectedSourceEventId` from the request; the customer gets
+an operator-editable confirmation in the thread (`event_move_confirmation_text`),
+or an operator-editable plain reason on refusal (`event_move_failed_text`);
+decline uses the existing notice. A conflict whose entry is already on the
+target is recorded as done. The approvals card summary, failure explanation
+and done line for `event_move` live in a web-only module
+(`src/lib/approvals/event-move-card.js`); `shared/**` is untouched so no
+phone OTA is published, and the phone shows a generic card until a later
+release.
 
 ## Testing
 

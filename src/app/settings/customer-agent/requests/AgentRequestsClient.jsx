@@ -5,14 +5,15 @@ import Link from 'next/link'
 import { Copy, Check } from 'lucide-react'
 import { formatMoneyMinor } from '@/lib/money-format'
 import { isStuckExecuting, retryOffered } from '@/lib/agent/request-recovery'
-import { whyFlagged, customerWords, failureExplanation, accountSummaryLine } from '@/lib/approvals/agent-request-why'
+import { whyFlagged, customerWords, accountSummaryLine } from '@/lib/approvals/agent-request-why'
+import { approvalSummary, explainFailure } from '@/lib/approvals/event-move-card'
 
 // RADAR-AGENT Phase 2 — operator approval queue. Manager+ reviews the
 // pause / cancellation requests the customer agent captured, and decides:
 // Approve, Decline, or (for cancellations) Save (retention kept them).
 // The actual Glofox change is made by staff after approving.
 
-const KIND_LABEL = { pause: 'Pause', cancellation: 'Cancellation', class_booking: 'Class booking', consultation: 'Consultation', membership_purchase: 'Membership purchase' }
+const KIND_LABEL = { pause: 'Pause', cancellation: 'Cancellation', class_booking: 'Class booking', consultation: 'Consultation', membership_purchase: 'Membership purchase', event_move: 'Event move' }
 const STATUS_STYLE = {
   pending: 'bg-amber-100 text-amber-800',
   approved: 'bg-green-100 text-green-700',
@@ -200,7 +201,7 @@ function RequestCard({ r, busy, onDecide, focused = false, retryMode = false }) 
   const why = whyFlagged(r)
   const said = customerWords(r)
   // AGENT-RETRY.1 — what Glofox rejected and what to fix before retrying.
-  const failWhy = retryMode ? failureExplanation(r) : null
+  const failWhy = retryMode ? explainFailure(r) : null
   // AGENT-FUNNEL-CREDITS.1 — what the account can book with.
   const account = accountSummaryLine(r.contacts)
   return (
@@ -229,6 +230,8 @@ function RequestCard({ r, busy, onDecide, focused = false, retryMode = false }) 
         {isCancel && d.desired_date && <p>Requested date: {fmtDate(d.desired_date)}</p>}
         {isCancel && d.requested_end_date && <p>Ends: {fmtDate(d.requested_end_date)}{d.result?.local_planned_end_date ? ` · Glofox: ${fmtDate(d.result.local_planned_end_date)}` : ''}</p>}
         {d.source === 'cancellation_form' && <p className="text-un1t-muted">Submitted through the cancellation form{d.pause_taken ? ' (chose a pause instead)' : ''}.</p>}
+        {/* EVENT-MOVE.7 — Mia's move request: one-line summary (web-only module). */}
+        {r.kind === 'event_move' && <p>{approvalSummary(r)}</p>}
         {(r.kind === 'class_booking' || r.kind === 'consultation') && (d.class_name || d.class_time) && (
           <p>{d.class_name || (r.kind === 'consultation' ? 'Consultation' : 'Class')}{d.class_time ? ` · ${d.class_time}` : ''}</p>
         )}
