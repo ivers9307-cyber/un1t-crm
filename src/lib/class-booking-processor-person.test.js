@@ -87,9 +87,10 @@ const sibling = (id, extra = {}) => ({
 // The two shapes a WRITE may move onto:
 //  • grouped — person-detect (or a human) vetted the link, so a shared phone
 //    is enough on top of it;
-//  • same email — contacts_email_unique is global and case-SENSITIVE (mig
-//    008, `ON contacts (email) WHERE email IS NOT NULL`), so two rows can only
-//    collide on casing/whitespace; one address is one person either way.
+//  • same email — contacts_email_org_unique is unique per organisation and
+//    case-SENSITIVE (mig 712, W0.6; mig 008's `ON contacts (email) WHERE email
+//    IS NOT NULL` was global), so two rows in one org can only collide on
+//    casing/whitespace; one address is one person either way.
 const emailSibling = (id, extra = {}) => sibling(id, {
   phone: '+353870000000', email: 'SAM.New@Example.com', ...extra,
 })
@@ -228,9 +229,9 @@ describe('the funnel reuses a REUSABLE sibling account instead of minting', () =
     expect(createBooking).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ user_id: 'gm-old' }))
   })
 
-  // The one identifier that IS an identity here: contacts_email_unique is
-  // global, so an exact (case-insensitive) match means one person — no group
-  // needed.
+  // The one identifier that IS an identity here: contacts_email_org_unique
+  // is unique per organisation, so an exact (case-insensitive) match within
+  // one means one person — no group needed.
   it('matches on EMAIL with no group at all (the address is the identity)', async () => {
     const db = makeDb({
       contact: funnelContact({ phone: '+353870000000', email: 'SAM@example.com' }),
