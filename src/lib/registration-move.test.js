@@ -108,8 +108,11 @@ describe('evaluateMove', () => {
     expect(evaluateMove(base({ registration: { ...base().registration, status: 'cancelled' } })).error).toBe(MOVE_ERRORS.NOT_ACTIVE)
     expect(evaluateMove(base({ registration: { ...base().registration, status: 'no_show' } })).error).toBe(MOVE_ERRORS.NOT_ACTIVE)
   })
-  it('allows an entry awaiting payment', () => {
-    expect(evaluateMove(base({ registration: { ...base().registration, status: 'pending_payment' } })).ok).toBe(true)
+  it('refuses an entry awaiting payment: its payment link is priced for the source event', () => {
+    expect(evaluateMove(base({ registration: { ...base().registration, status: 'pending_payment' } }))).toEqual({ ok: false, error: MOVE_ERRORS.PENDING_PAYMENT })
+  })
+  it('force does not skip pending_payment', () => {
+    expect(evaluateMove(base({ registration: { ...base().registration, status: 'pending_payment' }, force: true })).error).toBe(MOVE_ERRORS.PENDING_PAYMENT)
   })
   it('checked_in when anyone has checked in', () => {
     expect(evaluateMove(base({ checkinCount: 1 })).error).toBe(MOVE_ERRORS.CHECKED_IN)

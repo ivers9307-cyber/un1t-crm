@@ -170,6 +170,17 @@ describe('POST /api/event-registrations/[id]/move', () => {
     expect(json.error).toBe(code)
     expect(json.message).toBeTruthy()
   })
+  it('400 pending_payment with the stale-payment-link message (the default mapping)', async () => {
+    getCurrentUser.mockResolvedValue(manager([L1]))
+    moveRegistration.mockResolvedValue({ ok: false, error: 'pending_payment' })
+    const res = await POST(post(BODY), props())
+    expect(res.status).toBe(400)
+    expect(await res.json()).toEqual({
+      success: false,
+      error: 'pending_payment',
+      message: 'This entry is awaiting payment, so its payment link is priced for this event. Collect payment first, or cancel and rebook, then move it.',
+    })
+  })
   it('400 with the plain-English message on another rule', async () => {
     getCurrentUser.mockResolvedValue(manager([L1]))
     moveRegistration.mockResolvedValue({ ok: false, error: 'checked_in' })

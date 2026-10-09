@@ -10,6 +10,7 @@ vi.mock('@/lib/supabase', () => ({ createServerClient: mocks.createServerClient 
 vi.mock('@/lib/registration-move', async (importOriginal) => ({ ...(await importOriginal()), readRegistrationForMove: mocks.readRegistrationForMove, moveRegistration: mocks.moveRegistration }))
 
 const { POST } = await import('./route.js')
+const { MOVE_ERROR_MESSAGES } = await import('@/lib/registration-entry')
 
 const H1 = 'h0000000-0000-0000-0000-000000000001'
 const E1 = 'e0000000-0000-0000-0000-000000000001'
@@ -62,7 +63,7 @@ describe('POST /api/host/registrations/[id]/move', () => {
     mocks.readRegistrationForMove.mockResolvedValue({ registration: { id: R1, status: 'pending_payment', race_event_id: E1, race: { id: E1, host_id: H1, location_id: 'L1' } }, error: null })
     const res = await POST(post(BODY), props)
     expect(res.status).toBe(400)
-    expect(await res.json()).toMatchObject({ success: false, error: 'pending_payment', message: expect.stringMatching(/awaiting payment/) })
+    expect(await res.json()).toEqual({ success: false, error: 'pending_payment', message: MOVE_ERROR_MESSAGES.pending_payment })
     expect(mocks.moveRegistration).not.toHaveBeenCalled()
   })
   it('pending_payment is refused before the body is read (even a bad body)', async () => {

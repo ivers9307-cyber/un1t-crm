@@ -3,9 +3,10 @@
 // POST — a host moves ONE of their own entries to another of their OWN events.
 // Same lib and dialog as the staff route (/api/event-registrations/[id]/move);
 // the host fence is allowedEventIds (their own events) on top of the lib's
-// same-payee rule, so it is enforced twice. A host cannot move an entry that is
-// still awaiting payment (they cannot collect or waive money), so
-// pending_payment is refused here, before the body is read.
+// same-payee rule, so it is enforced twice. An entry still awaiting payment
+// cannot move (its payment link is priced for the source event; the lib refuses
+// it too, EVENT-MOVE.4); this route refuses it before the body is read, which
+// the lib cannot, with the lib's code and copy.
 //
 // Status codes: 401 not a host session; 404 an entry that is missing or on
 // another host's event (ids cannot be enumerated across hosts), or a target
@@ -41,9 +42,6 @@ const STATUS_FOR = Object.freeze({
   [MOVE_ERRORS.WRITE_FAILED]: 500,
 })
 
-const PENDING_PAYMENT = 'pending_payment'
-const PENDING_PAYMENT_MESSAGE = 'This entry is awaiting payment. It can move once it is paid.'
-
 /** A refusal with its code and the dialog's plain-English copy. */
 function refusal(code, extra = {}) {
   return NextResponse.json({
@@ -62,9 +60,7 @@ export async function POST(request, props) {
   if (ctx.response) return ctx.response
   const { db, registration, allowedEventIds, actor } = ctx
 
-  if (registration.status === PENDING_PAYMENT) {
-    return NextResponse.json({ success: false, error: PENDING_PAYMENT, message: PENDING_PAYMENT_MESSAGE }, { status: 400 })
-  }
+  if (registration.status === 'pending_payment') return refusal(MOVE_ERRORS.PENDING_PAYMENT)
 
   const validation = await validateBody(request, HostMoveSchema)
   if (!validation.ok) return validation.response
