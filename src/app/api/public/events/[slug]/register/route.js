@@ -22,7 +22,9 @@
 //
 // EVENT-WAITLIST.1: an optional `waitlist_token` (from a waitlist offer link,
 // /event/<slug>?wl=<token>) marks that waitlist row claimed once the
-// registration exists (free confirmed, or paid pending). Best effort, logged:
+// registration exists (free confirmed, or paid pending), and the lead's own
+// row for this event (same email) is claimed either way. An abandoned
+// checkout is re-opened by the offer round. Best effort, logged:
 // it never changes the answer. This route stays the arbiter of who gets a
 // freed place: the capacity gate above is the only gate.
 
@@ -43,7 +45,7 @@ import { logWarn } from '@/lib/log'
 import { wouldFit } from '@/lib/event-signups'
 import { LIVE_REGISTRATION_STATUSES } from '@/lib/audience-filter'
 import { eventIsPublic, resolveMasterLocationId } from '@/lib/host-events'
-import { claimWaitlistOnRegistration } from '@/lib/event-waitlist'
+import { claimWaitlistOnRegistration, claimWaitlistByEmail } from '@/lib/event-waitlist'
 
 export const runtime = 'nodejs'
 
@@ -724,6 +726,15 @@ export async function POST(request, props) {
     })
     if (!claim.claimed) {
       logWarn('race-register', 'waitlist claim not recorded', { reason: claim.reason, registrationId: registration.id })
+    }
+  }
+  // ...and whether or not they used the link: the lead's own waitlist row for
+  // this event (same email) is claimed too, so a booked person is never
+  // offered again. No-op when they were not on the list.
+  {
+    const byEmail = await claimWaitlistByEmail(db, { raceEventId: race.id, email: captainEmail, registrationId: registration.id })
+    if (!byEmail.claimed && byEmail.reason !== 'not_on_list') {
+      logWarn('race-register', 'waitlist claim by email not recorded', { reason: byEmail.reason, registrationId: registration.id })
     }
   }
 

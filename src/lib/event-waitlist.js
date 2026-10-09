@@ -37,6 +37,8 @@ import { maybeSendBookingWhatsappConfirm } from './automations/booking-whatsapp-
 import { findOrCreateRaceContact } from './race-contact-linking'
 import { resolveMasterLocationId } from './host-events'
 import { loadForMode } from './event-signups'
+import { LIVE_REGISTRATION_STATUSES } from './audience-filter'
+import { isWhatsAppNumberMissing } from './whatsapp-number-missing'
 import { dublinTodayStr } from './dublin-time'
 import { signWaitlistClaimToken, verifyWaitlistClaimToken, waitlistTokenSecret } from './event-waitlist-tokens'
 import { logError, logWarn } from './log'
@@ -74,6 +76,13 @@ export function normaliseWaitlistEmail(email) {
  * Does any time of this event have room for one more? The public event
  * route's arithmetic (its `is_full` per wave, confirmed-only): a wave with no
  * capacity always has room, and an event with no waves is not full. Pure.
+ *
+ * NOTE the difference from the register route's gate: in people mode that
+ * gate also counts pending_payment entries (a checkout in progress HOLDS its
+ * place), this does not. So an offer can go out for a place a pending
+ * checkout is holding; the register route then refuses the booking
+ * (wave_full) and the person stays on the list. Kept confirmed-only so the
+ * waitlist and the public page's "Sold out" agree on what full means.
  *
  * @param {{ capacity_mode?: string, waves?: Array<{ id: string, capacity?: number|null }> }} event
  * @param {Array<{ wave_id?: string|null, status?: string, team?: { size?: number }|null }>} registrations
@@ -353,8 +362,16 @@ export async function joinWaitlist(db, { race, name, email, phone = null, headco
 
   if (!row) {
     const stillOn = ACTIVE_WAITLIST_STATUSES.includes(existing.status)
+    // Still on the list: the form is public and anyone can type this email,
+    // so never overwrite the name, and only FILL a missing phone or contact.
+    // Off the list (removed / expired / claimed): a fresh join, fresh details.
     const patch = stillOn
-      ? fields
+      ? {
+          headcount: size,
+          ...(existing.phone ? {} : (cleanPhone ? { phone: cleanPhone } : {})),
+          ...(existing.contact_id || !contactId ? {} : { contact_id: contactId }),
+          ...(typeof consent === 'boolean' ? { marketing_consent: consent } : {}),
+        }
       : { ...fields, status: 'waiting', last_offered_at: null, removed_by_name: null }
     const { data, error } = await db
       .from('event_waitlist')
@@ -375,15 +392,19 @@ export async function joinWaitlist(db, { race, name, email, phone = null, headco
 }
 
 /**
- * Send one offer: email always (administrative, unrecoverable: an offer that
- * is suppressed is never re-sent for that opening), WhatsApp when there is a
- * phone, a contact, and an APPROVED `event_waitlist_offer` template at the
- * event's location, and the contact's WhatsApp state allows it. Never throws.
+ * Send one offer: email always (the ADMINISTRATIVE consent gate, recoverable:
+ * the cron re-runs every 10 minutes and offers again after 24 h, so a
+ * suppression is not the last word), WhatsApp when there is a phone, a
+ * contact, and an APPROVED `event_waitlist_offer` template at the event's
+ * location, and the contact's WhatsApp state allows it. Never throws.
+ *
+ * `commsLocationId` is the sending location, resolved once per event by the
+ * round; resolved here when not given.
  *
  * @returns {Promise<{ email: string, whatsapp: string }>} each 'sent',
  *   'skipped:<reason>' or 'failed'
  */
-export async function sendWaitlistOffer(db, { race, row, now = Date.now() }) {
+export async function sendWaitlistOffer(db, { race, row, now = Date.now(), commsLocationId = null }) {
   const out = { email: 'skipped:no_email', whatsapp: 'skipped:no_phone' }
   let claimUrl
   try {
@@ -397,7 +418,7 @@ export async function sendWaitlistOffer(db, { race, row, now = Date.now() }) {
   if (row.email) {
     try {
       const gate = await checkTransactionalConsent({
-        db, contactId: row.contact_id, channel: 'email', module: 'event-waitlist', meta: { waitlistId: row.id }, unrecoverable: true,
+        db, contactId: row.contact_id, channel: 'email', module: 'event-waitlist', meta: { waitlistId: row.id },
       })
       if (!gate.allowed) {
         out.email = `skipped:${gate.reason}`
@@ -405,7 +426,7 @@ export async function sendWaitlistOffer(db, { race, row, now = Date.now() }) {
         const contact = { first_name: ctx.firstName, name: row.name || '', email: row.email, phone: '' }
         const extras = { event_name: ctx.eventName, when: ctx.dateLabel, location: ctx.locationName, claim_url: claimUrl }
         const { subject, htmlBody } = await resolveEventEmail({ db, kind: 'waitlist', race, contact, extras, defaults: buildWaitlistOfferDefaults(ctx) })
-        const locationId = await commsLocationIdFor(db, race, { waitlistId: row.id })
+        const locationId = commsLocationId || await commsLocationIdFor(db, race, { waitlistId: row.id })
         await sendTransactionalEmail({ to: row.email, subject, htmlBody, contactId: row.contact_id || null, locationId, tag: 'event-waitlist-offer' })
         out.email = 'sent'
       }
@@ -420,11 +441,12 @@ export async function sendWaitlistOffer(db, { race, row, now = Date.now() }) {
 }
 
 /**
- * The WhatsApp leg. Must never throw out of the round: the send helper swallows
- * its own errors (a studio with no WhatsApp number of its own, i.e.
- * WhatsAppNumberMissingError, comes back as a quiet sent:false, usually as
- * template_not_found since templates live on a number), and this wrapper
- * catches everything else.
+ * The WhatsApp leg. Must never throw out of the round. A studio with no active
+ * WhatsApp number of its own (WhatsAppNumberMissingError territory, CLAUDE.md)
+ * is a quiet skip, `no_number`: checked up front from whatsapp_numbers (a
+ * plain read, not a config resolver), and recognised again if the error ever
+ * escapes the send helper. The helper swallows its own send errors; this
+ * wrapper catches everything else.
  */
 async function sendWaitlistOfferWhatsapp(db, { race, row, ctx }) {
   try {
@@ -442,6 +464,17 @@ async function sendWaitlistOfferWhatsapp(db, { race, row, ctx }) {
     if (!contact) return 'skipped:no_contact'
     const suppression = transactionalWhatsappSuppression(contact)
     if (suppression) return `skipped:${suppression}`
+    const { data: numbers, error: numErr } = await db
+      .from('whatsapp_numbers')
+      .select('id')
+      .eq('location_id', race.location_id)
+      .eq('is_active', true)
+      .limit(1)
+    if (numErr) {
+      logWarn('event-waitlist', 'WhatsApp number read failed; WhatsApp offer not sent (the email carries it)', { err: numErr, waitlistId: row.id })
+      return 'failed'
+    }
+    if (!numbers?.length) return 'skipped:no_number'
     const res = await maybeSendBookingWhatsappConfirm({
       db,
       locationId: race.location_id,
@@ -456,6 +489,7 @@ async function sendWaitlistOfferWhatsapp(db, { race, row, ctx }) {
     }
     return `skipped:${res?.reason || 'unknown'}`
   } catch (e) {
+    if (isWhatsAppNumberMissing(e)) return 'skipped:no_number'
     logWarn('event-waitlist', 'WhatsApp offer threw; skipped', { err: e, waitlistId: row?.id })
     return 'failed'
   }
@@ -474,6 +508,58 @@ async function readActiveRows(db, eventId) {
   return { rows, error: null }
 }
 
+/**
+ * Claimed rows of events still ahead (race_date today or later), with their
+ * registration, so the round can re-open a claim whose booking fell through.
+ * Bounded by the event date: past events' claims are history and never read.
+ */
+async function readUpcomingClaimedRows(db, eventId, todayStr) {
+  const rows = []
+  for (let from = 0; ; from += PAGE) {
+    let q = db
+      .from('event_waitlist')
+      .select(`${WAITLIST_ROW_COLUMNS}, race:race_events!inner ( race_date ), registration:claimed_registration_id ( id, status, race_event_id )`)
+      .eq('status', 'claimed')
+      .gte('race.race_date', todayStr)
+    if (eventId) q = q.eq('race_event_id', eventId)
+    const { data, error } = await q.order('id', { ascending: true }).range(from, from + PAGE - 1)
+    if (error) return { rows: null, error }
+    rows.push(...(data || []))
+    if (!data || data.length < PAGE) break
+  }
+  return { rows, error: null }
+}
+
+/**
+ * The LIVE registrations (confirmed or pending payment) of one event, with the
+ * lead's email: who already holds a place, and (confirmed only, inside
+ * eventHasRoom) whether a place is free. Range-paginated.
+ */
+async function readLiveRegistrations(db, raceEventId) {
+  const out = []
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await db
+      .from('race_registrations')
+      .select('id, wave_id, status, contact_id, team:teams ( size ), contact:contact_id ( email )')
+      .eq('race_event_id', raceEventId)
+      .in('status', LIVE_REGISTRATION_STATUSES)
+      .order('id', { ascending: true })
+      .range(from, from + PAGE - 1)
+    if (error) return { data: null, error }
+    out.push(...(data || []))
+    if (!data || data.length < PAGE) break
+  }
+  return { data: out, error: null }
+}
+
+/** A claim whose registration is gone, no longer live, or moved to another event. */
+export function claimFellThrough(row) {
+  const reg = row?.registration
+  if (!reg) return true
+  if (!LIVE_REGISTRATION_STATUSES.includes(reg.status)) return true
+  return reg.race_event_id !== row.race_event_id
+}
+
 async function readEvents(db, ids) {
   const events = new Map()
   for (let i = 0; i < ids.length; i += ID_CHUNK) {
@@ -485,10 +571,20 @@ async function readEvents(db, ids) {
 }
 
 /**
- * The offer round. For every event with rows still on the list: past events'
- * rows expire; an event that is published, active, open for registration and
- * has room in at least one time offers every row due (never offered, or not
- * in the last 24 h). One row's failure never stops the round.
+ * The offer round. For every event with rows on the list (or claims to check):
+ *   1. a past event's rows expire. An event with no date never expires (it has
+ *      no day to pass; staff remove rows by hand);
+ *   2. a claimed row whose booking fell through (registration cancelled,
+ *      no_show, deleted, or moved to another event) is RE-OPENED: back to
+ *      `offered`, claimed_registration_id cleared, logged, so it is offered
+ *      again on the usual rule;
+ *   3. a row whose contact or email already holds a LIVE registration on the
+ *      event (they booked without the link) is marked `claimed` and not
+ *      offered;
+ *   4. an event that is published, active, open for registration and has room
+ *      in at least one time offers every row due (never offered, or not in the
+ *      last 24 h; `force` ignores the 24 h rule). One row's failure never stops
+ *      the round.
  *
  * A row is stamped (status offered, last_offered_at, offer_count + 1) AFTER
  * its sends, whatever they did: sent, suppressed on every channel, or FAILED
@@ -503,30 +599,36 @@ async function readEvents(db, ids) {
  *   eventId limits the round to one event (staff / host "Offer now");
  *   force (only with "Offer now") ignores the 24 h rule for every row still on
  *   the list, never-offered and already-offered alike. The cron never forces.
- * @returns {Promise<{ events: number, offered: number, expired: number, skipped: number, failed: number, no_room: number }>}
+ * @returns {Promise<{ events: number, offered: number, expired: number, skipped: number, failed: number, no_room: number, claimed: number, reopened: number }>}
  */
 export async function runWaitlistOffers(db, { now = Date.now(), todayStr = dublinTodayStr(), eventId = null, force = false } = {}) {
-  const counts = { events: 0, offered: 0, expired: 0, skipped: 0, failed: 0, no_room: 0 }
+  const counts = { events: 0, offered: 0, expired: 0, skipped: 0, failed: 0, no_room: 0, claimed: 0, reopened: 0 }
 
-  const { rows, error: rowsErr } = await readActiveRows(db, eventId)
+  const { rows: activeRows, error: rowsErr } = await readActiveRows(db, eventId)
   if (rowsErr) throw new Error(`event_waitlist read failed: ${rowsErr.message || rowsErr}`)
-  if (!rows.length) return counts
+  const { rows: claimedRows, error: claimedErr } = await readUpcomingClaimedRows(db, eventId, todayStr)
+  if (claimedErr) throw new Error(`event_waitlist claimed read failed: ${claimedErr.message || claimedErr}`)
+  if (!activeRows.length && !claimedRows.length) return counts
 
   const byEvent = new Map()
-  for (const r of rows) {
-    if (!byEvent.has(r.race_event_id)) byEvent.set(r.race_event_id, [])
-    byEvent.get(r.race_event_id).push(r)
+  const bucket = (id) => {
+    if (!byEvent.has(id)) byEvent.set(id, { active: [], claimed: [] })
+    return byEvent.get(id)
   }
+  for (const r of activeRows) bucket(r.race_event_id).active.push(r)
+  for (const r of claimedRows) bucket(r.race_event_id).claimed.push(r)
   const { events, error: evErr } = await readEvents(db, [...byEvent.keys()])
   if (evErr) throw new Error(`race_events read failed: ${evErr.message || evErr}`)
 
   const nowIso = new Date(now).toISOString()
-  for (const [raceEventId, list] of byEvent) {
+  for (const [raceEventId, group] of byEvent) {
     const race = events.get(raceEventId)
-    if (!race) { counts.skipped += list.length; continue }
+    if (!race) { counts.skipped += group.active.length; continue }
 
-    // The event date passed: the list is over.
+    // 1. The event date passed: the list is over. A NULL race_date never
+    // matches, so such an event's rows never expire (see the header).
     if (race.race_date && race.race_date < todayStr) {
+      if (!group.active.length) continue
       const { data, error } = await db
         .from('event_waitlist')
         .update({ status: 'expired' })
@@ -542,23 +644,80 @@ export async function runWaitlistOffers(db, { now = Date.now(), todayStr = dubli
       continue
     }
 
-    if (!(race.active === true && race.status === 'published') || !registrationWindowOpen(race, now)) {
-      counts.skipped += list.length
+    // 2. Re-open claims whose booking fell through.
+    const active = [...group.active]
+    for (const row of group.claimed) {
+      if (!claimFellThrough(row)) continue
+      let q = db
+        .from('event_waitlist')
+        .update({ status: 'offered', claimed_registration_id: null })
+        .eq('id', row.id)
+        .eq('status', 'claimed')
+      q = row.claimed_registration_id ? q.eq('claimed_registration_id', row.claimed_registration_id) : q.is('claimed_registration_id', null)
+      const { data, error } = await q.select(WAITLIST_ROW_COLUMNS)
+      if (error) {
+        counts.failed += 1
+        logError('event-waitlist', 're-opening a claim whose booking fell through failed', { err: error, waitlistId: row.id })
+        continue
+      }
+      if (!data?.length) continue
+      logWarn('event-waitlist', 'claim re-opened: the booking fell through; back on the list', {
+        waitlistId: row.id, registrationId: row.claimed_registration_id || null, registrationStatus: row.registration?.status || 'gone',
+      })
+      counts.reopened += 1
+      active.push(data[0])
+    }
+    if (!active.length) continue
+
+    const { data: liveRegs, error: regsErr } = await readLiveRegistrations(db, raceEventId)
+    if (regsErr) {
+      counts.failed += 1
+      logError('event-waitlist', 'registrations read failed; event skipped this round', { err: regsErr, raceEventId })
       continue
     }
 
-    const { hasRoom, error: roomErr } = await loadEventHasRoom(db, race)
-    if (roomErr) {
-      counts.failed += 1
-      logError('event-waitlist', 'registrations read failed; event skipped this round', { err: roomErr, raceEventId })
+    // 3. Already booked (without the link): mark claimed, never offer.
+    const byContact = new Map()
+    const byEmail = new Map()
+    for (const reg of liveRegs) {
+      if (reg.contact_id) byContact.set(reg.contact_id, reg.id)
+      const em = normaliseWaitlistEmail(reg.contact?.email)
+      if (em) byEmail.set(em, reg.id)
+    }
+    const toOffer = []
+    for (const row of active) {
+      const regId = (row.contact_id && byContact.get(row.contact_id)) || byEmail.get(normaliseWaitlistEmail(row.email))
+      if (!regId) { toOffer.push(row); continue }
+      const { data, error } = await db
+        .from('event_waitlist')
+        .update({ status: 'claimed', claimed_registration_id: regId })
+        .eq('id', row.id)
+        .in('status', ACTIVE_WAITLIST_STATUSES)
+        .select('id')
+      if (error) {
+        counts.failed += 1
+        logError('event-waitlist', 'marking an already-booked row claimed failed; not offered', { err: error, waitlistId: row.id })
+      } else if (data?.length) {
+        counts.claimed += 1
+      }
+    }
+    if (!toOffer.length) continue
+
+    // 4. Offer, when the event is bookable and a place is free.
+    if (!(race.active === true && race.status === 'published') || !registrationWindowOpen(race, now)) {
+      counts.skipped += toOffer.length
       continue
     }
-    if (!hasRoom) { counts.no_room += 1; continue }
+    if (!eventHasRoom(race, liveRegs)) { counts.no_room += 1; continue }
     counts.events += 1
 
-    for (const row of list) {
-      if (!(force ? ACTIVE_WAITLIST_STATUSES.includes(row.status) : isOfferDue(row, now))) { counts.skipped += 1; continue }
-      const res = await sendWaitlistOffer(db, { race, row, now })
+    const due = toOffer.filter((row) => (force ? ACTIVE_WAITLIST_STATUSES.includes(row.status) : isOfferDue(row, now)))
+    counts.skipped += toOffer.length - due.length
+    if (!due.length) continue
+    const commsLocationId = await commsLocationIdFor(db, race, { raceEventId })
+
+    for (const row of due) {
+      const res = await sendWaitlistOffer(db, { race, row, now, commsLocationId })
       const sent = res.email === 'sent' || res.whatsapp === 'sent'
       const failedAll = !sent && (res.email === 'failed' || res.whatsapp === 'failed')
       if (failedAll) {
@@ -616,6 +775,38 @@ export async function claimWaitlistOnRegistration(db, { token, registrationId, r
     return { claimed: true, waitlistId: verified.waitlistId }
   } catch (e) {
     logError('event-waitlist', 'claim threw', { err: e, registrationId })
+    return { claimed: false, reason: 'error' }
+  }
+}
+
+/**
+ * Mark this event's waitlist row for the booking's lead email as claimed by
+ * the registration: they booked, with or without the offer link. Same CAS as
+ * the token claim (only a row still on the list). Never throws.
+ *
+ * @param {object} db
+ * @param {{ raceEventId: string, email: string, registrationId: string }} args
+ * @returns {Promise<{ claimed: boolean, reason?: string, waitlistId?: string }>}
+ */
+export async function claimWaitlistByEmail(db, { raceEventId, email, registrationId }) {
+  try {
+    const cleanEmail = normaliseWaitlistEmail(email)
+    if (!raceEventId || !cleanEmail || !registrationId) return { claimed: false, reason: 'missing' }
+    const { data, error } = await db
+      .from('event_waitlist')
+      .update({ status: 'claimed', claimed_registration_id: registrationId })
+      .eq('race_event_id', raceEventId)
+      .eq('email', cleanEmail)
+      .in('status', ACTIVE_WAITLIST_STATUSES)
+      .select('id')
+    if (error) {
+      logError('event-waitlist', 'claim by email failed', { err: error, raceEventId, registrationId })
+      return { claimed: false, reason: 'write_failed' }
+    }
+    if (!data?.length) return { claimed: false, reason: 'not_on_list' }
+    return { claimed: true, waitlistId: data[0].id }
+  } catch (e) {
+    logError('event-waitlist', 'claim by email threw', { err: e, registrationId })
     return { claimed: false, reason: 'error' }
   }
 }

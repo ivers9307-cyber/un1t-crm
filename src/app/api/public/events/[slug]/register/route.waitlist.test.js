@@ -24,9 +24,12 @@ vi.mock('@/lib/marketing-consent', () => ({ applyFormMarketingConsent: vi.fn() }
 vi.mock('@/lib/contact-tags', () => ({ writeContactTags: vi.fn() }))
 vi.mock('@/lib/app-url', () => ({ getAppUrl: () => 'https://crm.test' }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
-vi.mock('@/lib/event-waitlist', () => ({ claimWaitlistOnRegistration: vi.fn(async () => ({ claimed: true, waitlistId: 'wl1' })) }))
+vi.mock('@/lib/event-waitlist', () => ({
+  claimWaitlistOnRegistration: vi.fn(async () => ({ claimed: true, waitlistId: 'wl1' })),
+  claimWaitlistByEmail: vi.fn(async () => ({ claimed: false, reason: 'not_on_list' })),
+}))
 
-const { claimWaitlistOnRegistration } = await import('@/lib/event-waitlist')
+const { claimWaitlistOnRegistration, claimWaitlistByEmail } = await import('@/lib/event-waitlist')
 const { logWarn } = await import('@/lib/log')
 const { POST } = await import('./route.js')
 
@@ -58,6 +61,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   db = registerDb()
   claimWaitlistOnRegistration.mockResolvedValue({ claimed: true, waitlistId: 'wl1' })
+  claimWaitlistByEmail.mockResolvedValue({ claimed: false, reason: 'not_on_list' })
 })
 
 describe('register route: waitlist_token', () => {
@@ -67,9 +71,23 @@ describe('register route: waitlist_token', () => {
     expect(claimWaitlistOnRegistration).toHaveBeenCalledWith(db, { token: 'tok.sig', registrationId: 'reg1', raceEventId: 'e1' })
   })
 
-  it('no token, no claim', async () => {
+  it('no token, no token claim', async () => {
     expect((await post(BODY)).status).toBe(200)
     expect(claimWaitlistOnRegistration).not.toHaveBeenCalled()
+  })
+
+  it('with or without a token, the lead email\'s waitlist row on this event is claimed', async () => {
+    expect((await post({ ...BODY, captain_email: 'Ann@Example.test' })).status).toBe(200)
+    expect(claimWaitlistByEmail).toHaveBeenCalledWith(db, { raceEventId: 'e1', email: 'ann@example.test', registrationId: 'reg1' })
+  })
+
+  it('not on the list is silent; any other claim-by-email failure is logged, never changes the answer', async () => {
+    await post(BODY)
+    expect(logWarn).not.toHaveBeenCalledWith('race-register', 'waitlist claim by email not recorded', expect.anything())
+    claimWaitlistByEmail.mockResolvedValueOnce({ claimed: false, reason: 'write_failed' })
+    const res = await post(BODY)
+    expect(res.status).toBe(200)
+    expect(logWarn).toHaveBeenCalledWith('race-register', 'waitlist claim by email not recorded', expect.objectContaining({ reason: 'write_failed' }))
   })
 
   it('a claim that does not take is logged and never changes the answer', async () => {

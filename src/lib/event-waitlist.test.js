@@ -24,10 +24,12 @@ const { checkTransactionalConsent } = await import('./transactional-consent')
 const { maybeSendBookingWhatsappConfirm } = await import('./automations/booking-whatsapp-confirm')
 const { findOrCreateRaceContact } = await import('./race-contact-linking')
 const { applyFormMarketingConsent } = await import('./marketing-consent')
-const { logError } = await import('./log')
+const { logError, logWarn } = await import('./log')
+const { resolveEventCommsLocation } = await import('./event-comms-location')
+const { WhatsAppNumberMissingError } = await import('./whatsapp-number-missing')
 const {
   eventHasRoom, isOfferDue, registrationWindowOpen, joinWaitlist, runWaitlistOffers,
-  claimWaitlistOnRegistration, sendWaitlistOffer, buildWaitlistJoinedEmail, WAITLIST_OFFER_TEMPLATE,
+  claimWaitlistOnRegistration, claimWaitlistByEmail, sendWaitlistOffer, buildWaitlistJoinedEmail, WAITLIST_OFFER_TEMPLATE,
 } = await import('./event-waitlist.js')
 const { signWaitlistClaimToken, verifyWaitlistClaimToken } = await import('./event-waitlist-tokens.js')
 
@@ -123,21 +125,30 @@ describe('joinWaitlist', () => {
     expect(applyFormMarketingConsent).not.toHaveBeenCalled()
   })
 
-  it('a row still on the list is refreshed in place: status and offer timing kept, no second email', async () => {
+  it('a row still on the list is refreshed in place: status, offer timing, name and phone kept, no second email', async () => {
     const existing = { ...ROW, status: 'offered', last_offered_at: '2026-10-09T10:00:00Z' }
     const db = joinDb({ existing })
-    const r = await joinWaitlist(db, { race: RACE, name: 'Ann E', email: 'ann@example.test', headcount: 3 })
+    const r = await joinWaitlist(db, { race: RACE, name: 'Someone Else', email: 'ann@example.test', phone: '0861111111', headcount: 3 })
     expect(r).toMatchObject({ created: false, rejoined: false })
     const upd = db.queries.find((q) => q.action === 'update')
     expect(upd.payload).not.toHaveProperty('status')
     expect(upd.payload).not.toHaveProperty('last_offered_at')
-    expect(upd.payload).toMatchObject({ name: 'Ann E', headcount: 3 })
+    expect(upd.payload).not.toHaveProperty('name')
+    expect(upd.payload).not.toHaveProperty('phone')
+    expect(upd.payload).toMatchObject({ headcount: 3 })
     expect(sendTransactionalEmail).not.toHaveBeenCalled()
   })
 
-  it.each(['removed', 'expired', 'claimed'])('a %s row that joins again is reset to waiting and told', async (status) => {
+  it('a row still on the list with no phone gets the phone filled', async () => {
+    const db = joinDb({ existing: { ...ROW, phone: null } })
+    await joinWaitlist(db, { race: RACE, name: 'Ann', email: 'ann@example.test', phone: '0861111111' })
+    expect(db.queries.find((q) => q.action === 'update').payload.phone).toBe('0861111111')
+  })
+
+  it.each(['removed', 'expired', 'claimed'])('a %s row that joins again is reset to waiting with fresh details, and told', async (status) => {
     const db = joinDb({ existing: { ...ROW, status, last_offered_at: '2026-10-01T10:00:00Z', removed_by_name: 'Staff' } })
-    const r = await joinWaitlist(db, { race: RACE, name: 'Ann', email: 'ann@example.test' })
+    const r = await joinWaitlist(db, { race: RACE, name: 'Ann New', email: 'ann@example.test' })
+    expect(db.queries.find((q) => q.action === 'update').payload.name).toBe('Ann New')
     expect(r.rejoined).toBe(true)
     const upd = db.queries.find((q) => q.action === 'update')
     expect(upd.payload).toMatchObject({ status: 'waiting', last_offered_at: null, removed_by_name: null })
@@ -178,13 +189,18 @@ describe('joinWaitlist', () => {
 })
 
 describe('sendWaitlistOffer', () => {
-  const offerDb = (contact = { id: 'c1', first_name: 'Ann', name: 'Ann Example', wa_phone: null, wa_status: null, contact_preferences: null }) =>
-    fakeDb((q) => (q.table === 'contacts' ? { data: contact, error: null } : { data: null, error: null }))
+  const offerDb = (contact = { id: 'c1', first_name: 'Ann', name: 'Ann Example', wa_phone: null, wa_status: null, contact_preferences: null }, numbers = [{ id: 'n1' }]) =>
+    fakeDb((q) => {
+      if (q.table === 'contacts') return { data: contact, error: null }
+      if (q.table === 'whatsapp_numbers') return { data: numbers, error: null }
+      return { data: null, error: null }
+    })
 
-  it('emails the claim link (administrative, unrecoverable) and WhatsApps on the offer template with name, event, link', async () => {
+  it('emails the claim link (administrative, recoverable) and WhatsApps on the offer template with name, event, link', async () => {
     const res = await sendWaitlistOffer(offerDb(), { race: RACE, row: ROW, now: NOW })
     expect(res).toEqual({ email: 'sent', whatsapp: 'sent' })
-    expect(checkTransactionalConsent).toHaveBeenCalledWith(expect.objectContaining({ channel: 'email', unrecoverable: true }))
+    expect(checkTransactionalConsent).toHaveBeenCalledWith(expect.objectContaining({ channel: 'email' }))
+    expect(checkTransactionalConsent.mock.calls[0][0].unrecoverable).toBeUndefined()
     const mail = sendTransactionalEmail.mock.calls[0][0]
     expect(mail.subject).toBe('A spot opened up for Hatch Relay')
     expect(mail.tag).toBe('event-waitlist-offer')
@@ -221,10 +237,23 @@ describe('sendWaitlistOffer', () => {
     expect((await sendWaitlistOffer(offerDb(), { race: RACE, row: ROW, now: NOW })).whatsapp).toBe('skipped:template_not_found')
   })
 
-  it('a WhatsApp leg that throws never escapes', async () => {
-    maybeSendBookingWhatsappConfirm.mockRejectedValue(new Error('WhatsAppNumberMissingError'))
-    const res = await sendWaitlistOffer(offerDb(), { race: RACE, row: ROW, now: NOW })
-    expect(res).toEqual({ email: 'sent', whatsapp: 'failed' })
+  it('a studio with no active WhatsApp number is a quiet skip (no_number), never a send', async () => {
+    const res = await sendWaitlistOffer(offerDb(undefined, []), { race: RACE, row: ROW, now: NOW })
+    expect(res).toEqual({ email: 'sent', whatsapp: 'skipped:no_number' })
+    expect(maybeSendBookingWhatsappConfirm).not.toHaveBeenCalled()
+  })
+
+  it('a WhatsAppNumberMissingError that escapes is no_number too; any other throw is failed, never escapes', async () => {
+    maybeSendBookingWhatsappConfirm.mockRejectedValueOnce(new WhatsAppNumberMissingError('L1'))
+    expect((await sendWaitlistOffer(offerDb(), { race: RACE, row: ROW, now: NOW })).whatsapp).toBe('skipped:no_number')
+    maybeSendBookingWhatsappConfirm.mockRejectedValueOnce(new Error('meta down'))
+    expect(await sendWaitlistOffer(offerDb(), { race: RACE, row: ROW, now: NOW })).toEqual({ email: 'sent', whatsapp: 'failed' })
+  })
+
+  it('uses the comms location it is given instead of resolving one', async () => {
+    await sendWaitlistOffer(offerDb(), { race: RACE, row: ROW, now: NOW, commsLocationId: 'L-given' })
+    expect(sendTransactionalEmail.mock.calls[0][0].locationId).toBe('L-given')
+    expect(resolveEventCommsLocation).not.toHaveBeenCalled()
   })
 
   it('an email that throws is failed and logged, the WhatsApp leg still runs', async () => {
@@ -236,9 +265,17 @@ describe('sendWaitlistOffer', () => {
 })
 
 describe('runWaitlistOffers', () => {
-  function roundDb({ rows = [ROW], race = RACE, regs = [confirmed('w1'), confirmed('w2')], rowsError = null, stampError = null } = {}) {
+  function roundDb({ rows = [ROW], claimedRows = [], race = RACE, regs = [confirmed('w1'), confirmed('w2')], rowsError = null, stampError = null } = {}) {
     return fakeDb((q) => {
-      if (q.table === 'event_waitlist' && q.action === 'select') return rowsError ? { data: null, error: rowsError } : { data: rows, error: null }
+      const claimedRead = q.ops.some((o) => o[0] === 'eq' && o[1] === 'status' && o[2] === 'claimed')
+      if (q.table === 'event_waitlist' && q.action === 'select') {
+        if (claimedRead) return { data: claimedRows, error: null }
+        return rowsError ? { data: null, error: rowsError } : { data: rows, error: null }
+      }
+      if (q.table === 'event_waitlist' && q.action === 'update' && q.payload.status === 'offered' && 'claimed_registration_id' in q.payload) {
+        const r = claimedRows.find((x) => x.id === eqOf(q, 'id'))
+        return { data: [{ ...r, registration: undefined, status: 'offered', claimed_registration_id: null }], error: null }
+      }
       if (q.table === 'event_waitlist' && q.action === 'update') {
         if (stampError) return { data: null, error: stampError }
         if (q.payload.status === 'expired') return { data: rows.map((r) => ({ id: r.id })), error: null }
@@ -247,10 +284,12 @@ describe('runWaitlistOffers', () => {
       if (q.table === 'race_events') return { data: race ? [race] : [], error: null }
       if (q.table === 'race_registrations') return { data: regs, error: null }
       if (q.table === 'contacts') return { data: { id: 'c1', wa_status: null }, error: null }
+      if (q.table === 'whatsapp_numbers') return { data: [{ id: 'n1' }], error: null }
       return { data: null, error: null }
     })
   }
-  const stamps = (db) => db.queries.filter((q) => q.table === 'event_waitlist' && q.action === 'update')
+  const stamps = (db) => db.queries.filter((q) => q.table === 'event_waitlist' && q.action === 'update' && q.payload.last_offered_at)
+  const updatesWith = (db, status) => db.queries.filter((q) => q.table === 'event_waitlist' && q.action === 'update' && q.payload.status === status)
 
   it('offers nobody while every time is full', async () => {
     const db = roundDb()
@@ -276,7 +315,7 @@ describe('runWaitlistOffers', () => {
     const db = roundDb({ race: { ...RACE, race_date: '2026-10-08' }, regs: [] })
     const c = await runWaitlistOffers(db, { now: NOW, todayStr: '2026-10-09' })
     expect(c).toMatchObject({ expired: 1, offered: 0 })
-    const exp = stamps(db)[0]
+    const exp = updatesWith(db, 'expired')[0]
     expect(exp.payload).toEqual({ status: 'expired' })
     expect(eqOf(exp, 'race_event_id')).toBe('e1')
   })
@@ -355,7 +394,89 @@ describe('runWaitlistOffers', () => {
   })
 
   it('nothing on any list is a clean, empty round', async () => {
-    expect(await runWaitlistOffers(roundDb({ rows: [] }), { now: NOW })).toEqual({ events: 0, offered: 0, expired: 0, skipped: 0, failed: 0, no_room: 0 })
+    expect(await runWaitlistOffers(roundDb({ rows: [] }), { now: NOW })).toEqual({ events: 0, offered: 0, expired: 0, skipped: 0, failed: 0, no_room: 0, claimed: 0, reopened: 0 })
+  })
+
+  it('a row whose contact or email already holds a LIVE registration is marked claimed and never offered', async () => {
+    const rows = [
+      { ...ROW, id: 'wl1', contact_id: 'c1', email: 'ann@example.test' },
+      { ...ROW, id: 'wl2', contact_id: null, email: 'Bo@Example.test' },
+      { ...ROW, id: 'wl3', contact_id: 'c3', email: 'cy@example.test', phone: null },
+    ]
+    const regs = [
+      { id: 'reg-a', wave_id: 'w1', status: 'confirmed', contact_id: 'c1', team: { size: 1 }, contact: { email: 'other@example.test' } },
+      { id: 'reg-b', wave_id: 'w1', status: 'pending_payment', contact_id: 'c9', team: { size: 1 }, contact: { email: 'bo@example.test' } },
+    ]
+    const db = roundDb({ rows, regs })
+    const c = await runWaitlistOffers(db, { now: NOW, todayStr: '2026-10-09' })
+    expect(c).toMatchObject({ claimed: 2, offered: 1 })
+    const claims = updatesWith(db, 'claimed')
+    expect(claims.map((q) => [eqOf(q, 'id'), q.payload.claimed_registration_id])).toEqual([['wl1', 'reg-a'], ['wl2', 'reg-b']])
+    expect(claims[0].ops).toContainEqual(['in', 'status', ['waiting', 'offered']])
+    expect(sendTransactionalEmail).toHaveBeenCalledTimes(1)
+    expect(sendTransactionalEmail.mock.calls[0][0].to).toBe('cy@example.test')
+    // The live read asks for confirmed AND pending entries.
+    const read = db.queries.find((q) => q.table === 'race_registrations')
+    expect(read.ops).toContainEqual(['in', 'status', ['pending_payment', 'confirmed']])
+  })
+
+  it('re-opens a claim whose registration was cancelled, or is gone, and offers it again', async () => {
+    const claimedRows = [
+      { ...ROW, id: 'wl-c', status: 'claimed', claimed_registration_id: 'reg-x', phone: null, registration: { id: 'reg-x', status: 'cancelled', race_event_id: 'e1' } },
+      { ...ROW, id: 'wl-g', email: 'gone@example.test', status: 'claimed', claimed_registration_id: null, phone: null, registration: null },
+      { ...ROW, id: 'wl-k', email: 'kept@example.test', status: 'claimed', claimed_registration_id: 'reg-k', registration: { id: 'reg-k', status: 'pending_payment', race_event_id: 'e1' } },
+    ]
+    const db = roundDb({ rows: [], claimedRows, regs: [] })
+    const c = await runWaitlistOffers(db, { now: NOW, todayStr: '2026-10-09' })
+    expect(c).toMatchObject({ reopened: 2, offered: 2 })
+    const reopens = db.queries.filter((q) => q.action === 'update' && 'claimed_registration_id' in q.payload && q.payload.status === 'offered')
+    expect(reopens.map((q) => eqOf(q, 'id'))).toEqual(['wl-c', 'wl-g'])
+    expect(reopens[0].payload).toEqual({ status: 'offered', claimed_registration_id: null })
+    expect(reopens[0].ops).toContainEqual(['eq', 'status', 'claimed'])
+    expect(reopens[0].ops).toContainEqual(['eq', 'claimed_registration_id', 'reg-x'])
+    expect(reopens[1].ops).toContainEqual(['is', 'claimed_registration_id', null])
+    expect(logWarn).toHaveBeenCalledWith('event-waitlist', expect.stringMatching(/claim re-opened/), expect.objectContaining({ waitlistId: 'wl-c', registrationStatus: 'cancelled' }))
+    expect(sendTransactionalEmail.mock.calls.map((x) => x[0].to).sort()).toEqual(['ann@example.test', 'gone@example.test'])
+    // The claimed read is bounded to events still ahead.
+    const claimedRead = db.queries.find((q) => q.table === 'event_waitlist' && q.ops.some((o) => o[0] === 'eq' && o[2] === 'claimed'))
+    expect(claimedRead.ops).toContainEqual(['gte', 'race.race_date', '2026-10-09'])
+  })
+
+  it('a claim moved to another event is re-opened too', async () => {
+    const claimedRows = [{ ...ROW, id: 'wl-m', status: 'claimed', claimed_registration_id: 'reg-m', phone: null, registration: { id: 'reg-m', status: 'confirmed', race_event_id: 'e-other' } }]
+    const c = await runWaitlistOffers(roundDb({ rows: [], claimedRows, regs: [] }), { now: NOW, todayStr: '2026-10-09' })
+    expect(c.reopened).toBe(1)
+  })
+
+  it('resolves the sending location once per event, not per row', async () => {
+    const rows = [{ ...ROW, phone: null }, { ...ROW, id: 'wl2', email: 'bo@example.test', phone: null }, { ...ROW, id: 'wl3', email: 'cy@example.test', phone: null }]
+    await runWaitlistOffers(roundDb({ rows, regs: [] }), { now: NOW, todayStr: '2026-10-09' })
+    expect(sendTransactionalEmail).toHaveBeenCalledTimes(3)
+    expect(resolveEventCommsLocation).toHaveBeenCalledTimes(1)
+    expect(sendTransactionalEmail.mock.calls.every((x) => x[0].locationId === 'L-comms')).toBe(true)
+  })
+
+  it('an event with no date never expires its rows', async () => {
+    const db = roundDb({ race: { ...RACE, race_date: null }, regs: [] })
+    const c = await runWaitlistOffers(db, { now: NOW, todayStr: '2026-10-09' })
+    expect(c.expired).toBe(0)
+    expect(updatesWith(db, 'expired')).toHaveLength(0)
+  })
+})
+
+describe('claimWaitlistByEmail', () => {
+  it('claims THIS event\'s row for the lead email, lower-cased, only while it is on the list', async () => {
+    const db = fakeDb(() => ({ data: [{ id: 'wl1' }], error: null }))
+    expect(await claimWaitlistByEmail(db, { raceEventId: 'e1', email: ' Ann@Example.TEST ', registrationId: 'r9' })).toEqual({ claimed: true, waitlistId: 'wl1' })
+    const q = db.queries[0]
+    expect(q.payload).toEqual({ status: 'claimed', claimed_registration_id: 'r9' })
+    expect(eqOf(q, 'race_event_id')).toBe('e1')
+    expect(eqOf(q, 'email')).toBe('ann@example.test')
+    expect(q.ops).toContainEqual(['in', 'status', ['waiting', 'offered']])
+  })
+  it('not on the list is a quiet no-op; a failed write is reported, never thrown', async () => {
+    expect((await claimWaitlistByEmail(fakeDb(() => ({ data: [], error: null })), { raceEventId: 'e1', email: 'a@example.test', registrationId: 'r9' })).reason).toBe('not_on_list')
+    expect((await claimWaitlistByEmail(fakeDb(() => ({ data: null, error: { message: 'x' } })), { raceEventId: 'e1', email: 'a@example.test', registrationId: 'r9' })).reason).toBe('write_failed')
   })
 })
 
