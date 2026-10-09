@@ -17,11 +17,12 @@ import { verifyStripeWebhook, getStripe } from '@/lib/stripe'
 import { createServerClient } from '@/lib/supabase'
 import { resolveRacePaymentByProviderRef, markRacePaymentStatus } from '@/lib/race-payments'
 import { syncOrderFromRacePayment } from '@/lib/orders'
-import { sendRaceConfirmations } from '@/lib/race-confirmations'
+import { sendRaceConfirmations, sendGapPaidEmail } from '@/lib/race-confirmations'
 import { refundPatchFromCharge } from '@/lib/stripe-refund-sync'
 import { resolveClassBookingPaymentByRef, markClassBookingPaymentStatus } from '@/lib/class-booking-payments'
 import { publishQueuePush, CLASS_BOOKINGS_WORKER_PATH } from '@/lib/qstash'
 import { logWarn, logError } from '@/lib/log'
+import { GAP_PAYMENT_KIND } from '@/lib/registration-entry'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -102,7 +103,16 @@ export async function POST(request) {
           revolutState: 'completed',
           revolutAmount: Number.isFinite(session.amount_total) ? session.amount_total : null,
         })
-        if (result.applied?.status === 'completed') {
+        if (result.applied?.status === 'completed' && payment.kind === GAP_PAYMENT_KIND) {
+          // EVENT-MOVE.5 — a paid price difference: markRacePaymentStatus
+          // settled the move; the payer gets the gap receipt, never the
+          // entry confirmation.
+          try {
+            await sendGapPaidEmail({ db, paymentId: payment.id })
+          } catch (e) {
+            logWarn('stripe-webhook', 'gap receipt failed', { err: e, paymentId: payment.id })
+          }
+        } else if (result.applied?.status === 'completed') {
           try {
             await sendRaceConfirmations({ db, paymentId: payment.id })
           } catch (e) {
@@ -167,6 +177,13 @@ export async function POST(request) {
               account: event.account || null,
             })
           } else {
+            if (payment.kind === GAP_PAYMENT_KIND) {
+              // EVENT-MOVE.5 — a refunded price difference does NOT un-settle
+              // its move: whether the customer still owes it is staff's call.
+              logWarn('stripe-webhook', 'charge.refunded on a move_gap payment; the move stays settled, staff decide', {
+                paymentId: payment.id, moveId: payment.registration_move_id || null,
+              })
+            }
             const patch = refundPatchFromCharge(charge, payment, new Date().toISOString())
             if (patch) {
               // Atomic monotonic write: the filter re-checks the cumulative in

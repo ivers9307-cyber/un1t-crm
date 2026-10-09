@@ -30,7 +30,8 @@ import { viewerActiveLocationId } from '../registry'
 import { visitOriginLabel } from '@/lib/visit-origin'
 import { formatMoneyMinor } from '@/lib/money-format'
 import { retryOffered, RETRYABLE_KINDS } from '@/lib/agent/request-recovery'
-import { failureExplanation, accountSummaryLine, whyFlagged, accountMismatchWarning } from '@/lib/approvals/agent-request-why'
+import { accountSummaryLine, whyFlagged, accountMismatchWarning } from '@/lib/approvals/agent-request-why'
+import { approvalSummary, explainFailure } from '@/lib/approvals/event-move-card'
 
 // AGENT-FUNNEL-CREDITS.1 — the membership/credit fields the Glofox sync
 // denormalises onto contacts, surfaced on every approval card so staff see
@@ -45,6 +46,7 @@ const KIND_LABELS = {
   cancellation: 'Cancel membership',
   class_booking: 'Book class',
   consultation: 'Book consultation',
+  event_move: 'Move event entry',
 }
 
 // One-line summary of the request payload per kind. Exported for tests.
@@ -55,6 +57,8 @@ export function agentRequestSubtitle(row) {
     if (d.paid) parts.push(`💳 Paid ${formatMoneyMinor(d.amount_cents, d.currency)}`)
     return parts.join(' · ') || 'Class booking request'
   }
+  // EVENT-MOVE.7 — the move summary (web-only module; see event-move-card.js).
+  if (row?.kind === 'event_move') return approvalSummary(row)
   if (row?.kind === 'consultation') {
     return [d.date, d.start_time].filter(Boolean).join(' · ') || 'Consultation request'
   }
@@ -164,7 +168,7 @@ export const agentRequestsProvider = {
       failedAt: r.decided_at || null,
       // Pre-computed what-went-wrong copy so mobile renders it without
       // needing the (web-side) explainer lib.
-      failedWhy: failureExplanation(r),
+      failedWhy: explainFailure(r),
     }))
     return { count: items.length + failedItems.length, items, failedItems }
   },

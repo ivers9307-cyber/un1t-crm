@@ -15,8 +15,10 @@ import { useState } from 'react'
 import Link from 'next/link'
 import { Sparkles, Copy, Check } from 'lucide-react'
 import { DECLINE_REASONS, BOOKING_KINDS } from '@shared/approvals-next-steps'
-import { APPROVAL_KIND_LABELS } from '@shared/approval-cards'
-import { whyFlagged, customerWords, failureExplanation } from '@/lib/approvals/agent-request-why'
+import { whyFlagged, customerWords } from '@/lib/approvals/agent-request-why'
+// EVENT-MOVE.7 — label, failure line and done line prefer the web-only
+// event_move module and fall through to the shared helpers for other kinds.
+import { approvalKindLabel, explainFailure, eventMoveDoneLine, EVENT_MOVE_KIND_CHIP } from '@/lib/approvals/event-move-card'
 import { RETRYABLE_KINDS } from '@/lib/agent/request-recovery'
 
 const KIND_CHIP = {
@@ -24,6 +26,7 @@ const KIND_CHIP = {
   class_cancellation: 'bg-red-500/10 text-red-700',
   event_cancellation: 'bg-red-500/10 text-red-700',
   pause: 'bg-amber-500/10 text-amber-700',
+  event_move: EVENT_MOVE_KIND_CHIP,
 }
 const DEFAULT_KIND_CHIP = 'bg-amber-500/10 text-amber-700'
 
@@ -69,7 +72,7 @@ function notifiedSentence(notified) {
 }
 
 // What actually happened, in the operator's terms, once the PATCH returns.
-function outcomeLine(status, item, executed, notified = null, plannedEndDate = null) {
+export function outcomeLine(status, item, executed, notified = null, plannedEndDate = null) {
   const hasThread = !!item.conversationId
   const isMembership = item.kind === 'cancellation' || item.kind === 'pause'
   if (status === 'actioned' && item.kind === 'cancellation') {
@@ -83,12 +86,16 @@ function outcomeLine(status, item, executed, notified = null, plannedEndDate = n
     if (notified?.reason === 'email_blocked') return { tone: 'ok', text: 'Recorded as booked. The customer has NOT been emailed (their address bounced or they opted out), so make sure they know.' }
     return { tone: 'ok', text: 'Recorded as booked. The customer has NOT been emailed, so make sure they know.' }
   }
+  // EVENT-MOVE.7 — an event move runs on our own events, not Glofox.
+  if (status === 'actioned' && item.kind === 'event_move') {
+    return { tone: 'ok', text: eventMoveDoneLine({ hasThread, notified: executed?.notified === true }) }
+  }
   if (status === 'actioned') {
     return { tone: 'ok', text: hasThread ? 'Done — executed in Glofox and the customer was told in-thread.' : 'Done — executed in Glofox and the customer was notified.' }
   }
   if (status === 'failed') {
     // AGENT-RETRY.1 — a failure is a fix-then-retry, not a dead end.
-    const explain = failureExplanation({ status: 'failed', details: { result: executed || {} } })
+    const explain = explainFailure({ status: 'failed', details: { result: executed || {} } })
     return { tone: 'bad', failed: true, text: `${explain} The customer has NOT been confirmed.` }
   }
   // MIA-EXPIRY-QUIET.1 — the past-start guard refused the execution. Nothing
@@ -127,7 +134,7 @@ export default function AgentRequestDecideCard({ item, onDecided }) {
   const [outcome, setOutcome] = useState(null) // { tone, text, failed? } after a decision
   const [countedDecided, setCountedDecided] = useState(false)
 
-  const kindLabel = APPROVAL_KIND_LABELS[item.kind] || 'Agent request'
+  const kindLabel = approvalKindLabel(item.kind) || 'Agent request'
   const why = whyFlagged(item)
   const said = customerWords(item)
   // AGENT-RETRY.2 — the provider ships failed-retryable rows as their own
@@ -138,7 +145,7 @@ export default function AgentRequestDecideCard({ item, onDecided }) {
   const candidates = Array.isArray(item.details?.candidates) ? item.details.candidates : []
   const electedMemberId = item.details?.elected_glofox_member_id || null
   const isFailedItem = !!item.failed
-  const failWhy = isFailedItem ? failureExplanation({ status: 'failed', details: item.details }) : null
+  const failWhy = isFailedItem ? explainFailure({ status: 'failed', details: item.details }) : null
   const reasonOptions = BOOKING_KINDS.has(item.kind)
     ? DECLINE_REASONS
     : DECLINE_REASONS.filter(([k]) => k === 'not_eligible' || k === 'other')

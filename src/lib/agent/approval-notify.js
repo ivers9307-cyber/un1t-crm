@@ -11,12 +11,12 @@
 // pending row) is safe. Fire-and-forget: a notify hiccup never blocks the
 // customer-facing outcome.
 import { notifyUsersAtRolesOnce } from '@/lib/push-dedup'
-import { APPROVAL_KIND_LABELS } from '@shared/approval-cards'
+import { approvalKindLabel } from '@/lib/approvals/event-move-card'
 
 export async function notifyAgentApprovalRequest(db, { requestId, locationId, kind, customerName, summary }) {
   if (!requestId || !locationId) return
   try {
-    const label = APPROVAL_KIND_LABELS[kind] || 'Customer request'
+    const label = approvalKindLabel(kind) || 'Customer request'
     const who = customerName || 'A customer'
     await notifyUsersAtRolesOnce(db, `agent_request:${requestId}`, locationId, ['owner', 'manager'], {
       title: `Approval needed · ${label}`,
