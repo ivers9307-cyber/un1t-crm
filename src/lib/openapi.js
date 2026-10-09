@@ -6365,7 +6365,9 @@ registry.registerPath({
           schema: z.object({
             location_id: uuidLike,
             enabled: z.boolean(),
-            config: z.record(z.string(), z.unknown()).optional(),
+            // W0.12 — device_ids must all be ac_devices rows at location_id
+            // (400 unknown_device otherwise); other keys are per-automation.
+            config: z.object({ device_ids: z.array(uuidLike).max(50).optional() }).passthrough().optional(),
           }).openapi('AutomationToggle'),
         },
       },

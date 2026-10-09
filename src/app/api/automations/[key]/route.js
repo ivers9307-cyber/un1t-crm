@@ -12,7 +12,9 @@ export const runtime = 'nodejs'
 const Schema = z.object({
   location_id: uuidLike,
   enabled: z.boolean(),
-  config: z.record(z.string(), z.unknown()).optional(),
+  // W0.12 — device_ids are checked against ac_devices at location_id below;
+  // the rest of the config stays free-form (each automation's own keys).
+  config: z.object({ device_ids: z.array(uuidLike).max(50).optional() }).passthrough().optional(),
 })
 
 export async function PUT(request, { params }) {
@@ -39,6 +41,24 @@ export async function PUT(request, { params }) {
   }
 
   const db = createServerClient()
+
+  const wanted = body.config?.device_ids || []
+  if (wanted.length) {
+    const { data: owned, error: devErr } = await db
+      .from('ac_devices')
+      .select('id')
+      .eq('location_id', body.location_id)
+      .in('id', wanted)
+    if (devErr) return NextResponse.json({ success: false, error: devErr.message }, { status: 500 })
+    const ownedIds = new Set((owned || []).map((d) => d.id))
+    const foreign = wanted.filter((id) => !ownedIds.has(id))
+    if (foreign.length) {
+      // W0.12 — a pasted id from another studio would make the climate
+      // runners switch THAT studio's AC. Refuse; never say whose it is.
+      return NextResponse.json({ success: false, error: 'unknown_device' }, { status: 400 })
+    }
+  }
+
   const { data, error } = await db
     .from('location_automations')
     .upsert({
