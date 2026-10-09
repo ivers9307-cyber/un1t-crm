@@ -16,6 +16,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { refreshRacePaymentFromProvider } from '@/lib/race-payments'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
+import { GAP_PAYMENT_KIND } from '@/lib/registration-entry'
 
 export const runtime = 'nodejs'
 
@@ -43,7 +44,8 @@ export async function GET(request, props) {
       race_event_id, race_registration_id,
       race:race_event_id ( id, name, slug ),
       registration:race_registration_id ( id, status, team_id,
-        teams:team_id ( name, size ) )
+        teams:team_id ( name, size ) ),
+      move:registration_move_id ( gap_settled_at, gap_settled_how )
     `)
     .eq('id', params.id)
     .maybeSingle()
@@ -77,7 +79,8 @@ export async function GET(request, props) {
             race_event_id, race_registration_id,
             race:race_event_id ( id, name, slug ),
             registration:race_registration_id ( id, status, team_id,
-              teams:team_id ( name, size ) )
+              teams:team_id ( name, size ) ),
+            move:registration_move_id ( gap_settled_at, gap_settled_how )
           `)
           .eq('id', params.id)
           .maybeSingle()
@@ -88,6 +91,12 @@ export async function GET(request, props) {
     }
   }
 
+  // EVENT-MOVE.5 — a difference link that can no longer be paid: expired
+  // (the provider session lapsed, or it failed) or settled by hand. The
+  // checkout shows a message instead of mounting a widget.
+  const isGap = row.kind === GAP_PAYMENT_KIND
+  const settled = isGap && !!row.move?.gap_settled_at
+
   return NextResponse.json({
     success: true,
     data: {
@@ -96,6 +105,9 @@ export async function GET(request, props) {
       // EVENT-MOVE.5 — 'move_gap' is a moved entry's price difference: the
       // checkout labels it so and shows no roster.
       kind: row.kind || 'entry',
+      expired: isGap && (row.status === 'abandoned' || row.status === 'failed'),
+      settled,
+      settled_how: settled ? (row.move.gap_settled_how || null) : null,
       amount_cents: row.amount_cents,
       // The per-ticket booking fee UN1T adds on top (0/null for Revolut and
       // internal events). Ticket subtotal = amount_cents − booking_fee_cents.

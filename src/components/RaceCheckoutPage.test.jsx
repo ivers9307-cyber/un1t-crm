@@ -13,6 +13,7 @@ vi.mock('@/lib/revolut-embed', () => ({
 }))
 
 const { default: RaceCheckoutPage } = await import('./RaceCheckoutPage.jsx')
+const { loadRevolutSdk } = await import('@/lib/revolut-embed')
 
 const BASE = { id: 'gp1', status: 'pending', amount_cents: 1000, booking_fee_cents: 0, currency: 'EUR', provider: 'revolut',
   checkout: { token: 'tok', url: null, connected_account_id: null },
@@ -20,7 +21,7 @@ const BASE = { id: 'gp1', status: 'pending', amount_cents: 1000, booking_fee_cen
   registration: { id: 'r1', status: 'confirmed', team_name: 'The Crushers', team_size: 2 } }
 const serve = (data) => vi.stubGlobal('fetch', vi.fn(async () => ({ json: async () => ({ success: true, data }) })))
 
-afterEach(() => { cleanup(); vi.unstubAllGlobals() })
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.clearAllMocks() })
 
 describe('RaceCheckoutPage — price difference', () => {
   it('a move_gap payment says "Price difference" and lists no team or headcount', async () => {
@@ -41,3 +42,26 @@ describe('RaceCheckoutPage — price difference', () => {
     expect(screen.queryByText('Price difference')).toBeNull()
   })
 })
+
+describe('RaceCheckoutPage — a difference link that cannot be paid', () => {
+  it('an expired link says so and mounts no payment widget', async () => {
+    serve({ ...BASE, kind: 'move_gap', status: 'abandoned', expired: true, settled: false })
+    render(<RaceCheckoutPage paymentId="gp1" />)
+    await screen.findByText('This payment link has expired. Ask the event team for a new one.')
+    expect(loadRevolutSdk).not.toHaveBeenCalled()
+    expect(screen.queryByText(/Secure payment by/)).toBeNull()
+  })
+  it('a difference settled by hand says there is nothing to pay and mounts nothing, even while the row is pending', async () => {
+    serve({ ...BASE, kind: 'move_gap', status: 'pending', expired: false, settled: true, settled_how: 'waived' })
+    render(<RaceCheckoutPage paymentId="gp1" />)
+    await screen.findByText('This difference is already settled, nothing to pay.')
+    expect(loadRevolutSdk).not.toHaveBeenCalled()
+  })
+  it('a live difference link mounts the widget', async () => {
+    serve({ ...BASE, kind: 'move_gap', status: 'pending', expired: false, settled: false })
+    render(<RaceCheckoutPage paymentId="gp1" />)
+    await screen.findByText('Price difference')
+    await vi.waitFor(() => expect(loadRevolutSdk).toHaveBeenCalled())
+  })
+})
+

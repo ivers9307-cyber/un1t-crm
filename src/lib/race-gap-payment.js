@@ -29,13 +29,16 @@ import { emitEvent, EVENT_TYPES } from './contact-events'
 import { getAppUrl } from './app-url'
 import { entryLeadEmail, membersOf, GAP_PAYMENT_KIND } from './registration-entry'
 import { logError, logWarn } from './log'
+// A cycle (race-payments imports completeGapPayment from here); safe, since
+// neither module touches the other's bindings at load time.
+import { refreshRacePaymentFromProvider } from './race-payments'
 
 export { GAP_PAYMENT_KIND }
 
 // The entry's payment rows, newest first. One read answers three questions:
 // is there a pending link for this move to reuse, how many links this move has
 // had (the idempotency key), and the latest entry payment (contact fallback).
-const PAYMENT_COLUMNS = 'id, kind, status, registration_move_id, amount_cents, currency, contact_email, contact_phone, contact_name, payment_provider, payment_checkout_url, created_at'
+const PAYMENT_COLUMNS = 'id, kind, status, registration_move_id, amount_cents, currency, contact_email, contact_phone, contact_name, payment_provider, payment_provider_ref, payment_checkout_url, created_at'
 
 function leadName(registration, entryPayment) {
   const c = registration?.contact
@@ -79,7 +82,16 @@ export async function createGapPayment({ db, move, registration, race, returnUrl
   const forThisMove = payments.filter((p) => p.kind === GAP_PAYMENT_KIND && p.registration_move_id === move.id)
   const pending = forThisMove.find((p) => p.status === 'pending')
   if (pending) {
-    return { ok: true, payment: pending, checkoutUrl: `${getAppUrl()}/event-pay/${pending.id}`, reused: true }
+    // Ask the provider first: a Stripe Checkout session expires after 24
+    // hours, and a link may have been paid without the webhook landing yet.
+    // The refresh applies whatever it finds (abandoned, or completed, which
+    // settles the move and sends the receipt).
+    const live = (await refreshRacePaymentFromProvider(db, pending)) || pending
+    if (live.status === 'pending') {
+      return { ok: true, payment: live, checkoutUrl: `${getAppUrl()}/event-pay/${live.id}`, reused: true }
+    }
+    if (live.status === 'completed') return { ok: false, error: 'already_settled' }
+    // abandoned / failed: mint a fresh link below.
   }
   const entryPayment = payments.find((p) => (p.kind || 'entry') === 'entry') || null
 

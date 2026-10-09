@@ -60,7 +60,7 @@ function fakeDb({ payments = { data: [ENTRY_PAY], error: null }, insert = { erro
         const has = (col) => q.ops.some((o) => o[0] === 'eq' && o[1] === col)
         if (table === 'race_payments' && q.ops.some((o) => o[0] === 'update')) return statusWrite
         if (table === 'race_payments' && has('registration_move_id')) return winner
-        if (table === 'race_payments' && has('id')) return row
+        if (table === 'race_payments' && has('id')) return Array.isArray(row) ? (row.length > 1 ? row.shift() : row[0]) : row
         if (table === 'race_payments') return payments
         return { data: null, error: null }
       }
@@ -211,14 +211,34 @@ describe('createGapPayment — a new link', () => {
 })
 
 describe('createGapPayment — reuse', () => {
-  it('returns the pending move_gap payment for this move instead of minting another', async () => {
-    const pending = { id: 'gp0', kind: 'move_gap', status: 'pending', registration_move_id: 'mv1', amount_cents: 1000, contact_email: 'aoife@x.ie', created_at: '2026-10-08T00:00:00Z' }
-    const a = args({ db: fakeDb({ payments: { data: [pending, ENTRY_PAY], error: null } }) })
+  const pending = { id: 'gp0', kind: 'move_gap', status: 'pending', registration_move_id: 'mv1', amount_cents: 1000, contact_email: 'aoife@x.ie',
+    payment_provider: 'revolut', payment_provider_ref: 'ord-0', created_at: '2026-10-08T00:00:00Z' }
+  it('returns the pending move_gap payment for this move (still pending at the provider) instead of minting another', async () => {
+    getPayment.mockResolvedValue({ state: 'pending', amountCents: 1000 })
+    const a = args({ db: fakeDb({ payments: { data: [pending, ENTRY_PAY], error: null }, row: { data: pending, error: null } }) })
     const r = await createGapPayment(a)
     expect(r).toEqual({ ok: true, payment: pending, checkoutUrl: 'https://crm.test/event-pay/gp0', reused: true })
+    expect(getPayment).toHaveBeenCalledWith('ord-0', expect.anything())
     expect(createPayment).not.toHaveBeenCalled()
     expect(a.db.inserts).toEqual([])
     expect(emitEvent).not.toHaveBeenCalled()
+  })
+  it('an EXPIRED pending link (the provider says cancelled) is marked abandoned and a new one is minted', async () => {
+    getPayment.mockResolvedValue({ state: 'cancelled', amountCents: null })
+    const abandoned = { ...pending, status: 'abandoned' }
+    const a = args({ db: fakeDb({ payments: { data: [pending, ENTRY_PAY], error: null }, row: [{ data: pending, error: null }, { data: abandoned, error: null }] }) })
+    const r = await createGapPayment(a)
+    expect(r.ok).toBe(true)
+    expect(r.reused).toBe(false)
+    expect(a.db.updates.find((u) => u.table === 'race_payments').patch).toEqual(expect.objectContaining({ status: 'abandoned' }))
+    expect(createPayment).toHaveBeenCalledWith(expect.objectContaining({ idempotencyKey: 'move:mv1:1' }))
+  })
+  it('a pending link the customer actually PAID answers already_settled and mints nothing', async () => {
+    getPayment.mockResolvedValue({ state: 'completed', amountCents: 1000 })
+    const paid = { ...pending, status: 'completed' }
+    const a = args({ db: fakeDb({ payments: { data: [pending, ENTRY_PAY], error: null }, row: [{ data: pending, error: null }, { data: paid, error: null }] }) })
+    expect(await createGapPayment(a)).toEqual({ ok: false, error: 'already_settled' })
+    expect(createPayment).not.toHaveBeenCalled()
   })
   it('a pending gap payment of an EARLIER move is not reused', async () => {
     const other = { id: 'gpX', kind: 'move_gap', status: 'pending', registration_move_id: 'mv0', created_at: '2026-10-07T00:00:00Z' }

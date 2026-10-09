@@ -8,12 +8,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // maybeSingle() (answers globalThis.__move), the write ends in select()
 // after update() (answers globalThis.__write). Every call is recorded.
 vi.mock('@/lib/supabase', () => {
-  const make = () => {
+  const make = (table) => {
     const ops = []
     globalThis.__ops.push(ops)
     let writing = false
     const b = {
-      select: (...a) => { ops.push(['select', ...a]); return writing ? Promise.resolve(globalThis.__write) : b },
+      select: (...a) => { ops.push(['select', ...a]); return writing ? Promise.resolve(table === 'race_payments' ? globalThis.__gapWrite : globalThis.__write) : b },
       eq: (...a) => { ops.push(['eq', ...a]); return b },
       is: (...a) => { ops.push(['is', ...a]); return b },
       update: (...a) => { ops.push(['update', ...a]); writing = true; return b },
@@ -21,8 +21,9 @@ vi.mock('@/lib/supabase', () => {
     }
     return b
   }
-  return { createServerClient: vi.fn(() => ({ from: (t) => { globalThis.__tables.push(t); return make() } })) }
+  return { createServerClient: vi.fn(() => ({ from: (t) => { globalThis.__tables.push(t); return make(t) } })) }
 })
+vi.mock('@/lib/orders', () => ({ syncOrderFromRacePayment: vi.fn(async () => {}) }))
 vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), getCurrentUser: vi.fn() }))
 vi.mock('@/lib/registration-move', async (importOriginal) => ({
   ...(await importOriginal()),
@@ -33,6 +34,7 @@ vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), l
 const { getCurrentUser } = await import('@/lib/auth')
 const { readRegistrationForMove } = await import('@/lib/registration-move')
 const { logError } = await import('@/lib/log')
+const { syncOrderFromRacePayment } = await import('@/lib/orders')
 const { POST } = await import('./route.js')
 
 const L1 = 'a0000000-0000-0000-0000-000000000001'
@@ -62,6 +64,7 @@ beforeEach(() => {
   globalThis.__tables = []
   globalThis.__move = { data: { ...MOVE }, error: null }
   globalThis.__write = { data: [{ ...MOVE, gap_settled_at: '2026-10-09T10:00:00Z', gap_settled_how: 'collected', gap_settled_by_name: 'Richard' }], error: null }
+  globalThis.__gapWrite = { data: [], error: null }
   readRegistrationForMove.mockResolvedValue({ registration: { id: R1, race_event_id: E1, race: { id: E1, location_id: L1 } }, error: null })
 })
 
@@ -183,7 +186,7 @@ describe('POST /api/event-registrations/[id]/moves/[moveId]/settle', () => {
     expect(w).toContainEqual(['is', 'gap_settled_at', null])
     expect(w.at(-1)[0]).toBe('select')
     expect(w.at(-1)[1]).toMatch(/^id\b/)
-    expect(globalThis.__tables).toEqual(['registration_moves', 'registration_moves'])
+    expect(globalThis.__tables).toEqual(['registration_moves', 'registration_moves', 'race_payments'])
   })
   it('writes waived as waived', async () => {
     getCurrentUser.mockResolvedValue(manager([L1]))
@@ -234,3 +237,33 @@ describe('POST /api/event-registrations/[id]/moves/[moveId]/settle', () => {
     expect(writes()[0].find((o) => o[0] === 'update')[1].gap_settled_by_name).toBe('Master')
   })
 })
+
+describe('settle — a live payment link for the difference (EVENT-MOVE.5)', () => {
+  const gapWrite = () => globalThis.__ops.find((ops) => ops.some((o) => o[0] === 'update' && o[1].status === 'abandoned'))
+  it('marks the move\'s PENDING gap payments abandoned (local status only) and syncs their orders', async () => {
+    getCurrentUser.mockResolvedValue(manager([L1]))
+    globalThis.__gapWrite = { data: [{ id: 'gp1', status: 'abandoned' }], error: null }
+    const res = await POST(post({ how: 'waived' }), props())
+    expect(res.status).toBe(200)
+    const w = gapWrite()
+    expect(w).toContainEqual(['update', { status: 'abandoned', abandoned_at: expect.any(String) }])
+    expect(w).toContainEqual(['eq', 'registration_move_id', MV])
+    expect(w).toContainEqual(['eq', 'kind', 'move_gap'])
+    expect(w).toContainEqual(['eq', 'status', 'pending'])
+    expect(syncOrderFromRacePayment).toHaveBeenCalledWith(expect.objectContaining({ payment: { id: 'gp1', status: 'abandoned' } }))
+  })
+  it('a failed abandon write is logged and the settle still answers 200', async () => {
+    getCurrentUser.mockResolvedValue(manager([L1]))
+    globalThis.__gapWrite = { data: null, error: { message: 'down' } }
+    const res = await POST(post({ how: 'collected' }), props())
+    expect(res.status).toBe(200)
+    expect(logError).toHaveBeenCalledWith('event-move-settle', expect.stringContaining('payment link'), expect.objectContaining({ moveId: MV }))
+  })
+  it('an unchanged answer (already settled) touches no payment', async () => {
+    getCurrentUser.mockResolvedValue(manager([L1]))
+    globalThis.__move = { data: { ...MOVE, gap_settled_at: '2026-10-08T10:00:00Z', gap_settled_how: 'waived', gap_settled_by_name: 'Colm' }, error: null }
+    await POST(post({ how: 'collected' }), props())
+    expect(globalThis.__tables).not.toContain('race_payments')
+  })
+})
+

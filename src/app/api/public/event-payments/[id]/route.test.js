@@ -62,3 +62,31 @@ describe('GET /api/public/event-payments/[id] — kind', () => {
     expect(json.data.status).toBe('completed')
   })
 })
+
+describe('GET /api/public/event-payments/[id] — expired and settled differences (EVENT-MOVE.5)', () => {
+  it.each(['abandoned', 'failed'])('a %s move_gap row is expired, and is not refreshed', async (status) => {
+    globalThis.__rows = [{ data: { ...ROW, status, move: { gap_settled_at: null, gap_settled_how: null } }, error: null }]
+    const json = await (await get()).json()
+    expect(json.data).toEqual(expect.objectContaining({ expired: true, settled: false, settled_how: null }))
+    expect(refreshRacePaymentFromProvider).not.toHaveBeenCalled()
+  })
+  it('a pending move_gap row whose move was settled by hand says settled, with how', async () => {
+    globalThis.__rows = [
+      { data: { ...ROW, status: 'pending', move: { gap_settled_at: '2026-10-09T10:00:00Z', gap_settled_how: 'waived' } }, error: null },
+      { data: { ...ROW, status: 'pending', move: { gap_settled_at: '2026-10-09T10:00:00Z', gap_settled_how: 'waived' } }, error: null },
+    ]
+    const json = await (await get()).json()
+    expect(json.data).toEqual(expect.objectContaining({ settled: true, settled_how: 'waived', expired: false }))
+  })
+  it('an entry row is never expired or settled, whatever its status', async () => {
+    globalThis.__rows = [{ data: { ...ROW, kind: 'entry', status: 'abandoned', move: null }, error: null }]
+    const json = await (await get()).json()
+    expect(json.data).toEqual(expect.objectContaining({ expired: false, settled: false, settled_how: null }))
+  })
+  it('both selects read the move\'s settled fields', async () => {
+    globalThis.__rows = [{ data: { ...ROW, status: 'pending' }, error: null }, { data: ROW, error: null }]
+    await get()
+    for (const cols of globalThis.__selects) expect(cols.replace(/\s+/g, ' ')).toContain('move:registration_move_id ( gap_settled_at, gap_settled_how )')
+  })
+})
+

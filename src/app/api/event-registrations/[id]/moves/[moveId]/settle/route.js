@@ -6,7 +6,8 @@
 // entry's CURRENT event studio (the same rule as moving it). Idempotent: a
 // settled move answers 200 { unchanged: true }, and the write is a
 // compare-and-set on gap_settled_at IS NULL, so a double click (or two staff
-// at once) settles it exactly once and the first answer stands.
+// at once) settles it exactly once and the first answer stands. A fresh
+// settle also closes any live payment link for the difference (EVENT-MOVE.5).
 //
 // Status codes: 401 signed out; 403 races held nowhere, or no manager role /
 // no races at the entry's studio; 404 an id the caller may not see (entry
@@ -22,7 +23,9 @@ import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { MANAGER_ROLES, uuidLike } from '@/lib/schemas'
 import { readRegistrationForMove } from '@/lib/registration-move'
-import { logError } from '@/lib/log'
+import { logError, logWarn } from '@/lib/log'
+import { syncOrderFromRacePayment } from '@/lib/orders'
+import { GAP_PAYMENT_KIND } from '@/lib/registration-entry'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -102,5 +105,38 @@ export async function POST(request, props) {
   // Zero rows: someone else settled it between the read and the write. Their
   // answer stands; the list reload shows it.
   if (!rows || rows.length === 0) return NextResponse.json({ success: true, data: { unchanged: true, move } })
+  await closePendingGapLinks(db, params.moveId)
   return NextResponse.json({ success: true, data: { unchanged: false, move: rows[0] } })
+}
+
+/**
+ * EVENT-MOVE.5 — settled by hand while a payment link for the difference is
+ * live: mark the move's pending move_gap payments abandoned so the checkout
+ * stops offering them. Local status only (the provider session just
+ * expires); a customer who pays anyway is still recorded, and logged for a
+ * refund check. Best-effort: the settle already landed, so this logs and
+ * never fails the answer.
+ */
+async function closePendingGapLinks(db, moveId) {
+  const { data: closed, error } = await db
+    .from('race_payments')
+    .update({ status: 'abandoned', abandoned_at: new Date().toISOString() })
+    .eq('registration_move_id', moveId)
+    .eq('kind', GAP_PAYMENT_KIND)
+    .eq('status', 'pending')
+    .select('*')
+  if (error) {
+    logError('event-move-settle', 'settled, but a live payment link for the difference was NOT closed; the customer could still pay it', { err: error, moveId })
+    return
+  }
+  for (const payment of closed || []) {
+    try {
+      await syncOrderFromRacePayment({ db, payment })
+    } catch (e) {
+      logError('event-move-settle', 'closed payment link: order sync failed', { err: e, moveId, paymentId: payment.id })
+    }
+  }
+  if ((closed || []).length > 0) {
+    logWarn('event-move-settle', 'settled by hand: closed the live payment link(s) for the difference', { moveId, paymentIds: closed.map((p) => p.id) })
+  }
 }

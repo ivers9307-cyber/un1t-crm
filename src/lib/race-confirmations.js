@@ -729,6 +729,7 @@ export function buildGapDefaults(ctx, stage) {
     afterInfoHtml: `
 
   <p style="margin:0 0 12px;text-align:center"><a href="${href}" style="display:inline-block;background:#111;color:#fff;padding:12px 28px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px">Pay ${escapeHtml(ctx.differenceLabel)}</a></p>
+  <p style="margin:0 0 4px;text-align:center;color:#666;font-size:12px">This link is valid for 24 hours. If it has expired, reply and we'll send a new one.</p>
   <p style="margin:0 0 24px;text-align:center;color:#666;font-size:12px;word-break:break-all">Or open this link: ${href}</p>`,
     footerHtml: `<strong>Your entry is safe either way.</strong> The tickets in your "entry has moved" email still work; this only settles the price difference.`,
   }

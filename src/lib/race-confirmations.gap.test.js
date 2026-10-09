@@ -159,6 +159,11 @@ describe('sendGapLinkEmail — the payment link', () => {
     expect(call.htmlBody).toContain('Hatch Oct 18')
     expect(call.htmlBody).toContain('€10.00')
   })
+  it('says the link is valid for 24 hours, even under operator copy', async () => {
+    const payment = { ...GAP, status: 'pending', race: { ...RACE, gap_email_intro: 'Pay up.' } }
+    await sendGapLinkEmail({ db: fakeDb({ payment }), paymentId: 'gp1', payUrl: PAY_URL })
+    expect(sent().htmlBody).toContain('valid for 24 hours')
+  })
   it('stamps nothing: staff may send the link again', async () => {
     const db = fakeDb({ payment: { ...GAP, status: 'pending' } })
     await sendGapLinkEmail({ db, paymentId: 'gp1', payUrl: PAY_URL })
