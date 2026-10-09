@@ -26,6 +26,7 @@ import { ADMIN_ROLES, uuidLike } from '@/lib/schemas'
 import { eventSlug, uniqueEventSlug } from '@/lib/event-slug'
 import { formatSignupSummary, sumWaveCapacity } from '@/lib/event-signups'
 import { isRaceKind, orderEventsForBrowse, todayIsoDublin } from '@shared/events'
+import { sharedEventsOrFilterFor } from '@/lib/event-visibility'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -146,8 +147,10 @@ export async function GET(request) {
   }
 
   const db = createServerClient()
-  // Scope to the active location PLUS any event flagged `shared` (owned by
-  // one location, surfaced everywhere) — same rule as the web /events list.
+  // Scope to the active location PLUS any event flagged `shared` (owned by a
+  // sibling location of the same organisation, W0.3) — same rule as the web
+  // /events list.
+  const orFilter = await sharedEventsOrFilterFor(db, activeLocationId)
   const { data, error } = await db
     .from('race_events')
     .select(`
@@ -157,7 +160,7 @@ export async function GET(request) {
       waves:race_waves ( capacity ),
       registrations:race_registrations ( id, status, team:teams ( size ) )
     `)
-    .or(`location_id.eq.${activeLocationId},shared.eq.true`)
+    .or(orFilter)
     .order('race_date', { ascending: false })
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
 
