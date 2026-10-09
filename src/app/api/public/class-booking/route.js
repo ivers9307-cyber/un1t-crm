@@ -142,9 +142,11 @@ export async function POST(request) {
 
   // restrictToOrg (LEADCAP.1): a public form must not resolve (and then enqueue
   // a Glofox booking / write consent against) a contact in another ORGANISATION.
-  // Sibling locations in the same org are fine — and necessary, since
-  // `contacts_email_unique` is global and a location-only match left a known
-  // email unable to insert (23505 → 500).
+  // Sibling locations in the same org are fine — and necessary: a Stillorgan
+  // member booking at Hatch is one person. (Under mig 008's global
+  // `contacts_email_unique` a location-only match also left a known email
+  // unable to insert, 23505 → 500; since W0.6, mig 712, the index is per
+  // organisation and org scope is the helper's default.)
   // SOURCE-LABEL.1 — the helper's INSERT defaults to the race shape
   // (source 'race_signup'), which is wrong for a class-booking lead and
   // made every Hatch ad lead look like a race entrant in the contacts

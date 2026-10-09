@@ -37,9 +37,9 @@ import { getCurrentUser } from '@/lib/auth'
 import { redactWhatsAppForContact, redactInBodyForContact, getContactImpact } from '@/lib/contact-merge'
 import { redactMailForContact } from '@/lib/contact-mail-erasure'
 
-function mockDb({ oldRow, updated, oldErr } = {}) {
+function mockDb({ oldRow, updated, oldErr, updateErr } = {}) {
   const updateSingle = vi.fn(() =>
-    Promise.resolve({ data: updated ?? { id: 'c1', ...oldRow }, error: null })
+    Promise.resolve(updateErr ? { data: null, error: updateErr } : { data: updated ?? { id: 'c1', ...oldRow }, error: null })
   )
   const update = vi.fn(() => ({
     eq: vi.fn(() => ({ select: vi.fn(() => ({ single: updateSingle })) })),
@@ -195,6 +195,29 @@ describe('PUT /api/contacts/[id] — cookie-path location gate', () => {
 // cookie path (Manager+ by requireApiKeyOrManager) may flip it; API-key
 // callers (auth.user null — n8n / integrations) get the field stripped
 // rather than 403'd so whole-object PUTs keep working.
+describe('PUT /api/contacts/[id] — a failed update never echoes Postgres (W0.6)', () => {
+  const manager = { role: 'manager', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'manager' } }
+  const oldRow = { tags: [], location_id: 'loc-1', email: 'old@x.com', glofox_member_id: null }
+
+  it('a duplicate email answers a generic 409 that never names the index', async () => {
+    requireApiKeyOrManager.mockResolvedValue({ ok: true, orgId: null, user: manager })
+    createServerClient.mockReturnValue(mockDb({ oldRow, updateErr: { code: '23505', message: 'duplicate key value violates unique constraint "contacts_email_org_unique"' } }))
+    const res = await PUT(req({ email: 'taken@x.com' }), props)
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body).toEqual({ success: false, error: 'A contact with this email already exists in your organisation' })
+    expect(JSON.stringify(body)).not.toMatch(/contacts_email|duplicate key/)
+  })
+
+  it('any other failure answers a generic 400 without the Postgres text', async () => {
+    requireApiKeyOrManager.mockResolvedValue({ ok: true, orgId: null, user: manager })
+    createServerClient.mockReturnValue(mockDb({ oldRow, updateErr: { code: '22P02', message: 'invalid input syntax for type uuid: "nope"' } }))
+    const res = await PUT(req({ first_name: 'Ada' }), props)
+    expect(res.status).toBe(400)
+    expect(await res.json()).toEqual({ success: false, error: 'Could not update contact' })
+  })
+})
+
 describe('PUT /api/contacts/[id] — automations_exempt gating', () => {
   it('strips automations_exempt for an API-key caller (user null) — update object lacks it', async () => {
     requireApiKeyOrManager.mockResolvedValue({ ok: true, orgId: null, user: null })
