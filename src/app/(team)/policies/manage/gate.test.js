@@ -1,16 +1,18 @@
 // C141 ORGROLE.2 — managing policies (the /policies/manage tree, the
 // "Manage policies" link on /policies, and the publish route behind it) is
-// MASTER ONLY (Richard, 2 Oct): the policies table has no organisation, so a
-// published version reaches every studio in the estate. An org admin of any
-// organisation would publish estate-wide; an owner at a studio keeps
-// /policies itself (reading), not the manage surfaces.
+// MASTER ONLY (Richard, 2 Oct). W0.5 (mig 713) made policies per
+// organisation and scoped every read, but editing stays master-only until
+// the org-admin editor wave: an org admin of any organisation, even the
+// active one, is sent home; an owner at a studio keeps /policies itself
+// (reading their own organisation's), not the manage surfaces.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 
 vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
-vi.mock('@/lib/policies', () => ({
+vi.mock('@/lib/policies', async (importOriginal) => ({
+  ...(await importOriginal()),
   currentVersionOpenCounts: vi.fn(async () => ({ viewerCount: new Map(), activeStaffCount: 0 })),
   listPoliciesWithStatus: vi.fn(async () => []),
   listVersions: vi.fn(async () => []),
@@ -75,7 +77,7 @@ describe('/policies/manage tree — master only (C141)', () => {
       await expect(render()).rejects.toThrow(/^NEXT_REDIRECT:\/$/)
     })
 
-    it(`${name}: an org admin of the ACTIVE organisation is sent home too (policies are estate-wide)`, async () => {
+    it(`${name}: an org admin of the ACTIVE organisation is sent home too (editing is master-only; policies are per organisation, mig 713)`, async () => {
       vi.mocked(getCurrentUser).mockResolvedValue(owner([ORG]))
       await expect(render()).rejects.toThrow(/^NEXT_REDIRECT:\/$/)
     })

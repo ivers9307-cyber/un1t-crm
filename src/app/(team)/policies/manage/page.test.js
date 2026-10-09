@@ -8,7 +8,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 
 vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
-vi.mock('@/lib/policies', () => ({ currentVersionOpenCounts: vi.fn() }))
+vi.mock('@/lib/policies', async (importOriginal) => ({ ...(await importOriginal()), currentVersionOpenCounts: vi.fn() }))
 vi.mock('next/navigation', () => ({
   redirect: vi.fn((url) => { throw new Error(`NEXT_REDIRECT:${url}`) }),
 }))
@@ -29,6 +29,7 @@ const POLICIES = [{
 function db() {
   const b = {}
   b.select = () => b
+  b.eq = vi.fn(() => b)
   b.order = () => b
   b.then = (resolve) => Promise.resolve({ data: POLICIES, error: null }).then(resolve)
   return { from: vi.fn(() => b) }
@@ -45,6 +46,8 @@ describe('/policies/manage open counts', () => {
     const html = renderToStaticMarkup(await AdminPoliciesPage())
 
     expect(currentVersionOpenCounts).toHaveBeenCalledWith(['pv-1'], user)
+    // W0.5 — the list is the caller's active organisation's policies only.
+    expect(fake.from.mock.results[0].value.eq).toHaveBeenCalledWith('organization_id', 'org-a')
     expect(html.replace(/<[^>]+>/g, '')).toMatch(/1 \/ 3opened/)
     // The page itself no longer reads profiles or policy_views directly.
     expect(fake.from.mock.calls.map(([t]) => t)).toEqual(['policies'])
