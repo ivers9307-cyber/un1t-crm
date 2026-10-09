@@ -27,6 +27,8 @@ create unique index if not exists policies_org_slug_key
   on public.policies (organization_id, slug);
 create index if not exists policies_org_active_idx
   on public.policies (organization_id, active, display_order, title) where active = true;
+-- Fully superseded by policies_org_active_idx (every read now leads with organization_id).
+drop index if exists policies_active_order_idx;
 
 comment on column public.policies.organization_id is
   'W0.5 (mig 713) — owning organisation. Staff see only their organisations'' policies.';

@@ -211,9 +211,9 @@ export async function listVersions(policyId) {
  *
  * C115 POLICYVIEWERS.1 — scoped to the caller's ACTIVE organisation's
  * people (members of its studios plus its org admins, the same set
- * loadFleetScope gives the staff device fleet). Policies are estate-wide
- * documents, so every member of that organisation could see this version;
- * nobody outside it is listed. Before, the "haven't opened" list was every
+ * loadFleetScope gives the staff device fleet). A policy belongs to one
+ * organisation (W0.5, mig 713), so every member of that organisation could
+ * see this version; nobody outside it is listed. Before, the "haven't opened" list was every
  * active profile in the estate, so an owner at one gym read the name and
  * email of every other tenant's staff. A master keeps the estate (the
  * platform view). No caller, or no active organisation, lists nobody. Every

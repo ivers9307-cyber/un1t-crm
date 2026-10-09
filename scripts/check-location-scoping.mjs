@@ -54,8 +54,8 @@
 // createServerClient. Audited at the time: the only such data-reading
 // delegates were tenant-privacy.js (filters organization_id),
 // landing-logo.js (public_path — public marketing content) and policies.js
-// (policies/policy_versions/policy_views carry NO location_id — estate-wide
-// staff policies, so they aren't tenant tables at all). @/lib/auth's
+// (filters policies.organization_id via policyOrgIdFor — W0.5, mig 713;
+// policy_versions/policy_views hang off policies). @/lib/auth's
 // internal client is the auth lookup itself, not a tenant read. If you add
 // a lib that fetches tenant rows on its own client, scope it there and add
 // it to SCOPING_HELPERS.

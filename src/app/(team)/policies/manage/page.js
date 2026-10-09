@@ -1,4 +1,4 @@
-// /policies/manage — master-only (C141 ORGROLE.2; policies are estate-wide) admin for the policies hub.
+// /policies/manage — master-only (C141 ORGROLE.2) admin for the policies hub; the caller's active organisation's policies (W0.5, mig 713).
 // ADMIN.2h Task 1 — moved out of /admin (was /admin/policies) to sit
 // alongside the staff-facing read surface at /policies (that page and
 // its [slug] detail predate this move and are untouched — this CRUD
