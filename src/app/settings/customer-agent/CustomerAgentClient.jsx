@@ -128,6 +128,8 @@ export default function CustomerAgentClient({ canEdit = false } = {}) {
         holding_message: settings.holding_message || null,
         booking_confirmation_text: settings.booking_confirmation_text || null,
         cancellation_confirmation_text: settings.cancellation_confirmation_text || null,
+        event_move_confirmation_text: settings.event_move_confirmation_text || null,
+        event_move_failed_text: settings.event_move_failed_text || null,
         booking_issue_handoff_text: settings.booking_issue_handoff_text || null,
         no_credits_handoff_text: settings.no_credits_handoff_text || null,
         account_conflict_handoff_text: settings.account_conflict_handoff_text || null,
@@ -523,6 +525,24 @@ export default function CustomerAgentClient({ canEdit = false } = {}) {
             onChange={e => setField('cancellation_confirmation_text', e.target.value)}
             placeholder="All sorted, your booking for {class} has been cancelled. Hope to see you at another class soon." />
           <p className="text-xs text-un1t-muted mt-1">Sent to the customer when you approve a cancellation the agent drafted. <code>{'{class}'}</code> becomes the class name and time. Leave blank to use the default shown.</p>
+        </div>
+
+        {/* EVENT-MOVE.7 — in-thread texts once staff decide the agent's event
+            move request. Defaults mirror notify.js. */}
+        <div>
+          <label className="block text-sm font-medium text-un1t-text mb-1">Event move confirmation message</label>
+          <input className={inputCls} maxLength={500} value={settings.event_move_confirmation_text || ''}
+            onChange={e => setField('event_move_confirmation_text', e.target.value)}
+            placeholder="Done, your entry is now on {event}." />
+          <p className="text-xs text-un1t-muted mt-1">Sent to the customer when you approve an event move the agent asked for. <code>{'{event}'}</code> becomes the new event, date and time. A line about the new tickets email, and one about a link for any extra cost, are added after it when they apply. Leave blank to use the default shown.</p>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-un1t-text mb-1">Event move not possible message</label>
+          <input className={inputCls} maxLength={500} value={settings.event_move_failed_text || ''}
+            onChange={e => setField('event_move_failed_text', e.target.value)}
+            placeholder="We could not move your entry: {reason}. The team will be in touch." />
+          <p className="text-xs text-un1t-muted mt-1">Sent to the customer when you approve an event move but it cannot be done (for example the time has filled). <code>{'{reason}'}</code> becomes a short plain reason. Leave blank to use the default shown.</p>
         </div>
 
         {/* MIA-BOOK.1 — what the agent says when the booking system rejects a

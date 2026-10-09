@@ -12,6 +12,7 @@
 // throughout — a send hiccup never breaks the approval.
 
 import { stripEmDashes } from './core'
+import { formatMoneyMinor } from '@/lib/money-format'
 
 // HUMANIZE.1 — customer-visible copy: no em dashes, no emoji, low-key. Both
 // texts are operator-editable (settings.customer_agent.booking_confirmation_text
@@ -76,13 +77,65 @@ export function buildCancellationConfirmationText({ className, classTime, templa
   )
 }
 
+// EVENT-MOVE.7 — in-thread texts once staff decide Mia's event_move request.
+// Operator-editable (settings.customer_agent.event_move_confirmation_text /
+// .event_move_failed_text); these are the fallbacks. {event} renders the new
+// event, date and time; {reason} a plain reason. Two sentences are added by
+// code, not the template, because they depend on what happened: the tickets
+// line only when the moved email went, and the difference line only when the
+// new date costs more (the team sends a link for it: EVENT-MOVE.5). A cheaper
+// date is never mentioned (a move never refunds). Never a count.
+export const DEFAULT_EVENT_MOVE_CONFIRMATION_TEXT = 'Done, your entry is now on {event}.'
+export const DEFAULT_EVENT_MOVE_FAILED_TEXT = 'We could not move your entry: {reason}. The team will be in touch.'
+
+// MOVE_ERRORS (registration-entry.js) in the customer's words. The staff
+// copy (MOVE_ERROR_MESSAGES) talks about wave selects and reloading; this
+// never names a number.
+export const EVENT_MOVE_FAILURE_REASONS = Object.freeze({
+  not_found: 'we could not find the entry',
+  not_active: 'the entry is no longer active',
+  checked_in: 'the entry has already been checked in',
+  same_event: 'the entry is already on that date',
+  target_unavailable: 'that date is no longer available',
+  different_payee: 'that date is no longer available',
+  already_entered: 'there is already an entry for you on that date',
+  headcount_not_allowed: 'that date does not take an entry of this size',
+  wave_required: 'that date needs a time picked',
+  wrong_event: 'that time is no longer available',
+  wave_full: 'that time is now full',
+  load_failed: 'something went wrong on our side',
+  write_failed: 'something went wrong on our side',
+  conflict: 'the entry changed in the meantime',
+})
+const EVENT_MOVE_FALLBACK_REASON = 'something went wrong on our side'
+
+/** Confirmation once an approved event move went through. Pure. */
+export function buildEventMoveConfirmationText({ eventName, dateLabel, timeLabel, notified, priceGapCents, currency = 'EUR', template } = {}) {
+  const when = [dateLabel, timeLabel].filter(Boolean).join(' at ')
+  const what = [eventName, when].filter(Boolean).join(', ') || 'the new date'
+  const base = String(template || '').trim() || DEFAULT_EVENT_MOVE_CONFIRMATION_TEXT
+  const parts = [base.replace(/\{event\}/g, what)]
+  if (notified) parts.push('New tickets are on their way by email.')
+  const gap = Number(priceGapCents) || 0
+  if (gap > 0) parts.push(`The team will send a link for the ${formatMoneyMinor(gap, currency || 'EUR')} difference.`)
+  return stripEmDashes(parts.join(' ')).trim()
+}
+
+/** In-thread text when an approved event move was refused. Pure. */
+export function buildEventMoveFailedText({ error, template } = {}) {
+  const reason = EVENT_MOVE_FAILURE_REASONS[error] || EVENT_MOVE_FALLBACK_REASON
+  const base = String(template || '').trim() || DEFAULT_EVENT_MOVE_FAILED_TEXT
+  return stripEmDashes(base.replace(/\{reason\}/g, reason)).trim()
+}
+
 /**
  * The location's operator-set confirmation copy (null when unset → the
  * defaults above). Best-effort: a read failure just uses the defaults.
- * @returns {Promise<{booking: string|null, cancellation: string|null}>}
+ * @returns {Promise<{booking: string|null, cancellation: string|null, decline: string|null, eventMove: string|null, eventMoveFailed: string|null}>}
  */
 export async function agentConfirmationTemplates(db, locationId) {
-  if (!locationId) return { booking: null, cancellation: null, decline: null }
+  const none = { booking: null, cancellation: null, decline: null, eventMove: null, eventMoveFailed: null }
+  if (!locationId) return none
   try {
     const { data } = await db.from('locations').select('settings').eq('id', locationId).maybeSingle()
     const s = data?.settings?.customer_agent || {}
@@ -90,9 +143,11 @@ export async function agentConfirmationTemplates(db, locationId) {
       booking: String(s.booking_confirmation_text || '').trim() || null,
       cancellation: String(s.cancellation_confirmation_text || '').trim() || null,
       decline: String(s.approval_decline_text || '').trim() || null,
+      eventMove: String(s.event_move_confirmation_text || '').trim() || null,
+      eventMoveFailed: String(s.event_move_failed_text || '').trim() || null,
     }
   } catch {
-    return { booking: null, cancellation: null, decline: null }
+    return none
   }
 }
 

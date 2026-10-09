@@ -29,6 +29,7 @@ const KIND_LABELS = {
   class_cancellation: 'cancel a class booking',
   event_booking: 'book an event',
   event_cancellation: 'cancel an event booking',
+  event_move: 'move an event entry to another date',
 }
 
 const OUTCOME_LABELS = {

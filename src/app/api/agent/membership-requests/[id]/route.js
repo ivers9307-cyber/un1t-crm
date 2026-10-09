@@ -199,6 +199,77 @@ export async function PATCH(request, { params }) {
     }
   }
 
+  // EVENT-MOVE.7 — approving Mia's event_move request runs the shared move
+  // (moveRegistration, the same rules and SQL function staff and hosts use)
+  // with the agent as actor and the approving staff member named. Never
+  // forced: a full time refuses, and staff can move it by hand from the
+  // teams page. expectedSourceEventId refuses a move whose entry has left
+  // the event the request was filed against (conflict). The customer is
+  // told in-thread either way; a refusal is told once, not on every retry.
+  if (executing && row.kind === 'event_move') {
+    const { moveRegistration, MOVE_ERROR_MESSAGES } = await import('@/lib/registration-move')
+    const result = await moveRegistration(db, {
+      registrationId: details.registration_id,
+      targetEventId: details.target_event_id,
+      targetWaveId: details.target_wave_id || null,
+      expectedSourceEventId: details.source_event_id || null,
+      actor: { type: 'agent', id: null, name: `Mia, approved by ${user.full_name || user.email || 'staff'}` },
+      note: details.note || null,
+      notify: true,
+      force: false,
+    })
+    // A conflict whose entry is already on the target is a move that landed:
+    // an earlier attempt that died after the write (the stuck-retry lane) or
+    // a staff member who moved it by hand first. Read, never assumed.
+    let alreadyMoved = false
+    if (!result.ok && result.error === 'conflict') {
+      const { data: current, error: currentErr } = await db.from('race_registrations')
+        .select('race_event_id, wave_id')
+        .eq('id', details.registration_id)
+        .maybeSingle()
+      if (currentErr) logWarn('agent-requests', 'event move: conflict re-read failed', { requestId: id, err: currentErr })
+      alreadyMoved = !!current && current.race_event_id === details.target_event_id
+        && (!details.target_wave_id || current.wave_id === details.target_wave_id)
+    }
+    if (alreadyMoved) {
+      executed = { ok: true, move_id: null, notified: false, recovered: 'already_on_target' }
+      const { failure: _previousFailure, ...rest } = details
+      details = { ...rest, result: executed }
+      finalStatus = 'actioned'
+    } else if (result.ok) {
+      executed = { ok: true, move_id: result.move?.id || null, notified: result.notified === true }
+      // A retry that now succeeds drops the earlier attempt's failure code.
+      const { failure: _previousFailure, ...rest } = details
+      details = { ...rest, result: executed }
+      finalStatus = 'actioned'
+    } else {
+      executed = { ok: false, move_error: result.error, message: MOVE_ERROR_MESSAGES[result.error] || null }
+      details = { ...details, result: executed, failure: result.error }
+      finalStatus = 'failed'
+    }
+    const moved = finalStatus === 'actioned'
+    const tellCustomer = row.conversation_id && (moved || (!isRetry && !isFailedRetry))
+    if (tellCustomer) {
+      try {
+        const { sendAgentThreadMessage, buildEventMoveConfirmationText, buildEventMoveFailedText } = await import('@/lib/agent/notify')
+        const text = moved
+          ? buildEventMoveConfirmationText({
+            eventName: details.target_event_name,
+            dateLabel: details.target_date_label,
+            timeLabel: details.target_wave_label,
+            notified: executed.notified === true,
+            priceGapCents: details.price_gap_cents,
+            currency: details.currency,
+            template: await confirmationTemplate('eventMove'),
+          })
+          : buildEventMoveFailedText({ error: result.error, template: await confirmationTemplate('eventMoveFailed') })
+        await sendAgentThreadMessage(db, { channel: row.channel, conversationId: row.conversation_id, text })
+      } catch (e) {
+        console.warn(`[agent-requests] event move message send error: ${e?.message || e}`)
+      }
+    }
+  }
+
   // AGENT-EVENTS.2 — approving a drafted event booking executes it.
   if (executing && row.kind === 'event_booking') {
     const { registerSoloEventEntry } = await import('@/lib/race-register-solo')

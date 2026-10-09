@@ -69,7 +69,7 @@ function notifiedSentence(notified) {
 }
 
 // What actually happened, in the operator's terms, once the PATCH returns.
-function outcomeLine(status, item, executed, notified = null, plannedEndDate = null) {
+export function outcomeLine(status, item, executed, notified = null, plannedEndDate = null) {
   const hasThread = !!item.conversationId
   const isMembership = item.kind === 'cancellation' || item.kind === 'pause'
   if (status === 'actioned' && item.kind === 'cancellation') {
@@ -82,6 +82,11 @@ function outcomeLine(status, item, executed, notified = null, plannedEndDate = n
     if (notified?.reason === 'no_email') return { tone: 'ok', text: 'Recorded as booked. The customer has NOT been emailed (no email address), so make sure they know.' }
     if (notified?.reason === 'email_blocked') return { tone: 'ok', text: 'Recorded as booked. The customer has NOT been emailed (their address bounced or they opted out), so make sure they know.' }
     return { tone: 'ok', text: 'Recorded as booked. The customer has NOT been emailed, so make sure they know.' }
+  }
+  // EVENT-MOVE.7 — an event move runs on our own events, not Glofox.
+  if (status === 'actioned' && item.kind === 'event_move') {
+    const tickets = executed?.notified ? ' The new tickets were emailed.' : ' The moved email did NOT go, so send them their tickets.'
+    return { tone: 'ok', text: `Done. The entry is moved${hasThread ? ' and the customer was told in-thread' : ''}.${tickets}` }
   }
   if (status === 'actioned') {
     return { tone: 'ok', text: hasThread ? 'Done — executed in Glofox and the customer was told in-thread.' : 'Done — executed in Glofox and the customer was notified.' }
