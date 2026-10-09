@@ -36,6 +36,7 @@ import { POST as hostListPOST } from './host-list/[slug]/subscribe/route.js'
 import { POST as eventRegisterPOST } from './events/[slug]/register/route.js'
 import { POST as raceRegisterPOST } from './races/[slug]/register/route.js'
 import { POST as checkMemberPOST } from './events/[slug]/check-member/route.js'
+import { POST as waitlistPOST } from './events/[slug]/waitlist/route.js'
 import { GET as classesGET } from './classes/route.js'
 import { POST as classBookingPOST } from './class-booking/route.js'
 import { POST as leadsPOST } from './leads/route.js'
@@ -121,6 +122,12 @@ describe('SAAS-6 tenant-keyed rate limits — swept call sites', () => {
     const res = await eventRegisterPOST(req('/api/public/events/city-race/register', { method: 'POST', body: {} }), props({ slug: 'city-race' }))
     expect(res.status).toBe(429)
     expect(limiterKey()).toBe(`race-register:city-race:${IP}`)
+  })
+
+  it('event waitlist join keys on the event slug (EVENT-WAITLIST.1)', async () => {
+    const res = await waitlistPOST(req('/api/public/events/city-race/waitlist', { method: 'POST', body: {} }), props({ slug: 'city-race' }))
+    expect(res.status).toBe(429)
+    expect(limiterKey()).toBe(`waitlist:city-race:${IP}`)
   })
 
   it('race register keys on the race slug', async () => {

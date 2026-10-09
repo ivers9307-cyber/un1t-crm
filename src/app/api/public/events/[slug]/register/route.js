@@ -19,6 +19,12 @@
 //  12. Create race_payment + Revolut order (or mark paid for free entry)
 //  13. Return either { payment_url, payment_token, payment_id } for the
 //      embedded checkout, or { confirmed: true } for free entries.
+//
+// EVENT-WAITLIST.1: an optional `waitlist_token` (from a waitlist offer link,
+// /event/<slug>?wl=<token>) marks that waitlist row claimed once the
+// registration exists (free confirmed, or paid pending). Best effort, logged:
+// it never changes the answer. This route stays the arbiter of who gets a
+// freed place: the capacity gate above is the only gate.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -37,6 +43,7 @@ import { logWarn } from '@/lib/log'
 import { wouldFit } from '@/lib/event-signups'
 import { LIVE_REGISTRATION_STATUSES } from '@/lib/audience-filter'
 import { eventIsPublic, resolveMasterLocationId } from '@/lib/host-events'
+import { claimWaitlistOnRegistration } from '@/lib/event-waitlist'
 
 export const runtime = 'nodejs'
 
@@ -70,6 +77,8 @@ const RegisterSchema = z.object({
   marketing_consent: z.boolean().optional(),
   // EVENTS-PROMO.1 — optional discount code applied to the ticket amount.
   promo_code: z.string().trim().max(64).optional(),
+  // EVENT-WAITLIST.1 — the claim token from a waitlist offer link.
+  waitlist_token: z.string().trim().max(1000).optional(),
 })
 
 export async function POST(request, props) {
@@ -705,6 +714,17 @@ export async function POST(request, props) {
       error: `Could not start payment: ${e.message || 'unknown error'}`,
       code: 'payment_init_failed',
     }, { status: 502 })
+  }
+
+  // EVENT-WAITLIST.1 — booked through a waitlist offer: mark that row
+  // claimed. Never throws (the helper reports); never changes the answer.
+  if (body.waitlist_token) {
+    const claim = await claimWaitlistOnRegistration(db, {
+      token: body.waitlist_token, registrationId: registration.id, raceEventId: race.id,
+    })
+    if (!claim.claimed) {
+      logWarn('race-register', 'waitlist claim not recorded', { reason: claim.reason, registrationId: registration.id })
+    }
   }
 
   // Free entry — fire confirmations immediately. Best-effort, never
