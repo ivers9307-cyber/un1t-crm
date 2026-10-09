@@ -379,23 +379,32 @@ move is reused rather than minted twice. It never touches
 On completion (webhook or the checkout page's provider refresh) a gap
 payment writes its status, syncs its order, emits `ORDER_COMPLETED`
 (`kind: move_gap`), settles the move through the EVENT-MOVE.3 compare-and-set
-as `collected` by "Customer (paid online)", and sends the gap RECEIPT. It
-never re-runs entry side effects: no registration status change, no host
+as `collected` by "Customer (paid online)", and sends the gap RECEIPT
+(fixed transactional wording, "Difference paid for <event>"). The status
+write is a compare-and-set on the status the caller read, so a webhook and
+the checkout page's refresh cannot both complete one payment, and the
+refresh path re-reads the full row first. It never re-runs entry side effects: no registration status change, no host
 contact-list sync, no tag rules, no sequences, no entry confirmation, no
 Glofox push. Failed, abandoned and refunded gap transitions likewise skip
 tag rules and sequences; a refund leaves the move settled (staff decide).
 Readers that take "the latest payment" (the teams list, the moved email's
 Total paid) skip gap rows.
 
+Only one pending gap link can exist per move (a unique partial index);
+a reused link is refreshed with the provider first and re-minted when it
+has expired (Stripe sessions last about 24 hours, and the link email says
+so). The checkout page says "expired" or "already settled" instead of
+mounting when that is the case, and settling a gap by hand abandons its
+pending links. The gap-link and settle routes refuse a non-confirmed entry.
 Staff: **Send payment link** beside the chip (confirm first) posts to
 `POST /api/event-registrations/[id]/moves/[moveId]/settle`'s sibling
 `.../gap-link` `{ email }`, gated identically (a settled move answers 409
 `already_settled`), which mints or reuses the link, emails it when asked,
-and returns the URL (also copied to the clipboard). Both gap emails (the
-link, the receipt) resolve through `resolveEventEmail({ kind: 'gap' })`
-with the operator-editable `gap_email_subject/intro` on the event form and
-the merge tags `{{difference}}`, `{{old_event_name}}`, `{{pay_url}}` (the
-link email always carries a pay button). The checkout page labels a gap
+and returns the URL (also copied to the clipboard). The link email resolves
+through `resolveEventEmail({ kind: 'gap' })` with the operator-editable
+`gap_email_subject/intro` on the event form and the merge tags
+`{{difference}}`, `{{old_event_name}}`, `{{pay_url}}`; it always carries a
+pay button. The checkout page labels a gap
 payment "Price difference" and shows no roster. EVENT-MOVE.6 (customer
 self-service) carries `metadata.pending_move` on the same kind so the move
 lands when the difference is paid.
