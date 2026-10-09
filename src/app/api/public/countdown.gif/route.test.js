@@ -1,14 +1,25 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const state = { endsAt: null, dbThrows: false }
+// W0.4 — the route resolves the pinned Stillorgan location, then reads
+// sale_offers filtered to it. The mock serves the offer row ONLY when the
+// query's location_id filter matches the row's location, so a foreign
+// location's offer is genuinely invisible rather than mocked away.
+const state = { endsAt: null, offerLocationId: 'loc-home', homeLocation: { id: 'loc-home' }, dbThrows: false, filters: {} }
 
 vi.mock('@/lib/supabase', () => ({
   createServerClient: () => {
     if (state.dbThrows) throw new Error('db down')
     return {
-      from() { return this }, select() { return this }, eq() { return this },
+      _table: null,
+      from(t) { this._table = t; state.filters = {}; return this },
+      select() { return this },
+      eq(col, val) { state.filters[col] = val; return this },
       order() { return this }, limit() { return this },
-      maybeSingle: async () => ({ data: state.endsAt ? { ends_at: state.endsAt } : null }),
+      maybeSingle() {
+        if (this._table === 'locations') return Promise.resolve({ data: state.homeLocation })
+        const visible = state.endsAt && state.filters.location_id === state.offerLocationId
+        return Promise.resolve({ data: visible ? { ends_at: state.endsAt } : null })
+      },
     }
   },
 }))
@@ -20,6 +31,8 @@ import { GET } from './route'
 
 beforeEach(() => {
   state.endsAt = new Date(Date.now() + 5 * 3600e3).toISOString()
+  state.offerLocationId = 'loc-home'
+  state.homeLocation = { id: 'loc-home' }
   state.dbThrows = false
   buildCountdownGif.mockClear()
 })
@@ -60,6 +73,24 @@ describe('GET /api/public/countdown.gif', () => {
     state.endsAt = null
     const res = await GET()
     expect(res.headers.get('content-type')).toBe('image/gif')
+    await expectBlankGif(res)
+    expect(buildCountdownGif).not.toHaveBeenCalled()
+  })
+
+  // W0.4 — pinned to Stillorgan: another location's active offer must not
+  // drive UN1T's email countdown, and a missing pinned location row reads
+  // as "no sale".
+  it('ignores another location\'s active offer (blank pixel)', async () => {
+    state.offerLocationId = 'loc-other'
+    const res = await GET()
+    await expectBlankGif(res)
+    expect(buildCountdownGif).not.toHaveBeenCalled()
+    expect(state.filters.location_id).toBe('loc-home')
+  })
+
+  it('falls back to a blank pixel when the pinned location row is missing', async () => {
+    state.homeLocation = null
+    const res = await GET()
     await expectBlankGif(res)
     expect(buildCountdownGif).not.toHaveBeenCalled()
   })
