@@ -21,7 +21,9 @@
 //     studio's booking system — requires verify_identity, exactly like
 //     the class tools.
 //   cancel_event_registration /
-//   reschedule_event_wave       ALWAYS require verify_identity, like
+//   reschedule_event_wave /
+//   list_event_move_options /
+//   move_event_entry            ALWAYS require verify_identity, like
 //     cancel_class_booking. These change something the customer already
 //     has; the previous `verifiedContactId || contactId` gate let an
 //     unverified sender on a thread bound to a contact (a duplicate /
@@ -112,7 +114,8 @@ export const EVENT_TOOLS = [
       '(e.g. from the 9am wave to the 10:30 wave), capacity permitting, once their identity ' +
       'is verified. Get the wave_id from ' +
       'list_upcoming_events and confirm the new time with them first. Moving to a different ' +
-      'EVENT is a cancel + a new booking — handle those separately with their own confirmations.',
+      'EVENT or a different date is NOT this tool, and never a cancel plus a new booking: use ' +
+      'list_event_move_options, then move_event_entry.',
     input_schema: {
       type: 'object',
       properties: {
@@ -121,6 +124,46 @@ export const EVENT_TOOLS = [
         new_wave_time: { type: 'string', description: 'The new wave time you confirmed with the customer.' },
       },
       required: ['registration_id', 'new_wave_id'],
+    },
+  },
+  // EVENT-MOVE.7 — moving an entry to another event goes through staff
+  // approval: list the options, then file the request. Never cancel + rebook.
+  {
+    name: 'list_event_move_options',
+    description:
+      'Use when a VERIFIED customer asks to change the date of an event entry they already have, ' +
+      'or to move it to a different event (e.g. from the 18 Oct Hyrox sim to the 25 Oct one). ' +
+      'Shows the dates and times their entry can move to, with the price difference as a sentence. ' +
+      'Identity must be verified first; get the registration_id from get_my_event_registrations. ' +
+      'Offer only what this lists, and never say how many places are left. Do not promise the move: ' +
+      'it needs staff approval, and only move_event_entry asks for it. A different time on the SAME ' +
+      'event is reschedule_event_wave instead. Never cancel and rebook to change the event.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        registration_id: { type: 'string', description: 'The registration_id from get_my_event_registrations.' },
+      },
+      required: ['registration_id'],
+    },
+  },
+  {
+    name: 'move_event_entry',
+    description:
+      "Ask the team to move the VERIFIED customer's event entry to one of the dates from " +
+      'list_event_move_options. It files a request for staff approval and NEVER moves the entry ' +
+      'itself. CRITICAL: restate the new event, date and time (and the price difference when there ' +
+      'is one) and get a clear yes before calling. This is the only way to change the event of an ' +
+      'entry: never cancel and rebook instead. Afterwards, say the request is with the team and they ' +
+      'will confirm; never say it is moved.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        registration_id: { type: 'string', description: 'The registration_id from get_my_event_registrations.' },
+        target_event_id: { type: 'string', description: 'The event_id of the chosen option from list_event_move_options.' },
+        target_wave_id: { type: 'string', description: 'The wave_id of the chosen time (required when the option lists times).' },
+        note: { type: 'string', description: "The customer's reason, in a few words, if they gave one." },
+      },
+      required: ['registration_id', 'target_event_id'],
     },
   },
 ]
@@ -197,6 +240,59 @@ function dateLabel(dateStr) {
     parts[p.type] = p.value
   }
   return `${parts.weekday} ${parts.day} ${parts.month}`
+}
+
+// ── EVENT-MOVE.7: move options, customer-safe ───────────────────────
+
+/**
+ * The price difference of a move as one sentence for the customer. Pure.
+ * A team's gap is for the whole entry: members and non-members can pay
+ * different prices, so a per-person split could be wrong. A lower price is
+ * never refunded (a move never moves money).
+ */
+export function priceDifferenceSentence(gapCents, headcount = 1) {
+  const gap = Number(gapCents) || 0
+  if (gap === 0) return 'Same price.'
+  const team = (Number(headcount) || 1) > 1
+  const amount = euro(Math.abs(gap))
+  if (gap > 0) return team ? `${amount} more in total for the entry.` : `${amount} more.`
+  return team ? `${amount} less in total for the entry, not refunded.` : `${amount} less, not refunded.`
+}
+
+function waveTimeLabel(w) {
+  const time = String(w?.start_time || '').slice(0, 5)
+  if (time && w?.label) return `${time} (${w.label})`
+  return time || w?.label || 'Time to be confirmed'
+}
+
+/**
+ * listMoveTargets' targets (staff-shaped, with spots_left) → what Mia may see:
+ * name, date, the times this entry fits, and the price difference as a
+ * sentence. NO capacity, spots or counts of any kind (never surface capacity
+ * to a customer). A time is offered only when the entry fits it (the same
+ * arithmetic as wouldFit: an entry takes one place in teams mode, its
+ * headcount in people mode); an event whose times are all too full is
+ * dropped; an event with no times at all is kept (nothing to fill). Pure.
+ */
+export function shapeMoveOptionsForAgent(targets, { headcount = 1 } = {}) {
+  const need = (mode) => (mode === 'people' ? Math.max(1, Number(headcount) || 1) : 1)
+  const out = []
+  for (const t of Array.isArray(targets) ? targets : []) {
+    if (!t?.id || !t.race_date) continue
+    const waves = Array.isArray(t.waves) ? t.waves : []
+    const times = waves
+      .filter((w) => w?.spots_left === null || w?.spots_left === undefined || Number(w.spots_left) >= need(t.capacity_mode))
+      .map((w) => ({ wave_id: w.id, label: waveTimeLabel(w) }))
+    if (waves.length > 0 && times.length === 0) continue
+    out.push({
+      event_id: t.id,
+      name: t.name || 'Event',
+      date_label: dateLabel(String(t.race_date)),
+      times,
+      price_difference_sentence: priceDifferenceSentence(t.price_gap_cents, headcount),
+    })
+  }
+  return out
 }
 
 function dublinToday(nowMs) {
@@ -508,6 +604,10 @@ export async function executeEventTool(toolName, input, ctx) {
     return { booked: false, reason: result.reason, message: 'The registration did not go through — relay honestly and offer a handoff.' }
   }
 
+  if (toolName === 'list_event_move_options' || toolName === 'move_event_entry') {
+    return executeMoveTool(toolName, input, ctx)
+  }
+
   if (toolName === 'cancel_event_registration' || toolName === 'reschedule_event_wave') {
     // AUTH (MIA-REVIEW.3) — changing something the customer already HAS needs
     // the same hard verification as cancel_class_booking. The old
@@ -563,7 +663,7 @@ export async function executeEventTool(toolName, input, ctx) {
         return { rescheduled: false, reason: 'wave_full', message: 'That wave is full — offer another wave from the list.' }
       }
       if (result.error === 'wrong_event') {
-        return { error: 'wrong_event', message: 'That wave belongs to a different event — a different event is a cancel + new booking.' }
+        return { error: 'wrong_event', message: 'That wave belongs to a different event. A different event is not a cancel and rebook: use list_event_move_options, then move_event_entry.' }
       }
       return { rescheduled: false, reason: result.error, message: 'The move did not go through — relay honestly and offer a handoff.' }
     }
@@ -622,6 +722,181 @@ export async function executeEventTool(toolName, input, ctx) {
   }
 
   return { error: 'unknown_tool', tool: toolName }
+}
+
+// ── EVENT-MOVE.7: the move tools (IO) ───────────────────────────────
+
+/**
+ * The same gate as cancel_event_registration / reschedule_event_wave:
+ * verified sender, entry at this studio, owned by someone in the verified
+ * person's group, and confirmed (an unpaid entry is paid first). Returns
+ * { reg } or { refusal } (a tool result for Mia).
+ */
+async function ownedConfirmedRegistration(db, ctx, registrationId) {
+  const { locationId, contactId, verifiedContactId } = ctx
+  if (!verifiedContactId) {
+    return {
+      refusal: contactId
+        ? { error: 'not_verified', message: 'Identity not verified yet. Call verify_identity first, then retry.' }
+        : { error: 'no_contact', message: 'No contact linked to this conversation. Hand off to the team.' },
+    }
+  }
+  const { data: reg, error } = await db.from('race_registrations')
+    .select('id, status, contact_id, wave_id, race_events!inner(id, name, race_date, location_id)')
+    .eq('id', String(registrationId || ''))
+    .eq('race_events.location_id', locationId)
+    .maybeSingle()
+  if (error) {
+    console.warn(`[agent][events] move: registration read failed: ${error.message}`)
+    return { refusal: { error: 'load_failed', message: 'The entry could not be read just now. Say so and offer the team.' } }
+  }
+  if (!reg) return { refusal: { error: 'not_found', message: 'That registration was not found. Re-check get_my_event_registrations.' } }
+
+  // PERSON-ACCT.4 — ownership spans the person group (see the cancel branch).
+  const linked = await linkedAccountsForContact(db, verifiedContactId)
+  const ownerIds = linked.readFailed ? [verifiedContactId] : linked.contacts.map((c) => c?.id).filter(Boolean)
+  if (!ownerIds.includes(reg.contact_id)) {
+    return { refusal: { error: 'not_yours', message: 'That registration belongs to someone else. Hand off to the team.' } }
+  }
+  if (reg.status === 'pending_payment') {
+    return { refusal: { error: 'not_paid', message: 'This entry is not paid yet, so it cannot be moved. Tell the customer, low-key, that it can be moved once the payment is complete, and offer the team if they are stuck.' } }
+  }
+  if (reg.status !== 'confirmed') {
+    return { refusal: { error: 'not_active', message: 'This entry is not active (cancelled or already used), so there is nothing to move.' } }
+  }
+  return { reg }
+}
+
+/**
+ * The studios a customer's entry may move to: every studio in this studio's
+ * organisation (a move may cross studios, never organisations), or this
+ * studio alone when it has none. null when the read failed (fail closed).
+ */
+async function moveLocationIds(db, locationId) {
+  const { data: loc, error } = await db.from('locations').select('organization_id').eq('id', locationId).maybeSingle()
+  if (error) {
+    console.warn(`[agent][events] move: location read failed: ${error.message}`)
+    return null
+  }
+  if (!loc?.organization_id) return [locationId]
+  const { data: rows, error: orgErr } = await db.from('locations')
+    .select('id')
+    .eq('organization_id', loc.organization_id)
+    .order('id')
+    .limit(200)
+  if (orgErr) {
+    console.warn(`[agent][events] move: organisation locations read failed: ${orgErr.message}`)
+    return null
+  }
+  const ids = (rows || []).map((r) => r.id).filter(Boolean)
+  return ids.includes(locationId) ? ids : [locationId, ...ids]
+}
+
+/** listMoveTargets for this entry, plus the customer-safe options. */
+async function moveOptionsFor(db, ctx, reg) {
+  const allowedLocationIds = await moveLocationIds(db, ctx.locationId)
+  if (!allowedLocationIds) {
+    return { refusal: { error: 'load_failed', message: 'The dates could not be loaded just now. Say so and offer the team.' } }
+  }
+  const { listMoveTargets } = await import('@/lib/registration-move')
+  const listed = await listMoveTargets(db, { registrationId: reg.id, allowedLocationIds })
+  if (!listed?.ok) {
+    return { refusal: { error: listed?.error || 'load_failed', message: 'The dates could not be loaded just now. Say so and offer the team.' } }
+  }
+  const headcount = listed.entry?.headcount || 1
+  return { listed, headcount, options: shapeMoveOptionsForAgent(listed.targets, { headcount }) }
+}
+
+async function executeMoveTool(toolName, input, ctx) {
+  const { db } = ctx
+  const gate = await ownedConfirmedRegistration(db, ctx, input?.registration_id)
+  if (gate.refusal) return gate.refusal
+  const { reg } = gate
+  const found = await moveOptionsFor(db, ctx, reg)
+  if (found.refusal) return found.refusal
+  const { listed, headcount, options } = found
+  const sourceDate = reg.race_events?.race_date ? dateLabel(String(reg.race_events.race_date)) : null
+
+  if (toolName === 'list_event_move_options') {
+    const entry = { registration_id: reg.id, event_name: reg.race_events?.name || 'Event', date_label: sourceDate }
+    if (options.length === 0) {
+      return { entry, options: [], message: 'There is no other date this entry can move to right now. Say so plainly and offer the team.' }
+    }
+    return {
+      entry,
+      options,
+      message: 'Offer these dates and times only. Mention the price difference only when there is one. Once they pick, restate it and get a clear yes, then call move_event_entry. It needs staff approval, so do not promise it.',
+    }
+  }
+
+  // move_event_entry — the target must be one of the options, re-checked now.
+  const option = options.find((o) => o.event_id === String(input?.target_event_id || ''))
+  if (!option) {
+    return { error: 'not_an_option', message: 'That date is not one this entry can move to. Run list_event_move_options again and offer only what it lists.' }
+  }
+  const waveId = input?.target_wave_id ? String(input.target_wave_id) : null
+  let time = null
+  if (option.times.length > 0) {
+    if (!waveId) return { error: 'pick_a_time', message: 'That date has set times. Ask which time they want, then call again with its wave_id.' }
+    time = option.times.find((t) => t.wave_id === waveId) || null
+    if (!time) return { error: 'not_an_option', message: 'That time is not one this entry can move to. Run list_event_move_options again and offer only what it lists.' }
+  } else if (waveId) {
+    return { error: 'not_an_option', message: 'That date has no times to pick. Run list_event_move_options again and offer only what it lists.' }
+  }
+
+  // One pending move per entry: a second ask while the first waits is the same request.
+  const { data: pending, error: pendingErr } = await db.from('agent_membership_requests')
+    .select('id')
+    .eq('kind', 'event_move')
+    .eq('status', 'pending')
+    .eq('details->>registration_id', reg.id)
+    .limit(1)
+    .maybeSingle()
+  if (pendingErr) console.warn(`[agent][events] move: pending-request check failed: ${pendingErr.message}`)
+  if (pending?.id) {
+    return { requested: true, already_requested: true, message: 'A move for this entry is already with the team. Tell the customer it is in hand and they will hear back once it is done. Never say it is moved.' }
+  }
+
+  const target = listed.targets.find((t) => t.id === option.event_id) || {}
+  const priceGapCents = Number(target.price_gap_cents) || 0
+  const note = String(input?.note || '').trim().slice(0, 500) || null
+  const details = {
+    registration_id: reg.id,
+    entry_label: listed.entry?.label || 'Entry',
+    headcount,
+    source_event_id: listed.source?.event_id || reg.race_events?.id || null,
+    source_event_name: listed.source?.event_name || reg.race_events?.name || '',
+    source_event_date: listed.source?.race_date || reg.race_events?.race_date || null,
+    target_event_id: option.event_id,
+    target_event_name: option.name,
+    target_event_date: target.race_date || null,
+    target_date_label: option.date_label,
+    target_wave_id: time?.wave_id || null,
+    target_wave_label: time?.label || null,
+    price_gap_cents: priceGapCents,
+    currency: target.currency || 'EUR',
+    note,
+  }
+  const requestId = await logEventRequest(db, ctx, { kind: 'event_move', status: 'pending', details })
+  if (!requestId) {
+    return { requested: false, error: 'not_filed', message: 'The request could not be passed to the team. Do not say it is in hand; hand off to the team instead.' }
+  }
+  const { notifyAgentApprovalRequest } = await import('./approval-notify')
+  const when = [option.date_label, time?.label].filter(Boolean).join(', ')
+  await notifyAgentApprovalRequest(db, {
+    requestId, locationId: ctx.locationId, kind: 'event_move', customerName: ctx.nameHint,
+    summary: `Move ${details.entry_label} from ${details.source_event_name}${sourceDate ? ` (${sourceDate})` : ''} to ${option.name} (${when})`,
+  })
+  const difference = priceGapCents > 0
+    ? ` The new date costs ${euro(priceGapCents)} more${headcount > 1 ? ' in total for the entry' : ''}: say the team will send them a link for the difference.`
+    : ''
+  return {
+    requested: true,
+    new_event: option.name,
+    new_date: option.date_label,
+    ...(time ? { new_time: time.label } : {}),
+    message: `Request filed. Tell the customer, low-key, that moving their entry to ${option.name} on ${when} is with the team to confirm and they will hear back once it is done. Never say it is moved yet.${difference}`,
+  }
 }
 
 // Audit-trail writer — same queue/audit table as class bookings (mig
