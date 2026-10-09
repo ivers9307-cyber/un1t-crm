@@ -15,6 +15,8 @@ function makeDb(handlers) {
         select() { return builder }, insert(v) { ctx.op = 'insert'; ctx.values = v; return builder },
         update(v) { ctx.op = 'update'; ctx.values = v; return builder },
         eq(c, v) { ctx.filters.push(['eq', c, v]); return builder }, is() { return builder },
+        neq(c, v) { ctx.filters.push(['neq', c, v]); return builder },
+        in(c, v) { ctx.filters.push(['in', c, v]); return builder },
         or(f) { ctx.filters.push(['or', f]); return builder },
         limit() { return builder }, order() { return builder },
         maybeSingle() { return Promise.resolve(handlers(ctx)) },
@@ -48,6 +50,58 @@ describe('syncContactMatchOnly', () => {
     const r = await syncContactMatchOnly(db, { phone: '+353860000000' })
     expect(r).toEqual({ matched: false, contactId: null })
     expect(inserts).toEqual([]) // never inserts a contact
+  })
+})
+
+// W0.2 — the organisation fence. The fake answers `locations` the way the
+// real table would for L1 (org-1) with one sibling L2, so the real
+// siblingLocationIds runs and the recorded `contacts` query carries the scope.
+function locationsHandler(ctx) {
+  if (ctx.table !== 'locations') return undefined
+  if (ctx.filters.some(([k]) => k === 'neq')) return { data: [{ id: 'L2' }], error: null }
+  return { data: { id: 'L1', organization_id: 'org-1' }, error: null }
+}
+
+describe('W0.2 — coexistence contact matches stay inside the receiving organisation', () => {
+  it('syncContactMatchOnly scopes the phone match to [receiving, sibling]', async () => {
+    const contactReads = []
+    const db = makeDb((ctx) => {
+      const loc = locationsHandler(ctx); if (loc) return loc
+      if (ctx.table === 'contacts' && ctx.op !== 'update') { contactReads.push(ctx.filters); return { data: { id: 'c1', wa_phone: '353861234567' }, error: null } }
+      return { data: null, error: null }
+    })
+    const r = await syncContactMatchOnly(db, { phone: '+353861234567', locationId: 'L1' })
+    expect(r).toEqual({ matched: true, contactId: 'c1' })
+    expect(contactReads).toHaveLength(1)
+    expect(contactReads[0]).toContainEqual(['in', 'location_id', ['L1', 'L2']])
+    expect(contactReads[0].some(([k]) => k === 'or')).toBe(true)
+  })
+
+  it('ingestCoexistenceMessage scopes the peer match to [receiving, sibling]', async () => {
+    const contactReads = []
+    const db = makeDb((ctx) => {
+      const loc = locationsHandler(ctx); if (loc) return loc
+      if (ctx.table === 'contacts') { contactReads.push(ctx.filters); return { data: { id: 'c1' }, error: null } }
+      if (ctx.op === 'insert') return { data: { id: 'n1' }, error: null }
+      return { data: null, error: null }
+    })
+    const r = await ingestCoexistenceMessage(db, {
+      locationId: 'L1', descriptor: { waMessageId: 'wamid.F1', peerPhone: '353222', direction: 'inbound', messageType: 'text', body: 'x', tsSeconds: 1700000000 },
+    })
+    expect(r).toMatchObject({ inserted: true, contactId: 'c1' })
+    expect(contactReads).toHaveLength(1)
+    expect(contactReads[0]).toContainEqual(['in', 'location_id', ['L1', 'L2']])
+  })
+
+  it('a failed locations read narrows to the receiving location (never the sentinel-less estate)', async () => {
+    const contactReads = []
+    const db = makeDb((ctx) => {
+      if (ctx.table === 'locations') return { data: null, error: { message: 'boom' } }
+      if (ctx.table === 'contacts') { contactReads.push(ctx.filters); return { data: null, error: null } }
+      return { data: null, error: null }
+    })
+    await syncContactMatchOnly(db, { phone: '+353861234567', locationId: 'L1' })
+    expect(contactReads[0]).toContainEqual(['in', 'location_id', ['L1']])
   })
 })
 
