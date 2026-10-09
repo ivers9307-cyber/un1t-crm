@@ -130,8 +130,8 @@ const EXEMPT = {
     'Capability-token URL (per-contact unsubscribe token, or the legacy contact+session PAIR whose session must belong to the contact) + tiered rate limit and refusal logging — public by design, same guard as the sibling consent endpoints (HRPREF-AUTH.1).',
   'src/app/api/webhooks/sequence/[token]/route.js':
     'URL token (32-hex, unguessable, per-sequence) + optional constant-time X-Webhook-Secret + 100/min rate limit — the token IS the credential.',
-  'src/app/api/webhooks/strava/route.js':
-    'Strava does not sign webhook POSTs; GET handshake verifies via STRAVA_WEBHOOK_VERIFY_TOKEN, POST acts only on known owner_ids + fetches with our own token',
+  'src/app/api/webhooks/strava/[token]/route.js':
+    'Strava does not sign webhook POSTs, so the URL token IS the credential (STRAVA_WEBHOOK_URL_TOKEN, constant-time compare, 404 on POST / 403 on GET when wrong, closed when unset — W0.10) + 120/min per-IP limit on POST; GET handshake additionally verifies STRAVA_WEBHOOK_VERIFY_TOKEN; POST acts only on known owner_ids + fetches with our own token.',
   'src/app/api/whatsapp/flow/route.js':
     'WhatsApp Flow data-exchange endpoint — RSA/AES encryption is the credential (only Meta, holding our registered public key, can produce a request we can decrypt; 421 on failure). No tenant data is read before decrypt.',
   'src/app/api/mobile/review-login/route.js':
