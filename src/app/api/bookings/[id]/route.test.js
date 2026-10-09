@@ -2,8 +2,8 @@
 //
 // api-auth is REAL (only the supabase client is faked): a per-org key
 // targeting another org's booking must get 404 (not 403 — ids are not
-// confirmed across orgs) and the row must NOT be touched. The legacy
-// shared key keeps its unscoped behaviour byte-for-byte.
+// confirmed across orgs) and the row must NOT be touched. Since W0.1 the
+// legacy shared key is scoped to CRM_API_KEY_ORG_ID and is gated the same way.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
@@ -28,6 +28,7 @@ const props = (id) => ({ params: { id } })
 
 beforeEach(() => {
   vi.stubEnv('CRM_API_KEY', GLOBAL_KEY)
+  vi.stubEnv('CRM_API_KEY_ORG_ID', 'org-1') // W0.1 — legacy key = org-1's key
   tables = twoOrgFixture()
   db = makeFakeDb(tables)
 })
@@ -53,10 +54,17 @@ describe('PUT /api/bookings/[id] — per-org key row gate', () => {
     expect(tables.bookings.find((b) => b.id === 'b1').status).toBe('confirmed')
   })
 
-  it('legacy CRM_API_KEY may update any org\'s booking — unchanged', async () => {
+  it('legacy CRM_API_KEY targeting another org\'s booking → 404, row untouched (W0.1 scoped)', async () => {
     const res = await PUT(req(GLOBAL_KEY), props('b2'))
+    expect(res.status).toBe(404)
+    expect(await res.json()).toEqual({ success: false, error: 'not_found' })
+    expect(tables.bookings.find((b) => b.id === 'b2').status).toBe('pending')
+  })
+
+  it('legacy CRM_API_KEY updates a booking inside CRM_API_KEY_ORG_ID (positive control)', async () => {
+    const res = await PUT(req(GLOBAL_KEY), props('b1'))
     expect(res.status).toBe(200)
-    expect(tables.bookings.find((b) => b.id === 'b2').status).toBe('confirmed')
+    expect(tables.bookings.find((b) => b.id === 'b1').status).toBe('confirmed')
   })
 
   it('revoked per-org key → 401 before any row is read', async () => {

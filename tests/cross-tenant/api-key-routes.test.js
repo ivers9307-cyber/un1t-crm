@@ -10,16 +10,17 @@
 //
 // Assertions per route kind:
 //   list    — org-A key sees ONLY org-A rows (both its locations);
-//             org-B key the mirror; legacy shared key sees everything
-//             (unscoped BY DESIGN until n8n migrates — pinned so a
-//             change is deliberate).
+//             org-B key the mirror; the legacy shared key (W0.1: scoped
+//             to CRM_API_KEY_ORG_ID, org A here) sees exactly what org
+//             A's key sees, and is refused when that env is unset.
 //   detail  — org-A key reads its own row; a cross-tenant id → 404
 //             (indistinguishable from missing).
 //   mutate  — org-A key mutating a cross-tenant row → 404, the row is
 //             byte-identical afterwards, and no write ever reached the
 //             table. Positive control proves the block isn't vacuous.
 //   create  — org-A key creating into org B (by location_id or via a
-//             B contact anchor) → 403 and no insert.
+//             B contact anchor) → 403 and no insert; the legacy key
+//             (scoped to org A) is refused the same way.
 //
 // ADDING A ROUTE: one entry in the relevant spec table below.
 // Routes that can't fit the pattern are listed in SKIPPED with the
@@ -63,6 +64,7 @@ import { createServerClient } from '@/lib/supabase'
 import {
   makeWorld, makeTenantDb, makeReq, jsonOf, propsOf, idsOf,
   LEGACY_KEY, ORG_A_KEY, ORG_B_KEY,
+  ORG_A,
   LOC_A1, LOC_B1,
   C_A1, C_A2, C_B1, C_B2,
   D_A1, D_B1,
@@ -102,6 +104,8 @@ function freshWorld() {
 beforeEach(() => {
   vi.mocked(createServerClient).mockReset()
   process.env.CRM_API_KEY = LEGACY_KEY
+  // W0.1 — the legacy shared key is a per-org key for this one org.
+  process.env.CRM_API_KEY_ORG_ID = ORG_A
   freshWorld()
 })
 
@@ -114,49 +118,49 @@ const LIST_SPECS = [
     name: 'GET /api/contacts (contacts list)',
     call: () => contactsRoute.GET(makeReq('/api/contacts', { bearer: currentKey })),
     ids: dataIds,
-    orgA: [C_A1, C_A2], orgB: [C_B1, C_B2], all: [C_A1, C_A2, C_B1, C_B2],
+    orgA: [C_A1, C_A2], orgB: [C_B1, C_B2],
   },
   {
     name: 'GET /api/contacts/search?fields=email (contacts search, email path)',
     call: () => contactsSearchRoute.GET(makeReq('/api/contacts/search?term=lead&fields=email', { bearer: currentKey })),
     ids: itemIds,
-    orgA: [C_A1, C_A2], orgB: [C_B1, C_B2], all: [C_A1, C_A2, C_B1, C_B2],
+    orgA: [C_A1, C_A2], orgB: [C_B1, C_B2],
   },
   {
     name: 'GET /api/contacts/search?fields=all (contacts search, or() path)',
     call: () => contactsSearchRoute.GET(makeReq('/api/contacts/search?term=Lead&fields=all', { bearer: currentKey })),
     ids: itemIds,
-    orgA: [C_A1, C_A2], orgB: [C_B1, C_B2], all: [C_A1, C_A2, C_B1, C_B2],
+    orgA: [C_A1, C_A2], orgB: [C_B1, C_B2],
   },
   {
     name: 'GET /api/bookings (bookings list)',
     call: () => bookingsRoute.GET(makeReq('/api/bookings', { bearer: currentKey })),
     ids: dataIds,
-    orgA: [BK_A1, BK_A2], orgB: [BK_B1, BK_B2], all: [BK_A1, BK_A2, BK_B1, BK_B2],
+    orgA: [BK_A1, BK_A2], orgB: [BK_B1, BK_B2],
   },
   {
     name: 'GET /api/campaigns (campaigns list)',
     call: () => campaignsRoute.GET(makeReq('/api/campaigns', { bearer: currentKey })),
     ids: dataIds,
-    orgA: [CAM_A1, CAM_A2], orgB: [CAM_B1, CAM_B2], all: [CAM_A1, CAM_A2, CAM_B1, CAM_B2],
+    orgA: [CAM_A1, CAM_A2], orgB: [CAM_B1, CAM_B2],
   },
   {
     name: 'GET /api/tasks (tasks list)',
     call: () => tasksRoute.GET(makeReq('/api/tasks', { bearer: currentKey })),
     ids: dataIds,
-    orgA: [TASK_A1, TASK_A2], orgB: [TASK_B1, TASK_B2], all: [TASK_A1, TASK_A2, TASK_B1, TASK_B2],
+    orgA: [TASK_A1, TASK_A2], orgB: [TASK_B1, TASK_B2],
   },
   {
     name: 'GET /api/bookings/event-types (event types list)',
     call: () => eventTypesRoute.GET(makeReq('/api/bookings/event-types', { bearer: currentKey })),
     ids: dataIds,
-    orgA: [ET_A1, ET_A2], orgB: [ET_B1, ET_B2], all: [ET_A1, ET_A2, ET_B1, ET_B2],
+    orgA: [ET_A1, ET_A2], orgB: [ET_B1, ET_B2],
   },
   {
     name: 'GET /api/stages (pipeline stages list, API-key path)',
     call: () => stagesRoute.GET(makeReq('/api/stages', { bearer: currentKey })),
     ids: dataIds,
-    orgA: [STG_A1, STG_A2], orgB: [STG_B1, STG_B2], all: [STG_A1, STG_A2, STG_B1, STG_B2],
+    orgA: [STG_A1, STG_A2], orgB: [STG_B1, STG_B2],
   },
 ]
 
@@ -178,11 +182,19 @@ describe.each(LIST_SPECS)('$name — org boundary', (spec) => {
     expect(spec.ids(json)).toEqual([...spec.orgB].sort())
   })
 
-  it('legacy shared key sees every tenant — unscoped BY DESIGN (n8n back-compat, pinned)', async () => {
+  it('legacy shared key sees only org-A rows — scoped to CRM_API_KEY_ORG_ID (W0.1)', async () => {
     currentKey = LEGACY_KEY
     const { status, json } = await jsonOf(await spec.call())
     expect(status).toBe(200)
-    expect(spec.ids(json)).toEqual([...spec.all].sort())
+    expect(spec.ids(json)).toEqual([...spec.orgA].sort())
+  })
+
+  it('legacy shared key with CRM_API_KEY_ORG_ID unset → 401, nothing listed (fail closed)', async () => {
+    currentKey = LEGACY_KEY
+    process.env.CRM_API_KEY_ORG_ID = ''
+    const { status, json } = await jsonOf(await spec.call())
+    expect(status).toBe(401)
+    expect(json?.data).toBeUndefined()
   })
 })
 
@@ -220,11 +232,18 @@ describe.each(DETAIL_SPECS)('$name — org boundary', (spec) => {
     expect(JSON.stringify(json)).not.toContain(spec.bId)
   })
 
-  it('legacy shared key reads any tenant — unscoped BY DESIGN (pinned)', async () => {
+  it('legacy shared key fetching a cross-tenant id gets 404 — scoped to org A (W0.1)', async () => {
     currentKey = LEGACY_KEY
     const { status, json } = await jsonOf(await spec.call(spec.bId))
+    expect(status).toBe(404)
+    expect(JSON.stringify(json)).not.toContain(spec.bId)
+  })
+
+  it('legacy shared key reads an org-A row (positive control)', async () => {
+    currentKey = LEGACY_KEY
+    const { status, json } = await jsonOf(await spec.call(spec.aId))
     expect(status).toBe(200)
-    expect(json.data.id).toBe(spec.bId)
+    expect(json.data.id).toBe(spec.aId)
   })
 })
 
@@ -345,6 +364,15 @@ describe.each(CREATE_SPECS)('$name — org boundary', (spec) => {
     expect(db._writesTo(spec.table).filter((w) => w.op === 'insert')).toEqual([])
   })
 
+  it('legacy shared key creating into org B is refused (403) and nothing is inserted — scoped to org A (W0.1)', async () => {
+    currentKey = LEGACY_KEY
+    const countBefore = world[spec.table].length
+    const { status } = await jsonOf(await spec.call(spec.bTarget))
+    expect(status).toBe(403)
+    expect(world[spec.table].length).toBe(countBefore)
+    expect(db._writesTo(spec.table).filter((w) => w.op === 'insert')).toEqual([])
+  })
+
   it('org-A key creating inside its own org succeeds and is stamped in org A (positive control)', async () => {
     currentKey = ORG_A_KEY
     const countBefore = world[spec.table].length
@@ -373,11 +401,12 @@ describe('GET /api/deals/search — org boundary (bespoke: resolves contact by e
     expect(idsOf(json.data.items.map((i) => i.item))).toEqual([D_A1])
   })
 
-  it('legacy shared key resolves any tenant — unscoped BY DESIGN (pinned)', async () => {
-    const { json } = await jsonOf(await dealsSearchRoute.GET(
+  it('legacy shared key searching a B-tenant email finds nothing — scoped to org A (W0.1)', async () => {
+    const { status, json } = await jsonOf(await dealsSearchRoute.GET(
       makeReq('/api/deals/search?term=lead.b1@', { bearer: LEGACY_KEY })
     ))
-    expect(idsOf(json.data.items.map((i) => i.item))).toEqual([D_B1])
+    expect(status).toBe(200)
+    expect(json.data.items).toEqual([])
   })
 })
 
