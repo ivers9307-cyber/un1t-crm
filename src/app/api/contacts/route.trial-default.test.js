@@ -26,7 +26,7 @@ vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.f
 
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
-import { makeWorld, makeTenantDb, makeReq, jsonOf, users, LOC_A1 } from '../../../../tests/cross-tenant/fixture.js'
+import { makeWorld, makeTenantDb, makeReq, jsonOf, users, ORG_A, LOC_A1 } from '../../../../tests/cross-tenant/fixture.js'
 import * as contactsRoute from './route.js'
 
 let world
@@ -36,10 +36,11 @@ const created = () => world.contacts.filter((c) => c.email === EMAIL)
 beforeEach(() => {
   vi.clearAllMocks()
   delete process.env.CRM_API_KEY
+  delete process.env.CRM_API_KEY_ORG_ID
   world = makeWorld()
   vi.mocked(createServerClient).mockReturnValue(makeTenantDb(world))
 })
-afterEach(() => { delete process.env.CRM_API_KEY })
+afterEach(() => { delete process.env.CRM_API_KEY; delete process.env.CRM_API_KEY_ORG_ID })
 
 describe('POST /api/contacts — no default trial credits (C145)', () => {
   it('web form (cookie): a new contact has no credit count', async () => {
@@ -54,6 +55,7 @@ describe('POST /api/contacts — no default trial credits (C145)', () => {
 
   it('API key: a new contact has no credit count either', async () => {
     process.env.CRM_API_KEY = 'test-shared-key'
+    process.env.CRM_API_KEY_ORG_ID = ORG_A // W0.1 — the legacy key is org A's key
     const { status } = await jsonOf(await contactsRoute.POST(makeReq('/api/contacts', {
       method: 'POST', bearer: 'test-shared-key', body: { name: 'New Lead', email: EMAIL, location_id: LOC_A1 },
     })))

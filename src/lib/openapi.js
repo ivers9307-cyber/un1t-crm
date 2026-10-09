@@ -251,7 +251,7 @@ registry.registerComponent('securitySchemes', 'BearerAuth', {
     'API key for n8n / external integrations, sent as `Authorization: Bearer <token>`. ' +
     'Two kinds are accepted (SAAS-3): a per-organization key (`unitk_…`, issued at ' +
     '/settings/api-keys) whose queries are scoped to the key\'s organization, or the ' +
-    'legacy shared CRM_API_KEY (unscoped, system-admin behaviour).',
+    'legacy shared CRM_API_KEY (scoped to CRM_API_KEY_ORG_ID — one organisation; refused when unset).',
 })
 registry.registerComponent('securitySchemes', 'CookieAuth', {
   type: 'apiKey',
@@ -6365,7 +6365,9 @@ registry.registerPath({
           schema: z.object({
             location_id: uuidLike,
             enabled: z.boolean(),
-            config: z.record(z.string(), z.unknown()).optional(),
+            // W0.12 — device_ids must all be ac_devices rows at location_id
+            // (400 unknown_device otherwise); other keys are per-automation.
+            config: z.object({ device_ids: z.array(uuidLike).max(50).optional() }).passthrough().optional(),
           }).openapi('AutomationToggle'),
         },
       },
@@ -9916,7 +9918,7 @@ function buildSpec() {
         'HTTP API for the Repset gym CRM. Most endpoints accept either a Supabase ' +
         'session cookie (browser) or a Bearer token for n8n / external integrations — ' +
         'a per-organization `unitk_…` API key (org-scoped) or the legacy shared ' +
-        'CRM_API_KEY (unscoped). Mutating endpoints validate request bodies via Zod schemas; ' +
+        'CRM_API_KEY (scoped to CRM_API_KEY_ORG_ID — one organisation; refused when unset). Mutating endpoints validate request bodies via Zod schemas; ' +
         'invalid input returns 400 with structured `issues` array.' +
         ' Covers the public, inbound-webhook, bridge and mobile integration surface; planned outbound events appear under webhooks.',
     },

@@ -26,6 +26,7 @@ const req = (token, qs) =>
 
 beforeEach(() => {
   vi.stubEnv('CRM_API_KEY', GLOBAL_KEY)
+  vi.stubEnv('CRM_API_KEY_ORG_ID', 'org-1') // W0.1 — legacy key = org-1's key
   db = makeFakeDb(twoOrgFixture())
 })
 
@@ -34,12 +35,12 @@ afterEach(() => {
 })
 
 describe('GET /api/contacts/search — API-key callers', () => {
-  it('legacy CRM_API_KEY searches across orgs without crashing (assimilation regression)', async () => {
+  it('legacy CRM_API_KEY searches only its org without crashing (W0.1 scoped; assimilation regression)', async () => {
     const res = await GET(req(GLOBAL_KEY, '?term=example.com'))
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.success).toBe(true)
-    expect(body.data.items.map(({ item }) => item.id).sort()).toEqual(['c1', 'c2'])
+    expect(body.data.items.map(({ item }) => item.id)).toEqual(['c1'])
   })
 
   it('per-org key can only find its own org\'s contacts (two-org leak test)', async () => {
