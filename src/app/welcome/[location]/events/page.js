@@ -12,6 +12,7 @@ import { orderEventsForBrowse, todayIsoDublin } from '@shared/events'
 import { isEventSoldOut, toBrowseCard } from '@/lib/public-events'
 import PublicEventsList from '@/components/landing-page/PublicEventsList'
 import InstagramStrip from '@/components/landing-page/InstagramStrip'
+import { sharedEventsOrFilterFor } from '@/lib/event-visibility'
 
 export const dynamic = 'force-dynamic'
 
@@ -85,13 +86,15 @@ export default async function StudioEventsPage(props) {
 
   const db = createServerClient()
   // Public-safe SELECT, scoped to this studio's active upcoming events.
-  // Includes shared events (visible across locations). Embeds waves +
+  // Includes shared events (visible across the owning organisation, W0.3).
+  // Embeds waves +
   // registrations ONLY to compute a coy sold-out boolean — raw
   // capacity/counts are never rendered.
+  const orFilter = await sharedEventsOrFilterFor(db, locationId)
   const { data: rows } = await db
     .from('race_events')
     .select('slug, name, kind, race_date, start_time, capacity_mode, registration_opens_at, registration_closes_at, member_pricing_enabled, member_fee_cents, non_member_fee_cents, waves:race_waves ( id, capacity ), registrations:race_registrations ( status, wave_id, team:teams ( size ) )')
-    .or(`location_id.eq.${locationId},shared.eq.true`)
+    .or(orFilter)
     .eq('active', true)
     .eq('status', 'published')
     .is('host_id', null)
