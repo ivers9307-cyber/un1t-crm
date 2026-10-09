@@ -103,6 +103,10 @@ export const CreateSchema = z.object({
   // payment link and the receipt share it).
   gap_email_subject: z.string().max(4000).nullable().optional(),
   gap_email_intro: z.string().max(4000).nullable().optional(),
+  // EVENT-WAITLIST.1 (mig 713) — copy for the waitlist "a spot opened up"
+  // offer email ({{claim_url}} available).
+  waitlist_email_subject: z.string().max(4000).nullable().optional(),
+  waitlist_email_intro: z.string().max(4000).nullable().optional(),
   confirmation_email_template_id: uuidLike.nullable().optional(),
   reminder_email_template_id: uuidLike.nullable().optional(),
   // EVENT-COMMS-LOC (mig 553) — the real UN1T location this event's SMS + email
@@ -390,6 +394,8 @@ export async function POST(request) {
       moved_email_intro: body.moved_email_intro ?? null,
       gap_email_subject: body.gap_email_subject ?? null,
       gap_email_intro: body.gap_email_intro ?? null,
+      waitlist_email_subject: body.waitlist_email_subject ?? null,
+      waitlist_email_intro: body.waitlist_email_intro ?? null,
       confirmation_email_template_id: body.confirmation_email_template_id ?? null,
       reminder_email_template_id: body.reminder_email_template_id ?? null,
       sending_location_id: body.sending_location_id ?? null,

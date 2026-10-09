@@ -60,6 +60,7 @@ export default async function RaceTeamsPage(props) {
         race={race}
         canCancelEntries={hasRoleAtLocation(user, race.location_id, MANAGER_ROLES)}
         canMoveEntries={hasRoleAtLocation(user, race.location_id, MANAGER_ROLES)}
+        canManageWaitlist={hasRoleAtLocation(user, race.location_id, MANAGER_ROLES)}
         currency={race.payment_currency || 'EUR'}
       />
     </div>
