@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { pickHostBranding, hostPageCopy } from './host-public-page'
+import { pickHostBranding, hostPageCopy, hostPageEvents } from './host-public-page'
 
 const HERO = 'https://x.supabase.co/storage/v1/object/public/branding/race-hero/a/hero.png'
 
@@ -30,5 +30,23 @@ describe('hostPageCopy', () => {
   it('uses trimmed operator copy', () => {
     expect(hostPageCopy({ events_headline: '  Train with PTC ', events_blurb: ' Sessions every month. ' }))
       .toEqual({ headline: 'Train with PTC', blurb: 'Sessions every month.' })
+  })
+})
+
+describe('hostPageEvents (HOST-EVENTS-PAGE.2)', () => {
+  const ev = (slug, race_date, registration_closes_at = null) => ({ slug, race_date, registration_closes_at })
+  it('keeps an upcoming event whose registration has closed, and drops past ones', () => {
+    const rows = [
+      ev('past', '2026-10-08'),
+      ev('closed-upcoming', '2026-10-18', '2026-10-08T18:00:00Z'),
+      ev('open', '2026-10-25', '2026-10-24T18:00:00Z'),
+    ]
+    expect(hostPageEvents(rows, '2026-10-09').map((e) => e.slug)).toEqual(['closed-upcoming', 'open'])
+  })
+  it('an event today is still listed, nearest first', () => {
+    expect(hostPageEvents([ev('later', '2026-10-20'), ev('today', '2026-10-09')], '2026-10-09').map((e) => e.slug)).toEqual(['today', 'later'])
+  })
+  it('tolerates no rows', () => {
+    expect(hostPageEvents(null, '2026-10-09')).toEqual([])
   })
 })

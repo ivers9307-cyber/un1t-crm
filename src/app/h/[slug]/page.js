@@ -7,8 +7,10 @@
 //
 // Server component: host by slug via the service client (notFound when the
 // slug is unknown — slugs are public, no enumeration concern). Events are
-// the host's own published, active, upcoming ones whose registration
-// window is open — the same filters as the studio listing. Waves and
+// the host's own published, active, upcoming ones. An upcoming event whose
+// registration has CLOSED stays listed, badged "Registration closed" and not
+// linked to the buy page (HOST-EVENTS-PAGE.2; the studio listing still hides
+// them). Waves and
 // registrations are embedded ONLY to compute the sold-out boolean; no
 // count or capacity is ever rendered. Branding is the host's own
 // (mig 707), falling back to the nearest event's hero.
@@ -20,8 +22,8 @@ import HostPublicEvents from '@/components/host/HostPublicEvents'
 import { poppinsBody as poppins } from '@/fonts/poppins'
 import { getOrgBrandName } from '@/lib/location-branding'
 import { isEventSoldOut, toBrowseCard } from '@/lib/public-events'
-import { pickHostBranding, hostPageCopy } from '@/lib/host-public-page'
-import { orderEventsForBrowse, todayIsoDublin } from '@shared/events'
+import { pickHostBranding, hostPageCopy, hostPageEvents } from '@/lib/host-public-page'
+import { todayIsoDublin } from '@shared/events'
 
 // Same brand-font setup as /event/[slug] — self-hosted Poppins scoped to
 // this public subtree via the `--font-body` variable.
@@ -43,11 +45,8 @@ async function loadHostEvents(db, hostId) {
     .eq('active', true)
     .eq('status', 'published')
     .gte('race_date', today)
-  const open = (rows || []).filter((e) => {
-    const closesAt = e.registration_closes_at ? Date.parse(e.registration_closes_at) : null
-    return !(closesAt && nowMs > closesAt)
-  })
-  const { upcoming } = orderEventsForBrowse(open, today)
+  // Closed-registration events stay listed (HOST-EVENTS-PAGE.2); past ones go.
+  const upcoming = hostPageEvents(rows, today)
   return { upcoming, nowMs }
 }
 

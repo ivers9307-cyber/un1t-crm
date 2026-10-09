@@ -64,11 +64,17 @@ export function formatEventTime(e) {
 
 /** Row → card view-model. `now` injectable for tests.
  *  HOST-EVENTS-PAGE.1 added `timeLabel` + `venue` (additive; the studio
- *  listing ignores them). */
+ *  listing ignores them). HOST-EVENTS-PAGE.2 added `closed` + the "Registration
+ *  closed" badge (after "Opens", before "Sold out": a closed event can't be
+ *  bought whether or not it is full); the studio listing still filters closed
+ *  events out before calling this, so it never sees one. */
 export function toBrowseCard(e, { soldOut = false, now = Date.now() } = {}) {
   const opensAt = e?.registration_opens_at ? Date.parse(e.registration_opens_at) : null
+  const closesAt = e?.registration_closes_at ? Date.parse(e.registration_closes_at) : null
+  const closed = !!(closesAt && now > closesAt)
   let badge = null
   if (opensAt && now < opensAt) badge = `Opens ${formatOpensDate(e.registration_opens_at)}`
+  else if (closed) badge = 'Registration closed'
   else if (soldOut) badge = 'Sold out'
   return {
     slug: e.slug,
@@ -79,5 +85,6 @@ export function toBrowseCard(e, { soldOut = false, now = Date.now() } = {}) {
     venue: typeof e?.venue_name === 'string' && e.venue_name.trim() ? e.venue_name.trim() : null,
     priceLabel: eventPriceLabel(e),
     badge,
+    closed,
   }
 }

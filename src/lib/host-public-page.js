@@ -1,6 +1,8 @@
 // HOST-EVENTS-PAGE.1 — pure helpers for the host's public page (/h/[slug]):
 // which hero and accent to show, and the default wording. No IO.
 
+import { orderEventsForBrowse } from '@shared/events'
+
 const HEX = /^#[0-9a-fA-F]{6}$/
 
 function cleanUrl(v) {
@@ -33,4 +35,14 @@ export function hostPageCopy(host) {
     headline: headline || 'Upcoming events',
     blurb: blurb || null,
   }
+}
+
+/**
+ * HOST-EVENTS-PAGE.2 — the events a host's public page lists, nearest first:
+ * every one dated `today` (YYYY-MM-DD, Europe/Dublin) or later, INCLUDING
+ * those whose registration window has closed (the card says "Registration
+ * closed" and does not link to the buy page). Past events are dropped.
+ */
+export function hostPageEvents(rows, today) {
+  return orderEventsForBrowse(rows, today).upcoming
 }
