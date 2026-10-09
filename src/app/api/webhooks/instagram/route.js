@@ -1,13 +1,20 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { verifyMetaSignature } from '@/lib/webhook-auth'
-import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
+import { recordWebhookEvent, releaseWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
 import { parseInstagramEvents, handleInstagramInbound } from '@/lib/agent/instagram'
 
 // RADAR-AGENT — Instagram messaging webhook (Meta Messenger Platform).
 // GET = hub verification; POST = inbound DMs. Mirrors the WhatsApp
-// webhook posture: signature-checked, per-message idempotency, always
-// 200 to Meta, never throws.
+// webhook posture: signature-checked, per-message idempotency, 200 to
+// Meta for anything we cannot usefully retry, never throws.
+//
+// W0.14 — the one deliberate non-2xx: if the per-message handler FAILS
+// after its dedup row was claimed, we release the claim and answer 500
+// so Meta retries and the retry is actually processed. Before this, a
+// transient DB failure in the location lookup read as "unmatched
+// account" and the already-claimed dedup row swallowed Meta's retry:
+// permanent message loss.
 
 export const runtime = 'nodejs'
 
@@ -71,12 +78,28 @@ export async function POST(request) {
         })
         if (dedup.seen) continue
       }
-      await handleInstagramInbound(db, ev)
+      try {
+        await handleInstagramInbound(db, ev)
+      } catch (err) {
+        // W0.14 — undo this message's claim, then ask Meta to retry the
+        // envelope. Messages already handled in this loop keep their
+        // claims, so the retry skips them and reprocesses only this one.
+        // Every non-retryable path inside the handler (profile fetch,
+        // contact link, media re-host, agent turn, pushes) is already
+        // caught locally, so a throw reaching here is the retry path by
+        // design.
+        if (ev.messageId) {
+          await releaseWebhookEvent({ db, provider: WEBHOOK_PROVIDERS.INSTAGRAM, eventId: `msg:${ev.messageId}` })
+        }
+        console.error('Instagram webhook: handler failed, releasing dedup for retry:', err?.message)
+        return NextResponse.json({ success: false, error: 'retry' }, { status: 500 })
+      }
     }
   } catch (err) {
+    // Parse-level failure: a retry would fail identically, so 200.
     console.error('Instagram webhook error:', err?.message, err?.stack)
   }
 
-  // Always 200 — Meta retries non-200.
+  // 200 — Meta retries non-200, and only a handler failure (above) wants that.
   return NextResponse.json({ success: true })
 }

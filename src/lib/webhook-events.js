@@ -26,7 +26,7 @@
 //   path O(log n) on the small lookup we need. Rows older than 90d
 //   get pruned by a future TTL cron.
 
-import { logWarn } from './log'
+import { logWarn, logError } from './log'
 
 export const WEBHOOK_PROVIDERS = Object.freeze({
   POSTMARK: 'postmark',
@@ -104,4 +104,31 @@ export async function recordWebhookEvent({ db, provider, eventId }) {
   // But log it so a sustained failure becomes visible in Sentinel.
   logWarn('webhook-events', 'insert failed', { provider, eventId, err: error })
   return { seen: false, error: error.message }
+}
+
+/**
+ * W0.14 — undo a dedup claim so the provider's retry is processed.
+ *
+ * Use when the handler fails AFTER recordWebhookEvent claimed the row:
+ * without this, the route's non-2xx makes the provider retry, but the
+ * retry hits `seen=true` and short-circuits — the event is lost for good.
+ * Never throws: a failed release is logged (the worst case is the
+ * pre-W0.14 behaviour, not a crashed route).
+ *
+ * @param {object} args
+ * @param {object} args.db        Supabase service-role client
+ * @param {string} args.provider  One of WEBHOOK_PROVIDERS values
+ * @param {string} args.eventId   The exact eventId that was claimed
+ */
+export async function releaseWebhookEvent({ db, provider, eventId }) {
+  try {
+    const { error } = await db
+      .from('webhook_events')
+      .delete()
+      .eq('provider', provider)
+      .eq('event_id', eventId)
+    if (error) logError('webhook-events', 'release failed', { provider, eventId, err: error })
+  } catch (e) {
+    logError('webhook-events', 'release threw', { provider, eventId, err: e })
+  }
 }
