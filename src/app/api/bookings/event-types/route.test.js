@@ -3,8 +3,9 @@
 // any member of the studio do). A cookie caller creates only as a master or
 // with MANAGER_ROLES at body.location_id — canManageEventType, the rule the
 // New page, the Edit/Delete buttons and the [id] route already use. The
-// API-key paths are unchanged. api-auth + validate are real; only
-// supabase/getCurrentUser are faked.
+// API-key paths are org-gated by assertCreateInOrg (since W0.1 the legacy
+// key too, scoped to CRM_API_KEY_ORG_ID). api-auth + validate are real;
+// only supabase/getCurrentUser are faked.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { makeFakeDb, twoOrgFixture, GLOBAL_KEY } from '@/lib/api-auth.test-helpers.js'
@@ -64,8 +65,10 @@ const FORM_BODY = {
 
 beforeEach(() => {
   vi.stubEnv('CRM_API_KEY', GLOBAL_KEY)
+  vi.stubEnv('CRM_API_KEY_ORG_ID', 'org-1') // W0.1 — legacy key = org-1's key
   getCurrentUser.mockResolvedValue(null)
   tables = twoOrgFixture()
+  tables.locations.push({ id: STUDIO_A, organization_id: 'org-1' }, { id: STUDIO_B, organization_id: 'org-2' })
   tables.event_types = []
   db = makeFakeDb(tables)
 })
@@ -124,15 +127,27 @@ describe('POST /api/bookings/event-types — cookie caller (EVENTTYPERLS.1)', ()
   })
 })
 
-describe('POST /api/bookings/event-types — API-key path unchanged', () => {
-  it('the legacy key still creates without a location and without confirmation keys (column defaults kept)', async () => {
-    const res = await POST(keyPost({ name: 'Intro Call' }))
+describe('POST /api/bookings/event-types — API-key path (W0.1: the legacy key is org-scoped)', () => {
+  it('the legacy key creates at a studio in CRM_API_KEY_ORG_ID without confirmation keys (column defaults kept)', async () => {
+    const res = await POST(keyPost({ name: 'Intro Call', location_id: STUDIO_A }))
     expect(res.status).toBe(200)
     expect(tables.event_types).toHaveLength(1)
     const row = tables.event_types[0]
-    expect(row).toMatchObject({ name: 'Intro Call', slug: 'intro-call', duration_minutes: 30, active: true })
-    expect('location_id' in row).toBe(false)
+    expect(row).toMatchObject({ name: 'Intro Call', slug: 'intro-call', duration_minutes: 30, active: true, location_id: STUDIO_A })
     expect('confirmation_enabled' in row).toBe(false)
     expect('confirmation_channels' in row).toBe(false)
+  })
+
+  it('the legacy key without a location → 400, nothing created (an org-scoped key needs a target studio)', async () => {
+    const res = await POST(keyPost({ name: 'Intro Call' }))
+    expect(res.status).toBe(400)
+    expect(await res.json()).toEqual({ success: false, error: 'location_id required for org-scoped key' })
+    expect(tables.event_types).toHaveLength(0)
+  })
+
+  it('the legacy key creating at another org\'s studio → 403, nothing created', async () => {
+    const res = await POST(keyPost({ name: 'Intro Call', location_id: STUDIO_B }))
+    expect(res.status).toBe(403)
+    expect(tables.event_types).toHaveLength(0)
   })
 })
