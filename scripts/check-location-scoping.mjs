@@ -173,6 +173,13 @@ const SCOPING_HELPERS = [
   // src/app/api/invoices-inbox/_bulk-helpers.js — bookkeeper permission +
   // per-row location checks on the bulk surface.
   'loadBookkeeper(',
+  // src/lib/event-visibility.js (W0.3) — builds the race_events .or() string:
+  // `location_id.eq.<active>` plus shared events whose location_id is IN the
+  // active studio's organisation (orgLocationIdsFor → siblingLocationIds); a
+  // lookup error narrows to the active studio alone. Verified in
+  // src/app/(members)/events/page.js, src/app/api/events/route.js and
+  // src/app/welcome/[location]/events/page.js.
+  'sharedEventsOrFilterFor(',
   // src/lib/permissions.js — permission check evaluated AT a specific
   // location (the fetch-row-then-check-its-location approvals pattern).
   'hasPermissionForLocation(',
