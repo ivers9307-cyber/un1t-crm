@@ -160,7 +160,20 @@ export function numberNotification(field, value = {}, label) {
  * Apply a number/account health webhook: match the whatsapp_numbers row by the
  * event's display phone number (digits-only compare — Meta formats with spaces),
  * patch changed columns idempotently, and return which locations to notify.
- * Account-level events (no phone number) fan out to every number's location.
+ *
+ * Account-level events (account_update, business_capability_update) carry no
+ * phone number. They are scoped by the webhook entry's WABA id
+ * (`opts.wabaId` = `entry.id`) to the distinct locations of the
+ * whatsapp_numbers rows whose business_account_id matches.
+ *
+ * W0.13 — an event that matches neither a number nor a WABA used to fan out
+ * to EVERY location owning a WhatsApp number: one tenant's Meta notice paged
+ * every tenant's managers. Unmatched now notifies NO location, is logged at
+ * error level for platform ops (Sentinel reads logs), and returns
+ * `unmatched: true`. `notify` is still built so an ops channel can use it.
+ * A phone-bearing event whose number we do not know is unmatched even when
+ * its WABA is known: the number is not one we operate.
+ *
  * Best-effort caller; may throw — the route wrapper swallows.
  *
  * WA-QUALITY.1 — a quality collapse (FLAGGED / limit DOWNGRADE) also auto-pauses
@@ -173,17 +186,24 @@ export function numberNotification(field, value = {}, label) {
  * the request thread so there is nothing in-flight to pause; new blasts are
  * refused by the preflight quality gate in sendBroadcast (WA-QUALITY.2).
  *
- * @returns {Promise<{ locations: string[], notify: {title,body}|null, matched?: object, pausedBroadcasts: Array<{id: string, name: string}> }>}
+ * @param {{ wabaId?: string|null }} [opts] — `wabaId` is the webhook entry's id (the WABA).
+ * @returns {Promise<{ locations: string[], notify: {title,body}|null, matched: object|null, pausedBroadcasts: Array<{id: string, name: string}>, unmatched: boolean }>}
  */
-export async function applyNumberEvent(db, field, value = {}) {
+export async function applyNumberEvent(db, field, value = {}, opts = {}) {
   const { data: rows } = await db.from('whatsapp_numbers')
-    .select('id, location_id, label, display_phone, quality_rating, messaging_limit_tier, name_status')
+    .select('id, location_id, label, display_phone, business_account_id, quality_rating, messaging_limit_tier, name_status')
   const numbers = rows || []
 
   const digits = String(value.display_phone_number || value.phone_number || '').replace(/\D/g, '')
   const matched = digits
     ? numbers.find((r) => String(r.display_phone || '').replace(/\D/g, '') === digits) || null
     : null
+
+  // Account-level scope: only for events that carry no phone number at all.
+  const wabaId = String(opts?.wabaId || '')
+  const wabaLocations = !digits && wabaId
+    ? [...new Set(numbers.filter((r) => String(r.business_account_id || '') === wabaId).map((r) => r.location_id).filter(Boolean))]
+    : []
 
   const update = numberColumnUpdate(field, value)
   let unchanged = false
@@ -206,9 +226,12 @@ export async function applyNumberEvent(db, field, value = {}) {
     notify = { ...notify, body: `${notify.body} ${pauseNote}` }
   }
 
-  const locations = matched
-    ? [matched.location_id]
-    : [...new Set(numbers.map((r) => r.location_id).filter(Boolean))]
+  // W0.13 — never fan an unidentified event out to every tenant's managers.
+  const locations = matched ? [matched.location_id] : wabaLocations
+  const unmatched = !locations.length
+  if (unmatched && notify) {
+    console.error(`[wa-number-events] unmatched ${field} event (number ${digits || '(none)'}, waba ${wabaId || '(none)'}): ${notify.title}`)
+  }
 
-  return { locations, notify, matched, pausedBroadcasts }
+  return { locations, notify, matched, pausedBroadcasts, unmatched }
 }
