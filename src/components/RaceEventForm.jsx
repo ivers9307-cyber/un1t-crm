@@ -1383,7 +1383,7 @@ export default function RaceEventForm({ race, locationId }) {
 
           <EventEmailFields
             title="Signup confirmation"
-            description="Sent as soon as a signup is confirmed."
+            description="Sent as soon as a signup is confirmed. The default copy ends with a link where the customer can change their date; custom copy keeps it only if it includes {{manage_url}}."
             subject={confirmationSubject}
             onSubject={setConfirmationSubject}
             subjectPlaceholder="{{event_name}} — you're in!"
@@ -1415,7 +1415,7 @@ export default function RaceEventForm({ race, locationId }) {
           <div className="pt-4 border-t border-un1t-border">
             <EventEmailFields
               title="Entry moved"
-              description="Sent when an entry is moved onto this event from another one, by staff or by the customer from their own entry page. Carries the new date, time and fresh QR codes."
+              description="Sent when an entry is moved onto this event from another one, by staff or by the customer from their own entry page. Carries the new date, time and fresh QR codes. The default copy ends with the change-your-date link; custom copy keeps it only if it includes {{manage_url}}."
               subject={movedSubject}
               onSubject={setMovedSubject}
               subjectPlaceholder="Your entry has moved to {{event_name}}"
