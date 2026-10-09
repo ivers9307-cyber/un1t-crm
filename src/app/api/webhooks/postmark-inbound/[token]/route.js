@@ -213,6 +213,7 @@ import { escapeLikePattern } from '@/lib/like-escape'
 import { storeInboundAttachments, discardStagedAttachments } from '@/lib/email-attachments-server'
 import { maybeNotifyInboundEmail } from '@/lib/email-inbound-push'
 import { extractSpamScore, classifyInboundSpam, SPAM_SETTINGS_COLUMNS } from '@/lib/email-spam'
+import { orgLocationIdsFor } from '@/lib/inbound-contact-match'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -884,13 +885,21 @@ async function processInboundEmail(db, body, messageId, { deadLetter = (args) =>
   // it is unconditional — it used to be skipped whenever (a) had already taken
   // a contact off the sender-supplied header.
   //
+  // W0.2 — ORGANISATION-scoped: the match may come from the mailbox's
+  // location or its organisation siblings only (pickContact still prefers the
+  // mailbox's own location). It used to search every tenant's contacts, so a
+  // person already known at tenant A who mailed tenant B was linked to A's
+  // row. A failed sibling read narrows to the mailbox's location.
+  //
   // escapeLikePattern: fromEmail comes off an UNAUTHENTICATED webhook and
   // normalizeEmail admits both LIKE wildcards, so a bare .ilike() matched a
   // PATTERN — `%@example.com` picked up every contact at the domain and
   // `a_b@` also matched `axb@`. pickContact then chose one deterministically,
   // linking a stranger's mail to a real contact's identity, silently.
+  const orgLocIds = await orgLocationIdsFor(db, locationId)
   const { data: contacts, error: cErr } = await db.from('contacts')
     .select('id, location_id, created_at')
+    .in('location_id', orgLocIds.length ? orgLocIds : ['00000000-0000-0000-0000-000000000000'])
     .ilike('email', escapeLikePattern(fromEmail))
     .limit(50)
   if (cErr) {

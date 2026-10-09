@@ -116,6 +116,7 @@ function applyFilters(list, filters) {
   return list.filter(row => filters.every(f => {
     if (f[0] === 'eq') return row[f[1]] === f[2]
     if (f[0] === 'in') return f[2].includes(row[f[1]])
+    if (f[0] === 'neq') return row[f[1]] !== f[2]
     // ilike applies REAL LIKE semantics (wildcards live). This used to be
     // `lower(a) === lower(b)`, which is what the call site means but not what
     // Postgres does — and that gap is exactly how the wildcard bug below
@@ -177,6 +178,10 @@ function makeDb(state = {}) {
       case 'email_sends': return applyFilters(s.sends, b._filters)
       case 'email_mailboxes': return applyFilters(s.mailboxes, b._filters)
       case 'contacts': return applyFilters(s.contacts, b._filters)
+      // W0.2 — the organisation fence reads locations (via siblingLocationIds)
+      // to decide which contacts a From address may match. Absent by default,
+      // so a bare fixture narrows to the mailbox's own location.
+      case 'locations': return applyFilters(s.locations || [], b._filters)
       case 'email_inbox_messages': return applyFilters(s.threadRows, b._filters)
       case 'email_tickets': return applyFilters(Object.values(s.tickets), b._filters)
       case 'email_ticket_attachments': return applyFilters(s.attachments, b._filters)
@@ -311,6 +316,7 @@ function makeDb(state = {}) {
     b.is = filter('is')
     b.not = filter('not')
     b.in = filter('in')
+    b.neq = filter('neq')
     b.ilike = filter('ilike')
     b.or = filter('or')
     // MAILBOX-PAGE.1 — order and range are MODELLED, not stubbed.
@@ -2695,5 +2701,62 @@ describe('MAIL-SPAM.1 — spam quarantine at ingest', () => {
     expect(db._state.tickets['T-open'].is_spam).toBe(false)
     expect(db.rpcs).toContainEqual({ fn: 'increment_email_ticket_unread', args: { p_ticket_id: 'T-open' } })
     expect(maybeNotifyInboundEmail).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('W0.2 — a From address matches contacts inside the receiving organisation only', () => {
+  // Three locations, two organisations. The mail lands in HATCH's mailbox
+  // (loc-hatch). Stillorgan is a SIBLING (same organisation); loc-foreign is
+  // another tenant entirely.
+  const LOCATIONS = [
+    { id: 'loc-hatch', organization_id: 'org-un1t' },
+    { id: 'loc-stillorgan', organization_id: 'org-un1t' },
+    { id: 'loc-foreign', organization_id: 'org-other' },
+  ]
+  const AT_SIBLING = { id: 'c-sibling', location_id: 'loc-stillorgan', email: 'member@example.com', created_at: '2024-01-01T00:00:00Z' }
+  const AT_FOREIGN = { id: 'c-foreign', location_id: 'loc-foreign', email: 'member@example.com', created_at: '2023-01-01T00:00:00Z' }
+
+  it('links a contact at a sibling location of the same organisation', async () => {
+    db = makeDb({ locations: LOCATIONS, contacts: [AT_SIBLING] })
+    createServerClient.mockImplementation(() => db)
+
+    const res = await post(inbound())
+
+    expect(insertsInto(db, 'email_tickets')[0].payload.contact_id).toBe('c-sibling')
+    expect((await res.json()).matched_via).toBe('from_address')
+  })
+
+  it("never links another organisation's contact, even when it is the only match", async () => {
+    db = makeDb({ locations: LOCATIONS, contacts: [AT_FOREIGN] })
+    createServerClient.mockImplementation(() => db)
+
+    const res = await post(inbound())
+
+    // Filed (the mailbox matched) but with NO contact identity — not a
+    // stranger's from another tenant.
+    const [ticket] = insertsInto(db, 'email_tickets')
+    expect(ticket.payload.contact_id).toBeNull()
+    expect((await res.json()).matched_via).toBe('recipient_address')
+  })
+
+  it("the mailbox's own location still beats a sibling (pickContact preference unchanged)", async () => {
+    // AT_SIBLING is OLDER, so an unscoped oldest-first pick would take it.
+    db = makeDb({ locations: LOCATIONS, contacts: [AT_SIBLING, AT_FOREIGN, CONTACT] })
+    createServerClient.mockImplementation(() => db)
+
+    await post(inbound())
+
+    expect(insertsInto(db, 'email_tickets')[0].payload.contact_id).toBe('c-1')
+  })
+
+  it('a failed locations read narrows to the mailbox location (fail safe, never open)', async () => {
+    db = makeDb({ locations: LOCATIONS, contacts: [AT_SIBLING, CONTACT], fail: { 'locations:select': { message: 'boom' } } })
+    createServerClient.mockImplementation(() => db)
+
+    await post(inbound())
+
+    // Own-location contact still found; the sibling would have been too, but
+    // the scope shrank rather than widened.
+    expect(insertsInto(db, 'email_tickets')[0].payload.contact_id).toBe('c-1')
   })
 })
