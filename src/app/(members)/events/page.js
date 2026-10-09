@@ -14,6 +14,7 @@ import { getAppUrl } from '@/lib/app-url'
 import { formatSignupSummary, sumWaveCapacity } from '@/lib/event-signups'
 import { ADMIN_ROLES } from '@/lib/schemas'
 import { eventKindLabel, eventKindTone, isRaceKind, orderEventsForBrowse, todayIsoDublin } from '@shared/events'
+import { sharedEventsOrFilterFor } from '@/lib/event-visibility'
 
 export const dynamic = 'force-dynamic'
 
@@ -49,13 +50,15 @@ export default async function EventsIndexPage(props) {
   const db = createServerClient()
   // EVENTS-LOC.2 — scope the list to the operator's ACTIVE location so
   // each studio is independent (Hatch Street must not see Stillorgan's
-  // events), PLUS any event flagged `shared` (owned by one location but
-  // surfaced at every location). Master switches active location via the
+  // events), PLUS any event flagged `shared` (owned by a sibling location of
+  // the same organisation, W0.3; another gym never sees it). Master switches
+  // active location via the
   // location switcher; non-master operators are pinned to theirs. No
   // active location → empty list rather than leaking every location.
   const activeLocationId = user.activeLocation?.id || null
   let races = []
   if (activeLocationId) {
+    const orFilter = await sharedEventsOrFilterFor(db, activeLocationId)
     const { data } = await db
       .from('race_events')
       .select(`
@@ -65,7 +68,7 @@ export default async function EventsIndexPage(props) {
         waves:race_waves ( capacity ),
         registrations:race_registrations ( id, status, team:teams ( size ) )
       `)
-      .or(`location_id.eq.${activeLocationId},shared.eq.true`)
+      .or(orFilter)
       .order('race_date', { ascending: false })
     races = data || []
   }
