@@ -19,6 +19,8 @@ const MIG_708 = readFileSync(path.resolve(import.meta.dirname, '../supabase/migr
 // EVENT-MOVE.3 — 709 adds the gap_settled_* columns; applied on top of 708 in
 // its own describe at the end, so every test above still runs 708 alone.
 const MIG_709 = readFileSync(path.resolve(import.meta.dirname, '../supabase/migrations/709_registration_moves_gap_settled.sql'), 'utf8')
+// EVENT-MOVE.6 — 712 widens actor_type to 'customer' (self-service moves).
+const MIG_712 = readFileSync(path.resolve(import.meta.dirname, '../supabase/migrations/712_registration_moves_actor_customer.sql'), 'utf8')
 
 const L1 = 'a0000000-0000-0000-0000-0000000000a1'
 const L2 = 'a0000000-0000-0000-0000-0000000000a2'
@@ -268,6 +270,40 @@ describe('mig 709 — gap_settled_* on registration_moves', () => {
   })
 
   it('stays closed to clients', async () => {
+    for (const role of ['anon', 'authenticated']) {
+      expect((await one(`SELECT has_table_privilege('${role}', 'public.registration_moves', 'SELECT') AS ok`)).ok).toBe(false)
+    }
+  })
+})
+
+describe('mig 712 — a customer may be the actor', () => {
+  const moveAs = (actorType) => MOVE.replace("p_actor_type => 'staff'", `p_actor_type => '${actorType}'`)
+
+  it('708 alone refuses a customer actor (the CHECK this migration widens)', async () => {
+    const err = await db.query(moveAs('customer'), [R1, E1, E2, W2]).then(() => null, (e) => e)
+    expect(err?.code).toBe('23514')
+  })
+
+  it('after 712 a customer move records, and staff, host and agent still do', async () => {
+    await run(MIG_712)
+    const move = await one(moveAs('customer'), [R1, E1, E2, W2])
+    expect(move).toMatchObject({ actor_type: 'customer' })
+    for (const t of ['staff', 'host', 'agent']) {
+      const ok = await db.query(`UPDATE registration_moves SET actor_type = $2 WHERE id = $1`, [move.id, t]).then(() => true, () => false)
+      expect(ok).toBe(true)
+    }
+  })
+
+  it('still refuses an actor outside the four, and re-applies cleanly', async () => {
+    await run(MIG_712)
+    await run(MIG_712)
+    const err = await db.query(moveAs('robot'), [R1, E1, E2, W2]).then(() => null, (e) => e)
+    expect(err?.code).toBe('23514')
+    expect(err?.message).toMatch(/registration_moves_actor_type_check/)
+  })
+
+  it('keeps registration_moves closed to clients', async () => {
+    await run(MIG_712)
     for (const role of ['anon', 'authenticated']) {
       expect((await one(`SELECT has_table_privilege('${role}', 'public.registration_moves', 'SELECT') AS ok`)).ok).toBe(false)
     }
