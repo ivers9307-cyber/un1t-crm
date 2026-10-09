@@ -436,6 +436,42 @@ and done line for `event_move` live in a web-only module
 phone OTA is published, and the phone shows a generic card until a later
 release.
 
+## Customer self-service move (EVENT-MOVE.6, mig 712)
+
+The person who booked can change the date themselves. Both the entry
+confirmation and the moved email carry a "Need a different date? Change it
+here." line (merge tag `{{manage_url}}`; operators who write their own intro
+keep the link by using the tag). The link is a signed entry token (HMAC on
+the service-role key, kind-tagged, 90-day expiry) opening `/event/entry/[token]`,
+a public page outside the staff shell and on all four public-path allowlists.
+
+The page shows the entry and, when it may move, the dates it can move to: the
+same eligibility staff see, fenced to the entry's organisation, listing only
+times with room, as date, time and a price note. Never any capacity, spots or
+counts. An unpaid, cancelled, no-show, checked-in or past entry cannot move
+and the page says why in one sentence. A customer can never force a full
+time. Every bad or expired token is a 404.
+
+An equal-or-cheaper date moves at once (`actor_type = 'customer'`, the lead
+contact), with the moved email and fresh QR codes; nothing is refunded. A
+dearer date is paid for first: the move route mints a `move_gap` payment
+(EVENT-MOVE.5) carrying `metadata.pending_move` (target, time, the source the
+customer judged, the actor) and sends them to the same embedded checkout,
+with their own entry token carried back in the URL fragment so the checkout
+returns them to the entry page. When the payment completes, the stored move
+runs under the same rules, the payment is linked to the new move row and
+settled as collected; if the move is refused after payment (the time filled
+meanwhile), the payment stays recorded, the failure is written on it, an
+`error_events` row pages Sentinel, and the receipt says the team will be in
+touch. A paid amount that no longer matches the gap recomputed at landing is
+recorded as a mismatch and, if underpaid, left outstanding for staff. A new
+dearer change closes the customer's older pending links, and an immediate
+move closes them too, so two changes can never both be paid. Each customer
+gap link uses its own provider idempotency key.
+
+Tokens cannot be revoked per entry (rotating the service-role key revokes
+them all), as with every other public token in the repo.
+
 ## Testing
 
 - Unit (vitest): every rule in the table with a fake db; price gap for member,
@@ -456,7 +492,6 @@ release.
 - Moving money in either direction, or minting a payment link automatically.
 - Moves across payees.
 - Moving one person out of a team onto a different event.
-- Customer self-service moves on the public event page.
 - SMS or WhatsApp on move.
 
 ## Open follow-ups
