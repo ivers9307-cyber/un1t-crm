@@ -271,7 +271,9 @@ export const instagramAdapter = {
 /**
  * Persist one inbound IG message + ensure the conversation, resolve the
  * owning location by the IG business account id, then trigger the agent.
- * Best-effort; never throws out of the webhook.
+ * Best-effort past the location lookup; the lookup itself THROWS on a
+ * read error (W0.14) and that is left to propagate so the webhook can
+ * release the dedup claim and answer 500 for a Meta retry.
  *
  * @param {object} db   service-role client
  * @param {object} event  one element of parseInstagramEvents()

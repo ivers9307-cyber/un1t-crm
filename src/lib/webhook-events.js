@@ -105,3 +105,30 @@ export async function recordWebhookEvent({ db, provider, eventId }) {
   logWarn('webhook-events', 'insert failed', { provider, eventId, err: error })
   return { seen: false, error: error.message }
 }
+
+/**
+ * W0.14 — undo a dedup claim so the provider's retry is processed.
+ *
+ * Use when the handler fails AFTER recordWebhookEvent claimed the row:
+ * without this, the route's non-2xx makes the provider retry, but the
+ * retry hits `seen=true` and short-circuits — the event is lost for good.
+ * Never throws: a failed release is logged (the worst case is the
+ * pre-W0.14 behaviour, not a crashed route).
+ *
+ * @param {object} args
+ * @param {object} args.db        Supabase service-role client
+ * @param {string} args.provider  One of WEBHOOK_PROVIDERS values
+ * @param {string} args.eventId   The exact eventId that was claimed
+ */
+export async function releaseWebhookEvent({ db, provider, eventId }) {
+  try {
+    const { error } = await db
+      .from('webhook_events')
+      .delete()
+      .eq('provider', provider)
+      .eq('event_id', eventId)
+    if (error) console.error(`[webhook-events] release failed for ${provider}:${eventId}: ${error.message}`)
+  } catch (e) {
+    console.error(`[webhook-events] release threw for ${provider}:${eventId}: ${e?.message || e}`)
+  }
+}
