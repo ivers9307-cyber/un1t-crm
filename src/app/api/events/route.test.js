@@ -118,4 +118,11 @@ describe('events CreateSchema — EVENT-MOVE.1 moved-email copy', () => {
     expect(CreateSchema.parse({ ...base }).moved_email_subject).toBeUndefined()
     expect(() => CreateSchema.parse({ ...base, moved_email_intro: 'y'.repeat(4001) })).toThrow()
   })
+
+  it('EVENT-MOVE.5: accepts, clears and bounds the two price-difference fields', () => {
+    expect(CreateSchema.parse({ ...base, gap_email_subject: 'Pay {{difference}}' }).gap_email_subject).toContain('difference')
+    expect(CreateSchema.parse({ ...base, gap_email_intro: null }).gap_email_intro).toBeNull()
+    expect(CreateSchema.parse({ ...base }).gap_email_subject).toBeUndefined()
+    expect(() => CreateSchema.parse({ ...base, gap_email_intro: 'y'.repeat(4001) })).toThrow()
+  })
 })

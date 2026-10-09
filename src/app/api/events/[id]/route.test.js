@@ -78,3 +78,11 @@ describe('events UpdateSchema — EVENT-MOVE.1 moved-email copy', () => {
     expect(() => UpdateSchema.parse({ moved_email_intro: 'y'.repeat(4001) })).toThrow()
   })
 })
+
+describe('events UpdateSchema — EVENT-MOVE.5 price-difference email copy', () => {
+  it('accepts, clears and bounds the two fields', () => {
+    expect(UpdateSchema.parse({ gap_email_subject: 'Pay {{difference}} for {{event_name}}' }).gap_email_subject).toContain('difference')
+    expect(UpdateSchema.parse({ gap_email_intro: null }).gap_email_intro).toBeNull()
+    expect(() => UpdateSchema.parse({ gap_email_intro: 'y'.repeat(4001) })).toThrow()
+  })
+})
