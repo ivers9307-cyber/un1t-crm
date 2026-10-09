@@ -6,7 +6,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const createPayment = vi.fn()
-vi.mock('./payments', () => ({ paymentsFor: vi.fn(() => ({ createPayment })) }))
+const getPayment = vi.fn()
+vi.mock('./payments', () => ({ paymentsFor: vi.fn(() => ({ createPayment, getPayment })) }))
+vi.mock('./race-confirmations', () => ({ sendGapPaidEmail: vi.fn(async () => ({ sent: ['email'], skipped: [], failed: [] })) }))
 vi.mock('./event-hosts', async (importOriginal) => ({ ...(await importOriginal()), resolveEventHost: vi.fn(async () => null) }))
 vi.mock('./orders', () => ({ syncOrderFromRacePayment: vi.fn(async () => {}) }))
 vi.mock('./contact-events', async (importOriginal) => ({ ...(await importOriginal()), emitEvent: vi.fn(async () => {}), applyTagRules: vi.fn() }))
@@ -21,7 +23,8 @@ const { syncOrderFromRacePayment } = await import('./orders')
 const { emitEvent, applyTagRules, EVENT_TYPES } = await import('./contact-events')
 const { logError } = await import('./log')
 const { createGapPayment } = await import('./race-gap-payment.js')
-const { markRacePaymentStatus } = await import('./race-payments.js')
+const { markRacePaymentStatus, refreshRacePaymentFromProvider } = await import('./race-payments.js')
+const { sendGapPaidEmail } = await import('./race-confirmations')
 const { triggerSequencesForOrderStatus } = await import('./sequences')
 const { addEventAttendeesToHostList } = await import('./host-contact-list')
 
@@ -306,3 +309,56 @@ describe('markRacePaymentStatus — a completed move_gap payment', () => {
     expect(db.queries.some((q) => q.table === 'race_registrations')).toBe(false)
   })
 })
+
+describe('markRacePaymentStatus — tag rules and sequences never run for a move_gap payment', () => {
+  const GAP = { id: 'gp1', kind: 'move_gap', registration_move_id: 'mv1', status: 'pending', amount_cents: 1000, currency: 'EUR',
+    race_registration_id: 'r1', race_event_id: 'e2', contact_id: 'c1', contact_email: 'aoife@x.ie', race: { location_id: 'L1' } }
+  it.each([['failed', 'failed'], ['cancelled', 'abandoned'], ['completed', 'completed']])('provider %s → %s: order synced, no tag rules, no sequences', async (state, status) => {
+    const r = await markRacePaymentStatus({ db: fakeDb(), payment: GAP, revolutState: state, revolutAmount: null })
+    expect(r.applied.status).toBe(status)
+    expect(syncOrderFromRacePayment).toHaveBeenCalledWith(expect.objectContaining({ payment: expect.objectContaining({ id: 'gp1', status }) }))
+    expect(applyTagRules).not.toHaveBeenCalled()
+    expect(triggerSequencesForOrderStatus).not.toHaveBeenCalled()
+  })
+  it('an entry payment that fails still applies tag rules and fires its sequence', async () => {
+    await markRacePaymentStatus({ db: fakeDb(), payment: { ...GAP, kind: 'entry', registration_move_id: null }, revolutState: 'failed', revolutAmount: null })
+    expect(applyTagRules).toHaveBeenCalledWith(expect.objectContaining({ contactId: 'c1' }))
+    expect(triggerSequencesForOrderStatus).toHaveBeenCalledWith(expect.objectContaining({ status: 'failed' }))
+  })
+})
+
+describe('refreshRacePaymentFromProvider — a move_gap payment completed by the refresh sends its receipt', () => {
+  const GAP = { id: 'gp1', kind: 'move_gap', registration_move_id: 'mv1', status: 'pending', amount_cents: 1000, currency: 'EUR',
+    payment_provider: 'revolut', payment_provider_ref: 'ord-1', race_registration_id: 'r1', contact_id: 'c1', contact_email: 'aoife@x.ie' }
+  it('a fresh completion sends sendGapPaidEmail', async () => {
+    getPayment.mockResolvedValue({ state: 'completed', amountCents: 1000 })
+    const db = fakeDb()
+    await refreshRacePaymentFromProvider(db, GAP)
+    expect(sendGapPaidEmail).toHaveBeenCalledTimes(1)
+    expect(sendGapPaidEmail).toHaveBeenCalledWith({ db, paymentId: 'gp1' })
+    expect(db.queries.some((q) => q.table === 'registration_moves')).toBe(true)
+  })
+  it('still pending: no receipt', async () => {
+    getPayment.mockResolvedValue({ state: 'pending', amountCents: 1000 })
+    await refreshRacePaymentFromProvider(fakeDb(), GAP)
+    expect(sendGapPaidEmail).not.toHaveBeenCalled()
+  })
+  it('already completed (the webhook won): no second receipt from here', async () => {
+    getPayment.mockResolvedValue({ state: 'completed', amountCents: 1000 })
+    await refreshRacePaymentFromProvider(fakeDb(), { ...GAP, status: 'completed', completed_at: '2026-10-09T10:00:00Z' })
+    expect(sendGapPaidEmail).not.toHaveBeenCalled()
+  })
+  it('an entry payment completed by the refresh sends nothing here (unchanged)', async () => {
+    getPayment.mockResolvedValue({ state: 'completed', amountCents: 1000 })
+    await refreshRacePaymentFromProvider(fakeDb(), { ...GAP, kind: 'entry', registration_move_id: null })
+    expect(sendGapPaidEmail).not.toHaveBeenCalled()
+  })
+  it('a thrown receipt is logged and the refresh still answers the row', async () => {
+    getPayment.mockResolvedValue({ state: 'completed', amountCents: 1000 })
+    sendGapPaidEmail.mockRejectedValueOnce(new Error('postmark down'))
+    const out = await refreshRacePaymentFromProvider(fakeDb(), GAP)
+    expect(out).toBeTruthy()
+    expect(logError).toHaveBeenCalledWith('race-payments', expect.stringContaining('gap receipt'), expect.objectContaining({ paymentId: 'gp1' }))
+  })
+})
+

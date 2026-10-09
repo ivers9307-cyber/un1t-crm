@@ -36,6 +36,7 @@ import { triggerSequencesForOrderStatus } from './sequences'
 import { addEventAttendeesToHostList } from './host-contact-list'
 import { logWarn, logError } from './log'
 import { GAP_PAYMENT_KIND } from './race-gap-payment'
+import { sendGapPaidEmail } from './race-confirmations'
 
 /**
  * Resolve which Revolut credentials to use for race payments. For
@@ -384,7 +385,10 @@ export async function markRacePaymentStatus({ db, payment, revolutState, revolut
         sourceId: payment.id,
         metadata: { amount_cents: refreshed.amount_cents, currency: payment.currency },
       })
-      if (payment.contact_id) {
+      // EVENT-MOVE.5 — tag rules and order sequences are written for ENTRY
+      // payments (an abandoned difference link is not a lapsed payer), so a
+      // move_gap payment skips both on every transition.
+      if (payment.contact_id && payment.kind !== GAP_PAYMENT_KIND) {
         await applyTagRules({ db, contactId: payment.contact_id })
         // Fire order_completed/failed/abandoned sequence trigger
         // (Tier 1A). Best-effort — error already swallowed by the
@@ -472,12 +476,23 @@ export async function refreshRacePaymentFromProvider(db, payment) {
     return payment
   }
   if (!normalized) return payment
-  await markRacePaymentStatus({
+  const result = await markRacePaymentStatus({
     db,
     payment,
     revolutState: normalized.state,
     revolutAmount: Number.isFinite(normalized.amountCents) ? normalized.amountCents : null,
   })
+  // EVENT-MOVE.5 — if THIS refresh completed a price-difference payment, the
+  // webhook will see no fresh transition and never send the receipt, so send
+  // it here. Its send-once stamp makes any later attempt harmless. Entry
+  // payments are unchanged.
+  if (payment.kind === GAP_PAYMENT_KIND && result?.applied?.status === 'completed') {
+    try {
+      await sendGapPaidEmail({ db, paymentId: payment.id })
+    } catch (e) {
+      logError('race-payments', 'gap receipt failed after the refresh completed the payment', { err: e, paymentId: payment.id })
+    }
+  }
   const { data: refreshed } = await db
     .from('race_payments')
     .select('*')
