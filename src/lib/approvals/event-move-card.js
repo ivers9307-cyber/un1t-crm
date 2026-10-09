@@ -18,6 +18,9 @@ import { failureExplanation } from '@shared/agent-request-failure'
 
 export const EVENT_MOVE_KIND = 'event_move'
 export const EVENT_MOVE_LABEL = 'Event move'
+// The kind chip on the web decide card: a move is neither a cancellation
+// (red) nor the amber default.
+export const EVENT_MOVE_KIND_CHIP = 'bg-blue-500/10 text-blue-700'
 
 // A DATE column (YYYY-MM-DD, Dublin wall-clock) as "Sun 25 Oct". Anchored on
 // noon UTC so it never shifts a day in any timezone.

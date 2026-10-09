@@ -18,7 +18,7 @@ import { DECLINE_REASONS, BOOKING_KINDS } from '@shared/approvals-next-steps'
 import { whyFlagged, customerWords } from '@/lib/approvals/agent-request-why'
 // EVENT-MOVE.7 — label, failure line and done line prefer the web-only
 // event_move module and fall through to the shared helpers for other kinds.
-import { approvalKindLabel, explainFailure, eventMoveDoneLine } from '@/lib/approvals/event-move-card'
+import { approvalKindLabel, explainFailure, eventMoveDoneLine, EVENT_MOVE_KIND_CHIP } from '@/lib/approvals/event-move-card'
 import { RETRYABLE_KINDS } from '@/lib/agent/request-recovery'
 
 const KIND_CHIP = {
@@ -26,6 +26,7 @@ const KIND_CHIP = {
   class_cancellation: 'bg-red-500/10 text-red-700',
   event_cancellation: 'bg-red-500/10 text-red-700',
   pause: 'bg-amber-500/10 text-amber-700',
+  event_move: EVENT_MOVE_KIND_CHIP,
 }
 const DEFAULT_KIND_CHIP = 'bg-amber-500/10 text-amber-700'
 

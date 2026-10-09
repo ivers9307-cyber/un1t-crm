@@ -2,33 +2,30 @@
 // move_event_entry (files an approval request, never moves). The move rules
 // themselves are listMoveTargets/moveRegistration's (registration-move.js,
 // tested there); these tests pin what the AGENT sees and files: the gate
-// (verified, owner, confirmed), the customer-safe options shape (no capacity
-// or counts of any kind), and the request row.
+// (verified, owner, confirmed, not past), the customer-safe options shape (no
+// capacity or counts of any kind), the request row, superseding a pending
+// request for a different date, and that neither tool ever moves anything.
 //
 // Fictional ids only: the repo is public.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/registration-move', () => ({ listMoveTargets: vi.fn() }))
+vi.mock('@/lib/registration-move', () => ({ listMoveTargets: vi.fn(), moveRegistration: vi.fn() }))
 vi.mock('@/lib/person-accounts', () => ({
   linkedAccountsForContact: vi.fn(),
   hasBookableMembership: vi.fn(() => false),
 }))
 vi.mock('./approval-notify', () => ({ notifyAgentApprovalRequest: vi.fn(async () => {}) }))
 
-import { listMoveTargets } from '@/lib/registration-move'
+import { listMoveTargets, moveRegistration } from '@/lib/registration-move'
 import { linkedAccountsForContact } from '@/lib/person-accounts'
 import { notifyAgentApprovalRequest } from './approval-notify'
-import {
-  EVENT_TOOLS,
-  executeEventTool,
-  priceDifferenceSentence,
-  shapeMoveOptionsForAgent,
-} from './event-tools'
+import { EVENT_TOOLS, executeEventTool } from './event-tools'
+import { EVENT_MOVE_TOOLS, priceDifferenceSentence, shapeMoveOptionsForAgent } from './event-move-tools'
 
 const LOC = 'a0000000-0000-0000-0000-0000000000a1'
 const LOC_2 = 'a0000000-0000-0000-0000-0000000000a2'
 const ORG = 'b0000000-0000-0000-0000-0000000000b1'
-const REG = 'r0000000-0000-0000-0000-000000000001'
+const REG = 'd0000000-0000-0000-0000-000000000001'
 const SRC = 'e0000000-0000-0000-0000-0000000000e1'
 const TGT = 'e0000000-0000-0000-0000-0000000000e2'
 const TGT_FULL = 'e0000000-0000-0000-0000-0000000000e3'
@@ -79,6 +76,7 @@ function stubDb(trace, {
   insertError = null,
 } = {}) {
   return {
+    async rpc(name, args) { trace.push({ step: 'rpc', name, args }); return { data: null, error: null } },
     from(table) {
       const st = { table, filters: {}, op: null }
       const settle = (single) => {
@@ -89,6 +87,7 @@ function stubDb(trace, {
         }
         if (table === 'agent_membership_requests') {
           if (st.op === 'insert') return insertError ? { data: null, error: insertError } : { data: { id: 'req-1' }, error: null }
+          if (st.op === 'update') return { data: [{ id: st.filters.id }], error: null }
           return { data: single ? pendingMove : (pendingMove ? [pendingMove] : []), error: null }
         }
         return { data: single ? null : [], error: null }
@@ -100,6 +99,9 @@ function stubDb(trace, {
         limit() { return b },
         order() { return b },
         insert(row) { st.op = 'insert'; trace.push({ step: 'insert', table, row }); return b },
+        update(patch) { st.op = 'update'; trace.push({ step: 'update', table, patch }); return b },
+        upsert(row) { st.op = 'upsert'; trace.push({ step: 'upsert', table, row }); return b },
+        delete() { st.op = 'delete'; trace.push({ step: 'delete', table }); return b },
         async maybeSingle() { return settle(true) },
         async single() { return settle(true) },
         then(resolve, reject) { return Promise.resolve(settle(false)).then(resolve, reject) },
@@ -137,7 +139,8 @@ function allKeys(value, out = []) {
 }
 
 describe('the move tools are declared', () => {
-  it('both tools exist, after reschedule_event_wave', () => {
+  it('both tools are registered in EVENT_TOOLS, after reschedule_event_wave', () => {
+    expect(EVENT_MOVE_TOOLS.map((t) => t.name)).toEqual(['list_event_move_options', 'move_event_entry'])
     const names = EVENT_TOOLS.map((t) => t.name)
     expect(names).toContain('list_event_move_options')
     expect(names).toContain('move_event_entry')
@@ -164,6 +167,9 @@ describe('priceDifferenceSentence', () => {
   it('a solo entry: the difference is the person', () => {
     expect(priceDifferenceSentence(1000, 1)).toBe('€10 more.')
     expect(priceDifferenceSentence(-550, 1)).toBe('€5.50 less, not refunded.')
+  })
+  it("uses the request's currency", () => {
+    expect(priceDifferenceSentence(1000, 1, 'GBP')).toBe('£10 more.')
   })
   it('a team: the difference is for the whole entry (members and non-members can differ)', () => {
     expect(priceDifferenceSentence(1000, 2)).toBe('€10 more in total for the entry.')
@@ -228,6 +234,22 @@ describe('the gate (both tools)', () => {
       const db = stubDb([], { reg: { ...REG_ROW, status: 'cancelled' } })
       const res = await executeEventTool(tool, { registration_id: REG, target_event_id: TGT, target_wave_id: W_OPEN }, ctx(db))
       expect(res.error).toBe('not_active')
+    })
+    it(`${tool} refuses an entry whose event has already happened`, async () => {
+      const db = stubDb([], { reg: { ...REG_ROW, race_events: { ...REG_ROW.race_events, race_date: '2001-01-06' } } })
+      const res = await executeEventTool(tool, { registration_id: REG, target_event_id: TGT, target_wave_id: W_OPEN }, ctx(db))
+      expect(res.error).toBe('not_active')
+      expect(res.message).toMatch(/already happened/i)
+      expect(listMoveTargets).not.toHaveBeenCalled()
+    })
+    it(`${tool} answers not_found for a registration_id that is not a UUID, before any read`, async () => {
+      const trace = []
+      const db = stubDb(trace)
+      const fromSpy = vi.spyOn(db, 'from')
+      const res = await executeEventTool(tool, { registration_id: 'reg-1; drop', target_event_id: TGT, target_wave_id: W_OPEN }, ctx(db))
+      expect(res.error).toBe('not_found')
+      expect(fromSpy).not.toHaveBeenCalled()
+      expect(linkedAccountsForContact).not.toHaveBeenCalled()
     })
     it(`${tool} answers not_found for an entry outside this studio`, async () => {
       const db = stubDb([], { reg: null })
@@ -336,13 +358,53 @@ describe('move_event_entry', () => {
     expect(trace.find((t) => t.step === 'insert')).toBeUndefined()
   })
 
-  it('does not file a second request while one for the same entry is pending', async () => {
+  it('the same target again while one is pending: no second request', async () => {
     const trace = []
+    const pendingMove = { id: 'req-0', details: { registration_id: REG, target_event_id: TGT, target_wave_id: W_OPEN } }
     const res = await executeEventTool('move_event_entry', { registration_id: REG, target_event_id: TGT, target_wave_id: W_OPEN },
-      ctx(stubDb(trace, { pendingMove: { id: 'req-0' } })))
+      ctx(stubDb(trace, { pendingMove })))
     expect(res.already_requested).toBe(true)
     expect(trace.find((t) => t.step === 'insert')).toBeUndefined()
+    expect(trace.find((t) => t.step === 'update')).toBeUndefined()
     expect(trace).toContainEqual({ step: 'eq', table: 'agent_membership_requests', col: 'details->>registration_id', val: REG })
+  })
+
+  it('a different target while one is pending: the new request is filed and the old one superseded, quietly', async () => {
+    const trace = []
+    const pendingMove = { id: 'req-0', details: { registration_id: REG, target_event_id: TGT, target_wave_id: W_UNCAPPED, note: 'old' } }
+    const res = await executeEventTool('move_event_entry', { registration_id: REG, target_event_id: TGT, target_wave_id: W_OPEN },
+      ctx(stubDb(trace, { pendingMove })))
+    expect(res.requested).toBe(true)
+    expect(res.already_requested).toBeUndefined()
+    const steps = trace.filter((t) => t.step === 'insert' || t.step === 'update').map((t) => t.step)
+    expect(steps).toEqual(['insert', 'update'])
+    const upd = trace.find((t) => t.step === 'update')
+    expect(upd.table).toBe('agent_membership_requests')
+    expect(upd.patch.status).toBe('declined')
+    expect(upd.patch.details).toEqual({ ...pendingMove.details, superseded_by_request_id: 'req-1', superseded_reason: 'customer_changed_target' })
+    // Guarded: only the old row, and only while it is still pending.
+    expect(trace).toContainEqual({ step: 'eq', table: 'agent_membership_requests', col: 'id', val: 'req-0' })
+    expect(trace).toContainEqual({ step: 'eq', table: 'agent_membership_requests', col: 'status', val: 'pending' })
+    // Approvals hear about the new one only; nothing goes to the customer for the old.
+    expect(notifyAgentApprovalRequest).toHaveBeenCalledTimes(1)
+    expect(notifyAgentApprovalRequest.mock.calls[0][1].requestId).toBe('req-1')
+  })
+
+  it('a different EVENT while one is pending supersedes too', async () => {
+    const trace = []
+    const pendingMove = { id: 'req-0', details: { registration_id: REG, target_event_id: TGT, target_wave_id: W_OPEN } }
+    const res = await executeEventTool('move_event_entry', { registration_id: REG, target_event_id: TGT_NOWAVES }, ctx(stubDb(trace, { pendingMove })))
+    expect(res.requested).toBe(true)
+    expect(trace.find((t) => t.step === 'update').patch.details.superseded_reason).toBe('customer_changed_target')
+  })
+
+  it('a new request that could not be filed leaves the pending one alone', async () => {
+    const trace = []
+    const pendingMove = { id: 'req-0', details: { registration_id: REG, target_event_id: TGT, target_wave_id: W_UNCAPPED } }
+    const res = await executeEventTool('move_event_entry', { registration_id: REG, target_event_id: TGT, target_wave_id: W_OPEN },
+      ctx(stubDb(trace, { pendingMove, insertError: { message: 'boom' } })))
+    expect(res.error).toBe('not_filed')
+    expect(trace.find((t) => t.step === 'update')).toBeUndefined()
   })
 
   it('a request that could not be filed is never reported as with the team', async () => {
@@ -351,5 +413,19 @@ describe('move_event_entry', () => {
     expect(res.requested).toBe(false)
     expect(res.error).toBe('not_filed')
     expect(notifyAgentApprovalRequest).not.toHaveBeenCalled()
+  })
+})
+
+describe('neither tool ever moves anything', () => {
+  it('moveRegistration is never called, and no race_registrations write or rpc happens', async () => {
+    expect(vi.isMockFunction(moveRegistration)).toBe(true)
+    const trace = []
+    await executeEventTool('list_event_move_options', { registration_id: REG }, ctx(stubDb(trace)))
+    await executeEventTool('move_event_entry', { registration_id: REG, target_event_id: TGT, target_wave_id: W_OPEN }, ctx(stubDb(trace)))
+    await executeEventTool('move_event_entry', { registration_id: REG, target_event_id: TGT, target_wave_id: W_OPEN },
+      ctx(stubDb(trace, { pendingMove: { id: 'req-0', details: { target_event_id: TGT_NOWAVES } } })))
+    expect(moveRegistration).not.toHaveBeenCalled()
+    expect(trace.filter((t) => t.step === 'rpc')).toEqual([])
+    expect(trace.filter((t) => t.table === 'race_registrations' && ['insert', 'update', 'upsert', 'delete'].includes(t.step))).toEqual([])
   })
 })

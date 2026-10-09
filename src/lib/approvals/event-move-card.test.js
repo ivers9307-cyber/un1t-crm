@@ -5,6 +5,7 @@ import { APPROVAL_KIND_LABELS, approvalCardSummary } from '@shared/approval-card
 import { failureExplanation } from '@shared/agent-request-failure'
 import {
   EVENT_MOVE_LABEL,
+  EVENT_MOVE_KIND_CHIP,
   eventMoveSummary,
   eventMoveFailureExplanation,
   eventMoveDoneLine,
@@ -48,6 +49,12 @@ describe('eventMoveFailureExplanation', () => {
   it('null for any other result', () => {
     expect(eventMoveFailureExplanation({ ok: false, message_code: 'YOU_HAVE_NO_CREDITS_LEFT' })).toBeNull()
     expect(eventMoveFailureExplanation(null)).toBeNull()
+  })
+})
+
+describe('EVENT_MOVE_KIND_CHIP', () => {
+  it('follows the light-theme chip recipe', () => {
+    expect(EVENT_MOVE_KIND_CHIP).toMatch(/^bg-(\w+)-500\/10 text-\1-700$/)
   })
 })
 

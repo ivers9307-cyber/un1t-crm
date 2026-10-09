@@ -3,14 +3,18 @@
 // registration-move.test.js) with the agent as actor and the approving staff
 // member named, then tells the customer in-thread. A refusal lands on
 // 'failed' with the code kept, and the customer hears a plain reason.
-// Decline sends the existing decline notice and moves nothing.
+// Decline sends the existing decline notice and moves nothing. Approving
+// needs `races` and a manager role at the source AND target studio, judged
+// before the claim.
 //
 // Fictional ids only: the repo is public.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 let db
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => db }))
-vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn(async () => ({ id: 'staff-1', full_name: 'Sam Staff', email: 'sam@example.com' })) }))
+// Manager at the source (L1) and the target (L2) studio by default.
+const MANAGER_BOTH = { id: 'staff-1', full_name: 'Sam Staff', email: 'sam@example.com', profileRole: 'staff', rolesByLocation: { L1: 'manager', L2: 'manager' } }
+vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn(async () => MANAGER_BOTH) }))
 vi.mock('@/lib/permissions', () => ({ hasPermissionForLocation: vi.fn(() => true) }))
 vi.mock('@/lib/registration-move', async (importOriginal) => ({
   ...(await importOriginal()),
@@ -23,12 +27,13 @@ vi.mock('@/lib/agent/notify', async (importOriginal) => ({
 }))
 
 import { getCurrentUser } from '@/lib/auth'
+import { hasPermissionForLocation } from '@/lib/permissions'
 import { moveRegistration } from '@/lib/registration-move'
 import { sendAgentThreadMessage, agentConfirmationTemplates } from '@/lib/agent/notify'
 import { explainFailure } from '@/lib/approvals/event-move-card'
 import { PATCH } from './route.js'
 
-const REG = 'r0000000-0000-0000-0000-000000000001'
+const REG = 'd0000000-0000-0000-0000-000000000001'
 const SRC = 'e0000000-0000-0000-0000-0000000000e1'
 const TGT = 'e0000000-0000-0000-0000-0000000000e2'
 const WAVE = 'f0000000-0000-0000-0000-0000000000f1'
@@ -57,7 +62,7 @@ const ROW = {
 }
 
 let updates
-function makeDb(row, { registration = null } = {}) {
+function makeDb(row, { registration = null, target = { id: TGT, location_id: 'L2', locations: { name: 'UN1T Hatch Street' } } } = {}) {
   updates = []
   return {
     from(table) {
@@ -68,6 +73,8 @@ function makeDb(row, { registration = null } = {}) {
         async maybeSingle() {
           if (patch) return { data: { id: row.id }, error: null }
           if (table === 'race_registrations') return { data: registration, error: null }
+          if (table === 'race_events') return { data: target, error: null }
+          if (table === 'locations') return { data: { name: 'UN1T Stillorgan' }, error: null }
           return { data: row, error: null }
         },
         async single() {
@@ -109,7 +116,7 @@ describe('approve an event_move', () => {
   })
 
   it('names the staff member by email when they have no name', async () => {
-    getCurrentUser.mockResolvedValueOnce({ id: 'staff-2', full_name: null, email: 'pat@example.com' })
+    getCurrentUser.mockResolvedValueOnce({ ...MANAGER_BOTH, id: 'staff-2', full_name: null, email: 'pat@example.com' })
     moveRegistration.mockResolvedValue({ ok: true, move: { id: 'mv-1' }, registration: { id: REG }, notified: true })
     await decide({ status: 'approved' })
     expect(moveRegistration.mock.calls[0][1].actor).toEqual({ type: 'agent', id: null, name: 'Mia, approved by pat@example.com' })
@@ -180,10 +187,61 @@ describe('approve an event_move', () => {
   })
 })
 
+describe('who may approve a move', () => {
+  it('a manager at the source only: 403 naming the target studio, nothing claimed, nothing moved', async () => {
+    getCurrentUser.mockResolvedValueOnce({ ...MANAGER_BOTH, rolesByLocation: { L1: 'manager' } })
+    const res = await decide({ status: 'approved' })
+    expect(res.status).toBe(403)
+    expect((await res.json()).error).toBe('Approving this move needs a manager at UN1T Hatch Street')
+    expect(updates).toEqual([])
+    expect(moveRegistration).not.toHaveBeenCalled()
+    expect(sendAgentThreadMessage).not.toHaveBeenCalled()
+  })
+  it('a manager at the target only: 403 naming the source studio', async () => {
+    getCurrentUser.mockResolvedValueOnce({ ...MANAGER_BOTH, rolesByLocation: { L2: 'manager' } })
+    const res = await decide({ status: 'approved' })
+    expect(res.status).toBe(403)
+    expect((await res.json()).error).toBe('Approving this move needs a manager at UN1T Stillorgan')
+    expect(updates).toEqual([])
+  })
+  it('a manager at both without races at the target: 403', async () => {
+    hasPermissionForLocation.mockImplementation((_u, loc, key) => !(loc === 'L2' && key === 'races'))
+    const res = await decide({ status: 'approved' })
+    hasPermissionForLocation.mockImplementation(() => true)
+    expect(res.status).toBe(403)
+    expect(updates).toEqual([])
+  })
+  it('a manager at both: proceeds', async () => {
+    moveRegistration.mockResolvedValue({ ok: true, move: { id: 'mv-1' }, registration: { id: REG }, notified: true })
+    const res = await decide({ status: 'approved' })
+    expect(res.status).toBe(200)
+    expect(moveRegistration).toHaveBeenCalledTimes(1)
+  })
+  it('a master: proceeds', async () => {
+    getCurrentUser.mockResolvedValueOnce({ id: 'm-1', full_name: 'Rita Master', email: 'r@example.com', profileRole: 'master', rolesByLocation: {} })
+    moveRegistration.mockResolvedValue({ ok: true, move: { id: 'mv-1' }, registration: { id: REG }, notified: true })
+    const res = await decide({ status: 'approved' })
+    expect(res.status).toBe(200)
+    expect(moveRegistration.mock.calls[0][1].actor.name).toBe('Mia, approved by Rita Master')
+  })
+  it('declining needs no manager at the target', async () => {
+    getCurrentUser.mockResolvedValueOnce({ ...MANAGER_BOTH, rolesByLocation: { L1: 'manager' } })
+    const res = await decide({ status: 'declined' })
+    expect(res.status).toBe(200)
+    expect(finalUpdate().status).toBe('declined')
+  })
+  it('under impersonation the master is named: "<master> as <user>"', async () => {
+    getCurrentUser.mockResolvedValueOnce({ ...MANAGER_BOTH, impersonatingFrom: { masterId: 'm-1', masterName: 'Rita Master', masterEmail: 'r@example.com' } })
+    moveRegistration.mockResolvedValue({ ok: true, move: { id: 'mv-1' }, registration: { id: REG }, notified: true })
+    await decide({ status: 'approved' })
+    expect(moveRegistration.mock.calls[0][1].actor).toEqual({ type: 'agent', id: null, name: 'Mia, approved by Rita Master as Sam Staff' })
+  })
+})
+
 describe('a conflict whose entry is already on the target', () => {
   it('is a move that landed (crashed earlier attempt or a hand move): actioned and confirmed, never re-moved', async () => {
     db = makeDb({ ...ROW, status: 'approved', details: { ...DETAILS, execution: { stage: 'executing', started_at: '2000-01-01T00:00:00Z' } } },
-      { registration: { race_event_id: TGT, wave_id: WAVE } })
+      { registration: { race_event_id: TGT, wave_id: WAVE, status: 'confirmed' } })
     moveRegistration.mockResolvedValue({ ok: false, error: 'conflict' })
     await decide({ status: 'approved' })
     const final = finalUpdate()
@@ -191,6 +249,12 @@ describe('a conflict whose entry is already on the target', () => {
     expect(final.details.result).toEqual({ ok: true, move_id: null, notified: false, recovered: 'already_on_target' })
     expect(sendAgentThreadMessage).toHaveBeenCalledTimes(1)
     expect(sendAgentThreadMessage.mock.calls[0][1].text).toMatch(/^Done, your entry is now on Hyrox Sim, Sun 25 Oct at 09:30\./)
+  })
+  it('an entry on the target but no longer live (cancelled) is not a move that landed', async () => {
+    db = makeDb(ROW, { registration: { race_event_id: TGT, wave_id: WAVE, status: 'cancelled' } })
+    moveRegistration.mockResolvedValue({ ok: false, error: 'conflict' })
+    await decide({ status: 'approved' })
+    expect(finalUpdate().status).toBe('failed')
   })
   it('a conflict with the entry elsewhere stays a failure', async () => {
     db = makeDb(ROW, { registration: { race_event_id: 'e-somewhere-else', wave_id: null } })
