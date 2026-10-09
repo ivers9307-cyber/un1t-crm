@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { FLOW_EVENT_FIELDS, flowNotification, applyFlowEvent } from './whatsapp-flow-events.js'
 
 describe('flowNotification', () => {
@@ -36,6 +36,7 @@ function fakeDb({ locations = [], numbers = [] }) {
 }
 
 describe('applyFlowEvent', () => {
+  afterEach(() => vi.restoreAllMocks())
   const STILLORGAN = { id: 'loc1', settings: { whatsapp_flow: { flow_id: '1343015528022374' } } }
 
   it('routes to the location whose settings carry the flow_id', async () => {
@@ -45,10 +46,37 @@ describe('applyFlowEvent', () => {
     expect(res.notify).not.toBeNull()
   })
 
-  it('falls back to all number locations when no settings match', async () => {
-    const db = fakeDb({ locations: [{ id: 'locX', settings: {} }], numbers: [{ location_id: 'loc1' }, { location_id: 'loc1' }] })
+  // W0.13 — an unmatched flow_id used to fan out to every location that owns
+  // a WhatsApp number (a cross-tenant alert). Now: notify nobody, log for
+  // platform ops, keep `notify` built so an ops channel can still use it.
+  it('an unmatched flow_id notifies NO location, logs at error level, and flags unmatched', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const db = fakeDb({ locations: [{ id: 'locX', settings: {} }], numbers: [{ location_id: 'loc1' }, { location_id: 'loc2' }] })
     const res = await applyFlowEvent(db, { flow_id: 'unknown-flow', new_status: 'BLOCKED' })
+    expect(res.locations).toEqual([])
+    expect(res.unmatched).toBe(true)
+    expect(res.notify).not.toBeNull()
+    expect(res.notify.title).toBe('WhatsApp Flow BLOCKED')
+    expect(errSpy).toHaveBeenCalledTimes(1)
+    expect(errSpy.mock.calls[0][0]).toMatch(/unmatched flow_id unknown-flow/)
+  })
+
+  it('a flow event with no flow_id at all is unmatched too (never pages every tenant)', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const db = fakeDb({ locations: [STILLORGAN], numbers: [{ location_id: 'loc1' }] })
+    const res = await applyFlowEvent(db, { new_status: 'THROTTLED', old_status: 'PUBLISHED' })
+    expect(res.locations).toEqual([])
+    expect(res.unmatched).toBe(true)
+    expect(errSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('a matched flow is not flagged unmatched and logs nothing', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const db = fakeDb({ locations: [STILLORGAN] })
+    const res = await applyFlowEvent(db, { flow_id: '1343015528022374', new_status: 'BLOCKED' })
     expect(res.locations).toEqual(['loc1'])
+    expect(res.unmatched).toBe(false)
+    expect(errSpy).not.toHaveBeenCalled()
   })
 
   it('silent events do zero lookups and return no locations', async () => {
