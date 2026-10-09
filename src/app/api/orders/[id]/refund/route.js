@@ -28,6 +28,8 @@ import { RevolutError } from '@/lib/revolut'
 import { paymentsFor } from '@/lib/payments'
 import { emitEvent, applyTagRules, EVENT_TYPES } from '@/lib/contact-events'
 import { validateBody } from '@/lib/validate'
+import { logError } from '@/lib/log'
+import { GAP_PAYMENT_KIND } from '@/lib/registration-entry'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -210,14 +212,26 @@ export async function POST(request, props) {
   await db.from('orders').update(updates).eq('id', order.id)
 
   // Cascade to source. Both target tables have their own status enum.
+  // EVENT-MOVE.5 — the write answers the payment's kind: a refunded price
+  // difference (move_gap) skips tag rules below, which are written for entry
+  // payments. It never un-settles the move (staff decide).
+  let sourceKind = null
   if (order.source_type === 'race_registration') {
-    await db.from('race_payments')
+    const { data: srcRows, error: srcErr } = await db.from('race_payments')
       .update({
         status: resolution.isFull ? 'refunded' : 'completed',
         refunded_at: nowIso,
         refunded_amount_cents: resolution.newRefundedTotal,
       })
       .eq('id', order.source_id)
+      .select('kind')
+    if (srcErr) {
+      // The money has gone back; the source row did not follow. Logged so it
+      // can be put right; tag rules then run as they always did.
+      logError('orders-refund', 'refund issued but race_payments was NOT updated', { err: srcErr, orderId: order.id, paymentId: order.source_id })
+    } else {
+      sourceKind = srcRows?.[0]?.kind || null
+    }
   } else if (order.source_type === 'car_deposit' && resolution.isFull) {
     // Car deposits are fixed-amount; only a full refund clears the deposit.
     await db.from('cars')
@@ -243,7 +257,7 @@ export async function POST(request, props) {
         actor_id: user.id,
       },
     })
-    if (order.contact_id) {
+    if (order.contact_id && sourceKind !== GAP_PAYMENT_KIND) {
       await applyTagRules({ db, contactId: order.contact_id })
     }
   } catch (e) {

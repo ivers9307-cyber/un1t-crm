@@ -154,6 +154,12 @@ describe('sendRegistrationMovedEmail — guards', () => {
     expect(sent().htmlBody).not.toContain('Free entry')
     expect(logError).toHaveBeenCalledWith('race-confirmations', expect.stringContaining('See your original receipt'), expect.objectContaining({ moveId: 'mv1' }))
   })
+  it('Total paid is the entry payment, never a paid price difference from an earlier move (EVENT-MOVE.5)', async () => {
+    const gap = { id: 'gp1', kind: 'move_gap', amount_cents: 1000, currency: 'EUR', status: 'completed', contact_email: 'pay@x.ie', member_count: 0, non_member_count: 0, member_fee_cents: null, non_member_fee_cents: null }
+    await sendRegistrationMovedEmail(fakeDb({ payments: { data: [gap, { ...PAYMENT, kind: 'entry' }], error: null } }), { registrationId: 'r1', moveId: 'mv1' })
+    expect(sent().htmlBody).toContain('€64.00')
+    expect(sent().htmlBody).not.toContain('€10.00')
+  })
   it('falls back to the payment address when the contact has none', async () => {
     const reg = { ...REG, contact: { ...REG.contact, email: null }, teams: { ...REG.teams, team_members: REG.teams.team_members.map((m) => ({ ...m, email: null })) } }
     await sendRegistrationMovedEmail(fakeDb({ reg }), { registrationId: 'r1', moveId: 'mv1' })

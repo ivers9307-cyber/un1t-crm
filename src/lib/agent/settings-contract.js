@@ -30,6 +30,11 @@ export const DEFAULTS = {
   // defaults in lib/agent/notify.js. {class} renders the class + time.
   booking_confirmation_text: null,
   cancellation_confirmation_text: null,
+  // EVENT-MOVE.7 — sent in-thread when staff approve Mia's event move
+  // ({event}) or the approved move is refused ({reason}). Null → the code
+  // defaults in lib/agent/notify.js.
+  event_move_confirmation_text: null,
+  event_move_failed_text: null,
   // MIA-BOOK.1 — what the agent tells the customer when Glofox rejects a
   // booking (e.g. no credits) and the attempt becomes a pending approval.
   // Null → the code default in lib/agent/notify.js.
@@ -106,6 +111,8 @@ export const SettingsSchema = z.object({
   holding_message: z.string().max(500).nullable().optional(),
   booking_confirmation_text: z.string().max(500).nullable().optional(),
   cancellation_confirmation_text: z.string().max(500).nullable().optional(),
+  event_move_confirmation_text: z.string().max(500).nullable().optional(),
+  event_move_failed_text: z.string().max(500).nullable().optional(),
   booking_issue_handoff_text: z.string().max(500).nullable().optional(),
   no_credits_handoff_text: z.string().max(500).nullable().optional(),
   account_conflict_handoff_text: z.string().max(500).nullable().optional(),
@@ -236,6 +243,8 @@ export function buildCustomerAgentSettings(data = {}) {
     holding_message: data.holding_message?.trim() || null,
     booking_confirmation_text: data.booking_confirmation_text?.trim() || null,
     cancellation_confirmation_text: data.cancellation_confirmation_text?.trim() || null,
+    event_move_confirmation_text: data.event_move_confirmation_text?.trim() || null,
+    event_move_failed_text: data.event_move_failed_text?.trim() || null,
     booking_issue_handoff_text: data.booking_issue_handoff_text?.trim() || null,
     no_credits_handoff_text: data.no_credits_handoff_text?.trim() || null,
     account_conflict_handoff_text: data.account_conflict_handoff_text?.trim() || null,

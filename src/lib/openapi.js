@@ -812,6 +812,34 @@ registry.registerPath({
   },
 })
 
+// EVENT-MOVE.5 — a payment link for a moved entry's price difference.
+registry.registerPath({
+  method: 'post',
+  path: '/api/event-registrations/{id}/moves/{moveId}/gap-link',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "Get (and optionally email) a payment link for a moved entry's price difference (staff, manager+ with races at the entry's current studio)",
+  description:
+    'Mints a race_payments row of kind move_gap through the event\'s payment provider, or reuses the pending one for the move. ' +
+    'Paying it marks the difference collected. With `email: true` the link is also emailed to the payer; the answer says whether it went (`emailed`), and a minted link answers 200 either way. ' +
+    '400 no_gap / no_email; 409 already_settled / host_not_ready; 502 provider_failed.',
+  request: {
+    params: z.object({ id: uuidLike, moveId: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      email: z.boolean().optional(),
+    }).openapi('EntryMoveGapLinkRequest') } } },
+  },
+  responses: {
+    200: { description: '{ payment_id, url, reused, emailed }', content: { 'application/json': { schema: z.object({}).passthrough().openapi('EntryMoveGapLinkResult') } } },
+    400: { description: 'A bad body, no_gap, or no_email', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: "No races permission or manager role at the entry's studio", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Entry or move not found (or at a studio the caller cannot see)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'already_settled, or host_not_ready', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'load_failed or write_failed', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'provider_failed: the payment provider did not create the link', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // EVENT-MOVE.2 — a host moves one of their own entries to another of their
 // OWN events. Same lib and shapes as the staff routes above.
 registry.registerPath({

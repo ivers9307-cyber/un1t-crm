@@ -2,6 +2,8 @@
 // execution crashed between the atomic claim and the Glofox call finishing.
 import { describe, it, expect } from 'vitest'
 import {
+  EXECUTING_KINDS,
+  RETRYABLE_KINDS,
   EXECUTION_STALE_MS,
   stuckExecutionStartedAt,
   isStuckExecuting,
@@ -186,5 +188,14 @@ describe('AGENT-RETRY.3 — superseded duplicates never reach the retry lane', (
       details: { reason: 'superseded_duplicate', duplicate_of: 'sibling-id', starts_at: future },
     }
     expect(isRetryableFailure(tombstone)).toBe(true)
+  })
+})
+
+// EVENT-MOVE.7 — approving a Mia event_move runs the move in the same
+// request, so a crash mid-move must be visible and retryable like the others.
+describe('event_move', () => {
+  it('is an executing kind, so a crashed or failed move is retryable', () => {
+    expect(EXECUTING_KINDS.has('event_move')).toBe(true)
+    expect(RETRYABLE_KINDS.has('event_move')).toBe(true)
   })
 })

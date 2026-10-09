@@ -16,6 +16,8 @@ import {
 import { approvalGrantsTrialCredit } from '@/lib/approvals/agent-request-why'
 import { logWarn } from '@/lib/log'
 import { isManualEventId } from '@/lib/manual-timetable'
+import { hasRoleAtLocation } from '@/lib/role-at-location'
+import { MANAGER_ROLES } from '@/lib/schemas'
 
 // PATCH /api/agent/membership-requests/[id] — staff decides a queued
 // agent request. Decision rights follow the comms surface (any staff
@@ -54,6 +56,54 @@ const DecisionSchema = z.object({
 })
 
 const MEMBERSHIP_KINDS = new Set(['cancellation', 'pause'])
+
+// EVENT-MOVE.7 — approving an event_move writes at the source AND the target
+// studio, so the approver needs what the staff move route needs at both
+// (/api/event-registrations/[id]/move): `races` and a manager role. Judged
+// BEFORE the claim, so a refusal leaves the request pending for someone who
+// can approve it. A missing target is not refused here: the move itself
+// answers target_unavailable.
+async function eventMoveApproverRefusal(db, user, row) {
+  const targetId = row.details?.target_event_id
+  let target = null
+  if (targetId) {
+    const { data, error } = await db.from('race_events')
+      .select('id, location_id, locations:location_id ( name )')
+      .eq('id', targetId)
+      .maybeSingle()
+    if (error) {
+      logWarn('agent-requests', 'event move: target event read failed', { requestId: row.id, err: error })
+      return NextResponse.json({ success: false, error: 'The target event could not be read. Try again.' }, { status: 500 })
+    }
+    target = data || null
+  }
+  const studios = [{ id: row.location_id, name: null }]
+  if (target?.location_id && target.location_id !== row.location_id) studios.push({ id: target.location_id, name: target.locations?.name || null })
+  else if (target?.location_id) studios[0].name = target.locations?.name || null
+  for (const studio of studios) {
+    const allowed = !!studio.id
+      && hasPermissionForLocation(user, studio.id, 'races')
+      && hasRoleAtLocation(user, studio.id, MANAGER_ROLES)
+    if (allowed) continue
+    let name = studio.name
+    if (!name && studio.id) {
+      const { data: loc } = await db.from('locations').select('name').eq('id', studio.id).maybeSingle()
+      name = loc?.name || null
+    }
+    return NextResponse.json({ success: false, error: `Approving this move needs a manager at ${name || 'that studio'}` }, { status: 403 })
+  }
+  return null
+}
+
+/**
+ * Who approved, for the move's actor name. Under impersonation the REAL
+ * caller is named, "<master> as <user>" (the staff move route's actorFor).
+ */
+function moveApproverName(user) {
+  const userName = user.full_name || user.email || 'staff'
+  const imp = user.impersonatingFrom
+  return imp?.masterId ? `${imp.masterName || imp.masterEmail || 'master'} as ${userName}` : userName
+}
 
 export async function PATCH(request, { params }) {
   const { id } = await params
@@ -109,6 +159,11 @@ export async function PATCH(request, { params }) {
   const isFailedRetry = isRetryableFailure(row) && v.data.status === 'approved'
   if (row.status !== 'pending' && !isRetry && !isFailedRetry) {
     return NextResponse.json({ success: false, error: 'Already decided' }, { status: 409 })
+  }
+
+  if (row.kind === 'event_move' && v.data.status === 'approved') {
+    const refusal = await eventMoveApproverRefusal(db, user, row)
+    if (refusal) return refusal
   }
 
   // Atomic claim — flip pending → the caller's decision. A concurrent
@@ -195,6 +250,78 @@ export async function PATCH(request, { params }) {
         })
       } catch (e) {
         console.warn(`[agent-requests] event cancellation confirmation send error: ${e?.message || e}`)
+      }
+    }
+  }
+
+  // EVENT-MOVE.7 — approving Mia's event_move request runs the shared move
+  // (moveRegistration, the same rules and SQL function staff and hosts use)
+  // with the agent as actor and the approving staff member named. Never
+  // forced: a full time refuses, and staff can move it by hand from the
+  // teams page. expectedSourceEventId refuses a move whose entry has left
+  // the event the request was filed against (conflict). The customer is
+  // told in-thread either way; a refusal is told once, not on every retry.
+  if (executing && row.kind === 'event_move') {
+    const { moveRegistration, MOVE_ERROR_MESSAGES } = await import('@/lib/registration-move')
+    const result = await moveRegistration(db, {
+      registrationId: details.registration_id,
+      targetEventId: details.target_event_id,
+      targetWaveId: details.target_wave_id || null,
+      expectedSourceEventId: details.source_event_id || null,
+      actor: { type: 'agent', id: null, name: `Mia, approved by ${moveApproverName(user)}` },
+      note: details.note || null,
+      notify: true,
+      force: false,
+    })
+    // A conflict whose entry is already on the target is a move that landed:
+    // an earlier attempt that died after the write (the stuck-retry lane) or
+    // a staff member who moved it by hand first. Read, never assumed.
+    let alreadyMoved = false
+    if (!result.ok && result.error === 'conflict') {
+      const { data: current, error: currentErr } = await db.from('race_registrations')
+        .select('race_event_id, wave_id, status')
+        .eq('id', details.registration_id)
+        .maybeSingle()
+      if (currentErr) logWarn('agent-requests', 'event move: conflict re-read failed', { requestId: id, err: currentErr })
+      // Live only: a cancelled entry sitting on the target is not a move that landed.
+      alreadyMoved = !!current && current.status === 'confirmed' && current.race_event_id === details.target_event_id
+        && (!details.target_wave_id || current.wave_id === details.target_wave_id)
+    }
+    if (alreadyMoved) {
+      executed = { ok: true, move_id: null, notified: false, recovered: 'already_on_target' }
+      const { failure: _previousFailure, ...rest } = details
+      details = { ...rest, result: executed }
+      finalStatus = 'actioned'
+    } else if (result.ok) {
+      executed = { ok: true, move_id: result.move?.id || null, notified: result.notified === true }
+      // A retry that now succeeds drops the earlier attempt's failure code.
+      const { failure: _previousFailure, ...rest } = details
+      details = { ...rest, result: executed }
+      finalStatus = 'actioned'
+    } else {
+      executed = { ok: false, move_error: result.error, message: MOVE_ERROR_MESSAGES[result.error] || null }
+      details = { ...details, result: executed, failure: result.error }
+      finalStatus = 'failed'
+    }
+    const moved = finalStatus === 'actioned'
+    const tellCustomer = row.conversation_id && (moved || (!isRetry && !isFailedRetry))
+    if (tellCustomer) {
+      try {
+        const { sendAgentThreadMessage, buildEventMoveConfirmationText, buildEventMoveFailedText } = await import('@/lib/agent/notify')
+        const text = moved
+          ? buildEventMoveConfirmationText({
+            eventName: details.target_event_name,
+            dateLabel: details.target_date_label,
+            timeLabel: details.target_wave_label,
+            notified: executed.notified === true,
+            priceGapCents: details.price_gap_cents,
+            currency: details.currency,
+            template: await confirmationTemplate('eventMove'),
+          })
+          : buildEventMoveFailedText({ error: result.error, template: await confirmationTemplate('eventMoveFailed') })
+        await sendAgentThreadMessage(db, { channel: row.channel, conversationId: row.conversation_id, text })
+      } catch (e) {
+        console.warn(`[agent-requests] event move message send error: ${e?.message || e}`)
       }
     }
   }

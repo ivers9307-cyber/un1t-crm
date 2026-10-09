@@ -86,6 +86,7 @@ const KIND_LABELS = {
   event_booking: 'event booking',
   event_cancellation: 'event cancellation',
   membership_purchase: 'membership purchase',
+  event_move: 'event move',
 }
 
 function expiredNoticePayload(row) {

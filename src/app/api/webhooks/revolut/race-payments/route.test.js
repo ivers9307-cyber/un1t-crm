@@ -13,7 +13,10 @@ vi.mock('@/lib/race-payments', () => ({
   resolveRacePaymentByProviderRef: vi.fn(),
   markRacePaymentStatus: vi.fn(),
 }))
-vi.mock('@/lib/race-confirmations', () => ({ sendRaceConfirmations: vi.fn(async () => ({ sent: ['email'] })) }))
+vi.mock('@/lib/race-confirmations', () => ({
+  sendRaceConfirmations: vi.fn(async () => ({ sent: ['email'] })),
+  sendGapPaidEmail: vi.fn(async () => ({ sent: ['email'], skipped: [], failed: [] })),
+}))
 vi.mock('@/lib/webhook-events', () => ({
   recordWebhookEvent: vi.fn(async () => ({ seen: false })),
   WEBHOOK_PROVIDERS: { REVOLUT_RACE: 'revolut_race' },
@@ -23,7 +26,7 @@ import { POST } from './route.js'
 import { createServerClient } from '@/lib/supabase'
 import { verifyWebhookSignature, getOrder } from '@/lib/revolut'
 import { resolveRacePaymentByProviderRef, markRacePaymentStatus } from '@/lib/race-payments'
-import { sendRaceConfirmations } from '@/lib/race-confirmations'
+import { sendRaceConfirmations, sendGapPaidEmail } from '@/lib/race-confirmations'
 import { recordWebhookEvent } from '@/lib/webhook-events'
 
 // Minimal DB mock — only the fire-and-forget Glofox IIFE touches it, and it
@@ -122,5 +125,55 @@ describe('POST /api/webhooks/revolut/race-payments', () => {
     expect(res.status).toBe(200)
     expect(markRacePaymentStatus).toHaveBeenCalledTimes(1)
     expect(sendRaceConfirmations).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/webhooks/revolut/race-payments — a move_gap payment (EVENT-MOVE.5)', () => {
+  beforeEach(() => {
+    resolveRacePaymentByProviderRef.mockResolvedValue({ id: 'gp1', kind: 'move_gap', registration_move_id: 'mv1' })
+    markRacePaymentStatus.mockResolvedValue({ applied: { status: 'completed', kind: 'move_gap' }, state_changed: true })
+  })
+
+  it('a fresh completion sends the gap receipt once, never the entry confirmation', async () => {
+    const res = await POST(makeRequest())
+    expect(res.status).toBe(200)
+    expect(sendGapPaidEmail).toHaveBeenCalledTimes(1)
+    expect(sendGapPaidEmail).toHaveBeenCalledWith(expect.objectContaining({ paymentId: 'gp1' }))
+    expect(sendRaceConfirmations).not.toHaveBeenCalled()
+    expect((await res.json()).confirmations).toEqual({ sent: ['email'], skipped: [], failed: [] })
+  })
+
+  it('runs no Glofox push (the database is never read for it)', async () => {
+    const from = vi.fn(() => { throw new Error('the Glofox push read the database') })
+    createServerClient.mockReturnValue({ from })
+    await POST(makeRequest())
+    await new Promise((r) => setTimeout(r, 0)) // let a fire-and-forget IIFE run, if there were one
+    expect(from).not.toHaveBeenCalled()
+  })
+
+  it('an entry payment still runs the Glofox push read', async () => {
+    resolveRacePaymentByProviderRef.mockResolvedValue({ id: 'pay-1', kind: 'entry' })
+    markRacePaymentStatus.mockResolvedValue({ applied: { status: 'completed' } })
+    const db = makeDb()
+    const from = vi.fn(() => db)
+    createServerClient.mockReturnValue({ from })
+    await POST(makeRequest())
+    await new Promise((r) => setTimeout(r, 0))
+    expect(from).toHaveBeenCalledWith('race_payments')
+    expect(sendGapPaidEmail).not.toHaveBeenCalled()
+  })
+
+  it('a retry on an already-completed gap payment sends nothing', async () => {
+    markRacePaymentStatus.mockResolvedValue({ applied: null, state_changed: false })
+    await POST(makeRequest())
+    expect(sendGapPaidEmail).not.toHaveBeenCalled()
+    expect(sendRaceConfirmations).not.toHaveBeenCalled()
+  })
+
+  it('a thrown receipt still answers 200', async () => {
+    sendGapPaidEmail.mockRejectedValueOnce(new Error('boom'))
+    const res = await POST(makeRequest())
+    expect(res.status).toBe(200)
+    expect((await res.json()).confirmations).toEqual({ failed: ['unhandled:boom'] })
   })
 })

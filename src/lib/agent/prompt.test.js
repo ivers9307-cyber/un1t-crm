@@ -279,6 +279,17 @@ describe('events section', () => {
     expect(out).toMatch(/answer the customer's actual question FIRST/i)
     expect(out).toMatch(/never collect payment details in chat/i)
   })
+
+  // EVENT-MOVE.7 — a different event goes through the move tools and staff
+  // approval, never cancel + rebook.
+  it('teaches moving an entry to another date through the approval tools', () => {
+    const out = buildCustomerSystemPrompt({})
+    expect(out).toMatch(/list_event_move_options/)
+    expect(out).toMatch(/move_event_entry/)
+    expect(out).toMatch(/never cancel and rebook/i)
+    expect(out).not.toMatch(/different EVENT is a cancel/i)
+    expect(out).toMatch(/A CLASS RESCHEDULE is a cancel \+ a new booking \(event entries are different/)
+  })
 })
 
 // AGENT-MEMSALES.1 — editable membership signup link.

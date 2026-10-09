@@ -58,6 +58,7 @@ import { maybeAutoReply } from '@/lib/agent/auto-reply'
 import { parseConsentKeyword, pickInboundContact } from '@/lib/whatsapp'
 import { applyWhatsappConsentKeyword } from '@/lib/whatsapp-consent'
 import { ingestCoexistenceMessage, syncContactMatchOnly } from '@/lib/whatsapp-coexistence-ingest'
+import { parseSyncContacts } from '@/lib/whatsapp-coexistence'
 
 // Recording fake supabase client: chainable builder, thenable (matches
 // supabase-js), with per-table response handlers. Every terminal call is
@@ -72,7 +73,7 @@ function makeDb(handlers = {}) {
       return (typeof h === 'function' ? h(ops, terminal) : h) || { data: null, error: null }
     }
     const b = {}
-    for (const m of ['select', 'eq', 'or', 'is', 'in', 'order', 'limit', 'insert', 'update', 'upsert', 'delete']) {
+    for (const m of ['select', 'eq', 'neq', 'or', 'is', 'in', 'order', 'limit', 'insert', 'update', 'upsert', 'delete']) {
       b[m] = (...args) => { ops.push([m, ...args]); return b }
     }
     b.single = async () => finish('single')
@@ -146,6 +147,41 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks()
+})
+
+describe('W0.2 — the sender phone matches contacts inside the receiving organisation only', () => {
+  it('the contacts lookup is fenced to [receiving, sibling] alongside the phone match', async () => {
+    resolveWhatsAppNumberByPhoneNumberId.mockResolvedValue(STILLORGAN)
+    // The real siblingLocationIds runs against the fake: the receiving row,
+    // then its organisation's other locations.
+    db = makeDb({
+      locations: (ops, terminal) => terminal === 'maybeSingle'
+        ? { data: { id: 'loc-still', organization_id: 'org-un1t' }, error: null }
+        : { data: [{ id: 'loc-hatch' }], error: null },
+      contacts: { data: [], error: null },
+      whatsapp_conversations: (ops, terminal) => {
+        if (ops.some(([m]) => m === 'insert')) return { data: { id: 'conv-1' }, error: null }
+        return { data: null, error: null }
+      },
+      whatsapp_messages: (ops) => ops.some(([m]) => m === 'insert') ? { data: { id: 'msg-row-1' }, error: null } : { data: null, error: null },
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(reqFor(inboundText(REGISTERED_PNI)))
+    expect(res.status).toBe(200)
+
+    const lookup = db.calls.find((c) => c.table === 'contacts' && c.ops.some(([m]) => m === 'or'))
+    expect(lookup).toBeTruthy()
+    expect(lookup.ops).toContainEqual(['in', 'location_id', ['loc-still', 'loc-hatch']])
+  })
+
+  it('a contact-sync event passes the receiving location to the match-only sync', async () => {
+    resolveWhatsAppNumberByPhoneNumberId.mockResolvedValue(STILLORGAN)
+    parseSyncContacts.mockReturnValueOnce([{ phone: '353871234567' }])
+    const res = await POST(reqFor(envelope({ metadata: { phone_number_id: REGISTERED_PNI }, contacts: [{ wa_id: '353871234567' }] }, 'smb_app_state_sync')))
+    expect(res.status).toBe(200)
+    expect(syncContactMatchOnly).toHaveBeenCalledWith(db, expect.objectContaining({ locationId: 'loc-still' }))
+  })
 })
 
 describe('POST /api/webhooks/whatsapp — inbound message routing', () => {
