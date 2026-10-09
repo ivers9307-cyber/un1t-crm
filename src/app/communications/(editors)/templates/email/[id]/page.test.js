@@ -115,16 +115,34 @@ describe('/communications/templates/email/[id] page', () => {
     expect(notFound).not.toHaveBeenCalled()
   })
 
-  // C123 GATES-4 (c) — a template with no location_id opened here but its
-  // save (PUT /api/templates/[id]) 404s, so the page now 404s too (0 such
-  // rows in prod; no data change). Main: rendered the editor.
-  it('404s a template with no location_id (parity with PUT /api/templates/[id])', async () => {
+  // W0.11 — a template with no location_id belongs to the platform and is
+  // master-only (the rule /api/templates/[id] applies to its read and save).
+  // A non-master who holds `email` somewhere gets the missing-id 404.
+  it('404s a template with no location_id for a non-master (platform row, parity with /api/templates/[id])', async () => {
     getCurrentUser.mockResolvedValue(user)
     createServerClient.mockReturnValue(
       mockDb({ template: { id: 'tpl-1', location_id: null } })
     )
     await expect(EditTemplatePage(props())).rejects.toThrow('NEXT_NOT_FOUND')
     expect(notFound).toHaveBeenCalled()
+  })
+
+  it('renders the editor on a template with no location_id for a master', async () => {
+    getCurrentUser.mockResolvedValue({
+      ...user,
+      id: 'user-master',
+      role: 'master',
+      profileRole: 'master',
+      isMaster: true,
+      locations: [{ id: 'loc-mine', role: 'master', features: {} }],
+      assignmentsByLocation: { 'loc-mine': { role: 'master', permissions: {} } },
+    })
+    createServerClient.mockReturnValue(
+      mockDb({ template: { id: 'tpl-1', location_id: null } })
+    )
+    const el = await EditTemplatePage(props())
+    expect(el).toBeTruthy()
+    expect(notFound).not.toHaveBeenCalled()
   })
 
   it('a failed read is an error, not "not found"', async () => {

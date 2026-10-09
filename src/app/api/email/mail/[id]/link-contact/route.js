@@ -21,10 +21,10 @@ import { loadConversationForUser } from '../../_conversation'
 // REUSES findOrCreateRaceContact with restrictToOrg: true — the SAME
 // LEADCAP.1 create-or-link helper every other operator-facing "resolve this
 // email to a contact" path uses (team-members, event/race rosters). email is
-// GLOBALLY unique on contacts (contacts_email_unique, mig 008), so a second
-// create path here would be a second chance to hit 23505 blind, or to link a
-// stranger's contact across an organisation the caller cannot see into. No
-// second implementation exists in this file.
+// unique per ORGANISATION on contacts (contacts_email_org_unique, mig 712;
+// global before W0.6), so a second create path here would be a second chance
+// to hit 23505 blind, or to link a stranger's contact across an organisation
+// the caller cannot see into. No second implementation exists in this file.
 const CONTACT_COLUMNS = 'id, name, first_name, email, pipeline_stage_slug'
 
 export async function POST(request, props) {
@@ -67,9 +67,9 @@ export async function POST(request, props) {
     email: conversation.requester_email,
     name: conversation.requester_name,
     // LEADCAP.1 — match/create anywhere in the SAME organisation, never a
-    // bare location match and never a global one: contacts_email_unique is a
-    // GLOBAL index, so without org scope a known email either 500s on
-    // insert or (worse) would have to fall back to a cross-tenant match.
+    // bare location match and never a global one. Since W0.6 (mig 712,
+    // contacts_email_org_unique is per organisation) org scope is the
+    // helper's default; the flag stays so this call site reads as what it is.
     restrictToOrg: true,
     // H1 (pre-merge audit) — findOrCreateRaceContact's own INSERT is
     // hard-coded to the race shape (name: name || 'Race competitor', source:

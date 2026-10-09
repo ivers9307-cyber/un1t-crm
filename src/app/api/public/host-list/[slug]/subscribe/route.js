@@ -93,8 +93,12 @@ export async function POST(request, props) {
     // a signup with a known member's email deliberately links to their real
     // contact and re-affirms marketing consent — that's the feature, and the
     // accepted posture of every public opt-in form (/api/public/leads,
-    // class-booking). The tenant-keyed rate limit + always-identical response
-    // bound the abuse surface: no enumeration oracle, no bulk probing.
+    // class-booking). W0.6: should the email already sit at a SIBLING
+    // location of the same organisation, the INSERT collides on
+    // contacts_email_org_unique and the helper adopts that in-org holder
+    // (same person, same tenant) rather than failing the signup. The
+    // tenant-keyed rate limit + always-identical response bound the abuse
+    // surface: no enumeration oracle, no bulk probing.
     const contactId = await findOrCreateRaceContact({
       db,
       locationId,

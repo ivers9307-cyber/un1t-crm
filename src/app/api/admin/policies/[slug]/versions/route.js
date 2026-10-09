@@ -15,7 +15,7 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { publishVersion } from '@/lib/policies'
+import { publishVersion, policyOrgIdFor } from '@/lib/policies'
 import { logAuditEvent } from '@/lib/audit'
 import { canManagePolicies } from '@/lib/policies-access'
 
@@ -27,9 +27,10 @@ const PublishSchema = z.object({
   effective_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
 })
 
-// C141 ORGROLE.2 — managing policies is MASTER ONLY (Richard, 2 Oct): the
-// policies table has no organisation, so a version reaches every studio.
-// canManagePolicies lives in src/lib/policies-access.js.
+// C141 ORGROLE.2 — managing policies is MASTER ONLY (Richard, 2 Oct);
+// canManagePolicies lives in src/lib/policies-access.js. W0.5 (mig 713) —
+// policies belong to an organisation: the slug resolves inside the caller's
+// ACTIVE organisation only, so a version is published into that tenant alone.
 
 export async function POST(request, { params }) {
   const { slug } = await params
@@ -43,10 +44,15 @@ export async function POST(request, { params }) {
   if (!validation.ok) return validation.response
   const body = validation.data
 
+  const orgId = policyOrgIdFor(user)
+  if (!orgId) {
+    return NextResponse.json({ success: false, error: 'Policy not found' }, { status: 404 })
+  }
   const db = createServerClient()
   const { data: policy } = await db
     .from('policies')
     .select('id, active')
+    .eq('organization_id', orgId)
     .eq('slug', slug)
     .maybeSingle()
   if (!policy || !policy.active) {
