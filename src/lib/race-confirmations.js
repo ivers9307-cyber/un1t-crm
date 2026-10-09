@@ -563,16 +563,19 @@ export async function sendRegistrationMovedEmail(db, { registrationId, moveId })
   }
   const { data: payments, error: payErr } = await db
     .from('race_payments')
-    .select('id, amount_cents, currency, status, contact_email, member_count, non_member_count, member_fee_cents, non_member_fee_cents, created_at')
+    .select('id, kind, amount_cents, currency, status, contact_email, member_count, non_member_count, member_fee_cents, non_member_fee_cents, created_at')
     .eq('race_registration_id', registrationId)
     .order('created_at', { ascending: false })
-    .limit(5)
+    .limit(10)
   if (payErr) logError('race-confirmations', 'moved email: payment read failed; Total paid says "See your original receipt"', { err: payErr, registrationId, moveId })
-  const payment = (payments || []).find((p) => p.status === 'completed') || null
+  // EVENT-MOVE.5 — "Total paid" is the ENTRY's payment: a paid price
+  // difference from an earlier move is not the ticket.
+  const entryPayments = (payments || []).filter((p) => (p.kind || 'entry') === 'entry')
+  const payment = entryPayments.find((p) => p.status === 'completed') || null
 
   const race = reg.race || {}
   const contact = reg.contact || {}
-  const toEmail = entryLeadEmail({ registration: reg, payment: payment || (payments || [])[0] || null })
+  const toEmail = entryLeadEmail({ registration: reg, payment: payment || entryPayments[0] || null })
   if (!toEmail) {
     logError('race-confirmations', 'moved email: no address for the lead contact', { registrationId, moveId })
     result.skipped.push('email:no_email')

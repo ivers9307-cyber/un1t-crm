@@ -169,3 +169,18 @@ describe('GET /api/events/[id]/teams — move history', () => {
     expect(globalThis.__calls.some((c) => c.table === 'registration_moves' && has(c.ops, 'eq', 'to_event_id', EV))).toBe(false)
   })
 })
+
+describe('GET /api/events/[id]/teams — the entry payment (EVENT-MOVE.5)', () => {
+  it('payment is the newest ENTRY payment; a newer price-difference payment is skipped', async () => {
+    const answer = globalThis.__answer
+    globalThis.__answer = (table, ops) => {
+      if (table === 'race_payments') return { data: [
+        { id: 'gp1', race_registration_id: 'r1', kind: 'move_gap', status: 'pending', payment_checkout_url: null, created_at: '2026-10-09T00:00:00Z' },
+        { id: 'p1', race_registration_id: 'r1', kind: 'entry', status: 'completed', payment_checkout_url: null, created_at: '2026-10-01T00:00:00Z' },
+      ], error: null }
+      return answer(table, ops)
+    }
+    const json = await (await GET(req(), props)).json()
+    expect(json.data.find((r) => r.id === 'r1').payment).toEqual(expect.objectContaining({ id: 'p1', status: 'completed' }))
+  })
+})

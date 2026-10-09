@@ -93,6 +93,9 @@ export async function GET(request, props) {
     data: {
       id: row.id,
       status: row.status,
+      // EVENT-MOVE.5 — 'move_gap' is a moved entry's price difference: the
+      // checkout labels it so and shows no roster.
+      kind: row.kind || 'entry',
       amount_cents: row.amount_cents,
       // The per-ticket booking fee UN1T adds on top (0/null for Revolut and
       // internal events). Ticket subtotal = amount_cents − booking_fee_cents.

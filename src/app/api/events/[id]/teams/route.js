@@ -85,11 +85,14 @@ export async function GET(_request, props) {
   if (regIds.length > 0) {
     const { data: payments } = await db
       .from('race_payments')
-      .select('id, race_registration_id, status, payment_checkout_url, contact_phone, contact_name, created_at')
+      .select('id, race_registration_id, kind, status, payment_checkout_url, contact_phone, contact_name, created_at')
       .in('race_registration_id', regIds)
       .order('created_at', { ascending: false })
     const byReg = {}
     for (const pmt of payments || []) {
+      // EVENT-MOVE.5 — `payment` is the ENTRY's payment (its link, its
+      // status); a price-difference payment for a move is not it.
+      if ((pmt.kind || 'entry') !== 'entry') continue
       if (!byReg[pmt.race_registration_id]) {
         byReg[pmt.race_registration_id] = {
           id: pmt.id,

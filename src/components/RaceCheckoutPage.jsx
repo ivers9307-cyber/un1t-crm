@@ -211,6 +211,9 @@ export default function RaceCheckoutPage({ paymentId }) {
     )
   }
 
+  // EVENT-MOVE.5 — a moved entry's price difference: say so, list no roster.
+  const isGap = data.kind === 'move_gap'
+
   const fmt = (cents, currency) => {
     const major = (cents / 100).toFixed(2)
     if (currency === 'EUR') return `€${major}`
@@ -235,12 +238,15 @@ export default function RaceCheckoutPage({ paymentId }) {
             {/* top: event + team */}
             <div className="px-6 pt-6 pb-5">
               <h1 className="font-bold text-lg leading-snug">{data.race?.name || 'Your race'}</h1>
-              {data.registration?.team_name && (
+              {isGap && (
+                <p className="text-sm text-white/60 mt-1">Price difference</p>
+              )}
+              {!isGap && data.registration?.team_name && (
                 <p className="text-sm text-white/60 mt-1">
                   Team <strong className="text-white font-semibold">{data.registration.team_name}</strong>
                 </p>
               )}
-              {data.registration?.team_size > 1 && (
+              {!isGap && data.registration?.team_size > 1 && (
                 <p className="text-xs text-white/45 mt-1 tabular-nums">{data.registration.team_size} people</p>
               )}
             </div>
@@ -259,7 +265,7 @@ export default function RaceCheckoutPage({ paymentId }) {
               {data.booking_fee_cents > 0 && (
                 <div className="space-y-2 text-sm mb-4">
                   <div className="flex items-baseline justify-between text-white/70">
-                    <span>Entry</span>
+                    <span>{isGap ? 'Price difference' : 'Entry'}</span>
                     <span className="tabular-nums text-white/90">
                       {fmt(data.amount_cents - data.booking_fee_cents, data.currency)}
                     </span>

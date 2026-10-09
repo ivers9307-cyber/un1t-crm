@@ -173,6 +173,14 @@ function settledNote(move) {
 }
 
 // Cents in the event's currency (same rendering as MoveEntryDialog).
+// EVENT-MOVE.5 — who the payment link goes to, by name: the captain, else
+// the first person, else the entry's payer, else the team.
+function leadOf(registration) {
+  const members = registration?.teams?.team_members || []
+  const lead = members.find((m) => m?.role === 'captain') || members[0]
+  return lead?.name || registration?.payment?.contact_name || registration?.teams?.name || 'the customer'
+}
+
 function money(cents, currency = 'EUR') {
   const major = (Math.abs(cents) / 100).toFixed(2)
   return currency === 'EUR' ? `€${major}` : currency === 'GBP' ? `£${major}` : `${major} ${currency}`
@@ -419,6 +427,43 @@ function TeamCard({ registration, waves, onChanged, onError, onNotice, canCancel
     }
   }
 
+  // EVENT-MOVE.5 — email the customer a link to pay the difference (the
+  // route reuses a pending one), and copy it so staff hold it either way.
+  // Paying it marks the difference collected on its own.
+  async function sendGapLink() {
+    const move = registration.last_move
+    if (!move?.id) return
+    const lead = leadOf(registration)
+    if (!confirm(`Send ${lead} a payment link for ${money(move.price_gap_cents, currency)}?`)) return
+    setBusy(true)
+    try {
+      const r = await fetch(`/api/event-registrations/${registration.id}/moves/${move.id}/gap-link`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: true }),
+      })
+      const j = await r.json()
+      if (!r.ok || j.success === false) {
+        onError(j.message || j.error || 'Could not create the payment link')
+        // Settled meanwhile: reload so the chip clears.
+        if (j.error === 'already_settled') onChanged()
+        return
+      }
+      const url = j.data?.url || ''
+      let copiedLink = false
+      if (url) {
+        try { await navigator.clipboard.writeText(url); copiedLink = true } catch { copiedLink = false }
+      }
+      if (j.data?.emailed) onNotice(`Payment link sent to ${lead}`)
+      else if (copiedLink) onNotice('Payment link copied; the email could not be sent')
+      else onNotice(`The email could not be sent. Payment link: ${url}`)
+    } catch (e) {
+      onError(e.message || 'Network error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function removeRegistration() {
     if (!confirm(`Remove team "${team?.name}" from this race?`)) return
     setBusy(true)
@@ -490,6 +535,15 @@ function TeamCard({ registration, waves, onChanged, onError, onNotice, canCancel
                     title="Let the difference go; the customer owes nothing more"
                   >
                     Waived
+                  </button>
+                  <button
+                    type="button"
+                    onClick={sendGapLink}
+                    disabled={busy}
+                    className="text-[11px] text-un1t-accent hover:underline disabled:opacity-40"
+                    title="Email the customer a link to pay the difference (the link is copied too). Paying it marks the difference collected."
+                  >
+                    Send payment link
                   </button>
                 </>
               )}
