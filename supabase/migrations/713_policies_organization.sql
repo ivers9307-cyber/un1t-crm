@@ -1,4 +1,4 @@
--- 710 — W0.5: policies belong to an ORGANISATION.
+-- 713 — W0.5: policies belong to an ORGANISATION.
 --
 -- WHY. policies / policy_versions had no tenant column: every signed-in
 -- user on the platform was shown UN1T's employee handbook, acceptable-use
@@ -29,7 +29,7 @@ create index if not exists policies_org_active_idx
   on public.policies (organization_id, active, display_order, title) where active = true;
 
 comment on column public.policies.organization_id is
-  'W0.5 (mig 710) — owning organisation. Staff see only their organisations'' policies.';
+  'W0.5 (mig 713) — owning organisation. Staff see only their organisations'' policies.';
 
 -- RLS: browser reads are rare — the lib uses the service role — but the
 -- deny must exist at the DB too.

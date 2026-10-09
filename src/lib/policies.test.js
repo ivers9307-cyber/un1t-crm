@@ -7,7 +7,7 @@
 //   - detectSectionHeadings: heading-detection heuristic (numbered
 //     headings, ALL-CAPS headings, blank-line-followed)
 //
-// W0.5 — policies belong to an organisation (mig 710). The fake's `policies`
+// W0.5 — policies belong to an organisation (mig 713). The fake's `policies`
 // reads really apply `.eq`, so a read that forgets the organisation filter
 // returns the other tenant's rows here and fails, rather than passing
 // vacuously against a mock that returns whatever it is given.

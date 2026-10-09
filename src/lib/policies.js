@@ -4,7 +4,7 @@
 // version if at least one completed (ended_at IS NOT NULL) view row
 // exists for that (profile_id, policy_version_id).
 //
-// W0.5 (mig 710) — policies belong to an ORGANISATION. Every read here is
+// W0.5 (mig 713) — policies belong to an ORGANISATION. Every read here is
 // scoped to the caller's active organisation (policyOrgIdFor); a caller
 // with no organisation reads nothing. Before, every signed-in user on the
 // platform saw UN1T's handbook, AUP and staff privacy notice. Editing

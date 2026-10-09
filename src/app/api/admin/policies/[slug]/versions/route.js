@@ -28,7 +28,7 @@ const PublishSchema = z.object({
 })
 
 // C141 ORGROLE.2 — managing policies is MASTER ONLY (Richard, 2 Oct);
-// canManagePolicies lives in src/lib/policies-access.js. W0.5 (mig 710) —
+// canManagePolicies lives in src/lib/policies-access.js. W0.5 (mig 713) —
 // policies belong to an organisation: the slug resolves inside the caller's
 // ACTIVE organisation only, so a version is published into that tenant alone.
 

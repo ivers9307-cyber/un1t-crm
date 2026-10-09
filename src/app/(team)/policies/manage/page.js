@@ -19,7 +19,7 @@ import { canManagePolicies } from '@/lib/policies-access'
 export const dynamic = 'force-dynamic'
 
 // C141 ORGROLE.2 — managing policies is MASTER ONLY (Richard, 2 Oct);
-// canManagePolicies lives in src/lib/policies-access.js. W0.5 (mig 710) —
+// canManagePolicies lives in src/lib/policies-access.js. W0.5 (mig 713) —
 // policies belong to an organisation: this page reads the caller's ACTIVE
 // organisation's rows only (a master switches studio to switch organisation).
 

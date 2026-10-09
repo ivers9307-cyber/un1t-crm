@@ -35,7 +35,7 @@ export async function POST(request, { params }) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
-  // W0.5 (mig 710) — the slug resolves inside the caller's organisation only.
+  // W0.5 (mig 713) — the slug resolves inside the caller's organisation only.
   const orgId = policyOrgIdFor(user)
   if (!orgId) {
     return NextResponse.json({ success: false, error: 'Policy not found' }, { status: 404 })
