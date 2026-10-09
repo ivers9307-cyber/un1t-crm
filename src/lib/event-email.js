@@ -22,9 +22,10 @@
 // tags PLUS {{event_name}}, {{team_name}}, {{when}}, {{location}}, (the
 // moved email only, EVENT-MOVE.1) {{old_event_name}}, {{old_when}}, and (the
 // price-difference link email, EVENT-MOVE.5) {{difference}},
-// {{old_event_name}}, {{pay_url}}, and (the confirmation and moved emails,
+// {{old_event_name}}, {{pay_url}}, (the confirmation and moved emails,
 // EVENT-MOVE.6) {{manage_url}}: the entry's own page, where the booker can
-// change the date.
+// change the date, and (the waitlist offer email, EVENT-WAITLIST.1)
+// {{claim_url}}.
 //
 // LIVE EMAILS: with no per-event config (all columns NULL) the shell output is
 // identical to the pre-refactor builders — locked by event-email.test.js.
@@ -76,6 +77,9 @@ export function applyEventMergeTags(text, contact, extras = {}) {
   // EVENT-MOVE.6 — the confirmation and moved emails set it: the signed link
   // to the entry's own page ("Change your date").
   out = out.replaceAll('{{manage_url}}', extras.manage_url || '')
+  // EVENT-WAITLIST.1 — set by the waitlist offer email (waitlist_email_*):
+  // the link to the event page that books the freed place.
+  out = out.replaceAll('{{claim_url}}', extras.claim_url || '')
   return out
 }
 
@@ -102,6 +106,7 @@ export function applyEventMergeTagsHtml(html, contact, extras = {}) {
     difference: escapeHtml(extras.difference || ''),
     pay_url: escapeHtml(extras.pay_url || ''),
     manage_url: escapeHtml(extras.manage_url || ''),
+    claim_url: escapeHtml(extras.claim_url || ''),
   }
   return applyEventMergeTags(html, safeContact, safeExtras)
 }
@@ -216,7 +221,7 @@ function renderOperatorIntro(text, contact, extras) {
 }
 
 /**
- * Resolve one event email (kind = 'confirmation' | 'reminder' | 'moved' | 'gap') against the
+ * Resolve one event email (kind = 'confirmation' | 'reminder' | 'moved' | 'gap' | 'waitlist') against the
  * per-event configuration on the race row. Returns { subject, htmlBody }.
  *
  * Precedence (see module header):
@@ -234,12 +239,14 @@ function renderOperatorIntro(text, contact, extras) {
  *
  * @param {object} args
  * @param {import('@supabase/supabase-js').SupabaseClient} [args.db]
- * @param {'confirmation'|'reminder'|'moved'|'gap'} args.kind  ('gap' = the
+ * @param {'confirmation'|'reminder'|'moved'|'gap'|'waitlist'} args.kind  ('gap' = the
  *   price-difference payment-link email, race_events.gap_email_subject/intro,
- *   mig 710; the receipt passes the race with that copy cleared)
+ *   mig 710; the receipt passes the race with that copy cleared; 'waitlist' =
+ *   the "a spot opened up" offer, race_events.waitlist_email_subject/intro,
+ *   mig 713)
  * @param {object} args.race     the race_events row (new EVENTS-EMAILCFG columns + accent_hex/hero_image_url)
  * @param {object} args.contact  merge contact ({ first_name, name, email, ... })
- * @param {object} args.extras   { event_name, team_name, when, location, old_event_name?, old_when?, difference?, pay_url?, manage_url? }
+ * @param {object} args.extras   { event_name, team_name, when, location, old_event_name?, old_when?, difference?, pay_url?, manage_url?, claim_url? }
  * @param {object} args.defaults default subject + shell slots for this email
  * @returns {Promise<{ subject: string, htmlBody: string }>}
  */

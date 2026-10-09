@@ -26,6 +26,7 @@ import { readRegistrationForMove } from '@/lib/registration-move'
 import { logError, logWarn } from '@/lib/log'
 import { syncOrderFromRacePayment } from '@/lib/orders'
 import { GAP_PAYMENT_KIND } from '@/lib/registration-entry'
+import { staffActorName } from '@/lib/staff-actor-name'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -42,12 +43,7 @@ const forbidden = () => NextResponse.json({ success: false, error: 'Forbidden' }
  * master acting as someone, see getCurrentUser's impersonatingFrom) the REAL
  * caller, "<master> as <user>", so the history reads true.
  */
-function actorName(user) {
-  const userName = user.full_name || user.email || 'staff'
-  const imp = user.impersonatingFrom
-  if (imp?.masterId) return `${imp.masterName || imp.masterEmail || 'master'} as ${userName}`
-  return userName
-}
+const actorName = staffActorName
 
 export async function POST(request, props) {
   const params = await props.params

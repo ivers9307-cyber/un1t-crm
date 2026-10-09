@@ -86,3 +86,12 @@ describe('events UpdateSchema — EVENT-MOVE.5 price-difference email copy', () 
     expect(() => UpdateSchema.parse({ gap_email_intro: 'y'.repeat(4001) })).toThrow()
   })
 })
+
+describe('events UpdateSchema — EVENT-WAITLIST.1 waitlist offer email copy', () => {
+  it('accepts, clears and bounds the two fields', () => {
+    expect(UpdateSchema.parse({ waitlist_email_subject: 'A spot at {{event_name}}' }).waitlist_email_subject).toContain('event_name')
+    expect(UpdateSchema.parse({ waitlist_email_intro: 'Book here: {{claim_url}}' }).waitlist_email_intro).toContain('claim_url')
+    expect(UpdateSchema.parse({ waitlist_email_intro: null }).waitlist_email_intro).toBeNull()
+    expect(() => UpdateSchema.parse({ waitlist_email_intro: 'y'.repeat(4001) })).toThrow()
+  })
+})

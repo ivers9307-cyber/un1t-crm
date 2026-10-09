@@ -656,6 +656,7 @@ registry.registerPath({
             email: email,
             phone: z.string().max(50).optional(),
             team_name: z.string().max(200).optional(),
+            waitlist_token: z.string().max(1000).optional().openapi({ description: 'EVENT-WAITLIST.1: the claim token from a waitlist offer link (?wl=); marks that waitlist row claimed once the registration exists. Never changes the answer.' }),
           }).openapi('EventRegisterBody'),
         },
       },
@@ -947,6 +948,113 @@ registry.registerPath({
     404: { description: "Entry or target event not found, or not this host's", content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'wave_full (resend with force) or conflict (the entry changed mid-move)', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'load_failed or write_failed; nothing changed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// EVENT-WAITLIST.1 — the waitlist for a sold-out event (mig 713). The public
+// join answers only "you're on the list"; the count and the list are staff and
+// host data.
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/events/{slug}/waitlist',
+  tags: ['Public'],
+  summary: 'Join the waitlist of a sold-out event',
+  description:
+    'Rate-limited 5 per 15 minutes per slug + IP. Refused when the event is not public (404), past (409 past), not taking signups (409 closed) ' +
+    'or has room in any time (409 has_room: book directly). One row per event + email; joining again refreshes it. Never answers a count or any capacity.',
+  request: {
+    params: z.object({ slug: z.string() }),
+    body: { content: { 'application/json': { schema: z.object({
+      name: z.string().min(1).max(200),
+      email: email,
+      phone: z.string().max(50).nullable().optional(),
+      headcount: z.number().int().min(1).max(50).optional().openapi({ description: 'Group size (one of the event\'s allowed team sizes)' }),
+      consent: z.boolean().optional().openapi({ description: 'Marketing consent checkbox, as on the register form' }),
+    }).openapi('EventWaitlistJoinBody') } } },
+  },
+  responses: {
+    200: { description: '{ id } of the waitlist row', content: { 'application/json': { schema: z.object({}).passthrough() } } },
+    400: { description: 'Validation failed, or a group size the event does not offer', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Event not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'has_room, past or closed', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'load_failed or write_failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/events/{id}/waitlist',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "An event's waitlist and how many are still waiting (staff, manager+ with races at the event's studio)",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ rows, waiting }', content: { 'application/json': { schema: z.object({}).passthrough().openapi('EventWaitlist') } } },
+    403: { description: "No races permission or manager role at the event's studio", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (or at a studio the caller cannot see)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'load_failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/events/{id}/waitlist/{rowId}',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "Take someone off an event's waitlist (status removed; staff, manager+ with races at the event's studio)",
+  request: { params: z.object({ id: uuidLike, rowId: uuidLike }) },
+  responses: {
+    200: { description: 'The removed row', content: { 'application/json': { schema: z.object({}).passthrough() } } },
+    403: { description: "No races permission or manager role at the event's studio", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Event or row not found, or the row is on another event', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'write_failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/events/{id}/waitlist/offer',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "Run the waitlist offer round for this event now (staff, manager+ with races at the event's studio)",
+  description: 'Forced: if any time has room, everyone still on the list is offered again at once, even if offered in the last 24 h (the cron keeps the 24 h rule). Email; WhatsApp when the studio has an APPROVED event_waitlist_offer template. Answers the round counts; no_room 1 = every time is full, nobody offered.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ events, offered, expired, skipped, failed, no_room }', content: { 'application/json': { schema: z.object({}).passthrough().openapi('EventWaitlistOfferResult') } } },
+    403: { description: "No races permission or manager role at the event's studio", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (or at a studio the caller cannot see)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'load_failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/host/events/{id}/waitlist',
+  tags: ['Host Portal'],
+  security: [{ CookieAuth: [] }],
+  summary: "The waitlist of one of the host's own events and how many are still waiting (read-only)",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ rows, waiting }', content: { 'application/json': { schema: z.object({}).passthrough() } } },
+    401: { description: 'Unauthorized: no host session', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: "Not found, or not this host's event", content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'load_failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/host/events/{id}/waitlist/offer',
+  tags: ['Host Portal'],
+  security: [{ CookieAuth: [] }],
+  summary: "Run the waitlist offer round now for one of the host's own events (forced past the 24 h rule: everyone on the list is offered again)",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ events, offered, expired, skipped, failed, no_room }', content: { 'application/json': { schema: z.object({}).passthrough() } } },
+    401: { description: 'Unauthorized: no host session', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: "Not found, or not this host's event", content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'load_failed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
