@@ -22,6 +22,11 @@ vi.mock('@/lib/permissions', () => ({
 }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => db }))
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn() }))
+let limitAllowed = true
+vi.mock('@/lib/rate-limit', () => ({
+  checkRateLimit: vi.fn(async () => (limitAllowed ? { allowed: true } : { allowed: false, retryAfterSec: 60 })),
+  rateLimitResponse: vi.fn((_l, message) => new Response(JSON.stringify({ success: false, error: message }), { status: 429 })),
+}))
 vi.mock('@/lib/event-waitlist', async (importOriginal) => ({ ...(await importOriginal()), runWaitlistOffers: vi.fn() }))
 
 const { runWaitlistOffers } = await import('@/lib/event-waitlist')
@@ -48,6 +53,7 @@ function staffDb({ race = RACE, rows = ROWS, removed = [{ id: ROW_ID, status: 'r
 
 beforeEach(() => {
   vi.clearAllMocks()
+  limitAllowed = true
   user = { id: 'u1', full_name: 'Sam Staff' }
   canRaces = true
   isManager = true
@@ -134,6 +140,16 @@ describe('POST /api/events/[id]/waitlist/offer', () => {
   it('gated like the list', async () => {
     canRaces = false
     expect((await OFFER(new Request('https://crm.test', { method: 'POST' }), props())).status).toBe(403)
+    expect(runWaitlistOffers).not.toHaveBeenCalled()
+  })
+})
+
+describe('Offer now throttle', () => {
+  it('over 3 an hour per event: 429 with a plain message, no round', async () => {
+    limitAllowed = false
+    const res = await OFFER(new Request('https://crm.test', { method: 'POST' }), props())
+    expect(res.status).toBe(429)
+    expect((await res.json()).error).toBe('Offer now can run 3 times an hour for an event. Try again later.')
     expect(runWaitlistOffers).not.toHaveBeenCalled()
   })
 })

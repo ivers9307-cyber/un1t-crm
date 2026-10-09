@@ -15,6 +15,9 @@ import { hasPermissionAtAnyLocation, hasPermissionForLocation } from './permissi
 import { MANAGER_ROLES, uuidLike } from './schemas'
 import { ACTIVE_WAITLIST_STATUSES, WAITLIST_ROW_COLUMNS } from './event-waitlist'
 import { logError } from './log'
+import { staffActorName } from './staff-actor-name'
+
+export { staffActorName }
 
 const PAGE = 1000
 const json = (status, body) => NextResponse.json(body, { status })
@@ -89,12 +92,4 @@ export async function listEventWaitlist(db, race) {
     if (!data || data.length < PAGE) break
   }
   return { rows, waiting: rows.filter((r) => ACTIVE_WAITLIST_STATUSES.includes(r.status)).length }
-}
-
-/** Who removed a row: the staff member, or "<master> as <user>" under impersonation. */
-export function staffActorName(user) {
-  const userName = user?.full_name || user?.email || 'staff'
-  const imp = user?.impersonatingFrom
-  if (imp?.masterId) return `${imp.masterName || imp.masterEmail || 'master'} as ${userName}`
-  return userName
 }

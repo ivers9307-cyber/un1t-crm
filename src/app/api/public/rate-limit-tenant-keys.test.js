@@ -27,6 +27,14 @@ vi.mock('@/lib/rate-limit', () => ({
 }))
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => ({})) }))
+// EVENT-WAITLIST.1 — the staff and host "Offer now" routes throttle AFTER
+// their gate; stub the gate so the limiter is the first thing that answers.
+vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), getCurrentUser: vi.fn(async () => ({ id: 'u1' })) }))
+vi.mock('@/lib/host-auth', async (importOriginal) => ({ ...(await importOriginal()), getCurrentHost: vi.fn(async () => ({ host: { id: 'h1' } })) }))
+vi.mock('@/lib/event-waitlist-access', () => ({
+  resolveStaffWaitlistEvent: vi.fn(async (_u, id) => ({ db: {}, race: { id, location_id: 'L1' } })),
+  resolveHostWaitlistEvent: vi.fn(async (_s, id) => ({ db: {}, race: { id, location_id: 'L1', host_id: 'h1' } })),
+}))
 
 import { checkRateLimit, peekRateLimit } from '@/lib/rate-limit'
 import { createServerClient } from '@/lib/supabase'
@@ -37,6 +45,8 @@ import { POST as eventRegisterPOST } from './events/[slug]/register/route.js'
 import { POST as raceRegisterPOST } from './races/[slug]/register/route.js'
 import { POST as checkMemberPOST } from './events/[slug]/check-member/route.js'
 import { POST as waitlistPOST } from './events/[slug]/waitlist/route.js'
+import { POST as staffOfferPOST } from '../events/[id]/waitlist/offer/route.js'
+import { POST as hostOfferPOST } from '../host/events/[id]/waitlist/offer/route.js'
 import { GET as classesGET } from './classes/route.js'
 import { POST as classBookingPOST } from './class-booking/route.js'
 import { POST as leadsPOST } from './leads/route.js'
@@ -128,6 +138,20 @@ describe('SAAS-6 tenant-keyed rate limits — swept call sites', () => {
     const res = await waitlistPOST(req('/api/public/events/city-race/waitlist', { method: 'POST', body: {} }), props({ slug: 'city-race' }))
     expect(res.status).toBe(429)
     expect(limiterKey()).toBe(`waitlist:city-race:${IP}`)
+  })
+
+  it('staff Offer now keys on the event id, 3 per hour (EVENT-WAITLIST.1)', async () => {
+    const res = await staffOfferPOST(req('/api/events/e1/waitlist/offer', { method: 'POST' }), props({ id: 'e1' }))
+    expect(res.status).toBe(429)
+    expect(limiterKey()).toBe('waitlist-offer:e1')
+    expect(checkRateLimit.mock.calls[0][2]).toEqual({ max: 3, windowMs: 3_600_000 })
+  })
+
+  it('host Offer now shares the same per-event key and budget (EVENT-WAITLIST.1)', async () => {
+    const res = await hostOfferPOST(req('/api/host/events/e1/waitlist/offer', { method: 'POST' }), props({ id: 'e1' }))
+    expect(res.status).toBe(429)
+    expect(limiterKey()).toBe('waitlist-offer:e1')
+    expect(checkRateLimit.mock.calls[0][2]).toEqual({ max: 3, windowMs: 3_600_000 })
   })
 
   it('race register keys on the race slug', async () => {
