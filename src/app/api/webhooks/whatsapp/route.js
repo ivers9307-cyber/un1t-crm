@@ -97,7 +97,9 @@ export async function POST(request) {
           continue
         }
         if (NUMBER_EVENT_FIELDS.has(change.field)) {
-          await handleNumberEvent(db, change.field, change.value)
+          // entry.id is the WABA — account-level events carry no phone number
+          // and are scoped to that WABA's locations (W0.13).
+          await handleNumberEvent(db, change.field, change.value, entry.id)
           continue
         }
         if (FLOW_EVENT_FIELDS.has(change.field)) {
@@ -936,10 +938,11 @@ async function handleFlowEvent(db, value) {
 
 // WA-HEALTH — number/account health webhooks (quality flags, limit tiers,
 // display-name decisions, account restrictions) → whatsapp_numbers columns +
-// manager push per affected location. Best-effort; never throws.
-async function handleNumberEvent(db, field, value) {
+// manager push per affected location. An unmatched event yields no locations
+// (logged inside applyNumberEvent, W0.13). Best-effort; never throws.
+async function handleNumberEvent(db, field, value, wabaId) {
   try {
-    const { locations, notify } = await applyNumberEvent(db, field, value)
+    const { locations, notify } = await applyNumberEvent(db, field, value, { wabaId })
     if (!notify) return
     for (const locationId of locations) {
       await sendPushToRolesAtLocation(locationId, MANAGER_ROLES, {
