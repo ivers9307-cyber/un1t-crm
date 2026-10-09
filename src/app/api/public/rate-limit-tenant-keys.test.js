@@ -50,7 +50,8 @@ import { GET as bcaMergedGET } from './bca/[token]/merged/route.js'
 import { GET as bookingTypeGET } from './bookings/[slug]/route.js'
 import { GET as slotsGET } from './bookings/[slug]/slots/route.js'
 import { GET as brandingGET } from './branding/route.js'
-import { GET as challengesGET } from './challenges/[locationId]/route.js'
+import { GET as tvChallengesGET } from './tv-challenges/[token]/route.js'
+import { GET as tvLiveGET } from './tv-live/[token]/route.js'
 import { GET as eventPaymentGET } from './event-payments/[id]/route.js'
 import { GET as eventRegistrationGET } from './event-registrations/[id]/route.js'
 import { GET as raceGET } from './events/[slug]/route.js'
@@ -296,10 +297,19 @@ describe('H2a — remaining public routes are rate limited', () => {
     expect(checkRateLimit.mock.calls[1][1]).toBe(`pubbranding:${LOC_A}:${IP}`)
   })
 
-  it('challenges TV board keys on the location', async () => {
-    const res = await challengesGET(req(`/api/public/challenges/${LOC_A}`), props({ locationId: LOC_A }))
+  // W0.9c — the TV boards are token-keyed only (the location-keyed
+  // /api/public/live|challenges/[locationId] routes are gone). The limiter
+  // runs BEFORE the token lookup so an enumeration attempt is still capped.
+  it('challenges TV board keys on the display token', async () => {
+    const res = await tvChallengesGET(req('/api/public/tv-challenges/tok-a'), props({ token: 'tok-a' }))
     expect(res.status).toBe(429)
-    expect(limiterKey()).toBe(`pubchallenges:${LOC_A}:${IP}`)
+    expect(limiterKey()).toBe(`tv-challenges:tok-a:${IP}`)
+  })
+
+  it('live TV board keys on the display token', async () => {
+    const res = await tvLiveGET(req('/api/public/tv-live/tok-a'), props({ token: 'tok-a' }))
+    expect(res.status).toBe(429)
+    expect(limiterKey()).toBe(`tv-live:tok-a:${IP}`)
   })
 
   it('event-payment status keys on IP alone (anti-enumeration — the enumerator varies the UUID)', async () => {

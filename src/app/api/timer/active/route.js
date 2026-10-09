@@ -11,7 +11,7 @@
 //     `class_timer` entries in either `profile_locations.permissions` or
 //     `location_role_permissions` — so no tier denies anyone today.
 //   • The studio TV reads timer state out of the public board payload
-//     (/api/public/live), not this route.
+//     (/api/public/tv-live/[token]), not this route.
 //   • Mobile IS a caller here (mobile/lib/timer-api.js → the staff timer
 //     screen). It gates on `class_timer` via `canMobile`, and because
 //     `class_timer` is a CROSS_PLATFORM_KEY that routes to the TOP-LEVEL web

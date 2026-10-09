@@ -619,18 +619,6 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'get',
-  path: '/api/public/challenges/{locationId}',
-  tags: ['Public'],
-  summary: 'Public challenge board for a location',
-  request: { params: z.object({ locationId: uuidLike }) },
-  responses: {
-    200: { description: 'Challenge board', content: { 'application/json': { schema: z.object({}).passthrough().openapi('PublicChallengesResponse') } } },
-    404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
-  },
-})
-
-registry.registerPath({
-  method: 'get',
   path: '/api/public/events/{slug}',
   tags: ['Public'],
   summary: 'Event detail for a public event slug',
@@ -986,18 +974,6 @@ registry.registerPath({
     200: { description: 'Payment initiated or confirmed' },
     400: { description: 'Validation failed or deposit already paid', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Not found or expired', content: { 'application/json': { schema: ErrorResponse } } },
-  },
-})
-
-registry.registerPath({
-  method: 'get',
-  path: '/api/public/live/{locationId}',
-  tags: ['Public'],
-  summary: 'Public live / TV state feed for a location',
-  request: { params: z.object({ locationId: uuidLike }) },
-  responses: {
-    200: { description: 'Live state', content: { 'application/json': { schema: z.object({}).passthrough().openapi('PublicLiveState') } } },
-    404: { description: 'Location not found', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

@@ -159,9 +159,11 @@ export async function proxy(request) {
   }
 
   // Public routes that don't require auth.
-  // /tv/ — big-screen kiosk displays (HR live board, future race
-  // display moves here too). TV browsers don't have CRM accounts
-  // and shouldn't need them; the API endpoints under /api/public/
+  // /tv/ — big-screen kiosk displays: /tv/live/[token] (HR live board +
+  // its /challenges twin) and /tv/cast/[token] (UC Cast). Every board is
+  // token-gated since W0.9c (the location-keyed /tv/[locationId] is gone);
+  // the token in the URL is the bearer secret. TV browsers don't have CRM
+  // accounts and shouldn't need them; the API endpoints under /api/public/
   // expose only display-safe data.
   // /ffmpeg/ — the self-hosted ffmpeg.wasm worker + core/wasm (landing-
   // page in-browser video compression). ffmpeg fetches these like a
