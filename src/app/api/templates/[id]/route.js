@@ -22,8 +22,10 @@ const TemplateUpdateSchema = z.object({
 
 // W0.11 — a template with no location belongs to the platform, not to any
 // tenant: assertLocationAccessOr404 passes a null location through and the
-// permission check was skipped for it, so any staff member anywhere could
-// read, edit or delete it by id. Platform rows are master-only.
+// permission check was skipped for it, so a non-master anywhere could READ
+// it by id (GET), while a master could not edit or delete it at all (PUT and
+// DELETE 404'd a null location as "missing"). Platform rows are now
+// master-only on all three verbs.
 function platformTemplateGuard(user, locationId) {
   if (locationId) return null
   const isMaster = user.isMaster || user.role === 'master' || user.profileRole === 'master'
