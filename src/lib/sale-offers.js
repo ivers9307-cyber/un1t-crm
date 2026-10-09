@@ -78,9 +78,10 @@ export async function markOfferPurchaseState({ db, purchase, providerState }) {
 }
 
 // Resolve the buyer to a CRM contact (org-scoped — the public-form rule from
-// LEADCAP.1: contacts_email_unique is GLOBAL, restrictToOrg keeps a known
-// email from 500ing and from resolving a stranger's row) and tag them in
-// BOTH tag systems (contacts.tags text[] + contact_tags rows).
+// LEADCAP.1, and the helper's default since W0.6: contacts_email_org_unique
+// (mig 712) is per organisation, so restrictToOrg keeps a known email from
+// resolving a stranger's row in another tenant) and tag them in BOTH tag
+// systems (contacts.tags text[] + contact_tags rows).
 export async function linkOrCreateContactForPurchase(db, purchase) {
   const contactId = await findOrCreateRaceContact({
     db,
