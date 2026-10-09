@@ -1780,7 +1780,7 @@ registry.registerPath({
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
   summary: 'Link (or create) the contact for a conversation\u2019s sender',
-  description: 'EMAIL-CONTACT-CHIP.2 \u2014 resolves conversation.requester_email to a contact via findOrCreateRaceContact (restrictToOrg: true, the LEADCAP.1 create-or-link helper \u2014 email is globally unique on contacts). Idempotent: a conversation that already carries contact_id answers 200 with that contact rather than erroring or re-linking. Backfills contact_id onto the conversation\u2019s own messages that have none, mirroring what the inbound webhook denormalises at ingest. Gated through loadConversationForUser like every conversation write: 404, never 403, for a conversation that does not exist, is at a location the caller cannot reach, is on a mailbox they cannot see, or is at a location where they lack email_inbox.',
+  description: 'EMAIL-CONTACT-CHIP.2 \u2014 resolves conversation.requester_email to a contact via findOrCreateRaceContact (restrictToOrg: true, the LEADCAP.1 create-or-link helper \u2014 email is unique per organisation on contacts, mig 712). Idempotent: a conversation that already carries contact_id answers 200 with that contact rather than erroring or re-linking. Backfills contact_id onto the conversation\u2019s own messages that have none, mirroring what the inbound webhook denormalises at ingest. Gated through loadConversationForUser like every conversation write: 404, never 403, for a conversation that does not exist, is at a location the caller cannot reach, is on a mailbox they cannot see, or is at a location where they lack email_inbox.',
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: 'Linked (or already-linked) contact: { id, name, first_name, email, pipeline_stage_slug }' },
@@ -2767,9 +2767,10 @@ registry.registerPath({
   request: { body: { content: { 'application/json': { schema: ContactCreate } } } },
   responses: {
     200: { description: 'Contact created', content: { 'application/json': { schema: SuccessResponse(Contact) } } },
-    400: { description: 'Validation failed, or location_id missing (cookie callers and per-organisation keys)', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: 'Validation failed, location_id missing (cookie callers and per-organisation keys), or the insert failed (generic message; the database error is logged, never echoed)', content: { 'application/json': { schema: ErrorResponse } } },
     401: { description: 'Unauthorized, or (cookie caller) not Manager+ at location_id', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Per-organisation API key: location_id is not in your organisation. Cookie caller: not a member of location_id.', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'A contact with this email already exists in your organisation', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -2785,9 +2786,10 @@ registry.registerPath({
   },
   responses: {
     200: { description: 'Contact updated', content: { 'application/json': { schema: SuccessResponse(Contact) } } },
-    400: { description: 'Validation failed', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: 'Validation failed, or the update failed (generic message; the database error is logged, never echoed)', content: { 'application/json': { schema: ErrorResponse } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'No such contact (or a malformed id), or (cookie caller) not Manager+ at its location; per-organisation keys: not in your organisation', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'A contact with this email already exists in your organisation', content: { 'application/json': { schema: ErrorResponse } } },
     503: { description: 'The contact could not be read just now; nothing was changed. Retry.', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })

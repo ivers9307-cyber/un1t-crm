@@ -1062,7 +1062,7 @@ describe('reusableSibling', () => {
     expect(reusableSibling(anchor, phoneOnly, { viaGroup: true })).toBe(true)
   })
 
-  it('accepts an exact email match with no group at all (contacts_email_unique is global)', () => {
+  it('accepts an exact email match with no group at all (contacts_email_org_unique: one address, one person in an org)', () => {
     expect(reusableSibling(anchor, emailOnly)).toBe(true)
   })
 
