@@ -10,7 +10,8 @@ import { renderToStaticMarkup } from 'react-dom/server'
 
 vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
-vi.mock('@/lib/policies', () => ({
+vi.mock('@/lib/policies', async (importOriginal) => ({
+  ...(await importOriginal()),
   currentVersionOpenCounts: vi.fn(async () => ({ viewerCount: new Map(), activeStaffCount: 0 })),
   listPoliciesWithStatus: vi.fn(async () => []),
   listVersions: vi.fn(async () => []),
