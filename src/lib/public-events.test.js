@@ -97,3 +97,27 @@ describe('toBrowseCard time + venue (HOST-EVENTS-PAGE.1)', () => {
     expect(toBrowseCard({ slug: 'x', name: 'X', kind: 'race', race_date: '2026-10-18', waves: [] }).venue).toBeNull()
   })
 })
+
+describe('toBrowseCard registration closed (HOST-EVENTS-PAGE.2)', () => {
+  const base = { slug: 'ptc-oct18', name: 'PTC', kind: 'masterclass', race_date: '2026-10-18', non_member_fee_cents: 1500 }
+  const NOW = Date.parse('2026-10-09T12:00:00Z')
+
+  it('badge "Registration closed" and closed=true once registration_closes_at has passed', () => {
+    const c = toBrowseCard({ ...base, registration_closes_at: '2026-10-08T18:00:00Z' }, { soldOut: false, now: NOW })
+    expect(c.badge).toBe('Registration closed')
+    expect(c.closed).toBe(true)
+  })
+  it('closed wins over sold out (nothing to buy either way)', () => {
+    const c = toBrowseCard({ ...base, registration_closes_at: '2026-10-08T18:00:00Z' }, { soldOut: true, now: NOW })
+    expect(c.badge).toBe('Registration closed')
+  })
+  it('an open event is unchanged: no badge, closed=false', () => {
+    const c = toBrowseCard({ ...base, registration_closes_at: '2026-10-17T18:00:00Z' }, { soldOut: false, now: NOW })
+    expect(c.badge).toBeNull()
+    expect(c.closed).toBe(false)
+  })
+  it('"Opens" still takes precedence; sold-out unchanged while open', () => {
+    expect(toBrowseCard({ ...base, registration_opens_at: '2026-10-12T09:00:00Z', registration_closes_at: '2026-10-17T18:00:00Z' }, { now: NOW }).badge).toBe('Opens 12 Oct')
+    expect(toBrowseCard(base, { soldOut: true, now: NOW })).toMatchObject({ badge: 'Sold out', closed: false })
+  })
+})
