@@ -419,7 +419,12 @@ async function landPendingMove({ db, payment, pendingMove, nowIso, paidCents }) 
     const patch = { registration_move_id: moveId }
     if (mismatch) {
       patch.metadata = { ...(payment.metadata || {}), gap_mismatch: { paid, gap } }
-      logWarn('race-gap-payment', 'the paid difference differs from the gap the move recorded; check the move', {
+      // Underpaid pages (Sentinel reads error-level): the chip shows the full
+      // gap and staff could charge it again on top of what was paid.
+      const log = paid < gap ? logError : logWarn
+      log('race-gap-payment', paid < gap
+        ? 'the customer paid LESS than the gap the move recorded; the difference is left outstanding, check before charging again'
+        : 'the paid difference differs from the gap the move recorded; check the move', {
         paymentId: payment.id, moveId, paid, gap, settled: paid >= gap,
       })
     }

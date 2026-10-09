@@ -644,12 +644,14 @@ describe('landPendingMove — the paid amount against the move\'s own gap (revie
     expect(linkPatch(db)).toEqual({ registration_move_id: 'mvNew' })
     expect(db.queries.some((q) => q.table === 'registration_moves')).toBe(true)
   })
-  it('underpaid (the price rose while they paid): records the mismatch, warns, and does NOT settle', async () => {
+  it('underpaid (the price rose while they paid): records the mismatch, logs an error, and does NOT settle', async () => {
     moveRegistration.mockResolvedValue({ ok: true, move: { id: 'mvNew', price_gap_cents: 1500 }, notified: true })
     const db = fakeDb()
     await complete(db)
     expect(linkPatch(db)).toEqual({ registration_move_id: 'mvNew', metadata: { pending_move: PM, gap_mismatch: { paid: 1000, gap: 1500 } } })
-    expect(logWarn).toHaveBeenCalledWith('race-gap-payment', expect.stringContaining('differs'), expect.objectContaining({ paid: 1000, gap: 1500 }))
+    // Underpaid pages: error level, so Sentinel sees it before staff charge the full gap again.
+    expect(logError).toHaveBeenCalledWith('race-gap-payment', expect.stringContaining('LESS'), expect.objectContaining({ paid: 1000, gap: 1500 }))
+    expect(logWarn).not.toHaveBeenCalledWith('race-gap-payment', expect.stringContaining('differs'), expect.anything())
     expect(db.queries.some((q) => q.table === 'registration_moves')).toBe(false)
   })
   it('overpaid (the price fell): records the mismatch, warns, and settles', async () => {
