@@ -17,9 +17,10 @@ export const dynamic = 'force-dynamic'
 // Same formula as /policies/manage's own gate (server-checked here too
 // — this only controls whether the CTA is offered, the destination
 // page enforces the real gate independently either way).
-// C141 ORGROLE.2 — managing policies is MASTER ONLY (Richard, 2 Oct): the
-// policies table has no organisation, so a version reaches every studio.
-// canManagePolicies lives in src/lib/policies-access.js.
+// C141 ORGROLE.2 — managing policies is MASTER ONLY (Richard, 2 Oct);
+// canManagePolicies lives in src/lib/policies-access.js. W0.5 (mig 713) —
+// policies belong to an organisation: the list is the caller's active
+// organisation's policies only (listPoliciesWithStatus).
 
 function fmtDate(iso) {
   if (!iso) return ''

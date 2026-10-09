@@ -18,6 +18,7 @@ import { ensureMediaRehosted } from '@/lib/whatsapp-media-server'
 import { captureInboundBsuid } from '@/lib/whatsapp-bsuid'
 import { parseEchoMessages, parseSyncContacts, parseHistoryMessages, nextHistorySyncState, parseAccountUpdateEvent, nextCoexistenceLinkState, COEX_LINK_EVENTS } from '@/lib/whatsapp-coexistence'
 import { syncContactMatchOnly, ingestCoexistenceMessage } from '@/lib/whatsapp-coexistence-ingest'
+import { orgLocationIdsFor, scopeFor } from '@/lib/inbound-contact-match'
 
 // Force Node.js runtime — we use node:crypto for HMAC verification.
 export const runtime = 'nodejs'
@@ -226,14 +227,20 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
   // COMMS-AUDIT 2026-07-10 — the phone can match contacts at SEVERAL
   // locations (multi-gym members, shared numbers). Prefer the contact in
   // the receiving number's location (resolved above); only fall back to a
-  // cross-location match when none exists in-location, with an explicit
-  // order (oldest contact first) so the fallback is deterministic instead
-  // of Postgres row order. The matched contact's location still decides
-  // the conversation's location below — this just stops a random
+  // match at a SIBLING location when none exists in-location, with an
+  // explicit order (oldest contact first) so the fallback is deterministic
+  // instead of Postgres row order. The matched contact's location still
+  // decides the conversation's location below — this just stops a random
   // other-location contact hijacking a thread that belongs here.
+  //
+  // W0.2 — ORG-scoped: a match may come from the receiving number's
+  // organisation only (its own location first, siblings second — the
+  // pickInboundContact preference is unchanged). Never another tenant's row.
+  const orgLocIds = await orgLocationIdsFor(db, defaultLocationId)
   let contact = null
   const { data: existingContacts } = await db.from('contacts')
     .select('id, location_id')
+    .in('location_id', scopeFor(orgLocIds))
     .or(`wa_phone.eq.${phoneWithout},wa_phone.eq.${phoneWithPlus},phone.eq.${phoneWithout},phone.eq.${phoneWithPlus}`)
     .order('created_at', { ascending: true })
     .order('id', { ascending: true })
@@ -787,7 +794,7 @@ async function handleCoexistenceEvent(db, field, value) {
 
   if (field === 'smb_app_state_sync') {
     for (const c of parseSyncContacts(value)) {
-      try { await syncContactMatchOnly(db, c) } catch (e) { console.error('[wa-webhook] sync contact failed:', e?.message) }
+      try { await syncContactMatchOnly(db, { ...c, locationId }) } catch (e) { console.error('[wa-webhook] sync contact failed:', e?.message) }
     }
     return
   }

@@ -29,6 +29,7 @@ let tables
 beforeEach(() => {
   vi.clearAllMocks()
   vi.stubEnv('CRM_API_KEY', GLOBAL_KEY)
+  vi.stubEnv('CRM_API_KEY_ORG_ID', 'org-1')
   tables = twoOrgFixture()
   db = makeFakeDb(tables)
 })
@@ -38,9 +39,16 @@ afterEach(() => {
 })
 
 describe('authenticateApiKey', () => {
-  it('legacy shared CRM_API_KEY → ok, unscoped (orgId null, legacy)', async () => {
+  it('legacy shared CRM_API_KEY → ok, scoped to CRM_API_KEY_ORG_ID (W0.1)', async () => {
     const auth = await authenticateApiKey(req(GLOBAL_KEY))
-    expect(auth).toEqual({ ok: true, orgId: null, legacy: true })
+    expect(auth).toEqual({ ok: true, orgId: 'org-1', legacy: true })
+  })
+
+  it('legacy shared key with CRM_API_KEY_ORG_ID unset → 401 (fail closed)', async () => {
+    vi.stubEnv('CRM_API_KEY_ORG_ID', '')
+    const auth = await authenticateApiKey(req(GLOBAL_KEY))
+    expect(auth.ok).toBe(false)
+    expect(auth.response.status).toBe(401)
   })
 
   it('active per-org key → ok with the key\'s organization', async () => {
@@ -77,9 +85,17 @@ describe('requireApiKeyOrManager', () => {
     expect(getCurrentUser).not.toHaveBeenCalled()
   })
 
-  it('legacy shared key → ok, unscoped — behaviour unchanged', async () => {
+  it('legacy shared key → ok, scoped to CRM_API_KEY_ORG_ID', async () => {
     const auth = await requireApiKeyOrManager(req(GLOBAL_KEY))
-    expect(auth).toEqual({ ok: true, user: null, orgId: null })
+    expect(auth).toEqual({ ok: true, user: null, orgId: 'org-1' })
+    expect(getCurrentUser).not.toHaveBeenCalled()
+  })
+
+  it('legacy shared key with CRM_API_KEY_ORG_ID unset → 401, no cookie fallback (fail closed)', async () => {
+    vi.stubEnv('CRM_API_KEY_ORG_ID', '')
+    const auth = await requireApiKeyOrManager(req(GLOBAL_KEY))
+    expect(auth.ok).toBe(false)
+    expect(auth.response.status).toBe(401)
     expect(getCurrentUser).not.toHaveBeenCalled()
   })
 

@@ -102,7 +102,8 @@ const put = (body) => PUT(
 
 beforeEach(() => {
   vi.clearAllMocks()
-  authenticateApiKey.mockResolvedValue({ ok: true, orgId: null, legacy: true })
+  // W0.1 — the legacy key resolves to CRM_API_KEY_ORG_ID; orgId null no longer occurs.
+  authenticateApiKey.mockResolvedValue({ ok: true, orgId: ORG, legacy: true })
 })
 
 describe('PUT /api/locations/[id]/integrations: the echo (N8NECHO.1)', () => {

@@ -22,6 +22,7 @@ const req = (token, qs = '') =>
 
 beforeEach(() => {
   vi.stubEnv('CRM_API_KEY', GLOBAL_KEY)
+  vi.stubEnv('CRM_API_KEY_ORG_ID', 'org-1') // W0.1 — legacy key = org-1's key
   db = makeFakeDb(twoOrgFixture())
 })
 
@@ -30,12 +31,12 @@ afterEach(() => {
 })
 
 describe('GET /api/tasks — API-key callers', () => {
-  it('legacy CRM_API_KEY lists every org\'s tasks without crashing (assimilation regression)', async () => {
+  it('legacy CRM_API_KEY lists only its org\'s tasks without crashing (W0.1 scoped; assimilation regression)', async () => {
     const res = await GET(req(GLOBAL_KEY))
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.success).toBe(true)
-    expect(body.data.map((t) => t.id).sort()).toEqual(['t1', 't2'])
+    expect(body.data.map((t) => t.id)).toEqual(['t1'])
   })
 
   it('per-org key sees only its own org\'s tasks, with later filters intact', async () => {
