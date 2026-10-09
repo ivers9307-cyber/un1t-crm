@@ -3,7 +3,8 @@
 // each linking to the existing /event/[slug] page to book and pay. Server
 // component; dark like the rest of the public surfaces. Cards carry date,
 // time, venue, price and a "Sold out" (red, white text — Richard, 7 Oct) /
-// "Opens <date>" badge — never a count or a capacity (that boolean is all
+// "Opens <date>" / "Registration closed" badge (a closed card is listed but is
+// not a link: HOST-EVENTS-PAGE.2) — never a count or a capacity (that boolean is all
 // that leaves the server).
 import Link from 'next/link'
 
@@ -37,29 +38,42 @@ export default function HostPublicEvents({ hostName, headline, blurb, heroUrl, a
         <ul className="mt-8 grid gap-5 sm:grid-cols-2">
           {cards.map((c) => {
             const soldOut = c.badge === 'Sold out'
-            return (
-              <li key={c.slug}>
-                <Link
-                  href={`/event/${c.slug}`}
-                  className="group block h-full rounded-2xl border border-white/15 p-6 transition-colors hover:border-white/40"
-                >
-                  <div className="mb-4 flex items-center justify-between gap-3">
-                    <span className="rounded-full border border-white/20 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-white/70">{c.kindLabel}</span>
-                    {c.badge && (
-                      <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${soldOut ? 'bg-red-600 text-white' : 'bg-white/15 text-white'}`}>{c.badge}</span>
-                    )}
-                  </div>
-                  <p className="mb-1 text-xs text-white/55">
-                    {c.dateLabel}{c.timeLabel ? ` · ${c.timeLabel}` : ''}{c.venue ? ` · ${c.venue}` : ''}
-                  </p>
-                  <h2 className="mb-4 text-xl font-semibold transition-transform group-hover:translate-x-0.5">{c.title}</h2>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-white/70">{c.priceLabel}</span>
+            const closed = c.closed === true
+            const badgeEl = c.badge && (
+              <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${soldOut || closed ? 'bg-red-600 text-white' : 'bg-white/15 text-white'}`}>{c.badge}</span>
+            )
+            const body = (
+              <>
+                <div className="mb-4 flex items-center justify-between gap-3">
+                  <span className="rounded-full border border-white/20 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-white/70">{c.kindLabel}</span>
+                  {badgeEl}
+                </div>
+                <p className="mb-1 text-xs text-white/55">
+                  {c.dateLabel}{c.timeLabel ? ` · ${c.timeLabel}` : ''}{c.venue ? ` · ${c.venue}` : ''}
+                </p>
+                <h2 className={`mb-4 text-xl font-semibold ${closed ? '' : 'transition-transform group-hover:translate-x-0.5'}`}>{c.title}</h2>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-white/70">{c.priceLabel}</span>
+                  {!closed && (
                     <span className="inline-flex items-center gap-1 text-sm font-semibold" style={{ color: soldOut ? undefined : accent }}>
                       {soldOut ? 'View' : 'View & book'} <span aria-hidden className="transition-transform group-hover:translate-x-1">→</span>
                     </span>
-                  </div>
-                </Link>
+                  )}
+                </div>
+              </>
+            )
+            return (
+              <li key={c.slug}>
+                {closed ? (
+                  <div className="block h-full rounded-2xl border border-white/10 p-6 opacity-70">{body}</div>
+                ) : (
+                  <Link
+                    href={`/event/${c.slug}`}
+                    className="group block h-full rounded-2xl border border-white/15 p-6 transition-colors hover:border-white/40"
+                  >
+                    {body}
+                  </Link>
+                )}
               </li>
             )
           })}
