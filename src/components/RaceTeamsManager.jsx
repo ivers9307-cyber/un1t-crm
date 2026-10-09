@@ -163,6 +163,15 @@ function actorOf(move) {
   return name || 'staff'
 }
 
+// EVENT-MOVE.3 — a settled difference shows nothing on the card except this
+// note on the "Moved from" tooltip: how, who and when.
+function settledNote(move) {
+  if (!move?.gap_settled_at) return ''
+  const how = move.gap_settled_how === 'waived' ? 'waived' : 'collected'
+  const who = (typeof move.gap_settled_by_name === 'string' && move.gap_settled_by_name.trim()) || 'staff'
+  return ` · difference ${how} by ${who} on ${new Date(move.gap_settled_at).toLocaleDateString('en-IE')}`
+}
+
 // Cents in the event's currency (same rendering as MoveEntryDialog).
 function money(cents, currency = 'EUR') {
   const major = (Math.abs(cents) / 100).toFixed(2)
@@ -378,6 +387,38 @@ function TeamCard({ registration, waves, onChanged, onError, onNotice, canCancel
     }
   }
 
+  // EVENT-MOVE.3 — record that the move's price difference was collected
+  // (a payment link, cash, …) or waived. Records a decision, never moves
+  // money; only SQL can undo it, so ask first, like Cancel entry.
+  async function settleGap(how) {
+    const move = registration.last_move
+    if (!move?.id) return
+    if (!confirm(`Mark the ${money(move.price_gap_cents, currency)} difference as ${how}?`)) return
+    setBusy(true)
+    try {
+      const r = await fetch(`/api/event-registrations/${registration.id}/moves/${move.id}/settle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ how }),
+      })
+      const j = await r.json()
+      if (!r.ok || j.success === false) onError(j.message || j.error || 'Could not save the difference')
+      else {
+        // Someone settled it first, the other way: say so rather than let
+        // the reload quietly show an answer that is not the one clicked.
+        const stood = j.data?.unchanged ? j.data.move : null
+        if (stood?.gap_settled_how && stood.gap_settled_how !== how) {
+          onNotice(`Already marked ${stood.gap_settled_how} by ${(typeof stood.gap_settled_by_name === 'string' && stood.gap_settled_by_name.trim()) || 'staff'}.`)
+        }
+        onChanged()
+      }
+    } catch (e) {
+      onError(e.message || 'Network error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function removeRegistration() {
     if (!confirm(`Remove team "${team?.name}" from this race?`)) return
     setBusy(true)
@@ -412,7 +453,7 @@ function TeamCard({ registration, waves, onChanged, onError, onNotice, canCancel
           {registration.last_move && (
             <span
               className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-sky-500/10 text-sky-700 inline-flex items-center gap-1"
-              title={`Moved from ${registration.last_move.from_event?.name || 'another event'} by ${actorOf(registration.last_move)} on ${new Date(registration.last_move.created_at).toLocaleDateString('en-IE')}${registration.last_move.forced ? ' (wave was full)' : ''}`}
+              title={`Moved from ${registration.last_move.from_event?.name || 'another event'} by ${actorOf(registration.last_move)} on ${new Date(registration.last_move.created_at).toLocaleDateString('en-IE')}${registration.last_move.forced ? ' (wave was full)' : ''}${settledNote(registration.last_move)}`}
             >
               <ArrowRightCircle size={10} /> Moved from {registration.last_move.from_event?.name || 'another event'}
             </span>
@@ -425,9 +466,33 @@ function TeamCard({ registration, waves, onChanged, onError, onNotice, canCancel
               Not emailed
             </span>
           )}
-          {registration.last_move?.price_gap_cents > 0 && (
-            <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-amber-500/10 text-amber-700">
-              {money(registration.last_move.price_gap_cents, currency)} difference outstanding
+          {registration.last_move?.price_gap_cents > 0 && !registration.last_move.gap_settled_at && (
+            <span className="inline-flex items-center gap-2">
+              <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-amber-500/10 text-amber-700">
+                {money(registration.last_move.price_gap_cents, currency)} difference outstanding
+              </span>
+              {canMove && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => settleGap('collected')}
+                    disabled={busy}
+                    className="text-[11px] text-un1t-accent hover:underline disabled:opacity-40"
+                    title="The customer has paid the difference (payment link, cash, …)"
+                  >
+                    Collected
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => settleGap('waived')}
+                    disabled={busy}
+                    className="text-[11px] text-un1t-accent hover:underline disabled:opacity-40"
+                    title="Let the difference go; the customer owes nothing more"
+                  >
+                    Waived
+                  </button>
+                </>
+              )}
             </span>
           )}
         </div>

@@ -786,6 +786,32 @@ registry.registerPath({
   },
 })
 
+// EVENT-MOVE.3 — staff record that a move's price difference was collected
+// or waived. Records a decision; never moves money.
+registry.registerPath({
+  method: 'post',
+  path: '/api/event-registrations/{id}/moves/{moveId}/settle',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "Mark a moved entry's price difference collected or waived; never moves money (staff, manager+ with races at the entry's current studio)",
+  description:
+    'Idempotent: a settled move answers 200 with `unchanged: true`, and the write is a compare-and-set, so the first answer stands. ' +
+    '400 no_gap when the move left nothing to settle; 404 when the move is missing or not this entry\'s.',
+  request: {
+    params: z.object({ id: uuidLike, moveId: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      how: z.enum(['collected', 'waived']),
+    }).openapi('EntryMoveSettleRequest') } } },
+  },
+  responses: {
+    200: { description: '{ unchanged, move } — the settled move row', content: { 'application/json': { schema: z.object({}).passthrough().openapi('EntryMoveSettleResult') } } },
+    400: { description: 'A bad body, or no_gap', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: "No races permission or manager role at the entry's studio", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Entry or move not found (or at a studio the caller cannot see)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'load_failed or write_failed; nothing changed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // EVENT-MOVE.2 — a host moves one of their own entries to another of their
 // OWN events. Same lib and shapes as the staff routes above.
 registry.registerPath({

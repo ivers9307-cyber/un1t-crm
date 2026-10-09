@@ -16,6 +16,9 @@ import path from 'node:path'
 import { PGlite } from '@electric-sql/pglite'
 
 const MIG_708 = readFileSync(path.resolve(import.meta.dirname, '../supabase/migrations/708_registration_moves.sql'), 'utf8')
+// EVENT-MOVE.3 — 709 adds the gap_settled_* columns; applied on top of 708 in
+// its own describe at the end, so every test above still runs 708 alone.
+const MIG_709 = readFileSync(path.resolve(import.meta.dirname, '../supabase/migrations/709_registration_moves_gap_settled.sql'), 'utf8')
 
 const L1 = 'a0000000-0000-0000-0000-0000000000a1'
 const L2 = 'a0000000-0000-0000-0000-0000000000a2'
@@ -224,6 +227,48 @@ describe('move_race_registration — closed to clients', () => {
     const fn = 'public.move_race_registration(uuid, uuid, uuid, uuid, int, int, boolean, text, uuid, text, text)'
     for (const role of ['anon', 'authenticated']) {
       expect((await one(`SELECT has_function_privilege('${role}', '${fn}', 'EXECUTE') AS ok`)).ok).toBe(false)
+      expect((await one(`SELECT has_table_privilege('${role}', 'public.registration_moves', 'SELECT') AS ok`)).ok).toBe(false)
+    }
+  })
+})
+
+describe('mig 709 — gap_settled_* on registration_moves', () => {
+  beforeEach(async () => { await run(MIG_709) })
+
+  it('a move still records, with the gap outstanding, and the function returns the new columns', async () => {
+    const move = await one(MOVE, [R1, E1, E2, W2])
+    expect(move).toMatchObject({ price_gap_cents: 1000, gap_settled_at: null, gap_settled_how: null, gap_settled_by_name: null })
+  })
+
+  it('the compare-and-set settles once; a second write matches no row', async () => {
+    const { id } = await one(MOVE, [R1, E1, E2, W2])
+    const settle = `UPDATE registration_moves SET gap_settled_at = now(), gap_settled_how = $2, gap_settled_by_name = $3
+                     WHERE id = $1 AND gap_settled_at IS NULL RETURNING id`
+    expect((await all(settle, [id, 'collected', 'Richard']))).toHaveLength(1)
+    expect((await all(settle, [id, 'waived', 'Colm']))).toHaveLength(0)
+    expect(await one('SELECT gap_settled_how, gap_settled_by_name FROM registration_moves WHERE id = $1', [id]))
+      .toEqual({ gap_settled_how: 'collected', gap_settled_by_name: 'Richard' })
+  })
+
+  it('refuses a how outside collected | waived, and re-applies cleanly', async () => {
+    const { id } = await one(MOVE, [R1, E1, E2, W2])
+    const err = await db.query('UPDATE registration_moves SET gap_settled_how = $2 WHERE id = $1', [id, 'refunded']).then(() => null, (e) => e)
+    expect(err?.code).toBe('23514')
+    await run(MIG_709)
+  })
+
+  it.each([
+    ['a time with no how', 'gap_settled_at = now()'],
+    ['a how with no time', "gap_settled_how = 'waived'"],
+  ])('refuses a half-settled row: %s', async (_name, set) => {
+    const { id } = await one(MOVE, [R1, E1, E2, W2])
+    const err = await db.query(`UPDATE registration_moves SET ${set} WHERE id = $1`, [id]).then(() => null, (e) => e)
+    expect(err?.code).toBe('23514')
+    expect(err?.message).toMatch(/registration_moves_gap_settled_consistent/)
+  })
+
+  it('stays closed to clients', async () => {
+    for (const role of ['anon', 'authenticated']) {
       expect((await one(`SELECT has_table_privilege('${role}', 'public.registration_moves', 'SELECT') AS ok`)).ok).toBe(false)
     }
   })

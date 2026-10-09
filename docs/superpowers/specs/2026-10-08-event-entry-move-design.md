@@ -310,6 +310,19 @@ real caller.
   is positive, and "Not emailed" when `notified_at` is null.
 - Source event footer: "N moves to other events" expanding to one line per
   move (label → event, date, actor). Hidden when zero.
+- **Settling the gap (EVENT-MOVE.3, mig 709).** Beside "€X difference
+  outstanding" staff who may move entries see two actions, **Collected** and
+  **Waived** (after a confirm). `POST
+  /api/event-registrations/[id]/moves/[moveId]/settle` with `{ how }` records
+  `gap_settled_at`, `gap_settled_how` and `gap_settled_by_name` on the move
+  row (the real caller under impersonation), gated like the move route at the
+  entry's CURRENT event studio; the move must belong to the entry; a move with
+  no positive gap answers `no_gap`; the write is a compare-and-set on
+  `gap_settled_at IS NULL`, so a second click, or a colleague settling first,
+  answers `unchanged: true`. Once settled the chip disappears and the "Moved
+  from" tooltip notes "difference collected|waived by <name> on <date>". It
+  records a decision staff made elsewhere (a payment link, cash, a waiver);
+  no money moves. Staff only: the host table shows no gap chip.
 - The event form's Emails section gains the two moved-email fields.
 
 ## Host surface (PR 2)
@@ -377,5 +390,5 @@ the entry, instead of "cancel and rebook".
 
 ## Open follow-ups
 
-- Collect the price gap in one click from the chip (a "Send payment link for
-  €X" action) once the first real gap turns up.
+- A "Send payment link for €X" action from the chip, once the first real
+  gap turns up (settling is EVENT-MOVE.3; collecting is still manual).

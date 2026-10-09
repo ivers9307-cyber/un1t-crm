@@ -96,7 +96,10 @@ describe('client code names only granted credential-table columns (SECFIX.3c)', 
       }
     }
     expect(offenders, 'read it through a service-role /api route that masks, or grant the column in a migration').toEqual([])
-  })
+    // It parses every client file in the repo; on a loaded CI runner it took
+    // 5.8 s against the 5 s default (#1951, shard 2). The budget is for the
+    // scan, not a wait.
+  }, 30_000)
 
   it('every select on a credential table is readable (fail closed)', () => {
     // A select string the scanner cannot evaluate (a parameter, an import, a

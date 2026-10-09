@@ -36,6 +36,14 @@ describe('loadMoveHistory', () => {
     expect(out.ops).toContainEqual(['order', 'created_at', { ascending: false }])
     expect(out.ops).toContainEqual(['limit', 200])
   })
+  it('the moves-in read carries how the gap was settled (EVENT-MOVE.3)', async () => {
+    const db = fakeDb({ movesIn: [mv({ price_gap_cents: 1000, gap_settled_at: '2026-10-09T10:00:00Z', gap_settled_how: 'waived', gap_settled_by_name: 'Richard' })] })
+    const { lastMoveByReg } = await loadMoveHistory(db, { eventId: 'e2', regIds: ['r1'] })
+    const movesIn = db.calls.find((q) => q.ops.some((o) => o[0] === 'eq' && o[1] === 'to_event_id'))
+    const cols = movesIn.ops.find((o) => o[0] === 'select')[1].split(',').map((c) => c.trim())
+    expect(cols).toEqual(expect.arrayContaining(['gap_settled_at', 'gap_settled_how', 'gap_settled_by_name']))
+    expect(lastMoveByReg.r1).toMatchObject({ gap_settled_how: 'waived', gap_settled_by_name: 'Richard' })
+  })
   it('skips the moves-in read when there are no entries', async () => {
     const db = fakeDb()
     const { lastMoveByReg } = await loadMoveHistory(db, { eventId: 'e1', regIds: [] })

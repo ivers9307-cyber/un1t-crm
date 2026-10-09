@@ -427,6 +427,9 @@ const config = [
       // studio, and the retry-recovery writes now read their error (logged,
       // never thrown: they run after a committed payment).
       'src/lib/orders.js',
+      // EVENT-MOVE.3 — the settle route: born clean; its one write is a
+      // compare-and-set that reads its error and the rows it touched.
+      'src/app/api/event-registrations/[[]id]/moves/**',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },

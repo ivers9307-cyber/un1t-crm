@@ -124,3 +124,108 @@ describe('RaceTeamsManager — Move to event', () => {
     expect(screen.queryByText(/€10\.00/)).toBeNull()
   })
 })
+
+// EVENT-MOVE.3 — settle the outstanding difference from the chip.
+describe('RaceTeamsManager — settle the difference', () => {
+  const SETTLE_URL = '/api/event-registrations/r1/moves/mv1/settle'
+  const settleFetch = (settleAnswer) => {
+    const fetchMock = vi.fn(async (url) => {
+      if (url === SETTLE_URL) return settleAnswer
+      return { ok: true, status: 200, json: async () => ({ success: true, data: [reg], moved_out: [] }) }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+  const teamsCalls = (fetchMock) => fetchMock.mock.calls.filter(([url]) => url === '/api/events/e2/teams').length
+
+  it('shows Collected and Waived beside the outstanding chip with canMoveEntries', async () => {
+    render(<RaceTeamsManager race={race} canMoveEntries />)
+    await screen.findByText(/€10\.00 difference outstanding/)
+    expect(screen.getByRole('button', { name: /^Collected$/ }).getAttribute('type')).toBe('button')
+    expect(screen.getByRole('button', { name: /^Waived$/ }).getAttribute('type')).toBe('button')
+  })
+  it('without canMoveEntries the chip shows but no buttons', async () => {
+    render(<RaceTeamsManager race={race} />)
+    await screen.findByText(/€10\.00 difference outstanding/)
+    expect(screen.queryByRole('button', { name: /^Collected$/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /^Waived$/ })).toBeNull()
+  })
+  it('Collected asks first, POSTs { how: collected } and reloads the list', async () => {
+    const confirmMock = vi.fn(() => true)
+    vi.stubGlobal('confirm', confirmMock)
+    const fetchMock = settleFetch({ ok: true, status: 200, json: async () => ({ success: true, data: { unchanged: false, move: { id: 'mv1' } } }) })
+    render(<RaceTeamsManager race={race} canMoveEntries />)
+    fireEvent.click(await screen.findByRole('button', { name: /^Collected$/ }))
+    await waitFor(() => expect(teamsCalls(fetchMock)).toBe(2))
+    expect(confirmMock).toHaveBeenCalledWith(expect.stringContaining('€10.00 difference as collected'))
+    const settle = fetchMock.mock.calls.find(([url]) => url === SETTLE_URL)
+    expect(settle[1].method).toBe('POST')
+    expect(JSON.parse(settle[1].body)).toEqual({ how: 'collected' })
+  })
+  it('Waived POSTs { how: waived }', async () => {
+    vi.stubGlobal('confirm', vi.fn(() => true))
+    const fetchMock = settleFetch({ ok: true, status: 200, json: async () => ({ success: true, data: { unchanged: false, move: { id: 'mv1' } } }) })
+    render(<RaceTeamsManager race={race} canMoveEntries />)
+    fireEvent.click(await screen.findByRole('button', { name: /^Waived$/ }))
+    await waitFor(() => expect(teamsCalls(fetchMock)).toBe(2))
+    expect(JSON.parse(fetchMock.mock.calls.find(([url]) => url === SETTLE_URL)[1].body)).toEqual({ how: 'waived' })
+  })
+  it('a declined confirm sends nothing', async () => {
+    vi.stubGlobal('confirm', vi.fn(() => false))
+    const fetchMock = settleFetch({ ok: true, status: 200, json: async () => ({ success: true, data: {} }) })
+    render(<RaceTeamsManager race={race} canMoveEntries />)
+    fireEvent.click(await screen.findByRole('button', { name: /^Collected$/ }))
+    expect(fetchMock.mock.calls.find(([url]) => url === SETTLE_URL)).toBeUndefined()
+    expect(teamsCalls(fetchMock)).toBe(1)
+  })
+  it('a failed POST shows its message in the red banner and does not reload', async () => {
+    vi.stubGlobal('confirm', vi.fn(() => true))
+    const fetchMock = settleFetch({ ok: false, status: 500, json: async () => ({ success: false, error: 'write_failed', message: 'The change could not be saved. Try again.' }) })
+    render(<RaceTeamsManager race={race} canMoveEntries />)
+    fireEvent.click(await screen.findByRole('button', { name: /^Collected$/ }))
+    const msg = await screen.findByText(/The change could not be saved\. Try again\./)
+    expect(msg.className).toContain('text-red-700')
+    expect(teamsCalls(fetchMock)).toBe(1)
+  })
+  it('a stale click (already settled another way) says so in the amber notice, and still reloads', async () => {
+    vi.stubGlobal('confirm', vi.fn(() => true))
+    const fetchMock = settleFetch({ ok: true, status: 200, json: async () => ({ success: true, data: { unchanged: true, move: { id: 'mv1', gap_settled_at: '2026-10-09T10:00:00Z', gap_settled_how: 'waived', gap_settled_by_name: 'Colm' } } }) })
+    render(<RaceTeamsManager race={race} canMoveEntries />)
+    fireEvent.click(await screen.findByRole('button', { name: /^Collected$/ }))
+    const notice = await screen.findByText(/Already marked waived by Colm\./)
+    expect(notice.closest('[role="status"]').className).toContain('bg-amber-500/10')
+    await waitFor(() => expect(teamsCalls(fetchMock)).toBe(2))
+  })
+  it('an unchanged answer that agrees with the click raises no notice', async () => {
+    vi.stubGlobal('confirm', vi.fn(() => true))
+    const fetchMock = settleFetch({ ok: true, status: 200, json: async () => ({ success: true, data: { unchanged: true, move: { id: 'mv1', gap_settled_at: '2026-10-09T10:00:00Z', gap_settled_how: 'collected', gap_settled_by_name: 'Colm' } } }) })
+    render(<RaceTeamsManager race={race} canMoveEntries />)
+    fireEvent.click(await screen.findByRole('button', { name: /^Collected$/ }))
+    await waitFor(() => expect(teamsCalls(fetchMock)).toBe(2))
+    expect(screen.queryByText(/Already marked/)).toBeNull()
+  })
+  it('in GBP the chip and the confirm say £10.00', async () => {
+    const confirmMock = vi.fn(() => false)
+    vi.stubGlobal('confirm', confirmMock)
+    settleFetch({ ok: true, status: 200, json: async () => ({ success: true, data: {} }) })
+    render(<RaceTeamsManager race={race} canMoveEntries currency="GBP" />)
+    await screen.findByText(/£10\.00 difference outstanding/)
+    fireEvent.click(screen.getByRole('button', { name: /^Waived$/ }))
+    expect(confirmMock).toHaveBeenCalledWith('Mark the £10.00 difference as waived?')
+  })
+  it('a settled gap hides the chip and the buttons, and the Moved from tooltip says how, who and when', async () => {
+    const settled = { ...reg, last_move: { ...reg.last_move, gap_settled_at: '2026-10-09T10:00:00Z', gap_settled_how: 'collected', gap_settled_by_name: 'Richard' } }
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ success: true, data: [settled], moved_out: [] }) })))
+    render(<RaceTeamsManager race={race} canMoveEntries />)
+    const chip = await screen.findByText(/Moved from Hatch Oct 18/)
+    expect(screen.queryByText(/difference outstanding/)).toBeNull()
+    expect(screen.queryByRole('button', { name: /^Collected$/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /^Waived$/ })).toBeNull()
+    expect(chip.getAttribute('title')).toContain('· difference collected by Richard on 9/10/2026')
+  })
+  it('an outstanding gap says nothing about settling in the tooltip', async () => {
+    render(<RaceTeamsManager race={race} canMoveEntries />)
+    const chip = await screen.findByText(/Moved from Hatch Oct 18/)
+    expect(chip.getAttribute('title')).not.toMatch(/difference/)
+  })
+})
