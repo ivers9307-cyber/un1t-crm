@@ -1,11 +1,12 @@
 // Who may MANAGE HR policies (publish a version, open /policies/manage).
 //
-// C141 ORGROLE.2 — MASTER ONLY (Richard, 2 Oct 2026). The `policies` and
-// `policy_versions` tables carry no organisation: a published version is the
-// current version for every studio in the estate. An organisation admin
-// (C18's rule) would therefore publish into OTHER organisations, so the
-// organisation-admin rule is not enough here. Everyone keeps /policies
-// itself (reading).
+// C141 ORGROLE.2 — MASTER ONLY (Richard, 2 Oct 2026). At the time the
+// `policies` and `policy_versions` tables carried no organisation, so an
+// organisation admin (C18's rule) would have published into OTHER
+// organisations. W0.5 (mig 713, 9 Oct) gave policies an organisation and
+// scoped every read; editing stays master-only until the org-admin editor
+// wave (Richard's call). Everyone keeps /policies itself (reading, their
+// own organisation's).
 //
 // One rule for the pages, the "Manage policies" link and
 // POST /api/admin/policies/[slug]/versions (UI gating = route rule).
