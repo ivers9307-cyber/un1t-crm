@@ -3,7 +3,9 @@
 // In-studio challenge TV board — Repset ledger (P4a reskin of the
 // Graft/Afterglow board — palette + signature only; layout unchanged).
 //
-// Polls /api/public/challenges/[locationId] every 45s (+ on mount).
+// Polls /api/public/challenges/[locationId] every 45s (+ on mount) — or the
+// `endpoint` prop when given (W0.9a: /tv/live/[token]/challenges passes the
+// token-gated /api/public/tv-challenges/[token]).
 // Shows the first active individual challenge's standings, rolling 8 rows
 // at a time in landscape / 12 in portrait. If the first active challenge is
 // collective, shows a big progress bar instead. Falls back to "this month"
@@ -75,7 +77,7 @@ function filledPips(value, leaderValue) {
   return Math.min(10, Math.max(1, Math.round((value / leaderValue) * 10)))
 }
 
-export default function ChallengeTvClient({ locationId }) {
+export default function ChallengeTvClient({ locationId, endpoint }) {
   const searchParams = useSearchParams()
   const forcedOrientation = searchParams.get('orientation') // 'portrait' | 'landscape' | null
   const [portrait, setPortrait] = useState(false)
@@ -98,10 +100,17 @@ export default function ChallengeTvClient({ locationId }) {
     return () => mq.removeEventListener('change', handler)
   }, [forcedOrientation])
 
+  // W0.9a: the data URL. Defaults to the location-keyed endpoint (unchanged for
+  // the live /tv/[locationId]/challenges TV). The token-gated
+  // /tv/live/[token]/challenges page passes an explicit `endpoint` so the same
+  // client polls /api/public/tv-challenges/[token] instead. Same payload either
+  // way — the client is agnostic to which it hits.
+  const dataUrl = endpoint || `/api/public/challenges/${locationId}`
+
   // Poll the public endpoint.
   const fetchData = useCallback(async () => {
     try {
-      const res = await fetch(`/api/public/challenges/${locationId}`, { cache: 'no-store' })
+      const res = await fetch(dataUrl, { cache: 'no-store' })
       const json = await res.json()
       if (!res.ok || !json.ok) throw new Error(json.error || 'Fetch failed')
       setData(json)
@@ -110,7 +119,7 @@ export default function ChallengeTvClient({ locationId }) {
     } catch (e) {
       setError(e.message)
     }
-  }, [locationId])
+  }, [dataUrl])
 
   useEffect(() => {
     fetchData()

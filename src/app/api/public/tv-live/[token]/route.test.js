@@ -7,6 +7,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+// W0.9a — the kiosk render heartbeat (FLEET-CMD.2). Mocked so the tests assert
+// the CALL, not the fleet_devices write; deviceFromRequest is the real parser
+// so `?device=` is exercised end to end from the request url.
+vi.mock('@/lib/fleet-render', async (importOriginal) => {
+  const actual = await importOriginal()
+  return { ...actual, stampRender: vi.fn(() => Promise.resolve()) }
+})
 // Stub the board builder — the board internals are covered by the live-route
 // test; here we only assert token resolution + status codes.
 vi.mock('@/lib/live-board', () => ({
@@ -18,6 +25,7 @@ vi.mock('@/lib/live-board', () => ({
 
 import { GET } from './route.js'
 import { createServerClient } from '@/lib/supabase'
+import { stampRender } from '@/lib/fleet-render'
 
 function makeDb({ display, location }) {
   return {
@@ -34,9 +42,9 @@ function makeDb({ display, location }) {
   }
 }
 
-async function callRoute(db, token) {
+async function callRoute(db, token, { url } = {}) {
   createServerClient.mockReturnValue(db)
-  const request = { headers: { get: () => null } }
+  const request = { headers: { get: () => null }, url: url ?? `https://crm.test/api/public/tv-live/${token}` }
   return GET(request, { params: Promise.resolve({ token }) })
 }
 
@@ -70,5 +78,31 @@ describe('GET /api/public/tv-live/[token]', () => {
     db.rpc = vi.fn(() => Promise.resolve({ data: 100000, error: null }))
     const res = await callRoute(db, 'good-token')
     expect(res.status).toBe(429)
+  })
+
+  // W0.9a — kiosks are moving from /tv/[locationId]?device= to the token URL
+  // (W0.9b), so the token route must stamp the FLEET-CMD.2 render heartbeat
+  // exactly as the location route does: with the device name from ?device= and
+  // the location the TOKEN resolved to (never a caller-supplied id).
+  it('stamps the render heartbeat for ?device= against the token-resolved location', async () => {
+    const db = makeDb({ display: { location_id: 'loc-1', active: true }, location: { id: 'loc-1', name: 'Stillorgan' } })
+    const res = await callRoute(db, 'good-token', { url: 'https://crm.test/api/public/tv-live/good-token?device=kiosk-1' })
+    expect(res.status).toBe(200)
+    expect(stampRender).toHaveBeenCalledTimes(1)
+    expect(stampRender).toHaveBeenCalledWith(db, 'kiosk-1', 'loc-1')
+  })
+
+  it('does not stamp when there is no device param', async () => {
+    const db = makeDb({ display: { location_id: 'loc-1', active: true }, location: { id: 'loc-1', name: 'Stillorgan' } })
+    const res = await callRoute(db, 'good-token')
+    expect(res.status).toBe(200)
+    expect(stampRender).not.toHaveBeenCalled()
+  })
+
+  it('does not stamp for an unknown token (device names cannot be probed)', async () => {
+    const db = makeDb({ display: null, location: null })
+    const res = await callRoute(db, 'bad-token', { url: 'https://crm.test/api/public/tv-live/bad-token?device=kiosk-1' })
+    expect(res.status).toBe(404)
+    expect(stampRender).not.toHaveBeenCalled()
   })
 })
