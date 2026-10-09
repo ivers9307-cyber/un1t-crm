@@ -36,6 +36,14 @@ function getStripe(pubKey, connectedAccountId) {
   return stripePromises.get(cacheKey)
 }
 
+// Where a paid (or already-paid) payment goes: the entry page for a
+// customer's own date change (EVENT-MOVE.6, the API's return_path), else the
+// event's confirmed page.
+function doneUrl(d) {
+  if (d?.return_path) return d.return_path
+  return `/event/${d?.race?.slug}/confirmed?registration=${d?.registration?.id || ''}`
+}
+
 export default function RaceCheckoutPage({ paymentId }) {
   const router = useRouter()
   const [data, setData] = useState(null)
@@ -64,10 +72,9 @@ export default function RaceCheckoutPage({ paymentId }) {
         }
         setData(j.data)
         if (j.data?.status === 'completed') {
-          // Already paid — webhook landed. Redirect to confirmation.
-          const slug = j.data.race?.slug
-          const regId = j.data.registration?.id
-          if (slug) router.replace(`/event/${slug}/confirmed?registration=${regId || ''}`)
+          // Already paid — webhook landed. Redirect to confirmation (or, for
+          // a customer's date change, back to their entry page).
+          if (j.data.return_path || j.data.race?.slug) router.replace(doneUrl(j.data))
           return
         }
         // Both providers now render inline below: Revolut via its embed SDK,
@@ -115,9 +122,7 @@ export default function RaceCheckoutPage({ paymentId }) {
             clientSecret,
             onComplete: () => {
               if (destroyed) return
-              const slug = data.race?.slug
-              const regId = data.registration?.id
-              router.push(`/event/${slug}/confirmed?registration=${regId || ''}`)
+              router.push(doneUrl(data))
             },
           })
           if (destroyed) { try { checkout.destroy() } catch {} ; return }
@@ -165,9 +170,7 @@ export default function RaceCheckoutPage({ paymentId }) {
           createOrder: async () => ({ publicId: data.checkout.token }),
           onSuccess: () => {
             if (destroyed) return
-            const slug = data.race?.slug
-            const regId = data.registration?.id
-            router.push(`/event/${slug}/confirmed?registration=${regId || ''}`)
+            router.push(doneUrl(data))
           },
           onError: ({ error }) => {
             if (destroyed) return
@@ -221,7 +224,10 @@ export default function RaceCheckoutPage({ paymentId }) {
   const closedMessage = isGap && data.settled
     ? 'This difference is already settled, nothing to pay.'
     : isGap && data.expired
-      ? 'This payment link has expired. Ask the event team for a new one.'
+      // EVENT-MOVE.6 — a customer's own date change can simply be started again.
+      ? (data.return_path
+          ? 'This payment link has expired. Go back to your entry to choose your date again.'
+          : 'This payment link has expired. Ask the event team for a new one.')
       : null
   if (closedMessage) {
     return (
@@ -230,6 +236,11 @@ export default function RaceCheckoutPage({ paymentId }) {
           <AlertCircle size={32} className="mx-auto text-white/50 mb-3" />
           <p className="font-semibold mb-1">{data.race?.name || 'Your event'}</p>
           <p className="text-white/70">{closedMessage}</p>
+          {data.return_path && (
+            <a href={data.return_path} className="inline-block mt-4 text-sm font-semibold underline underline-offset-4 text-white/90 hover:text-white">
+              Back to your entry
+            </a>
+          )}
         </div>
       </div>
     )

@@ -22,7 +22,9 @@
 // tags PLUS {{event_name}}, {{team_name}}, {{when}}, {{location}}, (the
 // moved email only, EVENT-MOVE.1) {{old_event_name}}, {{old_when}}, and (the
 // price-difference link email, EVENT-MOVE.5) {{difference}},
-// {{old_event_name}}, {{pay_url}}.
+// {{old_event_name}}, {{pay_url}}, and (the confirmation and moved emails,
+// EVENT-MOVE.6) {{manage_url}}: the entry's own page, where the booker can
+// change the date.
 //
 // LIVE EMAILS: with no per-event config (all columns NULL) the shell output is
 // identical to the pre-refactor builders — locked by event-email.test.js.
@@ -71,6 +73,9 @@ export function applyEventMergeTags(text, contact, extras = {}) {
   // the link; the receipt uses fixed wording.
   out = out.replaceAll('{{difference}}', extras.difference || '')
   out = out.replaceAll('{{pay_url}}', extras.pay_url || '')
+  // EVENT-MOVE.6 — the confirmation and moved emails set it: the signed link
+  // to the entry's own page ("Change your date").
+  out = out.replaceAll('{{manage_url}}', extras.manage_url || '')
   return out
 }
 
@@ -96,6 +101,7 @@ export function applyEventMergeTagsHtml(html, contact, extras = {}) {
     old_when: escapeHtml(extras.old_when || ''),
     difference: escapeHtml(extras.difference || ''),
     pay_url: escapeHtml(extras.pay_url || ''),
+    manage_url: escapeHtml(extras.manage_url || ''),
   }
   return applyEventMergeTags(html, safeContact, safeExtras)
 }
@@ -233,7 +239,7 @@ function renderOperatorIntro(text, contact, extras) {
  *   mig 710; the receipt passes the race with that copy cleared)
  * @param {object} args.race     the race_events row (new EVENTS-EMAILCFG columns + accent_hex/hero_image_url)
  * @param {object} args.contact  merge contact ({ first_name, name, email, ... })
- * @param {object} args.extras   { event_name, team_name, when, location, old_event_name?, old_when?, difference?, pay_url? }
+ * @param {object} args.extras   { event_name, team_name, when, location, old_event_name?, old_when?, difference?, pay_url?, manage_url? }
  * @param {object} args.defaults default subject + shell slots for this email
  * @returns {Promise<{ subject: string, htmlBody: string }>}
  */

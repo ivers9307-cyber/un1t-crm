@@ -110,6 +110,10 @@ export const BRANDS = [
       '/cancel/',
       '/book/',         // public Calendly-style booking pages
       '/event/',        // public race / workshop / etc. signup pages
+      // EVENT-MOVE.6 — the customer's entry page (change the date), from the
+      // link in their confirmation email. Covered by '/event/' today; listed
+      // so the flow survives a narrowing of it. Its paid leg is '/event-pay/'.
+      '/event/entry/',
       // PUBPATH.1 — the checkout leg of the two above. RaceSignupWidget
       // sends every PAID signup to a HOST-RELATIVE /event-pay/<id>
       // (src/components/RaceSignupWidget.jsx:428), and in the embed it does

@@ -24,6 +24,7 @@ vi.mock('@/lib/rate-limit', () => ({
 }))
 
 const { refreshRacePaymentFromProvider } = await import('@/lib/race-payments')
+const { verifyEntryManageToken } = await import('@/lib/entry-manage-tokens')
 const { GET } = await import('./route.js')
 
 const ROW = { id: 'gp1', status: 'completed', amount_cents: 1000, currency: 'EUR', kind: 'move_gap', registration_move_id: 'mv1',
@@ -90,3 +91,38 @@ describe('GET /api/public/event-payments/[id] — expired and settled difference
   })
 })
 
+// EVENT-MOVE.6 — a customer's own date change returns them to their entry
+// page once paid (the checkout's success handlers and its "already paid"
+// redirect follow return_path). A staff difference link and an entry payment
+// keep the confirmed page. The pending move itself is never echoed.
+describe('GET /api/public/event-payments/[id] — return_path for a customer date change', () => {
+  const PM = { target_event_id: 'e3', target_wave_id: 'w3', expected_source_event_id: 'e2', actor: { type: 'customer', id: 'k1', name: 'Aoife Byrne' } }
+  it('answers a signed /event/entry/<token> path for the payment\'s entry, and no metadata', async () => {
+    vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'svc')
+    try {
+      globalThis.__rows = [{ data: { ...ROW, registration_move_id: null, metadata: { pending_move: PM } }, error: null }]
+      const json = await (await get()).json()
+      expect(json.data.return_path).toMatch(/^\/event\/entry\/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/)
+      expect(verifyEntryManageToken(json.data.return_path.split('/').pop(), 'svc')).toEqual({ registrationId: 'r1' })
+      expect(JSON.stringify(json)).not.toMatch(/pending_move|Aoife|metadata/)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+  it('a staff difference link and an entry payment have none', async () => {
+    vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'svc')
+    try {
+      globalThis.__rows = [{ data: { ...ROW, metadata: null }, error: null }]
+      expect((await (await get()).json()).data.return_path).toBeNull()
+      globalThis.__rows = [{ data: { ...ROW, kind: 'entry', metadata: { pending_move: PM } }, error: null }]
+      expect((await (await get()).json()).data.return_path).toBeNull()
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+  it('both selects read metadata', async () => {
+    globalThis.__rows = [{ data: { ...ROW, status: 'pending' }, error: null }, { data: ROW, error: null }]
+    await get()
+    for (const cols of globalThis.__selects) expect(cols).toMatch(/\bmetadata\b/)
+  })
+})

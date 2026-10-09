@@ -4,7 +4,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, cleanup, screen } from '@testing-library/react'
 
-vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn(), replace: vi.fn() }) }))
+const router = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn() }))
+vi.mock('next/navigation', () => ({ useRouter: () => router }))
 vi.mock('@stripe/stripe-js', () => ({ loadStripe: vi.fn(() => new Promise(() => {})) }))
 vi.mock('@/lib/revolut-embed', () => ({
   loadRevolutSdk: vi.fn(() => new Promise(() => {})),
@@ -65,3 +66,37 @@ describe('RaceCheckoutPage — a difference link that cannot be paid', () => {
   })
 })
 
+// EVENT-MOVE.6 — a customer's own date change goes back to their entry page.
+describe('RaceCheckoutPage — return_path (customer date change)', () => {
+  const RETURN = '/event/entry/PAYLOAD.SIG'
+  it('an already-paid change goes straight back to the entry page', async () => {
+    serve({ ...BASE, kind: 'move_gap', status: 'completed', return_path: RETURN })
+    render(<RaceCheckoutPage paymentId="gp1" />)
+    await vi.waitFor(() => expect(router.replace).toHaveBeenCalledWith(RETURN))
+  })
+  it('a successful payment goes to the entry page, not the confirmed page', async () => {
+    let opts = null
+    loadRevolutSdk.mockResolvedValueOnce({ embeddedCheckout: (o) => { opts = o; return { destroy() {} } } })
+    serve({ ...BASE, kind: 'move_gap', status: 'pending', expired: false, settled: false, return_path: RETURN })
+    render(<RaceCheckoutPage paymentId="gp1" />)
+    await vi.waitFor(() => expect(opts).toBeTruthy())
+    opts.onSuccess()
+    expect(router.push).toHaveBeenCalledWith(RETURN)
+  })
+  it('without return_path the confirmed page stands (entry payments, staff difference links)', async () => {
+    let opts = null
+    loadRevolutSdk.mockResolvedValueOnce({ embeddedCheckout: (o) => { opts = o; return { destroy() {} } } })
+    serve({ ...BASE, kind: 'move_gap', status: 'pending', expired: false, settled: false })
+    render(<RaceCheckoutPage paymentId="gp1" />)
+    await vi.waitFor(() => expect(opts).toBeTruthy())
+    opts.onSuccess()
+    expect(router.push).toHaveBeenCalledWith('/event/hatch-oct25-1100/confirmed?registration=r1')
+  })
+  it('an expired date-change link sends the customer back to their entry to choose again', async () => {
+    serve({ ...BASE, kind: 'move_gap', status: 'abandoned', expired: true, settled: false, return_path: RETURN })
+    render(<RaceCheckoutPage paymentId="gp1" />)
+    await screen.findByText('This payment link has expired. Go back to your entry to choose your date again.')
+    expect(screen.getByRole('link', { name: 'Back to your entry' }).getAttribute('href')).toBe(RETURN)
+    expect(loadRevolutSdk).not.toHaveBeenCalled()
+  })
+})
