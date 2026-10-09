@@ -344,10 +344,7 @@ export const EXEMPT = {
     class_booking_requests: 'Public paid-booking status poll: the row is resolved by its own unguessable UUID (the payment id handed to the payer in the create response) — the id IS the capability token, not enumerable. Returns only display-safe checkout fields (status/provider/token/url/amount/class_name), no contact PII. Mirrors public/event-payments/[id].',
   },
   'src/app/api/public/offers/[slug]/checkout/route.js': {
-    sale_offers: 'Public sale catalogue (OFFERS.4): the row is looked up by its globally-unique slug and every active offer is deliberately world-readable — it IS the product page data. The only sensitive field the route touches is price_cents, which it reads server-side precisely so the client can never supply an amount.',
-  },
-  'src/app/api/public/countdown.gif/route.js': {
-    sale_offers: 'Countdown image for marketing email (COUNTDOWN.1): reads ONLY ends_at of the latest active offer — the same deadline already rendered publicly on /offers and printed in the email itself. No location context exists (it is an <img> fetched by a mail client), and the response is pixels, not data.',
+    sale_offers: 'Public sale checkout (OFFERS.4): the row is looked up by its globally-unique slug, then fenced to the Stillorgan home location by offerBelongsToHome (W0.4, src/lib/offers-home.js) — any other location\'s offer answers 404 until Wave 2 gives tenants their own offers route and payment rail. The only sensitive field the route touches is price_cents, which it reads server-side precisely so the client can never supply an amount.',
   },
   'src/app/api/public/offer-purchases/[id]/route.js': {
     offer_purchases: 'Public paid-purchase status poll (OFFERS.4): the row is resolved by its own unguessable UUID (the purchaseId handed to the payer in the checkout response) — the id IS the capability token, not enumerable. Returns only { paid, state }, no buyer PII. Mirrors public/class-booking-payments/[id].',
@@ -393,13 +390,9 @@ export const EXEMPT = {
     race_events:
       'HOST-EVENTS-PAGE.1 — public host page: event_hosts row resolved by its published slug (the same public selector as /event/[slug]), then race_events filtered to THAT host_id + active=true + status=published + upcoming. Host events sit on a hidden anchor location, so host_id is their tenancy boundary (HOST-PORTAL.1); published content by design, and the embedded waves/registrations feed only the sold-out boolean — no count or capacity is rendered. Verified in src/app/h/[slug]/page.js loadHostEvents().',
   },
-  'src/app/offers/page.js': {
-    sale_offers:
-      'Public sale catalogue (OFFERS.7): active offers are deliberately world-readable — they ARE the landing-page content (same rationale as /api/public/offers/[slug]/checkout).',
-  },
   'src/app/offers/[slug]/page.js': {
     sale_offers:
-      'Public sale product page: row resolved by its globally-unique slug; price is rendered server-side from the row so the client can never supply an amount.',
+      'Public sale product page: row resolved by its globally-unique slug, then fenced to the Stillorgan home location by offerBelongsToHome (W0.4, src/lib/offers-home.js) — any other location\'s offer 404s until Wave 2 gives tenants their own offers route. Price is rendered server-side from the row so the client can never supply an amount.',
   },
   'src/app/start/[path]/page.js': {
     landing_page_settings:

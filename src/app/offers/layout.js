@@ -6,6 +6,7 @@
 import { Archivo, Archivo_Black } from 'next/font/google'
 import { createServerClient } from '@/lib/supabase'
 import { formatSaleDeadline } from '@/lib/sale-offers'
+import { resolveOffersHomeLocationId, NO_HOME_LOCATION_ID } from '@/lib/offers-home'
 import './offers.css'
 
 const archivo = Archivo({ subsets: ['latin'], weight: ['500', '600', '700'], variable: '--font-archivo' })
@@ -18,10 +19,13 @@ const archivoBlack = Archivo_Black({ subsets: ['latin'], weight: '400', variable
 // else here.
 export async function generateMetadata() {
   const db = createServerClient()
+  // W0.4 — pinned to the Stillorgan home location, like the pages below it.
+  const homeId = await resolveOffersHomeLocationId(db)
   const { data } = await db
     .from('sale_offers')
     .select('category')
     .eq('active', true)
+    .eq('location_id', homeId || NO_HOME_LOCATION_ID)
   const cats = new Set((data || []).map((o) => o.category))
   const giftOnly = cats.size > 0 && cats.size === 1 && cats.has('gift_card')
   return {
@@ -37,6 +41,7 @@ export default async function OffersLayout({ children }) {
   // formatSaleDeadline(). A literal date here disagreed with the countdown
   // the moment the operator moved ends_at in SQL.
   const db = createServerClient()
+  const homeId = await resolveOffersHomeLocationId(db)
   // Only DATED offers can produce a deadline line. Gift cards carry
   // ends_at NULL, and Postgres sorts NULLs first on DESC — without this
   // filter a live gift card would win the ordering and blank out a real
@@ -45,6 +50,7 @@ export default async function OffersLayout({ children }) {
     .from('sale_offers')
     .select('ends_at')
     .eq('active', true)
+    .eq('location_id', homeId || NO_HOME_LOCATION_ID)
     .not('ends_at', 'is', null)
     .order('ends_at', { ascending: false })
     .limit(1)
