@@ -258,12 +258,13 @@ function sameEmail(a, b) {
  *       still required on top, mirroring electWriteAccount's rule 1: a group
  *       row sharing NO identifier at all is a name match somebody accepted
  *       for display, not a mandate to write.
- *   (b) an exact email match — `contacts_email_unique` is GLOBAL in this
- *       schema (mig 008: `ON contacts (email) WHERE email IS NOT NULL`) and
- *       prod carries zero shared addresses, so one address really is one
- *       person. Being case-SENSITIVE, that index still permits a casing
- *       variant, which our trim+lowercase compare catches — the one shape
- *       where two rows legitimately share an address.
+ *   (b) an exact email match — `contacts_email_org_unique` is unique per
+ *       ORGANISATION (mig 712, W0.6; mig 008's was global: `ON contacts
+ *       (email) WHERE email IS NOT NULL`), the sibling search here is
+ *       location-scoped, and prod carries zero shared addresses, so one
+ *       address really is one person. Being case-SENSITIVE, that index
+ *       still permits a casing variant, which our trim+lowercase compare
+ *       catches — the one shape where two rows legitimately share an address.
  *
  * A phone-only match from the DIRECT search is neither: it blocks the mint
  * (conservative — a human decides), but it never moves a write. Do NOT
