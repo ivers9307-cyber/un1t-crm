@@ -57,5 +57,7 @@ describe('/events/[id]/teams — canCancelEntries at the event\'s studio', () =>
     const el = await RaceTeamsPage(props())
     const manager = el.props.children.find((c) => c?.props?.race)
     expect(manager.props.canCancelEntries).toBe(expected)
+    // EVENT-WAITLIST.1 — the waitlist routes apply the same rule.
+    expect(manager.props.canManageWaitlist).toBe(expected)
   })
 })

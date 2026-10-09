@@ -334,6 +334,9 @@ export const EXEMPT = {
   'src/app/api/public/events/[slug]/display/route.js': {
     race_events: 'Public race-day display for a published slug (TV screen at the venue).',
   },
+  'src/app/api/public/events/[slug]/waitlist/route.js': {
+    race_events: 'EVENT-WAITLIST.1 public waitlist join: race_events row resolved by published slug + active/published flags (the same row the public event page serves); the waitlist row is written at that event\'s own location_id by joinWaitlist. Answers only the new row id.',
+  },
   'src/app/api/public/classes/route.js': {
     landing_page_settings: 'Public landing-page class list: landing_page_settings row resolved by its public_path — the path IS the tenant selector for the public site.',
   },

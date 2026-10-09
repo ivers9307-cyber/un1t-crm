@@ -437,6 +437,14 @@ const config = [
       // EVENT-MOVE.3 — the settle route: born clean; its one write is a
       // compare-and-set that reads its error and the rows it touched.
       'src/app/api/event-registrations/[[]id]/moves/**',
+      // EVENT-WAITLIST.1 — the waitlist: born clean; every write reads its
+      // error and, where the row must exist, the rows it touched.
+      'src/lib/event-waitlist.js',
+      'src/lib/event-waitlist-access.js',
+      'src/app/api/events/[[]id]/waitlist/**',
+      'src/app/api/host/events/[[]id]/waitlist/**',
+      'src/app/api/public/events/[[]slug]/waitlist/**',
+      'src/app/api/cron/event-waitlist-offers/**',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },
@@ -456,6 +464,8 @@ const config = [
       'src/app/tv/**', 'src/app/present/**', 'src/components/RaceDisplayBoard.jsx',
       'src/app/event/**', 'src/app/event-pay/**', 'src/app/embed/event/**',
       'src/components/RaceSignupWidget.jsx',
+      // EVENT-WAITLIST.1 — rendered only inside RaceSignupWidget's dark card.
+      'src/components/EventWaitlistForm.jsx',
       'src/components/RaceConfirmedPage.jsx',
       'src/components/RaceCheckoutPage.jsx',
       'src/app/host/**', 'src/components/host/**',
