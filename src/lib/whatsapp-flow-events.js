@@ -34,9 +34,17 @@ export function flowNotification(value = {}) {
 }
 
 /**
- * Resolve which locations to notify for a Flow event: the location whose
- * settings.whatsapp_flow.flow_id matches, else every WhatsApp-number location
- * (better to over-page than silently drop a funnel outage).
+ * Resolve which locations to notify for a Flow event: the location(s) whose
+ * settings.whatsapp_flow.flow_id matches.
+ *
+ * W0.13 — an unmatched flow_id used to fall back to every location that owns
+ * a WhatsApp number ("better to over-page than drop a funnel outage"). In a
+ * multi-tenant estate that is a cross-tenant alert: one tenant's Meta notice
+ * paged every tenant's managers. Unmatched now notifies NO location, is logged
+ * at error level for platform ops (Sentinel reads logs), and returns
+ * `unmatched: true`. `notify` is still built so an ops channel can use it.
+ *
+ * @returns {Promise<{ locations: string[], notify: {title,body}|null, unmatched?: boolean }>}
  */
 export async function applyFlowEvent(db, value = {}) {
   const notify = flowNotification(value)
@@ -51,8 +59,9 @@ export async function applyFlowEvent(db, value = {}) {
       .map((l) => l.id)
   }
   if (!locations.length) {
-    const { data: nums } = await db.from('whatsapp_numbers').select('location_id')
-    locations = [...new Set((nums || []).map((n) => n.location_id).filter(Boolean))]
+    // W0.13 — never fan an unidentified event out to every tenant's managers.
+    console.error(`[wa-flow-events] unmatched flow_id ${flowId || '(none)'}: ${notify.title}`)
+    return { locations: [], notify, unmatched: true }
   }
-  return { locations, notify }
+  return { locations, notify, unmatched: false }
 }
