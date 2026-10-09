@@ -12,7 +12,7 @@
 import Link from 'next/link'
 import { createServerClient } from '@/lib/supabase'
 import { offerIsOpen, offerHasDeadline, formatEuro } from '@/lib/sale-offers'
-import { resolveOffersHomeLocationId } from '@/lib/offers-home'
+import { resolveOffersHomeLocationId, NO_HOME_LOCATION_ID } from '@/lib/offers-home'
 import SaleCountdown from '@/components/offers/SaleCountdown'
 
 export const runtime = 'nodejs'
@@ -119,7 +119,7 @@ export default async function OffersPage() {
     .from('sale_offers')
     .select('*')
     .eq('active', true)
-    .eq('location_id', homeId || '00000000-0000-0000-0000-000000000000')
+    .eq('location_id', homeId || NO_HOME_LOCATION_ID)
     .order('sort', { ascending: true })
 
   const offers = (data || []).filter((o) => offerIsOpen(o))

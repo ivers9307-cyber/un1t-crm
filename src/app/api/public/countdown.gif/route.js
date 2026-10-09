@@ -20,7 +20,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { buildCountdownGif } from '@/lib/countdown-gif'
-import { resolveOffersHomeLocationId } from '@/lib/offers-home'
+import { resolveOffersHomeLocationId, NO_HOME_LOCATION_ID } from '@/lib/offers-home'
 import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs' // sharp is a native module
@@ -50,7 +50,7 @@ export async function GET() {
       .from('sale_offers')
       .select('ends_at')
       .eq('active', true)
-      .eq('location_id', homeId || '00000000-0000-0000-0000-000000000000')
+      .eq('location_id', homeId || NO_HOME_LOCATION_ID)
       .order('ends_at', { ascending: false })
       .limit(1)
       .maybeSingle()

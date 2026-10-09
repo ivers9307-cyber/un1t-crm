@@ -17,7 +17,9 @@ vi.mock('@/lib/supabase', () => ({
       order() { return this }, limit() { return this },
       maybeSingle() {
         if (this._table === 'locations') return Promise.resolve({ data: state.homeLocation })
-        const visible = state.endsAt && state.filters.location_id === state.offerLocationId
+        // No location filter at all = the row is visible: that is the leak the
+        // foreign-location case guards against, so it fails if the .eq goes.
+        const visible = state.endsAt && (state.filters.location_id === undefined || state.filters.location_id === state.offerLocationId)
         return Promise.resolve({ data: visible ? { ends_at: state.endsAt } : null })
       },
     }

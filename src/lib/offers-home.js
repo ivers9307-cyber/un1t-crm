@@ -6,6 +6,10 @@
 // locations' offers are not listed and their slugs answer 404.
 export const OFFERS_HOME_LOCATION_SLUG = 'un1t-stillorgan'
 
+// Filter value when the pinned location row is missing: matches no row, so a
+// list renders empty rather than falling open to every location.
+export const NO_HOME_LOCATION_ID = '00000000-0000-0000-0000-000000000000'
+
 /** Pure. */
 export function offerBelongsToHome(offer, homeLocationId) {
   return Boolean(homeLocationId && offer?.location_id === homeLocationId)
