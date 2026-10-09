@@ -153,7 +153,15 @@ export async function PUT(request, props) {
   const { data, error } = await db.from('contacts').update(updates).eq('id', id).select().single()
 
   if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+    // W0.6 — same answer as POST /api/contacts: a duplicate email is a
+    // generic 409 (contacts_email_org_unique, mig 712, is per organisation),
+    // anything else a generic 400; the database text goes to the logs, never
+    // to the caller (it named the index and confirmed the address existed).
+    if (error.code === '23505') {
+      return NextResponse.json({ success: false, error: 'A contact with this email already exists in your organisation' }, { status: 409 })
+    }
+    logWarn('contacts.PUT', `update failed for ${id}`, { err: error })
+    return NextResponse.json({ success: false, error: 'Could not update contact' }, { status: 400 })
   }
 
   // Fire sequence triggers AFTER the update lands. The helper is

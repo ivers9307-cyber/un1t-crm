@@ -67,9 +67,10 @@ export async function POST(request) {
   // Find-or-create the contact at this studio (shared public-form helper).
   // restrictToOrg (LEADCAP.1): match here first, then sibling locations in the
   // same organisation, never globally. restrictToLocation used to be the flag,
-  // but `contacts_email_unique` is a GLOBAL index — so an existing Stillorgan
+  // but under mig 008's GLOBAL `contacts_email_unique` an existing Stillorgan
   // member joining the Hatch Street waitlist found no match, hit 23505 on the
-  // insert, and got a 500. Org scope keeps the cross-TENANT IDOR closed.
+  // insert, and got a 500. Org scope keeps the cross-TENANT IDOR closed; since
+  // W0.6 (mig 712, unique per organisation) it is also the helper's default.
   // SOURCE-LABEL.1 — see class-booking: a website lead form is not a race
   // signup. CREATE only; matched contacts are untouched.
   const contactId = await findOrCreateRaceContact({ db, locationId, email, name: firstName, phone, restrictToOrg: true, insertFields: { source: 'lead_form' } })
