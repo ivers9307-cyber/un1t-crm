@@ -88,7 +88,13 @@ gate('GET /api/events?location_id= — races at the location', {
 describe('GET /api/events?location_id= — the hosted-events branch judges races at the ACTIVE studio', () => {
   const run = async (caller) => {
     getCurrentUser.mockResolvedValue(caller)
-    const probe = gateProbe([{ data: [], error: null }]) // the listed location's events
+    const probe = gateProbe([
+      // W0.3 — sharedEventsOrFilterFor resolves the listed studio's
+      // organisation first (siblingLocationIds: the row, then its siblings).
+      { data: { id: LOC_B, organization_id: ORG }, error: null },
+      { data: [{ id: LOC_A }], error: null },
+      { data: [], error: null }, // the listed location's events
+    ])
     createServerClient.mockReturnValue(probe.db)
     const out = await runProbed(probe, () => events.GET(bare('GET', `?location_id=${LOC_B}`)))
     return { probe, ...out }
