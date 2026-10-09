@@ -364,6 +364,42 @@ real caller.
   on the staff page; chips "moved in <date>" and "Not emailed". The gap chip
   is not shown on the host table in PR 2.
 
+## Paying the gap (EVENT-MOVE.5, mig 710)
+
+A payment can be the price difference of a move: `race_payments.kind` is
+`entry` (every existing row, every entry insert by default) or `move_gap`,
+and a gap payment carries `registration_move_id`. `createGapPayment` mints
+it through the same provider adapters and the same `/event-pay/[paymentId]`
+embedded checkout: amount = `price_gap_cents`, no platform fee (the
+per-ticket fee was taken on the entry), the event's currency and merchant,
+Revolut idempotency key `move:<id>:<n>`, and a pending gap payment for the
+move is reused rather than minted twice. It never touches
+`active_payment_id` or the registration.
+
+On completion (webhook or the checkout page's provider refresh) a gap
+payment writes its status, syncs its order, emits `ORDER_COMPLETED`
+(`kind: move_gap`), settles the move through the EVENT-MOVE.3 compare-and-set
+as `collected` by "Customer (paid online)", and sends the gap RECEIPT. It
+never re-runs entry side effects: no registration status change, no host
+contact-list sync, no tag rules, no sequences, no entry confirmation, no
+Glofox push. Failed, abandoned and refunded gap transitions likewise skip
+tag rules and sequences; a refund leaves the move settled (staff decide).
+Readers that take "the latest payment" (the teams list, the moved email's
+Total paid) skip gap rows.
+
+Staff: **Send payment link** beside the chip (confirm first) posts to
+`POST /api/event-registrations/[id]/moves/[moveId]/settle`'s sibling
+`.../gap-link` `{ email }`, gated identically (a settled move answers 409
+`already_settled`), which mints or reuses the link, emails it when asked,
+and returns the URL (also copied to the clipboard). Both gap emails (the
+link, the receipt) resolve through `resolveEventEmail({ kind: 'gap' })`
+with the operator-editable `gap_email_subject/intro` on the event form and
+the merge tags `{{difference}}`, `{{old_event_name}}`, `{{pay_url}}` (the
+link email always carries a pay button). The checkout page labels a gap
+payment "Price difference" and shows no roster. EVENT-MOVE.6 (customer
+self-service) carries `metadata.pending_move` on the same kind so the move
+lands when the difference is paid.
+
 ## Mia (EVENT-MOVE.7, mig 711)
 
 Two agent tools. `list_event_move_options` shows a verified customer the
