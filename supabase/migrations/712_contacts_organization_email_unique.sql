@@ -7,13 +7,16 @@
 -- violation — an existence oracle across tenants.
 --
 -- WHAT. (1) contacts.organization_id, trigger-maintained from the row's
--- location (locations.organization_id, NOT NULL since mig 079), backfilled.
--- (2) the unique index becomes (organization_id, email). (3) the audience
--- send-path view gains the column (mig 689 rule: a new contacts column
--- must reach contact_location_audience, appended at the END). (4) the
--- public booking trigger (mig 336) matches an existing contact across the
--- booking's ORGANISATION, so a sibling-studio contact never collides on
--- insert. Safe before the code deploys.
+-- location (locations.organization_id, NOT NULL since mig 079), backfilled,
+-- and re-stamped on every contact of a location that MOVES organisation.
+-- (2) the unique index becomes (organization_id, email), NULLS NOT DISTINCT
+-- (PG 15+; prod is 17.6) so a location-less contact keeps mig 008's global
+-- guarantee rather than escaping uniqueness through a NULL organisation.
+-- (3) the audience send-path view gains the column (mig 689 rule: a new
+-- contacts column must reach contact_location_audience, appended at the
+-- END). (4) the public booking trigger (mig 336) matches an existing contact
+-- across the booking's ORGANISATION, so a sibling-studio contact never
+-- collides on insert. Safe before the code deploys.
 
 alter table public.contacts
   add column if not exists organization_id uuid references public.organizations(id);
@@ -39,14 +42,31 @@ update public.contacts c
   from public.locations l
  where l.id = c.location_id and c.organization_id is distinct from l.organization_id;
 
+-- A location moved to another organisation carries its contacts with it:
+-- organization_id is a denormalisation, and without this it drifts.
+create or replace function private.locations_restamp_contacts_organization()
+returns trigger language plpgsql set search_path = public as $$
+begin
+  update public.contacts
+     set organization_id = new.organization_id
+   where location_id = new.id
+     and organization_id is distinct from new.organization_id;
+  return new;
+end $$;
+
+drop trigger if exists locations_restamp_contacts_organization on public.locations;
+create trigger locations_restamp_contacts_organization
+  after update of organization_id on public.locations
+  for each row execute function private.locations_restamp_contacts_organization();
+
 create index if not exists contacts_organization_id_idx on public.contacts (organization_id);
 
 drop index if exists public.contacts_email_unique;
 create unique index if not exists contacts_email_org_unique
-  on public.contacts (organization_id, email) where email is not null;
+  on public.contacts (organization_id, email) nulls not distinct where email is not null;
 
 comment on column public.contacts.organization_id is
-  'W0.6 (mig 712) — denormalised from locations.organization_id by trigger; never written by app code.';
+  'W0.6 (mig 712) — denormalised from locations.organization_id by trigger (contacts_set_organization_id on the row''s location_id; locations_restamp_contacts_organization when a location moves organisation); never written by app code.';
 
 -- (3) The view: mig 705's columns unchanged and in order, then organization_id.
 CREATE OR REPLACE VIEW public.contact_location_audience WITH (security_invoker = on) AS
@@ -144,9 +164,10 @@ BEGIN
 
   v_location_id := COALESCE(v_event_location_id, NEW.location_id);
 
-  -- W0.6 (mig 712): case-insensitive match at this location, else a legacy
-  -- unscoped contact, else a sibling location in the same ORGANISATION;
-  -- never a contact known to live in another organisation.
+  -- W0.6 (mig 712): case-insensitive match, in priority order: a contact at
+  -- THIS location, else one at a sibling location in the same ORGANISATION,
+  -- else a legacy location-less row (NULLS LAST: a NULL location sorts after
+  -- both); never a contact known to live in another organisation.
   SELECT c.id INTO v_contact_id
   FROM contacts c
   LEFT JOIN locations l ON l.id = c.location_id
@@ -260,6 +281,20 @@ begin
        and tgenabled <> 'D'
   ) then
     raise exception 'mig 712: contacts_set_organization_id trigger is missing or disabled';
+  end if;
+  if not exists (
+    select 1 from pg_trigger
+     where tgrelid = 'public.locations'::regclass
+       and tgname = 'locations_restamp_contacts_organization'
+       and tgenabled <> 'D'
+  ) then
+    raise exception 'mig 712: locations_restamp_contacts_organization trigger is missing or disabled';
+  end if;
+  if not exists (
+    select 1 from pg_index i join pg_class c on c.oid = i.indexrelid
+     where c.relname = 'contacts_email_org_unique' and i.indnullsnotdistinct
+  ) then
+    raise exception 'mig 712: contacts_email_org_unique is not NULLS NOT DISTINCT';
   end if;
   v_def := pg_get_functiondef('public.handle_new_booking'::regproc);
   if v_def not ilike '%l.organization_id%' then

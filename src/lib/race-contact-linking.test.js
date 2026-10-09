@@ -270,6 +270,21 @@ describe('findOrCreateRaceContact — default scope is the organisation (W0.6)',
     expect(id).toBe('race-winner')
   })
 
+  it('restrictToLocation: a sibling-location holder is adopted when the INSERT collides in-org', async () => {
+    // Host-list subscribe: match is scoped to the master location, so the
+    // lookup misses a Stillorgan-held email, the INSERT hits the per-org
+    // index, and the re-check adopts that sibling row rather than 500ing.
+    const { db, state } = makeConstrainedDb({
+      contacts: [{ id: 'stillorgan-contact', location_id: STILLORGAN, email: 'x@example.com' }],
+      locations: LOCATIONS,
+    })
+
+    const id = await findOrCreateRaceContact({ db, locationId: HATCH, email: 'x@example.com', name: 'X', restrictToLocation: true })
+
+    expect(id).toBe('stillorgan-contact')
+    expect(state.insertAttempts).toHaveLength(1)
+  })
+
   it('a 23505 with no in-org holder returns null rather than linking anywhere else', async () => {
     // The index refused the row but nothing in this org holds the email: the
     // only explanation is a row outside the organisation (or a half-applied

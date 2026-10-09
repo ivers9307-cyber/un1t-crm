@@ -43,6 +43,10 @@ import { escapeLikePattern } from './like-escape'
  * @param {string|null} [args.phone]
  * @param {boolean} [args.restrictToLocation=false]  when true, skip the
  *        sibling-location email fallback and match at this location only.
+ *        The INSERT is still judged by contacts_email_org_unique (per
+ *        organisation), so on a 23505 the in-org holder is adopted even
+ *        under this flag: a sibling-location contact is the same person,
+ *        and the alternative is a 500 for a known member.
  * @param {boolean} [args.restrictToOrg=false]  LEADCAP.1 — match at this
  *        location first, then fall back to sibling locations in the SAME
  *        organisation, never globally. Since W0.6 this is the DEFAULT for
