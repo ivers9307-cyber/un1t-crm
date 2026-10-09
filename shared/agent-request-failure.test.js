@@ -44,18 +44,3 @@ describe('failureExplanation (shared)', () => {
     expect(failureExplanation(null)).toBeNull()
   })
 })
-
-// EVENT-MOVE.7 — a refused event move carries the move's own code and its
-// plain message, never a Glofox code.
-describe('failureExplanation — event move', () => {
-  it('explains the refusal in the move\'s words and says how to fix it', () => {
-    const line = failureExplanation({ status: 'failed', details: { result: { ok: false, move_error: 'wave_full', message: 'That time is full.' } } })
-    expect(line).toMatch(/^The move did not go through: That time is full\./)
-    expect(line).toMatch(/retry/i)
-    expect(line).not.toMatch(/Glofox/)
-  })
-  it('falls back to the code when there is no message', () => {
-    expect(failureExplanation({ status: 'failed', details: { result: { ok: false, move_error: 'conflict' } } }))
-      .toMatch(/^The move did not go through \(conflict\)\./)
-  })
-})

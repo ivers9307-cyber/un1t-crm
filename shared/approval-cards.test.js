@@ -68,25 +68,3 @@ describe('CANCEL-FORM.6 — approvalCardSummary for form cancellations', () => {
     expect(approvalCardSummary({ kind: 'cancellation', details: { reason: 'Moving away' } })).toBe('Moving away')
   })
 })
-
-// EVENT-MOVE.7 — Mia's move request, summarised for staff.
-describe('approvalCardSummary — event_move', () => {
-  const details = {
-    entry_label: 'The Crushers', source_event_name: 'Hyrox Sim', source_event_date: '2099-10-18',
-    target_event_name: 'Hyrox Sim', target_event_date: '2099-10-25', target_wave_label: '09:30',
-    price_gap_cents: 1000, currency: 'EUR',
-  }
-  it('names the entry, both events with their dates and the new time, and a difference to collect', () => {
-    expect(approvalCardSummary({ kind: 'event_move', details }))
-      .toBe('Move The Crushers from Hyrox Sim, Sun 18 Oct to Hyrox Sim, Sun 25 Oct 09:30 · €10 difference to collect')
-  })
-  it('a cheaper date says it is not refunded; the same price says nothing', () => {
-    expect(approvalCardSummary({ kind: 'event_move', details: { ...details, price_gap_cents: -550, target_wave_label: null } }))
-      .toBe('Move The Crushers from Hyrox Sim, Sun 18 Oct to Hyrox Sim, Sun 25 Oct · €5.50 cheaper, not refunded')
-    expect(approvalCardSummary({ kind: 'event_move', details: { ...details, price_gap_cents: 0 } }))
-      .toBe('Move The Crushers from Hyrox Sim, Sun 18 Oct to Hyrox Sim, Sun 25 Oct 09:30')
-  })
-  it('has a label', () => {
-    expect(APPROVAL_KIND_LABELS.event_move).toBe('Event move')
-  })
-})

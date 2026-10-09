@@ -25,7 +25,7 @@ vi.mock('@/lib/agent/notify', async (importOriginal) => ({
 import { getCurrentUser } from '@/lib/auth'
 import { moveRegistration } from '@/lib/registration-move'
 import { sendAgentThreadMessage, agentConfirmationTemplates } from '@/lib/agent/notify'
-import { failureExplanation } from '@/lib/approvals/agent-request-why'
+import { explainFailure } from '@/lib/approvals/event-move-card'
 import { PATCH } from './route.js'
 
 const REG = 'r0000000-0000-0000-0000-000000000001'
@@ -154,7 +154,7 @@ describe('approve an event_move', () => {
     expect(final.details.failure).toBe('wave_full')
     expect(final.details.result).toEqual({ ok: false, move_error: 'wave_full', message: 'That time is full.' })
     expect(body.executed).toEqual({ ok: false, move_error: 'wave_full', message: 'That time is full.' })
-    expect(failureExplanation({ status: 'failed', details: final.details })).toMatch(/^The move did not go through: That time is full\./)
+    expect(explainFailure({ status: 'failed', details: final.details })).toMatch(/^The move did not go through: That time is full\./)
     expect(sendAgentThreadMessage).toHaveBeenCalledTimes(1)
     const text = sendAgentThreadMessage.mock.calls[0][1].text
     expect(text).toBe('We could not move your entry: that time is now full. The team will be in touch.')

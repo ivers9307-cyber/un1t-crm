@@ -73,14 +73,6 @@ const NO_CREDITS_AFTER_TRIAL =
 export function failureExplanation(row) {
   if (!row || row.status !== 'failed') return null
   const result = row.details?.result || {}
-  // EVENT-MOVE.7 — an approved event move that the move rules refused
-  // (moveRegistration): its own code and plain message, never Glofox's.
-  if (result.move_error) {
-    const said = typeof result.message === 'string' && result.message.trim()
-      ? `: ${result.message.trim()}`
-      : ` (${result.move_error}).`
-    return `The move did not go through${said} Nothing was moved. Fix it, then retry, or move the entry by hand from the event's teams page.`
-  }
   const code = result.message_code || result.reason || null
   if (!code) return 'The execution failed. Check the account in Glofox, fix what is wrong, then retry.'
   if (code === 'TRIAL_GRANT_FAILED' && result.outcome_unknown === true) return TRIAL_GRANT_NO_ANSWER
