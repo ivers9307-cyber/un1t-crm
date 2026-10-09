@@ -9,18 +9,22 @@ import { normalizeWaPhone } from './whatsapp-coexistence'
 import { manualTakeoverPatch } from './agent/core'
 import { WA_APP_ECHO_SOURCE } from './whatsapp-staff-sources'
 import { logError } from './log'
+import { orgLocationIdsFor, scopeFor } from './inbound-contact-match'
 
 /**
  * Match a synced contact to an EXISTING CRM contact by phone. If found,
  * ensure wa_phone linkage (stored without +) and return it. If not found,
  * do nothing (never create). Never touches marketing preferences.
  */
-export async function syncContactMatchOnly(db, { phone }) {
+export async function syncContactMatchOnly(db, { phone, locationId }) {
   const n = normalizeWaPhone(phone)
   if (!n) return { matched: false, contactId: null }
+  // W0.2 — inside the receiving number's organisation only (see
+  // inbound-contact-match.js); never another tenant's row.
   const { data: contact } = await db
     .from('contacts')
     .select('id, wa_phone')
+    .in('location_id', scopeFor(await orgLocationIdsFor(db, locationId)))
     .or(`wa_phone.eq.${n.without},wa_phone.eq.${n.withPlus},phone.eq.${n.without},phone.eq.${n.withPlus}`)
     .limit(1)
     .maybeSingle()
@@ -62,8 +66,10 @@ export async function ingestCoexistenceMessage(db, { locationId, descriptor }) {
   const n = peerPhone ? normalizeWaPhone(peerPhone) : null
   let contactId = null
   if (n) {
+    // W0.2 — organisation-scoped, as above.
     const { data: contact } = await db
       .from('contacts').select('id')
+      .in('location_id', scopeFor(await orgLocationIdsFor(db, locationId)))
       .or(`wa_phone.eq.${n.without},wa_phone.eq.${n.withPlus},phone.eq.${n.without},phone.eq.${n.withPlus}`)
       .limit(1).maybeSingle()
     contactId = contact?.id || null

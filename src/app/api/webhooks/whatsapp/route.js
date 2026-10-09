@@ -18,7 +18,7 @@ import { ensureMediaRehosted } from '@/lib/whatsapp-media-server'
 import { captureInboundBsuid } from '@/lib/whatsapp-bsuid'
 import { parseEchoMessages, parseSyncContacts, parseHistoryMessages, nextHistorySyncState, parseAccountUpdateEvent, nextCoexistenceLinkState, COEX_LINK_EVENTS } from '@/lib/whatsapp-coexistence'
 import { syncContactMatchOnly, ingestCoexistenceMessage } from '@/lib/whatsapp-coexistence-ingest'
-import { orgLocationIdsFor } from '@/lib/inbound-contact-match'
+import { orgLocationIdsFor, scopeFor } from '@/lib/inbound-contact-match'
 
 // Force Node.js runtime — we use node:crypto for HMAC verification.
 export const runtime = 'nodejs'
@@ -240,7 +240,7 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
   let contact = null
   const { data: existingContacts } = await db.from('contacts')
     .select('id, location_id')
-    .in('location_id', orgLocIds.length ? orgLocIds : ['00000000-0000-0000-0000-000000000000'])
+    .in('location_id', scopeFor(orgLocIds))
     .or(`wa_phone.eq.${phoneWithout},wa_phone.eq.${phoneWithPlus},phone.eq.${phoneWithout},phone.eq.${phoneWithPlus}`)
     .order('created_at', { ascending: true })
     .order('id', { ascending: true })
@@ -794,7 +794,7 @@ async function handleCoexistenceEvent(db, field, value) {
 
   if (field === 'smb_app_state_sync') {
     for (const c of parseSyncContacts(value)) {
-      try { await syncContactMatchOnly(db, c) } catch (e) { console.error('[wa-webhook] sync contact failed:', e?.message) }
+      try { await syncContactMatchOnly(db, { ...c, locationId }) } catch (e) { console.error('[wa-webhook] sync contact failed:', e?.message) }
     }
     return
   }

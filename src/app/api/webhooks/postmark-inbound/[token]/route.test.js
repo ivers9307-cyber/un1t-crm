@@ -2750,13 +2750,15 @@ describe('W0.2 — a From address matches contacts inside the receiving organisa
   })
 
   it('a failed locations read narrows to the mailbox location (fail safe, never open)', async () => {
-    db = makeDb({ locations: LOCATIONS, contacts: [AT_SIBLING, CONTACT], fail: { 'locations:select': { message: 'boom' } } })
+    // Only a SIBLING contact exists. With the organisation known it would be
+    // linked (first test above); with the locations read broken the scope
+    // shrinks to the mailbox's own location, so nothing is linked.
+    db = makeDb({ locations: LOCATIONS, contacts: [AT_SIBLING], fail: { 'locations:select': { message: 'boom' } } })
     createServerClient.mockImplementation(() => db)
 
-    await post(inbound())
+    const res = await post(inbound())
 
-    // Own-location contact still found; the sibling would have been too, but
-    // the scope shrank rather than widened.
-    expect(insertsInto(db, 'email_tickets')[0].payload.contact_id).toBe('c-1')
+    expect(insertsInto(db, 'email_tickets')[0].payload.contact_id).toBeNull()
+    expect((await res.json()).matched_via).toBe('recipient_address')
   })
 })

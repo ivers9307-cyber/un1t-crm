@@ -213,7 +213,7 @@ import { escapeLikePattern } from '@/lib/like-escape'
 import { storeInboundAttachments, discardStagedAttachments } from '@/lib/email-attachments-server'
 import { maybeNotifyInboundEmail } from '@/lib/email-inbound-push'
 import { extractSpamScore, classifyInboundSpam, SPAM_SETTINGS_COLUMNS } from '@/lib/email-spam'
-import { orgLocationIdsFor } from '@/lib/inbound-contact-match'
+import { orgLocationIdsFor, scopeFor } from '@/lib/inbound-contact-match'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -899,7 +899,7 @@ async function processInboundEmail(db, body, messageId, { deadLetter = (args) =>
   const orgLocIds = await orgLocationIdsFor(db, locationId)
   const { data: contacts, error: cErr } = await db.from('contacts')
     .select('id, location_id, created_at')
-    .in('location_id', orgLocIds.length ? orgLocIds : ['00000000-0000-0000-0000-000000000000'])
+    .in('location_id', scopeFor(orgLocIds))
     .ilike('email', escapeLikePattern(fromEmail))
     .limit(50)
   if (cErr) {

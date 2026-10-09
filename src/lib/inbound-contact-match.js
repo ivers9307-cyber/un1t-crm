@@ -7,6 +7,15 @@
 // lookup error, narrow to the receiving location (fail safe, never open).
 import { siblingLocationIds } from './sibling-locations'
 
+// A `.in('location_id', [])` is an empty filter in PostgREST, not "nothing",
+// so an empty scope is pinned to an id no row carries.
+export const NO_SCOPE_SENTINEL = '00000000-0000-0000-0000-000000000000'
+
+/** The `.in('location_id', …)` argument for a scope: never an empty list. */
+export function scopeFor(ids) {
+  return ids.length ? ids : [NO_SCOPE_SENTINEL]
+}
+
 /**
  * @param {object} db service-role client
  * @param {string|null} receivingLocationId the location owning the number / mailbox
