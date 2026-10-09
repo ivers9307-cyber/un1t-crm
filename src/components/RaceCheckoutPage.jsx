@@ -19,6 +19,7 @@ import { useRouter } from 'next/navigation'
 import { loadStripe } from '@stripe/stripe-js'
 import { Loader2, AlertCircle, Lock } from 'lucide-react'
 import { loadRevolutSdk, revolutMode, revolutPublicKey } from '@/lib/revolut-embed'
+import { GAP_PAYMENT_KIND } from '@/lib/registration-entry'
 
 const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || ''
 
@@ -85,6 +86,8 @@ export default function RaceCheckoutPage({ paymentId }) {
   useEffect(() => {
     if (!data) return
     if (data.status !== 'pending') return
+    // EVENT-MOVE.5 — a difference settled by hand: nothing to pay.
+    if (data.settled) return
     if (!targetRef.current || instanceRef.current) return
 
     // ─── Stripe Connect: mount Stripe Embedded Checkout inline ───────
@@ -211,6 +214,27 @@ export default function RaceCheckoutPage({ paymentId }) {
     )
   }
 
+  // EVENT-MOVE.5 — a moved entry's price difference: say so, list no roster.
+  const isGap = data.kind === GAP_PAYMENT_KIND
+
+  // A difference link that can no longer be paid: say why, mount nothing.
+  const closedMessage = isGap && data.settled
+    ? 'This difference is already settled, nothing to pay.'
+    : isGap && data.expired
+      ? 'This payment link has expired. Ask the event team for a new one.'
+      : null
+  if (closedMessage) {
+    return (
+      <div className="min-h-screen bg-black text-white flex items-center justify-center p-6">
+        <div className="lp-card-glow rounded-2xl p-8 max-w-sm text-center">
+          <AlertCircle size={32} className="mx-auto text-white/50 mb-3" />
+          <p className="font-semibold mb-1">{data.race?.name || 'Your event'}</p>
+          <p className="text-white/70">{closedMessage}</p>
+        </div>
+      </div>
+    )
+  }
+
   const fmt = (cents, currency) => {
     const major = (cents / 100).toFixed(2)
     if (currency === 'EUR') return `€${major}`
@@ -235,12 +259,15 @@ export default function RaceCheckoutPage({ paymentId }) {
             {/* top: event + team */}
             <div className="px-6 pt-6 pb-5">
               <h1 className="font-bold text-lg leading-snug">{data.race?.name || 'Your race'}</h1>
-              {data.registration?.team_name && (
+              {isGap && (
+                <p className="text-sm text-white/60 mt-1">Price difference</p>
+              )}
+              {!isGap && data.registration?.team_name && (
                 <p className="text-sm text-white/60 mt-1">
                   Team <strong className="text-white font-semibold">{data.registration.team_name}</strong>
                 </p>
               )}
-              {data.registration?.team_size > 1 && (
+              {!isGap && data.registration?.team_size > 1 && (
                 <p className="text-xs text-white/45 mt-1 tabular-nums">{data.registration.team_size} people</p>
               )}
             </div>
@@ -259,7 +286,7 @@ export default function RaceCheckoutPage({ paymentId }) {
               {data.booking_fee_cents > 0 && (
                 <div className="space-y-2 text-sm mb-4">
                   <div className="flex items-baseline justify-between text-white/70">
-                    <span>Entry</span>
+                    <span>{isGap ? 'Price difference' : 'Entry'}</span>
                     <span className="tabular-nums text-white/90">
                       {fmt(data.amount_cents - data.booking_fee_cents, data.currency)}
                     </span>

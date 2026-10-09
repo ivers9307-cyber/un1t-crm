@@ -467,3 +467,19 @@ describe('event merge tags — EVENT-MOVE.1', () => {
     expect(applyEventMergeTags('[{{old_event_name}}]', contact, {})).toBe('[]')
   })
 })
+
+describe('event merge tags — EVENT-MOVE.5', () => {
+  const contact = { first_name: 'Aoife', name: 'Aoife Byrne', email: 'a@x.ie' }
+  it('fills difference, old_event_name and pay_url in plain text', () => {
+    const out = applyEventMergeTags('{{old_event_name}} to {{event_name}} costs {{difference}} more: {{pay_url}}', contact,
+      { event_name: 'Oct 25', old_event_name: 'Oct 18', difference: '€10.00', pay_url: 'https://crm.test/event-pay/p1' })
+    expect(out).toBe('Oct 18 to Oct 25 costs €10.00 more: https://crm.test/event-pay/p1')
+  })
+  it('escapes them in HTML', () => {
+    const out = applyEventMergeTagsHtml('<p>{{difference}} {{pay_url}}</p>', contact, { difference: '<i>€1</i>', pay_url: 'https://x.test/?a=1&b="2"' })
+    expect(out).toBe('<p>&lt;i&gt;€1&lt;/i&gt; https://x.test/?a=1&amp;b=&quot;2&quot;</p>')
+  })
+  it('blank when absent', () => {
+    expect(applyEventMergeTags('[{{difference}}][{{pay_url}}]', contact, {})).toBe('[][]')
+  })
+})

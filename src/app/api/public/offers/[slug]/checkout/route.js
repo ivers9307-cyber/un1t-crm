@@ -9,6 +9,7 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { createOrder } from '@/lib/revolut'
 import { offerIsOpen } from '@/lib/sale-offers'
+import { resolveOffersHomeLocationId, offerBelongsToHome } from '@/lib/offers-home'
 import { validateBody } from '@/lib/validate'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 
@@ -34,7 +35,10 @@ export async function POST(request, props) {
   if (!limit.allowed) return rateLimitResponse(limit)
 
   const { data: offer } = await db.from('sale_offers').select('*').eq('slug', slug).maybeSingle()
-  if (!offer) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  const homeId = await resolveOffersHomeLocationId(db)
+  if (!offer || !offerBelongsToHome(offer, homeId)) {
+    return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  }
   if (!offerIsOpen(offer)) {
     return NextResponse.json({ success: false, error: 'sale_ended' }, { status: 410 })
   }

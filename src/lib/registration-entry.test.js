@@ -21,7 +21,7 @@ describe('registration-entry is browser-safe', () => {
   it('loading it does not load @/lib/supabase; loading registration-move does', async () => {
     const entry = await import('./registration-entry.js')
     expect(Object.keys(entry).sort()).toEqual([
-      'MOVE_ERRORS', 'MOVE_ERROR_MESSAGES', 'computePriceGapCents', 'entryHeadcount', 'entryLabel', 'entryLeadEmail', 'membersOf', 'perPersonFeeCents',
+      'GAP_PAYMENT_KIND', 'MOVE_ERRORS', 'MOVE_ERROR_MESSAGES', 'computePriceGapCents', 'entryHeadcount', 'entryLabel', 'entryLeadEmail', 'entryLeadName', 'membersOf', 'perPersonFeeCents',
     ].sort())
     expect(probe.supabaseLoaded).toBe(false)
     // Positive control: the server half does reach it, so the probe works.
@@ -58,3 +58,28 @@ describe('entryLeadEmail', async () => {
     expect(entryLeadEmail({})).toBe(null)
   })
 })
+
+describe('entryLeadName — the person entryLeadEmail writes to (EVENT-MOVE.5)', async () => {
+  const { entryLeadName } = await import('./registration-entry.js')
+  const team = (...m) => ({ team_members: m })
+  it('the lead contact, by name, when it has the address', () => {
+    expect(entryLeadName({ registration: { contact: { first_name: 'Aoife', last_name: 'Byrne', email: 'a@x.ie' }, teams: team({ name: 'Cap', role: 'captain', email: 'c@x.ie' }) } })).toBe('Aoife Byrne')
+  })
+  it('the captain when the contact has no address', () => {
+    expect(entryLeadName({ registration: { contact: { first_name: 'Aoife', email: null }, teams: team({ name: 'Dan', role: 'member', email: 'd@x.ie' }, { name: 'Cap', role: 'captain', email: 'c@x.ie' }) } })).toBe('Cap')
+  })
+  it('the first member with an address next', () => {
+    expect(entryLeadName({ registration: { teams: team({ name: 'No Mail', role: 'captain', email: null }, { name: 'Dan', role: 'member', email: 'd@x.ie' }) } })).toBe('Dan')
+  })
+  it('then the payer named on the payment', () => {
+    expect(entryLeadName({ registration: { teams: team({ name: 'No Mail', role: 'captain' }) }, payment: { contact_email: 'p@x.ie', contact_name: 'Payer Person' } })).toBe('Payer Person')
+  })
+  it('with nobody to write to, the best name there is, else null', () => {
+    expect(entryLeadName({ registration: { teams: team({ name: 'Cap', role: 'captain' }) } })).toBe('Cap')
+    expect(entryLeadName({})).toBe(null)
+  })
+  it('a contact with the address but no name falls back to the captain\'s name', () => {
+    expect(entryLeadName({ registration: { contact: { email: 'a@x.ie' }, teams: team({ name: 'Cap', role: 'captain' }) } })).toBe('Cap')
+  })
+})
+
