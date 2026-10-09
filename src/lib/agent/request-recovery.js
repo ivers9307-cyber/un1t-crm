@@ -25,6 +25,8 @@ export const EXECUTING_KINDS = new Set([
   'class_cancellation',
   'event_booking',
   'event_cancellation',
+  // EVENT-MOVE.7 — approving Mia's move request runs moveRegistration.
+  'event_move',
 ])
 
 // CANCEL-FORM.5 — kinds that execute ONLY when the location opted in

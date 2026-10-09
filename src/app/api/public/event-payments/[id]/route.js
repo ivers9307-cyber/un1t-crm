@@ -16,6 +16,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { refreshRacePaymentFromProvider } from '@/lib/race-payments'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
+import { GAP_PAYMENT_KIND } from '@/lib/registration-entry'
 
 export const runtime = 'nodejs'
 
@@ -36,14 +37,15 @@ export async function GET(request, props) {
   const { data, error } = await db
     .from('race_payments')
     .select(`
-      id, status, amount_cents, currency,
+      id, status, amount_cents, currency, kind, registration_move_id,
       payment_provider, payment_provider_ref,
       payment_checkout_token, payment_checkout_url, connected_account_id,
       application_fee_cents,
       race_event_id, race_registration_id,
       race:race_event_id ( id, name, slug ),
       registration:race_registration_id ( id, status, team_id,
-        teams:team_id ( name, size ) )
+        teams:team_id ( name, size ) ),
+      move:registration_move_id ( gap_settled_at, gap_settled_how )
     `)
     .eq('id', params.id)
     .maybeSingle()
@@ -54,7 +56,10 @@ export async function GET(request, props) {
 
   // If the front-end is asking and the payment is still pending,
   // refresh from the provider in case the webhook hasn't landed yet.
-  // Side effect: markRacePaymentStatus may update the row inline.
+  // Side effect: markRacePaymentStatus may update the row inline. `kind` and
+  // `registration_move_id` are selected above for it: a paid price
+  // difference (EVENT-MOVE.5) must take its move_gap branch here too, never
+  // the entry side effects.
   let row = data
   if (
     data.status === 'pending' &&
@@ -68,13 +73,14 @@ export async function GET(request, props) {
         const { data: re } = await db
           .from('race_payments')
           .select(`
-            id, status, amount_cents, currency,
+            id, status, amount_cents, currency, kind, registration_move_id,
             payment_provider, payment_provider_ref,
             payment_checkout_token, payment_checkout_url,
             race_event_id, race_registration_id,
             race:race_event_id ( id, name, slug ),
             registration:race_registration_id ( id, status, team_id,
-              teams:team_id ( name, size ) )
+              teams:team_id ( name, size ) ),
+            move:registration_move_id ( gap_settled_at, gap_settled_how )
           `)
           .eq('id', params.id)
           .maybeSingle()
@@ -85,11 +91,23 @@ export async function GET(request, props) {
     }
   }
 
+  // EVENT-MOVE.5 — a difference link that can no longer be paid: expired
+  // (the provider session lapsed, or it failed) or settled by hand. The
+  // checkout shows a message instead of mounting a widget.
+  const isGap = row.kind === GAP_PAYMENT_KIND
+  const settled = isGap && !!row.move?.gap_settled_at
+
   return NextResponse.json({
     success: true,
     data: {
       id: row.id,
       status: row.status,
+      // EVENT-MOVE.5 — 'move_gap' is a moved entry's price difference: the
+      // checkout labels it so and shows no roster.
+      kind: row.kind || 'entry',
+      expired: isGap && (row.status === 'abandoned' || row.status === 'failed'),
+      settled,
+      settled_how: settled ? (row.move.gap_settled_how || null) : null,
       amount_cents: row.amount_cents,
       // The per-ticket booking fee UN1T adds on top (0/null for Revolut and
       // internal events). Ticket subtotal = amount_cents − booking_fee_cents.

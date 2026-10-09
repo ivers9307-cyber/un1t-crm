@@ -288,6 +288,13 @@ const config = [
       // resolves with { data, error } instead of throwing. Born clean, armed
       // on arrival.
       'src/lib/waitlist-entry.js',
+      // EVENT-MOVE.5 — the race payment lifecycle: the status write that
+      // decides whether a payment completed (and, for a price difference,
+      // settles its move) and every write around it. A bare write here
+      // reported a completed payment that had not been recorded. Writes after
+      // a committed payment log, never throw.
+      'src/lib/race-payments.js',
+      'src/lib/race-gap-payment.js',
       // BLOCKEDIT.1 — the shift editor (PUT beside the existing DELETE) and its
       // */5 notice arm. Every write judges its error (and the block UPDATE its
       // rows) from day one. `[[]id]`: files entries are minimatch globs, and a

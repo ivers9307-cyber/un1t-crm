@@ -21,7 +21,9 @@
 //     studio's booking system — requires verify_identity, exactly like
 //     the class tools.
 //   cancel_event_registration /
-//   reschedule_event_wave       ALWAYS require verify_identity, like
+//   reschedule_event_wave /
+//   list_event_move_options /
+//   move_event_entry            ALWAYS require verify_identity, like
 //     cancel_class_booking. These change something the customer already
 //     has; the previous `verifiedContactId || contactId` gate let an
 //     unverified sender on a thread bound to a contact (a duplicate /
@@ -43,6 +45,8 @@
 // here.
 
 import { linkedAccountsForContact, hasBookableMembership } from '@/lib/person-accounts'
+import { dateLabel, dublinToday } from './event-date-label'
+import { EVENT_MOVE_TOOLS, executeMoveTool } from './event-move-tools'
 
 export const EVENT_TOOLS = [
   {
@@ -112,7 +116,8 @@ export const EVENT_TOOLS = [
       '(e.g. from the 9am wave to the 10:30 wave), capacity permitting, once their identity ' +
       'is verified. Get the wave_id from ' +
       'list_upcoming_events and confirm the new time with them first. Moving to a different ' +
-      'EVENT is a cancel + a new booking — handle those separately with their own confirmations.',
+      'EVENT or a different date is NOT this tool, and never a cancel plus a new booking: use ' +
+      'list_event_move_options, then move_event_entry.',
     input_schema: {
       type: 'object',
       properties: {
@@ -123,6 +128,8 @@ export const EVENT_TOOLS = [
       required: ['registration_id', 'new_wave_id'],
     },
   },
+  // EVENT-MOVE.7 — list_event_move_options, move_event_entry (event-move-tools.js).
+  ...EVENT_MOVE_TOOLS,
 ]
 
 export const EVENT_TOOL_NAMES = new Set(EVENT_TOOLS.map(t => t.name))
@@ -182,26 +189,6 @@ export function classifyEventCancellation({ isOwner, status, eventDate, paidCent
   if (status === 'cancelled' || status === 'no_show') return { action: null, reason: 'already_cancelled' }
   if (!eventDate || String(eventDate) < dublinToday(nowMs)) return { action: null, reason: 'event_past' }
   return (Number(paidCents) || 0) > 0 ? { action: 'draft' } : { action: 'direct' }
-}
-
-const DUBLIN_DATE_FMT = new Intl.DateTimeFormat('en-IE', {
-  timeZone: 'Europe/Dublin', weekday: 'short', day: 'numeric', month: 'short',
-})
-
-// race_date is a DATE (Dublin wall-clock by convention) — anchor on
-// noon UTC so the label never shifts a day in any timezone (the
-// booking-confirmations lesson).
-function dateLabel(dateStr) {
-  const parts = {}
-  for (const p of DUBLIN_DATE_FMT.formatToParts(new Date(`${dateStr}T12:00:00Z`))) {
-    parts[p.type] = p.value
-  }
-  return `${parts.weekday} ${parts.day} ${parts.month}`
-}
-
-function dublinToday(nowMs) {
-  // en-CA gives YYYY-MM-DD, comparable to the DATE column as a string.
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Dublin' }).format(new Date(nowMs))
 }
 
 const MAX_EVENTS = 8
@@ -508,6 +495,10 @@ export async function executeEventTool(toolName, input, ctx) {
     return { booked: false, reason: result.reason, message: 'The registration did not go through — relay honestly and offer a handoff.' }
   }
 
+  if (toolName === 'list_event_move_options' || toolName === 'move_event_entry') {
+    return executeMoveTool(toolName, input, ctx)
+  }
+
   if (toolName === 'cancel_event_registration' || toolName === 'reschedule_event_wave') {
     // AUTH (MIA-REVIEW.3) — changing something the customer already HAS needs
     // the same hard verification as cancel_class_booking. The old
@@ -563,7 +554,7 @@ export async function executeEventTool(toolName, input, ctx) {
         return { rescheduled: false, reason: 'wave_full', message: 'That wave is full — offer another wave from the list.' }
       }
       if (result.error === 'wrong_event') {
-        return { error: 'wrong_event', message: 'That wave belongs to a different event — a different event is a cancel + new booking.' }
+        return { error: 'wrong_event', message: 'That wave belongs to a different event. A different event is not a cancel and rebook: use list_event_move_options, then move_event_entry.' }
       }
       return { rescheduled: false, reason: result.error, message: 'The move did not go through — relay honestly and offer a handoff.' }
     }

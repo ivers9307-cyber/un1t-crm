@@ -68,6 +68,10 @@ export const UpdateSchema = z.object({
   // EVENT-MOVE.1 (mig 708) — copy for the "your entry has moved" email.
   moved_email_subject: z.string().max(4000).nullable().optional(),
   moved_email_intro: z.string().max(4000).nullable().optional(),
+  // EVENT-MOVE.5 (mig 710) — copy for the two price-difference emails (the
+  // payment link and the receipt share it).
+  gap_email_subject: z.string().max(4000).nullable().optional(),
+  gap_email_intro: z.string().max(4000).nullable().optional(),
   confirmation_email_template_id: uuidLike.nullable().optional(),
   reminder_email_template_id: uuidLike.nullable().optional(),
   // EVENT-COMMS-LOC (mig 553) — flows through the generic scalar patch; in-org
@@ -91,6 +95,7 @@ async function loadRace(db, id) {
       confirmation_email_subject, confirmation_email_intro,
       reminder_email_subject, reminder_email_intro,
       moved_email_subject, moved_email_intro,
+      gap_email_subject, gap_email_intro,
       confirmation_email_template_id, reminder_email_template_id,
       sending_location_id,
       waves:race_waves ( id, start_time, capacity, label, display_order ),

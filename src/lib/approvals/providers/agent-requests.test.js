@@ -169,3 +169,14 @@ describe('agentRequestsProvider — account summary enrichment', () => {
     expect(items[0].why).toMatch(/attended before/i)
   })
 })
+
+// EVENT-MOVE.7 — Mia's move request on the /approvals card.
+describe('agentRequestSubtitle — event_move', () => {
+  it('uses the event-move card summary (web-only module)', () => {
+    const s = agentRequestSubtitle({ kind: 'event_move', details: {
+      entry_label: 'Ann Example', source_event_name: 'Hyrox Sim', source_event_date: '2099-10-18',
+      target_event_name: 'Hyrox Sim', target_event_date: '2099-10-25', target_wave_label: '09:30', price_gap_cents: 1000, currency: 'EUR',
+    } })
+    expect(s).toBe('Move Ann Example from Hyrox Sim, Sun 18 Oct to Hyrox Sim, Sun 25 Oct 09:30 · €10 difference to collect')
+  })
+})
