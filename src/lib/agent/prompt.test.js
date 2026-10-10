@@ -410,9 +410,17 @@ describe('buildCustomerSystemPromptParts — businessName', () => {
     expect(JSON.stringify(parts)).toContain('CCF Autos')
   })
 
-  it('falls back to UN1T when businessName is absent', () => {
+  // W1.S3 — the brand comes from getLocationBranding (which ends in the
+  // location's own name); the prompt itself never names a gym.
+  it('names no gym when businessName is absent (no literal fallback)', () => {
     const parts = buildCustomerSystemPromptParts({})
-    expect(JSON.stringify(parts)).toContain('UN1T')
+    expect(JSON.stringify(parts)).not.toContain('UN1T')
+    expect(parts.stable).toContain('You are the AI assistant for a boutique fitness studio.')
+  })
+
+  it('reads "the AI assistant for {brand}, a boutique fitness studio" with a brand', () => {
+    const parts = buildCustomerSystemPromptParts({ businessName: 'Gym A', agentName: 'Mia' })
+    expect(parts.stable).toContain('You are Mia, the AI assistant for Gym A, a boutique fitness studio.')
   })
 })
 
