@@ -583,8 +583,9 @@ export function applyMergeTags(html, contact, extras = {}) {
  * preferences row, so this returns null for nobody today; it is the
  * closed door, not the fix for a live outage.
  *
- * The caller provides baseUrl from getAppUrl() so this is
- * unit-testable without env vars.
+ * The caller provides baseUrl — since W1.L3a the sending location's tenant
+ * host from resolveCustomerBaseUrl() — so this is unit-testable without
+ * env vars or a database.
  *
  * @returns {string|null} the URL, or null when there is no token
  */

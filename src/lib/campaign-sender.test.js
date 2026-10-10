@@ -23,6 +23,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('./app-url.js', () => ({ getAppUrl: () => 'https://crm.test' }))
+// W1.L3a — customer-facing links are minted on the campaign location's tenant
+// host. The default answers the CRM host so every pre-existing assertion on
+// 'https://crm.test' still reads as before; the W1.L3a suite overrides it.
+vi.mock('./tenant-host.js', () => ({ resolveCustomerBaseUrl: vi.fn(async () => 'https://crm.test') }))
 vi.mock('./postmark.js', async (importOriginal) => {
   const actual = await importOriginal()
   return { ...actual, sendBatch: vi.fn(), buildAudienceQueryAsync: vi.fn() }
@@ -31,6 +35,7 @@ vi.mock('./postmark.js', async (importOriginal) => {
 import { sendBatch, buildAudienceQueryAsync } from './postmark.js'
 import { _resetTenantEmailCache } from './tenant-email.js'
 import { tickCampaignSend, MAX_SEND_ATTEMPTS, SENDING_LEASE_MS } from './campaign-sender.js'
+import { resolveCustomerBaseUrl } from './tenant-host.js'
 
 // ── chainable fake ─────────────────────────────────────────────────
 // Each db.from() call creates a recorded "statement" ({ table, ops }).
@@ -1867,5 +1872,53 @@ describe('tickCampaignSend — view in browser (WEBVIEW.1)', () => {
     await tickCampaignSend(db, { ...campaign, postmark_stream: 'outbound' })
 
     expect(sendBatch.mock.calls[0][0][0].htmlBody).not.toContain('/view-email/')
+  })
+})
+
+// W1.L3a — every customer-facing link in a campaign email (unsubscribe,
+// preference centre, view in browser) is minted on the CAMPAIGN LOCATION's
+// tenant host — resolveCustomerBaseUrl(db, campaign.location_id) — never on
+// the CRM host. A second gym's members must never see crm.repset.ie.
+describe('tickCampaignSend — links on the tenant host (W1.L3a)', () => {
+  const ORIGINAL_SECRET = process.env.SUPABASE_SERVICE_ROLE_KEY
+  beforeEach(() => { process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-signing-secret' })
+  afterEach(() => {
+    if (ORIGINAL_SECRET === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY
+    else process.env.SUPABASE_SERVICE_ROLE_KEY = ORIGINAL_SECRET
+  })
+
+  it("unsubscribe, preferences and view-in-browser links use the campaign location's tenant host", async () => {
+    resolveCustomerBaseUrl.mockResolvedValueOnce('https://gym-a.repset.ie')
+    const { db } = makeDb(routeFor({ candidates: [makeRecipient('r1', 0)] }))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, {
+      ...campaign,
+      location_id: 'loc-a1',
+      html_content: '<html><body><p>Hi {{first_name}} — {{preference_url}}</p></body></html>',
+    })
+
+    expect(resolveCustomerBaseUrl).toHaveBeenCalledWith(db, 'loc-a1')
+    const email = sendBatch.mock.calls[0][0][0]
+    expect(email.unsubscribeUrl).toContain('https://gym-a.repset.ie/unsubscribe/')
+    expect(email.htmlBody).toContain('https://gym-a.repset.ie/unsubscribe/')
+    expect(email.htmlBody).toContain('https://gym-a.repset.ie/preferences/')
+    expect(email.htmlBody).toContain('https://gym-a.repset.ie/view-email/')
+    expect(email.htmlBody).not.toContain('crm.test')
+    expect(email.unsubscribeUrl).not.toContain('crm.test')
+  })
+
+  it('resolves the host ONCE per chunk, not once per recipient', async () => {
+    const { db } = makeDb(routeFor({ candidates: [makeRecipient('r1', 0), makeRecipient('r2', 0)] }))
+    sendBatch.mockResolvedValue([
+      { ErrorCode: 0, MessageID: 'pm-1' },
+      { ErrorCode: 0, MessageID: 'pm-2' },
+    ])
+    resolveCustomerBaseUrl.mockClear()
+
+    await tickCampaignSend(db, campaign)
+
+    expect(resolveCustomerBaseUrl).toHaveBeenCalledTimes(1)
+    expect(sendBatch.mock.calls[0][0]).toHaveLength(2)
   })
 })

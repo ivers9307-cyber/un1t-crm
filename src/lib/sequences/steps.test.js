@@ -27,6 +27,10 @@ vi.mock('@/lib/postmark', () => ({
   appendUnsubscribeFooter: vi.fn((html) => html),
 }))
 vi.mock('@/lib/app-url', () => ({ getAppUrl: vi.fn(() => 'https://crm.test') }))
+// W1.L3a — the sequence's location decides the host its email links land on.
+// Defaults to the CRM host so the pre-existing 'https://crm.test' assertions
+// keep reading as before; the W1.L3a test overrides it.
+vi.mock('@/lib/tenant-host', () => ({ resolveCustomerBaseUrl: vi.fn(async () => 'https://crm.test') }))
 vi.mock('@/lib/whatsapp', () => ({
   sendTemplateMessage: vi.fn(),
   buildTemplateComponents: vi.fn(),
@@ -42,6 +46,7 @@ vi.mock('./triggers.js', () => ({ triggerSequencesForPipelineStageChange: vi.fn(
 const steps = await import('./steps.js')
 const { triggerSequencesForPipelineStageChange } = await import('./triggers.js')
 const { logWarn } = await import('@/lib/log')
+const { resolveCustomerBaseUrl } = await import('@/lib/tenant-host')
 
 beforeEach(() => {
   triggerSequencesForPipelineStageChange.mockReset()
@@ -1103,6 +1108,26 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
     })
     expect(out).toBe('cccccccc-0000-0000-0000-000000000003')
     expect(pm.sendMarketingEmail).toHaveBeenCalledTimes(1)
+  })
+
+  // W1.L3a — the unsubscribe + preference links in a sequence email are minted
+  // on the SEQUENCE LOCATION's tenant host (resolveCustomerBaseUrl), so a
+  // second gym's enrolled leads never see crm.repset.ie.
+  it("W1.L3a — unsubscribe and preference links use the sequence location's tenant host", async () => {
+    resolveCustomerBaseUrl.mockResolvedValueOnce('https://gym-a.repset.ie')
+    const db = emailDb()
+    await steps.sendEmailStep(db, { enrollment: { id: 'e9' }, step, sequence, contact: consentedContact })
+    expect(resolveCustomerBaseUrl).toHaveBeenCalledWith(db, sequence.location_id)
+    expect(pm.sendMarketingEmail).toHaveBeenCalledWith(expect.objectContaining({
+      unsubscribeUrl: 'https://gym-a.repset.ie/unsubscribe/c9',
+    }))
+    expect(pm.applyMergeTags).toHaveBeenCalledWith(
+      step.html_content, consentedContact,
+      expect.objectContaining({
+        unsubscribe_url: 'https://gym-a.repset.ie/unsubscribe/c9',
+        preference_url: 'https://gym-a.repset.ie/preferences/c9',
+      }),
+    )
   })
 
   it('missing email still throws (unchanged contract)', async () => {

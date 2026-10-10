@@ -133,6 +133,23 @@ export const BRANDS = [
       '/race-pay/',     // + its checkout (legacy alias for /event-pay/)
       '/api/public/',   // backing API for all of the above
       '/api/webhooks/', // future-proof if a payment redirect lands here
+      // W1.L2 — the rest of the CUSTOMER FLOW, mirrored from
+      // DB_BRAND_DEFAULTS (src/lib/tenant-domains-edge.js) so UN1T's own
+      // marketing host serves the same links a tenant host does. The
+      // operator may build links on THIS host (settings public_base_url),
+      // and W1.L3 mints them on the org's host; every entry is already
+      // public on the CRM host (the token in the path, or the host session
+      // inside /host, is the credential). Raw startsWith, as above.
+      '/unsubscribe/',     // one-click unsubscribe landing (email footer)
+      '/preferences/',     // the preference centre (email footer)
+      '/view-email/',      // "view in browser" hosted copy
+      '/api/unsubscribe/', // + their backing routes (token in the path)
+      '/api/preferences/',
+      '/class-pay/',       // the paid class leg of the booking flow
+      '/h/',               // host public pages + mailing-list signup (HOST-EMAIL.2)
+      '/host',             // the host portal (auth inside: getCurrentHost)
+      '/host-connect/',    // host self-serve Stripe onboarding (signed token in the path)
+      '/api/host/',        // host-scoped API (getCurrentHost)
     ],
     rootHandler: 'rewrite',
     rootRewriteTo: '/welcome',

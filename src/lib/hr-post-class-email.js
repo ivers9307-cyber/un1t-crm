@@ -34,6 +34,7 @@ import { normalizeClassName } from '@/lib/hr-analytics'
 import { logInfo, logWarn, logError } from '@/lib/log'
 import { formatWeekdayShortDateTimeInTZ } from '@/lib/dates'
 import { getAppUrl, getMemberAppUrl } from '@/lib/app-url'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 
 const HISTORY_LOOKBACK_DAYS = 90
 
@@ -58,6 +59,13 @@ const HISTORY_LOOKBACK_DAYS = 90
 //
 // Both bases are resolved per call (not at module load) so a stubbed env is
 // honoured and the throw lands at the site that needs the value.
+//
+// W1.L3a — the stop-emails link is now minted on the SESSION LOCATION's
+// tenant host (<org.slug>.repset.ie or its custom domain): sendPostClassEmail
+// resolves it (resolveCustomerBaseUrl, which floors to getAppUrl() and never
+// throws past it) and hands it to the pure composeEmail as `customerBaseUrl`.
+// A compose with no host handed in keeps the getAppUrl() seam above, so the
+// throw-when-unset contract is unchanged.
 
 // ── (1) load ────────────────────────────────────────────────────
 
@@ -195,7 +203,7 @@ export async function loadContextForSession(db, sessionId) {
  * no Date.now() unless caller passes nowMs. Returns subject + html
  * + text. Tested standalone.
  */
-export function composeEmail(ctx, { nowMs = Date.now() } = {}) {
+export function composeEmail(ctx, { nowMs = Date.now(), customerBaseUrl = null } = {}) {
   const { session, thisSession, history, eventTypeName, contact } = ctx
   const report = buildSessionReport({ session, thisSession, history, eventTypeName, cta: ctx.cta }, { nowMs })
   // Adapt the report back to the shapes the existing renderers read, so
@@ -252,6 +260,7 @@ export function composeEmail(ctx, { nowMs = Date.now() } = {}) {
       firstName, classLabel, startedAt, points, peak, avg, durationMin,
       breakdown, analytics, vcLine, sessionUrl, contact, sessionId: session.id, na,
       unsubscribeToken: ctx.unsubscribeToken || null,
+      customerBaseUrl,
     }),
     analytics,
   }
@@ -333,7 +342,7 @@ function renderText({ firstName, classLabel, startedAt, points, peak, avg, durat
   return lines.join('\n')
 }
 
-function renderHtml({ firstName, classLabel, startedAt, points, peak, avg, durationMin, breakdown, analytics, vcLine, sessionUrl, contact, sessionId, na, unsubscribeToken }) {
+function renderHtml({ firstName, classLabel, startedAt, points, peak, avg, durationMin, breakdown, analytics, vcLine, sessionUrl, contact, sessionId, na, unsubscribeToken, customerBaseUrl }) {
   const ctLabel = classTypeLabel(analytics.classType)
   const tPoints = trendLabel(analytics.overall.pointsTrend)
   const tPeak = trendLabel(analytics.overall.peakTrend)
@@ -389,7 +398,7 @@ function renderHtml({ firstName, classLabel, startedAt, points, peak, avg, durat
       </ul>
     </div>`
 
-  const unsubUrl = unsubscribeUrl({ contactId: contact?.id, sessionId, unsubscribeToken })
+  const unsubUrl = unsubscribeUrl({ contactId: contact?.id, sessionId, unsubscribeToken, customerBaseUrl })
 
   return `
 <!doctype html>
@@ -468,12 +477,15 @@ function renderHtml({ firstName, classLabel, startedAt, points, peak, avg, durat
  * the legacy `cid`+`sid` PAIR, which the endpoint still accepts — the session
  * has to belong to the contact, so the pair is a capability too.
  */
-function unsubscribeUrl({ contactId, sessionId, unsubscribeToken }) {
+function unsubscribeUrl({ contactId, sessionId, unsubscribeToken, customerBaseUrl }) {
   const params = unsubscribeToken
     ? new URLSearchParams({ scope: 'hr', token: unsubscribeToken })
     : new URLSearchParams({ scope: 'hr', cid: contactId || '', sid: sessionId || '' })
-  // CRM base — this deployment serves /api/preferences/hr-emails (see top).
-  return `${getAppUrl()}/api/preferences/hr-emails?${params.toString()}`
+  // W1.L3a — the session location's tenant host when the send path handed one
+  // in; otherwise the CRM base (this deployment serves
+  // /api/preferences/hr-emails, and so does every tenant host since W1.L2).
+  const baseUrl = customerBaseUrl || getAppUrl()
+  return `${baseUrl}/api/preferences/hr-emails?${params.toString()}`
 }
 
 function escapeHtml(s) {
@@ -578,7 +590,12 @@ export async function sendPostClassEmail(db, sessionId, { nowMs = Date.now() } =
 
   let composed
   try {
-    composed = composeEmail(ctx, { nowMs })
+    // W1.L3a — the stop-emails link lands on the session location's tenant
+    // host. Inside the try on purpose: the resolver's floor is getAppUrl(),
+    // which throws when unset, and that throw must take the same stamp-and-
+    // stop exit as a compose throw (the catch below), never re-arm the sweep.
+    const customerBaseUrl = await resolveCustomerBaseUrl(db, session.location_id)
+    composed = composeEmail(ctx, { nowMs, customerBaseUrl })
   } catch (e) {
     // URLSEAM.1 review — this catch used to `return` without stamping, which
     // re-armed the exact loop `markProcessed` exists to stop: the auto-end
@@ -586,9 +603,10 @@ export async function sendPostClassEmail(db, sessionId, { nowMs = Date.now() } =
     // minutes, so a compose that throws meant a re-compose (and a re-fired
     // "session ready" push) on every tick, forever.
     //
-    // That was latent before URLSEAM.1 and reachable after it: `composeEmail`
-    // now calls `getAppUrl()` (via unsubscribeUrl), which THROWS by design
-    // when NEXT_PUBLIC_APP_URL is unset. Every way composeEmail can throw is
+    // That was latent before URLSEAM.1 and reachable after it: the host
+    // resolve above floors to `getAppUrl()` (and a bare `composeEmail` still
+    // calls it via unsubscribeUrl), which THROWS by design when
+    // NEXT_PUBLIC_APP_URL is unset. Every way this try block can throw is
     // permanent for the life of the deployment — it is a pure function of the
     // already-loaded ctx plus env, so nothing about the next tick differs —
     // which makes "stamp and stop" strictly better than "retry forever".

@@ -14,7 +14,10 @@ export const CREDENTIAL_COLUMN_GRANTS = Object.freeze({
   // update = exactly what LocationForm (edit) and CarDepositSettings write.
   locations: Object.freeze({
     select: Object.freeze(['id', 'name', 'slug', 'address', 'phone', 'email', 'timezone', 'active',
-      'created_at', 'updated_at', 'country', 'features', 'organization_id', 'is_host_anchor']),
+      'created_at', 'updated_at', 'country', 'features', 'organization_id', 'is_host_anchor',
+      // W1.M1 (mig 717): the membership source is public identity, not a
+      // credential; the phone's Studio tab and the browser gate on it.
+      'membership_source']),
     update: Object.freeze(['name', 'slug', 'address', 'phone', 'email', 'timezone', 'country', 'active',
       'monthly_contractor_budget_eur', 'invoices_inbound_slug', 'updated_at', 'car_deposit_default_amount',
       'car_deposit_terms', 'car_deposit_terms_version', 'car_deposit_receipt_sms_enabled']),

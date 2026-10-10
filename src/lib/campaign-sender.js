@@ -81,7 +81,7 @@ import { injectPreheader, htmlToPlainText } from './email-content.js'
 import { resolveAbPhase, assignAbVariants, clampAbTestPct, decideAbOutcome, subjectForVariant, AB_FALLBACK_VARIANT } from './campaign-ab.js'
 import { frequencyCapFromLocationSettings, capCutoffIso, stampMarketingTouch, CAMPAIGN_CAP_SKIP_AFTER_MS } from './frequency-cap.js'
 import { loadNonOpenerContactIds } from './campaign-resend.js'
-import { getAppUrl } from './app-url.js'
+import { resolveCustomerBaseUrl } from './tenant-host.js'
 import { logInfo } from './log.js'
 import { buildCampaignViewUrl, prependViewInBrowserLink, fetchLocationEmailCopy } from './campaign-web-view.js'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
@@ -734,7 +734,14 @@ export async function tickCampaignSend(db, campaign) {
   }
 
   // Build email batch for this chunk.
-  const baseUrl = getAppUrl()
+  // W1.L3a — every customer link below (view-in-browser, unsubscribe,
+  // preference centre) is minted on the CAMPAIGN LOCATION's tenant host
+  // (<org.slug>.repset.ie, or its custom domain), never on the CRM host: a
+  // second gym's members must never see crm.repset.ie. Resolved ONCE per
+  // chunk (it is a property of the studio, not the person); the resolver
+  // floors to the CRM host and never throws past it, so a link is always
+  // minted. W1.L2 made the tenant-domain tier serve every path built here.
+  const baseUrl = await resolveCustomerBaseUrl(db, campaign.location_id)
 
   // EMAIL-MAILBOX-ADMIN.1 — where replies to this campaign go. Resolved ONCE
   // per chunk, not per recipient. A per-campaign reply_to still wins; below
