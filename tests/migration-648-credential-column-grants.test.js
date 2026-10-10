@@ -19,13 +19,29 @@
 // Fictional values only (SYNTH-…): the repo is public.
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { PGlite } from '@electric-sql/pglite'
-import { CREDENTIAL_COLUMN_GRANTS, NO_CLIENT_ACCESS_TABLES, CREDENTIAL_GRANT_TABLES } from './helpers/credential-column-grants.js'
+import { CREDENTIAL_COLUMN_GRANTS, NO_CLIENT_ACCESS_TABLES, CREDENTIAL_GRANT_TABLES, CREDENTIAL_GRANT_MIGRATION } from './helpers/credential-column-grants.js'
+import { sqlCode } from './helpers/sql-code.js'
 
-const MIG_648 = readFileSync(
-  path.resolve(import.meta.dirname, '../supabase/migrations/648_credential_column_grants.sql'), 'utf8')
+const MIGRATIONS_DIR = path.resolve(import.meta.dirname, '../supabase/migrations')
+const MIG_648 = readFileSync(path.join(MIGRATIONS_DIR, '648_credential_column_grants.sql'), 'utf8')
+
+// Migrations AFTER 648 that add a column to, or grant a column on, one of the
+// five tables (717 W1.M1 `locations.membership_source` was the first). They
+// are replayed after 648 so the catalog assertions below judge TODAY's
+// grants against the helper's lists, which the 3c guard requires to carry
+// every later column. Each must be replay-safe on its own (a second run is a
+// no-op: see the idempotency test) and must not need tables the fixture
+// lacks; one that does extends BASE_SCHEMA in its own PR.
+const LATER_TABLE_RE = new RegExp(
+  `\\b(?:alter\\s+table\\s+(?:only\\s+)?(?:if\\s+exists\\s+)?|grant\\s+(?:select|update|insert|references)\\s*\\([^)]*\\)\\s+on\\s+(?:table\\s+)?)(?:public\\.)?(?:${CREDENTIAL_GRANT_TABLES.join('|')})\\b`, 'i')
+const LATER_MIGRATIONS = readdirSync(MIGRATIONS_DIR)
+  .filter((f) => f.endsWith('.sql') && parseInt(f, 10) > CREDENTIAL_GRANT_MIGRATION)
+  .sort()
+  .map((file) => ({ file, sql: readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8') }))
+  .filter(({ sql }) => LATER_TABLE_RE.test(sqlCode(sql)))
 
 const ORG = '0a000000-0000-0000-0000-00000000000a'
 const LOC_A = 'a0000000-0000-0000-0000-00000000000a'
@@ -279,12 +295,24 @@ async function tableColumns(table) {
 const sorted = (xs) => [...xs].sort()
 const ALL_TABLE_PRIVS = ['DELETE', 'INSERT', 'REFERENCES', 'SELECT', 'TRIGGER', 'TRUNCATE', 'UPDATE']
 
+/** migrate: false = prod before 648; true = 648 then every later credential-table migration. */
 async function boot({ migrate = false } = {}) {
   db = new PGlite()
   await runSql(BASE_SCHEMA)
   await runSql(PROD_POLICIES)
   await runSql(SEED)
-  if (migrate) await runSql(MIG_648)
+  if (migrate) {
+    await runSql(MIG_648)
+    for (const { sql } of LATER_MIGRATIONS) await runSql(sql)
+  }
+}
+
+/** Every `GRANT <priv> (cols) ON public.<table> TO authenticated` column list in 648 + the later migrations. */
+function grantedColumns(table, priv, files = [MIG_648, ...LATER_MIGRATIONS.map((m) => m.sql)]) {
+  const re = new RegExp(`^GRANT ${priv} \\(([^)]*)\\) ON public\\.${table} TO authenticated;`, 'gm')
+  const out = []
+  for (const sql of files) for (const m of sqlCode(sql).matchAll(re)) out.push(...m[1].split(',').map((c) => c.trim()))
+  return out
 }
 
 describe('before 648 — the leak and the write hole (prod today)', () => {
@@ -365,22 +393,71 @@ describe('after 648 — the catalog', () => {
     expect(r).toEqual({ a_tbl: false, a_col: false, n_tbl: false, n_col: false })
   })
 
-  it("the migration's GRANT lines name exactly the helper's lists", () => {
+  it("the migrations' GRANT lines (648 + every later credential-table migration) name exactly the helper's lists", () => {
     for (const [table, { select, update }] of Object.entries(CREDENTIAL_COLUMN_GRANTS)) {
-      const sel = MIG_648.match(new RegExp(`^GRANT SELECT \\(([^)]*)\\) ON public\\.${table} TO authenticated;`, 'm'))
-      const upd = MIG_648.match(new RegExp(`^GRANT UPDATE \\(([^)]*)\\) ON public\\.${table} TO authenticated;`, 'm'))
-      expect(sorted(sel[1].split(',').map((s) => s.trim()))).toEqual(sorted(select))
-      expect(sorted(upd[1].split(',').map((s) => s.trim()))).toEqual(sorted(update))
+      expect(sorted(grantedColumns(table, 'SELECT'))).toEqual(sorted(select))
+      expect(sorted(grantedColumns(table, 'UPDATE'))).toEqual(sorted(update))
     }
   })
 
-  it("takes its locks with a 5s lock_timeout, set right after BEGIN (never queues behind a long reader)", () => {
-    expect(MIG_648).toMatch(/^BEGIN;\nSET LOCAL lock_timeout = '5s';\n/m)
+  it('the later credential-table migrations are the ones on disk that add or grant a column on the five tables', async () => {
+    // 717 (W1.M1) is the first; a later one joins this list by touching a table, never by hand.
+    expect(LATER_MIGRATIONS.map((m) => m.file)).toContain('717_locations_membership_source.sql')
+    expect(await tableColumns('locations')).toContain('membership_source')
   })
 
-  it('a second run passes its own self-check (idempotent)', async () => {
+  it("717 backfill: an ACTIVE registry row is served exclusively (readConnection never falls back per field), so Studio A's complete legacy slice does not count while its registry row lacks a branch id", async () => {
+    // LOC_A: active glofox registry row with access_token + config.api_token but external_account_id NULL,
+    // AND a complete settings.glofox slice. The runtime answers from the registry row → unconfigured;
+    // the backfill must agree. LOC_B: nothing at all.
+    const { rows } = await db.query('SELECT id, membership_source FROM public.locations ORDER BY id')
+    expect(rows).toEqual([{ id: LOC_A, membership_source: 'none' }, { id: LOC_B, membership_source: 'none' }])
+  })
+
+  it("717 backfill promotes a registry row carrying all three, or a legacy slice with NO active registry row; a replay re-promotes an operator's 'none'", async () => {
+    const mig717 = LATER_MIGRATIONS.find((m) => m.file.startsWith('717_')).sql
+    await runSql('BEGIN')
+    try {
+      await db.query(`UPDATE public.channel_connections SET external_account_id = 'b1' WHERE location_id = $1`, [LOC_A])
+      await db.query(`UPDATE public.locations SET settings = '{"glofox":{"branch_id":"b2","api_key":"SYNTH-K","api_token":"SYNTH-T"}}' WHERE id = $1`, [LOC_B])
+      await runSql(mig717.replace(/^BEGIN;\n/m, '').replace(/^COMMIT;\n?/m, ''))
+      let { rows } = await db.query('SELECT id, membership_source FROM public.locations ORDER BY id')
+      expect(rows).toEqual([{ id: LOC_A, membership_source: 'glofox' }, { id: LOC_B, membership_source: 'glofox' }])
+      // The operator sets B back to none; credentials stay; a replay promotes it again (documented, not idempotent on data).
+      await db.query(`UPDATE public.locations SET membership_source = 'none' WHERE id = $1`, [LOC_B])
+      await runSql(mig717.replace(/^BEGIN;\n/m, '').replace(/^COMMIT;\n?/m, ''))
+      ;({ rows } = await db.query('SELECT membership_source FROM public.locations WHERE id = $1', [LOC_B]))
+      expect(rows).toEqual([{ membership_source: 'glofox' }])
+    } finally {
+      await runSql('ROLLBACK')
+    }
+  })
+
+  it("648 and 717 take their locks with a 5s lock_timeout, set right after BEGIN (never queue behind a long reader)", () => {
+    expect(MIG_648).toMatch(/^BEGIN;\nSET LOCAL lock_timeout = '5s';\n/m)
+    for (const { file, sql } of LATER_MIGRATIONS) {
+      expect(sql, `${file}: ADD COLUMN takes ACCESS EXCLUSIVE on a table every getCurrentUser joins`).toMatch(/^BEGIN;\nSET LOCAL lock_timeout = '5s';\n/m)
+      expect(sql).toMatch(/^COMMIT;\s*$/m)
+    }
+  })
+
+  it('a second run of 648 passes its own self-check (idempotent), and so does a second run of each later migration', async () => {
+    // 648's self-check classifies every column by ITS lists, so it can only
+    // re-run before a later migration adds one: replay on a fresh instance.
+    await db.close()
+    db = new PGlite()
+    await runSql(BASE_SCHEMA)
+    await runSql(PROD_POLICIES)
+    await runSql(SEED)
+    await runSql(MIG_648)
     await expect(runSql(MIG_648)).resolves.toBeDefined()
+    expect(await columnGrants('locations', 'authenticated', 'SELECT')).toEqual(sorted(grantedColumns('locations', 'SELECT', [MIG_648])))
+    for (const { file, sql } of LATER_MIGRATIONS) {
+      await expect(runSql(sql), `${file} first run`).resolves.toBeDefined()
+      await expect(runSql(sql), `${file} second run`).resolves.toBeDefined()
+    }
     expect(await columnGrants('locations', 'authenticated', 'SELECT')).toEqual(sorted(CREDENTIAL_COLUMN_GRANTS.locations.select))
+    expect(await columnGrants('locations', 'authenticated', 'UPDATE')).toEqual(sorted(CREDENTIAL_COLUMN_GRANTS.locations.update))
   })
 })
 
@@ -544,6 +621,21 @@ describe('the self-check aborts the whole file', () => {
     await expect(runSql(broken)).rejects.toThrow(/SECFIX\.3c: public\.contact_external_integrations UPDATE for authenticated is \[disconnected_at\]/)
     await runSql('ROLLBACK')
     await stillOpen()
+  })
+})
+
+describe('the 717 self-check aborts the whole file', () => {
+  beforeAll(async () => { await boot(); await runSql(MIG_648) }, 60_000)
+  afterAll(() => db?.close())
+
+  it('when the column GRANT is missing: the column never lands, the catalog is as 648 left it', async () => {
+    const mig717 = LATER_MIGRATIONS.find((m) => m.file.startsWith('717_')).sql
+    const line = 'GRANT SELECT (membership_source) ON public.locations TO authenticated;\n'
+    expect(mig717).toContain(line)
+    await expect(runSql(mig717.replace(line, ''))).rejects.toThrow(/W1\.M1: authenticated cannot read locations\.membership_source/)
+    await runSql('ROLLBACK')
+    expect(await tableColumns('locations')).not.toContain('membership_source')
+    expect(await columnGrants('locations', 'authenticated', 'SELECT')).toEqual(sorted(grantedColumns('locations', 'SELECT', [MIG_648])))
   })
 })
 
