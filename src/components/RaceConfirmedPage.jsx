@@ -11,8 +11,12 @@ import { useEffect, useState, useRef } from 'react'
 import Link from 'next/link'
 import { Loader2, AlertCircle, Calendar, BadgeCheck, QrCode } from 'lucide-react'
 import { timeRowLabel } from '@/lib/event-time-slots'
+import { buildEventIcs, eventIcsDataHref, eventWallClockMs } from '@/lib/event-ics'
 
-export default function RaceConfirmedPage({ slug, registrationId }) {
+// `brandName` + `hostname` (W1.L5): the tenant's identity for the calendar
+// file, resolved once by the server page (resolveEventIcsIdentity). Both
+// optional: the builder has neutral floors, never a first-gym literal.
+export default function RaceConfirmedPage({ slug, registrationId, brandName = '', hostname = '' }) {
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
   const [polling, setPolling] = useState(false)
@@ -80,41 +84,20 @@ export default function RaceConfirmedPage({ slug, registrationId }) {
   // Per-attendee check-in QR URLs, minted server-side once confirmed.
   const membersWithQr = members.filter((m) => m.qr_url)
 
-  // Client-side .ics — no backend. 2h default duration, TZ-safe (all
-  // UTC getters so the host machine's offset never contaminates the
-  // Dublin wall-clock start_time; emitted as floating local time).
+  // Client-side .ics — no backend. 2h default duration, TZ-safe: the Dublin
+  // wall-clock start is composed with Date.UTC and emitted as floating local
+  // time (src/lib/event-ics.js), so the host machine's offset never leaks.
   const calendarHref = (() => {
-    if (!race.race_date) return null
-    const pad = (n) => String(n).padStart(2, '0')
-    const [y, mo, d] = String(race.race_date).slice(0, 10).split('-').map(Number)
-    const [hh, mm] = String(wave?.start_time || '09:00').slice(0, 5).split(':').map(Number)
-    const startMs = Date.UTC(y, (mo || 1) - 1, d || 1, hh || 0, mm || 0)
-    const endMs = startMs + 2 * 60 * 60 * 1000
-    const local = (ms) => {
-      const dt = new Date(ms)
-      return `${dt.getUTCFullYear()}${pad(dt.getUTCMonth() + 1)}${pad(dt.getUTCDate())}T${pad(dt.getUTCHours())}${pad(dt.getUTCMinutes())}00`
-    }
-    const now = new Date()
-    const stamp = `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}T${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}Z`
-    const esc = (s) => String(s || '').replace(/([\\,;])/g, '\\$1').replace(/\r?\n/g, '\\n')
-    const where = race.locations?.address || race.locations?.name || ''
-    const ics = [
-      'BEGIN:VCALENDAR',
-      'VERSION:2.0',
-      'PRODID:-//UN1T//Events//EN',
-      'CALSCALE:GREGORIAN',
-      'BEGIN:VEVENT',
-      `UID:${data.id}@un1tdublin.com`,
-      `DTSTAMP:${stamp}`,
-      `DTSTART:${local(startMs)}`,
-      `DTEND:${local(endMs)}`,
-      `SUMMARY:${esc(race.name || 'UN1T Event')}`,
-      where ? `LOCATION:${esc(where)}` : null,
-      team.name ? `DESCRIPTION:${esc(`Team ${team.name}`)}` : null,
-      'END:VEVENT',
-      'END:VCALENDAR',
-    ].filter(Boolean).join('\r\n')
-    return `data:text/calendar;charset=utf8,${encodeURIComponent(ics)}`
+    const startsAt = eventWallClockMs(race.race_date, wave?.start_time)
+    if (startsAt == null) return null
+    const ics = buildEventIcs({
+      id: data.id,
+      title: race.name,
+      startsAt,
+      location: race.locations?.address || race.locations?.name || '',
+      description: team.name ? `Team ${team.name}` : '',
+    }, { brandName, hostname })
+    return eventIcsDataHref(ics)
   })()
 
   const dateLabel = race.race_date
