@@ -34,8 +34,20 @@ import BcaIntegrationTab from './integrations/BcaIntegrationTab'
 import WhatsAppIntegrationTab from './integrations/WhatsAppIntegrationTab'
 import AdsIntegrationTab from './integrations/AdsIntegrationTab'
 import PaymentsIntegrationTab from './integrations/PaymentsIntegrationTab'
+import MembershipSourceCard from './MembershipSourceCard'
 
-export default function LocationIntegrations({ location, xeroConnection, xeroReadFailed = false, user, sampleBcaCar }) {
+// W1.M2 — the Glofox tab's dot is the membership-source STATE (resolved
+// server-side by the page via membershipSourceState), not a sniff of
+// `settings?.glofox?.api_key` — that read a masked placeholder as
+// "connected" and knew nothing of the registry row.
+function glofoxTabStatus(membershipSource) {
+  if (!membershipSource || membershipSource.source !== 'glofox') return 'not-configured'
+  if (membershipSource.state === 'configured') return 'connected'
+  if (membershipSource.state === 'unknown') return 'unknown'
+  return 'not-configured'
+}
+
+export default function LocationIntegrations({ location, xeroConnection, xeroReadFailed = false, user, sampleBcaCar, membershipSource = null }) {
   const router = useRouter()
   const searchParams = useSearchParams()
 
@@ -73,12 +85,15 @@ export default function LocationIntegrations({ location, xeroConnection, xeroRea
       status: xeroReadFailed ? 'unknown' : (xeroConnection?.tenant_id ? 'connected' : 'not-configured'),
     })
   }
-  if (location.settings?.glofox || features.bookings || features.contacts) {
+  // W1.M2 — shown whenever Glofox IS the membership source (even before any
+  // credential is saved), plus the legacy visibility rule for studios still
+  // on 'none' that book or hold contacts.
+  if (location.membership_source === 'glofox' || location.settings?.glofox || features.bookings || features.contacts) {
     tabs.push({
       key: 'glofox',
       label: 'Glofox',
       Icon: Zap,
-      status: location.settings?.glofox?.api_key ? 'connected' : 'not-configured',
+      status: glofoxTabStatus(membershipSource),
     })
   }
   // PAID-INTRO-P3C.5 — payments settings (Stripe Connect for the class
@@ -159,14 +174,15 @@ export default function LocationIntegrations({ location, xeroConnection, xeroRea
     })
   }
 
-  if (tabs.length === 0) {
-    return null  // No integrations apply at this location — hide entirely
-  }
+  // W1.M2 — the membership-source card is a SETTING, not a provider tab, so
+  // it renders even when no integration tab applies here (the old
+  // "hide entirely" return now covers only the tab container below).
+  const hasTabs = tabs.length > 0
 
   // Active tab from URL; fallback to first tab.
-  const activeTabKey = searchParams.get('tab') || tabs[0].key
+  const activeTabKey = searchParams.get('tab') || tabs[0]?.key
   const validKeys = new Set(tabs.map(t => t.key))
-  const activeKey = validKeys.has(activeTabKey) ? activeTabKey : tabs[0].key
+  const activeKey = validKeys.has(activeTabKey) ? activeTabKey : tabs[0]?.key
 
   function switchTab(key) {
     const params = new URLSearchParams(searchParams.toString())
@@ -181,6 +197,16 @@ export default function LocationIntegrations({ location, xeroConnection, xeroRea
         <h3 className="text-lg font-semibold">Integrations</h3>
       </div>
 
+      {/* W1.M2 — the membership-source setting sits ABOVE the provider tabs:
+          it is what the Glofox tab (and every gated page) hangs off. Owner
+          here or master may change it — the route's guardMasterOrOwner. */}
+      <MembershipSourceCard
+        locationId={location.id}
+        membershipSource={membershipSource}
+        canEdit={isOwnerOrMaster}
+      />
+
+      {hasTabs && (
       <div className="bg-un1t-surface border border-un1t-border rounded-lg overflow-hidden">
         {/* Tab strip */}
         <div className="flex border-b border-un1t-border overflow-x-auto">
@@ -236,6 +262,7 @@ export default function LocationIntegrations({ location, xeroConnection, xeroRea
           )}
         </div>
       </div>
+      )}
     </section>
   )
 }
