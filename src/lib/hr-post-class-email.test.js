@@ -7,14 +7,26 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 vi.mock('@/lib/postmark', () => ({
   sendTransactionalEmail: vi.fn(),
 }))
+<<<<<<< HEAD
 // W1.S4 — loadContextForSession resolves the studio's short brand for the
 // highlight's product name; the db mocks here know no company_settings.
 vi.mock('@/lib/location-branding', () => ({
   getLocationBranding: vi.fn(() => Promise.resolve({ companyName: 'UN1T Dublin', shortName: 'UN1T', companyNameConfigured: true, logoUrl: null, faviconUrl: null })),
 }))
+=======
+// W1.L3a — the stop-emails link is minted on the session location's tenant
+// host. The default calls the REAL getAppUrl() (the resolver's own floor), so
+// every env-driven assertion in this file — including the throw-when-unset
+// one — keeps reading as before; the W1.L3a tests override it.
+vi.mock('@/lib/tenant-host', async () => {
+  const { getAppUrl } = await vi.importActual('@/lib/app-url')
+  return { resolveCustomerBaseUrl: vi.fn(async () => getAppUrl()) }
+})
+>>>>>>> origin/main
 
 import { composeEmail, sendPostClassEmail, loadContextForSession } from './hr-post-class-email.js'
 import { sendTransactionalEmail } from '@/lib/postmark'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 
 const NOW = new Date('2026-05-08T19:00:00Z').getTime()
 
@@ -142,6 +154,15 @@ describe('composeEmail', () => {
     expect(out.html).toContain('/api/preferences/hr-emails')
     expect(out.html).toContain(`token=${UNSUB_TOKEN}`)
     expect(out.html).not.toContain('cid=c-1')
+  })
+
+  // W1.L3a — the send path resolves the session location's tenant host and
+  // hands it in; the pure composer builds the stop-emails link on it. With no
+  // host handed in it keeps the CRM seam (the resolver's own floor).
+  it('W1.L3a — builds the stop-emails link on the customer base URL it is handed', () => {
+    const out = composeEmail(ctx(), { nowMs: NOW, customerBaseUrl: 'https://gym-a.repset.ie' })
+    expect(out.html).toContain('https://gym-a.repset.ie/api/preferences/hr-emails')
+    expect(out.html).not.toContain('https://crm.repset.ie/api/preferences/hr-emails')
   })
 
   // REPSET-P6.C — the session CTA is a MEMBER link and must build on the
@@ -426,6 +447,22 @@ describe('sendPostClassEmail', () => {
     expect(out).toEqual({ ok: true, skipped: 'test-mode' })
     expect(sendTransactionalEmail).not.toHaveBeenCalled()
     expect(db.__stamps).toHaveLength(1) // markProcessed stamp
+  })
+
+  // W1.L3a — the stop-emails link in the delivered email is minted on the
+  // SESSION LOCATION's tenant host (resolveCustomerBaseUrl(db, session.
+  // location_id)), never on the CRM host: a second gym's member must never see
+  // crm.repset.ie in their post-class email.
+  it("W1.L3a — the stop-emails link is minted on the session location's tenant host", async () => {
+    resolveCustomerBaseUrl.mockResolvedValueOnce('https://gym-a.repset.ie')
+    sendTransactionalEmail.mockResolvedValue({ messageId: 'pm-1' })
+    const db = mockDb({ session: fullSessionRow({ location_id: 'loc-a1' }) })
+    const out = await sendPostClassEmail(db, 'sess-1', { nowMs: NOW })
+    expect(out).toEqual(expect.objectContaining({ ok: true, sent: true }))
+    expect(resolveCustomerBaseUrl).toHaveBeenCalledWith(db, 'loc-a1')
+    const html = sendTransactionalEmail.mock.calls[0][0].htmlBody
+    expect(html).toContain('https://gym-a.repset.ie/api/preferences/hr-emails')
+    expect(html).not.toContain('https://crm.repset.ie/api/preferences/hr-emails')
   })
 
   // Item 5 — claim-before-send: if a concurrent path already claimed the row
