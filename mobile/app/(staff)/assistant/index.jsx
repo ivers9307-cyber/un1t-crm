@@ -25,6 +25,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { useHeaderHeight } from 'expo-router/react-navigation'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAuth } from '../../../lib/auth-context'
+import { PLATFORM_NAME } from 'shared/brand-name'
 import { sendAssistantChat } from '../../../lib/assistant-api'
 import BackHeaderLeft from '../../../components/BackHeaderLeft'
 
@@ -178,7 +179,7 @@ export default function AssistantChat() {
               <AssistantAvatar />
               <View className="max-w-[80%] bg-un1t-surface border border-un1t-border rounded-2xl px-3.5 py-2.5">
                 <Text className="text-base text-un1t-text">
-                  Hi {firstName}! I&apos;m your UN1T assistant. I can help you navigate the CRM,
+                  Hi {firstName}! I&apos;m your {PLATFORM_NAME} assistant. I can help you navigate the CRM,
                   answer questions, or take actions for you. What can I help with?
                 </Text>
               </View>

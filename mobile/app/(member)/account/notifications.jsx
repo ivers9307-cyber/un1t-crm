@@ -25,11 +25,13 @@ import { getPushPermission, registerForPushNotifications, unregisterCurrentDevic
 import { isPushOptedOut, setPushOptOut } from '../../../lib/member/push-opt-out'
 import Card from '../../../components/member/ui/Card'
 import { PEARL } from '../../../lib/member/brand'
+import { useMemberBrand } from '../../../lib/member/use-member-brand'
 
 // Per-category copy + the example banner each card renders. Categories are
 // product labels tied to the shared channel ids — fixed by design, like the
-// channel names themselves.
-const CATEGORIES = [
+// channel names themselves. W1.S5 — the reminder example names the member's
+// own studio (brand) rather than a gym literal; no place when none is known.
+const categories = (companyName) => [
   {
     key: 'reminders',
     label: 'Class reminders',
@@ -38,7 +40,7 @@ const CATEGORIES = [
     example: {
       title: 'Class in 2 hours',
       time: '4:30pm',
-      body: 'UN1T Strength · 6:30pm tonight at Stillorgan. See you on the floor.',
+      body: `Strength · 6:30pm tonight${companyName ? ` at ${companyName}` : ''}. See you on the floor.`,
     },
   },
   {
@@ -100,6 +102,7 @@ function PushPreview({ title, time, body }) {
 
 export default function Notifications() {
   const router = useRouter()
+  const { companyName } = useMemberBrand()
 
   // ── Master device toggle (moved from (tabs)/account.jsx, logic unchanged) ──
   const [pushEnabled, setPushEnabled] = useState(false)
@@ -192,7 +195,7 @@ export default function Notifications() {
         </Card>
 
         {/* Category cards — head, description, example banner */}
-        {CATEGORIES.map(({ key, label, icon, desc, example }) => (
+        {categories(companyName).map(({ key, label, icon, desc, example }) => (
           <Card key={key} className="mt-3.5 p-0 overflow-hidden">
             <View className="flex-row items-center gap-3 px-5 pt-[18px] pb-1.5">
               <Ionicons name={icon} size={18} color="#B3B2AC" />
