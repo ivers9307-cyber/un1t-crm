@@ -39,12 +39,18 @@
 //   org_settings.legal_entity_name (+ legal_trading_name)
 //     -> operator-configured brand (company_settings / org_settings)
 //     -> organizations.name
-//     -> 'UN1T'   (only reachable when even the org row is unreadable)
+//     -> DEFAULT_BRAND   (only reachable when even the org row is unreadable)
 
 import { getLocationBranding } from './location-branding.js'
 
-// Mirrors location-branding.js's own default so the pure function can
-// be used without a branding lookup.
+// This module's OWN last-resort label for the pure function, so a contract
+// surface never renders "For " with nothing after it. W1.B1 removed the
+// brand resolver's literal (DEFAULT_COMPANY_NAME): getLocationBranding now
+// ends in locations.name and reports '' when it cannot resolve at all, so
+// this literal no longer mirrors anything and is reached only when the db
+// is unreadable or absent. It is a Track S sweep row (W1.S1a — the plan's
+// appendix row for contracting-entity.js:48, "drop"), not a brand fallback:
+// the brand tier reads `companyNameConfigured` below.
 const DEFAULT_BRAND = 'UN1T'
 
 // The literal every contract issued BEFORE LEGALENT.1 was issued and
@@ -141,19 +147,19 @@ export async function getContractingEntity(db, { organizationId = null, location
   if (!resolvedBranding) {
     resolvedBranding = await getLocationBranding(db, locationId)
   }
-  const companyName = resolvedBranding?.companyName || DEFAULT_BRAND
+  const resolvedName = String(resolvedBranding?.companyName ?? '').trim()
+  const companyName = resolvedName || DEFAULT_BRAND
 
-  // Only an OPERATOR-CONFIGURED brand may stand in for the entity.
-  // getLocationBranding returns its own 'UN1T' literal when nothing is
-  // set, and that literal is the gym's brand — passing it through here
-  // is how another org's contract would end up countersigned "For
-  // UN1T". `companyNameConfigured` says which it is; the `??` arm
-  // keeps a pre-resolved branding object from an older caller (no such
-  // field) working by inferring it.
+  // Only an OPERATOR-CONFIGURED brand may stand in for the entity. Since
+  // W1.B1 getLocationBranding ends in the LOCATION'S NAME when nobody set
+  // a brand — a label, not a claim — and `companyNameConfigured` says
+  // which tier answered, so the flag is read and the string is never
+  // compared against a literal. The `??` arm keeps a pre-resolved
+  // branding object from an older caller (no such field) working: with
+  // no literal left in the resolver, a non-empty name there is configured.
   const configuredBrand = (
-    resolvedBranding?.companyNameConfigured
-    ?? (Boolean(companyName) && companyName !== DEFAULT_BRAND)
-  ) ? companyName : null
+    resolvedBranding?.companyNameConfigured ?? Boolean(resolvedName)
+  ) ? resolvedName : null
 
   let entityName = null
   let tradingName = null
