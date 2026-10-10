@@ -1523,28 +1523,33 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'get',
-  path: '/api/webhooks/strava',
+  path: '/api/webhooks/strava/{token}',
   tags: ['Webhooks (Inbound)'],
   security: [],
   summary: 'Strava subscription validation',
-  description: 'Strava subscription validation (echoes `hub.challenge`).',
+  description: 'Strava subscription validation (echoes `hub.challenge`). `token` is the STRAVA_WEBHOOK_URL_TOKEN path secret (W0.10); a wrong path token is a 403 like a wrong `hub.verify_token`.',
+  request: { params: z.object({ token: z.string() }) },
   responses: {
     200: { description: 'Challenge echoed' },
-    403: { description: 'Verify token mismatch' },
+    403: { description: 'Path token or verify token mismatch' },
   },
 })
 
 registry.registerPath({
   method: 'post',
-  path: '/api/webhooks/strava',
+  path: '/api/webhooks/strava/{token}',
   tags: ['Webhooks (Inbound)'],
-  security: [{ WebhookToken: [] }],
+  security: [],
   summary: 'Strava activity events',
-  description: 'Strava → CRM. Carries activity create/update/delete events.',
-  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('StravaWebhookEvent') } } } },
+  description: 'Strava → CRM. Carries activity create/update/delete events. Strava does not sign webhook POSTs, so the `token` path segment (STRAVA_WEBHOOK_URL_TOKEN, constant-time compare) IS the credential (W0.10); a wrong token is a 404 so the route cannot be probed. Rate-limited per IP.',
+  request: {
+    params: z.object({ token: z.string() }),
+    body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('StravaWebhookEvent') } } },
+  },
   responses: {
     200: { description: 'Accepted' },
-    401: { description: 'Verify-token mismatch', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Wrong or missing path token', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

@@ -18,6 +18,8 @@ POSTMARK_EMAIL_INBOX_WEBHOOK_TOKEN= # token-in-URL secret for the support inbox'
 # WHATSAPP_ACCESS_TOKEN / _PHONE_NUMBER_ID / _BUSINESS_ACCOUNT_ID: RETIRED (WACONFIGFALLBACK.1). Numbers live on whatsapp_numbers rows; a location without one cannot send.
 WHATSAPP_WEBHOOK_VERIFY_TOKEN=   # for Meta GET subscription handshake
 WHATSAPP_APP_SECRET=             # for X-Hub-Signature-256 verification on POST
+STRAVA_WEBHOOK_VERIFY_TOKEN=     # Strava push-subscription GET handshake (hub.verify_token)
+STRAVA_WEBHOOK_URL_TOKEN=        # W0.10 — 32-hex path secret for /api/webhooks/strava/<token>. Strava never signs its POSTs, so this IS the credential: wrong token 404s (GET 403), unset = the route is closed. The push subscription's callback_url must carry it (docs/domain-migration-stage3.md §5a).
 WHATSAPP_ES_CONFIG_ID=           # Facebook Login for Business configuration id driving Embedded Signup v4 ("Connect with WhatsApp" in Settings → Locations → Integrations). Unset = the connect button renders a not-configured state; the exchange route 500s.
 QSTASH_TOKEN=                    # Upstash QStash publish token. UNSET = QStash disabled entirely (deliberate kill switch): webhook routes skip the push publish and the drain crons remain the only queue consumers. See "QStash push delivery".
 QSTASH_CURRENT_SIGNING_KEY=      # Upstash-Signature verification (worker routes 503 without it)
