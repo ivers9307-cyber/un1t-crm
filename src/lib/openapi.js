@@ -9057,6 +9057,42 @@ registry.registerPath({
   },
 })
 
+// W1.M2 — the per-location membership source (locations.membership_source,
+// mig 717). The only DIRECT writer of the column; the Glofox connect/
+// disconnect flip in PUT/DELETE …/integrations/glofox is the other, owner/
+// master only.
+registry.registerPath({
+  method: 'put',
+  path: '/api/locations/{id}/membership-source',
+  tags: ['Settings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Set which system is the membership source at a location (owner or master)',
+  description:
+    'Writes locations.membership_source (mig 717: none | glofox | un1t). The Zod enum admits every CHECK value, ' +
+    'but a key with NO registered provider module (today `un1t`, the home-grown source still to land) answers ' +
+    '400 with code `not_available_yet` and writes nothing — the registry in src/lib/membership/source.js decides, ' +
+    'not the CHECK. Gate: membership (404, a detail route never confirms an id) then owner-or-master AT the ' +
+    'target location (403 for a manager). Switching to `none` never deletes a credential: when an active glofox ' +
+    'channel_connections row exists the response carries `warning: "glofox_credentials_kept"` (Disconnect in the ' +
+    'Integrations hub is the explicit path). Selecting the value already set is a no-op 200. Every real change ' +
+    'writes an audit_events row (location.membership_source_changed). The only DIRECT writer of the column; the other ' +
+    'is the Glofox connect/disconnect flip: an OWNER or MASTER saving complete Glofox credentials through ' +
+    'PUT /api/locations/{id}/integrations/glofox selects it when the studio is on `none`, and their DELETE there clears it ' +
+    '(a manager may still save or delete the credentials, which never moves the column). ' +
+    'Response data is membershipSourceState(): { source, state: none|configured|unconfigured|unknown, missing?, readError?, previous }.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ membership_source: z.enum(['none', 'glofox', 'un1t']) }).openapi('MembershipSourceSave') } } },
+  },
+  responses: {
+    200: { description: 'Saved (or already set) — the resolved membership-source state, plus `warning` when Glofox credentials were kept', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
+    400: { description: 'Not a CHECK value, or `not_available_yet` (no provider registered for that key)', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — owner or master at this location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not one of the caller\'s locations, or no such location', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // ============================================================================
 // Tenant console (INTEG-D2) — master roster / drill-in / wallet adjust
 // ============================================================================

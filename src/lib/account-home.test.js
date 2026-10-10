@@ -8,6 +8,18 @@
 //      (no row fetch) and that per-studio failures are isolated.
 
 import { describe, it, expect, vi } from 'vitest'
+
+// W1.M2 — the studio card's integration chip is the membership-source STATE
+// (src/lib/membership/source.js), not a sniff of settings.glofox. Mocked
+// here so the table-scripted db below never sees a `locations` read.
+vi.mock('@/lib/membership/source', () => ({
+  membershipSourceState: vi.fn(async (_db, locationId) => (
+    locationId === 'loc-1' ? { source: 'glofox', state: 'configured' }
+      : locationId === 'loc-err' ? { source: null, state: 'unknown', readError: 'MEMBERSHIP_SOURCE_UNREADABLE' }
+        : { source: 'none', state: 'none' }
+  )),
+}))
+
 import {
   dublinWeekWindow,
   aggregateOrgKpis,
@@ -207,13 +219,14 @@ describe('assembleAccountHome', () => {
     const still = res.studios.find((s) => s.id === 'loc-1')
     expect(still).toMatchObject({
       name: 'Stillorgan', members: 268, bookings7d: 90, atRiskHigh: 4,
-      openApprovals: 3, integrationConnected: true,
+      openApprovals: 3, membershipSource: { source: 'glofox', state: 'configured' },
     })
+    expect(still).not.toHaveProperty('integrationConnected')
     // 3 open approvals → purple "to review" pill.
     expect(still.attention).toEqual({ tone: 'purple', label: '3 to review', needsAttention: true })
 
     const hatch = res.studios.find((s) => s.id === 'loc-2')
-    expect(hatch).toMatchObject({ integrationConnected: false, openApprovals: 0, atRiskHigh: 0 })
+    expect(hatch).toMatchObject({ membershipSource: { source: 'none', state: 'none' }, openApprovals: 0, atRiskHigh: 0 })
     expect(hatch.attention).toEqual({ tone: 'teal', label: 'All clear', needsAttention: false })
 
     // Every count query is HEAD-only (no rows transferred → 1000-row cap
@@ -256,5 +269,18 @@ describe('assembleAccountHome', () => {
       members: 0, bookings7d: 0, atRiskHigh: 0, openApprovals: 0,
     })
     expect(res.studios[0].attention.tone).toBe('teal')
+    // The membership-source state still rides through: it is resolved by the
+    // seam, not by one of the failing count queries.
+    expect(res.studios[0].membershipSource).toEqual({ source: 'glofox', state: 'configured' })
+  })
+
+  it('W1.M2 — a failed membership-source read is "unknown" on the card, never "none"', async () => {
+    const { db } = mockDb({ 'loc-err': {} })
+    const res = await assembleAccountHome(db, {
+      organization: org,
+      locations: [{ id: 'loc-err', name: 'Broken', slug: 'broken', settings: {} }],
+      now: Date.now(),
+    })
+    expect(res.studios[0].membershipSource).toEqual({ source: null, state: 'unknown', readError: 'MEMBERSHIP_SOURCE_UNREADABLE' })
   })
 })
