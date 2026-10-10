@@ -61,7 +61,7 @@ export async function POST(_request, { params }) {
   }
 
   const sRes = await expandSession(
-    { week, slot: row.slot, dial: block.difficulty_dial, locationLabel: (loc?.name || 'UN1T').toUpperCase(), charter, houseStyle, styleExamples, autoTuneSignal: null, arcPlan: block.arc?.plan, sessionsPerWeek: block.sessions_per_week, prevWeekSummary },
+    { week, slot: row.slot, dial: block.difficulty_dial, locationLabel: (loc?.name || '').toUpperCase(), charter, houseStyle, styleExamples, autoTuneSignal: null, arcPlan: block.arc?.plan, sessionsPerWeek: block.sessions_per_week, prevWeekSummary },
     { caller },
   )
   if (!sRes.ok) return NextResponse.json({ success: false, error: 'regeneration_failed' }, { status: 502 })

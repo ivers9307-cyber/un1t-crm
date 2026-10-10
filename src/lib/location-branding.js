@@ -23,6 +23,7 @@ import { logError } from './log.js'
 const EMPTY = Object.freeze({
   companyName: '',
   shortName: '',
+  locationName: '',
   companyNameConfigured: false,
   logoUrl: null,
   faviconUrl: null,
@@ -31,8 +32,11 @@ const EMPTY = Object.freeze({
 /**
  * @param {object} db          a supabase-js client
  * @param {string} locationId  the location whose branding to resolve
- * @returns {Promise<{ companyName: string, shortName: string, companyNameConfigured: boolean, logoUrl: string|null, faviconUrl: string|null }>}
+ * @returns {Promise<{ companyName: string, shortName: string, locationName: string, companyNameConfigured: boolean, logoUrl: string|null, faviconUrl: string|null }>}
  *          companyName: company_settings → org_settings → locations.name → ''.
+ *          locationName (W1.S3): locations.name itself, the studio's own
+ *          label, for merge fields that mean "this studio" rather than "the
+ *          brand" ({{location_name}}); '' when the row is unreadable.
  *          shortName (W1.B1): org_settings.short_name (mig 715) when set,
  *          else companyName — the wordmark productName() in
  *          shared/brand-name.js builds "{Brand} Points" / "{Brand} HR" from.
@@ -74,6 +78,7 @@ export async function getLocationBranding(db, locationId) {
     return {
       companyName: name,
       shortName: (org?.short_name || '').trim() || name,
+      locationName: org?.locationName || '',
       companyNameConfigured: Boolean(configuredName),
       logoUrl,
       faviconUrl,

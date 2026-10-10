@@ -25,4 +25,18 @@ describe('automations registry', () => {
     expect(automationStatus('glofox_lead_provisioning', noTrial)).toEqual({ available: true, trialConfigured: false })
     expect(automationStatus('glofox_lead_provisioning', notConn)).toEqual({ available: false, trialConfigured: false })
   })
+
+  // W1.M3a — the membership-source answer, when given, IS the connection
+  // test; the settings slice is consulted only for the trial config. The
+  // slice-only call above is the deprecated fallback, pinned until it goes.
+  it('automationStatus: an explicit `connected` wins over the settings slice', () => {
+    expect(automationStatus('glofox_lead_provisioning', notConn, { connected: true })).toEqual({ available: true, trialConfigured: false })
+    expect(automationStatus('glofox_lead_provisioning', connected, { connected: false })).toEqual({ available: false, trialConfigured: true })
+    expect(automationStatus('class_climate', notConn, { connected: true })).toEqual({ available: true, trialConfigured: false })
+    expect(automationStatus('class_climate', connected, { connected: false })).toEqual({ available: false, trialConfigured: false })
+    expect(automationStatus('class_climate', null, { connected: true })).toEqual({ available: true, trialConfigured: false })
+    // Not a boolean → the fallback (no accidental "connected" from a truthy object).
+    expect(automationStatus('class_climate', notConn, { connected: 'yes' })).toEqual({ available: false, trialConfigured: false })
+    expect(automationStatus('class_climate', connected, {})).toEqual({ available: true, trialConfigured: false })
+  })
 })

@@ -54,7 +54,7 @@ export async function POST(request, { params }) {
     houseStyle,
     styleExamples,
     caller,
-    locationLabel: (loc?.name || 'UN1T').toUpperCase(),
+    locationLabel: (loc?.name || '').toUpperCase(),
   })
   if (!out.ok) return NextResponse.json({ success: false, error: out.error }, { status: 502 })
   return NextResponse.json({ success: true, data: { sessionsCreated: out.sessionsCreated, skipped: Boolean(out.skipped) } })

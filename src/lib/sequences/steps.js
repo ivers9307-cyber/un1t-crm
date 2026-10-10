@@ -529,7 +529,7 @@ export async function sendWhatsappStep(db, { enrollment, step, sequence, contact
     contact,
     variableMapping,
     step.whatsapp_header_media_url || null,
-    { companyName: branding.companyName, locationId: sequence.location_id, payment },
+    { companyName: branding.companyName, locationName: branding.locationName, locationId: sequence.location_id, payment },
   )
   // PAYLINK.6b — the general case the two checks above cover only for the
   // pay-link feature specifically: ANY template whose approved link ends in
@@ -606,7 +606,7 @@ export async function sendWhatsappStep(db, { enrollment, step, sequence, contact
       message_type: 'template',
       template_name: template.name,
       template_variables: variableMapping,
-      body: renderTemplateBody(template, contact, variableMapping, { companyName: branding.companyName, payment }),
+      body: renderTemplateBody(template, contact, variableMapping, { companyName: branding.companyName, locationName: branding.locationName, payment }),
       status: 'sent',
       sent_at: new Date().toISOString(),
     }).select('id').single()

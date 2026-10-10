@@ -19,6 +19,13 @@ vi.mock('@/lib/sequence-access', () => ({ canCloneSequenceAt: vi.fn(() => false)
 vi.mock('@/components/automations/ClassClimateCard', () => ({ default: (p) => <div>{`climate:${p.glofoxConnected}:${p.glofoxUnknown ? 'unknown' : 'known'}`}</div> }))
 vi.mock('@/components/automations/BathroomClimateCard', () => ({ default: (p) => <div>{`bathroom:${p.glofoxConnected}:${p.glofoxUnknown ? 'unknown' : 'known'}`}</div> }))
 
+// W1.M3a — readGlofoxAutomationStatus carries the membership state the gate
+// renders from. The PROFILESPREAD cases below are a CONFIGURED source (Stillorgan).
+const CAPS = { memberships: true, bookings: true, credits: true, invoices: true, schedule: true }
+const CONFIGURED = { source: 'glofox', state: 'configured', label: 'Glofox', capabilities: CAPS }
+const ALL_KNOWN = { glofox_lead_provisioning: { available: true, trialConfigured: true }, class_climate: { available: true, trialConfigured: false }, bathroom_climate: { available: true, trialConfigured: false } }
+const ALL_UNKNOWN = { glofox_lead_provisioning: { available: false, trialConfigured: false, unknown: true }, class_climate: { available: false, trialConfigured: false, unknown: true }, bathroom_climate: { available: false, trialConfigured: false, unknown: true } }
+
 import AutomationsPage from './page.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
@@ -36,6 +43,7 @@ const emptyDb = () => {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  readGlofoxAutomationStatus.mockResolvedValue({ known: true, connected: true, membership: CONFIGURED, statuses: ALL_KNOWN })
   createServerClient.mockReturnValue(emptyDb())
   // The user object carries NO settings now (PROFILESPREAD.1a).
   getCurrentUser.mockResolvedValue({ id: 'u1', role: 'owner', activeLocation: { id: LOC, name: 'Studio' }, locations: [{ id: LOC, name: 'Studio' }] })
@@ -49,23 +57,21 @@ describe('/automations — Glofox presence (PROFILESPREAD.1)', () => {
   })
 
   it('reads it by the active location id and passes the booleans on', async () => {
-    readGlofoxAutomationStatus.mockResolvedValue({
-      known: true, connected: true,
-      statuses: { glofox_lead_provisioning: { available: true, trialConfigured: true }, class_climate: { available: true, trialConfigured: false }, bathroom_climate: { available: true, trialConfigured: false } },
-    })
+    readGlofoxAutomationStatus.mockResolvedValue({ known: true, connected: true, membership: CONFIGURED, statuses: ALL_KNOWN })
     const html = renderToStaticMarkup(await AutomationsPage())
     expect(readGlofoxAutomationStatus).toHaveBeenCalledWith(expect.anything(), LOC)
     expect(html).toContain('glofox_lead_provisioning:true:known')
     expect(html).toContain('climate:true:known')
     expect(html).toContain('bathroom:true:known')
     expect(html).not.toMatch(/Couldn(?:&#x27;|')t check whether Glofox/) // static markup escapes the apostrophe
+    // W1.M3a — a configured source renders no gate copy (Stillorgan unchanged).
+    expect(html).not.toContain('No membership source connected')
+    expect(html).not.toContain('data-membership-state')
   })
 
   it('a failed read: a page notice, unknown cards, and no card says "connected" or "not connected"', async () => {
-    readGlofoxAutomationStatus.mockResolvedValue({
-      known: false, connected: null,
-      statuses: { glofox_lead_provisioning: { available: false, trialConfigured: false, unknown: true }, class_climate: { available: false, trialConfigured: false, unknown: true }, bathroom_climate: { available: false, trialConfigured: false, unknown: true } },
-    })
+    // A failed SETTINGS read (the trial config) with a configured source.
+    readGlofoxAutomationStatus.mockResolvedValue({ known: false, connected: null, membership: CONFIGURED, statuses: ALL_UNKNOWN })
     const html = renderToStaticMarkup(await AutomationsPage())
     expect(html).toMatch(/role="alert"[^>]*>[^<]*Couldn(?:&#x27;|')t check whether Glofox is connected/)
     // A disabled card can't be switched OFF either, so "switched on" undersold it.
@@ -83,11 +89,53 @@ describe('/automations — Glofox presence (PROFILESPREAD.1)', () => {
     readGlofoxAutomationStatus.mockImplementation(async () => {
       await Promise.resolve()
       order.push('glofox:resolved')
-      return { known: true, connected: false, statuses: { glofox_lead_provisioning: { available: false, trialConfigured: false } } }
+      return { known: true, connected: false, membership: CONFIGURED, statuses: { glofox_lead_provisioning: { available: false, trialConfigured: false } } }
     })
     await AutomationsPage()
     expect(order.indexOf('from:location_automations')).toBeGreaterThanOrEqual(0)
     expect(order.indexOf('from:location_automations')).toBeLessThan(order.indexOf('glofox:resolved'))
+  })
+})
+
+// W1.M3a — the curated cards render only behind the membership-source gate.
+describe('/automations — membership source gate (W1.M3a)', () => {
+  beforeEach(() => {
+    hasPermission.mockImplementation((_u, k) => k === 'automations')
+  })
+
+  it('none: "No membership source connected" (with the owner link), and NO cards', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'u1', profileRole: 'staff', rolesByLocation: { [LOC]: 'owner' }, activeLocation: { id: LOC, name: 'Studio' }, locations: [{ id: LOC, name: 'Studio' }] })
+    const NONE = { source: 'none', state: 'none', label: 'No membership source', capabilities: {} }
+    readGlofoxAutomationStatus.mockResolvedValue({ known: true, connected: false, membership: NONE, statuses: { glofox_lead_provisioning: { available: false, trialConfigured: false }, class_climate: { available: false, trialConfigured: false }, bathroom_climate: { available: false, trialConfigured: false } } })
+    const html = renderToStaticMarkup(await AutomationsPage())
+    expect(html).toContain('No membership source connected')
+    expect(html).toContain('no class schedule to run on')
+    expect(html).toContain(`href="/settings/locations/${LOC}?section=integrations&amp;tab=glofox"`)
+    expect(html).not.toContain('data-testid="view"')
+    expect(html).not.toContain('climate:')
+    expect(html).not.toContain('bathroom:')
+    expect(html).not.toMatch(/role="alert"/)
+  })
+
+  it('unknown membership state: the gate\'s retry copy once, never the none copy, no cards and no second notice', async () => {
+    const UNKNOWN = { source: null, state: 'unknown', readError: 'MEMBERSHIP_SOURCE_UNREADABLE', label: 'No membership source', capabilities: {} }
+    readGlofoxAutomationStatus.mockResolvedValue({ known: false, connected: null, membership: UNKNOWN, statuses: ALL_UNKNOWN })
+    const html = renderToStaticMarkup(await AutomationsPage())
+    expect(html).toContain('Membership data could not be read right now')
+    expect(html).not.toContain('No membership source connected')
+    expect(html).not.toMatch(/role="alert"/)
+    expect(html).not.toContain('climate:')
+  })
+
+  it('the device and flow sections are not behind the gate', async () => {
+    hasPermission.mockImplementation((_u, k) => k === 'automations' || k === 'device_control' || k === 'email')
+    const NONE = { source: 'none', state: 'none', label: 'No membership source', capabilities: {} }
+    readGlofoxAutomationStatus.mockResolvedValue({ known: true, connected: false, membership: NONE, statuses: { glofox_lead_provisioning: { available: false, trialConfigured: false }, class_climate: { available: false, trialConfigured: false }, bathroom_climate: { available: false, trialConfigured: false } } })
+    const html = renderToStaticMarkup(await AutomationsPage())
+    expect(html).toContain('No membership source connected')
+    expect(html).toContain('href="/automations/sonos"')
+    expect(html).toContain('href="/automations/shelly"')
+    expect(seen.flows).not.toBeNull()
   })
 })
 
