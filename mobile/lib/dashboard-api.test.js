@@ -18,7 +18,7 @@ vi.mock('shared/dashboard-data', () => ({
 
 const { api } = await import('./api')
 const shared = await import('shared/dashboard-data')
-const { fetchStudioDashboard, fetchRosterRunway, swapRowTitle, fetchStudioContactCountsFromRoute, studioContactNumbers, studioWhatsappUnread } = await import('./dashboard-api')
+const { fetchStudioDashboard, fetchRosterRunway, swapRowTitle, fetchStudioContactCountsFromRoute, studioContactNumbers, studioWhatsappUnread, fetchBusinessCommandCentre } = await import('./dashboard-api')
 
 const LOC = 'a0000000-0000-0000-0000-000000000001'
 // CONTACTREADSCOPE.1a — the shared fetcher no longer returns the contact
@@ -280,5 +280,41 @@ describe('CONTACTREADSCOPE.1a — contact numbers come from the route', () => {
     expect(studioContactNumbers({ newLeadsThisWeek: 0, funnel: {}, totalContacts: 0 }, HEADLINE)).toEqual({
       failed: false, newLeads: 0, newLeadsSublabel: 'contacts added', total: 0, headline: HEADLINE.map((key) => ({ key, count: 0 })),
     })
+  })
+})
+
+// W1.M3c — the Business payload carries the server-judged membership state.
+describe('fetchBusinessCommandCentre', () => {
+  const BLOCKS = { locationName: 'Test Studio', kpis: { briefing: 'x' }, funnel: null, ads: null, membership: null, today: null, rail: [] }
+
+  it('reads /api/dashboard/business through api() for the location', async () => {
+    api.mockResolvedValue({ success: true, data: { ...BLOCKS } })
+    await fetchBusinessCommandCentre({ locationId: LOC })
+    expect(api).toHaveBeenCalledWith('/api/dashboard/business', { locationId: LOC })
+  })
+
+  it('exposes membership_source from the payload, normalised as membershipSource; every block untouched', async () => {
+    const ms = { source: 'glofox', state: 'configured', label: 'Glofox', provides_memberships: true, can_manage: false }
+    api.mockResolvedValue({ success: true, data: { ...BLOCKS, membership_source: ms } })
+    const res = await fetchBusinessCommandCentre({ locationId: LOC })
+    expect(res).toEqual({
+      success: true,
+      data: {
+        ...BLOCKS,
+        membership_source: ms,
+        membershipSource: { source: 'glofox', state: 'configured', label: 'Glofox', missing: [], providesMemberships: true, canManage: false, reported: true },
+      },
+    })
+  })
+
+  it('absent → { source: unknown, state: unknown } (never none), marked not reported', async () => {
+    api.mockResolvedValue({ success: true, data: { ...BLOCKS } })
+    const { data } = await fetchBusinessCommandCentre({ locationId: LOC })
+    expect(data.membershipSource).toMatchObject({ source: 'unknown', state: 'unknown', reported: false })
+  })
+
+  it('a failed envelope passes through unchanged', async () => {
+    api.mockResolvedValue({ success: false, error: 'Forbidden' })
+    expect(await fetchBusinessCommandCentre({ locationId: LOC })).toEqual({ success: false, error: 'Forbidden' })
   })
 })
