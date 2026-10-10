@@ -5,7 +5,7 @@
 // workshop, seminar, open_day, masterclass.
 //
 // Payment NEVER happens in chat — paid events get their public
-// signup link (/race/[slug]) where the Revolut widget owns card
+// signup link (/event/[slug]) where the Revolut widget owns card
 // entry. Phase 2 adds direct booking for events that are free for
 // the person asking; phase 3 adds cancel/reschedule.
 //

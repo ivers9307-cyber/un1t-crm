@@ -57,9 +57,10 @@ const HELPERS = new Set([
   'src/lib/entry-manage-tokens.js',
 ])
 
-// The literal path that follows `${baseUrl}` in a template literal, up to the
-// first dynamic part, query string or closing backtick.
-const LINK_RE = /\$\{baseUrl\}(\/[A-Za-z0-9_\-./]*)/g
+// The literal path that follows `${baseUrl}` (or a route's `${floor}`
+// fallback) in a template literal, up to the first dynamic part, query string
+// or closing backtick.
+const LINK_RE = /\$\{(?:baseUrl|floor)\}(\/[A-Za-z0-9_\-./]*)/g
 
 function mintedPaths(file) {
   const src = readFileSync(resolve(process.cwd(), file), 'utf8')

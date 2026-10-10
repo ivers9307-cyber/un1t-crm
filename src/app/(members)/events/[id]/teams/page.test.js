@@ -11,10 +11,12 @@ vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('next/navigation', () => navigationMock())
 vi.mock('@/components/RaceTeamsManager', () => ({ default: () => null }))
+vi.mock('@/lib/tenant-host', async (importOriginal) => ({ ...(await importOriginal()), resolveCustomerBaseUrl: vi.fn(async () => '') }))
 
 import RaceTeamsPage from './page.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 
 const EVENT_ID = 'e0000000-0000-4000-8000-000000000001'
 const props = () => ({ params: Promise.resolve({ id: EVENT_ID }) })
@@ -59,5 +61,25 @@ describe('/events/[id]/teams — canCancelEntries at the event\'s studio', () =>
     expect(manager.props.canCancelEntries).toBe(expected)
     // EVENT-WAITLIST.1 — the waitlist routes apply the same rule.
     expect(manager.props.canManageWaitlist).toBe(expected)
+  })
+})
+
+// W1.L3b — the staff-copied payment link is a customer link, so the page
+// resolves the EVENT's tenant host and hands its origin to the manager.
+describe('/events/[id]/teams — customerOrigin is the event\'s tenant host', () => {
+  it('resolves at the event\'s location and passes the origin through', async () => {
+    getCurrentUser.mockResolvedValue(MASTER); at(LOC_B)
+    resolveCustomerBaseUrl.mockResolvedValueOnce('https://gym-b.repset.ie')
+    const el = await RaceTeamsPage(props())
+    const manager = el.props.children.find((c) => c?.props?.race)
+    expect(resolveCustomerBaseUrl).toHaveBeenCalledWith(expect.anything(), LOC_B)
+    expect(manager.props.customerOrigin).toBe('https://gym-b.repset.ie')
+  })
+  it('an unresolvable host degrades to \'\' (the client falls back), never throws', async () => {
+    getCurrentUser.mockResolvedValue(MASTER); at(LOC_B)
+    resolveCustomerBaseUrl.mockRejectedValueOnce(new Error('APP_URL unset'))
+    const el = await RaceTeamsPage(props())
+    const manager = el.props.children.find((c) => c?.props?.race)
+    expect(manager.props.customerOrigin).toBe('')
   })
 })

@@ -46,8 +46,9 @@ export const CANCELLATION_FORM_DEFAULTS = Object.freeze({
   confirmation_template_cancel: null,
   confirmation_template_pause: null,
   confirmation_template_saved: null,
-  // Host the link is built on. Null = getAppUrl() (the CRM host). Set to the
-  // marketing host (already allowlisted) to hand members a friendlier URL.
+  // Host the link is built on. Null = the contact location's tenant host
+  // (resolveCustomerBaseUrl, W1.L3b; the CRM host only when the location has
+  // none). Set it to pin a host, e.g. the one a WhatsApp template was approved on.
   public_base_url: null,
 })
 

@@ -12,6 +12,7 @@ import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/perm
 import RaceTeamsManager from '@/components/RaceTeamsManager'
 import { hasRoleAtLocation } from '@/lib/role-at-location'
 import { MANAGER_ROLES } from '@/lib/schemas'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import { ArrowLeft } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
@@ -38,6 +39,13 @@ export default async function RaceTeamsPage(props) {
   if (assertLocationAccess(user, race.location_id)) notFound()
   if (!hasPermissionForLocation(user, race.location_id, 'races')) redirect('/')
 
+  // W1.L3b — the staff-copied payment link is a CUSTOMER link, so it is minted
+  // on the event's own tenant host, not the CRM host the operator is on (same
+  // rule as the /events list's copy link). Origin-only, so a misconfigured env
+  // var can't poison it when the resolver floors; '' lets the client fall back.
+  let customerOrigin = ''
+  try { customerOrigin = new URL(await resolveCustomerBaseUrl(db, race.location_id)).origin } catch { customerOrigin = '' }
+
   return (
     <div className="p-6 max-w-5xl mx-auto">
       <Link href="/events" className="inline-flex items-center gap-1.5 text-sm text-un1t-subtle hover:text-un1t-text mb-3">
@@ -62,6 +70,7 @@ export default async function RaceTeamsPage(props) {
         canMoveEntries={hasRoleAtLocation(user, race.location_id, MANAGER_ROLES)}
         canManageWaitlist={hasRoleAtLocation(user, race.location_id, MANAGER_ROLES)}
         currency={race.payment_currency || 'EUR'}
+        customerOrigin={customerOrigin}
       />
     </div>
   )
