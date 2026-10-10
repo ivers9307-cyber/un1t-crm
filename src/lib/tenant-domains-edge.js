@@ -83,7 +83,44 @@ export const DB_BRAND_DEFAULTS = Object.freeze({
   // confirmation email, with '/event-pay/' as its paid leg; covered by
   // '/event/' today, listed so the flow survives a narrowing of it.
   // LATENT, not live: tenant_domains has zero rows today.
-  allowedPaths: Object.freeze(['/welcome', '/book/', '/event/', '/event/entry/', '/event-pay/', '/privacy', '/legal/', '/account-deletion', '/cancel/', '/api/public/', '/api/webhooks/']),
+  //
+  // W1.L2 — the whole CUSTOMER FLOW. Since mig 716 (W1.L1) every
+  // organisation has an automatic <slug>.repset.ie platform row with
+  // brand = {} → these defaults, and W1.L3 mints customer-facing links
+  // on that host. A link that lands on a path missing here is rewritten
+  // to /welcome (fallbackHandler below): the customer clicks "unsubscribe"
+  // and gets the studio chooser, consent untouched. So the default now
+  // carries the marketing flow an email leads to ('/unsubscribe/',
+  // '/preferences/', '/view-email/' + their '/api/…/' backers), the paid
+  // class leg ('/class-pay/'), the host portal and its onboarding
+  // ('/host', '/host-connect/', '/api/host/', '/h/'), embeds and '/terms'.
+  // Every one of them is already public on the CRM host (src/proxy.js
+  // publicPaths — the token in the path, or the host session inside
+  // /host, is the credential), so the default exposes nothing new.
+  // src/public-compliance-paths.test.jsx §8 pins the flow in both
+  // directions, and '/api/calendar-feed' stays OUT on purpose
+  // (src/calendar-feed-path.test.js: the feed URL is minted on the CRM host).
+  //
+  // Deliberately ABSENT: '/start', '/free-class', '/offers'. They are
+  // Stillorgan literals (src/app/start/page.js, src/app/free-class/page.js,
+  // W0.4's pinned /offers) — serving them on another tenant's host would
+  // show UN1T's funnel under that gym's name. UN1T Group's own platform row
+  // (un1t-group.repset.ie) may list them in brand.allowedPaths, which
+  // replaces (not extends) this default — see resolveTenantDomainBrand —
+  // so that row needs the full list: [...defaults, '/start', '/free-class',
+  // '/offers']. Operator SQL on the row, not code.
+  //
+  // mig 415's COMMENT ON COLUMN tenant_domains.brand still quotes the
+  // original five-entry default; THIS array is the truth (an applied
+  // migration is never edited).
+  allowedPaths: Object.freeze([
+    '/welcome', '/book/', '/event/', '/event/entry/', '/event-pay/', '/privacy', '/legal/', '/terms',
+    '/account-deletion', '/cancel/', '/api/public/', '/api/webhooks/',
+    // W1.L2 — the marketing flow a tenant's customer reaches from an email:
+    '/unsubscribe/', '/preferences/', '/view-email/', '/api/unsubscribe/', '/api/preferences/',
+    // the paid class leg, the host portal and host onboarding, embeds:
+    '/class-pay/', '/h/', '/host', '/host-connect/', '/api/host/', '/embed/',
+  ]),
   rootHandler: 'rewrite',
   rootRewriteTo: '/welcome',
   fallbackHandler: 'rewrite',
