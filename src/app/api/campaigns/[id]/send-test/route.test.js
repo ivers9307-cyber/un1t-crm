@@ -113,6 +113,9 @@ describe("send-test — links on the campaign location's tenant host (W1.L3a)", 
     campaignRow.subject = 'Manage at {{preference_url}}'
     const res = await post()
     expect(res.status).toBe(200)
+    // The rejection must have been CONSUMED by the route, or this case passes
+    // with the implementation reverted to getAppUrl().
+    expect(resolveCustomerBaseUrl).toHaveBeenCalledWith(fakeDb, 'loc-1')
     expect(sendEmail.mock.calls[0][0].subject).toContain('/preferences/test-token')
   })
 })

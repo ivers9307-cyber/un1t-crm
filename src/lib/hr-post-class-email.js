@@ -603,9 +603,10 @@ export async function sendPostClassEmail(db, sessionId, { nowMs = Date.now() } =
     // minutes, so a compose that throws meant a re-compose (and a re-fired
     // "session ready" push) on every tick, forever.
     //
-    // That was latent before URLSEAM.1 and reachable after it: `composeEmail`
-    // now calls `getAppUrl()` (via unsubscribeUrl), which THROWS by design
-    // when NEXT_PUBLIC_APP_URL is unset. Every way composeEmail can throw is
+    // That was latent before URLSEAM.1 and reachable after it: the host
+    // resolve above floors to `getAppUrl()` (and a bare `composeEmail` still
+    // calls it via unsubscribeUrl), which THROWS by design when
+    // NEXT_PUBLIC_APP_URL is unset. Every way this try block can throw is
     // permanent for the life of the deployment — it is a pure function of the
     // already-loaded ctx plus env, so nothing about the next tick differs —
     // which makes "stamp and stop" strictly better than "retry forever".
