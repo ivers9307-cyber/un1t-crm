@@ -101,9 +101,11 @@ export async function POST(request, props) {
     const authUserId = inv.user.id
     const { data: staffProfile } = await db.from('profiles').select('id').eq('id', authUserId).maybeSingle()
     if (staffProfile) {
+      // Brand-neutral: the profiles lookup is not org-scoped, so this login
+      // may be another organisation's staff (W1.S1c review).
       return NextResponse.json({
         success: false,
-        error: 'That email is a UN1T staff account. Use "Open host portal" above to manage this host as admin, or invite them on a different email.',
+        error: 'That email is already a staff login. Use "Open host portal" above to manage this host as admin, or invite them on a different email.',
       }, { status: 400 })
     }
     const { data: otherLink } = await db.from('host_users').select('host_id').eq('auth_user_id', authUserId).maybeSingle()

@@ -53,9 +53,40 @@ const SWEPT = [
   'src/lib/hyrox/generate-block.js',
   'src/app/api/hyrox/blocks/[id]/expand/route.js',
   'src/app/api/hyrox/sessions/[id]/regenerate/route.js',
+  // ── W1.S1c: host portal + host emails ────────────────────────────────────
+  // The org a host belongs to (event_hosts.organization_id, which is its
+  // anchor location's org) speaks in the portal and the host emails; money
+  // rails (booking fee, CSV fee column, the shared Postmark stream) are the
+  // platform's (PLATFORM_NAME). login/set-password moved their client bodies
+  // into HostLoginForm/HostSetPasswordForm so page.js can resolve the brand.
+  'src/app/host/(portal)/layout.js',
+  'src/app/host/(portal)/page.js',
+  'src/app/host/(portal)/events/new/page.js',
+  'src/app/host/(portal)/events/[id]/edit/page.js',
+  'src/app/host/login/page.js',
+  'src/app/host/login/HostLoginForm.jsx',
+  'src/app/host/set-password/page.js',
+  'src/app/host/set-password/HostSetPasswordForm.jsx',
+  'src/app/host-connect/[token]/page.js',
+  'src/components/HostConnect.jsx',
+  'src/app/api/public/host-connect/[token]/route.js',
+  'src/components/host/HostEmailReport.jsx',
+  'src/components/host/HostEventActions.jsx',
+  'src/components/host/HostEventForm.jsx',
+  'src/lib/host-onboarding-email.js',
+  'src/lib/host-campaign-launch.js',
+  'src/app/api/host/emails/[id]/send-test/route.js',
+  'src/app/api/host/emails/[id]/schedule/route.js',
+  'src/app/api/host/events/[id]/route.js',
+  'src/lib/host-statements.js',
+  'src/app/api/hosts/[id]/invite/route.js',
+  'src/app/api/hosts/[id]/link-staff/route.js',
+  'src/app/api/hosts/[id]/route.js',
 ]
 
-// file → exact literals the appendix marks `keep`. None in W1.S4 or W1.S3.
+// file → exact literals the appendix marks `keep`. None in W1.S4, W1.S3 or
+// W1.S1c (src/lib/brands.js:151, the un1t-hosts brand description, is a
+// keep row that W1.S1c leaves unswept rather than listing a whole file).
 const KEEP = {}
 
 describe('UN1T literal sweep (W1.S*)', () => {
