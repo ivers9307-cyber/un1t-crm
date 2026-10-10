@@ -731,7 +731,7 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   // Digital contracts (mig 106). Recipient gets a push when a
   // master/owner issues them a contract for signature. Default-on
   // for every role because the prompt-to-sign flow depends on it.
-  { key: 'notify_contract_issued',  label: '… Contract issued',    hint: 'Notify when UN1T issues you a contract that needs signing',     mobileOnly: true, isNotify: true },
+  { key: 'notify_contract_issued',  label: '… Contract issued',    hint: 'Notify when your studio issues you a contract that needs signing',     mobileOnly: true, isNotify: true },
   // NOTIF.1: lead-time reminders for tasks + bookings. The
   // send-push-reminders cron (every 5 min) sends two reminders
   // per item — one 24h ahead and one 1h ahead. Categories are

@@ -1,6 +1,7 @@
 // BYTE-SYNC: champ-app/shared/hr-analytics.js ↔ un1t-crm/src/lib/hr-analytics.js.
-// The two files are identical except the dublin-time import below
-// ('./dublin-time.js' in champ-app, '@/lib/dublin-time' in un1t-crm).
+// The two files are identical except the two imports below
+// ('./dublin-time.js' + './brand-name.js' in champ-app,
+// '@/lib/dublin-time' + '@/lib/brand-name' in un1t-crm).
 // champ-app is the canonical copy — edit there first, then mirror the change.
 // Both apps render these numbers to the SAME member: drift here means the CRM
 // coach view and the member app disagree on totals. The twin test files are
@@ -32,6 +33,7 @@
 // 8 of your last 10 RIDE classes".
 
 import { dublinDateKey, dublinDayStartMs, dublinAddDays, dublinWeekStartMs } from '@/lib/dublin-time'
+import { productName } from '@/lib/brand-name'
 
 const RECENT_DAYS = 28
 const PRIOR_DAYS = 56
@@ -184,7 +186,8 @@ const HIGHLIGHT_RULES = [
     },
     msg: ({ thisSession }) => `New peak heart rate: ${thisSession.peak_hr_bpm} bpm.`,
   },
-  // Highest UN1T Points ever for this class type.
+  // Highest points ever for this class type. The product name is the
+  // tenant's (W1.S4): `${shortName} Points`, bare "Points" with no brand.
   {
     id: 'best_class_type_points',
     test: ({ thisSession, sameTypeExclThis }) => {
@@ -194,8 +197,8 @@ const HIGHLIGHT_RULES = [
       const prior = sameTypeExclThis.map((s) => Number(s.effort_points)).filter(Number.isFinite)
       return prior.length >= 2 && pts > Math.max(...prior)
     },
-    msg: ({ thisSession, eventTypeName }) =>
-      `Personal best for ${eventTypeName || 'this class'} — ${thisSession.effort_points} UN1T Points.`,
+    msg: ({ thisSession, eventTypeName, shortName }) =>
+      `Personal best for ${eventTypeName || 'this class'} — ${thisSession.effort_points} ${productName(shortName, 'points')}.`,
   },
   // Top-quartile points across the last 30 days (any class).
   {
@@ -205,13 +208,13 @@ const HIGHLIGHT_RULES = [
       const pct = percentileOf(Number(thisSession.effort_points), recentSessionsExclThis, 'effort_points')
       return pct != null && pct >= 0.75
     },
-    msg: ({ thisSession, recentSessionsExclThis }) => {
+    msg: ({ thisSession, recentSessionsExclThis, shortName }) => {
       const pct = percentileOf(Number(thisSession.effort_points), recentSessionsExclThis, 'effort_points')
       const pctRound = Math.round(pct * 100)
       // Clamp to 1: a best-ever session has percentile 1 → 100-100 = 0,
       // which would read "top 0%" (nonsense). "Top 1%" is the floor.
       const topPct = Math.max(1, 100 - pctRound)
-      return `In the top ${topPct}% of your last 4 weeks — ${thisSession.effort_points} UN1T Points.`
+      return `In the top ${topPct}% of your last 4 weeks — ${thisSession.effort_points} ${productName(shortName, 'points')}.`
     },
   },
   // Streak — Nth class in N days.
@@ -228,7 +231,7 @@ const HIGHLIGHT_RULES = [
   },
 ]
 
-export function pickHighlight({ thisSession, history, eventTypeName, nowMs = Date.now() }) {
+export function pickHighlight({ thisSession, history, eventTypeName, nowMs = Date.now(), shortName = '' }) {
   if (!thisSession) return null
   const historyExclThis = (history || []).filter((s) => s.id !== thisSession.id)
   const sameTypeExclThis = sameClass(historyExclThis, thisSession.class_name)
@@ -239,7 +242,7 @@ export function pickHighlight({ thisSession, history, eventTypeName, nowMs = Dat
   // the test's anchor date drifts more than 28d behind today.
   const recentSessionsExclThis = withinDays(historyExclThis, RECENT_DAYS, nowMs)
 
-  const ctx = { thisSession, historyExclThis, sameTypeExclThis, recentSessionsExclThis, eventTypeName }
+  const ctx = { thisSession, historyExclThis, sameTypeExclThis, recentSessionsExclThis, eventTypeName, shortName }
   for (const rule of HIGHLIGHT_RULES) {
     if (rule.test(ctx)) return { id: rule.id, message: rule.msg(ctx) }
   }
@@ -402,7 +405,7 @@ export function weeklyStreak(sessions, { minPerWeek = 1, nowMs = Date.now() } = 
  * Roll up everything the email composer needs in one pass over
  * the data. The composer doesn't need to know about windows / fields.
  */
-export function buildSessionAnalytics({ thisSession, history, eventTypeName, nowMs = Date.now() }) {
+export function buildSessionAnalytics({ thisSession, history, eventTypeName, nowMs = Date.now(), shortName = '' }) {
   const historyExclThis = (history || []).filter((s) => s.id !== thisSession.id)
   const sameType = sameClass(historyExclThis, thisSession.class_name)
   // The "last 8" MUST be the 8 most RECENT qualifying sessions. The loader
@@ -424,7 +427,7 @@ export function buildSessionAnalytics({ thisSession, history, eventTypeName, now
   const categoryMean = meanField(sameCatRecent, 'effort_points')
   const categoryPercentile = percentileOf(Number(thisSession.effort_points), sameCatRecent, 'effort_points')
 
-  const highlight = pickHighlight({ thisSession, history: historyExclThis, eventTypeName, nowMs })
+  const highlight = pickHighlight({ thisSession, history: historyExclThis, eventTypeName, nowMs, shortName })
 
   return {
     highlight,
