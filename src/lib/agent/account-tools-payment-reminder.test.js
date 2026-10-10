@@ -42,7 +42,7 @@ const enrol = (over = {}) => ({
 // transactional row for the contact ids it was asked for. `trace` captures
 // the select column strings so a phantom column (ENROLFIX.1) is caught here,
 // not by a 400 in production.
-function stubDb({ groupId = null, members = [], contacts = [], enrollments = [], groupError = null, enrolError = null, trace = {} } = {}) {
+function stubDb({ groupId = null, members = [], contacts = [], enrollments = [], groupError = null, enrolError = null, trace = {}, membershipSource = 'glofox' } = {}) {
   return {
     from(table) {
       const st = { cols: '', filters: {}, order: null, limit: null }
@@ -52,6 +52,8 @@ function stubDb({ groupId = null, members = [], contacts = [], enrollments = [],
           if (st.cols.includes('group_id')) return { data: groupId ? { group_id: groupId } : null, error: null }
           return { data: members.map((id) => ({ contact_id: id })), error: null }
         }
+        // W1.M3b — the studio's membership source: Glofox unless the test says otherwise.
+        if (table === 'locations') return { data: single ? { membership_source: membershipSource } : [], error: null }
         if (table === 'contacts') {
           const want = st.filters.id
           const list = Array.isArray(want) ? contacts.filter((c) => want.includes(c.id)) : contacts.filter((c) => c.id === want)
@@ -215,6 +217,17 @@ describe('get_my_payment_reminder · executor', () => {
     expect(res.pay_link).toBeNull()
     expect(res.amount).toBeNull()
     expect(res.still_overdue).toBe('unknown')
+    expect(getGlofoxOverdueInvoices).not.toHaveBeenCalled()
+  })
+
+  it('W1.M3b — a studio with NO membership source → unknown, no credentials read, no Glofox call', async () => {
+    const db = stubDb({
+      contacts: [{ id: 'c1', glofox_member_id: MEMBER, location_id: 'loc1' }],
+      enrollments: [enrol()],
+      membershipSource: 'none',
+    })
+    expect((await run(db)).still_overdue).toBe('unknown')
+    expect(glofoxCredentialsForLocation).not.toHaveBeenCalled()
     expect(getGlofoxOverdueInvoices).not.toHaveBeenCalled()
   })
 
