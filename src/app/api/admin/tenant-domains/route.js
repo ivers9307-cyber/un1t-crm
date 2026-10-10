@@ -9,8 +9,9 @@
 // refused (the registry is the authoritative first tier — a row for
 // one of them would be dead data + dual-source drift), as is the
 // CRM's own hostname (a brand row there would gate the staff CRM
-// itself). Duplicate hostnames surface as a clean 409, not a raw
-// Postgres error.
+// itself), and (W1.L1) any *.repset.ie host — the platform row is
+// automatic, born with the org. Duplicate hostnames surface as a
+// clean 409, not a raw Postgres error.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -19,6 +20,7 @@ import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, tenantHostname, tenantDomainBrandConfigSchema } from '@/lib/schemas'
 import { resolveBrand, getCrmHostnames } from '@/lib/brands'
+import { PLATFORM_HOST_SUFFIX } from '@/lib/tenant-host'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -67,6 +69,12 @@ export function reservedHostnameError(hostname) {
   if (getCrmHostnames().includes(hostname)) {
     return `"${hostname}" is the CRM's own hostname — a brand row here would gate the staff CRM itself.`
   }
+  // W1.L1 (mig 716): every org's <slug>.repset.ie row is born with the
+  // org (source='platform'); a hand-made one would either duplicate it
+  // or squat another org's slug.
+  if (hostname === PLATFORM_HOST_SUFFIX || hostname.endsWith(`.${PLATFORM_HOST_SUFFIX}`)) {
+    return `<slug>.${PLATFORM_HOST_SUFFIX} hosts are automatic; bring your own domain here`
+  }
   return null
 }
 
@@ -86,7 +94,7 @@ export async function GET() {
   const db = createServerClient()
   const { data, error } = await db
     .from('tenant_domains')
-    .select('id, hostname, organization_id, location_id, brand, active, created_at, organizations:organization_id (name, slug), locations:location_id (name)')
+    .select('id, hostname, organization_id, location_id, brand, active, source, created_at, organizations:organization_id (name, slug), locations:location_id (name)')
     .order('hostname')
   if (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 })
@@ -140,7 +148,7 @@ export async function POST(request) {
 
   const { data: created, error: insertErr } = await db
     .from('tenant_domains')
-    .insert({ hostname, organization_id, location_id: location_id ?? null, brand, active })
+    .insert({ hostname, organization_id, location_id: location_id ?? null, brand, active, source: 'custom' })
     .select()
     .single()
   if (insertErr) {

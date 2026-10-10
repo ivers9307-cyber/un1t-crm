@@ -8,6 +8,7 @@
 //   DELETE — remove the mapping outright
 //
 // Unknown ids return 404 (detail routes never 403 on a missing row).
+// A source='platform' row (W1.L1, mig 716) answers 409 to both.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -39,11 +40,22 @@ async function requireMaster() {
   return { user }
 }
 
+// W1.L1 (mig 716): the org's <slug>.repset.ie row is automatic — it is
+// never edited or removed by hand (it lives and dies with the org).
+function platformRowError(row) {
+  if (row.source !== 'platform') return null
+  return NextResponse.json({
+    success: false,
+    error: `"${row.hostname}" is the organisation's automatic platform host; it cannot be edited or deleted.`,
+    code: 'platform_host',
+  }, { status: 409 })
+}
+
 async function loadRow(db, id) {
   if (!id || !uuidLike.safeParse(id).success) return null
   const { data } = await db
     .from('tenant_domains')
-    .select('id, hostname, organization_id, location_id, brand, active')
+    .select('id, hostname, organization_id, location_id, brand, active, source')
     .eq('id', id)
     .maybeSingle()
   return data || null
@@ -69,6 +81,8 @@ export async function PATCH(request, props) {
   if (!row) {
     return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   }
+  const platform = platformRowError(row)
+  if (platform) return platform
 
   if (patch.hostname && patch.hostname !== row.hostname) {
     const reserved = reservedHostnameError(patch.hostname)
@@ -117,6 +131,8 @@ export async function DELETE(request, props) {
   if (!row) {
     return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   }
+  const platform = platformRowError(row)
+  if (platform) return platform
 
   const { error } = await db
     .from('tenant_domains')
