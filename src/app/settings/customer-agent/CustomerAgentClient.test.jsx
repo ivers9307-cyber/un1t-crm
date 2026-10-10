@@ -38,6 +38,26 @@ function mockFetch(settingsAnswers, { knowledgeFails = false } = {}) {
 
 afterEach(() => { cleanup(); delete global.fetch })
 
+describe('CustomerAgentClient — placeholders carry the brand (W1.S3)', () => {
+  it('renders the hand-off and welcome defaults and the Points label from the GET brand', async () => {
+    mockFetch([reply(200, { ...(await GOOD.json()), brand: { companyName: 'Gym A', shortName: 'GA' } })])
+    const { container } = render(<CustomerAgentClient canEdit />)
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /Save settings/ }).length).toBeGreaterThan(0))
+    expect(container.querySelector('input[placeholder="Thanks for your message! One of the Gym A team will get back to you shortly."]')).toBeTruthy()
+    expect(container.querySelector('textarea[placeholder^="Hi, I\'m Mia, the studio\'s assistant at Gym A."]')).toBeTruthy()
+    expect(screen.getByText('Monthly GA Points target')).toBeTruthy()
+    expect(container.textContent).not.toContain('UN1T')
+  })
+
+  it('with no brand in the payload the placeholders still read naturally', async () => {
+    mockFetch([GOOD])
+    const { container } = render(<CustomerAgentClient canEdit />)
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /Save settings/ }).length).toBeGreaterThan(0))
+    expect(container.querySelector('input[placeholder="Thanks for your message! One of the team will get back to you shortly."]')).toBeTruthy()
+    expect(screen.getByText('Monthly Points target')).toBeTruthy()
+  })
+})
+
 describe('CustomerAgentClient — a failed read (SETTINGSWIPE.1)', () => {
   it('a 500 shows Could not load + Try again, and NO Save', async () => {
     mockFetch([reply(500, { success: false, code: 'settings_unreadable', error: 'x' })])

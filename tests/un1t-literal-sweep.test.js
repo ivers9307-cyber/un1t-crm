@@ -1,14 +1,16 @@
-// W1.S2 — the UN1T literal sweep guard for STAFF-facing web chrome and
-// staff emails (SaaS Wave 1, Track S).
+// W1.S* — the UN1T literal sweep guard (SaaS Wave 1, Track S).
 //
-// Same shape and helper as the shared ledger tests/un1t-literal-sweep.test.js
-// (created by W1.S4, PR #1999). It lives in its own file only so the two PRs
-// do not conflict on one list; fold SWEPT/KEEP below into the shared ledger
-// once S4 is on main.
+// A second gym's customers and staff must never read "UN1T". Every sweep PR
+// appends the files it cleaned to SWEPT below; from then on a reintroduced
+// literal in any of them fails here, so the sweep cannot rot one PR at a time.
 //
 // What counts: a `UN1T` outside comments. Rows the plan's appendix marks
-// `keep` (UN1T-specific by design) are allow-listed per file in KEEP, as the
-// exact literal, so a NEW literal in a kept file still fails.
+// `keep` (UN1T-specific by design — legal pages, /offers, master-only toggles)
+// are allow-listed per file in KEEP, as the exact literal, so a NEW literal
+// in a kept file still fails.
+//
+// Created by W1.S4 (shared/ seam + its src/lib twins). W1.S1a–S3 and S5
+// append their own rows; the list is the sweep's ledger.
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -17,8 +19,41 @@ import { stripComments } from './helpers/js-code.js'
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), '..')
 
-// Files swept by W1.S2 (staff chrome, staff settings copy, staff emails).
+// Files swept so far. Keep the list sorted by task so a reviewer can see
+// which PR owns a row.
 const SWEPT = [
+  // ── W1.S4: shared/ seam + src/lib twins ──────────────────────────────────
+  'shared/challenge-wrapped.js',
+  'shared/customer-notifications.js',
+  'shared/goals.js',
+  'shared/hr-analytics.js',
+  'shared/permissions.js',
+  'shared/session-history.js',
+  'src/lib/customer-notifications.js',
+  'src/lib/goals.js',
+  'src/lib/hr-analytics.js',
+  // ── W1.S3: Mia, WhatsApp merge, assistant, hyrox ─────────────────────────
+  'src/lib/agent/core.js',
+  'src/lib/agent/default-copy.js',
+  'src/lib/agent/welcome-greeting.js',
+  'src/lib/agent/prompt.js',
+  'src/lib/agent/approval-suggest.js',
+  'src/lib/agent/followups.js',
+  'src/lib/agent/auto-reply.js',
+  'src/lib/churn-winback.js',
+  'src/lib/whatsapp.js',
+  'src/lib/sequences/steps.js',
+  'src/lib/communications/compose.js',
+  'src/components/WABroadcastEditor.jsx',
+  'src/app/api/settings/customer-agent/route.js',
+  'src/app/settings/customer-agent/CustomerAgentClient.jsx',
+  'src/lib/assistant-prompt.js',
+  'src/lib/hyrox/prompt.js',
+  'src/lib/hyrox/expand-runner.js',
+  'src/lib/hyrox/generate-block.js',
+  'src/app/api/hyrox/blocks/[id]/expand/route.js',
+  'src/app/api/hyrox/sessions/[id]/regenerate/route.js',
+  // ── W1.S2: staff chrome + staff emails ───────────────────────────────────
   'src/app/account/contracts/page.js',
   'src/app/account/page.js',
   'src/app/api/account/pending-contracts/route.js',
@@ -61,29 +96,19 @@ const SWEPT = [
   'src/lib/zoom/external-contacts.js',
 ]
 
-// file → exact literals another OPEN sweep PR removes (tolerated here so the
-// two PRs never touch the same hunk; unlike KEEP they are not required to
-// still exist, so the entry goes dead, not red, when that PR merges). Delete
-// the map once W1.E2 (#1998, `platformFromHeader`) is on main.
-const PENDING = {
-  'src/lib/contractor-invoice-email.js': ["'UN1T <hello@un1t.ie>'"],
-  'src/lib/xero/bills-email.js': ["'UN1T <hello@un1t.ie>'"],
-  'src/lib/xero/contractor-bills.js': ["'UN1T <hello@un1t.ie>'"],
-  'src/lib/xero/fte-expense-claims.js': ["'UN1T <hello@un1t.ie>'"],
-}
-
-// file → exact literals the appendix marks `keep`.
+// file → exact literals the appendix marks `keep`. None in W1.S4 or W1.S3.
 const KEEP = {
-  // wallet-topup.js:62 — the platform IS the seller of a wallet top-up, so
-  // the VAT invoice names the platform's own trading entity (Wave 2 moves
-  // money rails to the org).
+  // ── W1.S2: staff chrome + staff emails ───────────────────────────────────
+  // wallet-topup.js — the platform IS the seller of a wallet top-up, so the
+  // VAT invoice names the platform's own trading entity (Wave 2 moves money
+  // rails to the org).
   'src/lib/wallet-topup.js': ['(trading as UN1T Dublin)'],
 }
 
-describe('UN1T literal sweep (W1.S2 — staff chrome and staff emails)', () => {
-  it.each(SWEPT)('%s carries no staff-visible UN1T literal', (file) => {
+describe('UN1T literal sweep (W1.S*)', () => {
+  it.each(SWEPT)('%s carries no customer/staff-visible UN1T literal', (file) => {
     const src = stripComments(readFileSync(join(repo, file), 'utf8'), file)
-    const allowed = [...(KEEP[file] || []), ...(PENDING[file] || [])]
+    const allowed = KEEP[file] || []
     const stripped = allowed.reduce((s, lit) => s.split(lit).join(''), src)
     const hits = stripped
       .split('\n')
@@ -93,7 +118,6 @@ describe('UN1T literal sweep (W1.S2 — staff chrome and staff emails)', () => {
   })
 
   it('every KEEP entry names a swept file and a literal that still exists', () => {
-    for (const file of Object.keys(PENDING)) expect(SWEPT, `${file} is in PENDING but not SWEPT`).toContain(file)
     for (const [file, lits] of Object.entries(KEEP)) {
       expect(SWEPT, `${file} is in KEEP but not SWEPT`).toContain(file)
       const src = readFileSync(join(repo, file), 'utf8')

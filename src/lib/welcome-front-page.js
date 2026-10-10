@@ -3,16 +3,13 @@
 // is unit-testable (the page itself is JSX; this module is pure data).
 //
 // SAAS-6: chooser_settings is per-ORGANIZATION (mig 414), so this
-// reader must decide WHICH org's front page to render. Single-domain
-// reality today: un1tdublin.com is the only marketing hostname and the
-// brand registry (src/lib/brands.js) carries no brand→organization
-// linkage yet, so we resolve the UN1T Group org by slug.
+// reader must decide WHICH org's front page to render.
 //
-// SAAS-8 HANDOFF: tenant_domains will map the request hostname to an
-// organization. When it lands, thread the host in from the page
-// (headers()) and swap the slug lookup below for that mapping — the
-// rest of this loader is already org-keyed and needs no change.
-// Behaviour today is identical for un1tdublin.com.
+// W1.L4: the page passes the organisation the REQUEST HOST maps to
+// (resolveTenantOrgId(host): the in-code brands — un1tdublin.com is UN1T
+// Group's — then tenant_domains, so <slug>.repset.ie and a custom domain
+// render THAT org's chooser). A host with no organisation (the CRM host)
+// keeps the UN1T Group slug fallback byte-identical.
 
 import { createServerClient } from '@/lib/supabase'
 import { blocksOrDefault } from '@/lib/landing-page-blocks'
@@ -21,8 +18,8 @@ import { tileModeFor } from '@/lib/landing-page-visibility'
 // Default left→right order when the operator hasn't set tile_order.
 export const TILE_ORDER = ['stillorgan', 'hatch-street']
 
-// The org whose chooser un1tdublin.com renders until SAAS-8 supplies a
-// hostname→org mapping. Resolved by slug — never a hardcoded UUID.
+// The org whose chooser a host with NO organisation (the CRM host) renders.
+// Resolved by slug — never a hardcoded UUID.
 export const FRONT_PAGE_ORG_SLUG = 'un1t-group'
 
 /**
@@ -33,16 +30,22 @@ export const FRONT_PAGE_ORG_SLUG = 'un1t-group'
  * empty chooser rather than 500ing the public page.
  *
  * @param {import('@supabase/supabase-js').SupabaseClient} [db]  Injectable for tests.
+ * @param {{ orgId?: string|null }} [opts]  W1.L4: the host's organisation
+ *   (resolveTenantOrgId); null keeps the slug fallback.
  */
-export async function loadFrontPage(db = null) {
+export async function loadFrontPage(db = null, { orgId = null } = {}) {
   try {
     const client = db || createServerClient()
 
-    const { data: org } = await client
-      .from('organizations')
-      .select('id')
-      .eq('slug', FRONT_PAGE_ORG_SLUG)
-      .maybeSingle()
+    let org = orgId ? { id: orgId } : null
+    if (!org) {
+      const { data } = await client
+        .from('organizations')
+        .select('id')
+        .eq('slug', FRONT_PAGE_ORG_SLUG)
+        .maybeSingle()
+      org = data
+    }
 
     const [chooserRes, tilesRes] = await Promise.all([
       org?.id

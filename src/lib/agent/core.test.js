@@ -10,7 +10,7 @@ import {
   parseAgentResponse,
   stripEmDashes,
   isVerificationFresh,
-  DEFAULT_HOLDING_MESSAGE,
+  defaultHoldingMessage,
   autoVerifyContactId,
   resolveAutoVerify,
   resolveActingContactId,
@@ -291,8 +291,10 @@ describe('parseAgentResponse', () => {
   it('an empty model response is a handoff, not a blank send', () => {
     expect(parseAgentResponse('   ').action).toBe('handoff')
   })
-  it('exposes a default holding message', () => {
-    expect(DEFAULT_HOLDING_MESSAGE).toMatch(/team/i)
+  it('W1.S3 — the default holding message carries the brand it is given, never a literal gym', () => {
+    expect(defaultHoldingMessage('Gym A')).toBe('Thanks for your message! One of the Gym A team will get back to you shortly.')
+    expect(defaultHoldingMessage('')).toBe('Thanks for your message! One of the team will get back to you shortly.')
+    expect(defaultHoldingMessage(undefined)).not.toMatch(/UN1T/)
   })
 
   // AGENT-UX.1 — tap-choice options. The model ends a reply with one

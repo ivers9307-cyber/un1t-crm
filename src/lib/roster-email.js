@@ -10,6 +10,7 @@ import { sendEmail } from './postmark'
 import { getAppUrl } from './app-url'
 import { logWarn } from './log'
 import { PLATFORM_NAME } from './brand-name'
+import { getLocationBranding } from './location-branding.js'
 
 function formatEur(n) {
   if (n == null) return '€0'
@@ -102,6 +103,10 @@ export async function sendOverBudgetApprovalEmail(db, args) {
     .eq('id', locationId)
     .single()
   const locationName = loc?.name || 'this location'
+  // W1.E2 — the studio's brand as the From display name (platform address).
+  // fromName only, never locationId: an owner's approval notice must not
+  // carry the studio's customer mailbox as Reply-To.
+  const branding = await getLocationBranding(db, locationId)
 
   const recipients = (owners || [])
     .map(o => o.profiles)
@@ -142,6 +147,7 @@ export async function sendOverBudgetApprovalEmail(db, args) {
         to: r.email,
         subject,
         htmlBody,
+        fromName: branding.companyName || undefined,
         stream: 'outbound',
         tag: 'roster-approval',
         metadata: { roster_id: rosterId, location_id: locationId, recipient_id: r.id },

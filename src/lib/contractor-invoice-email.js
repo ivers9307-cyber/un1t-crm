@@ -14,6 +14,7 @@ import { periodLabel } from './contractor-invoices.js'
 import { formatFullDateTimeInTZ } from './dates.js'
 import { getLocationBranding } from './location-branding.js'
 import { resolvePostmarkToken } from './postmark-token.js'
+import { platformFromHeader } from './platform-sender.js'
 // URLSEAM.1 — /schedule/invoices is served by THIS deployment, so the base is
 // this deployment's own host. The local `NEXT_PUBLIC_APP_URL || '<literal>'`
 // helper this replaces made the link ignore the seam wherever the env said
@@ -27,11 +28,18 @@ function getPostmarkToken() {
   return resolvePostmarkToken()
 }
 
-function getFromAddress() {
-  return process.env.POSTMARK_FROM_EMAIL || 'UN1T <hello@un1t.ie>'
+// W1.E2 — staff/supplier-facing mail leaves as the location's BRAND on the
+// platform address (POSTMARK_FROM_EMAIL, never spelled); PLATFORM_NAME when
+// the brand cannot be resolved. With the env unset this is undefined: the
+// request carries no From and Postmark refuses with its own message
+// (platformFromHeader has already logged the missing env), rather than a
+// silently invented address. getPostmarkToken() has already thrown before
+// this point when the server itself is unconfigured.
+function getFromAddress(brand) {
+  return platformFromHeader(brand) || undefined
 }
 
-async function postmarkSend({ to, subject, htmlBody, textBody, tag, metadata }) {
+async function postmarkSend({ to, subject, htmlBody, textBody, tag, metadata, fromName }) {
   const token = getPostmarkToken()
   if (!token) throw new Error('Postmark is not configured (set POSTMARK_API_KEY).')
   const res = await fetch(`${POSTMARK_API_URL}/email`, {
@@ -42,7 +50,7 @@ async function postmarkSend({ to, subject, htmlBody, textBody, tag, metadata }) 
       'X-Postmark-Server-Token': token,
     },
     body: JSON.stringify({
-      From: getFromAddress(),
+      From: getFromAddress(fromName),
       To: to,
       Subject: subject,
       HtmlBody: htmlBody,
@@ -132,6 +140,7 @@ export async function sendInvoiceApprovedEmail(invoiceId) {
     subject, htmlBody, textBody,
     tag: 'contractor-invoice-approved',
     metadata: { invoice_id: inv.id, contractor_id: inv.contractor?.id || null },
+    fromName: inv.branding?.companyName,
   })
   return { messageId }
 }
@@ -177,6 +186,7 @@ export async function sendInvoiceDeclinedEmail(invoiceId) {
     subject, htmlBody, textBody,
     tag: 'contractor-invoice-declined',
     metadata: { invoice_id: inv.id, contractor_id: inv.contractor?.id || null },
+    fromName: inv.branding?.companyName,
   })
   return { messageId }
 }

@@ -28,15 +28,16 @@
 // validation lives in the admin routes; this read side
 // re-normalises defensively instead).
 //
-// SAAS-6/7 HANDOFF SEAM: welcome-front-page.js (org chooser) and
-// default-favicon.js resolve "whose front page / whose favicon" —
-// they should thread the request host in and call
-// resolveTenantOrgId(host): a mapped host renders that org's
-// surface; null keeps their existing slug / first-row fallback
-// byte-identical (un1tdublin.com has no row here by design).
+// SAAS-6/7 HANDOFF SEAM, closed by W1.L4: welcome-front-page.js (org
+// chooser), default-site-name.js, default-favicon.js and the anonymous
+// /api/public/branding branch thread the request host in and call
+// resolveTenantOrgId(host): a mapped host renders that org's surface;
+// null means the platform (no org). un1tdublin.com has no row here by
+// design — it resolves through the in-code tier (brands.js
+// organizationId), which resolveTenantOrgId consults first.
 
 import { createServerClient } from '@supabase/ssr'
-import { getCrmHostnames } from './brands.js'
+import { getCrmHostnames, resolveBrand, normalizeHost } from './brands.js'
 
 export const TENANT_DOMAINS_CACHE_TTL_MS = 5 * 60 * 1000 // domain churn is rare
 
@@ -246,16 +247,30 @@ export async function resolveTenantDomainBrand(hostname, { db = null, nowMs = Da
 
 /**
  * Hostname → organization_id, or null when unmapped. The SAAS-6/7
- * handoff seam (see header): welcome-front-page.js renders a mapped
- * host's org chooser and keeps its slug fallback on null;
- * default-favicon.js likewise. Shares the row cache above.
+ * handoff seam (see header), consumed since W1.L4 by every host-keyed
+ * brand resolver: the site name and favicon (default-site-name.js,
+ * default-favicon.js), the anonymous /api/public/branding branch and the
+ * /welcome front page. Shares the row cache above.
+ *
+ * W1.L4 — the in-code tier is consulted FIRST, exactly as the proxy does:
+ * an in-code brand that carries an organizationId (the UN1T hosts,
+ * brands.js) answers without a DB read, and an in-code brand without one
+ * (the car-business hosts) is null — the DB tier is never asked about an
+ * in-code host, which can have no row anyway. The host is normalised ONCE
+ * here (lowercase, port and trailing dot stripped), so `WWW.UN1TDUBLIN.COM`
+ * and `gym-a.repset.ie:443` resolve the same tenant as their canonical
+ * spellings, whichever consumer passed the raw header.
  *
  * @param {string} hostname
  * @param {{ db?: object, nowMs?: number }} [opts]
  * @returns {Promise<string | null>}
  */
 export async function resolveTenantOrgId(hostname, opts = {}) {
-  const brand = await resolveTenantDomainBrand(hostname, opts)
+  const hostKey = normalizeHost(hostname)
+  if (!hostKey) return null
+  const inCode = resolveBrand(hostKey)
+  if (inCode) return inCode.organizationId || null
+  const brand = await resolveTenantDomainBrand(hostKey, opts)
   return brand ? brand.organizationId : null
 }
 

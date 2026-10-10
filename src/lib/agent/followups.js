@@ -366,7 +366,7 @@ export async function composeAgentText({ location, settings, historyRows, instru
   // CACHE.2 — cache the stable prefix (no tools on this path, so it caches the
   // stable system block directly); the date suffix stays uncached.
   const system = buildCachedSystem({
-    businessName: companyName || 'UN1T',
+    businessName: companyName,
     locationName: location.name,
     agentName: settings?.agent_name || null,
     membershipUrl: settings?.membership_signup_url || null,

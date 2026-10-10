@@ -34,6 +34,7 @@ import { normalizeClassName } from '@/lib/hr-analytics'
 import { logInfo, logWarn, logError } from '@/lib/log'
 import { formatWeekdayShortDateTimeInTZ } from '@/lib/dates'
 import { getAppUrl, getMemberAppUrl } from '@/lib/app-url'
+import { getLocationBranding } from '@/lib/location-branding'
 import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 
 const HISTORY_LOOKBACK_DAYS = 90
@@ -184,6 +185,11 @@ export async function loadContextForSession(db, sessionId) {
     unsubscribeToken = pref?.unsubscribe_token || null
   }
 
+  // W1.S4 — the highlight names the product in the studio's brand ("UN1T
+  // Points"). Resolved last, after every read the tests count; the resolver
+  // never throws and answers '' when unresolved (bare "Points").
+  const { shortName } = await getLocationBranding(db, session.location_id)
+
   return {
     ok: true,
     session,
@@ -193,6 +199,7 @@ export async function loadContextForSession(db, sessionId) {
     cta,
     contact: session.contact,
     unsubscribeToken,
+    shortName,
   }
 }
 
@@ -204,8 +211,8 @@ export async function loadContextForSession(db, sessionId) {
  * + text. Tested standalone.
  */
 export function composeEmail(ctx, { nowMs = Date.now(), customerBaseUrl = null } = {}) {
-  const { session, thisSession, history, eventTypeName, contact } = ctx
-  const report = buildSessionReport({ session, thisSession, history, eventTypeName, cta: ctx.cta }, { nowMs })
+  const { session, thisSession, history, eventTypeName, contact, shortName = '' } = ctx
+  const report = buildSessionReport({ session, thisSession, history, eventTypeName, cta: ctx.cta, shortName }, { nowMs })
   // Adapt the report back to the shapes the existing renderers read, so
   // the email's output is byte-identical while the numbers now flow from
   // the one canonical builder.

@@ -21,6 +21,8 @@
 // see, and belongs in its own change. Do not "resolve" it by editing this
 // comment back.
 
+import { productName } from '@/lib/brand-name'
+
 const MS_DAY = 24 * 3600 * 1000
 
 // ISO week starts Monday 00:00 UTC. We display the week label in
@@ -37,36 +39,47 @@ export function startOfMonth(now = new Date()) {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1))
 }
 
-export const GOAL_DEFS = {
-  weekly_points: {
-    label: 'UN1T points this week',
-    unit: 'points',
-    suggested: [200, 500, 1000, 1500, 2500],
-    period: 'week',
-    field: 'effort_points',
-  },
-  weekly_classes: {
-    label: 'Classes this week',
-    unit: 'classes',
-    suggested: [2, 3, 4, 5, 6],
-    period: 'week',
-    field: 'classes',
-  },
-  monthly_points: {
-    label: 'UN1T points this month',
-    unit: 'points',
-    suggested: [1000, 2500, 5000, 10000],
-    period: 'month',
-    field: 'effort_points',
-  },
-  monthly_classes: {
-    label: 'Classes this month',
-    unit: 'classes',
-    suggested: [8, 12, 16, 20, 24],
-    period: 'month',
-    field: 'classes',
-  },
+// W1.S4 — the two points goals name the PRODUCT ("UN1T Points this week"),
+// and the product name is the tenant's short brand, never a literal. Callers
+// that render a label resolve the brand (getLocationBranding on the web,
+// useBrand() on the phone) and read goalDefs(shortName); GOAL_DEFS is the
+// brand-less default (bare "Points") for the unit / period / field /
+// suggested lookups that never show a label.
+export function goalDefs(shortName) {
+  const points = productName(shortName, 'points')
+  return {
+    weekly_points: {
+      label: `${points} this week`,
+      unit: 'points',
+      suggested: [200, 500, 1000, 1500, 2500],
+      period: 'week',
+      field: 'effort_points',
+    },
+    weekly_classes: {
+      label: 'Classes this week',
+      unit: 'classes',
+      suggested: [2, 3, 4, 5, 6],
+      period: 'week',
+      field: 'classes',
+    },
+    monthly_points: {
+      label: `${points} this month`,
+      unit: 'points',
+      suggested: [1000, 2500, 5000, 10000],
+      period: 'month',
+      field: 'effort_points',
+    },
+    monthly_classes: {
+      label: 'Classes this month',
+      unit: 'classes',
+      suggested: [8, 12, 16, 20, 24],
+      period: 'month',
+      field: 'classes',
+    },
+  }
 }
+
+export const GOAL_DEFS = goalDefs('')
 
 export const GOAL_KINDS = Object.keys(GOAL_DEFS)
 

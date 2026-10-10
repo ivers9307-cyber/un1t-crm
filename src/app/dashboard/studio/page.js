@@ -37,6 +37,8 @@ import {
   ScoreCell, ScoreGrid, RoleSection, FloorTable, LocationEmptyState,
   NotTrackedYet, euros,
 } from '@/components/dashboard/StudioScorecard'
+import { membershipStateForPage, membershipSettingsHref, canManageMembershipSource } from '@/lib/membership/state-for-page'
+import MembershipSourceGate from '@/components/MembershipSourceGate'
 
 export const dynamic = 'force-dynamic'
 
@@ -91,7 +93,25 @@ async function loadLocationScorecard(locationId) {
   }
 }
 
-async function LocationColumn({ location }) {
+async function LocationColumn({ user, location }) {
+  // W1.M3a — every KPI here is a membership or class-sync figure, so the
+  // column gates on THIS studio's membership source before any query
+  // runs (the board is per-studio: Stillorgan's column is unchanged while
+  // Hatch Street's says why it is empty). The state read is cached 60 s.
+  const membership = await membershipStateForPage(createServerClient(), location.id)
+  if (membership.state !== 'configured') {
+    return (
+      <MembershipSourceGate
+        state={membership}
+        capability="memberships"
+        settingsHref={membershipSettingsHref(location.id)}
+        canManage={canManageMembershipSource(user, location.id)}
+        padding="md"
+        className="bg-un1t-surface border border-un1t-border rounded-2xl"
+      />
+    )
+  }
+
   let vm = null
   try {
     vm = await loadLocationScorecard(location.id)
@@ -103,8 +123,9 @@ async function LocationColumn({ location }) {
   const { mrr, growth, churn, acq, engagement, floor, spend, radarSummary } = vm
   const W = WINDOW_DAYS
 
-  // A location with no recurring base AND no class sync has no Glofox
-  // connection yet (Hatch until onboarded) — say so instead of zeros.
+  // A CONFIGURED source with no recurring base AND no class sync has not
+  // synced anything yet (a studio in its first hours) — say so instead
+  // of zeros. "Not connected" is the gate's job above, not this inference's.
   if (mrr && floor && mrr.recurringMembers === 0 && floor.noData) {
     return <LocationEmptyState name={location.name} />
   }
@@ -332,7 +353,7 @@ export default async function StudioDashboardPage() {
           <div key={loc.id}>
             <h2 className="text-sm font-semibold text-un1t-text mb-2 px-1">{loc.name}</h2>
             <Suspense fallback={<BlockSkeleton lines={8} />}>
-              <LocationColumn location={loc} />
+              <LocationColumn user={user} location={loc} />
             </Suspense>
           </div>
         ))}

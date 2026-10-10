@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  metricLabels,
   challengeWrappedModel,
   challengeWindowMs,
   endedRecentlyFlagship,
@@ -191,5 +192,23 @@ describe('challengeWrappedModel — the finisher story', () => {
     expect(challengeWrappedModel({}).hasContent).toBe(false)
     expect(challengeWrappedModel().hasContent).toBe(false)
     expect(challengeWrappedModel({ challenge: CH, sessions: null, nowMs: now }).hasContent).toBe(false)
+  })
+})
+
+describe('metricLabels — the points label is the product name in the brand (W1.S4)', () => {
+  it('names the product from the short brand the screen passes', () => {
+    expect(metricLabels('UN1T').points).toBe('UN1T Points')
+    expect(metricLabels('Gym A').points).toBe('Gym A Points')
+    expect(metricLabels('UN1T')).toMatchObject({ classes: 'classes', z4plus_minutes: 'Zone 4+ min' })
+  })
+  it('no brand in hand → bare "Points", never a gym literal', () => {
+    expect(metricLabels('').points).toBe('Points')
+    expect(metricLabels(undefined).points).toBe('Points')
+  })
+  it('challengeWrappedModel threads shortName into metricLabel for a points challenge', () => {
+    const challenge = { id: 'ch-p', name: 'Points Push', metric: 'points', starts_on: '2026-06-01', ends_on: '2026-06-10' }
+    const now = Date.parse('2026-06-12T12:00:00Z')
+    expect(challengeWrappedModel({ challenge, sessions: [], nowMs: now, shortName: 'UN1T' }).metricLabel).toBe('UN1T Points')
+    expect(challengeWrappedModel({ challenge, sessions: [], nowMs: now }).metricLabel).toBe('Points')
   })
 })

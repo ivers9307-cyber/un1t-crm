@@ -426,6 +426,8 @@ export async function POST(request, props) {
   // deleted) still sends, from a domain we own.
   const send = await sendConversationEmail({
     mailboxAddress: mailbox?.address || null,
+    // W1.E2 — the studio whose brand names a degraded (fallback-From) send.
+    locationId: conversation.location_id,
     // MAILBOX-CONNECT.7 — see the compose route. `mailbox` may be null here (an
     // elevated caller answering correspondence whose address was deleted); the
     // send path treats absent exactly as it treats egress 'postmark', so that

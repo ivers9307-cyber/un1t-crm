@@ -1,7 +1,7 @@
 // BYTE-SYNC: champ-app/shared/customer-notifications.js ↔ un1t-crm/src/lib/customer-notifications.js.
-// The two files are identical except the two import lines below
-// ('./hr-analytics.js' + './dublin-time.js' in champ-app,
-// '@/lib/hr-analytics' + '@/lib/dublin-time' in un1t-crm).
+// The two files are identical except the three import lines below
+// ('./hr-analytics.js' + './dublin-time.js' + './brand-name.js' in champ-app,
+// '@/lib/hr-analytics' + '@/lib/dublin-time' + '@/lib/brand-name' in un1t-crm).
 // champ-app is the canonical copy — edit there first, then mirror the change.
 // Both surfaces push to the SAME member: drift here means the once-per-period
 // idempotency key or the push copy disagree between the CRM crons and the
@@ -15,14 +15,19 @@
 
 import { currentStreak } from '@/lib/hr-analytics'
 import { dublinMonthKey, dublinIsoWeekKey, dublinDayStartMs, dublinDateKey } from '@/lib/dublin-time'
+import { productName } from '@/lib/brand-name'
 
-function pointsPhrase(effortPoints) {
-  return Number.isFinite(effortPoints) ? `${effortPoints} UN1T Points` : 'Tap to see your stats'
+// W1.S4 — the product name is built from the tenant's SHORT brand
+// ("UN1T" → "280 UN1T Points"); with no brand in hand it reads bare
+// "280 Points". Never a gym literal: the web resolves shortName through
+// getLocationBranding, the phone through useBrand().
+function pointsPhrase(effortPoints, shortName) {
+  return Number.isFinite(effortPoints) ? `${effortPoints} ${productName(shortName, 'points')}` : 'Tap to see your stats'
 }
 
 /** One consolidated session-end push. Leads with the achievement if any unlocked. */
-export function buildSessionPush({ effortPoints, className, sessionId, unlocked }) {
-  const pts = pointsPhrase(effortPoints)
+export function buildSessionPush({ effortPoints, className, sessionId, unlocked, shortName }) {
+  const pts = pointsPhrase(effortPoints, shortName)
   const cls = className ? ` · ${className}` : ''
   const n = (unlocked || []).length
   if (n === 1) {

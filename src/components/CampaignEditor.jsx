@@ -39,10 +39,11 @@ export default function CampaignEditor({ campaign, locationId, userId: _userId, 
   const [previewText, setPreviewText] = useState(campaign?.preview_text || '')
   // W1.S2 — the default From NAME is the studio's brand (resolved by the
   // branding route, never spelled); it seeds an empty draft once the brand
-  // lands and is then the operator's to edit. Requires #1998 (W1.E2), which
-  // makes from_email inert on the wire (the platform address always sends;
-  // the From name still applies), so the field is no longer shown: the
-  // stored value is carried through the save untouched.
+  // lands and is then the operator's to edit. from_email never reaches the
+  // wire (the sender resolver's address always sends: the platform's, or the
+  // org's verified domain once it has one; the From name still applies), so
+  // the field is not shown: the stored value is carried through the save
+  // untouched.
   const { companyName: brand } = useLocationBrand(locationId)
   const [fromName, setFromName] = useState(campaign?.from_name || '')
   const fromNameSeeded = useRef(Boolean(campaign?.from_name))
@@ -1158,7 +1159,7 @@ export default function CampaignEditor({ campaign, locationId, userId: _userId, 
                 <div>
                   <label className="block text-sm mb-1.5">From address</label>
                   <p className="text-xs text-un1t-muted pt-2" data-testid="campaign-from-address-note">
-                    Sent from the platform&apos;s sending address with the From name above; replies go to the Reply-To below.
+                    Sent from the platform&apos;s sending address (or the studio&apos;s own verified domain, once set up) with the From name above; replies go to the Reply-To below.
                   </p>
                 </div>
               </div>
