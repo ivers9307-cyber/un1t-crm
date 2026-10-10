@@ -84,8 +84,8 @@ describe('wireFrom — the resolved address always wins, the explicit display na
     expect(wireFrom({ from: 'Old <ops@gyma.ie>', fromName: 'New' })).toBe('New <ops@gyma.ie>')
   })
   it('no resolved sender → an explicit `from` passes through byte-for-byte', () => {
-    expect(wireFrom({ from: '"Dean Nolan" <dean@x.com>' })).toBe('"Dean Nolan" <dean@x.com>')
-    expect(wireFrom({ from: 'dean@x.com' })).toBe('dean@x.com')
+    expect(wireFrom({ from: '"Ada Byrne" <ada@x.com>' })).toBe('"Ada Byrne" <ada@x.com>')
+    expect(wireFrom({ from: 'ada@x.com' })).toBe('ada@x.com')
   })
   it('nothing at all → the platform header; with a fromName → that name on it', () => {
     expect(wireFrom({})).toBe('Repset <hello@platform.test>')
