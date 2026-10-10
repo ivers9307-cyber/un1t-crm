@@ -18,13 +18,18 @@
 // server logs to say why.
 
 import { notFound } from 'next/navigation'
+import { headers } from 'next/headers'
 import { createServerClient } from '@/lib/supabase'
+import { resolveGymSiteName } from '@/lib/default-site-name'
 import RaceSignupWidget from '@/components/RaceSignupWidget'
 
 export const dynamic = 'force-dynamic'
 
+// W1.L4 — the no-event fallback title names the HOST's organisation brand
+// (the embed is loaded from the tenant's own host), never a literal.
 export async function generateMetadata(props) {
   const params = await props.params
+  const hostBrand = await resolveGymSiteName({ host: (await headers()).get('host') })
   try {
     const db = createServerClient()
     const { data } = await db
@@ -37,12 +42,12 @@ export async function generateMetadata(props) {
       // unique index (mig 451), so this is 0-or-1 rows and 0 (no such event, or
       // unpublished) is a real answer rather than an error to discard.
       .maybeSingle()
-    const title = data?.name ? `${data.name} — Sign up` : 'UN1T Dublin — Sign up'
+    const title = data?.name ? `${data.name} — Sign up` : `${hostBrand} — Sign up`
     // Embeds shouldn't be indexed as standalone pages; the canonical
     // signup lives at /event/<slug>.
     return { title, robots: { index: false, follow: false } }
   } catch {
-    return { title: 'UN1T Dublin — Sign up', robots: { index: false, follow: false } }
+    return { title: `${hostBrand} — Sign up`, robots: { index: false, follow: false } }
   }
 }
 
