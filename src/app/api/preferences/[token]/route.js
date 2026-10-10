@@ -7,6 +7,7 @@ import { consentActionFor } from '@/lib/consent-actions'
 import { propagateOptOut } from '@/lib/consent-propagation'
 import { emailStatusNormaliseForOptIn } from '@/lib/email-reputation'
 import { suppressAtPostmark, unsuppressAtPostmark } from '@/lib/postmark-suppressions'
+import { serverTokenForLocation } from '@/lib/postmark-server-for-location'
 import {
   REFUSAL_REASONS,
   guardBeforeTokenLookup,
@@ -82,7 +83,7 @@ async function resolveTokenOrRefuse(db, request, token) {
   // the guard look correct while silently never normalising a legacy NULL row.
   const { data: pref, error } = await db
     .from('contact_preferences')
-    .select('*, contacts(id, name, email, email_status, wa_phone)')
+    .select('*, contacts(id, name, email, email_status, location_id, wa_phone)')
     .eq('unsubscribe_token', token)
     .single()
 
@@ -365,11 +366,16 @@ export async function PUT(request, props) {
     //
     // A location-scoped OPT-OUT is the one combination with nothing to do at
     // Postmark; the other three all act.
+    //
+    // W1.E4 — both directions act on the server the person's mail comes from:
+    // the org's own Postmark server when it has a live tenant_email_domains
+    // row, else the global one. Resolved from the contact's home location.
     const scopedOptOut = updates.email_marketing === false && Boolean(body.locationId)
     if (pref.contacts?.email && !scopedOptOut) {
       try {
+        const serverToken = await serverTokenForLocation(db, pref.contacts.location_id)
         if (updates.email_marketing === false) {
-          const result = await suppressAtPostmark(pref.contacts.email)
+          const result = await suppressAtPostmark(pref.contacts.email, { serverToken })
           if (result?.failed?.length) {
             console.error('[preferences] Postmark suppression failed (the opt-out itself IS recorded; consent-drift-check will retry):', {
               contactId: pref.contact_id,
@@ -377,7 +383,7 @@ export async function PUT(request, props) {
             })
           }
         } else {
-          const result = await unsuppressAtPostmark(pref.contacts.email)
+          const result = await unsuppressAtPostmark(pref.contacts.email, { serverToken })
           if (result?.failed?.length) {
             console.error('[preferences] Postmark un-suppression failed (the opt-in itself IS recorded):', {
               contactId: pref.contact_id,

@@ -44,6 +44,7 @@ import { writeContactTag } from '@/lib/contact-tags'
 import { applyFormMarketingConsent } from '@/lib/marketing-consent'
 import { grantHostConsent, resubscribeHost } from '@/lib/host-consent'
 import { unsuppressAtPostmark } from '@/lib/postmark-suppressions'
+import { hostServerToken } from '@/lib/postmark-server-for-location'
 import { logWarn, logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -155,9 +156,12 @@ export async function POST(request, props) {
       if (!consentResult.ok) {
         logError('host-list-subscribe', 'host consent write failed', { err: consentResult.error, host_id: host.id, contact_id: contactId })
       }
+      // W1.E4 — on the server host mail goes out on (hostServerToken: null =
+      // global today, since host sends ride the global server).
       if (existingSup && consentResult.ok && host.postmark_stream_id) {
         try {
-          const lift = await unsuppressAtPostmark(email, { stream: host.postmark_stream_id })
+          const serverToken = await hostServerToken(db, host)
+          const lift = await unsuppressAtPostmark(email, { stream: host.postmark_stream_id, serverToken })
           if (lift?.failed?.length) logWarn('host-list-subscribe', 'Postmark host-stream lift failed', { message: lift.failed[0]?.message })
         } catch (e) {
           logWarn('host-list-subscribe', 'Postmark host-stream lift threw', { err: e?.message || String(e) })
