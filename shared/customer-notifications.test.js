@@ -28,7 +28,9 @@ const at = (iso) => new Date(iso).getTime()
 // ── buildSessionPush ──────────────────────────────────────────────
 
 describe('buildSessionPush', () => {
-  const base = { effortPoints: 280, className: 'Conditioning', sessionId: 'sess-1' }
+  // W1.S4 — the product name comes from the tenant's short brand the caller
+  // resolved; UN1T keeps reading "UN1T Points" because its short_name is UN1T.
+  const base = { effortPoints: 280, className: 'Conditioning', sessionId: 'sess-1', shortName: 'UN1T' }
   it('no achievement → session-ready copy', () => {
     expect(buildSessionPush({ ...base, unlocked: [] })).toEqual({
       title: 'Your session is ready',
@@ -41,6 +43,15 @@ describe('buildSessionPush', () => {
     expect(r.title).toBe('New achievement — First Z5')
     expect(r.body).toBe('280 UN1T Points · Conditioning. Tap to see your stats.')
     expect(r.data).toEqual({ type: 'achievement', session_id: 'sess-1', count: 1 })
+  })
+  it('names the product in whatever brand the caller resolved (W1.S4)', () => {
+    expect(buildSessionPush({ ...base, shortName: 'Gym A', unlocked: [] }).body).toBe('280 Gym A Points · Conditioning')
+    expect(buildSessionPush({ ...base, shortName: 'Gym A', unlocked: [] }).body).not.toContain('UN1T')
+  })
+  it('no brand in hand → bare "Points", never a gym literal (W1.S4)', () => {
+    const { shortName: _omit, ...noBrand } = base
+    expect(buildSessionPush({ ...noBrand, unlocked: [] }).body).toBe('280 Points · Conditioning')
+    expect(buildSessionPush({ ...noBrand, shortName: '', unlocked: [] }).body).toBe('280 Points · Conditioning')
   })
   it('two+ achievements → counts them', () => {
     const r = buildSessionPush({ ...base, unlocked: [{ name: 'A' }, { name: 'B' }] })

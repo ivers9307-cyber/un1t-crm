@@ -29,6 +29,7 @@ import { buildSessionPush, buildGoalPush, buildTargetHitPush, buildTierUpPush, p
 import { GOAL_DEFS, computeProgress, startOfMonth, startOfIsoWeek } from '@/lib/goals'
 import { tierForMonths, nextTier, tierWindowMonths, windowedMonthsHit } from '@/lib/tiers'
 import { dublinMonthStr } from '@/lib/dublin-time'
+import { getLocationBranding } from '@/lib/location-branding'
 
 const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December']
 
@@ -551,6 +552,9 @@ export async function finalizeSessionRewards(db, sessionId, { nowMs = Date.now()
   try {
     const det = await runDetectionForSession(db, sessionId)
     const unlocked = det && det.ok && Array.isArray(det.unlocked) ? det.unlocked : []
+    // W1.S4 — the push names the product in the studio's brand ("280 UN1T
+    // Points"); the resolver never throws and answers '' when unresolved.
+    const { shortName } = await getLocationBranding(db, session.location_id)
     const pushResult = await sendCustomerPush(
       db,
       session.contact_id,
@@ -559,6 +563,7 @@ export async function finalizeSessionRewards(db, sessionId, { nowMs = Date.now()
         className: session.class_name,
         sessionId,
         unlocked,
+        shortName,
       })
     )
     // C31 PUSHNITS.1 — notified_at is stamped AFTER the push, and only when it
