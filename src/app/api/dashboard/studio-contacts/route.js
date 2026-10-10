@@ -68,8 +68,11 @@ export async function GET(request) {
 
   const weekStartIso = new Date(dublinWeekStartMs(Date.now())).toISOString()
   const db = createServerClient()
-  // Started alongside the counts; it never rejects (a failed read is 'unknown').
+  // Started alongside the counts; it never rejects (a failed read is
+  // 'unknown'), and a rejection is caught to 'unknown' anyway so the key can
+  // never 500 the counts for 2.3.x phones that never read it.
   const sourceStatePromise = membershipStateForPage(db, location_id)
+    .catch(() => ({ source: null, state: 'unknown' }))
   let res
   try {
     res = await fetchStudioContactCounts(db, location_id, { weekStartIso })

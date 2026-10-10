@@ -130,8 +130,8 @@ export function businessMembershipView(source) {
  * (the web pipeline board is not gated either). Its later stages
  * (1st class … converted) move only on membership and booking data, so at
  * a studio whose source is not configured a note under the funnel says
- * why. null = no note (configured, an older server, or the contact numbers
- * themselves failed, which already has its own retry line).
+ * why. null = no note (configured, unknown, an older server, or the
+ * contact numbers themselves failed, which already has its own retry line).
  *
  * @param {object|null} contactCounts  /api/dashboard/studio-contacts data, or null
  * @returns {null | { state: string, text: string }}
@@ -158,12 +158,10 @@ export function studioFunnelNote(contactCounts) {
         text: `${source.label || 'The membership source'} is selected but not fully configured (missing: ${missing}), so stages that depend on memberships will not move. ${source.canManage ? FINISH_ON_WEB : ASK_AN_OWNER}`,
       }
     }
-    case 'no_location':
-      return null
     default:
-      return {
-        state: 'unknown',
-        text: 'The membership source could not be checked right now. Pull down to try again.',
-      }
+      // no_location, unknown, and anything unrecognised: no note. Mirrors the
+      // web pipeline note, which fires only for a KNOWN none; an unknown
+      // state is never told as "the later stages will not move".
+      return null
   }
 }

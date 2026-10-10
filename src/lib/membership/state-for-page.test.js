@@ -139,9 +139,9 @@ describe('membershipStatePayload (W1.M3c: what the phone routes carry)', () => {
     expect(p.missing).toEqual(['Branch ID', 'API Key'])
   })
 
-  it('unknown keeps no read-error detail (it stays in the server log)', () => {
+  it('unknown keeps no read-error detail (it stays in the server log) and no label (never the none provider\'s)', () => {
     const p = membershipStatePayload({ source: null, state: 'unknown', readError: 'MEMBERSHIP_STATE_THREW', label: 'No membership source', capabilities: {} })
-    expect(p).toEqual({ source: null, state: 'unknown', label: 'No membership source', provides_memberships: true, can_manage: false })
+    expect(p).toEqual({ source: null, state: 'unknown', label: null, provides_memberships: true, can_manage: false })
     expect(p).not.toHaveProperty('readError')
   })
 

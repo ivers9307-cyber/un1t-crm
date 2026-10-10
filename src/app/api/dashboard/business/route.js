@@ -26,7 +26,8 @@
 // the state is not 'configured'. The blocks are still computed and keep
 // their shape, so an older bundle that never reads the key renders exactly
 // what it did before, and a configured studio (Stillorgan) is unchanged.
-// membershipStateForPage never throws (a failed read is 'unknown').
+// membershipStateForPage never throws (a failed read is 'unknown'), and the
+// route catches it to 'unknown' anyway: the key can never 500 the blocks.
 
 import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
@@ -90,7 +91,10 @@ export async function GET() {
     membershipBlock(db, locationId),
     blockData(fetchTodayOps(db, locationId)),
     buildNeedsYouRail(db, user, locationId).then(rows => rows, () => null),
-    membershipStateForPage(db, locationId),
+    // Belt and braces: membershipStateForPage is built never to throw, but a
+    // rejection here must never 500 the route for 2.3.x phones that never
+    // read the key.
+    membershipStateForPage(db, locationId).catch(() => ({ source: null, state: 'unknown' })),
   ])
 
   return NextResponse.json({

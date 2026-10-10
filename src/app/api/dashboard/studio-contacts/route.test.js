@@ -135,6 +135,22 @@ describe('GET /api/dashboard/studio-contacts', () => {
     expect(body.data.membership_source.state).toBe('unknown')
   })
 
+  // 2.3.x phones never read membership_source: a state read that rejects
+  // must never cost them the counts they do read.
+  it('a state read that REJECTS is still 200: every old count plus membership_source unknown', async () => {
+    membershipStateForPage.mockRejectedValue(new Error('boom'))
+    const res = await GET(req({ location_id: LOC }))
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({
+      success: true,
+      data: {
+        ...COUNTS,
+        membership_source: { source: null, state: 'unknown', label: null, provides_memberships: true, can_manage: false },
+      },
+    })
+    expect(logError).not.toHaveBeenCalled()
+  })
+
   it('a refused caller never reaches the state read', async () => {
     hasPermissionForLocation.mockReturnValue(false)
     await GET(req({ location_id: LOC }))

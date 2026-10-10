@@ -92,7 +92,7 @@ export default function StudioDashboard({ refreshKey }) {
   const headline = contactNumbers.headline
   // W1.M3c — the funnel counts are contact counts and always render; at a
   // studio whose membership source is not configured a note says why the
-  // later stages do not move. null = no note (configured, an older server,
+  // later stages do not move. null = no note (configured, unknown, an older server,
   // or the counts failed). lib/membership-source-copy.js decides.
   const funnelNote = studioFunnelNote(data.contactCounts)
 

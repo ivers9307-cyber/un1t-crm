@@ -109,7 +109,10 @@ export function membershipStatePayload(s, { canManage = false } = {}) {
   const out = {
     source: s?.source ?? null,
     state,
-    label: s?.label || null,
+    // 'unknown' carries no label: the label a failed read falls back to is
+    // the none provider's ("No membership source"), which would mix unknown
+    // with a known none.
+    label: state === 'unknown' ? null : (s?.label || null),
     provides_memberships: s?.capabilities?.memberships !== false,
     can_manage: Boolean(canManage),
   }

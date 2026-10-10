@@ -8,7 +8,7 @@ import { readMembershipSource, membershipSourceCard, businessMembershipView, stu
 const CONFIGURED = { source: 'glofox', state: 'configured', label: 'Glofox', provides_memberships: true, can_manage: false }
 const NONE = { source: 'none', state: 'none', label: 'No membership source', provides_memberships: false, can_manage: false }
 const UNCONFIGURED = { source: 'glofox', state: 'unconfigured', label: 'Glofox', missing: ['Branch ID', 'API Key'], provides_memberships: true, can_manage: false }
-const UNKNOWN = { source: null, state: 'unknown', label: 'No membership source', provides_memberships: true, can_manage: false }
+const UNKNOWN = { source: null, state: 'unknown', label: null, provides_memberships: true, can_manage: false }
 
 const NONE_TITLE = 'No membership source connected'
 const RETRY_TITLE = 'Membership data could not be read right now'
@@ -156,13 +156,13 @@ describe('studioFunnelNote', () => {
       .toBe('Glofox is selected but not fully configured (missing: Branch ID, API Key), so stages that depend on memberships will not move. Ask an owner to connect a membership source.')
   })
 
-  it('unknown: a retry line, never the none copy', () => {
-    const n = studioFunnelNote({ ...COUNTS, membership_source: UNKNOWN })
-    expect(n).toEqual({ state: 'unknown', text: 'The membership source could not be checked right now. Pull down to try again.' })
+  it('unknown: no note (mirrors the web pipeline note, which fires only for a known none)', () => {
+    expect(studioFunnelNote({ ...COUNTS, membership_source: UNKNOWN })).toBeNull()
+    expect(studioFunnelNote({ ...COUNTS, membership_source: { ...UNKNOWN, state: 'something_new' } })).toBeNull()
   })
 
   it('no note carries an em-dash', () => {
-    for (const ms of [NONE, UNCONFIGURED, UNKNOWN, { ...CONFIGURED, provides_memberships: false }]) {
+    for (const ms of [NONE, UNCONFIGURED, { ...CONFIGURED, provides_memberships: false }]) {
       for (const can_manage of [true, false]) {
         expect(studioFunnelNote({ ...COUNTS, membership_source: { ...ms, can_manage } }).text).not.toContain('—')
       }

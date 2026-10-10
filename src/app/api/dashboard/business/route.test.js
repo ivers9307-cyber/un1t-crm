@@ -51,6 +51,17 @@ const TODAY = { bookedToday: 40, classesToday: 6, staffToday: 3, labourWeekCents
 const RAIL = [{ key: 'approvals', chip: '2', text: '2 approvals', tone: 'purple' }]
 const GLOFOX_CAPS = { memberships: true, bookings: true, credits: true, invoices: true, schedule: true }
 
+// Every block the phone rendered before W1.M3c, unchanged.
+const OLD_BLOCKS = {
+  locationName: 'Test Studio',
+  kpis: KPIS,
+  funnel: FUNNEL,
+  ads: ADS,
+  membership: { live: LIVE, trend: TREND },
+  today: TODAY,
+  rail: RAIL,
+}
+
 beforeEach(() => {
   getCurrentUser.mockReset().mockResolvedValue(USER)
   assertLocationAccess.mockReset().mockReturnValue(null)
@@ -105,10 +116,15 @@ describe('GET /api/dashboard/business', () => {
 
   it('a studio with no membership source: state none ALONGSIDE the blocks (older bundles keep their shape)', async () => {
     membershipStateForPage.mockResolvedValue({ source: 'none', state: 'none', label: 'No membership source', capabilities: { memberships: false } })
-    const { data } = await (await GET()).json()
-    expect(data.membership_source).toEqual({ source: 'none', state: 'none', label: 'No membership source', provides_memberships: false, can_manage: false })
-    expect(data.kpis).toEqual(KPIS)
-    expect(data.membership).toEqual({ live: LIVE, trend: TREND })
+    const res = await GET()
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({
+      success: true,
+      data: {
+        ...OLD_BLOCKS,
+        membership_source: { source: 'none', state: 'none', label: 'No membership source', provides_memberships: false, can_manage: false },
+      },
+    })
   })
 
   it('unconfigured names the missing credentials; an owner gets can_manage', async () => {
@@ -122,9 +138,32 @@ describe('GET /api/dashboard/business', () => {
 
   it('a failed state read is unknown, never none', async () => {
     membershipStateForPage.mockResolvedValue({ source: null, state: 'unknown', readError: 'MEMBERSHIP_SOURCE_UNREADABLE', label: 'No membership source', capabilities: {} })
-    const { data } = await (await GET()).json()
-    expect(data.membership_source.state).toBe('unknown')
-    expect(data.membership_source).not.toHaveProperty('readError')
+    const res = await GET()
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body).toEqual({
+      success: true,
+      data: {
+        ...OLD_BLOCKS,
+        membership_source: { source: null, state: 'unknown', label: null, provides_memberships: true, can_manage: false },
+      },
+    })
+    expect(body.data.membership_source).not.toHaveProperty('readError')
+  })
+
+  // 2.3.x phones never read membership_source: a state read that rejects
+  // must never cost them the blocks they do read.
+  it('a state read that REJECTS is still 200: every old block plus membership_source unknown', async () => {
+    membershipStateForPage.mockRejectedValue(new Error('boom'))
+    const res = await GET()
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({
+      success: true,
+      data: {
+        ...OLD_BLOCKS,
+        membership_source: { source: null, state: 'unknown', label: null, provides_memberships: true, can_manage: false },
+      },
+    })
   })
 
   it('a failed block is still null under its own key', async () => {
