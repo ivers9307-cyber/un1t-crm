@@ -16,9 +16,15 @@ export const dynamic = 'force-dynamic'
 
 export default async function TvLiveTokenPage(props) {
   const params = await props.params
+  const searchParams = await props.searchParams
   const { token } = params
+  // FLEET-CMD.2 / W0.9a — un1t-pi provisions the kiosk URL with
+  // ?device=<fleet name>; forwarded so the board's own poll stays this
+  // screen's render heartbeat on the token entrypoint. Same reading as
+  // /tv/[locationId]: a string or nothing (a repeated param is ignored).
+  const device = typeof searchParams?.device === 'string' ? searchParams.device : null
   // locationId is unused when an endpoint is supplied; pass the token through
   // as a stable key. The client polls the token endpoint and reads the studio
   // name out of the payload.
-  return <LiveTvClient locationId={token} endpoint={`/api/public/tv-live/${token}`} />
+  return <LiveTvClient locationId={token} endpoint={`/api/public/tv-live/${token}`} device={device} />
 }

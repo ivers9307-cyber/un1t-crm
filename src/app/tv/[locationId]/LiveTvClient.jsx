@@ -39,6 +39,7 @@ import { nextPollDelay, ACTIVE_POLL_MS } from '@/lib/live-poll'
 import { createBrowserClient } from '@/lib/supabase'
 import { repsetDisplay, repsetBody, repsetMono } from '@/fonts/repset'
 import { zoneColorDark, dominantZone } from '@/lib/tv-zone-colors'
+import { withDevice } from '@/lib/tv-data-url'
 
 // Poll cadence (active few-seconds vs idle back-off) lives in @/lib/live-poll.
 
@@ -112,10 +113,9 @@ export default function LiveTvClient({ locationId, endpoint, device }) {
   // an explicit `endpoint` so the same client polls /api/public/tv-live/[token]
   // instead. Same payload either way — the client is agnostic to which it hits.
   // FLEET-CMD.2 appends ?device= so the poll doubles as this kiosk's render
-  // heartbeat. Only on the location-keyed entrypoint: the token URL already
-  // identifies a specific display, so it needs no hint from the client.
-  const dataUrl = endpoint
-    || `/api/public/live/${locationId}${device ? `?device=${encodeURIComponent(device)}` : ''}`
+  // heartbeat — on BOTH entrypoints since W0.9a (the token route stamps it
+  // too), so a kiosk keeps its heartbeat when it moves to the token URL.
+  const dataUrl = withDevice(endpoint || `/api/public/live/${locationId}`, device)
 
   // TIMER-PUSH.1 — realtime nudge. The timer routes broadcast a ping on
   // `timer:<locationId>` after every start/pause/resume/skip/stop; bumping
