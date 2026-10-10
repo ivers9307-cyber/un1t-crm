@@ -39,15 +39,16 @@
 //                     permissions against it, so it can't be cheaply or
 //                     correctly re-run per studio — hence a direct
 //                     representative head-count here instead.
-//   - integration   → whether the studio has Glofox configured
-//                     (locations.settings.glofox). A lightweight connected/
-//                     not-connected signal, NOT an error probe: this repo
-//                     has no per-location integration-HEALTH registry
-//                     (the proposal's `integrations-hub.js` does not exist),
-//                     so health-error detection is deferred to a later phase.
+//   - membershipSource → the studio's membership-source STATE from the seam
+//                     (src/lib/membership/source.js, W1.M2): none |
+//                     configured | unconfigured | unknown. It replaced
+//                     `Boolean(settings.glofox)`, which read CCF Autos'
+//                     empty slice as "connected". A failed read is
+//                     'unknown' on the card, never "no integration".
 
 import { resolveAdminOrgId } from '@/lib/org-admin'
 import { dublinDayStr, addDaysISO } from '@/lib/dublin-time'
+import { membershipSourceState } from '@/lib/membership/source'
 
 // Glofox statuses that count as an active member (same cohort as
 // membership-snapshot.js).
@@ -228,9 +229,10 @@ async function assembleStudio(db, location, window) {
     id: location.id,
     name: location.name,
     slug: location.slug || null,
-    // Cheap connected/not-connected signal (see module header).
-    integrationConnected: Boolean(location.settings?.glofox),
   }
+  // W1.M2 — resolved by the seam (never throws: a failed read is state
+  // 'unknown'), outside the counts' try so a failing count cannot blank it.
+  const membershipSource = await membershipSourceState(db, location.id)
   try {
     const [members, bookings7d, atRiskHigh, openApprovals] = await Promise.all([
       countMembers(db, location.id),
@@ -240,6 +242,7 @@ async function assembleStudio(db, location, window) {
     ])
     return {
       ...base,
+      membershipSource,
       members,
       bookings7d,
       atRiskHigh,
@@ -249,6 +252,7 @@ async function assembleStudio(db, location, window) {
   } catch {
     return {
       ...base,
+      membershipSource,
       members: 0,
       bookings7d: 0,
       atRiskHigh: 0,
@@ -264,12 +268,12 @@ async function assembleStudio(db, location, window) {
  * resolveAccountScope — this only ever reads within the given org, so
  * it cannot leak another tenant's locations.
  *
- * @returns {Promise<Array<{id,name,slug,settings,organization_id}>>}
+ * @returns {Promise<Array<{id,name,slug,organization_id,membership_source}>>}
  */
 export async function fetchOrgLocations(db, orgId) {
   const { data } = await db
     .from('locations')
-    .select('id, name, slug, settings, organization_id')
+    .select('id, name, slug, organization_id, membership_source')
     .eq('organization_id', orgId)
     .eq('active', true)
     .order('name', { ascending: true })
@@ -282,7 +286,7 @@ export async function fetchOrgLocations(db, orgId) {
  * @param {object} db                       service-role Supabase client
  * @param {object} args
  * @param {{id:string,name:string,slug?:string}} args.organization
- * @param {Array<{id,name,slug,settings}>} args.locations  the org's studios
+ * @param {Array<{id,name,slug}>} args.locations  the org's studios
  * @param {Date|number} [args.now]          injectable clock (tests)
  * @returns {Promise<{organization, kpis, studios}>}
  */
