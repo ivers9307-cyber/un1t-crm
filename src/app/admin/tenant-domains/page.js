@@ -18,7 +18,7 @@ export default async function AdminTenantDomainsPage() {
   const db = createServerClient()
   const [{ data: domains }, { data: organizations }, { data: locations }] = await Promise.all([
     db.from('tenant_domains')
-      .select('id, hostname, organization_id, location_id, brand, active, created_at, organizations:organization_id (name, slug), locations:location_id (name)')
+      .select('id, hostname, organization_id, location_id, brand, active, source, created_at, organizations:organization_id (name, slug), locations:location_id (name)')
       .order('hostname'),
     db.from('organizations').select('id, name, slug').order('name'),
     // Org-locations source for the optional per-location dropdown
