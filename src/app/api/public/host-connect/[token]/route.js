@@ -16,6 +16,7 @@ import { createServerClient } from '@/lib/supabase'
 import { verifyHostOnboardingToken } from '@/lib/host-onboarding-tokens'
 import { retrieveAccountStatus } from '@/lib/payments/stripe-connect'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
+import { resolveHostOrgBrand } from '@/lib/host-org-brand'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -41,7 +42,7 @@ export async function GET(request, props) {
 
   const { data: host } = await db
     .from('event_hosts')
-    .select('id, name, payment_provider, charges_enabled, payouts_enabled, details_submitted, stripe_connected_account_id, onboarding_completed_at')
+    .select('id, name, organization_id, payment_provider, charges_enabled, payouts_enabled, details_submitted, stripe_connected_account_id, onboarding_completed_at')
     .eq('id', payload.hostId)
     .maybeSingle()
   if (!host || host.payment_provider !== 'stripe_connect') {
@@ -76,10 +77,17 @@ export async function GET(request, props) {
     }
   }
 
+  // W1.S1c: the organisation the host runs events through, for the page's
+  // "<host> × <brand>" heading (short name) and its copy (brand). Floors on
+  // the platform name; never another tenant's.
+  const brand = await resolveHostOrgBrand(db, host)
+
   return NextResponse.json({
     success: true,
     data: {
       name: host.name,
+      brand: brand.name,
+      brand_short: brand.shortName,
       charges_enabled: charges,
       payouts_enabled: payouts,
       details_submitted: details,
