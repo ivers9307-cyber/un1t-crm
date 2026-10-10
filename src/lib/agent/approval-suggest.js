@@ -17,6 +17,7 @@ import { buildCachedSystem, SKIP_PREFIX } from './prompt'
 import { formatHistoryForClaude, isSkipResponse, parseAgentResponse } from './core'
 import { formatNextClass } from './account-tools'
 import { getLocationBranding } from '@/lib/location-branding'
+import { resolveMembershipSource } from '@/lib/membership/source'
 import { anthropicMessages } from '@/lib/anthropic'
 
 // MIA-SONNET5 — in step with the inbound reply path (see auto-reply.js).
@@ -116,7 +117,7 @@ export function sanitizeSuggestion(text) {
 // model/max_tokens/system-cache shape) — see file header. Returns
 // { text } or { error }; never throws.
 // Exported for tests (repo convention) — see compose-effort.test.js.
-export async function composeAgentText(location, settings, historyRows, instruction, companyName, signal) {
+export async function composeAgentText(location, settings, historyRows, instruction, companyName, signal, membershipSource = null) {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) return { error: 'no_api_key' }
   const system = buildCachedSystem({
@@ -124,6 +125,7 @@ export async function composeAgentText(location, settings, historyRows, instruct
     locationName: location.name,
     agentName: settings?.agent_name || null,
     membershipUrl: settings?.membership_signup_url || null,
+    membershipSource, // W1.M3b — null renders the Glofox default
     tone: settings?.tone || null,
     extraRules: settings?.extra_rules || null,
     today: new Date().toDateString(),
@@ -206,7 +208,8 @@ export async function composeApprovalSuggestion(db, row, { signal } = {}) {
 
   const instruction = buildSuggestionInstruction(row.kind, row.status, ctx)
   const branding = await getLocationBranding(db, location.id)
-  const composed = await composeAgentText(location, settings, historyRows, instruction, branding.companyName, signal)
+  const provider = await resolveMembershipSource(db, location.id) // W1.M3b
+  const composed = await composeAgentText(location, settings, historyRows, instruction, branding.companyName, signal, { key: provider.key, label: provider.label })
   if (composed.error) return { error: composed.error }
 
   const text = sanitizeSuggestion(composed.text)
