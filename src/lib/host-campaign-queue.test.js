@@ -30,6 +30,9 @@ vi.mock('./postmark.js', async (importOriginal) => ({
   sendEmail: vi.fn(),
 }))
 vi.mock('./app-url.js', () => ({ getAppUrl: () => 'https://crm.test' }))
+// W1.L3a — the host's anchor location decides the host its unsubscribe link
+// lands on. Defaults to the CRM host so the pre-existing assertion holds.
+vi.mock('./tenant-host.js', () => ({ resolveCustomerBaseUrl: vi.fn(async () => 'https://crm.test') }))
 vi.mock('./host-unsubscribe.js', () => ({ signHostUnsubToken: vi.fn(() => 'tok') }))
 vi.mock('./host-campaign-email.js', () => ({ renderHostCampaignHtml: vi.fn(() => '<html>rendered</html>') }))
 vi.mock('./log.js', () => ({ logError: vi.fn() }))
@@ -37,6 +40,7 @@ vi.mock('./log.js', () => ({ logError: vi.fn() }))
 import { sendEmail } from './postmark.js'
 import { logError } from './log.js'
 import { processHostCampaignChunk, BATCH_SIZE } from './host-campaign-queue.js'
+import { resolveCustomerBaseUrl } from './tenant-host.js'
 
 // ── chainable fake ─────────────────────────────────────────────────
 function makeDb(route) {
@@ -402,6 +406,23 @@ describe('processHostCampaignChunk — HOST-CONSENT.1', () => {
     expect(call.postmarkStream).toBe('colm-events')
     expect(call.unsubscribeUrl).toBe('https://crm.test/unsubscribe/host/tok')
     expect(call.metadata).toMatchObject({ host_campaign_id: CAMPAIGN_ID, host_id: HOST_ID, contact_id: 'c1' })
+  })
+
+  // W1.L3a — a host is a customer of the platform: its unsubscribe link is
+  // minted on the tenant host of the host's ANCHOR location (event_hosts.
+  // anchor_location_id, mig 388), never on the CRM host. A host with no anchor
+  // yet (provisioned lazily on its first event) resolves through the
+  // resolver's own floor, which is the CRM host — still a working link.
+  it("W1.L3a — the unsubscribe link is minted on the host anchor location's tenant host", async () => {
+    resolveCustomerBaseUrl.mockResolvedValueOnce('https://gym-a.repset.ie')
+    const { db, statements } = makeDb(routeFor({ ...base, host: { ...HOST, anchor_location_id: 'loc-anchor' } }))
+    await processHostCampaignChunk(db, CAMPAIGN_ID)
+    expect(resolveCustomerBaseUrl).toHaveBeenCalledWith(db, 'loc-anchor')
+    expect(sendEmail.mock.calls[0][0].unsubscribeUrl).toBe('https://gym-a.repset.ie/unsubscribe/host/tok')
+    // The anchor must actually be READ, or the resolver is handed undefined
+    // and every host link silently floors to the CRM host.
+    const hostRead = statements.find((s) => s.table === 'event_hosts')
+    expect(op(hostRead, 'select').args[0]).toContain('anchor_location_id')
   })
 
   it('utility stays on outbound with no postmarkStream and no unsubscribe header URL', async () => {

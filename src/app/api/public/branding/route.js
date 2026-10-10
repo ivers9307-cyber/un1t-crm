@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getLocationBranding, getOrgCustomerBranding } from '@/lib/location-branding'
+import { productName, pointsUnit } from '@/lib/brand-name'
 import { resolveTenantOrgId } from '@/lib/tenant-domains-edge'
 import { PLATFORM_SITE_NAME } from '@/lib/default-site-name'
 import { PLATFORM_FAVICON_URL } from '@/lib/default-favicon'
@@ -26,9 +27,21 @@ export async function GET(request) {
 
   if (locationId) {
     const b = await getLocationBranding(db, locationId)
+    // W1.B2 — the phone's brand source. `short_name` is the wordmark the
+    // product names are built from (org_settings.short_name, mig 715; falls
+    // back to the brand), and `product_names` ships them ready-made so a
+    // screen that only needs "{Brand} Points" never imports the helper. An
+    // unresolved brand answers empty strings and bare nouns — never a literal.
     return NextResponse.json({
       success: true,
-      data: { logo_url: b.logoUrl, favicon_url: b.faviconUrl, company_name: b.companyName },
+      data: {
+        logo_url: b.logoUrl,
+        favicon_url: b.faviconUrl,
+        company_name: b.companyName,
+        short_name: b.shortName,
+        product_names: { points: productName(b.shortName, 'points'), hr: productName(b.shortName, 'hr') },
+        points_unit: pointsUnit(b.shortName),
+      },
     })
   }
 

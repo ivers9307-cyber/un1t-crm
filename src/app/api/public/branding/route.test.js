@@ -1,9 +1,13 @@
-// W1.L4 — the ANONYMOUS branch of /api/public/branding (login screen,
-// reset-password: no location known yet) resolves by the request's host.
-// Before, it read ONE company_settings row estate-wide (`.limit(1).single()`,
-// no order), so every tenant's login screen wore whichever logo sorted
-// first. Now: tenant host → that org's brand; CRM / unmapped host → the
-// platform's name and mark, never another tenant's logo.
+// /api/public/branding has two branches:
+//   • `?location_id=` (W1.B2) — the phone's brand source: the resolved chain
+//     (W1.B1) PLUS the product names built from the SHORT brand, so a screen
+//     that only needs "{Brand} Points" never imports the helper.
+//   • anonymous (W1.L4) — login screen, reset-password: no location known
+//     yet, so it resolves by the REQUEST HOST's organisation. Before, it read
+//     ONE company_settings row estate-wide (`.limit(1).single()`, no order),
+//     so every tenant's login screen wore whichever logo sorted first. Now:
+//     tenant host → that org's brand; CRM / unmapped host → the platform's
+//     name and mark, never another tenant's logo.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { makeFakeDb } from '@/lib/api-auth.test-helpers.js'
 import { _resetTenantDomainsCache } from '@/lib/tenant-domains-edge.js'
@@ -11,9 +15,9 @@ import { PLATFORM_SITE_NAME } from '@/lib/default-site-name.js'
 import { PLATFORM_FAVICON_URL } from '@/lib/default-favicon.js'
 
 vi.mock('@/lib/rate-limit', () => ({
-  checkRateLimit: vi.fn(async () => ({ allowed: true })),
+  checkRateLimit: vi.fn(async () => ({ allowed: true, remaining: 59, resetAt: new Date(0) })),
   getClientIp: () => '203.0.113.9',
-  rateLimitResponse: () => new Response(null, { status: 429 }),
+  rateLimitResponse: () => new Response('{}', { status: 429 }),
 }))
 
 let db
@@ -35,7 +39,7 @@ function tables() {
       { id: 'loc-a1', name: 'Gym A', organization_id: ORG_A, active: true, created_at: '2026-01-01' },
       { id: 'loc-b1', name: 'Gym B', organization_id: ORG_B, active: true, created_at: '2026-01-02' },
     ],
-    org_settings: [],
+    org_settings: [{ organization_id: ORG_A, company_name: null, short_name: 'GA', logo_url: null, favicon_url: null }],
     company_settings: [
       // Gym B sorts first on every column — the row the old first-row pick served to everyone.
       { location_id: 'loc-b1', company_name: 'AAA Gym B', logo_url: 'https://cdn/b-logo.png', favicon_url: 'https://cdn/b.ico' },
@@ -49,6 +53,32 @@ const req = (host, qs = '') => new Request(`https://${host}/api/public/branding$
 beforeEach(() => {
   _resetTenantDomainsCache()
   db = makeFakeDb(tables())
+})
+
+describe('GET /api/public/branding?location_id= (W1.B2)', () => {
+  it('answers the chain plus product names built from the SHORT brand', async () => {
+    const res = await GET(req('crm.repset.ie', '?location_id=loc-a1'))
+    expect(res.status).toBe(200)
+    const { success, data } = await res.json()
+    expect(success).toBe(true)
+    expect(data).toEqual({
+      logo_url: 'https://cdn/a-logo.png',
+      favicon_url: null,
+      company_name: 'Gym A',
+      short_name: 'GA',
+      product_names: { points: 'GA Points', hr: 'GA HR' },
+      points_unit: 'GA',
+    })
+  })
+
+  it('an unresolved brand yields bare nouns, never a literal', async () => {
+    const { data } = await (await GET(req('crm.repset.ie', '?location_id=loc-9'))).json()
+    expect(data.company_name).toBe('')
+    expect(data.short_name).toBe('')
+    expect(data.product_names).toEqual({ points: 'Points', hr: 'HR' })
+    expect(data.points_unit).toBe('pts')
+    expect(JSON.stringify(data)).not.toMatch(/UN1T/)
+  })
 })
 
 describe('GET /api/public/branding — anonymous branch resolves by host (W1.L4)', () => {
@@ -74,10 +104,5 @@ describe('GET /api/public/branding — anonymous branch resolves by host (W1.L4)
       expect(body.success).toBe(true)
       expect(body.data).toEqual({ logo_url: null, favicon_url: PLATFORM_FAVICON_URL, company_name: PLATFORM_SITE_NAME })
     }
-  })
-
-  it('?location_id= still answers that location\'s brand chain (unchanged)', async () => {
-    const body = await (await GET(req('crm.repset.ie', '?location_id=loc-a1'))).json()
-    expect(body.data).toEqual({ logo_url: 'https://cdn/a-logo.png', favicon_url: null, company_name: 'Gym A' })
   })
 })
