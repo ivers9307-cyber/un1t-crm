@@ -16,11 +16,17 @@ import {
 import { sendPostClassEmail } from '@/lib/hr-post-class-email'
 import { runDetectionForSession } from '@/lib/achievements'
 import { enqueueExportsForSession } from '@/lib/external-export'
+import { sendCustomerPush } from '@/lib/customer-push'
+import { getLocationBranding } from '@/lib/location-branding'
 
 vi.mock('@/lib/hr-post-class-email', () => ({ sendPostClassEmail: vi.fn(() => Promise.resolve()) }))
 vi.mock('@/lib/achievements', () => ({ runDetectionForSession: vi.fn(() => Promise.resolve()) }))
 vi.mock('@/lib/external-export', () => ({ enqueueExportsForSession: vi.fn(() => Promise.resolve()) }))
 vi.mock('@/lib/customer-push', () => ({ sendCustomerPush: vi.fn(() => Promise.resolve({ sent: 0, invalidated: 0 })) }))
+// W1.S4 — the session push names the product in the studio's brand.
+vi.mock('@/lib/location-branding', () => ({
+  getLocationBranding: vi.fn(() => Promise.resolve({ companyName: 'UN1T Dublin', shortName: 'UN1T', companyNameConfigured: true, logoUrl: null, faviconUrl: null })),
+}))
 
 beforeEach(() => { vi.clearAllMocks() })
 
@@ -967,6 +973,9 @@ describe('finalizeSessionRewards', () => {
     })
     await finalizeSessionRewards(db, 'sess-1')
     expect(enqueueExportsForSession).toHaveBeenCalledTimes(1)
+    // W1.S4 — the session-ready push names the product in the resolved brand.
+    expect(getLocationBranding).toHaveBeenCalledWith(db, 'loc-1')
+    expect(sendCustomerPush).toHaveBeenCalledWith(db, 'c-1', expect.objectContaining({ body: '42 UN1T Points · DR1VE' }))
     // Regression guard: the export MUST receive a truthy ended_at — without it
     // enqueueExportsForSession early-returns and the Strava auto-export is
     // silently skipped for every session. The SELECT in finalizeSessionRewards
