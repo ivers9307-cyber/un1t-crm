@@ -46,7 +46,7 @@ export async function POST(_request, props) {
   const url = `${getAppUrl()}/host-connect/${token}`
 
   try {
-    await sendHostOnboardingEmail({ host, url })
+    await sendHostOnboardingEmail({ host, url, db })
   } catch (e) {
     return NextResponse.json({ success: false, error: `Could not send the email: ${e.message || 'unknown'}` }, { status: 502 })
   }

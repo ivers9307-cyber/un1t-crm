@@ -36,6 +36,8 @@ import { renderHostCampaignHtml } from '@/lib/host-campaign-email'
 import { sendEmail, applyMergeTags } from '@/lib/postmark'
 import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import { validateBody } from '@/lib/validate'
+import { hostSetupMessages } from '@/lib/host-campaign-launch'
+import { resolveHostOrgBrand } from '@/lib/host-org-brand'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -72,28 +74,25 @@ export async function POST(request, props) {
   // them here, exactly as the real send route does.
   const { data: host } = await db
     .from('event_hosts')
-    .select('id, name, email, sender_domain_verified, sender_email, sender_name, reply_to_email, postmark_stream_id, anchor_location_id')
+    .select('id, name, email, organization_id, sender_domain_verified, sender_email, sender_name, reply_to_email, postmark_stream_id, anchor_location_id')
     .eq('id', session.host.id)
     .maybeSingle()
   if (!host) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
 
+  // W1.S1c: the setup refusals name the host's organisation, word for word
+  // what the real send answers (hostSetupMessages).
+  const setupRefusal = async (reason) => NextResponse.json(
+    { success: false, error: hostSetupMessages((await resolveHostOrgBrand(db, host)).name)[reason] },
+    { status: 409 },
+  )
+
   // The kill switch applies to a test too: this is a real email leaving the
   // host's domain, so letting a test bypass the gate would be a hole in it.
-  if (!host.sender_domain_verified || !host.sender_email) {
-    return NextResponse.json(
-      { success: false, error: 'Sending is not enabled — ask UN1T to verify your sending domain.' },
-      { status: 409 },
-    )
-  }
+  if (!host.sender_domain_verified || !host.sender_email) return setupRefusal('sender_not_verified')
 
   // HOST-CONSENT.1 — a test send must exercise the SAME stream the real send
   // uses, so a missing stream fails here first, not on the real send.
-  if (campaign.email_type !== 'utility' && !host.postmark_stream_id) {
-    return NextResponse.json(
-      { success: false, error: 'Marketing sending is not set up for this host yet — ask UN1T to attach your Postmark stream.' },
-      { status: 409 },
-    )
-  }
+  if (campaign.email_type !== 'utility' && !host.postmark_stream_id) return setupRefusal('no_stream')
 
   if (!campaign.subject || !campaign.body_html) {
     return NextResponse.json(
