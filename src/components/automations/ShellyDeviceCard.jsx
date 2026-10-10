@@ -462,7 +462,7 @@ export default function ShellyDeviceCard({ device, connected, locationTz = DEFAU
             className="inline-flex items-center gap-1.5 text-xs text-un1t-text"
             title={canEnable ? undefined
               : glofoxUnknown && device.schedule_mode === 'class' ? GLOFOX_UNKNOWN_HINT
-                : 'Add a window (or connect Glofox for class mode) first'}
+                : 'Add a window (or connect a membership source with a class schedule for class mode) first'}
           >
             <input
               type="checkbox"

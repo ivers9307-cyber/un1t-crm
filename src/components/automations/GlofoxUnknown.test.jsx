@@ -29,35 +29,38 @@ const card = (status) => ({
   supportsBackfill: true, reviewBase: '/settings/glofox-import', enabled: false, status,
 })
 // No tooltip may claim "not connected" either.
-const connectTitles = () => [...document.querySelectorAll('[title]')].map((e) => e.getAttribute('title')).filter((t) => /Connect Glofox/.test(t))
+// W1.M3a — the not-connected copy is source-neutral now ("a membership source").
+const connectTitles = () => [...document.querySelectorAll('[title]')].map((e) => e.getAttribute('title')).filter((t) => /Connect (Glofox|a membership source)/.test(t))
 
 describe('AutomationsView — unknown Glofox status', () => {
   it('says it could not check, not that Glofox is disconnected; the toggle stays off', () => {
     render(<AutomationsView locationId={LOC} locationName="Studio" cards={[card({ available: false, trialConfigured: false, unknown: true })]} />)
     expect(screen.getByText(/Couldn.t check Glofox/)).toBeTruthy()
-    expect(screen.queryByText(/isn.t connected/)).toBeNull()
+    expect(screen.queryByText(/No membership source is connected/)).toBeNull()
     expect(connectTitles()).toEqual([])
     expect(screen.getByRole('button', { name: /Turn automation on/ }).disabled).toBe(true)
   })
 
-  it('a known "not connected" still says so (unchanged)', () => {
+  it('a known "not connected" still says so — source-neutrally (W1.M3a), never naming Glofox', () => {
     render(<AutomationsView locationId={LOC} locationName="Studio" cards={[card({ available: false, trialConfigured: false })]} />)
-    expect(screen.getByText(/isn.t connected/)).toBeTruthy()
+    expect(screen.getByText(/No membership source is connected at this location/)).toBeTruthy()
+    expect(screen.queryByText(/isn.t connected/)).toBeNull()
     expect(screen.queryByText(/Couldn.t check Glofox/)).toBeNull()
   })
 })
 
 describe.each([['ClassClimateCard', ClassClimateCard], ['BathroomClimateCard', BathroomClimateCard]])('%s — unknown Glofox status', (_n, Card) => {
-  it('says it could not check, not "isn\'t connected"', () => {
+  it('says it could not check, not "no membership source"', () => {
     render(<Card locationId={LOC} glofoxConnected={false} glofoxUnknown devices={[]} initialEnabled={false} initialConfig={{}} />)
     expect(screen.getByText(/Couldn.t check Glofox/)).toBeTruthy()
-    expect(screen.queryByText(/isn.t connected/)).toBeNull()
+    expect(screen.queryByText(/No membership source with a class schedule/)).toBeNull()
     expect(connectTitles()).toEqual([])
   })
 
-  it('without glofoxUnknown, "not connected" is unchanged', () => {
+  it('without glofoxUnknown, "not connected" is the source-neutral copy (W1.M3a)', () => {
     render(<Card locationId={LOC} glofoxConnected={false} devices={[]} initialEnabled={false} initialConfig={{}} />)
-    expect(screen.getByText(/isn.t connected/)).toBeTruthy()
+    expect(screen.getByText(/No membership source with a class schedule is connected at this location/)).toBeTruthy()
+    expect(screen.queryByText(/isn.t connected/)).toBeNull()
     expect(screen.queryByText(/Couldn.t check Glofox/)).toBeNull()
   })
 })

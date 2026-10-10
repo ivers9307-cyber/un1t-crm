@@ -162,7 +162,7 @@ export default function ClassClimateCard({ locationId, glofoxConnected, glofoxUn
             disabled={busy || (!enabled && !canEnable)}
             aria-pressed={enabled}
             aria-label={enabled ? 'Turn automation off' : 'Turn automation on'}
-            title={!enabled && !canEnable ? (glofoxUnknown ? "Couldn't check Glofox. Reload to try again." : 'Connect Glofox + pick at least one AC unit to enable') : (enabled ? 'Turn off' : 'Turn on')}
+            title={!enabled && !canEnable ? (glofoxUnknown ? "Couldn't check Glofox. Reload to try again." : 'Connect a membership source with a class schedule + pick at least one AC unit to enable') : (enabled ? 'Turn off' : 'Turn on')}
             className={`inline-flex h-6 w-11 items-center rounded-full border transition disabled:opacity-50 disabled:cursor-not-allowed ${enabled ? 'bg-emerald-500 border-emerald-600' : 'bg-un1t-muted border-un1t-muted'}`}
           >
             <span className={`h-5 w-5 rounded-full bg-white shadow-sm transition ${enabled ? 'translate-x-5' : 'translate-x-0.5'}`} />
@@ -177,7 +177,7 @@ export default function ClassClimateCard({ locationId, glofoxConnected, glofoxUn
           <p className="text-amber-700">Couldn&apos;t check Glofox. Reload to try again.</p>
         )}
         {!glofoxUnknown && !glofoxConnected && (
-          <p className="text-amber-700">Glofox isn&apos;t connected at this location — connect it in Settings → Locations → Glofox Integration to get the class schedule.</p>
+          <p className="text-amber-700">No membership source with a class schedule is connected at this location — choose one in Settings → Locations → Integrations.</p>
         )}
         {glofoxConnected && !hasDevices && (
           <p className="text-amber-700 inline-flex items-center gap-1">

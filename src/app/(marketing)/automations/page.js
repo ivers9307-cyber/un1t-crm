@@ -9,6 +9,8 @@ import { logError } from '@/lib/log'
 import { canCloneSequenceAt } from '@/lib/sequence-access'
 import { AUTOMATIONS } from '@/lib/automations/registry'
 import { readGlofoxAutomationStatus } from '@/lib/automations/glofox-status'
+import { membershipSettingsHref, canManageMembershipSource } from '@/lib/membership/state-for-page'
+import MembershipSourceGate from '@/components/MembershipSourceGate'
 import AutomationsView from '@/components/automations/AutomationsView'
 import AutomationsFlowList from '@/components/automations/AutomationsFlowList'
 import ClassClimateCard from '@/components/automations/ClassClimateCard'
@@ -124,31 +126,47 @@ export default async function AutomationsPage() {
         <h1 className="text-xl font-semibold text-un1t-text">Automations</h1>
         <p className="text-sm text-un1t-subtle mt-1">Things that run by themselves for {location?.name || 'your studio'}</p>
       </div>
-      {canCurated && glofox?.known === false && (
-        <p role="alert" className="text-sm bg-amber-500/10 text-amber-700 border border-amber-500/30 rounded-md px-3 py-2">
-          Couldn&apos;t check whether Glofox is connected at this location. The automation cards below can&apos;t be changed until it can. Reload to try again.
-        </p>
-      )}
+      {/* W1.M3a — every curated card needs the membership source (Glofox
+          accounts for lead provisioning, its class schedule for the climate
+          cards), so the cards render only behind the gate: a studio with no
+          source sees "No membership source connected" instead of three
+          disabled toggles; a failed state read sees the gate's retry copy.
+          Inside the gate, a failed SETTINGS read (trial config) keeps the
+          PROFILESPREAD.1 notice and the unknown cards. */}
       {canCurated && (
-        <div className="space-y-4">
-          <AutomationsView locationId={location?.id || null} locationName={location?.name || ''} cards={cards} />
-          <ClassClimateCard
-            locationId={location?.id || null}
-            glofoxConnected={glofox?.connected === true}
-            glofoxUnknown={glofox?.known === false}
-            devices={climateDevices}
-            initialEnabled={climate?.enabled}
-            initialConfig={climate?.config}
-          />
-          <BathroomClimateCard
-            locationId={location?.id || null}
-            glofoxConnected={glofox?.connected === true}
-            glofoxUnknown={glofox?.known === false}
-            devices={climateDevices}
-            initialEnabled={bathroom?.enabled}
-            initialConfig={bathroom?.config}
-          />
-        </div>
+        <MembershipSourceGate
+          state={glofox?.membership}
+          capability="schedule"
+          settingsHref={membershipSettingsHref(location?.id || null)}
+          canManage={canManageMembershipSource(user, location?.id || null)}
+          padding="md"
+          className="bg-un1t-surface border border-un1t-border rounded-lg"
+        >
+          {glofox?.known === false && (
+            <p role="alert" className="text-sm bg-amber-500/10 text-amber-700 border border-amber-500/30 rounded-md px-3 py-2 mb-4">
+              Couldn&apos;t check whether Glofox is connected at this location. The automation cards below can&apos;t be changed until it can. Reload to try again.
+            </p>
+          )}
+          <div className="space-y-4">
+            <AutomationsView locationId={location?.id || null} locationName={location?.name || ''} cards={cards} />
+            <ClassClimateCard
+              locationId={location?.id || null}
+              glofoxConnected={glofox?.connected === true}
+              glofoxUnknown={glofox?.known === false}
+              devices={climateDevices}
+              initialEnabled={climate?.enabled}
+              initialConfig={climate?.config}
+            />
+            <BathroomClimateCard
+              locationId={location?.id || null}
+              glofoxConnected={glofox?.connected === true}
+              glofoxUnknown={glofox?.known === false}
+              devices={climateDevices}
+              initialEnabled={bathroom?.enabled}
+              initialConfig={bathroom?.config}
+            />
+          </div>
+        </MembershipSourceGate>
       )}
       {canDevices && (
         <div className="space-y-4">

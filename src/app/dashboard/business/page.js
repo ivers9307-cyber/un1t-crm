@@ -21,6 +21,8 @@ import {
 } from '@/components/dashboard/BusinessBlocks'
 import { LabourBlock } from '@/components/dashboard/LabourBlock'
 import { canSeeLabour, labourStudiosFor } from '@/lib/labour-month-model'
+import { membershipStateForPage, membershipSettingsHref, canManageMembershipSource } from '@/lib/membership/state-for-page'
+import MembershipSourceGate from '@/components/MembershipSourceGate'
 
 export const dynamic = 'force-dynamic'
 
@@ -89,8 +91,25 @@ async function FunnelAdsBlock({ locationId }) {
   )
 }
 
-async function MembershipBlock({ locationId }) {
+async function MembershipBlock({ user, locationId }) {
   const db = createServerClient()
+  // W1.M3a — the trend is a count of MEMBERSHIPS, so without a membership
+  // source it is a flat zero. Gate this block only (the KPI, funnel, today
+  // and rail blocks have their own, source-independent data); the trend
+  // queries do not run for a studio that has nothing to count.
+  const membership = await membershipStateForPage(db, locationId)
+  if (membership.state !== 'configured') {
+    return (
+      <MembershipSourceGate
+        state={membership}
+        capability="memberships"
+        settingsHref={membershipSettingsHref(locationId)}
+        canManage={canManageMembershipSource(user, locationId)}
+        padding="md"
+        className="bg-un1t-surface border border-un1t-border rounded-lg"
+      />
+    )
+  }
   let data = null
   try {
     const [live, flows] = await Promise.all([
@@ -156,7 +175,7 @@ export default async function BusinessDashboardPage() {
             <FunnelAdsBlock locationId={locationId} />
           </Suspense>
           <Suspense fallback={<BlockSkeleton lines={5} />}>
-            <MembershipBlock locationId={locationId} />
+            <MembershipBlock user={user} locationId={locationId} />
           </Suspense>
           {showLabour ? (
             <Suspense fallback={<BlockSkeleton lines={5} />}>
