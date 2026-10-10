@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { FUNNEL_STAGE_SLUGS, OFF_FUNNEL_STAGE_SLUGS } from '../../shared/pipeline-classifier.js'
 import { BUNDLE_KEYS } from '../../shared/permission-bundles.js'
 import { defaultPipelineStages, seedLocationDefaults, seedBundleFeatures, STARTER_BUNDLES } from './location-seed.js'
+import { DEFAULT_NOTIFICATION_CONFIG } from './notification-config.js'
 
 describe('defaultPipelineStages', () => {
   it('matches the classifier taxonomy exactly — funnel then off-funnel, in order', () => {
@@ -60,16 +61,33 @@ describe('seedLocationDefaults', () => {
   // pipelineConflict: when set, the pipelines insert reports a 23505 (the
   // acquisition pipeline already exists) so the re-run path is exercised;
   // pipelineExisting is what the fallback select then finds.
-  function stubDb({ pipelineConflict = false, pipelineExisting = { id: 'existing-pipeline' } } = {}) {
+  //
+  // W1.W1: locationRow is what the seed's `locations.notification_config`
+  // read finds (null = "never seeded"); companySettingsUpserts records the
+  // company_settings upsert so the settings seed can be asserted on.
+  function stubDb({
+    pipelineConflict = false,
+    pipelineExisting = { id: 'existing-pipeline' },
+    locationRow = { notification_config: null },
+  } = {}) {
     const upsertCalls = []
     const updateCalls = []
     const pipelineInsertCalls = []
+    const companySettingsUpserts = []
     const upsert = vi.fn(async (rows, opts) => {
       upsertCalls.push({ rows, opts })
       return { error: null }
     })
     const from = vi.fn((table) => {
       if (table === 'pipeline_stages') return { upsert }
+      if (table === 'company_settings') {
+        return {
+          upsert: vi.fn(async (row, opts) => {
+            companySettingsUpserts.push({ row, opts })
+            return { error: null }
+          }),
+        }
+      }
       if (table === 'pipelines') {
         return {
           insert: vi.fn((row) => {
@@ -103,11 +121,16 @@ describe('seedLocationDefaults', () => {
             updateCalls.push(patch)
             return { eq: vi.fn(async () => ({ error: null })) }
           }),
+          select: vi.fn(() => ({
+            eq: vi.fn(() => ({
+              maybeSingle: vi.fn(async () => ({ data: locationRow, error: null })),
+            })),
+          })),
         }
       }
       throw new Error(`stubDb: unexpected table ${table}`)
     })
-    return { db: { from }, upsertCalls, updateCalls, upsert, pipelineInsertCalls }
+    return { db: { from }, upsertCalls, updateCalls, upsert, pipelineInsertCalls, companySettingsUpserts }
   }
 
   // A minimal pipelines-table stub for the manual `db` objects below, which
@@ -237,8 +260,9 @@ describe('seedLocationDefaults', () => {
     const { db, updateCalls } = stubDb()
     await seedLocationDefaults(db, { id: 'loc-1', features: {} })
     expect(db.from).toHaveBeenCalledWith('locations')
-    expect(updateCalls).toHaveLength(1)
-    const written = updateCalls[0].features
+    const featurePatches = updateCalls.filter((u) => 'features' in u)
+    expect(featurePatches).toHaveLength(1)
+    const written = featurePatches[0].features
     for (const key of STARTER_BUNDLES) expect(key in written, key).toBe(false)
     for (const key of BUNDLE_KEYS.filter((k) => !STARTER_BUNDLES.includes(k))) {
       expect(written[key], key).toBe(false)
@@ -254,6 +278,106 @@ describe('seedLocationDefaults', () => {
       },
     }
     await expect(seedLocationDefaults(db, { id: 'loc-1' })).rejects.toThrow(/features write denied/)
+  })
+
+  // W1.W1 — settings rows a tenant location is born with (SaaS Wave 1,
+  // decision 6). company_settings: name from the location, logo null, quiet
+  // hours from mig 514's column defaults (so the INSERT carries none).
+  // notification_config: the exact DEFAULT_NOTIFICATION_CONFIG shape
+  // (validateConfig drops unknown categories), written only while NULL.
+  it('W1.W1 — seeds company_settings with the location name, no logo, and the schema quiet-hours defaults', async () => {
+    const { db, companySettingsUpserts } = stubDb()
+    await seedLocationDefaults(db, { id: 'loc-1', name: 'Gym A North', features: {} })
+    expect(companySettingsUpserts).toEqual([{
+      row: { location_id: 'loc-1', company_name: 'Gym A North', logo_url: null, favicon_url: null },
+      opts: { onConflict: 'location_id', ignoreDuplicates: true },
+    }])
+    // Quiet hours are NOT NULL DEFAULT columns (enabled true, 21 → 8): the
+    // seed must not name them, or a later default change would be shadowed.
+    for (const key of Object.keys(companySettingsUpserts[0].row)) {
+      expect(key.startsWith('send_quiet_hours'), key).toBe(false)
+    }
+  })
+
+  it('W1.W1 — seeds locations.notification_config with exactly DEFAULT_NOTIFICATION_CONFIG when it is null', async () => {
+    const { db, updateCalls } = stubDb({ locationRow: { id: 'loc-1', notification_config: null } })
+    await seedLocationDefaults(db, { id: 'loc-1', name: 'Gym A North', features: {} })
+    const patch = updateCalls.find((u) => 'notification_config' in u)
+    expect(patch).toBeDefined()
+    expect(patch.notification_config).toEqual(DEFAULT_NOTIFICATION_CONFIG)
+    expect(Object.keys(patch)).toEqual(['notification_config'])
+  })
+
+  it("W1.W1 — re-running never overwrites an operator's branding or notification config", async () => {
+    const { db, updateCalls, companySettingsUpserts } = stubDb({
+      locationRow: { id: 'loc-1', notification_config: { categories: {} } },
+    })
+    await seedLocationDefaults(db, { id: 'loc-1', name: 'Gym A North', features: {} })
+    // The upsert ignores an existing row (an operator's renamed brand stays).
+    expect(companySettingsUpserts).toHaveLength(1)
+    expect(companySettingsUpserts[0].opts).toMatchObject({ ignoreDuplicates: true })
+    // A non-null notification_config is left exactly as it is.
+    expect(updateCalls.some((u) => 'notification_config' in u)).toBe(false)
+  })
+
+  it('W1.W1 — a host-anchor location is not seeded with settings', async () => {
+    const { db, updateCalls, companySettingsUpserts } = stubDb()
+    await seedLocationDefaults(db, { id: 'loc-h', name: 'PTC (host events)', is_host_anchor: true, features: {} })
+    expect(companySettingsUpserts).toEqual([])
+    expect(updateCalls.some((u) => 'notification_config' in u)).toBe(false)
+  })
+
+  it('W1.W1 — a blank location name seeds company_name null, not an empty string', async () => {
+    const { db, companySettingsUpserts } = stubDb()
+    await seedLocationDefaults(db, { id: 'loc-1', name: '   ', features: {} })
+    expect(companySettingsUpserts[0].row.company_name).toBeNull()
+  })
+
+  it('W1.W1 — throws when the company_settings seed reports an error', async () => {
+    const db = {
+      from: (table) => {
+        if (table === 'pipelines') return okPipelinesTable()
+        if (table === 'pipeline_stages') return { upsert: async () => ({ error: null }) }
+        if (table === 'company_settings') return { upsert: async () => ({ error: { message: 'company_settings denied' } }) }
+        return { update: () => ({ eq: async () => ({ error: null }) }) }
+      },
+    }
+    await expect(seedLocationDefaults(db, { id: 'loc-1', name: 'Gym A' })).rejects.toThrow(/company_settings denied/)
+  })
+
+  it('W1.W1 — throws when the notification_config read or write reports an error', async () => {
+    const dbReadFails = {
+      from: (table) => {
+        if (table === 'pipelines') return okPipelinesTable()
+        if (table === 'pipeline_stages') return { upsert: async () => ({ error: null }) }
+        if (table === 'company_settings') return { upsert: async () => ({ error: null }) }
+        return {
+          update: () => ({ eq: async () => ({ error: null }) }),
+          select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: { message: 'config read denied' } }) }) }),
+        }
+      },
+    }
+    await expect(seedLocationDefaults(dbReadFails, { id: 'loc-1', name: 'Gym A' })).rejects.toThrow(/config read denied/)
+
+    let patches = 0
+    const dbWriteFails = {
+      from: (table) => {
+        if (table === 'pipelines') return okPipelinesTable()
+        if (table === 'pipeline_stages') return { upsert: async () => ({ error: null }) }
+        if (table === 'company_settings') return { upsert: async () => ({ error: null }) }
+        return {
+          update: (patch) => ({
+            eq: async () => {
+              patches += 1
+              return 'notification_config' in patch ? { error: { message: 'config write denied' } } : { error: null }
+            },
+          }),
+          select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { notification_config: null }, error: null }) }) }),
+        }
+      },
+    }
+    await expect(seedLocationDefaults(dbWriteFails, { id: 'loc-1', name: 'Gym A' })).rejects.toThrow(/config write denied/)
+    expect(patches).toBe(2) // features, then notification_config
   })
 })
 
