@@ -32,7 +32,7 @@ const UNIFI_OK = { host: 'https://unifi.example.test', api_token: 'SYNTH-UT', st
 const row = (id, name, settings = {}) => ({
   id, name, slug: name.toLowerCase(), address: null, phone: null, email: null, timezone: 'Europe/Dublin',
   active: true, created_at: 'T', updated_at: 'T', country: 'IE', features: { pipeline: true },
-  organization_id: 'o0000000-0000-4000-8000-000000000001', is_host_anchor: false,
+  organization_id: 'o0000000-0000-4000-8000-000000000001', is_host_anchor: false, membership_source: 'none',
   settings,
   // a credential the select names for the server-side AC check; it must never reach the result
   sensibo_api_key: 'SYNTH-SENSIBO',

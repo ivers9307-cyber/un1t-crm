@@ -103,7 +103,7 @@ describe('USER_LOCATION_COLUMNS (PROFILESPREAD.1: no settings)', () => {
   it('is exactly the client identity: no settings, no credential column', () => {
     const cols = USER_LOCATION_COLUMNS.split(',').map((s) => s.trim())
     expect(cols).toEqual([...CLIENT_LOCATION_COLUMNS])
-    for (const needed of ['id', 'name', 'organization_id', 'features', 'active', 'is_host_anchor', 'slug', 'country', 'timezone']) {
+    for (const needed of ['id', 'name', 'organization_id', 'features', 'active', 'is_host_anchor', 'slug', 'country', 'timezone', 'membership_source']) {
       expect(cols).toContain(needed)
     }
     expect(cols).not.toContain('settings')
