@@ -32,6 +32,7 @@
 
 import { useEffect, useState } from 'react'
 import { dublinScheduleLabel } from '@/lib/host-schedule-time'
+import { PLATFORM_NAME } from '@/lib/brand-name'
 
 const AUDIENCE_LABEL = {
   all: 'All contacts',
@@ -184,7 +185,8 @@ export function resendConfirmCopy(missedCount) {
 
 const HOUR_MS = 60 * 60 * 1000
 
-export default function HostEmailReport({ campaignId }) {
+// brandName (W1.S1c): the host's organisation, resolved by the server page.
+export default function HostEmailReport({ campaignId, brandName = PLATFORM_NAME }) {
   const [state, setState] = useState('loading') // 'loading' | 'error' | 'not_found' | 'ready'
   const [campaign, setCampaign] = useState(null)
   const [recipients, setRecipients] = useState([])
@@ -292,7 +294,7 @@ export default function HostEmailReport({ campaignId }) {
           <p className="text-amber-300 text-xs mt-2">Still sending, numbers update as it goes.</p>
         )}
         {staleNoDelivery && (
-          <p className="text-red-300 text-xs mt-2">Nothing delivered yet. If this persists, contact UN1T.</p>
+          <p className="text-red-300 text-xs mt-2">Nothing delivered yet. If this persists, contact {brandName}.</p>
         )}
       </div>
 

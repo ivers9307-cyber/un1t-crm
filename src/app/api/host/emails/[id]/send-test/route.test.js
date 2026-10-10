@@ -82,6 +82,8 @@ function makeDb(cfg = {}) {
     if (state.table === 'event_hosts') {
       return { data: 'host' in cfg ? cfg.host : HOST_ROW, error: null }
     }
+    // W1.S1c — the host's organisation brand, for the setup refusals.
+    if (state.table === 'org_settings') return { data: cfg.orgSettings || [], error: null }
     return { data: null, error: null }
   }
   return { db, statements }
@@ -128,6 +130,17 @@ describe('POST /api/host/emails/[id]/send-test', () => {
     const campaignStmt = statements.find((s) => s.table === 'host_campaigns')
     const eqArgs = campaignStmt.ops.filter((o) => o.method === 'eq').map((o) => o.args)
     expect(eqArgs).toContainEqual(['host_id', HOST_ID])
+  })
+
+  it("W1.S1c: the setup refusal names the host's organisation, never a literal gym", async () => {
+    const made = makeDb({
+      host: { ...HOST_ROW, organization_id: 'org-send-test-1', sender_domain_verified: false },
+      orgSettings: [{ company_name: 'Pulse Gym', short_name: null }],
+    })
+    createServerClient.mockReturnValue(made.db)
+    const res = await post()
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toBe('Sending is not enabled. Ask Pulse Gym to verify your sending domain.')
   })
 
   it('409s when the sending domain is not verified', async () => {
