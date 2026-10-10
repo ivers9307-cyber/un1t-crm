@@ -3,7 +3,10 @@
 // /welcome layout (Poppins + #lp-shell). Lists active, upcoming race_events
 // for the studio; cards link to the existing /event/[slug] booking.
 import { notFound } from 'next/navigation'
+import { headers } from 'next/headers'
 import { createServerClient } from '@/lib/supabase'
+import { getLocationBranding } from '@/lib/location-branding'
+import { resolveGymSiteName } from '@/lib/default-site-name'
 import { SiteHeader, SiteFooter } from '@/components/landing-page/BlockRenderers'
 import RevealManager from '@/components/landing-page/RevealManager'
 import { RevealArmScript } from '@/components/landing-page/reveal-arm'
@@ -51,11 +54,16 @@ async function loadInstagramPosts(db, locationId) {
   return { posts, username: data[0].ig_username || null }
 }
 
+// W1.L4 — the OG site name is THIS studio's brand and the not-found title
+// is the host's organisation brand; neither is a literal (mirrors
+// welcome/[location]/page.js).
 export async function generateMetadata(props) {
   const params = await props.params
   const row = await loadByPath(params.location)
-  if (!row || !isPubliclyVisible(row.publish_state)) return { title: 'UN1T Dublin' }
-  const studioName = row.locations?.name || 'UN1T Dublin'
+  const hostBrand = await resolveGymSiteName({ host: (await headers()).get('host') })
+  if (!row || !isPubliclyVisible(row.publish_state)) return { title: hostBrand }
+  const brand = (await getLocationBranding(createServerClient(), row.location_id)).companyName || hostBrand
+  const studioName = row.locations?.name || brand
   const title = `Events — ${studioName}`
   const description = `Upcoming races, workshops and open days at ${studioName}. Book your spot.`
   return {
@@ -64,7 +72,7 @@ export async function generateMetadata(props) {
     openGraph: {
       title,
       description,
-      siteName: 'UN1T Dublin',
+      siteName: brand,
       type: 'website',
     },
   }

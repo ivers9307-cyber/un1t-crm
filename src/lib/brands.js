@@ -51,6 +51,18 @@
 // to act as the buyer-facing subdomain.
 // ─────────────────────────────────────────────────────────────────
 
+// W1.L4 — the organisation an in-code hostname speaks for. The DB tier
+// (tenant_domains, src/lib/tenant-domains-edge.js) carries organization_id
+// on every row, but an in-code host never has a row (the admin API refuses
+// one), so the host-keyed brand resolvers — site name, favicon, the
+// anonymous login branding, the /welcome front page — need the linkage
+// here; resolveTenantOrgId consults this tier first. Only the UN1T hosts
+// carry one: un1tdublin.com (+www) and host.un1tdublin.com are UN1T Group's.
+// The car-business hosts render their own in-code pages and inherit no org
+// brand by host. Env-overridable so a preview can point the marketing host
+// at another org.
+export const UN1T_GROUP_ORG_ID = process.env.MARKETING_ORG_ID || 'f117b7b8-5f56-4f80-8299-2c698242e4d2'
+
 export const BRANDS = [
   // ─── CCF Autos — buyer-facing payment subdomain ────────────────
   // Customers reaching this hostname can ONLY hit deposit pages and
@@ -77,6 +89,7 @@ export const BRANDS = [
     description: 'UN1T public marketing site (apex + www)',
     hostnames: (process.env.MARKETING_HOSTNAMES || 'un1tdublin.com,www.un1tdublin.com')
       .split(',').map((s) => s.trim()).filter(Boolean),
+    organizationId: UN1T_GROUP_ORG_ID, // W1.L4
     allowedPaths: [
       '/welcome',
       '/stillorgan',    // pretty path → next.config rewrites to /welcome/stillorgan
@@ -168,6 +181,7 @@ export const BRANDS = [
     description: 'UN1T third-party event host portal',
     hostnames: (process.env.HOST_PORTAL_HOSTNAME || 'host.un1tdublin.com')
       .split(',').map((s) => s.trim()).filter(Boolean),
+    organizationId: UN1T_GROUP_ORG_ID, // W1.L4 — UN1T's partner portal reads UN1T's brand
     allowedPaths: [
       '/host',        // the portal — login + gated dashboard pages
       '/api/host/',   // host-scoped API (getCurrentHost)
@@ -243,6 +257,21 @@ export const BRANDS = [
  * @param {string} hostname  Raw value of the `Host` request header.
  * @returns {object | null}  Brand entry from BRANDS, or null.
  */
+/**
+ * W1.L4 — one normalisation of a raw `Host` header for every host-keyed
+ * brand lookup (resolveTenantOrgId, the per-host brand cache): lowercased,
+ * port stripped, trailing dot stripped, trimmed; '' for no host. Pure.
+ * resolveBrand() itself stays byte-exact (the proxy's contract); callers
+ * that want case-insensitive matching normalise first.
+ *
+ * @param {unknown} host
+ * @returns {string}
+ */
+export function normalizeHost(host) {
+  if (typeof host !== 'string') return ''
+  return host.trim().split(':')[0].replace(/\.+$/, '').toLowerCase()
+}
+
 export function resolveBrand(hostname) {
   if (!hostname || typeof hostname !== 'string') return null
   const hostKey = hostname.split(':')[0]

@@ -370,9 +370,6 @@ export const EXEMPT = {
   'src/app/api/public/offer-purchases/[id]/route.js': {
     offer_purchases: 'Public paid-purchase status poll (OFFERS.4): the row is resolved by its own unguessable UUID (the purchaseId handed to the payer in the checkout response) — the id IS the capability token, not enumerable. Returns only { paid, state }, no buyer PII. Mirrors public/class-booking-payments/[id].',
   },
-  'src/app/api/public/branding/route.js': {
-    company_settings: 'Anonymous login-screen branding: deliberately serves the FIRST configured row (logo/name only) when no location context exists yet. Known single-tenant shortcut — revisit when a second org onboards, but it exposes no contact/tenant data.',
-  },
 
   // Webhooks — sender authenticated by signature/secret (enforced by
   // check:route-guards); the tenant is resolved from the PROVIDER\'s
