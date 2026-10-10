@@ -38,6 +38,9 @@ vi.mock('@/lib/webhook-events', () => ({
 vi.mock('@/lib/agent/auto-reply', () => ({ maybeAutoReply: vi.fn(async () => ({ handled: false })) }))
 vi.mock('@/lib/agent/welcome-greeting', () => ({ maybeSendWelcomeGreeting: vi.fn() }))
 vi.mock('@/lib/whatsapp-template-events', () => ({ applyTemplateEvent: vi.fn(async () => ({ template: null, notify: null })) }))
+// NOTE (WA-COEX.7): this EMPTY set is why the unreachable account_update branch went
+// unnoticed — with the real set the field is claimed by the number-event branch. Tests
+// that need the real dispatch use vi.importActual (route.account-update.test.js).
 vi.mock('@/lib/whatsapp-number-events', () => ({ NUMBER_EVENT_FIELDS: new Set(), applyNumberEvent: vi.fn() }))
 vi.mock('@/lib/whatsapp-flow-events', () => ({ FLOW_EVENT_FIELDS: new Set(), applyFlowEvent: vi.fn() }))
 vi.mock('@/lib/meta-capi', () => ({ recordCtwaTouch: vi.fn() }))
