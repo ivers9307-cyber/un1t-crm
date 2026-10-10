@@ -21,7 +21,7 @@ import { z } from 'zod'
 import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { sendEmail, applyMergeTags } from '@/lib/postmark'
-import { getAppUrl } from '@/lib/app-url'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import { ADMIN_ROLES } from '@/lib/schemas'
 import { validateBody } from '@/lib/validate'
 
@@ -109,8 +109,9 @@ export async function POST(request, props) {
   // Mirror the real send's URL building so the unsubscribe + preference
   // links in the test email are real and clickable. Useful for verifying
   // the footer renders correctly.
+  // W1.L3a — on the campaign location's tenant host, as the real send's are.
   let baseUrl
-  try { baseUrl = getAppUrl() } catch { baseUrl = '' }
+  try { baseUrl = await resolveCustomerBaseUrl(db, campaign.location_id) } catch { baseUrl = '' }
   const unsubscribeUrl = `${baseUrl}/unsubscribe/test-token`
   const preferenceUrl  = `${baseUrl}/preferences/test-token`
 
