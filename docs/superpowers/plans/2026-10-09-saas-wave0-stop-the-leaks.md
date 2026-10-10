@@ -33,7 +33,7 @@ All fourteen tasks shipped as planned (PR titles verified against GitHub on 10 O
 | W0.8 notifications page | #1963 | Merged | |
 | W0.9a token challenges + heartbeat | #1969 | Merged | |
 | W0.9b kiosks on token URL | un1t-pi #2 | Merged | per-kiosk `tv-token-<device>` secret, `pi kiosk-refresh`; stillorgan-tv1 cut over (heartbeat advancing 10 Oct 02:11 UTC), stillorgan-tv2 offline (SD card, `pi prepare`), hatch-tv1/tv2 not provisioned |
-| W0.9c remove location-keyed routes | #1973 | Open | removal shipped ahead of the hatch kiosks (decision: they are not yet provisioned, so nothing to break); staff `/live/[locationId]` lost its "TV display" button, restore later |
+| W0.9c remove location-keyed routes | #1973 | Merged | removal shipped ahead of the hatch kiosks (decision: they are not yet provisioned, so nothing to break); staff `/live/[locationId]` lost its "TV display" button, restore later |
 | W0.10 Strava | #1970 | Merged | Richard to recreate the push subscription on `/api/webhooks/strava/<token>` |
 | W0.11 templates NULL guard | #1965 | Merged | |
 | W0.12 automation device ids | #1966 | Merged | |
@@ -721,7 +721,7 @@ Delete `RECEIPT_COVERAGE_REPORT_TO` reads; update `docs/architecture/INTEGRATION
 
 ### Task W0.9: Live board — kiosk cut-over to token URLs, then remove the location-keyed routes
 
-**Status:** done — #1969 W0.9a (merged) · un1t-pi #2 W0.9b (merged) · #1973 W0.9c (open).
+**Status:** done — #1969 W0.9a (merged) · un1t-pi #2 W0.9b (merged) · #1973 W0.9c (merged 10 Oct).
 
 This is the only task with a hardware step. Order matters: 9a and 9b ship first; 9c (removal) only after every kiosk is verified on the token URL.
 
