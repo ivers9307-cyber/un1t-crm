@@ -444,8 +444,11 @@ describe('getContractingEntity', () => {
     const out = await getContractingEntity(db, { locationId: 'loc-ccf' })
     expect(out.label).not.toBe('UN1T')
     expect(out.label).toBe('CCF Autos')
-    // The brand resolver still reports its own default — the point is
-    // that the ENTITY label no longer inherits it.
+    // Since W1.B1 the brand resolver returns '' here (no configured name,
+    // and this fixture's locations row carries no name); the WORDMARK field
+    // then re-applies contracting-entity's own last-resort literal, which
+    // W1.S1a removes. The point of this test is that the ENTITY label
+    // never inherits it.
     expect(out.companyName).toBe('UN1T')
     expect(out.entityName).toBeNull()
   })
