@@ -252,6 +252,8 @@ export async function POST(request) {
 
   const send = await sendConversationEmail({
     mailboxAddress: mailbox.address,
+    // W1.E2 — the studio whose brand names a degraded (fallback-From) send.
+    locationId: mailbox.location_id,
     // MAILBOX-CONNECT.7 — the mailbox ROW, not just its address. sendConversationEmail
     // reads `egress` off it to choose the transport; a mailbox connected over
     // IMAP/SMTP sends as its own address over its own SMTP, because Postmark
