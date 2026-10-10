@@ -27,6 +27,7 @@ import { MANAGER_ROLES } from '@/lib/schemas'
 import { isWhatsAppStaffAuthored } from '@/lib/whatsapp-staff-sources'
 import { buildCachedSystem } from './prompt'
 import { getLocationBranding } from '@/lib/location-branding'
+import { DEFAULTS } from './settings-contract'
 import {
   shouldAgentReply,
   buildReplyTurnMessages,
@@ -776,7 +777,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     const system = buildCachedSystem({
       businessName: branding.companyName,
       locationName: loc?.name || null,
-      agentName: settings?.agent_name || null,
+      agentName: settings?.agent_name || DEFAULTS.agent_name,
       membershipUrl: settings?.membership_signup_url || null,
       tone: settings?.tone || null,
       extraRules: settings?.extra_rules || null,

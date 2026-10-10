@@ -120,7 +120,7 @@ export async function composeAgentText(location, settings, historyRows, instruct
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) return { error: 'no_api_key' }
   const system = buildCachedSystem({
-    businessName: companyName || '',
+    businessName: companyName,
     locationName: location.name,
     agentName: settings?.agent_name || null,
     membershipUrl: settings?.membership_signup_url || null,

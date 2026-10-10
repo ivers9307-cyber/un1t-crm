@@ -1398,7 +1398,7 @@ export async function sendBroadcast(broadcastId, { force = false, maxRecipients 
         message_type: 'template',
         template_name: template.name,
         template_variables: variableMapping,
-        body: renderTemplateBody(template, contact, variableMapping, { companyName: branding.companyName }),
+        body: renderTemplateBody(template, contact, variableMapping, { companyName: branding.companyName, locationName: branding.locationName }),
         status: 'sent',
         broadcast_id: broadcastId,
         sent_at: new Date().toISOString(),
@@ -1763,7 +1763,7 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
         contact_id: contact.id, location_id: broadcast.location_id,
         wa_message_id: result.messageId, direction: 'outbound', message_type: 'template',
         template_name: template.name, template_variables: variableMapping,
-        body: renderTemplateBody(template, contact, variableMapping, { companyName: branding.companyName }),
+        body: renderTemplateBody(template, contact, variableMapping, { companyName: branding.companyName, locationName: branding.locationName }),
         status: 'sent', broadcast_id: broadcastId, sent_at: new Date().toISOString(),
       })
       if (pauseAgent) await pauseAgentOnThread(db, conversationId)

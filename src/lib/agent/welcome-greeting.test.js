@@ -19,8 +19,9 @@ import {
   defaultWelcomeGreeting,
 } from './welcome-greeting.js'
 
-// What the code default renders for the mocked brand and an unset agent name.
-const DEFAULT_WELCOME_GREETING = defaultWelcomeGreeting({ agentName: null, brand: 'Gym A' })
+// What the code default renders for the mocked brand and an unset agent name
+// (the contract's default name stands in, so the text matches the editor's).
+const DEFAULT_WELCOME_GREETING = defaultWelcomeGreeting({ agentName: 'Mia', brand: 'Gym A' })
 
 const PHONE = '353871234567'
 // Fixed clock — 13:00 Dublin (summer), safely inside any all-day quiet window
@@ -135,6 +136,12 @@ describe('maybeSendWelcomeGreeting', () => {
     const sent = sendTextMessage.mock.calls[0][1]
     expect(sent).toBe("Hi, I'm Ava, the studio's assistant at Gym A. Ask me anything, or tell me if you'd like to book a free class or a consultation.")
     expect(sent).not.toMatch(/UN1T/)
+  })
+
+  it('a blob saved without agent_name greets as the contract default name (what the editor shows)', async () => {
+    const db = fakeDb({ customerAgent: { enabled: true } })
+    await maybeSendWelcomeGreeting(db, CTX)
+    expect(sendTextMessage.mock.calls[0][1]).toMatch(/^Hi, I'm Mia, the studio's assistant at Gym A\./)
   })
 
   it('an operator-set greeting never resolves the brand (no query spent on a text that is not sent)', async () => {

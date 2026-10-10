@@ -7,6 +7,7 @@ import { sendTextMessage } from '@/lib/whatsapp'
 import { getLocationBranding } from '@/lib/location-branding'
 import { phoneMatchesAllowlist, isWithinQuietHours, stripEmDashes, resolveAgentGate, AGENT_MESSAGE_SOURCE } from './core'
 import { defaultWelcomeGreeting } from './default-copy'
+import { DEFAULTS } from './settings-contract'
 
 // HUMANIZE.1 — no em dash, no emoji, low-key: this is shipped customer copy on
 // the click-to-WhatsApp path, and the deterministic scrub below covers the
@@ -54,7 +55,9 @@ export async function maybeSendWelcomeGreeting(db, { conversationId, locationId,
     let text = (settings?.welcome_greeting || '').trim()
     if (!text) {
       const { companyName } = await getLocationBranding(db, locationId)
-      text = defaultWelcomeGreeting({ agentName: settings?.agent_name, brand: companyName })
+      // A blob saved without a name sends the same text the editor shows as
+      // the default (the contract names the agent on every save).
+      text = defaultWelcomeGreeting({ agentName: settings?.agent_name || DEFAULTS.agent_name, brand: companyName })
     }
     text = stripEmDashes(text)
     // WAREPLYNUMBER.1 (C86) — from the number the chat was opened on.
