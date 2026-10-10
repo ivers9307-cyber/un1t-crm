@@ -47,11 +47,14 @@ vi.mock('./event-email', () => ({
   buildEventEmailShell: vi.fn(() => '<html></html>'),
 }))
 vi.mock('./app-url', () => ({ getAppUrl: () => 'https://crm.example.com' }))
+// W1.L3b — the manage link's host; defaults to the CRM host for the older assertions.
+vi.mock('./tenant-host', () => ({ resolveCustomerBaseUrl: vi.fn(async () => 'https://crm.example.com') }))
 vi.mock('./event-checkin-tokens', () => ({ signCheckinToken: () => 'tok' }))
 
 import { sendRaceConfirmations } from './race-confirmations'
 import { resolveEventEmail } from './event-email'
 import { verifyEntryManageToken } from './entry-manage-tokens'
+import { resolveCustomerBaseUrl } from './tenant-host'
 
 const PAYMENT_ID = 'p0000000-0000-0000-0000-000000000001'
 
@@ -265,6 +268,20 @@ describe('sendRaceConfirmations — the "Change your date" link', () => {
       expect(verifyEntryManageToken(extras.manage_url.split('/').pop(), 'test-secret')).toEqual({ registrationId: 'reg1' })
       expect(defaults.footerHtml).toContain(`Need a different date? <a href="${extras.manage_url}"`)
       expect(defaults.footerHtml).toContain('>Change it here</a>.')
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+  it("W1.L3b — manage_url is minted on the event location's tenant host, never the CRM host", async () => {
+    vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'test-secret')
+    try {
+      resolveCustomerBaseUrl.mockResolvedValueOnce('https://gym-a.repset.ie')
+      const { db } = makeWorld()
+      resolveEventEmail.mockClear()
+      await sendRaceConfirmations({ db, paymentId: PAYMENT_ID })
+      const { extras } = resolveEventEmail.mock.calls[0][0]
+      expect(extras.manage_url).toMatch(/^https:\/\/gym-a\.repset\.ie\/event\/entry\/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/)
+      expect(resolveCustomerBaseUrl).toHaveBeenCalledWith(db, expect.any(String))
     } finally {
       vi.unstubAllEnvs()
     }

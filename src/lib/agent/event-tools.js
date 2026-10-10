@@ -211,9 +211,11 @@ const LIMITED_SPOTS_THRESHOLD = 3
  * @param {Array} events    race_events rows with `waves` embedded
  * @param {Object} takenByWave  wave_id → non-cancelled registration count
  * @param {number} nowMs
- * @param {string} appUrl   origin for the signup link
+ * @param {string} baseUrl  origin for the signup link — the conversation
+ *   location's tenant host (W1.L3b), on the canonical /event/ path: /race/ is
+ *   only a next.config alias on the CRM host and is not served on a tenant host
  */
-export function shapeEventsForAgent(events, takenByWave, nowMs, appUrl) {
+export function shapeEventsForAgent(events, takenByWave, nowMs, baseUrl) {
   const today = dublinToday(nowMs)
   const out = []
   for (const e of Array.isArray(events) ? events : []) {
@@ -246,7 +248,7 @@ export function shapeEventsForAgent(events, takenByWave, nowMs, appUrl) {
       price: formatEventPrice(e),
       ...(e.description ? { description: String(e.description).replace(/\s+/g, ' ').trim().slice(0, MAX_DESCRIPTION) } : {}),
       waves,
-      signup_url: `${appUrl}/race/${e.slug}`,
+      signup_url: `${baseUrl}/event/${e.slug}`,
     })
   }
   out.sort((a, b) => a.race_date.localeCompare(b.race_date))
@@ -308,7 +310,7 @@ export async function executeEventTool(toolName, input, ctx) {
   const { db, locationId, contactId, verifiedContactId } = ctx
 
   if (toolName === 'list_upcoming_events') {
-    const { getAppUrl } = await import('@/lib/app-url')
+    const { resolveCustomerBaseUrl } = await import('@/lib/tenant-host')
     const today = dublinToday(Date.now())
     const { data: events } = await db.from('race_events')
       .select('id, name, kind, slug, description, race_date, active, registration_opens_at, registration_closes_at, member_pricing_enabled, member_fee_cents, non_member_fee_cents, members_only, waves:race_waves(id, start_time, capacity, label)')
@@ -333,7 +335,8 @@ export async function executeEventTool(toolName, input, ctx) {
         if (r.wave_id) takenByWave[r.wave_id] = (takenByWave[r.wave_id] || 0) + 1
       }
     }
-    return { events: shapeEventsForAgent(events, takenByWave, Date.now(), getAppUrl()) }
+    // W1.L3b — Mia's signup links land on HER ACTIVE LOCATION's tenant host.
+    return { events: shapeEventsForAgent(events, takenByWave, Date.now(), await resolveCustomerBaseUrl(db, locationId)) }
   }
 
   if (toolName === 'get_my_event_registrations') {
@@ -468,12 +471,13 @@ export async function executeEventTool(toolName, input, ctx) {
       return { booked: true, event_name: race.name, event_date: auditDetails.event_date }
     }
     if (result.reason === 'requires_payment') {
-      const { getAppUrl } = await import('@/lib/app-url')
+      const { resolveCustomerBaseUrl } = await import('@/lib/tenant-host')
+      const baseUrl = await resolveCustomerBaseUrl(db, locationId)
       return {
         booked: false,
         requires_payment: true,
         price: formatEventPrice(race),
-        signup_url: `${getAppUrl()}/race/${race.slug}`,
+        signup_url: `${baseUrl}/event/${race.slug}`,
         message: 'This entry has a fee — share the signup link so they can register and pay securely there. Never collect payment in chat.',
       }
     }

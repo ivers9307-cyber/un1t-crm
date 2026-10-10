@@ -8,6 +8,9 @@ vi.mock('./event-comms-location', () => ({
   pickAudienceVenueName: ({ venueName, eventLocation }) => venueName || eventLocation?.name || '',
 }))
 vi.mock('./app-url', () => ({ getAppUrl: () => 'https://crm.test' }))
+// W1.L3b — the event location's tenant host decides where the manage link
+// lands. Defaults to the CRM host so the pre-existing assertions read as before.
+vi.mock('./tenant-host', () => ({ resolveCustomerBaseUrl: vi.fn(async () => 'https://crm.test') }))
 vi.mock('./log', async (importOriginal) => ({ ...(await importOriginal()), logError: vi.fn() }))
 
 const { sendTransactionalEmail } = await import('./postmark')
@@ -16,6 +19,7 @@ const { logError } = await import('./log')
 const { sendRegistrationMovedEmail, buildMovedDefaults } = await import('./race-confirmations.js')
 const { verifyCheckinToken } = await import('./event-checkin-tokens.js')
 const { verifyEntryManageToken } = await import('./entry-manage-tokens.js')
+const { resolveCustomerBaseUrl } = await import('./tenant-host')
 
 process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-secret'
 
@@ -228,6 +232,22 @@ describe('sendRegistrationMovedEmail — the "Change your date" link', () => {
     const m = html.match(/Need a different date\? <a href="(https:\/\/crm\.test\/event\/entry\/([^"]+))"[^>]*>Change it here<\/a>\./)
     expect(m).toBeTruthy()
     expect(verifyEntryManageToken(m[2], 'test-secret')).toEqual({ registrationId: 'r1' })
+  })
+  // W1.L3b — minted on the EVENT LOCATION's tenant host (resolveCustomerBaseUrl),
+  // so a second gym's entrants never see crm.repset.ie.
+  it("W1.L3b — the Change it here link is on the event location's tenant host", async () => {
+    resolveCustomerBaseUrl.mockResolvedValueOnce('https://gym-a.repset.ie')
+    const db = fakeDb()
+    await sendRegistrationMovedEmail(db, { registrationId: 'r1', moveId: 'mv1' })
+    expect(resolveCustomerBaseUrl).toHaveBeenCalledWith(db, 'L1')
+    const html = sent().htmlBody
+    const m = html.match(/Need a different date\? <a href="(https:\/\/gym-a\.repset\.ie\/event\/entry\/([^"]+))"/)
+    expect(m).toBeTruthy()
+    expect(verifyEntryManageToken(m[2], 'test-secret')).toEqual({ registrationId: 'r1' })
+    // The check-in QR IMAGE stays on the CRM host on purpose: the mail client
+    // fetches it, the customer never reads it (plan W1.L3b "NOT changed").
+    expect(html).toContain('https://crm.test/api/public/events/checkin-qr?t=')
+    expect(html).not.toMatch(/https:\/\/crm\.test\/event\//)
   })
   it('operator copy can carry it with {{manage_url}}', async () => {
     const race = { ...RACE, moved_email_intro: 'Wrong date again? {{manage_url}}' }

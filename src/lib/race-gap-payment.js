@@ -26,7 +26,7 @@ import {
 } from './event-hosts'
 import { syncOrderFromRacePayment } from './orders'
 import { emitEvent, EVENT_TYPES } from './contact-events'
-import { getAppUrl } from './app-url'
+import { resolveCustomerBaseUrl } from './tenant-host'
 import { entryLeadEmail, entryLeadName, GAP_PAYMENT_KIND } from './registration-entry'
 import { logError, logWarn } from './log'
 import { recordErrorEvent } from './error-events'
@@ -106,6 +106,10 @@ export async function createGapPayment({ db, move = null, registration, race, re
     if (move.gap_settled_at) return { ok: false, error: 'already_settled' }
   }
   const amount = pendingMove ? Number(amountCents) : Number(move.price_gap_cents)
+  // W1.L3b — every /event-pay/ link below (fresh, reused, or the concurrent
+  // winner's) is minted on the EVENT LOCATION's tenant host, resolved once;
+  // the resolver floors to the CRM host and never throws past it.
+  const baseUrl = await resolveCustomerBaseUrl(db, race?.location_id || null)
 
   const { data: rows, error: readErr } = await db
     .from('race_payments')
@@ -139,7 +143,7 @@ export async function createGapPayment({ db, move = null, registration, race, re
     // settles the move and sends the receipt).
     const live = (await refreshRacePaymentFromProvider(db, pending)) || pending
     if (live.status === 'pending') {
-      return { ok: true, payment: live, checkoutUrl: `${getAppUrl()}/event-pay/${live.id}`, reused: true }
+      return { ok: true, payment: live, checkoutUrl: `${baseUrl}/event-pay/${live.id}`, reused: true }
     }
     if (live.status === 'completed') return { ok: false, error: 'already_settled' }
     // abandoned / failed: mint a fresh link below.
@@ -245,7 +249,7 @@ export async function createGapPayment({ db, move = null, registration, race, re
       logWarn('race-gap-payment', 'lost the race to mint a gap link; reusing the winner, our provider order is unused', {
         provider: providerName, providerRef: created.providerRef, paymentId: winner.id, moveId: move.id,
       })
-      return { ok: true, payment: winner, checkoutUrl: `${getAppUrl()}/event-pay/${winner.id}`, reused: true }
+      return { ok: true, payment: winner, checkoutUrl: `${baseUrl}/event-pay/${winner.id}`, reused: true }
     }
   }
   if (insErr || !row) {
@@ -275,7 +279,7 @@ export async function createGapPayment({ db, move = null, registration, race, re
     logWarn('race-gap-payment', 'orders/events sync (gap created) failed', { err: e, paymentId: row.id })
   }
 
-  return { ok: true, payment: row, checkoutUrl: `${getAppUrl()}/event-pay/${row.id}`, reused: false }
+  return { ok: true, payment: row, checkoutUrl: `${baseUrl}/event-pay/${row.id}`, reused: false }
 }
 
 /**

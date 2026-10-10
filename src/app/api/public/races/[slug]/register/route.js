@@ -29,7 +29,7 @@ import { validateBody } from '@/lib/validate'
 import { validateTeamRoster, computeTeamPricing } from '@/lib/member-validation'
 import { createRacePayment } from '@/lib/race-payments'
 import { sendRaceConfirmations } from '@/lib/race-confirmations'
-import { getAppUrl } from '@/lib/app-url'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
 import { triggerSequencesForRaceRegistered } from '@/lib/sequences'
 import { logWarn } from '@/lib/log'
@@ -376,8 +376,11 @@ export async function POST(request, props) {
   // ─── kick off the payment (or mark paid for free entry) ──────────
   let paymentResult
   try {
-    const baseUrl = getAppUrl()
-    const returnUrl = `${baseUrl}/race/${race.slug}/confirmed?registration=${registration.id}`
+    // W1.L3b — the checkout returns to the EVENT LOCATION's tenant host, on
+    // the canonical /event/ path: /race/ is only a next.config alias on the
+    // CRM host and is not served on a tenant host.
+    const baseUrl = await resolveCustomerBaseUrl(db, race.location_id)
+    const returnUrl = `${baseUrl}/event/${race.slug}/confirmed?registration=${registration.id}`
     paymentResult = await createRacePayment({
       db,
       race,

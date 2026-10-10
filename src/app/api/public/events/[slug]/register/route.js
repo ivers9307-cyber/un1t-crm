@@ -37,7 +37,7 @@ import { validateTeamRoster, computeTeamPricing } from '@/lib/member-validation'
 import { normalizeCode, computeDiscountCents, promoCodeError } from '@/lib/promo-codes'
 import { createRacePayment, refreshRacePaymentFromProvider } from '@/lib/race-payments'
 import { sendRaceConfirmations } from '@/lib/race-confirmations'
-import { getAppUrl } from '@/lib/app-url'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
 import { writeContactTags } from '@/lib/contact-tags'
 import { triggerSequencesForRaceRegistered } from '@/lib/sequences'
@@ -689,7 +689,9 @@ export async function POST(request, props) {
   // ─── kick off the payment (or mark paid for free entry) ──────────
   let paymentResult
   try {
-    const baseUrl = getAppUrl()
+    // W1.L3b — the checkout returns to the EVENT LOCATION's tenant host
+    // (resolveCustomerBaseUrl floors to the CRM host, never throws past it).
+    const baseUrl = await resolveCustomerBaseUrl(db, race.location_id)
     const returnUrl = `${baseUrl}/event/${race.slug}/confirmed?registration=${registration.id}`
     // Stripe-hosted checkout needs a cancel target (buyer backs out); Revolut
     // ignores it. Send them back to the event page.

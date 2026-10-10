@@ -58,7 +58,9 @@ describe('shapeEventsForAgent', () => {
     expect(out[0].kind).toBe('race')
     expect(out[0].date).toMatch(/Sat 20 Jun/)
     expect(out[0].price).toBe('Free')
-    expect(out[0].signup_url).toBe('https://crm.example.com/race/summer-hyrox')
+    // W1.L3b — the CANONICAL /event/ path: /race/ is only a next.config alias
+    // on the CRM host and is not served on a tenant host.
+    expect(out[0].signup_url).toBe('https://crm.example.com/event/summer-hyrox')
     // CAPACITY-SECRECY.1 — full/limited booleans only, never a count.
     expect(out[0].waves).toEqual([
       { wave_id: 'w1', time: '09:00', label: 'Wave 1' },

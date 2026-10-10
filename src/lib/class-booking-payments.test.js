@@ -3,6 +3,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 const createPayment = vi.fn(async () => ({ providerRef: 'ord_1', checkoutToken: 'tok', checkoutUrl: 'https://pay/x', state: 'pending', amountCents: 2900 }))
 vi.mock('./payments', () => ({ paymentsFor: () => ({ createPayment }) }))
 vi.mock('./app-url', () => ({ getAppUrl: () => 'https://crm.test' }))
+// W1.L3b — the /class-pay/ return lands on the booking location's tenant host.
+const resolveCustomerBaseUrl = vi.fn(async () => 'https://crm.test')
+vi.mock('./tenant-host', () => ({ resolveCustomerBaseUrl: (...a) => resolveCustomerBaseUrl(...a) }))
 
 import { createClassBookingPayment, markClassBookingPaymentStatus } from './class-booking-payments'
 
@@ -19,9 +22,16 @@ function makeDb(updates) {
 const location = { id: 'loc1', settings: { payments: { provider: 'revolut' } } }
 const request = { id: 'req1', location_id: 'loc1', customer_email: 'a@b.com', customer_name: 'A B', class_name: 'HIIT' }
 
-beforeEach(() => { createPayment.mockClear() })
+beforeEach(() => { createPayment.mockClear(); resolveCustomerBaseUrl.mockClear() })
 
 describe('createClassBookingPayment', () => {
+  it("W1.L3b — the return URL is /class-pay/<id> on the booking location's tenant host", async () => {
+    resolveCustomerBaseUrl.mockResolvedValueOnce('https://gym-a.repset.ie')
+    const db = makeDb([])
+    await createClassBookingPayment({ db, request, location, amountCents: 2900, currency: 'EUR' })
+    expect(resolveCustomerBaseUrl).toHaveBeenCalledWith(db, 'loc1')
+    expect(createPayment).toHaveBeenCalledWith(expect.objectContaining({ returnUrl: 'https://gym-a.repset.ie/class-pay/req1' }))
+  })
   it('charges the server amount and persists provider refs on the row', async () => {
     const updates = []
     const res = await createClassBookingPayment({ db: makeDb(updates), request, location, amountCents: 2900, currency: 'EUR' })

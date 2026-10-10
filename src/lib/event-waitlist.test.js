@@ -13,6 +13,9 @@ vi.mock('./event-comms-location', () => ({
   pickAudienceVenueName: ({ venueName, eventLocation }) => venueName || eventLocation?.name || '',
 }))
 vi.mock('./app-url', () => ({ getAppUrl: () => 'https://crm.test' }))
+// W1.L3b — the claim link's host is the event location's tenant host; defaults
+// to the CRM host so the pre-existing 'https://crm.test' assertions hold.
+vi.mock('./tenant-host', () => ({ resolveCustomerBaseUrl: vi.fn(async () => 'https://crm.test') }))
 vi.mock('./automations/booking-whatsapp-confirm', () => ({ maybeSendBookingWhatsappConfirm: vi.fn(async () => ({ sent: true })) }))
 vi.mock('./race-contact-linking', () => ({ findOrCreateRaceContact: vi.fn(async () => 'c1') }))
 vi.mock('./host-events', () => ({ resolveMasterLocationId: vi.fn(async () => 'L-master') }))
@@ -27,6 +30,7 @@ const { applyFormMarketingConsent } = await import('./marketing-consent')
 const { logError, logWarn } = await import('./log')
 const { resolveEventCommsLocation } = await import('./event-comms-location')
 const { WhatsAppNumberMissingError } = await import('./whatsapp-number-missing')
+const { resolveCustomerBaseUrl } = await import('./tenant-host')
 const {
   eventHasRoom, isOfferDue, registrationWindowOpen, joinWaitlist, runWaitlistOffers,
   claimWaitlistOnRegistration, claimWaitlistByEmail, sendWaitlistOffer, buildWaitlistJoinedEmail, WAITLIST_OFFER_TEMPLATE,
@@ -189,6 +193,21 @@ describe('joinWaitlist', () => {
 })
 
 describe('sendWaitlistOffer', () => {
+  // W1.L3b — the claim link (email + the WhatsApp body param) is minted on the
+  // EVENT LOCATION's tenant host, so a second gym's waitlist never sees crm.repset.ie.
+  it("W1.L3b — the claim link in both legs is on the event location's tenant host", async () => {
+    resolveCustomerBaseUrl.mockResolvedValueOnce('https://gym-a.repset.ie')
+    const db = offerDb()
+    const res = await sendWaitlistOffer(db, { race: RACE, row: ROW, now: NOW })
+    expect(res).toEqual({ email: 'sent', whatsapp: 'sent' })
+    expect(resolveCustomerBaseUrl).toHaveBeenCalledWith(db, 'L1')
+    const mail = sendTransactionalEmail.mock.calls[0][0]
+    const link = mail.htmlBody.match(/href="(https:\/\/gym-a\.repset\.ie\/event\/hatch-oct18-1100\?wl=[^"]+)"/)[1]
+    const token = decodeURIComponent(new URL(link.replaceAll('&amp;', '&')).searchParams.get('wl'))
+    expect(verifyWaitlistClaimToken(token, 'test-secret', { now: NOW })).toEqual({ waitlistId: 'wl1' })
+    expect(mail.htmlBody).not.toContain('crm.test')
+    expect(maybeSendBookingWhatsappConfirm.mock.calls[0][0].bodyParams[2]).toMatch(/^https:\/\/gym-a\.repset\.ie\/event\/hatch-oct18-1100\?wl=/)
+  })
   const offerDb = (contact = { id: 'c1', first_name: 'Ann', name: 'Ann Example', wa_phone: null, wa_status: null, contact_preferences: null }, numbers = [{ id: 'n1' }]) =>
     fakeDb((q) => {
       if (q.table === 'contacts') return { data: contact, error: null }
