@@ -45,6 +45,7 @@ import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { glofoxCredentialsForLocation, fetchMemberResult, glofoxHttpStats, glofoxHttpStatsSince } from '@/lib/glofox'
 import { GLOFOX_SETTINGS_UNREADABLE_MESSAGE } from '@/lib/glofox-settings-read'
 import { applyMemberSync } from '@/lib/glofox-sync'
+import { locationsWithSource, skippedSummary } from '@/lib/membership/locations-for-source'
 import { logWarn, logError } from '@/lib/log'
 import {
   DETAIL_PER_TICK, DETAIL_SWEEP_DAYS, DETAIL_RETRY_HOURS,
@@ -79,18 +80,13 @@ export async function GET(request) {
   const httpBefore = glofoxHttpStats()
   const db = createServerClient()
 
-  const { data: locations, error: locErr } = await db
-    .from('locations')
-    .select('id, name, settings')
-    .filter('settings', 'cs', JSON.stringify({ glofox: {} }))
+  // W1.M3b — discovery through the membership seam (see glofox-sync). A
+  // failed seam read is a 500 with no heartbeat.
+  const { eligible, skipped, error: locErr } = await locationsWithSource(db, 'glofox', { module: 'glofox-detail-backfill' })
   if (locErr) {
     console.warn(`[cron][glofox-detail-backfill] list locations failed: ${locErr.message}`)
     return NextResponse.json({ success: false, error: locErr.message }, { status: 500 })
   }
-  const eligible = (locations || []).filter(loc => {
-    const cfg = loc.settings?.glofox || {}
-    return cfg.branch_id && cfg.api_key && cfg.api_token
-  })
 
   const perLocation = []
   let budgetExhausted = false
@@ -104,18 +100,28 @@ export async function GET(request) {
   // DETAILBACKFILL.1 — a location whose candidate read (or credentials)
   // failed did no work. Stamping would report a healthy quiet run; leave the
   // heartbeat to go stale (it pages after 20 minutes) and say why.
+  //
+  // W1.M3b — a location the seam reported as 'unknown' (its credentials read
+  // failed) did no work either, exactly like a failed credentials read inside
+  // backfillLocation used to: it withholds the stamp the same way.
   const failed = perLocation.filter((r) => r.status === 'failed')
-  if (failed.length > 0) {
+  const unknown = skipped.filter((s) => s.state === 'unknown')
+  if (failed.length > 0 || unknown.length > 0) {
     logError('glofox-detail-backfill', 'location run failed; heartbeat not stamped', {
-      failed: failed.map((r) => ({ locationId: r.location_id, error: r.first_error })),
+      failed: [
+        ...failed.map((r) => ({ locationId: r.location_id, error: r.first_error })),
+        ...unknown.map((s) => ({ locationId: s.id, error: s.readError || 'membership source state unknown' })),
+      ],
     })
   } else {
-    await stampHeartbeat('glofox-detail-backfill', heartbeatOutcome(perLocation, glofoxHttpStatsSince(httpBefore)))
+    await stampHeartbeat('glofox-detail-backfill', heartbeatOutcome(perLocation, glofoxHttpStatsSince(httpBefore), skipped))
   }
 
   return NextResponse.json({
-    success: failed.length === 0,
+    success: failed.length === 0 && unknown.length === 0,
     locations_processed: perLocation.length,
+    locations_skipped: skipped.length,
+    ...skippedSummary(skipped),
     budget_exhausted: budgetExhausted,
     per_location: perLocation,
   })
@@ -123,10 +129,12 @@ export async function GET(request) {
 
 // The heartbeat's last_outcome: enough to verify the cursor from SQL alone.
 // CREDITSREAD.1 — plus syncs that could not read credits, and Glofox traffic.
-function heartbeatOutcome(perLocation, glofoxHttp) {
+function heartbeatOutcome(perLocation, glofoxHttp, skipped = []) {
   const sum = (pick) => perLocation.reduce((n, r) => n + (pick(r) ?? 0), 0)
   const dues = perLocation.map((r) => r.remaining_due)
   return {
+    // W1.M3b — locations on the source the seam would not hand over this tick.
+    ...skippedSummary(skipped),
     candidates_seen: sum((r) => r.candidates_seen),
     remaining_due: dues.some((d) => d == null) ? null : dues.reduce((a, b) => a + b, 0),
     member_refused: sum((r) => r.summary.member_refused),
