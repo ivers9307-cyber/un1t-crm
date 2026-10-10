@@ -25,6 +25,7 @@ const SITES = [
   'src/lib/hr-post-class-email.js',
   'src/app/api/campaigns/[id]/send-test/route.js',
   'src/app/api/host/emails/[id]/send-test/route.js',
+  'src/app/api/hosts/[id]/invite/route.js', // W1.L3c — host set-password
   'src/lib/postmark.js',          // buildUnsubscribeUrl
   'src/lib/campaign-web-view.js', // buildCampaignViewUrl
   // W1.L3b — events, booking, host and Mia:
@@ -108,6 +109,10 @@ describe('W1.L3a/b — minted customer links land on paths the tenant-domain tie
       for (const p of found[f]) expect(admitted(p), `${p} would rewrite to /welcome on a tenant host`).toBe(true)
     })
   }
+
+  it('W1.L3c — the host invite mints /host/set-password on the tenant host', () => {
+    expect(found['src/app/api/hosts/[id]/invite/route.js']).toEqual(['/host/set-password'])
+  })
 
   it('no site builds a customer link on getAppUrl() any more, and every non-helper resolves the tenant host', () => {
     for (const f of SITES) {
