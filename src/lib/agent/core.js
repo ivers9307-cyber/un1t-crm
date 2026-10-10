@@ -7,8 +7,10 @@
 import { HANDOFF_PREFIX, OPTIONS_PREFIX, SKIP_PREFIX } from './prompt'
 
 export const AGENT_MESSAGE_SOURCE = 'agent'
-export const DEFAULT_HOLDING_MESSAGE =
-  "Thanks for your message! One of the UN1T team will get back to you shortly."
+// W1.S3 — the holding message is a function of the location's brand
+// (src/lib/agent/default-copy.js); auto-reply.js resolves the brand once per
+// turn (getLocationBranding) and passes it down to every hand-off.
+export { defaultHoldingMessage } from './default-copy'
 
 // MIA-CREDITS.1 — sent (verbatim, operator-editable via
 // settings.no_credits_handoff_text) when a booking pre-flight finds no

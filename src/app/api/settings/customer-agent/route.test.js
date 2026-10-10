@@ -6,6 +6,8 @@ vi.mock('next/headers', () => ({
 }))
 vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), getCurrentUser: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+// W1.S3 — the GET carries the location's resolved brand for the editor's placeholders.
+vi.mock('@/lib/location-branding', () => ({ getLocationBranding: vi.fn(async () => ({ companyName: 'Gym A', shortName: 'GA', locationName: 'Gym A North' })) }))
 
 import { PUT, GET } from './route'
 import { getCurrentUser } from '@/lib/auth'
@@ -149,6 +151,8 @@ describe('GET /api/settings/customer-agent — cancellation form', () => {
     expect(res.status).toBe(200)
     expect(body.settings.glofox_auto_cancel).toBe(true)
     expect(body.settings.cancellation_form).toEqual({ notice_days: 14 })
+    // W1.S3 — the editor's placeholders read the resolved brand off the GET.
+    expect(body.brand).toEqual({ companyName: 'Gym A', shortName: 'GA' })
   })
 })
 

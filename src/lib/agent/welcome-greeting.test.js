@@ -5,13 +5,22 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('@/lib/whatsapp', () => ({
   sendTextMessage: vi.fn(async () => ({ messageId: 'wamid.OUT1', status: 'sent' })),
 }))
+// W1.S3 — the code-default greeting is built from the location's resolved
+// brand; the resolver is mocked so the fake db below sees only its two tables.
+vi.mock('@/lib/location-branding', () => ({
+  getLocationBranding: vi.fn(async () => ({ companyName: 'Gym A', shortName: 'Gym A', locationName: 'Gym A North' })),
+}))
 
 import { sendTextMessage } from '@/lib/whatsapp'
+import { getLocationBranding } from '@/lib/location-branding'
 import {
   shouldSendWelcome,
   maybeSendWelcomeGreeting,
-  DEFAULT_WELCOME_GREETING,
+  defaultWelcomeGreeting,
 } from './welcome-greeting.js'
+
+// What the code default renders for the mocked brand and an unset agent name.
+const DEFAULT_WELCOME_GREETING = defaultWelcomeGreeting({ agentName: null, brand: 'Gym A' })
 
 const PHONE = '353871234567'
 // Fixed clock — 13:00 Dublin (summer), safely inside any all-day quiet window
@@ -116,6 +125,28 @@ describe('maybeSendWelcomeGreeting', () => {
   it('the default greeting carries no dash and no emoji', () => {
     expect(DEFAULT_WELCOME_GREETING).not.toMatch(/[—–]/)
     expect(DEFAULT_WELCOME_GREETING).not.toMatch(/\p{Extended_Pictographic}/u)
+  })
+
+  // W1.S3 — the default names the studio's brand and the configured agent.
+  it('the default greeting carries the resolved brand and the agent_name, never a literal gym', async () => {
+    const db = fakeDb({ customerAgent: { enabled: true, agent_name: 'Ava' } })
+    await maybeSendWelcomeGreeting(db, CTX)
+    expect(getLocationBranding).toHaveBeenCalledWith(db, 'loc1')
+    const sent = sendTextMessage.mock.calls[0][1]
+    expect(sent).toBe("Hi, I'm Ava, the studio's assistant at Gym A. Ask me anything, or tell me if you'd like to book a free class or a consultation.")
+    expect(sent).not.toMatch(/UN1T/)
+  })
+
+  it('an operator-set greeting never resolves the brand (no query spent on a text that is not sent)', async () => {
+    const db = fakeDb({ customerAgent: { enabled: true, welcome_greeting: 'Hello there.' } })
+    await maybeSendWelcomeGreeting(db, CTX)
+    expect(getLocationBranding).not.toHaveBeenCalled()
+    expect(sendTextMessage).toHaveBeenCalledWith(PHONE, 'Hello there.', { locationId: 'loc1', replyInConversation: 'conv1' })
+  })
+
+  it('with no agent name the greeting still reads naturally', () => {
+    expect(defaultWelcomeGreeting({ brand: 'Gym A' })).toBe("Hi, I'm the studio's assistant at Gym A. Ask me anything, or tell me if you'd like to book a free class or a consultation.")
+    expect(defaultWelcomeGreeting({ agentName: 'Mia' })).toBe("Hi, I'm Mia, the studio's assistant. Ask me anything, or tell me if you'd like to book a free class or a consultation.")
   })
 
   it('scrubs an em dash out of an operator-set greeting before sending', async () => {

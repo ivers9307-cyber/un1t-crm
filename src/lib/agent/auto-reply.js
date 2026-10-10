@@ -35,7 +35,7 @@ import {
   isVerificationFresh,
   resolveAgentEffort,
   AGENT_MESSAGE_SOURCE,
-  DEFAULT_HOLDING_MESSAGE,
+  defaultHoldingMessage,
   DEFAULT_NO_CREDITS_HANDOFF_TEXT,
   DEFAULT_ACCOUNT_CONFLICT_HANDOFF_TEXT,
   resolveAutoVerify,
@@ -528,7 +528,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     // customer + flag a human rather than leave them hanging. Doesn't
     // disable the agent; a follow-up text re-engages it.
     if (decision.onDuty && decision.reason === 'unsupported_type') {
-      return await softHandoff(db, adapter, { conversationId, locationId, recipient, contactId, connection, settings, lastReplyAt: conv?.agent_last_reply_at })
+      return await softHandoff(db, adapter, { conversationId, locationId, recipient, contactId, connection, settings, brand: branding.companyName, lastReplyAt: conv?.agent_last_reply_at })
     }
     return { handled: false, reason: decision.reason }
   }
@@ -541,7 +541,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
   const aiCap = await getAiCapStatus({ locationId })
   if (aiCap.capped) {
     return await softHandoff(db, adapter, {
-      conversationId, locationId, recipient, contactId, connection, settings,
+      conversationId, locationId, recipient, contactId, connection, settings, brand: branding.companyName,
       lastReplyAt: conv?.agent_last_reply_at,
       reason: 'ai_cap',
       notify: {
@@ -565,7 +565,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     const walletSpend = await checkSpend(db, locationId, 'ai_message', 'ai')
     if (!walletSpend.allow) {
       return await softHandoff(db, adapter, {
-        conversationId, locationId, recipient, contactId, connection, settings,
+        conversationId, locationId, recipient, contactId, connection, settings, brand: branding.companyName,
         lastReplyAt: conv?.agent_last_reply_at,
         reason: 'wallet_empty',
         notify: {
@@ -641,7 +641,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     if (convReplies >= limits.convHour) {
       // Abnormal volume to one person in an hour — loop or abuse. Hand off
       // to a human rather than keep burning the model.
-      await handoff(db, adapter, { conversationId, locationId, recipient, contactId, connection, reason: 'rate_limited: hourly agent-reply cap hit', settings })
+      await handoff(db, adapter, { conversationId, locationId, recipient, contactId, connection, reason: 'rate_limited: hourly agent-reply cap hit', settings, brand: branding.companyName })
       return { handled: true, action: 'handoff', reason: 'rate_limited' }
     }
 
@@ -891,7 +891,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
           // message bursts to ONE holding message). The agent stays armed,
           // so it resumes as soon as the API recovers.
           return await softHandoff(db, adapter, {
-            conversationId, locationId, recipient, contactId, connection, settings,
+            conversationId, locationId, recipient, contactId, connection, settings, brand: branding.companyName,
             lastReplyAt: conv?.agent_last_reply_at,
             reason: 'model_error',
             notify: modelFailureNotify(adapter),
@@ -1036,7 +1036,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       // (debounced) + manager push, agent stays armed for when the model
       // comes back.
       return await softHandoff(db, adapter, {
-        conversationId, locationId, recipient, contactId, connection, settings,
+        conversationId, locationId, recipient, contactId, connection, settings, brand: branding.companyName,
         lastReplyAt: conv?.agent_last_reply_at,
         reason: 'model_exception',
         notify: modelFailureNotify(adapter),
@@ -1060,7 +1060,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
         conversationId,
       })
       return await softHandoff(db, adapter, {
-        conversationId, locationId, recipient, contactId, connection, settings,
+        conversationId, locationId, recipient, contactId, connection, settings, brand: branding.companyName,
         lastReplyAt: conv?.agent_last_reply_at,
         reason: stopFailure,
         notify: abandonedTurnNotify(adapter, stopFailure),
@@ -1095,7 +1095,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     // tool) carries the booking intent for the one-tap grant-then-book.
     if (noCreditsHandoff) {
       await handoff(db, adapter, {
-        ...common, reason: 'no_credits', settings,
+        ...common, reason: 'no_credits', settings, brand: branding.companyName,
         holdingOverride: (settings?.no_credits_handoff_text || '').trim() || DEFAULT_NO_CREDITS_HANDOFF_TEXT,
       })
       return { handled: true, action: 'handoff', reason: 'no_credits' }
@@ -1110,7 +1110,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     // thread while they are still warm.
     if (accountConflictHandoff) {
       await handoff(db, adapter, {
-        ...common, reason: 'account_conflict', settings,
+        ...common, reason: 'account_conflict', settings, brand: branding.companyName,
         holdingOverride: (settings?.account_conflict_handoff_text || '').trim() || DEFAULT_ACCOUNT_CONFLICT_HANDOFF_TEXT,
       })
       return { handled: true, action: 'handoff', reason: 'account_conflict' }
@@ -1122,7 +1122,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
           .update({ agent_verify_attempts: 0 })
           .eq('id', conversationId)
       } catch { /* handoff still proceeds; the next re-arm resets anyway */ }
-      await handoff(db, adapter, { ...common, reason: 'verify_failed', settings })
+      await handoff(db, adapter, { ...common, reason: 'verify_failed', settings, brand: branding.companyName })
       return { handled: true, action: 'handoff', reason: 'verify_failed' }
     }
 
@@ -1138,7 +1138,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     }
 
     if (parsed.action === 'handoff') {
-      await handoff(db, adapter, { ...common, reason: parsed.reason, settings })
+      await handoff(db, adapter, { ...common, reason: parsed.reason, settings, brand: branding.companyName })
       return { handled: true, action: 'handoff', reason: parsed.reason }
     }
 
@@ -1243,11 +1243,12 @@ async function recordAgentMessage(db, adapter, row) {
 }
 
 // Escalate: holding message, stop the agent on this thread, notify staff.
-async function handoff(db, adapter, { conversationId, locationId, recipient, contactId, connection, reason, settings, holdingOverride }) {
+async function handoff(db, adapter, { conversationId, locationId, recipient, contactId, connection, reason, settings, brand, holdingOverride }) {
   // holdingOverride: a reason-specific script (e.g. the no_credits
   // escalation wording) replaces the generic holding message for this
   // handoff only.
-  const holding = (holdingOverride || '').trim() || (settings?.holding_message || '').trim() || DEFAULT_HOLDING_MESSAGE
+  // W1.S3 — `brand` is the turn's resolved companyName (never re-queried here).
+  const holding = (holdingOverride || '').trim() || (settings?.holding_message || '').trim() || defaultHoldingMessage(brand)
   const now = new Date().toISOString()
 
   await db.from(adapter.conversationsTable).update({
@@ -1389,7 +1390,7 @@ async function claimSoftHandoff(db, adapter, conversationId) {
 // API recovering) re-engages it. Debounced via agent_last_reply_at so a
 // burst of photos / webhook retries during an outage sends ONE ack, not a
 // string of them. `notify` overrides the push copy per cause.
-async function softHandoff(db, adapter, { conversationId, locationId, recipient, contactId, connection, settings, lastReplyAt, reason = 'unsupported_type', notify = null }) {
+async function softHandoff(db, adapter, { conversationId, locationId, recipient, contactId, connection, settings, brand, lastReplyAt, reason = 'unsupported_type', notify = null }) {
   if (lastReplyAt && Date.now() - new Date(lastReplyAt).getTime() < SOFT_NOTIFY_GAP_MS) {
     return { handled: false, reason: 'soft_handoff_debounced' }
   }
@@ -1401,7 +1402,7 @@ async function softHandoff(db, adapter, { conversationId, locationId, recipient,
   if (!(await claimSoftHandoff(db, adapter, conversationId))) {
     return { handled: false, reason: 'soft_handoff_debounced' }
   }
-  const holding = (settings?.holding_message || '').trim() || DEFAULT_HOLDING_MESSAGE
+  const holding = (settings?.holding_message || '').trim() || defaultHoldingMessage(brand)
   const now = new Date().toISOString()
   try {
     const r = await adapter.send(recipient, holding, { locationId, connection, settings, conversationId })

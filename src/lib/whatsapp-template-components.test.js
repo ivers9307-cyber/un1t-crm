@@ -125,9 +125,19 @@ describe('resolveTemplateVariableValues — location_name branding', () => {
     expect(vals[1]).toBe('CCF Autos')
   })
 
-  it('falls back to UN1T when no companyName is passed', () => {
-    const vals = resolveTemplateVariableValues(tpl, contact, { 1: 'first_name', 2: 'location_name' })
-    expect(vals[1]).toBe('UN1T')
+  // W1.S3 — the brand comes from getLocationBranding at the call site; with
+  // no brand the studio's own label stands in, and nothing names a gym.
+  it('falls back to opts.locationName, then empty, when no companyName is passed', () => {
+    expect(resolveTemplateVariableValues(tpl, contact, { 1: 'first_name', 2: 'location_name' }, { locationName: 'Gym A North' })[1]).toBe('Gym A North')
+    const bare = resolveTemplateVariableValues(tpl, contact, { 1: 'first_name', 2: 'location_name' })
+    expect(bare[1]).toBe('')
+    expect(bare.join(' ')).not.toMatch(/UN1T/)
+  })
+
+  it('offers company_name as the same brand email renders ({{company_name}})', () => {
+    const opts = { companyName: 'Gym A', locationName: 'Gym A North' }
+    expect(resolveTemplateVariableValues(tpl, contact, { 1: 'first_name', 2: 'company_name' }, opts)[1]).toBe('Gym A')
+    expect(resolveTemplateVariableValues(tpl, contact, { 1: 'first_name', 2: 'company_name' }, { locationName: 'Gym A North' })[1]).toBe('Gym A North')
   })
 })
 
