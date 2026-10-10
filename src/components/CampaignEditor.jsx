@@ -39,10 +39,10 @@ export default function CampaignEditor({ campaign, locationId, userId: _userId, 
   const [previewText, setPreviewText] = useState(campaign?.preview_text || '')
   // W1.S2 — the default From NAME is the studio's brand (resolved by the
   // branding route, never spelled); it seeds an empty draft once the brand
-  // lands and is then the operator's to edit. W1.E2 made from_email inert on
-  // the wire (the platform address always sends; the From name still
-  // applies), so the field is no longer shown: the stored value is carried
-  // through the save untouched.
+  // lands and is then the operator's to edit. Requires #1998 (W1.E2), which
+  // makes from_email inert on the wire (the platform address always sends;
+  // the From name still applies), so the field is no longer shown: the
+  // stored value is carried through the save untouched.
   const { companyName: brand } = useLocationBrand(locationId)
   const [fromName, setFromName] = useState(campaign?.from_name || '')
   const fromNameSeeded = useRef(Boolean(campaign?.from_name))

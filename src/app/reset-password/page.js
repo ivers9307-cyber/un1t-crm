@@ -248,7 +248,7 @@ export default function ResetPasswordPage() {
           </button>
         </form>
 
-        <p className="text-center text-xs text-un1t-muted mt-6">{PLATFORM_NAME} CRM</p>
+        <p className="text-center text-xs text-un1t-muted mt-6">{PLATFORM_NAME}</p>
       </div>
     </div>
   )

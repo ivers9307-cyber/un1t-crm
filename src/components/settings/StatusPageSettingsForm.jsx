@@ -143,7 +143,7 @@ export default function StatusPageSettingsForm() {
           type="text"
           value={form.brand}
           onChange={(e) => { setSaved(false); setForm((f) => ({ ...f, brand: e.target.value })) }}
-          placeholder={d.brand || ''}
+          placeholder={d.brand || 'Brand shown on the status page'}
           className="w-full bg-un1t-surface border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-subtle"
         />
       </section>

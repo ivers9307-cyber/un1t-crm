@@ -99,8 +99,8 @@ function AbVariantRow({ label, subject, stats, isWinner }) {
 
 export default function CampaignDetail({ campaign, recipients = [], stats = null, abStats = null, resendChild = null, resendParent = null, locationId, userId: _userId }) {
   // W1.S2 — the From NAME is the operator's or the studio's brand; the
-  // address is the platform's (W1.E2: campaign.from_email never reaches the
-  // wire), so neither surface renders it.
+  // address is the platform's — requires #1998 (W1.E2), after which
+  // campaign.from_email never reaches the wire — so neither surface renders it.
   const { companyName: brand } = useLocationBrand(locationId)
   const router = useRouter()
   const [tab, setTab] = useState('overview')  // overview, recipients, preview
