@@ -41,7 +41,7 @@ export async function createBlockWithArc(db, { input, charter, houseStyle, calle
 // re-running fills only the gaps and leaves the finished slots alone. Returns
 // skipped:true only when every slot for the week already exists.
 // Returns { ok, sessionsCreated, skipped? } | { ok:false, error }.
-export async function expandBlockWeek(db, { block, weekNo, charter, houseStyle, styleExamples, caller, locationLabel = 'UN1T' }) {
+export async function expandBlockWeek(db, { block, weekNo, charter, houseStyle, styleExamples, caller, locationLabel = '' }) {
   const week = (block.arc?.plan || []).find((w) => w.week_no === weekNo)
   if (!week) return { ok: false, error: 'no_arc_week' }
 

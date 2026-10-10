@@ -2,10 +2,15 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getLocationBranding } from '@/lib/location-branding'
 import { productName, pointsUnit } from '@/lib/brand-name'
+import { resolveHostBrand } from '@/lib/host-brand'
+import { PLATFORM_SITE_NAME } from '@/lib/default-site-name'
+import { PLATFORM_FAVICON_URL } from '@/lib/default-favicon'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 
 // GET /api/public/branding — Public endpoint for logo/favicon (no auth needed)
-// Returns branding for the first active location (or specific location_id)
+// Returns branding for a specific location_id, or — anonymous (login screen,
+// reset-password: no location known yet) — for the REQUEST HOST's
+// organisation (W1.L4).
 export async function GET(request) {
   const { searchParams } = new URL(request.url)
   const locationId = searchParams.get('location_id')
@@ -40,15 +45,23 @@ export async function GET(request) {
     })
   }
 
-  // Anonymous visitor (login screen, no location yet) — first configured row.
-  const { data } = await db
-    .from('company_settings')
-    .select('logo_url, favicon_url, company_name')
-    .limit(1)
-    .single()
+  // Anonymous visitor — the host's organisation (W1.L4). Before this it read
+  // ONE company_settings row estate-wide (no order), so every tenant's login
+  // screen wore whichever logo sorted first. A CRM host, an unmapped host or
+  // a resolver failure answers the PLATFORM's name and mark: no gym is in
+  // the picture there, and never another tenant's logo. resolveHostBrand is
+  // the ONE per-host cache the site name and favicon read too, so a login
+  // screen costs no reads of its own inside the window.
+  const b = await resolveHostBrand({ host: request.headers.get('host'), db })
+  if (b.orgId) {
+    return NextResponse.json({
+      success: true,
+      data: { logo_url: b.logoUrl, favicon_url: b.faviconUrl, company_name: b.companyName || null },
+    })
+  }
 
   return NextResponse.json({
     success: true,
-    data: data || { logo_url: null, favicon_url: null, company_name: null },
+    data: { logo_url: null, favicon_url: PLATFORM_FAVICON_URL, company_name: PLATFORM_SITE_NAME },
   })
 }

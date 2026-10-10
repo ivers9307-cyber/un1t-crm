@@ -23,5 +23,6 @@ describe('waBodyVariables', () => {
   it('exposes the mappable contact fields', () => {
     expect(WA_VARIABLE_FIELDS).toContain('first_name')
     expect(WA_VARIABLE_FIELDS).toContain('location_name')
+    expect(WA_VARIABLE_FIELDS).toContain('company_name') // W1.S3 — the brand, as email offers it
   })
 })

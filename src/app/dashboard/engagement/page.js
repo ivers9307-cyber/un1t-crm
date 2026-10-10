@@ -10,6 +10,8 @@ import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { loadEngagementChurn } from '@/lib/engagement-analytics-data'
 import EngagementReport from '@/components/dashboard/EngagementReport'
+import { membershipStateForPage, membershipSettingsHref, canManageMembershipSource } from '@/lib/membership/state-for-page'
+import MembershipSourceGate from '@/components/MembershipSourceGate'
 
 export const dynamic = 'force-dynamic'
 
@@ -19,11 +21,17 @@ export default async function DashboardEngagementPage() {
   if (!hasPermission(user, 'engagement_analytics')) redirect('/dashboard')
 
   const locId = user.activeLocation?.id
+  const db = createServerClient()
+  // W1.M3a — the cross-tab is the churn radar's member base against its
+  // at-risk verdict, so without a membership source there are no members
+  // to tab. Gate it (the report query does not run) instead of "No
+  // engagement data yet".
+  const membership = await membershipStateForPage(db, locId)
   let report = null
-  if (locId) {
+  if (membership.state === 'configured') {
     // Best-effort — a query failure must not blank the dashboard chrome.
     try {
-      report = await loadEngagementChurn(createServerClient(), locId)
+      report = await loadEngagementChurn(db, locId)
     } catch {
       report = null
     }
@@ -36,9 +44,16 @@ export default async function DashboardEngagementPage() {
         attendance — the data behind &ldquo;members with more friends churn less&rdquo; — and tracks
         app + social adoption.
       </p>
-      {report
-        ? <EngagementReport report={report} />
-        : <p className="text-sm text-un1t-muted">No engagement data yet for this location.</p>}
+      <MembershipSourceGate
+        state={membership}
+        capability="memberships"
+        settingsHref={membershipSettingsHref(locId)}
+        canManage={canManageMembershipSource(user, locId)}
+      >
+        {report
+          ? <EngagementReport report={report} />
+          : <p className="text-sm text-un1t-muted">No engagement data yet for this location.</p>}
+      </MembershipSourceGate>
     </>
   )
 }

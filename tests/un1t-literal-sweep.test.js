@@ -32,7 +32,28 @@ const SWEPT = [
   'src/lib/customer-notifications.js',
   'src/lib/goals.js',
   'src/lib/hr-analytics.js',
-  // ── W1.S5: mobile/ screens (Appendix B, 32 bundled rows + login) ────────
+  // ── W1.S3: Mia, WhatsApp merge, assistant, hyrox ─────────────────────────
+  'src/lib/agent/core.js',
+  'src/lib/agent/default-copy.js',
+  'src/lib/agent/welcome-greeting.js',
+  'src/lib/agent/prompt.js',
+  'src/lib/agent/approval-suggest.js',
+  'src/lib/agent/followups.js',
+  'src/lib/agent/auto-reply.js',
+  'src/lib/churn-winback.js',
+  'src/lib/whatsapp.js',
+  'src/lib/sequences/steps.js',
+  'src/lib/communications/compose.js',
+  'src/components/WABroadcastEditor.jsx',
+  'src/app/api/settings/customer-agent/route.js',
+  'src/app/settings/customer-agent/CustomerAgentClient.jsx',
+  'src/lib/assistant-prompt.js',
+  'src/lib/hyrox/prompt.js',
+  'src/lib/hyrox/expand-runner.js',
+  'src/lib/hyrox/generate-block.js',
+  'src/app/api/hyrox/blocks/[id]/expand/route.js',
+  'src/app/api/hyrox/sessions/[id]/regenerate/route.js',
+  // ── W1.S5: mobile/ screens (Appendix B, 34 bundled rows + login) ────────
   'mobile/app/(member)/(tabs)/home.jsx',
   'mobile/app/(member)/(tabs)/progress.jsx',
   'mobile/app/(member)/(tabs)/sessions.jsx',
@@ -61,7 +82,7 @@ const LOWERCASE_SWEPT = {
   'mobile/app/(staff)/(auth)/login.jsx': [/un1t\.ie/, /un1tdublin\.com/],
 }
 
-// file → exact literals the appendix marks `keep`. None in W1.S4.
+// file → exact literals the appendix marks `keep`. None in W1.S4, W1.S3 or W1.S5.
 const KEEP = {}
 
 describe('UN1T literal sweep (W1.S*)', () => {
