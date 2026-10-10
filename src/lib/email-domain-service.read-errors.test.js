@@ -14,6 +14,8 @@ vi.mock('@/lib/postmark-account', () => ({
   verifyTenantDomainDkim: vi.fn(),
   verifyTenantReturnPath: vi.fn(),
   domainIsFullyVerified: vi.fn(() => false),
+  ensureTenantServerStreams: vi.fn(),
+  ensureTenantServerWebhooks: vi.fn(),
 }))
 
 import { loadEmailDomainRow, provisionEmailDomain, verifyEmailDomain } from './email-domain-service.js'

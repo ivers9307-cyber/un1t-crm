@@ -1,6 +1,8 @@
 // INTEG-B3 — tenant email sending domain (server-per-tenant).
 //
 //   GET  /api/settings/email-domain   — REDACTED status for the caller's org
+//                                        (incl. webhooks_registered: the server's
+//                                        broadcast stream + webhooks exist, W1.E3)
 //   POST /api/settings/email-domain   — initiate: create the org's Postmark
 //                                        server + sending domain, return the
 //                                        DNS records to add (NEVER the token)
