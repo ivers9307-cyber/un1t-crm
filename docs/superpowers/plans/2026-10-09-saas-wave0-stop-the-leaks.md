@@ -17,6 +17,29 @@
 - Live board location-keyed routes → remove, after the four kiosks are moved to the token URL.
 - Delivery → the executor opens, self-reviews, gates on CI and merges each PR, and applies migrations via the Supabase MCP (project `iyvtbjjxdggiadzwwvdj`). A decision card only for a visible behaviour change not covered above.
 
+## Status — Wave 0 delivered 9–10 Oct 2026
+
+All fourteen tasks shipped as planned (PR titles verified against GitHub on 10 Oct). The plan text below is kept as written; migration numbers in the task bodies were provisional and landed as noted here. Two items stay with Richard: the n8n `unitk_` key swap (then unset `CRM_API_KEY*`) and the Strava push-subscription recreate.
+
+| Task | PR | State | Note |
+|---|---|---|---|
+| W0.1 legacy key | #1957 | Merged | `CRM_API_KEY_ORG_ID` set; Richard to mint the n8n `unitk_` key then unset both envs |
+| W0.2 WA + mail inbound org match | #1956 | Merged | also the coexistence ingest |
+| W0.3 shared events | #1962 | Merged | |
+| W0.4 offers pinned | #1958 | Merged | until Wave 2 |
+| W0.5 policies per org | #1960 | Merged | landed as **mig 713** (plan said 710); 3 rows → UN1T Group |
+| W0.6 contacts per-org uniqueness | #1961 | Merged | landed as **mig 712** (plan said 711); `nulls not distinct` |
+| W0.7 coverage report per org | #1964 | Merged | env `RECEIPT_COVERAGE_REPORT_TO` retired |
+| W0.8 notifications page | #1963 | Merged | |
+| W0.9a token challenges + heartbeat | #1969 | Merged | |
+| W0.9b kiosks on token URL | un1t-pi #2 | Merged | per-kiosk `tv-token-<device>` secret, `pi kiosk-refresh`; stillorgan-tv1 cut over (heartbeat advancing 10 Oct 02:11 UTC), stillorgan-tv2 offline (SD card, `pi prepare`), hatch-tv1/tv2 not provisioned |
+| W0.9c remove location-keyed routes | #1973 | Open | removal shipped ahead of the hatch kiosks (decision: they are not yet provisioned, so nothing to break); staff `/live/[locationId]` lost its "TV display" button, restore later |
+| W0.10 Strava | #1970 | Merged | Richard to recreate the push subscription on `/api/webhooks/strava/<token>` |
+| W0.11 templates NULL guard | #1965 | Merged | |
+| W0.12 automation device ids | #1966 | Merged | |
+| W0.13 WA alert fan-out | #1967 | Merged | |
+| W0.14 Instagram lookup error | #1968 | Merged | |
+
 ---
 
 ## PR ritual (every task ends with this)
@@ -70,6 +93,8 @@ Commit messages end with `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.co
 ---
 
 ### Task W0.1: Scope the legacy shared API key to one organisation
+
+**Status:** done — #1957 (merged).
 
 **Files:**
 - Modify: `src/lib/api-auth.js:170-178` (requireApiKeyOrManager) and `:232-236` (authenticateApiKey)
@@ -156,6 +181,8 @@ Update the file header comment (lines 210-214) to describe the new semantics.
 ---
 
 ### Task W0.2: Inbound WhatsApp and mail match contacts inside the receiving organisation only
+
+**Status:** done — #1956 (merged).
 
 **Files:**
 - Create: `src/lib/inbound-contact-match.js`, `src/lib/inbound-contact-match.test.js`
@@ -254,6 +281,8 @@ Amend the comment "(b) From address → contacts" to say the match is organisati
 
 ### Task W0.3: "Shared" events are shared within the owning organisation only
 
+**Status:** done — #1962 (merged).
+
 **Files:**
 - Create: `src/lib/event-visibility.js`, `src/lib/event-visibility.test.js`
 - Modify: `src/app/api/events/route.js:156`, `src/app/(members)/events/page.js:68`, `src/app/welcome/[location]/events/page.js:94`
@@ -320,6 +349,8 @@ with `import { sharedEventsOrFilterFor } from '@/lib/event-visibility'` in each.
 
 ### Task W0.4: Pin the public /offers surface to Stillorgan
 
+**Status:** done — #1958 (merged).
+
 **Files:**
 - Create: `src/lib/offers-home.js`, `src/lib/offers-home.test.js`
 - Modify: `src/app/offers/page.js:115-121`, `src/app/offers/[slug]/page.js:51-52`, `src/app/api/public/offers/[slug]/checkout/route.js:36-37`
@@ -374,6 +405,8 @@ export async function resolveOffersHomeLocationId(db) {
 ---
 
 ### Task W0.5: Policies belong to an organisation
+
+**Status:** done — #1960 (merged, mig 713).
 
 **Files:**
 - Create: `supabase/migrations/710_policies_organization.sql`
@@ -474,6 +507,8 @@ export function policyOrgIdFor(user) {
 ---
 
 ### Task W0.6: One contact per person per organisation
+
+**Status:** done — #1961 (merged, mig 712).
 
 **Files:**
 - Create: `supabase/migrations/711_contacts_organization_email_unique.sql`
@@ -596,6 +631,8 @@ and extend the 23505 handler so it applies to every caller (drop the `&& restric
 
 ### Task W0.7: Receipt-coverage report per organisation
 
+**Status:** done — #1964 (merged).
+
 **Files:**
 - Modify: `src/lib/recon/finalize.js:55-62,190-270`, `src/lib/recon/report-email.js:137-150`, their tests under `src/lib/recon/`
 - One-time data: `org_settings.ops_alert_emails` for UN1T Group and CCF Autos
@@ -652,6 +689,8 @@ Delete `RECEIPT_COVERAGE_REPORT_TO` reads; update `docs/architecture/INTEGRATION
 
 ### Task W0.8: The notifications settings page shows the caller's organisation only
 
+**Status:** done — #1963 (merged).
+
 **Files:**
 - Modify: `src/app/settings/notifications/page.js:48-62`
 
@@ -681,6 +720,8 @@ Delete `RECEIPT_COVERAGE_REPORT_TO` reads; update `docs/architecture/INTEGRATION
 ---
 
 ### Task W0.9: Live board — kiosk cut-over to token URLs, then remove the location-keyed routes
+
+**Status:** done — #1969 W0.9a (merged) · un1t-pi #2 W0.9b (merged) · #1973 W0.9c (open).
 
 This is the only task with a hardware step. Order matters: 9a and 9b ship first; 9c (removal) only after every kiosk is verified on the token URL.
 
@@ -717,6 +758,8 @@ Add `TV_TOKEN` to the provisioning template that writes `agent.env` (grep `agent
 
 ### Task W0.10: Strava webhook behind a URL token
 
+**Status:** done — #1970 (merged).
+
 **Files:**
 - Move: `src/app/api/webhooks/strava/route.js` → `src/app/api/webhooks/strava/[token]/route.js`
 - Vercel env: `STRAVA_WEBHOOK_URL_TOKEN` (32 hex, generated with `openssl rand -hex 16`), production + preview
@@ -747,6 +790,8 @@ Add an IP rate limit on POST (`checkRateLimit(db, \`strava-webhook:${getClientIp
 
 ### Task W0.11: Location-less email templates are master-only
 
+**Status:** done — #1965 (merged).
+
 **Files:**
 - Modify: `src/app/api/templates/[id]/route.js` GET (`:42-46`), PUT (`:61`), DELETE (`:89`)
 
@@ -773,6 +818,8 @@ Call it right after each `assertLocationAccessOr404` (`const pg = platformTempla
 ---
 
 ### Task W0.12: Automation device ids must belong to the location
+
+**Status:** done — #1966 (merged).
 
 **Files:**
 - Modify: `src/app/api/automations/[key]/route.js:12-16,35-50`
@@ -809,6 +856,8 @@ const Schema = z.object({
 
 ### Task W0.13: Unmatched WhatsApp number and flow events no longer page every tenant
 
+**Status:** done — #1967 (merged).
+
 **Files:**
 - Modify: `src/lib/whatsapp-flow-events.js:53-56`, `src/lib/whatsapp-flow-events.test.js:48`
 - Modify: `src/lib/whatsapp-number-events.js:209-211`, `src/lib/whatsapp-number-events.test.js:131,138`
@@ -838,6 +887,8 @@ Check the webhook caller (`src/app/api/webhooks/whatsapp/route.js` around `apply
 ---
 
 ### Task W0.14: Instagram lookup errors are retried, not swallowed
+
+**Status:** done — #1968 (merged).
 
 **Files:**
 - Modify: `src/lib/agent/channels.js:165-177`, `src/lib/agent/channels.test.js`
@@ -899,4 +950,4 @@ Keep the outer catch's 200 for parse-level errors.
 - [ ] Vercel runtime logs: no `GET /api/public/live/` or `/api/public/challenges/` hits after 9c; token hits from all four kiosks.
 - [ ] `/offers` on un1tdublin.com renders Stillorgan's offers only; a non-Stillorgan slug answers 404.
 - [ ] Richard's two manual items recorded in memory as waiting on him: n8n per-org key swap (then unset `CRM_API_KEY*`), Strava subscription recreate.
-- [ ] Update `docs/SAAS_READINESS_REVIEW_2026-10-09.md` §3 blockers 1–6, 9–11 with the PR numbers; update the memory note.
+- [x] Update `docs/SAAS_READINESS_REVIEW_2026-10-09.md` §3 blockers 1–6, 9–11 with the PR numbers (this docs PR); update the memory note.
