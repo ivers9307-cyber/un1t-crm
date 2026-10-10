@@ -10,10 +10,10 @@
 // the active session and leaves the unit alone. Idempotency + run history
 // via automation_fire_log.
 
-import { vendorTurnOn, loadDeviceWithLocation } from '@/lib/ac-devices'
+import { vendorTurnOn, loadDeviceWithLocation, assertDeviceAtLocation } from '@/lib/ac-devices'
 import { AC_SESSION_STATUS, AC_SESSION_ACTIVE_STATUSES } from '@/lib/enums'
 import { logAuditEvent } from '@/lib/audit'
-import { logWarn } from '@/lib/log'
+import { logWarn, logError } from '@/lib/log'
 import { resolveConfig, planClassClimate, autoOffAtFor } from '@/lib/class-climate'
 
 export const AUTOMATION_KEY = 'class_climate'
@@ -105,6 +105,18 @@ async function fireOn(db, { locationId, deviceId, occurrence, config, nowMs }) {
     return { status: 'failed', error: loaded.error }
   }
   const { device, location } = loaded
+
+  // W0.12b: never switch a device that lives at another location, whatever
+  // the config says — `location` above is THAT device's studio with its own
+  // vendor credentials. Recorded as a failed fire (same shape as the other
+  // reasons, so dashboards and the alert path see it) and nothing else.
+  const atLocation = assertDeviceAtLocation(device, locationId)
+  if (!atLocation.ok) {
+    logError('class-climate', 'device belongs to another location; refusing to switch it',
+      { locationId, deviceId, deviceLocationId: device.location_id, eventId })
+    await recordFire(db, { locationId, eventId, deviceId, status: 'failed', detail: { reason: 'device_not_at_location', error: atLocation.error } })
+    return { status: 'failed', error: atLocation.error }
+  }
 
   // Already on (operator or a prior class)? Don't double-fire the vendor;
   // record skipped so the timeline shows it (and it gets re-evaluated
