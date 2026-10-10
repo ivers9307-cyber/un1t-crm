@@ -14,8 +14,9 @@
 // field /settings → BrandingSettings already writes and the login screen
 // already renders — and fall back to the PLATFORM name only when no operator
 // has configured one. That gives a Repset-branded deployment the right chrome
-// today (company_name is unset in prod) and automatically defers to the
-// operator's own name the moment they fill the field in.
+// when no name is configured (true when CHROME.1 landed; UN1T's rows are
+// populated now) and defers to the operator's own name the moment they fill
+// the field in.
 //
 // WHICH tenant's name? Same answer, and the same caveat, as
 // resolveDefaultFaviconUrl: the CRM hostname serves every tenant and the
@@ -55,11 +56,13 @@
 // customer side without touching the staff side.
 
 import { createServerClient } from './supabase'
+import { PLATFORM_NAME } from './brand-name'
 
 // The platform's own name. Used only when NO operator has configured a
 // company name — at that point there is no gym identity to show, and the
-// product this deployment is running IS Repset.
-export const PLATFORM_SITE_NAME = 'Repset'
+// product this deployment is running IS Repset. One source (W1.B1):
+// shared/brand-name.js, so the phone, champ-app and this chrome never drift.
+export const PLATFORM_SITE_NAME = PLATFORM_NAME
 
 export const SITE_NAME_CACHE_TTL_MS = 5 * 60 * 1000 // renames are rare
 

@@ -48,8 +48,9 @@ import { getLocationBranding } from './location-branding.js'
 // brand resolver's literal (DEFAULT_COMPANY_NAME): getLocationBranding now
 // ends in locations.name and reports '' when it cannot resolve at all, so
 // this literal no longer mirrors anything and is reached only when the db
-// is unreadable or absent. It is a Track S sweep row (W1.S2), not a brand
-// fallback — the brand tier reads `companyNameConfigured` below.
+// is unreadable or absent. It is a Track S sweep row (W1.S1a — the plan's
+// appendix row for contracting-entity.js:48, "drop"), not a brand fallback:
+// the brand tier reads `companyNameConfigured` below.
 const DEFAULT_BRAND = 'UN1T'
 
 // The literal every contract issued BEFORE LEGALENT.1 was issued and

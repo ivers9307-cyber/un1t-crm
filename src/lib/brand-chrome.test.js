@@ -231,7 +231,7 @@ describe('root site name resolves operator branding (CHROME.1)', () => {
 // inherit that floor. Verified against prod read-only: the single
 // company_settings row has company_name NULL and org_settings is empty, so the
 // FLOOR is what renders today — this is not a theoretical branch.
-describe('customer-facing surfaces resolve the GYM identity, never the platform (CHROME.1)', () => {
+describe('customer-facing surfaces resolve operator branding; since W1.B1 both resolvers floor on the platform name (CHROME.1 / W1.B1)', () => {
   afterEach(() => { _resetDefaultSiteNameCache() })
 
   const dbReturning = (rows) => ({
@@ -253,7 +253,7 @@ describe('customer-facing surfaces resolve the GYM identity, never the platform 
     expect(name).not.toMatch(/UN1T/)
   })
 
-  it('the two resolvers differ ONLY in the floor — a configured name wins for both', async () => {
+  it('the two resolvers agree — a configured name wins for both, and the floor is the same', async () => {
     const gym = await resolveGymSiteName({ db: dbReturning([{ company_name: 'Acme Fitness' }]) })
     _resetDefaultSiteNameCache()
     const platform = await resolveDefaultSiteName({ db: dbReturning([{ company_name: 'Acme Fitness' }]) })

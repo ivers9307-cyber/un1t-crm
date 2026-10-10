@@ -78,7 +78,6 @@ export async function PUT(request) {
     logo_url: body.logo_url ?? null,
     favicon_url: body.favicon_url ?? null,
     company_name: body.company_name ?? null,
-    short_name: body.short_name || null,
     updated_at: new Date().toISOString(),
     updated_by: user.id,
   }
@@ -88,6 +87,11 @@ export async function PUT(request) {
   for (const key of ['legal_entity_name', 'legal_trading_name', 'legal_address', 'privacy_contact_email']) {
     if (key in body) record[key] = body[key]
   }
+  // W1.B1 short_name: same "only when present" rule, so a client that does
+  // not know the field (a pre-deploy tab, a GET that failed and left the
+  // form blank) cannot null the seeded wordmark on Save. Blank → null, since
+  // the column CHECK (mig 715) refuses an empty string.
+  if ('short_name' in body) record.short_name = body.short_name || null
 
   const { data, error } = await db.from('org_settings')
     .upsert(record, { onConflict: 'organization_id' })
