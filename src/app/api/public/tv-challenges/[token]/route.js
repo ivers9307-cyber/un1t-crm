@@ -1,16 +1,14 @@
 // GET /api/public/tv-challenges/[token]
 //
-// W0.9a — token-gated entrypoint for the in-studio challenge TV board. Same
-// payload as /api/public/challenges/[locationId], but the caller presents an
-// opaque tv_displays.token instead of a guessable location UUID — exactly the
+// W0.9a — THE entrypoint for the in-studio challenge TV board. The caller
+// presents an opaque tv_displays.token instead of a location UUID — exactly the
 // model /api/public/tv-live/[token] uses for the live HR board (P0-3, mig 160).
+// The location-keyed twin (/api/public/challenges/[locationId], same payload)
+// was removed in W0.9c once every kiosk had moved (W0.9b).
 //
 // No auth header — the token IS the auth (kiosk browsers can't supply
 // cookies). Invalid / inactive tokens return 404 (never reveal whether a token
 // or location exists). Rate-limited per token + IP and no-store.
-//
-// The location endpoint stays live during the transition (W0.9b moves the
-// kiosks, W0.9c removes the location-keyed routes).
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
@@ -65,8 +63,8 @@ export async function GET(request, props) {
     return NextResponse.json({ ok: false, error: 'Not found' }, { status: 404, headers: NO_STORE })
   }
 
-  // From here on identical to /api/public/challenges/[locationId], scoped to
-  // the location the TOKEN resolved to.
+  // The board itself, scoped to the location the TOKEN resolved to (never a
+  // caller-supplied id).
   const locationId = location.id
 
   const { data: defs } = await db.from('challenges')

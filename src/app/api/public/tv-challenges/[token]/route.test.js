@@ -1,7 +1,7 @@
 // Tests for the W0.9a token-gated challenge board.
 //
 // The token resolves tv_displays.token → location, then returns the SAME
-// payload as /api/public/challenges/[locationId]. A good token returns 200 +
+// challenge payload for the resolved location. A good token returns 200 +
 // data scoped to THAT location; an invalid or inactive token returns 404
 // (never confirm existence); the limiter is keyed per token + IP.
 
