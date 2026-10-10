@@ -145,6 +145,34 @@ export async function getOrgBrandName(db, organizationId) {
 }
 
 /**
+ * W1.S1b — getOrgBrandName for a surface that holds a LOCATION (an event's
+ * location_id): the org that location belongs to, named the same way the
+ * public event payload names it (`organization_name`, which the signup
+ * widget prints). So the widget and its register route's refusal say the
+ * same brand, and a host-anchor location's internal label never shows.
+ *
+ * Never throws; a missing db/location, an unknown one, or a read error is ''.
+ * @param {object} db
+ * @param {string|null} locationId
+ * @returns {Promise<string>}
+ */
+export async function getLocationOrgBrandName(db, locationId) {
+  if (!db || !locationId) return ''
+  try {
+    const { data, error } = await db
+      .from('locations')
+      .select('organization_id')
+      .eq('id', locationId)
+      .limit(1)
+    const orgId = (!error && data && data[0]?.organization_id) || null
+    return orgId ? await getOrgBrandName(db, orgId) : ''
+  } catch {
+    logError('location-branding', 'location org brand unresolved', { locationId })
+    return ''
+  }
+}
+
+/**
  * W1.L4 — the ORGANISATION's customer-facing brand (name, logo, favicon)
  * for a surface that knows the request's organisation (the host, via
  * resolveTenantOrgId) but no location: the anonymous login screen, the

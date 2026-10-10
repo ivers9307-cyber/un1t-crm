@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
+import { resolveLocationBrand } from '@/lib/host-brand'
 
 // GET /api/public/bookings/:slug — Public: Calendly booking-type
 // details + form fields. No auth required — this powers the public
@@ -47,5 +48,8 @@ export async function GET(request, props) {
     return NextResponse.json({ success: false, error: 'Booking type not found' }, { status: 404 })
   }
 
-  return NextResponse.json({ success: true, data })
+  // W1.S1b — the studio's brand names the marketing consent on the widget
+  // (never a literal gym). Cached per location (host-brand.js).
+  const { companyName } = await resolveLocationBrand({ locationId: data.location_id, db })
+  return NextResponse.json({ success: true, data: { ...data, brand: companyName } })
 }

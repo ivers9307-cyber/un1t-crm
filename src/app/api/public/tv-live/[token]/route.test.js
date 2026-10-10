@@ -24,7 +24,14 @@ vi.mock('@/lib/live-board', () => ({
   })),
 }))
 
+// W1.S1b — the studio's brand rides the payload; resolved through the
+// per-location cache, mocked here so the assertion is the CALL + the shape.
+vi.mock('@/lib/host-brand', () => ({
+  resolveLocationBrand: vi.fn(async () => ({ companyName: 'Gym A North', shortName: 'Gym A', locationName: 'Gym A North' })),
+}))
+
 import { GET } from './route.js'
+import { resolveLocationBrand } from '@/lib/host-brand'
 import { createServerClient } from '@/lib/supabase'
 import { stampRender } from '@/lib/fleet-render'
 
@@ -105,5 +112,21 @@ describe('GET /api/public/tv-live/[token]', () => {
     const res = await callRoute(db, 'bad-token', { url: 'https://crm.test/api/public/tv-live/bad-token?device=kiosk-1' })
     expect(res.status).toBe(404)
     expect(stampRender).not.toHaveBeenCalled()
+  })
+
+  it('W1.S1b: carries the studio\'s brand from the per-location cache, keyed by the TOKEN\'s location', async () => {
+    const db = makeDb({ display: { location_id: 'loc-1', active: true }, location: { id: 'loc-1', name: 'Stillorgan' } })
+    const res = await callRoute(db, 'good-token')
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body.brand).toEqual({ name: 'Gym A North', short_name: 'Gym A' })
+    expect(resolveLocationBrand).toHaveBeenCalledWith(expect.objectContaining({ locationId: 'loc-1' }))
+    expect(JSON.stringify(body)).not.toMatch(/UN1T/)
+  })
+
+  it('W1.S1b: an unknown token never resolves a brand', async () => {
+    const db = makeDb({ display: null, location: null })
+    await callRoute(db, 'bad-token')
+    expect(resolveLocationBrand).not.toHaveBeenCalled()
   })
 })

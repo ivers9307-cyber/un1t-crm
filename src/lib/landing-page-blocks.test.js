@@ -569,3 +569,20 @@ describe('pageCtas — class_funnel label and visibility', () => {
       .toEqual({ href: '#book', label: 'Book a free consult' })
   })
 })
+
+// W1.S1b — the defaults that name a studio are functions of the brand the
+// editor passes; none carries a literal gym.
+describe('block defaults name the studio\'s brand (W1.S1b)', () => {
+  it('lead_form and class_funnel consent defaults read the brand', () => {
+    expect(newBlockOfType('lead_form', { brand: 'Gym A' }).consent_label).toContain('hear from Gym A about the launch')
+    expect(newBlockOfType('class_funnel', { brand: 'Gym A' }).consent_label).toBe("I'd like to hear from Gym A by email, SMS and WhatsApp.")
+  })
+
+  it('no brand → whole sentences that name nobody; no default anywhere says UN1T', () => {
+    expect(newBlockOfType('lead_form').consent_label).toBe('I’d like to hear about the launch and offers by email, SMS and WhatsApp. I can opt out anytime.')
+    expect(newBlockOfType('class_funnel').consent_label).toBe("I'd like to hear from this studio by email, SMS and WhatsApp.")
+    for (const { type } of BLOCK_TYPES) expect(JSON.stringify(newBlockOfType(type))).not.toMatch(/UN1T/)
+    expect(JSON.stringify(defaultBlocks())).not.toMatch(/UN1T/)
+  })
+})
+

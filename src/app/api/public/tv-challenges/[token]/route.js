@@ -15,6 +15,7 @@ import { createServerClient } from '@/lib/supabase'
 import { computeStandings, computeCollective } from '@/lib/challenges-io'
 import { challengePhase, windowIso } from '@/lib/challenges'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
+import { resolveLocationBrand } from '@/lib/host-brand'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -92,9 +93,14 @@ export async function GET(request, props) {
   const monthFrom = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)).toISOString()
   const gym = await computeStandings(db, { locationId, metric: 'points', fromIso: monthFrom, toIso: new Date(nowMs).toISOString(), excludeOptedOut: true })
 
+  // W1.S1b — the studio's brand for "{Brand} Points" and the tab title
+  // (per-location cache, host-brand.js; this board polls).
+  const brand = await resolveLocationBrand({ locationId, db, nowMs })
+
   return NextResponse.json({
     ok: true, server_time: new Date().toISOString(),
     location: { id: location.id, name: location.name },
+    brand: { name: brand.companyName, short_name: brand.shortName },
     challenges, gymBoard: project(gym),
   }, { headers: NO_STORE })
 }

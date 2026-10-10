@@ -6,7 +6,7 @@
 //
 // Polls the token-gated /api/public/tv-live/[token] (the `endpoint` prop,
 // supplied by /tv/live/[token]) every 2s. Renders an ink (#131316)
-// full-viewport grid of attendee tiles, sorted by UN1T Points. Tile colour
+// full-viewport grid of attendee tiles, sorted by {Brand} Points. Tile colour
 // follows current zone via the shared dark-canvas palette
 // (@/lib/tv-zone-colors); "stale" tiles dim themselves after 2min without
 // samples.
@@ -116,6 +116,14 @@ export default function LiveTvClient({ locationId, endpoint, device }) {
   // FLEET-CMD.2 appends ?device= so the poll doubles as this kiosk's render
   // heartbeat (the token route stamps it since W0.9a).
   const dataUrl = withDevice(endpoint, device)
+
+  // W1.S1b — the studio's configured brand (payload `brand.name`): the
+  // overlays' corner wordmark and the tab title. Empty until the first poll
+  // lands, and then the wordmark simply is not drawn; never a literal gym.
+  const brandName = data?.brand?.name || ''
+  useEffect(() => {
+    if (brandName && typeof document !== 'undefined') document.title = brandName
+  }, [brandName])
 
   // TIMER-PUSH.1 — realtime nudge. The timer routes broadcast a ping on
   // `timer:<locationId>` after every start/pause/resume/skip/stop; bumping
@@ -441,11 +449,11 @@ export default function LiveTvClient({ locationId, endpoint, device }) {
         <RepsetSignature caption="Scores land in your app" />
       </div>
 
-      <ClassStartIntro current={data?.current_class} serverTime={data?.server_time} />
+      <ClassStartIntro current={data?.current_class} serverTime={data?.server_time} brand={brandName} />
 
       <ToastLayer queue={toastQueue} onDone={(t) => setToastQueue((q) => q.filter((x) => x !== t))} />
 
-      {outro && <OutroPodium podium={outro.podium} total={outro.total} />}
+      {outro && <OutroPodium podium={outro.podium} total={outro.total} brand={brandName} />}
     </main>
   )
 }
@@ -542,11 +550,24 @@ function ToastLayer({ queue, onDone }) {
   )
 }
 
+// W1.S1b — the corner wordmark on the two full-screen overlays (class
+// intro, class-complete podium) is the studio's configured brand from the
+// payload (company_settings → org_settings → locations.name): "UN1T
+// Stillorgan" / "UN1T Hatch Street". The overlays are absolutely positioned
+// over the whole board, so the longer name cannot push the one-screen board
+// (TV-FIT.1); it is still capped to one line at 45% of the width so a long
+// brand can never run into the intro's "● Live" chip at top right. Uppercase
+// keeps it a wordmark whatever casing the operator typed.
+const BRAND_WORDMARK = {
+  position: 'absolute', top: 24, left: 28, fontFamily: FONT_DISPLAY, fontWeight: 700, letterSpacing: 6, color: BONE,
+  textTransform: 'uppercase', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '45%',
+}
+
 // CLASS COMPLETE — TOP MOVERS podium. Shown for OUTRO_MS then the board
 // returns to idle. Top 3 by effort points + room total + app nudge.
 // De-metaled: heat is earned, not awarded — the winner runs volt (with
 // the Burn-style glow), 2nd reads bone, 3rd bone-2. No medals.
-function OutroPodium({ podium, total }) {
+function OutroPodium({ podium, total, brand = '' }) {
   const [shown, setShown] = useState(false)
   useEffect(() => { const t = setTimeout(() => setShown(true), 40); return () => clearTimeout(t) }, [])
   const order = [1, 0, 2] // render 2nd, 1st, 3rd for a real podium shape
@@ -557,7 +578,7 @@ function OutroPodium({ podium, total }) {
     <div style={{ position: 'absolute', inset: 0, zIndex: 55, background: INK,
       display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
       opacity: shown ? 1 : 0, transition: 'opacity .6s ease' }}>
-      <span style={{ position: 'absolute', top: 24, left: 28, fontFamily: FONT_DISPLAY, fontWeight: 700, letterSpacing: 6, color: BONE }}>UN1T</span>
+      {brand ? <span style={BRAND_WORDMARK}>{brand}</span> : null}
       <span style={{ fontFamily: FONT_MONO, fontSize: 14, fontWeight: 500, letterSpacing: '0.5em', color: BONE_3, textTransform: 'uppercase' }}>Class complete</span>
       <span style={{ fontFamily: FONT_DISPLAY, fontSize: '5.5vw', lineHeight: 1, fontWeight: 800, color: BONE, letterSpacing: 2, margin: '6px 0 30px' }}>TOP MOVERS</span>
 
@@ -600,7 +621,7 @@ function OutroPodium({ podium, total }) {
   )
 }
 
-function ClassStartIntro({ current, serverTime }) {
+function ClassStartIntro({ current, serverTime, brand = '' }) {
   const [visible, setVisible] = useState(false)
   const [shown, setShown] = useState(false) // drives the fade/scale-in transition
   // Preview mode (?introPreview=1): force the card to loop for on-demand QA on
@@ -668,7 +689,7 @@ function ClassStartIntro({ current, serverTime }) {
     <div style={{ position: 'absolute', inset: 0, zIndex: 50, background: INK,
       display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
       opacity: shown ? 1 : 0, transition: 'opacity .6s ease' }}>
-      <span style={{ position: 'absolute', top: 24, left: 28, fontFamily: FONT_DISPLAY, fontWeight: 700, letterSpacing: 6, color: BONE }}>UN1T</span>
+      {brand ? <span style={BRAND_WORDMARK}>{brand}</span> : null}
       <span style={{ position: 'absolute', top: 24, right: 28, fontFamily: FONT_MONO, fontSize: 12, fontWeight: 500, letterSpacing: '0.28em', color: REDLINE, textTransform: 'uppercase' }}>● Live</span>
       <span style={{ fontFamily: FONT_MONO, fontSize: 15, fontWeight: 500, letterSpacing: '0.5em', color: BONE_3, textTransform: 'uppercase',
         opacity: shown ? 1 : 0, transform: shown ? 'translateY(0)' : 'translateY(8px)', transition: 'all .6s ease .1s' }}>Now starting</span>
@@ -882,7 +903,7 @@ function Tile({ session, rank }) {
         <span className="text-xs tracking-[0.12em]" style={{ fontFamily: FONT_MONO, color: BONE_3 }}>BPM</span>
       </div>
 
-      {/* Zone chip + UN1T points */}
+      {/* Zone chip + {Brand} points */}
       <div className="mt-3 flex shrink-0 items-center justify-between">
         {session.stale ? (
           <span className="text-xs uppercase tracking-[0.1em]" style={{ fontFamily: FONT_MONO, color: BONE_3 }}>strap silent</span>

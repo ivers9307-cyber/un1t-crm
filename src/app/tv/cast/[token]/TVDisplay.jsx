@@ -10,7 +10,7 @@
 //                    a fixed base image with text zones overlaid
 //   - HyroxBoard     for source_type 'generated' (HYROX-TC.3) —
 //                    the purpose-built portrait Hyrox board
-//   - Idle view      (UN1T mark + live clock) if no content row
+//   - Idle view      (the studio's mark + live clock) if no content row
 //
 // TV-ROTATION.1 — the whole stage is counter-rotated by
 // display.rotation degrees so content designed landscape fills a
@@ -232,7 +232,7 @@ function IdleView({ now, logoUrl, companyName }) {
         />
       ) : (
         <div style={{ fontSize: '12cqh', fontWeight: 900, letterSpacing: '0.2em', fontFamily: tvFontFamily }}>
-          {companyName || 'UN1T'}
+          {companyName}
         </div>
       )}
       <div style={{ fontSize: '18cqh', fontWeight: 700, fontVariantNumeric: 'tabular-nums', lineHeight: 1, fontFamily: tvFontFamily }}>

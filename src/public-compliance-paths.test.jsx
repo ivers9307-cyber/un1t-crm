@@ -492,10 +492,11 @@ describe('EVENT-MOVE.6 — the entry page flow is public on every host', () => {
 // the widened default exposes nothing new — it only stops the tenant host
 // from swallowing a flow the CRM host already serves anonymously.
 //
-// Deliberately NOT served by default: /start, /free-class, /offers. They are
-// Stillorgan literals (src/app/start, src/app/free-class, W0.4's pinned
-// /offers) and would show UN1T's funnel on another gym's host. UN1T Group's
-// own platform row may list them in brand.allowedPaths.
+// Deliberately NOT served by default: /start, /free-class, /offers,
+// /technical. They are Stillorgan literals (src/app/start, src/app/free-class,
+// W0.4's pinned /offers) or UN1T's own company story (src/app/technical, the
+// Meta Tech Provider page) and would show UN1T on another gym's host. UN1T
+// Group's own platform row may list them in brand.allowedPaths.
 
 const TENANT_FLOW_PATHS = [
   '/unsubscribe/abc', '/preferences/abc', '/view-email/abc',
@@ -503,7 +504,7 @@ const TENANT_FLOW_PATHS = [
   '/class-pay/abc', '/h/pride', '/host', '/host/login', '/host-connect/abc',
   '/api/host/x', '/embed/event/x', '/terms',
 ]
-const TENANT_PINNED_OFF = ['/start', '/free-class', '/offers']
+const TENANT_PINNED_OFF = ['/start', '/free-class', '/offers', '/technical']
 const PLATFORM_TENANT_HOST = 'gym-a.repset.ie'
 
 // The entries the two rewrite-fallback tiers (un1t-marketing + the tenant

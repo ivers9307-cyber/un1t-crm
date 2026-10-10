@@ -18,7 +18,14 @@ vi.mock('@/lib/challenges-io', () => ({
   computeCollective: vi.fn(() => Promise.resolve({ total: 500, target: 1000, pct: 50 })),
 }))
 
+// W1.S1b — the studio's brand rides the payload; resolved through the
+// per-location cache, mocked here so the assertion is the CALL + the shape.
+vi.mock('@/lib/host-brand', () => ({
+  resolveLocationBrand: vi.fn(async () => ({ companyName: 'Gym A North', shortName: 'Gym A', locationName: 'Gym A North' })),
+}))
+
 import { GET } from './route.js'
+import { resolveLocationBrand } from '@/lib/host-brand'
 import { createServerClient } from '@/lib/supabase'
 import { computeStandings } from '@/lib/challenges-io'
 
@@ -120,5 +127,21 @@ describe('GET /api/public/tv-challenges/[token]', () => {
     expect(res.status).toBe(429)
     const key = db.rpc.mock.calls[0][1]?.p_key ?? JSON.stringify(db.rpc.mock.calls[0])
     expect(String(key)).toContain('good-token')
+  })
+
+  it('W1.S1b: carries the studio\'s brand from the per-location cache, keyed by the TOKEN\'s location', async () => {
+    const db = makeDb({ display: { location_id: 'loc-1', active: true }, location: { id: 'loc-1', name: 'Stillorgan' } })
+    const res = await callRoute(db, 'good-token')
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body.brand).toEqual({ name: 'Gym A North', short_name: 'Gym A' })
+    expect(resolveLocationBrand).toHaveBeenCalledWith(expect.objectContaining({ locationId: 'loc-1' }))
+    expect(JSON.stringify(body)).not.toMatch(/UN1T/)
+  })
+
+  it('W1.S1b: an unknown token never resolves a brand', async () => {
+    const db = makeDb({ display: null, location: null })
+    await callRoute(db, 'bad-token')
+    expect(resolveLocationBrand).not.toHaveBeenCalled()
   })
 })
