@@ -25,6 +25,7 @@ import {
   giversEnquirySchema,
 } from './schemas.js'
 import { LeadSchema } from './leads.js'
+import { PLATFORM_NAME } from './brand-name.js'
 import { MAX_STORED_EXAMPLE_CHARS, MAX_STORED_EXAMPLES } from '@/lib/hyrox/constants'
 import { WindowBase } from '@/lib/schedule/windows'
 import { AvailabilityPutSchema } from '@/lib/availability-server'
@@ -326,7 +327,7 @@ registry.registerPath({
   path: '/api/unsubscribe/host/{token}',
   tags: ['Public'],
   summary: 'One-click unsubscribe from a host\'s marketing list (RFC 8058)',
-  description: 'Anonymous. `token` is the HMAC host-unsubscribe token from a host campaign footer (pins host + contact). Writes a per-host suppression only — UN1T marketing consent is untouched (HOST-CONSENT.1). Body ignored. A repeat click is a 200 no-op. Invalid tokens spend a per-IP budget. A GET on this same path (a mail client rendering the List-Unsubscribe URL as a link) 302-redirects to the `/unsubscribe/host/{token}` landing page instead of 405ing. Unlike the sibling `/api/unsubscribe/{token}` (which redirects to a non-destructive preference centre), that landing page performs the unsubscribe on the GET itself.',
+  description: 'Anonymous. `token` is the HMAC host-unsubscribe token from a host campaign footer (pins host + contact). Writes a per-host suppression only — the organisation\'s marketing consent is untouched (HOST-CONSENT.1). Body ignored. A repeat click is a 200 no-op. Invalid tokens spend a per-IP budget. A GET on this same path (a mail client rendering the List-Unsubscribe URL as a link) 302-redirects to the `/unsubscribe/host/{token}` landing page instead of 405ing. Unlike the sibling `/api/unsubscribe/{token}` (which redirects to a non-destructive preference centre), that landing page performs the unsubscribe on the GET itself.',
   request: { params: z.object({ token: z.string().min(1) }) },
   responses: {
     200: { description: 'Unsubscribed from the host (or already unsubscribed)' },
@@ -8286,7 +8287,7 @@ registry.registerPath({
   path: '/api/accounting/event-fees',
   tags: ['Accounting'],
   security: [{ CookieAuth: [] }],
-  summary: 'Org-wide event booking fees (per-ticket fee UN1T earned on host events)',
+  summary: `Org-wide event booking fees (per-ticket fee ${PLATFORM_NAME} earned on host events)`,
   description: 'Rollup of race_payments.application_fee_cents across ALL of the session org\'s event hosts, settled (completed/refunded) payments only: grand total, per-host breakdown, per-month buckets. Organisation admins of the active organisation only (a master, or an org_admin grant; C18).',
   responses: {
     200: { description: 'Total + per-host + per-month fee rollup', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },

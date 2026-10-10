@@ -115,7 +115,7 @@ export default function AddOrganizationButton() {
                   value={name}
                   onChange={(e) => onNameChange(e.target.value)}
                   disabled={busy}
-                  placeholder="UN1T Group"
+                  placeholder="Organisation name"
                   className="w-full bg-un1t-surface border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
                 />
               </div>

@@ -15,6 +15,7 @@ import Link from 'next/link'
 import { FileText, ChevronRight } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { getContractingEntity } from '@/lib/contracting-entity'
 
 export const dynamic = 'force-dynamic'
 
@@ -49,6 +50,10 @@ export default async function MyContractsPage() {
     .neq('status', 'draft')
     .order('issued_at', { ascending: false })
 
+  // W1.S2 — the issuing company is the active organisation's contracting
+  // entity (org_settings legal entity → brand → organisation name).
+  const { label: issuer } = await getContractingEntity(db, { locationId: user.activeLocation?.id })
+
   const rows = contracts || []
   const pending = rows.filter(r => r.status === 'issued' || r.status === 'viewed')
   const archive = rows.filter(r => r.status !== 'issued' && r.status !== 'viewed')
@@ -60,7 +65,7 @@ export default async function MyContractsPage() {
       </Link>
       <h2 className="text-2xl font-bold mt-1 mb-2">Your contracts</h2>
       <p className="text-sm text-un1t-subtle mb-6">
-        Documents UN1T Dublin has issued to you. Sign pending contracts to confirm receipt;
+        Documents {issuer} has issued to you. Sign pending contracts to confirm receipt;
         signed copies stay here for your records.
       </p>
 

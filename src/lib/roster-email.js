@@ -9,6 +9,7 @@
 import { sendEmail } from './postmark'
 import { getAppUrl } from './app-url'
 import { logWarn } from './log'
+import { PLATFORM_NAME } from './brand-name'
 import { getLocationBranding } from './location-branding.js'
 
 function formatEur(n) {
@@ -135,7 +136,7 @@ export async function sendOverBudgetApprovalEmail(db, args) {
       <p style="margin: 28px 0;">
         <a href="${approvalUrl}" style="display: inline-block; padding: 10px 16px; background: #111827; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 500;">Review &amp; approve</a>
       </p>
-      <p style="font-size: 13px; color: #6b7280;">This is an automated notification from the UN1T CRM.</p>
+      <p style="font-size: 13px; color: #6b7280;">This is an automated notification from ${PLATFORM_NAME}.</p>
     </div>
   `
 
