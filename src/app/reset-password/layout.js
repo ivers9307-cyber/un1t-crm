@@ -6,19 +6,21 @@
 // really does resolve to "Repset", and a customer here would have read a
 // brand they have no relationship with in place of the gym's name.
 //
-// customerFacingMetadata() reads the same operator-editable
-// company_settings.company_name and floors on the GYM wordmark instead —
-// the same value the login screen, contract emails and Mia already render.
+// customerFacingMetadata({ host }) resolves the REQUEST HOST's organisation
+// brand (W1.L4: org_settings → that org's company_settings → location name)
+// and floors on the platform name when the host has no organisation — so a
+// tenant's customers read the tenant's gym, and never another tenant's.
 //
 // Scope: /reset-password — reached from an emailed recovery link by staff AND
 // by members, so it is treated as customer-facing. The page itself is a client
 // component and cannot export metadata; this layout is the only place to put
 // it.
 
+import { headers } from 'next/headers'
 import { customerFacingMetadata } from '@/lib/default-site-name'
 
 export async function generateMetadata() {
-  return customerFacingMetadata()
+  return customerFacingMetadata({ host: (await headers()).get('host') })
 }
 
 export default function ResetPasswordLayout({ children }) {

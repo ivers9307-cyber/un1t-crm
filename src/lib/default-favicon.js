@@ -1,70 +1,67 @@
-// SAAS-7 — deployment-default favicon for the root layout.
+// SAAS-7 / W1.L4 — the favicon for a request, resolved by its HOST.
 //
 // The root layout used to hardcode a public-storage URL containing the
 // seeded Stillorgan UUID — a tenant hardcode in the one file every page
-// renders through. The favicon is operator-editable (/settings →
+// renders through. SAAS-7 made it operator-editable (/settings →
 // BrandingSettings writes company_settings.favicon_url via
-// /api/settings/branding/upload), so resolve it from there instead.
+// /api/settings/branding/upload) but resolved "the first configured row in
+// the estate", so one tenant's icon labelled every tenant's tabs — and the
+// CRM's. W1.L4 (SaaS Wave 1, decision 4) resolves by the REQUEST HOST's
+// organisation instead, the same way default-site-name.js resolves the
+// name: resolveTenantOrgId(host) → getOrgCustomerBranding(org).faviconUrl
+// (org_settings.favicon_url → the earliest active location's
+// company_settings.favicon_url in that org). A CRM host, an unmapped host,
+// an org with no icon, and any DB failure all get the PLATFORM mark.
 //
-// WHICH tenant's favicon? The CRM hostname serves every tenant and the
-// brand registry (src/lib/brands.js) carries no brand→tenant linkage
-// yet, so — mirroring the anonymous branch of /api/public/branding
-// (login screen, no location known) — we take the first configured
-// company_settings row, ordered by location_id so the pick is stable.
-//
-// SAAS-8 HANDOFF: when tenant_domains maps the request hostname to an
-// organization, thread the host in from the layout and resolve that
-// org's favicon here; the cache below can then key by host.
-//
-// PERFORMANCE: this runs in the ROOT layout's generateMetadata, so a
-// naive implementation is a DB read on every request. A module-level
-// TTL cache (the pattern is per-lambda; a cold start pays one read)
-// bounds that, and the pre-SAAS-7 hardcoded URL stays as the ultimate
-// fallback so UN1T renders identically on a cache miss / DB blip —
-// including during `next build`, where local env keys may be stubs.
+// PERFORMANCE: this runs in the ROOT layout's generateMetadata, so the
+// answer is held in a module-level TTL cache KEYED BY HOST (one read set
+// per host per window per lambda, failures cached too). Never throws.
 
 import { createServerClient } from './supabase'
+import { resolveTenantOrgId } from './tenant-domains-edge'
+import { getOrgCustomerBranding } from './location-branding'
+import { hostCacheKey } from './default-site-name'
 
-// The exact URL the layout hardcoded before SAAS-7 (Stillorgan's
-// uploaded favicon). Ultimate fallback — never remove without checking
-// the object still exists in the branding bucket.
-export const LEGACY_FAVICON_URL =
-  'https://iyvtbjjxdggiadzwwvdj.supabase.co/storage/v1/object/public/branding/a0000000-0000-0000-0000-000000000001/favicon.png'
+// The platform's own mark, served from public/ on EVERY host: the proxy
+// matcher excludes *.svg, so a brand or tenant host never rewrites it.
+// (The pre-W1.L4 floor was Stillorgan's uploaded favicon.png — UN1T's icon
+// on every tenant's tab; UN1T's hosts still resolve it through the chain.)
+export const PLATFORM_FAVICON_URL = '/repset-mark.svg'
 
 export const FAVICON_CACHE_TTL_MS = 5 * 60 * 1000 // favicon churn is rare
 
-let cache = { url: null, at: 0 }
+const MAX_CACHED_HOSTS = 256
+let cache = new Map()
 
 // Test hook — the module-level cache would otherwise leak between tests.
 export function _resetDefaultFaviconCache() {
-  cache = { url: null, at: 0 }
+  cache = new Map()
 }
 
 /**
- * Resolve the deployment-default favicon URL. Never throws; on any
- * miss/error it returns (and caches) LEGACY_FAVICON_URL. The failure
- * result is cached too so a down DB costs one read per TTL window, not
- * one per request.
+ * Resolve the favicon URL for a request host. Never throws; on any
+ * miss/error it returns (and caches) PLATFORM_FAVICON_URL.
  *
- * @param {{ db?: object, nowMs?: number }} [opts]  Injectable for tests.
+ * @param {{ host?: string|null, db?: object, nowMs?: number }} [opts]
+ *   host: the raw `Host` header — `(await headers()).get('host')` in a layout.
  * @returns {Promise<string>}
  */
-export async function resolveDefaultFaviconUrl({ db = null, nowMs = Date.now() } = {}) {
-  if (cache.url && nowMs - cache.at < FAVICON_CACHE_TTL_MS) return cache.url
-  let url = LEGACY_FAVICON_URL
+export async function resolveDefaultFaviconUrl({ host = '', db = null, nowMs = Date.now() } = {}) {
+  const key = hostCacheKey(host)
+  const hit = cache.get(key)
+  if (hit && nowMs - hit.at < FAVICON_CACHE_TTL_MS) return hit.url
+  let url = PLATFORM_FAVICON_URL
   try {
-    const client = db || createServerClient()
-    const { data, error } = await client
-      .from('company_settings')
-      .select('favicon_url')
-      .not('favicon_url', 'is', null)
-      .order('location_id')
-      .limit(1)
-    const configured = (!error && data && data[0]?.favicon_url) || null
-    if (configured) url = configured
+    const orgId = await resolveTenantOrgId(key, { db })
+    if (orgId) {
+      const client = db || createServerClient()
+      const { faviconUrl } = await getOrgCustomerBranding(client, orgId)
+      if (faviconUrl) url = faviconUrl
+    }
   } catch {
-    /* fall through to the legacy fallback */
+    /* fall through to the platform mark */
   }
-  cache = { url, at: nowMs }
+  if (cache.size >= MAX_CACHED_HOSTS) cache.clear()
+  cache.set(key, { url, at: nowMs })
   return url
 }

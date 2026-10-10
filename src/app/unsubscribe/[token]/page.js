@@ -1,12 +1,25 @@
+import { headers } from 'next/headers'
 import UnsubscribePage from '@/components/UnsubscribePage'
+import { createServerClient } from '@/lib/supabase'
+import { getLocationBranding } from '@/lib/location-branding'
+import { resolveGymSiteName } from '@/lib/default-site-name'
 
-// Public, no auth, no server data fetch — let Next.js render a static
-// shell that UnsubscribePage then hydrates client-side.
-export const dynamicParams = true
-export const revalidate = 3600
+// Public, no auth, no server data fetch for the body — UnsubscribePage
+// hydrates client-side. W1.L4: the title resolves by request (the `?l=`
+// studio, else the host), which is a dynamic read, so the former static
+// shell (`revalidate = 3600`) is now rendered per request.
+export const dynamic = 'force-dynamic'
 
-export const metadata = {
-  title: 'Unsubscribe — UN1T',
+// W1.L4 — the tab names the gym whose email this was: the `?l=<locationId>`
+// scope buildUnsubscribeUrl appends (that studio's brand chain), else the
+// request host's organisation brand. Never a literal.
+export async function generateMetadata(props) {
+  const searchParams = await props.searchParams
+  const locationId = typeof searchParams?.l === 'string' ? searchParams.l : null
+  let brand = ''
+  if (locationId) brand = (await getLocationBranding(createServerClient(), locationId)).companyName
+  if (!brand) brand = await resolveGymSiteName({ host: (await headers()).get('host') })
+  return { title: `Unsubscribe — ${brand}` }
 }
 
 export default async function Unsubscribe(props) {

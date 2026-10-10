@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { getLocationBranding, getOrgBrandName } from './location-branding.js'
+import { getLocationBranding, getOrgBrandName, getOrgCustomerBranding } from './location-branding.js'
+import { makeFakeDb } from './api-auth.test-helpers.js'
 
 // Table-aware supabase-builder fake. `rows` is keyed by table; `.eq()` pairs
 // filter the rows, `.order()` sorts, `.limit()` caps, and the builder is a
@@ -236,5 +237,71 @@ describe('getOrgBrandName', () => {
   it('never throws — swallows a thrown query and returns empty', async () => {
     const db = { from() { throw new Error('boom') } }
     expect(await getOrgBrandName(db, 'org1')).toBe('')
+  })
+})
+
+// W1.L4 — the ORGANISATION's customer-facing brand for a surface that knows
+// the request's org (tenant host) but no location: the anonymous login
+// screen, the <title>/OG site name, the favicon. Per field: org_settings →
+// the earliest ACTIVE location's company_settings in that org → (name only)
+// getOrgBrandName's location-name floor → '' / null. Uses makeFakeDb because
+// the resolver's `.in()` is not in this file's older fake.
+describe('getOrgCustomerBranding (W1.L4)', () => {
+  const ORG_A = 'org-a'
+  const ORG_B = 'org-b'
+  const base = () => ({
+    organizations: [
+      { id: ORG_A, slug: 'gym-a', master_location_id: null },
+      { id: ORG_B, slug: 'gym-b', master_location_id: null },
+    ],
+    locations: [
+      { id: 'loc-a1', name: 'Gym A North', organization_id: ORG_A, active: true, created_at: '2026-01-01' },
+      { id: 'loc-a2', name: 'Gym A South', organization_id: ORG_A, active: true, created_at: '2026-02-01' },
+      { id: 'loc-b1', name: 'Gym B', organization_id: ORG_B, active: true, created_at: '2026-01-15' },
+    ],
+    org_settings: [],
+    company_settings: [],
+  })
+
+  it('org_settings wins per field', async () => {
+    const t = base()
+    t.org_settings = [{ organization_id: ORG_A, company_name: 'Gym A', logo_url: 'org.png', favicon_url: 'org.ico' }]
+    t.company_settings = [{ location_id: 'loc-a1', company_name: 'North', logo_url: 'n.png', favicon_url: 'n.ico' }]
+    expect(await getOrgCustomerBranding(makeFakeDb(t), ORG_A)).toEqual({ companyName: 'Gym A', logoUrl: 'org.png', faviconUrl: 'org.ico' })
+  })
+
+  it('fills a missing field from the earliest active location\'s company_settings in THAT org', async () => {
+    const t = base()
+    t.org_settings = [{ organization_id: ORG_A, company_name: 'Gym A', logo_url: null, favicon_url: null }]
+    t.company_settings = [
+      { location_id: 'loc-a2', company_name: 'South', logo_url: 's.png', favicon_url: 's.ico' },
+      { location_id: 'loc-a1', company_name: 'North', logo_url: null, favicon_url: 'n.ico' },
+      { location_id: 'loc-b1', company_name: 'Gym B', logo_url: 'b.png', favicon_url: 'b.ico' },
+    ]
+    expect(await getOrgCustomerBranding(makeFakeDb(t), ORG_A)).toEqual({ companyName: 'Gym A', logoUrl: 's.png', faviconUrl: 'n.ico' })
+  })
+
+  it('another tenant\'s company_settings row never fills this org\'s brand', async () => {
+    const t = base()
+    t.company_settings = [{ location_id: 'loc-b1', company_name: 'Gym B', logo_url: 'b.png', favicon_url: 'b.ico' }]
+    const a = await getOrgCustomerBranding(makeFakeDb(t), ORG_A)
+    expect(a.logoUrl).toBe(null)
+    expect(a.faviconUrl).toBe(null)
+    expect(a.companyName).not.toBe('Gym B')
+  })
+
+  it('the name floors on the location-name chain (getOrgBrandName), never a literal', async () => {
+    const t = base()
+    expect((await getOrgCustomerBranding(makeFakeDb(t), ORG_A)).companyName).toBe('Gym A North')
+    const t2 = base()
+    t2.company_settings = [{ location_id: 'loc-a2', company_name: 'Gym A South Configured', logo_url: null, favicon_url: null }]
+    expect((await getOrgCustomerBranding(makeFakeDb(t2), ORG_A)).companyName).toBe('Gym A South Configured')
+  })
+
+  it('is empty with no db / no org, and never throws', async () => {
+    const EMPTY = { companyName: '', logoUrl: null, faviconUrl: null }
+    expect(await getOrgCustomerBranding(null, ORG_A)).toEqual(EMPTY)
+    expect(await getOrgCustomerBranding(makeFakeDb(base()), null)).toEqual(EMPTY)
+    expect(await getOrgCustomerBranding({ from() { throw new Error('x') } }, ORG_A)).toEqual(EMPTY)
   })
 })

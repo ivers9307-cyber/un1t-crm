@@ -9,7 +9,7 @@
 // edge cases so future-me notices breakage before staging does.
 
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { BRANDS, resolveBrand, isFrameworkAsset, getLegacyBrandRows, getCrmHostnames, CANONICAL_CRM_HOSTNAME, LEGACY_CRM_HOSTNAME, CRM_DEFAULT_HOSTNAME } from './brands.js'
+import { BRANDS, UN1T_GROUP_ORG_ID, resolveBrand, isFrameworkAsset, getLegacyBrandRows, getCrmHostnames, CANONICAL_CRM_HOSTNAME, LEGACY_CRM_HOSTNAME, CRM_DEFAULT_HOSTNAME } from './brands.js'
 import { CANONICAL_CRM_ORIGIN, LEGACY_CRM_HOST } from './legacy-host-redirect.js'
 
 afterEach(() => {
@@ -21,6 +21,27 @@ describe('BRANDS registry shape', () => {
     const ids = BRANDS.map((b) => b.id)
     expect(ids).toContain('ccfautos-pay')
     expect(ids).toContain('un1t-marketing')
+  })
+
+  // W1.L4 — the UN1T hosts speak for UN1T Group, so the host-keyed brand
+  // resolvers (site name, favicon, anonymous branding, front page) can
+  // answer for them without a tenant_domains row (which the admin API
+  // refuses for in-code hosts). Env-overridable for previews.
+  it('W1.L4 — the UN1T marketing and host-portal entries carry UN1T Group\'s organizationId', () => {
+    expect(UN1T_GROUP_ORG_ID).toBe('f117b7b8-5f56-4f80-8299-2c698242e4d2')
+    expect(BRANDS.find((b) => b.id === 'un1t-marketing').organizationId).toBe(UN1T_GROUP_ORG_ID)
+    expect(BRANDS.find((b) => b.id === 'un1t-hosts').organizationId).toBe(UN1T_GROUP_ORG_ID)
+    // The car-business hosts render their own in-code pages; no org linkage.
+    expect(BRANDS.find((b) => b.id === 'ccfautos-pay').organizationId).toBeUndefined()
+  })
+
+  it('W1.L4 — MARKETING_ORG_ID overrides the UN1T Group id', async () => {
+    vi.stubEnv('MARKETING_ORG_ID', 'org-preview')
+    vi.resetModules()
+    const mod = await import('./brands.js')
+    expect(mod.UN1T_GROUP_ORG_ID).toBe('org-preview')
+    expect(mod.BRANDS.find((b) => b.id === 'un1t-marketing').organizationId).toBe('org-preview')
+    vi.resetModules()
   })
 
   it('every brand declares the required shape', () => {

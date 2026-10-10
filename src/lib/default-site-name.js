@@ -1,148 +1,131 @@
-// CHROME.1 — deployment-default SITE NAME for the root layout's metadata.
+// CHROME.1 / W1.L4 — the SITE NAME for a request, resolved by its HOST.
 //
-// The root layout is the fallback metadata for BOTH audiences:
+// Two audiences read the <title> / OG site name this module produces:
 //   • ~160 of the 188 pages in this app are the STAFF CRM and carry no
-//     metadata of their own, so this string labels almost every staff
-//     browser tab — including on crm.repset.ie, where "UN1T Dublin" is
-//     simply the wrong product name.
-//   • a handful of customer-facing pages (event payment, host connect)
-//     also inherit it, which is why the answer is NOT "hard-code Repset".
-//     Per CLAUDE.md, anything naming the gym to a customer must come from
-//     operator-editable branding, never a literal.
+//     metadata of their own (the root layout labels them; staff layouts
+//     then name the active studio, TABTITLE.1).
+//   • the customer-facing subtrees (/book, /event, /event-pay, /host,
+//     /host-connect, /reset-password, /account) declare their own metadata
+//     through customerFacingMetadata() below.
 //
-// So: resolve the operator's own `company_settings.company_name` — the same
-// field /settings → BrandingSettings already writes and the login screen
-// already renders — and fall back to the PLATFORM name only when no operator
-// has configured one. That gives a Repset-branded deployment the right chrome
-// when no name is configured (true when CHROME.1 landed; UN1T's rows are
-// populated now) and defers to the operator's own name the moment they fill
-// the field in.
+// WHICH tenant's name? Since W1.L4 (SaaS Wave 1, decision 4): the REQUEST
+// HOST's organisation. resolveTenantOrgId(host) answers for an in-code brand
+// (un1tdublin.com → UN1T Group, brands.js) and for any tenant_domains row
+// (<slug>.repset.ie, a custom domain); getOrgCustomerBranding then walks the
+// brand chain for that org: org_settings.company_name → the earliest active
+// location's company_settings.company_name in that org → the location's
+// name. A CRM host (crm.repset.ie, crm.un1tdublin.com) and any unmapped host
+// have no organisation, and read the PLATFORM name: the product running
+// there IS Repset, and no gym is in the picture.
 //
-// WHICH tenant's name? Same answer, and the same caveat, as
-// resolveDefaultFaviconUrl: the CRM hostname serves every tenant and the
-// brand registry carries no brand→tenant linkage, so take the first
-// configured row ordered by location_id for a stable pick.
+// Before W1.L4 both resolvers took the FIRST configured company_settings
+// row in the ESTATE ordered by location_id, so every tenant's customers —
+// and the CRM itself — read whichever gym sorted first. That is the
+// cross-tenant hole this module closes; brand-chrome.test.js pins that a
+// second tenant's row can never change another tenant's rendered brand.
 //
-// SAAS-8 HANDOFF: when tenant_domains maps the request hostname to an
-// organization, thread the host in from the layout and key the cache by host.
+// resolveDefaultSiteName (root layout) and resolveGymSiteName (customer
+// layouts) are the SAME resolver since W1.L4 — one chain, one floor. Both
+// names stay exported because the two audiences are still separate seams
+// in the layouts (brand-chrome.test.js pins which one each subtree uses).
 //
-// PERFORMANCE: runs in the ROOT layout's generateMetadata, so it uses the
-// same module-level TTL cache pattern as the favicon resolver — one DB read
-// per lambda per window, never one per request. Never throws.
-
-// CHROME.1 REVIEW — one string cannot serve both audiences, so there are TWO
-// resolvers here and the difference is only the FLOOR:
-//
-//   resolveDefaultSiteName()  → operator name, else PLATFORM_SITE_NAME
-//                               ("Repset"). The root layout. Right for the
-//                               ~160 staff pages that inherit it.
-//   resolveGymSiteName()      → operator name, else (since W1.B1) the SAME
-//                               PLATFORM_SITE_NAME floor. The customer-facing
-//                               layouts.
-//
-// Why the split existed: prod's ONE company_settings row had company_name
-// NULL and org_settings was empty when CHROME.1 landed, so the floor was
-// what actually rendered, and customers on /book, /event-pay and
-// /host-connect were floored on the gym wordmark literal
-// (DEFAULT_COMPANY_NAME) while staff tabs were floored on Repset.
-//
-// W1.B1 (SaaS Wave 1, decision 3) removed that literal from
-// location-branding.js: a second gym's customers must never read another
-// gym's wordmark, and a deployment-wide "first configured row" cannot know
-// WHICH gym a customer is dealing with anyway. So until W1.L4 resolves the
-// customer-facing name by the REQUEST'S HOST (tenant_domains → organisation
-// → getLocationBranding), the gym resolver floors on the platform name too.
-// The two functions are kept as separate seams so W1.L4 can rewire the
-// customer side without touching the staff side.
+// PERFORMANCE: runs in generateMetadata on every request, so the answer is
+// held in a module-level TTL cache KEYED BY HOST (one DB round-trip set per
+// host per window per lambda); the tenant_domains rows behind
+// resolveTenantOrgId have their own 5-min cache. Never throws.
 
 import { createServerClient } from './supabase'
 import { PLATFORM_NAME } from './brand-name'
+import { resolveTenantOrgId } from './tenant-domains-edge'
+import { getOrgCustomerBranding } from './location-branding'
 
-// The platform's own name. Used only when NO operator has configured a
-// company name — at that point there is no gym identity to show, and the
-// product this deployment is running IS Repset. One source (W1.B1):
-// shared/brand-name.js, so the phone, champ-app and this chrome never drift.
+// The platform's own name. Used when the host has NO organisation — at that
+// point there is no gym identity to show, and the product this deployment
+// is running IS Repset. One source (W1.B1): shared/brand-name.js, so the
+// phone, champ-app and this chrome never drift.
 export const PLATFORM_SITE_NAME = PLATFORM_NAME
 
 export const SITE_NAME_CACHE_TTL_MS = 5 * 60 * 1000 // renames are rare
 
-let cache = { name: null, at: 0 }
-let gymCache = { name: null, at: 0 }
+// Host → { name, at }. The wildcard *.repset.ie means the key space is open
+// (any label resolves to this deployment), so the map is bounded: past the
+// cap it is cleared rather than grown.
+const MAX_CACHED_HOSTS = 256
+let cache = new Map()
 
-// Test hook — the module-level caches would otherwise leak between tests.
+// Test hook — the module-level cache would otherwise leak between tests.
 export function _resetDefaultSiteNameCache() {
-  cache = { name: null, at: 0 }
-  gymCache = { name: null, at: 0 }
+  cache = new Map()
+}
+
+/** Port stripped, lowercased; '' for no host. Shared with the favicon cache. */
+export function hostCacheKey(host) {
+  return String(host || '').split(':')[0].trim().toLowerCase()
 }
 
 /**
- * The operator-configured company name, or null when nobody has set one.
- * Shared by both resolvers so they can never disagree about what "configured"
- * means — they differ ONLY in what they fall back to. Never throws.
+ * The host's organisation brand name, or null when the host has no
+ * organisation or the organisation has no resolvable name. Never throws.
  *
- * @param {object|null} db
+ * @param {string} host
+ * @param {object|null} db  injected (tests) or null for the service-role client
  * @returns {Promise<string|null>}
  */
-async function readConfiguredCompanyName(db) {
+async function readBrandNameForHost(host, db) {
   try {
+    const orgId = await resolveTenantOrgId(host, { db })
+    if (!orgId) return null
     const client = db || createServerClient()
-    const { data, error } = await client
-      .from('company_settings')
-      .select('company_name')
-      .not('company_name', 'is', null)
-      .order('location_id')
-      .limit(1)
-    const configured = (!error && data && data[0]?.company_name) || null
+    const { companyName } = await getOrgCustomerBranding(client, orgId)
+    const name = String(companyName || '').trim()
     // A whitespace-only name would render an empty tab title.
-    if (configured && String(configured).trim()) return String(configured).trim()
+    return name || null
   } catch {
-    /* treat an unreadable row as "not configured" */
+    /* treat an unreadable brand as "no organisation name" */
   }
   return null
 }
 
 /**
- * Resolve the PLATFORM-surface default site name — the root layout, i.e. the
- * staff CRM. Never throws; on any miss or error it returns (and caches)
- * PLATFORM_SITE_NAME. The failure result is cached too, so a down DB costs
- * one read per TTL window.
+ * The site name for a request host. Tenant host → the organisation's brand;
+ * CRM / unmapped host → PLATFORM_SITE_NAME. Never throws; the miss and the
+ * failure are cached too, so a down DB costs one attempt per host per TTL.
  *
- * Customer-facing routes must NOT inherit this — see resolveGymSiteName.
- *
- * @param {{ db?: object, nowMs?: number }} [opts]  Injectable for tests.
+ * @param {{ host?: string|null, db?: object, nowMs?: number }} [opts]
+ *   host: the raw `Host` header — `(await headers()).get('host')` in a layout.
  * @returns {Promise<string>}
  */
-export async function resolveDefaultSiteName({ db = null, nowMs = Date.now() } = {}) {
-  if (cache.name && nowMs - cache.at < SITE_NAME_CACHE_TTL_MS) return cache.name
-  const name = (await readConfiguredCompanyName(db)) || PLATFORM_SITE_NAME
-  cache = { name, at: nowMs }
+export async function resolveSiteNameForHost({ host = '', db = null, nowMs = Date.now() } = {}) {
+  const key = hostCacheKey(host)
+  const hit = cache.get(key)
+  if (hit && nowMs - hit.at < SITE_NAME_CACHE_TTL_MS) return hit.name
+  const name = (await readBrandNameForHost(key, db)) || PLATFORM_SITE_NAME
+  if (cache.size >= MAX_CACHED_HOSTS) cache.clear()
+  cache.set(key, { name, at: nowMs })
   return name
 }
 
 /**
- * Resolve the CUSTOMER-facing site name — booking pages, event payment, the
- * host portal, password reset, the member account pages. Same operator field;
- * since W1.B1 the same PLATFORM floor too (the gym literal is gone — see the
- * header). W1.L4 replaces this with resolution by the request's host, which
- * is the only way to floor on the RIGHT gym.
- *
- * Never throws, same TTL cache, same "cache the miss too" behaviour.
- *
- * @param {{ db?: object, nowMs?: number }} [opts]  Injectable for tests.
- * @returns {Promise<string>}
+ * The root layout's resolver — the staff CRM and every page without its own
+ * metadata. Same chain as resolveGymSiteName since W1.L4; kept as its own
+ * name so the two audiences remain separate seams in the layouts.
  */
-export async function resolveGymSiteName({ db = null, nowMs = Date.now() } = {}) {
-  if (gymCache.name && nowMs - gymCache.at < SITE_NAME_CACHE_TTL_MS) return gymCache.name
-  const name = (await readConfiguredCompanyName(db)) || PLATFORM_SITE_NAME
-  gymCache = { name, at: nowMs }
-  return name
-}
+export const resolveDefaultSiteName = resolveSiteNameForHost
+
+/**
+ * The customer-facing resolver — booking pages, event payment, the host
+ * portal, password reset, the member account pages, and the OG site name
+ * on the public event / studio pages.
+ */
+export const resolveGymSiteName = resolveSiteNameForHost
 
 /**
  * Metadata for a customer-facing route subtree. Every customer/partner page
- * that inherited the root layout's metadata now imports this from its own
- * layout, so the gym's identity — not the platform's — labels the tab and the
- * link preview.
+ * that inherited the root layout's metadata imports this from its own
+ * layout and threads the request host in:
+ *   customerFacingMetadata({ host: (await headers()).get('host') })
+ * so the gym's identity — the right gym's — labels the tab and the link
+ * preview.
  *
  * NO `description`: the root layout used to carry a hard-coded UN1T marketing
  * tagline, which was neither operator-editable nor true for another tenant.
@@ -153,7 +136,7 @@ export async function resolveGymSiteName({ db = null, nowMs = Date.now() } = {})
  * field on /settings → BrandingSettings — and this is the single place that
  * would read it. NOT applied here: this branch takes no migrations.
  *
- * @param {{ db?: object, nowMs?: number }} [opts]
+ * @param {{ host?: string|null, db?: object, nowMs?: number }} [opts]
  * @returns {Promise<object>} a Next.js Metadata object
  */
 export async function customerFacingMetadata(opts = {}) {

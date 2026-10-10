@@ -8,6 +8,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { makeFakeDb } from './api-auth.test-helpers.js'
+import { UN1T_GROUP_ORG_ID } from './brands.js'
 import {
   resolveTenantDomainBrand,
   resolveTenantOrgId,
@@ -193,9 +194,30 @@ describe('resolveTenantOrgId — the SAAS-6/7 handoff seam', () => {
     expect(await resolveTenantOrgId('members.acmegym.ie', { db: fixture() })).toBe('org-acme')
   })
 
-  it('unmapped host → null (welcome keeps its UN1T slug fallback byte-identical)', async () => {
-    // un1tdublin.com deliberately has no row (in-code tier owns it).
-    expect(await resolveTenantOrgId('un1tdublin.com', { db: fixture() })).toBe(null)
+  // W1.L4 — the in-code tier is consulted FIRST: un1tdublin.com has no row
+  // by design (the admin API refuses one), so its organisation comes from
+  // the brands.js entry, and the DB tier is never asked about it.
+  it('W1.L4 — an in-code host with an organizationId → that org, without touching the DB tier', async () => {
+    const db = counted(fixture())
+    expect(await resolveTenantOrgId('un1tdublin.com', { db })).toBe(UN1T_GROUP_ORG_ID)
+    expect(await resolveTenantOrgId('www.un1tdublin.com', { db })).toBe(UN1T_GROUP_ORG_ID)
+    expect(await resolveTenantOrgId('host.un1tdublin.com', { db })).toBe(UN1T_GROUP_ORG_ID)
+    expect(db.spy).not.toHaveBeenCalled()
+  })
+
+  it('W1.L4 — an in-code host WITHOUT an organizationId → null, and the DB tier is still not consulted', async () => {
+    const db = counted(fixture([{ ...ROW, hostname: 'pay.ccfautos.com' }]))
+    expect(await resolveTenantOrgId('pay.ccfautos.com', { db })).toBe(null)
+    expect(db.spy).not.toHaveBeenCalled()
+  })
+
+  it('a CRM host → null (the platform surface has no tenant)', async () => {
+    expect(await resolveTenantOrgId('crm.repset.ie', { db: fixture() })).toBe(null)
+    expect(await resolveTenantOrgId('crm.un1tdublin.com', { db: fixture() })).toBe(null)
+  })
+
+  it('an unmapped host → null', async () => {
+    expect(await resolveTenantOrgId('nobody.example.com', { db: fixture() })).toBe(null)
   })
 })
 
