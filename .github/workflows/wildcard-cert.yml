@@ -3,41 +3,49 @@
 # Why this exists: repset.ie's nameservers are Cloudflare
 # (kim/robert.ns.cloudflare.com), not Vercel's. Vercel only auto-renews a
 # WILDCARD certificate when it controls the zone's DNS (it has to plant the
-# _acme-challenge TXT itself), so the *.repset.ie certificate on the un1t-crm
-# project is a CUSTOM certificate that somebody has to renew every ~90 days.
-# This workflow is that somebody. The apex (repset.ie) and the fixed hostnames
-# are NOT touched: Vercel renews those itself over HTTP-01.
+# _acme-challenge TXT itself), so somebody has to re-issue *.repset.ie every
+# ~90 days. This workflow is that somebody. The apex (repset.ie) and the
+# fixed hostnames are NOT touched: Vercel renews those itself over HTTP-01.
+#
+# Design: Vercel issues the certificate; we only solve its DNS challenge.
+# Uploading our own certificate (`vercel certs add` / PUT /v3/certs) answers
+# 402 "only available for Enterprise customers" on this Pro team (verified
+# 2026-10-10), so there is no acme.sh, no Let's Encrypt account and no key
+# material here at all. The two calls are the ones `vercel certs issue`
+# makes (read from the 63.1.0 CLI source):
+#   PATCH /v3/certs {op:"startOrder",    domains:["*.repset.ie"]}  -> challengesToResolve[{domain,status,value}]
+#   PATCH /v3/certs {op:"finalizeOrder", domains:["*.repset.ie"]}  -> the certificate
 #
 # What it does, monthly (and on demand):
 #   1. Reads the certificate currently served for wildcard-probe.repset.ie.
 #      If it is good for more than RENEW_WITHIN_DAYS more days and `force`
-#      is not set, stops with a log line. Monthly cron + 45-day threshold
-#      on a 90-day Let's Encrypt cert = a renewal roughly every two months,
-#      with a month of margin if a run fails.
-#   2. Issues a fresh *.repset.ie certificate from Let's Encrypt with
-#      acme.sh, pinned to a release TAG and its COMMIT and run straight from
-#      the clone (never --install / --install-online), proving control with
-#      a _acme-challenge.repset.ie TXT written through the Cloudflare API.
-#   3. Uploads leaf + key + CA chain to Vercel as a custom certificate
-#      (`vercel certs add`, team-scoped token).
-#   4. Polls the probe host until the served serial is the new one; fails
-#      the job if it never is.
-#   5. Shreds the key material whatever happened.
+#      is not set, stops with a log line. Monthly cron + 45-day threshold on
+#      a 90-day certificate = a renewal roughly every two months, with a
+#      month of margin if a run fails.
+#   2. Starts a Vercel certificate order for *.repset.ie (the API form of
+#      `vercel certs issue --challenge-only`) and captures the TXT value.
+#   3. Upserts that value at _acme-challenge.repset.ie through the
+#      Cloudflare API (stale TXTs with that name deleted first), then polls
+#      1.1.1.1 and 8.8.8.8 until the record is visible.
+#   4. Finishes the order with `vercel certs issue '*.repset.ie'` (the exact
+#      command that worked by hand on 2026-10-10), up to 3 attempts 30 s
+#      apart in case the challenge is not visible to Let's Encrypt yet.
+#   5. Polls the probe host until the served serial changes and the new
+#      notAfter is more than 60 days out; fails the job otherwise.
+#   The TXT record is left in place on purpose: a stale value is harmless
+#   and the next run replaces it.
 #
 # Secrets (repo -> Settings -> Secrets and variables -> Actions -> Secrets):
 #   CLOUDFLARE_DNS_API_TOKEN  Cloudflare API token: Zone:DNS:Edit +
 #                             Zone:Zone:Read, scoped to the repset.ie zone ONLY.
 #   VERCEL_TOKEN              Vercel token scoped to the accounts-1909s-projects
-#                             team (plan: Pro, which allows custom certificates).
-# Variables (same page -> Variables):
-#   ACME_ACCOUNT_EMAIL        Let's Encrypt account contact (expiry notices).
-#                             REQUIRED: the job fails early with a clear
-#                             message if it is unset, rather than hard-coding
-#                             a mailbox into a public repo.
+#                             team.
+# No repository variable is needed.
 #
 # Nothing here interpolates untrusted event input into `run:` (workflow
 # injection): the only expression that reaches a shell is the boolean
-# `inputs.force`, passed through env.
+# `inputs.force`, passed through env. The challenge value and the zone id
+# are masked before anything could echo them.
 #
 # Failure signal: GitHub emails the repo owner when a scheduled workflow
 # fails, which is enough here — the old certificate keeps serving until it
@@ -60,7 +68,7 @@ permissions:
   contents: read
 
 # Never two issuances at once: a second run would race the first on the
-# _acme-challenge TXT and on the Vercel upload. Queue, don't cancel.
+# _acme-challenge TXT and on the Vercel order. Queue, don't cancel.
 concurrency:
   group: wildcard-cert
   cancel-in-progress: false
@@ -68,21 +76,22 @@ concurrency:
 env:
   DOMAIN: repset.ie
   WILDCARD: '*.repset.ie'
+  CHALLENGE_NAME: _acme-challenge.repset.ie
   PROBE_HOST: wildcard-probe.repset.ie
   RENEW_WITHIN_DAYS: '45'
-  # acme.sh release tag AND the commit that tag pointed at when pinned. A
-  # tag can be moved; the commit check below is what actually pins.
-  ACME_SH_TAG: '3.1.6'
-  ACME_SH_COMMIT: 807da6498377ee5e0cf43a78091f46f12dc59a89
-  # Domain key type. acme.sh's default; Let's Encrypt and Vercel both take
-  # it. Set to 2048 for an RSA key if a provider ever refuses EC.
-  KEY_TYPE: ec-256
+  # A freshly issued Let's Encrypt certificate lasts 90 days; the verify
+  # step demands the served one is good for at least this long, so an old
+  # certificate still being served cannot pass as the new one.
+  MIN_NEW_DAYS: '60'
   VERCEL_CLI_VERSION: '63.1.0'
   VERCEL_SCOPE: accounts-1909s-projects
+  VERCEL_TEAM_ID: team_FgMwIJ8BU0fvTV5UsGStVJlq
+  VERCEL_API: https://api.vercel.com
+  CF_API: https://api.cloudflare.com/client/v4
 
 jobs:
   renew:
-    name: Renew *.repset.ie (Cloudflare DNS-01 -> Vercel)
+    name: Renew *.repset.ie (Vercel order, Cloudflare DNS challenge)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -91,23 +100,27 @@ jobs:
       #    parsing notAfter by hand. An unreadable probe counts as DUE: a
       #    probe outage must not be able to hide an expiry, and the worst
       #    case is one spare issuance followed by a loud verify failure.
+      #    The served serial is kept so the verify step can see it change.
       - name: Check whether renewal is due
         id: due
         env:
           FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force == true }}
         run: |
           set -euo pipefail
-          # Everything later steps write lives under WORK; the last step shreds it.
+          # Everything later steps write lives under WORK; the last step removes it.
           echo "WORK=$RUNNER_TEMP/wildcert" >> "$GITHUB_ENV"
           secs=$(( RENEW_WITHIN_DAYS * 86400 ))
           served=$(openssl s_client -servername "$PROBE_HOST" -connect "$PROBE_HOST:443" </dev/null 2>/dev/null | openssl x509 2>/dev/null || true)
           if [ -z "$served" ]; then
             echo "::warning::Could not read a certificate from $PROBE_HOST:443 - treating the renewal as due."
             echo "due=true" >> "$GITHUB_OUTPUT"
+            echo "old_serial=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo "Currently served for $PROBE_HOST:"
           printf '%s\n' "$served" | openssl x509 -noout -subject -enddate -serial | sed 's/^/  /'
+          old_serial=$(printf '%s\n' "$served" | openssl x509 -noout -serial | cut -d= -f2)
+          echo "old_serial=$old_serial" >> "$GITHUB_OUTPUT"
           if printf '%s\n' "$served" | openssl x509 -noout -checkend "$secs" >/dev/null; then
             if [ "$FORCE" = "true" ]; then
               echo "More than $RENEW_WITHIN_DAYS days left, but force=true: renewing."
@@ -123,12 +136,11 @@ jobs:
 
       # 2a. Fail early and clearly on missing configuration, before any
       #     network call. Values are only tested for presence, never printed.
-      - name: Check secrets and variables are configured
+      - name: Check secrets are configured
         if: steps.due.outputs.due == 'true'
         env:
           CF_TOKEN_SET: ${{ secrets.CLOUDFLARE_DNS_API_TOKEN != '' }}
           VERCEL_TOKEN_SET: ${{ secrets.VERCEL_TOKEN != '' }}
-          ACME_ACCOUNT_EMAIL: ${{ vars.ACME_ACCOUNT_EMAIL }}
         run: |
           set -euo pipefail
           ok=true
@@ -140,11 +152,136 @@ jobs:
             echo "::error::Secret VERCEL_TOKEN is not set (Vercel token scoped to the $VERCEL_SCOPE team)."
             ok=false
           fi
-          if [ -z "${ACME_ACCOUNT_EMAIL:-}" ]; then
-            echo "::error::Repository variable ACME_ACCOUNT_EMAIL is not set. It is the Let's Encrypt account contact (expiry notices); set it under Settings -> Secrets and variables -> Actions -> Variables."
-            ok=false
-          fi
           [ "$ok" = true ]
+          mkdir -p "$RUNNER_TEMP/wildcert"
+
+      # 2b. Start the order and capture the challenge. This is what
+      #     `vercel certs issue --challenge-only` does; calling the API
+      #     directly gives us the value as JSON instead of a table to parse.
+      #     The value goes to a file (never an output: a masked value cannot
+      #     be a step output) and is masked before anything else runs.
+      - name: Start the Vercel certificate order and capture the DNS challenge
+        if: steps.due.outputs.due == 'true'
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          body=$(jq -cn --arg d "$WILDCARD" '{op:"startOrder", domains:[$d]}')
+          resp=$(curl -sS --retry 3 --retry-all-errors \
+            -X PATCH "$VERCEL_API/v3/certs?teamId=$VERCEL_TEAM_ID" \
+            -H "Authorization: Bearer $VERCEL_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data "$body")
+          if err=$(printf '%s' "$resp" | jq -er '.error.message // empty' 2>/dev/null) && [ -n "$err" ]; then
+            code=$(printf '%s' "$resp" | jq -r '.error.code // "unknown"')
+            echo "::error::Vercel refused to start the order ($code): $err"
+            exit 1
+          fi
+          # One pending DNS challenge is expected for a single wildcard.
+          pending=$(printf '%s' "$resp" | jq -c '[.challengesToResolve[]? | select(.status == "pending")]')
+          n=$(printf '%s' "$pending" | jq 'length')
+          if [ "$n" -eq 0 ]; then
+            echo "Vercel reports no pending challenge for $WILDCARD - the order can be finished directly."
+            : > "$WORK/challenge.txt"
+            exit 0
+          fi
+          if [ "$n" -ne 1 ]; then
+            echo "::error::Expected exactly one pending challenge for $WILDCARD, got $n. Challenge domains: $(printf '%s' "$pending" | jq -r '[.[].domain] | join(", ")')"
+            exit 1
+          fi
+          cdomain=$(printf '%s' "$pending" | jq -r '.[0].domain')
+          case "$cdomain" in
+            "$DOMAIN"|"$WILDCARD") ;;
+            *) echo "::error::The pending challenge is for '$cdomain', not $WILDCARD. Refusing to write a TXT for it."; exit 1 ;;
+          esac
+          value=$(printf '%s' "$pending" | jq -r '.[0].value')
+          if [ -z "$value" ] || [ "$value" = "null" ]; then
+            echo "::error::The pending challenge carries no value."
+            exit 1
+          fi
+          echo "::add-mask::$value"
+          printf '%s' "$value" > "$WORK/challenge.txt"
+          echo "Order started; one pending DNS challenge for $cdomain captured (value masked, ${#value} chars)."
+
+      # 3. Put the value in DNS. Cloudflare's API: resolve the zone with
+      #    the token's Zone:Read, delete any TXT already at that name (a
+      #    previous run's; the challenge changes every order), create the
+      #    new one unproxied with a 60 s TTL, then wait until two public
+      #    resolvers return it. Nothing but the record count is printed.
+      - name: Publish the challenge TXT at _acme-challenge.repset.ie (Cloudflare)
+        if: steps.due.outputs.due == 'true'
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_DNS_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          value=$(cat "$WORK/challenge.txt")
+          if [ -z "$value" ]; then
+            echo "No pending challenge: nothing to publish."
+            exit 0
+          fi
+          cf() { # method path [json-body]
+            if [ $# -ge 3 ]; then
+              curl -sS --retry 3 --retry-all-errors -X "$1" "$CF_API$2" \
+                -H "Authorization: Bearer $CF_TOKEN" -H "Content-Type: application/json" --data "$3"
+            else
+              curl -sS --retry 3 --retry-all-errors -X "$1" "$CF_API$2" \
+                -H "Authorization: Bearer $CF_TOKEN"
+            fi
+          }
+          cf_ok() { # fail loudly on success:false, printing Cloudflare's messages only
+            if [ "$(printf '%s' "$1" | jq -r '.success')" != "true" ]; then
+              echo "::error::Cloudflare API call failed: $(printf '%s' "$1" | jq -c '.errors')"
+              exit 1
+            fi
+          }
+
+          zones=$(cf GET "/zones?name=$DOMAIN&status=active")
+          cf_ok "$zones"
+          zone_id=$(printf '%s' "$zones" | jq -r '.result[0].id // empty')
+          if [ -z "$zone_id" ]; then
+            echo "::error::No active Cloudflare zone named $DOMAIN is visible to CLOUDFLARE_DNS_API_TOKEN (it needs Zone:Zone:Read on repset.ie)."
+            exit 1
+          fi
+          echo "::add-mask::$zone_id"
+
+          existing=$(cf GET "/zones/$zone_id/dns_records?type=TXT&name=$CHALLENGE_NAME&per_page=100")
+          cf_ok "$existing"
+          stale=$(printf '%s' "$existing" | jq -r '.result[].id')
+          count=0
+          for rid in $stale; do
+            del=$(cf DELETE "/zones/$zone_id/dns_records/$rid")
+            cf_ok "$del"
+            count=$((count + 1))
+          done
+          echo "Removed $count stale TXT record(s) at $CHALLENGE_NAME."
+
+          body=$(jq -cn --arg n "$CHALLENGE_NAME" --arg v "$value" \
+            '{type:"TXT", name:$n, content:$v, ttl:60, proxied:false, comment:"Vercel *.repset.ie wildcard challenge (wildcard-cert workflow)"}')
+          created=$(cf POST "/zones/$zone_id/dns_records" "$body")
+          cf_ok "$created"
+          echo "Created the challenge TXT at $CHALLENGE_NAME (TTL 60, DNS-only)."
+
+          # Wait until both public resolvers return the exact value (dig
+          # prints TXT data quoted; strip the quotes before comparing).
+          deadline=$(( $(date +%s) + 180 ))
+          while :; do
+            seen=0
+            for ns in 1.1.1.1 8.8.8.8; do
+              if dig +short +time=3 +tries=1 TXT "$CHALLENGE_NAME" "@$ns" 2>/dev/null | tr -d '"' | grep -qxF -- "$value"; then
+                seen=$((seen + 1))
+              fi
+            done
+            if [ "$seen" -eq 2 ]; then
+              echo "Challenge TXT visible on 1.1.1.1 and 8.8.8.8."
+              break
+            fi
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::The challenge TXT is still not visible on both 1.1.1.1 and 8.8.8.8 after 3 minutes."
+              exit 1
+            fi
+            sleep 10
+          done
 
       - name: Set up Node
         if: steps.due.outputs.due == 'true'
@@ -152,117 +289,65 @@ jobs:
         with:
           node-version: '24'
 
-      # 2b. acme.sh from a shallow clone of the pinned tag, verified against
-      #     the pinned commit. Run from the clone: no --install, no
-      #     --install-online, no cron, no profile edits.
-      - name: Fetch acme.sh (pinned)
-        if: steps.due.outputs.due == 'true'
-        run: |
-          set -euo pipefail
-          umask 077
-          mkdir -p "$WORK"
-          git clone --quiet --depth 1 --branch "$ACME_SH_TAG" https://github.com/acmesh-official/acme.sh "$WORK/acme.sh"
-          got=$(git -C "$WORK/acme.sh" rev-parse HEAD)
-          if [ "$got" != "$ACME_SH_COMMIT" ]; then
-            echo "::error::acme.sh tag $ACME_SH_TAG resolved to commit $got, expected $ACME_SH_COMMIT. Refusing to run unpinned code; update ACME_SH_COMMIT deliberately if the tag was re-pointed."
-            exit 1
-          fi
-          echo "acme.sh $ACME_SH_TAG @ $got"
-
-      # 2c. Issue. The Cloudflare zone id is looked up with the same token
-      #     (needs Zone:Zone:Read) and handed to acme.sh as CF_Zone_ID so
-      #     dns_cf does not have to walk the zone list itself; it is masked
-      #     and kept inside this step. acme.sh polls public DNS for the TXT
-      #     before asking Let's Encrypt to validate, so no fixed --dnssleep.
-      #     Each run registers a fresh ACME account (nothing is persisted
-      #     between runs on purpose: an account key is a secret too).
-      - name: Issue the certificate with acme.sh (Cloudflare DNS-01)
-        if: steps.due.outputs.due == 'true'
-        env:
-          CF_Token: ${{ secrets.CLOUDFLARE_DNS_API_TOKEN }}
-          ACME_ACCOUNT_EMAIL: ${{ vars.ACME_ACCOUNT_EMAIL }}
-        run: |
-          set -euo pipefail
-          umask 077
-          mkdir -p "$WORK/config" "$WORK/certs" "$WORK/out"
-
-          zones=$(curl -fsS --retry 3 --retry-all-errors \
-            -H "Authorization: Bearer $CF_Token" \
-            "https://api.cloudflare.com/client/v4/zones?name=$DOMAIN&status=active")
-          CF_Zone_ID=$(printf '%s' "$zones" | jq -r '.result[0].id // empty')
-          if [ -z "$CF_Zone_ID" ]; then
-            echo "::error::No active Cloudflare zone named $DOMAIN is visible to CLOUDFLARE_DNS_API_TOKEN (it needs Zone:Zone:Read on repset.ie)."
-            exit 1
-          fi
-          echo "::add-mask::$CF_Zone_ID"
-          export CF_Token CF_Zone_ID
-
-          "$WORK/acme.sh/acme.sh" \
-            --home "$WORK/acme.sh" \
-            --config-home "$WORK/config" \
-            --cert-home "$WORK/certs" \
-            --issue \
-            --dns dns_cf \
-            --domain "$WILDCARD" \
-            --server letsencrypt \
-            --keylength "$KEY_TYPE" \
-            --accountemail "$ACME_ACCOUNT_EMAIL" \
-            --cert-file "$WORK/out/cert.pem" \
-            --key-file "$WORK/out/key.pem" \
-            --ca-file "$WORK/out/ca.pem" \
-            --fullchain-file "$WORK/out/fullchain.pem" \
-            --log-level 1
-
-          chmod 600 "$WORK/out"/*
-          echo "Issued:"
-          openssl x509 -in "$WORK/out/cert.pem" -noout -subject -enddate | sed 's/^/  /'
-
-      # 3. Upload. `vercel certs add` reads the three files and PUTs
-      #    {cert, key, ca} to /v3/certs: --crt is the LEAF, --ca the
-      #    intermediate chain (acme.sh's ca.pem), never the fullchain.
-      #    Vercel starts serving the newest certificate for the CN.
-      - name: Upload to Vercel
+      # 4. Finish the order. `vercel certs issue <cn>` sends
+      #    {op:"finalizeOrder"}; Let's Encrypt then reads the TXT. The exact
+      #    command below completed by hand on 2026-10-10. If Let's Encrypt
+      #    has not seen the record yet the CLI exits non-zero, so: three
+      #    attempts, 30 s apart.
+      - name: Issue the certificate (Vercel finalises the order)
         if: steps.due.outputs.due == 'true'
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_TELEMETRY_DISABLED: '1'
         run: |
           set -euo pipefail
-          npx --yes "vercel@$VERCEL_CLI_VERSION" certs add \
-            --crt "$WORK/out/cert.pem" \
-            --key "$WORK/out/key.pem" \
-            --ca "$WORK/out/ca.pem" \
-            --scope "$VERCEL_SCOPE" \
-            --token "$VERCEL_TOKEN"
-
-      # 4. Verify the edge actually serves it. Compare serials, up to ~3
-      #    minutes. If this fails the upload DID happen: check the project's
-      #    certificates in the Vercel dashboard before re-running.
-      - name: Verify the probe host serves the new certificate
-        if: steps.due.outputs.due == 'true'
-        run: |
-          set -euo pipefail
-          want=$(openssl x509 -in "$WORK/out/cert.pem" -noout -serial | cut -d= -f2)
-          deadline=$(( $(date +%s) + 180 ))
+          attempt=1
           while :; do
-            got=$(openssl s_client -servername "$PROBE_HOST" -connect "$PROBE_HOST:443" </dev/null 2>/dev/null | openssl x509 -noout -serial 2>/dev/null | cut -d= -f2 || true)
-            if [ -n "$got" ] && [ "$got" = "$want" ]; then
-              echo "$PROBE_HOST now serves the new certificate:"
-              openssl x509 -in "$WORK/out/cert.pem" -noout -subject -enddate | sed 's/^/  /'
+            if npx --yes "vercel@$VERCEL_CLI_VERSION" certs issue "$WILDCARD" --scope "$VERCEL_SCOPE" --token "$VERCEL_TOKEN"; then
               exit 0
             fi
+            if [ "$attempt" -ge 3 ]; then
+              echo "::error::vercel certs issue $WILDCARD failed on all 3 attempts. The challenge TXT is still in place; re-run the workflow with force=true, or finish by hand (docs/ops/wildcard-cert-renewal.md)."
+              exit 1
+            fi
+            attempt=$((attempt + 1))
+            echo "Issuance not complete yet; retrying in 30 s (attempt $attempt of 3)."
+            sleep 30
+          done
+
+      # 5. Verify the edge actually serves a NEW certificate: a different
+      #    serial from step 1, good for more than MIN_NEW_DAYS. Up to ~3
+      #    minutes. Subject + notAfter only.
+      - name: Verify the probe host serves the new certificate
+        if: steps.due.outputs.due == 'true'
+        env:
+          OLD_SERIAL: ${{ steps.due.outputs.old_serial }}
+        run: |
+          set -euo pipefail
+          min_secs=$(( MIN_NEW_DAYS * 86400 ))
+          deadline=$(( $(date +%s) + 180 ))
+          while :; do
+            served=$(openssl s_client -servername "$PROBE_HOST" -connect "$PROBE_HOST:443" </dev/null 2>/dev/null | openssl x509 2>/dev/null || true)
+            if [ -n "$served" ]; then
+              serial=$(printf '%s\n' "$served" | openssl x509 -noout -serial | cut -d= -f2)
+              if [ "$serial" != "$OLD_SERIAL" ] && printf '%s\n' "$served" | openssl x509 -noout -checkend "$min_secs" >/dev/null; then
+                echo "$PROBE_HOST now serves the new certificate:"
+                printf '%s\n' "$served" | openssl x509 -noout -subject -enddate | sed 's/^/  /'
+                exit 0
+              fi
+            fi
             if [ "$(date +%s)" -ge "$deadline" ]; then
-              echo "::error::$PROBE_HOST is still not serving the new certificate (serial ${want}) after 3 minutes. The upload succeeded; inspect Vercel -> un1t-crm -> Settings -> Domains / certificates before re-running."
+              echo "::error::$PROBE_HOST is still serving the previous certificate (or one expiring within $MIN_NEW_DAYS days) after 3 minutes. The issuance reported success; inspect Vercel -> un1t-crm -> Settings -> Domains before re-running."
               exit 1
             fi
             sleep 10
           done
 
-      # 5. Key material never outlives the job, pass or fail.
-      - name: Shred working files
+      # 6. Nothing secret is kept, but the challenge file goes anyway. The
+      #    TXT record stays in DNS on purpose (harmless; replaced next run).
+      - name: Remove working files
         if: always()
         run: |
           if [ -n "${WORK:-}" ] && [ -d "$WORK" ]; then
-            find "$WORK" -type f -exec shred -u -z -- {} + 2>/dev/null || true
             rm -rf -- "$WORK"
           fi
