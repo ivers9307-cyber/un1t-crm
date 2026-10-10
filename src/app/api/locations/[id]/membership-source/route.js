@@ -1,11 +1,12 @@
 // PUT /api/locations/[id]/membership-source
 //
-// W1.M2 — THE ONLY writer of locations.membership_source (mig 717: 'none' |
-// 'glofox' | 'un1t'; SELECT granted to authenticated, UPDATE withheld, so a
-// browser or phone cannot write it and this service-role route is the whole
-// boundary). The Glofox integrations route also sets it as a side-effect of
-// connecting/disconnecting, through the same locations update it already
-// makes — see src/app/api/locations/[id]/integrations/[provider]/route.js.
+// W1.M2 — the only DIRECT writer of locations.membership_source (mig 717:
+// 'none' | 'glofox' | 'un1t'; SELECT granted to authenticated, UPDATE
+// withheld, so a browser or phone cannot write it). The other writer is the
+// Glofox connect/disconnect flip in src/app/api/locations/[id]/integrations/
+// [provider]/route.js, which moves the column through the locations update
+// it already makes — owner/master only there too (a manager's credential
+// save never moves it), so the gate below is the gate for the column.
 //
 // Gate (Style B, the send-quiet-hours / branding order): membership FIRST
 // via assertLocationAccessOr404 — a detail route never confirms an id to a
@@ -38,6 +39,7 @@ import { getCurrentUser, assertLocationAccessOr404, guardMasterOrOwner } from '@
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { MEMBERSHIP_SOURCES, MEMBERSHIP_SOURCE_KEYS, membershipSourceState } from '@/lib/membership/source'
+import { GLOFOX_CREDENTIALS_KEPT } from '@/lib/membership/choices'
 import { logMembershipSourceChange } from '@/lib/membership/audit'
 import { logError } from '@/lib/log'
 
@@ -47,8 +49,6 @@ export const dynamic = 'force-dynamic'
 const MembershipSourceSchema = z.object({
   membership_source: z.enum(MEMBERSHIP_SOURCE_KEYS),
 })
-
-export const GLOFOX_CREDENTIALS_KEPT = 'glofox_credentials_kept'
 
 // Does an ACTIVE glofox registry row exist for this studio? A failed count
 // is "unknown" and answers false here: the warning is advisory copy, and

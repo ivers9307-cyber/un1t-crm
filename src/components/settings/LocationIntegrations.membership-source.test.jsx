@@ -48,6 +48,9 @@ describe('LocationIntegrations — Membership source card', () => {
     const options = Array.from(select.querySelectorAll('option'))
     expect(options.map((o) => o.value)).toEqual(['none', 'glofox', 'un1t'])
     expect(options.find((o) => o.value === 'un1t').disabled).toBe(true)
+    // A neutral, tenant-safe label: the KEY is un1t (schema), the copy is not.
+    expect(options.find((o) => o.value === 'un1t').textContent).toMatch(/built-in memberships/i)
+    expect(options.find((o) => o.value === 'un1t').textContent).not.toMatch(/un1t/i)
     expect(options.find((o) => o.value === 'un1t').textContent).toMatch(/not available yet/i)
     expect(options.find((o) => o.value === 'glofox').disabled).toBe(false)
     expect(options.find((o) => o.value === 'none').disabled).toBe(false)

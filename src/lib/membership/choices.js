@@ -23,12 +23,24 @@ export const MEMBERSHIP_SOURCE_CHOICES = Object.freeze([
     hint: 'Memberships, bookings, credits, invoices and the class schedule come from Glofox. Enter the credentials on the Glofox tab.',
     registered: true,
   }),
+  // The KEY is the mig 717 CHECK value; the LABEL is tenant-neutral copy
+  // (this select is staff-visible in every tenant, and nothing says UN1T —
+  // Wave 1's whole point). When src/lib/membership/sources/un1t.js lands,
+  // its `label` must equal this one (source.test.js pins registered labels).
   Object.freeze({
     key: 'un1t',
-    label: 'UN1T',
-    hint: 'The home-grown membership system. Not available yet.',
+    label: 'Built-in memberships',
+    hint: 'Memberships run inside this platform, with no external system. Coming soon.',
     registered: false,
   }),
 ])
 
 export const NOT_AVAILABLE_YET_LABEL = 'not available yet'
+
+/**
+ * The `warning` PUT /api/locations/[id]/membership-source carries when a
+ * switch to 'none' left an active Glofox registry row in place (the switch
+ * never deletes a credential). Here, not in the route, so the card imports
+ * it without importing server code.
+ */
+export const GLOFOX_CREDENTIALS_KEPT = 'glofox_credentials_kept'

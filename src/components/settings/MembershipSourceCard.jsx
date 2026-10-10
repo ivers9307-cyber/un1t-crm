@@ -22,7 +22,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Database, Loader2, Check, AlertTriangle } from 'lucide-react'
-import { MEMBERSHIP_SOURCE_CHOICES, NOT_AVAILABLE_YET_LABEL } from '@/lib/membership/choices'
+import { MEMBERSHIP_SOURCE_CHOICES, NOT_AVAILABLE_YET_LABEL, GLOFOX_CREDENTIALS_KEPT } from '@/lib/membership/choices'
 
 const STATE_COPY = {
   none: { tone: 'bg-un1t-border/40 text-un1t-subtle', label: 'No membership source' },
@@ -71,7 +71,7 @@ export default function MembershipSourceCard({ locationId, membershipSource, can
       if (!res.ok || !j.success) {
         setError(j.error || `HTTP ${res.status}`)
       } else {
-        if (j.warning === 'glofox_credentials_kept') {
+        if (j.warning === GLOFOX_CREDENTIALS_KEPT) {
           setNotice('The Glofox credentials were kept. To remove them, use Disconnect on the Glofox tab or in the Integrations hub.')
         }
         setSavedFlash(true)

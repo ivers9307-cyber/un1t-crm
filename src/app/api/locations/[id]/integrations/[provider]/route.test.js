@@ -122,9 +122,11 @@ function req(body) {
 }
 const props = (id, provider) => ({ params: Promise.resolve({ id, provider }) })
 
-const MASTER = { id: 'm', isMaster: true, role: 'master', rolesByLocation: {}, locations: [{ id: LOC }] }
-const OWNER = { id: 'o', isMaster: false, role: 'owner', rolesByLocation: { [LOC]: 'owner' }, locations: [{ id: LOC }] }
-const MANAGER = { id: 'mg', isMaster: false, role: 'manager', rolesByLocation: { [LOC]: 'manager' }, locations: [{ id: LOC }] }
+// profileRole rides on every fixture: the real getCurrentUser sets it, and
+// guardMasterOrOwner (the W1.M2 flip gate) reads it for the master bypass.
+const MASTER = { id: 'm', isMaster: true, role: 'master', profileRole: 'master', rolesByLocation: {}, locations: [{ id: LOC }] }
+const OWNER = { id: 'o', isMaster: false, role: 'owner', profileRole: 'owner', rolesByLocation: { [LOC]: 'owner' }, locations: [{ id: LOC }] }
+const MANAGER = { id: 'mg', isMaster: false, role: 'manager', profileRole: 'manager', rolesByLocation: { [LOC]: 'manager' }, locations: [{ id: LOC }] }
 const HEAD_COACH = { id: 'hc', isMaster: false, role: 'head_coach', rolesByLocation: { [LOC]: 'head_coach' }, locations: [{ id: LOC }] }
 const OUTSIDER = { id: 'x', isMaster: false, role: 'owner', rolesByLocation: { 'other': 'owner' }, locations: [{ id: 'other' }] }
 
@@ -420,6 +422,76 @@ describe('W1.M2 — membership_source follows the Glofox connection', () => {
     expect(locRow.membership_source).toBe('none')
     expect(log.locationUpdates[0]).not.toHaveProperty('membership_source')
     expect(logAuditEvent).not.toHaveBeenCalled()
+  })
+
+  // The credential save/delete stays at ADMIN_ROLES (a manager may rotate a
+  // key), but the SETTING is owner/master only (the dedicated route's gate):
+  // a manager's save or disconnect never moves membership_source.
+  it("a MANAGER saving complete Glofox credentials on a 'none' studio writes the slice but never selects glofox", async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const loc = liveGlofoxLocation()
+    loc.membership_source = 'none'
+    const { db, log, locRow } = makeDb({ location: loc })
+    createServerClient.mockReturnValue(db)
+
+    const res = await PUT(req({ branch_id: 'branch-abc', api_key: 'FRESH', api_token: 'FRESH_T' }), props(LOC, 'glofox'))
+    const body = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(locRow.settings.glofox.api_key).toBe('FRESH')
+    expect(locRow.membership_source).toBe('none')
+    expect(log.locationUpdates).toHaveLength(1)
+    expect(log.locationUpdates[0]).not.toHaveProperty('membership_source')
+    expect(body.data.membership_source).toBe('none')
+    expect(logAuditEvent).not.toHaveBeenCalled()
+  })
+
+  it("a MANAGER's DELETE on a 'glofox' studio clears the slice but leaves membership_source alone", async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const { db, log, locRow, cc } = makeDb({
+      location: liveGlofoxLocation(),
+      channelConnections: [{ id: 'cc-g', location_id: LOC, platform: 'glofox', is_active: true, access_token: 'LIVE_KEY' }],
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await DELETE(req(), props(LOC, 'glofox'))
+    expect(res.status).toBe(200)
+    expect(locRow.settings.glofox).toBeNull()
+    expect(cc[0].is_active).toBe(false)
+    expect(locRow.membership_source).toBe('glofox')
+    expect(log.locationUpdates).toHaveLength(1)
+    expect(log.locationUpdates[0]).not.toHaveProperty('membership_source')
+    expect(logAuditEvent).not.toHaveBeenCalled()
+  })
+
+  // "Connected" for the flip means COMPLETE credentials (branch id, API key,
+  // API token), not "the slice holds any value": Hatch Street's first
+  // trainer-names save must not put it on glofox/unconfigured.
+  it("saving only trainer_names on a 'none' studio with no credentials does not select glofox", async () => {
+    getCurrentUser.mockResolvedValue(OWNER)
+    const loc = liveGlofoxLocation()
+    loc.membership_source = 'none'
+    loc.settings.glofox = null
+    const { db, log, locRow } = makeDb({ location: loc })
+    createServerClient.mockReturnValue(db)
+
+    const res = await PUT(req({ trainer_names: { '0123456789abcdef01234567': 'Coach A' } }), props(LOC, 'glofox'))
+    expect(res.status).toBe(200)
+    expect(locRow.settings.glofox.trainer_names).toEqual({ '0123456789abcdef01234567': 'Coach A' })
+    expect(locRow.membership_source).toBe('none')
+    expect(log.locationUpdates[0]).not.toHaveProperty('membership_source')
+    expect(logAuditEvent).not.toHaveBeenCalled()
+  })
+
+  it("a save with a branch id and API key but NO api_token does not select glofox either", async () => {
+    getCurrentUser.mockResolvedValue(OWNER)
+    const loc = liveGlofoxLocation()
+    loc.membership_source = 'none'
+    loc.settings.glofox = null
+    const { db, locRow } = makeDb({ location: loc })
+    createServerClient.mockReturnValue(db)
+    await PUT(req({ branch_id: 'b', api_key: 'k' }), props(LOC, 'glofox'))
+    expect(locRow.membership_source).toBe('none')
   })
 
   it('a non-membership provider (unifi) never touches membership_source', async () => {

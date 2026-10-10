@@ -38,6 +38,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { membershipSourceState } from '@/lib/membership/source'
 import { logAuditEvent } from '@/lib/audit'
+import { logWarn } from '@/lib/log'
 
 const LOC_A = 'a0000000-0000-0000-0000-000000000001'
 const LOC_B = 'b0000000-0000-0000-0000-000000000002'
@@ -170,11 +171,12 @@ describe('PUT /api/locations/[id]/membership-source — the legitimate switch', 
     })
   })
 
-  it('a failed audit write never fails the switch', async () => {
-    logAuditEvent.mockRejectedValueOnce(new Error('audit down'))
+  it('a failed audit write (logAuditEvent resolves { logged: false }) is warned about and never fails the switch', async () => {
+    logAuditEvent.mockResolvedValueOnce({ logged: false, error: 'audit down' })
     const res = await PUT(put(LOC_A, { membership_source: 'glofox' }), props(LOC_A))
     expect(res.status).toBe(200)
     expect(db.updates).toHaveLength(1)
+    expect(logWarn).toHaveBeenCalledWith('membership-source', 'audit row not written', expect.objectContaining({ locationId: LOC_A, err: 'audit down' }))
   })
 
   it('selecting the value already set is a no-op 200 with no write and no audit row', async () => {

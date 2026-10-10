@@ -9058,7 +9058,9 @@ registry.registerPath({
 })
 
 // W1.M2 — the per-location membership source (locations.membership_source,
-// mig 717). THE only direct writer of the column.
+// mig 717). The only DIRECT writer of the column; the Glofox connect/
+// disconnect flip in PUT/DELETE …/integrations/glofox is the other, owner/
+// master only.
 registry.registerPath({
   method: 'put',
   path: '/api/locations/{id}/membership-source',
@@ -9073,8 +9075,10 @@ registry.registerPath({
     'target location (403 for a manager). Switching to `none` never deletes a credential: when an active glofox ' +
     'channel_connections row exists the response carries `warning: "glofox_credentials_kept"` (Disconnect in the ' +
     'Integrations hub is the explicit path). Selecting the value already set is a no-op 200. Every real change ' +
-    'writes an audit_events row (location.membership_source_changed). Connecting Glofox through ' +
-    'PUT /api/locations/{id}/integrations/glofox selects it when the studio is on `none`; DELETE there clears it. ' +
+    'writes an audit_events row (location.membership_source_changed). The only DIRECT writer of the column; the other ' +
+    'is the Glofox connect/disconnect flip: an OWNER or MASTER saving complete Glofox credentials through ' +
+    'PUT /api/locations/{id}/integrations/glofox selects it when the studio is on `none`, and their DELETE there clears it ' +
+    '(a manager may still save or delete the credentials, which never moves the column). ' +
     'Response data is membershipSourceState(): { source, state: none|configured|unconfigured|unknown, missing?, readError?, previous }.',
   request: {
     params: z.object({ id: uuidLike }),
