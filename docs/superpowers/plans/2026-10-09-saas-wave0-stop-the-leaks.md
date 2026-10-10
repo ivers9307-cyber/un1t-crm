@@ -28,6 +28,7 @@ All fourteen tasks shipped as planned (PR titles verified against GitHub on 10 O
 | W0.3 shared events | #1962 | Merged | |
 | W0.4 offers pinned | #1958 | Merged | until Wave 2 |
 | W0.5 policies per org | #1960 | Merged | landed as **mig 713** (plan said 710); 3 rows → UN1T Group |
+| W0.5b policies write RLS per org | #1979 | Open | follow-up to the #1960 review: mig 714 scopes the six write policies to the caller's organisation (owners), masters unchanged |
 | W0.6 contacts per-org uniqueness | #1961 | Merged | landed as **mig 712** (plan said 711); `nulls not distinct` |
 | W0.7 coverage report per org | #1964 | Merged | env `RECEIPT_COVERAGE_REPORT_TO` retired |
 | W0.8 notifications page | #1963 | Merged | |
