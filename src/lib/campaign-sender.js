@@ -76,7 +76,6 @@
 
 import { buildAudienceQueryAsync, applyMergeTags, buildUnsubscribeUrl, appendUnsubscribeFooter, sendBatch, consentFieldForStream, consentColumnFor, isTransientSendError, getDefaultMailboxAddress } from './postmark.js'
 import { resolveEmailSender } from './tenant-email.js'
-import { wireFrom, resolvedFromOf } from './platform-sender.js'
 import { injectPreheader, htmlToPlainText } from './email-content.js'
 import { resolveAbPhase, assignAbVariants, clampAbTestPct, decideAbOutcome, subjectForVariant, AB_FALLBACK_VARIANT } from './campaign-ab.js'
 import { frequencyCapFromLocationSettings, capCutoffIso, stampMarketingTouch, CAMPAIGN_CAP_SKIP_AFTER_MS } from './frequency-cap.js'
@@ -881,9 +880,10 @@ export async function tickCampaignSend(db, campaign) {
     }
   })
 
-  // W1.E2 — email_sends logs what went on the wire: the campaign's display
-  // name on the resolver's address, by the SAME rule sendBatch applies.
-  const loggedFromEmail = wireFrom({ fromName: campaign.from_name || undefined, resolvedFrom: resolvedFromOf(tenantSender) }) || null
+  // W1.E2 — email_sends.from_email is the ADDRESS that went on the wire (the
+  // resolver's, for every email in the chunk; the display name is not an
+  // address and is not logged — same shape as the transactional path).
+  const loggedFromEmail = tenantSender.fromEmail || null
 
   const results = await sendBatch(emailBatch, { sender: tenantSender })
 

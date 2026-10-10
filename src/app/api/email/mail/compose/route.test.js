@@ -230,7 +230,7 @@ describe('POST /api/email/conversations/compose — the send', () => {
 
     expect(res.status).toBe(200)
     expect(sendEmail).toHaveBeenCalledTimes(2)
-    expect(sendEmail.mock.calls[1][0].sender.fromEmail).toBe('Repset <hello@platform.test>')
+    expect(sendEmail.mock.calls[1][0].sender).toMatchObject({ fromEmail: 'hello@platform.test', fromName: 'Repset' })
     expect(sendEmail.mock.calls[1][0].replyTo).toBe(MB_STUDIO.address)
     const [msg] = insertsInto(db, 'email_inbox_messages')
     expect(msg.payload.from_email).toBe('Repset <hello@platform.test>')

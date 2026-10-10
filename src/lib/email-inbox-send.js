@@ -74,7 +74,7 @@ import { logError } from './log'
 import { sendViaSmtp } from './mail/smtp-send'
 import { createServerClient } from './supabase'
 import { getLocationBranding } from './location-branding'
-import { platformFromHeader } from './platform-sender'
+import { platformFromHeader, parseAddressHeader } from './platform-sender'
 
 /**
  * THIS APP'S internal stream for all conversation mail. Conversation mail is
@@ -441,7 +441,9 @@ export async function sendConversationEmail({
         // The tenant-override seam carries BOTH the server token and the From
         // (src/lib/postmark.js resolveTenantOverride). Passing `sender`
         // explicitly also stops it looking up a per-tenant sender by location.
-        sender: { serverToken, fromEmail: attempt.from, fromName: null },
+        // W1.E2 — the resolver contract is fromEmail = ADDRESS, fromName =
+        // display name, so a branded fallback ("Gym A <addr>") is split here.
+        sender: { serverToken, fromEmail: parseAddressHeader(attempt.from).address, fromName: parseAddressHeader(attempt.from).name || null },
       })
       return { ok: true, result, fromEmail: attempt.from, degraded: attempt.degraded }
     } catch (err) {

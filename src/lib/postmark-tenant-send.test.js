@@ -11,8 +11,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 vi.mock('./tenant-email', () => ({ resolveEmailSender: vi.fn() }))
 vi.mock('./supabase', () => ({ createServerClient: vi.fn(() => ({ __service: true })) }))
 
-import { sendEmail, sendBatch } from './postmark.js'
+import { sendEmail, sendBatch, sendTransactionalEmail } from './postmark.js'
 import { resolveEmailSender } from './tenant-email.js'
+import { createServerClient } from './supabase.js'
 
 const GLOBAL_TOKEN = 'global-server-token'
 // W1.E2 — the env holds a bare platform ADDRESS; with no resolved sender the
@@ -135,8 +136,9 @@ describe('sendBatch — zero behaviour change + tenant override', () => {
 // ── W1.E2 — the PRE-DOMAIN sender on the wire ───────────────────────────────
 // No tenant token: the GLOBAL server, the platform ADDRESS, the tenant's brand
 // as display name, the location's address as Reply-To.
+const PRE_DOMAIN = { serverToken: null, fromEmail: PLATFORM_ADDRESS, fromName: 'Gym A', replyTo: 'hi@gyma.ie' }
+
 describe('W1.E2 — pre-domain sends go out as "{Brand} <platform address>" with the location reply-to', () => {
-  const PRE_DOMAIN = { serverToken: null, fromEmail: PLATFORM_ADDRESS, fromName: 'Gym A', replyTo: 'hi@gyma.ie' }
 
   it('sendEmail with locationId and no tenant token puts `Gym A <hello@platform.test>` and ReplyTo hi@gyma.ie on the wire, on the global server', async () => {
     fetchSpy = okSingle()
@@ -206,6 +208,35 @@ describe('W1.E2 — pre-domain sends go out as "{Brand} <platform address>" with
       expect(JSON.stringify(bodyOf(call))).not.toContain('un1t.ie')
       expect(JSON.stringify(bodyOf(call))).not.toContain('UN1T')
     }
+  })
+
+  // sendTransactionalEmail resolves the sender itself and hands it to
+  // sendEmail as `sender` — this pins that hand-off (dropping it to `null`
+  // left every other test green).
+  it('sendTransactionalEmail with locationId: brand From + location ReplyTo on the wire; email_sends.from_email is the BARE platform address', async () => {
+    fetchSpy = okSingle()
+    resolveEmailSender.mockResolvedValue(PRE_DOMAIN)
+    const insert = vi.fn().mockResolvedValue({ error: null })
+    createServerClient.mockReturnValue({ from: vi.fn(() => ({ insert })) })
+    await sendTransactionalEmail({ to: 'a@x.ie', subject: 'S', htmlBody: '<p>x</p>', locationId: 'loc-1', contactId: 'c-1' })
+    expect(resolveEmailSender).toHaveBeenCalledWith(expect.anything(), 'loc-1')
+    const wire = bodyOf(fetchSpy.mock.calls[0])
+    expect(wire.From).toBe('Gym A <hello@platform.test>')
+    expect(wire.ReplyTo).toBe('hi@gyma.ie')
+    expect(tokenOf(fetchSpy.mock.calls[0])).toBe(GLOBAL_TOKEN)
+    expect(insert).toHaveBeenCalledTimes(1)
+    expect(insert.mock.calls[0][0]).toMatchObject({ from_email: 'hello@platform.test', to_email: 'a@x.ie', location_id: 'loc-1' })
+  })
+
+  it('sendTransactionalEmail without a contactId: same wire, nothing logged', async () => {
+    fetchSpy = okSingle()
+    resolveEmailSender.mockResolvedValue(PRE_DOMAIN)
+    const insert = vi.fn()
+    createServerClient.mockReturnValue({ from: vi.fn(() => ({ insert })) })
+    await sendTransactionalEmail({ to: 'a@x.ie', subject: 'S', htmlBody: '<p>x</p>', locationId: 'loc-1' })
+    expect(bodyOf(fetchSpy.mock.calls[0]).From).toBe('Gym A <hello@platform.test>')
+    expect(bodyOf(fetchSpy.mock.calls[0]).ReplyTo).toBe('hi@gyma.ie')
+    expect(insert).not.toHaveBeenCalled()
   })
 
   it('env unset and nothing resolved → no From on the wire (Postmark refuses loudly), never a literal', async () => {

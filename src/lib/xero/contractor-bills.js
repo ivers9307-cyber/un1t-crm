@@ -14,6 +14,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { resolvePostmarkToken } from '@/lib/postmark-token'
 import { platformFromHeader } from '@/lib/platform-sender'
+import { getLocationBranding } from '@/lib/location-branding'
 import { XeroError } from './client'
 
 const STORAGE_BUCKET = 'contractor-invoices'
@@ -25,19 +26,21 @@ function getPostmarkToken() {
   return t
 }
 
-// W1.E2 — staff/supplier-facing mail leaves as PLATFORM_NAME on the platform
-// address (POSTMARK_FROM_EMAIL, never spelled). With the env unset this is
-// undefined: the request carries no From and Postmark refuses with its own
-// message (platformFromHeader has already logged the missing env), rather
-// than a silently invented address. getPostmarkToken() has already thrown
-// before this point when the server itself is unconfigured.
-function getFromAddress() {
-  return platformFromHeader() || undefined
+// W1.E2 — supplier-facing mail leaves as the location's BRAND (W1.B1 chain:
+// company_settings → org_settings → locations.name) on the platform address
+// (POSTMARK_FROM_EMAIL, never spelled); PLATFORM_NAME when the brand cannot
+// be resolved. With the env unset this is undefined: the request carries no
+// From and Postmark refuses with its own message (platformFromHeader has
+// already logged the missing env), rather than a silently invented address.
+// getPostmarkToken() has already thrown before this point when the server
+// itself is unconfigured.
+function getFromAddress(brand) {
+  return platformFromHeader(brand) || undefined
 }
 
-async function postmarkSendWithAttachment({ to, subject, htmlBody, attachment, replyTo, metadata }) {
+async function postmarkSendWithAttachment({ to, subject, htmlBody, attachment, replyTo, metadata, fromName }) {
   const body = {
-    From: getFromAddress(),
+    From: getFromAddress(fromName),
     To: to,
     Subject: subject,
     HtmlBody: htmlBody,
@@ -143,6 +146,7 @@ export async function sendContractorInvoiceBillEmail(invoiceId) {
     to: conn.bills_email_address,
     subject,
     htmlBody,
+    fromName: (await getLocationBranding(db, inv.location_id)).companyName,
     replyTo: inv.contractor?.email || undefined,
     attachment: {
       Name: filename,

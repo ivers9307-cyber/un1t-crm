@@ -37,6 +37,9 @@ describe('parseAddressHeader / formatAddressHeader', () => {
     expect(formatAddressHeader('Gym A, Dublin', 'hi@gyma.ie')).toBe('"Gym A, Dublin" <hi@gyma.ie>')
     expect(formatAddressHeader('Gym <A>', 'hi@gyma.ie')).toBe('"Gym <A>" <hi@gyma.ie>')
     expect(formatAddressHeader('Gym\r\nA', 'hi@gyma.ie')).toBe('Gym A <hi@gyma.ie>')
+    // quotes + backslashes inside the name are dropped, the rest is quoted whole
+    expect(formatAddressHeader(`O'Brien's "Gym" <Dublin>`, 'hi@gyma.ie')).toBe(`"O'Brien's Gym <Dublin>" <hi@gyma.ie>`)
+    expect(formatAddressHeader('Back\\slash', 'hi@gyma.ie')).toBe('"Backslash" <hi@gyma.ie>')
   })
 })
 

@@ -7,7 +7,7 @@ import { withSendMarker } from './postmark-send-marker'
 // W1.E2 — the reply-to readers live in their own module so tenant-email.js
 // can read them without a cycle; both stay exported from here for callers.
 import { getDefaultMailboxAddress, getLocationInboxReplyTo as resolveInboxReplyTo } from './postmark-reply-to'
-import { wireFrom, resolvedFromOf, platformFromAddress } from './platform-sender'
+import { wireFrom, resolvedFromOf, platformFromAddress, parseAddressHeader } from './platform-sender'
 
 export { getDefaultMailboxAddress }
 
@@ -952,11 +952,12 @@ export async function sendMarketingEmail({
   })
 
   // SEQSENDER.1 / W1.E2 — the SAME rule sendEmail applies (wireFrom), so
-  // email_sends records the From that actually went on the wire: the
-  // resolver's address with the sequence's display name when it has one.
-  // Logging anything else is the kind of quiet drift that makes a
-  // deliverability question unanswerable months later.
-  const loggedFromEmail = wireFrom({ from, fromName, resolvedFrom: resolvedFromOf(sender) }) || null
+  // email_sends records the ADDRESS that actually went on the wire (the
+  // column promises an address, not a header; sendTransactionalEmail and
+  // campaign-sender log the same shape). Logging anything else is the kind
+  // of quiet drift that makes a deliverability question unanswerable months
+  // later.
+  const loggedFromEmail = parseAddressHeader(wireFrom({ from, fromName, resolvedFrom: resolvedFromOf(sender) })).address || null
 
   // Log to email_sends (same shape as the campaign + transactional paths).
   if (contactId) {

@@ -438,13 +438,13 @@ describe('W1.E2 — a campaign sends as "{from_name} <platform address>" pre-dom
     expect(batch[0].fromName).toBe('Garrett at Gym A')
     expect(batch[0].from).toBeUndefined()
     expect(opts.sender).toMatchObject({ serverToken: null, fromEmail: 'hello@platform.test', fromName: 'Gym A' })
-    // email_sends logs what went on the wire: the operator's name on the platform address.
+    // email_sends.from_email is the ADDRESS that went on the wire (never a header).
     const insert = statements.find(s => s.table === 'email_sends' && s.ops[0].method === 'insert')
-    expect(insert.ops[0].args[0][0].from_email).toBe('Garrett at Gym A <hello@platform.test>')
+    expect(insert.ops[0].args[0][0].from_email).toBe('hello@platform.test')
     expect(JSON.stringify(sendBatch.mock.calls[0])).not.toContain('ops@gyma.ie')
   })
 
-  it('no from_name → the brand From is logged, and campaign.from_email is nowhere on the wire', async () => {
+  it('no from_name → the platform address is logged, and campaign.from_email is nowhere on the wire', async () => {
     const { db, statements } = makeDb(routeWithBrand(routeFor({ candidates: [makeRecipient('r1', 0)] })))
     sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
 
@@ -452,7 +452,7 @@ describe('W1.E2 — a campaign sends as "{from_name} <platform address>" pre-dom
 
     expect(sendBatch.mock.calls[0][0][0].fromName).toBeUndefined()
     const insert = statements.find(s => s.table === 'email_sends' && s.ops[0].method === 'insert')
-    expect(insert.ops[0].args[0][0].from_email).toBe('Gym A <hello@platform.test>')
+    expect(insert.ops[0].args[0][0].from_email).toBe('hello@platform.test')
     expect(JSON.stringify(sendBatch.mock.calls[0])).not.toContain('ops@gyma.ie')
   })
 })

@@ -83,8 +83,16 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-describe('W1.E2 — staff/supplier mail leaves as PLATFORM_NAME on the platform address', () => {
-  it('From is `Repset <POSTMARK_FROM_EMAIL>`; nothing on the wire says un1t.ie', async () => {
+describe('W1.E2 — staff/supplier mail leaves as the location brand on the platform address', () => {
+  it('From is the company_settings brand on POSTMARK_FROM_EMAIL', async () => {
+    vi.stubEnv('POSTMARK_FROM_EMAIL', 'hello@platform.test')
+    vi.mocked(createServerClient).mockReturnValue(mockClient({ companySettings: [{ company_name: 'UN1T Stillorgan', logo_url: null, favicon_url: null }] }))
+    const fetchMock = stubPostmark()
+    await sendInvoiceApprovedEmail('inv-1')
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).From).toBe('UN1T Stillorgan <hello@platform.test>')
+  })
+
+  it('From is `Repset <POSTMARK_FROM_EMAIL>` when no brand resolves; nothing on the wire says un1t.ie', async () => {
     vi.stubEnv('POSTMARK_FROM_EMAIL', 'hello@platform.test')
     vi.mocked(createServerClient).mockReturnValue(mockClient({ companySettings: [] }))
     const fetchMock = stubPostmark()

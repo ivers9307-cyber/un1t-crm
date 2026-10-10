@@ -36,7 +36,9 @@ export function parseAddressHeader(value) {
 
 // A display name that would read as address syntax (`<`, `>`, a comma, a
 // quote…) is quoted, so a brand such as "Gym A, Dublin" is one mailbox on the
-// wire rather than two. Line breaks can never reach a header.
+// wire rather than two; quotes and backslashes inside it are dropped rather
+// than escaped. Line breaks can never reach a header. Non-ASCII names
+// ("Café Gym") are left as-is: Postmark RFC-2047-encodes display names itself.
 function safeName(name) {
   const n = (typeof name === 'string' ? name : '').replace(/[\r\n]+/g, ' ').trim()
   if (!n) return ''
