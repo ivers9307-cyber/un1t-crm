@@ -87,8 +87,10 @@ describe('membershipStateForPage (W1.M3a)', () => {
     expect(logError).toHaveBeenCalledTimes(1)
   })
 
-  it('no location id → none without a read (a user with no active studio has nothing to gate)', async () => {
-    expect((await membershipStateForPage(db, null)).state).toBe('none')
+  it('no location id → no_location without a read (not "none": a user with no active studio is told to pick one)', async () => {
+    const r = await membershipStateForPage(db, null)
+    expect(r.state).toBe('no_location')
+    expect(r.source).toBeNull()
     expect(membershipSourceState).not.toHaveBeenCalled()
   })
 
@@ -106,7 +108,6 @@ describe('membershipStateForPage (W1.M3a)', () => {
 describe('membershipSettingsHref / canManageMembershipSource', () => {
   it('links to the location\'s Integrations tab (where W1.M2 puts the Membership source card)', () => {
     expect(membershipSettingsHref(LOC)).toBe(`/settings/locations/${LOC}?section=integrations&tab=glofox`)
-    expect(membershipSettingsHref(null)).toBe('/settings/integrations-hub')
   })
 
   it('mirrors guardMasterOrOwner: master anywhere, owner AT the location, nobody else', () => {

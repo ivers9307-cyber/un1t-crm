@@ -172,12 +172,12 @@ export default function ClassClimateCard({ locationId, glofoxConnected, glofoxUn
 
       {/* Status warnings */}
       <div className="mt-3 text-xs space-y-1">
-        {/* PROFILESPREAD.1 — the page could not read Glofox presence. */}
+        {/* PROFILESPREAD.1 — the page could not read Glofox presence.
+            W1.M3a — there is no "not connected" line any more: the page
+            renders this card only behind <MembershipSourceGate>, which
+            owns that copy, so here connected is true unless the check failed. */}
         {glofoxUnknown && (
           <p className="text-amber-700">Couldn&apos;t check Glofox. Reload to try again.</p>
-        )}
-        {!glofoxUnknown && !glofoxConnected && (
-          <p className="text-amber-700">No membership source with a class schedule is connected at this location — choose one in Settings → Locations → Integrations.</p>
         )}
         {glofoxConnected && !hasDevices && (
           <p className="text-amber-700 inline-flex items-center gap-1">

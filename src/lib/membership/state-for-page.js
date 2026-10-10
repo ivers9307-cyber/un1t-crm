@@ -10,8 +10,9 @@
 //   { source, state, missing?, readError?, label, capabilities }
 //
 // where `state` is membershipSourceState()'s 'none' | 'configured' |
-// 'unconfigured' | 'unknown' and `label` / `capabilities` come from the
-// provider registered for `source` (the none provider for a failed read).
+// 'unconfigured' | 'unknown', or 'no_location' (no active studio to ask
+// about), and `label` / `capabilities` come from the provider registered
+// for `source` (the none provider for a failed read).
 //
 // CACHE. 60 s per location, per instance: the Studio board renders up to
 // four columns and the Business page several blocks, each of which asks.
@@ -43,7 +44,8 @@ function withProvider(s) {
  * @param {{ now?: () => number }} [opts]  test seam for the clock
  */
 export async function membershipStateForPage(db, locationId, { now = Date.now } = {}) {
-  if (!locationId) return withProvider({ source: 'none', state: 'none' })
+  // No active studio is not "no source": the gate says "Choose a location".
+  if (!locationId) return withProvider({ source: null, state: 'no_location' })
   const hit = cache.get(locationId)
   const t = now()
   if (hit && t - hit.at < MEMBERSHIP_STATE_TTL_MS) return hit.value
@@ -67,11 +69,10 @@ export function resetMembershipStateCache(locationId) {
 /**
  * Where the per-location "Membership source" setting lives (W1.M2 puts its
  * card on the location's Integrations tab, above the Glofox tab). One
- * constant, so a move is a one-line change. With no location there is only
- * the hub.
+ * constant, so a move is a one-line change. The gate links to it only for
+ * a real location (the no_location state draws no link).
  */
 export function membershipSettingsHref(locationId) {
-  if (!locationId) return '/settings/integrations-hub'
   return `/settings/locations/${locationId}?section=integrations&tab=glofox`
 }
 

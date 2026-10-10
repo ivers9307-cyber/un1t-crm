@@ -73,6 +73,15 @@ describe('MembershipSourceGate', () => {
     expect(document.querySelector('[data-membership-state]').getAttribute('data-membership-state')).toBe('unknown')
   })
 
+  it('no_location → "Choose a location": neither the none copy nor a link', () => {
+    render(<MembershipSourceGate state={{ source: null, state: 'no_location', label: 'No membership source', capabilities: NONE_CAPS }} capability="memberships" settingsHref={HREF} canManage><p>x</p></MembershipSourceGate>)
+    expect(screen.queryByText('x')).toBeNull()
+    expect(screen.getByText('Choose a location')).toBeTruthy()
+    expect(screen.getByText(/Pick a studio to see its membership data/)).toBeTruthy()
+    expect(screen.queryByText(NONE_COPY)).toBeNull()
+    expect(screen.queryByRole('link')).toBeNull()
+  })
+
   it('a missing state is treated as unknown, never as none', () => {
     render(<MembershipSourceGate capability="memberships" settingsHref={HREF}><p>x</p></MembershipSourceGate>)
     expect(screen.getByText(UNKNOWN_COPY)).toBeTruthy()

@@ -14,12 +14,14 @@ vi.mock('@/lib/membership-snapshot', () => ({ computeMembershipCounts: vi.fn() }
 vi.mock('@/lib/membership-flows', () => ({ fetchMembershipFlows: vi.fn() }))
 vi.mock('@/components/dashboard/MembershipPanel', () => ({ MembershipPanel: ({ live }) => <div>{`membership-panel:${live.active}`}</div> }))
 vi.mock('@/lib/labour-month-model', () => ({ canSeeLabour: () => false, labourStudiosFor: () => [] }))
+vi.mock('@/lib/dashboard/business-kpis', () => ({ buildBusinessKpis: vi.fn() }))
 
 import Page from './page.js'
 import { getCurrentUser } from '@/lib/auth'
 import { membershipStateForPage } from '@/lib/membership/state-for-page'
 import { computeMembershipCounts } from '@/lib/membership-snapshot'
 import { fetchMembershipFlows } from '@/lib/membership-flows'
+import { buildBusinessKpis } from '@/lib/dashboard/business-kpis'
 
 const LOC = 'a0000000-0000-4000-8000-00000000000a'
 const CAPS = { memberships: true, bookings: true, credits: true, invoices: true, schedule: true }
@@ -32,18 +34,24 @@ function findElement(node, name) {
   return findElement(node.props?.children, name)
 }
 
-async function renderMembershipBlock() {
+async function renderBlock(name) {
   const tree = await Page()
-  const el = findElement(tree, 'MembershipBlock')
-  expect(el, 'MembershipBlock is on the page').toBeTruthy()
+  const el = findElement(tree, name)
+  expect(el, `${name} is on the page`).toBeTruthy()
   return renderToStaticMarkup(await el.type(el.props))
 }
+const renderMembershipBlock = () => renderBlock('MembershipBlock')
 
 beforeEach(() => {
   vi.clearAllMocks()
   getCurrentUser.mockResolvedValue({ id: 'u1', profileRole: 'staff', rolesByLocation: { [LOC]: 'owner' }, activeLocation: { id: LOC, name: 'Studio' }, locations: [] })
   computeMembershipCounts.mockResolvedValue({ active: 412 })
   fetchMembershipFlows.mockResolvedValue([])
+  buildBusinessKpis.mockResolvedValue({
+    revenue: { totalCents: 1_234_500, deltaPct: 4, paidCount: 300 },
+    arrearsData: { totalCents: 45_000, memberCount: 3 },
+    memberCount: 412, churnCount: 7, churnDelta: 2, briefing: '2 pending approvals',
+  })
 })
 
 describe('/dashboard/business — membership trend gate (W1.M3a)', () => {
@@ -74,12 +82,52 @@ describe('/dashboard/business — membership trend gate (W1.M3a)', () => {
     expect(computeMembershipCounts).not.toHaveBeenCalled()
   })
 
-  it('the other blocks are not gated: the KPI block never asks the membership state', async () => {
+  it('the funnel, today and rail blocks are not gated and never ask the membership state', async () => {
     membershipStateForPage.mockResolvedValue({ source: 'none', state: 'none', label: 'No membership source', capabilities: {} })
     const tree = await Page()
     for (const name of ['KpiBriefingBlock', 'FunnelAdsBlock', 'TodayBlock', 'RailBlock']) {
       expect(findElement(tree, name), name).toBeTruthy()
     }
-    expect(membershipStateForPage).not.toHaveBeenCalled() // only MembershipBlock asks, and only when rendered
+    expect(membershipStateForPage).not.toHaveBeenCalled() // only the gated blocks ask, and only when rendered
+  })
+})
+
+// The KPI row is Glofox-derived end to end (Revenue MTD + In arrears read
+// glofox_invoices, Members the membership counts, Churn risk the radar).
+describe('/dashboard/business — KPI row gate (W1.M3a review)', () => {
+  it('configured: briefing + the four tiles exactly as before, no gate copy', async () => {
+    membershipStateForPage.mockResolvedValue({ source: 'glofox', state: 'configured', label: 'Glofox', capabilities: CAPS })
+    const html = await renderBlock('KpiBriefingBlock')
+    expect(buildBusinessKpis).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: 'u1' }), LOC)
+    expect(html).toContain('2 pending approvals')
+    for (const label of ['Revenue MTD', 'Members', 'Churn risk', 'In arrears']) expect(html).toContain(`>${label}<`)
+    expect(html).toContain('412')
+    expect(html).not.toContain('No membership source connected')
+    expect(html).not.toContain('data-membership-state')
+  })
+
+  it('none: the briefing line stays, the tiles are replaced by the gate (no zeros)', async () => {
+    membershipStateForPage.mockResolvedValue({ source: 'none', state: 'none', label: 'No membership source', capabilities: {} })
+    const html = await renderBlock('KpiBriefingBlock')
+    expect(html).toContain('2 pending approvals')
+    expect(html).toContain('No membership source connected')
+    expect(html).toContain(`href="/settings/locations/${LOC}?section=integrations&amp;tab=glofox"`)
+    for (const label of ['Revenue MTD', 'Members', 'Churn risk', 'In arrears']) expect(html).not.toContain(`>${label}<`)
+  })
+
+  it('unknown: the retry copy, never the none copy', async () => {
+    membershipStateForPage.mockResolvedValue({ source: null, state: 'unknown', readError: 'MEMBERSHIP_SOURCE_UNREADABLE', label: 'No membership source', capabilities: {} })
+    const html = await renderBlock('KpiBriefingBlock')
+    expect(html).toContain('Membership data could not be read right now')
+    expect(html).not.toContain('No membership source connected')
+    expect(html).not.toContain('>Members<')
+  })
+
+  it('a failed KPI build is still the block error, state or no state', async () => {
+    membershipStateForPage.mockResolvedValue({ source: 'none', state: 'none', label: 'No membership source', capabilities: {} })
+    buildBusinessKpis.mockResolvedValue(null)
+    const html = await renderBlock('KpiBriefingBlock')
+    expect(html).toContain('Headline numbers')
+    expect(html).not.toContain('No membership source connected')
   })
 })

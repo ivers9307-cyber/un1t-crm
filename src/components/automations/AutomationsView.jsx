@@ -127,12 +127,11 @@ function AutomationCard({ card, locationId }) {
       <div className="mt-3 text-xs">
         {/* PROFILESPREAD.1 — the page could not read Glofox presence: say so,
             never "isn't connected" (which sends an operator to reconnect a
-            live integration). The toggle stays off, as for !available. */}
+            live integration). The toggle stays off, as for !available.
+            W1.M3a — there is no "not connected" line: the page renders the
+            cards only behind <MembershipSourceGate>, which owns that copy. */}
         {card.status.unknown && (
           <p className="text-amber-700">Couldn&apos;t check Glofox. Reload to try again.</p>
-        )}
-        {!card.status.unknown && !card.status.available && (
-          <p className="text-amber-700">No membership source is connected at this location — choose one in Settings → Locations → Integrations to use this.</p>
         )}
         {card.status.available && !card.status.trialConfigured && (
           <p className="text-amber-700 inline-flex items-center gap-1">

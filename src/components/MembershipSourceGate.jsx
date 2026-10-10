@@ -15,6 +15,7 @@
 //                 unreadable this second
 //   configured but without the capability
 //                 "<Provider> does not provide <what>"
+//   no_location   "Choose a location" (no active studio to ask about)
 //
 // A missing `state` is unknown, never none (a page that forgot to pass it
 // cannot accidentally tell a live studio it has no source).
@@ -78,6 +79,18 @@ export default function MembershipSourceGate({ state, capability = 'memberships'
         className={className}
         title={`${label} is selected but not fully configured`}
         description={<>Missing: {missing}. <ManageLine canManage={canManage} settingsHref={settingsHref} verb="Finish setting it up in" /></>}
+      />
+    )
+  }
+
+  if (s.state === 'no_location') {
+    return (
+      <EmptyState
+        data-membership-state="no_location"
+        padding={padding}
+        className={className}
+        title="Choose a location"
+        description={`Pick a studio to see its ${cap.noun}.`}
       />
     )
   }
