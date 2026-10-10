@@ -156,3 +156,20 @@ describe('listLocationsByMembershipSource (W1.M1) — the one sanctioned reader 
     expect(await listLocationsByMembershipSource(pagedDb([[]]), 'un1t')).toEqual({ ids: [], error: null })
   })
 })
+
+// W1.M2 — the settings UI lists the CHECK values from a client-safe module
+// (src/lib/membership/choices.js: no server imports, so the browser bundle
+// never pulls @/lib/glofox). Its `registered` flags are a static mirror of
+// the registry; this test is what forces the flip when the un1t provider
+// lands (register the module here AND mark the choice registered).
+describe('membership source choices (W1.M2)', () => {
+  it('lists exactly the CHECK values, in order, and mirrors the registry on `registered`', async () => {
+    const { MEMBERSHIP_SOURCE_CHOICES } = await import('./choices')
+    expect(MEMBERSHIP_SOURCE_CHOICES.map((c) => c.key)).toEqual([...MEMBERSHIP_SOURCE_KEYS])
+    expect(MEMBERSHIP_SOURCE_CHOICES.filter((c) => c.registered).map((c) => c.key)).toEqual(Object.keys(MEMBERSHIP_SOURCES))
+    for (const c of MEMBERSHIP_SOURCE_CHOICES) {
+      expect(typeof c.label, c.key).toBe('string')
+      if (c.registered) expect(c.label).toBe(MEMBERSHIP_SOURCES[c.key].label)
+    }
+  })
+})
