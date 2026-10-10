@@ -179,7 +179,16 @@ describe('tenantEmailStatePayload / dnsRecordsFromRow — redaction', () => {
 
   it('null row → not_configured with the meta flags', () => {
     const payload = tenantEmailStatePayload(null, { addonActive: false, accountConfigured: true })
-    expect(payload).toMatchObject({ status: 'not_configured', addon_active: false, account_configured: true, records: [] })
+    expect(payload).toMatchObject({ status: 'not_configured', addon_active: false, account_configured: true, records: [], webhooks_registered: false })
+  })
+
+  // W1.E3 — the GET payload says whether the server's broadcast stream +
+  // webhooks were registered (mig 718 webhooks_registered_at), as a boolean:
+  // the timestamp itself stays on the row.
+  it('W1.E3 — webhooks_registered is the boolean of webhooks_registered_at', () => {
+    expect(tenantEmailStatePayload({ ...liveRow, webhooks_registered_at: '2026-10-10T10:00:00.000Z' }, {}).webhooks_registered).toBe(true)
+    expect(tenantEmailStatePayload({ ...liveRow, webhooks_registered_at: null }, {}).webhooks_registered).toBe(false)
+    expect(tenantEmailStatePayload(liveRow, {})).not.toHaveProperty('webhooks_registered_at')
   })
 
   it('dnsRecordsFromRow omits records missing a name or value', () => {

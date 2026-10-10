@@ -425,7 +425,7 @@ ships dark until `ZOOM_*` is set — `src/lib/settings-tree.js:290`.)
 
 **9.6 — the hidden non-Postmark item:** the ticketing shim forwards to the CRM via the Supabase edge secret **`CRM_WEBHOOK_BASE_URL`** (`supabase/functions/postmark-inbound-shim/index.ts:282,332`), currently the un1tdublin host. Flip: `supabase secrets set CRM_WEBHOOK_BASE_URL=https://crm.repset.ie` on project `iyvtbjjxdggiadzwwvdj`.
 
-**9.7 — account-wide audit gap:** the MCP is bound to one server token; the account holds at least a second (ticketing) server and possibly INTEG-B3 tenant servers (sending-only, no webhooks by construction). Eyeball the account's server list once in the UI to confirm no other registrations exist.
+**9.7 — account-wide audit gap:** the MCP is bound to one server token; the account holds at least a second (ticketing) server and possibly INTEG-B3 tenant servers (since W1.E3 these register the six-trigger hooks on `outbound`/`broadcast` themselves, at `NEXT_PUBLIC_APP_URL` — so after the host flip a tenant server's hooks point at the OLD host until its org presses Verify, which only adds hooks at the new URL and never edits the old ones). Eyeball the account's server list once in the UI to confirm no other registrations exist.
 
 Verify after: re-send any email → `postmark_webhook_queue` rows drain via `/api/cron/process-postmark-webhooks`; `/admin/webhook-dead-letter` stays empty; a test invoice email to `<slug>-invoices@mail.un1tdublin.com` lands `status='received'` (silent-by-design failure modes make a positive test the only proof). MX for `mail.un1tdublin.com` is marketing infra and does NOT change.
 

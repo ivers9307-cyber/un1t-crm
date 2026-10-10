@@ -16,6 +16,10 @@ import {
   shapeDomainResponse,
   domainIsFullyVerified,
   sanitizeSendingDomain,
+  ensureTenantServerStreams,
+  ensureTenantServerWebhooks,
+  WEBHOOK_TRIGGERS,
+  WEBHOOK_STREAMS,
 } from './postmark-account.js'
 
 const TOKEN = 'pm-account-test-token'
@@ -151,5 +155,126 @@ describe('createTenantDomain / getTenantDomain / verify*', () => {
     try { await createTenantDomain('mail.gymx.com') } catch (e) { err = e }
     expect(err.message).toContain('Domain already exists.')
     expect(err.message).not.toContain(TOKEN)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────
+// W1.E3 — a tenant server is born with its streams + webhooks
+// ─────────────────────────────────────────────────────────────
+
+// A tiny router on top of the file's vi.fn() fetch stub: `get(path, body)`
+// answers a GET by path (query string ignored), every POST records its parsed
+// body under its path and answers 200. The plan's fetchMock.get/posted/postedAll
+// DSL, implemented locally so no live Postmark call can ever be made.
+function routeFetch() {
+  const gets = new Map()
+  const posts = []
+  fetchMock.mockImplementation(async (url, opts = {}) => {
+    const path = new URL(url).pathname
+    const method = (opts.method || 'GET').toUpperCase()
+    if (method === 'GET') {
+      if (!gets.has(path)) return jsonResponse({ Message: `no stub for GET ${path}` }, 500)
+      return jsonResponse(gets.get(path))
+    }
+    posts.push({ path, body: JSON.parse(opts.body), headers: opts.headers })
+    return jsonResponse({ ID: 1 })
+  })
+  return {
+    get: (path, body) => gets.set(path, body),
+    posted: (path) => posts.find((p) => p.path === path)?.body,
+    postedAll: (path) => posts.filter((p) => p.path === path).map((p) => p.body),
+  }
+}
+
+describe('W1.E3 tenant server streams + webhooks', () => {
+  const WEBHOOK_URL = 'https://crm.repset.ie/api/webhooks/postmark'
+
+  beforeEach(() => {
+    vi.stubEnv('POSTMARK_WEBHOOK_TOKEN', 'wh-secret')
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://crm.repset.ie')
+  })
+  afterEach(() => vi.unstubAllEnvs())
+
+  it('creates the broadcast stream when the server has only outbound/inbound', async () => {
+    const r = routeFetch()
+    r.get('/message-streams', { MessageStreams: [{ ID: 'outbound' }, { ID: 'inbound' }] })
+    const out = await ensureTenantServerStreams('srv-tok')
+    expect(out).toEqual({ created: true })
+    expect(r.posted('/message-streams')).toEqual({
+      ID: 'broadcast', Name: 'Broadcasts', MessageStreamType: 'Broadcasts',
+      SubscriptionManagementConfiguration: { UnsubscribeHandlingType: 'Custom' },
+    })
+  })
+
+  it('is idempotent: an existing broadcast stream is not created again', async () => {
+    const r = routeFetch()
+    r.get('/message-streams', { MessageStreams: [{ ID: 'outbound' }, { ID: 'inbound' }, { ID: 'broadcast' }] })
+    expect(await ensureTenantServerStreams('srv-tok')).toEqual({ created: false })
+    expect(r.postedAll('/message-streams')).toHaveLength(0)
+  })
+
+  it('registers one six-trigger webhook per stream, with the X-Webhook-Token header, skipping ones that exist', async () => {
+    const r = routeFetch()
+    r.get('/webhooks', { Webhooks: [{ Url: WEBHOOK_URL, MessageStream: 'outbound' }] })
+    const out = await ensureTenantServerWebhooks('srv-tok')
+    expect(out).toEqual({ created: ['broadcast'] })
+    const posted = r.postedAll('/webhooks')
+    expect(posted).toHaveLength(1)
+    expect(posted[0]).toMatchObject({
+      Url: WEBHOOK_URL, MessageStream: 'broadcast',
+      HttpHeaders: [{ Name: 'X-Webhook-Token', Value: 'wh-secret' }],
+      Triggers: {
+        Open: { Enabled: true, PostFirstOpenOnly: false }, Click: { Enabled: true }, Delivery: { Enabled: true },
+        Bounce: { Enabled: true, IncludeContent: false }, SpamComplaint: { Enabled: true, IncludeContent: false },
+        SubscriptionChange: { Enabled: true },
+      },
+    })
+    // The exported constants ARE what goes on the wire (the global CRM.UN1T
+    // server's trigger set and the two streams the app sends on).
+    expect(posted[0].Triggers).toEqual(WEBHOOK_TRIGGERS)
+    expect(WEBHOOK_STREAMS).toEqual(['outbound', 'broadcast'])
+  })
+
+  it('registers both streams on a bare server; a hook on a DIFFERENT url does not count', async () => {
+    const r = routeFetch()
+    r.get('/webhooks', { Webhooks: [{ Url: 'https://elsewhere.example/hook', MessageStream: 'outbound' }] })
+    expect(await ensureTenantServerWebhooks('srv-tok')).toEqual({ created: ['outbound', 'broadcast'] })
+    expect(r.postedAll('/webhooks').map((w) => w.MessageStream)).toEqual([...WEBHOOK_STREAMS])
+  })
+
+  it('refuses to register a webhook without POSTMARK_WEBHOOK_TOKEN (the receiver 403s an unsigned hook), in words an org admin may read', async () => {
+    vi.stubEnv('POSTMARK_WEBHOOK_TOKEN', '')
+    const r = routeFetch()
+    r.get('/webhooks', { Webhooks: [] })
+    const err = await ensureTenantServerWebhooks('srv-tok').catch((e) => e)
+    expect(err).toBeInstanceOf(Error)
+    expect(err.message).toBe('Webhook signing token is not configured on this deployment.')
+    // The message lands in last_error (rendered to the org admin): no env name.
+    expect(err.message).not.toMatch(/POSTMARK_/)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('both calls use the SERVER token header, never the account token', async () => {
+    const r = routeFetch()
+    r.get('/message-streams', { MessageStreams: [] })
+    r.get('/webhooks', { Webhooks: [] })
+    await ensureTenantServerStreams('srv-tok')
+    await ensureTenantServerWebhooks('srv-tok')
+    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(4)
+    for (const [, opts] of fetchMock.mock.calls) {
+      expect(opts.headers['X-Postmark-Server-Token']).toBe('srv-tok')
+      expect(opts.headers['X-Postmark-Account-Token']).toBeUndefined()
+    }
+  })
+
+  it('surfaces a failed create as an error that never carries the server token', async () => {
+    fetchMock.mockImplementation(async (url, opts = {}) => {
+      if ((opts.method || 'GET') === 'GET') return jsonResponse({ MessageStreams: [] })
+      return jsonResponse({ ErrorCode: 1221, Message: 'Stream limit reached.' }, 422)
+    })
+    const err = await ensureTenantServerStreams('srv-tok').catch((e) => e)
+    expect(err).toBeInstanceOf(Error)
+    expect(err.message).toContain('Stream limit reached.')
+    expect(err.message).not.toContain('srv-tok')
   })
 })
