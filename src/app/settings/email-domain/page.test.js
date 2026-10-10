@@ -10,6 +10,7 @@ vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => ({})) }))
 vi.mock('@/lib/log', () => ({ logError: vi.fn() }))
 vi.mock('@/lib/postmark-account', () => ({ isPostmarkAccountConfigured: () => true }))
+vi.mock('@/lib/plans', () => ({ plansGrantingFeature: vi.fn(async () => []) }))
 vi.mock('@/lib/tenant-email', () => ({
   orgHasEmailDomainAddon: vi.fn(async () => true),
   tenantEmailStatePayload: vi.fn(() => ({ status: 'not_configured' })),
@@ -18,11 +19,13 @@ vi.mock('@/lib/email-domain-service', () => ({
   resolveEmailDomainOrgId: () => ({ orgId: 'org-a' }),
   loadEmailDomainRow: vi.fn(),
 }))
-vi.mock('@/components/settings/EmailDomainWizard', () => ({ default: () => 'WIZARD-RENDERED' }))
+vi.mock('@/components/settings/EmailDomainWizard', () => ({ default: vi.fn(() => 'WIZARD-RENDERED') }))
 
 import EmailDomainSettingsPage from './page.js'
 import { getCurrentUser } from '@/lib/auth'
 import { loadEmailDomainRow } from '@/lib/email-domain-service'
+import { plansGrantingFeature } from '@/lib/plans'
+import EmailDomainWizard from '@/components/settings/EmailDomainWizard'
 
 // C18 ORGROLE.1 — the page is for organisation admins (an org_admin grant).
 const owner = { id: 'u1', role: 'owner', orgAdminOrgIds: ['org-a'], activeOrganization: { id: 'org-a' }, organizationsById: { 'org-a': { name: 'Gym A' } } }
@@ -51,5 +54,21 @@ describe('/settings/email-domain — organisation admins only (C18 ORGROLE.1)', 
   it('a studio owner with no org_admin grant is sent back to /settings', async () => {
     getCurrentUser.mockResolvedValue({ ...owner, orgAdminOrgIds: [] })
     await expect(render()).rejects.toThrow(/^NEXT_REDIRECT:\/settings$/)
+  })
+})
+
+// W1.E1 — the page reads the plans that carry custom_email_domain so the
+// upsell can NAME them; a failed catalogue read never blocks the page.
+describe('/settings/email-domain — the upsell names the plans (W1.E1)', () => {
+  it('passes the plans that grant custom_email_domain to the wizard', async () => {
+    loadEmailDomainRow.mockResolvedValue(null)
+    plansGrantingFeature.mockResolvedValue([{ id: 'p1', slug: 'scale', name: 'Scale', kind: 'tier' }])
+    const html = await render()
+    expect(html).toContain('WIZARD-RENDERED')
+    expect(plansGrantingFeature).toHaveBeenCalledWith(expect.anything(), 'custom_email_domain')
+    expect(EmailDomainWizard).toHaveBeenCalledWith(
+      expect.objectContaining({ featurePlans: [{ id: 'p1', slug: 'scale', name: 'Scale', kind: 'tier' }] }),
+      undefined
+    )
   })
 })

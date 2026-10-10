@@ -9,7 +9,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { toSlug } from '@/lib/slug'
-import { deriveWizardState, WIZARD_STEPS } from '@/lib/tenant-wizard'
+import { deriveWizardState, WIZARD_STEPS, orgAdminGrantRequest, tenantPlansHref } from '@/lib/tenant-wizard'
 import { Building2, MapPin, UserPlus, Palette, Globe, CheckCircle2 } from 'lucide-react'
 
 const STEP_ICONS = { org: Building2, location: MapPin, owner: UserPlus, branding: Palette, domain: Globe, done: CheckCircle2 }
@@ -75,7 +75,7 @@ export default function TenantWizard({ initialParams }) {
 
       {step === 'org' && <OrgStep onDone={(id) => advance({ org: id })} />}
       {step === 'location' && <LocationStep orgId={orgId} onDone={(id) => advance({ loc: id })} />}
-      {step === 'owner' && <OwnerStep locationId={locationId} onDone={() => advance({ invited: '1' })} />}
+      {step === 'owner' && <OwnerStep orgId={orgId} locationId={locationId} onDone={() => advance({ invited: '1' })} />}
       {step === 'branding' && (
         <BrandingStep orgId={orgId} onDone={() => advance({ branded: '1' })} onSkip={() => advance({ branded: 'skip' })} />
       )}
@@ -215,25 +215,55 @@ function LocationStep({ orgId, onDone }) {
   )
 }
 
-function OwnerStep({ locationId, onDone }) {
+function OwnerStep({ orgId, locationId, onDone }) {
   const [fullName, setFullName] = useState('')
   const [email, setEmail] = useState('')
+  const [orgAdmin, setOrgAdmin] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
+  // W1.E1 — set once POST /api/staff has succeeded. From then on the form
+  // only retries the org-admin grant: re-posting the invite would 409 on
+  // the email, and the invite email has already gone.
+  const [invitedProfileId, setInvitedProfileId] = useState(null)
+
+  // W1.E1 — the grant that makes /settings/email-domain reachable for the
+  // new tenant's owner (an org_admin row on profile_organizations). PUT is
+  // desired-state and master-only; the wizard is master-only too.
+  async function grantOrgAdmin(profileId) {
+    const req = orgAdminGrantRequest(profileId, orgId)
+    if (!req) return { success: false, error: 'Missing organisation or profile id.' }
+    return postJson(req.url, req.method, req.body)
+  }
 
   async function submit(e) {
     e.preventDefault()
     setBusy(true)
     setError(null)
-    const json = await postJson('/api/staff', 'POST', {
-      email: email.trim().toLowerCase(),
-      full_name: fullName.trim(),
-      assignments: [{ location_id: locationId, role: 'owner', is_default: true }],
-    })
-    if (!json.success) {
-      setError(json.error || 'Could not send the invite.')
-      setBusy(false)
-      return
+    let profileId = invitedProfileId
+    if (!profileId) {
+      const json = await postJson('/api/staff', 'POST', {
+        email: email.trim().toLowerCase(),
+        full_name: fullName.trim(),
+        assignments: [{ location_id: locationId, role: 'owner', is_default: true }],
+      })
+      if (!json.success) {
+        setError(json.error || 'Could not send the invite.')
+        setBusy(false)
+        return
+      }
+      profileId = json.data?.id || null
+      if (orgAdmin) setInvitedProfileId(profileId)
+    }
+    if (orgAdmin) {
+      const grant = await grantOrgAdmin(profileId)
+      if (!grant.success) {
+        setError(
+          `Invite sent, but the organisation admin grant failed: ${grant.error || 'unknown error'}. ` +
+          'Retry here, or grant it later from Settings → Staff → the owner → Organisation admin.'
+        )
+        setBusy(false)
+        return
+      }
     }
     onDone()
   }
@@ -247,13 +277,28 @@ function OwnerStep({ locationId, onDone }) {
         <ErrorNote error={error} />
         <label className="block text-sm mb-3 max-w-sm">
           <span>Full name</span>
-          <input value={fullName} onChange={(e) => setFullName(e.target.value)} required className={inputCls()} />
+          <input value={fullName} onChange={(e) => setFullName(e.target.value)} required disabled={!!invitedProfileId} className={inputCls()} />
         </label>
-        <label className="block text-sm mb-4 max-w-sm">
+        <label className="block text-sm mb-3 max-w-sm">
           <span>Email</span>
-          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required className={inputCls()} />
+          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required disabled={!!invitedProfileId} className={inputCls()} />
         </label>
-        <PrimaryButton busy={busy}>Send invite</PrimaryButton>
+        <label className="flex items-start gap-2 text-sm mb-4 max-w-sm">
+          <input
+            type="checkbox"
+            checked={orgAdmin}
+            onChange={(e) => setOrgAdmin(e.target.checked)}
+            disabled={!!invitedProfileId}
+            className="mt-0.5"
+          />
+          <span>
+            Organisation admin (billing, email domain, API keys)
+            <span className="block text-xs text-un1t-subtle">
+              Owner at every studio of the organisation. Needed to set up the sending domain and API keys.
+            </span>
+          </span>
+        </label>
+        <PrimaryButton busy={busy}>{invitedProfileId ? 'Retry grant' : 'Send invite'}</PrimaryButton>
       </form>
     </StepCard>
   )
@@ -356,8 +401,9 @@ function DoneStep({ orgId }) {
           <span className="text-un1t-subtle"> — Glofox, WhatsApp, Instagram, Xero, Meta ads.</span>
         </li>
         <li>
-          <Link href="/admin/plans" className="underline">Assign a plan</Link>
-          <span className="text-un1t-subtle"> — tiers, allowances and wallets live on the plans track.</span>
+          {/* W1.E1 — the drill-in PINS plans per location; /admin/plans only edits the catalogue. */}
+          <Link href={tenantPlansHref(orgId)} className="underline">Assign a plan</Link>
+          <span className="text-un1t-subtle"> — pin a tier (and add-ons) per location; the sending domain comes with the plan that includes email marketing.</span>
         </li>
         <li>
           <Link href="/settings/usage" className="underline">Set usage hard caps</Link>
