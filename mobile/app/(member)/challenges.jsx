@@ -469,8 +469,6 @@ function FlagshipBadge() {
 // ── Shared leaderboard card ───────────────────────────────────────────
 
 function LeaderboardCard({ title, subtitle, iconName, top, me, count, metric, phase, flagship = false }) {
-  const metricLabel = useMetricLabels()[metric] || metric
-
   return (
     <Card>
       {/* Header */}
@@ -510,7 +508,6 @@ function LeaderboardCard({ title, subtitle, iconName, top, me, count, metric, ph
               key={`${row.rank}-${row.name}`}
               row={row}
               metric={metric}
-              metricLabel={metricLabel}
             />
           ))}
           {count > top.length && (
@@ -524,7 +521,7 @@ function LeaderboardCard({ title, subtitle, iconName, top, me, count, metric, ph
   )
 }
 
-function LeaderboardRow({ row, metric, metricLabel }) {
+function LeaderboardRow({ row, metric }) {
   const podiumColor = row.rank <= 3 ? METAL[row.rank - 1] : null
   const isMe = row.isMe
   const rankColor = podiumColor || (isMe ? PEARL : '#727170')
@@ -559,7 +556,7 @@ function LeaderboardRow({ row, metric, metricLabel }) {
         className={metric === 'points' ? 'shrink-0 font-display-bold text-sm' : 'shrink-0 font-mono text-sm'}
         style={{ color: isMe ? PEARL : '#B3B2AC' }}
       >
-        {formatValue(row.value, metric, metricLabel)}
+        {formatValue(row.value, metric)}
       </Text>
     </View>
   )
@@ -574,8 +571,10 @@ function formatDate(isoDate) {
   return `${d} ${months[m - 1]}`
 }
 
-function formatValue(value, metric, metricLabel) {
+// Branch on the metric KEY, never its label: labels are tenant-branded
+// display text (metricLabels(shortName)) and can change under us.
+function formatValue(value, metric) {
   if (metric === 'points') return `${Math.round(value).toLocaleString()} pts`
-  if (metricLabel === 'Zone 4+ min') return `${Math.round(value)} min`
+  if (metric === 'z4plus_minutes') return `${Math.round(value)} min`
   return String(Math.round(value))
 }

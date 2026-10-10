@@ -215,7 +215,8 @@ export default function ChallengeWrapped() {
           rank: rankParam,
           count: countParam,
           bookend,
-          shortName,
+          // No shortName: the model's metricLabel is never rendered here, and
+          // passing it would make the [id]-only effect read a stale brand.
         })
         setModel(m)
       } catch {

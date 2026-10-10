@@ -72,10 +72,12 @@ function fmtDate(iso) {
 export default function ContractDetail() {
   const { id } = useLocalSearchParams()
   const { profile } = useAuth()
-  // W1.S5 — the issuing studio's brand (active location); bare "Your studio"
-  // until it loads, never a gym literal.
-  const { companyName } = useBrand()
   const [contract, setContract] = useState(null)
+  // W1.S5 — the issuing studio's brand: the contract's OWN location, not the
+  // staffer's active one (a contract from another studio names that studio).
+  // useBrand falls back to the active location while the contract is still
+  // null; bare "Your studio" until it loads, never a gym literal.
+  const { companyName } = useBrand(contract?.location_id)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [signature, setSignature] = useState('')
