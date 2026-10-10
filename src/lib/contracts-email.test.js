@@ -102,6 +102,10 @@ describe('contract email branding header', () => {
     expect(sendEmail).toHaveBeenCalledTimes(2)
     for (const call of sendEmail.mock.calls) {
       expect(call[0].htmlBody).toContain('https://cdn.example/acme-logo.png')
+      // W1.E2 — the brand is the From display name; no locationId, so the
+      // studio's customer mailbox never becomes a staff email's Reply-To.
+      expect(call[0].fromName).toBe('Acme Fitness')
+      expect(call[0].locationId).toBeUndefined()
     }
   })
 })

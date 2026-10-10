@@ -89,7 +89,9 @@ function setupDb(state) {
 beforeEach(() => {
   vi.clearAllMocks()
   _resetInboxSenderCache()
-  process.env.POSTMARK_FROM_EMAIL = 'UN1T <hello@un1t.ie>'
+  // W1.E2 — the env is a bare platform address; a degraded send goes out as
+  // the studio's brand (PLATFORM_NAME here: the fake db holds no branding) on it.
+  process.env.POSTMARK_FROM_EMAIL = 'hello@un1t.ie' // bare: the recipient tests below treat this address as 'ours'
   // EMAIL-OUTBOUND-SERVER.1 — the support inbox's OWN Postmark server. Without
   // it the route refuses to send at all, which is the point (see the
   // "unconfigured" test below).
@@ -265,10 +267,10 @@ describe('POST …/reply — real reply', () => {
     expect(sendEmail).toHaveBeenCalledTimes(2)
     // Reply-To still points at the real mailbox, so the thread survives.
     expect(sendEmail.mock.calls[1][0].replyTo).toBe(MB_STUDIO.address)
-    expect(sendEmail.mock.calls[1][0].sender.fromEmail).toBe('UN1T <hello@un1t.ie>')
+    expect(sendEmail.mock.calls[1][0].sender).toMatchObject({ fromEmail: 'hello@un1t.ie', fromName: 'Repset' })
     // The row records what actually went out, not what we hoped would.
     const [msg] = insertsInto(db, 'email_inbox_messages')
-    expect(msg.payload.from_email).toBe('UN1T <hello@un1t.ie>')
+    expect(msg.payload.from_email).toBe('Repset <hello@un1t.ie>')
   })
 
   it('moves the conversation to pending and refreshes the queue summary', async () => {

@@ -16,6 +16,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('./postmark', () => ({ sendEmail: vi.fn(() => Promise.resolve()) }))
 vi.mock('./app-url', () => ({ getAppUrl: () => 'https://crm.example.test' }))
 vi.mock('./log', () => ({ logWarn: vi.fn() }))
+// W1.E2 — the From display name is the studio brand.
+vi.mock('./location-branding', () => ({ getLocationBranding: vi.fn(async () => ({ companyName: 'UN1T Stillorgan', shortName: 'UN1T', companyNameConfigured: true, logoUrl: null, faviconUrl: null })) }))
 
 const { sendEmail } = await import('./postmark')
 const { sendOverBudgetApprovalEmail, approvalVisibilityLine, monthLabel } = await import('./roster-email')
@@ -59,6 +61,16 @@ async function sendAndRead(extra = {}) {
 }
 
 beforeEach(() => { sendEmail.mockClear() })
+
+describe('W1.E2 — the From display name is the studio brand, with no customer Reply-To', () => {
+  it('passes fromName and no locationId', async () => {
+    await sendOverBudgetApprovalEmail(mockDb(), BASE)
+    const arg = sendEmail.mock.calls.at(-1)[0]
+    expect(arg.fromName).toBe('UN1T Stillorgan')
+    expect(arg.locationId).toBeUndefined()
+    expect(arg.replyTo).toBeUndefined()
+  })
+})
 
 describe('approvalVisibilityLine', () => {
   it('says staff cannot see their shifts only when nothing on the period is published', () => {
