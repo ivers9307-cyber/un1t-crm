@@ -30,7 +30,6 @@ import {
   _resetDefaultSiteNameCache,
   PLATFORM_SITE_NAME,
 } from './default-site-name.js'
-import { DEFAULT_COMPANY_NAME } from './location-branding.js'
 
 const repoFile = (rel) => readFileSync(path.join(process.cwd(), rel), 'utf8')
 
@@ -232,7 +231,7 @@ describe('root site name resolves operator branding (CHROME.1)', () => {
 // inherit that floor. Verified against prod read-only: the single
 // company_settings row has company_name NULL and org_settings is empty, so the
 // FLOOR is what renders today — this is not a theoretical branch.
-describe('customer-facing surfaces resolve the GYM identity, never the platform (CHROME.1)', () => {
+describe('customer-facing surfaces resolve operator branding; since W1.B1 both resolvers floor on the platform name (CHROME.1 / W1.B1)', () => {
   afterEach(() => { _resetDefaultSiteNameCache() })
 
   const dbReturning = (rows) => ({
@@ -245,13 +244,16 @@ describe('customer-facing surfaces resolve the GYM identity, never the platform 
     }),
   })
 
-  it('floors on the gym wordmark, not Repset, when nothing is configured', async () => {
+  // W1.B1 — the gym wordmark literal is gone from location-branding.js, so
+  // until W1.L4 resolves the site name by the request's host this resolver
+  // floors on the PLATFORM name too. The split is kept so W1.L4 has a seam.
+  it('W1.B1 — floors on the platform name, never a gym literal, when nothing is configured', async () => {
     const name = await resolveGymSiteName({ db: dbReturning([]) })
-    expect(name).toBe(DEFAULT_COMPANY_NAME)
-    expect(name).not.toBe(PLATFORM_SITE_NAME)
+    expect(name).toBe(PLATFORM_SITE_NAME)
+    expect(name).not.toMatch(/UN1T/)
   })
 
-  it('the two resolvers differ ONLY in the floor — a configured name wins for both', async () => {
+  it('the two resolvers agree — a configured name wins for both, and the floor is the same', async () => {
     const gym = await resolveGymSiteName({ db: dbReturning([{ company_name: 'Acme Fitness' }]) })
     _resetDefaultSiteNameCache()
     const platform = await resolveDefaultSiteName({ db: dbReturning([{ company_name: 'Acme Fitness' }]) })
@@ -261,13 +263,13 @@ describe('customer-facing surfaces resolve the GYM identity, never the platform 
 
   it('never throws and never blocks a customer render when the DB is down', async () => {
     const exploding = { from: () => { throw new Error('db down') } }
-    await expect(resolveGymSiteName({ db: exploding })).resolves.toBe(DEFAULT_COMPANY_NAME)
+    await expect(resolveGymSiteName({ db: exploding })).resolves.toBe(PLATFORM_SITE_NAME)
   })
 
   it('customerFacingMetadata carries no description to echo', async () => {
     const meta = await customerFacingMetadata({ db: dbReturning([]) })
-    expect(meta.title).toBe(DEFAULT_COMPANY_NAME)
-    expect(meta.openGraph.siteName).toBe(DEFAULT_COMPANY_NAME)
+    expect(meta.title).toBe(PLATFORM_SITE_NAME)
+    expect(meta.openGraph.siteName).toBe(PLATFORM_SITE_NAME)
     expect(meta.description).toBeUndefined()
     expect(meta.openGraph.description).toBeUndefined()
   })

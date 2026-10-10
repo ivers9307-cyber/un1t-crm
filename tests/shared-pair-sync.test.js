@@ -181,6 +181,14 @@ const PAIRS = {
       'what makes the identity assertion run.',
   },
 
+  'brand-name.js': {
+    mode: 'reexport',
+    why:
+      'W1.B1 — one source for product names. productName(brand, "points"|"hr") and pointsUnit build ' +
+      '"{Brand} Points" / "{Brand} HR" from the tenant brand so the phone, champ-app and the web never spell ' +
+      'a gym literal; shared/ is the implementation, src/lib/brand-name.js is an `export * from` shim.',
+  },
+
   // ── identical: hand-maintained twins that really are twins ─────────────────
   'challenges.js': {
     mode: 'identical',
