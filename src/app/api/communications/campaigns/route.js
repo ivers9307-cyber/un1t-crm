@@ -16,6 +16,7 @@ import { validateBody } from '@/lib/validate'
 import {
   CampaignCreateSchema, contentPatch, audienceFilterRefusal, NO_EMAIL, serverError,
 } from '@/lib/campaign-session-access'
+import { fromAddressReport } from '@/lib/from-address'
 
 export const dynamic = 'force-dynamic'
 
@@ -49,5 +50,8 @@ export async function POST(request) {
     .single()
   if (error || !data) return serverError(error?.message || 'Could not create the campaign')
 
-  return NextResponse.json({ success: true, data })
+  // FROMDOMAIN — from_email is stored as given but SENT only when it is on the
+  // org's verified sending domain; the editor reads `from_address` to say so.
+  const from_address = await fromAddressReport(db, body.location_id, body)
+  return NextResponse.json({ success: true, data, ...(from_address ? { from_address } : {}) })
 }

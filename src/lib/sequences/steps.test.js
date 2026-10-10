@@ -995,10 +995,11 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
     expect(arg.replyTo).toBeUndefined()
   })
 
-  // W1.E2 — the sequence's from_name is a DISPLAY NAME; the address is the
-  // resolver's (platform pre-domain, the org's verified From after), so
-  // sequence.from_email never reaches the wire and `from` is never built here.
-  it('SEQSENDER.1 / W1.E2 — passes from_name as the display name and reply_to through; from_email is not the address', async () => {
+  // W1.E2 — the sequence's from_name is a DISPLAY NAME; `from` is never built
+  // here. FROMDOMAIN — sequence.from_email is handed to sendMarketingEmail as
+  // the REQUESTED address, which uses it only on the org's verified domain
+  // (pinned in postmark-tenant-send.test.js).
+  it('SEQSENDER.1 / W1.E2 / FROMDOMAIN — passes from_name as the display name, from_email as the requested address, reply_to through', async () => {
     const db = emailDb()
     await steps.sendEmailStep(db, {
       enrollment: { id: 'e9' },
@@ -1008,12 +1009,19 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
     })
     expect(pm.sendMarketingEmail).toHaveBeenCalledWith(expect.objectContaining({
       fromName: 'Alex Example',
+      fromEmail: 'alex@example.test',
       replyTo: 'alex@example.test',
     }))
     expect(pm.sendMarketingEmail.mock.calls[0][0].from).toBeUndefined()
   })
 
-  it('W1.E2 — a bare from_email with no from_name sends with no from and no fromName (the resolver\'s brand + address)', async () => {
+  it('FROMDOMAIN — no from_email → no requested address (the resolver\'s own goes out)', async () => {
+    const db = emailDb()
+    await steps.sendEmailStep(db, { enrollment: { id: 'e9' }, step, sequence, contact: consentedContact })
+    expect(pm.sendMarketingEmail.mock.calls[0][0].fromEmail).toBeUndefined()
+  })
+
+  it('W1.E2 — a bare from_email with no from_name sends with no from and no fromName (the resolver\'s brand; FROMDOMAIN judges the address)', async () => {
     const db = emailDb()
     await steps.sendEmailStep(db, {
       enrollment: { id: 'e9' },
@@ -1024,6 +1032,7 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
     const arg = pm.sendMarketingEmail.mock.calls[0][0]
     expect(arg.from).toBeUndefined()
     expect(arg.fromName).toBeUndefined()
+    expect(arg.fromEmail).toBe('alex@example.test')
   })
 
   it('W1.E2 — from_name WITHOUT from_email is still the display name (it needs no address of its own)', async () => {

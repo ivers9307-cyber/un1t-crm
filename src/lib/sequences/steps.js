@@ -356,10 +356,12 @@ export async function sendEmailStep(db, { enrollment, step, sequence, contact, f
   // 8058 List-Unsubscribe one-click headers). unsubscribeUrl is passed
   // through so sendEmail adds those headers alongside the visible footer.
   // SEQSENDER.1 (mig 555) / W1.E2 — a sequence may name its own sender, and
-  // that name is a DISPLAY NAME: the address on the wire is the resolver's
-  // (the platform address with the studio's brand before a verified domain,
-  // the org's verified From after), so sequence.from_email is never sent.
-  // from_name NULL (every pre-existing sequence) → the resolver's own name.
+  // that name is a DISPLAY NAME on the resolved address (the platform address
+  // with the studio's brand before a verified domain, the org's verified From
+  // after). from_name NULL (every pre-existing sequence) → the resolver's own
+  // name. FROMDOMAIN — sequence.from_email is the address only when it is on
+  // the org's VERIFIED sending domain (sendMarketingEmail → pickFromAddress);
+  // any other value is ignored and the resolver's address goes out.
   const result = await sendMarketingEmail({
     to: contact.email,
     subject: mergedSubject,
@@ -369,6 +371,7 @@ export async function sendEmailStep(db, { enrollment, step, sequence, contact, f
     tag: `seq-${sequence.id}`,
     unsubscribeUrl,
     fromName: sequence.from_name || undefined,
+    fromEmail: sequence.from_email || undefined,
     // NULL keeps EMAIL-INBOX.1's default (the location's unified-inbox address).
     replyTo: sequence.reply_to || undefined,
     sourceType: 'sequence',

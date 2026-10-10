@@ -11,7 +11,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 vi.mock('./tenant-email', () => ({ resolveEmailSender: vi.fn() }))
 vi.mock('./supabase', () => ({ createServerClient: vi.fn(() => ({ __service: true })) }))
 
-import { sendEmail, sendBatch, sendTransactionalEmail } from './postmark.js'
+import { sendEmail, sendBatch, sendTransactionalEmail, sendMarketingEmail } from './postmark.js'
+import { withRequestedFrom } from './from-address.js'
 import { resolveEmailSender } from './tenant-email.js'
 import { createServerClient } from './supabase.js'
 
@@ -246,5 +247,84 @@ describe('W1.E2 — pre-domain sends go out as "{Brand} <platform address>" with
     await sendEmail({ to: 'a@x.ie', subject: 'S', htmlBody: '<p>x</p>' })
     expect(bodyOf(fetchSpy.mock.calls[0]).From).toBeUndefined()
     expect(JSON.stringify(bodyOf(fetchSpy.mock.calls[0]))).not.toContain('un1t')
+  })
+})
+
+// ── FROMDOMAIN — any address on the org's VERIFIED domain, never another ──
+describe('FROMDOMAIN — a requested From address rides the wire only on the verified domain', () => {
+  const LIVE_UN1T = {
+    serverToken: 'tenant-srv-tok',
+    fromEmail: 'hello@un1tdublin.com',
+    fromName: 'UN1T',
+    replyTo: 'hi@un1tdublin.com',
+    sendingDomain: 'un1tdublin.com',
+  }
+  const PRE = { serverToken: null, fromEmail: PLATFORM_ADDRESS, fromName: 'Gym A', replyTo: 'hi@gyma.ie' }
+
+  function marketingDb() {
+    const insert = vi.fn().mockResolvedValue({ error: null })
+    createServerClient.mockReturnValue({ from: vi.fn(() => ({ insert })) })
+    return insert
+  }
+  const send = (extra) => sendMarketingEmail({
+    to: 'a@x.ie', subject: 'S', htmlBody: '<p>x</p>', locationId: 'loc-1', contactId: 'c-1',
+    unsubscribeUrl: 'https://crm.test/unsubscribe/tok', ...extra,
+  })
+
+  it('sendBatch (the campaign path): "Garrett Ivers <garrett@un1tdublin.com>" on the tenant server', async () => {
+    fetchSpy = okBatch()
+    await sendBatch([{ to: 'a@x.ie', subject: 'S', htmlBody: '<p>x</p>', fromName: 'Garrett Ivers' }],
+      { sender: withRequestedFrom(LIVE_UN1T, 'garrett@un1tdublin.com') })
+    expect(bodyOf(fetchSpy.mock.calls[0])[0].From).toBe('Garrett Ivers <garrett@un1tdublin.com>')
+    expect(tokenOf(fetchSpy.mock.calls[0])).toBe('tenant-srv-tok')
+  })
+
+  it('sendMarketingEmail (the sequence path): requested address on the verified domain → wire From + email_sends.from_email', async () => {
+    fetchSpy = okSingle()
+    resolveEmailSender.mockResolvedValue({ ...LIVE_UN1T })
+    const insert = marketingDb()
+    await send({ fromName: 'Garrett Ivers', fromEmail: 'garrett@un1tdublin.com' })
+    expect(bodyOf(fetchSpy.mock.calls[0]).From).toBe('Garrett Ivers <garrett@un1tdublin.com>')
+    expect(tokenOf(fetchSpy.mock.calls[0])).toBe('tenant-srv-tok')
+    expect(insert.mock.calls[0][0].from_email).toBe('garrett@un1tdublin.com')
+  })
+
+  it('case-insensitive: Alex@UN1TDublin.com sends (and logs) as alex@un1tdublin.com', async () => {
+    fetchSpy = okSingle()
+    resolveEmailSender.mockResolvedValue({ ...LIVE_UN1T })
+    const insert = marketingDb()
+    await send({ fromEmail: 'Alex@UN1TDublin.com' })
+    expect(bodyOf(fetchSpy.mock.calls[0]).From).toBe('UN1T <alex@un1tdublin.com>')
+    expect(insert.mock.calls[0][0].from_email).toBe('alex@un1tdublin.com')
+  })
+
+  it('another domain → the tenant fromEmail, and the requested address is nowhere on the wire', async () => {
+    fetchSpy = okSingle()
+    resolveEmailSender.mockResolvedValue({ ...LIVE_UN1T })
+    const insert = marketingDb()
+    await send({ fromName: 'Garrett Ivers', fromEmail: 'x@other.com' })
+    expect(bodyOf(fetchSpy.mock.calls[0]).From).toBe('Garrett Ivers <hello@un1tdublin.com>')
+    expect(insert.mock.calls[0][0].from_email).toBe('hello@un1tdublin.com')
+    expect(JSON.stringify(bodyOf(fetchSpy.mock.calls[0]))).not.toContain('other.com')
+  })
+
+  it('a subdomain of the verified domain → the tenant fromEmail', async () => {
+    fetchSpy = okSingle()
+    resolveEmailSender.mockResolvedValue({ ...LIVE_UN1T })
+    const insert = marketingDb()
+    await send({ fromEmail: 'garrett@mail.un1tdublin.com' })
+    expect(bodyOf(fetchSpy.mock.calls[0]).From).toBe('UN1T <hello@un1tdublin.com>')
+    expect(insert.mock.calls[0][0].from_email).toBe('hello@un1tdublin.com')
+  })
+
+  it('no live tenant domain → the platform address regardless of the requested one, on the global server', async () => {
+    fetchSpy = okSingle()
+    resolveEmailSender.mockResolvedValue({ ...PRE })
+    const insert = marketingDb()
+    await send({ fromName: 'Garrett Ivers', fromEmail: 'garrett@un1tdublin.com' })
+    expect(bodyOf(fetchSpy.mock.calls[0]).From).toBe('Garrett Ivers <hello@platform.test>')
+    expect(tokenOf(fetchSpy.mock.calls[0])).toBe(GLOBAL_TOKEN)
+    expect(insert.mock.calls[0][0].from_email).toBe(PLATFORM_ADDRESS)
+    expect(JSON.stringify(bodyOf(fetchSpy.mock.calls[0]))).not.toContain('garrett@')
   })
 })
