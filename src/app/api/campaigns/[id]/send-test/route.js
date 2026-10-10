@@ -21,6 +21,8 @@ import { z } from 'zod'
 import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { sendEmail, applyMergeTags } from '@/lib/postmark'
+import { resolveEmailSender } from '@/lib/tenant-email'
+import { withRequestedFrom } from '@/lib/from-address'
 import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import { ADMIN_ROLES } from '@/lib/schemas'
 import { validateBody } from '@/lib/validate'
@@ -129,17 +131,21 @@ export async function POST(request, props) {
     preference_url: preferenceUrl,
   })
 
+  // W1.E2 — a test send matches a real one: the campaign's location resolves
+  // the sender (brand on the platform address pre-domain, the org's verified
+  // From after, the studio's reply-to), and the operator's From name is a
+  // display name on it. FROMDOMAIN — the same address pick as
+  // campaign-sender.js: campaign.from_email when it is on the org's verified
+  // domain, the resolver's own address otherwise. resolveEmailSender never
+  // throws (any fault → the global default).
+  const sender = withRequestedFrom(await resolveEmailSender(db, campaign.location_id), campaign.from_email)
+
   try {
     const result = await sendEmail({
       to: recipient,
       subject,
       htmlBody: html,
-      // W1.E2 — a test send matches a real one: the campaign's location
-      // resolves the sender (brand on the platform address pre-domain, the
-      // org's verified From after, the studio's reply-to), and the operator's
-      // From name is a display name on it. campaign.from_email never reaches
-      // the wire, here or in campaign-sender.js.
-      locationId: campaign.location_id,
+      sender,
       fromName: campaign.from_name || undefined,
       replyTo: campaign.reply_to,
       stream: 'broadcast',
