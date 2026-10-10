@@ -98,11 +98,15 @@ function AbVariantRow({ label, subject, stats, isWinner }) {
 }
 
 export default function CampaignDetail({ campaign, recipients = [], stats = null, abStats = null, resendChild = null, resendParent = null, locationId, userId: _userId }) {
-  // W1.S2 — the From NAME is the operator's or the studio's brand; the
-  // address is the sender resolver's (the platform's, or the org's verified
-  // domain once it has one). campaign.from_email never reaches the wire, so
-  // neither surface renders it.
+  // W1.S2 — the From NAME is the operator's or the studio's brand. The From
+  // ADDRESS (campaign.from_email) applies only when it is on the org's
+  // verified sending domain; otherwise the platform address sends with the
+  // From name, and the details card says so.
   const { companyName: brand } = useLocationBrand(locationId)
+  const fromDisplayName = campaign.from_name || brand || ''
+  const fromLine = campaign.from_email
+    ? (fromDisplayName ? `${fromDisplayName} <${campaign.from_email}>` : campaign.from_email)
+    : (fromDisplayName || '—')
   const router = useRouter()
   const [tab, setTab] = useState('overview')  // overview, recipients, preview
   // COMMSFIX.D.1b — stop/resend state. `status` is local so the header
@@ -500,8 +504,12 @@ export default function CampaignDetail({ campaign, recipients = [], stats = null
               <div className="grid grid-cols-2 gap-4 text-sm">
                 <div>
                   <span className="text-un1t-muted">From</span>
-                  <p>{campaign.from_name || brand || '—'}</p>
-                  <p className="text-xs text-un1t-muted">on the platform&apos;s sending address, or the studio&apos;s verified domain</p>
+                  <p data-testid="campaign-detail-from">{fromLine}</p>
+                  <p className="text-xs text-un1t-muted">
+                    {campaign.from_email
+                      ? 'Applies when the address is on your verified sending domain; otherwise sent from the platform address with this From name.'
+                      : 'Sent from the platform address with this From name.'}
+                  </p>
                 </div>
                 <div>
                   <span className="text-un1t-muted">Reply To</span>
@@ -625,7 +633,7 @@ export default function CampaignDetail({ campaign, recipients = [], stats = null
               <div className="bg-white rounded-lg overflow-hidden shadow-lg">
                 {/* Email header bar */}
                 <div className="bg-gray-100 px-4 py-3 border-b text-xs text-gray-600 space-y-1">
-                  <p><strong>From:</strong> {campaign.from_name || brand || '—'}</p>
+                  <p><strong>From:</strong> {fromLine}</p>
                   <p><strong>Subject:</strong> {campaign.subject || '(no subject)'}</p>
                   {campaign.preview_text && <p><strong>Preview:</strong> {campaign.preview_text}</p>}
                 </div>

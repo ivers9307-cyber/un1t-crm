@@ -39,11 +39,10 @@ export default function CampaignEditor({ campaign, locationId, userId: _userId, 
   const [previewText, setPreviewText] = useState(campaign?.preview_text || '')
   // W1.S2 — the default From NAME is the studio's brand (resolved by the
   // branding route, never spelled); it seeds an empty draft once the brand
-  // lands and is then the operator's to edit. from_email never reaches the
-  // wire (the sender resolver's address always sends: the platform's, or the
-  // org's verified domain once it has one; the From name still applies), so
-  // the field is not shown: the stored value is carried through the save
-  // untouched.
+  // lands and is then the operator's to edit. The From ADDRESS applies only
+  // when it is on the org's verified sending domain; until an org has a live
+  // tenant domain (or for an address off it) the platform address sends,
+  // with the From name.
   const { companyName: brand } = useLocationBrand(locationId)
   const [fromName, setFromName] = useState(campaign?.from_name || '')
   const fromNameSeeded = useRef(Boolean(campaign?.from_name))
@@ -52,7 +51,7 @@ export default function CampaignEditor({ campaign, locationId, userId: _userId, 
     fromNameSeeded.current = true
     setFromName((v) => v || brand)
   }, [brand])
-  const [fromEmail] = useState(campaign?.from_email || '')
+  const [fromEmail, setFromEmail] = useState(campaign?.from_email || '')
   const [emailType, setEmailType] = useState(campaign?.postmark_stream === 'outbound' ? 'utility' : 'marketing')
   const [replyTo, setReplyTo] = useState(campaign?.reply_to || '')
   // CAMPAIGN-AB — optional subject-line A/B test (mig 398). Enabled ⇔
@@ -1157,9 +1156,18 @@ export default function CampaignEditor({ campaign, locationId, userId: _userId, 
                   />
                 </div>
                 <div>
-                  <label className="block text-sm mb-1.5">From address</label>
-                  <p className="text-xs text-un1t-muted pt-2" data-testid="campaign-from-address-note">
-                    Sent from the platform&apos;s sending address (or the studio&apos;s own verified domain, once set up) with the From name above; replies go to the Reply-To below.
+                  <label htmlFor="campaign-from-address" className="block text-sm mb-1.5">From address</label>
+                  <input
+                    id="campaign-from-address"
+                    type="email"
+                    value={fromEmail}
+                    onChange={e => setFromEmail(e.target.value)}
+                    placeholder="e.g. hello@yourstudio.com"
+                    aria-describedby="campaign-from-address-note"
+                    className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
+                  />
+                  <p id="campaign-from-address-note" className="text-xs text-un1t-muted mt-1.5" data-testid="campaign-from-address-note">
+                    Must be on your verified sending domain (Settings → Email domain); otherwise mail sends from the platform address with your From name.
                   </p>
                 </div>
               </div>

@@ -383,8 +383,9 @@ describe('CampaignEditor — a campaign whose content is locked is read-only', (
   })
 })
 
-// W1.S2 / W1.E2 — the platform address always sends; the From NAME still
-// applies. The editor shows no From-address input any more and seeds the From
+// W1.S2 / W1.E2 — the From ADDRESS applies when it is on the org's verified
+// sending domain; otherwise the platform address sends with the From NAME.
+// The editor keeps the From-address input (with that hint) and seeds the From
 // name from the studio's brand (never a literal gym).
 describe('CampaignEditor — sender fields after W1.E2', () => {
   beforeEach(() => resetLocationBrandCache())
@@ -397,14 +398,17 @@ describe('CampaignEditor — sender fields after W1.E2', () => {
     }))
   }
 
-  it('has no From-address input; a note explains the platform address sends', async () => {
+  it('keeps the From-address input, showing the saved address, with the verified-domain hint', async () => {
     stubBranding('Example Gym')
-    renderEditor()
+    renderEditor({ from_email: 'news@example-gym.ie' })
     fireEvent.click(screen.getByRole('button', { name: /settings/i }))
-    const note = await screen.findByTestId('campaign-from-address-note')
-    expect(note.textContent).toMatch(/platform/i)
-    expect(screen.queryByLabelText(/From Email/i)).toBeNull()
-    expect(screen.queryByPlaceholderText(/hello@/i)).toBeNull()
+    const input = await screen.findByLabelText('From address')
+    expect(input.value).toBe('news@example-gym.ie')
+    const note = screen.getByTestId('campaign-from-address-note')
+    expect(note.textContent).toMatch(/verified sending domain/i)
+    expect(note.textContent).toMatch(/platform address/i)
+    expect(input.getAttribute('aria-describedby')).toBe(note.id)
+    expect(input.getAttribute('placeholder')).not.toMatch(/un1t/i)
   })
 
   it('seeds an empty From name with the studio brand, and keeps a saved one', async () => {
