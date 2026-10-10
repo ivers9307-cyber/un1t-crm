@@ -267,7 +267,12 @@ export async function proxy(request) {
   // Allow API requests authenticated with a valid Bearer token. Three paths:
   //   1. CRM_API_KEY — the legacy shared key used by n8n and similar
   //      external integrations. Fixed 64-char hex, compared constant-time.
-  //      Unchanged — live n8n workflows depend on it.
+  //      Since W0.1 it is a per-org key for the ONE organisation named by
+  //      CRM_API_KEY_ORG_ID, and api-auth.js refuses it when that env is
+  //      unset; W0.1b makes the edge apply the same condition, so an unset
+  //      org id never lets the key past the proxy to a route that has no
+  //      in-route key check of its own. Retire with the env once n8n holds
+  //      a unitk_ key.
   //   2. Per-org API key (SAAS-3) — `unitk_…` keys from mig 217, issued at
   //      /settings/api-keys. REAL validation here (SHA-256 via Web Crypto +
   //      an active-row lookup in api_keys), not just a format sniff: a few
@@ -291,9 +296,10 @@ export async function proxy(request) {
     const token = auth.startsWith('Bearer ') ? auth.slice('Bearer '.length) : ''
 
     if (token) {
-      // Path 1: CRM_API_KEY (n8n)
+      // Path 1: CRM_API_KEY (n8n) — only while scoped to an org (W0.1b),
+      // the same fail-closed condition api-auth.js applies in-route.
       const expected = process.env.CRM_API_KEY
-      if (expected && timingSafeEqualEdge(token, expected)) {
+      if (expected && process.env.CRM_API_KEY_ORG_ID && timingSafeEqualEdge(token, expected)) {
         return NextResponse.next()
       }
 

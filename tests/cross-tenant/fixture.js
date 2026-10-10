@@ -78,6 +78,9 @@ export const STG_B2 = tid('57b2')
 export const TPL_A = tid('7e0a') // contract template, org-scoped
 export const TPL_B = tid('7e0b')
 
+export const EMT_A1 = tid('e3a1') // email template (campaigns.template_id) at A1
+export const EMT_B1 = tid('e3b1')
+
 export const SHT_A1 = tid('5fa1') // shift template (assistant tools)
 export const SHT_B1 = tid('5fb1')
 
@@ -211,6 +214,12 @@ export function makeWorld() {
       { id: TASK_B2, location_id: LOC_B2, kind: 'task', type: 'task', subject: 'Task B-Two', status: 'todo', contact_id: null, assignee_id: null, created_at: '2026-06-04T00:00:00Z' },
     ],
     notes: [],
+    // W0.1b — campaigns.template_id references these; one per org so a
+    // cross-org template reference has something real to point at.
+    email_templates: [
+      { id: EMT_A1, location_id: LOC_A1, name: 'Template A-One', subject: 'A1', category: 'general', created_at: '2026-05-01T00:00:00Z', updated_at: '2026-05-01T00:00:00Z' },
+      { id: EMT_B1, location_id: LOC_B1, name: 'Template B-One', subject: 'B1', category: 'general', created_at: '2026-05-02T00:00:00Z', updated_at: '2026-05-02T00:00:00Z' },
+    ],
     contract_templates: [
       { id: TPL_A, organization_id: ORG_A, name: 'Org A Contract', description: null, body_markdown: 'ORG A SALARY TERMS', variables_schema: [], employment_type: null, version: 1, active: true, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' },
       { id: TPL_B, organization_id: ORG_B, name: 'Org B Contract', description: null, body_markdown: 'ORG B SALARY TERMS', variables_schema: [], employment_type: null, version: 1, active: true, created_at: '2026-01-02T00:00:00Z', updated_at: '2026-01-02T00:00:00Z' },

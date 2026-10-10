@@ -87,6 +87,14 @@ export async function PUT(request, props) {
   const db = createServerClient()
   const scopeErr = await assertRowInOrg({ db, orgId: auth.orgId, table: 'campaigns', id: params.id })
   if (scopeErr) return scopeErr
+  // W0.1b — a referenced email template must be in the org too (404
+  // otherwise); null clears the reference. A platform template
+  // (location_id NULL, master-only on /api/templates) is likewise not
+  // reachable through a keyed caller.
+  if (updates.template_id) {
+    const refErr = await assertRowInOrg({ db, orgId: auth.orgId, table: 'email_templates', id: updates.template_id })
+    if (refErr) return refErr
+  }
 
   // Only a draft or a (not-yet-due) scheduled campaign may be edited. Once
   // it's queued / sending / sent / cancelled the send state machine owns it —

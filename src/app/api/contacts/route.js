@@ -67,8 +67,8 @@ export async function POST(request) {
   const db = createServerClient()
 
   // APIKEYS.3 — a per-org key may only create contacts at a location
-  // within its organization. Legacy shared key + cookie managers have
-  // orgId null and are unchanged.
+  // within its organization. Since W0.1 the legacy shared key carries an
+  // orgId too (CRM_API_KEY_ORG_ID); only cookie managers have orgId null.
   if (auth.orgId) {
     if (!body.location_id) {
       return NextResponse.json({ success: false, error: 'location_id required' }, { status: 400 })
@@ -170,8 +170,9 @@ export async function GET(request) {
   let query = db.from('contacts').select('*')
 
   // APIKEYS.3 — per-org key: restrict to the org's own locations so a
-  // leaked key can't read another org's contacts. Legacy shared key
-  // (orgId null) stays unscoped — unchanged until n8n migrates.
+  // leaked key can't read another org's contacts. Since W0.1 the legacy
+  // shared key is scoped the same way (CRM_API_KEY_ORG_ID); only a cookie
+  // session has orgId null here.
   if (auth.orgId) {
     const locIds = await orgLocationIds(db, auth.orgId)
     // Empty org → match nothing (sentinel uuid) rather than everything.

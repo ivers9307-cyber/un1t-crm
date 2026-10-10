@@ -45,6 +45,9 @@ beforeEach(() => {
   vi.clearAllMocks()
   ssrClient.auth.getUser.mockResolvedValue({ data: { user: null } })
   vi.stubEnv('CRM_API_KEY', GLOBAL_KEY)
+  // W0.1b — the edge admits the legacy key only when it is scoped to an org,
+  // the same condition api-auth.js applies in-route.
+  vi.stubEnv('CRM_API_KEY_ORG_ID', 'org-1')
   vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'http://localhost:54321')
   vi.stubEnv('NEXT_PUBLIC_SUPABASE_ANON_KEY', 'anon-key')
   vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'service-role-key')
@@ -56,10 +59,22 @@ afterEach(() => {
 })
 
 describe('proxy Bearer gate', () => {
-  it('legacy CRM_API_KEY admitted with ZERO Supabase calls — unchanged', async () => {
+  it('legacy CRM_API_KEY admitted with ZERO Supabase calls when CRM_API_KEY_ORG_ID is set', async () => {
     const res = await proxy(makeReq({ token: GLOBAL_KEY }))
     expect(admitted(res)).toBe(true)
     expect(createServerClient).not.toHaveBeenCalled()
+  })
+
+  // W0.1b — before this the edge admitted the legacy key unconditionally while
+  // api-auth.js refused it without CRM_API_KEY_ORG_ID, so an unset env left the
+  // key through the proxy to 401 in-route (or reach a route with no in-route
+  // key check at all). The two layers now apply the same condition.
+  it('legacy CRM_API_KEY with CRM_API_KEY_ORG_ID unset is NOT admitted at the edge (fail closed)', async () => {
+    vi.stubEnv('CRM_API_KEY_ORG_ID', '')
+    const res = await proxy(makeReq({ token: GLOBAL_KEY }))
+    expect(admitted(res)).toBe(false)
+    expect(res.status).toBe(307)
+    expect(res.headers.get('location')).toContain('/login')
   })
 
   it('active per-org unitk_ key is admitted (real hash lookup in api_keys)', async () => {
