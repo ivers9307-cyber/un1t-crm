@@ -32,6 +32,7 @@ import { supabase } from '../../../../lib/member/supabase'
 import { PEARL, VOLT } from '../../../../lib/member/brand'
 import { challengeWrappedModel, challengeWindowMs } from 'shared/challenge-wrapped'
 import { inbodyBookend } from 'shared/inbody'
+import { useMemberBrand } from '../../../../lib/member/use-member-brand'
 
 // Keep the pearl flood dark enough that chalk type always passes contrast.
 const SCRIM = 'rgba(19,19,22,0.62)'
@@ -141,6 +142,8 @@ export default function ChallengeWrapped() {
 
   const router = useRouter()
   const { width } = useWindowDimensions()
+  // W1.S5 — share copy carries the studio's short brand + product name.
+  const { shortName, productNames } = useMemberBrand()
 
   const [model, setModel] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -212,6 +215,7 @@ export default function ChallengeWrapped() {
           rank: rankParam,
           count: countParam,
           bookend,
+          shortName,
         })
         setModel(m)
       } catch {
@@ -240,8 +244,8 @@ export default function ChallengeWrapped() {
   function handleShare() {
     if (!model?.hasContent) return
     const bits = [
-      `I finished the ${model.name} challenge at UN1T 💪`,
-      `${model.classes} ${model.classes === 1 ? 'class' : 'classes'} · ${model.points.toLocaleString()} UN1T Points`,
+      `I finished the ${model.name} challenge${shortName ? ` at ${shortName}` : ''} 💪`,
+      `${model.classes} ${model.classes === 1 ? 'class' : 'classes'} · ${model.points.toLocaleString()} ${productNames.points}`,
     ]
     if (model.rank) bits.push(`Finished #${model.rank}${model.count ? ` of ${model.count}` : ''}`)
     if (model.inbody) {
