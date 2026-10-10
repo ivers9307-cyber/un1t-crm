@@ -10,6 +10,8 @@ import { Check } from 'lucide-react'
 // the PUT route is the authority; a non-owner simply gets a 403 on save.
 export default function OrgBrandingSettings({ orgId, orgName }) {
   const [companyName, setCompanyName] = useState('')
+  // W1.B1 — the short wordmark used in product names (org_settings.short_name).
+  const [shortName, setShortName] = useState('')
   // SAAS4-C2 — tenant legal identity for their hosted privacy notice.
   const [legalEntityName, setLegalEntityName] = useState('')
   const [legalTradingName, setLegalTradingName] = useState('')
@@ -28,12 +30,13 @@ export default function OrgBrandingSettings({ orgId, orgName }) {
         const data = await res.json()
         if (active && data.success && data.data) {
           setCompanyName(data.data.company_name || '')
+          setShortName(data.data.short_name || '')
           setLegalEntityName(data.data.legal_entity_name || '')
           setLegalTradingName(data.data.legal_trading_name || '')
           setLegalAddress(data.data.legal_address || '')
           setPrivacyEmail(data.data.privacy_contact_email || '')
         }
-      } catch { /* leave blank — the field defaults to the UN1T fallback */ }
+      } catch { /* leave blank — the resolver falls back to the location's own name */ }
       if (active) setLoading(false)
     }
     if (orgId) load()
@@ -51,6 +54,7 @@ export default function OrgBrandingSettings({ orgId, orgName }) {
         body: JSON.stringify({
           organization_id: orgId,
           company_name: companyName || null,
+          short_name: shortName.trim() || null,
           legal_entity_name: legalEntityName.trim() || null,
           legal_trading_name: legalTradingName.trim() || null,
           legal_address: legalAddress.trim() || null,
@@ -96,6 +100,27 @@ export default function OrgBrandingSettings({ orgId, orgName }) {
         >
           {saved ? <><Check size={12} /> Saved</> : saving ? 'Saving...' : 'Save'}
         </button>
+      </div>
+
+      {/* W1.B1 — the short wordmark product names are built from. The org
+          brand above may read "UN1T Dublin" while the product stays
+          "UN1T Points"; blank = use the brand name. Saved by the same
+          Save button above. */}
+      <div className="mt-4">
+        <label className="block text-xs font-medium text-un1t-subtle mb-1.5">
+          Short brand name (used in product names)
+        </label>
+        <p className="text-xs text-un1t-muted mb-2">
+          The wordmark in product names: &laquo;UN1T&raquo; &rarr; UN1T Points, UN1T HR. Leave blank to use the organisation name above.
+        </p>
+        <input
+          type="text"
+          value={shortName}
+          maxLength={40}
+          onChange={e => setShortName(e.target.value)}
+          className="w-full sm:w-1/2 bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
+          placeholder="Short name"
+        />
       </div>
 
       {/* SAAS4-C2 — tenant legal identity for the privacy notice served on
