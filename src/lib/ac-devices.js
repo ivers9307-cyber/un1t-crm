@@ -460,6 +460,21 @@ export async function loadDeviceWithLocation(deviceId, db) {
 }
 
 /**
+ * W0.12b — the runner-side twin of the save route's device_ids check
+ * (#1966). A location_automations config can still name ANOTHER studio's
+ * ac_devices row (an older config, a direct SQL write), and
+ * loadDeviceWithLocation hands back that device's own location + vendor
+ * credentials, so a runner that trusted the config would switch the other
+ * tenant's AC and write an ac_sessions row under the automation's
+ * location_id. Pure, fails closed on a missing id on either side.
+ * Returns { ok: true } or { ok: false, status, error, code }.
+ */
+export function assertDeviceAtLocation(device, locationId) {
+  if (device?.location_id && locationId && device.location_id === locationId) return { ok: true }
+  return { ok: false, status: 404, error: 'AC device is not at this location.', code: 'device_not_at_location' }
+}
+
+/**
  * Pure vendor power-off — dispatches to the right adapter based on
  * device.provider with no DB writes, no permission check, no audit.
  * The auto-off cron uses this so it can write its own AUTO_OFF
