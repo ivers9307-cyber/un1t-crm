@@ -4879,7 +4879,7 @@ registry.registerPath({
   tags: ['Staff'],
   security: [{ CookieAuth: [] }],
   summary: 'Provision the org\'s Postmark server + sending domain (organisation admins only)',
-  description: 'Initiate: creates the org\'s dedicated Postmark server (via the Account API) and its sending domain, persists ids/token, and returns the DNS records to add — NEVER the server token. Gated by the custom_email_domain plan add-on (403 if the org\'s plan lacks it). Idempotent: a re-post for an already-provisioned org re-reads Postmark, never spawning a second server. A foreign org answers 404, not 403. 503 when POSTMARK_ACCOUNT_TOKEN is unset. A failed read of the stored state answers 502 and creates nothing.',
+  description: 'Initiate: creates the org\'s dedicated Postmark server (via the Account API) and its sending domain, persists ids/token, and returns the DNS records to add — NEVER the server token. Gated by the custom_email_domain plan add-on (403 if the org\'s plan lacks it). Idempotent: a re-post for an already-provisioned org re-reads Postmark, never spawning a second server. A foreign org answers 404, not 403. 503 when POSTMARK_ACCOUNT_TOKEN is unset. A failed read of the stored state answers 502 and creates nothing. When Postmark answers "Domain already exists" (domains are account-level), a platform master adopts the existing account domain if no other organisation holds it; anyone else gets a 409.',
   request: {
     body: {
       content: {
@@ -4899,6 +4899,7 @@ registry.registerPath({
     400: { description: 'Invalid sending domain', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — organisation admins only, or the add-on is not on the plan', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Organization not found (or not yours)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'The domain is already a Domain in the platform\'s Postmark account and this caller may not adopt it (not a platform master, or another organisation holds it) — use a subdomain', content: { 'application/json': { schema: ErrorResponse } } },
     502: { description: 'Postmark could not provision the server/domain', content: { 'application/json': { schema: ErrorResponse } } },
     503: { description: 'Provisioning not configured on this deployment', content: { 'application/json': { schema: ErrorResponse } } },
   },
