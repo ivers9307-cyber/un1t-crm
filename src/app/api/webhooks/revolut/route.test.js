@@ -226,12 +226,25 @@ import { ilikeMatches } from '@/lib/like-escape.test-helpers'
 import { triggerSequencesForOrderStatus } from '@/lib/sequences'
 import { emitEvent } from '@/lib/contact-events'
 
+// The cars row is PROJECTED to the columns the handler's select names, the
+// way PostgREST answers. Before REVOLUT.1 this mock handed back the whole
+// fixture whatever the select said, which is how a select that never named
+// buyer_email passed these tests while the branch was dead in production.
+function projectSelect(row, select) {
+  const flat = select.replace(/\w+\s*\([^)]*\)/g, (m) => m.split('(')[0])
+  const cols = flat.split(',').map((c) => c.trim()).filter(Boolean)
+  return Object.fromEntries(cols.filter((c) => c in row).map((c) => [c, row[c]]))
+}
+
 function makeOrgDb({ car, locations = [], contacts = [] }) {
   const contactLookups = []
+  const selects = []
   function from(table) {
-    const b = { _op: 'select', _filters: [], _limit: null, _payload: null }
+    const b = { _op: 'select', _filters: [], _limit: null, _payload: null, _select: null }
     const rows = () => {
-      let out = table === 'cars' ? (car ? [car] : []) : table === 'locations' ? locations : table === 'contacts' ? contacts : []
+      let out = table === 'cars'
+        ? (car ? [b._select ? { ...projectSelect(car, b._select), deposit_revolut_order_id: car.deposit_revolut_order_id } : car] : [])
+        : table === 'locations' ? locations : table === 'contacts' ? contacts : []
       for (const [kind, col, val] of b._filters) {
         if (kind === 'eq') out = out.filter((r) => r[col] === val)
         if (kind === 'neq') out = out.filter((r) => r[col] !== val)
@@ -252,7 +265,7 @@ function makeOrgDb({ car, locations = [], contacts = [] }) {
       }
       return Promise.resolve({ data: out, error: null })
     }
-    b.select = () => b
+    b.select = (cols) => { if (b._op === 'select' && typeof cols === 'string') { b._select = cols; selects.push({ table, cols }) } return b }
     b.update = (payload) => { b._op = 'update'; b._payload = payload; return b }
     b.eq = (col, val) => { b._filters.push(['eq', col, val]); return b }
     b.neq = (col, val) => { b._filters.push(['neq', col, val]); return b }
@@ -263,7 +276,7 @@ function makeOrgDb({ car, locations = [], contacts = [] }) {
     b.then = (resolve, reject) => settle('list').then(resolve, reject)
     return b
   }
-  return { from, _contactLookups: contactLookups }
+  return { from, _contactLookups: contactLookups, _selects: selects }
 }
 
 describe('POST — the buyer contact is matched inside the car\'s organisation (W0.6b)', () => {
@@ -337,5 +350,57 @@ describe('POST — the buyer contact is matched inside the car\'s organisation (
     expect(triggerSequencesForOrderStatus).not.toHaveBeenCalled()
     const lookup = db._contactLookups.find((l) => l.filters.some(([k, c]) => k === 'ilike' && c === 'email'))
     expect(lookup.filters).toContainEqual(['in', 'location_id', [LOC_CCF]])
+  })
+})
+
+// ── REVOLUT.1 — the cars select must name buyer_email ─────────────────
+//
+// The contact + order_* sequence branch reads car.buyer_email, and so does
+// syncOrderFromCarDeposit (it returns null without it). The select never named
+// the column, so in production car.buyer_email was undefined and neither the
+// orders ledger, the contact event nor the sequence enrolment ever ran from
+// this webhook.
+describe('POST — the car-buyer branch actually runs (REVOLUT.1)', () => {
+  const LOCATIONS = [{ id: 'loc-1', organization_id: 'org-1' }]
+  const BUYER = { id: 'c-1', location_id: 'loc-1', email: 'buyer@example.com', created_at: '2026-01-01T00:00:00Z' }
+  const carsSelect = (db) => db._selects.find((s) => s.table === 'cars')?.cols || ''
+  const columns = (sel) => sel.replace(/\w+\s*\([^)]*\)/g, '').split(',').map((c) => c.trim()).filter(Boolean)
+
+  beforeEach(() => {
+    getOrder.mockResolvedValue({ state: 'completed', amount: 50000 })
+  })
+
+  it('the cars select names buyer_email and every column the orders sync reads', async () => {
+    const db = makeOrgDb({ car: { ...CAR, buyer_email: 'buyer@example.com', deposit_revolut_order_id: 'ord-1' }, locations: LOCATIONS })
+    createServerClient.mockReturnValue(db)
+    await POST(makeRequest())
+    const cols = columns(carsSelect(db))
+    for (const c of ['buyer_email', 'buyer_name', 'buyer_phone', 'location_id', 'deposit_revolut_order_id', 'deposit_link_sent_at']) {
+      expect(cols).toContain(c)
+    }
+  })
+
+  it('with a buyer_email on the row, the contact is looked up, the event emitted and the sequences triggered', async () => {
+    const db = makeOrgDb({ car: { ...CAR, buyer_email: 'Buyer@Example.com', deposit_revolut_order_id: 'ord-1' }, locations: LOCATIONS, contacts: [BUYER] })
+    createServerClient.mockReturnValue(db)
+
+    expect((await POST(makeRequest())).status).toBe(200)
+
+    expect(db._contactLookups.length).toBe(1)
+    expect(emitEvent).toHaveBeenCalledWith(expect.objectContaining({ contactId: 'c-1', contactEmail: 'Buyer@Example.com', eventType: 'order.completed' }))
+    expect(triggerSequencesForOrderStatus).toHaveBeenCalledWith(expect.objectContaining({ contactId: 'c-1', locationId: 'loc-1', status: 'completed', orderId: 'car-1' }))
+  })
+
+  it.each([null, '', '   '])('a buyer_email of %j skips the lookup, the event and the sequences', async (email) => {
+    const db = makeOrgDb({ car: { ...CAR, buyer_email: email, deposit_revolut_order_id: 'ord-1' }, locations: LOCATIONS, contacts: [BUYER] })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(makeRequest())
+    expect(res.status).toBe(200)
+    expect((await res.json()).applied.deposit_status).toBe('paid')
+
+    expect(db._contactLookups).toHaveLength(0)
+    expect(emitEvent).not.toHaveBeenCalled()
+    expect(triggerSequencesForOrderStatus).not.toHaveBeenCalled()
   })
 })

@@ -32,6 +32,7 @@ import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
 import { escapeLikePattern } from '@/lib/like-escape'
 import { orgLocationIdsFor, scopeFor } from '@/lib/inbound-contact-match'
 import { pickContact } from '@/lib/email-inbox'
+import { logInfo } from '@/lib/log'
 
 export const runtime = 'nodejs'
 
@@ -101,12 +102,18 @@ export async function POST(request) {
   if (dedup.seen) {
     return NextResponse.json({ success: true, deduped: true })
   }
+  // REVOLUT.1 — buyer_email, deposit_revolut_order_id and
+  // deposit_link_sent_at are read by the orders sync and the buyer-contact
+  // branch below. buyer_email was missing from this select until REVOLUT.1,
+  // so both were dead in production (syncOrderFromCarDeposit returns null
+  // without it, and the `car.buyer_email` guard never passed).
   const { data: car } = await db
     .from('cars')
     .select(`
       id, location_id, deposit_token, deposit_status, deposit_paid_at,
       deposit_amount, deposit_paid_amount,
-      buyer_phone, buyer_name, make, model, irish_reg,
+      deposit_revolut_order_id, deposit_link_sent_at,
+      buyer_email, buyer_phone, buyer_name, make, model, irish_reg,
       locations ( id, name )
     `)
     .eq('deposit_revolut_order_id', orderId)
@@ -162,7 +169,13 @@ export async function POST(request) {
       cancelled: EVENT_TYPES.ORDER_ABANDONED,
     }
     const evType = evMap[state]
-    if (evType && car.buyer_email) {
+    const buyerEmail = String(car.buyer_email || '').toLowerCase().trim()
+    if (evType && !buyerEmail) {
+      // No buyer email on the car: nothing to match a contact on, so no
+      // event and no order_* enrolment. The deposit write above stands.
+      logInfo('revolut-webhook', 'buyer contact skipped: no buyer_email', { carId: car.id, state })
+    }
+    if (evType && buyerEmail) {
       // Look up a contact by buyer_email so the order_* sequence
       // trigger (Tier 1A) has someone to enrol. We don't auto-create
       // contacts on the cars side — the cars deposit flow is for
@@ -182,7 +195,6 @@ export async function POST(request) {
       // oldest row, then the lowest id — the same choice the mail webhook
       // makes. The error is logged, never discarded: no match is "no
       // enrolment", which the caller already tolerates.
-      const buyerEmail = car.buyer_email.toLowerCase().trim()
       const orgLocIds = await orgLocationIdsFor(db, car.location_id)
       const { data: holders, error: holdersErr } = await db
         .from('contacts')
