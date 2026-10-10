@@ -266,15 +266,30 @@ describe('PATCH — update', () => {
     expect(body.error).toContain('<slug>.repset.ie hosts are automatic')
   })
 
-  it('a platform row → 409, untouched (W1.L1)', async () => {
-    for (const patch of [{ active: false }, { hostname: 'members2.acmegym.ie' }, { brand: { rootHandler: 'reject' } }]) {
+  it('a platform row: rename / brand / org / location → 409, untouched (W1.L1)', async () => {
+    for (const patch of [
+      { hostname: 'members2.acmegym.ie' },
+      { brand: { rootHandler: 'reject' } },
+      { organization_id: OTHER_ORG_ID },
+      { location_id: LOC_ID },
+      { active: false, hostname: 'members2.acmegym.ie' }, // active mixed with a frozen key is still refused
+    ]) {
       const res = await PATCH(idReq('PATCH', patch), props(PLATFORM_ROW_ID))
       expect(res.status).toBe(409)
       const body = await res.json()
       expect(body.code).toBe('platform_host')
     }
     const row = (await db.from('tenant_domains').select('*').eq('id', PLATFORM_ROW_ID).maybeSingle()).data
-    expect(row).toMatchObject({ hostname: 'acme-gyms.repset.ie', active: true, brand: {} })
+    expect(row).toMatchObject({ hostname: 'acme-gyms.repset.ie', active: true, brand: {}, organization_id: ORG_ID, location_id: null })
+  })
+
+  it('a platform row: active alone is the kill switch and stays available (suspend contract)', async () => {
+    let res = await PATCH(idReq('PATCH', { active: false }), props(PLATFORM_ROW_ID))
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.active).toBe(false)
+    res = await PATCH(idReq('PATCH', { active: true }), props(PLATFORM_ROW_ID))
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.active).toBe(true)
   })
 
   it('empty patch → 400', async () => {

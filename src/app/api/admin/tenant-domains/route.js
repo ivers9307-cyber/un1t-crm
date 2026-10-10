@@ -62,16 +62,24 @@ export async function locationOrgMismatchError(db, locationId, organizationId) {
  * the staff CRM on that domain. hostname arrives lowercased by the
  * tenantHostname schema.
  */
-export function reservedHostnameError(hostname) {
+export function inCodeOrCrmHostnameError(hostname) {
   if (resolveBrand(hostname)) {
     return `"${hostname}" is handled by the in-code brand registry (src/lib/brands.js) — it must not have a tenant_domains row.`
   }
   if (getCrmHostnames().includes(hostname)) {
     return `"${hostname}" is the CRM's own hostname — a brand row here would gate the staff CRM itself.`
   }
+  return null
+}
+
+export function reservedHostnameError(hostname) {
+  const fixed = inCodeOrCrmHostnameError(hostname)
+  if (fixed) return fixed
   // W1.L1 (mig 716): every org's <slug>.repset.ie row is born with the
   // org (source='platform'); a hand-made one would either duplicate it
-  // or squat another org's slug.
+  // or squat another org's slug. (The organizations route checks the
+  // automatic host itself with inCodeOrCrmHostnameError + the reserved
+  // platform labels, since for it the suffix is the point.)
   if (hostname === PLATFORM_HOST_SUFFIX || hostname.endsWith(`.${PLATFORM_HOST_SUFFIX}`)) {
     return `<slug>.${PLATFORM_HOST_SUFFIX} hosts are automatic; bring your own domain here`
   }

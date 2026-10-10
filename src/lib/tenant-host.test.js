@@ -1,6 +1,7 @@
 // W1.L1 — the host a customer-facing link is minted on, per tenant.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { platformHostnameFor, pickTenantHost, resolveCustomerBaseUrl, _resetTenantHostCache } from './tenant-host'
+import { platformHostnameFor, pickTenantHost, resolveCustomerBaseUrl, _resetTenantHostCache, RESERVED_PLATFORM_LABELS } from './tenant-host'
+import { makeFakeDb } from '@/lib/api-auth.test-helpers.js'
 
 const fakeDb = (rows, loc = { organization_id: 'org-a' }, org = { slug: 'gym-a' }) => ({
   from(table) {
@@ -43,6 +44,29 @@ describe('tenant-host (W1.L1)', () => {
     await resolveCustomerBaseUrl(db, 'loc-a1')
     await resolveCustomerBaseUrl(db, 'loc-a1')
     expect(calls).toBe(1)
+  })
+  it('only the location\'s own org\'s ACTIVE rows are considered (filter-aware double)', async () => {
+    // The hand-rolled fake above ignores .eq(); this one really filters, so
+    // dropping the organization_id / active filters in loadHostForLocation
+    // would return another tenant's host or a parked one.
+    const db = makeFakeDb({
+      locations: [{ id: 'loc-a1', organization_id: 'org-a' }, { id: 'loc-b1', organization_id: 'org-b' }],
+      organizations: [{ id: 'org-a', slug: 'gym-a' }, { id: 'org-b', slug: 'gym-b' }],
+      tenant_domains: [
+        { hostname: 'www.gym-b.com', organization_id: 'org-b', source: 'custom', location_id: null, active: true },
+        { hostname: 'gym-b.repset.ie', organization_id: 'org-b', source: 'platform', location_id: null, active: true },
+        { hostname: 'parked.gym-a.com', organization_id: 'org-a', source: 'custom', location_id: null, active: false },
+        { hostname: 'gym-a.repset.ie', organization_id: 'org-a', source: 'platform', location_id: null, active: true },
+      ],
+    })
+    expect(await resolveCustomerBaseUrl(db, 'loc-a1')).toBe('https://gym-a.repset.ie')
+    _resetTenantHostCache()
+    expect(await resolveCustomerBaseUrl(db, 'loc-b1')).toBe('https://www.gym-b.com')
+  })
+  it('reserved platform labels are the hosts the platform itself uses', () => {
+    for (const label of ['www', 'crm', 'api', 'mail', 'host', 'pay', 'app', 'pm-bounces', 'wildcard-probe']) {
+      expect(RESERVED_PLATFORM_LABELS).toContain(label)
+    }
   })
   it('never throws on a db error — the CRM host is the floor', async () => {
     const db = { from() { throw new Error('boom') } }

@@ -11,6 +11,21 @@
 import { getAppUrl } from './app-url'
 
 export const PLATFORM_HOST_SUFFIX = 'repset.ie'
+
+// Labels under repset.ie the PLATFORM itself uses (or may): www (the public
+// marketing site), crm (the staff CRM), api (the member-app origin,
+// app-url.js), mail / pm-bounces (Postmark), host / pay / app (reserved for
+// platform surfaces), wildcard-probe (the DNS probe). An org slug that is
+// one of these can never become <slug>.repset.ie: the admin organizations
+// route refuses it before the org exists.
+export const RESERVED_PLATFORM_LABELS = Object.freeze([
+  'www', 'crm', 'api', 'mail', 'host', 'pay', 'app', 'pm-bounces', 'wildcard-probe',
+])
+
+/** Pure: a slug that would collide with a platform-owned host label. */
+export function isReservedPlatformLabel(slug) {
+  return RESERVED_PLATFORM_LABELS.includes(String(slug || '').toLowerCase())
+}
 const CACHE_TTL_MS = 60_000
 const cache = new Map()
 

@@ -13,8 +13,14 @@
 -- exactly as a hand-inserted row would have.
 --
 -- Pre-check (must return 0 rows — a slug that is not a DNS label cannot
--- become a host):
---   select slug from organizations where slug !~ '^[a-z0-9]([a-z0-9-]*[a-z0-9])?$';
+-- become a host, and a slug the platform itself uses as a label must not
+-- shadow www/crm/api/… under repset.ie; RESERVED_PLATFORM_LABELS in
+-- src/lib/tenant-host.js is the same list, enforced at org creation):
+--   select slug from organizations
+--    where slug !~ '^[a-z0-9]([a-z0-9-]*[a-z0-9])?$'
+--       or length(slug) > 63
+--       or slug in ('www','crm','api','mail','host','pay','app','pm-bounces','wildcard-probe');
+-- (The three live slugs un1t-group, ccf-autos, givers-consultancy pass.)
 -- Post-check:
 --   select hostname, source from tenant_domains order by 1;
 --   → ccf-autos.repset.ie, givers-consultancy.repset.ie, un1t-group.repset.ie, all 'platform'.

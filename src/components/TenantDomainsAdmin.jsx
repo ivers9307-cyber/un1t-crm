@@ -2,7 +2,7 @@
 
 // /admin/tenant-domains manager (SAAS-8). Add / toggle / delete rows
 // in tenant_domains. W1.L1 (mig 716): a source='platform' row (the
-// org's automatic <slug>.repset.ie) is shown read-only. The "mode" select covers the two brand shapes
+// org's automatic <slug>.repset.ie) can be toggled but not deleted. The "mode" select covers the two brand shapes
 // operators actually need — the marketing defaults (brand {}) and a
 // locked-down payment-style config; anything bespoke is a row edit
 // via the API (the brand column is validated jsonb, not a UI form).
@@ -141,7 +141,7 @@ export default function TenantDomainsAdmin({ initialDomains, organizations, loca
                   {row.source === 'platform' && (
                     <span
                       className="ml-2 rounded-full bg-sky-500/10 px-2 py-0.5 text-[11px] font-semibold text-sky-700"
-                      title="Automatic platform host — born with the organisation (W1.L1). Not editable."
+                      title="Automatic platform host — born with the organisation (W1.L1). Can be disabled, not edited or deleted."
                     >
                       platform
                     </span>
@@ -158,28 +158,28 @@ export default function TenantDomainsAdmin({ initialDomains, organizations, loca
                   </span>
                 </td>
                 <td className="px-4 py-3 text-right whitespace-nowrap">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => toggle(row)}
+                    loading={busyId === row.id}
+                    className="mr-1"
+                  >
+                    {row.active ? 'Disable' : 'Enable'}
+                  </Button>
                   {/* W1.L1: the platform row lives and dies with the org —
-                      the API answers 409 to PATCH/DELETE, so offer neither. */}
+                      the API answers 409 to DELETE, so don't offer it.
+                      Enable/Disable stays: active is the hostname kill
+                      switch the suspend route leaves to this screen. */}
                   {row.source !== 'platform' && (
-                    <>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => toggle(row)}
-                        loading={busyId === row.id}
-                        className="mr-1"
-                      >
-                        {row.active ? 'Disable' : 'Enable'}
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        icon={Trash2}
-                        onClick={() => remove(row)}
-                        disabled={busyId === row.id}
-                        aria-label={`Delete ${row.hostname}`}
-                      />
-                    </>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      icon={Trash2}
+                      onClick={() => remove(row)}
+                      disabled={busyId === row.id}
+                      aria-label={`Delete ${row.hostname}`}
+                    />
                   )}
                 </td>
               </tr>

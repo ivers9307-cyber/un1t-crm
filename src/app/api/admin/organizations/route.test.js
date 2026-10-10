@@ -100,6 +100,25 @@ describe('POST — the org and its platform host are born together', () => {
     )
   })
 
+  it('a slug that is a reserved platform label → 400, NO org and NO host inserted', async () => {
+    for (const slug of ['www', 'crm', 'api', 'mail', 'host', 'pay', 'app', 'pm-bounces', 'wildcard-probe']) {
+      const res = await POST(postReq({ name: 'Squatter', slug }))
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.error).toContain('reserved')
+    }
+    // and via a name that derives to one
+    expect((await POST(postReq({ name: 'API' }))).status).toBe(400)
+    expect((await db.from('organizations').select('id')).data).toEqual([])
+    expect((await db.from('tenant_domains').select('id')).data).toEqual([])
+  })
+
+  it('a slug longer than a DNS label (63) → 400', async () => {
+    expect((await POST(postReq({ name: 'x', slug: 'a'.repeat(63) }))).status).toBe(200)
+    expect((await POST(postReq({ name: 'y', slug: 'b'.repeat(64) }))).status).toBe(400)
+    expect((await db.from('tenant_domains').select('hostname')).data.map((r) => r.hostname)).toEqual([`${'a'.repeat(63)}.repset.ie`])
+  })
+
   it('invalid body → 400, nothing inserted', async () => {
     const res = await POST(postReq({ name: '' }))
     expect(res.status).toBe(400)

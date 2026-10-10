@@ -8,7 +8,8 @@
 //   DELETE — remove the mapping outright
 //
 // Unknown ids return 404 (detail routes never 403 on a missing row).
-// A source='platform' row (W1.L1, mig 716) answers 409 to both.
+// A source='platform' row (W1.L1, mig 716) answers 409 to DELETE and to
+// any PATCH other than the active kill switch.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -40,13 +41,18 @@ async function requireMaster() {
   return { user }
 }
 
-// W1.L1 (mig 716): the org's <slug>.repset.ie row is automatic — it is
-// never edited or removed by hand (it lives and dies with the org).
-function platformRowError(row) {
+// W1.L1 (mig 716): the org's <slug>.repset.ie row is automatic — its
+// hostname, org, location and brand are never edited by hand and it is
+// never deleted (it lives and dies with the org). `active` is the ONE
+// exception: tenant_domains.active is the hostname kill switch the suspend
+// route (admin/orgs/[id]/suspend) deliberately leaves to this screen, so a
+// PATCH whose only key is `active` goes through.
+function platformRowError(row, patch = null) {
   if (row.source !== 'platform') return null
+  if (patch && Object.keys(patch).every((k) => k === 'active')) return null
   return NextResponse.json({
     success: false,
-    error: `"${row.hostname}" is the organisation's automatic platform host; it cannot be edited or deleted.`,
+    error: `"${row.hostname}" is the organisation's automatic platform host; only its active flag can change, and it cannot be deleted.`,
     code: 'platform_host',
   }, { status: 409 })
 }
@@ -81,7 +87,7 @@ export async function PATCH(request, props) {
   if (!row) {
     return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   }
-  const platform = platformRowError(row)
+  const platform = platformRowError(row, patch)
   if (platform) return platform
 
   if (patch.hostname && patch.hostname !== row.hostname) {

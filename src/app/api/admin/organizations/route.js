@@ -24,7 +24,8 @@ import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { toSlug } from '@/lib/slug'
 import { logError } from '@/lib/log'
-import { platformHostnameFor } from '@/lib/tenant-host'
+import { platformHostnameFor, isReservedPlatformLabel } from '@/lib/tenant-host'
+import { inCodeOrCrmHostnameError } from '@/app/api/admin/tenant-domains/route'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -32,7 +33,8 @@ export const dynamic = 'force-dynamic'
 const Body = z.object({
   name: z.string().trim().min(1, 'Name is required').max(100),
   // Optional — auto-derived from name if absent.
-  slug: z.string().trim().min(1).max(100)
+  // max 63: the slug becomes the DNS label <slug>.repset.ie (W1.L1).
+  slug: z.string().trim().min(1).max(63, 'Slug must be at most 63 characters (it becomes a DNS label)')
     .regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, 'Slug must be lowercase kebab-case (a-z, 0-9, hyphens)')
     .optional(),
 })
@@ -58,6 +60,23 @@ export async function POST(request) {
     }, { status: 400 })
   }
 
+  // W1.L1: the slug becomes <slug>.repset.ie, so it must not be a label the
+  // platform owns (www, crm, api, …) nor a hostname the in-code registry /
+  // CRM set already answers. Checked BEFORE the org exists — an org with no
+  // host is worse than no org. A derived slug (toSlug) can trip this too.
+  const hostname = platformHostnameFor(slug)
+  if (isReservedPlatformLabel(slug)) {
+    return NextResponse.json({
+      success: false,
+      error: `"${slug}" is a reserved platform label (${hostname} belongs to the platform). Pick a different slug.`,
+      code: 'reserved_slug',
+    }, { status: 400 })
+  }
+  const reserved = inCodeOrCrmHostnameError(hostname)
+  if (reserved) {
+    return NextResponse.json({ success: false, error: `"${slug}" is reserved: ${reserved}`, code: 'reserved_slug' }, { status: 400 })
+  }
+
   const db = createServerClient()
   const { data: created, error: insertErr } = await db
     .from('organizations')
@@ -81,7 +100,6 @@ export async function POST(request) {
   // W1.L1 — the platform host is born with the org (mig 716). The org is
   // already committed; a failed row is logged, not fatal — the migration's
   // idempotent backfill (or a re-run of it) repairs the gap.
-  const hostname = platformHostnameFor(slug)
   const { error: hostErr } = await db.from('tenant_domains').insert({
     hostname, organization_id: created.id, brand: {}, active: true, source: 'platform',
   })
