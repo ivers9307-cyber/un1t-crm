@@ -123,6 +123,27 @@ const SWEPT = [
   'src/lib/xero/contractor-bills.js',
   'src/lib/xero/fte-expense-claims.js',
   'src/lib/zoom/external-contacts.js',
+  // ── W1.S5: mobile/ screens (Appendix B, 34 bundled rows + login) ────────
+  'mobile/app/(member)/(tabs)/home.jsx',
+  'mobile/app/(member)/(tabs)/progress.jsx',
+  'mobile/app/(member)/(tabs)/sessions.jsx',
+  'mobile/app/(member)/account/connect-apple-health.jsx',
+  'mobile/app/(member)/account/goals.jsx',
+  'mobile/app/(member)/account/notifications.jsx',
+  'mobile/app/(member)/challenges.jsx',
+  'mobile/app/(member)/live.jsx',
+  'mobile/app/(member)/sessions/[id].jsx',
+  'mobile/app/(member)/sessions/[id]/wrapped.jsx',
+  'mobile/app/(member)/wrapped/challenge/[id].jsx',
+  'mobile/app/(member)/wrapped/month.jsx',
+  'mobile/app/(staff)/(auth)/login.jsx',
+  'mobile/app/(staff)/assistant/index.jsx',
+  'mobile/app/(staff)/contracts/[id].jsx',
+  'mobile/app/(staff)/contracts/index.jsx',
+  'mobile/app/(staff)/races/scan.jsx',
+  'mobile/components/member/BoardsPanel.jsx',
+  'mobile/components/member/ProfileSetupWizard.jsx',
+  'mobile/lib/member/use-member-brand.js',
   // ── W1.S1b: public pages, widgets, landing pages and TV boards ───────────
   'src/components/BookingWidget.jsx',
   'src/app/api/public/bookings/[slug]/route.js',
@@ -168,6 +189,12 @@ const SWEPT = [
   'src/app/preferences/layout.js',
   'src/app/unsubscribe/host/[token]/page.js',
 ]
+
+// W1.S5 — the login placeholder is lower-case (`you@un1t.ie`), which the
+// UN1T regex above never sees; pin it by name so it cannot come back either.
+const LOWERCASE_SWEPT = {
+  'mobile/app/(staff)/(auth)/login.jsx': [/un1t\.ie/, /un1tdublin\.com/],
+}
 
 // file → exact literals the appendix marks `keep`. None in W1.S4, W1.S3 or
 // W1.S1c (src/lib/brands.js:151, the un1t-hosts brand description, is a
@@ -232,5 +259,9 @@ describe('UN1T literal sweep (W1.S*)', () => {
       const src = readFileSync(join(repo, file), 'utf8')
       for (const lit of lits) expect(src, `${file} no longer contains kept literal ${lit}`).toContain(lit)
     }
+  })
+  it.each(Object.entries(LOWERCASE_SWEPT))('%s carries no lower-case UN1T hostname', (file, patterns) => {
+    const src = stripComments(readFileSync(join(repo, file), 'utf8'), file)
+    for (const re of patterns) expect(src, `${file} still carries ${re}`).not.toMatch(re)
   })
 })
