@@ -76,6 +76,14 @@ export async function orgScopeLocationIds(db, orgId) {
  * the `contactId`'s location. Returns null when allowed, or a
  * NextResponse (400 if no location resolvable, 403 if outside the org).
  * No-op (null) when orgId is falsy.
+ *
+ * W0.1b — when BOTH are supplied the contact is no longer ignored: the
+ * location decides the target (403 outside the org, as before) and the
+ * contact is then checked as a REFERENCE — it must exist at one of the
+ * org's locations, else 404 (the assertRowInOrg idiom: a cross-org id
+ * is indistinguishable from a missing one). Before this a keyed caller
+ * could create a task/activity/note at its own location against
+ * another organisation's contact id.
  */
 export async function assertCreateInOrg({ db, orgId, locationId = null, contactId = null }) {
   if (!orgId) return null
@@ -90,6 +98,12 @@ export async function assertCreateInOrg({ db, orgId, locationId = null, contactI
   }
   if (!locIds.includes(loc)) {
     return NextResponse.json({ success: false, error: 'not in your organization' }, { status: 403 })
+  }
+  if (locationId && contactId) {
+    const { data } = await db.from('contacts').select('location_id').eq('id', contactId).maybeSingle()
+    if (!data || !locIds.includes(data.location_id)) {
+      return NextResponse.json({ success: false, error: 'not_found' }, { status: 404 })
+    }
   }
   return null
 }
@@ -108,6 +122,40 @@ export async function assertRowInOrg({ db, orgId, table, id }) {
     return NextResponse.json({ success: false, error: 'not_found' }, { status: 404 })
   }
   return null
+}
+
+/**
+ * W0.1b — gate a PROFILE reference (a task's assignee_id) for a per-org
+ * key. Profiles carry no location_id or organization_id of their own, so
+ * membership is read the way staff-fleet-scope.js reads it: a
+ * profile_locations row at one of the org's locations, OR a
+ * profile_organizations row for the org (org admins hold no location
+ * row). Returns null when allowed, or a 404 NextResponse (404 not 403,
+ * so the id's existence is not confirmed across orgs). No-op when orgId
+ * is falsy.
+ */
+export async function assertProfileInOrg({ db, orgId, profileId }) {
+  if (!orgId) return null
+  const notFound = () => NextResponse.json({ success: false, error: 'not_found' }, { status: 404 })
+  if (!profileId) return notFound()
+  const locIds = await orgLocationIds(db, orgId)
+  if (locIds.length) {
+    const { data: atLocation } = await db
+      .from('profile_locations')
+      .select('profile_id')
+      .eq('profile_id', profileId)
+      .in('location_id', locIds)
+      .limit(1)
+    if (atLocation?.length) return null
+  }
+  const { data: orgAdmin } = await db
+    .from('profile_organizations')
+    .select('profile_id')
+    .eq('profile_id', profileId)
+    .eq('organization_id', orgId)
+    .limit(1)
+  if (orgAdmin?.length) return null
+  return notFound()
 }
 
 // W0.1 — the legacy shared key is no longer unscoped. It acts as a per-org

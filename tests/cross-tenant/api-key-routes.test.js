@@ -21,6 +21,10 @@
 //   create  — org-A key creating into org B (by location_id or via a
 //             B contact anchor) → 403 and no insert; the legacy key
 //             (scoped to org A) is refused the same way.
+//   reference — (W0.1b) a create/update INSIDE org A that references a
+//             row of org B by id (contact_id, assignee_id, template_id)
+//             → 404, nothing written; the legacy key the same; the
+//             org-A reference succeeds (positive control).
 //
 // ADDING A ROUTE: one entry in the relevant spec table below.
 // Routes that can't fit the pattern are listed in SKIPPED with the
@@ -73,6 +77,8 @@ import {
   TASK_A1, TASK_A2, TASK_B1, TASK_B2,
   ET_A1, ET_A2, ET_B1, ET_B2,
   STG_A1, STG_A2, STG_B1, STG_B2,
+  EMT_A1, EMT_B1,
+  P_STAFF_A1, P_STAFF_B1, P_ORGADMIN_A,
 } from './fixture.js'
 
 import * as contactsRoute from '@/app/api/contacts/route.js'
@@ -306,6 +312,16 @@ describe.each(MUTATION_SPECS)('$name — org boundary', (spec) => {
     if (spec.deletes) expect(row).toBeUndefined()
     else expect(spec.changed(row)).toBe(true)
   })
+
+  it('legacy shared key mutating a cross-tenant row: 404, row untouched, no write issued — scoped to org A (W0.1)', async () => {
+    currentKey = LEGACY_KEY
+    const before = structuredClone(world[spec.table].find((r) => r.id === spec.bId))
+    const { status } = await jsonOf(await spec.call(spec.bId))
+    expect(status).toBe(404)
+    expect(world[spec.table].find((r) => r.id === spec.bId)).toEqual(before)
+    const touched = db._writesTo(spec.table).filter((w) => (w.matchedIds || []).includes(spec.bId))
+    expect(touched).toEqual([])
+  })
 })
 
 // ─── spec table: CREATE routes (cross-org create refused) ────────────
@@ -381,6 +397,97 @@ describe.each(CREATE_SPECS)('$name — org boundary', (spec) => {
     expect(json.success).toBe(true)
     expect(world[spec.table].length).toBe(countBefore + 1)
     expect(spec.stamped(world[spec.table][world[spec.table].length - 1])).toBe(true)
+  })
+})
+
+// ─── spec table: cross-org REFERENCES (W0.1b) ────────────────────────
+// The target row/location is inside org A; only the REFERENCED id
+// belongs to org B. Before W0.1b assertCreateInOrg ignored contact_id
+// whenever location_id was also given, tasks PATCH never looked at
+// contact_id / assignee_id, and the campaign routes never looked at
+// template_id — so a keyed caller could stitch org A rows to org B's.
+// 404 (not 403), the assertRowInOrg idiom: the id's existence is not
+// confirmed across orgs.
+const REFERENCE_SPECS = [
+  {
+    name: 'POST /api/tasks (location_id in A, contact_id →)',
+    call: (ref) => tasksRoute.POST(makeReq('/api/tasks', { method: 'POST', bearer: currentKey, body: { location_id: LOC_A1, subject: 'Ref Task', contact_id: ref } })),
+    table: 'activities', aRef: C_A1, bRef: C_B1, creates: true,
+  },
+  {
+    name: 'POST /api/tasks (location_id in A, assignee_id →)',
+    call: (ref) => tasksRoute.POST(makeReq('/api/tasks', { method: 'POST', bearer: currentKey, body: { location_id: LOC_A1, subject: 'Ref Task', assignee_id: ref } })),
+    table: 'activities', aRef: P_STAFF_A1, bRef: P_STAFF_B1, creates: true,
+  },
+  {
+    name: 'POST /api/activities (location_id in A, contact_id →)',
+    call: (ref) => activitiesRoute.POST(makeReq('/api/activities', { method: 'POST', bearer: currentKey, body: { location_id: LOC_A1, subject: 'Ref Activity', contact_id: ref } })),
+    table: 'activities', aRef: C_A1, bRef: C_B1, creates: true,
+  },
+  {
+    name: 'POST /api/notes (location_id in A, contact_id →)',
+    call: (ref) => notesRoute.POST(makeReq('/api/notes', { method: 'POST', bearer: currentKey, body: { location_id: LOC_A1, content: 'Ref note', contact_id: ref } })),
+    table: 'notes', aRef: C_A1, bRef: C_B1, creates: true,
+  },
+  {
+    name: 'POST /api/campaigns (location_id in A, template_id →)',
+    call: (ref) => campaignsRoute.POST(makeReq('/api/campaigns', { method: 'POST', bearer: currentKey, body: { location_id: LOC_A1, name: 'Ref Campaign', template_id: ref } })),
+    table: 'campaigns', aRef: EMT_A1, bRef: EMT_B1, creates: true,
+  },
+  {
+    name: 'PATCH /api/tasks/[id] (own task, contact_id →)',
+    call: (ref) => taskDetailRoute.PATCH(makeReq(`/api/tasks/${TASK_A1}`, { method: 'PATCH', bearer: currentKey, body: { contact_id: ref } }), propsOf({ id: TASK_A1 })),
+    table: 'activities', rowId: TASK_A1, aRef: C_A1, bRef: C_B1, changed: (row, ref) => row.contact_id === ref,
+  },
+  {
+    name: 'PATCH /api/tasks/[id] (own task, assignee_id → staff)',
+    call: (ref) => taskDetailRoute.PATCH(makeReq(`/api/tasks/${TASK_A1}`, { method: 'PATCH', bearer: currentKey, body: { assignee_id: ref } }), propsOf({ id: TASK_A1 })),
+    table: 'activities', rowId: TASK_A1, aRef: P_STAFF_A1, bRef: P_STAFF_B1, changed: (row, ref) => row.assignee_id === ref,
+  },
+  {
+    name: 'PATCH /api/tasks/[id] (own task, assignee_id → org admin)',
+    call: (ref) => taskDetailRoute.PATCH(makeReq(`/api/tasks/${TASK_A1}`, { method: 'PATCH', bearer: currentKey, body: { assignee_id: ref } }), propsOf({ id: TASK_A1 })),
+    table: 'activities', rowId: TASK_A1, aRef: P_ORGADMIN_A, bRef: P_STAFF_B1, changed: (row, ref) => row.assignee_id === ref,
+  },
+  {
+    name: 'PUT /api/campaigns/[id] (own campaign, template_id →)',
+    call: (ref) => campaignDetailRoute.PUT(makeReq(`/api/campaigns/${CAM_A1}`, { method: 'PUT', bearer: currentKey, body: { template_id: ref } }), propsOf({ id: CAM_A1 })),
+    table: 'campaigns', rowId: CAM_A1, aRef: EMT_A1, bRef: EMT_B1, changed: (row, ref) => row.template_id === ref,
+  },
+]
+
+describe.each(REFERENCE_SPECS)('$name — cross-org reference (W0.1b)', (spec) => {
+  async function expectRefused(key) {
+    currentKey = key
+    const countBefore = world[spec.table].length
+    const before = spec.rowId ? structuredClone(world[spec.table].find((r) => r.id === spec.rowId)) : null
+    const { status, json } = await jsonOf(await spec.call(spec.bRef))
+    expect(status).toBe(404)
+    expect(JSON.stringify(json)).not.toContain(spec.bRef)
+    expect(world[spec.table].length).toBe(countBefore)
+    if (spec.rowId) expect(world[spec.table].find((r) => r.id === spec.rowId)).toEqual(before)
+    expect(db._writesTo(spec.table)).toEqual([])
+  }
+
+  it('org-A key referencing an org-B row: 404, nothing written', async () => {
+    await expectRefused(ORG_A_KEY)
+  })
+
+  it('legacy shared key referencing an org-B row: 404, nothing written — scoped to org A (W0.1)', async () => {
+    await expectRefused(LEGACY_KEY)
+  })
+
+  it('org-A key referencing an org-A row succeeds (positive control)', async () => {
+    currentKey = ORG_A_KEY
+    const countBefore = world[spec.table].length
+    const { status, json } = await jsonOf(await spec.call(spec.aRef))
+    expect(status).toBe(200)
+    expect(json.success).toBe(true)
+    if (spec.creates) {
+      expect(world[spec.table].length).toBe(countBefore + 1)
+    } else {
+      expect(spec.changed(world[spec.table].find((r) => r.id === spec.rowId), spec.aRef)).toBe(true)
+    }
   })
 })
 

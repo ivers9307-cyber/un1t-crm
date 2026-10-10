@@ -4,8 +4,10 @@
 // without having to know the activities schema. Marketed as
 // /api/tasks but writes to public.activities with kind='task'.
 //
-// Authentication mirrors the other public n8n surfaces:
-//   - x-api-key: <CRM_API_KEY> required.
+// Authentication mirrors the other n8n surfaces (authenticateApiKey):
+//   - Authorization: Bearer <per-org unitk_ key>, or the legacy shared
+//     CRM_API_KEY, scoped since W0.1 to the one organisation in
+//     CRM_API_KEY_ORG_ID (refused when unset).
 //
 // Endpoints:
 //   GET  /api/tasks?location_id=&status=&assignee_id=&limit=
@@ -22,7 +24,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { authenticateApiKey, orgScopeLocationIds, assertCreateInOrg } from '@/lib/api-auth'
+import { authenticateApiKey, orgScopeLocationIds, assertCreateInOrg, assertProfileInOrg } from '@/lib/api-auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 
@@ -85,6 +87,11 @@ export async function POST(request) {
   // APIKEYS.3 — per-org key may only create a task at a location in its org.
   const scopeErr = await assertCreateInOrg({ db, orgId: auth.orgId, locationId: validation.data.location_id, contactId: validation.data.contact_id })
   if (scopeErr) return scopeErr
+  // W0.1b — the assignee must be a member of the org as well (404 otherwise).
+  if (validation.data.assignee_id) {
+    const refErr = await assertProfileInOrg({ db, orgId: auth.orgId, profileId: validation.data.assignee_id })
+    if (refErr) return refErr
+  }
   const insert = {
     ...validation.data,
     kind: 'task',

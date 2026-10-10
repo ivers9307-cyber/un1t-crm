@@ -1,6 +1,11 @@
 // TASKS.1 — GET/PATCH/DELETE one task.
 //
-// Same auth as the collection endpoint (x-api-key: CRM_API_KEY).
+// Same auth as the collection endpoint: authenticateApiKey — an
+// `Authorization: Bearer` header carrying a per-org `unitk_` key, or
+// the legacy shared CRM_API_KEY, which since W0.1 is scoped to the one
+// organisation in CRM_API_KEY_ORG_ID (refused when unset). Every
+// caller therefore has an orgId; the row and every id it references
+// are gated to that org (assertRowInOrg / assertProfileInOrg, 404).
 // All writes go to activities WHERE kind='task' AND id=...; we
 // explicitly guard so n8n can't accidentally mutate an
 // auto-logged event row by passing its UUID.
@@ -8,7 +13,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { authenticateApiKey, assertRowInOrg } from '@/lib/api-auth'
+import { authenticateApiKey, assertRowInOrg, assertProfileInOrg } from '@/lib/api-auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 
@@ -54,6 +59,17 @@ export async function PATCH(request, props) {
   const db = createServerClient()
   const scopeErr = await assertRowInOrg({ db, orgId: auth.orgId, table: 'activities', id: params.id })
   if (scopeErr) return scopeErr
+  // W0.1b — the ids a PATCH references must be in the org too, else a
+  // keyed caller could point its own task at another org's contact or
+  // staff member. null clears the field and references nothing.
+  if (validation.data.contact_id) {
+    const refErr = await assertRowInOrg({ db, orgId: auth.orgId, table: 'contacts', id: validation.data.contact_id })
+    if (refErr) return refErr
+  }
+  if (validation.data.assignee_id) {
+    const refErr = await assertProfileInOrg({ db, orgId: auth.orgId, profileId: validation.data.assignee_id })
+    if (refErr) return refErr
+  }
   const { data, error } = await db.from('activities')
     .update(validation.data)
     .eq('id', params.id)

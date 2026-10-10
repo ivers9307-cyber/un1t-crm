@@ -44,8 +44,9 @@ export async function GET(request) {
     const managed = getUserLocationIds(auth.user).filter((id) => hasRoleAtLocation(auth.user, id, MANAGER_ROLES))
     query = query.in('location_id', managed)
   }
-  // APIKEYS.3 — per-org key: restrict to the org's locations (no-op for
-  // cookie callers + legacy shared key).
+  // APIKEYS.3 — keyed caller (per-org key, or the legacy shared key scoped
+  // since W0.1 to CRM_API_KEY_ORG_ID): restrict to the org's locations
+  // (no-op for cookie callers only).
   const orgLocs = await orgScopeLocationIds(db, auth.orgId)
   if (orgLocs) query = query.in('location_id', orgLocs)
   const { data, error } = await query
