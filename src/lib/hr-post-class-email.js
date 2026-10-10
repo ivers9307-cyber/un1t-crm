@@ -34,11 +34,8 @@ import { normalizeClassName } from '@/lib/hr-analytics'
 import { logInfo, logWarn, logError } from '@/lib/log'
 import { formatWeekdayShortDateTimeInTZ } from '@/lib/dates'
 import { getAppUrl, getMemberAppUrl } from '@/lib/app-url'
-<<<<<<< HEAD
 import { getLocationBranding } from '@/lib/location-branding'
-=======
 import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
->>>>>>> origin/main
 
 const HISTORY_LOOKBACK_DAYS = 90
 
@@ -213,15 +210,9 @@ export async function loadContextForSession(db, sessionId) {
  * no Date.now() unless caller passes nowMs. Returns subject + html
  * + text. Tested standalone.
  */
-<<<<<<< HEAD
-export function composeEmail(ctx, { nowMs = Date.now() } = {}) {
+export function composeEmail(ctx, { nowMs = Date.now(), customerBaseUrl = null } = {}) {
   const { session, thisSession, history, eventTypeName, contact, shortName = '' } = ctx
   const report = buildSessionReport({ session, thisSession, history, eventTypeName, cta: ctx.cta, shortName }, { nowMs })
-=======
-export function composeEmail(ctx, { nowMs = Date.now(), customerBaseUrl = null } = {}) {
-  const { session, thisSession, history, eventTypeName, contact } = ctx
-  const report = buildSessionReport({ session, thisSession, history, eventTypeName, cta: ctx.cta }, { nowMs })
->>>>>>> origin/main
   // Adapt the report back to the shapes the existing renderers read, so
   // the email's output is byte-identical while the numbers now flow from
   // the one canonical builder.
