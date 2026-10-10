@@ -45,6 +45,19 @@ describe('prompt builders', () => {
     const week = { week_no: 5, phase: 'build', stimulus: 'Engine', progression: 'x', is_benchmark: false }
     expect(buildExpansionPrompt({ week, houseStyle }).system).toContain('partner relays')
   })
+  // W1.S3 — the prompts are shared by every tenant: the house-style and
+  // example headings name no gym, and the board label is the caller's
+  // locations.name (upper-cased), with no literal default.
+  it('names no gym in the house-style / example headings or as a default label', () => {
+    const week = { week_no: 5, phase: 'build', stimulus: 'Engine', progression: 'x', is_benchmark: false }
+    const { system, user } = buildExpansionPrompt({ week, houseStyle: 'Loud cues.', styleExamples: [{ text: 'EX-ONE' }] })
+    expect(system).toContain('HOUSE STYLE (follow this')
+    expect(system).toContain("EXAMPLE SESSIONS in this gym's style")
+    expect(`${system}\n${user}`).not.toMatch(/UN1T/)
+    expect(user).toContain('Dial: mixed.')
+    expect(user).not.toContain('Location label:')
+    expect(buildExpansionPrompt({ ...input, week }).user).toContain('Location label: UN1T STILLORGAN. Dial: mixed.')
+  })
   it('injects capped few-shot example sessions into the expansion prompt', () => {
     const week = { week_no: 5, phase: 'build', stimulus: 'Engine', progression: 'x', is_benchmark: false }
     const styleExamples = [

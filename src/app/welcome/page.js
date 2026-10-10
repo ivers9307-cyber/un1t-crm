@@ -23,6 +23,7 @@
 // the /welcome layout), staggered entrance, film grain, ENTER pill
 // that lifts on hover. Tile data + visibility logic untouched.
 
+import { cache } from 'react'
 import Link from 'next/link'
 import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
@@ -30,9 +31,19 @@ import { createServerClient } from '@/lib/supabase'
 import { blocksOrDefault } from '@/lib/landing-page-blocks'
 import EditModeOverlay from '@/components/landing-page/EditModeOverlay'
 import { loadFrontPage, publicWelcomePathForLocation } from '@/lib/welcome-front-page'
-import { resolveTenantLocationId } from '@/lib/tenant-domains-edge'
+import { resolveTenantLocationId, resolveTenantOrgId } from '@/lib/tenant-domains-edge'
+import { resolveGymSiteName } from '@/lib/default-site-name'
 
 export const dynamic = 'force-dynamic'
+
+// W1.L4 — the front page is the REQUEST HOST's organisation's (un1tdublin.com
+// → UN1T Group through the in-code brand tier; <slug>.repset.ie and a custom
+// domain through tenant_domains; the CRM host → the UN1T slug fallback).
+// React-cached so generateMetadata and the render share one load.
+const loadFrontPageForHost = cache(async (host) => {
+  const orgId = await resolveTenantOrgId(host)
+  return loadFrontPage(null, { orgId })
+})
 
 // Edit-mode seed (unchanged behaviour): most-recently-edited row.
 // The overlay is postMessage-driven so the seed is just the initial
@@ -52,21 +63,25 @@ async function loadEditSeed() {
   }
 }
 
-// Front-page data (org chooser row + the org's studio tiles) now lives
-// in src/lib/welcome-front-page.js — SAAS-6 made chooser_settings
-// per-organization (mig 414) and the loader resolves WHICH org's front
-// page this hostname renders (UN1T Group by slug until SAAS-8's
-// tenant_domains maps hostname → org; see the loader's handoff note).
+// Front-page data (org chooser row + the org's studio tiles) lives in
+// src/lib/welcome-front-page.js — SAAS-6 made chooser_settings
+// per-organization (mig 414); W1.L4 picks the org by the request host.
 
-export const metadata = {
-  title: 'UN1T Dublin — Choose your studio',
-  description: 'Two Dublin studios. Coach-led strength + conditioning, built for racing. Choose Stillorgan or Hatch Street.',
-  openGraph: {
-    title: 'UN1T Dublin — Choose your studio',
-    description: 'Two Dublin studios — Stillorgan & Hatch Street. Coach-led strength + conditioning, built for racing.',
-    siteName: 'UN1T Dublin',
-    type: 'website',
-  },
+// W1.L4 — the title and OG site name are the host's organisation brand
+// (resolveGymSiteName), and the description is the operator's chooser intro
+// or headline (chooser_settings) rather than UN1T's two-studio tagline;
+// when neither is set (UN1T's row today) a brand-derived default keeps the
+// link preview from going blank.
+export async function generateMetadata() {
+  const host = (await headers()).get('host') || ''
+  const [brand, page] = await Promise.all([resolveGymSiteName({ host }), loadFrontPageForHost(host)])
+  const title = `${brand} — Choose your studio`
+  const description = page.intro || page.headline || `Choose your studio at ${brand}.`
+  return {
+    title,
+    description,
+    openGraph: { title, description, siteName: brand, type: 'website' },
+  }
 }
 
 // Shared inner content for a tile (cover image + scrim + centre text).
@@ -142,7 +157,7 @@ export default async function WelcomePage(props) {
     if (landing) redirect(landing)
   }
 
-  const { headline, intro, tiles } = await loadFrontPage()
+  const { headline, intro, tiles } = await loadFrontPageForHost(host)
 
   const tileWrapClasses = 'group relative flex-1 min-h-[50svh] md:min-h-screen overflow-hidden flex items-center justify-center border-b border-white/10 md:border-b-0 md:border-r last:border-0'
 

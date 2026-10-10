@@ -4,6 +4,8 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { BarChart3 } from 'lucide-react'
 import { CANCELLATION_FORM_DEFAULTS, REASON_CODES } from '@/lib/cancellation-form/defaults'
+import { defaultHoldingMessage, defaultWelcomeGreeting } from '@/lib/agent/default-copy'
+import { productName } from '@/lib/brand-name'
 import ReadFailedNote from '@/components/settings/ReadFailedNote'
 
 // RADAR-AGENT.0 — operator settings for the customer-facing WhatsApp /
@@ -47,6 +49,8 @@ function buildCancellationFormPayload(cf) {
 export default function CustomerAgentClient({ canEdit = false } = {}) {
   const [settings, setSettings] = useState(null)
   const [location, setLocation] = useState(null)
+  // W1.S3 — the studio's resolved brand (GET payload), for the placeholders.
+  const [brand, setBrand] = useState({ companyName: '', shortName: '' })
   const [entries, setEntries] = useState([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -70,6 +74,7 @@ export default function CustomerAgentClient({ canEdit = false } = {}) {
       const sRes = sOut.status === 'fulfilled' ? sOut.value : null
       if (sRes?.success && sRes.settings) {
         setSettings(sRes.settings); setLocation(sRes.location || null); setCheckinStats(sRes.checkin_stats || null)
+        setBrand(sRes.brand || { companyName: '', shortName: '' })
         setLoadFailed(false)
       } else {
         setSettings(null); setLoadFailed(true)
@@ -459,7 +464,7 @@ export default function CustomerAgentClient({ canEdit = false } = {}) {
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-un1t-text mb-1">Monthly UN1T-Points target</label>
+          <label className="block text-sm font-medium text-un1t-text mb-1">Monthly {productName(brand.shortName, 'points')} target</label>
           <p className="text-xs text-un1t-text-2 mb-1">Shared monthly goal that drives member tiers. Blank = tiers off.</p>
           <input type="number" min={0} step={50} className={inputCls}
             value={settings.monthly_points_target ?? ''}
@@ -503,7 +508,7 @@ export default function CustomerAgentClient({ canEdit = false } = {}) {
           <label className="block text-sm font-medium text-un1t-text mb-1">Hand-off message</label>
           <input className={inputCls} maxLength={500} value={settings.holding_message || ''}
             onChange={e => setField('holding_message', e.target.value)}
-            placeholder="Thanks! One of the UN1T team will get back to you shortly." />
+            placeholder={defaultHoldingMessage(brand.companyName)} />
           <p className="text-xs text-un1t-muted mt-1">Sent to the customer when the agent hands the chat to a human.</p>
         </div>
 
@@ -593,14 +598,14 @@ export default function CustomerAgentClient({ canEdit = false } = {}) {
           <p className="text-xs text-un1t-muted mt-1">Sent to the customer when you decline a request the agent queued. Leave blank to use the default shown.</p>
         </div>
 
-        {/* C2 — request_welcome instant greeting. Placeholder mirrors
-            DEFAULT_WELCOME_GREETING in src/lib/agent/welcome-greeting.js
-            (inlined — that module pulls server-only WhatsApp code). */}
+        {/* C2 — request_welcome instant greeting. Placeholder IS the code
+            default (src/lib/agent/default-copy.js, pure; welcome-greeting.js
+            pulls server-only WhatsApp code so it is not imported here). */}
         <div>
           <label className="block text-sm font-medium text-un1t-text mb-1">Welcome greeting (sent when someone opens the chat without typing)</label>
           <textarea className={inputCls} rows={2} maxLength={500} value={settings.welcome_greeting || ''}
             onChange={e => setField('welcome_greeting', e.target.value)}
-            placeholder="Hi, I'm Mia, the studio's assistant at UN1T. Ask me anything, or tell me if you'd like to book a free class or a consultation." />
+            placeholder={defaultWelcomeGreeting({ agentName: settings.agent_name, brand: brand.companyName })} />
           <p className="text-xs text-un1t-muted mt-1">
             Sent instantly when someone opens a brand-new chat (e.g. from a click-to-WhatsApp ad) without sending a message.
             Uses the agent&apos;s on/off, test-mode, and quiet-hours switches above. Leave blank to use the default shown.

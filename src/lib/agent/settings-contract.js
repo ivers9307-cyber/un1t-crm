@@ -56,7 +56,8 @@ export const DEFAULTS = {
   // request. Null → the code default in lib/agent/notify.js.
   approval_decline_text: null,
   // C2 — instant greeting sent when someone opens the chat without typing
-  // (request_welcome). Null → code default (DEFAULT_WELCOME_GREETING).
+  // (request_welcome). Null → code default (defaultWelcomeGreeting in
+  // lib/agent/default-copy.js, built from agent_name + the location brand).
   welcome_greeting: null,
   // C3 — label on the tappable button of cta_url link messages.
   // Null → code default ('Open link').
