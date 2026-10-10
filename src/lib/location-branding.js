@@ -139,6 +139,73 @@ export async function getOrgBrandName(db, organizationId) {
   }
 }
 
+/**
+ * W1.L4 — the ORGANISATION's customer-facing brand (name, logo, favicon)
+ * for a surface that knows the request's organisation (the host, via
+ * resolveTenantOrgId) but no location: the anonymous login screen, the
+ * <title>/OG site name, the favicon, the /welcome front page.
+ *
+ * Per field: org_settings → the earliest ACTIVE location's company_settings
+ * in THAT org (so a gym that configured one studio and never the org row
+ * still has a brand) → for the name only, getOrgBrandName's location-name
+ * floor → '' / null. Never another organisation's row: before W1.L4 these
+ * surfaces read the first company_settings row in the ESTATE.
+ *
+ * Never throws; a missing db or org is the empty brand.
+ * @param {object} db
+ * @param {string|null} organizationId
+ * @returns {Promise<{ companyName: string, logoUrl: string|null, faviconUrl: string|null }>}
+ */
+export async function getOrgCustomerBranding(db, organizationId) {
+  const empty = { companyName: '', logoUrl: null, faviconUrl: null }
+  if (!db || !organizationId) return empty
+  try {
+    const { data: orgRows, error: orgErr } = await db
+      .from('org_settings')
+      .select('company_name, logo_url, favicon_url')
+      .eq('organization_id', organizationId)
+      .limit(1)
+    const org = (!orgErr && orgRows && orgRows[0]) || {}
+    let name = (org.company_name || '').trim()
+    let logoUrl = org.logo_url || null
+    let faviconUrl = org.favicon_url || null
+
+    if (!name || !logoUrl || !faviconUrl) {
+      // The org's own active studios, oldest first; their company_settings
+      // rows fill whatever the org row left blank. Bounded: an org is a
+      // handful of studios, never a fan-out.
+      const { data: locRows, error: locErr } = await db
+        .from('locations')
+        .select('id')
+        .eq('organization_id', organizationId)
+        .eq('active', true)
+        .order('created_at')
+        .limit(50)
+      const ids = ((!locErr && locRows) || []).map((r) => r.id).filter(Boolean)
+      if (ids.length) {
+        const { data: csRows, error: csErr } = await db
+          .from('company_settings')
+          .select('location_id, company_name, logo_url, favicon_url')
+          .in('location_id', ids)
+        const byLocation = new Map(((!csErr && csRows) || []).map((r) => [r.location_id, r]))
+        for (const id of ids) {
+          const row = byLocation.get(id)
+          if (!row) continue
+          name = name || (row.company_name || '').trim()
+          logoUrl = logoUrl || row.logo_url || null
+          faviconUrl = faviconUrl || row.favicon_url || null
+        }
+      }
+    }
+
+    if (!name) name = await getOrgBrandName(db, organizationId)
+    return { companyName: name, logoUrl, faviconUrl }
+  } catch {
+    logError('location-branding', 'org customer brand unresolved', { organizationId })
+    return empty
+  }
+}
+
 // Resolve the location's own name plus the org_settings row (mig 317) for
 // the organisation that owns `locationId`: location -> organization_id ->
 // org_settings. Returns null only when the location row itself is

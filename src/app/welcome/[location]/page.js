@@ -21,7 +21,10 @@
 //   · JSON-LD (Gym) via the JsonLd island for richer search results.
 
 import { notFound } from 'next/navigation'
+import { headers } from 'next/headers'
 import { createServerClient } from '@/lib/supabase'
+import { getLocationBranding } from '@/lib/location-branding'
+import { resolveGymSiteName } from '@/lib/default-site-name'
 import { blocksOrDefault, pageCtas } from '@/lib/landing-page-blocks'
 import BlockRenderer, { SiteHeader, SiteFooter } from '@/components/landing-page/BlockRenderers'
 import EditModeOverlay from '@/components/landing-page/EditModeOverlay'
@@ -50,14 +53,19 @@ async function loadByPath(path) {
   }
 }
 
+// W1.L4 — the OG site name is THIS studio's brand (company_settings →
+// org_settings → location name) and the not-found title is the host's
+// organisation brand; neither is a literal.
 export async function generateMetadata(props) {
   const params = await props.params
   const row = await loadByPath(params.location)
-  if (!row || !isPubliclyVisible(row.publish_state)) return { title: 'UN1T Dublin' }
+  const hostBrand = await resolveGymSiteName({ host: (await headers()).get('host') })
+  if (!row || !isPubliclyVisible(row.publish_state)) return { title: hostBrand }
   const blocks = blocksOrDefault(row.blocks)
   const hero = blocks.find((b) => b.type === 'hero')
   const heroImage = hero?.image_url || null
-  const studioName = row.locations?.name || 'UN1T Dublin'
+  const brand = (await getLocationBranding(createServerClient(), row.location_id)).companyName || hostBrand
+  const studioName = row.locations?.name || brand
   const description = hero?.subtext
     || 'Coach-led strength + conditioning, built for racing. Book your free consultation.'
   const title = `${studioName} — Strength + conditioning, built for racing`
@@ -67,7 +75,7 @@ export async function generateMetadata(props) {
     openGraph: {
       title,
       description,
-      siteName: 'UN1T Dublin',
+      siteName: brand,
       type: 'website',
       ...(heroImage ? { images: [{ url: heroImage }] } : {}),
     },
