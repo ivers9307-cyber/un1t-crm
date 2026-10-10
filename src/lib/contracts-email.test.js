@@ -80,7 +80,7 @@ describe('contract email branding header', () => {
     expect(htmlBody).toContain('>UN1T Stillorgan</div>')
     expect(htmlBody).not.toContain('<img') // no logo image when none configured
     expect(subject).toBe('Action required: Coach Agreement from UN1T Stillorgan')
-    expect(htmlBody).toContain('A UN1T Stillorgan administrator has issued you')
+    expect(htmlBody).toContain('An administrator at UN1T Stillorgan has issued you')
   })
 
   // W1.S1a — nothing resolvable at all: no wordmark, never a fixed gym name.

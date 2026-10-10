@@ -364,7 +364,7 @@ export const SEQUENCE_TEMPLATES = [
         step_type: 'email',
         delay_days: 3,
         delay_hours: 0,
-        subject: 'How our members talk about {{company_name}}',
+        subject: 'What makes {{company_name}} different',
         html_content: '<p>Hi {{first_name}},</p><p>People often ask "what makes {{company_name}} different?" The short answer: coaches who know your name and a room that shows up.</p><p>Looking forward to meeting you.</p>',
       },
       {

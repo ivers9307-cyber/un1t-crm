@@ -126,7 +126,7 @@ export async function sendContractIssuedEmail({ contract, recipient, issuer, tem
   const innerHtml = `
     <h2 style="font-size:20px;margin:0 0 16px 0;">A contract is ready for your review</h2>
     <p>Hi ${escapeHtml(recipient.full_name || 'there')},</p>
-    <p>${escapeHtml(issuer?.full_name || (brand ? `A ${brand} administrator` : 'An administrator'))} has issued you the
+    <p>${escapeHtml(issuer?.full_name || (brand ? `An administrator at ${brand}` : 'An administrator'))} has issued you the
     following contract for review and signature:</p>
     <p style="background:#f9fafb;border-left:3px solid #111827;padding:12px 16px;margin:16px 0;font-weight:600;">
       ${escapeHtml(templateName || 'Contract')}

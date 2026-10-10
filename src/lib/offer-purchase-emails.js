@@ -21,7 +21,9 @@
 // exists at the location under the name below, it wins; otherwise the
 // built-in default is used. Both support {{first_name}}, {{offer_name}},
 // {{bonus}}, {{amount}}, {{studio}} and (W1.S1a) {{company_name}}, the
-// location's configured brand.
+// location's configured brand, and {{short_name}}, the SHORT brand
+// (org_settings.short_name, else the brand) the built-in copy uses to name
+// the member app ("the UN1T app").
 
 import { sendTransactionalEmail } from './postmark'
 import { formatEuro } from './sale-offers'

@@ -38,6 +38,8 @@ vi.mock('@/lib/app-url', () => ({ getAppUrl: () => 'https://crm.test' }))
 // W1.L3a — the test send mirrors the real send: links on the campaign
 // location's tenant host. Defaults to the CRM host for the older assertions.
 vi.mock('@/lib/tenant-host', () => ({ resolveCustomerBaseUrl: vi.fn(async () => 'https://crm.test') }))
+// W1.S1a — {{company_name}}, as the real send resolves it.
+vi.mock('@/lib/location-branding', () => ({ getLocationBranding: vi.fn(async () => ({ companyName: 'UN1T Stillorgan', shortName: 'UN1T', locationName: 'Stillorgan' })) }))
 vi.mock('@/lib/postmark', async (importOriginal) => {
   const actual = await importOriginal()
   return { ...actual, sendEmail: vi.fn(async () => ({ MessageID: 'pm-test' })) }
@@ -109,6 +111,17 @@ describe('send-test — subject merge tags get the same extras as the body', () 
     expect(arg.locationId).toBe('loc-1')
     expect(arg.fromName).toBeUndefined()
     expect(arg.from).toBeUndefined()
+  })
+})
+
+describe('send-test — {{company_name}} (W1.S1a)', () => {
+  it('renders the campaign location brand in the tested subject and body', async () => {
+    campaignRow.subject = 'News from {{company_name}}'
+    campaignRow.html_content = '<html><body><p>{{company_name}} here</p></body></html>'
+    await post()
+    const arg = sendEmail.mock.calls[0][0]
+    expect(arg.subject).toBe('[TEST] News from UN1T Stillorgan')
+    expect(arg.htmlBody).toContain('<p>UN1T Stillorgan here</p>')
   })
 })
 

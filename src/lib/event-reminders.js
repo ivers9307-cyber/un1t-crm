@@ -26,7 +26,7 @@ import { createServerClient } from '@/lib/supabase'
 import { sendTransactionalEmail, applyMergeTags } from '@/lib/postmark'
 import { logTransactionalWalletState } from '@/lib/wallet-enforcement'
 import { logWarn } from '@/lib/log'
-import { fmtBookingTime } from '@/lib/booking-confirmations'
+import { fmtBookingTime, bookingLocationMergeExtras } from '@/lib/booking-confirmations'
 
 // ±1h covers Dublin DST drift cleanly. Operators set reminder time in
 // coarse units (24h, 2h) so a ±1h fire-time window is acceptable.
@@ -229,7 +229,8 @@ async function stampLegacyReminderSentAt(db, bookingId) {
     .eq('id', bookingId)
 }
 
-async function sendEmailReminder(db, booking, ctx) {
+// Exported for tests (W1.S1a); the runner above is its only caller.
+export async function sendEmailReminder(db, booking, ctx) {
   if (!ctx.emailTemplateId) {
     throw new Error('Reminder channel=email but no email_template_id set on the reminder')
   }
@@ -273,7 +274,9 @@ async function sendEmailReminder(db, booking, ctx) {
     phone: booking.customer_phone,
   }
 
+  // W1.S1a — {{location_name}} / {{company_name}} for the sending location.
   const extras = {
+    ...(await bookingLocationMergeExtras(db, ctx.locationId)),
     event_name: ctx.eventName,
     event_time: fmtBookingTime(booking.booking_date, booking.start_time),
   }
@@ -304,6 +307,7 @@ function applyMergeTagsWithExtras(html, contact, extras) {
   // standard {{location_name}} tag works for reminders too.
   let out = applyMergeTags(html, contact, {
     location_name: extras.location_name || '',
+    company_name: extras.company_name || '',
   })
   out = out.replaceAll('{{event_name}}', extras.event_name || '')
   out = out.replaceAll('{{event_time}}', extras.event_time || '')

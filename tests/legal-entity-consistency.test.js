@@ -228,6 +228,33 @@ describe('the signed PDF countersigns with the entity, not the brand', () => {
     vi.resetModules()
   })
 
+  // W1.S1a — a branding blip at sign time (no brand resolved) must not store
+  // a PDF with a blank running header or author: they fall back to the
+  // contracting entity, never to a fixed gym's name.
+  it('with no brand the header and author fall back to the entity', async () => {
+    const captured = []
+    vi.doMock('@react-pdf/renderer', () => ({
+      Document: 'Document', Page: 'Page', Text: 'Text', View: 'View',
+      StyleSheet: { create: (s) => s },
+      renderToBuffer: (doc) => { captured.push(doc); return Promise.resolve(Buffer.from('%PDF-')) },
+    }))
+    const { renderContractPdf } = await import('../src/lib/contract-pdf.js')
+    await renderContractPdf({ bodyRendered: '# A', issuerSignature: 'I', companyName: '  ', contractingEntity: 'AN-ENTITY-ONLY' })
+    const strings = []
+    const walkTree = (node) => {
+      if (node == null || node === false) return
+      if (typeof node === 'string') { strings.push(node); return }
+      if (Array.isArray(node)) { node.forEach(walkTree); return }
+      if (node.props) walkTree(node.props.children)
+    }
+    walkTree(captured[0])
+    expect(captured[0].props.author).toBe('AN-ENTITY-ONLY')
+    expect(strings).toContain('AN-ENTITY-ONLY')
+    expect(strings).toContain('For AN-ENTITY-ONLY')
+    vi.doUnmock('@react-pdf/renderer')
+    vi.resetModules()
+  })
+
   it('the PDF label and the page label are the same string for one contract', () => {
     // Not a source grep: both sides are computed here from one row, so
     // a future edit that gives either surface its own resolver breaks

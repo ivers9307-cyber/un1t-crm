@@ -82,7 +82,7 @@ const SWEPT = [
   'src/app/api/hosts/[id]/invite/route.js',
   'src/app/api/hosts/[id]/link-staff/route.js',
   'src/app/api/hosts/[id]/route.js',
-  // ── W1.S1a: customer-facing email, ICS and message libs ──────────────────
+  // ── W1.S1a: customer-facing email and message libs ──────────────────
   'src/lib/event-email.js',
   'src/lib/event-attendee-reminders.js',
   'src/lib/event-waitlist.js',

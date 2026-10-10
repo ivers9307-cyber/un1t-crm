@@ -1819,6 +1819,32 @@ describe('tickCampaignSend — subject merge tags resolve the location (COMMSFIX
   })
 })
 
+// W1.S1a — {{company_name}} renders the campaign location's brand in the
+// body, the hidden preheader and the subject (the same extras everywhere).
+describe('tickCampaignSend — {{company_name}} (W1.S1a)', () => {
+  it('renders the location brand in body, preheader and subject', async () => {
+    // The REAL getLocationBranding reads the brand through the fake db.
+    const base = routeFor({ candidates: [makeRecipient('r1', 0)] })
+    const { db } = makeDb((state) => (state.table === 'company_settings'
+      ? { data: [{ company_name: 'UN1T Stillorgan', logo_url: null, favicon_url: null }] }
+      : base(state)))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, {
+      ...campaign,
+      subject: 'News from {{company_name}}',
+      preview_text: 'This week at {{company_name}}',
+      html_content: '<html><body><p>Hi {{first_name}}, {{company_name}} here.</p></body></html>',
+    })
+
+    const sent = sendBatch.mock.calls[0][0][0]
+    expect(sent.subject).toBe('News from UN1T Stillorgan')
+    expect(sent.htmlBody).toContain('This week at UN1T Stillorgan')
+    expect(sent.htmlBody).toContain('<p>Hi Alice, UN1T Stillorgan here.</p>')
+    expect(sent.htmlBody).not.toContain('{{company_name}}')
+  })
+})
+
 // WEBVIEW.1 — the view-in-browser link has to actually reach the wire, at the
 // top of the body, or it does not solve the problem it exists for (Gmail
 // clipping the bottom of the message together with the unsubscribe footer).
