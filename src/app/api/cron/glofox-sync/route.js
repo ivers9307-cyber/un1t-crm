@@ -26,6 +26,7 @@ import { glofoxCredentialsForLocation, fetchAllMembersPage, glofoxHttpStats, glo
 import { GLOFOX_SETTINGS_UNREADABLE_MESSAGE } from '@/lib/glofox-settings-read'
 import { syncMembershipCatalog } from '@/lib/glofox-catalog'
 import { applyMemberSync } from '@/lib/glofox-sync'
+import { locationsWithSource, skippedSummary } from '@/lib/membership/locations-for-source'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -47,30 +48,34 @@ export async function GET(request) {
 
   const db = createServerClient()
 
-  // Find every location that has Glofox configured. The integration
-  // is per-location (settings.glofox.branch_id + api_key + api_token).
-  const { data: locations, error: locErr } = await db
-    .from('locations')
-    .select('id, name, settings')
-    .filter('settings', 'cs', JSON.stringify({ glofox: {} }))
+  // W1.M3b — discovery goes through the membership seam: every active
+  // location whose membership_source is 'glofox' and whose provider is
+  // configured. (Until this task the cron sniffed settings->'glofox' plus the
+  // three legacy credentials, which tried the empty slices on Hatch Street and
+  // CCF Autos every night and never saw a registry-only connection.) A failed
+  // seam read is a 500 with no heartbeat, never "no locations".
+  const { eligible: eligibleLocations, skipped, error: locErr } = await locationsWithSource(db, 'glofox', { module: 'glofox-sync' })
   if (locErr) {
     console.warn(`[cron][glofox-sync] failed to list locations: ${locErr.message}`)
     return NextResponse.json({ success: false, error: locErr.message }, { status: 500 })
   }
-  // Filter to locations that ACTUALLY have all three creds set
-  // (settings.glofox might exist as an empty object on rows the
-  // operator started but didn't finish configuring).
-  const eligibleLocations = (locations || []).filter(loc => {
-    const cfg = loc.settings?.glofox || {}
-    return cfg.branch_id && cfg.api_key && cfg.api_token
-  })
+
+  // The skip counts ride on every global stamp as last_outcome, so a tick that
+  // could not read a location's credentials (`skipped_unknown`) never reads as
+  // a healthy quiet run. The stamp itself stays: like a failed location below,
+  // an unknown one shows in tenant_cron_health (it never stamps its tenant row).
+  const skipCounts = skippedSummary(skipped)
 
   if (eligibleLocations.length === 0) {
-    await stampHeartbeat('glofox-sync')
+    await stampHeartbeat('glofox-sync', { locations_processed: 0, ...skipCounts })
     return NextResponse.json({
       success: true,
-      message: 'No locations with Glofox credentials configured.',
+      message: skipped.length > 0
+        ? `No Glofox location synced: ${skipCounts.skipped_unknown} unreadable, ${skipCounts.skipped_unconfigured} not configured.`
+        : 'No locations with Glofox credentials configured.',
       locations_processed: 0,
+      locations_skipped: skipped.length,
+      ...skipCounts,
     })
   }
 
@@ -94,7 +99,11 @@ export async function GET(request) {
     }
   }
 
-  await stampHeartbeat('glofox-sync')
+  await stampHeartbeat('glofox-sync', {
+    locations_processed: perLocationResults.length,
+    failed_locations: perLocationResults.filter((r) => r.status === 'failed').length,
+    ...skipCounts,
+  })
 
   // Roll up across all locations for the response.
   const totals = perLocationResults.reduce((acc, r) => {
@@ -111,6 +120,8 @@ export async function GET(request) {
     success: true,
     lookback_hours: LOOKBACK_HOURS,
     locations_processed: perLocationResults.length,
+    locations_skipped: skipped.length,
+    ...skipCounts,
     totals,
     per_location: perLocationResults,
   })
