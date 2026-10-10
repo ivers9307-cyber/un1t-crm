@@ -24,6 +24,7 @@ const SITES = [
   'src/lib/hr-post-class-email.js',
   'src/app/api/campaigns/[id]/send-test/route.js',
   'src/app/api/host/emails/[id]/send-test/route.js',
+  'src/app/api/hosts/[id]/invite/route.js', // W1.L3c — host set-password
   'src/lib/postmark.js',          // buildUnsubscribeUrl
   'src/lib/campaign-web-view.js', // buildCampaignViewUrl
 ]
@@ -59,8 +60,12 @@ describe('W1.L3a — minted customer links land on paths the tenant-domain tier 
     })
   }
 
-  it('none of the six sites builds a customer link on getAppUrl() any more', () => {
-    for (const f of SITES.slice(0, 6)) {
+  it('W1.L3c — the host invite mints /host/set-password on the tenant host', () => {
+    expect(found['src/app/api/hosts/[id]/invite/route.js']).toEqual(['/host/set-password'])
+  })
+
+  it('none of the seven sites builds a customer link on getAppUrl() any more', () => {
+    for (const f of SITES.slice(0, 7)) {
       const src = readFileSync(resolve(process.cwd(), f), 'utf8')
       expect(src, f).not.toMatch(/\$\{getAppUrl\(\)\}/)
       expect(src, f).toMatch(/resolveCustomerBaseUrl\(/)

@@ -16,6 +16,7 @@
 
 import { supabase } from './supabase'
 import { api } from './api'
+import { readMembershipSource } from './membership-source-copy'
 import {
   fetchPersonalDashboardData,
   fetchStudioDashboardData,
@@ -146,12 +147,22 @@ export async function fetchStudioDashboard(locationId) {
  * Fetch every block of the Business command centre for the active
  * location. Resolves to the standard { success, data?, error? }
  * envelope; on success, data is { locationName, kpis, funnel, ads,
- * membership, today, rail } with null for any block that failed
- * server-side (the screen renders a compact error cell per null).
+ * membership, today, rail, membership_source } with null for any block
+ * that failed server-side (the screen renders a compact error cell per
+ * null).
+ *
+ * W1.M3c — data also carries `membershipSource`, the route's
+ * `membership_source` normalised by readMembershipSource(): the screen
+ * hands it to businessMembershipView() (lib/membership-source-copy.js),
+ * which decides between the Glofox-derived numbers and a state card.
+ * Absent (a web deploy older than this bundle) is { state: 'unknown',
+ * reported: false }, never none.
  *
  * @param {object} [opts]
  * @param {string} [opts.locationId] override the active location
  */
-export function fetchBusinessCommandCentre({ locationId } = {}) {
-  return api('/api/dashboard/business', { locationId })
+export async function fetchBusinessCommandCentre({ locationId } = {}) {
+  const res = await api('/api/dashboard/business', { locationId })
+  if (!res?.success || !res.data || typeof res.data !== 'object') return res
+  return { ...res, data: { ...res.data, membershipSource: readMembershipSource(res.data.membership_source) } }
 }

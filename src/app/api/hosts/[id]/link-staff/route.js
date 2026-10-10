@@ -1,4 +1,4 @@
-// GET/POST/DELETE /api/hosts/[id]/link-staff — link an existing UN1T staff login
+// GET/POST/DELETE /api/hosts/[id]/link-staff — link an existing staff login
 // to a host (dual staff+host account). ADMIN_ROLES; host + staff user must be in
 // the caller's org. Deliberate STAFF-XOR exception (see host-auth.js). (HOST-PORTAL.5)
 import { NextResponse } from 'next/server'
@@ -10,6 +10,7 @@ import { loadHostForOrg } from '@/lib/hosts'
 import { linkStaffDecision } from '@/lib/host-staff-link'
 import { logError } from '@/lib/log'
 import { escapeLikePattern } from '@/lib/like-escape'
+import { resolveOrgBrand } from '@/lib/host-org-brand'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -68,8 +69,11 @@ export async function POST(request, props) {
     : null
 
   const decision = linkStaffDecision({ staffProfile, sameOrg, existingLink, hostId })
+  // W1.S1c: "not staff" means not staff of THIS organisation's brand
+  // (cross_org is its own refusal); the brand is read only on that path.
+  const brandName = decision === 'not_staff' ? (await resolveOrgBrand(db, orgId)).name : ''
   const errors = {
-    not_staff: 'That email isn’t a UN1T staff account — use “Invite to portal” for a 3rd-party host on a separate email.',
+    not_staff: `That email isn’t a ${brandName} staff account. Use “Invite to portal” for a 3rd-party host on a separate email.`,
     cross_org: 'That staff member is not in this organisation.',
     other_host: 'That staff member is already linked to another host.',
   }

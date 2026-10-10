@@ -28,6 +28,7 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { getAppUrl } from '@/lib/app-url'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import { ADMIN_ROLES } from '@/lib/schemas'
 import { loadHostForOrg } from '@/lib/hosts'
 import { logError } from '@/lib/log'
@@ -68,7 +69,23 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: 'This host has no email on file — add one first.' }, { status: 400 })
   }
 
-  const redirectTo = `${getAppUrl()}/host/set-password`
+  // W1.L3c — a host is a customer of the platform, so the set-password link
+  // lands on the tenant host of the host's ANCHOR location
+  // (event_hosts.anchor_location_id, mig 388; NULL until the first host-
+  // authored event, and then the resolver floors to the CRM host). Safe only
+  // because Supabase Auth's redirect allow-list now carries
+  // https://*.repset.ie/** (added 10 Oct): a redirectTo NOT on that list is
+  // silently swapped for the Site URL and the invite lands on the wrong page.
+  // /host is on DB_BRAND_DEFAULTS.allowedPaths (src/lib/tenant-domains-edge.js),
+  // so a tenant host serves /host/set-password. A resolver failure floors to
+  // the CRM host rather than aborting the invite.
+  let baseUrl
+  try {
+    baseUrl = await resolveCustomerBaseUrl(db, host.anchor_location_id)
+  } catch {
+    baseUrl = getAppUrl()
+  }
+  const redirectTo = `${baseUrl}/host/set-password`
 
   // New host → invite (creates the auth user + sends the set-password email).
   // NB: inviteUserByEmail returns 200 (not an error) for an EXISTING UNCONFIRMED
@@ -84,9 +101,11 @@ export async function POST(request, props) {
     const authUserId = inv.user.id
     const { data: staffProfile } = await db.from('profiles').select('id').eq('id', authUserId).maybeSingle()
     if (staffProfile) {
+      // Brand-neutral: the profiles lookup is not org-scoped, so this login
+      // may be another organisation's staff (W1.S1c review).
       return NextResponse.json({
         success: false,
-        error: 'That email is a UN1T staff account. Use "Open host portal" above to manage this host as admin, or invite them on a different email.',
+        error: 'That email is already a staff login. Use "Open host portal" above to manage this host as admin, or invite them on a different email.',
       }, { status: 400 })
     }
     const { data: otherLink } = await db.from('host_users').select('host_id').eq('auth_user_id', authUserId).maybeSingle()

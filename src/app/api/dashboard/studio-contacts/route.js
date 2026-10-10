@@ -16,8 +16,15 @@
 // from the path).
 //
 // Query:   location_id  uuid (required)
-// Returns: { success, data: { newLeadsThisWeek, funnel, totalContacts } }
+// Returns: { success, data: { newLeadsThisWeek, funnel, totalContacts, membership_source } }
 //          500 { success: false } when the read failed (never zeros).
+//
+// W1.M3c — `membership_source` (membershipStatePayload) rides alongside the
+// counts: the funnel's later stages (first_class … converted) only move on
+// membership and booking data, so at a studio whose source is not
+// configured the phone puts a note under the funnel saying why. The counts
+// themselves are contact counts and are never withheld. The state read is
+// cached 60 s per location and never throws (a failed read is 'unknown').
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -28,6 +35,7 @@ import { uuidLike } from '@/lib/schemas'
 import { dublinWeekStartMs } from '@/lib/dublin-time'
 import { logError } from '@/lib/log'
 import { fetchStudioContactCounts } from '@shared/dashboard-data'
+import { membershipStateForPage, membershipStatePayload, canManageMembershipSource } from '@/lib/membership/state-for-page'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -59,15 +67,30 @@ export async function GET(request) {
   }
 
   const weekStartIso = new Date(dublinWeekStartMs(Date.now())).toISOString()
+  const db = createServerClient()
+  // Started alongside the counts; it never rejects (a failed read is
+  // 'unknown'), and a rejection is caught to 'unknown' anyway so the key can
+  // never 500 the counts for 2.3.x phones that never read it.
+  const sourceStatePromise = membershipStateForPage(db, location_id)
+    .catch(() => ({ source: null, state: 'unknown' }))
   let res
   try {
-    res = await fetchStudioContactCounts(createServerClient(), location_id, { weekStartIso })
+    res = await fetchStudioContactCounts(db, location_id, { weekStartIso })
   } catch (err) {
     res = { success: false, error: err?.message || String(err) }
   }
+  const sourceState = await sourceStatePromise
   if (!res?.success) {
     logError('dashboard.studio-contacts', 'contact counts read failed', { locationId: location_id, error: res?.error })
     return NextResponse.json({ success: false, error: READ_FAILED }, { status: 500 })
   }
-  return NextResponse.json({ success: true, data: res.data })
+  return NextResponse.json({
+    success: true,
+    data: {
+      ...res.data,
+      membership_source: membershipStatePayload(sourceState, {
+        canManage: canManageMembershipSource(user, location_id),
+      }),
+    },
+  })
 }
