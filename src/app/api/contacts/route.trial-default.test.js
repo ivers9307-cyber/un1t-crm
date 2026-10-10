@@ -4,7 +4,7 @@
 // Glofox says otherwise. An explicit value in the body is still stored.
 // (The column DEFAULT 3 from mig 001 goes in mig 702.)
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('next/headers', () => ({
   cookies: async () => ({ get: () => undefined, getAll: () => [], set: () => {} }),
@@ -26,7 +26,7 @@ vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.f
 
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
-import { makeWorld, makeTenantDb, makeReq, jsonOf, users, ORG_A, LOC_A1 } from '../../../../tests/cross-tenant/fixture.js'
+import { makeWorld, makeTenantDb, makeReq, jsonOf, users, ORG_A_KEY, LOC_A1 } from '../../../../tests/cross-tenant/fixture.js'
 import * as contactsRoute from './route.js'
 
 let world
@@ -35,12 +35,9 @@ const created = () => world.contacts.filter((c) => c.email === EMAIL)
 
 beforeEach(() => {
   vi.clearAllMocks()
-  delete process.env.CRM_API_KEY
-  delete process.env.CRM_API_KEY_ORG_ID
   world = makeWorld()
   vi.mocked(createServerClient).mockReturnValue(makeTenantDb(world))
 })
-afterEach(() => { delete process.env.CRM_API_KEY; delete process.env.CRM_API_KEY_ORG_ID })
 
 describe('POST /api/contacts — no default trial credits (C145)', () => {
   it('web form (cookie): a new contact has no credit count', async () => {
@@ -54,10 +51,8 @@ describe('POST /api/contacts — no default trial credits (C145)', () => {
   })
 
   it('API key: a new contact has no credit count either', async () => {
-    process.env.CRM_API_KEY = 'test-shared-key'
-    process.env.CRM_API_KEY_ORG_ID = ORG_A // W0.1 — the legacy key is org A's key
     const { status } = await jsonOf(await contactsRoute.POST(makeReq('/api/contacts', {
-      method: 'POST', bearer: 'test-shared-key', body: { name: 'New Lead', email: EMAIL, location_id: LOC_A1 },
+      method: 'POST', bearer: ORG_A_KEY, body: { name: 'New Lead', email: EMAIL, location_id: LOC_A1 },
     })))
     expect(status).toBe(200)
     expect(created()[0].trial_credits_remaining ?? null).toBeNull()

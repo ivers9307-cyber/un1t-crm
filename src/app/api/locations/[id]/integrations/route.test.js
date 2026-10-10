@@ -1,4 +1,4 @@
-// N8NECHO.1 — PUT /api/locations/[id]/integrations (the n8n / API-key route).
+// N8NECHO.1 — PUT /api/locations/[id]/integrations (the API-key route).
 //
 // It used to `.update(...).select().single()` and return the WHOLE locations
 // row: the Sensibo key, the ThinQ PAT, every settings credential and the
@@ -35,7 +35,7 @@ const STORED_ROW = {
     glofox: { branch_id: 'b1', namespace: 'ns', api_key: 'SYNTH-GK', api_token: 'SYNTH-GT', webhook_secret: 'SYNTH-GW' },
     unifi: { host: 'https://u.example', api_token: 'SYNTH-UT' },
     customer_agent: { enabled: false, test_phones: ['+353000000000'] },
-    webhooks: { lead_url: 'https://n8n.example/hook' },
+    webhooks: { lead_url: 'https://hooks.example/hook' },
   },
 }
 
@@ -102,8 +102,8 @@ const put = (body) => PUT(
 
 beforeEach(() => {
   vi.clearAllMocks()
-  // W0.1 — the legacy key resolves to CRM_API_KEY_ORG_ID; orgId null no longer occurs.
-  authenticateApiKey.mockResolvedValue({ ok: true, orgId: ORG, legacy: true })
+  // A per-org key: every keyed caller resolves to an organisation.
+  authenticateApiKey.mockResolvedValue({ ok: true, orgId: ORG, keyId: 'key-1' })
 })
 
 describe('PUT /api/locations/[id]/integrations: the echo (N8NECHO.1)', () => {
@@ -122,7 +122,7 @@ describe('PUT /api/locations/[id]/integrations: the echo (N8NECHO.1)', () => {
       id: LOC, name: 'Test Studio', slug: 'test-studio',
       settings: {
         glofox: { branch_id: 'b1', namespace: 'ns', api_key: SECRET_MASK, api_token: SECRET_MASK, webhook_secret: SECRET_MASK },
-        webhooks: { lead_url: 'https://n8n.example/hook' },
+        webhooks: { lead_url: 'https://hooks.example/hook' },
       },
     })
     // The write names its columns: the whole row never leaves the database.
@@ -148,8 +148,8 @@ describe('PUT /api/locations/[id]/integrations: the echo (N8NECHO.1)', () => {
       readResult: { data: { settings: { customer_agent: { enabled: true } }, organization_id: ORG }, error: null },
       writeResult: fullRow,
     })
-    const body = await (await put({ webhooks: { lead_url: 'https://n8n.example/h2' } })).json()
-    expect(body.data.settings).toEqual({ glofox: null, webhooks: { lead_url: 'https://n8n.example/h2' } })
+    const body = await (await put({ webhooks: { lead_url: 'https://hooks.example/h2' } })).json()
+    expect(body.data.settings).toEqual({ glofox: null, webhooks: { lead_url: 'https://hooks.example/h2' } })
   })
 })
 
@@ -158,7 +158,7 @@ describe('PUT /api/locations/[id]/integrations: the masked echo sent back (N8NEC
   // proved for each.
   const SETTINGS = {
     ...STORED_ROW.settings,
-    webhooks: { lead_url: 'https://n8n.example/hook', signing_secret: 'SYNTH-WHS' },
+    webhooks: { lead_url: 'https://hooks.example/hook', signing_secret: 'SYNTH-WHS' },
   }
 
   it("PUT with the previous PUT's response body keeps the stored credentials, and the registry sync gets the real ones", async () => {
@@ -193,10 +193,10 @@ describe('PUT /api/locations/[id]/integrations: the masked echo sent back (N8NEC
     const calls = mockDb({ readResult: { data: { settings: SETTINGS, organization_id: ORG }, error: null }, writeResult: fullRow })
     await put({
       glofox: { ...SETTINGS.glofox, branch_id: 'b2', api_token: 'SYNTH-GT-NEW', api_key: SECRET_MASK },
-      webhooks: { lead_url: 'https://n8n.example/h3', signing_secret: 'SYNTH-WHS-NEW' },
+      webhooks: { lead_url: 'https://hooks.example/h3', signing_secret: 'SYNTH-WHS-NEW' },
     })
     expect(calls.updateArg.settings.glofox).toEqual({ ...SETTINGS.glofox, branch_id: 'b2', api_token: 'SYNTH-GT-NEW' })
-    expect(calls.updateArg.settings.webhooks).toEqual({ lead_url: 'https://n8n.example/h3', signing_secret: 'SYNTH-WHS-NEW' })
+    expect(calls.updateArg.settings.webhooks).toEqual({ lead_url: 'https://hooks.example/h3', signing_secret: 'SYNTH-WHS-NEW' })
   })
 })
 

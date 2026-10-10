@@ -52,7 +52,7 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: error.message }, { status: 400 })
   }
 
-  // Match Pipedrive's response shape so n8n code nodes need minimal changes
+  // Match Pipedrive's response shape (the original integration contract)
   return NextResponse.json({
     success: true,
     data: {

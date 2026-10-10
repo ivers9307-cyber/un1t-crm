@@ -69,10 +69,11 @@ export function makeFakeDb(tables) {
   return { from }
 }
 
-// Raw bearer tokens. GLOBAL_KEY stands in for the legacy shared
-// CRM_API_KEY (stub the env to it); the unitk_ keys resolve against the
-// api_keys fixture rows below by real SHA-256 hash.
-export const GLOBAL_KEY = 'legacy-shared-crm-key-0123456789abcdef0123456789abcdef01234567'
+// Raw bearer tokens. The unitk_ keys resolve against the api_keys fixture
+// rows below by real SHA-256 hash. RETIRED_SHARED_KEY has the shape of the
+// shared integration key APIKEYS.4 removed (64-char hex): tests stub the
+// old env var to it to prove it is now refused everywhere.
+export const RETIRED_SHARED_KEY = '0123456789abcdef'.repeat(4)
 export const ORG1_KEY = 'unitk_' + '1'.repeat(40)
 export const ORG2_KEY_REVOKED = 'unitk_' + '2'.repeat(40)
 export const EMPTY_ORG_KEY = 'unitk_' + '3'.repeat(40) // active key, org with zero locations

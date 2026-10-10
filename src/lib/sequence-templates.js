@@ -319,7 +319,7 @@ export const SEQUENCE_TEMPLATES = [
     id: 'webhook_external_lead_capture',
     category: 'Lead conversion',
     name: 'External lead capture (webhook)',
-    description: 'Inbound-webhook starter template. Wire any external system (n8n / Glofox / Zapier / Stripe) to POST to a unique URL — the contact gets a welcome email + an internal task lands on the operator\'s queue. Edit the steps to match your funnel after install.',
+    description: 'Inbound-webhook starter template. Wire any external system (Glofox / Zapier / Stripe) to POST to a unique URL — the contact gets a welcome email + an internal task lands on the operator\'s queue. Edit the steps to match your funnel after install.',
     trigger_type: 'webhook',
     trigger_config: {},
     goal_config: null,

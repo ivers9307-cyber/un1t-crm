@@ -39,7 +39,7 @@ const BookingSchema = z.object({
 // The database trigger (handle_new_booking) automatically:
 //   1. Creates or finds the contact
 //   2. Creates a deal at "New Lead" stage
-//   3. Fires the event's webhook URL (for n8n)
+//   3. Fires the event's webhook URL (for external automations)
 export async function POST(request) {
   const db = createServerClient()
 

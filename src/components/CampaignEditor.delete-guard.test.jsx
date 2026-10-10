@@ -3,7 +3,7 @@
 // CAMPDEL.1 — the editor's delete must not be the way round the delete guard.
 //
 // The editor used to delete with `db.from('campaigns').delete()` straight from
-// the browser, after re-reading the status itself, because the n8n route
+// the browser, after re-reading the status itself, because the API-key route
 // (DELETE /api/campaigns/[id]) is Bearer-only. MEMBERWRITESWEEP.1e moved it to
 // DELETE /api/communications/campaigns/[id] (session auth, email at the
 // campaign's studio), which re-reads the status on the SERVER and applies the

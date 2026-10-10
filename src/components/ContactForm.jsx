@@ -8,7 +8,7 @@
 // touches one place.
 //
 // Backed by /api/contacts (POST + PUT) which now accepts cookie auth
-// for manager+ in addition to the existing n8n API key path.
+// for manager+ in addition to the per-org API key path.
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'

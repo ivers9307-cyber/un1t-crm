@@ -1,5 +1,5 @@
 // /api/webhooks/sequence/[token] — inbound receiver for the FLOW2
-// webhook trigger (mig 131). External systems (n8n / Glofox /
+// webhook trigger (mig 131). External systems (Glofox /
 // Stripe / Zapier / anything that can POST JSON) hit this URL
 // to enrol a contact into a webhook-triggered sequence.
 //

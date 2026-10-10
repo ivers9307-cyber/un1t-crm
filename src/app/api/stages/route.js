@@ -6,11 +6,11 @@ import { MANAGER_ROLES } from '@/lib/schemas'
 
 // GET /api/stages — List pipeline stages.
 //
-// Accepts either the n8n bearer token OR a manager+ cookie session
+// Accepts either a per-org API key (Bearer) OR a manager+ cookie session
 // — same dual-auth pattern as /api/contacts/[id]. (The SequenceEditor
 // stage-slug picker that used the cookie path went with the
-// move_pipeline_stage step type, retired in FUNNEL.1; n8n still hits
-// this with the API key.)
+// move_pipeline_stage step type, retired in FUNNEL.1; integrations hit
+// this with an API key.)
 export async function GET(request) {
   const auth = await requireApiKeyOrManager(request)
   if (!auth.ok) return auth.response
@@ -44,8 +44,7 @@ export async function GET(request) {
     const managed = getUserLocationIds(auth.user).filter((id) => hasRoleAtLocation(auth.user, id, MANAGER_ROLES))
     query = query.in('location_id', managed)
   }
-  // APIKEYS.3 — keyed caller (per-org key, or the legacy shared key scoped
-  // since W0.1 to CRM_API_KEY_ORG_ID): restrict to the org's locations
+  // APIKEYS.3 — keyed caller (per-org key): restrict to the org's locations
   // (no-op for cookie callers only).
   const orgLocs = await orgScopeLocationIds(db, auth.orgId)
   if (orgLocs) query = query.in('location_id', orgLocs)

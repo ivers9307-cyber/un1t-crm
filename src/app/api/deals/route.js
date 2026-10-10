@@ -37,8 +37,7 @@ export async function POST(request) {
 
   // APIKEYS.3 — per-org key: the deal must belong to the caller's org,
   // anchored on its contact's location (plus the explicit location_id if
-  // given). Since W0.1 the legacy shared key carries an orgId too; only
-  // cookie callers (orgId null) are unscoped here.
+  // given). Only cookie callers (orgId null) are unscoped here.
   if (auth.orgId) {
     const locIds = await orgLocationIds(db, auth.orgId)
     if (!contact || !locIds.includes(contact.location_id)) {
@@ -92,7 +91,7 @@ export async function POST(request) {
     pipelineId = stage.pipeline_id || null
   }
 
-  // A stageless create (n8n may send neither stage_id nor stage_slug) has no
+  // A stageless create (a keyed caller may send neither stage_id nor stage_slug) has no
   // stage to read the board off, and must still not write a NULL pipeline_id:
   // the nightly orchestrator scopes its deal read with `.in('pipeline_id', …)`
   // and SQL IN never matches NULL, so such a deal is invisible to the cron,

@@ -114,7 +114,6 @@ let db
 beforeEach(() => {
   vi.mocked(createServerClient).mockReset()
   vi.mocked(getCurrentUser).mockReset()
-  delete process.env.CRM_API_KEY // cookie path only — no bearer fallthrough
   world = makeWorld()
   db = makeTenantDb(world)
   vi.mocked(createServerClient).mockReturnValue(db)

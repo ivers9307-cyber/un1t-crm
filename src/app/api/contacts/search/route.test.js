@@ -1,5 +1,5 @@
 // SAAS-3 — GET /api/contacts/search under API-key auth (the Pipedrive-
-// replacement n8n search). Regression for the thenable-assimilation bug
+// replacement integration search). Regression for the thenable-assimilation bug
 // (see campaigns/route.test.js): `query.ilike(…)` after the old scope
 // call threw on the executed response object for every API-key caller.
 // Also the two-org leak test for the org filter itself.
@@ -7,7 +7,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
-  makeFakeDb, twoOrgFixture, GLOBAL_KEY, ORG1_KEY,
+  makeFakeDb, twoOrgFixture, RETIRED_SHARED_KEY, ORG1_KEY,
 } from '@/lib/api-auth.test-helpers.js'
 
 let db
@@ -25,8 +25,6 @@ const req = (token, qs) =>
   })
 
 beforeEach(() => {
-  vi.stubEnv('CRM_API_KEY', GLOBAL_KEY)
-  vi.stubEnv('CRM_API_KEY_ORG_ID', 'org-1') // W0.1 — legacy key = org-1's key
   db = makeFakeDb(twoOrgFixture())
 })
 
@@ -35,12 +33,9 @@ afterEach(() => {
 })
 
 describe('GET /api/contacts/search — API-key callers', () => {
-  it('legacy CRM_API_KEY searches only its org without crashing (W0.1 scoped; assimilation regression)', async () => {
-    const res = await GET(req(GLOBAL_KEY, '?term=example.com'))
-    expect(res.status).toBe(200)
-    const body = await res.json()
-    expect(body.success).toBe(true)
-    expect(body.data.items.map(({ item }) => item.id)).toEqual(['c1'])
+  it('the retired shared key → 401 (APIKEYS.4)', async () => {
+    const res = await GET(req(RETIRED_SHARED_KEY, '?term=example.com'))
+    expect(res.status).toBe(401)
   })
 
   it('per-org key can only find its own org\'s contacts (two-org leak test)', async () => {

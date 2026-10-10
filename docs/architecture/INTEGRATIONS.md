@@ -25,8 +25,7 @@ QSTASH_TOKEN=                    # Upstash QStash publish token. UNSET = QStash 
 QSTASH_CURRENT_SIGNING_KEY=      # Upstash-Signature verification (worker routes 503 without it)
 QSTASH_NEXT_SIGNING_KEY=         # second accepted key so Upstash-side key rotation never drops deliveries
 ANTHROPIC_API_KEY=               # for the in-app assistant chat
-CRM_API_KEY=                     # Bearer token for n8n / external integrations (legacy; prefer a per-org `unitk_` key)
-CRM_API_KEY_ORG_ID=              # W0.1: the ONE organisation the legacy key is scoped to (uuid). Unset = the legacy key is refused.
+# n8n was decommissioned on 10 Oct 2026 (APIKEYS.4); per-org `unitk_` API keys (issued at /settings/api-keys) are the only integration credential.
 NEXT_PUBLIC_APP_URL=https://crm.un1tdublin.com
 CRON_SECRET=                     # for Vercel cron auth
 XERO_CLIENT_ID=                  # Xero OAuth 2.0 web app — see "Xero integration"

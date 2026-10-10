@@ -225,7 +225,7 @@ export const ShellyDevicePatch = z.object({
 // now", which is why `until` is optional — it is meaningless without a state
 // to hold. The route bounds `until` by MAX_OVERRIDE_HOURS.
 //
-// `until` NORMALISES AT THE INPUT EDGE. /api routes take Bearer (n8n) and
+// `until` NORMALISES AT THE INPUT EDGE. /api routes take Bearer API-key and
 // mobile JWT callers as well as the web UI, and an offset form
 // ('…T18:00:00+01:00') is a perfectly ordinary ISO instant for them to send —
 // refusing it would be a 400 an operator cannot debug. The transform pins it

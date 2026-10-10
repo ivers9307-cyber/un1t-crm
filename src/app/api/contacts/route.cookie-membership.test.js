@@ -40,7 +40,6 @@ let world
 
 beforeEach(() => {
   vi.clearAllMocks()
-  delete process.env.CRM_API_KEY // cookie path only
   world = makeWorld()
   vi.mocked(createServerClient).mockReturnValue(makeTenantDb(world))
 })

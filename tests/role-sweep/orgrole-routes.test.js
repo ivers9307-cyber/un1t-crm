@@ -114,7 +114,7 @@ const settingsTables = () => ({
   locations: [{ id: LOC_A, organization_id: ORG }, { id: LOC_B, organization_id: ORG }],
   org_settings: [],
   wallets: [],
-  api_keys: [{ id: 'key-1', organization_id: ORG, name: 'n8n', key_prefix: 'unitk_ab', revoked_at: null }],
+  api_keys: [{ id: 'key-1', organization_id: ORG, name: 'Zapier', key_prefix: 'unitk_ab', revoked_at: null }],
   tenant_email_domains: [],
 })
 
@@ -159,7 +159,7 @@ describeOrgAdminRoute('PATCH /api/settings/billing/auto-topup', {
   refused: { adminElsewhere: 404 },
 })
 describeOrgAdminRoute('GET /api/settings/api-keys', { call: () => apiKeys.GET() })
-describeOrgAdminRoute('POST /api/settings/api-keys', { call: () => apiKeys.POST(json('POST', { name: 'n8n' })) })
+describeOrgAdminRoute('POST /api/settings/api-keys', { call: () => apiKeys.POST(json('POST', { name: 'Zapier' })) })
 describeOrgAdminRoute('DELETE /api/settings/api-keys/[id]', { call: () => apiKey.DELETE(bare('DELETE'), params({ id: 'key-1' })) })
 describeOrgAdminRoute('GET /api/settings/email-domain', { call: () => emailDomain.GET(bare('GET')) })
 describeOrgAdminRoute('POST /api/settings/email-domain', {

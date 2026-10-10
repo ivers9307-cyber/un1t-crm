@@ -104,7 +104,7 @@ export default function CampaignEditor({ campaign, locationId, userId: _userId, 
   // COMMSFIX.D.3a — initialise the mode FROM THE CONTENT. The old ternary was
   // `designJson ? 'visual' : 'visual'` — vestigial, always visual — so a draft
   // authored in the Code tab (or created through the Bearer /api/campaigns
-  // n8n path) opened into a blank Unlayer canvas, and Save exported that blank
+  // API-key path) opened into a blank Unlayer canvas, and Save exported that blank
   // scaffold over the stored html_content. The branded email was gone with no
   // warning. html_content without a design_json is by definition code-authored.
   const [editorMode, setEditorMode] = useState(
@@ -444,7 +444,7 @@ export default function CampaignEditor({ campaign, locationId, userId: _userId, 
   // CAMPAIGN.13 — delete the campaign.
   //
   // CAMPDEL.1 — this used to delete straight from the browser Supabase client
-  // after re-reading the status itself (the n8n route is Bearer-only), because
+  // after re-reading the status itself (the API-key route is Bearer-only), because
   // `campaignStatus` is React state read at load: an operator sitting on a
   // 'scheduled' campaign while the run-campaigns cron sends it still holds
   // 'scheduled' here, and deleting then would cascade away every

@@ -2,8 +2,7 @@
 // (2026-06-10 audit). assertRowInOrg only scopes per-org API keys (it
 // no-ops when orgId is null), so the cookie path previously let a
 // manager at one studio update any contact at any location/org by id.
-// The route now mirrors the DELETE handler's location guard; the
-// legacy-key (orgId null, user null) path stays unscoped by design.
+// The route now mirrors the DELETE handler's location guard.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -133,15 +132,6 @@ describe('PUT /api/contacts/[id] — cookie-path location gate', () => {
     expect(db.update).not.toHaveBeenCalled()
   })
 
-  it('legacy shared key (orgId null, no user) stays unscoped — n8n back-compat', async () => {
-    requireApiKeyOrManager.mockResolvedValue({ ok: true, orgId: null, user: null })
-    const db = mockDb({ oldRow: { tags: [], location_id: 'loc-1', email: null, glofox_member_id: null } })
-    createServerClient.mockReturnValue(db)
-    const res = await PUT(req(), props)
-    expect(res.status).toBe(200)
-    expect(db.update).toHaveBeenCalled()
-  })
-
   // REVIEWNITS.1 (D5): the old-row read's error was dropped. A master or an
   // API key then wrote anyway: the tag-added sequence trigger was skipped in
   // silence, the address-change reset read no old address, and a missing id
@@ -170,7 +160,7 @@ describe('PUT /api/contacts/[id] — cookie-path location gate', () => {
   })
 
   // A malformed id (PostgREST 22P02, invalid uuid) is a contact that cannot
-  // exist, not an outage: a 503 "try again" would have n8n retry forever and
+  // exist, not an outage: a 503 "try again" would have an integration retry forever and
   // log an error per call.
   it('a malformed id is a 404, not a retryable 503', async () => {
     requireApiKeyOrManager.mockResolvedValue({ ok: true, orgId: null, user: null })
@@ -193,7 +183,7 @@ describe('PUT /api/contacts/[id] — cookie-path location gate', () => {
 
 // HOST-MASTER.6b — automations_exempt (mig 464) is a staff decision: the
 // cookie path (Manager+ by requireApiKeyOrManager) may flip it; API-key
-// callers (auth.user null — n8n / integrations) get the field stripped
+// callers (auth.user null — integrations) get the field stripped
 // rather than 403'd so whole-object PUTs keep working.
 describe('PUT /api/contacts/[id] — a failed update never echoes Postgres (W0.6)', () => {
   const manager = { role: 'manager', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'manager' } }

@@ -67,7 +67,7 @@ single biggest lever.
 In Cloudflare DNS for the sending domain:
 
 - **SPF**: TXT record on root with `v=spf1 include:<ESP-include> ~all`
-  (ESP-include comes from whoever sends — n8n SMTP provider, ManyChat,
+  (ESP-include comes from whoever sends — Postmark, ManyChat,
   Klaviyo, etc.).
 - **DKIM**: CNAME records the ESP provides (usually two, named like
   `<selector>._domainkey`).
@@ -120,7 +120,7 @@ This is deliberately the opposite of the branded template. Looks like
 a coach typed it on a phone. Single column, no banner, no big CTA
 button — just a text link. Short. From a real person's name.
 
-Drop this into n8n / ManyChat / whichever ESP and replace the
+Drop this into ManyChat / whichever ESP and replace the
 `{{placeholders}}`. Keep the From name as a real coach (or "Richard at
 UN1T"), the From address as that coach's actual mailbox, and Reply-To
 the same so replies actually land somewhere monitored.
@@ -247,7 +247,7 @@ rows in `error_events` are what tell you the outage happened at all.
 
 ## Open follow-ups
 
-- [ ] Confirm which sending domain n8n / ManyChat / Klaviyo are
+- [ ] Confirm which sending domain ManyChat / Klaviyo are
       currently using.
 - [ ] Audit current SPF/DKIM/DMARC on that domain (see "Domain
       authentication" above).
