@@ -19,13 +19,29 @@
 // Fictional values only (SYNTH-…): the repo is public.
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { PGlite } from '@electric-sql/pglite'
-import { CREDENTIAL_COLUMN_GRANTS, NO_CLIENT_ACCESS_TABLES, CREDENTIAL_GRANT_TABLES } from './helpers/credential-column-grants.js'
+import { CREDENTIAL_COLUMN_GRANTS, NO_CLIENT_ACCESS_TABLES, CREDENTIAL_GRANT_TABLES, CREDENTIAL_GRANT_MIGRATION } from './helpers/credential-column-grants.js'
+import { sqlCode } from './helpers/sql-code.js'
 
-const MIG_648 = readFileSync(
-  path.resolve(import.meta.dirname, '../supabase/migrations/648_credential_column_grants.sql'), 'utf8')
+const MIGRATIONS_DIR = path.resolve(import.meta.dirname, '../supabase/migrations')
+const MIG_648 = readFileSync(path.join(MIGRATIONS_DIR, '648_credential_column_grants.sql'), 'utf8')
+
+// Migrations AFTER 648 that add a column to, or grant a column on, one of the
+// five tables (717 W1.M1 `locations.membership_source` was the first). They
+// are replayed after 648 so the catalog assertions below judge TODAY's
+// grants against the helper's lists, which the 3c guard requires to carry
+// every later column. Each must be replay-safe on its own (a second run is a
+// no-op: see the idempotency test) and must not need tables the fixture
+// lacks; one that does extends BASE_SCHEMA in its own PR.
+const LATER_TABLE_RE = new RegExp(
+  `\\b(?:alter\\s+table\\s+(?:only\\s+)?(?:if\\s+exists\\s+)?|grant\\s+(?:select|update|insert|references)\\s*\\([^)]*\\)\\s+on\\s+(?:table\\s+)?)(?:public\\.)?(?:${CREDENTIAL_GRANT_TABLES.join('|')})\\b`, 'i')
+const LATER_MIGRATIONS = readdirSync(MIGRATIONS_DIR)
+  .filter((f) => f.endsWith('.sql') && parseInt(f, 10) > CREDENTIAL_GRANT_MIGRATION)
+  .sort()
+  .map((file) => ({ file, sql: readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8') }))
+  .filter(({ sql }) => LATER_TABLE_RE.test(sqlCode(sql)))
 
 const ORG = '0a000000-0000-0000-0000-00000000000a'
 const LOC_A = 'a0000000-0000-0000-0000-00000000000a'
@@ -279,12 +295,24 @@ async function tableColumns(table) {
 const sorted = (xs) => [...xs].sort()
 const ALL_TABLE_PRIVS = ['DELETE', 'INSERT', 'REFERENCES', 'SELECT', 'TRIGGER', 'TRUNCATE', 'UPDATE']
 
+/** migrate: false = prod before 648; true = 648 then every later credential-table migration. */
 async function boot({ migrate = false } = {}) {
   db = new PGlite()
   await runSql(BASE_SCHEMA)
   await runSql(PROD_POLICIES)
   await runSql(SEED)
-  if (migrate) await runSql(MIG_648)
+  if (migrate) {
+    await runSql(MIG_648)
+    for (const { sql } of LATER_MIGRATIONS) await runSql(sql)
+  }
+}
+
+/** Every `GRANT <priv> (cols) ON public.<table> TO authenticated` column list in 648 + the later migrations. */
+function grantedColumns(table, priv, files = [MIG_648, ...LATER_MIGRATIONS.map((m) => m.sql)]) {
+  const re = new RegExp(`^GRANT ${priv} \\(([^)]*)\\) ON public\\.${table} TO authenticated;`, 'gm')
+  const out = []
+  for (const sql of files) for (const m of sqlCode(sql).matchAll(re)) out.push(...m[1].split(',').map((c) => c.trim()))
+  return out
 }
 
 describe('before 648 — the leak and the write hole (prod today)', () => {
@@ -365,22 +393,40 @@ describe('after 648 — the catalog', () => {
     expect(r).toEqual({ a_tbl: false, a_col: false, n_tbl: false, n_col: false })
   })
 
-  it("the migration's GRANT lines name exactly the helper's lists", () => {
+  it("the migrations' GRANT lines (648 + every later credential-table migration) name exactly the helper's lists", () => {
     for (const [table, { select, update }] of Object.entries(CREDENTIAL_COLUMN_GRANTS)) {
-      const sel = MIG_648.match(new RegExp(`^GRANT SELECT \\(([^)]*)\\) ON public\\.${table} TO authenticated;`, 'm'))
-      const upd = MIG_648.match(new RegExp(`^GRANT UPDATE \\(([^)]*)\\) ON public\\.${table} TO authenticated;`, 'm'))
-      expect(sorted(sel[1].split(',').map((s) => s.trim()))).toEqual(sorted(select))
-      expect(sorted(upd[1].split(',').map((s) => s.trim()))).toEqual(sorted(update))
+      expect(sorted(grantedColumns(table, 'SELECT'))).toEqual(sorted(select))
+      expect(sorted(grantedColumns(table, 'UPDATE'))).toEqual(sorted(update))
     }
+  })
+
+  it('the later credential-table migrations are the ones on disk that add or grant a column on the five tables', () => {
+    // 717 (W1.M1) is the first; a later one joins this list by touching a table, never by hand.
+    expect(LATER_MIGRATIONS.map((m) => m.file)).toContain('717_locations_membership_source.sql')
+    for (const { file } of LATER_MIGRATIONS) expect(parseInt(file, 10)).toBeGreaterThan(CREDENTIAL_GRANT_MIGRATION)
   })
 
   it("takes its locks with a 5s lock_timeout, set right after BEGIN (never queues behind a long reader)", () => {
     expect(MIG_648).toMatch(/^BEGIN;\nSET LOCAL lock_timeout = '5s';\n/m)
   })
 
-  it('a second run passes its own self-check (idempotent)', async () => {
+  it('a second run of 648 passes its own self-check (idempotent), and so does a second run of each later migration', async () => {
+    // 648's self-check classifies every column by ITS lists, so it can only
+    // re-run before a later migration adds one: replay on a fresh instance.
+    await db.close()
+    db = new PGlite()
+    await runSql(BASE_SCHEMA)
+    await runSql(PROD_POLICIES)
+    await runSql(SEED)
+    await runSql(MIG_648)
     await expect(runSql(MIG_648)).resolves.toBeDefined()
+    expect(await columnGrants('locations', 'authenticated', 'SELECT')).toEqual(sorted(grantedColumns('locations', 'SELECT', [MIG_648])))
+    for (const { file, sql } of LATER_MIGRATIONS) {
+      await expect(runSql(sql), `${file} first run`).resolves.toBeDefined()
+      await expect(runSql(sql), `${file} second run`).resolves.toBeDefined()
+    }
     expect(await columnGrants('locations', 'authenticated', 'SELECT')).toEqual(sorted(CREDENTIAL_COLUMN_GRANTS.locations.select))
+    expect(await columnGrants('locations', 'authenticated', 'UPDATE')).toEqual(sorted(CREDENTIAL_COLUMN_GRANTS.locations.update))
   })
 })
 
