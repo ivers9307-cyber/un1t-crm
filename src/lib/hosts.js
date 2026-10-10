@@ -14,7 +14,10 @@ export const HOST_COLS =
   'sender_domain, sender_email, sender_name, sender_domain_verified, ' +
   'postmark_domain_id, email_daily_send_cap, reply_to_email, slug, ' +
   // HOST-CONSENT.1 — the host's own Postmark Broadcasts stream (per-host suppression list).
-  'postmark_stream_id'
+  'postmark_stream_id, ' +
+  // W1.L3c — the host's anchor location (mig 388): the host invite mints its
+  // set-password link on this location's tenant host.
+  'anchor_location_id'
 
 /**
  * Load a host scoped to the caller's org. Returns null when the id is unknown
