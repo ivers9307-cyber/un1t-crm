@@ -303,6 +303,8 @@ Buyer-facing deposit pages live on a separate hostname from the CRM. Same Vercel
 
 **DNS setup.** CNAME `pay.ccfautos.com → cname.vercel-dns.com`. Add the domain in Vercel → Settings → Domains. SSL auto-provisioned within ~1 minute of DNS resolving.
 
+**TLS on `*.repset.ie` is the exception to "auto-provisioned".** repset.ie's DNS is at Cloudflare, not Vercel, so Vercel cannot plant the DNS challenge a wildcard needs and never renews it; `.github/workflows/wildcard-cert.yml` re-issues it monthly-when-due (starts a Vercel order, writes the `_acme-challenge.repset.ie` TXT through the Cloudflare API, then `vercel certs issue`). Custom-certificate upload is Enterprise-only, so that is the only shape that works on Pro. Secrets, the manual run and the manual fallback: [`docs/ops/wildcard-cert-renewal.md`](../ops/wildcard-cert-renewal.md).
+
 
 ## Cars deposit feature
 
