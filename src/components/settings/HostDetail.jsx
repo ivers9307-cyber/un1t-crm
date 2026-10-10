@@ -21,6 +21,7 @@ import { hostCanTakePayments, PROVIDER_STRIPE_CONNECT } from '@/lib/event-hosts'
 // Pure label sanitizer shared with the provisioning route — no server-only
 // imports in that module, so the client bundle can reuse it for the hint.
 import { sanitizeDomainLabel } from '@/lib/postmark-domains'
+import { PLATFORM_NAME } from '@/lib/brand-name'
 
 function centsToEuroInput(cents) {
   const n = Number(cents)
@@ -186,7 +187,7 @@ function SenderDefaultsCard({ hostId, host, applyHost }) {
             className="w-full border border-un1t-border rounded-md px-3 py-2 text-sm font-mono"
           />
           <p className="text-xs text-un1t-subtle mt-1">
-            The host&apos;s own Postmark Broadcasts stream ID. Create it in Postmark (Message Streams → Create → Broadcasts, unsubscribe handling Custom), add a webhook on that stream to <code>/api/webhooks/postmark</code> with all six events and the <code>x-webhook-token</code> header, then paste the ID here. Marketing sends are blocked until this is set; utility emails are unaffected. It must be the host&apos;s own stream, never UN1T&apos;s shared <code>broadcast</code> stream.
+            The host&apos;s own Postmark Broadcasts stream ID. Create it in Postmark (Message Streams → Create → Broadcasts, unsubscribe handling Custom), add a webhook on that stream to <code>/api/webhooks/postmark</code> with all six events and the <code>x-webhook-token</code> header, then paste the ID here. Marketing sends are blocked until this is set; utility emails are unaffected. It must be the host&apos;s own stream, never {PLATFORM_NAME}&apos;s shared <code>broadcast</code> stream.
           </p>
         </Field>
         <p className="text-xs text-un1t-subtle">
@@ -503,7 +504,9 @@ function EmailSendingCard({ hostId, host, canBackfill = false }) {
   )
 }
 
-export default function HostDetail({ hostId, canBackfill = false }) {
+// W1.S2 — `brand` is the organisation's resolved brand name (the server page
+// resolves it from the active location); it labels the org's own staff logins.
+export default function HostDetail({ hostId, canBackfill = false, brand = '' }) {
   const [host, setHost] = useState(null)
   const [loading, setLoading] = useState(true)
   const [checking, setChecking] = useState(false) // ?stripe=return sync-on-load
@@ -534,7 +537,7 @@ export default function HostDetail({ hostId, canBackfill = false }) {
   const [openPortalError, setOpenPortalError] = useState(null)
 
   // Portal members linked to this host — invited member logins (HOST-PORTAL.14)
-  // and linked UN1T staff logins (HOST-PORTAL.5). GET /link-staff lists ALL
+  // and linked staff logins of the org (HOST-PORTAL.5). GET /link-staff lists ALL
   // host_users rows, so both kinds land in the same list.
   const [staffLinks, setStaffLinks] = useState([])
   const [staffLinkEmail, setStaffLinkEmail] = useState('')
@@ -806,14 +809,14 @@ export default function HostDetail({ hostId, canBackfill = false }) {
     }
   }
 
-  // Remove the host. Events assigned to them fall back to internal/UN1T
+  // Remove the host. Events assigned to them fall back to internal/platform
   // (Revolut) via ON DELETE SET NULL — the host's own Stripe account is
   // untouched. On success we bounce back to the hosts list.
   async function handleDelete() {
     if (deleting) return
     const label = name.trim() || 'this host'
     if (!window.confirm(
-      `Delete ${label}?\n\nAny events currently assigned to them will switch back to UN1T (settled via Revolut). Their Stripe account is not affected — this only removes the payee record here.`
+      `Delete ${label}?\n\nAny events currently assigned to them will switch back to ${PLATFORM_NAME} (settled via Revolut). Their Stripe account is not affected — this only removes the payee record here.`
     )) return
     setDeleting(true)
     setDeleteError(null)
@@ -828,7 +831,7 @@ export default function HostDetail({ hostId, canBackfill = false }) {
     }
   }
 
-  // Link an existing UN1T staff login to this host (HOST-PORTAL.5). On success
+  // Link an existing staff login to this host (HOST-PORTAL.5). On success
   // clear the input + error and refresh the list; the API returns a friendly
   // { error } for not-staff / cross-org / already-linked-elsewhere cases.
   async function linkStaff() {
@@ -900,7 +903,7 @@ export default function HostDetail({ hostId, canBackfill = false }) {
       <Card title="Payments">
         {!isStripe ? (
           <p className="text-sm text-un1t-subtle">
-            This host settles via Revolut (an internal UN1T payout route) — no Stripe onboarding needed.
+            This host settles via Revolut (an internal {PLATFORM_NAME} payout route) — no Stripe onboarding needed.
           </p>
         ) : ready ? (
           <div className="rounded-lg border border-green-500/30 bg-green-500/10 p-4">
@@ -1034,7 +1037,7 @@ export default function HostDetail({ hostId, canBackfill = false }) {
           <>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <Stat label="Gross collected" value={fmtEuro(revenue.totals.gross_cents, revenue.currency)} />
-              <Stat label="UN1T booking fees" value={fmtEuro(revenue.totals.fee_cents, revenue.currency)} />
+              <Stat label={`${PLATFORM_NAME} booking fees`} value={fmtEuro(revenue.totals.fee_cents, revenue.currency)} />
               <Stat label="Net to host" value={fmtEuro(revenue.totals.net_to_host_cents, revenue.currency)} />
               <Stat label="Refunded" value={fmtEuro(revenue.totals.refunded_cents, revenue.currency)} />
             </div>
@@ -1102,7 +1105,7 @@ export default function HostDetail({ hostId, canBackfill = false }) {
           <Field
             id="edit-host-fee"
             label="Booking fee per ticket (€)"
-            hint="UN1T keeps this on every ticket the host sells. Leave blank for no fee."
+            hint={`${PLATFORM_NAME} keeps this on every ticket the host sells. Leave blank for no fee.`}
             className="sm:max-w-xs"
           >
             {(p) => (
@@ -1194,13 +1197,13 @@ export default function HostDetail({ hostId, canBackfill = false }) {
         )}
 
         {/* Portal members — everyone with a login to this host's portal:
-            invited member logins (HOST-PORTAL.1/.14) and linked UN1T staff
+            invited member logins (HOST-PORTAL.1/.14) and linked staff
             logins (HOST-PORTAL.5). Backed by GET/DELETE /link-staff, which
             lists/unlinks ALL host_users rows for the host. */}
         <div className="mt-4 pt-4 border-t border-un1t-border">
           <p className="text-sm font-medium text-un1t-text">Portal members</p>
           <p className="mt-1 text-xs text-un1t-muted">
-            Everyone who can sign in to this host&apos;s portal — invited members and linked UN1T staff logins.
+            Everyone who can sign in to this host&apos;s portal — invited members and linked {brand ? `${brand} ` : ''}staff logins.
           </p>
 
           <div className="mt-3 space-y-2">
@@ -1265,10 +1268,10 @@ export default function HostDetail({ hostId, canBackfill = false }) {
             </p>
           )}
 
-          {/* Link staff (HOST-PORTAL.5) — an existing UN1T staff member who is
+          {/* Link staff (HOST-PORTAL.5) — an existing staff member who is
               also this host, accessing the portal with their normal login. */}
           <p className="mt-4 text-xs text-un1t-muted">
-            Or give an existing UN1T staff member access with their normal login:
+            Or give an existing {brand ? `${brand} ` : ''}staff member access with their normal login:
           </p>
           <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
             <input
@@ -1301,7 +1304,7 @@ export default function HostDetail({ hostId, canBackfill = false }) {
 
       {/* Danger zone — a separate card so a delete can't be fat-fingered next
           to Save. Deleting only drops our payee record; assigned events revert
-          to UN1T (Revolut) via ON DELETE SET NULL and the host keeps their own
+          to the platform rail (Revolut) via ON DELETE SET NULL and the host keeps their own
           Stripe account. */}
       <Card title="Danger zone">
         <div className="flex flex-wrap items-start justify-between gap-4">
@@ -1309,7 +1312,7 @@ export default function HostDetail({ hostId, canBackfill = false }) {
             <p className="text-sm font-medium text-un1t-text">Delete this host</p>
             <p className="mt-1 text-xs text-un1t-muted">
               Removes the payee record here. Any events assigned to this host
-              switch back to UN1T (settled via Revolut). Their Stripe account
+              switch back to {PLATFORM_NAME} (settled via Revolut). Their Stripe account
               isn&apos;t affected.
             </p>
             {deleteError && (

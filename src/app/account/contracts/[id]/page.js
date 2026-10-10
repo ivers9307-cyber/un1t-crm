@@ -141,6 +141,7 @@ export default async function AccountContractDetail(props) {
           contract={c}
           recipientName={user.full_name}
           impersonating={!!(user.impersonatingFrom || user.supportSession)}
+          issuerLabel={entityLabel}
         />
       )}
 

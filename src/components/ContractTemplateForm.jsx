@@ -56,12 +56,12 @@ const PROFILE_VAR_HELP = [
   // Omitted entirely from the merged map when the field isn't set on
   // the location (or its org default), same "empty means unresolved"
   // convention as every other auto-fill here.
-  { group: 'Location', key: 'location_name',       sample: 'UN1T Stillorgan',                 desc: 'The recipient\'s primary location\'s name.' },
+  { group: 'Location', key: 'location_name',       sample: 'Example Studio',                  desc: 'The recipient\'s primary location\'s name.' },
   { group: 'Location', key: 'location_address',    sample: 'Stillorgan Shopping Centre, Dublin', desc: 'The location\'s address.' },
   { group: 'Location', key: 'location_phone',      sample: '01 234 5678',                     desc: 'The location\'s phone number.' },
   { group: 'Location', key: 'location_email',      sample: 'stillorgan@un1tdublin.com',        desc: 'The location\'s email address.' },
-  { group: 'Location', key: 'company_name',        sample: 'UN1T',                             desc: 'Operator-configured brand name (location, falling back to org default).' },
-  { group: 'Location', key: 'legal_entity_name',   sample: 'Champ Fitness Ltd (trading as UN1T Dublin)', desc: 'The contracting COMPANY. Set it on Settings → Organisation → legal entity; falls back to the brand name if unset. Use this, not company_name, in a party clause.' },
+  { group: 'Location', key: 'company_name',        sample: 'Example Gym',                      desc: 'Operator-configured brand name (location, falling back to org default).' },
+  { group: 'Location', key: 'legal_entity_name',   sample: 'Example Fitness Ltd (trading as Example Gym)', desc: 'The contracting COMPANY. Set it on Settings → Organisation → legal entity; falls back to the brand name if unset. Use this, not company_name, in a party clause.' },
 ]
 
 export default function ContractTemplateForm({ initial, isEdit = false }) {
@@ -147,7 +147,7 @@ export default function ContractTemplateForm({ initial, isEdit = false }) {
             required
             value={name}
             onChange={e => setName(e.target.value)}
-            placeholder="e.g. UN1T Coach FTE Contract v1"
+            placeholder="e.g. Coach FTE Contract v1"
             className="w-full bg-un1t-surface border border-un1t-border rounded-md px-3 py-2 text-sm"
           />
         </div>

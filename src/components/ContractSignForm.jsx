@@ -17,7 +17,9 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Check, X } from 'lucide-react'
 
-export default function ContractSignForm({ contract, recipientName, impersonating = false }) {
+// W1.S2 — `issuerLabel` is the contract's frozen contracting entity
+// (contractCountersignatureLabel on the page), never a literal.
+export default function ContractSignForm({ contract, recipientName, impersonating = false, issuerLabel = '' }) {
   const router = useRouter()
   const [signature, setSignature] = useState(recipientName || '')
   const [busy, setBusy] = useState(false)
@@ -93,7 +95,7 @@ export default function ContractSignForm({ contract, recipientName, impersonatin
       <div className="bg-red-500/5 border border-red-500/30 rounded-lg p-4 print:hidden">
         <h3 className="text-sm font-semibold text-red-700 mb-2">Decline this contract</h3>
         <p className="text-xs text-un1t-subtle mb-3">
-          Let UN1T Dublin know why you&apos;re declining. They&apos;ll be notified by email.
+          Let {issuerLabel || 'the issuer'} know why you&apos;re declining. They&apos;ll be notified by email.
         </p>
         <textarea
           rows={3}
