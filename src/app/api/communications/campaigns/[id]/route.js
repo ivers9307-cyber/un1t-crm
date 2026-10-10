@@ -25,6 +25,7 @@ import {
   loadCampaignForUser, CampaignContentSchema, contentPatch, audienceFilterRefusal,
   conflict, serverError, STATUS_CHANGED, CHECK_VIOLATION, currentStatus, undeletableMessage,
 } from '@/lib/campaign-session-access'
+import { fromAddressReport } from '@/lib/from-address'
 
 export const dynamic = 'force-dynamic'
 
@@ -77,7 +78,9 @@ export async function PUT(request, props) {
   }
   if (!data || data.length === 0) return conflict(STATUS_CHANGED, await currentStatus(db, campaign.id, campaign.status))
 
-  return NextResponse.json({ success: true, data: data[0] })
+  // FROMDOMAIN — stored as given, sent only when on the verified domain.
+  const from_address = await fromAddressReport(db, campaign.location_id, validation.data)
+  return NextResponse.json({ success: true, data: data[0], ...(from_address ? { from_address } : {}) })
 }
 
 export async function DELETE(_request, props) {

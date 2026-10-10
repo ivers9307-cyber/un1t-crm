@@ -34,6 +34,7 @@ vi.mock('./postmark.js', async (importOriginal) => {
 
 import { sendBatch, buildAudienceQueryAsync } from './postmark.js'
 import { _resetTenantEmailCache } from './tenant-email.js'
+import { wireFrom, resolvedFromOf } from './platform-sender.js'
 import { tickCampaignSend, MAX_SEND_ATTEMPTS, SENDING_LEASE_MS } from './campaign-sender.js'
 import { resolveCustomerBaseUrl } from './tenant-host.js'
 
@@ -454,6 +455,78 @@ describe('W1.E2 — a campaign sends as "{from_name} <platform address>" pre-dom
     const insert = statements.find(s => s.table === 'email_sends' && s.ops[0].method === 'insert')
     expect(insert.ops[0].args[0][0].from_email).toBe('hello@platform.test')
     expect(JSON.stringify(sendBatch.mock.calls[0])).not.toContain('ops@gyma.ie')
+  })
+})
+
+// ── FROMDOMAIN — campaign.from_email sends when it is on the org's VERIFIED domain ──
+describe('FROMDOMAIN — a campaign may send from any address on the org\'s verified domain', () => {
+  // The real resolver, through the fake db: a LIVE tenant_email_domains row for
+  // un1tdublin.com (or none), a branded location.
+  function routeWithTenant(base, liveRow) {
+    return (state) => {
+      if (state.table === 'tenant_email_domains') return { data: liveRow }
+      if (state.table === 'locations') return { data: { id: 'loc-1', name: 'Gym A', organization_id: 'org-a', email: null } }
+      if (state.table === 'company_settings') return { data: [{ company_name: 'Gym A', logo_url: null, favicon_url: null }] }
+      return base(state)
+    }
+  }
+  const LIVE_ROW = {
+    organization_id: 'org-a', status: 'live', postmark_server_token: 'tenant-srv-tok',
+    from_email: 'hello@un1tdublin.com', from_name: 'UN1T', sending_domain: 'un1tdublin.com',
+  }
+
+  beforeEach(() => { _resetTenantEmailCache(); vi.stubEnv('POSTMARK_FROM_EMAIL', 'hello@platform.test') })
+  afterEach(() => { vi.unstubAllEnvs() })
+
+  async function tick(liveRow, fields) {
+    const { db, statements } = makeDb(routeWithTenant(routeFor({ candidates: [makeRecipient('r1', 0)] }), liveRow))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+    await tickCampaignSend(db, { ...campaign, ...fields })
+    const [batch, opts] = sendBatch.mock.calls.at(-1)
+    const insert = statements.find(st => st.table === 'email_sends' && st.ops[0].method === 'insert')
+    return { batch, opts, logged: insert.ops[0].args[0][0].from_email }
+  }
+
+  it('live un1tdublin.com + garrett@un1tdublin.com → From "Garrett Ivers <garrett@un1tdublin.com>" on the tenant server; email_sends logs that address', async () => {
+    const { batch, opts, logged } = await tick(LIVE_ROW, { from_name: 'Garrett Ivers', from_email: 'garrett@un1tdublin.com' })
+    expect(opts.sender).toMatchObject({ serverToken: 'tenant-srv-tok', fromEmail: 'garrett@un1tdublin.com', sendingDomain: 'un1tdublin.com' })
+    expect(batch[0].from).toBeUndefined()
+    // The From sendBatch puts on the wire (same functions it calls).
+    expect(wireFrom({ from: batch[0].from, fromName: batch[0].fromName, resolvedFrom: resolvedFromOf(opts.sender) }))
+      .toBe('Garrett Ivers <garrett@un1tdublin.com>')
+    expect(logged).toBe('garrett@un1tdublin.com')
+  })
+
+  it('requested x@other.com → the tenant fromEmail, and x@other.com is nowhere in the batch', async () => {
+    const { opts, logged, batch } = await tick(LIVE_ROW, { from_name: 'Garrett Ivers', from_email: 'x@other.com' })
+    expect(opts.sender.fromEmail).toBe('hello@un1tdublin.com')
+    expect(logged).toBe('hello@un1tdublin.com')
+    expect(JSON.stringify([batch, opts])).not.toContain('other.com')
+  })
+
+  it('subdomain mismatch (garrett@mail.un1tdublin.com) → the tenant fromEmail', async () => {
+    const { opts, logged } = await tick(LIVE_ROW, { from_email: 'garrett@mail.un1tdublin.com' })
+    expect(opts.sender.fromEmail).toBe('hello@un1tdublin.com')
+    expect(logged).toBe('hello@un1tdublin.com')
+  })
+
+  it('case-insensitive: Garrett@UN1TDublin.COM sends and logs lower-cased', async () => {
+    const { opts, logged } = await tick(LIVE_ROW, { from_email: 'Garrett@UN1TDublin.COM' })
+    expect(opts.sender.fromEmail).toBe('garrett@un1tdublin.com')
+    expect(logged).toBe('garrett@un1tdublin.com')
+  })
+
+  it('no live tenant domain → the platform address regardless of the requested one', async () => {
+    const { opts, logged, batch } = await tick(null, { from_name: 'Garrett Ivers', from_email: 'garrett@un1tdublin.com' })
+    expect(opts.sender).toMatchObject({ serverToken: null, fromEmail: 'hello@platform.test' })
+    expect(logged).toBe('hello@platform.test')
+    expect(JSON.stringify([batch, opts])).not.toContain('garrett@')
+  })
+
+  it('no from_email → the tenant fromEmail (W1.E2 unchanged)', async () => {
+    const { opts, logged } = await tick(LIVE_ROW, { from_email: null })
+    expect(opts.sender.fromEmail).toBe('hello@un1tdublin.com')
+    expect(logged).toBe('hello@un1tdublin.com')
   })
 })
 
