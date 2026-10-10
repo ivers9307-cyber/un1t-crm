@@ -130,7 +130,7 @@ async function loadRows(db, nowMs) {
     if (client) {
       const { data, error } = await client
         .from('tenant_domains')
-        .select('id, hostname, organization_id, location_id, brand')
+        .select('id, hostname, organization_id, location_id, brand, source')
         .eq('active', true)
       if (!error && Array.isArray(data)) rows = data
     }
