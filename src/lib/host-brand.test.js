@@ -139,8 +139,9 @@ describe('resolveScopedBrandName — the `?l=` hint can never name another tenan
 })
 
 // W1.S1b — the per-location and per-org twins the public pages, widgets and
-// TV boards read. Same contract as the host cache: one walk per key per TTL,
-// misses and failures cached, never throws, never another tenant's name.
+// TV boards read. One walk per key per TTL, never throws, never another
+// tenant's name; unlike the host cache a FAILURE is never cached (review of
+// #2012): the next call reads again.
 describe('resolveLocationBrand (W1.S1b)', () => {
   it('a location → its brand, wordmark and name; cached per location per TTL', async () => {
     const t = tables()
@@ -156,7 +157,7 @@ describe('resolveLocationBrand (W1.S1b)', () => {
     expect(total()).toBeGreaterThan(walk)
   })
 
-  it('no location → the empty brand with no read; a failing db → empty, cached, never throws', async () => {
+  it('no location → the empty brand with no read; a failing db → empty, NOT cached, never throws', async () => {
     const { db, total } = counted(tables())
     expect(await resolveLocationBrand({ locationId: null, db, nowMs: T0 })).toEqual({ companyName: '', shortName: '', locationName: '' })
     expect(total()).toBe(0)
@@ -164,8 +165,21 @@ describe('resolveLocationBrand (W1.S1b)', () => {
     const down = { from() { calls += 1; throw new Error('down') } }
     expect((await resolveLocationBrand({ locationId: LOC_B1, db: down, nowMs: T0 })).companyName).toBe('')
     const after = calls
+    expect(after).toBeGreaterThan(0)
+    // The next call reads again, and once the db is back the brand resolves.
     await resolveLocationBrand({ locationId: LOC_B1, db: down, nowMs: T0 + 1 })
-    expect(calls).toBe(after)
+    expect(calls).toBeGreaterThan(after)
+    const { db: up } = counted(tables())
+    expect((await resolveLocationBrand({ locationId: LOC_B1, db: up, nowMs: T0 + 2 })).companyName).toBe('Gym B')
+  })
+
+  it('an empty name (getLocationBranding\'s answer to its own read errors) is not cached', async () => {
+    const t = tables()
+    const { db, total } = counted({ ...t, company_settings: [], org_settings: [], locations: [] })
+    expect((await resolveLocationBrand({ locationId: LOC_B1, db, nowMs: T0 })).companyName).toBe('')
+    const walk = total()
+    await resolveLocationBrand({ locationId: LOC_B1, db, nowMs: T0 + 1 })
+    expect(total()).toBeGreaterThan(walk)
   })
 })
 
@@ -214,5 +228,58 @@ describe('resolveOrgChrome (W1.S1b) — the marketing footer\'s organisation', (
     expect(total()).toBe(walk)
     expect(await resolveOrgChrome({ orgId: null, db, nowMs: T0 })).toEqual({ orgId: null, companyName: '', shortName: '', legalName: '', studios: [] })
     expect(total()).toBe(walk)
+  })
+
+  // A PostgREST builder whose every chain resolves to an error.
+  function erroring() {
+    const b = new Proxy({}, {
+      get(_, prop) {
+        if (prop === 'then') return (res, rej) => Promise.resolve({ data: null, error: { message: 'boom' } }).then(res, rej)
+        return () => b
+      },
+    })
+    return b
+  }
+
+  it.each(['org_settings', 'locations', 'landing_page_settings'])(
+    'a failed %s read → the partial chrome, NOT cached: the next call reads again',
+    async (failing) => {
+      const inner = makeFakeDb(chromeTables())
+      let broken = true
+      const calls = {}
+      const db = {
+        from(table) {
+          calls[table] = (calls[table] || 0) + 1
+          return broken && table === failing ? erroring() : inner.from(table)
+        },
+      }
+      const partial = await resolveOrgChrome({ orgId: ORG_A, db, nowMs: T0 })
+      expect(partial.companyName).toMatch(/^Gym A/)
+      const before = calls[failing]
+      broken = false
+      const healed = await resolveOrgChrome({ orgId: ORG_A, db, nowMs: T0 + 1 })
+      expect(calls[failing]).toBeGreaterThan(before)
+      expect(healed.legalName).toBe('Gym A Trading Ltd')
+      expect(healed.studios).toHaveLength(2)
+      // …and the healed chrome IS cached.
+      const after = calls[failing]
+      await resolveOrgChrome({ orgId: ORG_A, db, nowMs: T0 + 2 })
+      expect(calls[failing]).toBe(after)
+    },
+  )
+
+  it('a db that throws, or an org with no brand at all → empty, NOT cached', async () => {
+    let calls = 0
+    const down = { from() { calls += 1; throw new Error('down') } }
+    expect(await resolveOrgChrome({ orgId: ORG_A, db: down, nowMs: T0 })).toEqual({ orgId: null, companyName: '', shortName: '', legalName: '', studios: [] })
+    const after = calls
+    await resolveOrgChrome({ orgId: ORG_A, db: down, nowMs: T0 + 1 })
+    expect(calls).toBeGreaterThan(after)
+
+    const { db, total } = counted(tables())
+    expect((await resolveOrgChrome({ orgId: 'org-none', db, nowMs: T0 })).companyName).toBe('')
+    const walk = total()
+    await resolveOrgChrome({ orgId: 'org-none', db, nowMs: T0 + 1 })
+    expect(total()).toBeGreaterThan(walk)
   })
 })

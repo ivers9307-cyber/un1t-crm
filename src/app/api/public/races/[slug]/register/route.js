@@ -21,7 +21,7 @@
 //      embedded checkout, or { confirmed: true } for free entries.
 
 import { NextResponse } from 'next/server'
-import { resolveLocationBrand } from '@/lib/host-brand'
+import { getLocationOrgBrandName } from '@/lib/location-branding'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { LIVE_REGISTRATION_STATUSES } from '@/lib/audience-filter'
@@ -289,8 +289,11 @@ export async function POST(request, props) {
     const unverified = validatedRoster.filter((m) => !m.is_member)
     if (unverified.length > 0) {
       const names = unverified.map((m) => m.name || '(unnamed)').join(', ')
-      // W1.S1b — the studio's brand (cached per location), never a literal.
-      const { companyName: brand } = await resolveLocationBrand({ locationId: race.location_id, db })
+      // W1.S1b — the event's ORGANISATION brand, the same name the widget
+      // prints (the public payload's organization_name, getOrgBrandName), so
+      // the two never disagree and a host-anchor location's internal label
+      // never shows. Never a literal; a refusal path, so read uncached.
+      const brand = await getLocationOrgBrandName(db, race.location_id)
       return NextResponse.json({
         success: false,
         error: brand

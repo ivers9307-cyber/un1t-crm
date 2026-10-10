@@ -29,7 +29,7 @@
 // freed place: the capacity gate above is the only gate.
 
 import { NextResponse } from 'next/server'
-import { resolveLocationBrand } from '@/lib/host-brand'
+import { getLocationOrgBrandName } from '@/lib/location-branding'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
@@ -555,8 +555,11 @@ export async function POST(request, props) {
     const unverified = validatedRoster.filter((m) => !m.is_member)
     if (unverified.length > 0) {
       const names = unverified.map((m) => m.name || '(unnamed)').join(', ')
-      // W1.S1b — the studio's brand (cached per location), never a literal.
-      const { companyName: brand } = await resolveLocationBrand({ locationId: race.location_id, db })
+      // W1.S1b — the event's ORGANISATION brand, the same name the widget
+      // prints (the public payload's organization_name, getOrgBrandName), so
+      // the two never disagree and a host-anchor location's internal label
+      // never shows. Never a literal; a refusal path, so read uncached.
+      const brand = await getLocationOrgBrandName(db, race.location_id)
       return NextResponse.json({
         success: false,
         error: brand

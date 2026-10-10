@@ -91,6 +91,12 @@ const SWEPT = [
   'src/app/(operations)/tv-displays/TVAdmin.jsx',
   'src/app/settings/landing-page/page.js',
   'src/components/CookieConsent.jsx',
+  'src/app/start/page.js',
+  'src/app/free-class/page.js',
+  'src/app/technical/page.js',
+  'src/app/preferences/[token]/page.js',
+  'src/app/preferences/layout.js',
+  'src/app/unsubscribe/host/[token]/page.js',
   // ── W1.S1c: host portal + host emails ────────────────────────────────────
   // The org a host belongs to (event_hosts.organization_id, which is its
   // anchor location's org) speaks in the portal and the host emails; money
@@ -130,6 +136,36 @@ const KEEP = {
   // so its heading is UN1T's own; `window.UN1TCookies` is a global identifier
   // the site's footer links call, not copy.
   'src/components/CookieConsent.jsx': ['UN1T Dublin', 'UN1TCookies'],
+  // W1.S1b — UN1T-only funnel pages, unreachable on a tenant host (no
+  // tenant allowlist admits /start, /free-class or /technical; pinned in
+  // src/public-compliance-paths.test.jsx). Their static metadata, campaign
+  // copy and the Meta Tech Provider page's company story are UN1T's own;
+  // `UN1T_GROUP_ORG_ID` is the identifier that loads UN1T Group's chrome.
+  'src/app/start/page.js': [
+    'UN1T_GROUP_ORG_ID',
+    '3 Free Classes — UN1T Stillorgan',
+    'Your first 3 classes at UN1T Stillorgan are free — coach-led strength & conditioning. Book your first session now.',
+  ],
+  'src/app/free-class/page.js': [
+    'UN1T_GROUP_ORG_ID',
+    'Every class at UN1T Stillorgan is coached start to finish — the programming, your form, the push when you need it. Come try three on us. No membership, no pressure.',
+    "I'd like to hear from UN1T Stillorgan about my free classes and offers by email, SMS and WhatsApp. I can opt out anytime.",
+    "I've been a member of UN1T Dublin since the day it opened",
+    'Your first 3 classes free — UN1T Stillorgan',
+    "siteName: 'UN1T Dublin'",
+    'logoAlt="UN1T Stillorgan"',
+  ],
+  'src/app/technical/page.js': [
+    'UN1T_GROUP_ORG_ID',
+    'built and provided by Champ Fitness Ltd (trading as UN1T Dublin) to UN1T gym franchises.',
+    'the same platform our own coaches use every day to run the UN1T studios in Dublin.',
+    'that runs UN1T.',
+    'Built by UN1T',
+    'offered to UN1T gym franchises',
+    'Champ Fitness Ltd, trading as UN1T Dublin, is registered in',
+    'We operate the UN1T studios in Dublin',
+    'Interested in Repset for your UN1T franchise?',
+  ],
 }
 
 describe('UN1T literal sweep (W1.S*)', () => {

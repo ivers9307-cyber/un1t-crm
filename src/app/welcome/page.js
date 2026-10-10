@@ -33,7 +33,7 @@ import EditModeOverlay from '@/components/landing-page/EditModeOverlay'
 import { loadFrontPage, publicWelcomePathForLocation } from '@/lib/welcome-front-page'
 import { resolveTenantLocationId, resolveTenantOrgId } from '@/lib/tenant-domains-edge'
 import { resolveGymSiteName } from '@/lib/default-site-name'
-import { resolveLocationBrand } from '@/lib/host-brand'
+import { resolveLocationBrand, resolveOrgChrome } from '@/lib/host-brand'
 
 export const dynamic = 'force-dynamic'
 
@@ -54,7 +54,7 @@ async function loadEditSeed() {
     const db = createServerClient()
     const { data } = await db
       .from('landing_page_settings')
-      .select('*')
+      .select('*, locations:location_id ( organization_id )')
       .order('updated_at', { ascending: false })
       .limit(1)
       .maybeSingle()
@@ -132,8 +132,14 @@ export default async function WelcomePage(props) {
   if (searchParams?.edit === '1') {
     const row = await loadEditSeed()
     const blocks = blocksOrDefault(row?.blocks)
-    // W1.S1b — the seed row's own studio brand (cached), never a literal.
-    const seedBrand = await resolveLocationBrand({ locationId: row?.location_id || null })
+    // W1.S1b — the seed row's own studio brand and its organisation's
+    // footer chrome (both cached), the same footer /welcome/[location]
+    // renders live, so the preview matches the page; never a literal.
+    const [seedBrand, chrome] = await Promise.all([
+      resolveLocationBrand({ locationId: row?.location_id || null }),
+      resolveOrgChrome({ orgId: row?.locations?.organization_id || null }),
+    ])
+    const footer = { brand: chrome.companyName, studios: chrome.studios, legalName: chrome.legalName }
     return (
       <EditModeOverlay
         initialBlocks={blocks}
@@ -143,6 +149,7 @@ export default async function WelcomePage(props) {
         wordmark={seedBrand.shortName}
         locationName={seedBrand.locationName}
         initialLogoWidthPx={row?.logo_width_px || 200}
+        footer={footer}
       />
     )
   }

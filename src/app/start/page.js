@@ -21,7 +21,7 @@ import { RevealArmScript } from '@/components/landing-page/reveal-arm'
 import VisitOriginCapture from '@/components/VisitOriginCapture'
 import ClassFunnel from '@/components/ClassFunnel'
 import { getLandingLogo, STILLORGAN_LANDING_LOGO } from '@/lib/landing-logo'
-import { resolveOrgChrome } from '@/lib/host-brand'
+import { resolveOrgChrome, resolveLocationBrand } from '@/lib/host-brand'
 import { UN1T_GROUP_ORG_ID } from '@/lib/brands'
 
 export const dynamic = 'force-dynamic'
@@ -30,6 +30,13 @@ export const dynamic = 'force-dynamic'
 // landing_page_settings row (the operator-editable source /stillorgan
 // itself renders) with the old hardcoded URL as fallback; live value is
 // identical today, so paid traffic sees no change.
+
+// W1.S1b — the studio this funnel books into. Its name on the page (the
+// funnel card, the content blocks, the logo alt) is Stillorgan's configured
+// brand (resolveLocationBrand, cached), not a literal; the static metadata
+// below stays UN1T's own (Appendix A `keep`: /start is a UN1T-only paid
+// funnel, unreachable on a tenant host).
+const STILLORGAN_LOCATION_ID = 'a0000000-0000-0000-0000-000000000001'
 
 const HERO_IMAGE =
   'https://iyvtbjjxdggiadzwwvdj.supabase.co/storage/v1/object/public/branding/landing-page/28c78d6b-f7b3-4edf-8c7c-840bd047b3f4/3c80aac2-7007-43c5-81f4-be44f180ef99.jpg'
@@ -64,11 +71,13 @@ export default async function StartPage() {
   // W1.S1b — this page is UN1T Group's own (Appendix A `keep`): its footer and
   // wordmark come from UN1T Group's configured chrome (resolveOrgChrome,
   // cached), so the shared footer component carries no gym literal of its own.
-  const [blocks, logoUrl, chrome] = await Promise.all([
+  const [blocks, logoUrl, chrome, studio] = await Promise.all([
     loadContentBlocks(),
     getLandingLogo('stillorgan', STILLORGAN_LANDING_LOGO),
     resolveOrgChrome({ orgId: UN1T_GROUP_ORG_ID }),
+    resolveLocationBrand({ locationId: STILLORGAN_LOCATION_ID }),
   ])
+  const studioName = studio.companyName || chrome.companyName
   return (
     <div className="min-h-screen bg-black text-white antialiased">
       <RevealArmScript />
@@ -76,7 +85,7 @@ export default async function StartPage() {
       <RevealManager />
       <SiteHeader
         logoUrl={logoUrl}
-        logoAlt="UN1T Stillorgan"
+        logoAlt={studioName}
         logoWidthPx={150}
         sticky
         ctaHref={CTA_HREF}
@@ -96,7 +105,7 @@ export default async function StartPage() {
         />
 
         <div className="relative z-10 flex-1 flex items-center justify-center px-5 pt-28 pb-16">
-          <ClassFunnel locationName="UN1T Stillorgan" />
+          <ClassFunnel locationName={studioName} />
         </div>
       </section>
 
@@ -108,7 +117,7 @@ export default async function StartPage() {
           ctaHref={CTA_HREF}
           ctaLabel={CTA_LABEL}
           wordmark={chrome.shortName}
-          locationName="UN1T Stillorgan"
+          locationName={studioName}
         />
       ))}
 

@@ -20,7 +20,10 @@
 // here consistent with the Access Verification form and the App Review
 // submissions — reviewers cross-check them.
 //
-// Fully static, no DB reads, no client state. Standalone top-level
+// No client state. One cached server read since W1.S1b: the footer's
+// brand, studios and legal holder come from UN1T Group's org chrome
+// (resolveOrgChrome, held for HOST_BRAND_CACHE_TTL_MS), so the page is
+// rendered per request rather than fully static. Standalone top-level
 // route, so it must be in the public allowlist in THREE places:
 // src/proxy.js publicPaths, src/lib/brands.js allowedPaths
 // (un1t-marketing), and src/components/AppShell.jsx PUBLIC_PATHS.

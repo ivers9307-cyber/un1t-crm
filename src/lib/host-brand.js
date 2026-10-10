@@ -134,7 +134,10 @@ export async function resolveScopedBrandName({ host = '', locationId = null, db 
 // They name the gym through these two, never through a fresh walk per
 // request: the live TV board polls every few seconds and a landing page is
 // anonymous traffic, so each answer is held for HOST_BRAND_CACHE_TTL_MS,
-// bounded like the host cache, with misses and failures cached too.
+// bounded like the host cache. Only a RESOLVED brand is cached: a failed
+// read (or an empty name, which is what getLocationBranding returns when its
+// reads error) is returned uncached, so one DB blip never pins an unbranded
+// board or footer for the whole TTL.
 // Never throws; an unresolved brand is empty strings (callers word around an
 // empty brand, they never print a literal).
 
@@ -188,6 +191,9 @@ export async function resolveLocationBrand({ locationId = null, db = null, nowMs
   } catch {
     value = EMPTY_LOCATION
   }
+  // getLocationBranding swallows its own read errors and hands back an empty
+  // name, so an empty name is indistinguishable from a failure: never cache it.
+  if (!value.companyName) return value
   return cachedWrite(locationCache, key, value, nowMs)
 }
 
@@ -208,6 +214,9 @@ export async function resolveOrgChrome({ orgId = null, db = null, nowMs = Date.n
   const hit = cachedRead(orgCache, key, nowMs)
   if (hit) return hit
   let value = EMPTY_ORG
+  // Any failed read (or no brand at all) returns what we have WITHOUT caching
+  // it: a partial chrome (no legal holder, no studios) must not stick for the TTL.
+  let failed = false
   try {
     const client = db || createServerClient()
     const brand = await getOrgCustomerBranding(client, key)
@@ -230,11 +239,13 @@ export async function resolveOrgChrome({ orgId = null, db = null, nowMs = Date.n
       .limit(50)
     const locs = (!locErr && locRows) || []
     let studios = []
+    let pageErr = null
     if (locs.length) {
-      const { data: pageRows, error: pageErr } = await client
+      const { data: pageRows, error } = await client
         .from('landing_page_settings')
         .select('location_id, public_path, publish_state')
         .in('location_id', locs.map((l) => l.id))
+      pageErr = error
       const byLocation = new Map(
         ((!pageErr && pageRows) || [])
           .filter((r) => r.public_path && isPubliclyVisible(r.publish_state))
@@ -245,6 +256,8 @@ export async function resolveOrgChrome({ orgId = null, db = null, nowMs = Date.n
         .map((l) => Object.freeze({ name: trim(l.name), href: `/welcome/${byLocation.get(l.id)}` }))
     }
 
+    failed = Boolean(osErr || locErr || pageErr) || !companyName
+
     value = Object.freeze({
       orgId: key,
       companyName,
@@ -254,6 +267,8 @@ export async function resolveOrgChrome({ orgId = null, db = null, nowMs = Date.n
     })
   } catch {
     value = EMPTY_ORG
+    failed = true
   }
+  if (failed) return value
   return cachedWrite(orgCache, key, value, nowMs)
 }
