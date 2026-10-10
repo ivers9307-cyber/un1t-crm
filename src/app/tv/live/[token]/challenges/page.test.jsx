@@ -3,7 +3,7 @@
 
 import { describe, it, expect, vi } from 'vitest'
 
-vi.mock('../../../[locationId]/challenges/ChallengeTvClient', () => ({ default: (props) => <div data-props={JSON.stringify(props)} /> }))
+vi.mock('./ChallengeTvClient', () => ({ default: (props) => <div data-props={JSON.stringify(props)} /> }))
 
 import TvLiveTokenChallengesPage from './page.jsx'
 

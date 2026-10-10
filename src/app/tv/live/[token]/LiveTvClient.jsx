@@ -4,7 +4,8 @@
 // reskin of the Graft/Afterglow board — palette + signature only; layout,
 // type and zone semantics unchanged).
 //
-// Polls /api/public/live/[locationId] every 2s. Renders an ink (#131316)
+// Polls the token-gated /api/public/tv-live/[token] (the `endpoint` prop,
+// supplied by /tv/live/[token]) every 2s. Renders an ink (#131316)
 // full-viewport grid of attendee tiles, sorted by UN1T Points. Tile colour
 // follows current zone via the shared dark-canvas palette
 // (@/lib/tv-zone-colors); "stale" tiles dim themselves after 2min without
@@ -108,14 +109,13 @@ export default function LiveTvClient({ locationId, endpoint, device }) {
     return () => mq.removeEventListener('change', handler)
   }, [orientationOverride])
 
-  // P0-3: the data URL. Defaults to the location-keyed endpoint (unchanged for
-  // the live /tv/[locationId] TV). The token-gated /tv/live/[token] page passes
-  // an explicit `endpoint` so the same client polls /api/public/tv-live/[token]
-  // instead. Same payload either way — the client is agnostic to which it hits.
+  // P0-3 / W0.9c: the data URL is the `endpoint` prop — /tv/live/[token]
+  // passes /api/public/tv-live/[token]. The location-keyed
+  // /api/public/live/[locationId] fallback this used to default to was
+  // removed in W0.9c (a bare location id is guessable; the token is not).
   // FLEET-CMD.2 appends ?device= so the poll doubles as this kiosk's render
-  // heartbeat — on BOTH entrypoints since W0.9a (the token route stamps it
-  // too), so a kiosk keeps its heartbeat when it moves to the token URL.
-  const dataUrl = withDevice(endpoint || `/api/public/live/${locationId}`, device)
+  // heartbeat (the token route stamps it since W0.9a).
+  const dataUrl = withDevice(endpoint, device)
 
   // TIMER-PUSH.1 — realtime nudge. The timer routes broadcast a ping on
   // `timer:<locationId>` after every start/pause/resume/skip/stop; bumping

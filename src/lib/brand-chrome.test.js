@@ -305,7 +305,8 @@ describe('gym-floor surfaces keep UN1T (locked decision)', () => {
     expect(src).toMatch(/UN1T/)
   })
 
-  // /tv/[locationId] and /tv/live/[token] declared NO metadata and there was
+  // /tv/live/[token] (and the location-keyed board it replaced, gone since
+  // W0.9c) declared NO metadata and there was
   // no /tv layout, so they inherited the root title — which CHROME.1 moved
   // onto the platform name. That rebranded a locked surface by inheritance
   // and left the two boards disagreeing with their own /tv/cast sibling.
@@ -316,7 +317,7 @@ describe('gym-floor surfaces keep UN1T (locked decision)', () => {
   })
 
   it('neither in-studio board is left inheriting the platform chrome', () => {
-    for (const rel of ['src/app/tv/[locationId]/page.jsx', 'src/app/tv/live/[token]/page.jsx']) {
+    for (const rel of ['src/app/tv/live/[token]/page.jsx', 'src/app/tv/live/[token]/challenges/page.jsx']) {
       const src = repoFile(rel)
       // Either the page says UN1T itself or it is covered by the /tv layout
       // asserted above; what it must never do is resolve platform chrome.

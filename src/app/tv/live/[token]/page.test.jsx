@@ -1,13 +1,13 @@
 // W0.9a — the token-gated live board page must forward ?device= to the client
 // so the kiosk's poll keeps stamping its FLEET-CMD.2 render heartbeat after it
-// moves from /tv/[locationId]?device= to /tv/live/[token]?device= (W0.9b).
+// moved to /tv/live/[token]?device= (W0.9b; the location-keyed board is gone since W0.9c).
 // Without this the token route's heartbeat support is unreachable.
 
 import { describe, it, expect, vi } from 'vitest'
 
 // The client pulls in next/font + browser-only hooks; the page's contract is
 // only the props it hands over, so stub it and inspect the element.
-vi.mock('../../[locationId]/LiveTvClient', () => ({ default: (props) => <div data-props={JSON.stringify(props)} /> }))
+vi.mock('./LiveTvClient', () => ({ default: (props) => <div data-props={JSON.stringify(props)} /> }))
 
 import TvLiveTokenPage from './page.jsx'
 
@@ -29,7 +29,7 @@ describe('/tv/live/[token] page', () => {
     expect(props.device).toBeNull()
   })
 
-  it('ignores a repeated ?device= (array), like /tv/[locationId]', async () => {
+  it('ignores a repeated ?device= (array)', async () => {
     const props = await renderPage({ searchParams: { device: ['a', 'b'] } })
     expect(props.device).toBeNull()
   })

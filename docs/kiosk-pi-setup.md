@@ -6,26 +6,39 @@ only** setup — the Pi shows one URL and nothing else (it is NOT the champ-brid
 
 ## The URL
 
-Kiosk mode is the studio-TV route with `?kiosk=1`:
+Kiosk mode is the **token-gated** studio-TV route with `?kiosk=1`, plus the
+kiosk's own fleet name as `?device=`:
 
 ```
-https://crm.repset.ie/tv/<LOCATION_ID>?kiosk=1
+https://crm.repset.ie/tv/live/<token>?kiosk=1&device=<device-name>
 ```
 
-Stillorgan (`a0000000-0000-0000-0000-000000000001`):
+- `<token>` is the display's `tv_displays.token` — an opaque bearer secret that
+  resolves to the studio server-side. Create / read it under **TV displays** in
+  the CRM (one row per screen). The URL is the secret: never paste it anywhere
+  public.
+- `<device-name>` is the kiosk's `fleet_devices.name` (`stillorgan-tv1`,
+  `hatch-tv2`, …). The board's own 2 s poll carries it, which is the
+  FLEET-CMD.2 render heartbeat — proof the screen is actually rendering.
+- The challenge board is the same shape: `/tv/live/<token>/challenges?kiosk=1&device=<device-name>`.
 
-```
-https://crm.repset.ie/tv/a0000000-0000-0000-0000-000000000001?kiosk=1
-```
+**The token URL is installed on the Pi by the un1t-pi CLI, not by hand.**
+`pi prepare <device>` bakes it into the launcher on first provision, and
+`pi kiosk-refresh <device>` rewrites a live kiosk's launcher (a deliberately
+separate, gated operation — a provisioned kiosk keeps its baked URL until an
+explicit refresh). The CLI reads the token from `tv_displays` for the device's
+location; the script below is the fallback for a Pi provisioned without it,
+and takes the token as `TV_TOKEN`.
 
-> **Legacy devices:** these URLs apply to **new** kiosk setups. A live kiosk
-> keeps the URL baked into it at provision time until an explicit per-device
-> refresh (`pi kiosk-refresh` in un1t-pi) — deliberately a separate, gated
-> operation. Kiosks provisioned against the legacy `crm.un1tdublin.com` host
-> keep working until that pass.
+> **Removed (W0.9c, Oct 2026):** the location-keyed `/tv/<LOCATION_ID>` page
+> and its `/api/public/live/<location_id>` feed no longer exist — a bare
+> location id is guessable, which exposed live HR data to anyone who had one.
+> A kiosk still pointing at `/tv/<LOCATION_ID>` renders a 404 and must be
+> refreshed with `pi kiosk-refresh`. There is no redirect.
 
-`/tv/` is a **public route** (proxy allowlist) polling the public
-`/api/public/live/<location_id>` feed every 2 s — the Pi never logs in.
+`/tv/` is a **public route** (proxy allowlist) polling the token-gated
+`/api/public/tv-live/<token>` feed every 2 s — the Pi never logs in. An unknown
+or inactive token answers 404 (it never confirms whether a token exists).
 
 `?kiosk=1` (`src/lib/tv-kiosk.js` + `LiveTvClient.jsx`) turns on: **Screen Wake
 Lock** (no display sleep), **landscape lock**, **hidden cursor**, and
@@ -45,14 +58,15 @@ comes up headless and you finish over SSH.
 
 ## Setup (run once over SSH)
 
-Save the script below as `setup-kiosk.sh` on the Pi (`nano setup-kiosk.sh`,
-paste, Ctrl-O, Ctrl-X), then:
+Preferred: join the Pi to the tailnet and run `pi prepare <device>` from
+un1t-pi, which does everything below (and bakes the token URL) in one pass.
+
+Fallback, by hand: save the script below as `setup-kiosk.sh` on the Pi
+(`nano setup-kiosk.sh`, paste, Ctrl-O, Ctrl-X), then:
 
 ```bash
-# Stillorgan (default):
-bash setup-kiosk.sh
-# any other location:
-LOCATION_ID=<uuid> bash setup-kiosk.sh
+# the display's tv_displays.token and the kiosk's fleet name are REQUIRED:
+TV_TOKEN=<token> DEVICE_NAME=<device-name> bash setup-kiosk.sh
 # then:
 sudo reboot
 ```
@@ -63,10 +77,11 @@ sudo reboot
 # (Bookworm, Wayland/labwc). DISPLAY-ONLY unit.
 set -euo pipefail
 
-LOCATION_ID="${LOCATION_ID:-a0000000-0000-0000-0000-000000000001}"   # Stillorgan
-KIOSK_URL="https://crm.repset.ie/tv/${LOCATION_ID}?kiosk=1"
+: "${TV_TOKEN:?set TV_TOKEN to the display's tv_displays.token}"
+: "${DEVICE_NAME:?set DEVICE_NAME to the kiosk's fleet_devices.name}"
+KIOSK_URL="https://crm.repset.ie/tv/live/${TV_TOKEN}?kiosk=1&device=${DEVICE_NAME}"
 BIN="$HOME/.local/bin"
-echo ">> Kiosk URL: $KIOSK_URL"
+echo ">> Kiosk device: $DEVICE_NAME (token URL baked into $BIN/un1t-kiosk.sh)"
 
 # 1. Chromium (+ wlr-randr for the resolution set) — on 64-bit Bookworm the
 #    package/binary is `chromium`; older 32-bit builds use `chromium-browser`.
@@ -130,14 +145,23 @@ echo ">> Done. Launch the kiosk with:  sudo reboot"
 ## After reboot
 
 The Pi boots straight into the full-screen leaderboard. To verify without a
-keyboard: SSH in and `pgrep -a chromium` should show the kiosk URL.
+keyboard: SSH in and `pgrep -a chromium` should show the kiosk URL
+(`/tv/live/<token>?kiosk=1&device=<device-name>`). The CRM's fleet page shows
+the device's **last render** stamp moving once the board is polling.
 
 ## Troubleshooting
 
 - **Black screen / Chromium won't start on Wayland** → remove the
   `--ozone-platform=wayland` line from `~/.local/bin/un1t-kiosk.sh` (falls back
   to XWayland), then `sudo reboot`.
-- **Wrong studio** → re-run with `LOCATION_ID=<uuid> bash setup-kiosk.sh`.
+- **Board shows "Not found" / 404** → the token is wrong, the display row is
+  inactive, or the kiosk still carries the removed `/tv/<LOCATION_ID>` URL.
+  Check the row under TV displays, then `pi kiosk-refresh <device>`.
+- **Wrong studio** → the token belongs to another location's display. Point the
+  kiosk at the right display's token (`pi kiosk-refresh`, or re-run the script
+  with the right `TV_TOKEN`).
+- **No render heartbeat on the fleet page** → the URL is missing
+  `&device=<device-name>` or the name does not match `fleet_devices.name`.
 - **Screen sleeps** → confirm `sudo raspi-config nonint do_blanking 1` ran; the
   page's Wake Lock also keeps it awake once loaded.
 - **"Restore pages" bar after a power cut** → shouldn't happen (incognito), but
@@ -145,14 +169,16 @@ keyboard: SSH in and `pgrep -a chromium` should show the kiosk URL.
 - **"Unlock keyring" prompt on every boot** → gnome-keyring's login keyring
   can't auto-unlock under desktop autologin (no login password is entered).
   `--password-store=basic` (in the launcher) makes Chromium skip the keyring —
-  fine here, the kiosk stores no secrets. If a prompt still appears, clear the
-  keyring once: `rm -f ~/.local/share/keyrings/login.keyring` then reboot.
+  fine here, the kiosk stores no secrets beyond the URL. If a prompt still
+  appears, clear the keyring once: `rm -f ~/.local/share/keyrings/login.keyring`
+  then reboot.
 - **Board looks tiny** → the TV is running 4K. The launcher forces `1920x1080`
   (via `wlr-randr`) + `--force-device-scale-factor=2`, which is right for the
   Stillorgan 4K panels. Different TV? check the output name with `wlr-randr` and
   tune the mode / scale factor in `~/.local/bin/un1t-kiosk.sh`, then reboot.
-- **Change the URL / resolution / zoom later** → edit `~/.local/bin/un1t-kiosk.sh`
-  and reboot (disable the Overlay File System first, or the edit won't persist).
+- **Change the URL / resolution / zoom later** → `pi kiosk-refresh <device>`
+  for the URL; otherwise edit `~/.local/bin/un1t-kiosk.sh` and reboot (disable
+  the Overlay File System first, or the edit won't persist — `pi rw` / `pi ro`).
 
 ## Surviving power cuts (SD-card corruption)
 
@@ -167,7 +193,8 @@ never written during operation, so a power cut physically cannot corrupt it.
 Chromium's cache lives in a RAM overlay (fine — incognito, non-persistent), and
 the 4am reboot is still a clean reboot.
 - **To change anything later** (URL, `apt` updates): raspi-config → Overlay File
-  System → **disable** → reboot → make the change → **re-enable** → reboot.
+  System → **disable** → reboot → make the change → **re-enable** → reboot
+  (un1t-pi wraps this as `pi rw` / `pi ro`; `pi kiosk-refresh` does it for you).
 
 **2. If you skip the overlay, at least cut the writes:**
 - Disable swap: `sudo dphys-swapfile swapoff && sudo systemctl disable dphys-swapfile`
@@ -186,7 +213,10 @@ TVs lose power often.
 
 ## Notes
 
-- Both Stillorgan units get the **identical** setup (same `LOCATION_ID`).
+- Each screen is its own `tv_displays` row, so two kiosks in one studio carry
+  **different tokens** (and different `device` names); only the location they
+  resolve to is shared.
 - The 4am reboot clears any overnight memory creep; it lives in root's crontab.
-- Distinct from the token-based **TV display management** (`/tv/<token>`, "UC
-  Cast Pro") for operator-managed template rotation — `?kiosk=1` hardens either.
+- Distinct from the token-based **TV display management** (`/tv/cast/<token>`,
+  "UC Cast Pro") for operator-managed template rotation — the same
+  `tv_displays` row and token serve both URLs, and `?kiosk=1` hardens either.

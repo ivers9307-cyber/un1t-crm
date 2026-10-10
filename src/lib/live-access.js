@@ -52,22 +52,21 @@
 //    replayed through the same tier order, applied per-command — never a
 //    single RESTRICTIVE FOR ALL, which silently folds SELECT away). Out of
 //    scope here; the audit item stays OPEN until it lands.
-// 2. The public board. `/api/public/live/[locationId]` takes no auth at all —
-//    only an IP+location rate limit — and returns a live HR board with
-//    `First L.` names, current BPM and zone. Its own header records this as
-//    the unfinished half of P0-3. Any location member can also read
-//    `tv_displays.token` (its policy is membership-scoped too) and use the
-//    token-gated twin. So "live HR + member identity" is masked after this
-//    change, not confidential. Deliberate for the lobby TV; not a regression;
-//    closed only by migrating every TV onto /tv/live/[token] and retiring the
-//    location-keyed entrypoint.
+// 2. The public board. `/api/public/tv-live/[token]` takes no auth at all —
+//    the opaque tv_displays.token is the auth, plus an IP+token rate limit —
+//    and returns a live HR board with `First L.` names, current BPM and zone.
+//    Any location member can read `tv_displays.token` (its policy is
+//    membership-scoped too) and open the board. So "live HR + member
+//    identity" is masked after this change, not confidential. Deliberate for
+//    the lobby TV; not a regression. (The location-keyed
+//    /api/public/live/[locationId] twin, readable by anyone who could guess a
+//    location id, was retired in W0.9c.)
 //
 // WHY IT CANNOT BLANK A STUDIO DISPLAY
 // ------------------------------------
-// The in-studio TV / kiosk surfaces do NOT call this family. `/tv/[locationId]`
-// polls `/api/public/live/[locationId]` and `/tv/live/[token]` polls
-// `/api/public/tv-live/[token]` — both unauthenticated by design (the token is
-// the auth), both untouched here. The only callers of /api/live/** in the
+// The in-studio TV / kiosk surfaces do NOT call this family. `/tv/live/[token]`
+// polls `/api/public/tv-live/[token]` — unauthenticated by design (the token is
+// the auth), untouched here. The only callers of /api/live/** in the
 // estate are LiveClassClient.jsx and DetectedTab.jsx, which render *inside*
 // the already-gated /live page, plus a master. Mobile calls no /api/live route
 // at all — its staff surfaces reach /api/studio-management/* and /api/timer/*

@@ -8,7 +8,7 @@
 // metadata of their own (only /tv/cast/[token] did), so they inherited the
 // ROOT layout's title. CHROME.1 moved that root title off a gym literal onto
 // the resolved platform/operator name — which silently rebranded a locked
-// surface, and left /tv/[locationId] disagreeing with its own sibling
+// surface, and left /tv/live/[token] disagreeing with its own sibling
 // /tv/cast/[token]. Declaring it once here covers every board in the subtree,
 // including any added later, instead of relying on each page to remember.
 // /tv/cast/[token] keeps its own export (it also pins a kiosk viewport) and
