@@ -10,6 +10,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { useFocusEffect, useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '../../../lib/member/supabase'
+import { useMemberBrand } from '../../../lib/member/use-member-brand'
 import Card from '../../../components/member/ui/Card'
 import ErrorRetry from '../../../components/member/ErrorRetry'
 import ZoneBar from '../../../components/member/ui/ZoneBar'
@@ -25,6 +26,8 @@ import { groupSessionsByMonth } from 'shared/session-history'
 // for /sessions (kept reachable so home's "See all" + any deep-link resolve).
 export function SessionsScreen() {
   const router = useRouter()
+  // W1.S5 — product name + unit badge from the member's studio brand.
+  const { productNames, pointsUnit } = useMemberBrand()
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [sessions, setSessions] = useState([])
@@ -133,7 +136,7 @@ export function SessionsScreen() {
             <Text className="mt-3 text-base font-body-semibold text-chalk">No sessions yet</Text>
             <Text className="mt-1 text-sm text-chalk-2 text-center">
               Connect a device, or pair a chest strap at the studio. Every
-              session you train will appear here with zone breakdowns and UN1T Points.
+              session you train will appear here with zone breakdowns and {productNames.points}.
             </Text>
           </Card>
         }
@@ -145,6 +148,7 @@ export function SessionsScreen() {
             ) : (
               <SessionRow
                 session={item.session}
+                pointsUnit={pointsUnit}
                 onPress={item.session.ended_at ? () => router.push('/sessions/' + item.session.id) : null}
               />
             )}
@@ -188,7 +192,7 @@ function MonthHeader({ section }) {
 
 // ── Session row ───────────────────────────────────────────────────
 
-function SessionRow({ session, onPress }) {
+function SessionRow({ session, onPress, pointsUnit = 'pts' }) {
   const inProgress = !session.ended_at
   const dur = durationMinutes(session.started_at, session.ended_at)
   const label = sourceLabel(session.source)
@@ -236,7 +240,7 @@ function SessionRow({ session, onPress }) {
                   <Text className="text-xl font-display-bold text-chalk">
                     {session.effort_points}
                   </Text>
-                  <Text className="ml-1 font-mono text-[10px] uppercase text-chalk-3" style={{ letterSpacing: 1 }}>UN1T</Text>
+                  <Text className="ml-1 font-mono text-[10px] uppercase text-chalk-3" style={{ letterSpacing: 1 }}>{pointsUnit}</Text>
                 </View>
               )}
               {topZone && topZone.seconds > 0 && (
