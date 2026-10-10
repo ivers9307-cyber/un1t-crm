@@ -46,6 +46,9 @@ export const LOCATION_SETTINGS_CREDENTIALS = Object.freeze({
 export const CLIENT_LOCATION_COLUMNS = Object.freeze([
   'id', 'name', 'slug', 'address', 'phone', 'email', 'timezone', 'active',
   'created_at', 'updated_at', 'country', 'features', 'organization_id', 'is_host_anchor',
+  // W1.M1 (mig 717): 'none' | 'glofox' | 'un1t'. On the user object on
+  // purpose: pages gate their membership surfaces on it.
+  'membership_source',
 ])
 
 // getCurrentUser()'s location select: exactly the client identity. It used
