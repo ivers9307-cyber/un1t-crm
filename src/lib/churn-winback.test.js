@@ -6,8 +6,9 @@ describe('defaultWinbackMessage', () => {
     expect(defaultWinbackMessage('Sam', 'CCF Autos')).toContain("team at CCF Autos")
   })
 
-  it('falls back to UN1T when brand is blank', () => {
-    expect(defaultWinbackMessage('Sam', '')).toContain('team at UN1T')
+  it('W1.B1 — with no brand it says "the studio", never a literal gym', () => {
+    expect(defaultWinbackMessage('Sam', '')).toContain('team at the studio')
+    expect(defaultWinbackMessage('Sam', null)).not.toMatch(/UN1T/)
   })
 
   it('greets the member by first name', () => {

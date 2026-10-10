@@ -17,6 +17,10 @@ const OrgBrandingSchema = z.object({
   logo_url: httpUrl.nullable().optional(),
   favicon_url: httpUrl.nullable().optional(),
   company_name: z.string().max(200).nullable().optional(),
+  // W1.B1 — the SHORT wordmark productName() builds "{Brand} Points" /
+  // "{Brand} HR" from (mig 715; column CHECK length 1..40, so a blank is
+  // written as null below). NULL = use company_name.
+  short_name: z.string().trim().max(40).nullable().optional(),
   // SAAS4-C2 — the tenant's legal identity for their privacy notice
   // (mig 425). Entity name + privacy email must BOTH be set before the
   // tenant's hostname serves the tenant-entity notice.
@@ -74,6 +78,7 @@ export async function PUT(request) {
     logo_url: body.logo_url ?? null,
     favicon_url: body.favicon_url ?? null,
     company_name: body.company_name ?? null,
+    short_name: body.short_name || null,
     updated_at: new Date().toISOString(),
     updated_by: user.id,
   }
