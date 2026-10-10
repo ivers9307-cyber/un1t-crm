@@ -15,11 +15,12 @@ function fakeDb(rows, { errors = {} } = {}) {
       const b = {
         select() { return b },
         eq(col, val) { filters.push([col, val]); return b },
+        in(col, vals) { filters.push([col, (v) => vals.includes(v)]); return b },
         order(col) { orderBy = col; return b },
         limit(n) { cap = n; return b },
         then(resolve, reject) {
           if (errors[table]) return Promise.resolve({ data: null, error: errors[table] }).then(resolve, reject)
-          let out = (rows[table] || []).filter((r) => filters.every(([c, v]) => r[c] === v))
+          let out = (rows[table] || []).filter((r) => filters.every(([c, v]) => (typeof v === 'function' ? v(r[c]) : r[c] === v)))
           if (orderBy) out = [...out].sort((a, z) => String(a[orderBy] ?? '').localeCompare(String(z[orderBy] ?? '')))
           if (cap != null) out = out.slice(0, cap)
           return Promise.resolve({ data: out, error: null }).then(resolve, reject)
@@ -296,6 +297,29 @@ describe('getOrgCustomerBranding (W1.L4)', () => {
     const t2 = base()
     t2.company_settings = [{ location_id: 'loc-a2', company_name: 'Gym A South Configured', logo_url: null, favicon_url: null }]
     expect((await getOrgCustomerBranding(makeFakeDb(t2), ORG_A)).companyName).toBe('Gym A South Configured')
+  })
+
+  // makeFakeDb's .order() is a no-op, so "earliest ACTIVE location" needs
+  // this file's SORTING fake: locations seeded newest-first, an inactive one
+  // oldest of all, and the answer must still be the oldest ACTIVE studio's.
+  it('"earliest active location" really is by created_at, skipping inactive studios', async () => {
+    const db = fakeDb({
+      org_settings: [],
+      organizations: [{ id: ORG_A, master_location_id: null }],
+      locations: [
+        { id: 'loc-new', name: 'Newest', organization_id: ORG_A, active: true, created_at: '2026-03-01' },
+        { id: 'loc-mid', name: 'Middle', organization_id: ORG_A, active: true, created_at: '2026-02-01' },
+        { id: 'loc-old', name: 'Oldest', organization_id: ORG_A, active: true, created_at: '2026-01-15' },
+        { id: 'loc-dead', name: 'Closed', organization_id: ORG_A, active: false, created_at: '2026-01-01' },
+      ],
+      company_settings: [
+        { location_id: 'loc-new', company_name: 'Newest Brand', logo_url: 'new.png', favicon_url: 'new.ico' },
+        { location_id: 'loc-old', company_name: 'Oldest Brand', logo_url: null, favicon_url: 'old.ico' },
+        { location_id: 'loc-dead', company_name: 'Closed Brand', logo_url: 'dead.png', favicon_url: 'dead.ico' },
+      ],
+    })
+    // name + favicon from the oldest active studio; logo falls through to the next one that has one.
+    expect(await getOrgCustomerBranding(db, ORG_A)).toEqual({ companyName: 'Oldest Brand', logoUrl: 'new.png', faviconUrl: 'old.ico' })
   })
 
   it('is empty with no db / no org, and never throws', async () => {

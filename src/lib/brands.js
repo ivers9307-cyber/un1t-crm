@@ -257,6 +257,21 @@ export const BRANDS = [
  * @param {string} hostname  Raw value of the `Host` request header.
  * @returns {object | null}  Brand entry from BRANDS, or null.
  */
+/**
+ * W1.L4 — one normalisation of a raw `Host` header for every host-keyed
+ * brand lookup (resolveTenantOrgId, the per-host brand cache): lowercased,
+ * port stripped, trailing dot stripped, trimmed; '' for no host. Pure.
+ * resolveBrand() itself stays byte-exact (the proxy's contract); callers
+ * that want case-insensitive matching normalise first.
+ *
+ * @param {unknown} host
+ * @returns {string}
+ */
+export function normalizeHost(host) {
+  if (typeof host !== 'string') return ''
+  return host.trim().split(':')[0].replace(/\.+$/, '').toLowerCase()
+}
+
 export function resolveBrand(hostname) {
   if (!hostname || typeof hostname !== 'string') return null
   const hostKey = hostname.split(':')[0]

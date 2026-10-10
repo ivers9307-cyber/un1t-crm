@@ -69,23 +69,18 @@ async function loadEditSeed() {
 
 // W1.L4 — the title and OG site name are the host's organisation brand
 // (resolveGymSiteName), and the description is the operator's chooser intro
-// or headline (chooser_settings) rather than UN1T's two-studio tagline.
-// No description at all when the operator has set neither: a one-line echo
-// of the title previews worse than nothing.
+// or headline (chooser_settings) rather than UN1T's two-studio tagline;
+// when neither is set (UN1T's row today) a brand-derived default keeps the
+// link preview from going blank.
 export async function generateMetadata() {
   const host = (await headers()).get('host') || ''
   const [brand, page] = await Promise.all([resolveGymSiteName({ host }), loadFrontPageForHost(host)])
   const title = `${brand} — Choose your studio`
-  const description = page.intro || page.headline || undefined
+  const description = page.intro || page.headline || `Choose your studio at ${brand}.`
   return {
     title,
-    ...(description ? { description } : {}),
-    openGraph: {
-      title,
-      ...(description ? { description } : {}),
-      siteName: brand,
-      type: 'website',
-    },
+    description,
+    openGraph: { title, description, siteName: brand, type: 'website' },
   }
 }
 

@@ -11,6 +11,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { makeFakeDb } from '@/lib/api-auth.test-helpers.js'
 import { _resetTenantDomainsCache } from '@/lib/tenant-domains-edge.js'
+import { _resetHostBrandCache } from '@/lib/host-brand.js'
 import { PLATFORM_SITE_NAME } from '@/lib/default-site-name.js'
 import { PLATFORM_FAVICON_URL } from '@/lib/default-favicon.js'
 
@@ -52,6 +53,7 @@ const req = (host, qs = '') => new Request(`https://${host}/api/public/branding$
 
 beforeEach(() => {
   _resetTenantDomainsCache()
+  _resetHostBrandCache()
   db = makeFakeDb(tables())
 })
 
@@ -104,5 +106,10 @@ describe('GET /api/public/branding — anonymous branch resolves by host (W1.L4)
       expect(body.success).toBe(true)
       expect(body.data).toEqual({ logo_url: null, favicon_url: PLATFORM_FAVICON_URL, company_name: PLATFORM_SITE_NAME })
     }
+  })
+
+  it('the host is normalised: case, port and a trailing dot resolve the same tenant', async () => {
+    const body = await (await GET(req('GYM-A.repset.ie:443'))).json()
+    expect(body.data.company_name).toBe('Gym A')
   })
 })

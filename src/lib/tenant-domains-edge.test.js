@@ -211,6 +211,15 @@ describe('resolveTenantOrgId — the SAAS-6/7 handoff seam', () => {
     expect(db.spy).not.toHaveBeenCalled()
   })
 
+  it('W1.L4 — the host is normalised once: case, port and a trailing dot resolve the same tenant', async () => {
+    expect(await resolveTenantOrgId('WWW.UN1TDUBLIN.COM', { db: fixture() })).toBe(UN1T_GROUP_ORG_ID)
+    expect(await resolveTenantOrgId('un1tdublin.com:443', { db: fixture() })).toBe(UN1T_GROUP_ORG_ID)
+    expect(await resolveTenantOrgId('Members.AcmeGym.ie.', { db: fixture() })).toBe('org-acme')
+    expect(await resolveTenantOrgId('members.acmegym.ie:8443', { db: fixture() })).toBe('org-acme')
+    expect(await resolveTenantOrgId('', { db: fixture() })).toBe(null)
+    expect(await resolveTenantOrgId(null, { db: fixture() })).toBe(null)
+  })
+
   it('a CRM host → null (the platform surface has no tenant)', async () => {
     expect(await resolveTenantOrgId('crm.repset.ie', { db: fixture() })).toBe(null)
     expect(await resolveTenantOrgId('crm.un1tdublin.com', { db: fixture() })).toBe(null)

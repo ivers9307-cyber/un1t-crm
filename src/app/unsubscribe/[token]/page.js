@@ -1,8 +1,6 @@
 import { headers } from 'next/headers'
 import UnsubscribePage from '@/components/UnsubscribePage'
-import { createServerClient } from '@/lib/supabase'
-import { getLocationBranding } from '@/lib/location-branding'
-import { resolveGymSiteName } from '@/lib/default-site-name'
+import { resolveScopedBrandName } from '@/lib/host-brand'
 
 // Public, no auth, no server data fetch for the body — UnsubscribePage
 // hydrates client-side. W1.L4: the title resolves by request (the `?l=`
@@ -12,13 +10,17 @@ export const dynamic = 'force-dynamic'
 
 // W1.L4 — the tab names the gym whose email this was: the `?l=<locationId>`
 // scope buildUnsubscribeUrl appends (that studio's brand chain), else the
-// request host's organisation brand. Never a literal.
+// request host's organisation brand. Never a literal — and never ANOTHER
+// tenant's: `?l=` is caller-controlled, so resolveScopedBrandName honours it
+// only when it is a UUID (the API route's gate) AND the location belongs to
+// the host's organisation, or the host has no organisation (a CRM-host link,
+// where every link was minted before W1.L3). A non-UUID costs no read.
 export async function generateMetadata(props) {
   const searchParams = await props.searchParams
-  const locationId = typeof searchParams?.l === 'string' ? searchParams.l : null
-  let brand = ''
-  if (locationId) brand = (await getLocationBranding(createServerClient(), locationId)).companyName
-  if (!brand) brand = await resolveGymSiteName({ host: (await headers()).get('host') })
+  const brand = await resolveScopedBrandName({
+    host: (await headers()).get('host'),
+    locationId: typeof searchParams?.l === 'string' ? searchParams.l : null,
+  })
   return { title: `Unsubscribe — ${brand}` }
 }
 

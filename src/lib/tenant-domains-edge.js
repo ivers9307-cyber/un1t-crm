@@ -37,7 +37,7 @@
 // organizationId), which resolveTenantOrgId consults first.
 
 import { createServerClient } from '@supabase/ssr'
-import { getCrmHostnames, resolveBrand } from './brands.js'
+import { getCrmHostnames, resolveBrand, normalizeHost } from './brands.js'
 
 export const TENANT_DOMAINS_CACHE_TTL_MS = 5 * 60 * 1000 // domain churn is rare
 
@@ -256,16 +256,21 @@ export async function resolveTenantDomainBrand(hostname, { db = null, nowMs = Da
  * an in-code brand that carries an organizationId (the UN1T hosts,
  * brands.js) answers without a DB read, and an in-code brand without one
  * (the car-business hosts) is null — the DB tier is never asked about an
- * in-code host, which can have no row anyway.
+ * in-code host, which can have no row anyway. The host is normalised ONCE
+ * here (lowercase, port and trailing dot stripped), so `WWW.UN1TDUBLIN.COM`
+ * and `gym-a.repset.ie:443` resolve the same tenant as their canonical
+ * spellings, whichever consumer passed the raw header.
  *
  * @param {string} hostname
  * @param {{ db?: object, nowMs?: number }} [opts]
  * @returns {Promise<string | null>}
  */
 export async function resolveTenantOrgId(hostname, opts = {}) {
-  const inCode = resolveBrand(hostname)
+  const hostKey = normalizeHost(hostname)
+  if (!hostKey) return null
+  const inCode = resolveBrand(hostKey)
   if (inCode) return inCode.organizationId || null
-  const brand = await resolveTenantDomainBrand(hostname, opts)
+  const brand = await resolveTenantDomainBrand(hostKey, opts)
   return brand ? brand.organizationId : null
 }
 

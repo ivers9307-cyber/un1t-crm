@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getLocationBranding, getOrgCustomerBranding } from '@/lib/location-branding'
+import { getLocationBranding } from '@/lib/location-branding'
 import { productName, pointsUnit } from '@/lib/brand-name'
-import { resolveTenantOrgId } from '@/lib/tenant-domains-edge'
+import { resolveHostBrand } from '@/lib/host-brand'
 import { PLATFORM_SITE_NAME } from '@/lib/default-site-name'
 import { PLATFORM_FAVICON_URL } from '@/lib/default-favicon'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
@@ -49,10 +49,11 @@ export async function GET(request) {
   // ONE company_settings row estate-wide (no order), so every tenant's login
   // screen wore whichever logo sorted first. A CRM host, an unmapped host or
   // a resolver failure answers the PLATFORM's name and mark: no gym is in
-  // the picture there, and never another tenant's logo.
-  const orgId = await resolveTenantOrgId(request.headers.get('host'), { db })
-  if (orgId) {
-    const b = await getOrgCustomerBranding(db, orgId)
+  // the picture there, and never another tenant's logo. resolveHostBrand is
+  // the ONE per-host cache the site name and favicon read too, so a login
+  // screen costs no reads of its own inside the window.
+  const b = await resolveHostBrand({ host: request.headers.get('host'), db })
+  if (b.orgId) {
     return NextResponse.json({
       success: true,
       data: { logo_url: b.logoUrl, favicon_url: b.faviconUrl, company_name: b.companyName || null },

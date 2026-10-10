@@ -9,7 +9,7 @@
 // edge cases so future-me notices breakage before staging does.
 
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { BRANDS, UN1T_GROUP_ORG_ID, resolveBrand, isFrameworkAsset, getLegacyBrandRows, getCrmHostnames, CANONICAL_CRM_HOSTNAME, LEGACY_CRM_HOSTNAME, CRM_DEFAULT_HOSTNAME } from './brands.js'
+import { BRANDS, UN1T_GROUP_ORG_ID, normalizeHost, resolveBrand, isFrameworkAsset, getLegacyBrandRows, getCrmHostnames, CANONICAL_CRM_HOSTNAME, LEGACY_CRM_HOSTNAME, CRM_DEFAULT_HOSTNAME } from './brands.js'
 import { CANONICAL_CRM_ORIGIN, LEGACY_CRM_HOST } from './legacy-host-redirect.js'
 
 afterEach(() => {
@@ -33,6 +33,17 @@ describe('BRANDS registry shape', () => {
     expect(BRANDS.find((b) => b.id === 'un1t-hosts').organizationId).toBe(UN1T_GROUP_ORG_ID)
     // The car-business hosts render their own in-code pages; no org linkage.
     expect(BRANDS.find((b) => b.id === 'ccfautos-pay').organizationId).toBeUndefined()
+  })
+
+  it('W1.L4 — normalizeHost lowercases, strips the port and a trailing dot, and is empty for no host', () => {
+    expect(normalizeHost('WWW.UN1TDUBLIN.COM:443')).toBe('www.un1tdublin.com')
+    expect(normalizeHost(' Gym-A.repset.ie. ')).toBe('gym-a.repset.ie')
+    expect(normalizeHost('')).toBe('')
+    expect(normalizeHost(null)).toBe('')
+    expect(normalizeHost(undefined)).toBe('')
+    // resolveBrand itself stays byte-exact (the proxy's contract).
+    expect(resolveBrand('WWW.UN1TDUBLIN.COM')).toBe(null)
+    expect(resolveBrand(normalizeHost('WWW.UN1TDUBLIN.COM'))?.id).toBe('un1t-marketing')
   })
 
   it('W1.L4 — MARKETING_ORG_ID overrides the UN1T Group id', async () => {
