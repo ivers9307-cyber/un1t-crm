@@ -12,6 +12,7 @@ import CopyAssist from './communications/CopyAssist'
 import { stripUnsetFilterRows } from '@/lib/audience-filter'
 import { isCampaignContentEditable, campaignLockedReason } from '@/lib/campaign-editability'
 import { UNLAYER_MERGE_TAGS, MERGE_TAG_REFERENCE } from '@/lib/merge-tags'
+import { useLocationBrand } from './use-location-brand'
 
 // FILTER-P1.6 — what the send path ACTUALLY gates on, per
 // buildAudienceQueryAsync (src/lib/postmark.js): the campaign's location, the
@@ -36,7 +37,20 @@ export default function CampaignEditor({ campaign, locationId, userId: _userId, 
   const [name, setName] = useState(campaign?.name || '')
   const [subject, setSubject] = useState(campaign?.subject || '')
   const [previewText, setPreviewText] = useState(campaign?.preview_text || '')
-  const [fromName, setFromName] = useState(campaign?.from_name || 'UN1T')
+  // W1.S2 — the default From NAME is the studio's brand (resolved by the
+  // branding route, never spelled); it seeds an empty draft once the brand
+  // lands and is then the operator's to edit. The From ADDRESS applies only
+  // when it is on the org's verified sending domain; until an org has a live
+  // tenant domain (or for an address off it) the platform address sends,
+  // with the From name.
+  const { companyName: brand } = useLocationBrand(locationId)
+  const [fromName, setFromName] = useState(campaign?.from_name || '')
+  const fromNameSeeded = useRef(Boolean(campaign?.from_name))
+  useEffect(() => {
+    if (fromNameSeeded.current || !brand) return
+    fromNameSeeded.current = true
+    setFromName((v) => v || brand)
+  }, [brand])
   const [fromEmail, setFromEmail] = useState(campaign?.from_email || '')
   const [emailType, setEmailType] = useState(campaign?.postmark_stream === 'outbound' ? 'utility' : 'marketing')
   const [replyTo, setReplyTo] = useState(campaign?.reply_to || '')
@@ -1137,19 +1151,24 @@ export default function CampaignEditor({ campaign, locationId, userId: _userId, 
                     type="text"
                     value={fromName}
                     onChange={e => setFromName(e.target.value)}
-                    placeholder="UN1T"
+                    placeholder={brand || 'Sender name'}
                     className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm mb-1.5">From Email</label>
+                  <label htmlFor="campaign-from-address" className="block text-sm mb-1.5">From address</label>
                   <input
+                    id="campaign-from-address"
                     type="email"
                     value={fromEmail}
                     onChange={e => setFromEmail(e.target.value)}
-                    placeholder="hello@un1t.ie"
+                    placeholder="e.g. hello@yourstudio.com"
+                    aria-describedby="campaign-from-address-note"
                     className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
                   />
+                  <p id="campaign-from-address-note" className="text-xs text-un1t-muted mt-1.5" data-testid="campaign-from-address-note">
+                    Must be on your verified sending domain (Settings → Email domain); otherwise mail sends from the platform address with your From name.
+                  </p>
                 </div>
               </div>
 
@@ -1159,7 +1178,7 @@ export default function CampaignEditor({ campaign, locationId, userId: _userId, 
                   type="email"
                   value={replyTo}
                   onChange={e => setReplyTo(e.target.value)}
-                  placeholder="Same as From if left empty"
+                  placeholder="The studio's own address if left empty"
                   className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
                 />
               </div>

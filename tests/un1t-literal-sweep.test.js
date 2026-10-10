@@ -82,6 +82,47 @@ const SWEPT = [
   'src/app/api/hosts/[id]/invite/route.js',
   'src/app/api/hosts/[id]/link-staff/route.js',
   'src/app/api/hosts/[id]/route.js',
+  // ── W1.S2: staff chrome + staff emails ───────────────────────────────────
+  'src/app/account/contracts/page.js',
+  'src/app/account/page.js',
+  'src/app/api/account/pending-contracts/route.js',
+  'src/app/api/email/conversations/_gone.js',
+  'src/app/login/page.js',
+  'src/app/reset-password/page.js',
+  'src/app/settings/hosts/page.jsx',
+  'src/app/settings/scoring/ScoringClient.jsx',
+  'src/components/AchievementsAdminTable.jsx',
+  'src/components/AddOrganizationButton.jsx',
+  'src/components/AppShell.jsx',
+  'src/components/BrandingSettings.jsx',
+  'src/components/CampaignDetail.jsx',
+  'src/components/CampaignEditor.jsx',
+  'src/components/ChallengeForm.jsx',
+  'src/components/ContractSignForm.jsx',
+  'src/components/ContractTemplateForm.jsx',
+  'src/components/LocationForm.jsx',
+  'src/components/OrgBrandingSettings.jsx',
+  'src/components/PendingContractsAlert.jsx',
+  'src/components/RaceControlPanel.jsx',
+  'src/components/RaceEventForm.jsx',
+  'src/components/Sidebar.jsx',
+  'src/components/WidgetTokensCard.jsx',
+  'src/components/accounting/EventFeesCard.jsx',
+  'src/components/settings/HostDetail.jsx',
+  'src/components/settings/HostsManager.jsx',
+  'src/components/settings/StatusPageSettingsForm.jsx',
+  'src/components/settings/integrations/PaymentsIntegrationTab.jsx',
+  'src/components/use-location-brand.js',
+  'src/lib/contractor-invoice-email.js',
+  'src/lib/glofox-notes.js',
+  'src/lib/openapi.js',
+  'src/lib/roster-email.js',
+  'src/lib/settings-tree.js',
+  'src/lib/wallet-topup.js',
+  'src/lib/xero/bills-email.js',
+  'src/lib/xero/contractor-bills.js',
+  'src/lib/xero/fte-expense-claims.js',
+  'src/lib/zoom/external-contacts.js',
   // ── W1.S5: mobile/ screens (Appendix B, 34 bundled rows + login) ────────
   'mobile/app/(member)/(tabs)/home.jsx',
   'mobile/app/(member)/(tabs)/progress.jsx',
@@ -114,7 +155,13 @@ const LOWERCASE_SWEPT = {
 // file → exact literals the appendix marks `keep`. None in W1.S4, W1.S3 or
 // W1.S1c (src/lib/brands.js:151, the un1t-hosts brand description, is a
 // keep row that W1.S1c leaves unswept rather than listing a whole file).
-const KEEP = {}
+const KEEP = {
+  // ── W1.S2: staff chrome + staff emails ───────────────────────────────────
+  // wallet-topup.js — the platform IS the seller of a wallet top-up, so the
+  // VAT invoice names the platform's own trading entity (Wave 2 moves money
+  // rails to the org).
+  'src/lib/wallet-topup.js': ['(trading as UN1T Dublin)'],
+}
 
 describe('UN1T literal sweep (W1.S*)', () => {
   it.each(SWEPT)('%s carries no customer/staff-visible UN1T literal', (file) => {
@@ -128,16 +175,15 @@ describe('UN1T literal sweep (W1.S*)', () => {
     expect(hits, `reintroduced UN1T literal(s):\n${hits.join('\n')}`).toEqual([])
   })
 
-  it.each(Object.entries(LOWERCASE_SWEPT))('%s carries no lower-case UN1T hostname', (file, patterns) => {
-    const src = stripComments(readFileSync(join(repo, file), 'utf8'), file)
-    for (const re of patterns) expect(src, `${file} still carries ${re}`).not.toMatch(re)
-  })
-
   it('every KEEP entry names a swept file and a literal that still exists', () => {
     for (const [file, lits] of Object.entries(KEEP)) {
       expect(SWEPT, `${file} is in KEEP but not SWEPT`).toContain(file)
       const src = readFileSync(join(repo, file), 'utf8')
       for (const lit of lits) expect(src, `${file} no longer contains kept literal ${lit}`).toContain(lit)
     }
+  })
+  it.each(Object.entries(LOWERCASE_SWEPT))('%s carries no lower-case UN1T hostname', (file, patterns) => {
+    const src = stripComments(readFileSync(join(repo, file), 'utf8'), file)
+    for (const re of patterns) expect(src, `${file} still carries ${re}`).not.toMatch(re)
   })
 })

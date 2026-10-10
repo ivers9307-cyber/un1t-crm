@@ -83,7 +83,8 @@ async function loadInvoiceForEmail(invoiceId) {
   // Branding (logo + company name) lives on company_settings keyed by
   // location_id — the locations table has neither logo_url nor
   // company_name, so embedding them there returned nothing. Resolve via
-  // the shared helper (never throws; falls back to a neutral 'UN1T').
+  // the shared helper (never throws; W1.S2: an unresolved brand is the empty
+  // string, and the header then carries no wordmark rather than another gym's).
   const branding = await getLocationBranding(db, data.location_id)
   return { ...data, branding }
 }
@@ -92,7 +93,9 @@ function brandHeader(branding) {
   if (branding?.logoUrl) {
     return `<img src="${escapeAttr(branding.logoUrl)}" alt="${escapeAttr(branding.companyName || 'Logo')}" style="max-height:48px;margin-bottom:16px" />`
   }
-  return `<div style="font-size:24px;font-weight:bold;letter-spacing:2px;margin-bottom:16px">${escapeHtml(branding?.companyName || 'UN1T')}</div>`
+  const name = (branding?.companyName || '').trim()
+  if (!name) return ''
+  return `<div style="font-size:24px;font-weight:bold;letter-spacing:2px;margin-bottom:16px">${escapeHtml(name)}</div>`
 }
 
 export async function sendInvoiceApprovedEmail(invoiceId) {

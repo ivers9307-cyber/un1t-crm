@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import ReadFailedNote from '@/components/settings/ReadFailedNote'
 
-// INCLUSION-CORE T5 — operator editor for the UN1T-Points scoring
+// INCLUSION-CORE T5 — operator editor for the points scoring
 // figures: the five per-minute HR-zone point rates (Z1–Z5) plus the
 // participation-points award for attending a class with no HR data.
 // Manager+ only. Stored on locations.settings.scoring; read by the
@@ -20,7 +20,9 @@ const ZONE_LABELS = {
   5: 'Z5 — Max',
 }
 
-export default function ScoringClient() {
+// W1.S2 — `pointsName` is "{Brand} Points" for the active studio (the server
+// page resolves it); the bare noun when no brand is known.
+export default function ScoringClient({ pointsName = 'Points' }) {
   const [scoring, setScoring] = useState(null)
   const [defaults, setDefaults] = useState(null)
   const [location, setLocation] = useState(null)
@@ -111,7 +113,7 @@ export default function ScoringClient() {
     <div className="max-w-3xl">
       <h1 className="text-xl font-bold text-un1t-text mb-1">Scoring</h1>
       <p className="text-sm text-un1t-muted mb-6">
-        How UN1T Points are awarded at {location?.name || 'this studio'}. Members earn points per
+        How {pointsName} are awarded at {location?.name || 'this studio'}. Members earn points per
         minute in each heart-rate zone, plus a flat participation award for attending a class without
         a heart-rate strap. Tune these to weight effort however you like — leave them at the defaults
         ({ZONE_IDS.map(id => zoneDefaults[id]).join(',')} per minute / {participationDefault} for
