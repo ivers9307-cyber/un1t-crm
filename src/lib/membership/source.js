@@ -9,9 +9,11 @@
 //     isConfigured(db, locationId) → { configured, missing?, readError? } }
 //
 // Glofox implements it today (./sources/glofox.js). The home-grown 'un1t'
-// source registers itself in MEMBERSHIP_SOURCES when it lands: no schema
-// change (the mig 717 CHECK already admits the value), and until then a row
-// that says 'un1t' resolves to `none` with a structured warning.
+// source is added to MEMBERSHIP_SOURCES (a frozen literal) when it lands: no
+// schema change (the mig 717 CHECK already admits the value). Until then a
+// row that says 'un1t' resolves to the `none` PROVIDER with a structured
+// warning, while membershipSourceState keeps the row's identity
+// ({ source: 'un1t', state: 'unconfigured', missing: ['provider'] }).
 //
 // Pages, crons and Mia ask THIS module, never settings.glofox and never
 // channel_connections directly (the five disagreeing "is Glofox connected"
@@ -70,10 +72,44 @@ export async function resolveMembershipSource(db, locationId) {
 export async function membershipSourceState(db, locationId) {
   const { key, error } = await readSourceKey(db, locationId)
   if (error) return { source: null, state: 'unknown', readError: MEMBERSHIP_SOURCE_UNREADABLE }
-  const provider = key ? providerFor(key) : noneSource
-  if (provider.key === 'none') return { source: 'none', state: 'none' }
+  if (!key || key === 'none') return { source: 'none', state: 'none' }
+  const provider = providerFor(key)
+  // A value the CHECK admits but no module serves yet: the row keeps its
+  // identity (a UI says "un1t: not available yet"), never "no source".
+  if (provider.key !== key) return { source: key, state: 'unconfigured', missing: ['provider'] }
   const r = await provider.isConfigured(db, locationId)
   if (r.readError) return { source: provider.key, state: 'unknown', readError: r.readError }
   if (!r.configured) return { source: provider.key, state: 'unconfigured', missing: r.missing || [] }
   return { source: provider.key, state: 'configured' }
+}
+
+/**
+ * Every location whose membership_source is `key`, as ids in id order. THE
+ * one sanctioned reader of the column outside this module: crons and Mia
+ * discover their locations here (W1.M3b), never by querying the column or
+ * sniffing settings->'glofox'. Paginated under the 1k cap. A failed read is
+ * `{ ids: null, error }` — never an empty list.
+ *
+ * @param {object} db   service-role client
+ * @param {string} key  a value the mig 717 CHECK admits (MEMBERSHIP_SOURCE_KEYS)
+ * @returns {Promise<{ ids: string[]|null, error: any }>}
+ */
+export async function listLocationsByMembershipSource(db, key, { pageSize = 500 } = {}) {
+  if (!MEMBERSHIP_SOURCE_KEYS.includes(key)) throw new TypeError(`listLocationsByMembershipSource: unknown membership source '${key}'`)
+  const ids = []
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await db
+      .from('locations')
+      .select('id')
+      .eq('membership_source', key)
+      .order('id')
+      .range(from, from + pageSize - 1)
+    if (error) {
+      logError('membership-source', 'locations by membership_source unreadable', { key, from, err: error })
+      return { ids: null, error }
+    }
+    for (const row of data || []) ids.push(row.id)
+    if (!data || data.length < pageSize) break
+  }
+  return { ids, error: null }
 }

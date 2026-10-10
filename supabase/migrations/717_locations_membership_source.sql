@@ -11,18 +11,21 @@
 --
 -- VALUES. 'none' (lead CRM only), 'glofox' (today), 'un1t' (the home-grown
 -- source, arriving: admitted now so it plugs in with NO schema change — its
--- provider module registers itself in code). The CHECK is the whole
--- contract; adding a fourth source later is a new migration by design.
+-- provider module is added to MEMBERSHIP_SOURCES in code). The CHECK is the
+-- whole contract; adding a fourth source later is a new migration by design.
 --
 -- BACKFILL. 'glofox' where a REAL connection exists, judged the way the
 -- runtime judges it (missingGlofoxCredentialsForLocation: branch id, API
--- key AND API token): an active registry row (channel_connections,
--- platform='glofox', migs 230/418/419: branch_id → external_account_id,
--- api_key → access_token, api_token → config->>'api_token') holding all
--- three, or the legacy settings->'glofox' slice holding all three. Live on
--- 2026-10-10 that is exactly UN1T Stillorgan; Hatch Street and CCF Autos
--- carry a slice with no branch id and stay 'none'. Every other location
--- stays 'none' (the column default).
+-- key AND API token) AND with the runtime's precedence: readConnection
+-- (src/lib/connection-registry.js) serves an ACTIVE registry row
+-- exclusively and never falls back to the legacy slice per field. So: an
+-- active registry row (channel_connections, platform='glofox', migs
+-- 230/418/419: branch_id → external_account_id, api_key → access_token,
+-- api_token → config->>'api_token') holding all three; or, ONLY where no
+-- active registry row exists, the legacy settings->'glofox' slice holding
+-- all three. Live on 2026-10-10 that is exactly UN1T Stillorgan; Hatch
+-- Street and CCF Autos carry a slice with no branch id and stay 'none'.
+-- Every other location stays 'none' (the column default).
 --
 -- GRANT. SELECT for authenticated: the phone's Studio tab and the browser
 -- gate on it, and it is not a secret (locations is column-granted since
@@ -31,9 +34,16 @@
 -- through PUT /api/locations/[id]/membership-source (W1.M2), service role.
 -- tests/helpers/credential-column-grants.js lists the column under select.
 --
--- Replay-safe: ADD COLUMN IF NOT EXISTS, a backfill that only promotes
--- 'none' rows, an idempotent GRANT. The self-check at the end reads the
--- catalog (never this file's text) and aborts the whole file on a miss.
+-- Re-runnable DDL (ADD COLUMN IF NOT EXISTS, an idempotent GRANT), but the
+-- backfill is not idempotent on DATA: a replay re-promotes a location an
+-- operator has set back to 'none' while its Glofox credentials remain. Run
+-- once; a later re-run is an operator decision. One transaction with a 5s
+-- lock_timeout: ADD COLUMN … NOT NULL DEFAULT takes ACCESS EXCLUSIVE on
+-- locations, which every getCurrentUser joins. The self-check at the end
+-- reads the catalog (never this file's text) and aborts the whole file.
+
+BEGIN;
+SET LOCAL lock_timeout = '5s';
 
 ALTER TABLE public.locations
   ADD COLUMN IF NOT EXISTS membership_source text NOT NULL DEFAULT 'none'
@@ -53,7 +63,11 @@ UPDATE public.locations l
           AND coalesce(c.config->>'api_token', '') <> ''
      )
      OR (
-       coalesce(l.settings->'glofox'->>'branch_id', '') <> ''
+       NOT EXISTS (
+         SELECT 1 FROM public.channel_connections c
+          WHERE c.location_id = l.id AND c.platform = 'glofox' AND c.is_active = true
+       )
+       AND coalesce(l.settings->'glofox'->>'branch_id', '') <> ''
        AND coalesce(l.settings->'glofox'->>'api_key', '') <> ''
        AND coalesce(l.settings->'glofox'->>'api_token', '') <> ''
      )
@@ -87,3 +101,5 @@ BEGIN
   SELECT count(*) INTO n_glofox FROM public.locations WHERE membership_source = 'glofox';
   RAISE NOTICE 'W1.M1 mig 717: locations.membership_source added; % location(s) backfilled to glofox.', n_glofox;
 END $$;
+
+COMMIT;

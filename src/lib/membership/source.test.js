@@ -21,6 +21,7 @@ vi.mock('./sources/glofox', () => ({
 import { logWarn } from '@/lib/log'
 import {
   MEMBERSHIP_SOURCES, MEMBERSHIP_SOURCE_KEYS, providerFor, resolveMembershipSource, membershipSourceState,
+  listLocationsByMembershipSource,
 } from './source'
 
 const dbWith = (source, error = null) => ({
@@ -71,12 +72,18 @@ describe('membership source (W1.M1)', () => {
     expect(await membershipSourceState(dbWith('glofox'), 'loc-err')).toEqual({ source: 'glofox', state: 'unknown', readError: 'GLOFOX_SETTINGS_UNREADABLE' })
   })
 
-  it('an unregistered value (a future "un1t" before its module lands) resolves to none with a warning, never throws', async () => {
+  it('an unregistered value (a future "un1t" before its module lands) resolves to the none PROVIDER with a warning, never throws', async () => {
     vi.mocked(logWarn).mockClear()
     expect((await resolveMembershipSource(dbWith('un1t'), 'loc-ok')).key).toBe('none')
     expect(logWarn).toHaveBeenCalledWith('membership-source', expect.stringMatching(/no provider/), expect.objectContaining({ key: 'un1t' }))
     expect(providerFor('made-up').key).toBe('none')
     expect(providerFor(null).key).toBe('none')
+  })
+
+  it('…but the STATE keeps the row\'s identity: unconfigured, missing its provider — never "none"', async () => {
+    vi.mocked(logWarn).mockClear()
+    expect(await membershipSourceState(dbWith('un1t'), 'loc-ok')).toEqual({ source: 'un1t', state: 'unconfigured', missing: ['provider'] })
+    expect(logWarn).toHaveBeenCalledWith('membership-source', expect.stringMatching(/no provider/), expect.objectContaining({ key: 'un1t' }))
   })
 
   it('a failed locations read answers "unknown", not "none" (the column read is a claim, not a fact)', async () => {
@@ -93,5 +100,59 @@ describe('membership source (W1.M1)', () => {
   it('refuses a missing db or location id without a query', async () => {
     expect((await resolveMembershipSource(null, 'loc-ok')).key).toBe('none')
     expect((await resolveMembershipSource(dbWith('glofox'), null)).key).toBe('none')
+  })
+})
+
+describe('listLocationsByMembershipSource (W1.M1) — the one sanctioned reader of the column outside the seam', () => {
+  const pagedDb = (pages, error = null) => {
+    const calls = []
+    return {
+      calls,
+      from: (table) => ({
+        select: (cols) => ({
+          eq: (col, val) => ({
+            order: (by) => ({
+              range: async (from, to) => {
+                calls.push({ table, cols, col, val, by, from, to })
+                if (error) return { data: null, error }
+                return { data: pages.shift() || [], error: null }
+              },
+            }),
+          }),
+        }),
+      }),
+    }
+  }
+
+  it('returns the ids of every location on that source, in id order, paginated under the 1k cap', async () => {
+    const page = (n, k) => Array.from({ length: n }, (_, i) => ({ id: `loc-${k}-${i}` }))
+    const db = pagedDb([page(2, 'a'), page(1, 'b')])
+    const r = await listLocationsByMembershipSource(db, 'glofox', { pageSize: 2 })
+    expect(r.error).toBeNull()
+    expect(r.ids).toEqual(['loc-a-0', 'loc-a-1', 'loc-b-0'])
+    expect(db.calls).toEqual([
+      { table: 'locations', cols: 'id', col: 'membership_source', val: 'glofox', by: 'id', from: 0, to: 1 },
+      { table: 'locations', cols: 'id', col: 'membership_source', val: 'glofox', by: 'id', from: 2, to: 3 },
+    ])
+  })
+
+  it('a short page ends the walk; no locations is an empty list, not an error', async () => {
+    const db = pagedDb([[{ id: 'only' }]])
+    expect(await listLocationsByMembershipSource(db, 'none')).toEqual({ ids: ['only'], error: null })
+    expect(db.calls).toHaveLength(1)
+    expect(await listLocationsByMembershipSource(pagedDb([[]]), 'glofox')).toEqual({ ids: [], error: null })
+  })
+
+  it('a failed read is an error with ids null — never "no locations"', async () => {
+    const r = await listLocationsByMembershipSource(pagedDb([], { message: 'boom' }), 'glofox')
+    expect(r.ids).toBeNull()
+    expect(r.error).toEqual({ message: 'boom' })
+  })
+
+  it('a key the CHECK does not admit is a programming error', async () => {
+    await expect(listLocationsByMembershipSource(pagedDb([]), 'stripe')).rejects.toThrow(/unknown membership source/)
+    await expect(listLocationsByMembershipSource(pagedDb([]), undefined)).rejects.toThrow(/unknown membership source/)
+    // 'un1t' is admitted by the CHECK even before its provider lands
+    expect(await listLocationsByMembershipSource(pagedDb([[]]), 'un1t')).toEqual({ ids: [], error: null })
   })
 })
