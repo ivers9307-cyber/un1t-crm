@@ -477,3 +477,90 @@ describe('EVENT-MOVE.6 — the entry page flow is public on every host', () => {
     }
   })
 })
+
+// ── 8. W1.L2 — the customer flow is complete on a tenant domain ───────
+//
+// W1.L1 gave every organisation an automatic <slug>.repset.ie host whose
+// tenant_domains row carries brand = {} → DB_BRAND_DEFAULTS. W1.L3 mints
+// customer-facing links (unsubscribe, preferences, view-email, class-pay,
+// host portal, embeds) on that host. Until this section's paths were in
+// the defaults, every one of those links rewrote to /welcome
+// (fallbackHandler = 'rewrite'): the customer clicked "unsubscribe" and got
+// the studio chooser, with the consent untouched.
+//
+// Every path here is ALREADY public on the CRM host (proxy publicPaths), so
+// the widened default exposes nothing new — it only stops the tenant host
+// from swallowing a flow the CRM host already serves anonymously.
+//
+// Deliberately NOT served by default: /start, /free-class, /offers. They are
+// Stillorgan literals (src/app/start, src/app/free-class, W0.4's pinned
+// /offers) and would show UN1T's funnel on another gym's host. UN1T Group's
+// own platform row may list them in brand.allowedPaths.
+
+const TENANT_FLOW_PATHS = [
+  '/unsubscribe/abc', '/preferences/abc', '/view-email/abc',
+  '/api/unsubscribe/abc', '/api/preferences/abc',
+  '/class-pay/abc', '/h/pride', '/host', '/host/login', '/host-connect/abc',
+  '/api/host/x', '/embed/event/x', '/terms',
+]
+const TENANT_PINNED_OFF = ['/start', '/free-class', '/offers']
+const PLATFORM_TENANT_HOST = 'gym-a.repset.ie'
+
+// The entries the two rewrite-fallback tiers (un1t-marketing + the tenant
+// defaults) must both name, as raw startsWith prefixes.
+const W1L2_ALLOWLIST_ENTRIES = [
+  '/unsubscribe/', '/preferences/', '/view-email/', '/api/unsubscribe/', '/api/preferences/',
+  '/class-pay/', '/h/', '/host', '/host-connect/', '/api/host/', '/embed/', '/terms',
+]
+
+describe('W1.L2 — the customer flow is complete on a tenant domain', () => {
+  beforeEach(() => {
+    // A platform row (mig 716) has brand = {} → the real frozen defaults.
+    tenantBrandImpl = async (hostname) =>
+      hostname && hostname.split(':')[0] === PLATFORM_TENANT_HOST
+        ? { id: `tenant:${PLATFORM_TENANT_HOST}`, hostnames: [PLATFORM_TENANT_HOST], ...DB_BRAND_DEFAULTS }
+        : null
+  })
+
+  it.each(TENANT_FLOW_PATHS)('%s is served, not rewritten, on a tenant_domains host', async (path) => {
+    const res = await proxy(makeReq({ host: PLATFORM_TENANT_HOST, path }))
+    expect(rewrittenTo(res), `${path} fell through to /welcome on ${PLATFORM_TENANT_HOST}`).toBe(null)
+    expect(admitted(res)).toBe(true)
+  })
+
+  it.each(TENANT_FLOW_PATHS)('%s is already public on the CRM host (the default exposes nothing new)', async (path) => {
+    const res = await proxy(makeReq({ host: CRM_HOST, path }))
+    expect(admitted(res), `${path} is auth-gated on the CRM host: it does not belong in a brand default`).toBe(true)
+    expect(ssrClient.auth.getUser).not.toHaveBeenCalled()
+  })
+
+  it.each(TENANT_PINNED_OFF)('%s stays OFF the default (Stillorgan-pinned until Wave 2/3)', async (path) => {
+    const res = await proxy(makeReq({ host: PLATFORM_TENANT_HOST, path }))
+    expect(rewrittenTo(res)).toContain('/welcome')
+  })
+
+  it('a CRM page on a tenant host still rewrites to /welcome', async () => {
+    const res = await proxy(makeReq({ host: PLATFORM_TENANT_HOST, path: '/dashboard' }))
+    expect(rewrittenTo(res)).toContain('/welcome')
+  })
+
+  it.each(TENANT_FLOW_PATHS)('%s is also served on the marketing host (same flow, UN1T\'s own domain)', async (path) => {
+    const res = await proxy(makeReq({ host: MARKETING_HOST, path }))
+    expect(rewrittenTo(res), `${path} fell through to /welcome on ${MARKETING_HOST}`).toBe(null)
+    expect(admitted(res)).toBe(true)
+  })
+
+  it('the tenant defaults and the marketing brand name every flow entry explicitly', () => {
+    for (const [label, allowed] of [['DB_BRAND_DEFAULTS', DB_BRAND_DEFAULTS.allowedPaths], ['un1t-marketing', marketingBrand().allowedPaths]]) {
+      for (const entry of W1L2_ALLOWLIST_ENTRIES) {
+        expect(allowed, `${label} lost '${entry}'`).toContain(entry)
+      }
+    }
+  })
+
+  it('the tenant defaults never carry the Stillorgan funnel pages', () => {
+    for (const entry of TENANT_PINNED_OFF) {
+      expect(DB_BRAND_DEFAULTS.allowedPaths, `'${entry}' is a Stillorgan literal; it belongs on UN1T Group's own row, not the default`).not.toContain(entry)
+    }
+  })
+})
