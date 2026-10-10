@@ -449,25 +449,26 @@ create index if not exists policies_org_active_idx
 comment on column public.policies.organization_id is
   'W0.5 (mig 710) — owning organisation. Staff see only their organisations'' policies.';
 
--- RLS: replace the read-any-authenticated SELECT policy from mig 178 with an
--- org-membership one. (Browser reads are rare — the lib uses the service
--- role — but the deny must exist at the DB too.)
-do $$
-declare p record;
-begin
-  for p in select policyname from pg_policies
-            where schemaname = 'public' and tablename = 'policies' and cmd = 'SELECT'
-  loop
-    execute format('drop policy %I on public.policies', p.policyname);
-  end loop;
-end $$;
-
-create policy policies_select_in_org on public.policies
+-- RLS (live names verified 2026-10-09: policies_read_all / policy_versions_read_all
+-- are `for select to authenticated using (true)`; helpers
+-- private.auth_is_in_organization(org_id uuid) and private.auth_is_master() exist).
+-- Browser reads are rare — the lib uses the service role — but the deny must
+-- exist at the DB too.
+drop policy if exists policies_read_all on public.policies;
+create policy policies_read_in_org on public.policies
   for select to authenticated
   using (private.auth_is_master() or private.auth_is_in_organization(organization_id));
+
+drop policy if exists policy_versions_read_all on public.policy_versions;
+create policy policy_versions_read_in_org on public.policy_versions
+  for select to authenticated
+  using (exists (
+    select 1 from public.policies p
+     where p.id = policy_versions.policy_id
+       and (private.auth_is_master() or private.auth_is_in_organization(p.organization_id))));
 ```
 
-Check the exact SELECT policy name and the helper names in mig 178 and mig 079 before applying (`grep -n "create policy" supabase/migrations/178_policies_hub.sql`; `grep -n "auth_is_in_organization\|auth_is_master" supabase/migrations/079_*.sql`).
+Policy and helper names above were verified against the live database on 2026-10-09.
 
 - [ ] **Step 2: Failing test** — add to `src/lib/policies.test.js` (follow its existing fake-db style):
 
