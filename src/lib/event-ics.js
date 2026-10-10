@@ -15,6 +15,7 @@
 import { PLATFORM_NAME } from './brand-name'
 import { getLocationBranding } from './location-branding.js'
 import { PLATFORM_HOST_SUFFIX, resolveCustomerBaseUrl } from './tenant-host.js'
+import { logError } from './log.js'
 
 const DEFAULT_DURATION_MS = 2 * 60 * 60 * 1000
 const DEFAULT_START_TIME = '09:00'
@@ -116,15 +117,17 @@ export async function resolveEventIcsIdentity(db, slug) {
     if (db && slug) {
       // .maybeSingle(): slug is globally unique (mig 451); 0 rows is "no such
       // event" — the page still renders, the widget shows its own not-found.
-      const { data } = await db.from('race_events').select('location_id').eq('slug', slug).maybeSingle()
+      const { data, error } = await db.from('race_events').select('location_id').eq('slug', slug).maybeSingle()
+      if (error) logError('event-ics', 'race_events lookup failed', { slug, error: error.message })
       locationId = data?.location_id || null
     }
     if (locationId) {
       const brand = await getLocationBranding(db, locationId)
       brandName = String(brand?.companyName || '').trim()
     }
-  } catch {
+  } catch (e) {
     // brand stays '' — buildEventIcs falls back to a neutral summary
+    logError('event-ics', 'identity lookup threw', { slug, error: e?.message })
   }
   try {
     hostname = new URL(await resolveCustomerBaseUrl(db, locationId)).hostname
