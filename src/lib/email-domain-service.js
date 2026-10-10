@@ -18,6 +18,8 @@ import {
   verifyTenantDomainDkim,
   verifyTenantReturnPath,
   domainIsFullyVerified,
+  ensureTenantServerStreams,
+  ensureTenantServerWebhooks,
 } from '@/lib/postmark-account'
 
 /**
@@ -83,7 +85,9 @@ async function upsertRow(db, orgId, patch) {
 // Fold a shaped Postmark domain response into the row's verification
 // state. status → 'live' only when BOTH records verify; a disabled/failed
 // row is not silently reactivated by a verify pass.
-function persistDomainState(db, orgId, row, shaped) {
+// `lastError` is the webhook step's message when that step failed on this
+// pass (W1.E3) — it must survive this write so the status endpoint shows it.
+function persistDomainState(db, orgId, row, shaped, lastError = null) {
   const status = domainIsFullyVerified(shaped)
     ? 'live'
     : (row.status === 'disabled' || row.status === 'failed' ? row.status : 'verifying')
@@ -95,8 +99,34 @@ function persistDomainState(db, orgId, row, shaped) {
     return_path_cname_value: shaped.returnPathCnameValue ?? row.return_path_cname_value,
     return_path_verified: shaped.returnPathVerified,
     status,
-    last_error: null,
+    last_error: lastError,
   })
+}
+
+/**
+ * W1.E3 — make sure the org's Postmark server carries the broadcast stream
+ * and the six-trigger webhooks, then stamp webhooks_registered_at (mig 718).
+ * Idempotent: a stamped row is left alone; a NULL stamp (never done, or a
+ * failed earlier pass) runs both helpers again, and they only create what is
+ * missing. A failure is NOT fatal to provisioning or verification: it is
+ * logged structurally and returned as `error` so the caller writes it to
+ * last_error, and the stamp stays NULL so the next provision OR verify call
+ * retries. The server token is read off the row and never logged.
+ *
+ * @returns {Promise<{ row: object, error: string|null }>}
+ */
+async function ensureServerWebhooksRecorded(db, orgId, row) {
+  if (!row?.postmark_server_token || row.webhooks_registered_at) return { row, error: null }
+  try {
+    await ensureTenantServerStreams(row.postmark_server_token)
+    await ensureTenantServerWebhooks(row.postmark_server_token)
+  } catch (e) {
+    const message = e?.message || 'Postmark webhook registration failed.'
+    logWarn('tenant-email-domain', 'server streams/webhook registration failed; will retry on the next provision or verify', { orgId, err: message })
+    return { row, error: message }
+  }
+  const stamped = await upsertRow(db, orgId, { webhooks_registered_at: new Date().toISOString() })
+  return { row: stamped, error: null }
 }
 
 /**
@@ -120,10 +150,12 @@ function persistDomainState(db, orgId, row, shaped) {
 export async function provisionEmailDomain(db, { orgId, orgName, sendingDomain, fromLocal, fromName, createdBy }) {
   let row = await loadEmailDomainRow(db, orgId)
 
-  // Already fully provisioned → idempotent re-read, no new Postmark resources.
+  // Already fully provisioned → idempotent re-read, no new Postmark resources
+  // (but a NULL webhooks stamp is retried — W1.E3).
   if (row?.postmark_server_id && row?.postmark_domain_id) {
+    const hooks = await ensureServerWebhooksRecorded(db, orgId, row)
     const shaped = await getTenantDomain(row.postmark_domain_id)
-    return persistDomainState(db, orgId, row, shaped)
+    return persistDomainState(db, orgId, hooks.row, shaped, hooks.error)
   }
 
   // Step 1 — server. Persist id + token the moment they are minted.
@@ -140,6 +172,12 @@ export async function provisionEmailDomain(db, { orgId, orgName, sendingDomain, 
       last_error: null,
     })
   }
+
+  // Step 1b — W1.E3: streams + webhooks on the server, with the token just
+  // persisted. Its own try (inside the helper): a failure records last_error
+  // below and never blocks the domain.
+  const hooks = await ensureServerWebhooksRecorded(db, orgId, row)
+  row = hooks.row
 
   // Step 2 — domain. Reuse an existing domain id, else create it.
   const fromEmail = `${fromLocal || 'hello'}@${sendingDomain}`
@@ -163,7 +201,7 @@ export async function provisionEmailDomain(db, { orgId, orgName, sendingDomain, 
     return_path_cname_value: shaped.returnPathCnameValue,
     return_path_verified: shaped.returnPathVerified,
     status: domainIsFullyVerified(shaped) ? 'live' : 'verifying',
-    last_error: null,
+    last_error: hooks.error,
   })
 }
 
@@ -183,6 +221,12 @@ export async function verifyEmailDomain(db, orgId) {
   }
   if (!row?.postmark_domain_id) return { notProvisioned: true }
 
+  // W1.E3 — the verify button is the retry an operator can reach once the
+  // domain exists (the wizard never POSTs the initiate route again), so a
+  // NULL webhooks stamp is retried here too. Never fatal.
+  const hooks = await ensureServerWebhooksRecorded(db, orgId, row)
+  row = hooks.row
+
   // Best-effort re-checks: Postmark rejects these while DNS is still
   // wrong, so the getTenantDomain read below is the source of truth.
   try { await verifyTenantDomainDkim(row.postmark_domain_id) } catch (e) {
@@ -199,5 +243,5 @@ export async function verifyEmailDomain(db, orgId) {
     await upsertRow(db, orgId, { last_error: e?.message || 'domain read failed' })
     return { error: e?.message || 'Could not read the sending domain.' }
   }
-  return { row: await persistDomainState(db, orgId, row, shaped) }
+  return { row: await persistDomainState(db, orgId, row, shaped, hooks.error) }
 }
