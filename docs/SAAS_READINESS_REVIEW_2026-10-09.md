@@ -2,6 +2,8 @@
 
 Scope: un1t-crm at `origin/main` (c91ae071, 9 Oct 2026), live Supabase project `iyvtbjjxdggiadzwwvdj`, Vercel project `un1t-crm`, plus champ-app and the mobile app at the shell level. Question: can a second gym be onboarded into its own segmented environment with its own connections, and what is left before that is smooth? Method: ten parallel code reviews, one per hub, against one rubric (isolation, configuration, hard-coded tenant assumptions, onboarding path, seeded defaults), with every blocker-class claim re-verified by hand, plus live DB, Supabase advisor and Vercel checks. Prior reviews were not consulted for findings.
 
+> **Status 10 Oct 2026:** Wave 0 (blockers 1–6, 9–11 and the five small holes) is delivered — see the dated block under [§3 Blockers](#blockers-fix-before-any-second-gym-has-staff-or-customers). Blockers 7 and 8 are deferred to Waves 2 and 1 as planned. The analysis below is left as written on 9 Oct.
+
 ## 0. Headline
 
 **The goal is achievable and the architecture is already tenant-shaped. It is not yet safe to put a second gym on, and it is not yet smooth.**
@@ -187,6 +189,40 @@ Evidence for every row is in the per-applet notes that follow.
 11. **Retire the location-keyed public live and challenge boards** in favour of the token routes (src/app/api/public/live/[locationId]/route.js; src/proxy.js:217).
 
 Also close these smaller holes in the same pass: authenticate or rate-limit the Strava POST; guard NULL-location templates in `/api/templates/[id]`; validate `device_ids` against the location's own devices on automation save; stop WhatsApp number/flow events from paging every tenant; keep the Instagram lookup error instead of treating it as "unmatched".
+
+#### Wave 0 delivered 9–10 Oct 2026
+
+Status per blocker (PRs on `ivers9307-cyber/un1t-crm` unless noted; every PR is a scoping change plus a test, see `docs/superpowers/plans/2026-10-09-saas-wave0-stop-the-leaks.md`).
+
+| # | Blocker | Status | PR | What landed |
+|---|---|---|---|---|
+| B1 | Legacy API key unscoped | **Closed** (one manual step left) | #1957 W0.1 | `CRM_API_KEY_ORG_ID` env pins the legacy key to the UN1T Group org; unset = key refused. **Richard still to mint a per-org `unitk_` key for n8n, then unset both envs.** |
+| B2 | WA inbound contact match estate-wide | **Closed** | #1956 W0.2 | Org-scoped match; also covers the WA coexistence ingest and Postmark inbound mail. |
+| B3 | `race_events.shared` global | **Closed** | #1962 W0.3 | Shared within the owning org only. |
+| B4 | `/offers` lists all tenants | **Closed (interim)** | #1958 W0.4 | Pinned to Stillorgan until Wave 2. |
+| B5 | Policies global | **Closed** | #1960 W0.5 | Mig 713: `policies.organization_id`, the 3 existing rows → UN1T Group. |
+| B6 | `contacts_email_unique` global | **Closed** | #1961 W0.6 | Mig 712: per-org unique index, `nulls not distinct`, trigger-stamped `contacts.organization_id`. |
+| B7 | Single Revolut merchant | Deferred → Wave 2 | — | Unchanged. |
+| B8 | Email identity | Deferred → Wave 1 | — | Unchanged. |
+| B9 | Receipt-coverage report cross-tenant | **Closed** | #1964 W0.7 | One report per org via `org_settings.ops_alert_emails`; env `RECEIPT_COVERAGE_REPORT_TO` retired. |
+| B10 | `/settings/notifications` lists all locations | **Closed** | #1963 W0.8 | Scoped to the caller's locations. |
+| B11 | Live HR board public by location id | **Closed; tv1 cut over, tv2 + Hatch pending** | #1969 W0.9a · un1t-pi #2 W0.9b · #1973 W0.9c | 9a: the token live route stamps the kiosk heartbeat and the challenges board is token-gated. 9b (un1t-pi): per-kiosk `tv-token-<device>` secret, `pi kiosk-refresh`. 9c: location-keyed `/tv/[locationId]`, `/api/public/live/[locationId]` and `/api/public/challenges/[locationId]` removed (merged 10 Oct). Kiosk cut-over 9 Oct: **stillorgan-tv1** done over Tailscale, heartbeat proven advancing 10 Oct 02:11 UTC; **stillorgan-tv2** offline (failing SD card, reimage with `pi prepare`); **hatch-tv1/tv2** not yet provisioned. |
+
+The five small holes, plus hardening found during the review, also closed in Wave 0:
+
+| PR | Task | What landed |
+|---|---|---|
+| #1970 | W0.10 | Strava webhook behind a URL token (`STRAVA_WEBHOOK_URL_TOKEN`). **Richard must recreate the Strava push subscription** with callback `https://crm.repset.ie/api/webhooks/strava/<token>`. |
+| #1965 | W0.11 | Platform (location-less) email templates readable and editable by master only. |
+| #1966 | W0.12 | Automation `device_ids` validated against the location's own `ac_devices`. |
+| #1967 | W0.13 | Unmatched WhatsApp number/flow events logged, not fanned out to every studio. |
+| #1968 | W0.14 | Instagram lookup failures retried instead of dropped as "unmatched". |
+
+Open after Wave 0:
+- Richard: the n8n `unitk_` key swap (then unset `CRM_API_KEY` + `CRM_API_KEY_ORG_ID`) and the Strava subscription recreate.
+- Kiosks: provision hatch-tv1/tv2; reimage stillorgan-tv2.
+- Follow-up chips (not blockers): `layout.js` scoping gate; policies write RLS per org; legacy-key proxy comments; remaining email lookups (incl. champ-app); climate runner device guard; the unreachable WA coexistence `account_update` handler.
+- Regression to restore: the staff `/live/[locationId]` page lost its "TV display" button with 9c (needs the location's `tv_displays` token to rebuild).
 
 ### Majors, grouped by theme
 
