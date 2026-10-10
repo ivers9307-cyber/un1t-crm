@@ -27,7 +27,8 @@ const MODES = [
   { value: 'class', label: 'Class timetable', hint: 'On before each class and off after it.' },
 ]
 
-const GLOFOX_HINT = 'Connect Glofox to use class-linked schedules'
+// W1.M3a — source-neutral: the answer is the membership source, not Glofox.
+const GLOFOX_HINT = 'Connect a membership source with a class schedule to use class-linked schedules'
 // PROFILESPREAD.1a: the page could not READ the Glofox status (a failed by-id
 // read). Class mode stays off, but the reason must not claim Glofox is not
 // connected.

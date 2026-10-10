@@ -41,6 +41,8 @@ import { redirect } from 'next/navigation'
 import KanbanBoard from '@/components/KanbanBoard'
 import PipelineViewSwitcher from '@/components/PipelineViewSwitcher'
 import { splitStagesByFunnel } from '@/lib/pipeline-classifier'
+import { membershipStateForPage, membershipSettingsHref, canManageMembershipSource } from '@/lib/membership/state-for-page'
+import Link from 'next/link'
 
 export const dynamic = 'force-dynamic'
 
@@ -147,6 +149,16 @@ export default async function PipelinePage(props) {
   const [{ count: activeCount }, { count: dormantCount }] =
     await Promise.all([tabCount(activeStages), tabCount(dormantStages)])
 
+  // W1.M3a — the board is NOT gated: a lead-only gym needs new_lead →
+  // dormant, which the classifier derives without any membership source.
+  // But its membership and credit stages (first_class … converted, member)
+  // key on glofox_* columns, so on a DERIVED board at a studio with NO
+  // source those columns can never fill. One note says so. A manual board
+  // has no classifier, and an 'unknown' read is not a known absence.
+  const membership = manual ? null : await membershipStateForPage(db, locationId)
+  const noSourceNote = membership?.state === 'none'
+  const canManageSource = noSourceNote && canManageMembershipSource(user, locationId)
+
   // "funnel" is the derived board's word for its live columns; a manual board
   // has no funnel, so it just counts deals.
   const totalLabel = manual ? 'deals'
@@ -162,6 +174,14 @@ export default async function PipelinePage(props) {
         </span>
       </div>
 
+      {noSourceNote && (
+        <p role="note" className="text-sm bg-amber-500/10 text-amber-700 border border-amber-500/30 rounded-md px-3 py-2 mb-4">
+          No membership source is connected at this studio. Stages that depend on memberships and credits will not move without a membership source; leads still enter and go dormant.{' '}
+          {canManageSource
+            ? <>Choose one in <Link href={membershipSettingsHref(locationId)} className="underline">Location settings → Integrations</Link>.</>
+            : 'Ask an owner to connect one.'}
+        </p>
+      )}
       <PipelineViewSwitcher
         pipelines={pipelines}
         activePipelineKey={activePipeline.key}

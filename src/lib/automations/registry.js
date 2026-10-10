@@ -43,6 +43,12 @@ export function getAutomation(key) {
  * Pure: is Glofox actually connected at this location? Reads the
  * location row's settings.glofox (no DB). Mirrors the three-header
  * v3 requirement (branch_id + api_key + api_token).
+ *
+ * @deprecated W1.M3a — the answer now comes from locations.membership_source
+ * via membershipStateForPage() (src/lib/membership/state-for-page.js); the
+ * by-id reader passes it to automationStatus() as `connected`. This legacy
+ * slice test is only the fallback when no `connected` is given, and goes
+ * with the next release (registry.test.js pins it until then).
  */
 export function glofoxConnected(location) {
   const g = location?.settings?.glofox
@@ -52,21 +58,31 @@ export function glofoxConnected(location) {
 
 /**
  * Pure status summary for a card. Branch on key as automations are added.
+ *
+ * W1.M3a — `connected` (a boolean) is the membership-source answer the
+ * by-id reader resolved (configured, with a schedule); when given it is
+ * THE connection test. The legacy settings-slice test (glofoxConnected) is
+ * only the fallback for a caller that passes no `connected`.
+ *
+ * @param {string} key
+ * @param {object|null} location  `{ settings }` — trial config still lives in the slice
+ * @param {{ connected?: boolean }} [opts]
  * @returns {{ available: boolean, trialConfigured: boolean }}
  */
-export function automationStatus(key, location) {
+export function automationStatus(key, location, { connected } = {}) {
+  const available = typeof connected === 'boolean' ? connected : glofoxConnected(location)
   if (key === 'glofox_lead_provisioning') {
     const g = location?.settings?.glofox || {}
     return {
-      available: glofoxConnected(location),
+      available,
       trialConfigured: Boolean(g.trial_membership_id && g.trial_plan_code),
     }
   }
   if (key === 'class_climate' || key === 'bathroom_climate') {
-    // Needs the Glofox schedule as its trigger source. AC-device presence
+    // Needs the class schedule as its trigger source. AC-device presence
     // is surfaced in the dedicated card (which has the device list); here
     // we only gate on the schedule source being connected.
-    return { available: glofoxConnected(location), trialConfigured: false }
+    return { available, trialConfigured: false }
   }
   return { available: false, trialConfigured: false }
 }

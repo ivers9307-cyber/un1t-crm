@@ -7,6 +7,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 vi.mock('@/lib/postmark', () => ({
   sendTransactionalEmail: vi.fn(),
 }))
+// W1.S4 — loadContextForSession resolves the studio's short brand for the
+// highlight's product name; the db mocks here know no company_settings.
+vi.mock('@/lib/location-branding', () => ({
+  getLocationBranding: vi.fn(() => Promise.resolve({ companyName: 'UN1T Dublin', shortName: 'UN1T', companyNameConfigured: true, logoUrl: null, faviconUrl: null })),
+}))
 // W1.L3a — the stop-emails link is minted on the session location's tenant
 // host. The default calls the REAL getAppUrl() (the resolver's own floor), so
 // every env-driven assertion in this file — including the throw-when-unset
