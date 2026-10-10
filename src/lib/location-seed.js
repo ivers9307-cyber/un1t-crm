@@ -13,6 +13,7 @@
 
 import { FUNNEL_STAGE_SLUGS, OFF_FUNNEL_STAGE_SLUGS } from '../../shared/pipeline-classifier.js'
 import { BUNDLE_KEYS } from '../../shared/permission-bundles.js'
+import { DEFAULT_NOTIFICATION_CONFIG } from './notification-config.js'
 
 // (slug → row detail) in canonical order. Orders 301–310 match prod
 // (the 300-block sorts after the archived PIPELINE5 200-block).
@@ -151,10 +152,14 @@ async function resolveAcquisitionPipelineId(db, locationId) {
  * (the pipelines insert falls back to reading back the existing row on a
  * conflict; the pipeline_stages upsert ignores duplicates on the mig 150 uq
  * (location_id, slug); the bundle-features write only ever ADDS missing
- * keys, never overwrites an existing one — see seedBundleFeatures above).
+ * keys, never overwrites an existing one — see seedBundleFeatures above;
+ * the W1.W1 settings seed ignores an existing company_settings row and
+ * writes notification_config only while it is NULL).
  *
  * @param {object} db - service-role client (createServerClient())
- * @param {{ id: string, features?: object }} location - the freshly created locations row
+ * @param {{ id: string, name?: string, is_host_anchor?: boolean, features?: object }} location
+ *   - the freshly created locations row (POST /api/locations passes the
+ *   insert's `.select().single()` result, so name + is_host_anchor are on it)
  */
 export async function seedLocationDefaults(db, location) {
   if (!location?.id) throw new Error('seedLocationDefaults: location with id required')
@@ -178,4 +183,53 @@ export async function seedLocationDefaults(db, location) {
     .update({ features: nextFeatures })
     .eq('id', location.id)
   if (featErr) throw new Error(`seedLocationDefaults: locations.features bundle seed failed: ${featErr.message}`)
+
+  // W1.W1 — settings rows a tenant location is born with (SaaS Wave 1,
+  // decision 6). Both idempotent: the company_settings upsert ignores an
+  // existing row (an operator's branding is never overwritten), and
+  // notification_config is written only while NULL. NULL already means
+  // "code defaults" everywhere (getEffectiveConfig(null) renders the same
+  // values), so the explicit copy changes two things only: the settings
+  // page's "using default" indicator reads as configured, and a seeded
+  // location FREEZES today's registry defaults instead of tracking a later
+  // DEFAULT_NOTIFICATION_CONFIG change. That is decision 6's call.
+  // company_name = the LOCATION's name, so the brand chain
+  // (company_settings → org_settings → locations.name) resolves to this
+  // studio's own name from day one; logo/favicon stay null and fall through
+  // to the org's. Quiet hours are NOT named: mig 514's NOT NULL DEFAULT
+  // columns (enabled, 21 → 8) apply on the insert.
+  // The host-anchor gate is defensive: anchors are inserted directly by
+  // host-events.js and never pass through this seed, but a shell location
+  // with no brand of its own must never grow settings rows if one did.
+  if (!location.is_host_anchor) {
+    const { error: csErr } = await db
+      .from('company_settings')
+      .upsert(
+        {
+          location_id: location.id,
+          company_name: (location.name || '').trim() || null,
+          logo_url: null,
+          favicon_url: null,
+        },
+        { onConflict: 'location_id', ignoreDuplicates: true },
+      )
+    if (csErr) throw new Error(`seedLocationDefaults: company_settings seed failed: ${csErr.message}`)
+
+    // Read fresh rather than trusting the passed row: a re-run (wizard
+    // retry) passes whatever the caller held, which may predate an
+    // operator's edit. The seed exists to fill a gap, never to reset.
+    const { data: cur, error: curErr } = await db
+      .from('locations')
+      .select('notification_config')
+      .eq('id', location.id)
+      .maybeSingle()
+    if (curErr) throw new Error(`seedLocationDefaults: notification_config read failed: ${curErr.message}`)
+    if (!cur?.notification_config) {
+      const { error: ncErr } = await db
+        .from('locations')
+        .update({ notification_config: DEFAULT_NOTIFICATION_CONFIG })
+        .eq('id', location.id)
+      if (ncErr) throw new Error(`seedLocationDefaults: notification_config seed failed: ${ncErr.message}`)
+    }
+  }
 }

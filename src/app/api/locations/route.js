@@ -117,7 +117,7 @@ export async function POST(request) {
     // message names the location id for exactly that.
     return NextResponse.json({
       success: false,
-      error: `Location ${created.id} was created but seeding its pipeline stages failed: ${seedErr.message}. Re-running the seed is safe.`,
+      error: `Location ${created.id} was created but seeding its defaults (pipeline, bundles, settings) failed: ${seedErr.message}. Re-running the seed is safe.`,
       data: created,
     }, { status: 500 })
   }
