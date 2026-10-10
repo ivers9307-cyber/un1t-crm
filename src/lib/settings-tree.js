@@ -243,7 +243,7 @@ export const SETTINGS_TREE = [
         id: 'scoring',
         label: 'Scoring',
         href: '/settings/scoring',
-        description: 'How UN1T Points are awarded — per-minute rate for each heart-rate zone, plus participation points for classes with no strap.',
+        description: 'How points are awarded — per-minute rate for each heart-rate zone, plus participation points for classes with no strap.',
         icon: Trophy,
         // Mirrors the page's own gate exactly (MANAGER_ROLES).
         gate: { roles: MANAGER_ROLES },

@@ -11,6 +11,7 @@
 // upsert the contractor as a Xero supplier contact, etc. — not
 // worth it for the operator-facing workflow.
 
+import { PLATFORM_NAME } from '@/lib/brand-name'
 import { createServerClient } from '@/lib/supabase'
 import { resolvePostmarkToken } from '@/lib/postmark-token'
 import { XeroError } from './client'
@@ -121,7 +122,7 @@ export async function sendContractorInvoiceBillEmail(invoiceId) {
 
   const subject = `Contractor invoice — ${contractorName} — ${periodLabel}`
   const htmlBody = `
-    <p>Approved contractor invoice forwarded from UN1T CRM.</p>
+    <p>Approved contractor invoice forwarded from ${PLATFORM_NAME}.</p>
     <ul>
       <li>Contractor: <strong>${contractorName}</strong></li>
       <li>Period: <strong>${periodLabel}</strong></li>

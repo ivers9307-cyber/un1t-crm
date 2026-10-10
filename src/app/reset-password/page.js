@@ -6,6 +6,7 @@ import { Check, X } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import { passwordRequirements, validatePasswordComplexity } from '@/lib/schemas'
 import { parseRecoveryLink, establishRecoverySession } from '@/lib/recovery-link'
+import { PLATFORM_NAME } from '@/lib/brand-name'
 
 export default function ResetPasswordPage() {
   const [password, setPassword] = useState('')
@@ -166,7 +167,7 @@ export default function ResetPasswordPage() {
           {branding?.logo_url ? (
             <img src={branding.logo_url} alt={branding.company_name || 'Logo'} className="h-10 mx-auto object-contain" />
           ) : (
-            <h1 className="text-3xl font-bold tracking-wider text-un1t-text">{branding?.company_name || 'UN1T'}</h1>
+            <h1 className="text-3xl font-bold tracking-wider text-un1t-text">{branding?.company_name || PLATFORM_NAME}</h1>
           )}
           <p className="text-sm text-gray-500 mt-1">Lead Management</p>
         </div>
@@ -247,7 +248,7 @@ export default function ResetPasswordPage() {
           </button>
         </form>
 
-        <p className="text-center text-xs text-un1t-muted mt-6">UN1T CRM v1.0</p>
+        <p className="text-center text-xs text-un1t-muted mt-6">{PLATFORM_NAME} CRM</p>
       </div>
     </div>
   )

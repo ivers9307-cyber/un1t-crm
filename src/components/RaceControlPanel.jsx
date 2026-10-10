@@ -35,7 +35,9 @@ const COMPOSITION_FILTERS = [
   { id: 'all_non_members', label: 'Non-members' },
 ]
 
-export default function RaceControlPanel({ raceId }) {
+// W1.S2 — `brand` (the event location's resolved brand, from the server page)
+// labels verified members; empty renders the bare word.
+export default function RaceControlPanel({ raceId, brand = '' }) {
   const [board, setBoard] = useState(null)
   const [loadError, setLoadError] = useState(null)
   const [actionBusy, setActionBusy] = useState(null)
@@ -187,19 +189,19 @@ export default function RaceControlPanel({ raceId }) {
 
       <Section title="On Course" icon={Clock} count={sections.on_course.length} emptyText="No teams currently on the course.">
         {sections.on_course.map((r) => (
-          <OnCourseRow key={r.id} registration={r} wave={wavesById.get(r.wave_id)} busy={actionBusy === r.id} onFinish={() => fireAction(r.id, 'race-finish')} onAdjust={() => setAdjustingId(r.id)} />
+          <OnCourseRow key={r.id} registration={r} wave={wavesById.get(r.wave_id)} busy={actionBusy === r.id} onFinish={() => fireAction(r.id, 'race-finish')} onAdjust={() => setAdjustingId(r.id)} brand={brand} />
         ))}
       </Section>
 
       <Section title="Next Up" icon={Play} count={sections.next_up.length} emptyText="No teams registered yet.">
         {sections.next_up.map((r) => (
-          <NextUpRow key={r.id} registration={r} wave={wavesById.get(r.wave_id)} busy={actionBusy === r.id} onStart={() => fireAction(r.id, 'race-start')} onAdjust={() => setAdjustingId(r.id)} />
+          <NextUpRow key={r.id} registration={r} wave={wavesById.get(r.wave_id)} busy={actionBusy === r.id} onStart={() => fireAction(r.id, 'race-start')} onAdjust={() => setAdjustingId(r.id)} brand={brand} />
         ))}
       </Section>
 
       <Section title="Completed" icon={Trophy} count={sections.completed.length} emptyText="No teams have finished yet.">
         {sections.completed.map((r, i) => (
-          <CompletedRow key={r.id} registration={r} wave={wavesById.get(r.wave_id)} rank={i + 1} busy={actionBusy === r.id} onReset={() => fireAction(r.id, 'race-reset')} onAdjust={() => setAdjustingId(r.id)} />
+          <CompletedRow key={r.id} registration={r} wave={wavesById.get(r.wave_id)} rank={i + 1} busy={actionBusy === r.id} onReset={() => fireAction(r.id, 'race-reset')} onAdjust={() => setAdjustingId(r.id)} brand={brand} />
         ))}
       </Section>
 
@@ -236,7 +238,8 @@ function Section({ title, icon: Icon, count, emptyText, children }) {
   )
 }
 
-function TeamHeader({ registration, wave, accent = 'default' }) {
+function TeamHeader({ registration, wave, accent = 'default', brand = '' }) {
+  const memberNoun = brand ? `${brand} member` : 'member'
   const team = registration.teams
   const teamName = team?.name || '(no team)'
   const size = team?.size
@@ -268,7 +271,7 @@ function TeamHeader({ registration, wave, accent = 'default' }) {
           </span>
         )}
         {composition === 'all_members' && (
-          <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700 inline-flex items-center gap-1" title="All team members are verified UN1T members">
+          <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700 inline-flex items-center gap-1" title={`All team members are verified ${memberNoun}s`}>
             <BadgeCheck size={10} /> Members
           </span>
         )}
@@ -287,7 +290,7 @@ function TeamHeader({ registration, wave, accent = 'default' }) {
                 {m.name}
                 {m.role === 'captain' && <span className="text-amber-700 ml-0.5">★</span>}
                 {m.is_member && (
-                  <span title="Verified UN1T member" className="ml-1 inline-flex items-center text-emerald-700">
+                  <span title={`Verified ${memberNoun}`} className="ml-1 inline-flex items-center text-emerald-700">
                     <BadgeCheck size={10} />
                   </span>
                 )}
@@ -339,11 +342,11 @@ function AdjustButton({ onAdjust }) {
 // "Allen Thomson", 11:12 wave), and the operator would only discover it with
 // a competitor already on the line. Show WHY instead — the row stays, because
 // the team is really there and somebody has to sort the payment out.
-function NextUpRow({ registration, wave, busy, onStart, onAdjust }) {
+function NextUpRow({ registration, wave, busy, onStart, onAdjust, brand }) {
   const startable = canStartRace(registration)
   return (
     <div className="flex items-stretch gap-2">
-      <TeamHeader registration={registration} wave={wave} />
+      <TeamHeader registration={registration} wave={wave} brand={brand} />
       <div className="flex flex-col items-end justify-center gap-1 min-w-[110px]">
         {startable ? (
           <button
@@ -369,7 +372,7 @@ function NextUpRow({ registration, wave, busy, onStart, onAdjust }) {
   )
 }
 
-function OnCourseRow({ registration, wave, busy, onFinish, onAdjust }) {
+function OnCourseRow({ registration, wave, busy, onFinish, onAdjust, brand }) {
   const nowMs = Date.now()
   const startedMs = registration.race_started_at ? Date.parse(registration.race_started_at) : nowMs
   // Live elapsed = wallclock - start. Penalties shown separately
@@ -380,7 +383,7 @@ function OnCourseRow({ registration, wave, busy, onFinish, onAdjust }) {
 
   return (
     <div className="flex items-stretch gap-2">
-      <TeamHeader registration={registration} wave={wave} accent="on_course" />
+      <TeamHeader registration={registration} wave={wave} accent="on_course" brand={brand} />
       <div className="flex flex-col items-end justify-center gap-1 min-w-[110px]">
         <div className="font-mono text-base font-semibold text-amber-700 tabular-nums">
           {formatElapsed(totalElapsed)}
@@ -401,7 +404,7 @@ function OnCourseRow({ registration, wave, busy, onFinish, onAdjust }) {
   )
 }
 
-function CompletedRow({ registration, wave, rank, busy, onReset, onAdjust }) {
+function CompletedRow({ registration, wave, rank, busy, onReset, onAdjust, brand }) {
   // Use the new helper — base elapsed + penalties — so the Completed
   // section's leaderboard sort + display reflect adjusted times.
   const elapsed = elapsedWithPenalties(registration.race_started_at, registration.race_finished_at, registration.penalties)
@@ -410,7 +413,7 @@ function CompletedRow({ registration, wave, rank, busy, onReset, onAdjust }) {
       <div className="flex items-center justify-center min-w-[40px] text-base font-semibold text-un1t-subtle">
         #{rank}
       </div>
-      <TeamHeader registration={registration} wave={wave} accent="completed" />
+      <TeamHeader registration={registration} wave={wave} accent="completed" brand={brand} />
       <div className="flex flex-col items-end justify-center gap-1 min-w-[110px]">
         <div className="font-mono text-base font-semibold text-emerald-700 tabular-nums">
           {formatElapsed(elapsed)}

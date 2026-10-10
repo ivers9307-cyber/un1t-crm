@@ -23,6 +23,7 @@ import { decideAbOutcome } from '@/lib/campaign-ab'
 // campaigns.total_* is still written and still on disk; it is just no longer
 // what an operator reads. See campaign-display-stats.js for the measurements.
 import { campaignDisplayStats, NO_RECIPIENT_STATS, pct } from '@/lib/campaign-display-stats'
+import { useLocationBrand } from './use-location-brand'
 
 // COMMSFIX.D.1a — the header chip used to be a hardcoded green "Sent" for
 // every campaign, including scheduled/queued/sending/cancelled ones — i.e. it
@@ -96,7 +97,11 @@ function AbVariantRow({ label, subject, stats, isWinner }) {
   )
 }
 
-export default function CampaignDetail({ campaign, recipients = [], stats = null, abStats = null, resendChild = null, resendParent = null, locationId: _locationId, userId: _userId }) {
+export default function CampaignDetail({ campaign, recipients = [], stats = null, abStats = null, resendChild = null, resendParent = null, locationId, userId: _userId }) {
+  // W1.S2 — the From NAME is the operator's or the studio's brand; the
+  // address is the platform's (W1.E2: campaign.from_email never reaches the
+  // wire), so neither surface renders it.
+  const { companyName: brand } = useLocationBrand(locationId)
   const router = useRouter()
   const [tab, setTab] = useState('overview')  // overview, recipients, preview
   // COMMSFIX.D.1b — stop/resend state. `status` is local so the header
@@ -494,11 +499,12 @@ export default function CampaignDetail({ campaign, recipients = [], stats = null
               <div className="grid grid-cols-2 gap-4 text-sm">
                 <div>
                   <span className="text-un1t-muted">From</span>
-                  <p>{campaign.from_name ? `${campaign.from_name} <${campaign.from_email}>` : campaign.from_email || '—'}</p>
+                  <p>{campaign.from_name || brand || '—'}</p>
+                  <p className="text-xs text-un1t-muted">on the platform&apos;s sending address</p>
                 </div>
                 <div>
                   <span className="text-un1t-muted">Reply To</span>
-                  <p>{campaign.reply_to || 'Same as From'}</p>
+                  <p>{campaign.reply_to || 'The studio\'s own address'}</p>
                 </div>
                 <div>
                   <span className="text-un1t-muted">Preview Text</span>
@@ -618,7 +624,7 @@ export default function CampaignDetail({ campaign, recipients = [], stats = null
               <div className="bg-white rounded-lg overflow-hidden shadow-lg">
                 {/* Email header bar */}
                 <div className="bg-gray-100 px-4 py-3 border-b text-xs text-gray-600 space-y-1">
-                  <p><strong>From:</strong> {campaign.from_name || 'UN1T'} &lt;{campaign.from_email || '...'}&gt;</p>
+                  <p><strong>From:</strong> {campaign.from_name || brand || '—'}</p>
                   <p><strong>Subject:</strong> {campaign.subject || '(no subject)'}</p>
                   {campaign.preview_text && <p><strong>Preview:</strong> {campaign.preview_text}</p>}
                 </div>

@@ -5,7 +5,7 @@
 // table, which has no logo_url/company_name columns (mig 004 vs the
 // company_settings table in mig 013). These tests lock that in:
 // branding is sourced from company_settings, and a missing branding
-// row falls back to the neutral "UN1T" wordmark.
+// row renders no wordmark at all (W1.S2: never another gym's name).
 //
 // createServerClient + the Postmark fetch are mocked so we can assert
 // on the composed HtmlBody without standing up Supabase or Postmark.
@@ -101,7 +101,7 @@ describe('sendInvoiceApprovedEmail — branding from company_settings', () => {
     expect(html).toContain('UN1T Stillorgan')
   })
 
-  it('falls back to the UN1T wordmark when no branding row exists (no logo img)', async () => {
+  it('W1.S2 — renders NO wordmark when the brand is unresolved (no logo img, no literal gym name)', async () => {
     vi.mocked(createServerClient).mockReturnValue(mockClient({ companySettings: [] }))
     const fetchMock = stubPostmark()
 
@@ -109,7 +109,8 @@ describe('sendInvoiceApprovedEmail — branding from company_settings', () => {
 
     const html = sentHtml(fetchMock)
     expect(html).not.toContain('<img')
-    expect(html).toContain('UN1T')
+    expect(html).not.toContain('UN1T')
+    expect(html).not.toMatch(/letter-spacing:2px;margin-bottom:16px">\s*</)
   })
 })
 
