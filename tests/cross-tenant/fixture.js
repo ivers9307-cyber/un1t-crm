@@ -116,10 +116,10 @@ export const P_STAFF_B2 = tid('90b2')
 export const P_ORGADMIN_A = tid('9ada')
 export const P_MASTER = tid('9a57')
 
-// Raw bearer tokens. LEGACY_KEY stands in for the shared CRM_API_KEY
-// (tests stub the env to it — unscoped BY DESIGN until n8n migrates);
-// the unitk_ keys resolve against the api_keys rows by real SHA-256.
-export const LEGACY_KEY = 'legacy-shared-crm-key-abcdefabcdefabcdefabcdefabcdefabcdef0123'
+// Raw bearer tokens. The unitk_ keys resolve against the api_keys rows by
+// real SHA-256. RETIRED_SHARED_KEY has the shape of the shared integration
+// key APIKEYS.4 removed; tests stub the old env var to it and expect a 401.
+export const RETIRED_SHARED_KEY = 'abcdef0123456789'.repeat(4)
 export const ORG_A_KEY = 'unitk_' + 'a'.repeat(40)
 export const ORG_B_KEY = 'unitk_' + 'b'.repeat(40)
 

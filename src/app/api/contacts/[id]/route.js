@@ -40,8 +40,8 @@ const ContactUpdateSchema = z.object({
 
 // PUT /api/contacts/:id — Update a contact.
 //
-// Accepts either the n8n API key OR a logged-in manager+. Web UI
-// uses the cookie path; n8n keeps using the bearer token.
+// Accepts either a per-org API key OR a logged-in manager+. Web UI
+// uses the cookie path; integrations use the bearer token.
 export async function PUT(request, props) {
   const params = await props.params;
   const auth = await requireApiKeyOrManager(request)
@@ -55,7 +55,7 @@ export async function PUT(request, props) {
   // HOST-MASTER.6 — automations_exempt is a staff decision. The route has no
   // per-field gating, but its cookie path is Manager+-only AT THE CONTACT
   // (judged below, before any write), so auth.user present ⇒ MANAGER_ROLES
-  // there. API-key callers (auth.user null — n8n / integrations) may not flip
+  // there. API-key callers (auth.user null — integrations) may not flip
   // it: strip rather than 403 so integrations that PUT whole objects keep
   // working.
   if (!auth.user) delete body.automations_exempt
@@ -80,7 +80,7 @@ export async function PUT(request, props) {
   // REVIEWNITS.1 (D5): a failed read is not "no contact". Writing anyway
   // skipped the tag-added sequence trigger in silence and judged the
   // address-change reset without the old address. Nothing is written yet, so
-  // refusing loses nothing and the caller (n8n included) can retry. No row at
+  // refusing loses nothing and the caller (an integration included) can retry. No row at
   // all is a 404 for every caller (detail routes answer 404, not 400), and so
   // is a malformed id (22P02: no such row can exist; a 503 would invite an
   // endless retry).
@@ -92,7 +92,7 @@ export async function PUT(request, props) {
 
   // SECURITY (audit 2026-06-10): the cookie path must be location-
   // scoped. assertRowInOrg above only guards per-org API keys (it
-  // no-ops when orgId is null — the legacy-key and cookie paths), so
+  // no-ops when orgId is null — the cookie path), so
   // without this check a manager at one studio could update any
   // contact at any location/org by id. Mirrors the DELETE handler's
   // guard below; 404 (not 403) so a cross-tenant probe can't confirm
@@ -220,7 +220,7 @@ export async function GET(request, props) {
 
 // DELETE /api/contacts/:id — hard delete + GDPR PII scrub.
 //
-// Uses the cookie auth path (n8n shouldn't be issuing destructive
+// Uses the cookie auth path (integrations shouldn't be issuing destructive
 // deletes — kept off the API-key surface). MANAGER_ROLES (mig 092
 // audit). Mig 094: WhatsApp history no longer blocks the delete —
 // PII (wa_phone, wa_profile_name, message body, media URL) is

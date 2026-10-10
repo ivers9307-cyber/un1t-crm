@@ -69,7 +69,7 @@ export async function GET(request) {
 
   const url = new URL(request.url)
   // The mobile client always sends the studio it is asking about, but fall
-  // back to the caller's active location so a bare hit from the web/n8n side
+  // back to the caller's active location so a bare hit from the web or an integration
   // still means something. No location at all (a master with no active
   // studio selected) is not an error — there is simply no race to report.
   const locationId = url.searchParams.get('location_id') || user.activeLocation?.id || null

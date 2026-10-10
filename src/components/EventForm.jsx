@@ -875,17 +875,17 @@ export default function EventForm({ event, locationId }) {
         )}
       </div>
 
-      {/* Webhook (n8n) */}
+      {/* Webhook */}
       <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
-        <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider">Webhook (n8n)</h3>
+        <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider">Webhook</h3>
         <p className="text-xs text-un1t-subtle">
-          When a booking is made, the CRM will POST the booking details to this URL. Use your n8n webhook URL to trigger automations.
+          When a booking is made, the CRM will POST the booking details to this URL. Use your automation tool's webhook URL to trigger automations.
         </p>
         <input
           type="url"
           value={webhookUrl}
           onChange={e => setWebhookUrl(e.target.value)}
-          placeholder="https://your-n8n.com/webhook/xxxxx"
+          placeholder="https://example.com/webhook/xxxxx"
           className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
         />
       </div>

@@ -126,7 +126,7 @@ export async function PUT(request, props) {
 
   // Owner-self / owner-peer guard. Master is exempt. Defence-in-
   // depth — the UI page gate redirects before the form even
-  // renders, but a hand-crafted PUT (n8n script, curl, etc.)
+  // renders, but a hand-crafted PUT (script, curl, etc.)
   // would otherwise bypass the rule.
   if (!canEditStaffMember(
     { id: user.id, role: user.role, isMaster: user.isMaster, rolesByLocation: user.rolesByLocation },

@@ -1,14 +1,14 @@
 // SAAS-3 — middleware Bearer gate. Before this change the proxy accepted
-// only the legacy shared CRM_API_KEY or a Supabase JWT: per-org `unitk_`
+// only a shared integration key or a Supabase JWT: per-org `unitk_`
 // keys failed both paths, fell through to cookie auth and got redirected
 // to /login — dead on arrival regardless of route-level support. These
-// tests pin all three Bearer paths, including that the legacy key's
-// behaviour is byte-identical (admitted with zero Supabase calls).
+// tests pin both Bearer paths, and (APIKEYS.4) that the retired shared
+// key is refused at the edge even while its old env vars are still set.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   makeFakeDb, twoOrgFixture,
-  GLOBAL_KEY, ORG1_KEY, ORG2_KEY_REVOKED, UNKNOWN_KEY,
+  RETIRED_SHARED_KEY, ORG1_KEY, ORG2_KEY_REVOKED, UNKNOWN_KEY,
 } from './lib/api-auth.test-helpers.js'
 
 let db
@@ -44,10 +44,6 @@ const admitted = (res) => res.headers.get('x-middleware-next') === '1'
 beforeEach(() => {
   vi.clearAllMocks()
   ssrClient.auth.getUser.mockResolvedValue({ data: { user: null } })
-  vi.stubEnv('CRM_API_KEY', GLOBAL_KEY)
-  // W0.1b — the edge admits the legacy key only when it is scoped to an org,
-  // the same condition api-auth.js applies in-route.
-  vi.stubEnv('CRM_API_KEY_ORG_ID', 'org-1')
   vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'http://localhost:54321')
   vi.stubEnv('NEXT_PUBLIC_SUPABASE_ANON_KEY', 'anon-key')
   vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'service-role-key')
@@ -59,19 +55,14 @@ afterEach(() => {
 })
 
 describe('proxy Bearer gate', () => {
-  it('legacy CRM_API_KEY admitted with ZERO Supabase calls when CRM_API_KEY_ORG_ID is set', async () => {
-    const res = await proxy(makeReq({ token: GLOBAL_KEY }))
-    expect(admitted(res)).toBe(true)
-    expect(createServerClient).not.toHaveBeenCalled()
-  })
-
-  // W0.1b — before this the edge admitted the legacy key unconditionally while
-  // api-auth.js refused it without CRM_API_KEY_ORG_ID, so an unset env left the
-  // key through the proxy to 401 in-route (or reach a route with no in-route
-  // key check at all). The two layers now apply the same condition.
-  it('legacy CRM_API_KEY with CRM_API_KEY_ORG_ID unset is NOT admitted at the edge (fail closed)', async () => {
-    vi.stubEnv('CRM_API_KEY_ORG_ID', '')
-    const res = await proxy(makeReq({ token: GLOBAL_KEY }))
+  // APIKEYS.4 — the shared integration key's edge admit is
+  // gone. The old key is just an unknown Bearer: it rides the JWT path,
+  // fails it, and the cookie gate sends it to /login. The old env vars are
+  // deliberately SET, so the refusal proves the proxy no longer reads them.
+  it('the retired shared integration key is NOT admitted, even with both old envs set', async () => {
+    vi.stubEnv('CRM_API_KEY', RETIRED_SHARED_KEY)
+    vi.stubEnv('CRM_API_KEY_ORG_ID', 'org-1')
+    const res = await proxy(makeReq({ token: RETIRED_SHARED_KEY }))
     expect(admitted(res)).toBe(false)
     expect(res.status).toBe(307)
     expect(res.headers.get('location')).toContain('/login')

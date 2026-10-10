@@ -2,7 +2,7 @@
 //
 // WAITLIST.2. PUT /api/deals/[id] already resolves a location-scoped stage and
 // fires the STAGETRIG.1 sequence trigger, but it is gated by
-// authenticateApiKey() (src/lib/api-auth.js) — a Bearer API key, the n8n
+// authenticateApiKey() (src/lib/api-auth.js) — a Bearer per-org API key, the
 // integration path. A browser cannot call it, so it cannot back drag-drop.
 // This is its session-authed sibling.
 //

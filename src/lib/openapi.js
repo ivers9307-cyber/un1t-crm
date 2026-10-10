@@ -248,10 +248,9 @@ registry.registerComponent('securitySchemes', 'BearerAuth', {
   type: 'http',
   scheme: 'bearer',
   description:
-    'API key for n8n / external integrations, sent as `Authorization: Bearer <token>`. ' +
-    'Two kinds are accepted (SAAS-3): a per-organization key (`unitk_…`, issued at ' +
-    '/settings/api-keys) whose queries are scoped to the key\'s organization, or the ' +
-    'legacy shared CRM_API_KEY (scoped to CRM_API_KEY_ORG_ID — one organisation; refused when unset).',
+    'API key for external integrations, sent as `Authorization: Bearer <token>`: a ' +
+    'per-organization key (`unitk_…`, issued at /settings/api-keys) whose queries are ' +
+    'scoped to the key\'s organization.',
 })
 registry.registerComponent('securitySchemes', 'CookieAuth', {
   type: 'apiKey',
@@ -2882,7 +2881,7 @@ registry.registerPath({
   },
 })
 
-// Contacts (Bearer auth — used by n8n)
+// Contacts (Bearer auth — per-org API keys)
 registry.registerPath({
   method: 'get',
   path: '/api/contacts',
@@ -2942,7 +2941,7 @@ registry.registerPath({
 })
 
 // DELBLOCK.1 — DELETE /api/contacts/{id}. Cookie path only (destructive
-// deletes stay off the n8n API-key surface), Manager+ at the contact's
+// deletes stay off the API-key surface), Manager+ at the contact's
 // location. Registered here for the first time because of the 409 below.
 const ContactDeleteBlocker = z.object({
   table: z.string(),
@@ -7175,7 +7174,7 @@ const ShellyToggleBody = ShellyToggleBodyRaw.extend({}).openapi('ShellyToggleBod
   description:
     '"on"/"off" force the relay and write an override; "auto" clears the override and re-runs the schedule '
     + 'immediately — which is why until is optional, since it is meaningless without a state to hold. until '
-    + 'accepts any ISO instant INCLUDING an offset form (Bearer/n8n and mobile JWT callers send those) and is '
+    + 'accepts any ISO instant INCLUDING an offset form (Bearer API-key and mobile JWT callers send those) and is '
     + 'normalised to UTC-Z at the input edge. It defaults to the LOCATION\'s next local midnight, and is bounded '
     + 'by the request\'s own clock rather than by this schema: an instant already past is a 400, and so is '
     + 'anything more than ' + MAX_OVERRIDE_HOURS + ' hours out (further than that is a schedule, not a manual '
@@ -7530,7 +7529,7 @@ registry.registerPath({
   method: 'get',
   path: '/api/shelly/connection',
   tags: ['Automations'],
-  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // Bearer as well as the session cookie: /api routes take a per-org API key and a
   // mobile JWT, and the toggle body's `until` explicitly normalises the offset
   // forms those callers send — documenting cookie-only would have contradicted
   // the schema one screen up.
@@ -7553,7 +7552,7 @@ registry.registerPath({
   method: 'put',
   path: '/api/shelly/connection',
   tags: ['Automations'],
-  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // Bearer as well as the session cookie: /api routes take a per-org API key and a
   // mobile JWT, and the toggle body's `until` explicitly normalises the offset
   // forms those callers send — documenting cookie-only would have contradicted
   // the schema one screen up.
@@ -7608,7 +7607,7 @@ registry.registerPath({
   method: 'delete',
   path: '/api/shelly/connection',
   tags: ['Automations'],
-  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // Bearer as well as the session cookie: /api routes take a per-org API key and a
   // mobile JWT, and the toggle body's `until` explicitly normalises the offset
   // forms those callers send — documenting cookie-only would have contradicted
   // the schema one screen up.
@@ -7632,7 +7631,7 @@ registry.registerPath({
   method: 'get',
   path: '/api/shelly/discover',
   tags: ['Automations'],
-  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // Bearer as well as the session cookie: /api routes take a per-org API key and a
   // mobile JWT, and the toggle body's `until` explicitly normalises the offset
   // forms those callers send — documenting cookie-only would have contradicted
   // the schema one screen up.
@@ -7666,7 +7665,7 @@ registry.registerPath({
   method: 'get',
   path: '/api/shelly/devices',
   tags: ['Automations'],
-  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // Bearer as well as the session cookie: /api routes take a per-org API key and a
   // mobile JWT, and the toggle body's `until` explicitly normalises the offset
   // forms those callers send — documenting cookie-only would have contradicted
   // the schema one screen up.
@@ -7691,7 +7690,7 @@ registry.registerPath({
   method: 'post',
   path: '/api/shelly/devices',
   tags: ['Automations'],
-  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // Bearer as well as the session cookie: /api routes take a per-org API key and a
   // mobile JWT, and the toggle body's `until` explicitly normalises the offset
   // forms those callers send — documenting cookie-only would have contradicted
   // the schema one screen up.
@@ -7746,7 +7745,7 @@ registry.registerPath({
   method: 'patch',
   path: '/api/shelly/devices/{id}',
   tags: ['Automations'],
-  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // Bearer as well as the session cookie: /api routes take a per-org API key and a
   // mobile JWT, and the toggle body's `until` explicitly normalises the offset
   // forms those callers send — documenting cookie-only would have contradicted
   // the schema one screen up.
@@ -7778,7 +7777,7 @@ registry.registerPath({
   method: 'delete',
   path: '/api/shelly/devices/{id}',
   tags: ['Automations'],
-  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // Bearer as well as the session cookie: /api routes take a per-org API key and a
   // mobile JWT, and the toggle body's `until` explicitly normalises the offset
   // forms those callers send — documenting cookie-only would have contradicted
   // the schema one screen up.
@@ -7807,7 +7806,7 @@ registry.registerPath({
   method: 'post',
   path: '/api/shelly/devices/{id}/toggle',
   tags: ['Automations'],
-  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // Bearer as well as the session cookie: /api routes take a per-org API key and a
   // mobile JWT, and the toggle body's `until` explicitly normalises the offset
   // forms those callers send — documenting cookie-only would have contradicted
   // the schema one screen up.
@@ -7852,7 +7851,7 @@ registry.registerPath({
   method: 'post',
   path: '/api/shelly/devices/{id}/run-now',
   tags: ['Automations'],
-  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // Bearer as well as the session cookie: /api routes take a per-org API key and a
   // mobile JWT, and the toggle body's `until` explicitly normalises the offset
   // forms those callers send — documenting cookie-only would have contradicted
   // the schema one screen up.
@@ -7883,7 +7882,7 @@ registry.registerPath({
   method: 'get',
   path: '/api/shelly/devices/{id}/energy',
   tags: ['Automations'],
-  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // Bearer as well as the session cookie: /api routes take a per-org API key and a
   // mobile JWT, and the toggle body's `until` explicitly normalises the offset
   // forms those callers send — documenting cookie-only would have contradicted
   // the schema one screen up.
@@ -7912,7 +7911,7 @@ registry.registerPath({
   method: 'post',
   path: '/api/shelly/refresh',
   tags: ['Automations'],
-  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // Bearer as well as the session cookie: /api routes take a per-org API key and a
   // mobile JWT, and the toggle body's `until` explicitly normalises the offset
   // forms those callers send — documenting cookie-only would have contradicted
   // the schema one screen up.
@@ -7941,7 +7940,7 @@ registry.registerPath({
   method: 'post',
   path: '/api/shelly/sync-names',
   tags: ['Automations'],
-  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // Bearer as well as the session cookie: /api routes take a per-org API key and a
   // mobile JWT, and the toggle body's `until` explicitly normalises the offset
   // forms those callers send — documenting cookie-only would have contradicted
   // the schema one screen up.
@@ -10065,9 +10064,8 @@ function buildSpec() {
       version: '1.1.0',
       description:
         'HTTP API for the Repset gym CRM. Most endpoints accept either a Supabase ' +
-        'session cookie (browser) or a Bearer token for n8n / external integrations — ' +
-        'a per-organization `unitk_…` API key (org-scoped) or the legacy shared ' +
-        'CRM_API_KEY (scoped to CRM_API_KEY_ORG_ID — one organisation; refused when unset). Mutating endpoints validate request bodies via Zod schemas; ' +
+        'session cookie (browser) or a Bearer token for external integrations — ' +
+        'a per-organization `unitk_…` API key (org-scoped). Mutating endpoints validate request bodies via Zod schemas; ' +
         'invalid input returns 400 with structured `issues` array.' +
         ' Covers the public, inbound-webhook, bridge and mobile integration surface; planned outbound events appear under webhooks.',
     },

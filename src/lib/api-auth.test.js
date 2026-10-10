@@ -6,7 +6,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   makeFakeDb, twoOrgFixture,
-  GLOBAL_KEY, ORG1_KEY, ORG2_KEY_REVOKED, UNKNOWN_KEY,
+  RETIRED_SHARED_KEY, ORG1_KEY, ORG2_KEY_REVOKED, UNKNOWN_KEY,
 } from './api-auth.test-helpers.js'
 
 let db
@@ -28,8 +28,6 @@ let tables
 
 beforeEach(() => {
   vi.clearAllMocks()
-  vi.stubEnv('CRM_API_KEY', GLOBAL_KEY)
-  vi.stubEnv('CRM_API_KEY_ORG_ID', 'org-1')
   tables = twoOrgFixture()
   db = makeFakeDb(tables)
 })
@@ -39,14 +37,13 @@ afterEach(() => {
 })
 
 describe('authenticateApiKey', () => {
-  it('legacy shared CRM_API_KEY → ok, scoped to CRM_API_KEY_ORG_ID (W0.1)', async () => {
-    const auth = await authenticateApiKey(req(GLOBAL_KEY))
-    expect(auth).toEqual({ ok: true, orgId: 'org-1', legacy: true })
-  })
-
-  it('legacy shared key with CRM_API_KEY_ORG_ID unset → 401 (fail closed)', async () => {
-    vi.stubEnv('CRM_API_KEY_ORG_ID', '')
-    const auth = await authenticateApiKey(req(GLOBAL_KEY))
+  // APIKEYS.4 — the shared integration key's path was removed. The
+  // old env vars are deliberately SET here (Vercel's copies are unset only
+  // after the deploy), so the refusal proves the code no longer reads them.
+  it('APIKEYS.4 — the retired shared key is refused (401) even with both old envs set', async () => {
+    vi.stubEnv('CRM_API_KEY', RETIRED_SHARED_KEY)
+    vi.stubEnv('CRM_API_KEY_ORG_ID', 'org-1')
+    const auth = await authenticateApiKey(req(RETIRED_SHARED_KEY))
     expect(auth.ok).toBe(false)
     expect(auth.response.status).toBe(401)
   })
@@ -54,9 +51,7 @@ describe('authenticateApiKey', () => {
   it('active per-org key → ok with the key\'s organization', async () => {
     const auth = await authenticateApiKey(req(ORG1_KEY))
     expect(auth.ok).toBe(true)
-    expect(auth.orgId).toBe('org-1')
-    expect(auth.legacy).toBe(false)
-    expect(auth.keyId).toBe('key-1')
+    expect(auth).toEqual({ ok: true, orgId: 'org-1', keyId: 'key-1' })
   })
 
   it('revoked per-org key → 401', async () => {
@@ -85,18 +80,13 @@ describe('requireApiKeyOrManager', () => {
     expect(getCurrentUser).not.toHaveBeenCalled()
   })
 
-  it('legacy shared key → ok, scoped to CRM_API_KEY_ORG_ID', async () => {
-    const auth = await requireApiKeyOrManager(req(GLOBAL_KEY))
-    expect(auth).toEqual({ ok: true, user: null, orgId: 'org-1' })
-    expect(getCurrentUser).not.toHaveBeenCalled()
-  })
-
-  it('legacy shared key with CRM_API_KEY_ORG_ID unset → 401, no cookie fallback (fail closed)', async () => {
-    vi.stubEnv('CRM_API_KEY_ORG_ID', '')
-    const auth = await requireApiKeyOrManager(req(GLOBAL_KEY))
+  it('APIKEYS.4 — the retired shared key is no credential: falls through to cookie auth and 401s', async () => {
+    vi.stubEnv('CRM_API_KEY', RETIRED_SHARED_KEY)
+    vi.stubEnv('CRM_API_KEY_ORG_ID', 'org-1')
+    const auth = await requireApiKeyOrManager(req(RETIRED_SHARED_KEY))
     expect(auth.ok).toBe(false)
     expect(auth.response.status).toBe(401)
-    expect(getCurrentUser).not.toHaveBeenCalled()
+    expect(getCurrentUser).toHaveBeenCalled()
   })
 
   it('revoked per-org key falls through to cookie auth and 401s', async () => {
@@ -166,7 +156,7 @@ describe('orgScopeLocationIds', () => {
     expect(await orgScopeLocationIds(db, 'org-empty')).toEqual(['00000000-0000-0000-0000-000000000000'])
   })
 
-  it('falsy orgId → null (legacy key / cookie callers stay unfiltered)', async () => {
+  it('falsy orgId → null (cookie callers stay unfiltered)', async () => {
     expect(await orgScopeLocationIds(db, null)).toBeNull()
   })
 
@@ -194,7 +184,7 @@ describe('assertRowInOrg', () => {
     expect(res.status).toBe(404)
   })
 
-  it('no-op when orgId is falsy (legacy key)', async () => {
+  it('no-op when orgId is falsy (cookie callers)', async () => {
     expect(await assertRowInOrg({ db, orgId: null, table: 'bookings', id: 'b2' })).toBeNull()
   })
 })

@@ -5,7 +5,7 @@
 //   - 'send'     → status 'queued'  (the run-campaigns cron sends it, exactly
 //                  like POST /api/campaigns/[id]/send — untouched send path)
 //   - 'schedule' → status 'scheduled' + scheduled_at (cron promotes at the time)
-// (The existing POST /api/campaigns is Bearer-only for n8n; this is the browser
+// (The existing POST /api/campaigns is Bearer-only (per-org API key); this is the browser
 // session path, mirroring how CampaignEditor creates campaigns.)
 import { z } from 'zod'
 import { NextResponse } from 'next/server'

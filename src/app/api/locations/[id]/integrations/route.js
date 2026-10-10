@@ -14,7 +14,7 @@ const IntegrationsUpdateSchema = z.object({
 })
 
 // N8NECHO.1: the PUT answers with its slices masked, so a caller that sends
-// that answer back (n8n often does) would store SECRET_MASK over the live
+// that answer back (integrations often do) would store SECRET_MASK over the live
 // Glofox credentials, and syncConnectionFromLegacy would copy the mask into
 // channel_connections. For every secret-named key whose incoming value is a
 // string that is not fresh (blank, or the shared '••' mask), keep what is
@@ -32,7 +32,7 @@ function keepStoredSecrets(incoming, stored) {
 }
 
 // GET /api/locations/[id]/integrations — Get integration credentials for a location
-// Used by n8n to fetch Glofox API keys, webhook URLs, etc. per location
+// Used by API-key integrations to fetch Glofox API keys, webhook URLs, etc. per location
 export async function GET(request, props) {
   const params = await props.params;
   const auth = await authenticateApiKey(request)
@@ -54,7 +54,7 @@ export async function GET(request, props) {
   }
 
   // INTEG-A2 dual-read: registry glofox row replaces settings.glofox
-  // when present, so n8n sees the same config the app reads.
+  // when present, so a keyed caller sees the same config the app reads.
   const overlaid = await overlayConnections(db, data, ['glofox'])
 
   // Return integration settings (glofox, etc.)
@@ -82,7 +82,7 @@ export async function PUT(request, props) {
   const db = createServerClient()
 
   // Get current settings. N8NECHO.1: the error is read, not discarded. A
-  // failed read used to answer "Location not found", which n8n cannot tell
+  // failed read used to answer "Location not found", which a caller cannot tell
   // from a wrong id.
   const { data: location, error: readError } = await db
     .from('locations')
@@ -141,7 +141,7 @@ export async function PUT(request, props) {
   // N8NECHO.1: never echo the row. It carried the Sensibo key, the ThinQ
   // PAT, every settings credential and the customer agent's test phones back
   // to a caller that had only just sent two slices. Return exactly those two,
-  // under the old key paths (an n8n node reading data.settings.glofox.branch_id
+  // under the old key paths (an integration reading data.settings.glofox.branch_id
   // keeps working), with every secret-named key masked (mig 647's rule). The
   // GET above still serves the values to the key holder, by design.
   const settings = data?.settings || {}

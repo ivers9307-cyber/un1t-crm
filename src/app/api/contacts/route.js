@@ -25,7 +25,7 @@ const ContactCreateSchema = z.object({
 
 // POST /api/contacts — Create a contact.
 //
-// Originally a pipedrive-replacement n8n endpoint (API-key only).
+// Originally a pipedrive-replacement integration endpoint (API-key only).
 // Now also callable from the web UI (manager+ via cookie). Web
 // callers default location_id to their active location if they
 // didn't provide one.
@@ -37,7 +37,7 @@ export async function POST(request) {
   if (!validation.ok) return validation.response
   const body = validation.data
   // Web callers usually omit location_id — fall back to their
-  // active location. n8n callers always supply it explicitly.
+  // active location. API-key callers always supply it explicitly.
   if (!body.location_id && auth.user?.activeLocation?.id) {
     body.location_id = auth.user.activeLocation.id
   }
@@ -67,8 +67,7 @@ export async function POST(request) {
   const db = createServerClient()
 
   // APIKEYS.3 — a per-org key may only create contacts at a location
-  // within its organization. Since W0.1 the legacy shared key carries an
-  // orgId too (CRM_API_KEY_ORG_ID); only cookie managers have orgId null.
+  // within its organization. Only cookie managers have orgId null.
   if (auth.orgId) {
     if (!body.location_id) {
       return NextResponse.json({ success: false, error: 'location_id required' }, { status: 400 })
@@ -153,7 +152,7 @@ export async function POST(request) {
     ).catch(err => console.error('[contacts] push failed', err))
   }
 
-  // Return in a shape similar to Pipedrive for easy n8n migration
+  // Return in a shape similar to Pipedrive (the original integration contract)
   return NextResponse.json({ success: true, data })
 }
 
@@ -170,9 +169,8 @@ export async function GET(request) {
   let query = db.from('contacts').select('*')
 
   // APIKEYS.3 — per-org key: restrict to the org's own locations so a
-  // leaked key can't read another org's contacts. Since W0.1 the legacy
-  // shared key is scoped the same way (CRM_API_KEY_ORG_ID); only a cookie
-  // session has orgId null here.
+  // leaked key can't read another org's contacts. Only a cookie session
+  // has orgId null here.
   if (auth.orgId) {
     const locIds = await orgLocationIds(db, auth.orgId)
     // Empty org → match nothing (sentinel uuid) rather than everything.
@@ -185,7 +183,7 @@ export async function GET(request) {
 
   // Filters
   // Accepts ?lead_status= or ?pipeline_stage_slug= for the canonical
-  // stage slug (CLASSIFY.2 — old name kept as alias for n8n/back-compat).
+  // stage slug (CLASSIFY.2 — old name kept as alias for back-compat).
   const status = searchParams.get('pipeline_stage_slug') || searchParams.get('lead_status')
   if (status) query = query.eq('pipeline_stage_slug', status)
 

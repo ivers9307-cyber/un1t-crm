@@ -376,7 +376,7 @@ export const SETTINGS_TREE = [
         id: 'api-keys',
         label: 'API keys',
         href: '/settings/api-keys',
-        description: 'Create and revoke keys for programmatic access (n8n and other integrations).',
+        description: 'Create and revoke keys for programmatic access (integrations).',
         icon: KeyRound,
         // Mirrors the page's own gate exactly (C18 ORGROLE.1: org admins).
         gate: { orgAdmin: true },

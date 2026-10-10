@@ -3,12 +3,12 @@
 // any member of the studio do). A cookie caller creates only as a master or
 // with MANAGER_ROLES at body.location_id — canManageEventType, the rule the
 // New page, the Edit/Delete buttons and the [id] route already use. The
-// API-key paths are org-gated by assertCreateInOrg (since W0.1 the legacy
-// key too, scoped to CRM_API_KEY_ORG_ID). api-auth + validate are real;
+// per-org API-key path is org-gated by assertCreateInOrg; the retired
+// shared integration key is refused (APIKEYS.4). api-auth + validate are real;
 // only supabase/getCurrentUser are faked.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { makeFakeDb, twoOrgFixture, GLOBAL_KEY } from '@/lib/api-auth.test-helpers.js'
+import { makeFakeDb, twoOrgFixture, ORG1_KEY, RETIRED_SHARED_KEY } from '@/lib/api-auth.test-helpers.js'
 
 let db
 let tables
@@ -29,9 +29,9 @@ const STUDIO_B = 'b2000000-0000-4000-8000-0000000000b2'
 const cookiePost = (body) => new Request('http://localhost/api/bookings/event-types', {
   method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' },
 })
-const keyPost = (body) => new Request('http://localhost/api/bookings/event-types', {
+const keyPost = (body, key = ORG1_KEY) => new Request('http://localhost/api/bookings/event-types', {
   method: 'POST', body: JSON.stringify(body),
-  headers: { 'Content-Type': 'application/json', authorization: `Bearer ${GLOBAL_KEY}` },
+  headers: { 'Content-Type': 'application/json', authorization: `Bearer ${key}` },
 })
 
 const at = (role, ...locationIds) => ({
@@ -64,8 +64,6 @@ const FORM_BODY = {
 }
 
 beforeEach(() => {
-  vi.stubEnv('CRM_API_KEY', GLOBAL_KEY)
-  vi.stubEnv('CRM_API_KEY_ORG_ID', 'org-1') // W0.1 — legacy key = org-1's key
   getCurrentUser.mockResolvedValue(null)
   tables = twoOrgFixture()
   tables.locations.push({ id: STUDIO_A, organization_id: 'org-1' }, { id: STUDIO_B, organization_id: 'org-2' })
@@ -127,8 +125,14 @@ describe('POST /api/bookings/event-types — cookie caller (EVENTTYPERLS.1)', ()
   })
 })
 
-describe('POST /api/bookings/event-types — API-key path (W0.1: the legacy key is org-scoped)', () => {
-  it('the legacy key creates at a studio in CRM_API_KEY_ORG_ID without confirmation keys (column defaults kept)', async () => {
+describe('POST /api/bookings/event-types — API-key path (per-org key, org-scoped)', () => {
+  it('the retired shared key → 401, nothing created (APIKEYS.4)', async () => {
+    const res = await POST(keyPost({ name: 'Intro Call', location_id: STUDIO_A }, RETIRED_SHARED_KEY))
+    expect(res.status).toBe(401)
+    expect(tables.event_types).toHaveLength(0)
+  })
+
+  it('a per-org key creates at a studio in its org without confirmation keys (column defaults kept)', async () => {
     const res = await POST(keyPost({ name: 'Intro Call', location_id: STUDIO_A }))
     expect(res.status).toBe(200)
     expect(tables.event_types).toHaveLength(1)
@@ -138,14 +142,14 @@ describe('POST /api/bookings/event-types — API-key path (W0.1: the legacy key 
     expect('confirmation_channels' in row).toBe(false)
   })
 
-  it('the legacy key without a location → 400, nothing created (an org-scoped key needs a target studio)', async () => {
+  it('a per-org key without a location → 400, nothing created (an org-scoped key needs a target studio)', async () => {
     const res = await POST(keyPost({ name: 'Intro Call' }))
     expect(res.status).toBe(400)
     expect(await res.json()).toEqual({ success: false, error: 'location_id required for org-scoped key' })
     expect(tables.event_types).toHaveLength(0)
   })
 
-  it('the legacy key creating at another org\'s studio → 403, nothing created', async () => {
+  it('a per-org key creating at another org\'s studio → 403, nothing created', async () => {
     const res = await POST(keyPost({ name: 'Intro Call', location_id: STUDIO_B }))
     expect(res.status).toBe(403)
     expect(tables.event_types).toHaveLength(0)
