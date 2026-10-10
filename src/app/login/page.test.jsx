@@ -250,6 +250,26 @@ describe('/login — password sign-in by a deactivated person', () => {
   })
 })
 
+describe('/login — wordmark (W1.S2)', () => {
+  it('says the platform name, never a gym, when no branding resolves', async () => {
+    render(<LoginPage />)
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledWith('/api/public/branding'))
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Repset')
+    expect(document.body.textContent).not.toContain('UN1T')
+  })
+
+  it('says the configured brand when one resolves', async () => {
+    global.fetch = vi.fn(async (url) => {
+      if (String(url).includes('/api/public/branding')) {
+        return { ok: true, json: async () => ({ success: true, data: { company_name: 'Example Gym', logo_url: null } }) }
+      }
+      return { ok: true, json: async () => ({ success: false }) }
+    })
+    render(<LoginPage />)
+    await screen.findByRole('heading', { level: 1, name: 'Example Gym' })
+  })
+})
+
 describe('copy', () => {
   it('is calm, tells them what to do, and carries no em-dash', () => {
     expect(DEACTIVATED_MESSAGE).toBe('This account has been deactivated. Ask an owner to reactivate it.')

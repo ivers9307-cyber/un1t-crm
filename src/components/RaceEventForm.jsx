@@ -32,6 +32,8 @@ import Link from 'next/link'
 import { toSlug } from '@/lib/slug'
 import { compressImageForUpload, parseUploadResponse } from '@/lib/landing-media-upload'
 import { generateWaveTimes } from '@/lib/wave-generate'
+import { PLATFORM_NAME } from '@/lib/brand-name'
+import { useLocationBrand } from './use-location-brand'
 
 const ALL_SIZES = [1, 2, 3, 4, 5, 6, 8]
 
@@ -143,6 +145,10 @@ const kindMeta = (k) => KINDS.find((x) => x.value === k) || KINDS[0]
 export default function RaceEventForm({ race, locationId }) {
   const router = useRouter()
   const isEditing = !!race
+  // W1.S2 — the studio's brand names its members and its events; the platform
+  // (Revolut rail, booking fee) is named by PLATFORM_NAME.
+  const { companyName: brand } = useLocationBrand(locationId)
+  const memberNoun = brand ? `${brand} members` : 'members'
 
   const [kind, setKind] = useState(race?.kind || 'race')
   const meta = kindMeta(kind)
@@ -317,10 +323,10 @@ export default function RaceEventForm({ race, locationId }) {
   // for the welcome sequence. Default off — operator opts in per
   // event.
   const [createInGlofox, setCreateInGlofox] = useState(!!race?.create_in_glofox)
-  // EVENTS-HOST.4 — payout routing. '' = internal UN1T event (settled via
+  // EVENTS-HOST.4 — payout routing. '' = internal event (settled via
   // Revolut, the default); a host id = pay that third-party host directly
   // via Stripe Connect. Hosts are org-scoped and fetched on mount; a fetch
-  // failure just leaves the list empty (operator keeps the UN1T default).
+  // failure just leaves the list empty (operator keeps the internal default).
   const [hostId, setHostId] = useState(race?.host_id || '')
   const [hosts, setHosts] = useState([])
   useEffect(() => {
@@ -334,10 +340,10 @@ export default function RaceEventForm({ race, locationId }) {
     return () => { cancelled = true }
   }, [])
   // EVENTS-HOST.4 — only third-party (stripe_connect) hosts are selectable
-  // payees; a Revolut/UN1T host is the implicit default (host_id '').
+  // payees; a Revolut/internal host is the implicit default (host_id '').
   const stripeHosts = hosts.filter((h) => h.payment_provider === 'stripe_connect')
   const selectedHost = stripeHosts.find((h) => h.id === hostId) || null
-  // EVENT-COMMS-LOC (mig 553) — for host events, which real UN1T location's
+  // EVENT-COMMS-LOC (mig 553) — for host events, which real studio location's
   // email identity this event's confirmation/reminder emails use. Host events
   // sit on a sender-less per-host anchor location, so this override is only surfaced when hostId is set. Options
   // are the org's real (non-anchor) locations, fetched per event location —
@@ -550,7 +556,7 @@ export default function RaceEventForm({ race, locationId }) {
       member_pricing_enabled: memberPricingEnabled,
       members_only: membersOnly,
       shared,
-      // EVENTS-HOST.4 — payout routing. '' → null = internal UN1T (Revolut).
+      // EVENTS-HOST.4 — payout routing. '' → null = internal (Revolut).
       host_id: hostId || null,
       // EVENT-COMMS-LOC (mig 553) — '' → null = resolved at send time
       // (host event → org master location; normal event → its own location).
@@ -1070,7 +1076,7 @@ export default function RaceEventForm({ race, locationId }) {
         <p className="text-[11px] text-un1t-subtle -mt-2">
           Per-person pricing. Mixed groups pay each head at their own rate (e.g. 2 members + 2
           non-members on a 4-{meta.value === 'race' ? 'person team' : 'spot group'} = 2 × member fee + 2 × non-member fee). Leave a fee blank
-          to make that category free. UN1T members are matched by the email on their member account.
+          to make that category free. {brand ? `${brand} members` : 'Members'} are matched by the email on their member account.
         </p>
 
         {/* EVENTS-HOST.4 — payout routing: who gets paid for this event */}
@@ -1078,7 +1084,7 @@ export default function RaceEventForm({ race, locationId }) {
           <label className="block text-sm text-un1t-subtle mb-1">Who gets paid</label>
           {stripeHosts.length === 0 ? (
             <p className="text-[11px] text-un1t-muted">
-              UN1T (settles via Revolut). Add a third-party host in{' '}
+              {PLATFORM_NAME} (settles via Revolut). Add a third-party host in{' '}
               <Link href="/settings/hosts" className="text-un1t-text underline">Settings → Event hosts</Link>{' '}
               to pay someone else directly.
             </p>
@@ -1089,7 +1095,7 @@ export default function RaceEventForm({ race, locationId }) {
                 onChange={(e) => setHostId(e.target.value)}
                 className="w-full max-w-md bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
               >
-                <option value="">UN1T (settles via Revolut)</option>
+                <option value="">{PLATFORM_NAME} (settles via Revolut)</option>
                 {stripeHosts.map((h) => (
                   <option key={h.id} value={h.id}>
                     {h.name}{h.charges_enabled ? '' : ' — Stripe not connected'}
@@ -1098,11 +1104,11 @@ export default function RaceEventForm({ race, locationId }) {
               </select>
               {selectedHost ? (
                 <p className="text-[11px] text-un1t-muted mt-1">
-                  Tickets settle to {selectedHost.name}&apos;s own Stripe account, with UN1T&apos;s €{(((selectedHost.platform_fee_cents ?? 0)) / 100).toFixed(2)} booking fee added per ticket.
+                  Tickets settle to {selectedHost.name}&apos;s own Stripe account, with {PLATFORM_NAME}&apos;s €{(((selectedHost.platform_fee_cents ?? 0)) / 100).toFixed(2)} booking fee added per ticket.
                 </p>
               ) : (
                 <p className="text-[11px] text-un1t-muted mt-1">
-                  UN1T event — ticket money settles to UN1T via Revolut.
+                  {brand ? `${brand} event` : 'Internal event'} — ticket money settles to {PLATFORM_NAME} via Revolut.
                 </p>
               )}
               {selectedHost && !selectedHost.charges_enabled && (
@@ -1133,7 +1139,7 @@ export default function RaceEventForm({ race, locationId }) {
 
         <div className="flex items-center justify-between gap-3 pt-2 border-t border-un1t-border">
           <div>
-            <div className="text-sm text-un1t-text">Different pricing for UN1T members</div>
+            <div className="text-sm text-un1t-text">Different pricing for {memberNoun}</div>
             <div className="text-[11px] text-un1t-subtle">When on, the signup form validates member emails and applies the member rate per verified head.</div>
           </div>
           <button
@@ -1365,8 +1371,8 @@ export default function RaceEventForm({ race, locationId }) {
 
           {/* EVENT-COMMS-LOC (mig 553) — host events sit on a sender-less
               per-host anchor location, so their texts/emails need a real
-              UN1T location's identity to send from. Hidden for internal
-              UN1T events (hostId empty) — those already send from their
+              studio location's identity to send from. Hidden for internal
+              events (hostId empty) — those already send from their
               own location. */}
           {hostId && (
             <div className="pb-1">
@@ -1381,7 +1387,7 @@ export default function RaceEventForm({ race, locationId }) {
                 ))}
               </select>
               <p className="text-[11px] text-un1t-muted mt-1">
-                Which UN1T location&apos;s email identity this event&apos;s emails use.
+                Which {brand ? `${brand} ` : ''}location&apos;s email identity this event&apos;s emails use.
               </p>
             </div>
           )}
