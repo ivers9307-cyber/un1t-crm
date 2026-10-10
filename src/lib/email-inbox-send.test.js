@@ -17,6 +17,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('./tenant-email', () => ({ resolveEmailSender: vi.fn() }))
 vi.mock('./supabase', () => ({ createServerClient: vi.fn(() => ({ __service: true })) }))
+// W1.E2 — the fallback From carries the location's brand. Unbranded by
+// default (companyName '') so the existing wire assertions read PLATFORM_NAME.
+vi.mock('./location-branding', () => ({ getLocationBranding: vi.fn(async () => ({ companyName: '', shortName: '', companyNameConfigured: false, logoUrl: null, faviconUrl: null })) }))
+import { getLocationBranding } from './location-branding.js'
 // MAILBOX-CONNECT.7 — the SMTP transport is MOCKED here, and only here.
 // sendConversationEmail calls sendViaSmtp with production arguments and no test seam
 // (deliberately: the seam belongs to the module that owns the socket, not to
@@ -46,7 +50,10 @@ import { sendViaSmtp } from './mail/smtp-send.js'
 
 const INBOX_TOKEN = 'ticketing-server-token'
 const MARKETING_TOKEN = 'marketing-server-token'
-const GLOBAL_FROM = 'UN1T <hello@un1t.ie>'
+// W1.E2 — the env holds the platform ADDRESS only; the fallback From puts
+// PLATFORM_NAME (no brand resolved) or the location's brand on it.
+const PLATFORM_ADDRESS = 'hello@platform.test'
+const GLOBAL_FROM = 'Repset <hello@platform.test>'
 const HATCH = 'accounts@hatchstreetfitness.com'
 // A domain the business does not control — it can never be DKIM-verified, so
 // Postmark refuses it at submit time. Named after the real case.
@@ -91,7 +98,7 @@ beforeEach(() => {
   _resetInboxSenderCache()
   process.env.POSTMARK_EMAIL_INBOX_SERVER_TOKEN = INBOX_TOKEN
   process.env.POSTMARK_API_KEY = MARKETING_TOKEN
-  process.env.POSTMARK_FROM_EMAIL = GLOBAL_FROM
+  process.env.POSTMARK_FROM_EMAIL = PLATFORM_ADDRESS
   delete process.env.POSTMARK_EMAIL_INBOX_STREAM
   vi.spyOn(console, 'error').mockImplementation(() => {})
   vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -480,15 +487,41 @@ describe('plannedFroms (pure)', () => {
   })
 })
 
-describe('fallbackFromAddress', () => {
-  it('is POSTMARK_FROM_EMAIL', () => {
-    expect(fallbackFromAddress()).toBe(GLOBAL_FROM)
+describe('fallbackFromAddress (W1.E2 — the brand on the platform address)', () => {
+  it('is PLATFORM_NAME on POSTMARK_FROM_EMAIL when no location is known', async () => {
+    expect(await fallbackFromAddress({ __service: true }, null)).toBe(GLOBAL_FROM)
+    expect(getLocationBranding).not.toHaveBeenCalled()
   })
 
-  it('mirrors sendEmail’s own last-resort default when that is unset', () => {
+  it('is the location’s brand on POSTMARK_FROM_EMAIL', async () => {
+    getLocationBranding.mockResolvedValueOnce({ companyName: 'Gym A', shortName: 'Gym A', companyNameConfigured: true, logoUrl: null, faviconUrl: null })
+    expect(await fallbackFromAddress({ __service: true }, 'loc-1')).toBe('Gym A <hello@platform.test>')
+    expect(getLocationBranding).toHaveBeenCalledWith({ __service: true }, 'loc-1')
+  })
+
+  it("never takes the env's own display name, and is null (no invented address) when the env is unset", async () => {
+    process.env.POSTMARK_FROM_EMAIL = 'UN1T <hello@platform.test>'
+    expect(await fallbackFromAddress({ __service: true }, null)).toBe(GLOBAL_FROM)
     delete process.env.POSTMARK_FROM_EMAIL
-    expect(fallbackFromAddress()).toBe('UN1T <hello@un1t.ie>')
-    process.env.POSTMARK_FROM_EMAIL = GLOBAL_FROM
+    expect(await fallbackFromAddress({ __service: true }, null)).toBeNull()
+    process.env.POSTMARK_FROM_EMAIL = PLATFORM_ADDRESS
+  })
+
+  it('sendConversationEmail degrades to the LOCATION’s brand on the platform address (locationId, else the mailbox’s studio)', async () => {
+    getLocationBranding.mockResolvedValue({ companyName: 'Hatch Street Fitness', shortName: '', companyNameConfigured: true, logoUrl: null, faviconUrl: null })
+    fetchSpy = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(signatureRejection())
+      .mockResolvedValueOnce(okResponse())
+    const verdict = await sendConversationEmail({ ...SEND, mailboxAddress: STILLORGAN, mailbox: { address: STILLORGAN, location_id: 'loc-mb' }, locationId: 'loc-conv' })
+    expect(verdict.ok).toBe(true)
+    expect(verdict.fromEmail).toBe('Hatch Street Fitness <hello@platform.test>')
+    expect(bodyOf(fetchSpy.mock.calls[1]).From).toBe('Hatch Street Fitness <hello@platform.test>')
+    expect(getLocationBranding).toHaveBeenCalledWith(expect.anything(), 'loc-conv')
+
+    getLocationBranding.mockClear()
+    fetchSpy.mockResolvedValueOnce(signatureRejection()).mockResolvedValueOnce(okResponse())
+    await sendConversationEmail({ ...SEND, mailboxAddress: HATCH, mailbox: { address: HATCH, location_id: 'loc-mb' } })
+    expect(getLocationBranding).toHaveBeenCalledWith(expect.anything(), 'loc-mb')
   })
 })
 
