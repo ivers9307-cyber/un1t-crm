@@ -9,14 +9,16 @@
 // always 409.
 
 import { useState } from 'react'
+import { PLATFORM_NAME } from '@/lib/brand-name'
 
-export default function HostEventActions({ eventId, status, hasRegistrations }) {
+// brandName (W1.S1c): the host's organisation, resolved by the server page.
+export default function HostEventActions({ eventId, status, hasRegistrations, brandName = PLATFORM_NAME }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
 
   async function takeOffSale() {
     if (busy) return
-    if (!window.confirm('Take this event off sale? Existing attendees keep their tickets — this only stops new sales. Putting it back on sale needs UN1T approval again.')) return
+    if (!window.confirm(`Take this event off sale? Existing attendees keep their tickets; this only stops new sales. Putting it back on sale needs ${brandName} approval again.`)) return
     setBusy(true)
     setError(null)
     try {
