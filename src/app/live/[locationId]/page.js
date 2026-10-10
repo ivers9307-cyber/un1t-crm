@@ -48,10 +48,35 @@ export default async function LiveClassPage(props) {
 
   if (!location) notFound()
 
+  // LIVE-TVBTN.1 — the "TV display" link. W0.9c removed the location-keyed
+  // /tv/<locationId> board, so the studio board is now /tv/live/<token> and
+  // the token lives on tv_displays. Load the location's oldest ACTIVE display
+  // here (the same `active` fence /api/public/tv-live/[token] applies; an
+  // inactive row's token 404s there). Scoped by the location the gate above
+  // already admitted — a caller who cannot see this location never reaches
+  // this query, so a token is never handed to anyone outside it. No active
+  // display → null → the client renders no link (never a dead one). The link
+  // is a preview, so the client builds it WITHOUT ?kiosk=1 / ?device= (a
+  // staff tab must not stamp a kiosk render heartbeat).
+  const { data: displays, error: displaysError } = await db
+    .from('tv_displays')
+    .select('token')
+    .eq('location_id', locationId)
+    .eq('active', true)
+    .order('created_at', { ascending: true })
+    .order('label', { ascending: true })
+    .limit(1)
+  if (displaysError) {
+    // The board must still render without its TV link.
+    console.error('[live] tv_displays lookup failed', displaysError.message)
+  }
+  const tvToken = displays?.[0]?.token || null
+
   return (
     <LiveClassClient
       locationId={locationId}
       locationName={location.name}
+      tvToken={tvToken}
       // GATES-2 — End, Pair, test mode and Claim call routes that also need a
       // coach role here (LIVE_MUTATION_ROLES); nobody else is shown them.
       canMutate={canMutateLiveAt(user, locationId)}
