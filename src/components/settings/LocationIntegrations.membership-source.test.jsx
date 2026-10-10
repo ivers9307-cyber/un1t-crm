@@ -25,6 +25,7 @@ vi.mock('next/navigation', () => ({
 }))
 
 import LocationIntegrations from './LocationIntegrations.jsx'
+import { membershipSettingsHref } from '@/lib/membership/state-for-page'
 
 const LOC_ID = 'a0000000-0000-4000-8000-000000000001'
 const LOC = { id: LOC_ID, name: 'Synthetic Studio', features: {}, settings: {}, membership_source: 'none' }
@@ -169,5 +170,23 @@ describe('LocationIntegrations — the Glofox tab reads the membership-source ST
     )
     const tab = glofoxTab()
     expect(tab.querySelector('.text-green-500')).toBeNull()
+  })
+})
+
+// W1.M3a — the gate's "Choose one in settings" link is membershipSettingsHref()
+// (?section=integrations&tab=glofox). On a 'none' studio with no Glofox
+// footprint the Glofox TAB is not offered at all, so the link must still find
+// the card: it renders above the tab strip whatever ?tab= resolves to.
+describe('LocationIntegrations — the membershipSettingsHref landing', () => {
+  it("a 'none' studio with no Glofox tab: ?tab=glofox still shows the Membership source card", () => {
+    const query = new URL(membershipSettingsHref(LOC_ID), 'http://localhost').searchParams
+    expect(query.get('section')).toBe('integrations')
+    // The next/navigation mock above serves exactly this ?tab=.
+    expect(query.get('tab')).toBe('glofox')
+    render(<LocationIntegrations location={LOC} xeroConnection={null} user={OWNER_HERE} membershipSource={{ source: 'none', state: 'none' }} />)
+    expect(screen.queryByRole('button', { name: /^Glofox/ })).toBeNull()
+    const select = screen.getByRole('combobox', { name: /membership source/i })
+    expect(select.value).toBe('none')
+    expect(select.disabled).toBe(false)
   })
 })

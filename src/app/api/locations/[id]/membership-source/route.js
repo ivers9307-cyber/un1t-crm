@@ -30,8 +30,9 @@
 // exists, so the card can say so.
 //
 // Every real change writes an audit_events row (fire-and-forget) naming the
-// actor, the studio, from and to. Selecting the value already set is a no-op
-// 200: nothing written, nothing logged.
+// actor, the studio, from and to, and drops this instance's cached
+// membershipStateForPage entry (W1.M3a). Selecting the value already set is
+// a no-op 200: nothing written, nothing logged, the cache left alone.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -41,6 +42,7 @@ import { validateBody } from '@/lib/validate'
 import { MEMBERSHIP_SOURCES, MEMBERSHIP_SOURCE_KEYS, membershipSourceState } from '@/lib/membership/source'
 import { GLOFOX_CREDENTIALS_KEPT } from '@/lib/membership/choices'
 import { logMembershipSourceChange } from '@/lib/membership/audit'
+import { resetMembershipStateCache } from '@/lib/membership/state-for-page'
 import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -125,6 +127,10 @@ export async function PUT(request, props) {
       logError('membership-source', 'locations.membership_source update failed', { locationId, next, err: upErr })
       return NextResponse.json({ success: false, error: upErr.message }, { status: 400 })
     }
+    // W1.M3a caches membershipStateForPage 60 s per location, per lambda
+    // instance: drop this instance's entry so the gated pages it serves see
+    // the new source at once. Other instances age out within the TTL.
+    resetMembershipStateCache(locationId)
     await logMembershipSourceChange({ user, location, from: previous, to: next, via: 'membership-source', request })
   }
 

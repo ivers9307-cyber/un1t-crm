@@ -48,6 +48,7 @@ import { mergeSecretSlice, sliceHasValue } from '@/lib/integration-secret-merge'
 import { getBcaConfig, validateBcaConfig } from '@/lib/bca'
 import { logError } from '@/lib/log'
 import { logMembershipSourceChange } from '@/lib/membership/audit'
+import { resetMembershipStateCache } from '@/lib/membership/state-for-page'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -342,6 +343,20 @@ function membershipFlipOnDisconnect(descriptor, location, user, locationId) {
   return { from: current, to: 'none' }
 }
 
+// W1.M3a caches membershipStateForPage 60 s per location, per lambda
+// instance. A successful write here can move that answer two ways: the flip
+// moves the source, or the write rewrites the credentials of the provider
+// that IS the studio's source (configured <-> unconfigured, e.g. a manager's
+// key rotation or disconnect, which never flips). Either way this instance
+// drops its entry; other instances age out within the TTL. Any other write
+// (a non-membership provider, a manager's save on a 'none' studio) leaves
+// the state as it was, and the cache alone.
+function membershipStateMayHaveMoved(descriptor, location, flip) {
+  if (flip) return true
+  const key = descriptor.membershipSource
+  return !!key && (location.membership_source ?? 'none') === key
+}
+
 // Re-sync every registry platform this provider maps to, IN-HANDLER (no
 // fire-and-forget). Returns { [platform]: action | error-string }.
 // REGISTRYREAD.1a — a failed sync is logged structurally: on a disconnect it
@@ -403,6 +418,7 @@ export async function PUT(request, props) {
     .update({ ...applied.update, updated_at: new Date().toISOString() })
     .eq('id', locationId)
   if (upErr) return NextResponse.json({ success: false, error: upErr.message }, { status: 400 })
+  if (membershipStateMayHaveMoved(descriptor, location, flip)) resetMembershipStateCache(locationId)
   if (flip) {
     applied.nextLocation.membership_source = flip.to
     await logMembershipSourceChange({ user, location, from: flip.from, to: flip.to, via: `integrations/${params.provider}`, request })
@@ -435,6 +451,7 @@ export async function DELETE(request, props) {
     .update({ ...applied.update, updated_at: new Date().toISOString() })
     .eq('id', locationId)
   if (upErr) return NextResponse.json({ success: false, error: upErr.message }, { status: 400 })
+  if (membershipStateMayHaveMoved(descriptor, location, flip)) resetMembershipStateCache(locationId)
   if (flip) {
     applied.nextLocation.membership_source = flip.to
     await logMembershipSourceChange({ user, location, from: flip.from, to: flip.to, via: `integrations/${params.provider}`, request })

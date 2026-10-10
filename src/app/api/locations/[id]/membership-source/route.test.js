@@ -15,6 +15,8 @@
 //     with warning 'glofox_credentials_kept': the switch never deletes a
 //     credential (Disconnect in the hub does that)
 //   - every switch writes an audit_events row (fire-and-forget)
+//   - every successful write drops W1.M3a's cached membershipStateForPage
+//     entry for the location; a failed write or a no-op leaves it alone
 //
 // @/lib/auth is the REAL module (importActual) with only getCurrentUser
 // mocked, so the real guards' contracts are what run here (Style B).
@@ -31,6 +33,10 @@ vi.mock('@/lib/membership/source', async () => {
   return { ...actual, membershipSourceState: vi.fn() }
 })
 vi.mock('@/lib/audit', () => ({ logAuditEvent: vi.fn(async () => ({ logged: true })) }))
+vi.mock('@/lib/membership/state-for-page', async () => {
+  const actual = await vi.importActual('@/lib/membership/state-for-page')
+  return { ...actual, resetMembershipStateCache: vi.fn() }
+})
 vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
 
 import { PUT } from './route.js'
@@ -38,7 +44,8 @@ import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { membershipSourceState } from '@/lib/membership/source'
 import { logAuditEvent } from '@/lib/audit'
-import { logWarn } from '@/lib/log'
+import { logWarn, logError } from '@/lib/log'
+import { resetMembershipStateCache } from '@/lib/membership/state-for-page'
 
 const LOC_A = 'a0000000-0000-0000-0000-000000000001'
 const LOC_B = 'b0000000-0000-0000-0000-000000000002'
@@ -72,7 +79,7 @@ const MASTER = {
 //   locations  .select('id, name, membership_source').eq('id', id).maybeSingle()
 //   locations  .update({...}).eq('id', id)
 //   channel_connections .select('id', head count).eq('location_id', id).eq('platform','glofox').eq('is_active', true)
-function makeDb({ rows = {}, activeGlofoxRows = 0 } = {}) {
+function makeDb({ rows = {}, activeGlofoxRows = 0, updateError = null } = {}) {
   const updates = []
   return {
     updates,
@@ -94,6 +101,7 @@ function makeDb({ rows = {}, activeGlofoxRows = 0 } = {}) {
               eq: async (col, val) => {
                 if (col !== 'id') throw new Error(`unexpected locations update .eq('${col}')`)
                 updates.push({ payload, id: val })
+                if (updateError) return { data: null, error: updateError }
                 if (rows[val]) Object.assign(rows[val], payload)
                 return { data: null, error: null }
               },
@@ -266,5 +274,56 @@ describe('PUT /api/locations/[id]/membership-source — refusals write nothing',
     const res = await PUT(put(LOC_A, { membership_source: 'glofox' }), props(LOC_A))
     expect(res.status).toBe(404)
     expect(db.updates).toEqual([])
+  })
+})
+
+// W1.M3a — membershipStateForPage caches each location's answer for 60 s per
+// lambda instance. This route is the direct writer, so a successful switch
+// drops THIS instance's entry (other instances age out within the TTL). A
+// failed write or a no-op must leave the cache alone: nothing moved.
+describe('PUT /api/locations/[id]/membership-source — the page-state cache', () => {
+  it('a successful switch resets the cached state for that location, once, after the write', async () => {
+    // Record how many writes had landed when the reset ran: a reset BEFORE
+    // the write would let a concurrent render re-cache the old answer.
+    let writesAtReset = null
+    resetMembershipStateCache.mockImplementationOnce(() => { writesAtReset = db.updates.length })
+    const res = await PUT(put(LOC_A, { membership_source: 'glofox' }), props(LOC_A))
+    expect(res.status).toBe(200)
+    expect(resetMembershipStateCache).toHaveBeenCalledTimes(1)
+    expect(resetMembershipStateCache).toHaveBeenCalledWith(LOC_A)
+    expect(writesAtReset).toBe(1)
+  })
+
+  it('a master switching a studio back to none resets that studio, not the caller\'s active one', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    await PUT(put(LOC_B, { membership_source: 'none' }), props(LOC_B))
+    expect(resetMembershipStateCache).toHaveBeenCalledTimes(1)
+    expect(resetMembershipStateCache).toHaveBeenCalledWith(LOC_B)
+  })
+
+  it('a failed locations update → 400, and the cache is NOT reset', async () => {
+    db = makeDb({ rows: { [LOC_A]: { name: 'Studio A', membership_source: 'none' } }, updateError: { message: 'update refused' } })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(put(LOC_A, { membership_source: 'glofox' }), props(LOC_A))
+    expect(res.status).toBe(400)
+    expect(db.updates).toHaveLength(1)
+    expect(logError).toHaveBeenCalledWith('membership-source', 'locations.membership_source update failed', expect.objectContaining({ locationId: LOC_A }))
+    expect(resetMembershipStateCache).not.toHaveBeenCalled()
+    expect(logAuditEvent).not.toHaveBeenCalled()
+  })
+
+  it('selecting the value already set (a no-op) does NOT reset the cache', async () => {
+    const res = await PUT(put(LOC_A, { membership_source: 'none' }), props(LOC_A))
+    expect(res.status).toBe(200)
+    expect(db.updates).toEqual([])
+    expect(resetMembershipStateCache).not.toHaveBeenCalled()
+  })
+
+  it('a refused caller (manager) and a refused value (un1t) never reset the cache', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    await PUT(put(LOC_A, { membership_source: 'glofox' }), props(LOC_A))
+    getCurrentUser.mockResolvedValue(OWNER_A)
+    await PUT(put(LOC_A, { membership_source: 'un1t' }), props(LOC_A))
+    expect(resetMembershipStateCache).not.toHaveBeenCalled()
   })
 })

@@ -24,6 +24,12 @@ vi.mock('@/lib/connection-registry', async (importOriginal) => {
 vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
 // W1.M2 — the membership_source flip on connect/disconnect writes an audit row.
 vi.mock('@/lib/audit', () => ({ logAuditEvent: vi.fn(async () => ({ logged: true })) }))
+// W1.M3a — a write that can move the studio's membership state drops the
+// 60 s membershipStateForPage cache entry for that location.
+vi.mock('@/lib/membership/state-for-page', async (importOriginal) => {
+  const actual = await importOriginal()
+  return { ...actual, resetMembershipStateCache: vi.fn() }
+})
 
 import { PUT, DELETE } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
@@ -31,6 +37,7 @@ import { createServerClient } from '@/lib/supabase'
 import { syncConnectionFromLegacy } from '@/lib/connection-registry'
 import { logError } from '@/lib/log'
 import { logAuditEvent } from '@/lib/audit'
+import { resetMembershipStateCache } from '@/lib/membership/state-for-page'
 
 const LOC = 'loc-still'
 
@@ -62,7 +69,7 @@ function liveGlofoxLocation() {
 
 // Minimal Supabase mock: an in-memory `locations` row + `channel_connections`
 // array. Records every write so tests can assert on the persisted payloads.
-function makeDb({ location, channelConnections = [] }) {
+function makeDb({ location, channelConnections = [], locationUpdateError = null }) {
   const locRow = { ...location }
   const cc = channelConnections.map((r) => ({ ...r }))
   const log = { locationUpdates: [], ccUpdates: [], ccInserts: [] }
@@ -84,8 +91,9 @@ function makeDb({ location, channelConnections = [] }) {
       }
       if (state.op === 'update') {
         if (table === 'locations') {
-          Object.assign(locRow, state.payload)
           log.locationUpdates.push(state.payload)
+          if (locationUpdateError) return { data: null, error: locationUpdateError }
+          Object.assign(locRow, state.payload)
         } else {
           for (const row of cc.filter(matches)) Object.assign(row, state.payload)
           log.ccUpdates.push(state.payload)
@@ -503,5 +511,108 @@ describe('W1.M2 — membership_source follows the Glofox connection', () => {
     await PUT(req({ host: 'https://x:12445', api_token: 'UNIFI_TOK' }), props(LOC, 'unifi'))
     expect(m.locRow.membership_source).toBe('none')
     expect(m.log.locationUpdates[0]).not.toHaveProperty('membership_source')
+  })
+})
+
+// W1.M3a — membershipStateForPage caches each studio's answer 60 s per
+// lambda instance. A successful write here that can MOVE that answer drops
+// this instance's entry for the location: the flip (connect on 'none',
+// disconnect on 'glofox'), or a credential write on a studio whose source
+// IS glofox (configured <-> unconfigured, a manager's included). A failed
+// write, a non-membership provider, or a Glofox write on a studio that is
+// not on glofox and does not flip (state stays 'none') leaves it alone.
+describe('W1.M3a cache — a write that moves the membership state resets it', () => {
+  function noneStudio() {
+    const loc = liveGlofoxLocation()
+    loc.membership_source = 'none'
+    return loc
+  }
+
+  it('the connect flip (owner, complete credentials, none → glofox) resets the location, after the write', async () => {
+    getCurrentUser.mockResolvedValue(OWNER)
+    const { db, log } = makeDb({ location: noneStudio() })
+    createServerClient.mockReturnValue(db)
+    let writesAtReset = null
+    resetMembershipStateCache.mockImplementationOnce(() => { writesAtReset = log.locationUpdates.length })
+    const res = await PUT(req({ branch_id: 'branch-abc', api_key: 'FRESH', api_token: 'FRESH_T' }), props(LOC, 'glofox'))
+    expect(res.status).toBe(200)
+    expect(resetMembershipStateCache).toHaveBeenCalledTimes(1)
+    expect(resetMembershipStateCache).toHaveBeenCalledWith(LOC)
+    expect(writesAtReset).toBe(1)
+  })
+
+  it('the disconnect flip (owner, glofox → none) resets the location', async () => {
+    getCurrentUser.mockResolvedValue(OWNER)
+    const { db } = makeDb({ location: liveGlofoxLocation() })
+    createServerClient.mockReturnValue(db)
+    const res = await DELETE(req(), props(LOC, 'glofox'))
+    expect(res.status).toBe(200)
+    expect(resetMembershipStateCache).toHaveBeenCalledTimes(1)
+    expect(resetMembershipStateCache).toHaveBeenCalledWith(LOC)
+  })
+
+  it('a failed connect-flip write → 400, no reset and no audit row', async () => {
+    getCurrentUser.mockResolvedValue(OWNER)
+    const { db, log, locRow } = makeDb({ location: noneStudio(), locationUpdateError: { message: 'update refused' } })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(req({ branch_id: 'branch-abc', api_key: 'FRESH', api_token: 'FRESH_T' }), props(LOC, 'glofox'))
+    expect(res.status).toBe(400)
+    expect(log.locationUpdates[0]).toMatchObject({ membership_source: 'glofox' })
+    expect(locRow.membership_source).toBe('none')
+    expect(resetMembershipStateCache).not.toHaveBeenCalled()
+    expect(logAuditEvent).not.toHaveBeenCalled()
+  })
+
+  it('a failed disconnect-flip write → 400, no reset', async () => {
+    getCurrentUser.mockResolvedValue(OWNER)
+    const { db } = makeDb({ location: liveGlofoxLocation(), locationUpdateError: { message: 'update refused' } })
+    createServerClient.mockReturnValue(db)
+    const res = await DELETE(req(), props(LOC, 'glofox'))
+    expect(res.status).toBe(400)
+    expect(resetMembershipStateCache).not.toHaveBeenCalled()
+  })
+
+  it("a credential save on a studio already on glofox resets (configured/unconfigured can move), with no flip", async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const { db, log } = makeDb({ location: liveGlofoxLocation() })
+    createServerClient.mockReturnValue(db)
+    await PUT(req({ api_key: 'ROTATED' }), props(LOC, 'glofox'))
+    expect(log.locationUpdates[0]).not.toHaveProperty('membership_source')
+    expect(resetMembershipStateCache).toHaveBeenCalledWith(LOC)
+  })
+
+  it("a manager's DELETE on a glofox studio (no flip, credentials cleared) resets", async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const { db } = makeDb({ location: liveGlofoxLocation() })
+    createServerClient.mockReturnValue(db)
+    await DELETE(req(), props(LOC, 'glofox'))
+    expect(resetMembershipStateCache).toHaveBeenCalledWith(LOC)
+  })
+
+  it("no-ops for the state: a manager's Glofox save on a 'none' studio, and an incomplete owner save, never reset", async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const m1 = makeDb({ location: noneStudio() })
+    createServerClient.mockReturnValue(m1.db)
+    await PUT(req({ branch_id: 'branch-abc', api_key: 'FRESH', api_token: 'FRESH_T' }), props(LOC, 'glofox'))
+
+    getCurrentUser.mockResolvedValue(OWNER)
+    const loc = noneStudio()
+    loc.settings.glofox = null
+    const m2 = makeDb({ location: loc })
+    createServerClient.mockReturnValue(m2.db)
+    await PUT(req({ branch_id: 'b', api_key: 'k' }), props(LOC, 'glofox'))
+
+    expect(m1.locRow.membership_source).toBe('none')
+    expect(m2.locRow.membership_source).toBe('none')
+    expect(resetMembershipStateCache).not.toHaveBeenCalled()
+  })
+
+  it('a non-membership provider (unifi) never resets, even on a glofox studio', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const m = makeDb({ location: liveGlofoxLocation() })
+    createServerClient.mockReturnValue(m.db)
+    const res = await PUT(req({ host: 'https://x:12445', api_token: 'UNIFI_TOK' }), props(LOC, 'unifi'))
+    expect(res.status).toBe(200)
+    expect(resetMembershipStateCache).not.toHaveBeenCalled()
   })
 })
