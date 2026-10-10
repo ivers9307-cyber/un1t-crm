@@ -244,12 +244,19 @@ describe('no customer-facing or public surface can read a staff studio name (TAB
   // is that a session read HERE would make a staff studio name resolvable in
   // the metadata of customer surfaces, whose titles customerFacingMetadata()
   // owns. Scoped to generateMetadata on purpose: the layout BODY may read it.
+  //
+  // W1.L4 — it DOES read the request's Host header (the tenant host decides
+  // the brand). That is the one headers() use allowed: a `.get('host')` read,
+  // never the cookie jar, so a session stays unreadable here.
   it('the ROOT generateMetadata never reads the session', () => {
     const src = readFileSync(path.join(APP, 'layout.js'), 'utf8')
     const body = src.slice(src.indexOf('export async function generateMetadata'), src.indexOf('export const viewport'))
     expect(body.length).toBeGreaterThan(0)
     expect(importsStaffHelper(src)).toBe(false)
-    expect(body).not.toMatch(/getCurrentUser|cookies\(|headers\(/)
+    expect(body).not.toMatch(/getCurrentUser|cookies\(/)
+    const headerReads = body.match(/headers\(\)[^\n]*/g) || []
+    expect(headerReads.length).toBeGreaterThan(0)
+    for (const read of headerReads) expect(read).toMatch(/^headers\(\)\)\.get\('host'\)/)
   })
 
   // '/' is not a segment, so nothing above sees it. It renders no tab: every

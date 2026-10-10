@@ -1,9 +1,10 @@
 // TABTITLE.1 — the browser tab of every STAFF page names the ACTIVE studio.
 //
-// The defect: the root layout's generateMetadata resolves ONE site name for
-// the whole deployment (resolveDefaultSiteName — the first configured
-// company_settings.company_name ordered by location_id), so an operator
-// working in UN1T Stillorgan read "UN1T Hatch Street" on every tab.
+// The defect: the root layout's generateMetadata resolves ONE site name per
+// host (resolveDefaultSiteName — the platform name on the CRM hosts since
+// W1.L4; before that the first configured company_settings.company_name
+// ordered by location_id), so an operator working in UN1T Stillorgan read
+// "UN1T Hatch Street" on every tab.
 // ROSTERLOOK.1 fixed /schedule alone; this is the same fix for all of them.
 //
 // WHY IT IS NOT IN THE ROOT LAYOUT. Not rendering cost: the root layout

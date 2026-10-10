@@ -10,9 +10,35 @@ import { createServerClient } from '@/lib/supabase'
 import { getIntegrationHealth } from '@/lib/integration-health'
 import { buildStatusView } from '@/lib/status-page'
 
-// Short ISR cache — a public, unauthenticated page shouldn't run the health
-// aggregator on every hit, and ~1 min freshness is fine for a status page.
-export const revalidate = 60
+// Rendered per request: the root layout reads the Host header (W1.L4), which
+// is a dynamic API, so the former `revalidate = 60` ISR shell no longer
+// applied. A public, unauthenticated page still must not run the health
+// aggregator (~11 uncached reads) on every hit, so the rows are held in a
+// 60 s module-level cache KEYED BY LOCATION below — the same freshness the
+// ISR gave, enforced where it is now actually honoured.
+export const dynamic = 'force-dynamic'
+
+export const HEALTH_CACHE_TTL_MS = 60_000
+const MAX_CACHED_LOCATIONS = 256
+let healthCache = new Map()
+
+// Test hook — the module-level cache would otherwise leak between tests.
+export function _resetStatusHealthCache() {
+  healthCache = new Map()
+}
+
+// The aggregator's rows for one location, at most once per TTL. A failure
+// is cached as [] too (the page renders "unknown", and a down aggregator is
+// not hammered per request).
+async function loadHealth(db, locationId, nowMs = Date.now()) {
+  const hit = healthCache.get(locationId)
+  if (hit && nowMs - hit.at < HEALTH_CACHE_TTL_MS) return hit.rows
+  let rows = []
+  try { rows = await getIntegrationHealth(db, locationId) } catch { rows = [] }
+  if (healthCache.size >= MAX_CACHED_LOCATIONS) healthCache.clear()
+  healthCache.set(locationId, { rows, at: nowMs })
+  return rows
+}
 
 const PILL = { operational: 'Operational', degraded: 'Degraded', down: 'Down' }
 
@@ -46,9 +72,7 @@ export default async function StatusPage(props) {
   const loc = await loadLocation(location)
   if (!loc?.id) notFound()
 
-  const db = createServerClient()
-  let rows = []
-  try { rows = await getIntegrationHealth(db, loc.id) } catch { rows = [] }
+  const rows = await loadHealth(createServerClient(), loc.id)
   const overrides = loc.settings?.status_page || {}
   const view = buildStatusView(rows, overrides)
 
