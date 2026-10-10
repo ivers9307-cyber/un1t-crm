@@ -19,6 +19,7 @@ import { dedupeKey, filterUncredited } from '@/lib/credit-attendance'
 import { DEFAULT_CLASS_MINUTES } from '@/lib/class-occurrences'
 import { logInfo, logWarn } from '@/lib/log'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { noSourceLocationIds } from '@/lib/membership/locations-for-source'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -53,9 +54,18 @@ export async function GET(request) {
     }
     for (const l of locations || []) locationMap.set(l.id, l)
   }
+  // W1.M3b — a booking at a location with NO membership source is never
+  // credited (its class_bookings would be stale residue): skipped with a
+  // counted skipped_no_source. A failed seam read is a 500 with no heartbeat.
+  const { ids: noSource, error: srcErr } = await noSourceLocationIds(db)
+  if (srcErr) {
+    logWarn('cron-credit-attendance', 'membership sources read failed', { err: srcErr })
+    return NextResponse.json({ success: false, error: 'membership sources read failed' }, { status: 500 })
+  }
 
   let scanned = 0
   let credited = 0
+  let skippedNoSource = 0
 
   // Paginate attended, contact-linked, completed bookings (oldest first).
   for (let from = 0; ; from += PAGE) {
@@ -74,12 +84,15 @@ export async function GET(request) {
     }
     if (!bookings || bookings.length === 0) break
     scanned += bookings.length
+    const pageSize = bookings.length
+    const sourced = bookings.filter((b) => !noSource.has(b.location_id))
+    skippedNoSource += pageSize - sourced.length
 
     // Batch-load existing sessions for this page's (contact, event) pairs and
     // build the set of keys that already have ANY session (HR or participation).
     // No N+1 — one query for the whole page.
-    const pageContactIds = [...new Set(bookings.map((b) => b.contact_id).filter(Boolean))]
-    const pageEventIds = [...new Set(bookings.map((b) => b.glofox_event_id).filter(Boolean))]
+    const pageContactIds = [...new Set(sourced.map((b) => b.contact_id).filter(Boolean))]
+    const pageEventIds = [...new Set(sourced.map((b) => b.glofox_event_id).filter(Boolean))]
     const existingKeys = new Set()
     if (pageContactIds.length && pageEventIds.length) {
       // .in × .in returns a cross-product superset; filterUncredited narrows it back to exact (contact, event) keys.
@@ -99,9 +112,9 @@ export async function GET(request) {
     }
 
     // Decide which bookings still need a credit (pure + tested).
-    const toCredit = filterUncredited(bookings, existingKeys)
+    const toCredit = filterUncredited(sourced, existingKeys)
     if (toCredit.length === 0) {
-      if (bookings.length < PAGE) break
+      if (pageSize < PAGE) break
       continue
     }
 
@@ -177,11 +190,11 @@ export async function GET(request) {
       }
     }
 
-    if (bookings.length < PAGE) break
+    if (pageSize < PAGE) break
   }
 
-  logInfo('cron-credit-attendance', 'tick', { scanned, credited })
+  logInfo('cron-credit-attendance', 'tick', { scanned, credited, skipped_no_source: skippedNoSource })
   await stampHeartbeat('credit-attendance').catch((err) =>
     logWarn('cron-credit-attendance', 'heartbeat failed', { err }))
-  return NextResponse.json({ success: true, credited, scanned })
+  return NextResponse.json({ success: true, credited, scanned, skipped_no_source: skippedNoSource })
 }
