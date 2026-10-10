@@ -281,10 +281,11 @@ export async function sendEmailStep(db, { enrollment, step, sequence, contact, f
   // unsubscribe link, appendUnsubscribeFooter skips it so recipients
   // don't see two "Unsubscribe" links.
   // COMMSFIX.E.4 — {{location_name}} renders in sequence EMAIL steps as
-  // it already does in SMS steps (six shipped templates sign off 'UN1T
-  // {{location_name}}'; without it rendered 'UN1T ' with a trailing
-  // space). locationName is resolved above from the same location row
-  // the bundle gate fetched.
+  // it already does in SMS steps. locationName is resolved above from the
+  // same location row the bundle gate fetched.
+  // W1.S1a — {{company_name}} is the sequence location's configured brand
+  // (getLocationBranding never throws; '' when unresolved), resolved below
+  // once the send is certain.
   // W1.L3a — the unsubscribe + preference links are minted on the SEQUENCE
   // LOCATION's tenant host (resolveCustomerBaseUrl floors to the CRM host and
   // never throws past it), so a second gym's leads never see crm.repset.ie.
@@ -328,9 +329,11 @@ export async function sendEmailStep(db, { enrollment, step, sequence, contact, f
   // on which run's amount they're quoting.
   const payment = paymentFromEnrollment(enrollment)
   const payPhrase = payAmountPhrase(payment)
-  const mergedSubject = applyMergeTags(subject, contact, { location_name: locationName, pay_amount_phrase: payPhrase })
+  const { companyName } = await getLocationBranding(db, sequence?.location_id)
+  const mergedSubject = applyMergeTags(subject, contact, { location_name: locationName, company_name: companyName || '', pay_amount_phrase: payPhrase })
   const merged = applyMergeTags(html, contact, {
     location_name: locationName,
+    company_name: companyName || '',
     booking_token: bookingToken,
     unsubscribe_url: unsubscribeUrl,
     // Derived from the unsubscribe URL because both endpoints resolve the same

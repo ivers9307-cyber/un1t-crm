@@ -33,6 +33,7 @@ import {
 } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { applyMergeTags, sendTransactionalEmail } from '@/lib/postmark'
+import { getLocationBranding } from '@/lib/location-branding'
 
 export const runtime = 'nodejs'
 
@@ -136,7 +137,9 @@ export async function POST(request, props) {
 
   // Merge tags ({{first_name}} etc.) on both subject and body — same tag
   // set as the SMS/email surfaces.
-  const mergeCtx = { location_name: contact.locations?.name || '' }
+  // W1.S1a — {{company_name}} is the contact location's configured brand.
+  const { companyName } = await getLocationBranding(db, contact.location_id)
+  const mergeCtx = { location_name: contact.locations?.name || '', company_name: companyName || '' }
   const renderedSubject = applyMergeTags(subject, contact, mergeCtx)
   const renderedBody = applyMergeTags(body, contact, mergeCtx)
 

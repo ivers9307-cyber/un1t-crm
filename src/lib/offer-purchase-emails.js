@@ -20,10 +20,12 @@
 // Copy is operator-editable per the standing rule: if an email_templates row
 // exists at the location under the name below, it wins; otherwise the
 // built-in default is used. Both support {{first_name}}, {{offer_name}},
-// {{bonus}}, {{amount}} and {{studio}}.
+// {{bonus}}, {{amount}}, {{studio}} and (W1.S1a) {{company_name}}, the
+// location's configured brand.
 
 import { sendTransactionalEmail } from './postmark'
 import { formatEuro } from './sale-offers'
+import { getLocationBranding } from './location-branding'
 
 export const PURCHASE_EMAIL_TEMPLATES = Object.freeze({
   paid: 'offer-purchase-paid',
@@ -113,7 +115,9 @@ export function defaultCopy(kind, tokens) {
     htmlBody: wrapBody(
       `<p>Hi ${tokens.first_name},</p>` +
       `<p>Your <strong>${tokens.offer_name}</strong>${bonusLine} is now on your account and ready to use.</p>` +
-      `<p>Book classes through the UN1T app the way you normally would and you are good to go.</p>` +
+      // W1.S1a — the member app is named for the studio's SHORT brand
+      // ("the UN1T app"); unknown brand = "the app", never another gym's.
+      `<p>Book classes through the ${tokens.short_name ? `${tokens.short_name} app` : 'app'} the way you normally would and you are good to go.</p>` +
       `<p>If anything looks off when you go to book, just reply to this email and we will sort it.</p>` +
       `<p>See you in the studio.</p>` +
       `<p>${tokens.studio}</p>`
@@ -159,13 +163,20 @@ export async function sendOfferPurchaseEmail(db, { purchase, offer, kind = 'read
     .eq('id', purchase.location_id)
     .maybeSingle()
 
+  // W1.S1a — the location's brand (never throws; '' when unresolved). The
+  // sign-off is the studio's own name; with the row unreadable it falls back
+  // to the brand, never to another gym's.
+  const branding = await getLocationBranding(db, purchase.location_id)
+
   const tokens = {
     first_name: (contact?.first_name || purchase.buyer_name || '').split(' ')[0] || 'there',
     offer_name: offer?.name || 'your purchase',
     category: offer?.category || null,
     bonus: bonusPhrase(offer?.bonus_headline),
     amount: formatEuro(purchase.amount_cents || 0),
-    studio: loc?.name || 'UN1T',
+    studio: loc?.name || branding.companyName || '',
+    company_name: branding.companyName || '',
+    short_name: branding.shortName || '',
   }
 
   // Operator override wins over the built-in copy.

@@ -311,7 +311,9 @@ export async function renderContractPdf({
   contractingEntity,
 } = {}) {
   const blocks = parseContractBlocks(bodyRendered)
-  const company = companyName || 'UN1T'
+  // W1.S1a — the running header is the location's resolved brand, empty
+  // when none resolved (never a fixed gym's name).
+  const company = String(companyName ?? '').trim()
   const entity = String(contractingEntity ?? '').trim() || company
 
   const doc = el(

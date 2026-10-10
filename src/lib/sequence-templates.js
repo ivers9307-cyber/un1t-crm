@@ -34,7 +34,7 @@ export const SEQUENCE_TEMPLATES = [
         delay_days: 0,
         delay_hours: 0,
         subject: 'See you tomorrow, {{first_name}}',
-        html_content: '<p>Hi {{first_name}},</p><p>Your consultation\'s booked for tomorrow. Arrive 5 minutes early so we can chat through your goals before we move.</p><p>Bring water + comfy gym kit. We\'ll handle the rest.</p><p>UN1T {{location_name}}</p>',
+        html_content: '<p>Hi {{first_name}},</p><p>Your consultation\'s booked for tomorrow. Arrive 5 minutes early so we can chat through your goals before we move.</p><p>Bring water + comfy gym kit. We\'ll handle the rest.</p><p>{{location_name}}</p>',
       },
     ],
   },
@@ -79,7 +79,7 @@ export const SEQUENCE_TEMPLATES = [
         html_content: `<p>Hi {{first_name}},</p>
 <p>We've seen you in a couple of classes this week. Great work. Before your trial wraps, want to grab 10 minutes with a coach to chat about which membership fits how you train?</p>
 <p>Reply to this email with a day that works, or just walk in and ask for the on-shift coach.</p>
-<p>UN1T {{location_name}}</p>`,
+<p>{{location_name}}</p>`,
       },
     ],
   },
@@ -112,7 +112,7 @@ export const SEQUENCE_TEMPLATES = [
   <li>Class Pack: pay-as-you-go, no membership.</li>
 </ol>
 <p>Reply with your favourite and a coach will set it up. Or walk in and ask at reception.</p>
-<p>UN1T {{location_name}}</p>`,
+<p>{{location_name}}</p>`,
       },
     ],
   },
@@ -131,11 +131,11 @@ export const SEQUENCE_TEMPLATES = [
         step_type: 'email',
         delay_days: 1,
         delay_hours: 0,
-        subject: 'How was your UN1T trial, {{first_name}}?',
+        subject: 'How was your {{company_name}} trial, {{first_name}}?',
         html_content: `<p>Hi {{first_name}},</p>
 <p>Saw your trial just ended. Quick honest question: what got in the way? Time, money, the classes themselves, something else? Reply with one word and a coach will read it personally.</p>
 <p>We get it if it wasn't a fit. But if you'd like to give it another go, we can sort that too.</p>
-<p>UN1T {{location_name}}</p>`,
+<p>{{location_name}}</p>`,
       },
       {
         step_type: 'email',
@@ -144,7 +144,7 @@ export const SEQUENCE_TEMPLATES = [
         subject: 'Last invite, {{first_name}}',
         html_content: `<p>Hi {{first_name}},</p>
 <p>Last we'll bother you. If you ever want to drop in for a one-off class, the rate is €20, no membership required, no questions asked. Just reply.</p>
-<p>Otherwise, all the best from the UN1T team.</p>`,
+<p>Otherwise, all the best from the {{company_name}} team.</p>`,
       },
     ],
   },
@@ -163,9 +163,9 @@ export const SEQUENCE_TEMPLATES = [
         step_type: 'email',
         delay_days: 0,
         delay_hours: 1,
-        subject: 'Welcome to UN1T, {{first_name}}',
+        subject: 'Welcome to {{company_name}}, {{first_name}}',
         html_content: `<p>Hi {{first_name}},</p>
-<p>You're officially a member. Welcome to the UN1T family.</p>
+<p>You're officially a member. Welcome to the {{company_name}} family.</p>
 <p>A few things you should know:</p>
 <ul>
   <li>Book your classes via the Glofox app. Your membership credits load automatically.</li>
@@ -173,7 +173,7 @@ export const SEQUENCE_TEMPLATES = [
   <li>If you ever need to pause, switch, or upgrade, just reply to this email.</li>
 </ul>
 <p>See you on the floor.</p>
-<p>UN1T {{location_name}}</p>`,
+<p>{{location_name}}</p>`,
       },
     ],
   },
@@ -223,16 +223,16 @@ export const SEQUENCE_TEMPLATES = [
         step_type: 'email',
         delay_days: 0,
         delay_hours: 0,
-        subject: 'Welcome to UN1T: your Glofox account is ready, {{first_name}}',
+        subject: 'Welcome to {{company_name}}: your Glofox account is ready, {{first_name}}',
         html_content: `<p>Hi {{first_name}},</p>
-<p>Your UN1T account is live. Download the Glofox app to book your first class.</p>
+<p>Your {{company_name}} account is live. Download the Glofox app to book your first class.</p>
 <p>To log in for the first time, open the app, tap <strong>Forgot password?</strong> and enter <strong>{{email}}</strong>. Glofox will email you a link to set your own password.</p>
 <p>
   <a href="https://apps.apple.com/app/REPLACE-WITH-IOS-LINK">Download on the App Store</a> ·
   <a href="https://play.google.com/store/apps/details?id=REPLACE-WITH-ANDROID-ID">Get it on Google Play</a>
 </p>
 <p>Once you're in, your trial credits are already loaded. Pick a class on the timetable and tap Book.</p>
-<p>See you on the floor.<br />UN1T {{location_name}}</p>`,
+<p>See you on the floor.<br />{{location_name}}</p>`,
       },
       {
         // Day-2 nudge — only if the member hasn't booked yet.
@@ -249,7 +249,7 @@ export const SEQUENCE_TEMPLATES = [
 <p>Just checking in. Did you manage to get logged in and have a look at the timetable?</p>
 <p>If anything's not working (can't log in, app's grumpy, can't see the schedule), reply to this email and someone from the team will sort it within the hour.</p>
 <p>If you'd rather chat in person, we're at the studio Mon–Fri 6am–9pm and weekends 8am–4pm. Just walk in.</p>
-<p>UN1T {{location_name}}</p>`,
+<p>{{location_name}}</p>`,
       },
     ],
   },
@@ -311,7 +311,7 @@ export const SEQUENCE_TEMPLATES = [
         delay_days: 14,
         delay_hours: 0,
         subject: 'Final offer: half off your first month back',
-        html_content: '<p>Hi {{first_name}},</p><p>One last note. If you want to give UN1T another shot, your first month back is half price. No questions, no judgement.</p><p>Reply HALF and we\'ll set it up.</p>',
+        html_content: '<p>Hi {{first_name}},</p><p>One last note. If you want to give {{company_name}} another shot, your first month back is half price. No questions, no judgement.</p><p>Reply HALF and we\'ll set it up.</p>',
       },
     ],
   },
@@ -328,8 +328,8 @@ export const SEQUENCE_TEMPLATES = [
         step_type: 'email',
         delay_days: 0,
         delay_hours: 0,
-        subject: 'Welcome to UN1T, {{first_name}}',
-        html_content: '<p>Hi {{first_name}},</p><p>Thanks for getting in touch. Someone from the team will be in contact within the next working day.</p><p>In the meantime, you\'re welcome to drop into UN1T {{location_name}} any time.</p>',
+        subject: 'Welcome to {{company_name}}, {{first_name}}',
+        html_content: '<p>Hi {{first_name}},</p><p>Thanks for getting in touch. Someone from the team will be in contact within the next working day.</p><p>In the meantime, you\'re welcome to drop into {{location_name}} any time.</p>',
       },
       {
         step_type: 'internal_task',
@@ -357,15 +357,15 @@ export const SEQUENCE_TEMPLATES = [
         step_type: 'email',
         delay_days: 0,
         delay_hours: 1,
-        subject: 'Welcome to UN1T, {{first_name}}. What\'s next',
-        html_content: '<p>Hi {{first_name}},</p><p>Thanks for booking your consultation. Here\'s what to expect: a 30-minute chat about your goals + a tour of the floor + a short movement screen so we know where you\'re at.</p><p>No pressure, no commitment. Just a conversation.</p><p>See you soon,<br/>UN1T</p>',
+        subject: 'Welcome to {{company_name}}, {{first_name}}. What\'s next',
+        html_content: '<p>Hi {{first_name}},</p><p>Thanks for booking your consultation. Here\'s what to expect: a 30-minute chat about your goals + a tour of the floor + a short movement screen so we know where you\'re at.</p><p>No pressure, no commitment. Just a conversation.</p><p>See you soon,<br/>{{company_name}}</p>',
       },
       {
         step_type: 'email',
         delay_days: 3,
         delay_hours: 0,
-        subject: 'How our members talk about UN1T',
-        html_content: '<p>Hi {{first_name}},</p><p>People often ask "what makes UN1T different?" The short answer: coaches who know your name and a room that shows up.</p><p>Read what members say about training here: <a href="https://un1tdublin.com">un1tdublin.com</a></p><p>Looking forward to meeting you.</p>',
+        subject: 'How our members talk about {{company_name}}',
+        html_content: '<p>Hi {{first_name}},</p><p>People often ask "what makes {{company_name}} different?" The short answer: coaches who know your name and a room that shows up.</p><p>Looking forward to meeting you.</p>',
       },
       {
         step_type: 'email',
@@ -418,7 +418,7 @@ export const SEQUENCE_TEMPLATES = [
   <li>Bring water and normal gym kit. Everything else is here.</li>
 </ul>
 <p>Scale anything you want to. Nobody is watching the clock but you.</p>
-<p>UN1T {{location_name}}</p>`,
+<p>{{location_name}}</p>`,
       },
       {
         step_type: 'email',
@@ -429,7 +429,7 @@ export const SEQUENCE_TEMPLATES = [
 <p>One class tells you what the room feels like. The second one is where it starts turning into a habit, and it is the one most people never get round to booking.</p>
 <p>Pick a slot that fits your week and get it in the diary now, while you still remember how it felt.</p>
 <p>Stuck on which class to try next? Reply and a coach will point you at one.</p>
-<p>UN1T {{location_name}}</p>`,
+<p>{{location_name}}</p>`,
       },
     ],
   },
@@ -456,7 +456,7 @@ export const SEQUENCE_TEMPLATES = [
         delay_days: 0,
         delay_hours: 0,
         subject: 'You\'re in, {{first_name}}!',
-        html_content: '<p>Hi {{first_name}},</p><p>Your race entry is confirmed. Welcome to the team.</p><p>On the day, bring water, a towel, and your race-day energy.</p><p>See you there,<br/>UN1T</p>',
+        html_content: '<p>Hi {{first_name}},</p><p>Your race entry is confirmed. Welcome to the team.</p><p>On the day, bring water, a towel, and your race-day energy.</p><p>See you there,<br/>{{company_name}}</p>',
       },
       {
         step_type: 'email',
@@ -509,7 +509,7 @@ export const SEQUENCE_TEMPLATES = [
         step_type: 'email',
         delay_days: 0,
         delay_hours: 0,
-        subject: 'Welcome to UN1T, {{first_name}}',
+        subject: 'Welcome to {{company_name}}, {{first_name}}',
         html_content: '<p>Hi {{first_name}},</p><p>Your first class is locked in. Here\'s how to make the most of it: arrive 10 minutes early, water bottle, comfy gym kit.</p><p>See you on the floor.</p>',
       },
       {
@@ -542,7 +542,7 @@ export const SEQUENCE_TEMPLATES = [
         delay_days: 0,
         delay_hours: 0,
         subject: 'Welcome to the squad, {{first_name}}',
-        html_content: '<p>Big move. You\'re officially part of UN1T now.</p><p>What to expect this week: 4 classes, the Slack invite, the inside info.</p>',
+        html_content: '<p>Big move. You\'re officially part of {{company_name}} now.</p><p>What to expect this week: 4 classes, the Slack invite, the inside info.</p>',
       },
       {
         step_type: 'apply_tag',
@@ -592,7 +592,7 @@ export const SEQUENCE_TEMPLATES = [
   <li>Is anything getting in the way? Times, classes, injuries, anything.</li>
 </ul>
 <p>A coach reads every reply and will sort what they can.</p>
-<p>UN1T {{location_name}}</p>`,
+<p>{{location_name}}</p>`,
       },
     ],
   },
@@ -631,7 +631,7 @@ export const SEQUENCE_TEMPLATES = [
 <p>Your membership is paused, so nothing is being charged and your spot is held.</p>
 <p>If the pause is for the obvious reasons, travel, work, an injury, that is completely fine and we will see you when you are back.</p>
 <p>If it is because something here was not working, we would rather hear it. Reply to this email and a coach will read it.</p>
-<p>UN1T {{location_name}}</p>`,
+<p>{{location_name}}</p>`,
       },
       {
         step_type: 'email',
@@ -642,7 +642,7 @@ export const SEQUENCE_TEMPLATES = [
 <p>Quick check in. Your membership is still paused and there is no rush on our side.</p>
 <p>When you do want to start again, the easiest way back is to pick one class and book it. The rest sorts itself out after that.</p>
 <p>Reply with a day that suits and we will get you in.</p>
-<p>UN1T {{location_name}}</p>`,
+<p>{{location_name}}</p>`,
       },
     ],
   },
@@ -691,7 +691,7 @@ export const SEQUENCE_TEMPLATES = [
         html_content: `<p>Hi {{first_name}},</p>
 <p>We tried to take your membership payment{{pay_amount_phrase}} and it didn't go through. It happens, usually a card that has expired or been replaced.</p>
 <p>Your membership is still active. To keep it that way, {{payment_cta}}. If you'd rather we sorted the card with you, just reply to this email.</p>
-<p>UN1T {{location_name}}</p>`,
+<p>{{location_name}}</p>`,
       },
       {
         step_type: 'email',
@@ -701,7 +701,7 @@ export const SEQUENCE_TEMPLATES = [
         html_content: `<p>Hi {{first_name}},</p>
 <p>Your membership payment{{pay_amount_phrase}} is still outstanding, usually a card that needs updating. You can {{payment_cta}}.</p>
 <p>If something else is going on, reply here and we'll figure it out together.</p>
-<p>UN1T {{location_name}}</p>`,
+<p>{{location_name}}</p>`,
       },
       {
         step_type: 'whatsapp',
@@ -714,11 +714,11 @@ export const SEQUENCE_TEMPLATES = [
         step_type: 'email',
         delay_days: 0,
         delay_hours: 0,
-        subject: 'Action needed to keep your UN1T membership',
+        subject: 'Action needed to keep your {{company_name}} membership',
         html_content: `<p>Hi {{first_name}},</p>
 <p>Your membership payment{{pay_amount_phrase}} is now a week overdue and we don't want you to lose your spot.</p>
 <p>You can {{payment_cta}}. Or reply to this email and we'll sort the card together. No awkwardness, we just want to keep you training.</p>
-<p>UN1T {{location_name}}</p>`,
+<p>{{location_name}}</p>`,
       },
     ],
   },
@@ -792,7 +792,7 @@ export const SEQUENCE_TEMPLATES = [
         delay_days: 30,
         delay_hours: 0,
         subject: 'Half off your first month back',
-        html_content: '<p>Hi {{first_name}},</p><p>It\'s been three months. The first step back is the hardest, so we\'re halving your first month if you want to give UN1T another go.</p><p>Reply HALF and I\'ll set it up. No long contract, no fuss.</p>',
+        html_content: '<p>Hi {{first_name}},</p><p>It\'s been three months. The first step back is the hardest, so we\'re halving your first month if you want to give {{company_name}} another go.</p><p>Reply HALF and I\'ll set it up. No long contract, no fuss.</p>',
       },
     ],
   },
@@ -865,8 +865,8 @@ export const SEQUENCE_TEMPLATES = [
         step_type: 'email',
         delay_days: 0,
         delay_hours: 0,
-        subject: 'A year with UN1T',
-        html_content: '<p>Hi {{first_name}},</p><p>Happy UN1T anniversary. A year ago today you signed up. Look how far you\'ve come.</p>',
+        subject: 'A year with {{company_name}}',
+        html_content: '<p>Hi {{first_name}},</p><p>Happy {{company_name}} anniversary. A year ago today you signed up. Look how far you\'ve come.</p>',
       },
     ],
   },
@@ -894,7 +894,7 @@ export const SEQUENCE_TEMPLATES = [
         delay_days: 0,
         delay_hours: 0,
         subject: 'Happy birthday, {{first_name}}',
-        html_content: '<p>Hi {{first_name}},</p><p>Happy birthday from the UN1T team. Hope today\'s a good one.</p><p>Drop in any time this week for a free birthday class. Just reply with a day that works.</p>',
+        html_content: '<p>Hi {{first_name}},</p><p>Happy birthday from the {{company_name}} team. Hope today\'s a good one.</p><p>Drop in any time this week for a free birthday class. Just reply with a day that works.</p>',
       },
     ],
   },

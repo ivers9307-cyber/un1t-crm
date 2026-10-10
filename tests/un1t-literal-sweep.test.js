@@ -53,10 +53,42 @@ const SWEPT = [
   'src/lib/hyrox/generate-block.js',
   'src/app/api/hyrox/blocks/[id]/expand/route.js',
   'src/app/api/hyrox/sessions/[id]/regenerate/route.js',
+  // ── W1.S1a: customer-facing email, ICS and message libs ──────────────────
+  'src/lib/event-email.js',
+  'src/lib/event-attendee-reminders.js',
+  'src/lib/event-waitlist.js',
+  'src/lib/hr-post-class-email.js',
+  'src/lib/race-confirmations.js',
+  'src/lib/offer-purchase-emails.js',
+  'src/lib/manual-booking-confirm.js',
+  'src/lib/class-booking-payments.js',
+  'src/lib/contract-pdf.js',
+  'src/lib/contracting-entity.js',
+  'src/lib/contracts-email.js',
+  'src/lib/contracts-notify.js',
+  'src/app/api/contracts/[id]/resend/route.js',
+  'src/lib/external-export.js',
+  'src/lib/strava.js',
+  'src/lib/tcx-builder.js',
+  'src/app/api/cron/auto-end-stale-hr-sessions/route.js',
+  'src/lib/challenge-notifications.js',
+  'src/app/api/cron/run-challenge-events/route.js',
+  'src/lib/sequence-templates.js',
+  'src/lib/postmark.js',
+  'src/lib/campaign-sender.js',
+  'src/lib/campaign-web-view.js',
+  'src/lib/status-page.js',
 ]
 
 // file → exact literals the appendix marks `keep`. None in W1.S4 or W1.S3.
-const KEEP = {}
+// Every entry carries its reason in the comment above it.
+const KEEP = {
+  // W1.S1a — LEGACY_COUNTERSIGNATURE_ENTITY: the counterparty every contract
+  // issued before LEGALENT.1 was issued and signed under. An executed
+  // document must keep rendering what it said; rewriting it is tampering,
+  // not a sweep (appendix row contracting-entity.js:57, `keep`).
+  'src/lib/contracting-entity.js': ['UN1T Dublin Ltd'],
+}
 
 describe('UN1T literal sweep (W1.S*)', () => {
   it.each(SWEPT)('%s carries no customer/staff-visible UN1T literal', (file) => {

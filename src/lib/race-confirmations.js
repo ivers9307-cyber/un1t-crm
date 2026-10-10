@@ -19,7 +19,7 @@ import { sendTransactionalEmail } from './postmark'
 import { formatWeekdayLongDateInTZ } from './dates'
 import { getAppUrl } from './app-url'
 import { signCheckinToken } from './event-checkin-tokens'
-import { buildEventEmailShell, resolveEventEmail } from './event-email'
+import { buildEventEmailShell, resolveEventEmail, resolveEventBrand } from './event-email'
 import { resolveEventCommsLocation, pickAudienceVenueName } from './event-comms-location'
 import { checkTransactionalConsent } from './transactional-consent'
 import { logError } from './log'
@@ -83,7 +83,8 @@ function mintMemberQrs({ eventId, registrationId, members }) {
 
 /**
  * Send the race-registration confirmation. Reads the parent race
- * + registration + team_members and composes UN1T-branded copy.
+ * + registration + team_members and composes copy in the sending
+ * location's brand (W1.S1a).
  * Stamps confirmation_*_sent_at on the payment row to enforce
  * once-only delivery across webhook retries.
  *
@@ -189,13 +190,13 @@ export async function sendRaceConfirmations({ db, paymentId }) {
   const teamMembersWithQr = mintMemberQrs({ eventId: race?.id || null, registrationId: reg?.id || null, members: teamMembers })
 
   const ctx = {
-    raceName: race?.name || 'UN1T Race',
+    raceName: race?.name || 'Your event',
     raceDateLabel: fmtRaceDate(race?.race_date),
     waveLabel: waveText(wave),
     // EVENT-MULTITIME.1 — "Wave" for races, "Time" for a class/workshop.
     waveRowLabel: timeRowLabel(race?.kind),
     // EVENT-COPY.1 — this value reaches the customer three times: the "Where"
-    // row, the `UN1T · <loc>` email footer, and the `{{location}}` merge tag
+    // row, the `brand · <loc>` email footer, and the `{{location}}` merge tag
     // operators write copy against. All three are claims about WHERE THE EVENT
     // IS, so this is the VENUE helper, not the sign-off one: venue_name → the
     // event's OWN location (anchors skipped) → ''.
@@ -357,11 +358,16 @@ function buildBreakdownLine(ctx) {
  *
  * @param {object} ctx
  * @returns {{ subject:string, heading:string, introHtml:string, infoRows:string,
- *   afterInfoHtml:string, memberQrs:Array, footerHtml:string, locationName:string }}
+ *   afterInfoHtml:string, memberQrs:Array, footerHtml:string, locationName:string,
+ *   brand:string }}
  */
 export function buildConfirmationDefaults(ctx) {
+  // W1.S1a — the member badge names the sending location's brand
+  // (ctx.brand, resolved by the sender); "Member" alone when unknown.
+  const brand = String(ctx.brand || '').trim()
+  const memberBadge = escapeHtml(brand ? `${brand} member` : 'Member')
   const memberLineup = ctx.teamMembers
-    .map((m) => `<li>${escapeHtml(m.name)}${m.role === 'captain' ? ' <em>(captain)</em>' : ''}${m.is_member ? ' <span style="color:#7a5a00;font-size:11px;background:#fff4cc;padding:1px 6px;border-radius:9999px;margin-left:6px">UN1T member</span>' : ''}</li>`)
+    .map((m) => `<li>${escapeHtml(m.name)}${m.role === 'captain' ? ' <em>(captain)</em>' : ''}${m.is_member ? ` <span style="color:#7a5a00;font-size:11px;background:#fff4cc;padding:1px 6px;border-radius:9999px;margin-left:6px">${memberBadge}</span>` : ''}</li>`)
     .join('')
 
   const breakdownLine = buildBreakdownLine(ctx)
@@ -379,7 +385,7 @@ export function buildConfirmationDefaults(ctx) {
   }))
 
   return {
-    subject: `${ctx.raceName} — you're in!`,
+    subject: `${ctx.raceName}: you're in!`,
     heading: `You're registered, ${escapeHtml(ctx.captainFirstName || 'team captain')}.`,
     introHtml: `Team <strong>${escapeHtml(ctx.teamName)}</strong> is locked in for <strong>${escapeHtml(ctx.raceName)}</strong>.`,
     infoRows,
@@ -387,6 +393,7 @@ export function buildConfirmationDefaults(ctx) {
     memberQrs,
     footerHtml: `<strong>What's next:</strong> arrive 30 minutes before your wave. Bring water, a towel, and your race-day energy. We'll send a reminder the day before with parking + check-in details.${manageLineHtml(ctx.manageUrl)}`,
     locationName: ctx.locationName || '',
+    brand,
   }
 }
 
@@ -411,10 +418,11 @@ export function buildConfirmationEmailHtml(ctx) {
     afterInfoHtml: d.afterInfoHtml,
     footerHtml: d.footerHtml,
     locationName: d.locationName,
+    brand: d.brand,
   })
 }
 
-async function sendEmail({ db, payment, ctx, commsLocationId }) {
+async function sendEmail({ db, payment, ctx: baseCtx, commsLocationId }) {
   if (!payment.contact_email) return { status: 'skipped', reason: 'no_email' }
 
   // EVENT-CONSENT.1 — the check this path never had. Same gate the sibling
@@ -453,6 +461,9 @@ async function sendEmail({ db, payment, ctx, commsLocationId }) {
   if (!gate.allowed) return { status: 'skipped', reason: gate.reason }
 
   const race = payment.race || {}
+  // W1.S1a — the email carries the SENDING location's brand (header wordmark,
+  // member badge, signature line), the same location the From identity uses.
+  const ctx = { ...baseCtx, brand: await resolveEventBrand(db, {}, commsLocationId) }
   const mergeContact = {
     first_name: (payment.contact_name || '').split(' ')[0] || '',
     name: payment.contact_name || '',
@@ -474,6 +485,7 @@ async function sendEmail({ db, payment, ctx, commsLocationId }) {
     contact: mergeContact,
     extras,
     defaults: buildConfirmationDefaults(ctx),
+    brandLocationId: commsLocationId,
   })
 
   await sendTransactionalEmail({
@@ -633,7 +645,7 @@ export async function sendRegistrationMovedEmail(db, { registrationId, moveId })
   else amountLabel = reg.status === 'pending_payment' ? 'Payment pending' : 'Free entry'
 
   const ctx = {
-    raceName: race.name || 'UN1T Race',
+    raceName: race.name || 'Your event',
     raceDateLabel: fmtRaceDate(race.race_date),
     waveLabel: waveText(wave),
     waveRowLabel: timeRowLabel(race.kind),
@@ -652,12 +664,14 @@ export async function sendRegistrationMovedEmail(db, { registrationId, moveId })
     oldWhen,
     // EVENT-MOVE.6 — the same entry, so the same page; a fresh 90-day link.
     manageUrl: entryManageUrl(reg.id),
+    // W1.S1a — the sending location's brand (header, member badge, signature).
+    brand: await resolveEventBrand(db, {}, commsLocationId),
   }
   const mergeContact = { first_name: contact.first_name || '', name: [contact.first_name, contact.last_name].filter(Boolean).join(' '), email: toEmail, phone: contact.phone || '' }
   const extras = { event_name: ctx.raceName, team_name: ctx.teamName, when: ctx.waveLabel || ctx.raceDateLabel, location: ctx.locationName, old_event_name: ctx.oldEventName, old_when: ctx.oldWhen, manage_url: ctx.manageUrl || '' }
 
   try {
-    const { subject, htmlBody } = await resolveEventEmail({ db, kind: 'moved', race, contact: mergeContact, extras, defaults: buildMovedDefaults(ctx) })
+    const { subject, htmlBody } = await resolveEventEmail({ db, kind: 'moved', race, contact: mergeContact, extras, defaults: buildMovedDefaults(ctx), brandLocationId: commsLocationId })
     await sendTransactionalEmail({ to: toEmail, subject, htmlBody, contactId: reg.contact_id || null, locationId: commsLocationId, tag: 'event-moved' })
   } catch (e) {
     result.failed.push(`email:${e?.message || 'failed'}`)
@@ -787,7 +801,7 @@ function gapContext(payment, payUrl) {
   const race = payment.race || {}
   const differenceLabel = fmtMoney(Number(payment.amount_cents) || 0, payment.currency || 'EUR')
   const ctx = {
-    raceName: race.name || 'UN1T Race',
+    raceName: race.name || 'Your event',
     raceDateLabel: fmtRaceDate(race.race_date),
     waveLabel: waveText(payment.registration?.wave),
     waveRowLabel: timeRowLabel(race.kind),
@@ -850,7 +864,7 @@ export async function sendGapLinkEmail({ db, paymentId, payUrl }) {
   const { race, ctx, contact, extras } = gapContext(payment, payUrl)
   const locationId = await gapCommsLocationId(db, race, paymentId)
   try {
-    const { subject, htmlBody } = await resolveEventEmail({ db, kind: 'gap', race, contact, extras, defaults: buildGapDefaults(ctx, 'link') })
+    const { subject, htmlBody } = await resolveEventEmail({ db, kind: 'gap', race, contact, extras, defaults: buildGapDefaults(ctx, 'link'), brandLocationId: locationId })
     await sendTransactionalEmail({ to: payment.contact_email, subject, htmlBody, contactId: payment.contact_id || null, locationId, tag: 'event-gap-link' })
   } catch (e) {
     result.failed.push(`email:${e?.message || 'failed'}`)
@@ -897,7 +911,7 @@ export async function sendGapPaidEmail({ db, paymentId }) {
   // header styling still applies.
   const receiptRace = { ...race, gap_email_subject: null, gap_email_intro: null }
   try {
-    const { subject, htmlBody } = await resolveEventEmail({ db, kind: 'gap', race: receiptRace, contact, extras, defaults: buildGapDefaults(ctx, unmoved ? 'paid_unmoved' : 'paid') })
+    const { subject, htmlBody } = await resolveEventEmail({ db, kind: 'gap', race: receiptRace, contact, extras, defaults: buildGapDefaults(ctx, unmoved ? 'paid_unmoved' : 'paid'), brandLocationId: locationId })
     await sendTransactionalEmail({ to: payment.contact_email, subject, htmlBody, contactId: payment.contact_id || null, locationId, tag: 'event-gap-paid' })
   } catch (e) {
     result.failed.push(`email:${e?.message || 'failed'}`)

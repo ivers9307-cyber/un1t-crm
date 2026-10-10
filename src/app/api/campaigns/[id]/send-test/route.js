@@ -22,6 +22,7 @@ import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAt
 import { createServerClient } from '@/lib/supabase'
 import { sendEmail, applyMergeTags } from '@/lib/postmark'
 import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
+import { getLocationBranding } from '@/lib/location-branding'
 import { ADMIN_ROLES } from '@/lib/schemas'
 import { validateBody } from '@/lib/validate'
 
@@ -115,8 +116,11 @@ export async function POST(request, props) {
   const unsubscribeUrl = `${baseUrl}/unsubscribe/test-token`
   const preferenceUrl  = `${baseUrl}/preferences/test-token`
 
+  // W1.S1a — {{company_name}}, as the real send resolves it.
+  const { companyName } = await getLocationBranding(db, campaign.location_id)
   const html = applyMergeTags(campaign.html_content, renderContact, {
     location_name: campaign.locations?.name || '',
+    company_name: companyName || '',
     unsubscribe_url: unsubscribeUrl,
     preference_url: preferenceUrl,
   })
@@ -125,6 +129,7 @@ export async function POST(request, props) {
   // {{location_name}} / {{unsubscribe_url}} / {{preference_url}}.
   const subject = '[TEST] ' + applyMergeTags(campaign.subject, renderContact, {
     location_name: campaign.locations?.name || '',
+    company_name: companyName || '',
     unsubscribe_url: unsubscribeUrl,
     preference_url: preferenceUrl,
   })

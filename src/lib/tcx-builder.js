@@ -24,7 +24,8 @@ function escapeXml(s) {
  * @param {object} input
  * @param {object} input.session   heart_rate_sessions row (started_at, ended_at, avg_hr_bpm, peak_hr_bpm)
  * @param {Array}  input.samples   hr_samples rows: { recorded_at, bpm }, sorted ascending
- * @param {string} [input.title]   activity name; defaults to "UN1T HR session"
+ * @param {string} [input.title]   activity name; defaults to "HR session" (W1.S1a:
+ *                                 brand-neutral; callers pass productName(shortName, 'hr'))
  * @param {string} [input.sport]   "Other" | "Running" | "Biking"; Strava maps Other → "Workout"
  * @returns {string} TCX XML
  */
@@ -42,7 +43,7 @@ export function buildTcx({ session, samples = [], title = null, sport = 'Other' 
     })
     .join('\n        ')
 
-  const safeTitle = escapeXml(title || 'UN1T HR session')
+  const safeTitle = escapeXml(title || 'HR session')
   const avg = Number.isFinite(session.avg_hr_bpm) ? Math.round(session.avg_hr_bpm) : null
   const peak = Number.isFinite(session.peak_hr_bpm) ? Math.round(session.peak_hr_bpm) : null
 

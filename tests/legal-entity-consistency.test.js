@@ -371,9 +371,14 @@ describe('contractingEntityLabel', () => {
       .toBe('UN1T Dublin')
   })
 
-  it('is never empty', () => {
-    expect(contractingEntityLabel()).toBe('UN1T')
-    expect(contractingEntityLabel({ legalEntityName: '   ', companyName: '  ' })).toBe('UN1T')
+  // W1.S1a — the floor is the organisation's own name; past it the label is
+  // empty, never a fixed gym's wordmark (which was this function's last
+  // resort until the literal sweep, and which asserted ONE gym as the
+  // contracting party on every other organisation's document).
+  it('floors on the org name, then on nothing: never a fixed gym name', () => {
+    expect(contractingEntityLabel({ organizationName: 'UN1T Group' })).toBe('UN1T Group')
+    expect(contractingEntityLabel()).toBe('')
+    expect(contractingEntityLabel({ legalEntityName: '   ', companyName: '  ' })).toBe('')
   })
 })
 
@@ -445,11 +450,9 @@ describe('getContractingEntity', () => {
     expect(out.label).not.toBe('UN1T')
     expect(out.label).toBe('CCF Autos')
     // Since W1.B1 the brand resolver returns '' here (no configured name,
-    // and this fixture's locations row carries no name); the WORDMARK field
-    // then re-applies contracting-entity's own last-resort literal, which
-    // W1.S1a removes. The point of this test is that the ENTITY label
-    // never inherits it.
-    expect(out.companyName).toBe('UN1T')
+    // and this fixture's locations row carries no name), and since W1.S1a
+    // the wordmark field no longer re-applies a fixed gym literal on top.
+    expect(out.companyName).toBe('')
     expect(out.entityName).toBeNull()
   })
 
@@ -464,14 +467,25 @@ describe('getContractingEntity', () => {
     expect(out.label).toBe('Givers Consultancy')
   })
 
-  it('never throws and never returns an empty label', async () => {
-    // A contract surface must render a party name even when every
-    // lookup is unavailable — a blank "For " on a document someone is
-    // about to sign is worse than an under-specified one.
+  // W1.S1a — when every lookup is unavailable there is no honest name to
+  // give: the old last resort was a fixed gym's wordmark, i.e. a WRONG
+  // counterparty on any other organisation's document. The new floor is
+  // the org's own name (above); past it, empty.
+  it('never throws, and with nothing readable floors on empty rather than a fixed gym', async () => {
     const exploding = { from() { throw new Error('db down') } }
     await expect(getContractingEntity(exploding, { organizationId: 'org-1' })).resolves
-      .toMatchObject({ label: 'UN1T' })
-    await expect(getContractingEntity(null, {})).resolves.toMatchObject({ label: 'UN1T' })
+      .toMatchObject({ label: '', companyName: '' })
+    await expect(getContractingEntity(null, {})).resolves.toMatchObject({ label: '', companyName: '' })
+  })
+
+  it('W1.S1a: an unconfigured org whose org row reads floors on organizations.name', async () => {
+    const db = makeDb({
+      locations: [{ organization_id: 'org-u' }],
+      company_settings: [],
+      org_settings: [],
+      organizations: [{ name: 'UN1T Group' }],
+    })
+    await expect(getContractingEntity(db, { locationId: 'loc-u' })).resolves.toMatchObject({ label: 'UN1T Group' })
   })
 })
 

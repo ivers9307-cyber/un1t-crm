@@ -69,14 +69,35 @@ describe('contract email branding header', () => {
     expect(htmlBody).toContain('alt="Acme Fitness"')                // configured name as alt text
   })
 
-  it('falls back to the UN1T wordmark when no branding row exists', async () => {
+  // W1.S1a — with nothing configured the brand chain ends in the location's
+  // own name; the header, subject and copy all read it.
+  it("falls back to the location's own name when no branding row exists", async () => {
+    createServerClient.mockReturnValue(makeDb({ company_settings: [], locations: [{ name: 'UN1T Stillorgan', organization_id: null }] }))
+
+    await sendContractIssuedEmail({ ...baseArgs, issuer: {} })
+
+    const { htmlBody, subject } = sendEmail.mock.calls[0][0]
+    expect(htmlBody).toContain('>UN1T Stillorgan</div>')
+    expect(htmlBody).not.toContain('<img') // no logo image when none configured
+    expect(subject).toBe('Action required: Coach Agreement from UN1T Stillorgan')
+    expect(htmlBody).toContain('A UN1T Stillorgan administrator has issued you')
+  })
+
+  // W1.S1a — nothing resolvable at all: no wordmark, never a fixed gym name.
+  it('names no gym at all when the brand resolves nothing', async () => {
     createServerClient.mockReturnValue(makeDb({ company_settings: [] }))
 
-    await sendContractIssuedEmail(baseArgs)
+    await sendContractIssuedEmail({ ...baseArgs, issuer: {} })
 
-    const { htmlBody } = sendEmail.mock.calls[0][0]
-    expect(htmlBody).toContain('>UN1T<') // plain wordmark fallback
-    expect(htmlBody).not.toContain('<img') // no logo image when none configured
+    const { htmlBody, subject } = sendEmail.mock.calls[0][0]
+    expect(subject).toBe('Action required: Coach Agreement')
+    expect(htmlBody).toContain('An administrator has issued you')
+    expect(htmlBody).not.toContain('UN1T')
+    const sigCall = sendEmail.mock.calls.length
+    await sendContractSignedEmails(baseArgs)
+    const recipientBody = sendEmail.mock.calls[sigCall][0].htmlBody
+    expect(recipientBody).toContain('A copy is stored in your account and')
+    expect(recipientBody).not.toContain('UN1T')
   })
 
   it('escapes the company name when used as the logo alt text', async () => {

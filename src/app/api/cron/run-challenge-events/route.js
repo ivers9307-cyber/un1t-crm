@@ -29,6 +29,7 @@ import { pushOutcome } from '@/lib/push-outcome'
 import { computeStandings, computeCollective } from '@/lib/challenges-io'
 import { windowIso } from '@/lib/challenges'
 import { buildChallengeStartPush, buildChallengeResultPush, buildCollectiveTargetPush } from '@/lib/challenge-notifications'
+import { getLocationBranding } from '@/lib/location-branding'
 import { logInfo, logWarn, logError } from '@/lib/log'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { selectAll } from '@/lib/select-all'
@@ -156,6 +157,15 @@ export async function GET(request) {
     if (ANNOUNCED.has(outcome)) bump()
     else if (FAILED.has(outcome)) failed++
   }
+  // W1.S1a — a points challenge names the studio's own product ("UN1T
+  // Points"). One lookup per location per tick, only when a collective push
+  // is built; the resolver never throws ('' = bare "Points").
+  const shortNames = new Map()
+  const shortNameFor = async (locationId) => {
+    if (!locationId) return ''
+    if (!shortNames.has(locationId)) shortNames.set(locationId, (await getLocationBranding(db, locationId)).shortName || '')
+    return shortNames.get(locationId)
+  }
   for (const ch of challenges || []) {
     try {
       // START
@@ -173,7 +183,7 @@ export async function GET(request) {
         let payload
         if (ch.mode === 'collective') {
           const collective = await computeCollective(db, { locationId: ch.location_id, metric: ch.metric, fromIso, toIso, target: ch.target })
-          payload = buildChallengeResultPush({ challenge: ch, collective })
+          payload = buildChallengeResultPush({ challenge: ch, collective, shortName: await shortNameFor(ch.location_id) })
         } else {
           const standings = await computeStandings(db, { locationId: ch.location_id, metric: ch.metric, fromIso, toIso })
           payload = buildChallengeResultPush({ challenge: ch, winner: standings[0] || null })
@@ -187,7 +197,7 @@ export async function GET(request) {
         const collective = await computeCollective(db, { locationId: ch.location_id, metric: ch.metric, fromIso, toIso, target: ch.target })
         if (collective.total >= ch.target) {
           const ids = await tokenHolders(db, ch.location_id)
-          count(await announceOnce(db, ch, 'announced_target_at', stamp, ids, buildCollectiveTargetPush(ch)), () => targets++)
+          count(await announceOnce(db, ch, 'announced_target_at', stamp, ids, buildCollectiveTargetPush(ch, { shortName: await shortNameFor(ch.location_id) })), () => targets++)
         }
       }
     } catch (err) {
