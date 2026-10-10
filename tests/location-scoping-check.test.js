@@ -13,7 +13,10 @@ import {
   tablesQueried,
   classifyRoute,
   classifyPage,
+  classifyLayout,
   findStaleExemptions,
+  APP_SURFACE_FILES,
+  isAppSurfaceFile,
 } from '../scripts/check-location-scoping.mjs'
 
 describe('deriveLocationTables', () => {
@@ -290,6 +293,149 @@ describe('classifyPage', () => {
   it('does not apply the cron path skip to pages (only /api routes have system paths)', () => {
     const res = classifyPage('src/app/cron/page.js', unscopedServerPage, TABLES, {})
     expect(res.findings).toEqual([{ table: 'email_templates', exempt: false }])
+  })
+})
+
+describe('classifyLayout (PAGE-SCOPE.2)', () => {
+  const TABLES = new Set(['sale_offers', 'email_mailboxes'])
+
+  // The W0.4 shape: src/app/offers/layout.js before #1958 — a service-role
+  // client in BOTH generateMetadata and the layout body, selecting
+  // sale_offers across every location with only an active=true filter.
+  // layout.js was never walked, so the gate could not see it.
+  const unscopedLayout = `
+    import { createServerClient } from '@/lib/supabase'
+    export async function generateMetadata() {
+      const db = createServerClient()
+      const { data } = await db.from('sale_offers').select('category').eq('active', true)
+      return { title: data?.length ? 'Sale' : 'Gift Cards' }
+    }
+    export default async function OffersLayout({ children }) {
+      const db = createServerClient()
+      const { data } = await db.from('sale_offers').select('ends_at').eq('active', true).limit(1).maybeSingle()
+      return <div>{children}</div>
+    }
+  `
+
+  it('flags a service-role layout querying a tenant table with no scoping (the W0.4 /offers class)', () => {
+    const res = classifyLayout('src/app/offers/layout.js', unscopedLayout, TABLES, {})
+    expect(res.findings).toEqual([{ table: 'sale_offers', exempt: false }])
+  })
+
+  it('flags a layout whose ONLY tenant query lives inside generateMetadata', () => {
+    const src = `
+      import { createServerClient } from '@/lib/supabase'
+      export async function generateMetadata() {
+        const db = createServerClient()
+        const { data } = await db.from('sale_offers').select('category').eq('active', true)
+        return { title: data?.length ? 'Sale' : 'Gift Cards' }
+      }
+      export default function OffersLayout({ children }) { return <div>{children}</div> }
+    `
+    const res = classifyLayout('src/app/offers/layout.js', src, TABLES, {})
+    expect(res.findings).toEqual([{ table: 'sale_offers', exempt: false }])
+  })
+
+  it('flags a PAGE whose only tenant query lives inside generateMetadata (whole-file scope, pinned)', () => {
+    const src = `
+      import { createServerClient } from '@/lib/supabase'
+      export async function generateMetadata({ params }) {
+        const db = createServerClient()
+        const { data } = await db.from('sale_offers').select('name').eq('slug', params.slug).maybeSingle()
+        return { title: data?.name || 'Offer' }
+      }
+      export default function OfferPage() { return <div /> }
+    `
+    const res = classifyPage('src/app/offers/[slug]/page.js', src, TABLES, {})
+    expect(res.findings).toEqual([{ table: 'sale_offers', exempt: false }])
+  })
+
+  it('passes a layout whose chain filters on location_id (the post-#1958 /offers shape)', () => {
+    const src = `
+      import { createServerClient } from '@/lib/supabase'
+      export async function generateMetadata() {
+        const db = createServerClient()
+        const homeId = await resolveOffersHomeLocationId(db)
+        const { data } = await db.from('sale_offers').select('category').eq('active', true).eq('location_id', homeId || NO_HOME_LOCATION_ID)
+        return { title: data?.length ? 'Sale' : 'Gift Cards' }
+      }
+    `
+    const res = classifyLayout('src/app/offers/layout.js', src, TABLES, {})
+    expect(res.findings).toEqual([])
+  })
+
+  it('passes a layout scoped to the org via orgLocationIdsFor + .in(location_id)', () => {
+    const src = `
+      import { createServerClient } from '@/lib/supabase'
+      import { orgLocationIdsFor } from '@/lib/inbound-contact-match'
+      export default async function HubLayout({ children }) {
+        const db = createServerClient()
+        const ids = await orgLocationIdsFor(db, user.activeLocation.id)
+        const { data } = await db.from('email_mailboxes').select('id').in('location_id', ids).eq('active', true).limit(1)
+        return <div>{children}</div>
+      }
+    `
+    const res = classifyLayout('src/app/communications/(hub)/layout.js', src, TABLES, {})
+    expect(res.findings).toEqual([])
+  })
+
+  it('skips layouts that never call the service-role client (pure chrome / RLS-bound)', () => {
+    const src = `
+      import { getCurrentUser } from '@/lib/auth'
+      export default async function Layout({ children }) {
+        const user = await getCurrentUser()
+        if (!user) redirect('/login')
+        return <Shell user={user}>{children}</Shell>
+      }
+    `
+    expect(classifyLayout('src/app/settings/layout.js', src, TABLES, {})).toEqual({ skipped: 'no-service-role' })
+  })
+
+  it('honours EXEMPT entries keyed by the layout path, and only for that table', () => {
+    const exempt = {
+      'src/app/offers/layout.js': { sale_offers: 'public catalogue (test fixture)' },
+    }
+    const res = classifyLayout('src/app/offers/layout.js', unscopedLayout, TABLES, exempt)
+    expect(res.findings).toEqual([{ table: 'sale_offers', exempt: true }])
+    // Same file under a different path is NOT exempt — the key is the path.
+    const other = classifyLayout('src/app/cars/layout.js', unscopedLayout, TABLES, exempt)
+    expect(other.findings).toEqual([{ table: 'sale_offers', exempt: false }])
+  })
+
+  it('does not apply the cron path skip to layouts (only /api routes have system paths)', () => {
+    const res = classifyLayout('src/app/cron/layout.js', unscopedLayout, TABLES, {})
+    expect(res.findings).toEqual([{ table: 'sale_offers', exempt: false }])
+  })
+
+  it('uses the same classifier as pages — identical verdict for identical source', () => {
+    for (const src of [unscopedLayout, `'use client'\n// chrome only`]) {
+      expect(classifyLayout('src/app/x/layout.js', src, TABLES, {}))
+        .toEqual(classifyPage('src/app/x/page.js', src, TABLES, {}))
+    }
+  })
+})
+
+describe('app-dir scan surface (PAGE-SCOPE.2)', () => {
+  it('walks page AND layout files in both extensions — the set the gate promises to read', () => {
+    expect([...APP_SURFACE_FILES].sort()).toEqual(['layout.js', 'layout.jsx', 'page.js', 'page.jsx'])
+  })
+
+  it.each([
+    ['page.js', true],
+    ['page.jsx', true],
+    ['layout.js', true],
+    ['layout.jsx', true],
+    ['route.js', false], // the /api walk, not the app-dir walk
+    ['loading.js', false],
+    ['template.js', false],
+    ['error.js', false],
+    ['not-found.js', false],
+    ['default.js', false],
+    ['page.test.js', false],
+    ['layout.css', false],
+    ['_layout.js', false],
+  ])('isAppSurfaceFile(%s) → %s', (name, expected) => {
+    expect(isAppSurfaceFile(name)).toBe(expected)
   })
 })
 
