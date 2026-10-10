@@ -330,7 +330,7 @@ End-to-end flow: operator clicks one button on a car → copies the tokenised li
 
 **Operator UI.** `DepositCard.jsx` (dynamic-imported into `CarDetail.jsx`) shows the status badge, amount input, **Create / New deposit link** button, the new link with a Copy button, expiry countdown ("expires in 22h 14m"), and a 'View public page' preview link. `CarDepositSettings.jsx` (in `/settings/locations/[id]`) exposes the default amount + terms textarea — saving with changed terms bumps the version automatically.
 
-**Deposit-paid receipt SMS (mig 078) — RETIRED** with Twilio (TWILIO-RETIRE.1). The Revolut webhook now only flips the deposit state; the public deposit page shows the paid receipt.
+**Deposit-paid receipt SMS (mig 078) — RETIRED** with Twilio (TWILIO-RETIRE.1). The Revolut webhook flips the deposit state, upserts the `orders` row, emits the `order.*` contact event and enrols the buyer's contact (matched by `cars.buyer_email` inside the car's organisation) in `order_*` sequences; a car with no `buyer_email` skips all three (REVOLUT.1 — before it the select never read `buyer_email`, so none of them ever ran). The public deposit page shows the paid receipt.
 
 **Concurrency.** Each car is fully isolated end-to-end (`deposit_token`, `deposit_revolut_order_id`, `deposit_revolut_checkout_url`, idempotency key all keyed off the car). 4-5 simultaneous deposits work without contention — Postgres serializes UPDATEs naturally on different rows, Vercel scales horizontally per request, Revolut webhooks land in different car rows. Only edge case: two operators issuing the same car at the exact same moment would race — easy to fix with row-level lock if it ever matters.
 
