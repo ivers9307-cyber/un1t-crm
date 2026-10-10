@@ -12,13 +12,17 @@ vi.mock('@/lib/audit', () => ({ logAuditEvent: vi.fn(() => Promise.resolve()) })
 
 const vendorTurnOn = vi.fn()
 const loadDeviceWithLocation = vi.fn()
-vi.mock('@/lib/ac-devices', () => ({
+// W0.12b: the real assertDeviceAtLocation rides along (pure, no I/O) so the
+// foreign-device guard is exercised against the helper the runner ships with.
+vi.mock('@/lib/ac-devices', async (importOriginal) => ({
+  ...(await importOriginal()),
   vendorTurnOn: (...a) => vendorTurnOn(...a),
   loadDeviceWithLocation: (...a) => loadDeviceWithLocation(...a),
 }))
 
 import { runBathroomClimateForLocation } from './bathroom-climate-runner.js'
 import { logAuditEvent } from '@/lib/audit'
+import { logError } from '@/lib/log'
 
 // ── in-memory Supabase fake ────────────────────────────────────────
 // Tables are arrays of plain rows. A query builder collects filters, then
@@ -99,7 +103,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   loadDeviceWithLocation.mockResolvedValue({
     ok: true,
-    device: { id: 'dev1', label: 'Bathroom M', provider: 'thinq', provider_device_id: 'lg-1' },
+    device: { id: 'dev1', location_id: LOC, label: 'Bathroom M', provider: 'thinq', provider_device_id: 'lg-1' },
     location: { id: LOC },
   })
   vendorTurnOn.mockResolvedValue({ ok: true, observed: { power: 'on' } })
@@ -166,6 +170,35 @@ describe('runBathroomClimateForLocation', () => {
     const db = makeDb({ class_occurrences: [OCC] })
     const out = await runBathroomClimateForLocation(db, ROW, { nowMs: NOW })
     expect(out.actions).toEqual([expect.objectContaining({ status: 'failed', error: 'device offline (1209)' })])
+  })
+
+  it('W0.12b: a device_ids entry that lives at ANOTHER location is recorded failed and never switched', async () => {
+    // The save route (#1966) refuses a foreign id, but an older config or a
+    // direct SQL write can still carry one; loadDeviceWithLocation returns
+    // THAT device's location + credentials, so the runner must refuse it.
+    const OTHER_LOC = 'a0000000-0000-0000-0000-000000000002'
+    loadDeviceWithLocation.mockImplementation(async (id) => id === 'dev1'
+      ? { ok: true, device: { id: 'dev1', location_id: LOC, label: 'Bathroom M', provider: 'thinq', provider_device_id: 'lg-1' }, location: { id: LOC } }
+      : { ok: true, device: { id: 'dev-foreign', location_id: OTHER_LOC, label: 'Hatch WC', provider: 'thinq', provider_device_id: 'lg-9' }, location: { id: OTHER_LOC } })
+    const db = makeDb({ class_occurrences: [OCC] })
+    const out = await runBathroomClimateForLocation(
+      db, { ...ROW, config: { ...ROW.config, device_ids: ['dev1', 'dev-foreign'] } }, { nowMs: NOW })
+
+    // The in-location device still fires; the foreign one fails like any other failed fire.
+    expect(out.actions).toEqual([
+      expect.objectContaining({ device_id: 'dev1', status: 'fired' }),
+      expect.objectContaining({ device_id: 'dev-foreign', status: 'failed', error: expect.stringMatching(/location/i) }),
+    ])
+    expect(vendorTurnOn).toHaveBeenCalledTimes(1)
+    expect(vendorTurnOn.mock.calls[0][0].id).toBe('dev1')
+    // No ac_sessions row for the foreign device (it would carry OUR location_id with THEIR device_id).
+    expect(db.calls.inserts.filter((c) => c.table === 'ac_sessions').map((c) => c.rows.device_id)).toEqual(['dev1'])
+    const foreignFire = db.calls.upserts.find((u) => u.table === 'automation_fire_log' && u.rows.device_id === 'dev-foreign')
+    expect(foreignFire.rows).toMatchObject({
+      location_id: LOC, status: 'failed', detail: { reason: 'device_not_at_location' },
+    })
+    expect(logError).toHaveBeenCalledTimes(1)
+    expect(logError.mock.calls[0][2]).toMatchObject({ locationId: LOC, deviceId: 'dev-foreign', deviceLocationId: OTHER_LOC })
   })
 
   it('dry run plans + reports would_fire without touching vendor or DB writes', async () => {
