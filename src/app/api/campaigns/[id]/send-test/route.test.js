@@ -90,6 +90,26 @@ describe('send-test — subject merge tags get the same extras as the body', () 
     await post()
     expect(sendEmail.mock.calls[0][0].subject).toBe('[TEST] Hi Ops from Stillorgan')
   })
+
+  // W1.E2 — a test send must match a real one: the campaign's location drives
+  // the sender (brand display name on the platform address + the location's
+  // Reply-To), and the operator's From name is a display name, never an address.
+  it('W1.E2 — passes the campaign location and from_name; never builds a From from campaign.from_email', async () => {
+    campaignRow.from_name = 'Garrett at Stillorgan'
+    await post()
+    const arg = sendEmail.mock.calls[0][0]
+    expect(arg.locationId).toBe('loc-1')
+    expect(arg.fromName).toBe('Garrett at Stillorgan')
+    expect(arg.from).toBeUndefined()
+  })
+
+  it('W1.E2 — no from_name → no fromName, still the campaign location', async () => {
+    await post()
+    const arg = sendEmail.mock.calls[0][0]
+    expect(arg.locationId).toBe('loc-1')
+    expect(arg.fromName).toBeUndefined()
+    expect(arg.from).toBeUndefined()
+  })
 })
 
 // W1.L3a — a test send must show the operator the links the REAL send will

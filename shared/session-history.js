@@ -12,6 +12,7 @@
 
 import { dublinMonthKey } from './dublin-time.js'
 import { currentStreak } from './hr-analytics.js'
+import { productName } from './brand-name.js'
 
 const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -128,13 +129,17 @@ function crossed(value, thresholds) {
  *
  * @param {Array<{started_at?:string, ended_at?:string, effort_points?:number}>} sessions
  * @param {number} nowMs
+ * @param {{ brand?: string, shortName?: string }} [brandOpts]  W1.S4 — the tenant's
+ *   brand ("trained N times at {brand}") and short brand ("{shortName} Points");
+ *   with neither in hand the labels read "trained N times" / "N Points earned".
+ *   The phone passes useBrand(); never a gym literal here.
  * @returns {{
  *   totalSessions:number, totalPoints:number, totalMinutes:number,
  *   totalHours:number, longestStreak:number,
  *   milestones:Array<{ id:string, kind:string, value:number, threshold:number, label:string }>
  * }}
  */
-export function lifetimeMilestones(sessions, nowMs = Date.now()) {
+export function lifetimeMilestones(sessions, nowMs = Date.now(), { brand = '', shortName = '' } = {}) {
   const list = (sessions || []).filter((s) => startedMs(s) !== null)
   let totalPoints = 0
   let totalMinutes = 0
@@ -161,7 +166,7 @@ export function lifetimeMilestones(sessions, nowMs = Date.now()) {
       kind: 'sessions',
       value: totalSessions,
       threshold: sessionMs,
-      label: `You've trained ${sessionMs.toLocaleString()} times at UN1T`,
+      label: `You've trained ${sessionMs.toLocaleString()} times${brand ? ` at ${brand}` : ''}`,
     })
   }
 
@@ -172,7 +177,7 @@ export function lifetimeMilestones(sessions, nowMs = Date.now()) {
       kind: 'points',
       value: totalPoints,
       threshold: pointMs,
-      label: `${pointMs.toLocaleString()} UN1T Points earned`,
+      label: `${pointMs.toLocaleString()} ${productName(shortName, 'points')} earned`,
     })
   }
 
