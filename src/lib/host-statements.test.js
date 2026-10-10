@@ -6,6 +6,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { monthsWithActivity, buildStatementCsv } from './host-statements.js'
+import { PLATFORM_NAME } from './brand-name.js'
 
 // A settled stripe_connect payment row: gross = fee + net.
 const paid = (over = {}) => ({
@@ -64,7 +65,7 @@ describe('buildStatementCsv', () => {
     expect(lines[0]).toBe('Statement for Acme Events')
     expect(lines[1]).toBe('Month,2026-07')
     expect(lines[2]).toBe('')
-    expect(lines[3]).toBe('Date,Event,Status,Gross,UN1T fee,Net,Refunded')
+    expect(lines[3]).toBe(`Date,Event,Status,Gross,${PLATFORM_NAME} fee,Net,Refunded`)
     expect(lines[4]).toBe('2026-07-03,Spring Hyrox,completed,47.00,2.00,45.00,0.00')
     expect(lines[5]).toBe('2026-07-10,Summer Throwdown,refunded,47.00,2.00,45.00,47.00')
     expect(lines[6]).toBe('')
@@ -121,7 +122,7 @@ describe('buildStatementCsv', () => {
   it('emits an empty statement (headers + zero totals) for no payments', () => {
     const csv = buildStatementCsv({ ...base, payments: [] })
     const lines = csv.split('\r\n')
-    expect(lines[3]).toBe('Date,Event,Status,Gross,UN1T fee,Net,Refunded')
+    expect(lines[3]).toBe(`Date,Event,Status,Gross,${PLATFORM_NAME} fee,Net,Refunded`)
     expect(lines[lines.length - 1]).toBe('Totals,,,0.00,0.00,0.00,0.00')
   })
 })

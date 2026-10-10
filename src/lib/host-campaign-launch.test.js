@@ -15,7 +15,8 @@ vi.mock('@/lib/qstash', () => ({
   HOST_CAMPAIGNS_WORKER_PATH: '/api/webhooks/qstash/host-campaigns',
 }))
 
-import { launchHostCampaign, resolveMissedRecipients, LAUNCH_MESSAGES, LAUNCH_GATE_REASONS } from './host-campaign-launch.js'
+import { launchHostCampaign, resolveMissedRecipients, LAUNCH_MESSAGES, LAUNCH_GATE_REASONS, hostSetupMessages } from './host-campaign-launch.js'
+import { PLATFORM_NAME } from '@/lib/brand-name'
 import { resolveHostRecipients } from '@/lib/host-campaign-email'
 import { publishQueuePush, HOST_CAMPAIGNS_WORKER_PATH } from '@/lib/qstash'
 
@@ -93,6 +94,45 @@ beforeEach(() => {
     { contact_id: 'c1', email: 'a@x.ie' },
     { contact_id: 'c2', email: 'b@x.ie' },
   ])
+})
+
+// W1.S1c — the two refusals that say who to ask name the host's organisation
+// (the gym that verifies its domain and attaches its stream), never a literal.
+describe('setup refusals name the host organisation (W1.S1c)', () => {
+  it('hostSetupMessages builds both from the brand and floors on the platform name', () => {
+    expect(hostSetupMessages('Pulse Gym')).toEqual({
+      sender_not_verified: 'Sending is not enabled. Ask Pulse Gym to verify your sending domain.',
+      no_stream: 'Marketing sending is not set up for this host yet. Ask Pulse Gym to attach your Postmark stream.',
+    })
+    expect(hostSetupMessages('')).toEqual(hostSetupMessages(PLATFORM_NAME))
+    expect(LAUNCH_MESSAGES.sender_not_verified).toBe(hostSetupMessages(PLATFORM_NAME).sender_not_verified)
+    expect(Object.values(LAUNCH_MESSAGES).join(' ')).not.toMatch(/UN1T/)
+  })
+
+  const withOrg = (orgId, hostOver) => {
+    const base = routeFor({ host: { ...HOST_ROW, organization_id: orgId, ...hostOver } })
+    return makeDb((state) => (state.table === 'org_settings'
+      ? { data: [{ company_name: 'UN1T Dublin', short_name: 'UN1T' }], error: null }
+      : base(state)))
+  }
+
+  it('sender_not_verified names the organisation the host belongs to', async () => {
+    const { db } = withOrg('org-s1c-1', { sender_domain_verified: false })
+    expect(await launch(db)).toMatchObject({
+      reason: 'sender_not_verified',
+      status: 409,
+      error: 'Sending is not enabled. Ask UN1T Dublin to verify your sending domain.',
+    })
+  })
+
+  it('no_stream names the organisation too', async () => {
+    const { db } = withOrg('org-s1c-2', { postmark_stream_id: null })
+    expect(await launch(db)).toMatchObject({
+      reason: 'no_stream',
+      status: 409,
+      error: 'Marketing sending is not set up for this host yet. Ask UN1T Dublin to attach your Postmark stream.',
+    })
+  })
 })
 
 describe('LAUNCH_GATE_REASONS', () => {
