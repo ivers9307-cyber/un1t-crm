@@ -136,15 +136,15 @@ describe('ShellyScheduleEditor — Glofox gating', () => {
     render(<ShellyScheduleEditor device={device()} glofoxConnected={false} onSave={vi.fn()} />)
     const radio = screen.getByLabelText('Class timetable')
     expect(radio.disabled).toBe(true)
-    expect(radio.closest('label').getAttribute('title')).toBe('Connect Glofox to use class-linked schedules')
+    expect(radio.closest('label').getAttribute('title')).toBe('Connect a membership source with a class schedule to use class-linked schedules')
   })
 
   it('a device ALREADY in class mode still shows its inputs, disabled, with the reason', () => {
     render(<ShellyScheduleEditor device={device({ schedule_mode: 'class' })} glofoxConnected={false} onSave={vi.fn()} />)
     const lead = screen.getByDisplayValue(String(DEFAULT_LEAD_MIN))
     expect(lead.disabled).toBe(true)
-    expect(lead.getAttribute('title')).toBe('Connect Glofox to use class-linked schedules')
-    expect(screen.getByText('Connect Glofox to use class-linked schedules.')).toBeTruthy()
+    expect(lead.getAttribute('title')).toBe('Connect a membership source with a class schedule to use class-linked schedules')
+    expect(screen.getByText('Connect a membership source with a class schedule to use class-linked schedules.')).toBeTruthy()
   })
 })
 

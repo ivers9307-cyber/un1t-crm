@@ -13,6 +13,9 @@
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
+import { createServerClient } from '@/lib/supabase'
+import { membershipStateForPage, membershipSettingsHref, canManageMembershipSource } from '@/lib/membership/state-for-page'
+import MembershipSourceGate from '@/components/MembershipSourceGate'
 import ChurnRadar from '@/components/ChurnRadar'
 
 export const dynamic = 'force-dynamic'
@@ -22,13 +25,25 @@ export default async function DashboardChurnRadarPage() {
   if (!user) redirect('/login?redirect=/dashboard/churn-radar')
   if (!hasPermission(user, 'churn_radar')) redirect('/dashboard')
 
+  // W1.M3a — the radar scores MEMBERS, so without a membership source it
+  // is empty by construction. Say so instead of drawing an empty radar.
+  const locationId = user.activeLocation?.id || null
+  const membership = await membershipStateForPage(createServerClient(), locationId)
+
   return (
     <>
       <p className="text-sm text-un1t-subtle mb-6">
         Paying members at risk of churning, scored on attendance. Act early —
         a quick check-in turns most of these around.
       </p>
-      <ChurnRadar />
+      <MembershipSourceGate
+        state={membership}
+        capability="memberships"
+        settingsHref={membershipSettingsHref(locationId)}
+        canManage={canManageMembershipSource(user, locationId)}
+      >
+        <ChurnRadar />
+      </MembershipSourceGate>
     </>
   )
 }
