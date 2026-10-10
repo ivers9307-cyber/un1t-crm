@@ -8442,7 +8442,7 @@ registry.registerPath({
   tags: ['Dashboard'],
   security: [{ CookieAuth: [] }],
   summary: 'Business dashboard blocks as JSON',
-  description: 'Every block of the /dashboard/business command centre in one payload — KPI briefing, acquisition funnel, ads-7d, membership live + 12-month trend, today-ops strip, and the "Needs you" rail. Per-block failure isolation: a failed block returns null under its key (rail: null = failed, [] = nothing waiting). Session cookie (web) or Supabase JWT Bearer + x-active-location (mobile app). Requires the dashboard_business permission.',
+  description: 'Every block of the /dashboard/business command centre in one payload — KPI briefing, acquisition funnel, ads-7d, membership live + 12-month trend, today-ops strip, and the "Needs you" rail. Per-block failure isolation: a failed block returns null under its key (rail: null = failed, [] = nothing waiting). W1.M3c: `membership_source` ({ source, state: none|configured|unconfigured|unknown, label, missing?, provides_memberships, can_manage }) rides alongside the blocks; the phone shows a state card instead of the KPI row and membership section when the state is not configured (a failed state read is unknown, never none). Session cookie (web) or Supabase JWT Bearer + x-active-location (mobile app). Requires the dashboard_business permission.',
   responses: {
     200: { description: 'Dashboard blocks', content: { 'application/json': { schema: z.object({}).passthrough().openapi('BusinessDashboardResponse') } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
@@ -8459,7 +8459,7 @@ registry.registerPath({
   description: 'CONTACTREADSCOPE.1a — new leads this week (joined_at since the Europe/Dublin Monday), the funnel by pipeline_stage_slug and the contact total, for the phone Studio dashboard. Requires dashboard_studio AT location_id (not Contacts: these are counts). Scoped by assertLocationAccess. A failed read is a logged 500, never zeros or a partial funnel. Session cookie (web) or Supabase JWT Bearer + x-active-location (mobile app).',
   request: { query: z.object({ location_id: uuidLike }) },
   responses: {
-    200: { description: 'Contact numbers: { newLeadsThisWeek, funnel, totalContacts }', content: { 'application/json': { schema: z.object({}).passthrough().openapi('StudioContactNumbersResponse') } } },
+    200: { description: 'Contact numbers: { newLeadsThisWeek, funnel, totalContacts, membership_source } (W1.M3c: the studio membership-source state, server-judged)', content: { 'application/json': { schema: z.object({}).passthrough().openapi('StudioContactNumbersResponse') } } },
     400: { description: 'location_id missing or malformed', content: { 'application/json': { schema: ErrorResponse } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'No access to the studio, or no dashboard_studio there', content: { 'application/json': { schema: ErrorResponse } } },
