@@ -261,7 +261,7 @@ async function serverRequest(serverToken, method, path, body) {
  * @returns {Promise<{ created: boolean }>}
  */
 export async function ensureTenantServerStreams(serverToken) {
-  const list = await serverRequest(serverToken, 'GET', '/message-streams?includeArchivedStreams=false')
+  const list = await serverRequest(serverToken, 'GET', '/message-streams')
   const existing = (Array.isArray(list.MessageStreams) ? list.MessageStreams : []).map((s) => s?.ID)
   if (existing.includes(BROADCAST_STREAM.ID)) return { created: false }
   await serverRequest(serverToken, 'POST', '/message-streams', BROADCAST_STREAM)
@@ -281,7 +281,9 @@ export async function ensureTenantServerWebhooks(serverToken) {
   const token = process.env.POSTMARK_WEBHOOK_TOKEN
   if (!token) {
     // No silent fallback: a hook without the header 403s on every event.
-    throw new Error('POSTMARK_WEBHOOK_TOKEN is not set; refusing to register a webhook the receiver would reject.')
+    // (POSTMARK_WEBHOOK_TOKEN; the message reaches an org admin via
+    // last_error, so it names no env var.)
+    throw new Error('Webhook signing token is not configured on this deployment.')
   }
   const url = `${getAppUrl()}/api/webhooks/postmark`
   const list = await serverRequest(serverToken, 'GET', '/webhooks')

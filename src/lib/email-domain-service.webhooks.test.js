@@ -101,8 +101,10 @@ describe('provisionEmailDomain — streams + webhooks on a fresh server (W1.E3)'
     expect(row.postmark_domain_id).toBe(55)
     expect(row.status).toBe('verifying')
     expect(row.webhooks_registered_at ?? null).toBeNull()
-    expect(row.last_error).toMatch(/Webhook limit reached/)
-    expect(logWarn).toHaveBeenCalledWith('tenant-email-domain', expect.stringMatching(/webhook/i), expect.objectContaining({ orgId: 'org-a' }))
+    // Tenant-facing: says what did not happen and what to press, with the
+    // cause in brackets; the raw message goes to the log.
+    expect(row.last_error).toBe('Event webhooks were not registered on the sending server (Postmark server API error: Webhook limit reached.). Press Verify to retry.')
+    expect(logWarn).toHaveBeenCalledWith('tenant-email-domain', expect.stringMatching(/webhook/i), expect.objectContaining({ orgId: 'org-a', err: 'Postmark server API error: Webhook limit reached.' }))
     // The message never carries the server token.
     expect(JSON.stringify(db.state.patches.map((p) => p.last_error))).not.toContain('srv-tok')
   })
@@ -113,7 +115,7 @@ describe('provisionEmailDomain — streams + webhooks on a fresh server (W1.E3)'
     const row = await provisionEmailDomain(db, ARGS)
     expect(ensureTenantServerWebhooks).not.toHaveBeenCalled()
     expect(row.webhooks_registered_at ?? null).toBeNull()
-    expect(row.last_error).toMatch(/HTTP 500/)
+    expect(row.last_error).toMatch(/^Event webhooks were not registered on the sending server \(.*HTTP 500.*\)\. Press Verify to retry\.$/)
     expect(row.postmark_domain_id).toBe(55)
   })
 
@@ -162,7 +164,7 @@ describe('verifyEmailDomain — the verify button is the retry an operator can r
     const res = await verifyEmailDomain(db, 'org-a')
     expect(res.row).toBeTruthy()
     expect(res.row.webhooks_registered_at ?? null).toBeNull()
-    expect(res.row.last_error).toMatch(/HTTP 503/)
+    expect(res.row.last_error).toMatch(/^Event webhooks were not registered.*HTTP 503.*Press Verify to retry\.$/)
   })
 
   it('does nothing extra once stamped', async () => {

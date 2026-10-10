@@ -18,6 +18,8 @@ import {
   sanitizeSendingDomain,
   ensureTenantServerStreams,
   ensureTenantServerWebhooks,
+  WEBHOOK_TRIGGERS,
+  WEBHOOK_STREAMS,
 } from './postmark-account.js'
 
 const TOKEN = 'pm-account-test-token'
@@ -227,20 +229,28 @@ describe('W1.E3 tenant server streams + webhooks', () => {
         SubscriptionChange: { Enabled: true },
       },
     })
+    // The exported constants ARE what goes on the wire (the global CRM.UN1T
+    // server's trigger set and the two streams the app sends on).
+    expect(posted[0].Triggers).toEqual(WEBHOOK_TRIGGERS)
+    expect(WEBHOOK_STREAMS).toEqual(['outbound', 'broadcast'])
   })
 
   it('registers both streams on a bare server; a hook on a DIFFERENT url does not count', async () => {
     const r = routeFetch()
     r.get('/webhooks', { Webhooks: [{ Url: 'https://elsewhere.example/hook', MessageStream: 'outbound' }] })
     expect(await ensureTenantServerWebhooks('srv-tok')).toEqual({ created: ['outbound', 'broadcast'] })
-    expect(r.postedAll('/webhooks').map((w) => w.MessageStream)).toEqual(['outbound', 'broadcast'])
+    expect(r.postedAll('/webhooks').map((w) => w.MessageStream)).toEqual([...WEBHOOK_STREAMS])
   })
 
-  it('refuses to register a webhook without POSTMARK_WEBHOOK_TOKEN (the receiver 403s an unsigned hook)', async () => {
+  it('refuses to register a webhook without POSTMARK_WEBHOOK_TOKEN (the receiver 403s an unsigned hook), in words an org admin may read', async () => {
     vi.stubEnv('POSTMARK_WEBHOOK_TOKEN', '')
     const r = routeFetch()
     r.get('/webhooks', { Webhooks: [] })
-    await expect(ensureTenantServerWebhooks('srv-tok')).rejects.toThrow(/POSTMARK_WEBHOOK_TOKEN/)
+    const err = await ensureTenantServerWebhooks('srv-tok').catch((e) => e)
+    expect(err).toBeInstanceOf(Error)
+    expect(err.message).toBe('Webhook signing token is not configured on this deployment.')
+    // The message lands in last_error (rendered to the org admin): no env name.
+    expect(err.message).not.toMatch(/POSTMARK_/)
     expect(fetchMock).not.toHaveBeenCalled()
   })
 

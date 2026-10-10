@@ -122,8 +122,11 @@ async function ensureServerWebhooksRecorded(db, orgId, row) {
     await ensureTenantServerWebhooks(row.postmark_server_token)
   } catch (e) {
     const message = e?.message || 'Postmark webhook registration failed.'
+    // The raw message goes to the structured log for ops; what reaches
+    // last_error is rendered in red to the org admin by EmailDomainWizard,
+    // so it says what did not happen and what to press.
     logWarn('tenant-email-domain', 'server streams/webhook registration failed; will retry on the next provision or verify', { orgId, err: message })
-    return { row, error: message }
+    return { row, error: `Event webhooks were not registered on the sending server (${message}). Press Verify to retry.` }
   }
   const stamped = await upsertRow(db, orgId, { webhooks_registered_at: new Date().toISOString() })
   return { row: stamped, error: null }
