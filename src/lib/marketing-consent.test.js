@@ -8,7 +8,9 @@ vi.mock('@/lib/postmark-suppressions', () => ({
 }))
 
 import { applyFormMarketingConsent, applyMarketingPreferencesBulk } from './marketing-consent'
+vi.mock('@/lib/postmark-server-for-location', () => ({ serverTokenForLocation: vi.fn(async () => null) }))
 const { unsuppressAtPostmark } = await import('@/lib/postmark-suppressions')
+const { serverTokenForLocation } = await import('@/lib/postmark-server-for-location')
 
 // LOCCOMMS.2 — applyFormMarketingConsent must record consent at the location
 // the FORM belongs to, which is frequently NOT the location the contact is
@@ -377,7 +379,7 @@ describe('consent_log.location_id (CONSENTLOC.1)', () => {
 // while no mail arrives. Four live contacts were in exactly that state.
 
 describe('RESUB-SUPP.1 — an opt-in lifts the Postmark suppression', () => {
-  beforeEach(() => { unsuppressAtPostmark.mockClear() })
+  beforeEach(() => { unsuppressAtPostmark.mockClear(); serverTokenForLocation.mockClear(); serverTokenForLocation.mockResolvedValue(null) })
 
   const optedOut = { id: 'c1', email: 'back@example.com', glofox_membership_status: 'lead', email_status: 'active' }
 
@@ -386,7 +388,24 @@ describe('RESUB-SUPP.1 — an opt-in lifts the Postmark suppression', () => {
     const out = await applyFormMarketingConsent(db, { contactId: 'c1', consent: true, source: 'event_form' })
     expect(out.ok).toBe(true)
     expect(unsuppressAtPostmark).toHaveBeenCalledTimes(1)
-    expect(unsuppressAtPostmark).toHaveBeenCalledWith('back@example.com')
+    expect(unsuppressAtPostmark).toHaveBeenCalledWith('back@example.com', { serverToken: null })
+  })
+
+  // W1.E4 — the lift goes to the server the contact's org sends from, resolved
+  // from the CONTACT's home location (its org), not the form's location.
+  it('lifts on the TENANT server when the contact\'s org has a live one', async () => {
+    serverTokenForLocation.mockResolvedValue('tenant-tok')
+    const { db } = makeDb({ contact: { ...optedOut, location_id: 'loc-home' }, prefs: { email_marketing: false, sms_marketing: false, whatsapp_marketing: false } })
+    await applyFormMarketingConsent(db, { contactId: 'c1', consent: true, source: 'event_form', locationId: 'loc-form' })
+    expect(serverTokenForLocation).toHaveBeenCalledWith(db, 'loc-home')
+    expect(unsuppressAtPostmark).toHaveBeenCalledWith('back@example.com', { serverToken: 'tenant-tok' })
+  })
+
+  it('falls back to the FORM location for a contact row with no location_id', async () => {
+    serverTokenForLocation.mockResolvedValue('tenant-tok')
+    const { db } = makeDb({ contact: optedOut, prefs: { email_marketing: false, sms_marketing: false, whatsapp_marketing: false } })
+    await applyFormMarketingConsent(db, { contactId: 'c1', consent: true, source: 'event_form', locationId: 'loc-form' })
+    expect(serverTokenForLocation).toHaveBeenCalledWith(db, 'loc-form')
   })
 
   it('does NOT lift on an opt-OUT — that direction suppresses, it never releases', async () => {

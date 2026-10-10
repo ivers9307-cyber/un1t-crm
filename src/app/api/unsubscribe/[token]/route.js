@@ -5,6 +5,7 @@ import { getRequestOrigin } from '@/lib/app-url'
 import { CONSENT_ACTIONS } from '@/lib/consent-actions'
 import { propagateOptOut } from '@/lib/consent-propagation'
 import { suppressAtPostmark } from '@/lib/postmark-suppressions'
+import { serverTokenForLocation } from '@/lib/postmark-server-for-location'
 import {
   REFUSAL_REASONS,
   guardBeforeTokenLookup,
@@ -328,9 +329,15 @@ export async function POST(request, props) {
     // Gated on email_marketing having ACTUALLY flipped — channelPatch is built
     // only from channels that were true — so a repeat click or an SMS-only
     // opt-out sends nothing.
+    //
+    // W1.E4 — ON THE SERVER THE PERSON'S MAIL COMES FROM. A suppression list is
+    // per Postmark server; an org with a live tenant_email_domains row sends
+    // from its own, so the refusal must land there. Resolved from the
+    // contact's home location (→ org); null = the global server, as before.
     if (!scopeLocationId && channelPatch.email_marketing === false && pref.contacts?.email) {
       try {
-        const result = await suppressAtPostmark(pref.contacts.email)
+        const serverToken = await serverTokenForLocation(db, pref.contacts.location_id)
+        const result = await suppressAtPostmark(pref.contacts.email, { serverToken })
         if (result?.failed?.length) {
           console.error('[unsubscribe] Postmark suppression failed (the opt-out itself IS recorded; consent-drift-check will retry):', {
             contactId: pref.contact_id,

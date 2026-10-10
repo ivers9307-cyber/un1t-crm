@@ -17,7 +17,7 @@ vi.mock('@/lib/postmark-suppressions', () => ({
 }))
 
 const { suppressAtPostmark, unsuppressAtPostmark, listPostmarkSuppressions } = await import('@/lib/postmark-suppressions')
-const { GET, findConsentDrift, reconcilePostmarkSuppressions, PAGE_SIZE, MAX_SUPPRESSIONS_PER_RUN } = await import('./route.js')
+const { GET, findConsentDrift, reconcilePostmarkSuppressions, planPostmarkServers, PAGE_SIZE, MAX_SUPPRESSIONS_PER_RUN } = await import('./route.js')
 
 const req = (auth) => ({ headers: { get: (k) => (k === 'authorization' ? auth : null) } })
 
@@ -34,7 +34,7 @@ const req = (auth) => ({ headers: { get: (k) => (k === 'authorization' ? auth : 
 // `consentLog` defaults to one voluntary opt-out per opted-out contact, so the
 // tests that are about OTHER axes (pagination, the cap, push failures) do not
 // each have to restate the taxonomy.
-function makeDb({ rpcRows = [], optedOut = [], mailable = [], consentLog = null, failTable = null } = {}) {
+function makeDb({ rpcRows = [], optedOut = [], mailable = [], consentLog = null, failTable = null, tenantServers = [], locations = [] } = {}) {
   const statements = []
   const log = consentLog || optedOut.map((c, i) => ({
     id: `log-${i}`, contact_id: c.id, channel: 'email_marketing',
@@ -62,7 +62,9 @@ function makeDb({ rpcRows = [], optedOut = [], mailable = [], consentLog = null,
     const source = state.table === 'contacts' ? optedOut
       : state.table === 'contact_location_audience' ? mailable
         : state.table === 'consent_log' ? log
-          : []
+          : state.table === 'tenant_email_domains' ? tenantServers
+            : state.table === 'locations' ? locations
+              : []
     const rows = state.filters
       .filter(f => f[0] === 'in')
       .reduce((acc, [, col, values]) => acc.filter(r => values.includes(r[col])), source)
@@ -165,7 +167,7 @@ describe('reconcilePostmarkSuppressions', () => {
   it('pushes a suppression for someone we say is opted out and Postmark does not have', async () => {
     const db = makeDb({ optedOut: [row('gone@x.com')] })
     const out = await reconcilePostmarkSuppressions(db)
-    expect(suppressAtPostmark).toHaveBeenCalledWith(['gone@x.com'], { stream: 'broadcast' })
+    expect(suppressAtPostmark).toHaveBeenCalledWith(['gone@x.com'], { stream: 'broadcast', serverToken: null })
     expect(out.error).toBeNull()
     expect(out.missingSuppression).toBe(1)
     expect(out.suppressed).toBe(1)
@@ -192,7 +194,7 @@ describe('reconcilePostmarkSuppressions', () => {
     const out = await reconcilePostmarkSuppressions(db)
     // voluntary + the duplicate_propagation exception; bulk / policy /
     // deliverability all stay out.
-    expect(suppressAtPostmark).toHaveBeenCalledWith(['clicked@x.com', 'sibling@x.com'], { stream: 'broadcast' })
+    expect(suppressAtPostmark).toHaveBeenCalledWith(['clicked@x.com', 'sibling@x.com'], { stream: 'broadcast', serverToken: null })
     expect(out.missingSuppression).toBe(2)
   })
 
@@ -311,5 +313,137 @@ describe('GET /api/cron/consent-drift-check — Postmark reconciliation (PMSUPP.
     const res = await GET(req('Bearer test-secret'))
     expect(res.status).toBe(500)
     expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+})
+
+// ────────────────────────────────────────────────────────────────────
+// W1.E4 — the reconciliation runs PER POSTMARK SERVER: the global server plus
+// every LIVE tenant server (tenant_email_domains.status = 'live'). A tenant's
+// suppression list lives on its own server, so reconciling the global one
+// alone left every tenant unreconciled; and the DB side of each pass is
+// scoped to that server's locations, so one tenant's opted-out addresses are
+// never pushed onto another tenant's (or UN1T's) Postmark server — a
+// cross-tenant address leak into a third party's account.
+describe('planPostmarkServers (W1.E4)', () => {
+  it('is the global server alone, unscoped, when no tenant has a live server (today)', async () => {
+    const db = makeDb()
+    expect(await planPostmarkServers(db)).toEqual({
+      servers: [{ label: 'global', organizationId: null, serverToken: null, locationIds: null }],
+      error: null,
+    })
+  })
+
+  it('adds one entry per live tenant server, each scoped to its org\'s locations, and scopes the global one to the rest', async () => {
+    const db = makeDb({
+      tenantServers: [{ organization_id: 'org-t', postmark_server_token: 'tok-t' }],
+      locations: [
+        { id: 'loc-u1', organization_id: 'org-u' },
+        { id: 'loc-t1', organization_id: 'org-t' },
+        { id: 'loc-u2', organization_id: 'org-u' },
+        { id: 'loc-t2', organization_id: 'org-t' },
+        { id: 'loc-none', organization_id: null },
+      ],
+    })
+    const out = await planPostmarkServers(db)
+    expect(out.error).toBeNull()
+    expect(out.servers).toEqual([
+      { label: 'global', organizationId: null, serverToken: null, locationIds: ['loc-u1', 'loc-u2', 'loc-none'] },
+      { label: 'tenant:org-t', organizationId: 'org-t', serverToken: 'tok-t', locationIds: ['loc-t1', 'loc-t2'] },
+    ])
+  })
+
+  it('reports a failed tenant read instead of silently running global-only', async () => {
+    const db = makeDb({ failTable: 'tenant_email_domains' })
+    const out = await planPostmarkServers(db)
+    expect(out.servers).toEqual([])
+    expect(out.error).toContain('tenant_email_domains')
+  })
+
+  it('reports a failed locations read (needed to scope every pass) instead of guessing', async () => {
+    const db = makeDb({ tenantServers: [{ organization_id: 'org-t', postmark_server_token: 'tok-t' }], failTable: 'locations' })
+    const out = await planPostmarkServers(db)
+    expect(out.servers).toEqual([])
+    expect(out.error).toContain('locations')
+  })
+})
+
+describe('reconcilePostmarkSuppressions — per server (W1.E4)', () => {
+  const inFilter = (db, table, col) => db.statements.find(st => st.table === table)?.filters.find(f => f[0] === 'in' && f[1] === col)?.[2]
+
+  it('reads and pushes on the given server, and scopes both DB reads to its locations', async () => {
+    const db = makeDb({
+      optedOut: [row('gone@x.com', { location_id: 'loc-t1' })],
+      mailable: [],
+    })
+    const out = await reconcilePostmarkSuppressions(db, { serverToken: 'tok-t', locationIds: ['loc-t1', 'loc-t2'] })
+    expect(out.error).toBeNull()
+    expect(listPostmarkSuppressions).toHaveBeenCalledWith({ stream: 'broadcast', serverToken: 'tok-t' })
+    expect(suppressAtPostmark).toHaveBeenCalledWith(['gone@x.com'], { stream: 'broadcast', serverToken: 'tok-t' })
+    expect(inFilter(db, 'contacts', 'location_id')).toEqual(['loc-t1', 'loc-t2'])
+    expect(inFilter(db, 'contact_location_audience', 'audience_location_id')).toEqual(['loc-t1', 'loc-t2'])
+  })
+
+  it('never pushes another org\'s opt-outs onto a tenant server', async () => {
+    // The double replays .in() for real: a contact filed at a location outside
+    // the server's scope must not be read, so it cannot be pushed.
+    const db = makeDb({ optedOut: [row('other@x.com', { location_id: 'loc-u1' })] })
+    const out = await reconcilePostmarkSuppressions(db, { serverToken: 'tok-t', locationIds: ['loc-t1'] })
+    expect(out.missingSuppression).toBe(0)
+    expect(suppressAtPostmark).not.toHaveBeenCalled()
+  })
+
+  it('with locationIds null (global, no tenants) adds no location filter at all — unchanged behaviour', async () => {
+    const db = makeDb({ optedOut: [row('gone@x.com')] })
+    await reconcilePostmarkSuppressions(db)
+    expect(inFilter(db, 'contacts', 'location_id')).toBeUndefined()
+    expect(inFilter(db, 'contact_location_audience', 'audience_location_id')).toBeUndefined()
+    expect(suppressAtPostmark).toHaveBeenCalledWith(['gone@x.com'], { stream: 'broadcast', serverToken: null })
+  })
+})
+
+describe('GET /api/cron/consent-drift-check — per server (W1.E4)', () => {
+  const tenantDb = (extra = {}) => makeDb({
+    tenantServers: [{ organization_id: 'org-t', postmark_server_token: 'tok-t' }],
+    locations: [{ id: 'loc-u1', organization_id: 'org-u' }, { id: 'loc-t1', organization_id: 'org-t' }],
+    optedOut: [row('gone@x.com', { location_id: 'loc-u1' }), row('left-t@x.com', { location_id: 'loc-t1' })],
+    ...extra,
+  })
+
+  it('reconciles the global server AND every live tenant server, reporting each, and never leaks a token', async () => {
+    createServerClient.mockReturnValue(tenantDb())
+    const res = await GET(req('Bearer test-secret'))
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    // Global: unchanged shape, scoped to the non-tenant locations.
+    expect(body.data.postmark).toMatchObject({ missingSuppression: 1, suppressed: 1 })
+    expect(body.data.tenants).toEqual([
+      expect.objectContaining({ organization_id: 'org-t', missingSuppression: 1, suppressed: 1 }),
+    ])
+    expect(JSON.stringify(body)).not.toContain('tok-t')
+    expect(listPostmarkSuppressions).toHaveBeenCalledWith({ stream: 'broadcast', serverToken: null })
+    expect(listPostmarkSuppressions).toHaveBeenCalledWith({ stream: 'broadcast', serverToken: 'tok-t' })
+    expect(suppressAtPostmark).toHaveBeenCalledWith(['gone@x.com'], { stream: 'broadcast', serverToken: null })
+    expect(suppressAtPostmark).toHaveBeenCalledWith(['left-t@x.com'], { stream: 'broadcast', serverToken: 'tok-t' })
+    expect(stampHeartbeat).toHaveBeenCalledWith('consent-drift-check')
+  })
+
+  it('does NOT stamp the heartbeat when a tenant server could not be read, and still reports the others', async () => {
+    listPostmarkSuppressions.mockImplementation(async ({ serverToken }) =>
+      serverToken === 'tok-t' ? { suppressions: [], error: 'tenant server 401' } : { suppressions: [], error: null })
+    createServerClient.mockReturnValue(tenantDb())
+    const res = await GET(req('Bearer test-secret'))
+    const body = await res.json()
+    expect(res.status).toBe(500)
+    expect(body.error).toContain('tenant server 401')
+    expect(JSON.stringify(body)).not.toContain('tok-t')
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
+  it('does NOT stamp the heartbeat when the server plan itself could not be read', async () => {
+    createServerClient.mockReturnValue(makeDb({ failTable: 'tenant_email_domains' }))
+    const res = await GET(req('Bearer test-secret'))
+    expect(res.status).toBe(500)
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+    expect(listPostmarkSuppressions).not.toHaveBeenCalled()
   })
 })
