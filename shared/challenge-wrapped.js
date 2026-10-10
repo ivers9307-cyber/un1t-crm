@@ -14,12 +14,18 @@
 // 00:00 Dublin of the day after ends_on).
 
 import { metricValue, windowIso } from './challenges.js'
+import { productName } from './brand-name.js'
 
 // Metric → the count-up hero label + how the member's own total reads.
-const METRIC_LABEL = {
-  points: 'UN1T Points',
-  classes: 'classes',
-  z4plus_minutes: 'Zone 4+ min',
+// W1.S4 — the points label is the tenant's product name ("UN1T Points"),
+// built from the short brand the screen passes (useBrand()); bare "Points"
+// when it has none in hand. Never a gym literal.
+export function metricLabels(shortName) {
+  return {
+    points: productName(shortName, 'points'),
+    classes: 'classes',
+    z4plus_minutes: 'Zone 4+ min',
+  }
 }
 
 function startedMs(s) {
@@ -113,10 +119,10 @@ export function ownWindowStats(sessions, challenge, nowMs = Date.now()) {
  *   inbody: { label: string, unit: string, delta: number, dp: number }|null,
  * }}
  */
-export function challengeWrappedModel({ challenge, sessions, rank = null, count = null, bookend = null, nowMs = Date.now() } = {}) {
+export function challengeWrappedModel({ challenge, sessions, rank = null, count = null, bookend = null, nowMs = Date.now(), shortName = '' } = {}) {
   const name = String(challenge?.name || 'Challenge')
   const metric = challenge?.metric || 'classes'
-  const metricLabel = METRIC_LABEL[metric] || metric
+  const metricLabel = metricLabels(shortName)[metric] || metric
 
   const empty = {
     hasContent: false,
@@ -174,4 +180,3 @@ function pickInbodyHighlight(bookend) {
   return null
 }
 
-export { METRIC_LABEL }

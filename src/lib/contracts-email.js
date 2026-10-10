@@ -129,6 +129,10 @@ export async function sendContractIssuedEmail({ contract, recipient, issuer, tem
       to: recipient.email,
       subject,
       htmlBody: emailShell(innerHtml, branding),
+      // W1.E2 — the org/location brand as display name on the platform address.
+      // fromName only, never locationId: staff mail must not pick up the
+      // studio's customer mailbox as its Reply-To.
+      fromName: branding?.companyName || undefined,
       stream: 'outbound',
       tag: 'contract-issued',
       metadata: { contract_id: contract.id, profile_id: contract.profile_id },
@@ -188,6 +192,10 @@ export async function sendContractReminderEmail({ contract, recipient, templateN
       to: recipient.email,
       subject,
       htmlBody: emailShell(innerHtml, branding),
+      // W1.E2 — the org/location brand as display name on the platform address.
+      // fromName only, never locationId: staff mail must not pick up the
+      // studio's customer mailbox as its Reply-To.
+      fromName: branding?.companyName || undefined,
       stream: 'outbound',
       tag: 'contract-reminder',
       metadata: { contract_id: contract.id, profile_id: contract.profile_id },
@@ -257,6 +265,10 @@ export async function sendContractSignedEmails({ contract, recipient, issuer, te
         to: recipient.email,
         subject,
         htmlBody: emailShell(innerHtml, branding),
+      // W1.E2 — the org/location brand as display name on the platform address.
+      // fromName only, never locationId: staff mail must not pick up the
+      // studio's customer mailbox as its Reply-To.
+      fromName: branding?.companyName || undefined,
         stream: 'outbound',
         tag: 'contract-signed',
         metadata: { contract_id: contract.id, profile_id: contract.profile_id },
@@ -287,6 +299,10 @@ export async function sendContractSignedEmails({ contract, recipient, issuer, te
         to: issuer.email,
         subject,
         htmlBody: emailShell(innerHtml, branding),
+      // W1.E2 — the org/location brand as display name on the platform address.
+      // fromName only, never locationId: staff mail must not pick up the
+      // studio's customer mailbox as its Reply-To.
+      fromName: branding?.companyName || undefined,
         stream: 'outbound',
         tag: 'contract-signed-issuer',
         metadata: { contract_id: contract.id, profile_id: contract.profile_id },
@@ -325,6 +341,10 @@ export async function sendContractDeclinedEmail({ contract, recipient, issuer, t
       to: issuer.email,
       subject,
       htmlBody: emailShell(innerHtml, branding),
+      // W1.E2 — the org/location brand as display name on the platform address.
+      // fromName only, never locationId: staff mail must not pick up the
+      // studio's customer mailbox as its Reply-To.
+      fromName: branding?.companyName || undefined,
       stream: 'outbound',
       tag: 'contract-declined',
       metadata: { contract_id: contract.id, profile_id: contract.profile_id },
@@ -358,6 +378,10 @@ export async function sendContractRevokedEmail({ contract, recipient, templateNa
       to: recipient.email,
       subject,
       htmlBody: emailShell(innerHtml, branding),
+      // W1.E2 — the org/location brand as display name on the platform address.
+      // fromName only, never locationId: staff mail must not pick up the
+      // studio's customer mailbox as its Reply-To.
+      fromName: branding?.companyName || undefined,
       stream: 'outbound',
       tag: 'contract-revoked',
       metadata: { contract_id: contract.id, profile_id: contract.profile_id },

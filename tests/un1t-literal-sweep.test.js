@@ -23,16 +23,15 @@ const repo = join(dirname(fileURLToPath(import.meta.url)), '..')
 // which PR owns a row.
 const SWEPT = [
   // ── W1.S4: shared/ seam + src/lib twins ──────────────────────────────────
-  // Swept on #1999 (branch w1-sweep-shared); activate when #1999 lands.
-  // 'shared/challenge-wrapped.js',
-  // 'shared/customer-notifications.js',
-  // 'shared/goals.js',
-  // 'shared/hr-analytics.js',
-  // 'shared/permissions.js',
-  // 'shared/session-history.js',
-  // 'src/lib/customer-notifications.js',
-  // 'src/lib/goals.js',
-  // 'src/lib/hr-analytics.js',
+  'shared/challenge-wrapped.js',
+  'shared/customer-notifications.js',
+  'shared/goals.js',
+  'shared/hr-analytics.js',
+  'shared/permissions.js',
+  'shared/session-history.js',
+  'src/lib/customer-notifications.js',
+  'src/lib/goals.js',
+  'src/lib/hr-analytics.js',
   // ── W1.S3: Mia, WhatsApp merge, assistant, hyrox ─────────────────────────
   'src/lib/agent/core.js',
   'src/lib/agent/default-copy.js',
