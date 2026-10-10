@@ -222,6 +222,8 @@ function stubDeliveryDb({ send = null, stampError = null } = {}) {
     // contact by Recipient with .ilike(escapeLikePattern(...)); without this
     // the handler throws and the test reads as a behaviour failure.
     b.ilike = (col, val) => { b._filters.push(['ilike', col, val]); return b }
+    // W0.6b — the reactivation branch reads holders as a `.limit()` list.
+    b.limit = () => b
     b.single = () => settle('single')
     b.maybeSingle = () => settle('single')
     b.then = (resolve, reject) => settle('list').then(resolve, reject)
@@ -1292,5 +1294,143 @@ describe('processPostmarkEvent — HOST-CONSENT.1 routing', () => {
     expect(r).toEqual({ ok: true })
     expect(processHostCampaignEvent).toHaveBeenCalledTimes(1)
     expect(applyMarketingPreferencesBulk).not.toHaveBeenCalled()
+  })
+})
+
+
+// ─── W0.6b — a Recipient-resolved reactivation reaches EVERY holder on the
+// server that cleared it, and only those ───────────────────────────────────
+//
+// contacts_email_org_unique (mig 712) is per ORGANISATION, so one address can
+// be a contact at several tenants. The Recipient fallback (zero-GUID events:
+// no send row, so no location to scope by) used `.maybeSingle()`: two holders
+// → PGRST116 → "no contact" → the suppression mirror stayed stuck for BOTH,
+// the exact bug COMMSFIX.C.7 fixed, reopened by multi-tenancy. The scope is
+// the Postmark SERVER that fired the event: a tenant's own server
+// (tenant_email_domains.postmark_server_id, mig 427) → that organisation only;
+// the shared server → every organisation that sends through it, i.e. every
+// one WITHOUT its own server.
+function stubHoldersDb({ contacts = [], tenantServers = [], tenantServersError = null } = {}) {
+  const contactUpdates = []
+  const contactLookups = []
+
+  function builder(table) {
+    const b = { _op: 'select', _values: null, _filters: [], _limit: null }
+    const settle = (shape) => {
+      if (b._op === 'update') {
+        if (table === 'contacts') contactUpdates.push({ values: b._values, filters: b._filters })
+        return Promise.resolve({ data: [], error: null })
+      }
+      if (table === 'contacts') {
+        contactLookups.push({ filters: b._filters, limit: b._limit })
+        let rows = contacts
+        for (const f of b._filters) {
+          if (f[0] === 'eq') rows = rows.filter((r) => r[f[1]] === f[2])
+        }
+        if (typeof b._limit === 'number') rows = rows.slice(0, b._limit)
+        return Promise.resolve({ data: shape === 'single' ? (rows[0] || null) : rows, error: null })
+      }
+      if (table === 'tenant_email_domains') {
+        if (tenantServersError) return Promise.resolve({ data: null, error: tenantServersError })
+        return Promise.resolve({ data: tenantServers, error: null })
+      }
+      // email_sends: never a row — these are zero-GUID events.
+      return Promise.resolve({ data: shape === 'single' ? null : [], error: null })
+    }
+    b.select = () => (b._op === 'update' ? settle('list') : b)
+    b.update = (values) => { b._op = 'update'; b._values = values; return b }
+    b.eq = (col, val) => { b._filters.push(['eq', col, val]); return b }
+    b.in = (col, val) => { b._filters.push(['in', col, val]); return b }
+    b.is = (col, val) => { b._filters.push(['is', col, val]); return b }
+    b.not = (col, op, val) => { b._filters.push(['not', col, op, val]); return b }
+    b.ilike = (col, val) => { b._filters.push(['ilike', col, val]); return b }
+    b.or = (expr) => { b._filters.push(['or', expr]); return b }
+    b.limit = (n) => { b._limit = n; return b }
+    b.single = () => settle('single')
+    b.maybeSingle = () => settle('single')
+    b.then = (resolve, reject) => settle('list').then(resolve, reject)
+    return b
+  }
+
+  return { contactUpdates, contactLookups, from: builder, rpc: () => Promise.resolve({ error: null }) }
+}
+
+describe('processPostmarkEvent — SubscriptionChange reactivation reaches every holder on the clearing server (W0.6b)', () => {
+  const ZERO = '00000000-0000-0000-0000-000000000000'
+  const REACTIVATE = { RecordType: 'SubscriptionChange', MessageID: ZERO, SuppressSending: false, Recipient: 'a@x.ie' }
+  const HOLDER_UN1T = { id: 'c-un1t', email: 'a@x.ie', organization_id: 'org-un1t' }
+  const HOLDER_CCF = { id: 'c-ccf', email: 'A@x.ie', organization_id: 'org-ccf' }
+  const reinstated = (db) => db.contactUpdates
+    .filter((u) => u.values?.email_status === 'active')
+    .map((u) => u.filters.find(([k, c]) => k === 'eq' && c === 'id')?.[2])
+
+  it('on the shared server, two organisations holding the address are BOTH reactivated (never PGRST116 → nobody)', async () => {
+    const db = stubHoldersDb({ contacts: [HOLDER_UN1T, HOLDER_CCF] })
+
+    const r = await processPostmarkEvent(db, { ...REACTIVATE, ServerID: 1 })
+
+    expect(r.ok).toBe(true)
+    expect(reinstated(db).sort()).toEqual(['c-ccf', 'c-un1t'])
+    const lookup = db.contactLookups.find((l) => l.filters.some(([k, c]) => k === 'ilike' && c === 'email'))
+    expect(lookup).toBeTruthy()
+    expect(typeof lookup.limit).toBe('number') // a bounded list, not .maybeSingle()
+  })
+
+  it("a tenant's own server reactivates only that organisation's holder", async () => {
+    const db = stubHoldersDb({
+      contacts: [HOLDER_UN1T, HOLDER_CCF],
+      tenantServers: [{ organization_id: 'org-ccf', postmark_server_id: 777 }],
+    })
+
+    const r = await processPostmarkEvent(db, { ...REACTIVATE, ServerID: 777 })
+
+    expect(r.ok).toBe(true)
+    expect(reinstated(db)).toEqual(['c-ccf'])
+    const lookup = db.contactLookups.find((l) => l.filters.some(([k, c]) => k === 'ilike' && c === 'email'))
+    expect(lookup.filters).toContainEqual(['eq', 'organization_id', 'org-ccf'])
+  })
+
+  it('the shared server never reactivates a holder whose organisation sends through its own server', async () => {
+    const db = stubHoldersDb({
+      contacts: [HOLDER_UN1T, HOLDER_CCF],
+      tenantServers: [{ organization_id: 'org-ccf', postmark_server_id: 777 }],
+    })
+
+    const r = await processPostmarkEvent(db, { ...REACTIVATE, ServerID: 1 })
+
+    expect(r.ok).toBe(true)
+    expect(reinstated(db)).toEqual(['c-un1t'])
+  })
+
+  it('a message-bound event still resolves through the send row, with no holder lookup', async () => {
+    const db = stubHoldersDb({ contacts: [HOLDER_UN1T, HOLDER_CCF] })
+    db.from = ((orig) => (table) => {
+      const b = orig(table)
+      if (table === 'email_sends') {
+        b.maybeSingle = () => Promise.resolve({ data: { contact_id: 'c-sent' }, error: null })
+      }
+      return b
+    })(db.from)
+
+    const r = await processPostmarkEvent(db, { ...REACTIVATE, MessageID: 'pm-real', ServerID: 1 })
+
+    expect(r.ok).toBe(true)
+    expect(reinstated(db)).toEqual(['c-sent'])
+    expect(db.contactLookups.some((l) => l.filters.some(([k, c]) => k === 'ilike' && c === 'email'))).toBe(false)
+  })
+
+  it('an unreadable tenant-server table is logged and the event still reactivates (a lost reactivation is permanent)', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const db = stubHoldersDb({ contacts: [HOLDER_UN1T], tenantServersError: { message: 'relation missing' } })
+
+      const r = await processPostmarkEvent(db, { ...REACTIVATE, ServerID: 1 })
+
+      expect(r.ok).toBe(true)
+      expect(reinstated(db)).toEqual(['c-un1t'])
+      expect(err.mock.calls.flat().join(' ')).toContain('tenant_email_domains')
+    } finally {
+      err.mockRestore()
+    }
   })
 })

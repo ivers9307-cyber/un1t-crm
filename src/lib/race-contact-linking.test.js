@@ -1,26 +1,34 @@
 import { describe, it, expect } from 'vitest'
-import { findOrCreateRaceContact } from './race-contact-linking'
+import { findOrCreateRaceContact, pickEmailHolder } from './race-contact-linking'
 import { ilikeMatches } from './like-escape.test-helpers'
 
 // Minimal chainable db mock for the restrictToLocation path only (it never
 // reaches the org lookup, so no `locations` rows are modelled). A contacts
 // SELECT is location-scoped when .eq('location_id', …) or .in('location_id', …)
-// was called on the chain; any other contacts .maybeSingle() is an estate-wide
-// lookup, which W0.6 removed — `globalQueried` records one.
+// was called on the chain; any other contacts read (awaited list, or
+// .maybeSingle()) is an estate-wide lookup, which W0.6 removed —
+// `globalQueried` records one. W0.6b: the lookups are `.limit(2)` lists now,
+// so the awaited chain answers an array; `.maybeSingle()` stays modelled.
 function makeDb({ atLocation = null, anywhere = null, insertedId = 'new-id' }) {
   const calls = { globalQueried: false, inserted: null }
   const db = {
     from() {
       let locationFiltered = false
+      const answer = () => {
+        if (locationFiltered) return atLocation
+        calls.globalQueried = true
+        return anywhere
+      }
       return {
         select() { return this },
         eq(col) { if (col === 'location_id') locationFiltered = true; return this },
         in(col) { if (col === 'location_id') locationFiltered = true; return this },
         ilike() { return this },
-        maybeSingle: async () => {
-          if (locationFiltered) return { data: atLocation }
-          calls.globalQueried = true
-          return { data: anywhere }
+        limit() { return this },
+        maybeSingle: async () => ({ data: answer() }),
+        then(resolve, reject) {
+          const row = answer()
+          return Promise.resolve({ data: row ? [row] : [], error: null }).then(resolve, reject)
         },
         insert(row) { calls.inserted = row; return { select: () => ({ single: async () => ({ data: { id: insertedId }, error: null }) }) } },
       }
@@ -61,6 +69,7 @@ function makeConstrainedDb({ contacts = [], locations = [] }) {
 
   const query = (rows, { trackScope = false } = {}) => {
     let scoped = false
+    let limit = null
     const q = {
       _rows: rows,
       select() { return q },
@@ -74,13 +83,18 @@ function makeConstrainedDb({ contacts = [], locations = [] }) {
         q._rows = q._rows.filter((r) => ilikeMatches(val, r[col]))
         return q
       },
+      limit(n) { limit = n; return q },
       maybeSingle: async () => {
         if (trackScope && !scoped) state.unscopedContactLookups += 1
         return q._rows.length > 1
           ? { data: null, error: { code: 'PGRST116' } }
           : { data: q._rows[0] || null, error: null }
       },
-      then(resolve, reject) { return Promise.resolve({ data: q._rows, error: null }).then(resolve, reject) },
+      then(resolve, reject) {
+        if (trackScope && !scoped) state.unscopedContactLookups += 1
+        const page = typeof limit === 'number' ? q._rows.slice(0, limit) : q._rows
+        return Promise.resolve({ data: page, error: null }).then(resolve, reject)
+      },
     }
     return q
   }
@@ -198,12 +212,14 @@ describe('findOrCreateRaceContact — restrictToOrg (LEADCAP.1)', () => {
     db.from = (table) => {
       const q = original(table)
       if (table === 'contacts' && firstLook) {
-        const realMaybe = q.maybeSingle
-        q.maybeSingle = async () => {
+        // W0.6b: the lookups are awaited `.limit(2)` lists, so the race is
+        // staged on the chain's settlement, not on `.maybeSingle()`.
+        const realThen = q.then
+        q.then = (resolve, reject) => {
           firstLook = false
           // Simulate the racing request landing between our lookup and insert.
           state.contacts.push({ id: 'race-winner', location_id: HATCH, email: 'race@example.com' })
-          return realMaybe.call(q)
+          return realThen.call(q, resolve, reject)
         }
       }
       return q
@@ -255,11 +271,13 @@ describe('findOrCreateRaceContact — default scope is the organisation (W0.6)',
     db.from = (table) => {
       const q = original(table)
       if (table === 'contacts' && firstLook) {
-        const realMaybe = q.maybeSingle
-        q.maybeSingle = async () => {
+        // W0.6b: the lookups are awaited `.limit(2)` lists, so the race is
+        // staged on the chain's settlement, not on `.maybeSingle()`.
+        const realThen = q.then
+        q.then = (resolve, reject) => {
           firstLook = false
           state.contacts.push({ id: 'race-winner', location_id: STILLORGAN, email: 'race@example.com' })
-          return realMaybe.call(q)
+          return realThen.call(q, resolve, reject)
         }
       }
       return q
@@ -423,5 +441,106 @@ describe('findOrCreateRaceContact — LIKE wildcards cannot select a contact', (
 
     expect(id).toBe('underscored')
     expect(state.insertAttempts).toHaveLength(0)
+  })
+})
+
+// W0.6b — contacts_email_org_unique (mig 712) is case-SENSITIVE, so one
+// organisation can hold `Sam@Example.com` and `sam@example.com` as two rows.
+// Every lookup here is a case-INSENSITIVE ilike, which then matches both;
+// `.maybeSingle()` turned that into PGRST116 → "no match" → an INSERT that
+// 23505'd → a second PGRST116 → null. A known member at a studio with a
+// case-duplicate was refused on every race signup. The lookups are `.limit(2)`
+// lists now and the pick is deterministic.
+describe('findOrCreateRaceContact — two in-org holders differing only by case (W0.6b)', () => {
+  const UPPER = { id: 'c-upper', location_id: STILLORGAN, email: 'Sam@Example.com', created_at: '2026-02-01T00:00:00Z' }
+  const LOWER = { id: 'c-lower', location_id: STILLORGAN, email: 'sam@example.com', created_at: '2026-03-01T00:00:00Z' }
+
+  it('links the exact-case holder at this location rather than refusing', async () => {
+    const { db, state } = makeConstrainedDb({ contacts: [UPPER, LOWER], locations: LOCATIONS })
+
+    const id = await findOrCreateRaceContact({ db, locationId: STILLORGAN, email: 'Sam@Example.com', name: 'Sam' })
+
+    // The input is normalised to lower case, so the exact-case row is LOWER.
+    expect(id).toBe('c-lower')
+    expect(state.insertAttempts).toHaveLength(0)
+  })
+
+  it('with no exact-case holder, picks the oldest row, then the lowest id', async () => {
+    const { db, state } = makeConstrainedDb({
+      contacts: [
+        { id: 'c-b', location_id: STILLORGAN, email: 'SAM@example.com', created_at: '2026-02-01T00:00:00Z' },
+        { id: 'c-a', location_id: STILLORGAN, email: 'Sam@Example.com', created_at: '2026-02-01T00:00:00Z' },
+      ],
+      locations: LOCATIONS,
+    })
+
+    const id = await findOrCreateRaceContact({ db, locationId: STILLORGAN, email: 'sam@example.com', name: 'Sam' })
+
+    expect(id).toBe('c-a')
+    expect(state.insertAttempts).toHaveLength(0)
+  })
+
+  it('resolves two sibling-location holders through the org lookup deterministically', async () => {
+    const { db, state } = makeConstrainedDb({
+      contacts: [
+        { id: 'h-upper', location_id: STILLORGAN, email: 'Pat@Example.com', created_at: '2026-01-05T00:00:00Z' },
+        { id: 'h-lower', location_id: STILLORGAN, email: 'pat@example.com', created_at: '2026-01-01T00:00:00Z' },
+      ],
+      locations: LOCATIONS,
+    })
+
+    const id = await findOrCreateRaceContact({ db, locationId: HATCH, email: 'PAT@example.com', name: 'Pat' })
+
+    expect(id).toBe('h-lower') // exact-case match on the normalised input wins over age
+    expect(state.unscopedContactLookups).toBe(0)
+    expect(state.insertAttempts).toHaveLength(0)
+  })
+
+  it('a 23505 with two in-org holders adopts one instead of returning null', async () => {
+    const { db, state } = makeConstrainedDb({ contacts: [], locations: LOCATIONS })
+    const original = db.from
+    let firstLook = true
+    db.from = (table) => {
+      const q = original(table)
+      if (table === 'contacts' && firstLook) {
+        const realThen = q.then
+        q.then = (resolve, reject) => {
+          firstLook = false
+          state.contacts.push(
+            { id: 'w-upper', location_id: STILLORGAN, email: 'Race@Example.com', created_at: '2026-01-02T00:00:00Z' },
+            { id: 'w-lower', location_id: STILLORGAN, email: 'race@example.com', created_at: '2026-01-03T00:00:00Z' },
+          )
+          return realThen.call(q, resolve, reject)
+        }
+      }
+      return q
+    }
+
+    const id = await findOrCreateRaceContact({ db, locationId: HATCH, email: 'race@example.com', name: 'Racer' })
+
+    expect(id).toBe('w-lower')
+  })
+})
+
+describe('pickEmailHolder (W0.6b)', () => {
+  it('returns null for no rows', () => {
+    expect(pickEmailHolder([], 'a@x.ie')).toBeNull()
+    expect(pickEmailHolder(null, 'a@x.ie')).toBeNull()
+  })
+  it('prefers the row whose stored email equals the normalised input exactly', () => {
+    const rows = [
+      { id: 'z', email: 'A@X.ie', created_at: '2020-01-01T00:00:00Z' },
+      { id: 'y', email: 'a@x.ie', created_at: '2026-01-01T00:00:00Z' },
+    ]
+    expect(pickEmailHolder(rows, 'a@x.ie')?.id).toBe('y')
+  })
+  it('otherwise the oldest created_at, then the lowest id', () => {
+    const rows = [
+      { id: 'b', email: 'A@X.ie', created_at: '2026-01-01T00:00:00Z' },
+      { id: 'a', email: 'a@X.ie', created_at: '2026-01-01T00:00:00Z' },
+      { id: 'c', email: 'A@x.ie', created_at: '2025-01-01T00:00:00Z' },
+    ]
+    expect(pickEmailHolder(rows, 'a@x.ie')?.id).toBe('c')
+    expect(pickEmailHolder(rows.slice(0, 2), 'a@x.ie')?.id).toBe('a')
   })
 })
