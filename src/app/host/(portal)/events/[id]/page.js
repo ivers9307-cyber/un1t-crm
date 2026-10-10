@@ -4,7 +4,8 @@
 // Roster: one row per entry (attendee fetch shared with the CSV export via
 // attendee-export), with a Move action per paid entry (EVENT-MOVE.2, the
 // HostAttendeeTable client component + the /api/host/registrations/[id]/move*
-// routes); a self-serve promo-codes section (HOST-PORTAL.9) sits below.
+// routes); the event's waitlist (EVENT-WAITLIST.1, read-only + Offer now) and a
+// self-serve promo-codes section (HOST-PORTAL.9) sit below.
 // Header actions include take-off-sale / delete (HOST-PORTAL.10).
 
 import { notFound, redirect } from 'next/navigation'
@@ -16,6 +17,7 @@ import { entryLabel } from '@/lib/registration-entry'
 import HostAttendeeTable from '@/components/host/HostAttendeeTable'
 import HostPromoCodes from '@/components/host/HostPromoCodes'
 import HostEventActions from '@/components/host/HostEventActions'
+import EventWaitlistPanel from '@/components/EventWaitlistPanel'
 
 export const dynamic = 'force-dynamic'
 
@@ -92,6 +94,13 @@ export default async function HostEventDetail(props) {
       </div>
 
       <HostAttendeeTable entries={entries} movedOut={movedOut} />
+
+      {/* EVENT-WAITLIST.1 — read-only list + Offer now (own events only). */}
+      <EventWaitlistPanel
+        dark
+        listUrl={`/api/host/events/${race.id}/waitlist`}
+        offerUrl={`/api/host/events/${race.id}/waitlist/offer`}
+      />
 
       <HostPromoCodes eventId={race.id} />
     </div>

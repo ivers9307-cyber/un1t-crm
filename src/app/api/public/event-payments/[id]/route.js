@@ -37,7 +37,7 @@ export async function GET(request, props) {
   const { data, error } = await db
     .from('race_payments')
     .select(`
-      id, status, amount_cents, currency, kind, registration_move_id,
+      id, status, amount_cents, currency, kind, registration_move_id, metadata,
       payment_provider, payment_provider_ref,
       payment_checkout_token, payment_checkout_url, connected_account_id,
       application_fee_cents,
@@ -73,7 +73,7 @@ export async function GET(request, props) {
         const { data: re } = await db
           .from('race_payments')
           .select(`
-            id, status, amount_cents, currency, kind, registration_move_id,
+            id, status, amount_cents, currency, kind, registration_move_id, metadata,
             payment_provider, payment_provider_ref,
             payment_checkout_token, payment_checkout_url,
             race_event_id, race_registration_id,
@@ -97,6 +97,11 @@ export async function GET(request, props) {
   const isGap = row.kind === GAP_PAYMENT_KIND
   const settled = isGap && !!row.move?.gap_settled_at
 
+  // EVENT-MOVE.6 — a customer's own date change (metadata.pending_move). Only
+  // the flag: the way back to the entry page travels in the pay link's
+  // #back= fragment, so this payment-id route never hands out an entry token.
+  const isDateChange = isGap && !!row.metadata?.pending_move
+
   return NextResponse.json({
     success: true,
     data: {
@@ -108,6 +113,8 @@ export async function GET(request, props) {
       expired: isGap && (row.status === 'abandoned' || row.status === 'failed'),
       settled,
       settled_how: settled ? (row.move.gap_settled_how || null) : null,
+      // EVENT-MOVE.6 — a customer's own date change (no pending move echoed).
+      is_date_change: isDateChange,
       amount_cents: row.amount_cents,
       // The per-ticket booking fee UN1T adds on top (0/null for Revolut and
       // internal events). Ticket subtotal = amount_cents − booking_fee_cents.

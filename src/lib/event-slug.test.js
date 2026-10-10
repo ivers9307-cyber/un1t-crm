@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { placeToken, dateToken, timeToken, eventSlug, shouldRederiveSlug, uniqueEventSlug, redirectTargetForSlug } from './event-slug'
+import { placeToken, dateToken, timeToken, eventSlug, shouldRederiveSlug, uniqueEventSlug, redirectTargetForSlug, RESERVED_EVENT_SLUGS } from './event-slug'
 
 describe('placeToken', () => {
   it('strips UN1T and bracketed text and keeps the first word, lowercase', () => {
@@ -149,5 +149,22 @@ describe('redirectTargetForSlug', () => {
   it('is null when the lookup fails (the page renders as before)', async () => {
     expect(await redirectTargetForSlug(fakeDb({ failFirst: true }), 'pride-training-club-4')).toBeNull()
     expect(await redirectTargetForSlug({ from: () => { throw new Error('down') } }, 'x')).toBeNull()
+  })
+})
+
+// EVENT-MOVE.6 — /event/entry/<token> is the customer's own entry page; an
+// event slugged "entry" would be shadowed by it, so the slug is reserved.
+describe('reserved event slugs', () => {
+  it('"entry" is reserved', () => {
+    expect(RESERVED_EVENT_SLUGS.has('entry')).toBe(true)
+  })
+  it('a new event never takes it: "entry" becomes "entry-2"', async () => {
+    expect(await uniqueEventSlug(fakeDb(), 'entry')).toBe('entry-2')
+  })
+  it('an event named "Entry" with no date falls back to the name and still avoids it', async () => {
+    expect(await uniqueEventSlug(fakeDb(), eventSlug({ name: 'Entry' }))).toBe('entry-2')
+  })
+  it('other slugs are untouched', async () => {
+    expect(await uniqueEventSlug(fakeDb(), 'entry-night')).toBe('entry-night')
   })
 })

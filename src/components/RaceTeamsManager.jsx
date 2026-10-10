@@ -10,13 +10,16 @@
 import { useEffect, useState } from 'react'
 import { Plus, Trash2, Loader2, AlertCircle, Users, Check, X, Pencil, Star, BadgeCheck, Clock, Copy, Ban, Download, ArrowRightCircle } from 'lucide-react'
 import MoveEntryDialog from './MoveEntryDialog'
+import EventWaitlistPanel from './EventWaitlistPanel'
 
 // GATES-2 — `canCancelEntries` (the page's MANAGER_ROLES-at-the-event's-studio
 // decision, the cancel route's rule) gates Cancel entry. Defaults closed.
 // EVENT-MOVE.1 — `canMoveEntries` gates Move to event the same way (the move
 // route's rule: races + MANAGER_ROLES at the studio). Defaults closed.
 // `currency` is the event's payment_currency, for the outstanding-gap chip.
-export default function RaceTeamsManager({ race, canCancelEntries = false, canMoveEntries = false, currency = 'EUR' }) {
+// EVENT-WAITLIST.1 — `canManageWaitlist` (races + MANAGER_ROLES at the event's
+// studio, the waitlist routes' rule) shows the waitlist section. Defaults closed.
+export default function RaceTeamsManager({ race, canCancelEntries = false, canMoveEntries = false, canManageWaitlist = false, currency = 'EUR' }) {
   const [registrations, setRegistrations] = useState(null)
   const [loadError, setLoadError] = useState(null)
   const [showAddForm, setShowAddForm] = useState(false)
@@ -151,6 +154,14 @@ export default function RaceTeamsManager({ race, canCancelEntries = false, canMo
             ))}
           </ul>
         </details>
+      )}
+
+      {canManageWaitlist && (
+        <EventWaitlistPanel
+          listUrl={`/api/events/${race.id}/waitlist`}
+          offerUrl={`/api/events/${race.id}/waitlist/offer`}
+          removeUrlFor={(rowId) => `/api/events/${race.id}/waitlist/${rowId}`}
+        />
       )}
     </div>
   )

@@ -214,7 +214,12 @@ export async function proxy(request) {
   // own header says "Must be publicly accessible (no auth) so reviewers can
   // verify" while every anonymous hit 307'd to /login. Nothing personal is
   // behind it — it is static copy naming an email address.
-  const publicPaths = ['/login', '/auth/callback', '/reset-password', '/book/', '/event/', '/event-pay/', '/race/', '/race-pay/', '/class-pay/', '/tv/', '/present/', '/api/public/', '/unsubscribe/', '/preferences/', '/view-email/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/whatsapp/flow', '/api/cron/', '/api/bridge/', '/api/fleet/', '/deposit/', '/welcome', '/free-class', '/start', '/offers', '/.well-known/', '/privacy', '/terms', '/legal/', '/technical', '/account-deletion', '/givers', '/studio-login', '/api/auth/pin-login', '/api/auth/studio-heartbeat', '/api/auth/studio-signout', '/ffmpeg/', '/embed/', '/bca/', '/host-connect/', '/host', '/api/host/', '/h/', '/use-the-app', '/cancel/']
+  // /event/entry/ — EVENT-MOVE.6. The customer's own entry page (change
+  // the date) from the link in their confirmation email; the signed token in
+  // the path is its only credential. Already under '/event/', listed on its
+  // own so narrowing '/event/' can never take it down (and with /event-pay/,
+  // where a dearer change pays, the whole flow is public).
+  const publicPaths = ['/login', '/auth/callback', '/reset-password', '/book/', '/event/', '/event/entry/', '/event-pay/', '/race/', '/race-pay/', '/class-pay/', '/tv/', '/present/', '/api/public/', '/unsubscribe/', '/preferences/', '/view-email/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/whatsapp/flow', '/api/cron/', '/api/bridge/', '/api/fleet/', '/deposit/', '/welcome', '/free-class', '/start', '/offers', '/.well-known/', '/privacy', '/terms', '/legal/', '/technical', '/account-deletion', '/givers', '/studio-login', '/api/auth/pin-login', '/api/auth/studio-heartbeat', '/api/auth/studio-signout', '/ffmpeg/', '/embed/', '/bca/', '/host-connect/', '/host', '/api/host/', '/h/', '/use-the-app', '/cancel/']
 
   // Public paths matched EXACTLY (or as a parent segment), not as a bare
   // prefix — for entries where a same-stem sibling route must NOT inherit the

@@ -139,6 +139,13 @@ describe('events CreateSchema — EVENT-MOVE.1 moved-email copy', () => {
     expect(CreateSchema.parse({ ...base }).gap_email_subject).toBeUndefined()
     expect(() => CreateSchema.parse({ ...base, gap_email_intro: 'y'.repeat(4001) })).toThrow()
   })
+
+  it('EVENT-WAITLIST.1: accepts, clears and bounds the two waitlist offer fields', () => {
+    expect(CreateSchema.parse({ ...base, waitlist_email_subject: 'A spot at {{event_name}}' }).waitlist_email_subject).toContain('event_name')
+    expect(CreateSchema.parse({ ...base, waitlist_email_intro: null }).waitlist_email_intro).toBeNull()
+    expect(CreateSchema.parse({ ...base }).waitlist_email_subject).toBeUndefined()
+    expect(() => CreateSchema.parse({ ...base, waitlist_email_intro: 'y'.repeat(4001) })).toThrow()
+  })
 })
 
 // Ids are uuid-shaped: sharedEventsOrFilter refuses anything else.

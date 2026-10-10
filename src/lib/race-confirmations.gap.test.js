@@ -220,3 +220,42 @@ describe('buildGapDefaults', () => {
     expect(d.infoRows).toContain('Paid')
   })
 })
+
+// EVENT-MOVE.6 — a customer paid for their own date change. Moved: the normal
+// receipt (the payment was linked to the move). Refused after payment: the
+// receipt says so and that we will be in touch, never that it moved.
+describe('sendGapPaidEmail — a customer date change', () => {
+  const PM = { target_event_id: 'e2', target_wave_id: 'w9', expected_source_event_id: 'e1', actor: { type: 'customer', id: 'c1', name: 'Aoife Byrne' } }
+  it('moved (linked to its move): the normal receipt', async () => {
+    const payment = { ...GAP, metadata: { pending_move: PM } }
+    await sendGapPaidEmail({ db: fakeDb({ payment }), paymentId: 'gp1' })
+    expect(sent().subject).toBe('Difference paid for Hatch Oct 25')
+    expect(sent().htmlBody).toContain('Nothing more to do.')
+  })
+  it('refused after payment: says the payment arrived, the entry did not move, and we will be in touch', async () => {
+    const RACE_SRC = { ...RACE, id: 'e1', name: 'Hatch Oct 18' }
+    const payment = { ...GAP, race: RACE_SRC, race_event_id: 'e1', registration_move_id: null, move: null,
+      metadata: { pending_move: PM, pending_move_failed: { error: 'wave_full', at: '2026-10-09T10:00:00Z' } } }
+    const r = await sendGapPaidEmail({ db: fakeDb({ payment }), paymentId: 'gp1' })
+    expect(r.sent).toEqual(['email'])
+    const { subject, htmlBody } = sent()
+    expect(subject).toBe('Your date change for Hatch Oct 18')
+    expect(htmlBody).toContain('€10.00')
+    expect(htmlBody).toMatch(/could not move your entry/)
+    expect(htmlBody).toMatch(/We will be in touch/)
+    expect(htmlBody).not.toContain('Nothing more to do.')
+    expect(htmlBody).not.toMatch(/—|–/)
+  })
+  it('keys on pending_move_failed only: a change that landed but lost its link write still gets the normal receipt', async () => {
+    const payment = { ...GAP, registration_move_id: null, move: null, metadata: { pending_move: PM } }
+    await sendGapPaidEmail({ db: fakeDb({ payment }), paymentId: 'gp1' })
+    expect(sent().subject).toBe('Difference paid for Hatch Oct 25')
+    expect(sent().htmlBody).not.toMatch(/could not move/)
+  })
+  it('selects the metadata it decides on', async () => {
+    const db = fakeDb()
+    await sendGapPaidEmail({ db, paymentId: 'gp1' })
+    const select = db.queries.find((q) => q.table === 'race_payments').ops.find((o) => o[0] === 'select')[1]
+    expect(select).toMatch(/\bmetadata\b/)
+  })
+})
