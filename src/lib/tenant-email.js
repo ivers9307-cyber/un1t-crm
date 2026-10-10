@@ -18,7 +18,7 @@
 // mig 427). It is used ONLY to set the X-Postmark-Server-Token header. It
 // is never logged and never returned to a client.
 
-import { getLocationPlan } from '@/lib/plans'
+import { locationHasPlanFeature } from '@/lib/plans'
 
 // Small in-request cache: a campaign blasting 500 recipients would
 // otherwise re-resolve the same location on every send. Keyed by
@@ -121,14 +121,19 @@ export async function resolveEmailSender(db, locationId) {
 // ─────────────────────────────────────────────────────────────
 
 /**
- * True when ANY active location of the org is on a plan (tier or add-on)
- * whose resolved features include custom_email_domain. Plans are pinned
+ * True when ANY active location of the org holds an active pin (tier OR
+ * add-on) whose features include custom_email_domain. Plans are pinned
  * per LOCATION (mig 413) but the sending domain is per ORG, so an org
  * "has" the add-on if any of its locations does.
  *
+ * W1.E1 — judged by locationHasPlanFeature, which reads the pins directly.
+ * It used to go through getLocationPlan(), which answers null without a
+ * TIER pin, so an add-on-only pin (the live Test Studio pin) granted
+ * nothing and the feature stayed unreachable. The sending domain is a
+ * PAID plan feature (decision 1): the gate stays, master included.
+ *
  * FAIL CLOSED — this gates provisioning of PAID resources, so any error
- * (or no plan) resolves to false (feature off). Every org is unpinned
- * today → always false → the whole feature is unreachable.
+ * (or no pin) resolves to false (feature off).
  *
  * @param {object} db - service-role client
  * @param {string} orgId
@@ -144,8 +149,7 @@ export async function orgHasEmailDomainAddon(db, orgId) {
       .eq('active', true)
     if (error || !Array.isArray(locs)) return false
     for (const loc of locs) {
-      const plan = await getLocationPlan(db, loc.id)
-      if (plan?.resolved?.features?.custom_email_domain === true) return true
+      if (await locationHasPlanFeature(db, loc.id, 'custom_email_domain')) return true
     }
     return false
   } catch {

@@ -1,7 +1,8 @@
 // INTEG-B3 — /settings/email-domain: self-serve per-tenant email sending
 // domain (server-per-tenant). Owner/master only (the page carries its own
-// server gate; the routes gate independently). Paid add-on — an org whose
-// plan doesn't include custom_email_domain sees the upsell state.
+// server gate; the routes gate independently). Paid plan feature (W1.E1,
+// decision 1) — an org with no pin carrying custom_email_domain sees the
+// upsell state, which names the plans that carry it.
 //
 // Master can view any org's state via ?organization_id (the GET route
 // enforces the same access). Deep-link note: when B4 makes the integrations
@@ -12,6 +13,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { isOrgAdminSomewhere } from '@/lib/org-admin'
 import { isPostmarkAccountConfigured } from '@/lib/postmark-account'
 import { orgHasEmailDomainAddon, tenantEmailStatePayload } from '@/lib/tenant-email'
+import { plansGrantingFeature } from '@/lib/plans'
 import { resolveEmailDomainOrgId, loadEmailDomainRow } from '@/lib/email-domain-service'
 import { redirect } from 'next/navigation'
 import { AtSign } from 'lucide-react'
@@ -52,10 +54,14 @@ export default async function EmailDomainSettingsPage({ searchParams }) {
 
   let row
   let addonActive
+  let featurePlans
   try {
-    ;[row, addonActive] = await Promise.all([
+    // W1.E1 — the plans that carry custom_email_domain, so the upsell can
+    // name them. plansGrantingFeature fails safe to [] on its own.
+    ;[row, addonActive, featurePlans] = await Promise.all([
       loadEmailDomainRow(db, orgId),
       orgHasEmailDomainAddon(db, orgId),
+      plansGrantingFeature(db, 'custom_email_domain'),
     ])
   } catch (e) {
     // CHANNELREAD.1 — a failed read used to render the wizard's set-up
@@ -79,6 +85,7 @@ export default async function EmailDomainSettingsPage({ searchParams }) {
       <EmailDomainWizard
         initialState={state}
         organizationId={user.role === 'master' ? orgId : null}
+        featurePlans={featurePlans || []}
       />
     </div>
   )
