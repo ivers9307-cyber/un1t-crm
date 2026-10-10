@@ -22,12 +22,15 @@ vi.mock('@/lib/connection-registry', async (importOriginal) => {
   return { ...actual, syncConnectionFromLegacy: vi.fn(actual.syncConnectionFromLegacy) }
 })
 vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
+// W1.M2 — the membership_source flip on connect/disconnect writes an audit row.
+vi.mock('@/lib/audit', () => ({ logAuditEvent: vi.fn(async () => ({ logged: true })) }))
 
 import { PUT, DELETE } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { syncConnectionFromLegacy } from '@/lib/connection-registry'
 import { logError } from '@/lib/log'
+import { logAuditEvent } from '@/lib/audit'
 
 const LOC = 'loc-still'
 
@@ -36,6 +39,7 @@ function liveGlofoxLocation() {
     id: LOC,
     name: 'Stillorgan',
     features: { bca_submit: true },
+    membership_source: 'glofox',
     settings: {
       // A sibling slice that must survive a Glofox write untouched.
       customer_agent: { enabled: true, agent_name: 'Mia' },
@@ -331,5 +335,101 @@ describe('a failed registry sync is logged, the response unchanged', () => {
     await DELETE(req(), props(LOC, 'glofox'))
 
     expect(logError).not.toHaveBeenCalled()
+  })
+})
+
+// W1.M2 — connecting Glofox selects it as the membership source (so the
+// existing connect flow keeps working with no second step); disconnecting
+// puts the location back on 'none'. The column is written ONLY through the
+// locations update this route already makes; a save that leaves the slice
+// empty, or a location already on another source, never flips it.
+describe('W1.M2 — membership_source follows the Glofox connection', () => {
+  it("a Glofox save on a location at 'none' sets membership_source='glofox' in the same update, with an audit row", async () => {
+    getCurrentUser.mockResolvedValue(OWNER)
+    const loc = liveGlofoxLocation()
+    loc.membership_source = 'none'
+    const { db, log, locRow } = makeDb({ location: loc })
+    createServerClient.mockReturnValue(db)
+
+    const res = await PUT(req({ branch_id: 'branch-abc', api_key: 'FRESH', api_token: 'FRESH_T' }), props(LOC, 'glofox'))
+    const body = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(locRow.membership_source).toBe('glofox')
+    expect(log.locationUpdates).toHaveLength(1)
+    expect(log.locationUpdates[0]).toMatchObject({ membership_source: 'glofox' })
+    expect(body.data.membership_source).toBe('glofox')
+    expect(logAuditEvent).toHaveBeenCalledTimes(1)
+    expect(logAuditEvent.mock.calls[0][0]).toMatchObject({
+      action: 'location.membership_source_changed',
+      locationId: LOC,
+      details: { from: 'none', to: 'glofox', via: 'integrations/glofox' },
+    })
+  })
+
+  it("a Glofox save on a location already at 'glofox' does not touch membership_source", async () => {
+    getCurrentUser.mockResolvedValue(OWNER)
+    const { db, log } = makeDb({ location: liveGlofoxLocation() })
+    createServerClient.mockReturnValue(db)
+    await PUT(req({ branch_id: 'branch-abc' }), props(LOC, 'glofox'))
+    expect(log.locationUpdates[0]).not.toHaveProperty('membership_source')
+    expect(logAuditEvent).not.toHaveBeenCalled()
+  })
+
+  it("a save that leaves the slice EMPTY never selects glofox", async () => {
+    getCurrentUser.mockResolvedValue(OWNER)
+    const loc = liveGlofoxLocation()
+    loc.membership_source = 'none'
+    loc.settings.glofox = null
+    const { db, log, locRow } = makeDb({ location: loc })
+    createServerClient.mockReturnValue(db)
+    await PUT(req({ branch_id: '', api_key: '' }), props(LOC, 'glofox'))
+    expect(locRow.membership_source).toBe('none')
+    expect(log.locationUpdates[0]).not.toHaveProperty('membership_source')
+  })
+
+  it("DELETE on a 'glofox' location puts it back on 'none' in the same update, with an audit row", async () => {
+    getCurrentUser.mockResolvedValue(OWNER)
+    const { db, log, locRow } = makeDb({
+      location: liveGlofoxLocation(),
+      channelConnections: [{ id: 'cc-g', location_id: LOC, platform: 'glofox', is_active: true, access_token: 'LIVE_KEY' }],
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await DELETE(req(), props(LOC, 'glofox'))
+    const body = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(locRow.membership_source).toBe('none')
+    expect(log.locationUpdates).toHaveLength(1)
+    expect(log.locationUpdates[0]).toMatchObject({ membership_source: 'none', settings: expect.any(Object) })
+    expect(body.data.membership_source).toBe('none')
+    expect(logAuditEvent.mock.calls[0][0]).toMatchObject({
+      action: 'location.membership_source_changed',
+      details: { from: 'glofox', to: 'none', via: 'integrations/glofox' },
+    })
+  })
+
+  it("DELETE on a location whose source is not glofox leaves membership_source alone", async () => {
+    getCurrentUser.mockResolvedValue(OWNER)
+    const loc = liveGlofoxLocation()
+    loc.membership_source = 'none'
+    const { db, log, locRow } = makeDb({ location: loc })
+    createServerClient.mockReturnValue(db)
+    await DELETE(req(), props(LOC, 'glofox'))
+    expect(locRow.membership_source).toBe('none')
+    expect(log.locationUpdates[0]).not.toHaveProperty('membership_source')
+    expect(logAuditEvent).not.toHaveBeenCalled()
+  })
+
+  it('a non-membership provider (unifi) never touches membership_source', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const loc = liveGlofoxLocation()
+    loc.membership_source = 'none'
+    const m = makeDb({ location: loc })
+    createServerClient.mockReturnValue(m.db)
+    await PUT(req({ host: 'https://x:12445', api_token: 'UNIFI_TOK' }), props(LOC, 'unifi'))
+    expect(m.locRow.membership_source).toBe('none')
+    expect(m.log.locationUpdates[0]).not.toHaveProperty('membership_source')
   })
 })
