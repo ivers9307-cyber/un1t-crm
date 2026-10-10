@@ -9,7 +9,7 @@ NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
 POSTMARK_API_KEY=
-POSTMARK_FROM_EMAIL=hello@un1t.ie
+POSTMARK_FROM_EMAIL=hello@un1t.ie      # the PLATFORM sending ADDRESS (bare, or "Name <addr>" — only the address is read). W1.E2: before an org verifies its own domain every tenant email leaves from here with the location's BRAND as display name and the location's address as Reply-To; staff/supplier mail as "Repset <addr>". No file spells an address; the env's own display name is never used. Becomes hello@repset.ie once the Postmark domain is verified (plan prerequisite P2)
 POSTMARK_WEBHOOK_TOKEN=          # shared secret sent in X-Webhook-Token by Postmark (required — route 500s if unset). Set it on EVERY server that posts to us (marketing + support inbox)
 POSTMARK_WEBHOOK_TOKEN_PREVIOUS= # optional — old token kept live during rotation; unset after every Postmark webhook config has been flipped to the new value
 POSTMARK_EMAIL_INBOX_SERVER_TOKEN= # server token for the SUPPORT INBOX's own Postmark server. Ticket reply/compose only; no fallback — unset = those two routes 503 (EMAIL-OUTBOUND-SERVER.1)

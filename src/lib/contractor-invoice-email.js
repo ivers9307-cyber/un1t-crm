@@ -14,6 +14,7 @@ import { periodLabel } from './contractor-invoices.js'
 import { formatFullDateTimeInTZ } from './dates.js'
 import { getLocationBranding } from './location-branding.js'
 import { resolvePostmarkToken } from './postmark-token.js'
+import { platformFromHeader } from './platform-sender.js'
 // URLSEAM.1 — /schedule/invoices is served by THIS deployment, so the base is
 // this deployment's own host. The local `NEXT_PUBLIC_APP_URL || '<literal>'`
 // helper this replaces made the link ignore the seam wherever the env said
@@ -27,8 +28,14 @@ function getPostmarkToken() {
   return resolvePostmarkToken()
 }
 
+// W1.E2 — staff/supplier-facing mail leaves as PLATFORM_NAME on the platform
+// address (POSTMARK_FROM_EMAIL, never spelled). With the env unset this is
+// undefined: the request carries no From and Postmark refuses with its own
+// message (platformFromHeader has already logged the missing env), rather
+// than a silently invented address. getPostmarkToken() has already thrown
+// before this point when the server itself is unconfigured.
 function getFromAddress() {
-  return process.env.POSTMARK_FROM_EMAIL || 'UN1T <hello@un1t.ie>'
+  return platformFromHeader() || undefined
 }
 
 async function postmarkSend({ to, subject, htmlBody, textBody, tag, metadata }) {

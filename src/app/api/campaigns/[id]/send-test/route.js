@@ -128,16 +128,18 @@ export async function POST(request, props) {
     preference_url: preferenceUrl,
   })
 
-  const fromHeader = campaign.from_name
-    ? `${campaign.from_name} <${campaign.from_email || process.env.POSTMARK_FROM_EMAIL}>`
-    : undefined
-
   try {
     const result = await sendEmail({
       to: recipient,
       subject,
       htmlBody: html,
-      from: fromHeader,
+      // W1.E2 — a test send matches a real one: the campaign's location
+      // resolves the sender (brand on the platform address pre-domain, the
+      // org's verified From after, the studio's reply-to), and the operator's
+      // From name is a display name on it. campaign.from_email never reaches
+      // the wire, here or in campaign-sender.js.
+      locationId: campaign.location_id,
+      fromName: campaign.from_name || undefined,
       replyTo: campaign.reply_to,
       stream: 'broadcast',
       tag: `campaign-test-${params.id}`,

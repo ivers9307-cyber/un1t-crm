@@ -4,6 +4,12 @@ import { applyAudienceFilter, applyAudienceFilterAsync } from './audience-filter
 import { htmlToPlainText } from './email-content'
 import { resolveEmailSender } from './tenant-email'
 import { withSendMarker } from './postmark-send-marker'
+// W1.E2 — the reply-to readers live in their own module so tenant-email.js
+// can read them without a cycle; both stay exported from here for callers.
+import { getDefaultMailboxAddress, getLocationInboxReplyTo as resolveInboxReplyTo } from './postmark-reply-to'
+import { wireFrom, resolvedFromOf, platformFromAddress } from './platform-sender'
+
+export { getDefaultMailboxAddress }
 
 const POSTMARK_API_URL = 'https://api.postmarkapp.com'
 
@@ -55,18 +61,25 @@ function getPostmarkToken() {
   return token
 }
 
-// INTEG-B3 — resolve the tenant sending override for a send. Returns
-// { token, from } where BOTH are null unless a LIVE tenant email domain
-// (server-per-tenant, mig 427) resolves for the given location:
-//   - `token` non-null  → use it as X-Postmark-Server-Token (that org's
-//     Postmark server) instead of getPostmarkToken()
-//   - `from`  non-null  → use it as the From (that org's verified sender)
+// INTEG-B3 — resolve the sender for a send. Returns { token, from, replyTo }:
+//   - `token` non-null  → a LIVE tenant email domain (server-per-tenant, mig
+//     427) resolved: use it as X-Postmark-Server-Token (that org's Postmark
+//     server) instead of getPostmarkToken(); `from` is its verified sender
+//   - `token` null      → the shared server (getPostmarkToken())
 //
-// ZERO BEHAVIOUR CHANGE is keyed on `token`: with no locationId/sender, or
-// no live tenant row, or any resolver error, resolveEmailSender returns the
-// global default (serverToken null) → token/from stay null → the caller's
-// EXISTING getPostmarkToken() + POSTMARK_FROM_EMAIL path runs byte-for-byte
-// unchanged. resolveEmailSender never throws.
+// W1.E2 — the From is no longer keyed on `token`. With no live tenant row
+// the resolver hands back the PRE-DOMAIN sender (serverToken null, the
+// platform address, the tenant's brand as display name, the location's
+// reply-to), and that From and Reply-To go on the wire exactly like a live
+// tenant's would; only the server token still falls back to
+// getPostmarkToken(). With no locationId and no sender (an ops alert, a
+// staff notice) nothing is resolved and the From is PLATFORM_NAME on the
+// platform address (wireFrom). resolveEmailSender never throws.
+//
+//   { token, from, replyTo } — `from` is "{name} <address>" whenever the
+//   resolved sender carries an address; `replyTo` is the resolved location
+//   reply-to or null. A caller's own `from` display name / `fromName` /
+//   `replyTo` win over these in sendEmail/sendBatch; the ADDRESS never does.
 async function resolveTenantOverride({ locationId, sender }) {
   // `sender === undefined` = the caller did not pre-resolve; only then do
   // we look up by locationId. A caller can pass `sender: null` to force the
@@ -74,12 +87,11 @@ async function resolveTenantOverride({ locationId, sender }) {
   const resolved = sender !== undefined
     ? sender
     : (locationId ? await resolveEmailSender(createServerClient(), locationId) : null)
-  const token = resolved?.serverToken || null
-  if (!token) return { token: null, from: null }
-  const from = resolved.fromName
-    ? `${resolved.fromName} <${resolved.fromEmail}>`
-    : (resolved.fromEmail || null)
-  return { token, from }
+  return {
+    token: resolved?.serverToken || null,
+    from: resolvedFromOf(resolved),
+    replyTo: resolved?.replyTo || null,
+  }
 }
 
 // ── Engagement tracking (EMAIL-NOTRACK.1) ─────────────────────────
@@ -184,8 +196,17 @@ export function toListUnsubscribeUrl(pageUrl) {
  *   site where a resolved recipient set becomes wire values.
  * @param {string} options.subject - email subject
  * @param {string} options.htmlBody - HTML content
- * @param {string} options.from - sender (e.g. "UN1T <hello@un1t.ie>")
- * @param {string} options.replyTo - reply-to address
+ * @param {string} options.from - a full sender header ("Name <addr>"). W1.E2:
+ *   when a sender resolves for the send (always, given a locationId) only its
+ *   DISPLAY NAME is kept — the address on the wire is the resolved one (the
+ *   platform address before a verified domain, the org's verified From after).
+ *   Omit it and the resolved sender's own name goes out.
+ * @param {string} options.fromName - W1.E2 — a display name alone (a campaign
+ *   or sequence "From name"). Rides the resolved address; beats the name
+ *   inside `from`. Never needs an address of its own.
+ * @param {string} options.replyTo - reply-to address. W1.E2: omitted, the
+ *   resolved location reply-to (default mailbox → legacy column →
+ *   locations.email) is used when a sender resolved for the send.
  * @param {string} options.stream - THIS APP'S INTERNAL stream vocabulary:
  *   'broadcast' (marketing) or 'outbound' (transactional). It drives
  *   open/click tracking, the List-Unsubscribe gate, consentFieldForStream()
@@ -229,6 +250,7 @@ export async function sendEmail({
   htmlBody,
   textBody,
   from,
+  fromName,
   replyTo,
   // EMAIL-NOTRACK.1 — NO destructuring default. The wire default is applied
   // below as `messageStream`; `stream` stays raw so resolveTracking can tell
@@ -272,7 +294,11 @@ export async function sendEmail({
   }
 
   const body = {
-    From: tenant.from || from || process.env.POSTMARK_FROM_EMAIL || 'UN1T <hello@un1t.ie>',
+    // W1.E2 — the resolved ADDRESS always; the caller's display name when it
+    // gave one; PLATFORM_NAME on the platform address when nothing resolved.
+    // `|| undefined` so an unset POSTMARK_FROM_EMAIL sends no From and
+    // Postmark refuses with its own message, never an invented address.
+    From: wireFrom({ from, fromName, resolvedFrom: tenant.from }) || undefined,
     To: to,
     // EMAIL-CC.1 — `|| undefined` so an empty string never becomes a key with
     // no value, and so the serialised body keeps its old shape when omitted.
@@ -287,7 +313,9 @@ export async function sendEmail({
     // multipart is a spam signal; derive a conservative text part from
     // the HTML when the caller didn't supply one.
     TextBody: textBody || htmlToPlainText(htmlBody) || undefined,
-    ReplyTo: replyTo || undefined,
+    // W1.E2 — the caller's Reply-To wins; else the location's (resolved with
+    // the sender) so a customer's reply reaches the gym, not the platform.
+    ReplyTo: replyTo || tenant.replyTo || undefined,
     MessageStream: messageStream,
     Tag: tag || undefined,
     Metadata: metadata,
@@ -391,13 +419,15 @@ export async function sendBatch(emails, { locationId, sender } = {}) {
 
   for (const chunk of chunks) {
     const body = chunk.map(email => ({
-      From: tenant.from || email.from || process.env.POSTMARK_FROM_EMAIL || 'UN1T <hello@un1t.ie>',
+      // W1.E2 — same rule as sendEmail, per email: resolved address, the
+      // email's own display name (`fromName` or the one inside `from`).
+      From: wireFrom({ from: email.from, fromName: email.fromName, resolvedFrom: tenant.from }) || undefined,
       To: email.to,
       Subject: email.subject,
       HtmlBody: email.htmlBody,
       // CAMPAIGN-REL.4 — plain-text alternative (see sendEmail above).
       TextBody: email.textBody || htmlToPlainText(email.htmlBody) || undefined,
-      ReplyTo: email.replyTo || undefined,
+      ReplyTo: email.replyTo || tenant.replyTo || undefined,
       MessageStream: email.stream || 'broadcast',
       Tag: email.tag || undefined,
       Metadata: email.metadata || {},
@@ -815,7 +845,9 @@ export async function sendTransactionalEmail({
       sequence_id: sequenceId,
       sequence_step_id: sequenceStepId,
       subject,
-      from_email: sender?.fromEmail || process.env.POSTMARK_FROM_EMAIL,
+      // W1.E2 — the address that went on the wire (the resolver's; the
+      // platform address when nothing resolved).
+      from_email: sender?.fromEmail || platformFromAddress(),
       to_email: to,
       postmark_message_id: result.messageId,
       postmark_stream: 'outbound',
@@ -837,61 +869,20 @@ export async function sendTransactionalEmail({
 }
 
 /**
- * EMAIL-MAILBOX-ADMIN.1 — the address of a location's DEFAULT email account
- * (email_mailboxes, mig 485), or null.
- *
- * `is_default` was documented from the start as "the address stamped as
- * Reply-To on campaign + marketing sends" (mig 485's own COMMENT), but until
- * the account editor shipped nothing could set it, so the send paths still
- * read the column it replaced. Now that an operator can choose the default,
- * the default is what they get.
- *
- * Active only: a deactivated account stops accepting inbound, so stamping it
- * as Reply-To would invite customers to write to an address whose mail
- * dead-letters.
- *
- * Takes the caller's client rather than making one — the send paths already
- * hold a service-role client, and this runs per campaign tick.
- */
-export async function getDefaultMailboxAddress(db, locationId) {
-  if (!db || !locationId) return null
-  try {
-    const { data } = await db.from('email_mailboxes')
-      .select('address')
-      .eq('location_id', locationId)
-      .eq('is_default', true)
-      .eq('active', true)
-      .limit(1)
-      .maybeSingle()
-    return data?.address || null
-  } catch {
-    return null
-  }
-}
-
-/**
  * EMAIL-INBOX.1 — the location's inbound-inbox address. When set, campaign +
  * marketing sends stamp it as Reply-To so customer replies route back in via
  * /api/webhooks/postmark-inbound. Returns null when unset or on any error
  * (callers treat it as best-effort).
  *
- * The default email_mailboxes row wins; locations.email_inbox_reply_to (mig
- * 394, DEPRECATED by mig 485) is the fallback, kept because it still holds a
- * live value for studios configured before the accounts model and nothing
- * writes it any more. A studio with no default account and no legacy column
- * gets null — replies then go to the sending address, exactly as before.
+ * The resolve order (default email account → the deprecated
+ * locations.email_inbox_reply_to → locations.email, W1.E2) lives in
+ * src/lib/postmark-reply-to.js; this is the one-argument form for callers
+ * that hold no client (it makes a service-role one).
  */
 export async function getLocationInboxReplyTo(locationId) {
   if (!locationId) return null
   try {
-    const db = createServerClient()
-    const fromMailbox = await getDefaultMailboxAddress(db, locationId)
-    if (fromMailbox) return fromMailbox
-    const { data } = await db.from('locations')
-      .select('email_inbox_reply_to')
-      .eq('id', locationId)
-      .maybeSingle()
-    return data?.email_inbox_reply_to || null
+    return await resolveInboxReplyTo(createServerClient(), locationId)
   } catch {
     return null
   }
@@ -919,11 +910,13 @@ export async function getLocationInboxReplyTo(locationId) {
  */
 export async function sendMarketingEmail({
   to, subject, htmlBody, contactId, locationId, tag, unsubscribeUrl, replyTo,
-  // SEQSENDER.1 — optional per-send From ("Dean Nolan" <dean@un1tdublin.com>),
-  // the same lever campaign-sender.js has always had. Omitted (the case for
-  // every caller before this) → undefined → sendEmail falls through to
-  // POSTMARK_FROM_EMAIL exactly as before.
+  // SEQSENDER.1 — optional per-send From header, the same lever
+  // campaign-sender.js has always had. W1.E2: only its DISPLAY NAME reaches
+  // the wire; the address is the resolver's (see sendEmail).
   from,
+  // W1.E2 — a display name alone (a sequence's from_name). Rides the
+  // resolver's address; the sequence's from_email is never the address.
+  fromName,
   sourceType = 'sequence', sequenceId = null, sequenceStepId = null,
 }) {
   // EMAIL-INBOX.1 — marketing sends default their Reply-To to the
@@ -946,6 +939,7 @@ export async function sendMarketingEmail({
     subject,
     htmlBody,
     from,
+    fromName,
     replyTo: resolvedReplyTo || undefined,
     stream: 'broadcast',  // Postmark marketing stream — attaches List-Unsubscribe headers
     tag: tag || 'marketing',
@@ -956,18 +950,12 @@ export async function sendMarketingEmail({
     metadata: contactId ? withSendMarker() : undefined,
   })
 
-  // SEQSENDER.1 — mirror sendEmail's own From precedence (see the `From:` line
-  // in its body) so email_sends records the address that actually went on the
-  // wire. Reading sender.fromEmail alone was already only accidentally right:
-  // resolveEmailSender returns a populated fromEmail even when serverToken is
-  // null, and the tenant From is applied ONLY when that token exists. Without
-  // this, a per-sequence `from` would send correctly and log the wrong sender,
-  // which is the kind of quiet drift that makes a deliverability question
-  // unanswerable months later.
-  const tenantFrom = sender?.serverToken
-    ? (sender.fromName ? `${sender.fromName} <${sender.fromEmail}>` : sender.fromEmail)
-    : null
-  const loggedFromEmail = tenantFrom || from || process.env.POSTMARK_FROM_EMAIL
+  // SEQSENDER.1 / W1.E2 — the SAME rule sendEmail applies (wireFrom), so
+  // email_sends records the From that actually went on the wire: the
+  // resolver's address with the sequence's display name when it has one.
+  // Logging anything else is the kind of quiet drift that makes a
+  // deliverability question unanswerable months later.
+  const loggedFromEmail = wireFrom({ from, fromName, resolvedFrom: resolvedFromOf(sender) }) || null
 
   // Log to email_sends (same shape as the campaign + transactional paths).
   if (contactId) {

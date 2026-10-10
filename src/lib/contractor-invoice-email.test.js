@@ -83,6 +83,26 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
+describe('W1.E2 — staff/supplier mail leaves as PLATFORM_NAME on the platform address', () => {
+  it('From is `Repset <POSTMARK_FROM_EMAIL>`; nothing on the wire says un1t.ie', async () => {
+    vi.stubEnv('POSTMARK_FROM_EMAIL', 'hello@platform.test')
+    vi.mocked(createServerClient).mockReturnValue(mockClient({ companySettings: [] }))
+    const fetchMock = stubPostmark()
+    await sendInvoiceApprovedEmail('inv-1')
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    expect(body.From).toBe('Repset <hello@platform.test>')
+    expect(JSON.stringify(body)).not.toContain('un1t.ie')
+  })
+
+  it("the env's own display name is never used", async () => {
+    vi.stubEnv('POSTMARK_FROM_EMAIL', 'UN1T <hello@platform.test>')
+    vi.mocked(createServerClient).mockReturnValue(mockClient({ companySettings: [] }))
+    const fetchMock = stubPostmark()
+    await sendInvoiceApprovedEmail('inv-1')
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).From).toBe('Repset <hello@platform.test>')
+  })
+})
+
 describe('sendInvoiceApprovedEmail — branding from company_settings', () => {
   it('renders the company_settings logo in the email header', async () => {
     vi.mocked(createServerClient).mockReturnValue(

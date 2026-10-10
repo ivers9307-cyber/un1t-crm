@@ -20,6 +20,7 @@
 
 import { createServerClient } from '@/lib/supabase'
 import { resolvePostmarkToken } from '@/lib/postmark-token'
+import { platformFromHeader } from '@/lib/platform-sender'
 import { XeroError } from './client'
 
 const STORAGE_BUCKET = 'fte-expense-receipts'
@@ -31,8 +32,14 @@ function getPostmarkToken() {
   return t
 }
 
+// W1.E2 — staff/supplier-facing mail leaves as PLATFORM_NAME on the platform
+// address (POSTMARK_FROM_EMAIL, never spelled). With the env unset this is
+// undefined: the request carries no From and Postmark refuses with its own
+// message (platformFromHeader has already logged the missing env), rather
+// than a silently invented address. getPostmarkToken() has already thrown
+// before this point when the server itself is unconfigured.
 function getFromAddress() {
-  return process.env.POSTMARK_FROM_EMAIL || 'UN1T <hello@un1t.ie>'
+  return platformFromHeader() || undefined
 }
 
 async function postmarkSendWithAttachments({ to, subject, htmlBody, attachments, replyTo, metadata }) {
