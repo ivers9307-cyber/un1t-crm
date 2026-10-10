@@ -18,6 +18,7 @@ import {
   KpiCard, KpiRow, SectionHeader, PendingRow, ListCard,
 } from './cards'
 import RosterRunwayChip from './RosterRunwayChip'
+import { studioFunnelNote } from '../../lib/membership-source-copy'
 
 // Friendlier labels for the pipeline_stage_slug values than the raw
 // snake_case the DB stores. Anything not in the map falls back to a
@@ -89,6 +90,11 @@ export default function StudioDashboard({ refreshKey }) {
   // + a retry line, never zeros (dashboard-api.js decides).
   const contactNumbers = studioContactNumbers(data.contactCounts, headlineStatuses)
   const headline = contactNumbers.headline
+  // W1.M3c — the funnel counts are contact counts and always render; at a
+  // studio whose membership source is not configured a note says why the
+  // later stages do not move. null = no note (configured, unknown, an older server,
+  // or the counts failed). lib/membership-source-copy.js decides.
+  const funnelNote = studioFunnelNote(data.contactCounts)
 
   return (
     <View>
@@ -128,6 +134,14 @@ export default function StudioDashboard({ refreshKey }) {
           ? "Couldn't load the contact numbers. Pull down to retry."
           : `${contactNumbers.total} total contacts at ${activeLocation?.name || 'this location'}`}
       </Text>
+      {funnelNote ? (
+        <View
+          className="bg-un1t-surface border border-un1t-border rounded-2xl px-4 py-3 mt-2"
+          accessibilityRole="summary"
+        >
+          <Text className="text-xs text-un1t-muted">{funnelNote.text}</Text>
+        </View>
+      ) : null}
 
       {/* Approvals queue — time off */}
       <SectionHeader title="Time-off awaiting your call" count={pendingTimeOff.length} />

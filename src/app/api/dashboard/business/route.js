@@ -17,6 +17,17 @@
 // (mobile) — getCurrentUser handles both. Gate matches the web page:
 // hasPermission(user, 'dashboard_business') — the same top-level
 // permission key that shows/hides the mobile segment.
+//
+// W1.M3c — `membership_source` ({ source, state, label, missing?,
+// provides_memberships, can_manage }; membershipStatePayload) rides
+// ALONGSIDE the blocks. The web page gates its KPI row and membership
+// trend on the same state (W1.M3a); the phone (2.4.0 bundles) reads this
+// key and draws the state card instead of the Glofox-derived numbers when
+// the state is not 'configured'. The blocks are still computed and keep
+// their shape, so an older bundle that never reads the key renders exactly
+// what it did before, and a configured studio (Stillorgan) is unchanged.
+// membershipStateForPage never throws (a failed read is 'unknown'), and the
+// route catches it to 'unknown' anyway: the key can never 500 the blocks.
 
 import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
@@ -26,6 +37,7 @@ import { fetchFunnelCounts, fetchAdsSummary, fetchTodayOps } from '@shared/dashb
 import { buildBusinessKpis } from '@/lib/dashboard/business-kpis'
 import { buildNeedsYouRail } from '@/lib/dashboard/business-rail'
 import { computeMembershipCounts, fetchMembershipTrend } from '@/lib/membership-snapshot'
+import { membershipStateForPage, membershipStatePayload, canManageMembershipSource } from '@/lib/membership/state-for-page'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -72,13 +84,17 @@ export async function GET() {
   if (guard) return guard
 
   const db = createServerClient()
-  const [kpis, funnel, ads, membership, today, rail] = await Promise.all([
+  const [kpis, funnel, ads, membership, today, rail, sourceState] = await Promise.all([
     buildBusinessKpis(db, user, locationId), // null on failure by contract
     blockData(fetchFunnelCounts(db, locationId)),
     blockData(fetchAdsSummary(db, locationId)),
     membershipBlock(db, locationId),
     blockData(fetchTodayOps(db, locationId)),
     buildNeedsYouRail(db, user, locationId).then(rows => rows, () => null),
+    // Belt and braces: membershipStateForPage is built never to throw, but a
+    // rejection here must never 500 the route for 2.3.x phones that never
+    // read the key.
+    membershipStateForPage(db, locationId).catch(() => ({ source: null, state: 'unknown' })),
   ])
 
   return NextResponse.json({
@@ -91,6 +107,9 @@ export async function GET() {
       membership,
       today,
       rail,
+      membership_source: membershipStatePayload(sourceState, {
+        canManage: canManageMembershipSource(user, locationId),
+      }),
     },
   })
 }
