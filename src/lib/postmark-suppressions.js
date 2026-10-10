@@ -32,6 +32,17 @@
 // Create and delete take {"Suppressions":[{"EmailAddress":"…"}]} and answer
 // with a per-address Status — Suppressed/Deleted, or Failed with a Message.
 // Both cap at 50 addresses per call.
+//
+// WHICH SERVER (W1.E4). A suppression list is per (Postmark SERVER, stream).
+// A tenant whose org has a LIVE tenant_email_domains row (mig 427) sends from
+// its OWN server (resolveEmailSender in tenant-email.js), so a suppression
+// pushed to the global CRM.UN1T server would never refuse one of its sends —
+// the two systems would only LOOK like they refuse independently. Every
+// export therefore takes `{ serverToken }`: the org's server token (read via
+// serverTokenForLocation in postmark-server-for-location.js), or null/absent
+// for the global server, which is byte-for-byte the pre-W1.E4 behaviour. The
+// token is put on the wire as X-Postmark-Server-Token and nowhere else — never
+// in a URL, a body, a log line or a return value.
 
 import { resolvePostmarkToken } from './postmark-token'
 import { MARKETING_STREAM } from './postmark'
@@ -76,14 +87,15 @@ function normaliseEmails(emails) {
 /**
  * Headers for a Postmark call, or null when no server token is configured.
  *
- * postmark.js's getPostmarkToken() THROWS on a missing token, which is right
- * for a transactional send (the caller wants to know the mail did not go). It
- * is wrong here: this module runs beside somebody's opt-out and must never
- * throw. Same resolver (postmark-token.js — both env var names are live in
- * prod), different failure posture.
+ * `serverToken` (W1.E4) is a tenant's own server token and wins when given;
+ * otherwise the global token. postmark.js's getPostmarkToken() THROWS on a
+ * missing token, which is right for a transactional send (the caller wants
+ * to know the mail did not go). It is wrong here: this module runs beside
+ * somebody's opt-out and must never throw. Same resolver (postmark-token.js
+ * — both env var names are live in prod), different failure posture.
  */
-function postmarkHeaders() {
-  const token = resolvePostmarkToken()
+function postmarkHeaders(serverToken) {
+  const token = (typeof serverToken === 'string' && serverToken) ? serverToken : resolvePostmarkToken()
   if (!token) return null
   return {
     'Accept': 'application/json',
@@ -155,16 +167,18 @@ async function postSuppressionBatch(url, headers, batch, successStatus, acc, lab
  * refusal behind an opt-out recorded in our database.
  *
  * @param {string|string[]} emails
- * @param {{stream?: string}} [opts] - defaults to the marketing stream.
+ * @param {{stream?: string, serverToken?: string|null}} [opts] - defaults to
+ *   the marketing stream on the global server; `serverToken` selects a
+ *   tenant's own Postmark server (W1.E4).
  * @returns {Promise<{ok: number, failed: Array<{email: string, message: string}>}>}
  *   Never throws.
  */
-export async function suppressAtPostmark(emails, { stream = MARKETING_STREAM } = {}) {
+export async function suppressAtPostmark(emails, { stream = MARKETING_STREAM, serverToken = null } = {}) {
   const list = normaliseEmails(emails)
   const acc = { ok: 0, failed: [] }
   if (list.length === 0) return acc
 
-  const headers = postmarkHeaders()
+  const headers = postmarkHeaders(serverToken)
   if (!headers) {
     console.error('[postmark-suppressions] no Postmark server token configured — cannot suppress', list.length, 'address(es)')
     return { ok: 0, failed: list.map(email => ({ email, message: 'Postmark API token not configured' })) }
@@ -187,13 +201,14 @@ export async function suppressAtPostmark(emails, { stream = MARKETING_STREAM } =
  * everything is fine, and how unsuppressAtPostmark below could be fooled into
  * treating an unverifiable suppression as one of ours.
  *
- * @param {{stream?: string, suppressionReason?: string, origin?: string, emailAddress?: string}} [opts]
+ * @param {{stream?: string, suppressionReason?: string, origin?: string, emailAddress?: string, serverToken?: string|null}} [opts]
  *   suppressionReason ∈ HardBounce | SpamComplaint | ManualSuppression
  *   origin            ∈ Recipient | Customer | Admin
+ *   serverToken       — a tenant's own Postmark server (W1.E4); null = global
  * @returns {Promise<{suppressions: Array<Object>, error: string|null}>} Never throws.
  */
-export async function listPostmarkSuppressions({ stream = MARKETING_STREAM, suppressionReason, origin, emailAddress } = {}) {
-  const headers = postmarkHeaders()
+export async function listPostmarkSuppressions({ stream = MARKETING_STREAM, suppressionReason, origin, emailAddress, serverToken = null } = {}) {
+  const headers = postmarkHeaders(serverToken)
   if (!headers) {
     console.error('[postmark-suppressions] no Postmark server token configured — cannot list suppressions')
     return { suppressions: [], error: 'Postmark API token not configured' }
@@ -254,18 +269,20 @@ export async function listPostmarkSuppressions({ stream = MARKETING_STREAM, supp
  * reactivating a dead mailbox spends sending reputation nobody can give back.
  *
  * @param {string|string[]} emails
- * @param {{stream?: string}} [opts]
+ * @param {{stream?: string, serverToken?: string|null}} [opts] - `serverToken`
+ *   selects a tenant's own Postmark server (W1.E4); the read and the delete
+ *   both go to that server.
  * @returns {Promise<{ok: number, failed: Array<{email: string, message: string}>, skipped: Array<{email: string, reason: string}>}>}
  *   `skipped` carries the addresses we deliberately left suppressed, with the
  *   Postmark reason — 'NotSuppressed' when there was nothing there at all.
  *   Never throws.
  */
-export async function unsuppressAtPostmark(emails, { stream = MARKETING_STREAM } = {}) {
+export async function unsuppressAtPostmark(emails, { stream = MARKETING_STREAM, serverToken = null } = {}) {
   const list = normaliseEmails(emails)
   const acc = { ok: 0, failed: [], skipped: [] }
   if (list.length === 0) return acc
 
-  const headers = postmarkHeaders()
+  const headers = postmarkHeaders(serverToken)
   if (!headers) {
     console.error('[postmark-suppressions] no Postmark server token configured — cannot lift', list.length, 'suppression(s)')
     return { ok: 0, failed: list.map(email => ({ email, message: 'Postmark API token not configured' })), skipped: [] }
@@ -276,6 +293,7 @@ export async function unsuppressAtPostmark(emails, { stream = MARKETING_STREAM }
   // instead of pulling the stream's entire bounce history down the wire.
   const { suppressions, error } = await listPostmarkSuppressions({
     stream,
+    serverToken,
     emailAddress: list.length === 1 ? list[0] : undefined,
   })
   if (error) {
