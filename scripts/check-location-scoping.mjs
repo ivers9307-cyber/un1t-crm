@@ -2,9 +2,10 @@
 // Location-scoping presence lint (SAAS-9, sibling of check-route-guards.mjs).
 //
 // Fails CI when an /api route — or, since PAGE-SCOPE.1, an app-dir server
-// page — queries a location_id-bearing table with no detectable tenant
-// scoping. Every route runs createServerClient() (service role — RLS
-// bypassed), so an authenticated-but-unscoped
+// page, or, since PAGE-SCOPE.2, an app-dir layout — queries a
+// location_id-bearing table with no detectable tenant scoping. Every route
+// runs createServerClient() (service role — RLS bypassed), so an
+// authenticated-but-unscoped
 // `.from('contacts').select(...)` serves ANY tenant's rows to whoever passes
 // the auth guard. That's the exact class SAAS-1..5 kept finding by hand
 // (assistant executeTool cross-tenant reads, bare-id template fetches);
@@ -13,7 +14,14 @@
 // comms audit) shipped precisely because only src/app/api was scanned —
 // src/app/**/page.js files that call createServerClient() are now classified
 // too (pages without it are skipped: client/API-fed pages query through
-// guarded routes or the RLS-bound browser client).
+// guarded routes or the RLS-bound browser client). Layouts are the same
+// surface again (PAGE-SCOPE.2): src/app/offers/layout.js selected
+// sale_offers across EVERY location in both generateMetadata and the footer
+// until W0.4 (#1958) pinned it to the home location, and the gate never saw
+// it because only page.js was walked. The app-dir walk now reads page.js,
+// page.jsx, layout.js and layout.jsx (APP_SURFACE_FILES) with ONE classifier,
+// and the classifier is whole-file, so a query inside generateMetadata (or
+// any other export) counts exactly like one inside the default export.
 //
 // Model (token-presence heuristic, same spirit as check-route-guards):
 //   1. The set of tenant tables is DERIVED from supabase/migrations at
@@ -48,17 +56,21 @@
 // SCOPING_HELPERS asserts you've READ it and it scopes internally — don't
 // add names blind.
 //
-// Known gap (PAGE-SCOPE.1, checked and empty as of 2026-08-09): a page that
-// reads tenant rows ONLY through a src/lib helper which makes its own
-// service-role client is skipped, since the page itself never names
-// createServerClient. Audited at the time: the only such data-reading
+// Known gap (PAGE-SCOPE.1, checked and empty as of 2026-08-09; layouts
+// joined the scan in PAGE-SCOPE.2 and the gap is the same shape for them): a
+// page or layout that reads tenant rows ONLY through a src/lib helper which
+// makes its own service-role client is skipped, since the file itself never
+// names createServerClient. Audited at the time: the only such data-reading
 // delegates were tenant-privacy.js (filters organization_id),
 // landing-logo.js (public_path — public marketing content) and policies.js
 // (filters policies.organization_id via policyOrgIdFor — W0.5, mig 713;
 // policy_versions/policy_views hang off policies). @/lib/auth's
 // internal client is the auth lookup itself, not a tenant read. If you add
 // a lib that fetches tenant rows on its own client, scope it there and add
-// it to SCOPING_HELPERS.
+// it to SCOPING_HELPERS. Still outside the walk by design: loading.js,
+// error.js, template.js, default.js and not-found.js (chrome that renders
+// no tenant data; add the name to APP_SURFACE_FILES the day one grows a
+// service-role query).
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -68,6 +80,12 @@ import { sqlCode } from './lib/sql-code.mjs'
 const API_ROOT = 'src/app/api'
 const APP_ROOT = 'src/app'
 const MIGRATIONS_ROOT = 'supabase/migrations'
+
+// App-dir files the scan reads (PAGE-SCOPE.1 pages, PAGE-SCOPE.2 layouts).
+// Exact basenames, both extensions the repo uses — a *.test.js, a css file or
+// an underscore-prefixed helper next to them is never a Next.js segment file.
+export const APP_SURFACE_FILES = new Set(['page.js', 'page.jsx', 'layout.js', 'layout.jsx'])
+export const isAppSurfaceFile = (name) => APP_SURFACE_FILES.has(name)
 
 // ---------------------------------------------------------------------------
 // Tables where a location_id column exists but is NOT the tenant boundary a
@@ -597,6 +615,22 @@ export function classifyRoute(rel, src, tables, exemptMap = EXEMPT) {
  * client. No cron/qstash path skips — those are /api system surfaces.
  */
 export function classifyPage(rel, src, tables, exemptMap = EXEMPT) {
+  return classifyAppFile(rel, src, tables, exemptMap)
+}
+
+/**
+ * Classify one app-dir layout.js (PAGE-SCOPE.2, the W0.4 /offers class).
+ * Identical rules to classifyPage — a layout's generateMetadata and body run
+ * the same service-role client, for every page under it, and the
+ * whole-file classifier reads both. Kept as its own export so a test can
+ * pin that layouts and pages get the same verdict for the same source.
+ */
+export function classifyLayout(rel, src, tables, exemptMap = EXEMPT) {
+  return classifyAppFile(rel, src, tables, exemptMap)
+}
+
+/** Shared page/layout classifier: skip without the service-role client. */
+function classifyAppFile(rel, src, tables, exemptMap) {
   if (!src.includes('createServerClient(')) return { skipped: 'no-service-role' }
   return classifySource(rel, src, tables, exemptMap)
 }
@@ -635,11 +669,12 @@ export function findStaleExemptions(exemptMap, readFile = (p) => {
 // Runner
 // ---------------------------------------------------------------------------
 
-function walk(dir, filename, out = []) {
+function walk(dir, match, out = []) {
+  const wanted = typeof match === 'function' ? match : (name) => name === match
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const p = path.join(dir, entry.name)
-    if (entry.isDirectory()) walk(p, filename, out)
-    else if (entry.name === filename) out.push(p)
+    if (entry.isDirectory()) walk(p, match, out)
+    else if (wanted(entry.name)) out.push(p)
   }
   return out
 }
@@ -647,9 +682,12 @@ function walk(dir, filename, out = []) {
 function main() {
   const tables = collectLocationTables(MIGRATIONS_ROOT)
   const files = walk(API_ROOT, 'route.js')
-  // PAGE-SCOPE.1 — app-dir server pages are the same service-role surface
-  // (page.js never exists under src/app/api, so the two walks don't overlap).
-  const pageFiles = walk(APP_ROOT, 'page.js')
+  // PAGE-SCOPE.1 — app-dir server pages are the same service-role surface;
+  // PAGE-SCOPE.2 — so are layouts (generateMetadata + body). Neither basename
+  // exists under src/app/api, so the two walks don't overlap.
+  const appFiles = walk(APP_ROOT, isAppSurfaceFile)
+  const pageFiles = appFiles.filter((f) => path.basename(f).startsWith('page.'))
+  const layoutFiles = appFiles.filter((f) => path.basename(f).startsWith('layout.'))
 
   const failures = []
   let exemptCount = 0
@@ -660,6 +698,10 @@ function main() {
   let scopedPages = 0
   let queryingPages = 0
   let pagesSkipped = 0
+  let layoutExemptCount = 0
+  let scopedLayouts = 0
+  let queryingLayouts = 0
+  let layoutsSkipped = 0
 
   for (const file of files) {
     const rel = file.split(path.sep).join('/')
@@ -695,6 +737,23 @@ function main() {
     if (queried.length && !failed && !exempted) scopedPages++
   }
 
+  for (const file of layoutFiles) {
+    const rel = file.split(path.sep).join('/')
+    const src = fs.readFileSync(file, 'utf8')
+    const res = classifyLayout(rel, src, tables)
+    if (res.skipped) { layoutsSkipped++; continue }
+    const queried = tablesQueried(src, tables)
+    if (queried.length) queryingLayouts++
+    let failed = false
+    let exempted = false
+    for (const f of res.findings) {
+      if (f.exempt) { layoutExemptCount++; exempted = true; continue }
+      failures.push({ file: rel, table: f.table })
+      failed = true
+    }
+    if (queried.length && !failed && !exempted) scopedLayouts++
+  }
+
   const stale = findStaleExemptions(EXEMPT)
   const todoLeaks = Object.entries(EXEMPT).flatMap(([relFile, byTable]) =>
     Object.entries(byTable)
@@ -708,7 +767,9 @@ function main() {
       `${files.length} routes — ${queryingRoutes} query tenant tables ` +
       `(${scopedRoutes} scoped, ${exemptCount} table-exemptions), ${systemSkipped} cron/qstash skipped; ` +
       `${pageFiles.length} pages — ${queryingPages} query tenant tables ` +
-      `(${scopedPages} scoped, ${pageExemptCount} table-exemptions), ${pagesSkipped} without service-role client`
+      `(${scopedPages} scoped, ${pageExemptCount} table-exemptions), ${pagesSkipped} without service-role client; ` +
+      `${layoutFiles.length} layouts — ${queryingLayouts} query tenant tables ` +
+      `(${scopedLayouts} scoped, ${layoutExemptCount} table-exemptions), ${layoutsSkipped} without service-role client`
     )
     if (todoLeaks.length) {
       console.log(`  ⚠ ${todoLeaks.length} TODO-LEAK exemption(s) awaiting a fix PR:`)
@@ -723,8 +784,9 @@ function main() {
   if (failures.length) {
     console.error(`
 ${failures.length} file/table pair(s) query a location_id-bearing table with no
-detectable tenant scoping. Routes and server pages both run the service-role
-client (RLS bypassed), so an unscoped query serves ANY tenant's rows. Fix by either:
+detectable tenant scoping. Routes, server pages and layouts (generateMetadata
+included) all run the service-role client (RLS bypassed), so an unscoped query
+serves ANY tenant's rows. Fix by either:
   1. Scoping the query — .eq('location_id', …) / .in('location_id', ids)
      after assertLocationAccess(user, …), or an embedded-resource filter
      ('parent.location_id'), or fetch-by-pk + assertLocationAccessOr404 on
