@@ -34,7 +34,7 @@ import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
 import { renderHostCampaignHtml } from '@/lib/host-campaign-email'
 import { sendEmail, applyMergeTags } from '@/lib/postmark'
-import { getAppUrl } from '@/lib/app-url'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import { validateBody } from '@/lib/validate'
 
 export const runtime = 'nodejs'
@@ -72,7 +72,7 @@ export async function POST(request, props) {
   // them here, exactly as the real send route does.
   const { data: host } = await db
     .from('event_hosts')
-    .select('id, name, email, sender_domain_verified, sender_email, sender_name, reply_to_email, postmark_stream_id')
+    .select('id, name, email, sender_domain_verified, sender_email, sender_name, reply_to_email, postmark_stream_id, anchor_location_id')
     .eq('id', session.host.id)
     .maybeSingle()
   if (!host) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
@@ -113,8 +113,10 @@ export async function POST(request, props) {
   // An inert token: the footer must RENDER (that is most of what a test is
   // for), but a real signed token in an email the host may forward around
   // would let a stranger unsubscribe a genuine contact.
+  // W1.L3a — on the tenant host of the host's anchor location, as the real
+  // send's footer link is (host-campaign-queue.js).
   let baseUrl
-  try { baseUrl = getAppUrl() } catch { baseUrl = '' }
+  try { baseUrl = await resolveCustomerBaseUrl(db, host.anchor_location_id) } catch { baseUrl = '' }
   const unsubscribeUrl = `${baseUrl}/unsubscribe/host/test-token`
 
   // Sample personalisation — there is no contact behind a test address, and
