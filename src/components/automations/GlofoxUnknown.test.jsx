@@ -29,35 +29,43 @@ const card = (status) => ({
   supportsBackfill: true, reviewBase: '/settings/glofox-import', enabled: false, status,
 })
 // No tooltip may claim "not connected" either.
-const connectTitles = () => [...document.querySelectorAll('[title]')].map((e) => e.getAttribute('title')).filter((t) => /Connect Glofox/.test(t))
+// W1.M3a — the not-connected copy is source-neutral now ("a membership source").
+const connectTitles = () => [...document.querySelectorAll('[title]')].map((e) => e.getAttribute('title')).filter((t) => /Connect (Glofox|a membership source)/.test(t))
 
 describe('AutomationsView — unknown Glofox status', () => {
   it('says it could not check, not that Glofox is disconnected; the toggle stays off', () => {
     render(<AutomationsView locationId={LOC} locationName="Studio" cards={[card({ available: false, trialConfigured: false, unknown: true })]} />)
     expect(screen.getByText(/Couldn.t check Glofox/)).toBeTruthy()
-    expect(screen.queryByText(/isn.t connected/)).toBeNull()
+    expect(screen.queryByText(/No membership source is connected/)).toBeNull()
     expect(connectTitles()).toEqual([])
     expect(screen.getByRole('button', { name: /Turn automation on/ }).disabled).toBe(true)
   })
 
-  it('a known "not connected" still says so (unchanged)', () => {
+  // W1.M3a — "not connected" copy lives in <MembershipSourceGate> (the page
+  // renders the cards only behind it), so a known-unavailable card says
+  // nothing of the kind: the toggle is simply off and disabled.
+  it('a known "not connected" card draws no connection line at all (the gate owns that copy)', () => {
     render(<AutomationsView locationId={LOC} locationName="Studio" cards={[card({ available: false, trialConfigured: false })]} />)
-    expect(screen.getByText(/isn.t connected/)).toBeTruthy()
+    expect(screen.queryByText(/membership source/)).toBeNull()
+    expect(screen.queryByText(/isn.t connected/)).toBeNull()
     expect(screen.queryByText(/Couldn.t check Glofox/)).toBeNull()
+    expect(screen.getByRole('button', { name: /Turn automation on/ }).disabled).toBe(true)
   })
 })
 
 describe.each([['ClassClimateCard', ClassClimateCard], ['BathroomClimateCard', BathroomClimateCard]])('%s — unknown Glofox status', (_n, Card) => {
-  it('says it could not check, not "isn\'t connected"', () => {
+  it('says it could not check, not "no membership source"', () => {
     render(<Card locationId={LOC} glofoxConnected={false} glofoxUnknown devices={[]} initialEnabled={false} initialConfig={{}} />)
     expect(screen.getByText(/Couldn.t check Glofox/)).toBeTruthy()
-    expect(screen.queryByText(/isn.t connected/)).toBeNull()
+    expect(screen.queryByText(/No membership source with a class schedule/)).toBeNull()
     expect(connectTitles()).toEqual([])
   })
 
-  it('without glofoxUnknown, "not connected" is unchanged', () => {
+  it('without glofoxUnknown, a not-connected card draws no connection line (the gate owns that copy, W1.M3a)', () => {
     render(<Card locationId={LOC} glofoxConnected={false} devices={[]} initialEnabled={false} initialConfig={{}} />)
-    expect(screen.getByText(/isn.t connected/)).toBeTruthy()
+    expect(screen.queryByText(/membership source/)).toBeNull()
+    expect(screen.queryByText(/isn.t connected/)).toBeNull()
     expect(screen.queryByText(/Couldn.t check Glofox/)).toBeNull()
+    expect(screen.getByRole('button', { name: /Turn automation on/ }).disabled).toBe(true)
   })
 })
