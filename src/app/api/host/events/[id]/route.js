@@ -8,6 +8,7 @@ import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
 import { HostEventSchema, computeEditTransition } from '@/lib/host-events'
 import { eventSlug, uniqueEventSlug, shouldRederiveSlug } from '@/lib/event-slug'
+import { resolveHostOrgBrand } from '@/lib/host-org-brand'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -142,8 +143,10 @@ export async function DELETE(_request, props) {
     .eq('race_event_id', race.id)
   if (countErr) return NextResponse.json({ success: false, error: countErr.message }, { status: 500 })
   if ((count ?? 0) > 0) {
+    // W1.S1c: the host's organisation is who cancels an event fully.
+    const brand = await resolveHostOrgBrand(db, session.host)
     return NextResponse.json(
-      { success: false, error: 'This event has registrations — take it off sale instead; contact UN1T to cancel it fully.' },
+      { success: false, error: `This event has registrations. Take it off sale instead, and contact ${brand.name} to cancel it fully.` },
       { status: 409 }
     )
   }
