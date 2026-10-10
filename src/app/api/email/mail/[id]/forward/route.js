@@ -293,6 +293,8 @@ export async function POST(request, props) {
     mailboxAddress: mailbox?.address || null,
     // MAILBOX-CONNECT.7 — see the compose route.
     mailbox: mailbox || null,
+    // W1.E2 — the studio whose brand names a degraded (fallback-From) send.
+    locationId: conversation.location_id,
     to: wire.to,
     cc: wire.cc,
     bcc: wire.bcc,

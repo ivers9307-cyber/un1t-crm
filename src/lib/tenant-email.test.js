@@ -41,15 +41,46 @@ function makeDb(handler) {
   return db
 }
 
+// W1.E2 — a row-driven fake: eq filters are applied, .maybeSingle()/.single()
+// give one row, anything else gives the filtered array. Enough for the three
+// readers the pre-domain sender touches (tenant row, branding chain, reply-to).
+function fakeDb(tables) {
+  return {
+    from(table) {
+      const filters = []
+      let single = false
+      const run = () => {
+        const rows = (tables[table] || []).filter((r) => filters.every(([c, v]) => r[c] === v))
+        return Promise.resolve(single ? { data: rows[0] ?? null, error: null } : { data: rows, error: null })
+      }
+      const b = new Proxy({}, {
+        get(_, prop) {
+          if (prop === 'then') { const p = run(); return p.then.bind(p) }
+          if (prop === 'maybeSingle' || prop === 'single') return () => { single = true; return run() }
+          if (prop === 'eq') return (c, v) => { filters.push([c, v]); return b }
+          return () => b
+        },
+      })
+      return b
+    },
+  }
+}
+
 beforeEach(() => {
   _resetTenantEmailCache()
   vi.clearAllMocks()
-  process.env.POSTMARK_FROM_EMAIL = 'UN1T <hello@un1t.ie>'
+  // W1.E2 — the platform address is env-driven and a bare address; the tests
+  // below prove the display name is never taken from it.
+  process.env.POSTMARK_FROM_EMAIL = 'hello@platform.test'
 })
 
 describe('globalDefaultSender / senderFromRow (pure)', () => {
-  it('global default has serverToken null + env From', () => {
-    expect(globalDefaultSender()).toEqual({ serverToken: null, fromEmail: 'UN1T <hello@un1t.ie>', fromName: null })
+  it('global default has serverToken null + the platform address + PLATFORM_NAME, no reply-to', () => {
+    expect(globalDefaultSender()).toEqual({ serverToken: null, fromEmail: 'hello@platform.test', fromName: 'Repset', replyTo: null })
+  })
+  it('W1.E2 — a "Name <addr>" env still yields the bare address, never its name', () => {
+    process.env.POSTMARK_FROM_EMAIL = 'UN1T <hello@platform.test>'
+    expect(globalDefaultSender()).toEqual({ serverToken: null, fromEmail: 'hello@platform.test', fromName: 'Repset', replyTo: null })
   })
   it('senderFromRow falls back to global when a row has no token', () => {
     expect(senderFromRow(null).serverToken).toBeNull()
@@ -57,7 +88,7 @@ describe('globalDefaultSender / senderFromRow (pure)', () => {
   })
   it('senderFromRow builds a tenant sender from a live row', () => {
     expect(senderFromRow({ postmark_server_token: 'srv-tok', from_email: 'hi@mail.gymx.com', from_name: 'GymX' }))
-      .toEqual({ serverToken: 'srv-tok', fromEmail: 'hi@mail.gymx.com', fromName: 'GymX' })
+      .toEqual({ serverToken: 'srv-tok', fromEmail: 'hi@mail.gymx.com', fromName: 'GymX', replyTo: null })
   })
 })
 
@@ -72,12 +103,12 @@ describe('resolveEmailSender — fail safe to the global default', () => {
     expect(await resolveEmailSender(null, 'loc-1')).toEqual(globalDefaultSender())
   })
 
-  it('location with no org → global default', async () => {
+  it('location with no org → the platform sender (brand unresolved → PLATFORM_NAME), no reply-to', async () => {
     const db = makeDb((table) => table === 'locations' ? { data: { organization_id: null } } : { data: null })
     expect(await resolveEmailSender(db, 'loc-1')).toEqual(globalDefaultSender())
   })
 
-  it('org has no live row → global default', async () => {
+  it('org has no live row → the platform sender', async () => {
     const db = makeDb((table) =>
       table === 'locations' ? { data: { organization_id: 'org-1' } } : { data: null })
     expect(await resolveEmailSender(db, 'loc-1')).toEqual(globalDefaultSender())
@@ -88,7 +119,71 @@ describe('resolveEmailSender — fail safe to the global default', () => {
       table === 'locations'
         ? { data: { organization_id: 'org-1' } }
         : { data: { postmark_server_token: 'srv-secret', from_email: 'hi@mail.gymx.com', from_name: 'GymX', status: 'live' } })
-    expect(await resolveEmailSender(db, 'loc-1')).toEqual({ serverToken: 'srv-secret', fromEmail: 'hi@mail.gymx.com', fromName: 'GymX' })
+    expect(await resolveEmailSender(db, 'loc-1')).toEqual({ serverToken: 'srv-secret', fromEmail: 'hi@mail.gymx.com', fromName: 'GymX', replyTo: null })
+  })
+
+  // ── W1.E2 — the PRE-DOMAIN sender: platform address, tenant display name,
+  // tenant reply-to. Nothing says UN1T. ──────────────────────────────────
+  const GYM_A = {
+    locations: [{ id: 'loc-1', name: 'Gym A', organization_id: 'org-a', email: 'hi@gyma.ie', email_inbox_reply_to: null }],
+    tenant_email_domains: [],
+    company_settings: [],
+    org_settings: [],
+    email_mailboxes: [],
+  }
+
+  it('W1.E2 — with no live tenant row the sender is the platform address with the brand as display name and the location reply-to', async () => {
+    vi.stubEnv('POSTMARK_FROM_EMAIL', 'hello@platform.test')
+    expect(await resolveEmailSender(fakeDb(GYM_A), 'loc-1'))
+      .toEqual({ serverToken: null, fromEmail: 'hello@platform.test', fromName: 'Gym A', replyTo: 'hi@gyma.ie' })
+    vi.unstubAllEnvs()
+  })
+
+  it('W1.E2 — the brand chain is honoured: company_settings beats the location name', async () => {
+    const db = fakeDb({ ...GYM_A, company_settings: [{ location_id: 'loc-1', company_name: 'Gym A Studios', logo_url: null, favicon_url: null }] })
+    expect((await resolveEmailSender(db, 'loc-1')).fromName).toBe('Gym A Studios')
+  })
+
+  it('W1.E2 — the default mailbox beats locations.email for reply-to; a NULL location email yields replyTo null', async () => {
+    const withMailbox = fakeDb({
+      ...GYM_A,
+      email_mailboxes: [{ location_id: 'loc-1', address: 'inbox@gyma.ie', is_default: true, active: true }],
+    })
+    expect((await resolveEmailSender(withMailbox, 'loc-1')).replyTo).toBe('inbox@gyma.ie')
+
+    _resetTenantEmailCache()
+    const noEmail = fakeDb({
+      ...GYM_A,
+      locations: [{ id: 'loc-1', name: 'Gym A', organization_id: 'org-a', email: null, email_inbox_reply_to: null }],
+    })
+    expect(await resolveEmailSender(noEmail, 'loc-1'))
+      .toEqual({ serverToken: null, fromEmail: 'hello@platform.test', fromName: 'Gym A', replyTo: null })
+  })
+
+  it('W1.E2 — a LIVE tenant row still wins outright (its own from + server token), replyTo still the location', async () => {
+    const db = fakeDb({
+      ...GYM_A,
+      tenant_email_domains: [{ organization_id: 'org-a', status: 'live', postmark_server_token: 'srv-secret', from_email: 'hi@mail.gyma.ie', from_name: 'Gym A Mail' }],
+    })
+    expect(await resolveEmailSender(db, 'loc-1'))
+      .toEqual({ serverToken: 'srv-secret', fromEmail: 'hi@mail.gyma.ie', fromName: 'Gym A Mail', replyTo: 'hi@gyma.ie' })
+  })
+
+  it('W1.E2 — the whole pre-domain object is cached (brand + reply-to resolve once per TTL)', async () => {
+    let fromCount = 0
+    const inner = fakeDb(GYM_A)
+    const db = { from(t) { fromCount++; return inner.from(t) } }
+    const first = await resolveEmailSender(db, 'loc-1')
+    const after = fromCount
+    const second = await resolveEmailSender(db, 'loc-1')
+    expect(fromCount).toBe(after)
+    expect(second).toEqual(first)
+    expect(second).not.toBe(first) // a copy, so a caller cannot mutate the cache
+  })
+
+  it('W1.E2 — no code path produces a UN1T literal for a foreign tenant', async () => {
+    const sender = await resolveEmailSender(fakeDb(GYM_A), 'loc-1')
+    expect(JSON.stringify(sender)).not.toMatch(/un1t/i)
   })
 
   it('ANY DB error → global default (never throws)', async () => {
