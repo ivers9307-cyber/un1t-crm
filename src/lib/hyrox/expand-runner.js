@@ -30,7 +30,7 @@ export async function runExpandHyroxWeeks(db, { nowMs = Date.now(), aheadWeeks =
         if (!week) continue
         const rows = []
         for (const slot of slotsForWeek(block.sessions_per_week)) {
-          const sRes = await expandSession({ week, slot, dial: block.difficulty_dial, locationLabel: (loc?.name || 'UN1T').toUpperCase(), charter, autoTuneSignal: null }, { caller })
+          const sRes = await expandSession({ week, slot, dial: block.difficulty_dial, locationLabel: (loc?.name || '').toUpperCase(), charter, autoTuneSignal: null }, { caller })
           if (sRes.ok) rows.push(sessionRowFrom(block.id, block.location_id, { ...sRes.data, week_no: weekNo, slot }))
         }
         if (rows.length) {
