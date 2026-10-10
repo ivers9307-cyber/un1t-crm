@@ -6,6 +6,7 @@ import { canEditMiaSettings } from '@/lib/agent/settings-access'
 import { readCheckinSendsToday, readCheckinSendsAllTime } from '@/lib/agent/checkin-counts'
 import { logError } from '@/lib/log'
 import { mergeLocationSettings, settingsSaveFailure } from '@/lib/location-settings'
+import { getLocationBranding } from '@/lib/location-branding'
 // MIA-HYGIENE.1 — schema, defaults and the persisted-object builder live in
 // one contract module so a unit test can assert every validated key is
 // actually WRITTEN (see settings-contract.js for the two incidents this
@@ -41,6 +42,7 @@ export async function GET() {
       error: 'Could not load the customer agent settings just now.',
     }, { status: 500 })
   }
+  const branding = await getLocationBranding(db, locationId)
   const settings = {
     ...DEFAULTS,
     ...(loc?.settings?.customer_agent || {}),
@@ -100,6 +102,9 @@ export async function GET() {
     live_despite_test_mode: settings.enabled === true && settings.test_mode === true,
     checkin_stats: checkinStats,
     location: { id: locationId, name: loc?.name || null },
+    // W1.S3 — the editor's placeholders render the studio's own brand
+    // (default hand-off / welcome copy, the "{Brand} Points" label).
+    brand: { companyName: branding.companyName, shortName: branding.shortName },
   })
 }
 

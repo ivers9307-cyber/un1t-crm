@@ -41,7 +41,7 @@ describe('getLocationBranding', () => {
       org_settings: [],
     })
     expect(await getLocationBranding(db, 'loc1')).toEqual({
-      companyName: 'CCF Autos', shortName: 'CCF Autos', companyNameConfigured: true, logoUrl: 'l.png', faviconUrl: 'f.ico',
+      companyName: 'CCF Autos', shortName: 'CCF Autos', locationName: 'Gym A North', companyNameConfigured: true, logoUrl: 'l.png', faviconUrl: 'f.ico',
     })
   })
 
@@ -52,7 +52,7 @@ describe('getLocationBranding', () => {
       org_settings: [{ organization_id: 'org1', company_name: 'UN1T Group', logo_url: 'org.png', favicon_url: 'org.ico' }],
     })
     expect(await getLocationBranding(db, 'loc1')).toEqual({
-      companyName: 'Stillorgan', shortName: 'Stillorgan', companyNameConfigured: true, logoUrl: 'loc.png', faviconUrl: 'loc.ico',
+      companyName: 'Stillorgan', shortName: 'Stillorgan', locationName: 'Gym A North', companyNameConfigured: true, logoUrl: 'loc.png', faviconUrl: 'loc.ico',
     })
   })
 
@@ -63,7 +63,7 @@ describe('getLocationBranding', () => {
       org_settings: [{ organization_id: 'org1', company_name: 'CCF Autos', logo_url: 'org.png', favicon_url: 'org.ico' }],
     })
     expect(await getLocationBranding(db, 'loc1')).toEqual({
-      companyName: 'CCF Autos', shortName: 'CCF Autos', companyNameConfigured: true, logoUrl: 'org.png', faviconUrl: 'org.ico',
+      companyName: 'CCF Autos', shortName: 'CCF Autos', locationName: 'Gym A North', companyNameConfigured: true, logoUrl: 'org.png', faviconUrl: 'org.ico',
     })
   })
 
@@ -74,7 +74,7 @@ describe('getLocationBranding', () => {
       org_settings: [{ organization_id: 'org1', company_name: 'UN1T Group', logo_url: 'org.png', favicon_url: 'org.ico' }],
     })
     expect(await getLocationBranding(db, 'loc1')).toEqual({
-      companyName: 'Stillorgan', shortName: 'Stillorgan', companyNameConfigured: true, logoUrl: 'org.png', faviconUrl: 'org.ico',
+      companyName: 'Stillorgan', shortName: 'Stillorgan', locationName: 'Gym A North', companyNameConfigured: true, logoUrl: 'org.png', faviconUrl: 'org.ico',
     })
   })
 
@@ -92,7 +92,7 @@ describe('getLocationBranding', () => {
       locations: [{ id: 'loc-1', name: 'Gym A North', organization_id: 'org-a' }],
     })
     const b = await getLocationBranding(db, 'loc-1')
-    expect(b).toEqual({ companyName: 'Gym A', shortName: 'Gym A', companyNameConfigured: true, logoUrl: 'l.png', faviconUrl: 'f.ico' })
+    expect(b).toEqual({ companyName: 'Gym A', shortName: 'Gym A', locationName: 'Gym A North', companyNameConfigured: true, logoUrl: 'l.png', faviconUrl: 'f.ico' })
   })
 
   it('W1.B1 — shortName is org_settings.short_name when set, else the resolved brand', async () => {
@@ -112,6 +112,19 @@ describe('getLocationBranding', () => {
     expect(b.companyNameConfigured).toBe(false)
   })
 
+  it('W1.S3 — locationName is the studio\'s own label even when the brand is configured', async () => {
+    const db = fakeDb({
+      company_settings: [{ location_id: 'loc1', company_name: 'Gym A', logo_url: null, favicon_url: null }],
+      locations: [LOC],
+      org_settings: [],
+    })
+    const b = await getLocationBranding(db, 'loc1')
+    expect(b.companyName).toBe('Gym A')
+    expect(b.locationName).toBe('Gym A North')
+    const none = await getLocationBranding(null, 'loc1')
+    expect(none.locationName).toBe('')
+  })
+
   it('W1.B1 — a blank company_settings name and no org name fall through to the location name', async () => {
     const db = fakeDb({
       company_settings: [{ location_id: 'loc1', company_name: '   ', logo_url: null, favicon_url: null }],
@@ -127,7 +140,7 @@ describe('getLocationBranding', () => {
     expect((await getLocationBranding(null, 'loc-1')).companyName).toBe('')
     expect((await getLocationBranding({ from() { throw new Error('x') } }, 'loc-1')).companyName).toBe('')
     expect(await getLocationBranding(fakeDb({}), null)).toEqual({
-      companyName: '', shortName: '', companyNameConfigured: false, logoUrl: null, faviconUrl: null,
+      companyName: '', shortName: '', locationName: '', companyNameConfigured: false, logoUrl: null, faviconUrl: null,
     })
   })
 
@@ -137,7 +150,7 @@ describe('getLocationBranding', () => {
       { errors: { company_settings: { message: 'boom' } } },
     )
     expect(await getLocationBranding(db, 'loc1')).toEqual({
-      companyName: 'Gym A', shortName: 'Gym A', companyNameConfigured: true, logoUrl: null, faviconUrl: null,
+      companyName: 'Gym A', shortName: 'Gym A', locationName: 'Gym A North', companyNameConfigured: true, logoUrl: null, faviconUrl: null,
     })
   })
 
