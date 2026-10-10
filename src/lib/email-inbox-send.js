@@ -72,6 +72,9 @@
 import { sendEmail } from './postmark'
 import { logError } from './log'
 import { sendViaSmtp } from './mail/smtp-send'
+import { createServerClient } from './supabase'
+import { getLocationBranding } from './location-branding'
+import { platformFromHeader, parseAddressHeader } from './platform-sender'
 
 /**
  * THIS APP'S internal stream for all conversation mail. Conversation mail is
@@ -147,12 +150,21 @@ export function inboxMessageStream() {
 }
 
 /**
- * The From we fall back to when the mailbox address cannot be sent from.
- * A domain we own and Postmark has verified. Mirrors sendEmail's own default
- * chain so what we record is what went on the wire.
+ * The From we fall back to when the mailbox address cannot be sent from:
+ * the PLATFORM address (POSTMARK_FROM_EMAIL — a domain we own and Postmark
+ * has verified) with the LOCATION'S BRAND as display name (W1.E2), so a
+ * customer of a second gym never reads another gym's name on a degraded
+ * reply. PLATFORM_NAME when no location is known or the brand cannot be
+ * resolved; null when the env is unset (no invented address — the attempt
+ * list then holds the mailbox alone, and the refusal stays loud).
+ * Never throws: getLocationBranding swallows its own errors.
+ * @param {object} db - a supabase-js client
+ * @param {string|null} locationId
+ * @returns {Promise<string|null>}
  */
-export function fallbackFromAddress() {
-  return process.env.POSTMARK_FROM_EMAIL || 'UN1T <hello@un1t.ie>'
+export async function fallbackFromAddress(db, locationId) {
+  const branding = locationId ? await getLocationBranding(db, locationId) : null
+  return platformFromHeader(branding?.companyName)
 }
 
 /**
@@ -351,6 +363,10 @@ export async function sendConversationEmail({
   // MAILBOX-CONNECT.7 — the transport selector; see the docblock. Optional,
   // and defaulting to null keeps every existing call site byte-identical.
   mailbox = null,
+  // W1.E2 — the studio whose brand names a DEGRADED send (the fallback From
+  // on the platform address). The conversation's location when the caller
+  // has it; else the mailbox's own studio; else PLATFORM_NAME.
+  locationId = null,
   // EMAIL-CC.1 / EMAIL-OUTBOUND-ATTACH.1 — cc, bcc and attachments all default
   // to undefined, so a caller that passes none of them (and every caller
   // before those two tasks) produces a byte-identical sendEmail call.
@@ -389,7 +405,7 @@ export async function sendConversationEmail({
   const postmarkStream = inboxMessageStream()
   const attempts = plannedFroms({
     mailboxAddress,
-    fallback: fallbackFromAddress(),
+    fallback: await fallbackFromAddress(createServerClient(), locationId || mailbox?.location_id || null),
     skipMailbox: isKnownUnverified(mailboxAddress),
   })
 
@@ -425,7 +441,9 @@ export async function sendConversationEmail({
         // The tenant-override seam carries BOTH the server token and the From
         // (src/lib/postmark.js resolveTenantOverride). Passing `sender`
         // explicitly also stops it looking up a per-tenant sender by location.
-        sender: { serverToken, fromEmail: attempt.from, fromName: null },
+        // W1.E2 — the resolver contract is fromEmail = ADDRESS, fromName =
+        // display name, so a branded fallback ("Gym A <addr>") is split here.
+        sender: { serverToken, fromEmail: parseAddressHeader(attempt.from).address, fromName: parseAddressHeader(attempt.from).name || null },
       })
       return { ok: true, result, fromEmail: attempt.from, degraded: attempt.degraded }
     } catch (err) {

@@ -77,7 +77,9 @@ function setupDb(state) {
 beforeEach(() => {
   vi.clearAllMocks()
   _resetInboxSenderCache()
-  process.env.POSTMARK_FROM_EMAIL = 'UN1T <hello@un1t.ie>'
+  // W1.E2 — the env is a bare platform address; a degraded send goes out as
+  // the studio's brand (PLATFORM_NAME here: the fake db holds no branding) on it.
+  process.env.POSTMARK_FROM_EMAIL = 'hello@platform.test'
   // EMAIL-OUTBOUND-SERVER.1 — the support inbox's OWN Postmark server.
   process.env.POSTMARK_EMAIL_INBOX_SERVER_TOKEN = 'ticketing-server-token'
   getCurrentUser.mockResolvedValue(COACH)
@@ -228,10 +230,10 @@ describe('POST /api/email/conversations/compose — the send', () => {
 
     expect(res.status).toBe(200)
     expect(sendEmail).toHaveBeenCalledTimes(2)
-    expect(sendEmail.mock.calls[1][0].sender.fromEmail).toBe('UN1T <hello@un1t.ie>')
+    expect(sendEmail.mock.calls[1][0].sender).toMatchObject({ fromEmail: 'hello@platform.test', fromName: 'Repset' })
     expect(sendEmail.mock.calls[1][0].replyTo).toBe(MB_STUDIO.address)
     const [msg] = insertsInto(db, 'email_inbox_messages')
-    expect(msg.payload.from_email).toBe('UN1T <hello@un1t.ie>')
+    expect(msg.payload.from_email).toBe('Repset <hello@platform.test>')
   })
 
   it('a failed send leaves NO conversation and NO message behind', async () => {

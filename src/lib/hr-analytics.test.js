@@ -168,9 +168,15 @@ describe('pickHighlight', () => {
       s({ id: 'p2', points: 120 }),
       s({ id: 'p3', points: 110 }),
     ]
-    const h = pickHighlight({ thisSession, history, eventTypeName: 'RIDE', nowMs: NOW })
+    const h = pickHighlight({ thisSession, history, eventTypeName: 'RIDE', nowMs: NOW, shortName: 'UN1T' })
     expect(h.id).toBe('best_class_type_points')
     expect(h.message).toMatch(/RIDE/)
+    // W1.S4 — the product name is the tenant's short brand, never a literal.
+    expect(h.message).toBe('Personal best for RIDE — 250 UN1T Points.')
+    expect(pickHighlight({ thisSession, history, eventTypeName: 'RIDE', nowMs: NOW, shortName: 'Gym A' }).message)
+      .toBe('Personal best for RIDE — 250 Gym A Points.')
+    expect(pickHighlight({ thisSession, history, eventTypeName: 'RIDE', nowMs: NOW }).message)
+      .toBe('Personal best for RIDE — 250 Points.')
   })
   it('top_quartile_recent when this session is high vs last 28d', () => {
     // Use a different event type + class name for this session so best_class_type_points
@@ -199,6 +205,10 @@ describe('pickHighlight', () => {
     expect(h.id).toBe('top_quartile_recent')
     expect(h.message).toContain('top 1%')
     expect(h.message).not.toContain('top 0%')
+    // W1.S4 — brand-less reads bare "Points"; the brand names the product.
+    expect(h.message).toBe('In the top 1% of your last 4 weeks — 500 Points.')
+    expect(pickHighlight({ thisSession, history, nowMs: NOW, shortName: 'UN1T' }).message)
+      .toBe('In the top 1% of your last 4 weeks — 500 UN1T Points.')
   })
   it('returns null when no rule fires', () => {
     const thisSession = s({ id: 'now', points: 50, peak: 150, zones: { 5: 0 } })

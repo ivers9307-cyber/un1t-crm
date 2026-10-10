@@ -765,6 +765,15 @@ export async function tickCampaignSend(db, campaign) {
   // a settings hiccup can never fail a send.
   const emailCopy = await fetchLocationEmailCopy(db, campaign.location_id)
 
+  // INTEG-B3 / W1.E2 — resolve the sender ONCE for the whole chunk, before the
+  // batch is built. With no live tenant email domain (every org today) this
+  // is the PRE-DOMAIN sender: the platform address, the studio's brand as
+  // display name, the studio's reply-to. With a live tenant, the batch rides
+  // that org's Postmark server + verified From. Either way the ADDRESS on the
+  // wire is the resolver's — campaign.from_email is never sent (it was only
+  // ever right by accident when it equalled POSTMARK_FROM_EMAIL).
+  const tenantSender = await resolveEmailSender(db, campaign.location_id)
+
   const emailBatch = queuedRows.map(row => {
     const contact = row.contact
     // Utility (outbound) emails carry no marketing chrome — no unsubscribe
@@ -842,11 +851,13 @@ export async function tickCampaignSend(db, campaign) {
       }),
       htmlBody: finalHtml,
       textBody,
-      from: campaign.from_name
-        ? `${campaign.from_name} <${campaign.from_email || process.env.POSTMARK_FROM_EMAIL}>`
-        : undefined,
+      // W1.E2 — the operator's From NAME is a display name on the resolved
+      // address (sendBatch applies it); no `from` header is built here, so
+      // campaign.from_email cannot reach the wire.
+      fromName: campaign.from_name || undefined,
       // EMAIL-INBOX.1 / EMAIL-MAILBOX-ADMIN.1 — a per-campaign reply_to wins;
-      // otherwise the studio's default account, resolved once above.
+      // otherwise the studio's default account, resolved once above; below
+      // both, sendBatch stamps the resolver's reply-to (W1.E2: locations.email).
       replyTo: campaign.reply_to || locationReplyTo || undefined,
       stream,
       tag: `campaign-${campaignId}`,
@@ -869,15 +880,10 @@ export async function tickCampaignSend(db, campaign) {
     }
   })
 
-  // INTEG-B3 — resolve the org's tenant sending config ONCE for the whole
-  // chunk. With no live tenant email domain (every org today) this is the
-  // global default: sendBatch sends byte-identically and loggedFromEmail
-  // keeps the campaign's own from_email. With a live tenant, the batch
-  // rides that org's Postmark server + verified From, logged honestly.
-  const tenantSender = await resolveEmailSender(db, campaign.location_id)
-  const loggedFromEmail = tenantSender.serverToken
-    ? tenantSender.fromEmail
-    : (campaign.from_email || process.env.POSTMARK_FROM_EMAIL)
+  // W1.E2 — email_sends.from_email is the ADDRESS that went on the wire (the
+  // resolver's, for every email in the chunk; the display name is not an
+  // address and is not logged — same shape as the transactional path).
+  const loggedFromEmail = tenantSender.fromEmail || null
 
   const results = await sendBatch(emailBatch, { sender: tenantSender })
 

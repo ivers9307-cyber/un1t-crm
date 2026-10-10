@@ -711,9 +711,21 @@ describe('EMAIL-MAILBOX-ADMIN.1 — where a studio’s replies go', () => {
   })
 
   it('falls back to the deprecated column for studios configured before mig 485', async () => {
-    const db = makeDb({ mailboxes: [], locations: [{ id: LOC, email_inbox_reply_to: 'legacy@un1tdublin.com' }] })
+    const db = makeDb({ mailboxes: [], locations: [{ id: LOC, email_inbox_reply_to: 'legacy@un1tdublin.com', email: 'front@studio.ie' }] })
     createServerClient.mockReturnValue(db)
     expect(await getLocationInboxReplyTo(LOC)).toBe('legacy@un1tdublin.com')
+  })
+
+  it('W1.E2 — ends in locations.email: with no default account and no legacy column, the location’s own address', async () => {
+    const db = makeDb({ mailboxes: [], locations: [{ id: LOC, email_inbox_reply_to: null, email: 'front@studio.ie' }] })
+    createServerClient.mockReturnValue(db)
+    expect(await getLocationInboxReplyTo(LOC)).toBe('front@studio.ie')
+  })
+
+  it('W1.E2 — a NULL locations.email yields null, never an invented address', async () => {
+    const db = makeDb({ mailboxes: [], locations: [{ id: LOC, email_inbox_reply_to: null, email: null }] })
+    createServerClient.mockReturnValue(db)
+    expect(await getLocationInboxReplyTo(LOC)).toBeNull()
   })
 
   it('never picks up ANOTHER studio’s default account', async () => {
