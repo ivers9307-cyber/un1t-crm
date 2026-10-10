@@ -63,6 +63,11 @@ export async function locationsWithSource(db, key, { module = 'membership-source
       logError(module, 'membership source state unknown; location skipped this tick', {
         locationId: s.id, source: s.source, readError: s.readError ?? null,
       })
+    } else if (s.state === 'none') {
+      // Listed under `key`, then read back as 'none': the column changed mid-tick.
+      logWarn(module, 'membership source changed mid-tick; location skipped this tick', {
+        locationId: s.id, key,
+      })
     } else {
       logWarn(module, 'membership source not configured; location skipped this tick', {
         locationId: s.id, source: s.source, state: s.state, missing: s.missing ?? [],
@@ -72,11 +77,19 @@ export async function locationsWithSource(db, key, { module = 'membership-source
   return { locations, eligible, skipped, error: null }
 }
 
-/** The skip counts a cron puts in its response / heartbeat outcome. */
+/**
+ * The skip counts a cron puts in its response / heartbeat outcome.
+ *
+ * `skipped_source_changed` counts a location listed under the source but whose
+ * per-location read then said 'none': its membership_source was changed
+ * between the list and the state read (mid-tick). It is neither unconfigured
+ * nor unreadable, so it is not folded into either.
+ */
 export function skippedSummary(skipped) {
-  const out = { skipped_unconfigured: 0, skipped_unknown: 0 }
+  const out = { skipped_unconfigured: 0, skipped_unknown: 0, skipped_source_changed: 0 }
   for (const s of skipped || []) {
     if (s.state === 'unknown') out.skipped_unknown++
+    else if (s.state === 'none') out.skipped_source_changed++
     else out.skipped_unconfigured++
   }
   return out

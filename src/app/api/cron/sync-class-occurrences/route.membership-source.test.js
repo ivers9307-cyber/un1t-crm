@@ -33,7 +33,7 @@ describe('GET /api/cron/sync-class-occurrences — discovery through the members
     const out = await (await GET(req())).json()
     expect(visited()).toEqual([STILLORGAN_ID])
     expect(visited()).toEqual(legacyGlofoxDiscovery(ESTATE_2026_10))
-    expect(out.stats).toEqual({ locations: 1, upserted: 1, errors: 0, trainer_api_calls: 0, reconcile_errors: 0, skipped: 0 })
+    expect(out.stats).toEqual({ locations: 1, upserted: 1, errors: 0, trainer_api_calls: 0, reconcile_errors: 0, skipped_unconfigured: 0, skipped_unknown: 0, skipped_source_changed: 0 })
     expect(stampHeartbeat).toHaveBeenCalledWith('sync-class-occurrences', out.stats)
     for (const call of glofoxCredentialsForLocation.mock.calls) expect(call[1]).toBe(STILLORGAN_ID)
   })
@@ -51,7 +51,18 @@ describe('GET /api/cron/sync-class-occurrences — discovery through the members
     h.db = dbFor([...ESTATE_2026_10, REGISTRY_ONLY])
     const out = await (await GET(req())).json()
     expect(visited()).toEqual([STILLORGAN_ID])
-    expect(out.stats).toMatchObject({ locations: 1, skipped: 1 })
+    expect(out.stats).toMatchObject({ locations: 1, skipped_unconfigured: 1, skipped_unknown: 0 })
+  })
+
+  it('Stillorgan whose credentials read FAILS at discovery stamps skipped_unknown: 1, not a quiet unconfigured skip', async () => {
+    glofoxCredentialsForLocation.mockImplementation(async (_db, id) => (
+      id === STILLORGAN_ID ? { branchId: null, apiKey: null, apiToken: null, readError: 'glofox_settings_unreadable' } : { branchId: 'b', apiKey: 'k', apiToken: 't', readError: null }
+    ))
+    h.db = dbFor(ESTATE_2026_10)
+    const out = await (await GET(req())).json()
+    expect(visited()).toEqual([])
+    expect(out.stats).toMatchObject({ locations: 0, skipped_unknown: 1, skipped_unconfigured: 0 })
+    expect(stampHeartbeat).toHaveBeenCalledWith('sync-class-occurrences', expect.objectContaining({ skipped_unknown: 1 }))
   })
 
   it('a failed seam read answers 500 and does NOT stamp', async () => {

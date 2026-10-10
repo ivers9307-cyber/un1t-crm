@@ -24,7 +24,7 @@ import { loadJourneyLane } from '@/lib/onboarding-journey-data'
 import { buildOnboardingPacePush } from '@/lib/onboarding-journey'
 import { logInfo, logWarn } from '@/lib/log'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
-import { locationsWithSource } from '@/lib/membership/locations-for-source'
+import { locationsWithSource, skippedSummary } from '@/lib/membership/locations-for-source'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -114,12 +114,17 @@ export async function GET(request) {
     }
   }
 
+  // The skip split rides on the stamp's last_outcome, so an `unknown` location
+  // (credentials unreadable at discovery) never reads as a healthy quiet tick.
+  const skipCounts = skippedSummary(skipped)
   logInfo('cron-onboarding-pace', 'tick', {
-    locations: liveLocations.length, locations_skipped: skipped.length, candidates, nudged, failed, reachability_failed: reachabilityFailed,
+    locations: liveLocations.length, locations_skipped: skipped.length, ...skipCounts, candidates, nudged, failed, reachability_failed: reachabilityFailed,
   })
-  await stampHeartbeat('notify-onboarding-pace').catch((err) =>
+  await stampHeartbeat('notify-onboarding-pace', {
+    locations: liveLocations.length, ...skipCounts, candidates, nudged, failed, reachability_failed: reachabilityFailed,
+  }).catch((err) =>
     logWarn('cron-onboarding-pace', 'heartbeat failed', { err }))
   return NextResponse.json({
-    ok: true, locations: liveLocations.length, locations_skipped: skipped.length, candidates, nudged, failed, reachability_failed: reachabilityFailed,
+    ok: true, locations: liveLocations.length, locations_skipped: skipped.length, ...skipCounts, candidates, nudged, failed, reachability_failed: reachabilityFailed,
   })
 }

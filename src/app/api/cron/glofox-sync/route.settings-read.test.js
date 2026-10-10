@@ -66,7 +66,7 @@ describe('GET /api/cron/glofox-sync — REGISTRYREAD.1b', () => {
     expect(out.per_location[0]).toMatchObject({ status: 'failed', first_error: GLOFOX_SETTINGS_UNREADABLE_MESSAGE })
     expect(h.runUpdates.at(-1)).toMatchObject({ status: 'failed', first_error: GLOFOX_SETTINGS_UNREADABLE_MESSAGE })
     expect(fetchAllMembersPage).not.toHaveBeenCalled()
-    expect(stampHeartbeat).toHaveBeenCalledWith('glofox-sync')
+    expect(stampHeartbeat).toHaveBeenCalledWith('glofox-sync', expect.objectContaining({ failed_locations: 1, skipped_unknown: 0 }))
     expect(stampTenantHeartbeat).not.toHaveBeenCalled()
   })
 
@@ -75,7 +75,7 @@ describe('GET /api/cron/glofox-sync — REGISTRYREAD.1b', () => {
       .mockResolvedValue({ branchId: null, apiKey: null, apiToken: null, readError: null })
     const out = await (await GET(req())).json()
     expect(out.per_location[0]).toMatchObject({ status: 'failed', first_error: 'Glofox credentials missing on this location.' })
-    expect(stampHeartbeat).toHaveBeenCalledWith('glofox-sync')
+    expect(stampHeartbeat).toHaveBeenCalledWith('glofox-sync', expect.objectContaining({ failed_locations: 1, skipped_unknown: 0 }))
   })
 
   it('CREDITSREAD.1 — counts syncs that could not read credits, and records Glofox traffic on the run row', async () => {

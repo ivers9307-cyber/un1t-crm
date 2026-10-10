@@ -60,14 +60,22 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: locErr.message }, { status: 500 })
   }
 
+  // The skip counts ride on every global stamp as last_outcome, so a tick that
+  // could not read a location's credentials (`skipped_unknown`) never reads as
+  // a healthy quiet run. The stamp itself stays: like a failed location below,
+  // an unknown one shows in tenant_cron_health (it never stamps its tenant row).
+  const skipCounts = skippedSummary(skipped)
+
   if (eligibleLocations.length === 0) {
-    await stampHeartbeat('glofox-sync')
+    await stampHeartbeat('glofox-sync', { locations_processed: 0, ...skipCounts })
     return NextResponse.json({
       success: true,
-      message: 'No locations with Glofox credentials configured.',
+      message: skipped.length > 0
+        ? `No Glofox location synced: ${skipCounts.skipped_unknown} unreadable, ${skipCounts.skipped_unconfigured} not configured.`
+        : 'No locations with Glofox credentials configured.',
       locations_processed: 0,
       locations_skipped: skipped.length,
-      ...skippedSummary(skipped),
+      ...skipCounts,
     })
   }
 
@@ -91,7 +99,11 @@ export async function GET(request) {
     }
   }
 
-  await stampHeartbeat('glofox-sync')
+  await stampHeartbeat('glofox-sync', {
+    locations_processed: perLocationResults.length,
+    failed_locations: perLocationResults.filter((r) => r.status === 'failed').length,
+    ...skipCounts,
+  })
 
   // Roll up across all locations for the response.
   const totals = perLocationResults.reduce((acc, r) => {
@@ -109,7 +121,7 @@ export async function GET(request) {
     lookback_hours: LOOKBACK_HOURS,
     locations_processed: perLocationResults.length,
     locations_skipped: skipped.length,
-    ...skippedSummary(skipped),
+    ...skipCounts,
     totals,
     per_location: perLocationResults,
   })

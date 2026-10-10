@@ -15,7 +15,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { glofoxCredentialsForLocation } from '@/lib/glofox'
-import { locationsWithSource } from '@/lib/membership/locations-for-source'
+import { locationsWithSource, skippedSummary } from '@/lib/membership/locations-for-source'
 import { syncOccurrencesForLocation } from '@/lib/class-occurrences'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { logWarn } from '@/lib/log'
@@ -37,7 +37,9 @@ export async function GET(request) {
   const { eligible: connected, skipped, error } = await locationsWithSource(db, 'glofox', { module: 'cron-sync-class-occurrences' })
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
 
-  const stats = { locations: 0, upserted: 0, errors: 0, trainer_api_calls: 0, reconcile_errors: 0, skipped: skipped.length }
+  // The skip split rides on the stamp's last_outcome: an `unknown` location
+  // (its credentials read failed at discovery) is not a quiet unconfigured one.
+  const stats = { locations: 0, upserted: 0, errors: 0, trainer_api_calls: 0, reconcile_errors: 0, ...skippedSummary(skipped) }
   for (const loc of connected) {
     stats.locations++
     const creds = await glofoxCredentialsForLocation(db, loc.id)

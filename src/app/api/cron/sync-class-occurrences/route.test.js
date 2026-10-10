@@ -60,7 +60,7 @@ describe('GET /api/cron/sync-class-occurrences', () => {
     })
     const res = await GET(req())
     const body = await res.json()
-    const stats = { locations: 1, upserted: 15, errors: 0, trainer_api_calls: 0, reconcile_errors: 0, skipped: 0 }
+    const stats = { locations: 1, upserted: 15, errors: 0, trainer_api_calls: 0, reconcile_errors: 0, skipped_unconfigured: 0, skipped_unknown: 0, skipped_source_changed: 0 }
     expect(body).toEqual({ success: true, stats })
     expect(stampHeartbeat).toHaveBeenCalledWith('sync-class-occurrences', stats)
   })
@@ -70,14 +70,14 @@ describe('GET /api/cron/sync-class-occurrences', () => {
       ok: false, error: 'upsert failed', upserted: 0, trainerLookup: 'daily', trainerApiCalls: 5,
     })
     const body = await (await GET(req())).json()
-    expect(body.stats).toEqual({ locations: 1, upserted: 0, errors: 1, trainer_api_calls: 5, reconcile_errors: 0, skipped: 0 })
+    expect(body.stats).toEqual({ locations: 1, upserted: 0, errors: 1, trainer_api_calls: 5, reconcile_errors: 0, skipped_unconfigured: 0, skipped_unknown: 0, skipped_source_changed: 0 })
     expect(stampHeartbeat).toHaveBeenCalledWith('sync-class-occurrences', body.stats)
   })
 
   it('a Glofox-down tick (events fetch failed) still stamps, with 0 trainer calls', async () => {
     syncOccurrencesForLocation.mockResolvedValue({ ok: false, error: 'HTTP 502', upserted: 0 })
     const body = await (await GET(req())).json()
-    expect(body.stats).toEqual({ locations: 1, upserted: 0, errors: 1, trainer_api_calls: 0, reconcile_errors: 0, skipped: 0 })
+    expect(body.stats).toEqual({ locations: 1, upserted: 0, errors: 1, trainer_api_calls: 0, reconcile_errors: 0, skipped_unconfigured: 0, skipped_unknown: 0, skipped_source_changed: 0 })
     expect(stampHeartbeat).toHaveBeenCalledTimes(1)
   })
 
@@ -126,7 +126,7 @@ describe('GET /api/cron/sync-class-occurrences — REGISTRYREAD.1b unreadable se
     const body = await (await GET(req())).json()
     expect(syncOccurrencesForLocation).toHaveBeenCalledTimes(1)
     expect(syncOccurrencesForLocation.mock.calls[0][1]).toMatchObject({ locationId: LOC2.id })
-    const stats = { locations: 2, upserted: 4, errors: 1, trainer_api_calls: 0, reconcile_errors: 0, skipped: 0 }
+    const stats = { locations: 2, upserted: 4, errors: 1, trainer_api_calls: 0, reconcile_errors: 0, skipped_unconfigured: 0, skipped_unknown: 0, skipped_source_changed: 0 }
     expect(body).toEqual({ success: true, stats })
     expect(logWarn).toHaveBeenCalledWith('cron-sync-class-occurrences', expect.stringContaining('unreadable'), { locationId: LOC.id })
     expect(stampHeartbeat).toHaveBeenCalledWith('sync-class-occurrences', stats)

@@ -87,8 +87,12 @@ describe('locationsWithSource (W1.M3b)', () => {
   })
 
   it('skippedSummary counts by state', () => {
-    expect(skippedSummary([{ state: 'unknown' }, { state: 'unconfigured' }, { state: 'unconfigured' }])).toEqual({ skipped_unconfigured: 2, skipped_unknown: 1 })
-    expect(skippedSummary(null)).toEqual({ skipped_unconfigured: 0, skipped_unknown: 0 })
+    expect(skippedSummary([{ state: 'unknown' }, { state: 'unconfigured' }, { state: 'unconfigured' }])).toEqual({ skipped_unconfigured: 2, skipped_unknown: 1, skipped_source_changed: 0 })
+    expect(skippedSummary(null)).toEqual({ skipped_unconfigured: 0, skipped_unknown: 0, skipped_source_changed: 0 })
+  })
+
+  it('skippedSummary: a row read back as none (source changed mid-tick) is its own bucket, never unconfigured or unknown', () => {
+    expect(skippedSummary([{ state: 'none' }, { state: 'unknown' }])).toEqual({ skipped_unconfigured: 0, skipped_unknown: 1, skipped_source_changed: 1 })
   })
 })
 

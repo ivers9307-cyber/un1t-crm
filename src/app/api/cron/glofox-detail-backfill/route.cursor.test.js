@@ -157,7 +157,7 @@ describe('GET /api/cron/glofox-detail-backfill — DETAILBACKFILL.1 cursor', () 
     // "remaining" counts what is still due, by the same cursor predicate
     expect(ors(h.countChains[0])).toEqual([`glofox_detail_due_at.is.null,glofox_detail_due_at.lte.${NOW_ISO}`])
     expect(stampHeartbeat).toHaveBeenCalledWith('glofox-detail-backfill', {
-      skipped_unconfigured: 0, skipped_unknown: 0, // W1.M3b — seam discovery skips
+      skipped_unconfigured: 0, skipped_unknown: 0, skipped_source_changed: 0, // W1.M3b — seam discovery skips
       candidates_seen: 3, remaining_due: 42, member_refused: 1, fetch_failed: 1, error: 0, stamp_failed: 0,
       credits_unread: 0, glofox_http: expect.any(Object),
     })

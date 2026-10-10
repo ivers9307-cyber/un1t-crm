@@ -51,7 +51,9 @@ describe('GET /api/cron/glofox-sync — discovery through the membership seam (W
     expect(visited(h.db)).toEqual([STILLORGAN_ID])
     expect(visited(h.db)).toEqual(legacyGlofoxDiscovery(ESTATE_2026_10))
     expect(out).toMatchObject({ success: true, locations_processed: 1, locations_skipped: 0 })
-    expect(stampHeartbeat).toHaveBeenCalledWith('glofox-sync')
+    expect(stampHeartbeat).toHaveBeenCalledWith('glofox-sync', {
+      locations_processed: 1, failed_locations: 0, skipped_unconfigured: 0, skipped_unknown: 0, skipped_source_changed: 0,
+    })
     // Hatch Street / CCF Autos (empty slices) are not even asked for credentials any more.
     for (const call of glofoxCredentialsForLocation.mock.calls) expect(call[1]).toBe(STILLORGAN_ID)
   })
@@ -84,7 +86,20 @@ describe('GET /api/cron/glofox-sync — discovery through the membership seam (W
   it('no glofox location at all is a healthy quiet run (stamps), not an error', async () => {
     h.db = dbFor(ESTATE_2026_10.filter((r) => r.id !== STILLORGAN_ID))
     const out = await (await GET(req())).json()
-    expect(out).toMatchObject({ success: true, locations_processed: 0 })
-    expect(stampHeartbeat).toHaveBeenCalledWith('glofox-sync')
+    expect(out).toMatchObject({ success: true, locations_processed: 0, message: 'No locations with Glofox credentials configured.' })
+    expect(stampHeartbeat).toHaveBeenCalledWith('glofox-sync', expect.objectContaining({ locations_processed: 0, skipped_unknown: 0 }))
+  })
+
+  it('Stillorgan whose credentials read FAILS at discovery is skipped_unknown on the stamp, never the quiet "no locations" message', async () => {
+    glofoxCredentialsForLocation.mockImplementation(async (_db, id) => (
+      id === STILLORGAN_ID ? { branchId: null, apiKey: null, apiToken: null, readError: 'glofox_settings_unreadable' } : { branchId: 'b', apiKey: 'k', apiToken: 't', readError: null }
+    ))
+    h.db = dbFor(ESTATE_2026_10)
+    const out = await (await GET(req())).json()
+    expect(visited(h.db)).toEqual([])
+    expect(out).toMatchObject({ locations_processed: 0, locations_skipped: 1, skipped_unknown: 1 })
+    expect(out.message).not.toBe('No locations with Glofox credentials configured.')
+    expect(out.message).toMatch(/1 unreadable/)
+    expect(stampHeartbeat).toHaveBeenCalledWith('glofox-sync', expect.objectContaining({ skipped_unknown: 1 }))
   })
 })
