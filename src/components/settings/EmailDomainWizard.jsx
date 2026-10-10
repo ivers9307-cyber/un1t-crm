@@ -11,7 +11,9 @@
 // sees the DNS records + verification booleans.
 
 import { useState } from 'react'
+import Link from 'next/link'
 import { CheckCircle2, Clock, Copy, Check, AlertTriangle, Lock } from 'lucide-react'
+import { tenantPlansHref } from '@/lib/tenant-wizard'
 
 // Light-theme chip recipe (bg-*-500/10 + -700 text) per the guardrails lint.
 const STATUS_CHIP = {
@@ -60,7 +62,10 @@ function RecordVerifiedChip({ verified }) {
   )
 }
 
-export default function EmailDomainWizard({ initialState, organizationId }) {
+// W1.E1 — `featurePlans` is the catalogue list the page read
+// (plansGrantingFeature(db, 'custom_email_domain')): the plans that carry
+// the feature, named on the upsell. Optional; [] when the read failed.
+export default function EmailDomainWizard({ initialState, organizationId, featurePlans = [] }) {
   const [state, setState] = useState(initialState)
   const [domain, setDomain] = useState('')
   const [fromLocal, setFromLocal] = useState('hello')
@@ -95,30 +100,63 @@ export default function EmailDomainWizard({ initialState, organizationId }) {
   }
 
   // ── 1. Not configured on this deployment (no account token) ────────
+  // W1.E1 — say WHAT is missing and WHO fixes it: the platform-level
+  // Postmark account token (env POSTMARK_ACCOUNT_TOKEN, Repset's, never
+  // the tenant's). Documented in docs/architecture/INTEGRATIONS.md.
   if (!state.account_configured) {
     return (
-      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-6 text-sm text-un1t-subtle">
-        Email domain provisioning isn&apos;t configured on this deployment yet. Contact support to enable it.
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-6">
+        <div className="flex items-center gap-2 mb-2">
+          <AlertTriangle size={16} className="text-un1t-subtle" />
+          <h2 className="text-base font-semibold">Not available on this deployment yet</h2>
+        </div>
+        <p className="text-sm text-un1t-subtle">
+          Platform Postmark account token is not configured — ask Repset support to enable tenant sending
+          domains on this deployment. Nothing on your side is missing.
+        </p>
       </div>
     )
   }
 
-  // ── 2. Add-on gate / upsell ────────────────────────────────────────
+  // ── 2. Plan gate / upsell ──────────────────────────────────────────
+  // W1.E1 — the sending domain is a PAID plan feature (decision 1): it
+  // comes with the plan that opens email marketing. Name the plan(s) that
+  // carry it and who pins one (a plan is pinned per location by master on
+  // /admin/tenants/<org>). Master sees the pin link; an org admin asks.
   if (!state.addon_active) {
+    const plans = Array.isArray(featurePlans) ? featurePlans : []
     return (
       <div className="bg-un1t-surface border border-un1t-border rounded-lg p-6">
         <div className="flex items-center gap-2 mb-2">
           <Lock size={16} className="text-un1t-subtle" />
-          <h2 className="text-base font-semibold">Custom email domain add-on</h2>
+          <h2 className="text-base font-semibold">Your own sending domain</h2>
         </div>
-        <p className="text-sm text-un1t-subtle mb-4">
+        <p className="text-sm text-un1t-subtle mb-3">
           Send from your own verified domain (e.g. hello@mail.yourgym.com) on a dedicated Postmark
           server — your own sender reputation, streams and analytics, separate from every other
-          tenant. This is a paid add-on that isn&apos;t on your current plan.
+          tenant.
         </p>
-        <p className="text-sm text-un1t-subtle">
-          Talk to us to enable the custom email domain add-on for your organisation.
+        <p className="text-sm text-un1t-subtle mb-3">
+          Comes with the plan that includes email marketing — ask your account manager to pin it to one
+          of your locations. Until then your email sends from the shared platform address.
         </p>
+        {plans.length > 0 && (
+          <ul className="text-sm mb-3 space-y-1">
+            {plans.map((p) => (
+              <li key={p.id} className="flex items-center gap-2">
+                <span className="text-un1t-text font-medium">{p.name}</span>
+                <span className="text-xs bg-un1t-border text-un1t-subtle px-1.5 py-0.5 rounded">
+                  {p.kind === 'addon' ? 'add-on' : 'plan'}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {organizationId && (
+          <Link href={tenantPlansHref(organizationId)} className="text-sm underline">
+            Pin a plan for this organisation
+          </Link>
+        )}
       </div>
     )
   }
