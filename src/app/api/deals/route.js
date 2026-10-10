@@ -37,7 +37,8 @@ export async function POST(request) {
 
   // APIKEYS.3 — per-org key: the deal must belong to the caller's org,
   // anchored on its contact's location (plus the explicit location_id if
-  // given). Legacy shared key + cookie callers (orgId null) unchanged.
+  // given). Since W0.1 the legacy shared key carries an orgId too; only
+  // cookie callers (orgId null) are unscoped here.
   if (auth.orgId) {
     const locIds = await orgLocationIds(db, auth.orgId)
     if (!contact || !locIds.includes(contact.location_id)) {

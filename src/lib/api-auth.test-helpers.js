@@ -110,5 +110,14 @@ export function twoOrgFixture() {
       { id: 't1', location_id: 'loc-1a', kind: 'task', subject: 'Org one task', status: 'todo' },
       { id: 't2', location_id: 'loc-2a', kind: 'task', subject: 'Org two task', status: 'todo' },
     ],
+    // W0.1b — staff membership, for assertProfileInOrg: p1 works at an org-1
+    // location, p2 at org-2's, padmin1 is org-1's org admin (no location row).
+    profile_locations: [
+      { profile_id: 'p1', location_id: 'loc-1a', role: 'staff' },
+      { profile_id: 'p2', location_id: 'loc-2a', role: 'staff' },
+    ],
+    profile_organizations: [
+      { profile_id: 'padmin1', organization_id: 'org-1', role: 'org_admin' },
+    ],
   }
 }
