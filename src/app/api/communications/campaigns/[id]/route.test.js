@@ -23,7 +23,13 @@ vi.mock('@/lib/permissions', () => ({
   hasPermissionForLocation: vi.fn((...a) => hasPermissionForLocationImpl(...a)),
 }))
 
+// FROMDOMAIN — the resolver behind the `from_address` report; LIVE
+// un1tdublin.com by default (the server token must never reach the response).
+const LIVE_UN1T = { serverToken: 'srv-tok', fromEmail: 'hello@un1tdublin.com', fromName: 'UN1T', replyTo: null, sendingDomain: 'un1tdublin.com' }
+vi.mock('@/lib/tenant-email', async (importOriginal) => ({ ...(await importOriginal()), resolveEmailSender: vi.fn() }))
+
 import { GET, PUT, DELETE } from './route.js'
+import { resolveEmailSender } from '@/lib/tenant-email'
 
 const URL_ = `/api/communications/campaigns/${CAMPAIGN_ID}`
 const row = (over = {}) => ({
@@ -44,6 +50,7 @@ const CONTENT = {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  resolveEmailSender.mockResolvedValue({ ...LIVE_UN1T })
   user = userWith()
   db = campaignDb(row())
 })
@@ -122,6 +129,23 @@ describe('PUT [id] — save an existing campaign', () => {
     expect(update.payload).toEqual(CONTENT)
     for (const k of ['created_by', 'status', 'scheduled_at', 'location_id']) expect(update.payload).not.toHaveProperty(k)
     expect(update.filters).toEqual([['eq', 'id', CAMPAIGN_ID], ['in', 'status', ['draft', 'scheduled']]])
+  })
+
+  it('FROMDOMAIN — saving a from_email reports the address it sends as, judged at the campaign\'s studio; stored as given', async () => {
+    db = campaignDb(row(), () => ({ data: [{ id: CAMPAIGN_ID, status: 'draft' }], error: null }))
+    const res = await put({ from_email: 'alex@mail.un1tdublin.com' })
+    expect(res.status).toBe(200)
+    expect(writesOf(db)[0].payload).toEqual({ from_email: 'alex@mail.un1tdublin.com' })
+    expect(resolveEmailSender).toHaveBeenCalledWith(db, LOC_A)
+    const json = await res.json()
+    expect(json.from_address).toEqual({ requested: 'alex@mail.un1tdublin.com', sends_as: 'hello@un1tdublin.com', on_verified_domain: false, verified_domain: 'un1tdublin.com' })
+    expect(JSON.stringify(json)).not.toContain('srv-tok')
+  })
+
+  it('FROMDOMAIN — a save without from_email carries no from_address', async () => {
+    db = campaignDb(row(), () => ({ data: [{ id: CAMPAIGN_ID, status: 'draft' }], error: null }))
+    expect(await (await put({ name: 'Renamed' })).json()).not.toHaveProperty('from_address')
+    expect(resolveEmailSender).not.toHaveBeenCalled()
   })
 
   it('writes only the fields the body carries (a partial save never blanks the rest)', async () => {

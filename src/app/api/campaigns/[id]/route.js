@@ -6,6 +6,7 @@ import { validateBody } from '@/lib/validate'
 import { uuidLike, email, audienceFilterSchema } from '@/lib/schemas'
 import { validateAudienceFilter, InvalidAudienceFilterError } from '@/lib/audience-filter'
 import { isCampaignContentEditable } from '@/lib/campaign-editability'
+import { fromAddressReport } from '@/lib/from-address'
 
 const CampaignUpdateSchema = z.object({
   name: z.string().min(1).max(200).optional(),
@@ -104,7 +105,7 @@ export async function PUT(request, props) {
   // Two lists that must agree and are not the same expression is how they drift;
   // the shared predicate also fails closed on an unrecognised status, which the
   // inline `includes` did too but only by accident.
-  const { data: current } = await db.from('campaigns').select('status').eq('id', params.id).single()
+  const { data: current } = await db.from('campaigns').select('status, location_id').eq('id', params.id).single()
   if (current && !isCampaignContentEditable(current.status)) {
     return NextResponse.json({
       success: false,
@@ -120,7 +121,10 @@ export async function PUT(request, props) {
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
 
-  return NextResponse.json({ success: true, data })
+  // FROMDOMAIN — stored as given, sent only when on the verified domain (see
+  // POST /api/campaigns); the report says which.
+  const from_address = await fromAddressReport(db, data?.location_id || current?.location_id, updates)
+  return NextResponse.json({ success: true, data, ...(from_address ? { from_address } : {}) })
 }
 
 // DELETE /api/campaigns/[id] — only while the campaign is still a plan.

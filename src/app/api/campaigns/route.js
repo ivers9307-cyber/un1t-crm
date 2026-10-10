@@ -5,6 +5,7 @@ import { authenticateApiKey, orgScopeLocationIds, assertCreateInOrg, assertRowIn
 import { validateBody } from '@/lib/validate'
 import { uuidLike, email, audienceFilterSchema } from '@/lib/schemas'
 import { validateAudienceFilter, InvalidAudienceFilterError } from '@/lib/audience-filter'
+import { fromAddressReport } from '@/lib/from-address'
 
 const CampaignCreateSchema = z.object({
   location_id: uuidLike,
@@ -107,5 +108,9 @@ export async function POST(request) {
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
 
-  return NextResponse.json({ success: true, data })
+  // FROMDOMAIN — from_email is stored as given (any valid address; backward
+  // compatible) but only SENT when it is on the org's verified domain. Say
+  // which, so the caller is never surprised by the From on the wire.
+  const from_address = await fromAddressReport(db, body.location_id, body)
+  return NextResponse.json({ success: true, data, ...(from_address ? { from_address } : {}) })
 }

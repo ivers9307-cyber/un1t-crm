@@ -20,7 +20,13 @@ vi.mock('@/lib/permissions', () => ({
   hasPermissionForLocation: vi.fn((...a) => hasPermissionForLocationImpl(...a)),
 }))
 
+// FROMDOMAIN — the resolver behind the `from_address` report; LIVE
+// un1tdublin.com by default (the server token must never reach the response).
+const LIVE_UN1T = { serverToken: 'srv-tok', fromEmail: 'hello@un1tdublin.com', fromName: 'UN1T', replyTo: null, sendingDomain: 'un1tdublin.com' }
+vi.mock('@/lib/tenant-email', async (importOriginal) => ({ ...(await importOriginal()), resolveEmailSender: vi.fn() }))
+
 import { POST } from './route.js'
+import { resolveEmailSender } from '@/lib/tenant-email'
 
 const NEW_ID = 'c0000000-0000-4000-8000-0000000000ff'
 const BODY = {
@@ -43,6 +49,7 @@ const post = (body) => POST(jsonRequest('/api/communications/campaigns', 'POST',
 
 beforeEach(() => {
   vi.clearAllMocks()
+  resolveEmailSender.mockResolvedValue({ ...LIVE_UN1T })
   user = userWith()
   db = makeFakeDb((call) => (call.op === 'insert'
     ? { data: { id: NEW_ID, status: 'draft', location_id: LOC_A }, error: null }
@@ -110,5 +117,30 @@ describe('POST /api/communications/campaigns', () => {
     const res = await post(BODY)
     expect(res.status).toBe(500)
     expect((await res.json()).success).toBe(false)
+  })
+
+  // FROMDOMAIN — any valid from_email is STORED (backward compatible); the
+  // response says which address it will actually send as.
+  it('FROMDOMAIN — a from_email on the verified domain is stored and reported as the address it sends as', async () => {
+    const res = await post({ ...BODY, from_email: 'garrett@un1tdublin.com' })
+    expect(res.status).toBe(200)
+    const json = await res.json()
+    expect(writesOf(db)[0].payload.from_email).toBe('garrett@un1tdublin.com')
+    expect(resolveEmailSender).toHaveBeenCalledWith(db, LOC_A)
+    expect(json.from_address).toEqual({ requested: 'garrett@un1tdublin.com', sends_as: 'garrett@un1tdublin.com', on_verified_domain: true, verified_domain: 'un1tdublin.com' })
+    expect(JSON.stringify(json)).not.toContain('srv-tok')
+  })
+
+  it('FROMDOMAIN — a from_email off the verified domain is still stored as given, and reported as ignored', async () => {
+    const res = await post({ ...BODY, from_email: 'x@other.com' })
+    expect(res.status).toBe(200)
+    expect(writesOf(db)[0].payload.from_email).toBe('x@other.com')
+    expect((await res.json()).from_address).toMatchObject({ requested: 'x@other.com', sends_as: 'hello@un1tdublin.com', on_verified_domain: false })
+  })
+
+  it('FROMDOMAIN — no from_email in the body → no from_address key and no resolver call', async () => {
+    const json = await (await post(BODY)).json()
+    expect(json).not.toHaveProperty('from_address')
+    expect(resolveEmailSender).not.toHaveBeenCalled()
   })
 })
