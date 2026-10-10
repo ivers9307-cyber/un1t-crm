@@ -6018,6 +6018,7 @@ registry.registerPath({
   tags: ['Marketing'],
   security: [{ BearerAuth: [] }, { CookieAuth: [] }],
   summary: 'Create an email campaign (draft)',
+  description: 'FROMDOMAIN: any valid from_email is stored as given, but it is SENT only when its domain equals the org\'s verified sending domain (a live tenant email domain; exact, case-insensitive, a subdomain does not match); otherwise the email goes out from the resolved sender (the org\'s verified From, or the platform address before one). When the body carries a from_email the response adds from_address: { requested, sends_as, on_verified_domain, verified_domain }.',
   request: { body: { content: { 'application/json': { schema: CampaignCreate } } } },
   responses: { 200: { description: 'Campaign created' } },
 })
@@ -6070,7 +6071,7 @@ registry.registerPath({
   tags: ['Marketing'],
   security: [{ CookieAuth: [] }],
   summary: 'Create a draft email campaign (campaign editor)',
-  description: 'created_by is the caller and status is draft; neither is read from the body.',
+  description: 'created_by is the caller and status is draft; neither is read from the body. FROMDOMAIN: any valid from_email is stored as given, but it is SENT only when its domain equals the org\'s verified sending domain (a live tenant email domain; exact, case-insensitive, a subdomain does not match); otherwise the email goes out from the resolved sender (the org\'s verified From, or the platform address before one). When the body carries a from_email the response adds from_address: { requested, sends_as, on_verified_domain, verified_domain }.',
   request: { body: { content: { 'application/json': { schema: SessionCampaignCreate } } } },
   responses: {
     200: { description: 'Draft created: { id, status, location_id }' },
@@ -6093,7 +6094,7 @@ registry.registerPath({
   tags: ['Marketing'],
   security: [{ CookieAuth: [] }],
   summary: 'Save the content of a draft or scheduled campaign',
-  description: 'Writes only the content fields sent; never created_by, status, scheduled_at or location_id.',
+  description: 'Writes only the content fields sent; never created_by, status, scheduled_at or location_id. FROMDOMAIN: any valid from_email is stored as given, but it is SENT only when its domain equals the org\'s verified sending domain (a live tenant email domain; exact, case-insensitive, a subdomain does not match); otherwise the email goes out from the resolved sender (the org\'s verified From, or the platform address before one). When the body carries a from_email the response adds from_address: { requested, sends_as, on_verified_domain, verified_domain }.',
   request: { params: z.object({ id: uuidLike }), body: { content: { 'application/json': { schema: SessionCampaignContent } } } },
   responses: {
     200: { description: 'Saved' },

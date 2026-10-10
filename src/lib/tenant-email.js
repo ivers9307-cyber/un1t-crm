@@ -23,7 +23,7 @@ import { locationHasPlanFeature } from '@/lib/plans'
 import { getLocationBranding } from '@/lib/location-branding'
 import { getLocationInboxReplyTo } from '@/lib/postmark-reply-to'
 import { PLATFORM_NAME } from '@/lib/brand-name'
-import { platformFromAddress } from '@/lib/platform-sender'
+import { platformFromAddress, addressDomain } from '@/lib/platform-sender'
 
 // Small in-request cache: a campaign blasting 500 recipients would
 // otherwise re-resolve the same location on every send. Keyed by
@@ -65,15 +65,24 @@ export function globalDefaultSender() {
  * global default when the row is missing its server token (defensive —
  * a live row should always have one). replyTo is null here: the caller
  * (resolveEmailSender) adds the location's reply-to on top.
- * @param {{ postmark_server_token?: string, from_email?: string, from_name?: string }|null} row
+ *
+ * FROMDOMAIN — `sendingDomain` is the org's VERIFIED domain (the row's
+ * sending_domain, lower-cased; the domain of its from_email when the column is
+ * empty). It exists ONLY on a live tenant sender: it is what lets a campaign
+ * or sequence send from any other address on that same domain
+ * (pickFromAddress in src/lib/from-address.js). The platform and global
+ * senders never carry it, so nothing can borrow the platform's domain.
+ * @param {{ postmark_server_token?: string, from_email?: string, from_name?: string, sending_domain?: string }|null} row
  */
 export function senderFromRow(row) {
   if (!row?.postmark_server_token) return globalDefaultSender()
+  const declared = typeof row.sending_domain === 'string' ? row.sending_domain.trim().toLowerCase() : ''
   return {
     serverToken: row.postmark_server_token,
     fromEmail: row.from_email || platformFromAddress(),
     fromName: row.from_name || null,
     replyTo: null,
+    sendingDomain: declared || addressDomain(row.from_email) || null,
   }
 }
 
@@ -105,7 +114,7 @@ async function loadLiveRowForLocation(db, locationId) {
 
   const { data: row, error: rowErr } = await db
     .from('tenant_email_domains')
-    .select('postmark_server_token, from_email, from_name, status')
+    .select('postmark_server_token, from_email, from_name, sending_domain, status')
     .eq('organization_id', loc.organization_id)
     .eq('status', 'live')
     .maybeSingle()
@@ -129,7 +138,10 @@ async function loadLiveRowForLocation(db, locationId) {
  *
  * @param {object} db - service-role client (createServerClient())
  * @param {string|null|undefined} locationId
- * @returns {Promise<{ serverToken: string|null, fromEmail: string|null, fromName: string|null, replyTo: string|null }>}
+ * A LIVE tenant sender also carries `sendingDomain` (FROMDOMAIN — see
+ * senderFromRow); no other branch does.
+ *
+ * @returns {Promise<{ serverToken: string|null, fromEmail: string|null, fromName: string|null, replyTo: string|null, sendingDomain?: string|null }>}
  */
 export async function resolveEmailSender(db, locationId) {
   if (!db || !locationId) return globalDefaultSender()
