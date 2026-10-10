@@ -33,6 +33,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Calendar, Clock, MapPin, AlertCircle, Loader2, Check, BadgeCheck, BadgeEuro, Info } from 'lucide-react'
 import { timePickerWaves, initialWaveId, formatTimeChoices } from '@/lib/event-time-slots'
+import EventWaitlistForm from './EventWaitlistForm.jsx'
 
 // Kind-keyed copy. Adding a new kind = one entry. The 'race' entry
 // holds the original strings so the operator-visible UX for races
@@ -217,6 +218,18 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
   // invalid_promo_code inline so the customer can fix + retry.
   const [promoCode, setPromoCode] = useState('')
   const [promoError, setPromoError] = useState(null)
+
+  // EVENT-WAITLIST.1 — a waitlist offer link opens this page with ?wl=<token>.
+  // Kept in state and sent as waitlist_token on register, so the waitlist row
+  // is marked claimed once the booking exists. It holds no place: the register
+  // route's capacity gate decides, first come first served.
+  const [waitlistToken, setWaitlistToken] = useState(null)
+  useEffect(() => {
+    try {
+      const wl = new URLSearchParams(window.location.search).get('wl')
+      if (wl) setWaitlistToken(wl)
+    } catch { /* no URL to read: no token */ }
+  }, [])
 
   // Initial load
   useEffect(() => {
@@ -426,6 +439,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
         source: 'race_signup_widget',
         marketing_consent: marketingConsent,
         ...(promoCode.trim() ? { promo_code: promoCode.trim() } : {}),
+        ...(waitlistToken ? { waitlist_token: waitlistToken } : {}),
       }),
     })
     const json = await res.json()
@@ -780,6 +794,25 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
           {isClosed && (
             <div className="mb-4 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-sm flex items-start gap-2">
               <AlertCircle size={14} className="mt-0.5 shrink-0" /> {closeMsg}
+            </div>
+          )}
+
+          {/* EVENT-WAITLIST.1 — sold out (and only then): join the waitlist.
+              Never shows how many are waiting, nor any capacity. */}
+          {regState === 'full' && (
+            <EventWaitlistForm
+              slug={slug}
+              allowedTeamSizes={race.allowed_team_sizes}
+              sizeLabel={String(copy.sizeLabel || 'Group size').replace(/\s*\*$/, '')}
+              hostName={race.host_name || null}
+              organizationName={race.organization_name || null}
+            />
+          )}
+
+          {/* EVENT-WAITLIST.1 — arrived from a waitlist offer and it is open. */}
+          {waitlistToken && !isClosed && (
+            <div className="mb-4 p-3 rounded-xl bg-white/5 border border-white/20 text-white/85 text-sm flex items-start gap-2" role="status">
+              <Check size={14} className="mt-0.5 shrink-0" /> A spot opened up. Book now; first come, first served.
             </div>
           )}
 

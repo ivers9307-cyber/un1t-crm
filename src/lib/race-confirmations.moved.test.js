@@ -15,6 +15,7 @@ const { checkTransactionalConsent } = await import('./transactional-consent')
 const { logError } = await import('./log')
 const { sendRegistrationMovedEmail, buildMovedDefaults } = await import('./race-confirmations.js')
 const { verifyCheckinToken } = await import('./event-checkin-tokens.js')
+const { verifyEntryManageToken } = await import('./entry-manage-tokens.js')
 
 process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-secret'
 
@@ -216,5 +217,28 @@ describe('buildMovedDefaults', () => {
     const workshop = buildMovedDefaults({ ...CTX, isRace: false, waveRowLabel: 'Time' }).footerHtml
     expect(workshop).toContain('arrive 30 minutes before your start')
     expect(workshop).not.toContain('race-day')
+  })
+})
+
+// EVENT-MOVE.6 — the moved email carries a fresh link to the entry's own page.
+describe('sendRegistrationMovedEmail — the "Change your date" link', () => {
+  it('the default copy ends with a Change it here link to /event/entry/<token> for this entry', async () => {
+    await sendRegistrationMovedEmail(fakeDb(), { registrationId: 'r1', moveId: 'mv1' })
+    const html = sent().htmlBody
+    const m = html.match(/Need a different date\? <a href="(https:\/\/crm\.test\/event\/entry\/([^"]+))"[^>]*>Change it here<\/a>\./)
+    expect(m).toBeTruthy()
+    expect(verifyEntryManageToken(m[2], 'test-secret')).toEqual({ registrationId: 'r1' })
+  })
+  it('operator copy can carry it with {{manage_url}}', async () => {
+    const race = { ...RACE, moved_email_intro: 'Wrong date again? {{manage_url}}' }
+    await sendRegistrationMovedEmail(fakeDb({ reg: { ...REG, race } }), { registrationId: 'r1', moveId: 'mv1' })
+    expect(sent().htmlBody).toMatch(/Wrong date again\? https:\/\/crm\.test\/event\/entry\/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/)
+  })
+  it('buildMovedDefaults: the line only when a link exists', () => {
+    const ctx = { raceName: 'B', raceDateLabel: 'Sat', waveLabel: '', locationName: '', teamName: '', teamSize: 1, teamMembers: [], captainFirstName: 'A',
+      amountLabel: '€1.00', memberCount: 0, nonMemberCount: 0, oldEventName: 'A', oldWhen: '', isRace: false }
+    expect(buildMovedDefaults(ctx).footerHtml).not.toContain('Change it here')
+    expect(buildMovedDefaults({ ...ctx, manageUrl: 'https://crm.test/event/entry/a.b?x=1&y=2' }).footerHtml)
+      .toContain('<a href="https://crm.test/event/entry/a.b?x=1&amp;y=2" style="color:#111;font-weight:600">Change it here</a>.')
   })
 })

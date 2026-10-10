@@ -18,6 +18,7 @@ import { logWarn } from '@/lib/log'
 import { isManualEventId } from '@/lib/manual-timetable'
 import { hasRoleAtLocation } from '@/lib/role-at-location'
 import { MANAGER_ROLES } from '@/lib/schemas'
+import { staffActorName } from '@/lib/staff-actor-name'
 
 // PATCH /api/agent/membership-requests/[id] — staff decides a queued
 // agent request. Decision rights follow the comms surface (any staff
@@ -99,11 +100,7 @@ async function eventMoveApproverRefusal(db, user, row) {
  * Who approved, for the move's actor name. Under impersonation the REAL
  * caller is named, "<master> as <user>" (the staff move route's actorFor).
  */
-function moveApproverName(user) {
-  const userName = user.full_name || user.email || 'staff'
-  const imp = user.impersonatingFrom
-  return imp?.masterId ? `${imp.masterName || imp.masterEmail || 'master'} as ${userName}` : userName
-}
+const moveApproverName = staffActorName
 
 export async function PATCH(request, { params }) {
   const { id } = await params

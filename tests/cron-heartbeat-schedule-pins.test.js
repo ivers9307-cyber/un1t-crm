@@ -49,6 +49,7 @@ const PINNED = [
   { route: 'process-class-bookings', schedule: '*/2 * * * *', interval: 120, grace: 240, migration: '644_cron_heartbeat_cadence.sql' },
   { route: 'process-contact-imports', schedule: '*/2 * * * *', interval: 120, grace: 240, migration: '644_cron_heartbeat_cadence.sql' },
   { route: 'glofox-detail-backfill', schedule: '*/10 * * * *', interval: 600, grace: 900, migration: '645_contacts_glofox_detail_due_at.sql' },
+  { route: 'event-waitlist-offers', schedule: '*/10 * * * *', interval: 600, grace: 900, migration: '713_event_waitlist.sql' },
 ]
 
 describe('cronPeriodSeconds', () => {

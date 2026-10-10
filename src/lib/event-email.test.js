@@ -50,6 +50,11 @@ const CONFIRM_CTX = {
   nonMemberCount: 1,
   memberFeeLabel: '€15.00',
   nonMemberFeeLabel: '€25.00',
+  // EVENT-MOVE.6 — the entry's own page. DELIBERATE snapshot change: the
+  // default "what's next" copy now ends with "Need a different date? Change
+  // it here." linking here. The minimal ctx below has no link, and pins that
+  // the copy is then exactly as before.
+  manageUrl: 'https://crm.example/event/entry/PAYLOAD.SIG',
 }
 
 describe('confirmation email — characterization (default look)', () => {
@@ -83,7 +88,7 @@ describe('confirmation email — characterization (default look)', () => {
           </tr>
         </table>
         <div style="background:#f5f5f5;padding:16px;border-radius:8px;font-size:13px;color:#333;line-height:1.5">
-          <strong>What's next:</strong> arrive 30 minutes before your wave. Bring water, a towel, and your race-day energy. We'll send a reminder the day before with parking + check-in details.
+          <strong>What's next:</strong> arrive 30 minutes before your wave. Bring water, a towel, and your race-day energy. We'll send a reminder the day before with parking + check-in details.<br><br>Need a different date? <a href="https://crm.example/event/entry/PAYLOAD.SIG" style="color:#111;font-weight:600">Change it here</a>.
         </div>
 
         <p style="color:#999;font-size:12px;margin-top:24px;text-align:center">UN1T · UN1T Stillorgan</p>
@@ -481,5 +486,30 @@ describe('event merge tags — EVENT-MOVE.5', () => {
   })
   it('blank when absent', () => {
     expect(applyEventMergeTags('[{{difference}}][{{pay_url}}]', contact, {})).toBe('[][]')
+  })
+})
+
+describe('event merge tags — EVENT-MOVE.6', () => {
+  const contact = { first_name: 'Aoife', name: 'Aoife Byrne', email: 'a@x.ie' }
+  it('fills manage_url in plain text', () => {
+    expect(applyEventMergeTags('Change your date: {{manage_url}}', contact, { manage_url: 'https://crm.test/event/entry/a.b' }))
+      .toBe('Change your date: https://crm.test/event/entry/a.b')
+  })
+  it('escapes it in HTML (a template href cannot be broken out of)', () => {
+    const out = applyEventMergeTagsHtml('<a href="{{manage_url}}">x</a>', contact, { manage_url: 'https://x.test/?a=1&b="2"' })
+    expect(out).toBe('<a href="https://x.test/?a=1&amp;b=&quot;2&quot;">x</a>')
+  })
+  it('blank when absent', () => {
+    expect(applyEventMergeTags('[{{manage_url}}]', contact, {})).toBe('[]')
+  })
+  it('the operator intro path merges then escapes it', async () => {
+    const { htmlBody } = await resolveEventEmail({
+      kind: 'confirmation',
+      race: { confirmation_email_intro: 'Need another date? {{manage_url}}' },
+      contact,
+      extras: { manage_url: 'https://crm.test/event/entry/a.b?x=1&y=2' },
+      defaults: { footerHtml: 'default' },
+    })
+    expect(htmlBody).toContain('Need another date? https://crm.test/event/entry/a.b?x=1&amp;y=2')
   })
 })

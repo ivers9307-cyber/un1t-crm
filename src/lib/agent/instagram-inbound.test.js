@@ -223,3 +223,15 @@ describe('handleInstagramInbound — echo (staff replied from the Instagram app)
     expect(db.updates.find((u) => u.table === 'instagram_conversations')).toBeUndefined()
   })
 })
+
+// W0.14 — the location lookup's throw must PROPAGATE out of the handler so the
+// webhook can release the dedup claim and answer 500 for a Meta retry. If
+// someone later wraps the resolver call in a try/catch this fails.
+describe('handleInstagramInbound — lookup failure propagates', () => {
+  it('rejects when the resolver rejects (never reads as unmatched_account)', async () => {
+    resolveLocationByExternalAccount.mockRejectedValueOnce(new Error('channel_connections lookup failed: boom'))
+    const db = igDb({})
+    await expect(handleInstagramInbound(db, EVENT)).rejects.toThrow(/lookup failed/)
+    expect(db.inserts).toHaveLength(0)
+  })
+})

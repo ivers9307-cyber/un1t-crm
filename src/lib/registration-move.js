@@ -18,6 +18,7 @@ import { logError, logWarn } from './log'
 import { emitEvent, EVENT_TYPES } from './contact-events'
 import { addEventAttendeesToHostList } from './host-contact-list'
 import { sendRegistrationMovedEmail } from './race-confirmations'
+import { moveLocationIds } from './move-locations'
 import {
   MOVE_ERRORS, MOVE_ERROR_MESSAGES, membersOf,
   entryLabel, entryHeadcount, entryLeadEmail, perPersonFeeCents, computePriceGapCents,
@@ -26,6 +27,10 @@ import {
 // The pure, browser-safe helpers live in registration-entry.js (a client
 // component imports them from there); re-exported so server callers and
 // tests have one import path.
+// EVENT-MOVE.6 — the organisation fence for a customer's move (Mia and the
+// public entry routes); lives in move-locations.js, see its header.
+export { moveLocationIds }
+
 export {
   MOVE_ERRORS, MOVE_ERROR_MESSAGES,
   entryLabel, entryHeadcount, entryLeadEmail, perPersonFeeCents, computePriceGapCents,
@@ -187,7 +192,14 @@ function groupByWave(rows) {
   return byWave
 }
 
-/** Check-ins on the entry. { count, error }: a failed count is load_failed. */
+/**
+ * Check-ins on the entry. { count, error }: a failed count is load_failed.
+ * Exported (EVENT-MOVE.6) for the public entry routes' "can this move" answer.
+ */
+export async function countEntryCheckins(db, registrationId) {
+  return countCheckins(db, registrationId)
+}
+
 async function countCheckins(db, registrationId) {
   const { count, error } = await db
     .from('race_checkins')
@@ -347,8 +359,63 @@ function isConflict(err) {
 }
 
 /**
- * Move one entry. Rules first (pure), then the SQL function, then best-effort
- * after-effects that never fail the move.
+ * EVENT-MOVE.6 — every rule of a move, on fresh reads, with NOTHING written:
+ * the dry run moveRegistration itself runs first, and the customer route runs
+ * before it takes money for a dearer target (so nobody pays for a move the
+ * rules would refuse). Same refusals as moveRegistration.
+ *
+ * @returns {Promise<{ ok: true, registration: object, targetEvent: object, targetWave: object|null, headcount: number, priceGapCents: number }
+ *         | { ok: false, error: string, spots_left?: number|null }>}
+ */
+export async function checkMove(db, {
+  registrationId, targetEventId, targetWaveId = null,
+  force = false, allowedEventIds = null, allowedLocationIds = null, expectedSourceEventId = null,
+  today = dublinTodayStr(),
+}) {
+  const { registration, error: readErr } = await readRegistrationForMove(db, registrationId)
+  if (!registration) return entryReadRefusal(readErr)
+  if (expectedSourceEventId && registration.race_event_id !== expectedSourceEventId) {
+    logWarn('registration-move', 'entry left the event the caller authorised; refused as conflict', { registrationId, expectedSourceEventId, actualEventId: registration.race_event_id })
+    return { ok: false, error: MOVE_ERRORS.CONFLICT }
+  }
+  // Outside the host's own events: 404, the host fence.
+  if (allowedEventIds && !allowedEventIds.has(targetEventId)) return { ok: false, error: MOVE_ERRORS.NOT_FOUND }
+
+  // A missing or unreadable target is the target's problem, not the entry's.
+  const targetEvent = await loadEvent(db, targetEventId)
+  if (!targetEvent) return { ok: false, error: MOVE_ERRORS.TARGET_UNAVAILABLE }
+  // EVENT-MOVE.6 — the customer's fence (moveLocationIds): a studio outside
+  // the entry's organisation is not a place this entry can go.
+  if (Array.isArray(allowedLocationIds) && !allowedLocationIds.includes(targetEvent.location_id)) {
+    return { ok: false, error: MOVE_ERRORS.TARGET_UNAVAILABLE }
+  }
+  const targetWave = targetWaveId ? (targetEvent.waves || []).find((w) => w.id === targetWaveId) || { id: targetWaveId, race_event_id: null } : null
+
+  const [waveRead, checkinRead, existingRead] = await Promise.all([
+    targetWave?.race_event_id ? loadWaveRegistrations(db, [targetWave.id]) : Promise.resolve({ rows: [], error: null }),
+    countCheckins(db, registrationId),
+    findExistingOnTarget(db, { teamId: registration.team_id, targetEventId, registrationId }),
+  ])
+  // A read that failed refuses the move as load_failed (fail closed, and
+  // honestly: "try again", not a rule the entry did not break).
+  if (waveRead.error || checkinRead.error || existingRead.error) return { ok: false, error: MOVE_ERRORS.LOAD_FAILED }
+
+  const verdict = evaluateMove({
+    registration, sourceEvent: registration.race, targetEvent, targetWave,
+    // One wave was asked for, so every row is that wave's.
+    targetWaveRegistrations: waveRead.rows, checkinCount: checkinRead.count, existingOnTarget: existingRead.existing,
+    force, today,
+  })
+  if (!verdict.ok) return verdict
+
+  const headcount = entryHeadcount(registration)
+  const priceGapCents = computePriceGapCents({ sourceEvent: registration.race, targetEvent, members: membersOf(registration), headcount })
+  return { ok: true, registration, targetEvent, targetWave, headcount, priceGapCents }
+}
+
+/**
+ * Move one entry. Rules first (checkMove: fresh reads, pure rules), then the
+ * SQL function, then best-effort after-effects that never fail the move.
  *
  * `expectedSourceEventId`: the event the CALLER judged the entry on (a
  * route authorises on its own read, then this function reads again). When
@@ -365,50 +432,17 @@ function isConflict(err) {
  */
 export async function moveRegistration(db, {
   registrationId, targetEventId, targetWaveId = null,
-  actor, note = null, notify = true, force = false, allowedEventIds = null,
+  actor, note = null, notify = true, force = false, allowedEventIds = null, allowedLocationIds = null,
   expectedSourceEventId = null,
   today = dublinTodayStr(),
 }) {
   // Who moved it is recorded on every move (registration_moves.actor_type
-  // is NOT NULL, checked to staff/host/agent): a caller that omits it is a
-  // bug, not a refusal to show the operator.
+  // is NOT NULL, checked to staff/host/agent/customer, mig 712): a caller
+  // that omits it is a bug, not a refusal to show the operator.
   if (!actor?.type) throw new TypeError('actor.type is required')
-  const { registration, error: readErr } = await readRegistrationForMove(db, registrationId)
-  if (!registration) return entryReadRefusal(readErr)
-  if (expectedSourceEventId && registration.race_event_id !== expectedSourceEventId) {
-    logWarn('registration-move', 'entry left the event the caller authorised; refused as conflict', { registrationId, expectedSourceEventId, actualEventId: registration.race_event_id })
-    return { ok: false, error: MOVE_ERRORS.CONFLICT }
-  }
-  // Outside the host's own events: 404, the host fence.
-  if (allowedEventIds && !allowedEventIds.has(targetEventId)) return { ok: false, error: MOVE_ERRORS.NOT_FOUND }
-
-  // A missing or unreadable target is the target's problem, not the entry's.
-  const targetEvent = await loadEvent(db, targetEventId)
-  if (!targetEvent) return { ok: false, error: MOVE_ERRORS.TARGET_UNAVAILABLE }
-  const targetWave = targetWaveId ? (targetEvent.waves || []).find((w) => w.id === targetWaveId) || { id: targetWaveId, race_event_id: null } : null
-
-  const [waveRead, checkinRead, existingRead] = await Promise.all([
-    targetWave?.race_event_id ? loadWaveRegistrations(db, [targetWave.id]) : Promise.resolve({ rows: [], error: null }),
-    countCheckins(db, registrationId),
-    findExistingOnTarget(db, { teamId: registration.team_id, targetEventId, registrationId }),
-  ])
-  // A read that failed refuses the move as load_failed (fail closed, and
-  // honestly: "try again", not a rule the entry did not break).
-  if (waveRead.error || checkinRead.error || existingRead.error) return { ok: false, error: MOVE_ERRORS.LOAD_FAILED }
-  const checkinCount = checkinRead.count
-  const existingOnTarget = existingRead.existing
-  // One wave was asked for, so every row is that wave's.
-  const targetWaveRegistrations = waveRead.rows
-
-  const verdict = evaluateMove({
-    registration, sourceEvent: registration.race, targetEvent, targetWave,
-    targetWaveRegistrations, checkinCount, existingOnTarget, force, today,
-  })
-  if (!verdict.ok) return verdict
-
-  const members = membersOf(registration)
-  const headcount = entryHeadcount(registration)
-  const priceGapCents = computePriceGapCents({ sourceEvent: registration.race, targetEvent, members, headcount })
+  const checked = await checkMove(db, { registrationId, targetEventId, targetWaveId, force, allowedEventIds, allowedLocationIds, expectedSourceEventId, today })
+  if (!checked.ok) return checked
+  const { registration, targetEvent, targetWave, headcount, priceGapCents } = checked
   const { data: move, error: rpcErr } = await db.rpc('move_race_registration', {
     p_registration_id: registrationId,
     // The event the rules were judged against: the function re-checks it
