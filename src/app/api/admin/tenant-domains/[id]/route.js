@@ -8,6 +8,8 @@
 //   DELETE — remove the mapping outright
 //
 // Unknown ids return 404 (detail routes never 403 on a missing row).
+// A source='platform' row (W1.L1, mig 716) answers 409 to DELETE and to
+// any PATCH other than the active kill switch.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -39,11 +41,27 @@ async function requireMaster() {
   return { user }
 }
 
+// W1.L1 (mig 716): the org's <slug>.repset.ie row is automatic — its
+// hostname, org, location and brand are never edited by hand and it is
+// never deleted (it lives and dies with the org). `active` is the ONE
+// exception: tenant_domains.active is the hostname kill switch the suspend
+// route (admin/orgs/[id]/suspend) deliberately leaves to this screen, so a
+// PATCH whose only key is `active` goes through.
+function platformRowError(row, patch = null) {
+  if (row.source !== 'platform') return null
+  if (patch && Object.keys(patch).every((k) => k === 'active')) return null
+  return NextResponse.json({
+    success: false,
+    error: `"${row.hostname}" is the organisation's automatic platform host; only its active flag can change, and it cannot be deleted.`,
+    code: 'platform_host',
+  }, { status: 409 })
+}
+
 async function loadRow(db, id) {
   if (!id || !uuidLike.safeParse(id).success) return null
   const { data } = await db
     .from('tenant_domains')
-    .select('id, hostname, organization_id, location_id, brand, active')
+    .select('id, hostname, organization_id, location_id, brand, active, source')
     .eq('id', id)
     .maybeSingle()
   return data || null
@@ -69,6 +87,8 @@ export async function PATCH(request, props) {
   if (!row) {
     return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   }
+  const platform = platformRowError(row, patch)
+  if (platform) return platform
 
   if (patch.hostname && patch.hostname !== row.hostname) {
     const reserved = reservedHostnameError(patch.hostname)
@@ -117,6 +137,8 @@ export async function DELETE(request, props) {
   if (!row) {
     return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   }
+  const platform = platformRowError(row)
+  if (platform) return platform
 
   const { error } = await db
     .from('tenant_domains')
