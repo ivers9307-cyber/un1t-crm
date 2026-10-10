@@ -7,7 +7,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { Heart, RefreshCw, Plug, Square, Users, Tv } from 'lucide-react'
+import { Heart, RefreshCw, Plug, Square, Users } from 'lucide-react'
 import { zoneForBpm } from '@/lib/heart-rate'
 import { nextPollDelay, ACTIVE_POLL_MS } from '@/lib/live-poll'
 import DetectedTab from './DetectedTab'
@@ -121,16 +121,9 @@ export default function LiveClassClient({ locationId, locationName, canMutate = 
         </div>
         <div className="flex items-center gap-2">
           <RefreshIndicator lastTickRef={lastTickRef} />
-          {/* Open the in-class TV display (the public board this location casts
-              to the studio screen) in a new tab. */}
-          <Link
-            href={`/tv/${locationId}`}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-1.5 rounded-md border border-un1t-border bg-white px-3 py-1.5 text-sm font-medium hover:bg-un1t-surface"
-          >
-            <Tv size={14} /> TV display
-          </Link>
+          {/* W0.9c — the "TV display" link that opened /tv/<locationId> is
+              gone with that route: the studio board is /tv/live/<token>, and
+              the token lives on tv_displays, which this page does not load. */}
           {canMutate && data.sessions.length > 0 && (
             <button
               type="button"

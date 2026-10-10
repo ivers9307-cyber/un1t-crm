@@ -6,13 +6,13 @@ import { withDevice } from './tv-data-url.js'
 
 describe('withDevice', () => {
   it('leaves the url alone without a device', () => {
-    expect(withDevice('/api/public/live/loc-1', null)).toBe('/api/public/live/loc-1')
+    expect(withDevice('/api/public/tv-live/tok-1', null)).toBe('/api/public/tv-live/tok-1')
     expect(withDevice('/api/public/tv-live/tok-1', undefined)).toBe('/api/public/tv-live/tok-1')
     expect(withDevice('/api/public/tv-live/tok-1', '')).toBe('/api/public/tv-live/tok-1')
   })
 
   it('appends ?device= to a location-keyed url (unchanged behaviour)', () => {
-    expect(withDevice('/api/public/live/loc-1', 'kiosk-1')).toBe('/api/public/live/loc-1?device=kiosk-1')
+    expect(withDevice('/api/public/tv-live/tok-1', 'kiosk-1')).toBe('/api/public/tv-live/tok-1?device=kiosk-1')
   })
 
   it('appends ?device= to a token endpoint', () => {

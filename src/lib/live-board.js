@@ -1,9 +1,8 @@
-// Live HR board payload builder — shared by the two public entrypoints:
-//   - /api/public/live/[locationId]   (legacy, location-keyed; P0-3 transition)
+// Live HR board payload builder — the payload behind the public entrypoint:
 //   - /api/public/tv-live/[token]     (P0-3 token-gated; resolves the location
 //                                       from tv_displays.token first)
-// Both return the IDENTICAL board payload so the TV client is agnostic to which
-// URL it polls. Keeping the builder here (not in a route) means there is a
+// The location-keyed /api/public/live/[locationId] used to share it until W0.9c
+// removed that route. Keeping the builder here (not in the route) keeps a
 // single privacy/opt-out filter to maintain.
 //
 // Privacy floor (unchanged): first name + last initial only, no contact ids, no

@@ -3,9 +3,9 @@
 // In-studio challenge TV board — Repset ledger (P4a reskin of the
 // Graft/Afterglow board — palette + signature only; layout unchanged).
 //
-// Polls /api/public/challenges/[locationId] every 45s (+ on mount) — or the
-// `endpoint` prop when given (W0.9a: /tv/live/[token]/challenges passes the
-// token-gated /api/public/tv-challenges/[token]).
+// Polls the `endpoint` prop every 45s (+ on mount) — /tv/live/[token]/challenges
+// passes the token-gated /api/public/tv-challenges/[token] (W0.9a; the
+// location-keyed /api/public/challenges/[locationId] was removed in W0.9c).
 // Shows the first active individual challenge's standings, rolling 8 rows
 // at a time in landscape / 12 in portrait. If the first active challenge is
 // collective, shows a big progress bar instead. Falls back to "this month"
@@ -78,7 +78,7 @@ function filledPips(value, leaderValue) {
   return Math.min(10, Math.max(1, Math.round((value / leaderValue) * 10)))
 }
 
-export default function ChallengeTvClient({ locationId, endpoint, device }) {
+export default function ChallengeTvClient({ endpoint, device }) {
   const searchParams = useSearchParams()
   const forcedOrientation = searchParams.get('orientation') // 'portrait' | 'landscape' | null
   const [portrait, setPortrait] = useState(false)
@@ -101,15 +101,14 @@ export default function ChallengeTvClient({ locationId, endpoint, device }) {
     return () => mq.removeEventListener('change', handler)
   }, [forcedOrientation])
 
-  // W0.9a: the data URL. Defaults to the location-keyed endpoint (unchanged for
-  // the live /tv/[locationId]/challenges TV). The token-gated
-  // /tv/live/[token]/challenges page passes an explicit `endpoint` so the same
-  // client polls /api/public/tv-challenges/[token] instead. Same payload either
-  // way — the client is agnostic to which it hits. FLEET-CMD.2 ?device= is
-  // forwarded the same way LiveTvClient does so a kiosk showing this board
-  // carries its device name on the poll (the challenge routes do not stamp
-  // the heartbeat today; forwarding keeps the two boards' URLs symmetric).
-  const dataUrl = withDevice(endpoint || `/api/public/challenges/${locationId}`, device)
+  // W0.9a / W0.9c: the data URL is the `endpoint` prop —
+  // /tv/live/[token]/challenges passes /api/public/tv-challenges/[token]. The
+  // location-keyed /api/public/challenges/[locationId] fallback this used to
+  // default to was removed in W0.9c. FLEET-CMD.2 ?device= is forwarded the
+  // same way LiveTvClient does so a kiosk showing this board carries its
+  // device name on the poll (the challenge route does not stamp the
+  // heartbeat today; forwarding keeps the two boards' URLs symmetric).
+  const dataUrl = withDevice(endpoint, device)
 
   // Poll the public endpoint.
   const fetchData = useCallback(async () => {

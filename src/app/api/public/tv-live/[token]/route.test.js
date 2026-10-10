@@ -1,8 +1,9 @@
 // Tests for the P0-3 token-gated live board.
 //
-// The token resolves tv_displays.token → location, then returns the SAME board
-// payload as /api/public/live/[locationId]. A good token returns 200 + data; an
-// invalid or inactive token returns 404 (never confirm existence).
+// The token resolves tv_displays.token → location, then returns the board
+// payload (buildLiveBoardPayload; its contents are covered by route.board.test.js).
+// A good token returns 200 + data; an invalid or inactive token returns 404
+// (never confirm existence).
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -14,8 +15,8 @@ vi.mock('@/lib/fleet-render', async (importOriginal) => {
   const actual = await importOriginal()
   return { ...actual, stampRender: vi.fn(() => Promise.resolve()) }
 })
-// Stub the board builder — the board internals are covered by the live-route
-// test; here we only assert token resolution + status codes.
+// Stub the board builder — the board internals are covered by
+// route.board.test.js; here we only assert token resolution + status codes.
 vi.mock('@/lib/live-board', () => ({
   buildLiveBoardPayload: vi.fn(() => Promise.resolve({
     ok: true, server_time: 'T', location: { id: 'loc-1', name: 'Stillorgan' },
@@ -80,10 +81,10 @@ describe('GET /api/public/tv-live/[token]', () => {
     expect(res.status).toBe(429)
   })
 
-  // W0.9a — kiosks are moving from /tv/[locationId]?device= to the token URL
-  // (W0.9b), so the token route must stamp the FLEET-CMD.2 render heartbeat
-  // exactly as the location route does: with the device name from ?device= and
-  // the location the TOKEN resolved to (never a caller-supplied id).
+  // W0.9a — kiosks poll the token URL with ?device= (W0.9b), so the token
+  // route must stamp the FLEET-CMD.2 render heartbeat: with the device name
+  // from ?device= and the location the TOKEN resolved to (never a
+  // caller-supplied id).
   it('stamps the render heartbeat for ?device= against the token-resolved location', async () => {
     const db = makeDb({ display: { location_id: 'loc-1', active: true }, location: { id: 'loc-1', name: 'Stillorgan' } })
     const res = await callRoute(db, 'good-token', { url: 'https://crm.test/api/public/tv-live/good-token?device=kiosk-1' })

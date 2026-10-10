@@ -61,7 +61,7 @@ export function windowIso(challenge) {
 }
 
 /** Full contact name → "First L." privacy projection. `contacts` has a single
- * `name` column (NOT first_name/last_name) — this mirrors /api/public/live's split. */
+ * `name` column (NOT first_name/last_name) — this mirrors /api/public/tv-live's split. */
 export function shortName(fullName) {
   const parts = String(fullName || '').trim().split(/\s+/).filter(Boolean)
   if (parts.length === 0) return 'Member'

@@ -1,4 +1,10 @@
-// Tests for the public live-TV route.
+// Board-payload tests for the token-gated live TV route, through the REAL
+// buildLiveBoardPayload (the sibling route.test.js stubs it and covers token
+// resolution + status codes).
+//
+// W0.9c — these cases were ported from the removed location-keyed
+// /api/public/live/[locationId] route test; the token route returns the same
+// payload, so the guarantees move with it:
 //
 // Post audit W2/#11: the cumulative HR aggregate (zones_seconds / effort_points
 // / peak_hr_bpm / avg_hr_bpm) is maintained INCREMENTALLY at ingest and read
@@ -23,11 +29,13 @@ import { createServerClient } from '@/lib/supabase'
 import { getAvailableStraps } from '@/lib/live-class'
 
 const PAGE = 1000
+const TOKEN = 'tok-1'
 
 // Build a mock supabase client whose `hr_samples` select honours `.range(from,to)`
 // over a synthetic sample array (the last-30s recent-BPM read), so selectAll's
 // paging loop is exercised for real. The session rows carry the running
-// aggregate columns the route now renders from.
+// aggregate columns the route renders from. The token resolves through an
+// active tv_displays row to loc-1.
 function makeDb({ samples, sessions }) {
   function hrSamplesQuery() {
     const chain = {
@@ -59,6 +67,9 @@ function makeDb({ samples, sessions }) {
   return {
     rpc: vi.fn(() => Promise.resolve({ data: 1, error: null })), // rate_limit_hit → count 1
     from: vi.fn((table) => {
+      if (table === 'tv_displays') {
+        return { select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: { location_id: 'loc-1', active: true }, error: null }) }) }) }
+      }
       if (table === 'locations') {
         return { select: () => ({ eq: () => ({ single: () => Promise.resolve({ data: { id: 'loc-1', name: 'Stillorgan' }, error: null }) }) }) }
       }
@@ -81,20 +92,21 @@ function makeDb({ samples, sessions }) {
 
 async function callRoute(db) {
   createServerClient.mockReturnValue(db)
-  const request = { headers: { get: () => null } }
-  const res = await GET(request, { params: Promise.resolve({ locationId: 'loc-1' }) })
-  return res
+  const request = { headers: { get: () => null }, url: `https://crm.test/api/public/tv-live/${TOKEN}` }
+  return GET(request, { params: Promise.resolve({ token: TOKEN }) })
 }
 
 beforeEach(() => { vi.clearAllMocks() })
 
-describe('GET /api/public/live/[locationId]', () => {
+describe('GET /api/public/tv-live/[token] — board payload', () => {
   it('renders the cumulative aggregate straight off the session row (no per-poll scan)', async () => {
     const db = makeDb({ samples: [] })
     const res = await callRoute(db)
     const body = await res.json()
 
+    expect(res.status).toBe(200)
     expect(body.ok).toBe(true)
+    expect(body.location).toEqual({ id: 'loc-1', name: 'Stillorgan' })
     expect(body.sessions).toHaveLength(1)
     const tile = body.sessions[0]
     // Cumulative fields come from the row's incrementally-maintained columns.
@@ -103,6 +115,22 @@ describe('GET /api/public/live/[locationId]', () => {
     expect(tile.effortPoints).toBe(62)
     expect(tile.zonesSeconds).toEqual({ 1: 0, 2: 0, 3: 600, 4: 300, 5: 120 })
     expect(res.headers.get('Cache-Control')).toBe('no-store')
+  })
+
+  // Privacy floor: the public board carries first name + last initial only —
+  // never a full name, contact id or MAC. (Capacity is never part of this
+  // payload either.)
+  it('never exposes the full name, contact id or device identifier on a tile', async () => {
+    const db = makeDb({ samples: [] })
+    const res = await callRoute(db)
+    const body = await res.json()
+    const tile = body.sessions[0]
+    expect(tile.displayName).toBe('Alice S.')
+    const serialised = JSON.stringify(tile)
+    expect(serialised).not.toContain('Alice Smith')
+    expect(serialised).not.toContain('c-1')
+    expect(tile).not.toHaveProperty('contact_id')
+    expect(tile).not.toHaveProperty('device_identifier')
   })
 
   it('coalesces null aggregate columns on a fresh session to a stable shape', async () => {
@@ -138,13 +166,6 @@ describe('GET /api/public/live/[locationId]', () => {
     // mean of 1000×150 + 500×170 = (150000 + 85000)/1500 = 156.67 → 157.
     // An un-paged read (first 1000 only) would give 150 — the regression gate.
     expect(body.sessions[0].currentBpm).toBe(157)
-  })
-
-  it('returns 429 when the rate limiter denies the request', async () => {
-    const db = makeDb({ samples: [] })
-    db.rpc = vi.fn(() => Promise.resolve({ data: 100000, error: null }))
-    const res = await callRoute(db)
-    expect(res.status).toBe(429)
   })
 
   // C11 — unpaired straps only render while seen inside the same 2-minute

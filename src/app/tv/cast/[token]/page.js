@@ -5,10 +5,10 @@
 // is the secret). Polls /api/public/tv/[token]/content every
 // 3s to detect pushes.
 //
-// Sibling to the HR live board at /tv/[locationId]. Both live
-// under /tv/ (already public in middleware) but use different
-// dynamic-segment names, so Next.js requires they sit at
-// different path depths.
+// Sibling to the HR live board at /tv/live/[token]. Both live
+// under /tv/ (already public in middleware); each sits under its
+// own static segment (cast/, live/) since Next.js refuses two
+// different dynamic-segment names at the same path depth.
 
 import TVDisplay from './TVDisplay'
 import { headers } from 'next/headers'
