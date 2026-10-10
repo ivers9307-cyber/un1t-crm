@@ -4,8 +4,10 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
-vi.mock('@/lib/plans', () => ({ getLocationPlan: vi.fn() }))
-import { getLocationPlan } from '@/lib/plans'
+// W1.E1 — the gate reads locationHasPlanFeature (tier OR add-on pins), not
+// getLocationPlan (null without a tier pin, which hid an add-on-only pin).
+vi.mock('@/lib/plans', () => ({ locationHasPlanFeature: vi.fn() }))
+import { locationHasPlanFeature } from '@/lib/plans'
 
 import {
   resolveEmailSender,
@@ -112,17 +114,27 @@ describe('resolveEmailSender — fail safe to the global default', () => {
   })
 })
 
-describe('orgHasEmailDomainAddon — fail closed', () => {
+describe('orgHasEmailDomainAddon — fail closed (W1.E1: add-on pins count)', () => {
   it('true when any active location has custom_email_domain', async () => {
     const db = makeDb(() => ({ data: [{ id: 'loc-1' }, { id: 'loc-2' }] }))
-    getLocationPlan.mockImplementation((_db, id) =>
-      Promise.resolve(id === 'loc-2' ? { resolved: { features: { custom_email_domain: true } } } : null))
+    locationHasPlanFeature.mockImplementation((_db, id, key) =>
+      Promise.resolve(key === 'custom_email_domain' && id === 'loc-2'))
+    expect(await orgHasEmailDomainAddon(db, 'org-1')).toBe(true)
+    expect(locationHasPlanFeature).toHaveBeenCalledWith(db, 'loc-1', 'custom_email_domain')
+    expect(locationHasPlanFeature).toHaveBeenCalledWith(db, 'loc-2', 'custom_email_domain')
+  })
+
+  it('an org whose only pin is the ADD-ON has the add-on (the live Test Studio pin)', async () => {
+    // locationHasPlanFeature answers true for an add-on-only pin; the gate
+    // must take that answer as-is, never re-derive it through a tier.
+    const db = makeDb(() => ({ data: [{ id: 'test-studio' }] }))
+    locationHasPlanFeature.mockResolvedValue(true)
     expect(await orgHasEmailDomainAddon(db, 'org-1')).toBe(true)
   })
 
   it('false when no location has it', async () => {
     const db = makeDb(() => ({ data: [{ id: 'loc-1' }] }))
-    getLocationPlan.mockResolvedValue({ resolved: { features: { custom_email_domain: false } } })
+    locationHasPlanFeature.mockResolvedValue(false)
     expect(await orgHasEmailDomainAddon(db, 'org-1')).toBe(false)
   })
 
