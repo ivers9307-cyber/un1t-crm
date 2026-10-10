@@ -10,6 +10,7 @@ import { View, Text, FlatList, Pressable, RefreshControl, ActivityIndicator } fr
 import { Ionicons } from '@expo/vector-icons'
 import { useRouter, useFocusEffect, Stack } from 'expo-router'
 import { listContracts } from '../../../lib/contracts-api'
+import { useBrand } from '../../../lib/use-brand'
 import BackHeaderLeft from '../../../components/BackHeaderLeft'
 
 const STATUS_LABEL = {
@@ -30,6 +31,9 @@ function fmtDate(iso) {
 
 export default function ContractsList() {
   const router = useRouter()
+  // W1.S5 — the studio that issues contracts (active location); bare "your
+  // studio" until the brand loads, never a gym literal.
+  const { companyName } = useBrand()
   const [rows, setRows] = useState(null)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState(null)
@@ -106,7 +110,7 @@ export default function ContractsList() {
           No contracts on file yet.
         </Text>
         <Text className="text-xs text-un1t-muted mt-1 text-center">
-          When UN1T issues you a contract, you'll see it here.
+          When {companyName || 'your studio'} issues you a contract, you'll see it here.
         </Text>
       </View>
     )

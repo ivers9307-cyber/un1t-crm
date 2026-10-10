@@ -15,7 +15,8 @@ import Card from '../../components/member/ui/Card'
 import ErrorRetry from '../../components/member/ErrorRetry'
 import ChallengeTransformationCard from '../../components/member/ChallengeTransformationCard'
 import { PEARL, VOLT } from '../../lib/member/brand'
-import { endedRecentlyFlagship, ownWindowStats, challengeWindowMs } from 'shared/challenge-wrapped'
+import { endedRecentlyFlagship, ownWindowStats, challengeWindowMs, metricLabels } from 'shared/challenge-wrapped'
+import { useMemberBrand } from '../../lib/member/use-member-brand'
 
 // ── Everyone / Friends toggle for individual challenges ───────────────
 
@@ -214,10 +215,12 @@ function FinishedFlagshipWrapped() {
 // Podium metals (rank 1/2/3)
 const METAL = ['#e8b931', '#c2c8ce', '#c77b3a']
 
-const METRIC_LABEL = {
-  points: 'UN1T Points',
-  classes: 'classes',
-  z4plus_minutes: 'Zone 4+ min',
+// W1.S5 — metric labels come from the shared helper with the member's studio
+// brand ("{Brand} Points"); every points decision below compares the metric
+// KEY, never the label text.
+function useMetricLabels() {
+  const { shortName } = useMemberBrand()
+  return metricLabels(shortName)
 }
 
 // Named export so the Compete tab can embed this screen without the pushed-
@@ -226,6 +229,7 @@ const METRIC_LABEL = {
 // and any legacy link still resolve.
 export function ChallengesScreen({ showBack = true }) {
   const router = useRouter()
+  const { productNames } = useMemberBrand()
   const [loading, setLoading] = useState(true)
   const [challenges, setChallenges] = useState([])
   const [gymBoard, setGymBoard] = useState(null)
@@ -347,7 +351,7 @@ export function ChallengesScreen({ showBack = true }) {
           <View className="mt-4">
             <LeaderboardCard
               title="Gym leaderboard"
-              subtitle="Monthly UN1T Points"
+              subtitle={`Monthly ${productNames.points}`}
               iconName="bar-chart-outline"
               top={gymBoard.top}
               me={gymBoard.me}
@@ -370,7 +374,7 @@ export default function Challenges() {
 // ── Individual challenge ──────────────────────────────────────────────
 
 function IndividualCard({ challenge }) {
-  const metricLabel = METRIC_LABEL[challenge.metric] || challenge.metric
+  const metricLabel = useMetricLabels()[challenge.metric] || challenge.metric
   return (
     <LeaderboardCard
       title={challenge.name}
@@ -389,7 +393,7 @@ function IndividualCard({ challenge }) {
 // ── Collective challenge ──────────────────────────────────────────────
 
 function CollectiveCard({ challenge }) {
-  const metricLabel = METRIC_LABEL[challenge.metric] || challenge.metric
+  const metricLabel = useMetricLabels()[challenge.metric] || challenge.metric
   const { total, target, pct } = challenge.collective
   const pctRounded = Math.round(pct * 100)
   const fillPct = Math.min(1, pct) * 100
@@ -465,8 +469,6 @@ function FlagshipBadge() {
 // ── Shared leaderboard card ───────────────────────────────────────────
 
 function LeaderboardCard({ title, subtitle, iconName, top, me, count, metric, phase, flagship = false }) {
-  const metricLabel = METRIC_LABEL[metric] || metric
-
   return (
     <Card>
       {/* Header */}
@@ -505,7 +507,7 @@ function LeaderboardCard({ title, subtitle, iconName, top, me, count, metric, ph
             <LeaderboardRow
               key={`${row.rank}-${row.name}`}
               row={row}
-              metricLabel={metricLabel}
+              metric={metric}
             />
           ))}
           {count > top.length && (
@@ -519,7 +521,7 @@ function LeaderboardCard({ title, subtitle, iconName, top, me, count, metric, ph
   )
 }
 
-function LeaderboardRow({ row, metricLabel }) {
+function LeaderboardRow({ row, metric }) {
   const podiumColor = row.rank <= 3 ? METAL[row.rank - 1] : null
   const isMe = row.isMe
   const rankColor = podiumColor || (isMe ? PEARL : '#727170')
@@ -551,10 +553,10 @@ function LeaderboardRow({ row, metricLabel }) {
 
       {/* Value */}
       <Text
-        className={metricLabel === 'UN1T Points' ? 'shrink-0 font-display-bold text-sm' : 'shrink-0 font-mono text-sm'}
+        className={metric === 'points' ? 'shrink-0 font-display-bold text-sm' : 'shrink-0 font-mono text-sm'}
         style={{ color: isMe ? PEARL : '#B3B2AC' }}
       >
-        {formatValue(row.value, metricLabel)}
+        {formatValue(row.value, metric)}
       </Text>
     </View>
   )
@@ -569,8 +571,10 @@ function formatDate(isoDate) {
   return `${d} ${months[m - 1]}`
 }
 
-function formatValue(value, metricLabel) {
-  if (metricLabel === 'UN1T Points') return `${Math.round(value).toLocaleString()} pts`
-  if (metricLabel === 'Zone 4+ min') return `${Math.round(value)} min`
+// Branch on the metric KEY, never its label: labels are tenant-branded
+// display text (metricLabels(shortName)) and can change under us.
+function formatValue(value, metric) {
+  if (metric === 'points') return `${Math.round(value).toLocaleString()} pts`
+  if (metric === 'z4plus_minutes') return `${Math.round(value)} min`
   return String(Math.round(value))
 }

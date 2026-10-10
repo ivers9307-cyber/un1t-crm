@@ -16,6 +16,7 @@ import Markdown from 'react-native-markdown-display'
 import { Ionicons } from '@expo/vector-icons'
 import { useLocalSearchParams } from 'expo-router'
 import { useAuth } from '../../../lib/auth-context'
+import { useBrand } from '../../../lib/use-brand'
 import { getContract, signContract, declineContract } from '../../../lib/contracts-api'
 
 // CONTRACTS-MD.1 — markdown styles for the frozen body_rendered.
@@ -72,6 +73,11 @@ export default function ContractDetail() {
   const { id } = useLocalSearchParams()
   const { profile } = useAuth()
   const [contract, setContract] = useState(null)
+  // W1.S5 — the issuing studio's brand: the contract's OWN location, not the
+  // staffer's active one (a contract from another studio names that studio).
+  // useBrand falls back to the active location while the contract is still
+  // null; bare "Your studio" until it loads, never a gym literal.
+  const { companyName } = useBrand(contract?.location_id)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [signature, setSignature] = useState('')
@@ -283,7 +289,7 @@ export default function ContractDetail() {
           <View className="bg-red-500/5 border border-red-500/30 rounded-xl p-4">
             <Text className="text-sm font-semibold text-red-700 mb-1">Decline this contract</Text>
             <Text className="text-xs text-un1t-subtle mb-3">
-              UN1T Dublin will be notified by email.
+              {companyName || 'Your studio'} will be notified by email.
             </Text>
             <TextInput
               value={declineReason}

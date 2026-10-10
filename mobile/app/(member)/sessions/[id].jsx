@@ -16,6 +16,7 @@ import * as Linking from 'expo-linking'
 import { supabase } from '../../../lib/member/supabase'
 import { api } from '../../../lib/member/api'
 import { hasSeenRecap, clearRecapSeen } from '../../../lib/member/recap-seen'
+import { useMemberBrand } from '../../../lib/member/use-member-brand'
 import Card from '../../../components/member/ui/Card'
 import Button from '../../../components/member/ui/Button'
 import HrChart from '../../../components/member/HrChart'
@@ -63,6 +64,7 @@ function VsCategory({ c }) {
 }
 
 function VsRecent({ t }) {
+  const { productNames } = useMemberBrand()
   if (!t) return null
   if (!t.has_enough_data) {
     return (
@@ -74,9 +76,9 @@ function VsRecent({ t }) {
   if (!Number.isFinite(t.delta_pct)) return null
   const pct = Math.round(Math.abs(t.delta_pct) * 100)
   let text
-  if (t.direction === 'up') text = `UN1T Points up ${pct}% vs your previous 4 weeks.`
-  else if (t.direction === 'down') text = `UN1T Points down ${pct}% vs your previous 4 weeks.`
-  else text = 'UN1T Points steady vs your previous 4 weeks.'
+  if (t.direction === 'up') text = `${productNames.points} up ${pct}% vs your previous 4 weeks.`
+  else if (t.direction === 'down') text = `${productNames.points} down ${pct}% vs your previous 4 weeks.`
+  else text = `${productNames.points} steady vs your previous 4 weeks.`
   return <Text className="text-sm text-chalk-2">{text}</Text>
 }
 
@@ -136,6 +138,8 @@ function BurnBadge({ minutes }) {
 export default function SessionDetail() {
   const { id } = useLocalSearchParams()
   const router = useRouter()
+  // W1.S5 — the share sheet's title carries the studio's short brand.
+  const { shortName } = useMemberBrand()
 
   const [report, setReport] = useState(null)
   const [session, setSession] = useState(null)   // from report.session
@@ -237,7 +241,7 @@ export default function SessionDetail() {
         await Share.share({
           message: r.url,
           url: r.url,
-          title: 'My UN1T session',
+          title: shortName ? `My ${shortName} session` : 'My session',
         })
       }
     } catch {
