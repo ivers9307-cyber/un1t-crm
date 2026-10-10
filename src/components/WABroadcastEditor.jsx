@@ -68,6 +68,7 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
     { value: 'email', label: 'Email' },
     { value: 'phone', label: 'Phone' },
     { value: 'location_name', label: 'Location Name' },
+    { value: 'company_name', label: 'Company Name' },
     { value: 'pipeline_stage', label: 'Pipeline Stage' },
   ]
 

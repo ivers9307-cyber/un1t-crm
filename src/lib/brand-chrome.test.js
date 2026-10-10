@@ -30,6 +30,9 @@ import {
   _resetDefaultSiteNameCache,
   PLATFORM_SITE_NAME,
 } from './default-site-name.js'
+import { makeFakeDb } from './api-auth.test-helpers.js'
+import { _resetTenantDomainsCache } from './tenant-domains-edge.js'
+import { UN1T_GROUP_ORG_ID } from './brands.js'
 
 const repoFile = (rel) => readFileSync(path.join(process.cwd(), rel), 'utf8')
 
@@ -126,54 +129,90 @@ describe('platform chrome reads Repset, not UN1T (CHROME.1)', () => {
   })
 })
 
+// W1.L4 — the site name resolves by the REQUEST'S HOST. A tenant host (a
+// tenant_domains row, or an in-code brand carrying an organizationId) reads
+// its organisation's brand (org_settings → the earliest active location's
+// company_settings in that org → the location name); the CRM hosts and any
+// unmapped host read the PLATFORM name. Before W1.L4 both resolvers took the
+// FIRST configured company_settings row estate-wide, so one tenant's name
+// labelled every tenant's tabs — and the CRM's.
+const ORG_A = 'org-a'
+const ORG_B = 'org-b'
+function hostTables() {
+  return {
+    tenant_domains: [
+      { id: 'td-a', hostname: 'gym-a.repset.ie', organization_id: ORG_A, brand: {}, active: true, source: 'platform', location_id: null },
+      { id: 'td-b', hostname: 'gym-b.repset.ie', organization_id: ORG_B, brand: {}, active: true, source: 'platform', location_id: null },
+    ],
+    organizations: [{ id: ORG_A, slug: 'gym-a', master_location_id: null }, { id: ORG_B, slug: 'gym-b', master_location_id: null }],
+    locations: [
+      { id: 'loc-a1', name: 'Gym A North', organization_id: ORG_A, active: true, created_at: '2026-01-01' },
+      { id: 'loc-b1', name: 'Gym B', organization_id: ORG_B, active: true, created_at: '2026-01-02' },
+    ],
+    org_settings: [],
+    company_settings: [],
+  }
+}
+function seedTenantDomain(t, row) { t.tenant_domains.push({ id: `td-${row.hostname}`, brand: {}, active: true, source: 'custom', location_id: null, ...row }) }
+function seedOrgSettings(t, row) { t.org_settings.push({ logo_url: null, favicon_url: null, ...row }) }
+function seedCompanySettings(t, row) { t.company_settings.push({ logo_url: null, favicon_url: null, ...row }) }
+const resetBrandCaches = () => { _resetDefaultSiteNameCache(); _resetTenantDomainsCache() }
+
 // The root layout's metadata labels ~160 of this app's 188 pages — nearly
-// every staff tab — but a handful of customer-facing pages inherit it too,
-// so the answer is operator branding first and the platform name only as a
-// floor. Never a hard-coded gym name.
-describe('root site name resolves operator branding (CHROME.1)', () => {
-  afterEach(() => { _resetDefaultSiteNameCache() })
+// every staff tab — so on the CRM hosts it is the PLATFORM name, and a
+// tenant's own host reads the tenant's brand. Never a hard-coded gym name,
+// and never ANOTHER tenant's.
+describe('root site name resolves by host (CHROME.1 / W1.L4)', () => {
+  afterEach(resetBrandCaches)
 
-  const dbReturning = (rows) => ({
-    from: () => ({
-      select: () => ({
-        not: () => ({
-          order: () => ({ limit: async () => ({ data: rows, error: null }) }),
-        }),
-      }),
-    }),
+  it('a tenant host → that org\'s operator-configured brand', async () => {
+    const t = hostTables()
+    seedOrgSettings(t, { organization_id: ORG_A, company_name: 'Acme Fitness' })
+    expect(await resolveDefaultSiteName({ host: 'gym-a.repset.ie', db: makeFakeDb(t) })).toBe('Acme Fitness')
   })
 
-  it('uses the operator-configured company_settings.company_name', async () => {
-    const name = await resolveDefaultSiteName({ db: dbReturning([{ company_name: 'Acme Fitness' }]) })
-    expect(name).toBe('Acme Fitness')
+  it('the CRM host → the PLATFORM name, never a tenant gym, whatever company_settings holds', async () => {
+    const t = hostTables()
+    seedCompanySettings(t, { location_id: 'loc-a1', company_name: 'Acme Fitness' })
+    expect(await resolveDefaultSiteName({ host: 'crm.repset.ie', db: makeFakeDb(t) })).toBe(PLATFORM_SITE_NAME)
+    resetBrandCaches()
+    expect(await resolveDefaultSiteName({ host: 'crm.un1tdublin.com', db: makeFakeDb(t) })).toBe(PLATFORM_SITE_NAME)
+    resetBrandCaches()
+    expect(await resolveDefaultSiteName({ db: makeFakeDb(t) })).toBe(PLATFORM_SITE_NAME)
+    expect(PLATFORM_SITE_NAME).not.toMatch(/UN1T/)
   })
 
-  it('falls back to the PLATFORM name, never a tenant gym, when unconfigured', async () => {
-    const name = await resolveDefaultSiteName({ db: dbReturning([]) })
-    expect(name).toBe(PLATFORM_SITE_NAME)
-    expect(name).not.toMatch(/UN1T/)
-  })
-
-  it('ignores a whitespace-only name (an empty tab title is worse)', async () => {
-    const name = await resolveDefaultSiteName({ db: dbReturning([{ company_name: '   ' }]) })
-    expect(name).toBe(PLATFORM_SITE_NAME)
+  it('ignores a whitespace-only org name and floors on the location name, then the platform', async () => {
+    const t = hostTables()
+    seedOrgSettings(t, { organization_id: ORG_A, company_name: '   ' })
+    expect(await resolveDefaultSiteName({ host: 'gym-a.repset.ie', db: makeFakeDb(t) })).toBe('Gym A North')
+    resetBrandCaches()
+    t.locations = []
+    expect(await resolveDefaultSiteName({ host: 'gym-a.repset.ie', db: makeFakeDb(t) })).toBe(PLATFORM_SITE_NAME)
   })
 
   it('never throws and never blocks a render when the DB is down', async () => {
     const exploding = { from: () => { throw new Error('db down') } }
-    await expect(resolveDefaultSiteName({ db: exploding })).resolves.toBe(PLATFORM_SITE_NAME)
+    await expect(resolveDefaultSiteName({ host: 'gym-a.repset.ie', db: exploding })).resolves.toBe(PLATFORM_SITE_NAME)
   })
 
-  it('caches within the TTL window and re-reads after it', async () => {
+  it('caches PER HOST within the TTL window and re-reads after it', async () => {
+    const t = hostTables()
+    seedOrgSettings(t, { organization_id: ORG_A, company_name: 'Acme Fitness' })
+    seedOrgSettings(t, { organization_id: ORG_B, company_name: 'Gym B' })
+    const inner = makeFakeDb(t)
     let reads = 0
-    const counting = {
-      from: () => { reads++; return dbReturning([{ company_name: 'Acme Fitness' }]).from() },
-    }
-    await resolveDefaultSiteName({ db: counting, nowMs: 1_000_000 })
-    await resolveDefaultSiteName({ db: counting, nowMs: 1_000_000 + 60_000 })
-    expect(reads).toBe(1)
-    await resolveDefaultSiteName({ db: counting, nowMs: 1_000_000 + 10 * 60_000 })
-    expect(reads).toBe(2)
+    const counting = { from: (table) => { reads++; return inner.from(table) } }
+    expect(await resolveDefaultSiteName({ host: 'gym-a.repset.ie', db: counting, nowMs: 1_000_000 })).toBe('Acme Fitness')
+    const after = reads
+    expect(await resolveDefaultSiteName({ host: 'gym-a.repset.ie', db: counting, nowMs: 1_000_000 + 60_000 })).toBe('Acme Fitness')
+    expect(reads).toBe(after)
+    // A different host is a different cache entry — Gym A's answer is never served to Gym B.
+    expect(await resolveDefaultSiteName({ host: 'gym-b.repset.ie', db: counting, nowMs: 1_000_000 + 60_000 })).toBe('Gym B')
+    expect(reads).toBeGreaterThan(after)
+    const afterB = reads
+    await resolveDefaultSiteName({ host: 'gym-a.repset.ie', db: counting, nowMs: 1_000_000 + 10 * 60_000 })
+    expect(reads).toBeGreaterThan(afterB)
   })
 
   // The dynamic import pulls the root layout's whole child graph
@@ -182,24 +221,34 @@ describe('root site name resolves operator branding (CHROME.1)', () => {
   // reasons that have nothing to do with branding. Stub the children (only
   // generateMetadata is under test, and it never renders them) and give the
   // case room, so the regression guard cannot itself become the flake.
-  it('the root layout renders the resolved name, not a literal', async () => {
+  const mockRootLayoutDeps = () => {
     vi.resetModules()
-    vi.doMock('@/lib/default-favicon', () => ({ resolveDefaultFaviconUrl: async () => '/f.png' }))
-    vi.doMock('@/lib/default-site-name', () => ({ resolveDefaultSiteName: async () => 'Acme Fitness' }))
+    vi.doMock('next/headers', () => ({ headers: async () => new Headers({ host: 'gym-a.repset.ie' }) }))
+    vi.doMock('@/lib/default-favicon', () => ({ resolveDefaultFaviconUrl: async ({ host }) => `/f-${host}.png` }))
+    vi.doMock('@/lib/default-site-name', () => ({ resolveDefaultSiteName: async ({ host }) => (host === 'gym-a.repset.ie' ? 'Acme Fitness' : 'WRONG HOST') }))
     vi.doMock('@/components/AppShellServer', () => ({ default: () => null }))
     vi.doMock('@/components/StudioLockOverlay', () => ({ default: () => null }))
     vi.doMock('@/components/CookieConsent', () => ({ default: () => null }))
-    const { generateMetadata } = await import('@/app/layout.js')
-    const meta = await generateMetadata()
-    expect(meta.title).toBe('Acme Fitness')
-    expect(meta.openGraph.siteName).toBe('Acme Fitness')
-    expect(JSON.stringify(meta)).not.toMatch(/UN1T/)
+  }
+  const unmockRootLayoutDeps = () => {
+    vi.doUnmock('next/headers')
     vi.doUnmock('@/lib/default-favicon')
     vi.doUnmock('@/lib/default-site-name')
     vi.doUnmock('@/components/AppShellServer')
     vi.doUnmock('@/components/StudioLockOverlay')
     vi.doUnmock('@/components/CookieConsent')
     vi.resetModules()
+  }
+
+  it('the root layout renders the name resolved for the REQUEST HOST, not a literal', async () => {
+    mockRootLayoutDeps()
+    const { generateMetadata } = await import('@/app/layout.js')
+    const meta = await generateMetadata()
+    expect(meta.title).toBe('Acme Fitness')
+    expect(meta.openGraph.siteName).toBe('Acme Fitness')
+    expect(meta.icons.icon).toBe('/f-gym-a.repset.ie.png')
+    expect(JSON.stringify(meta)).not.toMatch(/UN1T/)
+    unmockRootLayoutDeps()
   }, 30_000)
 
   // The description used to be a hard-coded UN1T marketing tagline. CHROME.1's
@@ -207,67 +256,80 @@ describe('root site name resolves operator branding (CHROME.1)', () => {
   // one-word description. Neither is right; the editable home for a tagline is
   // a company_settings column.
   it('does not echo the site name back as the description', async () => {
-    vi.resetModules()
-    vi.doMock('@/lib/default-favicon', () => ({ resolveDefaultFaviconUrl: async () => '/f.png' }))
-    vi.doMock('@/lib/default-site-name', () => ({ resolveDefaultSiteName: async () => 'Acme Fitness' }))
-    vi.doMock('@/components/AppShellServer', () => ({ default: () => null }))
-    vi.doMock('@/components/StudioLockOverlay', () => ({ default: () => null }))
-    vi.doMock('@/components/CookieConsent', () => ({ default: () => null }))
+    mockRootLayoutDeps()
     const { generateMetadata } = await import('@/app/layout.js')
     const meta = await generateMetadata()
     expect(meta.description).toBeUndefined()
     expect(meta.openGraph.description).toBeUndefined()
-    vi.doUnmock('@/lib/default-favicon')
-    vi.doUnmock('@/lib/default-site-name')
-    vi.doUnmock('@/components/AppShellServer')
-    vi.doUnmock('@/components/StudioLockOverlay')
-    vi.doUnmock('@/components/CookieConsent')
-    vi.resetModules()
+    unmockRootLayoutDeps()
   }, 30_000)
 })
 
-// The other half of the audience split. The root layout floors on the PLATFORM
-// name because it labels ~160 staff pages; a customer-facing page must never
-// inherit that floor. Verified against prod read-only: the single
-// company_settings row has company_name NULL and org_settings is empty, so the
-// FLOOR is what renders today — this is not a theoretical branch.
-describe('customer-facing surfaces resolve operator branding; since W1.B1 both resolvers floor on the platform name (CHROME.1 / W1.B1)', () => {
-  afterEach(() => { _resetDefaultSiteNameCache() })
+// The customer-facing half. Since W1.L4 the customer-facing layouts thread
+// the request host in, so a tenant's customers read the tenant's brand and
+// a CRM-host link reads the platform's — never the first company_settings
+// row in the estate, which is what every customer used to read.
+describe('customer-facing surfaces resolve the brand of the host\'s organisation (CHROME.1 / W1.L4)', () => {
+  afterEach(resetBrandCaches)
 
-  const dbReturning = (rows) => ({
-    from: () => ({
-      select: () => ({
-        not: () => ({
-          order: () => ({ limit: async () => ({ data: rows, error: null }) }),
-        }),
-      }),
-    }),
+  it('W1.L4 — customerFacingMetadata resolves the brand of the host\'s organisation', async () => {
+    const t = hostTables()
+    seedTenantDomain(t, { hostname: 'members.gym-a.com', organization_id: ORG_A })
+    seedOrgSettings(t, { organization_id: ORG_A, company_name: 'Gym A' })
+    const meta = await customerFacingMetadata({ host: 'members.gym-a.com', db: makeFakeDb(t) })
+    expect(meta.title).toBe('Gym A')
+    expect(meta.openGraph.siteName).toBe('Gym A')
+    resetBrandCaches()
+    const platform = await customerFacingMetadata({ host: 'gym-a.repset.ie', db: makeFakeDb(t) })
+    expect(platform.title).toBe('Gym A')
   })
 
-  // W1.B1 — the gym wordmark literal is gone from location-branding.js, so
-  // until W1.L4 resolves the site name by the request's host this resolver
-  // floors on the PLATFORM name too. The split is kept so W1.L4 has a seam.
-  it('W1.B1 — floors on the platform name, never a gym literal, when nothing is configured', async () => {
-    const name = await resolveGymSiteName({ db: dbReturning([]) })
-    expect(name).toBe(PLATFORM_SITE_NAME)
-    expect(name).not.toMatch(/UN1T/)
+  it('W1.L4 — on the CRM host with no org the name is the platform name, never the first company_settings row', async () => {
+    const t = hostTables()
+    seedCompanySettings(t, { location_id: 'loc-a1', company_name: 'Gym A' })
+    const meta = await customerFacingMetadata({ host: 'crm.repset.ie', db: makeFakeDb(t) })
+    expect(meta.title).toBe('Repset')
+    expect(meta.openGraph.siteName).toBe('Repset')
   })
 
-  it('the two resolvers agree — a configured name wins for both, and the floor is the same', async () => {
-    const gym = await resolveGymSiteName({ db: dbReturning([{ company_name: 'Acme Fitness' }]) })
-    _resetDefaultSiteNameCache()
-    const platform = await resolveDefaultSiteName({ db: dbReturning([{ company_name: 'Acme Fitness' }]) })
+  // THE regression this task exists to close: before W1.L4 every tenant's
+  // customers read whichever company_settings row sorted first.
+  it('W1.L4 — a second tenant\'s company_settings row cannot change another tenant\'s rendered brand', async () => {
+    const t = hostTables()
+    seedCompanySettings(t, { location_id: 'loc-a1', company_name: 'Gym A' })
+    seedCompanySettings(t, { location_id: 'loc-b1', company_name: 'AAA Gym B' }) // sorts first by any column
+    seedOrgSettings(t, { organization_id: ORG_B, company_name: 'AAA Gym B' })
+    expect((await customerFacingMetadata({ host: 'gym-a.repset.ie', db: makeFakeDb(t) })).title).toBe('Gym A')
+    expect((await customerFacingMetadata({ host: 'gym-b.repset.ie', db: makeFakeDb(t) })).title).toBe('AAA Gym B')
+    expect((await customerFacingMetadata({ host: 'crm.repset.ie', db: makeFakeDb(t) })).title).toBe('Repset')
+    expect((await resolveGymSiteName({ host: 'gym-a.repset.ie', db: makeFakeDb(t) }))).toBe('Gym A')
+  })
+
+  it('W1.L4 — an in-code brand host (un1tdublin.com) resolves its organisation through the in-code tier', async () => {
+    const t = hostTables()
+    seedOrgSettings(t, { organization_id: UN1T_GROUP_ORG_ID, company_name: 'UN1T Dublin' })
+    expect((await customerFacingMetadata({ host: 'un1tdublin.com', db: makeFakeDb(t) })).title).toBe('UN1T Dublin')
+  })
+
+  it('the two resolvers agree — same chain, same floor', async () => {
+    const t = hostTables()
+    seedOrgSettings(t, { organization_id: ORG_A, company_name: 'Acme Fitness' })
+    const gym = await resolveGymSiteName({ host: 'gym-a.repset.ie', db: makeFakeDb(t) })
+    resetBrandCaches()
+    const platform = await resolveDefaultSiteName({ host: 'gym-a.repset.ie', db: makeFakeDb(t) })
     expect(gym).toBe('Acme Fitness')
     expect(platform).toBe('Acme Fitness')
+    resetBrandCaches()
+    expect(await resolveGymSiteName({ host: 'gym-a.repset.ie', db: makeFakeDb(hostTables()) })).toBe('Gym A North')
   })
 
   it('never throws and never blocks a customer render when the DB is down', async () => {
     const exploding = { from: () => { throw new Error('db down') } }
-    await expect(resolveGymSiteName({ db: exploding })).resolves.toBe(PLATFORM_SITE_NAME)
+    await expect(resolveGymSiteName({ host: 'gym-a.repset.ie', db: exploding })).resolves.toBe(PLATFORM_SITE_NAME)
   })
 
   it('customerFacingMetadata carries no description to echo', async () => {
-    const meta = await customerFacingMetadata({ db: dbReturning([]) })
+    const meta = await customerFacingMetadata({ host: 'crm.repset.ie', db: makeFakeDb(hostTables()) })
     expect(meta.title).toBe(PLATFORM_SITE_NAME)
     expect(meta.openGraph.siteName).toBe(PLATFORM_SITE_NAME)
     expect(meta.description).toBeUndefined()
@@ -277,7 +339,8 @@ describe('customer-facing surfaces resolve operator branding; since W1.B1 both r
   // The concrete list of subtrees that used to inherit the root metadata.
   // A new customer-facing route added without its own metadata silently
   // inherits the platform brand again, which is exactly the defect this
-  // describe block exists to stop.
+  // describe block exists to stop. Since W1.L4 each one must also thread the
+  // request host in, or it reads the platform name on every tenant host.
   it.each([
     ['src/app/book/[slug]/layout.js', 'public class booking'],
     ['src/app/event/layout.js', 'race confirmation + day board'],
@@ -286,11 +349,45 @@ describe('customer-facing surfaces resolve operator branding; since W1.B1 both r
     ['src/app/host/layout.js', 'host portal + host login'],
     ['src/app/reset-password/layout.js', 'emailed recovery link'],
     ['src/app/account/layout.js', 'member self-service'],
-  ])('%s declares its own customer-facing metadata (%s)', (rel) => {
+  ])('%s declares its own HOST-keyed customer-facing metadata (%s)', (rel) => {
     const src = repoFile(rel)
     expect(src).toContain('customerFacingMetadata')
     expect(src).toContain('export async function generateMetadata')
+    expect(src).toMatch(/customerFacingMetadata\(\{\s*host:\s*\(await headers\(\)\)\.get\('host'\)/)
     expect(src).not.toMatch(/resolveDefaultSiteName/)
+  })
+
+  it('the root layout threads the request host into both resolvers', () => {
+    const src = repoFile('src/app/layout.js')
+    expect(src).toMatch(/resolveDefaultFaviconUrl\(\{\s*host/)
+    expect(src).toMatch(/resolveDefaultSiteName\(\{\s*host/)
+  })
+
+  // Static `export const metadata` on a customer page is a literal by
+  // construction. These used to say "— UN1T"; now each resolves by host.
+  it.each([
+    'src/app/unsubscribe/[token]/page.js',
+    'src/app/unsubscribe/host/[token]/page.js',
+    'src/app/preferences/layout.js',
+    'src/app/preferences/[token]/page.js',
+    'src/app/welcome/page.js',
+  ])('%s resolves its title by host instead of a UN1T literal', (rel) => {
+    const src = repoFile(rel)
+    expect(src).toContain('export async function generateMetadata')
+    expect(src).not.toMatch(/export const metadata/)
+    expect(src).not.toMatch(/title:\s*'[^']*UN1T/)
+    expect(src).not.toMatch(/siteName:\s*'UN1T/)
+  })
+
+  it.each([
+    'src/app/event/[slug]/page.js',
+    'src/app/embed/event/[slug]/page.js',
+    'src/app/welcome/[location]/page.js',
+    'src/app/welcome/[location]/events/page.js',
+  ])('%s OG metadata names the resolved brand, not a UN1T literal', (rel) => {
+    const src = repoFile(rel)
+    const meta = src.slice(src.indexOf('export async function generateMetadata'), src.indexOf('export default'))
+    expect(meta).not.toMatch(/UN1T/)
   })
 })
 

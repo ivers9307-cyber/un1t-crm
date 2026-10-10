@@ -19,11 +19,16 @@ import { revokeHostConsent } from '@/lib/host-consent'
 import { suppressAtPostmark } from '@/lib/postmark-suppressions'
 import { hostServerToken } from '@/lib/postmark-server-for-location'
 import { logError } from '@/lib/log'
+import { headers } from 'next/headers'
+import { resolveGymSiteName } from '@/lib/default-site-name'
 
 export const dynamic = 'force-dynamic'
 
-export const metadata = {
-  title: 'Unsubscribe — UN1T',
+// W1.L4 — the tab names the request host's organisation brand (the host
+// campaign link is minted on the tenant's host), never a literal.
+export async function generateMetadata() {
+  const brand = await resolveGymSiteName({ host: (await headers()).get('host') })
+  return { title: `Unsubscribe — ${brand}` }
 }
 
 function Shell({ children }) {

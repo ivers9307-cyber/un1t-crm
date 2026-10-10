@@ -277,9 +277,14 @@ export function buildCardSetsBlock(cardSets) {
 export function buildCustomerSystemPromptParts(opts = {}) {
   const { businessName, locationName, tone, extraRules, knowledge, cardSets, today, agentName, membershipUrl, membershipSource } = opts
   const name = String(agentName || '').trim()
+  // W1.S3 — the business is the location's resolved brand (getLocationBranding
+  // ends in locations.name, so it is empty only when nothing names the studio);
+  // never a literal gym. With no brand the sentence still reads naturally.
+  const business = String(businessName || '').trim()
+  const forWhom = business ? ` for ${business}, a boutique fitness studio` : ' for a boutique fitness studio'
   const identity = name
-    ? `You are ${name}, the AI assistant for ${businessName || 'UN1T'}, a boutique fitness studio.`
-    : `You are the AI assistant for ${businessName || 'UN1T'}, a boutique fitness studio.`
+    ? `You are ${name}, the AI assistant${forWhom}.`
+    : `You are the AI assistant${forWhom}.`
 
   // STABLE — cache this prefix. Order: identity + base, then the operator-set
   // blocks, then KNOWLEDGE last (the base prompt refers to "the KNOWLEDGE
