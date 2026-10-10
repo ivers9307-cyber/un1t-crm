@@ -20,6 +20,7 @@ import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { MANAGER_ROLES, uuidLike } from '@/lib/schemas'
 import { logError } from '@/lib/log'
+import { staffActorName } from '@/lib/staff-actor-name'
 import { readRegistrationForMove, moveRegistration, MOVE_ERRORS, MOVE_ERROR_MESSAGES } from '@/lib/registration-move'
 
 export const runtime = 'nodejs'
@@ -65,12 +66,8 @@ function refusal(code, extra = {}, message = null) {
  * and "<master> as <user>" so the history reads true.
  */
 function actorFor(user) {
-  const userName = user.full_name || user.email || 'staff'
   const imp = user.impersonatingFrom
-  if (imp?.masterId) {
-    return { type: 'staff', id: imp.masterId, name: `${imp.masterName || imp.masterEmail || 'master'} as ${userName}` }
-  }
-  return { type: 'staff', id: user.id, name: userName }
+  return { type: 'staff', id: imp?.masterId || user.id, name: staffActorName(user) }
 }
 
 /**

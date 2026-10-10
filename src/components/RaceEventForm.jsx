@@ -291,6 +291,9 @@ export default function RaceEventForm({ race, locationId }) {
   const [movedIntro, setMovedIntro] = useState(race?.moved_email_intro || '')
   const [gapSubject, setGapSubject] = useState(race?.gap_email_subject || '')
   const [gapIntro, setGapIntro] = useState(race?.gap_email_intro || '')
+  // EVENT-WAITLIST.1 (mig 713) — the waitlist "a spot opened up" offer email.
+  const [waitlistSubject, setWaitlistSubject] = useState(race?.waitlist_email_subject || '')
+  const [waitlistIntro, setWaitlistIntro] = useState(race?.waitlist_email_intro || '')
   // The location's saved email templates, for the "Advanced: use a full
   // template" pickers. Fetched from the shared templates list endpoint,
   // scoped to this event's location. A fetch failure just leaves the list
@@ -582,6 +585,8 @@ export default function RaceEventForm({ race, locationId }) {
       moved_email_intro: movedIntro.trim() || null,
       gap_email_subject: gapSubject.trim() || null,
       gap_email_intro: gapIntro.trim() || null,
+      waitlist_email_subject: waitlistSubject.trim() || null,
+      waitlist_email_intro: waitlistIntro.trim() || null,
       ...(meta.isLeadGen ? {} : {
         waves: outboundWaves.map((w, i) => ({
           ...(w.id ? { id: w.id } : {}),
@@ -1352,7 +1357,7 @@ export default function RaceEventForm({ race, locationId }) {
             <div>
               <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">Emails</h3>
               <p className="text-[11px] text-un1t-subtle mt-1">
-                Style the signup confirmation, the pre-event reminder and the entry-moved notice this {meta.value === 'race' ? 'race' : 'event'} sends.
+                Style the signup confirmation, the pre-event reminder, the entry-moved notice and the waitlist offer this {meta.value === 'race' ? 'race' : 'event'} sends.
                 Leave a field blank to keep the current default. The accent colour + hero image set above already brand these emails.
               </p>
             </div>
@@ -1383,7 +1388,7 @@ export default function RaceEventForm({ race, locationId }) {
 
           <EventEmailFields
             title="Signup confirmation"
-            description="Sent as soon as a signup is confirmed."
+            description="Sent as soon as a signup is confirmed. The default copy ends with a link where the customer can change their date; custom copy keeps it only if it includes {{manage_url}}."
             subject={confirmationSubject}
             onSubject={setConfirmationSubject}
             subjectPlaceholder="{{event_name}} — you're in!"
@@ -1393,6 +1398,7 @@ export default function RaceEventForm({ race, locationId }) {
             templateId={confirmationTemplateId}
             onTemplateId={setConfirmationTemplateId}
             templates={emailTemplates}
+            extraTags={['{{manage_url}}']}
           />
 
           <div className="pt-4 border-t border-un1t-border">
@@ -1414,7 +1420,7 @@ export default function RaceEventForm({ race, locationId }) {
           <div className="pt-4 border-t border-un1t-border">
             <EventEmailFields
               title="Entry moved"
-              description="Sent when staff move an entry onto this event from another one. Carries the new date, time and fresh QR codes."
+              description="Sent when an entry is moved onto this event from another one, by staff or by the customer from their own entry page. Carries the new date, time and fresh QR codes. The default copy ends with the change-your-date link; custom copy keeps it only if it includes {{manage_url}}."
               subject={movedSubject}
               onSubject={setMovedSubject}
               subjectPlaceholder="Your entry has moved to {{event_name}}"
@@ -1422,7 +1428,7 @@ export default function RaceEventForm({ race, locationId }) {
               onIntro={setMovedIntro}
               introPlaceholder="What's next: arrive 30 minutes before your start, bring water and a towel. Your old tickets no longer work."
               showTemplate={false}
-              extraTags={['{{old_event_name}}', '{{old_when}}']}
+              extraTags={['{{old_event_name}}', '{{old_when}}', '{{manage_url}}']}
             />
           </div>
 
@@ -1438,6 +1444,21 @@ export default function RaceEventForm({ race, locationId }) {
               introPlaceholder="Questions about the difference? Reply to this email."
               showTemplate={false}
               extraTags={['{{difference}}', '{{old_event_name}}']}
+            />
+          </div>
+
+          <div className="pt-4 border-t border-un1t-border">
+            <EventEmailFields
+              title="Waitlist offer"
+              description="Sent to everyone on the waitlist at once when a spot opens up. The Book now button and the link are always included; the first to book gets the place."
+              subject={waitlistSubject}
+              onSubject={setWaitlistSubject}
+              subjectPlaceholder="A spot opened up for {{event_name}}"
+              intro={waitlistIntro}
+              onIntro={setWaitlistIntro}
+              introPlaceholder="It goes to the first person to book. If it's gone by the time you look, you stay on the list."
+              showTemplate={false}
+              extraTags={['{{claim_url}}']}
             />
           </div>
         </div>

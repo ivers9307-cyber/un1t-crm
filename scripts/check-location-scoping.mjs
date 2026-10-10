@@ -173,6 +173,13 @@ const SCOPING_HELPERS = [
   // src/app/api/invoices-inbox/_bulk-helpers.js — bookkeeper permission +
   // per-row location checks on the bulk surface.
   'loadBookkeeper(',
+  // src/lib/event-visibility.js (W0.3) — builds the race_events .or() string:
+  // `location_id.eq.<active>` plus shared events whose location_id is IN the
+  // active studio's organisation (orgLocationIdsFor → siblingLocationIds); a
+  // lookup error narrows to the active studio alone. Verified in
+  // src/app/(members)/events/page.js, src/app/api/events/route.js and
+  // src/app/welcome/[location]/events/page.js.
+  'sharedEventsOrFilterFor(',
   // src/lib/permissions.js — permission check evaluated AT a specific
   // location (the fetch-row-then-check-its-location approvals pattern).
   'hasPermissionForLocation(',
@@ -326,6 +333,9 @@ export const EXEMPT = {
   },
   'src/app/api/public/events/[slug]/display/route.js': {
     race_events: 'Public race-day display for a published slug (TV screen at the venue).',
+  },
+  'src/app/api/public/events/[slug]/waitlist/route.js': {
+    race_events: 'EVENT-WAITLIST.1 public waitlist join: race_events row resolved by published slug + active/published flags (the same row the public event page serves); the waitlist row is written at that event\'s own location_id by joinWaitlist. Answers only the new row id.',
   },
   'src/app/api/public/classes/route.js': {
     landing_page_settings: 'Public landing-page class list: landing_page_settings row resolved by its public_path — the path IS the tenant selector for the public site.',

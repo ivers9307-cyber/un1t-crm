@@ -1,7 +1,8 @@
 // RADAR-AGENT.0b — unit tests for channel connection pure helpers.
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   maskSecret,
+  resolveLocationByExternalAccount,
   isFreshSecret,
   maskConnectionRow,
   buildConnectionPatch,
@@ -172,5 +173,47 @@ describe('buildTokenRefreshPatch', () => {
     const p = buildTokenRefreshPatch({ access_token: 'IGAAX-new', expires_in: 'soon' }, NOW)
     expect(p.access_token).toBe('IGAAX-new')
     expect(p.token_expires_at).toBe(null)
+  })
+})
+
+// W0.14 — a failed channel_connections read must THROW, not read as
+// "unmatched account". The Instagram webhook has already claimed the
+// per-message dedup row by the time this runs, so a swallowed error
+// turned a DB blip into permanent message loss (Meta's retry was a no-op).
+describe('resolveLocationByExternalAccount', () => {
+  function fakeDb(result) {
+    const b = {}
+    for (const m of ['select', 'eq', 'limit']) b[m] = vi.fn(() => b)
+    b.maybeSingle = vi.fn(async () => result)
+    return { from: vi.fn(() => b), builder: b }
+  }
+
+  it('throws on a query error (never "unmatched")', async () => {
+    const db = fakeDb({ data: null, error: { message: 'boom' } })
+    await expect(resolveLocationByExternalAccount('instagram', 'acct-1', db))
+      .rejects.toThrow(/lookup failed/)
+  })
+
+  it('resolves null when no active row matches', async () => {
+    const db = fakeDb({ data: null, error: null })
+    await expect(resolveLocationByExternalAccount('instagram', 'acct-1', db)).resolves.toBeNull()
+    expect(db.from).toHaveBeenCalledWith('channel_connections')
+    expect(db.builder.eq).toHaveBeenCalledWith('platform', 'instagram')
+    expect(db.builder.eq).toHaveBeenCalledWith('external_account_id', 'acct-1')
+    expect(db.builder.eq).toHaveBeenCalledWith('is_active', true)
+  })
+
+  it('resolves { locationId, connection } for a matching row', async () => {
+    const row = { id: 'conn-1', location_id: 'loc-1', platform: 'instagram', external_account_id: 'acct-1' }
+    const db = fakeDb({ data: row, error: null })
+    await expect(resolveLocationByExternalAccount('instagram', 'acct-1', db))
+      .resolves.toEqual({ locationId: 'loc-1', connection: row })
+  })
+
+  it('short-circuits to null on missing inputs without touching the DB', async () => {
+    const db = fakeDb({ data: null, error: null })
+    await expect(resolveLocationByExternalAccount('instagram', '', db)).resolves.toBeNull()
+    await expect(resolveLocationByExternalAccount('', 'acct-1', db)).resolves.toBeNull()
+    expect(db.from).not.toHaveBeenCalled()
   })
 })

@@ -72,6 +72,10 @@ export const UpdateSchema = z.object({
   // payment link and the receipt share it).
   gap_email_subject: z.string().max(4000).nullable().optional(),
   gap_email_intro: z.string().max(4000).nullable().optional(),
+  // EVENT-WAITLIST.1 (mig 713) — copy for the waitlist "a spot opened up"
+  // offer email ({{claim_url}} available).
+  waitlist_email_subject: z.string().max(4000).nullable().optional(),
+  waitlist_email_intro: z.string().max(4000).nullable().optional(),
   confirmation_email_template_id: uuidLike.nullable().optional(),
   reminder_email_template_id: uuidLike.nullable().optional(),
   // EVENT-COMMS-LOC (mig 553) — flows through the generic scalar patch; in-org
@@ -96,6 +100,7 @@ async function loadRace(db, id) {
       reminder_email_subject, reminder_email_intro,
       moved_email_subject, moved_email_intro,
       gap_email_subject, gap_email_intro,
+      waitlist_email_subject, waitlist_email_intro,
       confirmation_email_template_id, reminder_email_template_id,
       sending_location_id,
       waves:race_waves ( id, start_time, capacity, label, display_order ),

@@ -90,3 +90,32 @@ describe('GET /api/public/event-payments/[id] — expired and settled difference
   })
 })
 
+// EVENT-MOVE.6 — a customer's own date change is flagged, and nothing more:
+// the way back to the entry page travels in the pay link's #back= fragment,
+// so this payment-id route never mints or returns an entry token.
+describe('GET /api/public/event-payments/[id] — is_date_change', () => {
+  const PM = { target_event_id: 'e3', target_wave_id: 'w3', expected_source_event_id: 'e2', actor: { type: 'customer', id: 'k1', name: 'Aoife Byrne' } }
+  it('flags a customer date change and echoes neither the pending move nor any token', async () => {
+    vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'svc')
+    try {
+      globalThis.__rows = [{ data: { ...ROW, registration_move_id: null, metadata: { pending_move: PM } }, error: null }]
+      const json = await (await get()).json()
+      expect(json.data.is_date_change).toBe(true)
+      expect(json.data).not.toHaveProperty('return_path')
+      expect(JSON.stringify(json)).not.toMatch(/pending_move|Aoife|metadata|\/event\/entry/)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+  it('a staff difference link and an entry payment are not date changes', async () => {
+    globalThis.__rows = [{ data: { ...ROW, metadata: null }, error: null }]
+    expect((await (await get()).json()).data.is_date_change).toBe(false)
+    globalThis.__rows = [{ data: { ...ROW, kind: 'entry', metadata: { pending_move: PM } }, error: null }]
+    expect((await (await get()).json()).data.is_date_change).toBe(false)
+  })
+  it('both selects read metadata', async () => {
+    globalThis.__rows = [{ data: { ...ROW, status: 'pending' }, error: null }, { data: ROW, error: null }]
+    await get()
+    for (const cols of globalThis.__selects) expect(cols).toMatch(/\bmetadata\b/)
+  })
+})

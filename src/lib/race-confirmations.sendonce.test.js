@@ -50,6 +50,8 @@ vi.mock('./app-url', () => ({ getAppUrl: () => 'https://crm.example.com' }))
 vi.mock('./event-checkin-tokens', () => ({ signCheckinToken: () => 'tok' }))
 
 import { sendRaceConfirmations } from './race-confirmations'
+import { resolveEventEmail } from './event-email'
+import { verifyEntryManageToken } from './entry-manage-tokens'
 
 const PAYMENT_ID = 'p0000000-0000-0000-0000-000000000001'
 
@@ -244,5 +246,40 @@ describe('sendRaceConfirmations — send-once ordering', () => {
       expect.objectContaining({ locationId: 'LOC' }),
     )
     expect(row.confirmation_email_sent_at).toBeTruthy()
+  })
+})
+
+// EVENT-MOVE.6 — the confirmation carries the entry's own page, so the booker
+// can change the date: {{manage_url}} for operator copy and a "Change it
+// here" line closing the default copy. Not send-once behaviour, but this file
+// is the one that drives sendRaceConfirmations through resolveEventEmail.
+describe('sendRaceConfirmations — the "Change your date" link', () => {
+  it('passes a signed /event/entry/<token> link for THIS entry as manage_url and in the default copy', async () => {
+    vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'test-secret')
+    try {
+      const { db } = makeWorld()
+      resolveEventEmail.mockClear()
+      await sendRaceConfirmations({ db, paymentId: PAYMENT_ID })
+      const { extras, defaults } = resolveEventEmail.mock.calls[0][0]
+      expect(extras.manage_url).toMatch(/^https:\/\/crm\.example\.com\/event\/entry\/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/)
+      expect(verifyEntryManageToken(extras.manage_url.split('/').pop(), 'test-secret')).toEqual({ registrationId: 'reg1' })
+      expect(defaults.footerHtml).toContain(`Need a different date? <a href="${extras.manage_url}"`)
+      expect(defaults.footerHtml).toContain('>Change it here</a>.')
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+  it('with no signing key there is no link and the default copy is unchanged', async () => {
+    vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', '')
+    try {
+      const { db } = makeWorld()
+      resolveEventEmail.mockClear()
+      await sendRaceConfirmations({ db, paymentId: PAYMENT_ID })
+      const { extras, defaults } = resolveEventEmail.mock.calls[0][0]
+      expect(extras.manage_url).toBe('')
+      expect(defaults.footerHtml).not.toContain('Change it here')
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 })

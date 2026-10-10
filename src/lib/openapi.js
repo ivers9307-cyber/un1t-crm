@@ -644,6 +644,7 @@ registry.registerPath({
             email: email,
             phone: z.string().max(50).optional(),
             team_name: z.string().max(200).optional(),
+            waitlist_token: z.string().max(1000).optional().openapi({ description: 'EVENT-WAITLIST.1: the claim token from a waitlist offer link (?wl=); marks that waitlist row claimed once the registration exists. Never changes the answer.' }),
           }).openapi('EventRegisterBody'),
         },
       },
@@ -722,6 +723,64 @@ registry.registerPath({
   responses: {
     200: { description: 'Registration status', content: { 'application/json': { schema: z.object({}).passthrough().openapi('EventRegistrationStatus') } } },
     404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// EVENT-MOVE.6 — the person who booked an entry manages it from the signed
+// link in their confirmation email (/event/entry/{token}). The token is the
+// only credential: a bad, expired or forged one is a 404, never 401/403.
+const EntryManageToken = z.string().min(10).openapi({ description: 'Signed entry-manage token (HMAC, 90-day TTL) from the confirmation or moved email' })
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/entry/{token}',
+  tags: ['Public'],
+  summary: 'The token holder\'s event entry, and whether they may change its date',
+  description: 'Anonymous; the token is the credential. Public entry shape (names only, no emails, phones or check-in codes) plus `can_move`, `move_blocked_reason` (unpaid, cancelled, checked in, past), `date_change_pending` and `date_change_failed` (a paid change was refused; shown until staff move or refund it). A pending date-change payment is refreshed from the provider first. Rate limited: 60 per IP per 5 minutes.',
+  request: { params: z.object({ token: EntryManageToken }) },
+  responses: {
+    200: { description: 'The entry', content: { 'application/json': { schema: z.object({}).passthrough().openapi('PublicEntrySummary') } } },
+    404: { description: 'Bad or expired link, or the entry is gone', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/entry/{token}/move-options',
+  tags: ['Public'],
+  summary: 'Dates and times the token holder may move their entry to',
+  description: 'Anonymous; the token is the credential. Same eligibility as the staff picker (same payee, published, upcoming, the entry size accepted) at a studio of the entry\'s own organisation (fails closed when that cannot be read) but only times with room are listed and NO capacity or count is ever returned. Each option carries `price_difference_cents` and `price_note`. A blocked entry answers `can_move: false`, its reason and no options. Rate limited with the summary: 60 per IP per 5 minutes.',
+  request: { params: z.object({ token: EntryManageToken }) },
+  responses: {
+    200: { description: 'The options', content: { 'application/json': { schema: z.object({}).passthrough().openapi('PublicEntryMoveOptions') } } },
+    404: { description: 'Bad or expired link, or the entry is gone', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The options could not be read', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/entry/{token}/move',
+  tags: ['Public'],
+  summary: 'The token holder moves their entry to another date (pays the difference first when dearer)',
+  description: 'Anonymous; the token is the credential. Only a confirmed, unchecked entry on an upcoming event; the same rules as staff, never forced. Equal or cheaper: moved at once as actor `customer`, new tickets emailed, nothing refunded → `{ moved: true, registration, notified }`. Dearer: a price-difference payment carrying the pending move is minted and the move lands when it is paid → `{ moved: false, pay_url }`, where pay_url ends `#back=<this token>` so the checkout can return to the entry page. Targets are fenced to the entry\'s organisation. An immediate move closes any open dearer link on the entry. Every refusal carries `error` and a customer `message`. Rate limited: 10 per IP per 15 minutes.',
+  request: {
+    params: z.object({ token: EntryManageToken }),
+    body: { content: { 'application/json': { schema: z.object({
+      target_event_id: uuidLike,
+      target_wave_id: uuidLike.nullable().optional(),
+    }).openapi('PublicEntryMoveRequest') } } },
+  },
+  responses: {
+    200: { description: 'Moved, or a pay URL for the difference', content: { 'application/json': { schema: z.object({}).passthrough().openapi('PublicEntryMoveResult') } } },
+    400: { description: 'A rule refused the move, or a bad body', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Bad or expired link, or the entry is gone', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'That time is full (no numbers), the entry changed, already paid, or the host cannot take payments', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'A read or write failed; nothing changed', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'The payment provider did not start the payment', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -877,6 +936,113 @@ registry.registerPath({
     404: { description: "Entry or target event not found, or not this host's", content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'wave_full (resend with force) or conflict (the entry changed mid-move)', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'load_failed or write_failed; nothing changed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// EVENT-WAITLIST.1 — the waitlist for a sold-out event (mig 713). The public
+// join answers only "you're on the list"; the count and the list are staff and
+// host data.
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/events/{slug}/waitlist',
+  tags: ['Public'],
+  summary: 'Join the waitlist of a sold-out event',
+  description:
+    'Rate-limited 5 per 15 minutes per slug + IP. Refused when the event is not public (404), past (409 past), not taking signups (409 closed) ' +
+    'or has room in any time (409 has_room: book directly). One row per event + email; joining again refreshes it. Never answers a count or any capacity.',
+  request: {
+    params: z.object({ slug: z.string() }),
+    body: { content: { 'application/json': { schema: z.object({
+      name: z.string().min(1).max(200),
+      email: email,
+      phone: z.string().max(50).nullable().optional(),
+      headcount: z.number().int().min(1).max(50).optional().openapi({ description: 'Group size (one of the event\'s allowed team sizes)' }),
+      consent: z.boolean().optional().openapi({ description: 'Marketing consent checkbox, as on the register form' }),
+    }).openapi('EventWaitlistJoinBody') } } },
+  },
+  responses: {
+    200: { description: '{ id } of the waitlist row', content: { 'application/json': { schema: z.object({}).passthrough() } } },
+    400: { description: 'Validation failed, or a group size the event does not offer', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Event not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'has_room, past or closed', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'load_failed or write_failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/events/{id}/waitlist',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "An event's waitlist and how many are still waiting (staff, manager+ with races at the event's studio)",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ rows, waiting }', content: { 'application/json': { schema: z.object({}).passthrough().openapi('EventWaitlist') } } },
+    403: { description: "No races permission or manager role at the event's studio", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (or at a studio the caller cannot see)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'load_failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/events/{id}/waitlist/{rowId}',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "Take someone off an event's waitlist (status removed; staff, manager+ with races at the event's studio)",
+  request: { params: z.object({ id: uuidLike, rowId: uuidLike }) },
+  responses: {
+    200: { description: 'The removed row', content: { 'application/json': { schema: z.object({}).passthrough() } } },
+    403: { description: "No races permission or manager role at the event's studio", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Event or row not found, or the row is on another event', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'write_failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/events/{id}/waitlist/offer',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "Run the waitlist offer round for this event now (staff, manager+ with races at the event's studio)",
+  description: 'Forced: if any time has room, everyone still on the list is offered again at once, even if offered in the last 24 h (the cron keeps the 24 h rule). Email; WhatsApp when the studio has an APPROVED event_waitlist_offer template. Answers the round counts; no_room 1 = every time is full, nobody offered.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ events, offered, expired, skipped, failed, no_room }', content: { 'application/json': { schema: z.object({}).passthrough().openapi('EventWaitlistOfferResult') } } },
+    403: { description: "No races permission or manager role at the event's studio", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (or at a studio the caller cannot see)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'load_failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/host/events/{id}/waitlist',
+  tags: ['Host Portal'],
+  security: [{ CookieAuth: [] }],
+  summary: "The waitlist of one of the host's own events and how many are still waiting (read-only)",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ rows, waiting }', content: { 'application/json': { schema: z.object({}).passthrough() } } },
+    401: { description: 'Unauthorized: no host session', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: "Not found, or not this host's event", content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'load_failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/host/events/{id}/waitlist/offer',
+  tags: ['Host Portal'],
+  security: [{ CookieAuth: [] }],
+  summary: "Run the waitlist offer round now for one of the host's own events (forced past the 24 h rule: everyone on the list is offered again)",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ events, offered, expired, skipped, failed, no_room }', content: { 'application/json': { schema: z.object({}).passthrough() } } },
+    401: { description: 'Unauthorized: no host session', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: "Not found, or not this host's event", content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'load_failed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -1333,28 +1499,33 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'get',
-  path: '/api/webhooks/strava',
+  path: '/api/webhooks/strava/{token}',
   tags: ['Webhooks (Inbound)'],
   security: [],
   summary: 'Strava subscription validation',
-  description: 'Strava subscription validation (echoes `hub.challenge`).',
+  description: 'Strava subscription validation (echoes `hub.challenge`). `token` is the STRAVA_WEBHOOK_URL_TOKEN path secret (W0.10); a wrong path token is a 403 like a wrong `hub.verify_token`.',
+  request: { params: z.object({ token: z.string() }) },
   responses: {
     200: { description: 'Challenge echoed' },
-    403: { description: 'Verify token mismatch' },
+    403: { description: 'Path token or verify token mismatch' },
   },
 })
 
 registry.registerPath({
   method: 'post',
-  path: '/api/webhooks/strava',
+  path: '/api/webhooks/strava/{token}',
   tags: ['Webhooks (Inbound)'],
-  security: [{ WebhookToken: [] }],
+  security: [],
   summary: 'Strava activity events',
-  description: 'Strava → CRM. Carries activity create/update/delete events.',
-  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('StravaWebhookEvent') } } } },
+  description: 'Strava → CRM. Carries activity create/update/delete events. Strava does not sign webhook POSTs, so the `token` path segment (STRAVA_WEBHOOK_URL_TOKEN, constant-time compare) IS the credential (W0.10); a wrong token is a 404 so the route cannot be probed. Rate-limited per IP.',
+  request: {
+    params: z.object({ token: z.string() }),
+    body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('StravaWebhookEvent') } } },
+  },
   responses: {
     200: { description: 'Accepted' },
-    401: { description: 'Verify-token mismatch', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Wrong or missing path token', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

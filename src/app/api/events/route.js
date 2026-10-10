@@ -26,6 +26,7 @@ import { ADMIN_ROLES, uuidLike } from '@/lib/schemas'
 import { eventSlug, uniqueEventSlug } from '@/lib/event-slug'
 import { formatSignupSummary, sumWaveCapacity } from '@/lib/event-signups'
 import { isRaceKind, orderEventsForBrowse, todayIsoDublin } from '@shared/events'
+import { sharedEventsOrFilterFor } from '@/lib/event-visibility'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -102,6 +103,10 @@ export const CreateSchema = z.object({
   // payment link and the receipt share it).
   gap_email_subject: z.string().max(4000).nullable().optional(),
   gap_email_intro: z.string().max(4000).nullable().optional(),
+  // EVENT-WAITLIST.1 (mig 713) — copy for the waitlist "a spot opened up"
+  // offer email ({{claim_url}} available).
+  waitlist_email_subject: z.string().max(4000).nullable().optional(),
+  waitlist_email_intro: z.string().max(4000).nullable().optional(),
   confirmation_email_template_id: uuidLike.nullable().optional(),
   reminder_email_template_id: uuidLike.nullable().optional(),
   // EVENT-COMMS-LOC (mig 553) — the real UN1T location this event's SMS + email
@@ -146,8 +151,10 @@ export async function GET(request) {
   }
 
   const db = createServerClient()
-  // Scope to the active location PLUS any event flagged `shared` (owned by
-  // one location, surfaced everywhere) — same rule as the web /events list.
+  // Scope to the active location PLUS any event flagged `shared` (owned by a
+  // sibling location of the same organisation, W0.3) — same rule as the web
+  // /events list.
+  const orFilter = await sharedEventsOrFilterFor(db, activeLocationId)
   const { data, error } = await db
     .from('race_events')
     .select(`
@@ -157,7 +164,7 @@ export async function GET(request) {
       waves:race_waves ( capacity ),
       registrations:race_registrations ( id, status, team:teams ( size ) )
     `)
-    .or(`location_id.eq.${activeLocationId},shared.eq.true`)
+    .or(orFilter)
     .order('race_date', { ascending: false })
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
 
@@ -387,6 +394,8 @@ export async function POST(request) {
       moved_email_intro: body.moved_email_intro ?? null,
       gap_email_subject: body.gap_email_subject ?? null,
       gap_email_intro: body.gap_email_intro ?? null,
+      waitlist_email_subject: body.waitlist_email_subject ?? null,
+      waitlist_email_intro: body.waitlist_email_intro ?? null,
       confirmation_email_template_id: body.confirmation_email_template_id ?? null,
       reminder_email_template_id: body.reminder_email_template_id ?? null,
       sending_location_id: body.sending_location_id ?? null,

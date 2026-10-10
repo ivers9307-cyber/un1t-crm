@@ -161,17 +161,23 @@ export async function resolveChannelConnection(locationId, platform, db = null) 
 /**
  * Reverse lookup for inbound webhooks: which location owns this Meta
  * account id on this platform? Returns { locationId, connection } | null.
+ * THROWS on a query error (W0.14) — null means "no active row", never
+ * "the read failed".
  */
 export async function resolveLocationByExternalAccount(platform, externalAccountId, db = null) {
   if (!platform || !externalAccountId) return null
   const client = db || createServerClient()
-  const { data } = await client.from('channel_connections')
+  const { data, error } = await client.from('channel_connections')
     .select('*')
     .eq('platform', platform)
     .eq('external_account_id', externalAccountId)
     .eq('is_active', true)
     .limit(1)
     .maybeSingle()
+  // W0.14 — a failed read is NOT "unmatched": the caller has already claimed
+  // the dedup row, so swallowing this made Meta's retry a no-op and lost the
+  // message for good. Throw so the webhook answers non-2xx and Meta retries.
+  if (error) throw new Error(`channel_connections lookup failed: ${error.message}`)
   if (!data) return null
   return { locationId: data.location_id, connection: data }
 }

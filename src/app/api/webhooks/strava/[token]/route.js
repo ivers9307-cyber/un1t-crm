@@ -2,14 +2,33 @@
 // POST = activity events. Strava does NOT sign webhook POSTs (events carry only ids,
 // no sensitive data); we act only on owner_ids we have a token for and fetch detail
 // with that member's own token. Always 200 fast so Strava doesn't disable the sub.
+//
+// W0.10 — because Strava never signs its POSTs, the URL token IS the shared
+// secret (same model as postmark-inbound/[token]): the path segment must equal
+// STRAVA_WEBHOOK_URL_TOKEN, compared constant-time. Without it anyone who knew
+// a connected athlete's id could trigger fetch/ingest/delete of that athlete's
+// activities. Wrong or missing token: GET 403, POST 404 (never confirm the
+// route exists). Fails CLOSED when the env is unset. POST is additionally
+// rate-limited per IP (120/min) before any DB read. The push subscription's
+// callback_url must carry the token: https://crm.repset.ie/api/webhooks/strava/<token>
+// (docs/domain-migration-stage3.md §5a has the curl).
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { loadStravaConfig, ingestActivity } from '@/lib/strava-import'
+import { safeEqual } from '@/lib/webhook-auth'
+import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(request) {
+function tokenOk(params) {
+  const expected = process.env.STRAVA_WEBHOOK_URL_TOKEN || ''
+  return expected.length > 0 && safeEqual(String(params?.token || ''), expected)
+}
+
+export async function GET(request, props) {
+  const params = await props.params
+  if (!tokenOk(params)) return NextResponse.json({ error: 'forbidden' }, { status: 403 })
   const u = new URL(request.url)
   if (u.searchParams.get('hub.mode') === 'subscribe'
     && u.searchParams.get('hub.verify_token') === process.env.STRAVA_WEBHOOK_VERIFY_TOKEN) {
@@ -18,12 +37,18 @@ export async function GET(request) {
   return NextResponse.json({ error: 'forbidden' }, { status: 403 })
 }
 
-export async function POST(request) {
+export async function POST(request, props) {
+  const params = await props.params
+  if (!tokenOk(params)) return NextResponse.json({ success: false }, { status: 404 })
+
+  const db = createServerClient()
+  const limit = await checkRateLimit(db, `strava-webhook:${getClientIp(request)}`, { max: 120, windowMs: 60_000 })
+  if (!limit.allowed) return rateLimitResponse(limit)
+
   let evt
   try { evt = await request.json() } catch { return NextResponse.json({ success: true }) }
   if (evt?.object_type !== 'activity') return NextResponse.json({ success: true, ignored: 'non_activity' })
 
-  const db = createServerClient()
   // Resolve the member by athlete id. Defence-in-depth against duplicate active
   // rows: even though mig 312's unique index now prevents them, order
   // newest-first + limit(1) so maybeSingle() can never throw on a stray dupe
