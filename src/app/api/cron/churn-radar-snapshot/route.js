@@ -11,6 +11,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { loadRadar } from '@/lib/churn-radar-data'
+import { noSourceLocationIds } from '@/lib/membership/locations-for-source'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -35,9 +36,20 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: locErr.message }, { status: 500 })
   }
 
+  // W1.M3b — a location with NO membership source has no Glofox-shaped data
+  // to read: skipped with a counted skipped_no_source. A failed seam read is a
+  // 500 with no heartbeat, never "nobody to skip".
+  const { ids: noSource, error: srcErr } = await noSourceLocationIds(db)
+  if (srcErr) {
+    console.warn(`[cron][churn-radar-snapshot] failed to read membership sources: ${srcErr.message}`)
+    return NextResponse.json({ success: false, error: srcErr.message }, { status: 500 })
+  }
+  let skippedNoSource = 0
+
   const rows = []
   const perLocation = []
   for (const loc of locations || []) {
+    if (noSource.has(loc.id)) { skippedNoSource++; continue }
     try {
       const { summary } = await loadRadar(db, loc.id)
       rows.push({
@@ -72,6 +84,7 @@ export async function GET(request) {
   return NextResponse.json({
     success: true,
     locations: perLocation.length,
+    skipped_no_source: skippedNoSource,
     snapshots_written: snapshotsWritten,
     perLocation,
   })

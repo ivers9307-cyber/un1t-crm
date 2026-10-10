@@ -38,14 +38,31 @@ import { formatDublinClassTime } from './dublin-format'
 // studio has no booking system": tell the model the difference so it never
 // says booking isn't offered here. Both answers still hand off to the team;
 // only the reason the model is given changes.
-export function noBookingSystemAnswer(creds) {
-  if (creds?.readError) {
-    return {
-      error: 'booking_system_unavailable',
-      message: 'The booking system could not be reached just now. Offer to hand off to the team. Do not say the studio does not take bookings.',
-    }
+//
+// W1.M3b — source-aware. `sourceState` is membershipSourceState() for the
+// conversation's studio: 'none' means the studio has chosen NO booking system
+// (a lead-only gym), which is a fact the model may state; 'unconfigured' and
+// 'unknown' are a chosen system that cannot answer right now, which is the
+// unavailable copy. Without a state (legacy callers) the old answers stand.
+const BOOKING_SYSTEM_UNAVAILABLE = Object.freeze({
+  error: 'booking_system_unavailable',
+  message: 'The booking system could not be reached just now. Offer to hand off to the team. Do not say the studio does not take bookings.',
+})
+export function noBookingSystemAnswer(creds, sourceState = null) {
+  if (creds?.readError) return { ...BOOKING_SYSTEM_UNAVAILABLE }
+  const state = sourceState?.state
+  if (state === 'none') {
+    return { error: 'no_booking_system', message: 'This studio has no class booking system connected — hand off to the team.' }
   }
+  if (state === 'unconfigured' || state === 'unknown') return { ...BOOKING_SYSTEM_UNAVAILABLE }
   return { error: 'no_booking_system', message: 'Class booking is not connected at this studio — hand off to the team.' }
+}
+
+// The studio's membership-source state, read only on the no-credentials path
+// (lazy import: the seam pulls @/lib/glofox and the connection registry).
+async function bookingSourceState(db, locationId) {
+  const { membershipSourceState } = await import('@/lib/membership/source')
+  return membershipSourceState(db, locationId)
 }
 
 // ── Anthropic tool definitions ──────────────────────────────────────
@@ -577,7 +594,7 @@ export async function executeBookingTool(toolName, input, ctx) {
       await import('@/lib/glofox')
     const creds = await glofoxCredentialsForLocation(db, locationId)
     if (!creds || missingGlofoxCredentialsForLocation(creds).length) {
-      return noBookingSystemAnswer(creds)
+      return noBookingSystemAnswer(creds, await bookingSourceState(db, locationId))
     }
     const days = Math.min(7, Math.max(1, Number(input?.days) || 7))
     const start = Math.floor(Date.now() / 1000)
@@ -844,7 +861,7 @@ export async function executeBookingTool(toolName, input, ctx) {
     }
 
     if (!credsUsable) {
-      return noBookingSystemAnswer(creds)
+      return noBookingSystemAnswer(creds, await bookingSourceState(db, locationId))
     }
     // Intent BEFORE the side effect (see logBookingRequest).
     const auditId = await logBookingRequest(db, ctx, {
@@ -952,7 +969,7 @@ export async function executeBookingTool(toolName, input, ctx) {
 
     const creds = await glofoxCredentialsForLocation(db, locationId)
     if (!creds || missingGlofoxCredentialsForLocation(creds).length) {
-      return noBookingSystemAnswer(creds)
+      return noBookingSystemAnswer(creds, await bookingSourceState(db, locationId))
     }
     // PERSON-ACCT.7 — the shared fan-out (windowDays:0 → upcoming only;
     // allSettled, so one dead account never loses the others' rows). book_class
@@ -1127,7 +1144,7 @@ export async function executeBookingTool(toolName, input, ctx) {
     }
 
     if (!credsUsable) {
-      return noBookingSystemAnswer(creds)
+      return noBookingSystemAnswer(creds, await bookingSourceState(db, locationId))
     }
 
     const details = { ...baseDetails, ...ownerDetails }

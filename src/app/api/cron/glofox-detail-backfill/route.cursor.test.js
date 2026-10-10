@@ -12,7 +12,7 @@ const h = vi.hoisted(() => ({
   candidateChains: [], countChains: [], contactUpdates: [], runInserts: [], runUpdates: [],
 }))
 
-const LOC = { id: 'loc-1', name: 'Studio', settings: { glofox: { branch_id: 'b', api_key: 'k', api_token: 't' } } }
+const LOC = { id: 'loc-1', name: 'Studio', active: true, membership_source: 'glofox', settings: { glofox: { branch_id: 'b', api_key: 'k', api_token: 't' } } }
 const NOW = Date.parse('2026-10-01T09:00:00.000Z')
 const NOW_ISO = new Date(NOW).toISOString()
 const HOUR = 3_600_000
@@ -21,7 +21,7 @@ const CODE = 'Resource not available, empty result cant be processed'
 const STATUSES = ['member', 'credit_member', 'trial', 'classpass_payg', 'no_sale_trial']
 
 function result(st) {
-  if (st.table === 'locations') return { data: [LOC], error: null }
+  if (st.table === 'locations') return { data: st.single ? LOC : [LOC], error: null }
   if (st.table === 'glofox_sync_runs' && st.op === 'insert') { h.runInserts.push(st.payload); return { data: { id: 'run-1' }, error: null } }
   if (st.table === 'glofox_sync_runs' && st.op === 'update') { h.runUpdates.push(st.payload); return { data: null, error: null } }
   if (st.table === 'contacts' && st.op === 'update') {
@@ -46,6 +46,7 @@ function builder(table) {
   b.eq = (col, val) => { st.chain.push(['eq', col, val]); if (col === 'id') st.eqId = val; return b }
   b.range = (from, to) => { st.chain.push(['range', from, to]); st.range = [from, to]; return b }
   b.select = (cols, opts) => { st.chain.push(['select', cols]); if (opts?.head) st.head = true; return b }
+  b.maybeSingle = () => { st.single = true; return b }
   b.insert = (p) => { st.op = 'insert'; st.payload = p; return b }
   b.update = (p) => { st.op = 'update'; st.payload = p; return b }
   b.then = (resolve, reject) => Promise.resolve().then(() => result(st)).then(resolve, reject)
@@ -156,6 +157,7 @@ describe('GET /api/cron/glofox-detail-backfill — DETAILBACKFILL.1 cursor', () 
     // "remaining" counts what is still due, by the same cursor predicate
     expect(ors(h.countChains[0])).toEqual([`glofox_detail_due_at.is.null,glofox_detail_due_at.lte.${NOW_ISO}`])
     expect(stampHeartbeat).toHaveBeenCalledWith('glofox-detail-backfill', {
+      skipped_unconfigured: 0, skipped_unknown: 0, // W1.M3b — seam discovery skips
       candidates_seen: 3, remaining_due: 42, member_refused: 1, fetch_failed: 1, error: 0, stamp_failed: 0,
       credits_unread: 0, glofox_http: expect.any(Object),
     })

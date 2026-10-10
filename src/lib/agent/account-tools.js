@@ -598,6 +598,13 @@ async function getMyPaymentReminder(db, { verifiedId, locationId }) {
     const memberId = owner?.glofox_member_id
     if (!memberId) return result
 
+    // W1.M3b — the live overdue check belongs to the studio's membership
+    // source: a studio with none (or a provider without invoices) answers
+    // 'unknown' without a credentials read. Same lazy-import reasoning as above.
+    const { resolveMembershipSource } = await import('@/lib/membership/source')
+    const provider = await resolveMembershipSource(db, locationId || owner?.location_id)
+    if (!provider.capabilities.invoices) return result
+
     const creds = await glofoxCredentialsForLocation(db, locationId || owner?.location_id)
     if (!creds?.branchId || !creds?.apiKey || !creds?.apiToken) return result
 

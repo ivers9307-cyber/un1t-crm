@@ -27,6 +27,7 @@ import { MANAGER_ROLES } from '@/lib/schemas'
 import { isWhatsAppStaffAuthored } from '@/lib/whatsapp-staff-sources'
 import { buildCachedSystem } from './prompt'
 import { getLocationBranding } from '@/lib/location-branding'
+import { resolveMembershipSource } from '@/lib/membership/source'
 import {
   shouldAgentReply,
   buildReplyTurnMessages,
@@ -473,6 +474,9 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
   // the half-configured state is greppable when an operator is surprised by it.
   warnLiveDespiteTestMode(locationId, settings)
   const branding = await getLocationBranding(db, locationId)
+  // W1.M3b — the base prompt names the studio's membership source (its app
+  // and payment page); a studio with none gets no app rules.
+  const membershipSource = await resolveMembershipSource(db, locationId)
 
   // Conversation state: kill switch + linked contact + verification.
   const nameCol = adapter.nameColumn
@@ -778,6 +782,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       locationName: loc?.name || null,
       agentName: settings?.agent_name || null,
       membershipUrl: settings?.membership_signup_url || null,
+      membershipSource: { key: membershipSource.key, label: membershipSource.label },
       tone: settings?.tone || null,
       extraRules: settings?.extra_rules || null,
       knowledge: knowledge || [],

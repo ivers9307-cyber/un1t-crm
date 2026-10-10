@@ -15,6 +15,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { glofoxCredentialsForLocation } from '@/lib/glofox'
+import { locationsWithSource } from '@/lib/membership/locations-for-source'
 import { syncOccurrencesForLocation } from '@/lib/class-occurrences'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { logWarn } from '@/lib/log'
@@ -30,18 +31,13 @@ export async function GET(request) {
   }
 
   const db = createServerClient()
-  const { data: locations, error } = await db
-    .from('locations')
-    .select('id, name, settings')
-    .filter('settings', 'cs', JSON.stringify({ glofox: {} }))
+  // W1.M3b — discovery through the membership seam (active locations whose
+  // membership_source is 'glofox' and whose provider is configured), never
+  // the settings slice. A failed seam read is a 500 with no heartbeat.
+  const { eligible: connected, skipped, error } = await locationsWithSource(db, 'glofox', { module: 'cron-sync-class-occurrences' })
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
 
-  const connected = (locations || []).filter((l) => {
-    const g = l.settings?.glofox || {}
-    return g.branch_id && g.api_key && g.api_token
-  })
-
-  const stats = { locations: 0, upserted: 0, errors: 0, trainer_api_calls: 0, reconcile_errors: 0 }
+  const stats = { locations: 0, upserted: 0, errors: 0, trainer_api_calls: 0, reconcile_errors: 0, skipped: skipped.length }
   for (const loc of connected) {
     stats.locations++
     const creds = await glofoxCredentialsForLocation(db, loc.id)

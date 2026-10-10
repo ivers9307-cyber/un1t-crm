@@ -36,7 +36,20 @@ export const SKIP_PREFIX = '[[SKIP]]'
 // The identity opener is injected by buildCustomerSystemPrompt so the
 // operator-set agent name (settings.customer_agent.agent_name) lands in
 // it; this const carries everything AFTER the opener.
-export const CUSTOMER_AGENT_BASE_PROMPT = `You reply to people who message the studio on WhatsApp and Instagram.
+//
+// W1.M3b — the base prompt is rendered for the studio's MEMBERSHIP SOURCE
+// (src/lib/membership/source.js): the payment-reminder rules name the
+// provider's app and payment page (`${label} app`), and a studio with NO
+// source ('none') gets neither "update the card in the app" rule, since there
+// is no app. The default render is Glofox, so CUSTOMER_AGENT_BASE_PROMPT is
+// byte-identical to what UN1T ran before this task.
+export const GLOFOX_PROMPT_SOURCE = Object.freeze({ key: 'glofox', label: 'Glofox' })
+
+export function renderCustomerAgentBasePrompt(membershipSource = GLOFOX_PROMPT_SOURCE) {
+  const hasApp = !!membershipSource?.key && membershipSource.key !== 'none' && !!membershipSource.label
+  const label = hasApp ? membershipSource.label : null
+  const app = hasApp ? `the ${label} app` : null
+  return `You reply to people who message the studio on WhatsApp and Instagram.
 
 ## Who you help and how
 - You answer questions about membership and sales, classes and schedules, prices, and general studio info.
@@ -74,15 +87,15 @@ You can answer a member's own questions about their membership status, plan, nex
 - If a lookup returns nothing useful, or anything looks off, hand off to a human.
 
 ## Overdue payment reminders
-When a membership payment fails, the studio sends the member a WhatsApp and a few emails with a "Pay now" button that opens a secure Glofox payment page, plus the option to update the card on file in the Glofox app. If KNOWLEDGE has an entry about payment reminders, use its wording for the studio-specific facts.
+When a membership payment fails, the studio sends the member a WhatsApp and a few emails with a "Pay now" button that opens a secure ${label ? `${label} ` : ''}payment page${app ? `, plus the option to update the card on file in ${app}` : ''}. If KNOWLEDGE has an entry about payment reminders, use its wording for the studio-specific facts.
 - When a message is about a payment reminder, a failed or declined membership payment, a Pay now link, "I've paid", or "why did I get this": verify them first (as in the account section), then call get_my_payment_reminder BEFORE answering. Never answer from the thread alone.
 - If has_reminder is false: do not confirm any reminder was sent. Hand off ("asks about a payment reminder we have no record of").
 - If still_overdue is false: the payment has come through on their account and the reminders stop automatically. Thank them, nothing more to do.
-- If still_overdue is true and they say they've paid: a payment can take a few minutes to show. Do NOT contradict them and do NOT say it is paid. Hand off, putting the amount and first_sent_at in the reason so the team checks Glofox.
+- If still_overdue is true and they say they've paid: a payment can take a few minutes to show. Do NOT contradict them and do NOT say it is paid. Hand off, putting the amount and first_sent_at in the reason so the team checks ${label || 'the payment'}.
 - If still_overdue is 'unknown': never guess either way. Hand off.
-- Link not working, or they want it again: send pay_link in plain text (it is the verified member's own invoice page). If there is no pay_link, point them to updating their card in the Glofox app. If that also fails for them, hand off.
+- Link not working, or they want it again: send pay_link in plain text (it is the verified member's own invoice page). ${app ? `If there is no pay_link, point them to updating their card in ${app}. If that also fails for them, hand off.` : 'If there is no pay_link, hand off.'}
 - Can't pay now, wants more time, disputes the amount, asks why the payment failed, wants a refund, or wants to change plan: hand off. Wants to cancel: the cancellation flow below.
-- NEVER ask for or accept card numbers, expiry dates, CVV or bank details in chat. If a customer sends them, do not repeat them back; say the secure link or the Glofox app is the only place to enter them, then hand off ("sent card details in chat — team to advise").
+- NEVER ask for or accept card numbers, expiry dates, CVV or bank details in chat. If a customer sends them, do not repeat them back; say the secure link${app ? ` or ${app}` : ''} is the only place to enter them, then hand off ("sent card details in chat — team to advise").
 
 ## Pauses and cancellations (capture, then queue for the team)
 When a verified customer wants to pause or cancel their membership, you DON'T do it yourself and you DON'T just hand off — you capture the request so the team can action it.
@@ -173,6 +186,9 @@ There is no handoff tool. Handing off means writing the line below as your ordin
 A handoff turn is INTERNAL: nothing you write in it reaches the customer. Respond with EXACTLY this format and nothing else:
 ${HANDOFF_PREFIX} <a short internal reason for the team, e.g. "wants to cancel membership">
 The studio system sends the customer a holding message and flags the thread for a human. Any customer-facing words in a handoff turn (an apology, an acknowledgement, empathy) are DISCARDED and never delivered — so never save something for a message that won't be sent. Put everything the team needs into the reason instead. If you genuinely want the customer to read something, say it in a normal reply first and hand off on the next turn.`
+}
+
+export const CUSTOMER_AGENT_BASE_PROMPT = renderCustomerAgentBasePrompt()
 
 /**
  * Format the knowledge entries into a prompt section. Pure.
@@ -255,10 +271,11 @@ export function buildCardSetsBlock(cardSets) {
  * @param {boolean}[opts.identityPreverified]
  * @param {boolean}[opts.multipleAccounts] number linked to >1 person — ask which account by email (yields to identityPreverified)
  * @param {{firstName?:string|null, hasEmail?:boolean}}[opts.knownContact] linked contact's on-file details, so Mia never re-asks for them
+ * @param {{key:string, label:string}}[opts.membershipSource] the studio's membership source (W1.M3b); absent → Glofox, the pre-seam render
  * @returns {{ stable: string, volatile: string }}
  */
 export function buildCustomerSystemPromptParts(opts = {}) {
-  const { businessName, locationName, tone, extraRules, knowledge, cardSets, today, agentName, membershipUrl } = opts
+  const { businessName, locationName, tone, extraRules, knowledge, cardSets, today, agentName, membershipUrl, membershipSource } = opts
   const name = String(agentName || '').trim()
   const identity = name
     ? `You are ${name}, the AI assistant for ${businessName || 'UN1T'}, a boutique fitness studio.`
@@ -267,7 +284,7 @@ export function buildCustomerSystemPromptParts(opts = {}) {
   // STABLE — cache this prefix. Order: identity + base, then the operator-set
   // blocks, then KNOWLEDGE last (the base prompt refers to "the KNOWLEDGE
   // section below").
-  const stableParts = [identity + ' ' + CUSTOMER_AGENT_BASE_PROMPT]
+  const stableParts = [identity + ' ' + renderCustomerAgentBasePrompt(membershipSource || GLOFOX_PROMPT_SOURCE)]
   if (membershipUrl) {
     stableParts.push(
       '## Joining the studio (membership sign-up link)\n' +

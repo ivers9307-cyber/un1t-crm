@@ -22,6 +22,7 @@
 // structured reason — silence must always be explainable (#478).
 
 import { buildCachedSystem, SKIP_PREFIX } from './prompt'
+import { resolveMembershipSource } from '@/lib/membership/source'
 import { formatHistoryForClaude, parseAgentResponse, phoneMatchesAllowlist, isSkipResponse, isWithinQuietHours } from './core'
 import { getLocationBranding } from '@/lib/location-branding'
 import { anthropicMessages } from '@/lib/anthropic'
@@ -348,6 +349,9 @@ async function loadAgentKnowledge(db, locationId) {
   return data || []
 }
 
+// W1.M3b — what the prompt needs of a membership provider.
+const promptSourceFor = (provider) => ({ key: provider.key, label: provider.label })
+
 // One short proactive message in Mia's voice, given the thread + an
 // instruction. Returns the text or null (callers log the reason).
 //
@@ -360,7 +364,7 @@ async function loadAgentKnowledge(db, locationId) {
 // Exported for tests (repo convention) — compose-effort.test.js asserts the
 // request body, which is how MIA-HYGIENE.2 caught this path running at the
 // API-default effort.
-export async function composeAgentText({ location, settings, historyRows, instruction, companyName, knowledge }) {
+export async function composeAgentText({ location, settings, historyRows, instruction, companyName, knowledge, membershipSource = null }) {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) return { error: 'no_api_key' }
   // CACHE.2 — cache the stable prefix (no tools on this path, so it caches the
@@ -370,6 +374,7 @@ export async function composeAgentText({ location, settings, historyRows, instru
     locationName: location.name,
     agentName: settings?.agent_name || null,
     membershipUrl: settings?.membership_signup_url || null,
+    membershipSource, // W1.M3b — null renders the Glofox default
     tone: settings?.tone || null,
     extraRules: settings?.extra_rules || null,
     knowledge: knowledge || [],
@@ -407,6 +412,7 @@ async function sendNudge(db, conv, location, settings, facts) {
     location, settings, historyRows: facts.rows, instruction: NUDGE_INSTRUCTION,
     companyName: branding.companyName,
     knowledge: await loadAgentKnowledge(db, location.id),
+    membershipSource: promptSourceFor(await resolveMembershipSource(db, location.id)),
   })
   if (composed.error) return skipLog(conv.id, `nudge_${composed.error}`)
   const text = composed.text
@@ -813,6 +819,7 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
 
     const branding = await getLocationBranding(db, location.id)
     const knowledge = await loadAgentKnowledge(db, location.id)
+    const membershipSource = promptSourceFor(await resolveMembershipSource(db, location.id))
 
     for (const contact of contacts || []) {
       try {
@@ -888,7 +895,7 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
           const composed = await composeAgentText({
             location, settings, historyRows: facts.rows,
             instruction: checkinInstruction(className),
-            companyName: branding.companyName, knowledge,
+            companyName: branding.companyName, knowledge, membershipSource,
           })
           if (composed.error) {
             console.warn('[radar-agent] checkin-skip', JSON.stringify({ contactId: contact.id, reason: composed.error }))
