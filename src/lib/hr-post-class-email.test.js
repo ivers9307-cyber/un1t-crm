@@ -7,6 +7,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 vi.mock('@/lib/postmark', () => ({
   sendTransactionalEmail: vi.fn(),
 }))
+// W1.S4 — loadContextForSession resolves the studio's short brand for the
+// highlight's product name; the db mocks here know no company_settings.
+vi.mock('@/lib/location-branding', () => ({
+  getLocationBranding: vi.fn(() => Promise.resolve({ companyName: 'UN1T Dublin', shortName: 'UN1T', companyNameConfigured: true, logoUrl: null, faviconUrl: null })),
+}))
 
 import { composeEmail, sendPostClassEmail, loadContextForSession } from './hr-post-class-email.js'
 import { sendTransactionalEmail } from '@/lib/postmark'
