@@ -87,3 +87,32 @@ export function canManageMembershipSource(user, locationId) {
   if (user.profileRole === 'master') return true
   return user.rolesByLocation?.[locationId] === 'owner'
 }
+
+/**
+ * W1.M3c — the membership state as a phone route payload carries it
+ * (`membership_source` on /api/dashboard/business and
+ * /api/dashboard/studio-contacts). Server-judged: whether a source is
+ * configured is the provider's answer, never the phone's guess from a
+ * settings slice. Carries only what the phone draws: the state, the
+ * provider's label, which credentials are missing (names, never values),
+ * whether the source provides membership data, and whether THIS user may
+ * change the setting (decides "Choose one in…" vs "Ask an owner…"). A
+ * missing or malformed state is 'unknown', never 'none'; the read error's
+ * detail stays in the server log.
+ *
+ * @param {{ source?: string|null, state?: string, missing?: string[], label?: string, capabilities?: object }|null|undefined} s
+ *   membershipStateForPage()'s answer
+ * @param {{ canManage?: boolean }} [opts]
+ */
+export function membershipStatePayload(s, { canManage = false } = {}) {
+  const state = s && typeof s.state === 'string' ? s.state : 'unknown'
+  const out = {
+    source: s?.source ?? null,
+    state,
+    label: s?.label || null,
+    provides_memberships: s?.capabilities?.memberships !== false,
+    can_manage: Boolean(canManage),
+  }
+  if (Array.isArray(s?.missing) && s.missing.length) out.missing = s.missing.map(String)
+  return out
+}

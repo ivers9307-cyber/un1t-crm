@@ -13,7 +13,7 @@ vi.mock('./source', async (importOriginal) => {
 
 import { membershipSourceState } from './source'
 import {
-  membershipStateForPage, resetMembershipStateCache, membershipSettingsHref, canManageMembershipSource,
+  membershipStateForPage, resetMembershipStateCache, membershipSettingsHref, canManageMembershipSource, membershipStatePayload,
   MEMBERSHIP_STATE_TTL_MS,
 } from './state-for-page'
 import { logError } from '@/lib/log'
@@ -117,5 +117,37 @@ describe('membershipSettingsHref / canManageMembershipSource', () => {
     expect(canManageMembershipSource({ profileRole: 'staff', rolesByLocation: { [LOC]: 'manager' } }, LOC)).toBe(false)
     expect(canManageMembershipSource(null, LOC)).toBe(false)
     expect(canManageMembershipSource({ profileRole: 'master' }, null)).toBe(false)
+  })
+})
+
+describe('membershipStatePayload (W1.M3c: what the phone routes carry)', () => {
+  const GLOFOX_CAPS = { memberships: true, bookings: true, credits: true, invoices: true, schedule: true }
+
+  it('configured glofox: state, label, provides memberships, the caller\'s manage bit; no missing key', () => {
+    expect(membershipStatePayload({ source: 'glofox', state: 'configured', label: 'Glofox', capabilities: GLOFOX_CAPS }, { canManage: true }))
+      .toEqual({ source: 'glofox', state: 'configured', label: 'Glofox', provides_memberships: true, can_manage: true })
+  })
+
+  it('none: the none provider provides no memberships; canManage defaults to false', () => {
+    expect(membershipStatePayload({ source: 'none', state: 'none', label: 'No membership source', capabilities: { memberships: false } }))
+      .toEqual({ source: 'none', state: 'none', label: 'No membership source', provides_memberships: false, can_manage: false })
+  })
+
+  it('unconfigured carries the missing credential NAMES', () => {
+    const p = membershipStatePayload({ source: 'glofox', state: 'unconfigured', missing: ['Branch ID', 'API Key'], label: 'Glofox', capabilities: GLOFOX_CAPS })
+    expect(p.state).toBe('unconfigured')
+    expect(p.missing).toEqual(['Branch ID', 'API Key'])
+  })
+
+  it('unknown keeps no read-error detail (it stays in the server log)', () => {
+    const p = membershipStatePayload({ source: null, state: 'unknown', readError: 'MEMBERSHIP_STATE_THREW', label: 'No membership source', capabilities: {} })
+    expect(p).toEqual({ source: null, state: 'unknown', label: 'No membership source', provides_memberships: true, can_manage: false })
+    expect(p).not.toHaveProperty('readError')
+  })
+
+  it('a missing or malformed state is unknown, never none', () => {
+    expect(membershipStatePayload(null).state).toBe('unknown')
+    expect(membershipStatePayload(undefined).state).toBe('unknown')
+    expect(membershipStatePayload({ source: 'none' }).state).toBe('unknown')
   })
 })
