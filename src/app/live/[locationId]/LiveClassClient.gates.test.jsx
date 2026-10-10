@@ -56,6 +56,31 @@ describe('LiveClassClient — mutation controls', () => {
   })
 })
 
+// LIVE-TVBTN.1 — the "TV display" link opens /tv/live/<token>, the
+// token-keyed board (W0.9c removed /tv/<locationId>). It is a staff PREVIEW:
+// no ?kiosk=1 and no ?device=, so it never stamps a kiosk render heartbeat.
+// Without a token there is no link at all (never a dead one).
+describe('LiveClassClient — TV display link', () => {
+  it('with tvToken: a new-tab link to /tv/live/<token>, with no kiosk or device params', async () => {
+    render(<LiveClassClient locationId="loc1" locationName="Studio" tvToken="tok-abc" />)
+    await screen.findByText('Aoife')
+    const link = screen.getByRole('link', { name: /TV display/ })
+    expect(link.getAttribute('href')).toBe('/tv/live/tok-abc')
+    expect(link.getAttribute('href')).not.toMatch(/kiosk|device/)
+    expect(link.getAttribute('target')).toBe('_blank')
+  })
+  it('without tvToken (the default): no link', async () => {
+    render(<LiveClassClient locationId="loc1" locationName="Studio" />)
+    await screen.findByText('Aoife')
+    expect(screen.queryByRole('link', { name: /TV display/ })).toBeNull()
+  })
+  it('with tvToken null: no link', async () => {
+    render(<LiveClassClient locationId="loc1" locationName="Studio" tvToken={null} />)
+    await screen.findByText('Aoife')
+    expect(screen.queryByRole('link', { name: /TV display/ })).toBeNull()
+  })
+})
+
 describe('DetectedTab — Claim', () => {
   it('hidden without canClaim; the prop defaults to closed', async () => {
     render(<DetectedTab locationId="loc1" />)

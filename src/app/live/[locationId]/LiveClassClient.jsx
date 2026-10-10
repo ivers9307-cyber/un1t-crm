@@ -7,7 +7,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { Heart, RefreshCw, Plug, Square, Users } from 'lucide-react'
+import { Heart, RefreshCw, Plug, Square, Users, Tv } from 'lucide-react'
 import { zoneForBpm } from '@/lib/heart-rate'
 import { nextPollDelay, ACTIVE_POLL_MS } from '@/lib/live-poll'
 import DetectedTab from './DetectedTab'
@@ -18,7 +18,10 @@ const STALE_MS = 2 * 60 * 1000  // strap silent for 2min → "stale"
 // GATES-2 — `canMutate` (from the page: a LIVE_MUTATION_ROLES role at this
 // location) gates every control whose route would otherwise 403: End all,
 // End, Pair, HR test mode and the Detected tab's Claim. Defaults closed.
-export default function LiveClassClient({ locationId, locationName, canMutate = false }) {
+//
+// LIVE-TVBTN.1 — `tvToken` (from the page: this location's oldest active
+// tv_displays token, or null) backs the "TV display" link. Null → no link.
+export default function LiveClassClient({ locationId, locationName, canMutate = false, tvToken = null }) {
   const [data, setData] = useState({ sessions: [], available_straps: [], roster: [], occurrence: null })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -121,9 +124,22 @@ export default function LiveClassClient({ locationId, locationName, canMutate = 
         </div>
         <div className="flex items-center gap-2">
           <RefreshIndicator lastTickRef={lastTickRef} />
-          {/* W0.9c — the "TV display" link that opened /tv/<locationId> is
-              gone with that route: the studio board is /tv/live/<token>, and
-              the token lives on tv_displays, which this page does not load. */}
+          {/* Open the in-class TV display (the token-keyed board this location
+              casts to the studio screen) in a new tab. W0.9c removed the
+              location-keyed /tv/<locationId>; LIVE-TVBTN.1 restored the link
+              via the page-loaded tv_displays token. Deliberately NO ?kiosk=1
+              and NO ?device= — a staff preview must not stamp a kiosk render
+              heartbeat (src/app/api/public/tv-live/[token]/route.js). */}
+          {tvToken && (
+            <Link
+              href={`/tv/live/${encodeURIComponent(tvToken)}`}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1.5 rounded-md border border-un1t-border bg-white px-3 py-1.5 text-sm font-medium hover:bg-un1t-surface"
+            >
+              <Tv size={14} /> TV display
+            </Link>
+          )}
           {canMutate && data.sessions.length > 0 && (
             <button
               type="button"

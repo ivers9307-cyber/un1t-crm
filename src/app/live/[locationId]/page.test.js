@@ -39,8 +39,8 @@ vi.mock('next/navigation', () => ({
 }))
 
 vi.mock('./LiveClassClient', () => ({
-  default: ({ locationId, locationName }) => (
-    <div data-testid="live-class-client">{locationName} / {locationId}</div>
+  default: ({ locationId, locationName, tvToken }) => (
+    <div data-testid="live-class-client" data-tv-token={tvToken || undefined}>{locationName} / {locationId}</div>
   ),
 }))
 
@@ -48,19 +48,37 @@ import LiveClassPage from './page.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 
-function mockDb({ location = null } = {}) {
-  return {
-    from: vi.fn(() => ({
-      select: vi.fn(() => ({
-        eq: vi.fn(() => ({
-          single: vi.fn(async () => ({
-            data: location,
-            error: location ? null : { message: 'not found' },
+/**
+ * Two tables: `locations` (the name lookup, `.single()`) and, since
+ * LIVE-TVBTN.1, `tv_displays` (the TV-link token, a filtered list). The
+ * tv_displays chain records every `.eq()` so a test can assert the query was
+ * scoped to the location the page admitted. `displays` is what that list
+ * resolves to; `displaysError` makes it fail.
+ */
+function mockDb({ location = null, displays = [], displaysError = null } = {}) {
+  const displayEqs = []
+  const displaysChain = {
+    eq: vi.fn((col, val) => { displayEqs.push([col, val]); return displaysChain }),
+    order: vi.fn(() => displaysChain),
+    limit: vi.fn(() => Promise.resolve({ data: displaysError ? null : displays, error: displaysError })),
+  }
+  const db = {
+    displayEqs,
+    from: vi.fn((table) => {
+      if (table === 'tv_displays') return { select: vi.fn(() => displaysChain) }
+      return {
+        select: vi.fn(() => ({
+          eq: vi.fn(() => ({
+            single: vi.fn(async () => ({
+              data: location,
+              error: location ? null : { message: 'not found' },
+            })),
           })),
         })),
-      })),
-    })),
+      }
+    }),
   }
+  return db
 }
 
 /**
@@ -110,9 +128,12 @@ describe('/live/[locationId] page', () => {
 
   it('404s for a foreign location even when the user holds studio_management', async () => {
     getCurrentUser.mockResolvedValue(user({ locations: [{ id: 'loc1' }], perms: { studio_management: true } }))
-    const db = mockDb({ location: { id: 'loc9', name: 'Foreign' } })
+    const db = mockDb({ location: { id: 'loc9', name: 'Foreign' }, displays: [{ token: 'tok-foreign' }] })
     createServerClient.mockReturnValue(db)
     await expect(LiveClassPage(props('loc9'))).rejects.toThrow('NEXT_NOT_FOUND')
+    // LIVE-TVBTN.1 — the token query sits BEHIND the gate: a caller outside
+    // the location never even reaches the tv_displays read.
+    expect(db.from).not.toHaveBeenCalledWith('tv_displays')
   })
 
   it('renders the live client for an assigned location when studio_management is held', async () => {
@@ -173,6 +194,46 @@ describe('/live/[locationId] page', () => {
     createServerClient.mockReturnValue(mockDb({ location: { id: 'loc2', name: 'Stillorgan' } }))
     const html = renderToStaticMarkup(await LiveClassPage(props('loc2')))
     expect(html).toContain('Stillorgan')
+  })
+})
+
+// LIVE-TVBTN.1 — the "TV display" link's token. W0.9c removed the
+// location-keyed /tv/<locationId> board (and with it the link); the board is
+// /tv/live/<token> now, so the page loads the location's oldest ACTIVE
+// tv_displays row and hands its token to the client. No active display →
+// null → no link. The query is scoped to the admitted location.
+describe('/live/[locationId] — tvToken', () => {
+  const permitted = () => user({ locations: [{ id: 'loc1' }], perms: { studio_management: true } })
+
+  it("passes the location's active display token, queried by location_id + active", async () => {
+    getCurrentUser.mockResolvedValue(permitted())
+    const db = mockDb({ location: { id: 'loc1', name: 'Stillorgan' }, displays: [{ token: 'tok-stillorgan-tv1' }] })
+    createServerClient.mockReturnValue(db)
+    const el = await LiveClassPage(props('loc1'))
+    expect(el.props.tvToken).toBe('tok-stillorgan-tv1')
+    expect(db.displayEqs).toEqual([['location_id', 'loc1'], ['active', true]])
+    expect(renderToStaticMarkup(el)).toContain('data-tv-token="tok-stillorgan-tv1"')
+  })
+
+  it('passes null when the location has no active display (no dead link)', async () => {
+    getCurrentUser.mockResolvedValue(permitted())
+    createServerClient.mockReturnValue(mockDb({ location: { id: 'loc1', name: 'Stillorgan' }, displays: [] }))
+    const el = await LiveClassPage(props('loc1'))
+    expect(el.props.tvToken).toBeNull()
+    expect(renderToStaticMarkup(el)).not.toContain('data-tv-token')
+  })
+
+  it('still renders the board (token null) when the tv_displays read fails', async () => {
+    getCurrentUser.mockResolvedValue(permitted())
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    createServerClient.mockReturnValue(
+      mockDb({ location: { id: 'loc1', name: 'Stillorgan' }, displaysError: { message: 'boom' } }),
+    )
+    const el = await LiveClassPage(props('loc1'))
+    expect(el.props.tvToken).toBeNull()
+    expect(renderToStaticMarkup(el)).toContain('Stillorgan')
+    expect(err).toHaveBeenCalled()
+    err.mockRestore()
   })
 })
 
