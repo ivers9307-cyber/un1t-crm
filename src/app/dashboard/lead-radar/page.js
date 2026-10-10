@@ -13,6 +13,9 @@
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
+import { createServerClient } from '@/lib/supabase'
+import { membershipStateForPage, membershipSettingsHref, canManageMembershipSource } from '@/lib/membership/state-for-page'
+import MembershipSourceGate from '@/components/MembershipSourceGate'
 import LeadRadar from '@/components/LeadRadar'
 
 export const dynamic = 'force-dynamic'
@@ -22,6 +25,12 @@ export default async function DashboardLeadRadarPage() {
   if (!user) redirect('/login?redirect=/dashboard/lead-radar')
   if (!hasPermission(user, 'lead_radar')) redirect('/dashboard')
 
+  // W1.M3a — the radar keys on glofox_membership_status (trial / lead /
+  // ClassPass) and the synced bookings, so without a membership source it
+  // is empty by construction. Say so instead of drawing an empty radar.
+  const locationId = user.activeLocation?.id || null
+  const membership = await membershipStateForPage(createServerClient(), locationId)
+
   return (
     <>
       <p className="text-sm text-un1t-subtle mb-6">
@@ -30,7 +39,14 @@ export default async function DashboardLeadRadarPage() {
         of drop-ins (who rarely convert to a membership); Cleanup clears
         the dormant records out of your pipeline and campaign audiences.
       </p>
-      <LeadRadar />
+      <MembershipSourceGate
+        state={membership}
+        capability="memberships"
+        settingsHref={membershipSettingsHref(locationId)}
+        canManage={canManageMembershipSource(user, locationId)}
+      >
+        <LeadRadar />
+      </MembershipSourceGate>
     </>
   )
 }

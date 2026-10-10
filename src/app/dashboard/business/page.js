@@ -21,6 +21,8 @@ import {
 } from '@/components/dashboard/BusinessBlocks'
 import { LabourBlock } from '@/components/dashboard/LabourBlock'
 import { canSeeLabour, labourStudiosFor } from '@/lib/labour-month-model'
+import { membershipStateForPage, membershipSettingsHref, canManageMembershipSource } from '@/lib/membership/state-for-page'
+import MembershipSourceGate from '@/components/MembershipSourceGate'
 
 export const dynamic = 'force-dynamic'
 
@@ -34,10 +36,34 @@ async function KpiBriefingBlock({ user, locationId }) {
   // src/lib/dashboard/business-kpis.js so /api/dashboard/business (the
   // mobile Business dashboard's data route) computes the SAME numbers.
   // Returns null on failure (its internal try/catch), per the header.
-  const vm = await buildBusinessKpis(db, user, locationId)
+  // W1.M3a — every tile in the row is Glofox-derived (Revenue MTD and
+  // In arrears read glofox_invoices, Members the membership counts, Churn
+  // risk the radar), so at a studio with no membership source the row is
+  // four honest-looking zeros. The briefing line stays (pending approvals
+  // are source-independent); the row renders only behind the gate. The
+  // state is read alongside the numbers (cached 60 s per location).
+  const [vm, membership] = await Promise.all([
+    buildBusinessKpis(db, user, locationId),
+    membershipStateForPage(db, locationId),
+  ])
   if (!vm) return <BlockError label="Headline numbers" />
 
   const { revenue, arrearsData, memberCount, churnCount, churnDelta, briefing } = vm
+  if (membership.state !== 'configured') {
+    return (
+      <>
+        <BriefingLine text={briefing} />
+        <MembershipSourceGate
+          state={membership}
+          capability="memberships"
+          settingsHref={membershipSettingsHref(locationId)}
+          canManage={canManageMembershipSource(user, locationId)}
+          padding="md"
+          className="bg-un1t-surface border border-un1t-border rounded-2xl mb-3"
+        />
+      </>
+    )
+  }
   return (
     <>
       <BriefingLine text={briefing} />
@@ -89,8 +115,25 @@ async function FunnelAdsBlock({ locationId }) {
   )
 }
 
-async function MembershipBlock({ locationId }) {
+async function MembershipBlock({ user, locationId }) {
   const db = createServerClient()
+  // W1.M3a — the trend is a count of MEMBERSHIPS, so without a membership
+  // source it is a flat zero. Gated like the KPI row above; the funnel,
+  // today and rail blocks are source-independent and stay ungated. The
+  // trend queries do not run for a studio that has nothing to count.
+  const membership = await membershipStateForPage(db, locationId)
+  if (membership.state !== 'configured') {
+    return (
+      <MembershipSourceGate
+        state={membership}
+        capability="memberships"
+        settingsHref={membershipSettingsHref(locationId)}
+        canManage={canManageMembershipSource(user, locationId)}
+        padding="md"
+        className="bg-un1t-surface border border-un1t-border rounded-lg"
+      />
+    )
+  }
   let data = null
   try {
     const [live, flows] = await Promise.all([
@@ -156,7 +199,7 @@ export default async function BusinessDashboardPage() {
             <FunnelAdsBlock locationId={locationId} />
           </Suspense>
           <Suspense fallback={<BlockSkeleton lines={5} />}>
-            <MembershipBlock locationId={locationId} />
+            <MembershipBlock user={user} locationId={locationId} />
           </Suspense>
           {showLabour ? (
             <Suspense fallback={<BlockSkeleton lines={5} />}>

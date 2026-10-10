@@ -1370,7 +1370,7 @@ export async function sendBroadcast(broadcastId, { force = false, maxRecipients 
 
     try {
       // Build template components with variable substitution
-      const components = buildTemplateComponents(template, contact, variableMapping, broadcast.header_media_url, { companyName: branding.companyName, locationId: broadcast.location_id })
+      const components = buildTemplateComponents(template, contact, variableMapping, broadcast.header_media_url, { companyName: branding.companyName, locationName: branding.locationName, locationId: broadcast.location_id })
 
       const result = await sendTemplateMessage(
         contact.wa_phone,
@@ -1398,7 +1398,7 @@ export async function sendBroadcast(broadcastId, { force = false, maxRecipients 
         message_type: 'template',
         template_name: template.name,
         template_variables: variableMapping,
-        body: renderTemplateBody(template, contact, variableMapping, { companyName: branding.companyName }),
+        body: renderTemplateBody(template, contact, variableMapping, { companyName: branding.companyName, locationName: branding.locationName }),
         status: 'sent',
         broadcast_id: broadcastId,
         sent_at: new Date().toISOString(),
@@ -1742,7 +1742,7 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
       continue
     }
     try {
-      const components = buildTemplateComponents(template, contact, variableMapping, broadcast.header_media_url, { companyName: branding.companyName, locationId: broadcast.location_id })
+      const components = buildTemplateComponents(template, contact, variableMapping, broadcast.header_media_url, { companyName: branding.companyName, locationName: branding.locationName, locationId: broadcast.location_id })
       const result = await sendTemplateMessage(contact.wa_phone, template.name, template.language, components, { config })
 
       // Promote the claimed row. Upsert (not update): the claim above may have
@@ -1763,7 +1763,7 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
         contact_id: contact.id, location_id: broadcast.location_id,
         wa_message_id: result.messageId, direction: 'outbound', message_type: 'template',
         template_name: template.name, template_variables: variableMapping,
-        body: renderTemplateBody(template, contact, variableMapping, { companyName: branding.companyName }),
+        body: renderTemplateBody(template, contact, variableMapping, { companyName: branding.companyName, locationName: branding.locationName }),
         status: 'sent', broadcast_id: broadcastId, sent_at: new Date().toISOString(),
       })
       if (pauseAgent) await pauseAgentOnThread(db, conversationId)
@@ -1964,7 +1964,13 @@ function resolveContactField(fieldName, contact, opts = {}) {
   if (fieldName === 'name') return contact.name || ''
   if (fieldName === 'email') return contact.email || ''
   if (fieldName === 'phone') return contact.phone || contact.wa_phone || ''
-  if (fieldName === 'location_name') return opts.companyName || 'UN1T'
+  // W1.S3 — `location_name` has always rendered the BRAND on WhatsApp (the
+  // approved templates were authored that way), so it keeps doing so and the
+  // studio's own label is its fallback; `company_name` is the same brand under
+  // the name email uses, so a template mapped on either channel agrees.
+  // Both come from getLocationBranding at the call site; never a literal gym.
+  if (fieldName === 'location_name') return opts.companyName || opts.locationName || ''
+  if (fieldName === 'company_name') return opts.companyName || opts.locationName || ''
   // PAYLINK.6 — reserved names for the overdue-payment reminder, resolved
   // from the RUN (opts.payment, off sequence_enrollments.metadata) and never
   // from the contact, so a contact column of the same name can't leak in.

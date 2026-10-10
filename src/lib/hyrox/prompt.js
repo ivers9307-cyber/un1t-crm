@@ -9,7 +9,7 @@ const NO_EMDASH = 'Never use em-dashes or en-dashes in any member-facing string 
 function styleBlock(charter, houseStyle) {
   const parts = ['WORKOUT DESIGN CHARTER (hard constraints, self-check every session against all three before returning):', charter || DEFAULT_CHARTER]
   if (houseStyle && houseStyle.trim()) {
-    parts.push('UN1T HOUSE STYLE (follow this - how this gym actually runs its classes):', houseStyle.trim())
+    parts.push('HOUSE STYLE (follow this - how this gym actually runs its classes):', houseStyle.trim())
   }
   return parts.join('\n')
 }
@@ -20,7 +20,7 @@ function examplesBlock(styleExamples) {
     .map((e) => String(e?.text || '').slice(0, MAX_EXAMPLE_CHARS))
     .filter((t) => t.trim())
   if (!items.length) return null
-  return ['EXAMPLE SESSIONS in UN1T\'s style - match their structure, format, and coaching voice; do not copy them verbatim:', items.join('\n\n---\n\n')].join('\n\n')
+  return ['EXAMPLE SESSIONS in this gym\'s style - match their structure, format, and coaching voice; do not copy them verbatim:', items.join('\n\n---\n\n')].join('\n\n')
 }
 
 export function buildArcPrompt({ weeks = 12, sessionsPerWeek = 2, dial = 'mixed', charter, houseStyle } = {}) {
@@ -45,7 +45,7 @@ export function buildArcPrompt({ weeks = 12, sessionsPerWeek = 2, dial = 'mixed'
   return { system, user }
 }
 
-export function buildExpansionPrompt({ week, slot = 1, dial = 'mixed', locationLabel = 'UN1T', charter, houseStyle, styleExamples, autoTuneSignal = null, arcPlan, sessionsPerWeek, prevWeekSummary } = {}) {
+export function buildExpansionPrompt({ week, slot = 1, dial = 'mixed', locationLabel = '', charter, houseStyle, styleExamples, autoTuneSignal = null, arcPlan, sessionsPerWeek, prevWeekSummary } = {}) {
   const capLine = `Every session MUST be completable by the class within the ${DEFAULT_CAP_MINUTES}-minute cap.`
   const tuneLine = autoTuneSignal
     ? `Auto-tune signal for this week (adjust difficulty accordingly): ${JSON.stringify(autoTuneSignal)}.`
@@ -83,7 +83,9 @@ export function buildExpansionPrompt({ week, slot = 1, dial = 'mixed', locationL
     ? 'Full block plan in order: ' + arcPlan.map((w) => `week ${w.week_no} (${w.phase}${w.is_benchmark ? ', benchmark' : ''}): ${w.stimulus}`).join('; ') + '.'
     : null
   const user = [
-    `Location label: ${locationLabel}. Dial: ${dial}.`,
+    // W1.S3 — the label is the studio's own name (locations.name, upper-cased
+    // by the callers); with none the board line simply carries the dial.
+    locationLabel ? `Location label: ${locationLabel}. Dial: ${dial}.` : `Dial: ${dial}.`,
     `This session is WEEK ${week?.week_no} of ${weeksTotal} (${week?.phase} phase)${benchmarkTag}. It is session ${slot} of ${sessionsPerWeek ?? 1} this week.`,
     `This week's stimulus: ${week?.stimulus}. Progression target: ${week?.progression}.`,
     planLine,
