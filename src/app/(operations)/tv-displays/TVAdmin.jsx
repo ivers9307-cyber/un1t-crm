@@ -322,7 +322,7 @@ function TVCard({ display, templates, onError, onChange }) {
               <span className="text-un1t-muted">pushed {new Date(content.pushed_at).toLocaleString('en-IE', { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' })}</span>
             </>
           ) : (
-            <span className="text-un1t-muted">Idle — UN1T mark + clock</span>
+            <span className="text-un1t-muted">Idle — studio brand mark + clock</span>
           )}
           <OrientationControl display={display} onError={onError} onChange={onChange} />
         </div>

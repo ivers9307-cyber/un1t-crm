@@ -31,6 +31,7 @@ import { pageSlice } from '@/lib/tv-roll'
 import { repsetDisplay, repsetBody, repsetMono } from '@/fonts/repset'
 import { ZONE_COLORS_DARK } from '@/lib/tv-zone-colors'
 import { withDevice } from '@/lib/tv-data-url'
+import { productName } from '@/lib/brand-name'
 
 const POLL_MS = 45_000
 const ROLL_MS = 2_600
@@ -53,8 +54,10 @@ const DISPLAY = { fontFamily: 'var(--font-repset-display), system-ui, sans-serif
 const BODY = { fontFamily: 'var(--font-repset-body), system-ui, sans-serif' }
 const MONO = { fontFamily: 'var(--font-repset-mono), ui-monospace, monospace' }
 
-function metricLabel(metric) {
-  if (metric === 'points') return 'UN1T Points'
+// W1.S1b — "{Brand} Points" from the studio's short brand (the payload's
+// brand.short_name, org_settings.short_name), never a literal gym.
+function metricLabel(metric, brandShort = '') {
+  if (metric === 'points') return productName(brandShort, 'points')
   if (metric === 'classes') return 'Classes'
   if (metric === 'z4plus_minutes') return 'Zone 4+ minutes'
   return metric
@@ -130,6 +133,14 @@ export default function ChallengeTvClient({ endpoint, device }) {
     return () => clearInterval(t)
   }, [fetchData])
 
+  // W1.S1b — the tab names the studio's brand from the payload (the /tv
+  // layout only floors it by host). A kiosk hides the tab; this keeps the
+  // code honest about whose board it is.
+  const brandName = data?.brand?.name || ''
+  useEffect(() => {
+    if (brandName && typeof document !== 'undefined') document.title = brandName
+  }, [brandName])
+
   // Wall clock — ticks every second so the header time is live.
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1_000)
@@ -147,6 +158,7 @@ export default function ChallengeTvClient({ endpoint, device }) {
   const gymBoard = data?.gymBoard || []
   const firstActive = challenges[0] || null
   const locationName = data?.location?.name || 'Studio'
+  const brandShort = data?.brand?.short_name || ''
 
   const size = portrait ? 12 : 8
 
@@ -161,6 +173,7 @@ export default function ChallengeTvClient({ endpoint, device }) {
       <main className={rootClass} style={rootStyle}>
         <VoltGlow />
         <Header
+          brandShort={brandShort}
           locationName={locationName}
           challengeName={firstActive.name}
           metric={firstActive.metric}
@@ -174,7 +187,7 @@ export default function ChallengeTvClient({ endpoint, device }) {
               className="text-lg uppercase"
               style={{ ...MONO, letterSpacing: '0.28em', color: VOLT }}
             >
-              {metricLabel(firstActive.metric)}
+              {metricLabel(firstActive.metric, brandShort)}
             </p>
             <p
               className="mt-3 text-7xl tabular-nums leading-none"
@@ -236,6 +249,7 @@ export default function ChallengeTvClient({ endpoint, device }) {
     <main className={rootClass} style={rootStyle}>
       <VoltGlow />
       <Header
+        brandShort={brandShort}
         locationName={locationName}
         challengeName={boardLabel}
         metric={boardMetric}
@@ -331,7 +345,7 @@ function VoltGlow() {
   )
 }
 
-function Header({ locationName, challengeName, metric, now, endsOn }) {
+function Header({ locationName, challengeName, metric, now, endsOn, brandShort = '' }) {
   return (
     <header
       className="relative flex items-start justify-between px-12 pb-5 pt-7"
@@ -357,7 +371,7 @@ function Header({ locationName, challengeName, metric, now, endsOn }) {
         </h1>
         <p className="mt-1 text-xl leading-tight" style={{ ...BODY, color: BONE_2 }}>
           {challengeName}
-          {metric ? ` · ${metricLabel(metric)}` : ''}
+          {metric ? ` · ${metricLabel(metric, brandShort)}` : ''}
         </p>
       </div>
       <div className="text-right" style={MONO}>

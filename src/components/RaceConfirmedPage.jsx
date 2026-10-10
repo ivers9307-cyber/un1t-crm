@@ -228,7 +228,7 @@ export default function RaceConfirmedPage({ slug, registrationId, brandName = ''
                 {members.map((m) => (
                   <span key={m.id} className="inline-flex items-center gap-1.5 text-[13px] px-3 py-1.5 rounded-full bg-white/5 border border-white/12">
                     {m.is_member && (
-                      <BadgeCheck size={13} className="text-emerald-400" title="Verified UN1T member" />
+                      <BadgeCheck size={13} className="text-emerald-400" title={brandName ? `Verified ${brandName} member` : 'Verified member'} />
                     )}
                     <span>{m.name}</span>
                     {m.role === 'captain' && (

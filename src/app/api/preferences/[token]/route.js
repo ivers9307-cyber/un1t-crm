@@ -8,6 +8,7 @@ import { propagateOptOut } from '@/lib/consent-propagation'
 import { emailStatusNormaliseForOptIn } from '@/lib/email-reputation'
 import { suppressAtPostmark, unsuppressAtPostmark } from '@/lib/postmark-suppressions'
 import { serverTokenForLocation } from '@/lib/postmark-server-for-location'
+import { resolveOrgChrome } from '@/lib/host-brand'
 import {
   REFUSAL_REASONS,
   guardBeforeTokenLookup,
@@ -117,21 +118,30 @@ export async function GET(request, props) {
   // showing all of them is what makes that legible instead of surprising.
   const { data: locRows } = await db
     .from('contact_location_preferences')
-    .select('location_id, email_marketing, sms_marketing, whatsapp_marketing, locations(name)')
+    .select('location_id, email_marketing, sms_marketing, whatsapp_marketing, locations(name, organization_id)')
     .eq('contact_id', pref.contact_id)
 
   const lists = (locRows || [])
     .map((r) => ({
       locationId: r.location_id,
-      locationName: r.locations?.name || 'UN1T',
+      locationName: r.locations?.name || '',
       email_marketing: r.email_marketing,
       sms_marketing: r.sms_marketing,
       whatsapp_marketing: r.whatsapp_marketing,
     }))
     .sort((a, b) => a.locationName.localeCompare(b.locationName))
 
+  // W1.S1b — the page header and the "leave everything" line name the
+  // ORGANISATION's brand (the page lists every studio list the person is
+  // on, so no one studio speaks for it). The org is the one the contact's
+  // lists belong to; cached per org (host-brand.js). Empty when unknown, and
+  // the page words around it rather than printing a literal.
+  const orgId = (locRows || []).map((r) => r.locations?.organization_id).find(Boolean) || null
+  const { companyName: brand } = await resolveOrgChrome({ orgId, db })
+
   return NextResponse.json({
     success: true,
+    brand,
     contact: {
       name: pref.contacts?.name,
       email: pref.contacts?.email,

@@ -19,6 +19,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import LandingPageSettingsForm from '@/components/LandingPageSettingsForm'
+import { getLocationBranding } from '@/lib/location-branding'
 import ChooserEditorForm from '@/components/ChooserEditorForm'
 import PageSwitcher from '@/components/landing-page/PageSwitcher'
 import { isActiveOrgAdmin } from '@/lib/org-admin'
@@ -110,10 +111,12 @@ export default async function LandingPageSettingsPage(props) {
     )
   }
 
-  const [settingsRes, eventTypesRes, eventsRes] = await Promise.all([
+  const [settingsRes, eventTypesRes, eventsRes, brand] = await Promise.all([
     db.from('landing_page_settings').select('*').eq('location_id', selectedId).maybeSingle(),
     db.from('event_types').select('id, name, slug').eq('location_id', selectedId).eq('active', true).order('name'),
     db.from('race_events').select('id, name, slug, kind').eq('location_id', selectedId).eq('active', true).order('race_date', { ascending: false }),
+    // W1.S1b — the studio's brand for the editor's defaults and hints.
+    getLocationBranding(db, selectedId),
   ])
   const selectedPage = pages.find((p) => p.location_id === selectedId) || null
 
@@ -138,6 +141,7 @@ export default async function LandingPageSettingsPage(props) {
         initialSettings={settingsRes.data || null}
         availableBookingTypes={eventTypesRes.data || []}
         availableEvents={eventsRes.data || []}
+        brand={{ companyName: brand.companyName, shortName: brand.shortName }}
       />
     </div>
   )

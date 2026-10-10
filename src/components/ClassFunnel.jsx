@@ -17,6 +17,7 @@ import { readVisitOrigin } from '@/lib/visit-origin'
 import { newLeadEventId, pixelUserData, fireBrowserLead } from '@/lib/meta-pixel-lead'
 import { metaPixelIdsForPath } from '@/lib/meta-pixel-paths'
 import ClassFunnelCheckout from '@/components/landing-page/ClassFunnelCheckout'
+import { classFunnelConsentDefault } from '@/lib/landing-page-blocks'
 
 // MATCHQUALITY.1 — Meta's `_fbp` cookie, or null. Never throws (no document
 // during SSR, cookies blocked, no Pixel yet).
@@ -28,29 +29,36 @@ function readFbpCookie() {
   } catch { return null }
 }
 
-// Default copy = today's live Stillorgan /start funnel, so a bare
-// <ClassFunnel /> is unchanged from the old StartFunnel.
-const DEFAULTS = {
-  publicPath:       'stillorgan',
-  consultSlug:      'free-un1t-consultation',
-  heading:          'Your first 3 classes are free',
-  subhead:          'Pick a time that suits you. It takes about 30 seconds.',
-  consentLabel:     "I'd like to hear from UN1T Stillorgan by email, SMS and WhatsApp.",
-  classDoneTitle:   "You're being booked in 🎉",
-  classDoneBody:    "That's the first of your 3 free classes — watch for a WhatsApp confirming it. See you at UN1T Stillorgan!",
-  consultDoneTitle: "You're booked 🎉",
-  consultDoneBody:  "You'll get a WhatsApp confirming your consultation if we have your number. See you at UN1T Stillorgan!",
+// Default copy = the original /start funnel. W1.S1b: the three lines that
+// name the studio are functions of the `locationName` prop (the page's own
+// location), so a tenant's class_funnel block left blank never reads
+// another gym's name; with no name they still read as whole sentences.
+export function defaultsFor(locationName) {
+  const name = typeof locationName === 'string' ? locationName.trim() : ''
+  const seeYou = name ? `See you at ${name}!` : 'See you soon!'
+  return {
+    publicPath:       'stillorgan',
+    consultSlug:      'free-un1t-consultation',
+    heading:          'Your first 3 classes are free',
+    subhead:          'Pick a time that suits you. It takes about 30 seconds.',
+    consentLabel:     classFunnelConsentDefault(name),
+    classDoneTitle:   "You're being booked in 🎉",
+    classDoneBody:    `That's the first of your 3 free classes. Watch for a WhatsApp confirming it. ${seeYou}`,
+    consultDoneTitle: "You're booked 🎉",
+    consultDoneBody:  `You'll get a WhatsApp confirming your consultation if we have your number. ${seeYou}`,
+  }
 }
 
 const inputCls ='w-full bg-white/[0.06] border border-white/15 rounded-xl px-4 py-3.5 text-base text-white placeholder-white/40 focus:outline-none focus:border-white/50'
 
 export default function ClassFunnel(props) {
+  const DEFAULTS = defaultsFor(props?.locationName)
   // Copy props: an empty string falls back to the default, so an operator who
   // leaves a field blank keeps our copy rather than a blank line.
   const {
     publicPath, heading, subhead, consentLabel,
     classDoneTitle, classDoneBody, consultDoneTitle, consultDoneBody,
-  } = { ...DEFAULTS, ...Object.fromEntries(Object.entries(props || {}).filter(([, v]) => v != null && v !== '')) }
+  } = { ...DEFAULTS, ...Object.fromEntries(Object.entries(props || {}).filter(([k, v]) => k !== 'locationName' && v != null && v !== '')) }
   // consultSlug is different: an explicit '' means "no consult upsell" and MUST
   // be honoured, so read it straight from props and only default when absent.
   const consultSlug = props?.consultSlug ?? DEFAULTS.consultSlug

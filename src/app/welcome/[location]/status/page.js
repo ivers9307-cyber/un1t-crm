@@ -6,6 +6,8 @@
 // reaches it. Copy is operator-override-able via locations.settings.status_page.
 
 import { notFound } from 'next/navigation'
+import { headers } from 'next/headers'
+import { resolveGymSiteName } from '@/lib/default-site-name'
 import { createServerClient } from '@/lib/supabase'
 import { getIntegrationHealth } from '@/lib/integration-health'
 import { buildStatusView } from '@/lib/status-page'
@@ -59,7 +61,9 @@ async function loadLocation(path) {
 export async function generateMetadata(props) {
   const { location } = await props.params
   const loc = await loadLocation(location)
-  const name = loc?.name || 'UN1T'
+  // W1.S1b — the studio's own name; with no row, the request host's
+  // organisation brand (the platform name on the CRM host). Never a literal.
+  const name = loc?.name || await resolveGymSiteName({ host: (await headers()).get('host') })
   return {
     title: `${name} — System status`,
     description: `Live service status for ${name}. Booking, messaging, payments and email.`,

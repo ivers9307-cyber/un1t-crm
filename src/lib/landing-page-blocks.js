@@ -127,14 +127,31 @@ export const OFFER_DEFAULT = () => ({
   cta_url:         'https://hatchstreet.un1t.online/#join',
 })
 
-const LEAD_FORM_DEFAULT = () => ({
+// W1.S1b — default consent copy names the studio's brand (the editor passes
+// it; the renderers pass the page's location), never a literal gym. With no
+// brand it still reads as a complete sentence.
+export function leadFormConsentDefault(brand = '') {
+  const b = typeof brand === 'string' ? brand.trim() : ''
+  return b
+    ? `I’d like to hear from ${b} about the launch and offers by email, SMS and WhatsApp. I can opt out anytime.`
+    : 'I’d like to hear about the launch and offers by email, SMS and WhatsApp. I can opt out anytime.'
+}
+
+export function classFunnelConsentDefault(brand = '') {
+  const b = typeof brand === 'string' ? brand.trim() : ''
+  return b
+    ? `I'd like to hear from ${b} by email, SMS and WhatsApp.`
+    : "I'd like to hear from this studio by email, SMS and WhatsApp."
+}
+
+const LEAD_FORM_DEFAULT = ({ brand = '' } = {}) => ({
   id:              newBlockId(),
   type:            'lead_form',
   heading:         'Keep me posted',
   subtext:         'Not ready to join yet? Leave your details and we’ll keep you in the loop on the opening, classes and offers.',
   button_label:    'Keep me posted',
   success_message: "You're on the list — we'll be in touch soon.",
-  consent_label:   'I’d like to hear from UN1T about the Hatch Street launch and offers by email, SMS and WhatsApp. I can opt out anytime.',
+  consent_label:   leadFormConsentDefault(brand),
   tag:             'hatch-founding-member',
   lead_source:     'hatch_launch',
   offer:           OFFER_DEFAULT(),
@@ -182,12 +199,12 @@ export function offerOf(block) {
   }
 }
 
-const CLASS_FUNNEL_DEFAULT = () => ({
+const CLASS_FUNNEL_DEFAULT = ({ brand = '' } = {}) => ({
   id:                newBlockId(),
   type:              'class_funnel',
   heading:           'Your first 3 classes are free',
   subhead:           'Book your first class now — pop in your details to start.',
-  consent_label:     "I'd like to hear from UN1T by email, SMS and WhatsApp.",
+  consent_label:     classFunnelConsentDefault(brand),
   class_done_title:  "You're being booked in 🎉",
   class_done_body:   "That's the first of your 3 free classes — watch for a WhatsApp confirming it. See you soon!",
   consult_done_title:"You're booked 🎉",
@@ -212,7 +229,7 @@ const STATS_DEFAULT = () => ({
 const TESTIMONIAL_DEFAULT = () => ({
   id:     newBlockId(),
   type:   'testimonial',
-  quote:  "The coaching is what separates UN1T from any gym I've trained at. I came in for a Hyrox PB. I stayed for the room.",
+  quote:  "The coaching is what separates this place from any gym I've trained at. I came in for a Hyrox PB. I stayed for the room.",
   author: 'Member, joined 2024',
 })
 
@@ -256,10 +273,11 @@ export const BLOCK_TYPES = [
 
 const TYPE_BY_NAME = new Map(BLOCK_TYPES.map((t) => [t.type, t]))
 
-export function newBlockOfType(type) {
+// `opts.brand` (W1.S1b): the studio's brand, for the defaults that name it.
+export function newBlockOfType(type, opts = {}) {
   const meta = TYPE_BY_NAME.get(type)
   if (!meta) throw new Error(`Unknown block type: ${type}`)
-  return meta.factory()
+  return meta.factory(opts)
 }
 
 // Default starter set — what an operator sees the FIRST time they
