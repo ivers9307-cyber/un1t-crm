@@ -29,7 +29,7 @@ import {
   buildUnsubscribeUrl,
   appendUnsubscribeFooter,
 } from '@/lib/postmark'
-import { getAppUrl } from '@/lib/app-url'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import {
   sendTemplateMessage,
   buildTemplateComponents,
@@ -285,7 +285,10 @@ export async function sendEmailStep(db, { enrollment, step, sequence, contact, f
   // {{location_name}}'; without it rendered 'UN1T ' with a trailing
   // space). locationName is resolved above from the same location row
   // the bundle gate fetched.
-  const baseUrl = getAppUrl()
+  // W1.L3a — the unsubscribe + preference links are minted on the SEQUENCE
+  // LOCATION's tenant host (resolveCustomerBaseUrl floors to the CRM host and
+  // never throws past it), so a second gym's leads never see crm.repset.ie.
+  const baseUrl = await resolveCustomerBaseUrl(db, sequence?.location_id)
   const unsubscribeUrl = buildUnsubscribeUrl(contact, baseUrl, sequence?.location_id)
   // UNSUBTOKEN.2 — null means the contact has no
   // contact_preferences.unsubscribe_token, and a sequence step is MARKETING
