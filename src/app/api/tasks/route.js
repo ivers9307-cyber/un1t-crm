@@ -1,13 +1,11 @@
 // TASKS.1 — external integration surface.
 //
-// Lets n8n / Slack / Zapier / etc. push tasks into the CRM
+// Lets Slack / Zapier / etc. push tasks into the CRM
 // without having to know the activities schema. Marketed as
 // /api/tasks but writes to public.activities with kind='task'.
 //
-// Authentication mirrors the other n8n surfaces (authenticateApiKey):
-//   - Authorization: Bearer <per-org unitk_ key>, or the legacy shared
-//     CRM_API_KEY, scoped since W0.1 to the one organisation in
-//     CRM_API_KEY_ORG_ID (refused when unset).
+// Authentication mirrors the other integration surfaces (authenticateApiKey):
+//   - Authorization: Bearer <per-org unitk_ key>
 //
 // Endpoints:
 //   GET  /api/tasks?location_id=&status=&assignee_id=&limit=

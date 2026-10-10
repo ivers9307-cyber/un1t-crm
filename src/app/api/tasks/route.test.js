@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
-  makeFakeDb, twoOrgFixture, GLOBAL_KEY, ORG1_KEY,
+  makeFakeDb, twoOrgFixture, RETIRED_SHARED_KEY, ORG1_KEY,
 } from '@/lib/api-auth.test-helpers.js'
 
 let db
@@ -21,8 +21,6 @@ const req = (token, qs = '') =>
   })
 
 beforeEach(() => {
-  vi.stubEnv('CRM_API_KEY', GLOBAL_KEY)
-  vi.stubEnv('CRM_API_KEY_ORG_ID', 'org-1') // W0.1 — legacy key = org-1's key
   db = makeFakeDb(twoOrgFixture())
 })
 
@@ -31,12 +29,9 @@ afterEach(() => {
 })
 
 describe('GET /api/tasks — API-key callers', () => {
-  it('legacy CRM_API_KEY lists only its org\'s tasks without crashing (W0.1 scoped; assimilation regression)', async () => {
-    const res = await GET(req(GLOBAL_KEY))
-    expect(res.status).toBe(200)
-    const body = await res.json()
-    expect(body.success).toBe(true)
-    expect(body.data.map((t) => t.id)).toEqual(['t1'])
+  it('the retired shared key → 401 (APIKEYS.4)', async () => {
+    const res = await GET(req(RETIRED_SHARED_KEY))
+    expect(res.status).toBe(401)
   })
 
   it('per-org key sees only its own org\'s tasks, with later filters intact', async () => {
@@ -56,7 +51,7 @@ describe('POST /api/tasks — source', () => {
   const post = (body) =>
     new Request('http://localhost/api/tasks', {
       method: 'POST',
-      headers: { authorization: `Bearer ${GLOBAL_KEY}`, 'content-type': 'application/json' },
+      headers: { authorization: `Bearer ${ORG1_KEY}`, 'content-type': 'application/json' },
       body: JSON.stringify(body),
     })
 

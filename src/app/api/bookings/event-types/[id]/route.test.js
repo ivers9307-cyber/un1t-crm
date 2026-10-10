@@ -1,16 +1,14 @@
 // SAAS-12 — GET/PUT/DELETE /api/bookings/event-types/[id]
 // (requireApiKeyOrManager dual-auth route). assertRowInOrg only scopes
-// per-org API keys (it no-ops when orgId is null — the legacy-key and
-// cookie paths), so before the fix a manager cookie session could
+// per-org API keys (it no-ops when orgId is null — the cookie path), so before the fix a manager cookie session could
 // read/edit/soft-delete ANY tenant's event type by id. The route now
 // adds a cookie-path location guard (404, not 403 — detail route). The
-// per-org-key path stays gated by assertRowInOrg, and since W0.1 the
-// legacy global key is scoped to CRM_API_KEY_ORG_ID and gated the same
-// way. api-auth + validate are real; only supabase/getCurrentUser are faked.
+// per-org-key path stays gated by assertRowInOrg, and (APIKEYS.4) the
+// retired shared integration key is refused. api-auth + validate are real; only supabase/getCurrentUser are faked.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
-  makeFakeDb, twoOrgFixture, GLOBAL_KEY, ORG1_KEY,
+  makeFakeDb, twoOrgFixture, RETIRED_SHARED_KEY, ORG1_KEY,
 } from '@/lib/api-auth.test-helpers.js'
 
 let db
@@ -61,8 +59,6 @@ const managerAt = (...locationIds) => ({
 })
 
 beforeEach(() => {
-  vi.stubEnv('CRM_API_KEY', GLOBAL_KEY)
-  vi.stubEnv('CRM_API_KEY_ORG_ID', 'org-1') // W0.1 — legacy key = org-1's key
   getCurrentUser.mockResolvedValue(null)
   seed()
 })
@@ -166,7 +162,7 @@ describe('event-types/[id] — cookie/manager path (SAAS-12)', () => {
   })
 })
 
-describe('event-types/[id] — API-key paths (SAAS-3; W0.1 legacy key scoped)', () => {
+describe('event-types/[id] — API-key paths (SAAS-3 per-org keys; APIKEYS.4 retired shared key)', () => {
   it('per-org key targeting a foreign event type → 404 (assertRowInOrg)', async () => {
     const res = await GET(keyGet('e2', ORG1_KEY), props('e2'))
     expect(res.status).toBe(404)
@@ -179,16 +175,9 @@ describe('event-types/[id] — API-key paths (SAAS-3; W0.1 legacy key scoped)', 
     expect(body.data.id).toBe('e1')
   })
 
-  it('legacy global key targeting a foreign event type → 404 (W0.1 scoped to CRM_API_KEY_ORG_ID)', async () => {
-    const res = await GET(keyGet('e2', GLOBAL_KEY), props('e2'))
-    expect(res.status).toBe(404)
-    expect(JSON.stringify(await res.json())).not.toContain('Yoga')
-  })
-
-  it('legacy global key reading an event type inside CRM_API_KEY_ORG_ID → 200 (positive control)', async () => {
-    const res = await GET(keyGet('e1', GLOBAL_KEY), props('e1'))
-    expect(res.status).toBe(200)
-    const body = await res.json()
-    expect(body.data.id).toBe('e1')
+  it('the retired shared key → 401, nothing read (APIKEYS.4)', async () => {
+    const res = await GET(keyGet('e1', RETIRED_SHARED_KEY), props('e1'))
+    expect(res.status).toBe(401)
+    expect(JSON.stringify(await res.json())).not.toContain('e1')
   })
 })

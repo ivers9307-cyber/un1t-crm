@@ -33,10 +33,10 @@ const API_ROOT = 'src/app/api'
 
 // Direct resolvers + verified delegated-auth helpers. Each delegated
 // entry names the file where it was verified to enforce auth:
-//   authenticateApiKey   src/lib/api-auth.js (per-org API key, n8n surface)
-//   requireApiKeyOrManager src/lib/api-auth.js (constant-time API key OR
+//   authenticateApiKey   src/lib/api-auth.js (per-org API key surface)
+//   requireApiKeyOrManager src/lib/api-auth.js (per-org API key OR
 //                        getCurrentUser + MANAGER_ROLES — the dual-auth
-//                        n8n/operator surface, e.g. /api/stages)
+//                        integration/operator surface, e.g. /api/stages)
 //   loadInvoiceForUser   src/app/api/invoices-inbox/_helpers.js
 //                        (getCurrentUser + master/owner-at-location, 401/403/404)
 //   loadBookkeeper       src/app/api/invoices-inbox/_bulk-helpers.js
@@ -47,7 +47,6 @@ const API_ROOT = 'src/app/api'
 const SESSION_GUARDS = [
   'getCurrentUser(',
   'withAuth(',
-  'requireApiKey(',
   'authenticateApiKey(',
   'requireApiKeyOrManager(',
   'loadInvoiceForUser(',

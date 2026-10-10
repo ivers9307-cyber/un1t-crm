@@ -3,7 +3,7 @@
 // GLOFOX-NOTES — this is the SESSION-AUTHED staff surface (used by
 // ContactActions.jsx). It inserts the note AND fires a best-effort push into
 // Glofox as an interaction so the front desk sees it in the member's timeline.
-// The API-key path (/api/notes) is the n8n / bulk-import route and deliberately
+// The API-key path (/api/notes) is the API-key / bulk-import route and deliberately
 // does NOT push (it would mass-spam Glofox with thousands of imported history
 // notes). Only THIS path has the session user, so it's the one that carries the
 // author name.

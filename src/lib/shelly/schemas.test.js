@@ -415,7 +415,7 @@ describe('ShellyToggleBody', () => {
     expect(ShellyToggleBody.safeParse({ state: 'off', until: '2026-08-23T18:00:00Z' }).success).toBe(true)
   })
 
-  // n8n (Bearer) and mobile callers send offset forms. Accept them, but
+  // API-key (Bearer) and mobile callers send offset forms. Accept them, but
   // normalise here so the value the route pipes into ShellyOverride is already
   // the strict-Z shape that schema demands.
   it('accepts an offset form and normalises it to UTC Z', () => {

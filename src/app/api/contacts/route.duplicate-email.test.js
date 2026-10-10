@@ -46,7 +46,6 @@ const RAW_23505 = 'duplicate key value violates unique constraint "contacts_emai
 
 beforeEach(() => {
   vi.clearAllMocks()
-  delete process.env.CRM_API_KEY
   vi.mocked(getCurrentUser).mockResolvedValue(users.managerA1())
 })
 

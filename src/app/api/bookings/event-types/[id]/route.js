@@ -12,7 +12,7 @@ import { logError } from '@/lib/log'
 
 // SAAS-12 — cookie/session location guard for this detail route.
 // assertRowInOrg only scopes per-org API keys (it no-ops when orgId is
-// null — the legacy-key and cookie paths), so without this a manager
+// null — the cookie path), so without this a manager
 // cookie session could read/edit/soft-delete ANY tenant's event type by
 // id. Scope the session caller to their own locations; master (whose
 // user.locations is every active location) is exempt. Returns a 404
@@ -42,8 +42,8 @@ async function assertEventTypeSessionAccess(db, user, id) {
 
 // GET /api/bookings/event-types/:id — Get single event type with bookings count
 //
-// Auth: requireApiKeyOrManager — the n8n bearer-token (CRM_API_KEY / per-org
-// key) AND a manager+ cookie session. Cookie callers: the booking-type form's
+// Auth: requireApiKeyOrManager — a per-org API key (Bearer) AND a manager+
+// cookie session. Cookie callers: the booking-type form's
 // PUT (EVENTTYPERLS.1, the only way the UI edits a booking type) and
 // EventActions' DELETE, both judged by assertEventTypeSessionAccess at the
 // row's location — the same rule as canManageEventType on the pages.

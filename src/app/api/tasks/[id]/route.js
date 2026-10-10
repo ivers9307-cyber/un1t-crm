@@ -1,13 +1,11 @@
 // TASKS.1 — GET/PATCH/DELETE one task.
 //
 // Same auth as the collection endpoint: authenticateApiKey — an
-// `Authorization: Bearer` header carrying a per-org `unitk_` key, or
-// the legacy shared CRM_API_KEY, which since W0.1 is scoped to the one
-// organisation in CRM_API_KEY_ORG_ID (refused when unset). Every
+// `Authorization: Bearer` header carrying a per-org `unitk_` key. Every
 // caller therefore has an orgId; the row and every id it references
 // are gated to that org (assertRowInOrg / assertProfileInOrg, 404).
 // All writes go to activities WHERE kind='task' AND id=...; we
-// explicitly guard so n8n can't accidentally mutate an
+// explicitly guard so an integration can't accidentally mutate an
 // auto-logged event row by passing its UUID.
 
 import { NextResponse } from 'next/server'

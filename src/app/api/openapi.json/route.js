@@ -7,7 +7,7 @@ export const runtime = 'nodejs'
 //
 // Returns the OpenAPI 3.1 spec for the CRM HTTP API. Auth via either:
 //   - Supabase session (handled by middleware — any logged-in user)
-//   - Authorization: Bearer <CRM_API_KEY> (also handled by middleware)
+//   - Authorization: Bearer <per-org unitk_ API key> (also handled by middleware)
 //
 // The spec describes the API surface, not the data, so exposing it to any
 // authenticated user is fine. Swagger UI / Redoc / Stoplight Studio can

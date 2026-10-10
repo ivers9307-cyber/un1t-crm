@@ -15,7 +15,7 @@ export async function GET(request) {
 
   const locationId = searchParams.get('location_id')
 
-  // Search deals by contact email (most common n8n use case)
+  // Search deals by contact email (most common integration use case)
   let contactQuery = db.from('contacts').select('id').ilike('email', `%${term}%`).limit(1)
   if (locationId) contactQuery = contactQuery.eq('location_id', locationId)
   // APIKEYS.3 — per-org key: only resolve contacts within the org's

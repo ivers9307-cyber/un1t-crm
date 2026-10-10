@@ -10,21 +10,21 @@
 //
 // Assertions per route kind:
 //   list    — org-A key sees ONLY org-A rows (both its locations);
-//             org-B key the mirror; the legacy shared key (W0.1: scoped
-//             to CRM_API_KEY_ORG_ID, org A here) sees exactly what org
-//             A's key sees, and is refused when that env is unset.
+//             org-B key the mirror.
+//   retired — (APIKEYS.4) every spec also sends the retired shared
+//             integration key: it is refused with a 401 and nothing
+//             is read or written.
 //   detail  — org-A key reads its own row; a cross-tenant id → 404
 //             (indistinguishable from missing).
 //   mutate  — org-A key mutating a cross-tenant row → 404, the row is
 //             byte-identical afterwards, and no write ever reached the
 //             table. Positive control proves the block isn't vacuous.
 //   create  — org-A key creating into org B (by location_id or via a
-//             B contact anchor) → 403 and no insert; the legacy key
-//             (scoped to org A) is refused the same way.
+//             B contact anchor) → 403 and no insert.
 //   reference — (W0.1b) a create/update INSIDE org A that references a
 //             row of org B by id (contact_id, assignee_id, template_id)
-//             → 404, nothing written; the legacy key the same; the
-//             org-A reference succeeds (positive control).
+//             → 404, nothing written; the org-A reference succeeds
+//             (positive control).
 //
 // ADDING A ROUTE: one entry in the relevant spec table below.
 // Routes that can't fit the pattern are listed in SKIPPED with the
@@ -67,8 +67,7 @@ vi.mock('@/lib/person-links', () => ({ attachLinkedCounts: vi.fn(async (_db, row
 import { createServerClient } from '@/lib/supabase'
 import {
   makeWorld, makeTenantDb, makeReq, jsonOf, propsOf, idsOf,
-  LEGACY_KEY, ORG_A_KEY, ORG_B_KEY,
-  ORG_A,
+  RETIRED_SHARED_KEY, ORG_A_KEY, ORG_B_KEY,
   LOC_A1, LOC_B1,
   C_A1, C_A2, C_B1, C_B2,
   D_A1, D_B1,
@@ -109,9 +108,6 @@ function freshWorld() {
 
 beforeEach(() => {
   vi.mocked(createServerClient).mockReset()
-  process.env.CRM_API_KEY = LEGACY_KEY
-  // W0.1 — the legacy shared key is a per-org key for this one org.
-  process.env.CRM_API_KEY_ORG_ID = ORG_A
   freshWorld()
 })
 
@@ -188,16 +184,8 @@ describe.each(LIST_SPECS)('$name — org boundary', (spec) => {
     expect(spec.ids(json)).toEqual([...spec.orgB].sort())
   })
 
-  it('legacy shared key sees only org-A rows — scoped to CRM_API_KEY_ORG_ID (W0.1)', async () => {
-    currentKey = LEGACY_KEY
-    const { status, json } = await jsonOf(await spec.call())
-    expect(status).toBe(200)
-    expect(spec.ids(json)).toEqual([...spec.orgA].sort())
-  })
-
-  it('legacy shared key with CRM_API_KEY_ORG_ID unset → 401, nothing listed (fail closed)', async () => {
-    currentKey = LEGACY_KEY
-    process.env.CRM_API_KEY_ORG_ID = ''
+  it('the retired shared key → 401, nothing listed (APIKEYS.4)', async () => {
+    currentKey = RETIRED_SHARED_KEY
     const { status, json } = await jsonOf(await spec.call())
     expect(status).toBe(401)
     expect(json?.data).toBeUndefined()
@@ -238,18 +226,11 @@ describe.each(DETAIL_SPECS)('$name — org boundary', (spec) => {
     expect(JSON.stringify(json)).not.toContain(spec.bId)
   })
 
-  it('legacy shared key fetching a cross-tenant id gets 404 — scoped to org A (W0.1)', async () => {
-    currentKey = LEGACY_KEY
-    const { status, json } = await jsonOf(await spec.call(spec.bId))
-    expect(status).toBe(404)
-    expect(JSON.stringify(json)).not.toContain(spec.bId)
-  })
-
-  it('legacy shared key reads an org-A row (positive control)', async () => {
-    currentKey = LEGACY_KEY
+  it('the retired shared key reading an org-A row → 401, nothing returned (APIKEYS.4)', async () => {
+    currentKey = RETIRED_SHARED_KEY
     const { status, json } = await jsonOf(await spec.call(spec.aId))
-    expect(status).toBe(200)
-    expect(json.data.id).toBe(spec.aId)
+    expect(status).toBe(401)
+    expect(JSON.stringify(json)).not.toContain(spec.aId)
   })
 })
 
@@ -313,14 +294,13 @@ describe.each(MUTATION_SPECS)('$name — org boundary', (spec) => {
     else expect(spec.changed(row)).toBe(true)
   })
 
-  it('legacy shared key mutating a cross-tenant row: 404, row untouched, no write issued — scoped to org A (W0.1)', async () => {
-    currentKey = LEGACY_KEY
-    const before = structuredClone(world[spec.table].find((r) => r.id === spec.bId))
-    const { status } = await jsonOf(await spec.call(spec.bId))
-    expect(status).toBe(404)
-    expect(world[spec.table].find((r) => r.id === spec.bId)).toEqual(before)
-    const touched = db._writesTo(spec.table).filter((w) => (w.matchedIds || []).includes(spec.bId))
-    expect(touched).toEqual([])
+  it('the retired shared key mutating an org-A row: 401, row untouched, no write issued (APIKEYS.4)', async () => {
+    currentKey = RETIRED_SHARED_KEY
+    const before = structuredClone(world[spec.table].find((r) => r.id === spec.aId))
+    const { status } = await jsonOf(await spec.call(spec.aId))
+    expect(status).toBe(401)
+    expect(world[spec.table].find((r) => r.id === spec.aId)).toEqual(before)
+    expect(db._writesTo(spec.table)).toEqual([])
   })
 })
 
@@ -380,11 +360,11 @@ describe.each(CREATE_SPECS)('$name — org boundary', (spec) => {
     expect(db._writesTo(spec.table).filter((w) => w.op === 'insert')).toEqual([])
   })
 
-  it('legacy shared key creating into org B is refused (403) and nothing is inserted — scoped to org A (W0.1)', async () => {
-    currentKey = LEGACY_KEY
+  it('the retired shared key creating inside org A is refused (401) and nothing is inserted (APIKEYS.4)', async () => {
+    currentKey = RETIRED_SHARED_KEY
     const countBefore = world[spec.table].length
-    const { status } = await jsonOf(await spec.call(spec.bTarget))
-    expect(status).toBe(403)
+    const { status } = await jsonOf(await spec.call(spec.aTarget))
+    expect(status).toBe(401)
     expect(world[spec.table].length).toBe(countBefore)
     expect(db._writesTo(spec.table).filter((w) => w.op === 'insert')).toEqual([])
   })
@@ -457,13 +437,13 @@ const REFERENCE_SPECS = [
 ]
 
 describe.each(REFERENCE_SPECS)('$name — cross-org reference (W0.1b)', (spec) => {
-  async function expectRefused(key) {
+  async function expectRefused(key, ref = spec.bRef, code = 404) {
     currentKey = key
     const countBefore = world[spec.table].length
     const before = spec.rowId ? structuredClone(world[spec.table].find((r) => r.id === spec.rowId)) : null
-    const { status, json } = await jsonOf(await spec.call(spec.bRef))
-    expect(status).toBe(404)
-    expect(JSON.stringify(json)).not.toContain(spec.bRef)
+    const { status, json } = await jsonOf(await spec.call(ref))
+    expect(status).toBe(code)
+    expect(JSON.stringify(json)).not.toContain(ref)
     expect(world[spec.table].length).toBe(countBefore)
     if (spec.rowId) expect(world[spec.table].find((r) => r.id === spec.rowId)).toEqual(before)
     expect(db._writesTo(spec.table)).toEqual([])
@@ -473,8 +453,8 @@ describe.each(REFERENCE_SPECS)('$name — cross-org reference (W0.1b)', (spec) =
     await expectRefused(ORG_A_KEY)
   })
 
-  it('legacy shared key referencing an org-B row: 404, nothing written — scoped to org A (W0.1)', async () => {
-    await expectRefused(LEGACY_KEY)
+  it('the retired shared key referencing an org-A row: 401, nothing written (APIKEYS.4)', async () => {
+    await expectRefused(RETIRED_SHARED_KEY, spec.aRef, 401)
   })
 
   it('org-A key referencing an org-A row succeeds (positive control)', async () => {
@@ -508,12 +488,12 @@ describe('GET /api/deals/search — org boundary (bespoke: resolves contact by e
     expect(idsOf(json.data.items.map((i) => i.item))).toEqual([D_A1])
   })
 
-  it('legacy shared key searching a B-tenant email finds nothing — scoped to org A (W0.1)', async () => {
+  it('the retired shared key → 401, nothing found (APIKEYS.4)', async () => {
     const { status, json } = await jsonOf(await dealsSearchRoute.GET(
-      makeReq('/api/deals/search?term=lead.b1@', { bearer: LEGACY_KEY })
+      makeReq('/api/deals/search?term=lead.a1@', { bearer: RETIRED_SHARED_KEY })
     ))
-    expect(status).toBe(200)
-    expect(json.data.items).toEqual([])
+    expect(status).toBe(401)
+    expect(json?.data).toBeUndefined()
   })
 })
 

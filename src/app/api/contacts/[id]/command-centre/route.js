@@ -56,7 +56,7 @@ export async function GET(request, props) {
 
   // Activities + bookable event types + triage signals in one parallel
   // pass. The event-types list powers the Book tab (UIX-P3a) — the
-  // existing /api/bookings/event-types list route is API-key-only (n8n),
+  // existing /api/bookings/event-types list route is API-key-only,
   // so the session-authed bundle carries it instead.
   //
   // INBOX-REDESIGN.4.1 — arrears + latest note join the same pass: both

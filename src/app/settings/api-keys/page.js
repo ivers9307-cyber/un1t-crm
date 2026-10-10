@@ -34,7 +34,7 @@ export default async function ApiKeysPage() {
     <div className="p-8 max-w-3xl">
       <h2 className="text-2xl font-bold mb-1">API keys</h2>
       <p className="text-sm text-un1t-subtle mb-6">
-        Programmatic access for n8n and other integrations, scoped to{' '}
+        Programmatic access for integrations, scoped to{' '}
         <span className="text-un1t-text">{user.activeOrganization?.name || 'this organization'}</span>.
       </p>
       {orgId ? (

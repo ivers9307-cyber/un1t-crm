@@ -167,10 +167,7 @@ async function getUserFromBearer() {
   }
   if (!auth.startsWith('Bearer ')) return null
   const token = auth.slice('Bearer '.length)
-  // Skip the n8n CRM_API_KEY — that path doesn't carry a Supabase user;
-  // routes that need a user under that token use requireApiKey() instead.
-  if (process.env.CRM_API_KEY && token === process.env.CRM_API_KEY) return null
-  // SAAS-3: per-org API keys (unitk_…) likewise never carry a Supabase
+  // SAAS-3: per-org API keys (unitk_…) never carry a Supabase
   // user — skip the doomed auth.getUser() round-trip; routes resolve
   // them via authenticateApiKey()/requireApiKeyOrManager() instead.
   if (isApiKeyToken(token)) return null
@@ -766,8 +763,8 @@ export function getOwnerOrganizationIds(user) {
  * user input (query string or request body) to prevent IDOR — a user
  * passing `?location_id=<some other tenant>` and reading their data.
  *
- * Bearer-auth routes (n8n) skip this — the API key holder is treated as
- * a system admin in this app's model.
+ * API-key routes skip this — they scope to the key's organisation
+ * instead (orgScopeLocationIds / assertRowInOrg in src/lib/api-auth.js).
  *
  * Behaviour:
  *   - user is null              → 401

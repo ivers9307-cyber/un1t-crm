@@ -161,7 +161,6 @@ Permissions are: dashboard, pipeline, contacts, events, bookings, activities, em
 - **Glofox**: Gym management system — member sync, class bookings, attendance
 - **Postmark**: Transactional and marketing email delivery
 - **Meta WhatsApp Cloud API**: WhatsApp Business messaging
-- **n8n**: Workflow automation (3 workflows: Lead Capture, Credit Tracking, Lifecycle Sync)
 
 ## How to Help Users
 

@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { safeEqual } from './webhook-auth'
 import { getCurrentUser } from './auth'
 import { hasRoleAtAnyLocation } from './role-at-location'
 import { MANAGER_ROLES } from './schemas'
@@ -48,8 +47,7 @@ const NO_MATCH_UUID = '00000000-0000-0000-0000-000000000000'
 /**
  * SAAS-3 — org location filter for list queries on `location_id`-bearing
  * tables. Returns null when the caller is unscoped (a cookie session —
- * keep today's behaviour; since W0.1 the legacy shared key is scoped
- * too), else the org's location ids;
+ * keep today's behaviour), else the org's location ids;
  * an org with zero locations gets [NO_MATCH_UUID] so it matches NOTHING
  * rather than falling through unfiltered. Apply at the call site:
  *
@@ -158,51 +156,11 @@ export async function assertProfileInOrg({ db, orgId, profileId }) {
   return notFound()
 }
 
-// W0.1 — the legacy shared key is no longer unscoped. It acts as a per-org
-// key for ONE organisation named by CRM_API_KEY_ORG_ID (UN1T Group in prod).
-// No org id configured → the legacy key is refused outright (fail closed):
-// an unscoped integration key is the SaaS leak this closes. Retire both env
-// vars once n8n holds a unitk_ key.
-function legacyKeyOrgId() {
-  const id = (process.env.CRM_API_KEY_ORG_ID || '').trim()
-  return id || null
-}
-
-// Validates the API key sent by n8n in the Authorization header.
-// Comparison is constant-time so an attacker can't observe how many leading
-// bytes of CRM_API_KEY they got right by timing 401 responses. Vercel's edge
-// adds enough latency noise that a real timing attack is impractical, but
-// there's no reason to leave a `!==` here either.
-//
-// Note: token extraction now uses startsWith() instead of replace(), which
-// previously would strip "Bearer " from anywhere in the string (e.g.
-// "abcBearer xyz" became "abcxyz") rather than only the prefix.
-//
-// LEGACY and UNSCOPED: this returns no orgId, so a caller cannot tenant-filter.
-// As of W0.1 it has no route callers (check:route-guards still recognises it);
-// new routes use authenticateApiKey / requireApiKeyOrManager, which resolve the
-// organisation. Do not adopt this for a new route.
-//
-// Usage: const error = requireApiKey(request); if (error) return error;
-export function requireApiKey(request) {
-  const auth = request.headers.get('authorization') || ''
-  const token = auth.startsWith('Bearer ') ? auth.slice('Bearer '.length) : ''
-  const expected = process.env.CRM_API_KEY
-
-  if (!expected || !safeEqual(token, expected)) {
-    return NextResponse.json(
-      { success: false, error: 'Unauthorized' },
-      { status: 401 }
-    )
-  }
-  return null // auth OK
-}
-
 /**
- * Same as requireApiKey but ALSO accepts a logged-in manager+ user
- * (cookie auth) as a valid caller. Used by routes that started life
- * as n8n integration endpoints (POST /api/contacts, etc.) and now
- * also need to be reachable from the web UI.
+ * Accepts either a per-org API key (`unitk_…`, resolved to its
+ * organisation) or a logged-in manager+ user (cookie auth). Used by
+ * routes that serve both external integrations and the web UI
+ * (POST /api/contacts, etc.).
  *
  * ROLESWEEP.2 — the cookie branch is a COARSE pre-check only: the
  * caller holds a MANAGER_ROLES role at SOME location
@@ -214,7 +172,7 @@ export function requireApiKey(request) {
  * after its membership check — before it reads or writes anything the
  * caller may not see. tests/role-at-target.test.js enforces that every
  * route calling this helper also calls hasRoleAtLocation (or another
- * target judgement) in the same file. The API-key branches are
+ * target judgement) in the same file. The API-key branch is
  * unchanged.
  *
  * Return shape:
@@ -225,26 +183,14 @@ export function requireApiKey(request) {
  *   { ok: false, response: <NextResponse> } — caller should return
  *                                              this directly.
  *
- * Why an object instead of mirroring `requireApiKey`'s
- * "null = ok": callers usually want the user object for audit
- * stamps (created_by, updated_by, etc.). API-key callers don't have
- * a user — that's a known property, not an error.
+ * Why an object instead of "null = ok": callers usually want the
+ * user object for audit stamps (created_by, updated_by, etc.).
+ * API-key callers don't have a user — that's a known property, not
+ * an error.
  */
 export async function requireApiKeyOrManager(request) {
-  // API-key path first (cheap, header-only). If the bearer token
-  // matches the configured key we're done — no DB hit.
   const auth = request.headers.get('authorization') || ''
   const token = auth.startsWith('Bearer ') ? auth.slice('Bearer '.length) : ''
-  const expected = process.env.CRM_API_KEY
-  if (expected && token && safeEqual(token, expected)) {
-    // W0.1 — legacy shared key, scoped to CRM_API_KEY_ORG_ID; refused
-    // (no cookie fallback) when that org id is unset.
-    const orgId = legacyKeyOrgId()
-    if (!orgId) {
-      return { ok: false, response: NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 }) }
-    }
-    return { ok: true, user: null, orgId }
-  }
 
   // APIKEYS.3 — per-org key. Returns the scoping org so handlers can
   // filter by organization; cookie callers get orgId null and behave
@@ -272,19 +218,14 @@ export async function requireApiKeyOrManager(request) {
 }
 
 /**
- * APIKEYS.1 — authenticate an external (n8n / integration) caller and
- * resolve the ORGANIZATION the key is scoped to. Supports two token
- * kinds during the rollout:
- *
- *   - per-org key (`unitk_…`): looked up by SHA-256 hash in `api_keys`;
- *     returns { orgId } so handlers can scope queries by organization.
- *   - legacy shared `CRM_API_KEY`: still accepted, but since W0.1 it is
- *     scoped to the ONE organisation in CRM_API_KEY_ORG_ID (returned as
- *     orgId, legacy: true) and refused when that env is unset. Retire by
- *     unsetting both envs once n8n holds a unitk_ key.
+ * APIKEYS.1 — authenticate an external integration caller and resolve
+ * the ORGANIZATION the key is scoped to. The only accepted token is a
+ * per-org key (`unitk_…`), looked up by SHA-256 hash in `api_keys`; it
+ * returns { orgId } so handlers can scope queries by organization.
+ * (APIKEYS.4 removed the legacy shared key path.)
  *
  * Return shape:
- *   { ok: true,  orgId: <uuid>, legacy: boolean, keyId?: uuid }
+ *   { ok: true,  orgId: <uuid>, keyId: uuid }
  *   { ok: false, response: <NextResponse 401> }
  *
  * Note: async (per-org keys require a DB lookup). Routes adopting this
@@ -299,18 +240,10 @@ export async function authenticateApiKey(request) {
   })
   if (!token) return unauthorized()
 
-  // Legacy shared key first (cheap, header-only) — scoped since W0.1.
-  const expected = process.env.CRM_API_KEY
-  if (expected && safeEqual(token, expected)) {
-    const orgId = legacyKeyOrgId()
-    if (!orgId) return unauthorized()
-    return { ok: true, orgId, legacy: true }
-  }
-
   // Per-org key — look up by hash, must be active (not revoked).
   const resolved = await resolveApiKeyOrg(token)
   if (resolved) {
-    return { ok: true, orgId: resolved.orgId, legacy: false, keyId: resolved.keyId }
+    return { ok: true, orgId: resolved.orgId, keyId: resolved.keyId }
   }
 
   return unauthorized()

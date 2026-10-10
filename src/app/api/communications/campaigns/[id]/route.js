@@ -8,7 +8,7 @@
 //
 // All three replace browser-direct reads and writes on campaigns that ran
 // under nothing but the mig 014 membership policy. Gate (D7): email at the
-// campaign's studio (loadCampaignForUser). The n8n twin is /api/campaigns/[id]
+// campaign's studio (loadCampaignForUser). The API-key twin is /api/campaigns/[id]
 // (Bearer only). Writes are narrowed to the status they were judged on, so a
 // campaign the run-campaigns cron moved in between is refused (409), never
 // rewritten; the DB triggers campaigns_lock_sent_content and

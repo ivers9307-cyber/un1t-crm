@@ -7,20 +7,6 @@ import { readSupportModeEdge, decideSupportWriteBlock } from '@/lib/support-sess
 import { decideLegacyHostRedirect } from '@/lib/legacy-host-redirect'
 import { decideStaffWebLock, STUDIO_SESSION_COOKIE } from '@/lib/staff-web-lock'
 
-// Constant-time string compare. Implemented inline because the proxy runs
-// in the Edge runtime which doesn't expose node:crypto.timingSafeEqual. The
-// length-mismatch early exit leaks key length, but CRM_API_KEY is a fixed
-// 64-char hex string by convention so that's effectively zero info.
-function timingSafeEqualEdge(a, b) {
-  if (typeof a !== 'string' || typeof b !== 'string') return false
-  if (a.length !== b.length) return false
-  let mismatch = 0
-  for (let i = 0; i < a.length; i++) {
-    mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i)
-  }
-  return mismatch === 0
-}
-
 // PROXY.1 — renamed from middleware → proxy for the Next.js 16 "proxy"
 // file convention (the old "middleware" name is deprecated and the
 // Vercel build pipeline now hard-fails on it). Behaviour is unchanged.
@@ -264,25 +250,18 @@ export async function proxy(request) {
     publicExactPaths.some(p => pathname === p || pathname.startsWith(p + '/'))
   if (isPublic) return NextResponse.next()
 
-  // Allow API requests authenticated with a valid Bearer token. Three paths:
-  //   1. CRM_API_KEY — the legacy shared key used by n8n and similar
-  //      external integrations. Fixed 64-char hex, compared constant-time.
-  //      Since W0.1 it is a per-org key for the ONE organisation named by
-  //      CRM_API_KEY_ORG_ID, and api-auth.js refuses it when that env is
-  //      unset; W0.1b makes the edge apply the same condition, so an unset
-  //      org id never lets the key past the proxy to a route that has no
-  //      in-route key check of its own. Retire with the env once n8n holds
-  //      a unitk_ key.
-  //   2. Per-org API key (SAAS-3) — `unitk_…` keys from mig 217, issued at
+  // Allow API requests authenticated with a valid Bearer token. Two paths
+  // (APIKEYS.4 removed the legacy shared-key path; any other Bearer value
+  // falls through to the cookie gate and is rejected there):
+  //   1. Per-org API key (SAAS-3) — `unitk_…` keys from mig 217, issued at
   //      /settings/api-keys. REAL validation here (SHA-256 via Web Crypto +
   //      an active-row lookup in api_keys), not just a format sniff: a few
   //      routes behind this gate (e.g. /api/openapi.json) have no in-route
   //      auth of their own, so format-only admission would open them to
   //      any `unitk_`-shaped string. Routes that carry data re-resolve the
   //      key via authenticateApiKey()/requireApiKeyOrManager() and scope
-  //      every query to the key's organization — defense in depth, same
-  //      double-validation shape as the CRM_API_KEY path.
-  //   3. Supabase JWT — used by the iOS mobile app. The JWT is the
+  //      every query to the key's organization — defense in depth.
+  //   2. Supabase JWT — used by the iOS mobile app. The JWT is the
   //      `access_token` from a successful Supabase auth session on the
   //      device. We validate it via `supabase.auth.getUser(token)`, which
   //      verifies the signature against the project's JWT secret over the
@@ -296,15 +275,8 @@ export async function proxy(request) {
     const token = auth.startsWith('Bearer ') ? auth.slice('Bearer '.length) : ''
 
     if (token) {
-      // Path 1: CRM_API_KEY (n8n) — only while scoped to an org (W0.1b),
-      // the same fail-closed condition api-auth.js applies in-route.
-      const expected = process.env.CRM_API_KEY
-      if (expected && process.env.CRM_API_KEY_ORG_ID && timingSafeEqualEdge(token, expected)) {
-        return NextResponse.next()
-      }
-
       if (isApiKeyToken(token)) {
-        // Path 2: per-org API key (SAAS-3). One PostgREST lookup by hash
+        // Path 1: per-org API key (SAAS-3). One PostgREST lookup by hash
         // (unique partial index on active key_hash) — comparable edge cost
         // to the JWT path's auth.getUser() network call, and only paid by
         // `unitk_` traffic. No last_used_at stamp here: middleware stays
@@ -328,10 +300,10 @@ export async function proxy(request) {
           }
         }
         // Unknown/revoked per-org key. A `unitk_` token is never a valid
-        // Supabase JWT — skip Path 3's network round-trip and fall through
+        // Supabase JWT — skip Path 2's network round-trip and fall through
         // to the cookie gate below (which rejects keyless callers).
       } else {
-        // Path 3: Supabase JWT (mobile app). Use a stripped client (no
+        // Path 2: Supabase JWT (mobile app). Use a stripped client (no
         // cookies) since the JWT is the source of truth. If the token is
         // malformed or expired, getUser() returns { user: null } and we
         // fall through to the cookie-session check below.
