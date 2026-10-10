@@ -55,7 +55,7 @@ import { renderHostCampaignHtml } from './host-campaign-email.js'
 import { emailabilityReason } from './host-contact-list.js'
 import { signHostUnsubToken } from './host-unsubscribe.js'
 import { sendEmail, applyMergeTags } from './postmark.js'
-import { getAppUrl } from './app-url.js'
+import { resolveCustomerBaseUrl } from './tenant-host.js'
 import { logError } from './log.js'
 
 export const BATCH_SIZE = 50 // send rows claimed per campaign per chunk
@@ -95,7 +95,7 @@ async function runChunk(db, campaignId) {
   // sender_domain_verified stops an in-flight campaign mid-drain.
   const { data: host, error: hostErr } = await db
     .from('event_hosts')
-    .select('id, name, email, sender_email, sender_name, sender_domain_verified, reply_to_email, postmark_stream_id')
+    .select('id, name, email, sender_email, sender_name, sender_domain_verified, reply_to_email, postmark_stream_id, anchor_location_id')
     .eq('id', campaign.host_id)
     .maybeSingle()
   if (hostErr) throw new Error(`host load failed: ${hostErr.message}`)
@@ -200,7 +200,12 @@ async function runChunk(db, campaignId) {
       failed += ids.length
     }
 
-    const baseUrl = getAppUrl()
+    // W1.L3a — a host is a customer of the platform: the unsubscribe link is
+    // minted on the tenant host of the host's ANCHOR location (event_hosts.
+    // anchor_location_id, mig 388 — provisioned lazily on the first host-
+    // authored event, so it may be NULL: the resolver then floors to the CRM
+    // host, still a working link). Resolved once per chunk.
+    const baseUrl = await resolveCustomerBaseUrl(db, host.anchor_location_id)
     const senderName = host.sender_name || host.name || ''
     const from = `"${senderName.replace(/"/g, "'")}" <${host.sender_email}>`
 
