@@ -15,7 +15,7 @@ vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn(async () => null) }))
 
 import {
   authenticateApiKey, requireApiKeyOrManager,
-  orgScopeLocationIds, assertRowInOrg, assertCreateInOrg, orgLocationIds,
+  orgScopeLocationIds, assertRowInOrg, assertCreateInOrg, assertProfileInOrg, orgLocationIds,
 } from './api-auth.js'
 import { getCurrentUser } from './auth.js'
 
@@ -220,8 +220,55 @@ describe('assertCreateInOrg', () => {
     expect(res.status).toBe(400)
   })
 
-  it('no-op when orgId is falsy (legacy key)', async () => {
+  it('no-op when orgId is falsy (cookie caller)', async () => {
     expect(await assertCreateInOrg({ db, orgId: null })).toBeNull()
+  })
+
+  // W0.1b — with BOTH supplied, the contact used to be ignored entirely: a
+  // key could create at its own location against another org's contact id.
+  it('404s when the location is in the org but the contact is another org\'s (both supplied)', async () => {
+    const res = await assertCreateInOrg({ db, orgId: 'org-1', locationId: 'loc-1a', contactId: 'c2' })
+    expect(res.status).toBe(404)
+  })
+
+  it('404s when the location is in the org but the contact does not exist (both supplied)', async () => {
+    const res = await assertCreateInOrg({ db, orgId: 'org-1', locationId: 'loc-1a', contactId: 'nope' })
+    expect(res.status).toBe(404)
+  })
+
+  it('allows when both the location and the contact are in the org', async () => {
+    expect(await assertCreateInOrg({ db, orgId: 'org-1', locationId: 'loc-1b', contactId: 'c1' })).toBeNull()
+  })
+
+  it('still 403s a cross-org location even when the contact is in the org', async () => {
+    const res = await assertCreateInOrg({ db, orgId: 'org-1', locationId: 'loc-2a', contactId: 'c1' })
+    expect(res.status).toBe(403)
+  })
+})
+
+// W0.1b — a referenced profile id (task assignee) must belong to the org:
+// a staff row at one of its locations, or an org-admin row for it.
+describe('assertProfileInOrg', () => {
+  it('null (allowed) for staff at one of the org\'s locations', async () => {
+    expect(await assertProfileInOrg({ db, orgId: 'org-1', profileId: 'p1' })).toBeNull()
+  })
+
+  it('null (allowed) for the org\'s org admin (profile_organizations, no location row)', async () => {
+    expect(await assertProfileInOrg({ db, orgId: 'org-1', profileId: 'padmin1' })).toBeNull()
+  })
+
+  it('404 for staff of another org — existence not confirmed', async () => {
+    const res = await assertProfileInOrg({ db, orgId: 'org-1', profileId: 'p2' })
+    expect(res.status).toBe(404)
+  })
+
+  it('404 for an unknown profile id', async () => {
+    const res = await assertProfileInOrg({ db, orgId: 'org-1', profileId: 'nope' })
+    expect(res.status).toBe(404)
+  })
+
+  it('no-op when orgId is falsy (cookie caller)', async () => {
+    expect(await assertProfileInOrg({ db, orgId: null, profileId: 'p2' })).toBeNull()
   })
 })
 
