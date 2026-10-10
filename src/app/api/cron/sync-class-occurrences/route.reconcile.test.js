@@ -9,7 +9,9 @@ let locationsResult = { data: [], error: null }
 const fakeDb = {
   from: () => {
     const b = {}
-    for (const m of ['select', 'filter']) b[m] = () => b
+    for (const m of ['select', 'filter', 'eq', 'in', 'order', 'range']) b[m] = () => b
+    // W1.M3b — the seam's per-location state read (locations.membership_source by id).
+    b.maybeSingle = async () => (locationsResult.error ? locationsResult : { data: locationsResult.data?.[0] ?? null, error: null })
     b.then = (resolve, reject) => Promise.resolve(locationsResult).then(resolve, reject)
     return b
   },
@@ -20,6 +22,7 @@ vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: vi.fn(() => Promise.res
 vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
 vi.mock('@/lib/glofox', () => ({
   glofoxCredentialsForLocation: vi.fn(async () => ({ branchId: 'b', apiKey: 'k', apiToken: 't' })),
+  missingGlofoxCredentialsForLocation: (c) => [['branchId', 'Branch ID'], ['apiKey', 'API Key'], ['apiToken', 'API Token']].filter(([k]) => !c?.[k]).map(([, l]) => l),
 }))
 vi.mock('@/lib/class-occurrences', () => ({ syncOccurrencesForLocation: vi.fn() }))
 
@@ -30,6 +33,8 @@ import { syncOccurrencesForLocation } from '@/lib/class-occurrences'
 const loc = (n) => ({
   id: `a0000000-0000-0000-0000-00000000000${n}`,
   name: `Studio ${n}`,
+  active: true,
+  membership_source: 'glofox',
   settings: { glofox: { branch_id: 'b', api_key: 'k', api_token: 't' } },
 })
 const req = (auth = 'Bearer test-secret') => ({
