@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { pickActiveVersion, resolveAllowances, mirrorBundleFeatures, applyPlanBundlesToLocation } from './plans.js'
+import { pickActiveVersion, resolveAllowances, mirrorBundleFeatures, applyPlanBundlesToLocation, locationHasPlanFeature, plansGrantingFeature } from './plans.js'
 import { BUNDLE_KEYS } from '@shared/permission-bundles'
 
 const v = (effective_from, extra = {}) => ({ effective_from, ...extra })
@@ -321,5 +321,95 @@ describe('applyPlanBundlesToLocation', () => {
       },
     }
     await expect(applyPlanBundlesToLocation(db, 'loc-1')).rejects.toThrow(/update boom/)
+  })
+})
+
+// ── W1.E1 — feature lookups that honour ADD-ON pins ───────────────────
+//
+// getLocationPlan() answers null without a TIER pin, so a location whose
+// only pin is an add-on (the live Test Studio pin on custom_email_domain)
+// "had" nothing. These two helpers read the pins / the catalogue directly.
+
+// The rows the location_plans select yields (shape of
+// 'active, version:plan_versions!plan_version_id(features, plan:plans!plan_id(kind))').
+function fakePins(rows, { error = null, throwOn = null } = {}) {
+  const calls = []
+  return {
+    calls,
+    from(table) {
+      if (throwOn === table) throw new Error('db down')
+      calls.push(table)
+      const builder = {
+        select: () => builder,
+        eq: (col, val) => { calls.push(`${col}=${val}`); return builder },
+        then: (resolve, reject) => Promise.resolve({ data: rows, error }).then(resolve, reject),
+      }
+      return builder
+    },
+  }
+}
+
+describe('locationHasPlanFeature (W1.E1)', () => {
+  it('true when an active ADD-ON pin grants the feature even with no tier pin', async () => {
+    const db = fakePins([{ active: true, version: { features: { custom_email_domain: true }, plan: { kind: 'addon' } } }])
+    expect(await locationHasPlanFeature(db, 'loc-1', 'custom_email_domain')).toBe(true)
+    // Reads the pins of THAT location, active only.
+    expect(db.calls).toEqual(['location_plans', 'location_id=loc-1', 'active=true'])
+  })
+
+  it('true when the tier grants it; false when nothing active grants it; false on error', async () => {
+    expect(await locationHasPlanFeature(fakePins([{ active: true, version: { features: { custom_email_domain: true }, plan: { kind: 'tier' } } }]), 'loc-1', 'custom_email_domain')).toBe(true)
+    expect(await locationHasPlanFeature(fakePins([{ active: true, version: { features: { custom_email_domain: false }, plan: { kind: 'tier' } } }]), 'loc-1', 'custom_email_domain')).toBe(false)
+    expect(await locationHasPlanFeature(fakePins([]), 'loc-1', 'custom_email_domain')).toBe(false)
+    expect(await locationHasPlanFeature(fakePins(null, { error: { message: 'boom' } }), 'loc-1', 'custom_email_domain')).toBe(false)
+    expect(await locationHasPlanFeature({ from() { throw new Error('x') } }, 'loc-1', 'custom_email_domain')).toBe(false)
+  })
+
+  it('only a literal true grants (a truthy string or a missing key does not); no location or key → false without a read', async () => {
+    expect(await locationHasPlanFeature(fakePins([{ active: true, version: { features: { custom_email_domain: 'yes' }, plan: { kind: 'addon' } } }]), 'loc-1', 'custom_email_domain')).toBe(false)
+    expect(await locationHasPlanFeature(fakePins([{ active: true, version: { features: {}, plan: { kind: 'addon' } } }]), 'loc-1', 'custom_email_domain')).toBe(false)
+    const db = fakePins([{ active: true, version: { features: { custom_email_domain: true }, plan: { kind: 'addon' } } }])
+    expect(await locationHasPlanFeature(db, null, 'custom_email_domain')).toBe(false)
+    expect(await locationHasPlanFeature(db, 'loc-1', '')).toBe(false)
+    expect(db.calls).toEqual([])
+  })
+})
+
+describe('plansGrantingFeature (W1.E1 — names the plans the upsell points at)', () => {
+  // Rows the plan_versions select yields:
+  // 'effective_from, features, plan:plans!plan_id(id, slug, name, kind, active)'
+  const v = (plan, effective_from, features) => ({ effective_from, features, plan })
+  const scale = { id: 'p-scale', slug: 'scale', name: 'Scale', kind: 'tier', active: true }
+  const growth = { id: 'p-growth', slug: 'growth', name: 'Growth', kind: 'tier', active: true }
+  const addon = { id: 'p-addon', slug: 'custom_email_domain', name: 'Custom email domain', kind: 'addon', active: true }
+  const retired = { id: 'p-old', slug: 'legacy', name: 'Legacy', kind: 'tier', active: false }
+
+  it('lists the ACTIVE plans whose CURRENT version grants the key, tiers before add-ons', async () => {
+    const db = fakePins([
+      v(addon, '2026-07-19', { custom_email_domain: true }),
+      v(scale, '2026-07-19', { custom_email_domain: true }),
+      v(growth, '2026-07-19', { custom_email_domain: false }),
+      v(retired, '2026-01-01', { custom_email_domain: true }),
+    ])
+    expect(await plansGrantingFeature(db, 'custom_email_domain', '2026-10-10')).toEqual([
+      { id: 'p-scale', slug: 'scale', name: 'Scale', kind: 'tier' },
+      { id: 'p-addon', slug: 'custom_email_domain', name: 'Custom email domain', kind: 'addon' },
+    ])
+  })
+
+  it('judges the version active ON THE DATE: a future version that adds the key does not count yet, and one that removes it does', async () => {
+    const db = fakePins([
+      v(growth, '2026-07-19', { custom_email_domain: false }),
+      v(growth, '2027-01-01', { custom_email_domain: true }),
+      v(scale, '2026-07-19', { custom_email_domain: true }),
+      v(scale, '2026-10-01', { custom_email_domain: false }),
+    ])
+    expect(await plansGrantingFeature(db, 'custom_email_domain', '2026-10-10')).toEqual([])
+  })
+
+  it('fails safe to an empty list (error, throw, no key)', async () => {
+    expect(await plansGrantingFeature(fakePins(null, { error: { message: 'boom' } }), 'custom_email_domain')).toEqual([])
+    expect(await plansGrantingFeature({ from() { throw new Error('x') } }, 'custom_email_domain')).toEqual([])
+    expect(await plansGrantingFeature(fakePins([v(scale, '2026-07-19', { custom_email_domain: true })]), '')).toEqual([])
   })
 })
