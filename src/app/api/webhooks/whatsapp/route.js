@@ -99,7 +99,23 @@ export async function POST(request) {
         if (NUMBER_EVENT_FIELDS.has(change.field)) {
           // entry.id is the WABA — account-level events carry no phone number
           // and are scoped to that WABA's locations (W0.13).
+          // handleNumberEvent never throws (its own try/catch), so a failure
+          // in it cannot stop the coexistence dispatch below.
           await handleNumberEvent(db, change.field, change.value, entry.id)
+          if (change.field === 'account_update') {
+            // WA-COEX.7 — account_update is a SHARED field, so it is dispatched
+            // to BOTH handlers, number-event first: the WA-HEALTH path above
+            // (bans / restrictions / verification → manager push) AND the
+            // WA-COEX.6 coexistence link lifecycle (ACCOUNT_OFFBOARDED /
+            // ACCOUNT_RECONNECTED → signup_meta.coex_link + manager push).
+            // Routed by WABA id (entry.id): account_update carries NO
+            // metadata.phone_number_id, so the phone-number routing every
+            // other branch uses cannot resolve it. From WA-COEX.6 to WA-COEX.7
+            // this call lived in its own `if` AFTER this branch's `continue`,
+            // so it never ran from a real webhook.
+            try { await handleAccountUpdateEvent(db, entry.id, change.value) }
+            catch (e) { console.error('[wa-webhook] account_update failed:', e?.message) }
+          }
           continue
         }
         if (FLOW_EVENT_FIELDS.has(change.field)) {
@@ -129,14 +145,9 @@ export async function POST(request) {
           catch (e) { console.error(`[wa-webhook] coexistence ${change.field} failed:`, e?.message) }
           continue
         }
-        if (change.field === 'account_update') {
-          // WA-COEX.6 — routed by WABA id (entry.id): account_update carries
-          // NO metadata.phone_number_id, so the phone-number routing every
-          // other branch uses cannot resolve it.
-          try { await handleAccountUpdateEvent(db, entry.id, change.value) }
-          catch (e) { console.error('[wa-webhook] account_update failed:', e?.message) }
-          continue
-        }
+        // account_update is dispatched inside the NUMBER_EVENT_FIELDS branch
+        // above (WA-COEX.7) — do not add a second `if` for it here: that set
+        // claims the field first and `continue`s, so a later branch is dead.
         if (change.field !== 'messages') continue
 
         const value = change.value
@@ -826,6 +837,10 @@ async function handleCoexistenceEvent(db, field, value) {
 }
 
 // WA-COEX.6 — coexistence link lifecycle (account_update).
+//
+// Dispatched from the NUMBER_EVENT_FIELDS branch of the change loop, after
+// the number-event handler for the same change (WA-COEX.7 — it was unreachable
+// before that, see the loop). route.account-update.test.js pins the dispatch.
 //
 // A client changing phone, reinstalling, or re-registering the WhatsApp
 // Business app AUTO-OFFBOARDS our Cloud API companion. Sends for that number
