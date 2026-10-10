@@ -19,6 +19,7 @@
 // directly from the draft bill if needed (Xero exposes the from
 // address on the resulting draft).
 
+import { PLATFORM_NAME } from '@/lib/brand-name'
 import { createServerClient } from '@/lib/supabase'
 import { resolvePostmarkToken } from '@/lib/postmark-token'
 import { platformFromHeader } from '@/lib/platform-sender'
@@ -145,7 +146,7 @@ export async function sendCarDocumentBillEmail(documentId) {
 
   const subject = `${docLabel} — ${reg}`
   const htmlBody = `
-    <p>Forwarded from UN1T CRM for car <strong>${reg}</strong> (${[car.make, car.model].filter(Boolean).join(' ') || 'vehicle'}).</p>
+    <p>Forwarded from ${PLATFORM_NAME} for car <strong>${reg}</strong> (${[car.make, car.model].filter(Boolean).join(' ') || 'vehicle'}).</p>
     <p>Document type: <strong>${docLabel}</strong></p>
     <p>Original filename: ${doc.filename || 'n/a'}</p>
     <p>Xero will OCR this attachment and create a draft bill in Bills to pay → Draft.</p>

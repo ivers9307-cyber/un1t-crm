@@ -90,7 +90,7 @@ export default function OrgBrandingSettings({ orgId, orgName }) {
           value={companyName}
           onChange={e => setCompanyName(e.target.value)}
           className="flex-1 bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
-          placeholder="UN1T"
+          placeholder="Organisation name"
         />
         <button
           type="button"
@@ -103,15 +103,15 @@ export default function OrgBrandingSettings({ orgId, orgName }) {
       </div>
 
       {/* W1.B1 — the short wordmark product names are built from. The org
-          brand above may read "UN1T Dublin" while the product stays
-          "UN1T Points"; blank = use the brand name. Saved by the same
+          brand above may read "Example Gym Dublin" while the product stays
+          "Example Gym Points"; blank = use the brand name. Saved by the same
           Save button above. */}
       <div className="mt-4">
         <label className="block text-xs font-medium text-un1t-subtle mb-1.5">
           Short brand name (used in product names)
         </label>
         <p className="text-xs text-un1t-muted mb-2">
-          The wordmark in product names: &laquo;UN1T&raquo; &rarr; UN1T Points, UN1T HR. Leave blank to use the organisation name above.
+          The wordmark in product names: the short name followed by &ldquo;Points&rdquo; and &ldquo;HR&rdquo;. Leave blank to use the organisation name above.
         </p>
         <input
           type="text"

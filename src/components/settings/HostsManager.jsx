@@ -14,6 +14,7 @@ import { useRouter } from 'next/navigation'
 import { Store, Plus, AlertTriangle } from 'lucide-react'
 import { Button, Card, Field, Table, EmptyState, Loading } from '@/components/ui'
 import { hostCanTakePayments, PROVIDER_STRIPE_CONNECT } from '@/lib/event-hosts'
+import { PLATFORM_NAME } from '@/lib/brand-name'
 
 const PROVIDER_LABELS = {
   stripe_connect: 'Stripe Connect',
@@ -132,7 +133,7 @@ export default function HostsManager() {
       <Card title="New host">
         <p className="text-xs text-un1t-subtle mb-4">
           Add a third-party organiser. After creating, open the host to connect their Stripe account —
-          their event tickets will settle to that account with UN1T&rsquo;s booking fee kept per ticket.
+          their event tickets will settle to that account with {PLATFORM_NAME}&rsquo;s booking fee kept per ticket.
         </p>
         <form onSubmit={createHost} className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
@@ -163,7 +164,7 @@ export default function HostsManager() {
           <Field
             id="host-fee"
             label="Booking fee per ticket (€)"
-            hint="UN1T keeps this on every ticket the host sells. Leave blank for no fee. e.g. 2.00"
+            hint={`${PLATFORM_NAME} keeps this on every ticket the host sells. Leave blank for no fee. e.g. 2.00`}
             className="sm:max-w-xs"
           >
             {(p) => (

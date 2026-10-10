@@ -296,3 +296,24 @@ describe('CampaignDetail — Duplicate', () => {
     expect(push).not.toHaveBeenCalled()
   })
 })
+
+// W1.S2 — the From address shows again beside the name: it applies when it is
+// on the org's verified sending domain, otherwise the platform address sends
+// with the From name, and the card says which.
+describe('CampaignDetail — From line', () => {
+  it('shows "name <address>" with the verified-domain note when an address is saved', () => {
+    renderDetail({ from_name: 'Example Gym', from_email: 'news@example-gym.ie' })
+    const from = screen.getByTestId('campaign-detail-from')
+    expect(from.textContent).toBe('Example Gym <news@example-gym.ie>')
+    expect(from.nextElementSibling.textContent).toMatch(/verified sending domain/i)
+    expect(from.nextElementSibling.textContent).toMatch(/platform address/i)
+  })
+
+  it('shows the name alone, sent from the platform address, when no address is saved', () => {
+    renderDetail({ from_name: 'Example Gym', from_email: null })
+    const from = screen.getByTestId('campaign-detail-from')
+    expect(from.textContent).toBe('Example Gym')
+    expect(from.nextElementSibling.textContent).toMatch(/platform address/i)
+    expect(document.body.textContent).not.toContain('UN1T')
+  })
+})
