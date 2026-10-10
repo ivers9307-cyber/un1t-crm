@@ -20,6 +20,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('@/lib/host-auth', () => ({ getCurrentHost: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/app-url', () => ({ getAppUrl: () => 'https://crm.test' }))
+// W1.L3a — the test footer link is minted on the host anchor location's
+// tenant host, as the real send's is. Defaults to the CRM host.
+vi.mock('@/lib/tenant-host', () => ({ resolveCustomerBaseUrl: vi.fn(async () => 'https://crm.test') }))
 vi.mock('@/lib/postmark', async (importOriginal) => {
   const actual = await importOriginal()
   return { ...actual, sendEmail: vi.fn(async () => ({ messageId: 'pm-test-1' })) }
@@ -29,6 +32,7 @@ import { POST } from './route.js'
 import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
 import { sendEmail } from '@/lib/postmark'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 
 const HOST_ID = 'b0000000-0000-0000-0000-0000000000b1'
 const CAMPAIGN_ID = 'a0000000-0000-0000-0000-0000000000a1'
@@ -218,6 +222,24 @@ describe('POST /api/host/emails/[id]/send-test', () => {
     const html = sendEmail.mock.calls[0][0].htmlBody
     expect(html).toContain('Unsubscribe')
     expect(html).toContain('Pride Training Club')
+  })
+
+  // W1.L3a — the inert test-token footer link lands where the real one will:
+  // on the tenant host of the host's anchor location (event_hosts.
+  // anchor_location_id), never on the CRM host.
+  it("W1.L3a — the footer link is minted on the host anchor location's tenant host", async () => {
+    resolveCustomerBaseUrl.mockResolvedValueOnce('https://gym-a.repset.ie')
+    const made = makeDb({ host: { ...HOST_ROW, anchor_location_id: 'loc-anchor' } })
+    createServerClient.mockReturnValue(made.db)
+    const res = await post()
+    expect(res.status).toBe(200)
+    expect(resolveCustomerBaseUrl).toHaveBeenCalledWith(made.db, 'loc-anchor')
+    const html = sendEmail.mock.calls[0][0].htmlBody
+    expect(html).toContain('https://gym-a.repset.ie/unsubscribe/host/test-token')
+    expect(html).not.toContain('crm.test')
+    // The anchor must actually be READ, or the resolver is handed undefined.
+    const hostRead = made.statements.find((s) => s.table === 'event_hosts')
+    expect(hostRead.ops.find((o) => o.method === 'select').args[0]).toContain('anchor_location_id')
   })
 
   it('runs the sanitizer, so a style block in the body never reaches the inbox', async () => {
