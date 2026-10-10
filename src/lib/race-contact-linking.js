@@ -26,6 +26,49 @@ import { logWarn } from './log'
 import { splitName } from './name-utils'
 import { escapeLikePattern } from './like-escape'
 
+// W0.6b — contacts_email_org_unique (mig 712) is case-SENSITIVE on `email`,
+// so one organisation can legitimately hold `Sam@Example.com` and
+// `sam@example.com` as two rows, while every lookup here is a
+// case-INSENSITIVE ilike that matches both. `.maybeSingle()` turned that
+// pair into PGRST116, which the discarded error read as "no match": the
+// INSERT then 23505'd, the in-org re-check PGRST116'd again, and a known
+// member was refused on every signup. Each lookup reads `.limit(2)` and
+// picks deterministically instead; two is enough to tell "one" from "more".
+const HOLDER_LIMIT = 2
+
+/**
+ * Deterministic choice among contacts matched by a case-insensitive email
+ * lookup: the row whose stored email equals the normalised input EXACTLY
+ * first (it is the row the index would have collided on), then the oldest
+ * `created_at` (the original record, not a later import dupe), then the
+ * lowest id as a total-order tiebreak. Null for no rows.
+ *
+ * @param {Array<{id: string, email?: string|null, created_at?: string|null}>|null} rows
+ * @param {string} normalisedEmail lower-cased, trimmed
+ */
+export function pickEmailHolder(rows, normalisedEmail) {
+  if (!Array.isArray(rows) || rows.length === 0) return null
+  const exact = rows.filter((r) => r?.email === normalisedEmail)
+  const pool = exact.length ? exact : rows
+  return [...pool].sort((a, b) => {
+    const at = new Date(a?.created_at || 0).getTime()
+    const bt = new Date(b?.created_at || 0).getTime()
+    if (at !== bt) return at - bt
+    return String(a?.id).localeCompare(String(b?.id))
+  })[0] || null
+}
+
+/** Pick from a `.limit(HOLDER_LIMIT)` page, saying so when it held two. */
+function holderFrom(rows, normalisedEmail, where) {
+  const picked = pickEmailHolder(rows, normalisedEmail)
+  if (picked && rows.length > 1) {
+    logWarn('race-contact-linking', `several contacts hold ${normalisedEmail} ${where} (case variants); linking one deterministically`, {
+      picked: picked.id, candidates: rows.map((r) => r.id),
+    })
+  }
+  return picked?.id || null
+}
+
 /**
  * Find an existing contact at the location with the given email,
  * or create a fresh one. Returns the contact_id (or null on hard
@@ -81,13 +124,17 @@ async function findContactInOrg(db, locationId, normalisedEmail) {
   const ids = (siblings || []).map((l) => l.id).filter(Boolean)
   if (!ids.length) return null
 
-  const { data: match } = await db
+  const { data: matches, error } = await db
     .from('contacts')
-    .select('id')
+    .select('id, email, created_at')
     .ilike('email', escapeLikePattern(normalisedEmail))
     .in('location_id', ids)
-    .maybeSingle()
-  return match?.id || null
+    .limit(HOLDER_LIMIT)
+  if (error) {
+    logWarn('race-contact-linking', `org-scoped lookup failed for ${normalisedEmail}`, { locationId, err: error })
+    return null
+  }
+  return holderFrom(matches || [], normalisedEmail, 'in this organisation')
 }
 
 // `restrictToOrg` is accepted and deliberately not read: the org-scoped lookup
@@ -108,13 +155,17 @@ export async function findOrCreateRaceContact({ db, locationId, email, name = nu
     // caller then links a team_member / lead / booking to that stranger — the
     // same IDOR the restrictToLocation flag below exists to prevent, reached by
     // a different route. See src/lib/like-escape.js.
-    const { data: existing } = await db
+    const { data: existing, error: existingErr } = await db
       .from('contacts')
-      .select('id')
+      .select('id, email, created_at')
       .eq('location_id', locationId)
       .ilike('email', escapeLikePattern(normalised))
-      .maybeSingle()
-    if (existing?.id) return existing.id
+      .limit(HOLDER_LIMIT)
+    if (existingErr) {
+      logWarn('race-contact-linking', `location lookup failed for ${normalised}`, { locationId, err: existingErr })
+    }
+    const here = holderFrom(existing || [], normalised, 'at this location')
+    if (here) return here
 
     // No match here. Unless the caller restricts to this location, try the
     // sibling locations in the same organisation. Don't change location_id —

@@ -36,7 +36,7 @@ import { EMAIL_ATTACHMENT_BUCKET } from '@/lib/email-attachment-quota'
 import { outboundDraftPath } from '@/lib/email-outbound-attachments'
 import { makeDb, insertsInto, writesTo, seedObject, failWrites } from '../../tickets/_test-db'
 import {
-  LOC_A, MB_STUDIO, MB_ACCOUNTS, MB_OTHER_LOCATION,
+  LOC_A, LOC_B, MB_STUDIO, MB_ACCOUNTS, MB_OTHER_LOCATION,
   COACH, COACH_NO_INBOX, OWNER, MULTI_LOCATION,
   GRANT_STUDIO, GRANT_MULTI_STUDIO, GRANT_MULTI_OTHER_LOCATION, baseState,
 } from '../../tickets/_test-fixtures'
@@ -367,6 +367,61 @@ describe('POST /api/email/conversations/compose — contact linkage', () => {
 })
 
 // EMAIL-TICKET.6 — the contact lookup no longer swallows its error.
+// W0.6b — the contact link is scoped to the MAILBOX'S ORGANISATION.
+// contacts_email_org_unique (mig 712) is per organisation, so one address can
+// be a contact at several tenants; pickContact only PREFERRED the mailbox's
+// location and fell back to the whole pool, so composing from tenant A to an
+// address known only at tenant B filed A's conversation, email_sends row and
+// member history against B's person. The lookup now carries
+// `.in('location_id', orgLocationIdsFor(mailbox location))`; a sibling studio
+// in the same organisation is still a match, another organisation never is.
+describe('POST /api/email/conversations/compose — contact linkage stays inside the mailbox\'s organisation (W0.6b)', () => {
+  const LOC_OTHER_ORG = 'c0000000-0000-0000-0000-000000000003'
+  const ORG_UN1T = 'o0000000-0000-0000-0000-00000000000a'
+  const ORG_OTHER = 'o0000000-0000-0000-0000-00000000000b'
+  const LOCATIONS = [
+    { id: LOC_A, organization_id: ORG_UN1T },
+    { id: LOC_B, organization_id: ORG_UN1T },
+    { id: LOC_OTHER_ORG, organization_id: ORG_OTHER },
+  ]
+  const SIBLING_CONTACT = {
+    id: 'contact-sibling', location_id: LOC_B,
+    email: 'lead@example.com', created_at: '2026-01-01T00:00:00Z',
+  }
+  const FOREIGN_CONTACT = {
+    id: 'contact-foreign', location_id: LOC_OTHER_ORG,
+    email: 'lead@example.com', created_at: '2025-01-01T00:00:00Z',
+  }
+
+  it('links a contact at a sibling studio of the same organisation', async () => {
+    setupDb(baseState({ grants: [GRANT_STUDIO], locations: LOCATIONS, contacts: [SIBLING_CONTACT] }))
+    await post(VALID)
+    expect(insertsInto(db, 'email_tickets')[0].payload.contact_id).toBe(SIBLING_CONTACT.id)
+  })
+
+  it("never links another organisation's contact, even when it is the only holder", async () => {
+    setupDb(baseState({ grants: [GRANT_STUDIO], locations: LOCATIONS, contacts: [FOREIGN_CONTACT] }))
+    await post(VALID)
+    expect(insertsInto(db, 'email_tickets')[0].payload.contact_id).toBeNull()
+    expect(insertsInto(db, 'email_sends')).toHaveLength(0)
+    expect(sendEmail).toHaveBeenCalledTimes(1) // the email still goes — only the link is withheld
+  })
+
+  it("an older holder in another organisation never outranks this organisation's own", async () => {
+    // pickContact's age tiebreak must only ever run inside the org scope.
+    setupDb(baseState({ grants: [GRANT_STUDIO], locations: LOCATIONS, contacts: [FOREIGN_CONTACT, SIBLING_CONTACT] }))
+    await post(VALID)
+    expect(insertsInto(db, 'email_tickets')[0].payload.contact_id).toBe(SIBLING_CONTACT.id)
+  })
+
+  it('a failed sibling read narrows the scope to the mailbox location (never widens)', async () => {
+    // No `locations` rows at all: orgLocationIdsFor falls back to [LOC_A].
+    setupDb(baseState({ grants: [GRANT_STUDIO], contacts: [SIBLING_CONTACT, MEMBER_CONTACT] }))
+    await post(VALID)
+    expect(insertsInto(db, 'email_tickets')[0].payload.contact_id).toBe(MEMBER_CONTACT.id)
+  })
+})
+
 describe('POST /api/email/conversations/compose — query failures are loud', () => {
   it('500s BEFORE sending when the contact lookup errors', async () => {
     setupDb(baseState({

@@ -10,6 +10,7 @@ import { textToHtml } from '@/lib/mail/text-to-html'
 import { normalizeEmail, pickContact, inboundPreview } from '@/lib/email-inbox'
 import { ticketSubject } from '@/lib/mail/conversation'
 import { escapeLikePattern } from '@/lib/like-escape'
+import { orgLocationIdsFor, scopeFor } from '@/lib/inbound-contact-match'
 import { logAuditEvent } from '@/lib/audit'
 import {
   MAX_RECIPIENTS,
@@ -171,8 +172,19 @@ export async function POST(request) {
   // history silently omitted an email we sent them and their reply threaded
   // back to an unlinked conversation. Same ordering argument as the reply route —
   // this runs BEFORE the send, so refusing costs a retry and nothing else.
+  //
+  // W0.6b — scoped to the MAILBOX'S ORGANISATION, exactly as the inbound
+  // webhook is since W0.2. contacts_email_org_unique (mig 712) is per
+  // organisation, so one address can be a contact at several tenants, and
+  // pickContact only PREFERS the mailbox's location before falling back to
+  // the whole pool: composing from tenant A to an address known only at
+  // tenant B filed A's conversation and email_sends row against B's person.
+  // A sibling studio in the same organisation is still a match; a failed
+  // sibling read narrows to the mailbox's own location, never wider.
+  const orgLocIds = await orgLocationIdsFor(db, locationId)
   const { data: candidates, error: candidatesErr } = await db.from('contacts')
     .select('id, location_id, email, created_at')
+    .in('location_id', scopeFor(orgLocIds))
     .ilike('email', escapeLikePattern(to))
     .limit(CONTACT_MATCH_LIMIT)
   if (candidatesErr) {

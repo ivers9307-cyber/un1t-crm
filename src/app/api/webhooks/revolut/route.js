@@ -30,6 +30,8 @@ import { emitEvent, EVENT_TYPES } from '@/lib/contact-events'
 import { triggerSequencesForOrderStatus } from '@/lib/sequences'
 import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
 import { escapeLikePattern } from '@/lib/like-escape'
+import { orgLocationIdsFor, scopeFor } from '@/lib/inbound-contact-match'
+import { pickContact } from '@/lib/email-inbox'
 
 export const runtime = 'nodejs'
 
@@ -168,12 +170,30 @@ export async function POST(request) {
       // escapeLikePattern: buyer_email is typed into the public deposit form,
       // so a '%' or '_' in it would resolve to some unrelated contact and
       // enrol THEM in the order_* sequence.
-      const { data: existingContact } = await db
+      //
+      // W0.6b — scoped to the CAR'S ORGANISATION (cars.location_id is NOT
+      // NULL, mig 025, so there is always a scope; a failed sibling read
+      // narrows to the car's own studio). contacts_email_org_unique (mig 712)
+      // is per organisation, so one address can be a contact at several
+      // tenants: the estate-wide `.maybeSingle()` enrolled ANOTHER tenant's
+      // person in this tenant's order_* sequence when they were the only
+      // holder, and enrolled nobody (PGRST116 read as "no contact") when
+      // there were two. pickContact prefers the car's studio, then the
+      // oldest row, then the lowest id — the same choice the mail webhook
+      // makes. The error is logged, never discarded: no match is "no
+      // enrolment", which the caller already tolerates.
+      const buyerEmail = car.buyer_email.toLowerCase().trim()
+      const orgLocIds = await orgLocationIdsFor(db, car.location_id)
+      const { data: holders, error: holdersErr } = await db
         .from('contacts')
-        .select('id')
-        .ilike('email', escapeLikePattern(car.buyer_email.toLowerCase().trim()))
-        .maybeSingle()
-      const buyerContactId = existingContact?.id || null
+        .select('id, location_id, created_at')
+        .in('location_id', scopeFor(orgLocIds))
+        .ilike('email', escapeLikePattern(buyerEmail))
+        .limit(20)
+      if (holdersErr) {
+        console.warn(`[revolut-webhook] buyer contact lookup failed for car ${car.id}: ${holdersErr.message}`)
+      }
+      const buyerContactId = pickContact(holders || [], car.location_id)?.id || null
 
       await emitEvent({
         db,
