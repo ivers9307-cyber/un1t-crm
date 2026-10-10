@@ -31,6 +31,7 @@ import { getAppUrl } from '@/lib/app-url'
 import { ADMIN_ROLES } from '@/lib/schemas'
 import { loadHostForOrg } from '@/lib/hosts'
 import { logError } from '@/lib/log'
+import { sendHostPortalAccessEmail } from '@/lib/host-portal-access-email'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -114,10 +115,25 @@ export async function POST(request, props) {
       .eq('email', email)
       .maybeSingle()
     if (link) {
-      const { error: recErr } = await db.auth.admin.generateLink({ type: 'recovery', email, options: { redirectTo } })
+      // admin.generateLink only MINTS the link; Supabase sends nothing. We
+      // deliver it ourselves and report success only once Postmark accepts
+      // the message (it used to say "re-sent" while the host got no email).
+      // The action link is a bearer credential: never log it.
+      const { data: linkData, error: recErr } = await db.auth.admin.generateLink({ type: 'recovery', email, options: { redirectTo } })
       if (recErr) {
         logError('host-invite', 'resend recovery link failed', { err: recErr })
         return NextResponse.json({ success: false, error: recErr.message }, { status: 400 })
+      }
+      const actionLink = linkData?.properties?.action_link
+      if (!actionLink) {
+        logError('host-invite', 'resend recovery link came back without an action link', { hostId: host.id })
+        return NextResponse.json({ success: false, error: 'Could not create a set-password link. Try again.' }, { status: 502 })
+      }
+      try {
+        await sendHostPortalAccessEmail({ db, orgId, hostId: host.id, to: email, url: actionLink })
+      } catch (err) {
+        logError('host-invite', 'resend set-password email failed', { hostId: host.id, err: err?.message })
+        return NextResponse.json({ success: false, error: 'The set-password email could not be sent. Try again shortly.' }, { status: 502 })
       }
       return NextResponse.json({ success: true, data: { sentTo: email, kind: 'reinvite' } })
     }
