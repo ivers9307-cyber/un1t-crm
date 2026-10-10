@@ -54,10 +54,53 @@ const SWEPT = [
   'src/lib/hyrox/generate-block.js',
   'src/app/api/hyrox/blocks/[id]/expand/route.js',
   'src/app/api/hyrox/sessions/[id]/regenerate/route.js',
+  // ── W1.S1b: public pages, widgets, landing pages and TV boards ───────────
+  'src/components/BookingWidget.jsx',
+  'src/app/api/public/bookings/[slug]/route.js',
+  'src/components/RaceSignupWidget.jsx',
+  'src/components/RaceConfirmedPage.jsx',
+  'src/components/PreferenceCentre.jsx',
+  'src/app/api/preferences/[token]/route.js',
+  'src/components/UnsubscribePage.jsx',
+  'src/app/unsubscribe/[token]/page.js',
+  'src/app/api/preferences/hr-emails/route.js',
+  'src/components/WaitlistWidget.jsx',
+  'src/components/EventWaitlistForm.jsx',
+  'src/components/landing-page/BlockRenderers.jsx',
+  'src/components/landing-page/EditModeOverlay.jsx',
+  'src/lib/landing-page-blocks.js',
+  'src/components/LandingPageSettingsForm.jsx',
+  'src/components/ClassFunnel.jsx',
+  'src/app/welcome/page.js',
+  'src/app/welcome/[location]/page.js',
+  'src/app/welcome/[location]/events/page.js',
+  'src/app/welcome/[location]/status/page.js',
+  'src/app/start/[path]/page.js',
+  'src/app/event/[slug]/page.js',
+  'src/app/embed/event/[slug]/page.js',
+  'src/app/api/public/events/[slug]/register/route.js',
+  'src/app/api/public/races/[slug]/register/route.js',
+  'src/app/(members)/challenges/page.js',
+  'src/app/api/challenges/route.js',
+  'src/app/tv/layout.js',
+  'src/app/tv/cast/[token]/page.js',
+  'src/app/tv/cast/[token]/TVDisplay.jsx',
+  'src/app/tv/live/[token]/LiveTvClient.jsx',
+  'src/app/api/public/tv-live/[token]/route.js',
+  'src/app/tv/live/[token]/challenges/ChallengeTvClient.jsx',
+  'src/app/api/public/tv-challenges/[token]/route.js',
+  'src/app/(operations)/tv-displays/TVAdmin.jsx',
+  'src/app/settings/landing-page/page.js',
+  'src/components/CookieConsent.jsx',
 ]
 
 // file → exact literals the appendix marks `keep`. None in W1.S4 or W1.S3.
-const KEEP = {}
+const KEEP = {
+  // W1.S1b — the cookie banner renders only on un1tdublin.com (its host gate),
+  // so its heading is UN1T's own; `window.UN1TCookies` is a global identifier
+  // the site's footer links call, not copy.
+  'src/components/CookieConsent.jsx': ['UN1T Dublin', 'UN1TCookies'],
+}
 
 describe('UN1T literal sweep (W1.S*)', () => {
   it.each(SWEPT)('%s carries no customer/staff-visible UN1T literal', (file) => {

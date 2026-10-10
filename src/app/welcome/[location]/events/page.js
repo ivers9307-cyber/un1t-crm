@@ -5,7 +5,7 @@
 import { notFound } from 'next/navigation'
 import { headers } from 'next/headers'
 import { createServerClient } from '@/lib/supabase'
-import { getLocationBranding } from '@/lib/location-branding'
+import { resolveLocationBrand, resolveOrgChrome } from '@/lib/host-brand'
 import { resolveGymSiteName } from '@/lib/default-site-name'
 import { SiteHeader, SiteFooter } from '@/components/landing-page/BlockRenderers'
 import RevealManager from '@/components/landing-page/RevealManager'
@@ -25,7 +25,7 @@ async function loadByPath(path) {
     const db = createServerClient()
     const { data, error } = await db
       .from('landing_page_settings')
-      .select('*, locations:location_id ( id, name )')
+      .select('*, locations:location_id ( id, name, organization_id )')
       .eq('public_path', path)
       .maybeSingle()
     if (error) return null
@@ -62,7 +62,7 @@ export async function generateMetadata(props) {
   const row = await loadByPath(params.location)
   const hostBrand = await resolveGymSiteName({ host: (await headers()).get('host') })
   if (!row || !isPubliclyVisible(row.publish_state)) return { title: hostBrand }
-  const brand = (await getLocationBranding(createServerClient(), row.location_id)).companyName || hostBrand
+  const brand = (await resolveLocationBrand({ locationId: row.location_id })).companyName || hostBrand
   const studioName = row.locations?.name || brand
   const title = `Events — ${studioName}`
   const description = `Upcoming races, workshops and open days at ${studioName}. Book your spot.`
@@ -87,12 +87,18 @@ export default async function StudioEventsPage(props) {
   // `location_id.eq.undefined` reaching PostgREST.
   const locationId = row.locations?.id
   if (!locationId) notFound()
-  const studioName = row.locations?.name || 'UN1T Dublin'
+  // W1.S1b — the studio's brand and its org's site chrome, cached
+  // (host-brand.js); the fallbacks name THIS studio, never a literal.
+  const [brand, chrome] = await Promise.all([
+    resolveLocationBrand({ locationId }),
+    resolveOrgChrome({ orgId: row.locations?.organization_id || null }),
+  ])
+  const studioName = row.locations?.name || brand.companyName
   const today = todayIsoDublin()
   const nowMs = Date.now()
 
   const logoUrl     = row.logo_url || null
-  const logoAlt     = row.logo_alt || 'UN1T Dublin'
+  const logoAlt     = row.logo_alt || brand.companyName
   const logoWidthPx = row.logo_width_px || 200
 
   const db = createServerClient()
@@ -137,6 +143,7 @@ export default async function StudioEventsPage(props) {
         logoUrl={logoUrl}
         logoAlt={logoAlt}
         logoWidthPx={logoWidthPx}
+        wordmark={brand.shortName}
         sticky
         eventsHref={eventsHref}
       />
@@ -152,7 +159,7 @@ export default async function StudioEventsPage(props) {
           </div>
         </div>
       )}
-      <SiteFooter ctaHref={`/${row.public_path}#book`} />
+      <SiteFooter ctaHref={`/${row.public_path}#book`} brand={chrome.companyName} studios={chrome.studios} legalName={chrome.legalName} />
     </div>
   )
 }

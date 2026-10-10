@@ -21,6 +21,7 @@
 //      embedded checkout, or { confirmed: true } for free entries.
 
 import { NextResponse } from 'next/server'
+import { resolveLocationBrand } from '@/lib/host-brand'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { LIVE_REGISTRATION_STATUSES } from '@/lib/audience-filter'
@@ -288,9 +289,13 @@ export async function POST(request, props) {
     const unverified = validatedRoster.filter((m) => !m.is_member)
     if (unverified.length > 0) {
       const names = unverified.map((m) => m.name || '(unnamed)').join(', ')
+      // W1.S1b — the studio's brand (cached per location), never a literal.
+      const { companyName: brand } = await resolveLocationBrand({ locationId: race.location_id, db })
       return NextResponse.json({
         success: false,
-        error: `This race is open to UN1T members only. We couldn't verify membership for: ${names}. Each team member must use the email on their UN1T account.`,
+        error: brand
+          ? `This race is open to ${brand} members only. We couldn't verify membership for: ${names}. Each team member must use the email on their ${brand} account.`
+          : `This race is open to members only. We couldn't verify membership for: ${names}. Each team member must use the email on their member account.`,
         code: 'members_only_unverified',
         unverified_emails: unverified.map((m) => m.email).filter(Boolean),
       }, { status: 403 })

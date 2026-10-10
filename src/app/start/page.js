@@ -21,6 +21,8 @@ import { RevealArmScript } from '@/components/landing-page/reveal-arm'
 import VisitOriginCapture from '@/components/VisitOriginCapture'
 import ClassFunnel from '@/components/ClassFunnel'
 import { getLandingLogo, STILLORGAN_LANDING_LOGO } from '@/lib/landing-logo'
+import { resolveOrgChrome } from '@/lib/host-brand'
+import { UN1T_GROUP_ORG_ID } from '@/lib/brands'
 
 export const dynamic = 'force-dynamic'
 
@@ -59,9 +61,13 @@ async function loadContentBlocks() {
 }
 
 export default async function StartPage() {
-  const [blocks, logoUrl] = await Promise.all([
+  // W1.S1b — this page is UN1T Group's own (Appendix A `keep`): its footer and
+  // wordmark come from UN1T Group's configured chrome (resolveOrgChrome,
+  // cached), so the shared footer component carries no gym literal of its own.
+  const [blocks, logoUrl, chrome] = await Promise.all([
     loadContentBlocks(),
     getLandingLogo('stillorgan', STILLORGAN_LANDING_LOGO),
+    resolveOrgChrome({ orgId: UN1T_GROUP_ORG_ID }),
   ])
   return (
     <div className="min-h-screen bg-black text-white antialiased">
@@ -90,7 +96,7 @@ export default async function StartPage() {
         />
 
         <div className="relative z-10 flex-1 flex items-center justify-center px-5 pt-28 pb-16">
-          <ClassFunnel />
+          <ClassFunnel locationName="UN1T Stillorgan" />
         </div>
       </section>
 
@@ -101,10 +107,12 @@ export default async function StartPage() {
           publicPath="stillorgan"
           ctaHref={CTA_HREF}
           ctaLabel={CTA_LABEL}
+          wordmark={chrome.shortName}
+          locationName="UN1T Stillorgan"
         />
       ))}
 
-      <SiteFooter ctaHref={CTA_HREF} ctaLabel={CTA_LABEL} />
+      <SiteFooter ctaHref={CTA_HREF} ctaLabel={CTA_LABEL} brand={chrome.companyName} studios={chrome.studios} legalName={chrome.legalName} />
     </div>
   )
 }

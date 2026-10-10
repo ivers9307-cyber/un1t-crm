@@ -19,6 +19,7 @@
 // compete with the studio's main page in organic search.
 
 import { notFound } from 'next/navigation'
+import { headers } from 'next/headers'
 import { createServerClient } from '@/lib/supabase'
 import { blocksOrDefault } from '@/lib/landing-page-blocks'
 import BlockRenderer, { SiteHeader, SiteFooter } from '@/components/landing-page/BlockRenderers'
@@ -28,6 +29,8 @@ import VisitOriginCapture from '@/components/VisitOriginCapture'
 import ClassFunnel from '@/components/ClassFunnel'
 import { resolveLandingPath, classFunnelCtaLabel } from '@/lib/public-landing'
 import { isPubliclyVisible } from '@/lib/landing-page-visibility'
+import { resolveLocationBrand, resolveOrgChrome } from '@/lib/host-brand'
+import { resolveGymSiteName } from '@/lib/default-site-name'
 
 export const dynamic = 'force-dynamic'
 
@@ -42,7 +45,7 @@ async function loadByPath(rawPath) {
     const db = createServerClient()
     const { data, error } = await db
       .from('landing_page_settings')
-      .select('location_id, public_path, publish_state, blocks, logo_url, logo_alt, logo_width_px, locations:location_id ( name )')
+      .select('location_id, public_path, publish_state, blocks, logo_url, logo_alt, logo_width_px, locations:location_id ( name, organization_id )')
       .eq('public_path', path)
       .maybeSingle()
     if (error || !data) return null
@@ -60,8 +63,11 @@ export async function generateMetadata(props) {
   const params = await props.params
   const page = await loadByPath(params.path)
   const robots = { index: false, follow: false }
-  if (!page) return { title: 'UN1T Dublin', robots }
-  const studioName = page.row.locations?.name || 'UN1T Dublin'
+  // W1.S1b — no row: the request host's organisation brand (the platform
+  // name on the CRM host); a row: the studio's name, else its brand.
+  if (!page) return { title: await resolveGymSiteName({ host: (await headers()).get('host') }), robots }
+  const studioName = page.row.locations?.name
+    || (await resolveLocationBrand({ locationId: page.row.location_id })).companyName
   const heading = (typeof page.funnel.heading === 'string' && page.funnel.heading.trim()) || 'Book a class'
   return {
     title: `${heading} | ${studioName}`,
@@ -83,6 +89,13 @@ export default async function StudioStartPage(props) {
   // funnel IS the lead capture here.
   const content = blocks.filter((b) => b.type !== 'hero' && b.type !== 'lead_form' && b.type !== 'class_funnel')
 
+  // W1.S1b — this studio's brand and its organisation's site chrome, cached
+  // per location / org (host-brand.js); never a literal gym.
+  const [brand, chrome] = await Promise.all([
+    resolveLocationBrand({ locationId: row.location_id }),
+    resolveOrgChrome({ orgId: row.locations?.organization_id || null }),
+  ])
+
   return (
     <div className="min-h-screen bg-black text-white antialiased">
       <RevealArmScript />
@@ -90,8 +103,9 @@ export default async function StudioStartPage(props) {
       <RevealManager />
       <SiteHeader
         logoUrl={row.logo_url || null}
-        logoAlt={row.logo_alt || row.locations?.name || 'UN1T Dublin'}
+        logoAlt={row.logo_alt || row.locations?.name || brand.companyName}
         logoWidthPx={row.logo_width_px || 150}
+        wordmark={brand.shortName}
         sticky
         ctaHref={CTA_HREF}
         ctaLabel={ctaLabel}
@@ -112,6 +126,7 @@ export default async function StudioStartPage(props) {
         <div className="relative z-10 flex-1 flex items-center justify-center px-5 pt-28 pb-16">
           <ClassFunnel
             publicPath={path}
+            locationName={brand.locationName}
             // '' is "no consult upsell" and must be passed explicitly: an
             // absent prop falls back to Stillorgan's booking type.
             consultSlug={funnel.consult_slug || ''}
@@ -133,10 +148,12 @@ export default async function StudioStartPage(props) {
           publicPath={path}
           ctaHref={CTA_HREF}
           ctaLabel={ctaLabel}
+          wordmark={brand.shortName}
+          locationName={brand.locationName}
         />
       ))}
 
-      <SiteFooter ctaHref={CTA_HREF} ctaLabel={ctaLabel} />
+      <SiteFooter ctaHref={CTA_HREF} ctaLabel={ctaLabel} brand={chrome.companyName} studios={chrome.studios} legalName={chrome.legalName} />
     </div>
   )
 }

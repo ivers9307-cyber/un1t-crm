@@ -5,6 +5,7 @@ import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/perm
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
+import { resolveLocationBrand } from '@/lib/host-brand'
 // HUBDOOR.2 — the role floor is exported from challenges-access so the
 // page gate, the (members) tab strip and the Members redirect chain are
 // bound to THIS route's rule rather than each re-deriving it. Same value
@@ -65,7 +66,10 @@ export async function GET(request) {
   if (filterLocation) { const t = targetGate(user, filterLocation); if (t) return t }
   const { data, error } = await db.from('challenges').select('*').in('location_id', locationIds).order('ends_on', { ascending: false })
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
-  return NextResponse.json({ success: true, data: data || [] })
+  // W1.S1b — each listed location's short brand, so the page labels a
+  // points challenge "{Brand} Points" for ITS studio (cached per location).
+  const brandRows = await Promise.all(locationIds.map(async (id) => [id, (await resolveLocationBrand({ locationId: id, db })).shortName]))
+  return NextResponse.json({ success: true, data: data || [], brands: Object.fromEntries(brandRows) })
 }
 
 export async function POST(request) {

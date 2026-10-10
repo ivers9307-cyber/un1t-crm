@@ -399,20 +399,30 @@ describe('gym-floor surfaces keep UN1T (locked decision)', () => {
     expect(src).toContain('UN1T Points')
   })
 
-  it('the TV cast page keeps its UN1T wordmark', () => {
+  // W1.S1b — the gym floor keeps the GYM's brand, which is no longer a
+  // literal: every board names its studio's configured brand (UN1T's own
+  // studios resolve to "UN1T Stillorgan" / "UN1T Hatch Street").
+  it('the TV cast page titles itself from its display\'s studio brand, not a literal', () => {
     const src = repoFile('src/app/tv/cast/[token]/page.js')
-    expect(src).toMatch(/UN1T/)
+    expect(src).toContain('export async function generateMetadata')
+    expect(src).toMatch(/display\?\.company_name/)
+    expect(src).not.toMatch(/export const metadata/)
+    expect(src).not.toMatch(/title:\s*'[^']*UN1T/)
   })
 
-  // /tv/live/[token] (and the location-keyed board it replaced, gone since
-  // W0.9c) declared NO metadata and there was
-  // no /tv layout, so they inherited the root title — which CHROME.1 moved
-  // onto the platform name. That rebranded a locked surface by inheritance
-  // and left the two boards disagreeing with their own /tv/cast sibling.
-  // The subtree layout is now the one place that answers for all of them.
-  it('the whole /tv subtree is pinned to UN1T by its own layout', () => {
+  // /tv/live/[token] and /challenges declare no metadata of their own; the
+  // /tv layout is their floor. It names the request host's organisation
+  // (never the platform chrome, never a literal) and each board sets the tab
+  // from its payload's brand.
+  it('the /tv subtree floor resolves the host\'s organisation brand, not a literal', () => {
     const src = repoFile('src/app/tv/layout.js')
-    expect(src).toMatch(/export const metadata\s*=\s*\{[\s\S]*title:\s*'UN1T'/)
+    expect(src).toContain('export async function generateMetadata')
+    expect(src).toMatch(/resolveHostBrand\(/)
+    expect(src).not.toMatch(/export const metadata/)
+    expect(src).not.toMatch(/resolveDefaultSiteName|PLATFORM_SITE_NAME|PLATFORM_NAME/)
+    for (const rel of ['src/app/tv/live/[token]/LiveTvClient.jsx', 'src/app/tv/live/[token]/challenges/ChallengeTvClient.jsx']) {
+      expect(repoFile(rel)).toMatch(/document\.title = brandName/)
+    }
   })
 
   it('neither in-studio board is left inheriting the platform chrome', () => {

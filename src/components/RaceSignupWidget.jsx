@@ -45,6 +45,12 @@ import EventWaitlistForm from './EventWaitlistForm.jsx'
 // team (captain = 1), so this only ever sees 2..8.
 const ordinal = (n) => `${n}${n === 2 ? 'nd' : n === 3 ? 'rd' : 'th'}`
 
+// W1.S1b — the members-only copy names the studio's brand (the payload's
+// organization_name, HOST-CONSENT.1), never a literal gym; with no brand it
+// reads as plain "member".
+const memberOf = (brand) => (brand ? `${brand} member` : 'member')
+const accountOf = (brand) => (brand ? `${brand} account` : 'member account')
+
 const KIND_COPY = {
   race: {
     sidebarTimeOne: (t) => `Wave at ${t}`,
@@ -61,9 +67,9 @@ const KIND_COPY = {
     closedFull: 'This race is full.',
     closedNotYet: "Registration hasn't opened yet for this race.",
     closedClosed: 'Registration has closed for this race.',
-    membersOnlyExtra: ' This race is members-only — every team member must be a verified UN1T member.',
-    membersOnlyBlock: (n) =>
-      `This is a members-only race. We couldn't verify membership for ${n} team member(s). Make sure everyone uses the email on their UN1T account.`,
+    membersOnlyExtra: (brand) => ` This race is members-only: every team member must be a verified ${memberOf(brand)}.`,
+    membersOnlyBlock: (n, brand) =>
+      `This is a members-only race. We couldn't verify membership for ${n} team member(s). Make sure everyone uses the email on their ${accountOf(brand)}.`,
   },
   workshop: {
     sidebarTimeOne: (t) => `Starts at ${t}`,
@@ -80,9 +86,9 @@ const KIND_COPY = {
     closedFull: 'This workshop is full.',
     closedNotYet: "Bookings haven't opened yet for this workshop.",
     closedClosed: 'Bookings have closed for this workshop.',
-    membersOnlyExtra: " This workshop is members-only — every attendee must be a verified UN1T member.",
-    membersOnlyBlock: (n) =>
-      `This is a members-only workshop. We couldn't verify membership for ${n} attendee(s). Make sure everyone uses the email on their UN1T account.`,
+    membersOnlyExtra: (brand) => ` This workshop is members-only: every attendee must be a verified ${memberOf(brand)}.`,
+    membersOnlyBlock: (n, brand) =>
+      `This is a members-only workshop. We couldn't verify membership for ${n} attendee(s). Make sure everyone uses the email on their ${accountOf(brand)}.`,
   },
   seminar: {
     sidebarTimeOne: (t) => `Starts at ${t}`,
@@ -99,9 +105,9 @@ const KIND_COPY = {
     closedFull: 'This seminar is full.',
     closedNotYet: "Bookings haven't opened yet for this seminar.",
     closedClosed: 'Bookings have closed for this seminar.',
-    membersOnlyExtra: " This seminar is members-only — every attendee must be a verified UN1T member.",
-    membersOnlyBlock: (n) =>
-      `This is a members-only seminar. We couldn't verify membership for ${n} attendee(s). Make sure everyone uses the email on their UN1T account.`,
+    membersOnlyExtra: (brand) => ` This seminar is members-only: every attendee must be a verified ${memberOf(brand)}.`,
+    membersOnlyBlock: (n, brand) =>
+      `This is a members-only seminar. We couldn't verify membership for ${n} attendee(s). Make sure everyone uses the email on their ${accountOf(brand)}.`,
   },
   open_day: {
     sidebarTimeOne: (t) => `Starts at ${t}`,
@@ -118,9 +124,9 @@ const KIND_COPY = {
     closedFull: 'This open day is full.',
     closedNotYet: "Reservations haven't opened yet for this open day.",
     closedClosed: 'Reservations have closed for this open day.',
-    membersOnlyExtra: ' This open day is members-only — every attendee must be a verified UN1T member.',
-    membersOnlyBlock: (n) =>
-      `This is a members-only open day. We couldn't verify membership for ${n} attendee(s). Make sure everyone uses the email on their UN1T account.`,
+    membersOnlyExtra: (brand) => ` This open day is members-only: every attendee must be a verified ${memberOf(brand)}.`,
+    membersOnlyBlock: (n, brand) =>
+      `This is a members-only open day. We couldn't verify membership for ${n} attendee(s). Make sure everyone uses the email on their ${accountOf(brand)}.`,
   },
   masterclass: {
     sidebarTimeOne: (t) => `Starts at ${t}`,
@@ -137,9 +143,9 @@ const KIND_COPY = {
     closedFull: 'This masterclass is full.',
     closedNotYet: "Bookings haven't opened yet for this masterclass.",
     closedClosed: 'Bookings have closed for this masterclass.',
-    membersOnlyExtra: ' This masterclass is members-only — every attendee must be a verified UN1T member.',
-    membersOnlyBlock: (n) =>
-      `This is a members-only masterclass. We couldn't verify membership for ${n} attendee(s). Make sure everyone uses the email on their UN1T account.`,
+    membersOnlyExtra: (brand) => ` This masterclass is members-only: every attendee must be a verified ${memberOf(brand)}.`,
+    membersOnlyBlock: (n, brand) =>
+      `This is a members-only masterclass. We couldn't verify membership for ${n} attendee(s). Make sure everyone uses the email on their ${accountOf(brand)}.`,
   },
   // Lead Gen — a pure name/email/phone capture form. No team, no wave,
   // no pricing. The size selector hides itself (allowed_team_sizes is
@@ -161,7 +167,7 @@ const KIND_COPY = {
     closedFull: 'This form is closed.',
     closedNotYet: "This form isn't open yet.",
     closedClosed: 'This form is closed.',
-    membersOnlyExtra: '',
+    membersOnlyExtra: () => '',
     membersOnlyBlock: () => '',
   },
 }
@@ -400,7 +406,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
     if (race?.members_only) {
       const unverified = liveRoster.filter((m) => !isVerifiedMember(m.email))
       if (unverified.length > 0) {
-        setSubmitError(copy.membersOnlyBlock(unverified.length))
+        setSubmitError(copy.membersOnlyBlock(unverified.length, race?.organization_name || ''))
         return
       }
     }
@@ -785,8 +791,8 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
             <div className="mb-4 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-start gap-2">
               <Info size={14} className="mt-0.5 shrink-0 text-amber-300" />
               <span>
-                <strong className="text-amber-200">UN1T members:</strong> use the email on your UN1T account so member pricing applies. We&apos;ll match each entrant&apos;s email against active member records.
-                {race.members_only && copy.membersOnlyExtra}
+                <strong className="text-amber-200">{race.organization_name ? `${race.organization_name} members:` : 'Members:'}</strong> use the email on your {accountOf(race.organization_name)} so member pricing applies. We&apos;ll match each entrant&apos;s email against active member records.
+                {race.members_only && copy.membersOnlyExtra(race.organization_name || '')}
               </span>
             </div>
           )}
@@ -941,6 +947,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                       memberPricing={memberPricing}
                       fmt={fmtMoney}
                       onRetry={() => scheduleMemberCheck(captainEmail)}
+                      brand={race.organization_name || ''}
                     />
                     {fieldErrors.captain_email && <p className={errCls}>{fieldErrors.captain_email}</p>}
                   </div>
@@ -1000,6 +1007,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                           memberPricing={memberPricing}
                           fmt={fmtMoney}
                           onRetry={() => scheduleMemberCheck(m.email)}
+                          brand={race.organization_name || ''}
                         />
                       </div>
                     ))}
@@ -1048,8 +1056,10 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                     </>
                   ) : (
                     <>
-                      Yes, send me UN1T promotional updates and offers via email, SMS or WhatsApp.
-                      You can unsubscribe at any time. Event-related notifications are sent regardless.
+                      {race.organization_name
+                        ? `Yes, send me ${race.organization_name} promotional updates and offers via email, SMS or WhatsApp.`
+                        : 'Yes, send me promotional updates and offers via email, SMS or WhatsApp.'}
+                      {' '}You can unsubscribe at any time. Event-related notifications are sent regardless.
                     </>
                   )}
                 </span>
@@ -1100,7 +1110,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
 // Per-email status pill rendered under each email input. Quiet when
 // member pricing is off (no signal to give); renders the verified
 // badge or a muted "non-member rate" line otherwise.
-function MemberStatusBadge({ email, checks, memberFeeCents, nonMemberFeeCents, memberPricing, fmt, onRetry }) {
+function MemberStatusBadge({ email, checks, memberFeeCents, nonMemberFeeCents, memberPricing, fmt, onRetry, brand = '' }) {
   if (!memberPricing) return null
   const e = (email || '').trim().toLowerCase()
   if (!e) return null
@@ -1121,7 +1131,7 @@ function MemberStatusBadge({ email, checks, memberFeeCents, nonMemberFeeCents, m
     // count); the boxed treatment splits it into a title + subtitle.
     const title = c.first_name
       ? (count === 0 ? `Welcome, ${c.first_name}` : `Welcome back, ${c.first_name}`)
-      : 'UN1T member'
+      : (brand ? `${brand} member` : 'Member')
     let subtitle = 'Verified member'
     if (count != null && count >= 2) {
       subtitle = `Verified member · ${count} race${count === 1 ? '' : 's'} finished`

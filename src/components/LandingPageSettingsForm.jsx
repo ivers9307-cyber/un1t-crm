@@ -53,7 +53,12 @@ import { DEFAULT_MANUAL_CONFIRM_EMAIL } from '@/lib/manual-booking-confirm-copy'
 // each other and ignore the noise from extensions / dev tools.
 const MESSAGE_NAMESPACE = 'lp-editor'
 
-export default function LandingPageSettingsForm({ locationId, initialSettings, availableBookingTypes, publicPath = null, availableEvents = [] }) {
+// W1.S1b — `brand` is the studio's resolved brand ({ companyName, shortName },
+// getLocationBranding on the server page): new blocks' consent defaults, the
+// logo hints and the embed snippet's title name it, never a literal gym.
+export default function LandingPageSettingsForm({ locationId, initialSettings, availableBookingTypes, publicPath = null, availableEvents = [], brand = null }) {
+  const brandName = (brand?.companyName || '').trim()
+  const wordmarkText = (brand?.shortName || '').trim() || brandName
   // LP multi-page: the preview iframe + "View live" links point at the
   // SELECTED studio's public page when known (public_path from mig 227),
   // falling back to the generic /welcome for a single-studio install.
@@ -206,7 +211,7 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
         // (0 = at top; blocks.length = at bottom; n = between
         // existing[n-1] and existing[n]).
         let added = null
-        try { added = newBlockOfType(msg.blockType) } catch { return }
+        try { added = newBlockOfType(msg.blockType, { brand: brandName }) } catch { return }
         setBlocks((prev) => {
           const idx = Math.max(0, Math.min(prev.length, msg.atIndex))
           const next = prev.slice()
@@ -229,7 +234,7 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
-  }, [buildState])
+  }, [buildState, brandName])
 
   // ── Block ops ─────────────────────────────────────────────
   function updateBlock(id, patch) {
@@ -240,7 +245,7 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
     setExpanded((prev) => { const next = new Set(prev); next.delete(id); return next })
   }
   function addBlock(type) {
-    const block = newBlockOfType(type)
+    const block = newBlockOfType(type, { brand: brandName })
     setBlocks((prev) => [...prev, block])
     setExpanded((prev) => new Set(prev).add(block.id))
     setPickerOpen(false)
@@ -373,7 +378,9 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
       <section className="bg-un1t-surface border border-un1t-border rounded-lg p-4 space-y-3">
         <div>
           <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">Site header</h3>
-          <p className="text-[11px] text-un1t-muted mt-1">Logo for the top nav. Renders on every page state regardless of section ordering. Leave the logo blank to fall back to the &ldquo;UN1T&rdquo; wordmark text.</p>
+          <p className="text-[11px] text-un1t-muted mt-1">Logo for the top nav. Renders on every page state regardless of section ordering.{wordmarkText
+            ? <> Leave the logo blank to fall back to the &ldquo;{wordmarkText}&rdquo; wordmark text.</>
+            : ' Leave the logo blank to fall back to the brand wordmark text.'}</p>
         </div>
         <Field label="Logo image" hint="PNG / JPEG / WebP — large images are auto-optimized on upload. Transparent PNG works best on the dark nav background.">
           <MediaSlot
@@ -388,8 +395,8 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
           />
         </Field>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <Field label="Alt text" hint="What screen readers announce. Defaults to &ldquo;UN1T Dublin&rdquo; if blank.">
-            <Input value={logoAlt} onChange={setLogoAlt} maxLength={200} placeholder="UN1T Dublin" />
+          <Field label="Alt text" hint={brandName ? `What screen readers announce. Defaults to “${brandName}” if blank.` : 'What screen readers announce. Defaults to the brand name if blank.'}>
+            <Input value={logoAlt} onChange={setLogoAlt} maxLength={200} placeholder={brandName} />
           </Field>
           <Field label="Logo width (px)" hint="40-600. Defaults to 200px. Width drives the rendered size — height auto-follows the image's aspect ratio. Bump it up for a chunky wordmark, down for a square brand mark.">
             <input
@@ -454,6 +461,7 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
                   onUpdate={(patch) => updateBlock(block.id, patch)}
                   availableBookingTypes={availableBookingTypes}
                   availableEvents={availableEvents}
+                  brandName={brandName}
                   uploadMedia={uploadMedia}
                   uploading={uploading}
                   uploadErr={uploadErr}
@@ -573,7 +581,7 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
 function SortableBlockCard({
   block, expanded, onToggleExpand, onRemove, onUpdate,
   availableBookingTypes, availableEvents, uploadMedia, uploading, uploadErr, progress,
-  locationId, publicPath,
+  locationId, publicPath, brandName,
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: block.id })
   const style = {
@@ -628,6 +636,7 @@ function SortableBlockCard({
             onUpdate={onUpdate}
             availableBookingTypes={availableBookingTypes}
             availableEvents={availableEvents}
+            brandName={brandName}
             uploadMedia={uploadMedia}
             uploading={uploading}
             uploadErr={uploadErr}
@@ -762,11 +771,11 @@ function BookingEdit({ block, onUpdate, availableBookingTypes }) {
   )
 }
 
-function EventEdit({ block, onUpdate, availableEvents }) {
+function EventEdit({ block, onUpdate, availableEvents, brandName = '' }) {
   const events = availableEvents || []
   const origin = (typeof window !== 'undefined' && window.location?.origin) || 'https://un1tdublin.com'
   const snippet = block.slug
-    ? `<iframe src="${origin}/embed/event/${block.slug}" width="100%" height="900" style="border:0;max-width:760px" loading="lazy" title="UN1T event signup"></iframe>`
+    ? `<iframe src="${origin}/embed/event/${block.slug}" width="100%" height="900" style="border:0;max-width:760px" loading="lazy" title="${escapeAttr(brandName ? `${brandName} event signup` : 'Event signup')}"></iframe>`
     : ''
   return (
     <>
@@ -1534,4 +1543,10 @@ function MediaSlot({ url, onClear, onUpload, uploading, error, accept, label, ki
       {error && <p className="text-[11px] text-red-700">{error}</p>}
     </div>
   )
+}
+
+// W1.S1b — the embed snippet is HTML an operator pastes elsewhere; the brand
+// is operator text, so it is attribute-escaped.
+function escapeAttr(v) {
+  return String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
 }
