@@ -11,6 +11,7 @@ import { HOST_EVENT_STATUS_LABEL } from '@/lib/host-events'
 import { ensureHostSlug } from '@/lib/hosts'
 import { getAppUrl } from '@/lib/app-url'
 import { logWarn } from '@/lib/log'
+import { PLATFORM_NAME } from '@/lib/brand-name'
 import HostSubmitButton from '@/components/host/HostSubmitButton'
 import HostPayouts from '@/components/host/HostPayouts'
 import HostStatements from '@/components/host/HostStatements'
@@ -96,7 +97,7 @@ export default async function HostDashboard() {
   }
   const netByEvent = new Map((revenue?.perEvent || []).map((r) => [r.event_id, r]))
 
-  // Only Stripe-Connect hosts have a UN1T booking fee + a settled "net to host"
+  // Only Stripe-Connect hosts have a platform booking fee + a settled "net to host"
   // (mig 381 columns). Revolut/internal hosts collect directly, so those columns
   // are NULL (→0) and would misrepresent as "€0 net" — show them gross only.
   const isStripe = session.host.payment_provider === 'stripe_connect'
@@ -107,7 +108,9 @@ export default async function HostDashboard() {
     : isStripe
       ? [
           { label: 'Gross collected', value: formatMoney(revenue.totals.gross_cents, cur) },
-          { label: 'UN1T booking fees', value: formatMoney(revenue.totals.fee_cents, cur) },
+          // W1.S1c: the per-ticket fee is the platform's money rail (Stripe
+          // Connect application fee), so it carries the platform name.
+          { label: `${PLATFORM_NAME} booking fees`, value: formatMoney(revenue.totals.fee_cents, cur) },
           { label: 'Net to you', value: formatMoney(revenue.totals.net_to_host_cents, cur) },
           { label: 'Refunded', value: formatMoney(revenue.totals.refunded_cents, cur) },
         ]
