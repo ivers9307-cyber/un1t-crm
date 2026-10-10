@@ -13,7 +13,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 vi.mock('@/lib/plans', () => ({ getLocationPlan: vi.fn() }))
 
 import { _resetTenantEmailCache } from './tenant-email.js'
-import { serverTokenForLocation, listLiveTenantServers } from './postmark-server-for-location.js'
+import { serverTokenForLocation, listLiveTenantServers, hostServerToken } from './postmark-server-for-location.js'
 
 const LOC = 'a0000000-0000-0000-0000-000000000001'
 
@@ -154,5 +154,26 @@ describe('listLiveTenantServers', () => {
     const out = await listLiveTenantServers(db)
     expect(out.servers).toEqual([])
     expect(out.error).toContain('exploded')
+  })
+})
+
+// Host mail rides the GLOBAL server today: host-campaign-queue.js passes no
+// locationId to sendEmail and the host's stream (postmark_stream_id) exists
+// only there. Resolving a host's suppression to its org's tenant server would
+// 422 on a missing stream and silently never land. hostServerToken is the one
+// place that reading lives, so the flip happens once, in the PR that moves
+// host sends.
+describe('hostServerToken', () => {
+  const host = { id: 'h-1', anchor_location_id: 'loc-a', organization_id: 'org-1', postmark_stream_id: 'colm-events' }
+
+  it('returns null (the global server) for every host today, even one whose org has a LIVE tenant server', async () => {
+    const db = dbWithTenantRow('live')
+    expect(await hostServerToken(db, host)).toBeNull()
+    expect(db.fromCount()).toBe(0)
+  })
+
+  it('returns null for a missing host or db, without throwing', async () => {
+    await expect(hostServerToken(null, host)).resolves.toBeNull()
+    await expect(hostServerToken(dbWithTenantRow('live'), null)).resolves.toBeNull()
   })
 })

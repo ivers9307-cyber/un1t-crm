@@ -7,7 +7,7 @@ vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/host-unsubscribe', () => ({ verifyHostUnsubToken: vi.fn() }))
 vi.mock('@/lib/host-consent', () => ({ revokeHostConsent: vi.fn().mockResolvedValue({ ok: true, changed: true }) }))
 vi.mock('@/lib/postmark-suppressions', () => ({ suppressAtPostmark: vi.fn().mockResolvedValue({ ok: 1, failed: [] }) }))
-vi.mock('@/lib/postmark-server-for-location', () => ({ serverTokenForLocation: vi.fn(async () => null) }))
+vi.mock('@/lib/postmark-server-for-location', () => ({ hostServerToken: vi.fn(async () => null) }))
 vi.mock('@/lib/rate-limit', () => ({
   getClientIp: () => '5.5.5.5',
   checkRateLimit: vi.fn().mockResolvedValue({ allowed: true }),
@@ -20,7 +20,7 @@ import { createServerClient } from '@/lib/supabase'
 import { verifyHostUnsubToken } from '@/lib/host-unsubscribe'
 import { revokeHostConsent } from '@/lib/host-consent'
 import { suppressAtPostmark } from '@/lib/postmark-suppressions'
-import { serverTokenForLocation } from '@/lib/postmark-server-for-location'
+import { hostServerToken } from '@/lib/postmark-server-for-location'
 import { checkRateLimit } from '@/lib/rate-limit'
 
 function stubDb({ host = { id: 'h-1', postmark_stream_id: 'colm-events', anchor_location_id: 'loc-a' }, contact = { email: 'pat@x.ie' } } = {}) {
@@ -42,7 +42,7 @@ beforeEach(() => {
   checkRateLimit.mockResolvedValue({ allowed: true })
   revokeHostConsent.mockResolvedValue({ ok: true, changed: true })
   suppressAtPostmark.mockResolvedValue({ ok: 1, failed: [] })
-  serverTokenForLocation.mockResolvedValue(null)
+  hostServerToken.mockResolvedValue(null)
 })
 
 describe('POST /api/unsubscribe/host/[token]', () => {
@@ -57,15 +57,16 @@ describe('POST /api/unsubscribe/host/[token]', () => {
     // spend the per-IP budget.
     expect(checkRateLimit).not.toHaveBeenCalled()
   })
-  // W1.E4 — the host's server is resolved from its ANCHOR location (plan W1.E4).
-  it('pushes on the TENANT server when the host\'s org has a live one', async () => {
+  // W1.E4 — the host's server comes from hostServerToken (null = global today,
+  // because host sends ride the global server); whatever it answers is passed through.
+  it('asks hostServerToken for the host and passes its answer to the push', async () => {
     verifyHostUnsubToken.mockReturnValue({ hostId: 'h-1', contactId: 'c-1' })
-    serverTokenForLocation.mockResolvedValue('tenant-tok')
+    hostServerToken.mockResolvedValue('host-srv-tok')
     const db = stubDb()
     createServerClient.mockReturnValue(db)
     expect((await POST(req(), props)).status).toBe(200)
-    expect(serverTokenForLocation).toHaveBeenCalledWith(db, 'loc-a')
-    expect(suppressAtPostmark).toHaveBeenCalledWith('pat@x.ie', { stream: 'colm-events', serverToken: 'tenant-tok' })
+    expect(hostServerToken).toHaveBeenCalledWith(db, expect.objectContaining({ id: 'h-1', anchor_location_id: 'loc-a' }))
+    expect(suppressAtPostmark).toHaveBeenCalledWith('pat@x.ie', { stream: 'colm-events', serverToken: 'host-srv-tok' })
   })
   it('skips the Postmark push when the host has no stream yet', async () => {
     verifyHostUnsubToken.mockReturnValue({ hostId: 'h-1', contactId: 'c-1' })

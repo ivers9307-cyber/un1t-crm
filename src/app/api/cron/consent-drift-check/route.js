@@ -60,6 +60,9 @@ export const PAGE_SIZE = 1000
 // invocation is a timeout, not a repair. The set is ordered, healed addresses
 // drop out of it, and the job runs daily — so it converges, and the response
 // reports what is left.
+//
+// W1.E4 — the cap is PER SERVER PASS (global + each live tenant server), not
+// per run: each server's backlog converges on its own clock.
 export const MAX_SUPPRESSIONS_PER_RUN = 500
 
 // PMSUPP.1 — WHICH opt-outs the auto-heal is allowed to push, by
@@ -159,7 +162,9 @@ export async function loadOptedOutEmails(db, { locationIds = null } = {}) {
         .eq('email_marketing', false)
         .not('email', 'is', null)
       // W1.E4 — null = every location (the global server with no tenants);
-      // an array = only this server's locations.
+      // an array = only this server's locations. CAVEAT: once any tenant is
+      // live, a contact with a NULL location_id matches no server's .in() and
+      // is reconciled by none of the passes (0 such rows today).
       if (Array.isArray(locationIds)) q = q.in('location_id', locationIds)
       return q.order('id', { ascending: true }).range(from, to)
     },
@@ -214,14 +219,13 @@ export async function loadMailableEmails(db, { locationIds = null } = {}) {
  * from then on the global pass is scoped too, so a tenant's addresses never
  * reach UN1T's server. A location with no organization_id stays global.
  *
- * `locations` is read whole (no pagination): the estate is six rows and a
- * thousandth location is a long way off; the 1k cap would surface as a
- * tenant's locations silently landing on the global pass, so this is noted
- * rather than hidden.
+ * `locations` is paged (pageAll): under the 1k cap a tenant's 1,001st
+ * location would silently land on the global pass.
  *
  * Returns `{ servers, error }`; `serverToken` on each entry is a SECRET that
  * goes to the header builder and nowhere else — GET strips it before the
- * response. Never throws; a failed read is an error, not "no tenants".
+ * response. Never throws (both reads report `{ error }`, and anything else is
+ * caught); a failed read is an error, not "no tenants".
  */
 export async function planPostmarkServers(db) {
   const { servers: tenants, error: tenantError } = await listLiveTenantServers(db)
@@ -230,11 +234,17 @@ export async function planPostmarkServers(db) {
   const global = { label: 'global', organizationId: null, serverToken: null, locationIds: null }
   if (tenants.length === 0) return { servers: [global], error: null }
 
-  const { data: locations, error: locError } = await db
-    .from('locations')
-    .select('id, organization_id')
-    .order('id', { ascending: true })
-  if (locError) return { servers: [], error: `locations: ${locError.message}` }
+  let locations
+  try {
+    const { rows, error: locError } = await pageAll(
+      (from, to) => db.from('locations').select('id, organization_id').order('id', { ascending: true }).range(from, to),
+      'locations',
+    )
+    if (locError) return { servers: [], error: locError }
+    locations = rows
+  } catch (err) {
+    return { servers: [], error: `locations: ${err?.message || String(err)}` }
+  }
 
   const byOrg = new Map(tenants.map(t => [t.organizationId, []]))
   const globalIds = []

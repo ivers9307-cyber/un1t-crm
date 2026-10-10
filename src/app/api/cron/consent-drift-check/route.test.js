@@ -352,6 +352,18 @@ describe('planPostmarkServers (W1.E4)', () => {
     ])
   })
 
+  it('paginates the locations read past the 1,000-row cap — the 1,001st tenant location never falls into the global pass', async () => {
+    const locations = Array.from({ length: PAGE_SIZE }, (_, i) => ({ id: `loc-u-${String(i).padStart(4, '0')}`, organization_id: 'org-u' }))
+    locations.push({ id: 'loc-t-last', organization_id: 'org-t' })
+    const db = makeDb({ tenantServers: [{ organization_id: 'org-t', postmark_server_token: 'tok-t' }], locations })
+    const out = await planPostmarkServers(db)
+    expect(out.error).toBeNull()
+    expect(out.servers[1].locationIds).toEqual(['loc-t-last'])
+    expect(out.servers[0].locationIds).toHaveLength(PAGE_SIZE)
+    expect(out.servers[0].locationIds).not.toContain('loc-t-last')
+    expect(db.statements.filter(st => st.table === 'locations').map(st => st.range)).toEqual([[0, 999], [1000, 1999]])
+  })
+
   it('reports a failed tenant read instead of silently running global-only', async () => {
     const db = makeDb({ failTable: 'tenant_email_domains' })
     const out = await planPostmarkServers(db)

@@ -17,7 +17,7 @@ import { verifyHostUnsubToken } from '@/lib/host-unsubscribe'
 import { createServerClient } from '@/lib/supabase'
 import { revokeHostConsent } from '@/lib/host-consent'
 import { suppressAtPostmark } from '@/lib/postmark-suppressions'
-import { serverTokenForLocation } from '@/lib/postmark-server-for-location'
+import { hostServerToken } from '@/lib/postmark-server-for-location'
 import { logError } from '@/lib/log'
 
 export const dynamic = 'force-dynamic'
@@ -83,12 +83,13 @@ export default async function HostUnsubscribePage(props) {
   // cron reconciles the UN1T broadcast stream only, so a repeat click is the
   // one retry a failed host-stream push gets.
   // Second refusal at Postmark on the host's own stream — best-effort.
-  // W1.E4 — on the host's org server (anchor location → org), else global.
+  // W1.E4 — on the server host mail goes out on (hostServerToken: null =
+  // global today, since host sends ride the global server).
   if (host.postmark_stream_id) {
     try {
       const { data: contact } = await db.from('contacts').select('email').eq('id', ids.contactId).maybeSingle()
       if (contact?.email) {
-        const serverToken = await serverTokenForLocation(db, host.anchor_location_id)
+        const serverToken = await hostServerToken(db, host)
         await suppressAtPostmark(contact.email, { stream: host.postmark_stream_id, serverToken })
       }
     } catch (e) {

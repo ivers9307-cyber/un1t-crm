@@ -71,3 +71,35 @@ export async function listLiveTenantServers(db) {
     return { servers: [], error: err?.message || String(err) }
   }
 }
+
+/**
+ * The Postmark server a HOST's mail goes out on — null = the global server,
+ * for every host, today.
+ *
+ * ┌─ WHY NOT serverTokenForLocation(db, host.anchor_location_id) ────────────┐
+ * │ Host campaign sends ride the GLOBAL server: host-campaign-queue.js:227    │
+ * │ calls sendEmail with no locationId, and the host's own stream            │
+ * │ (event_hosts.postmark_stream_id) exists only on that server. Resolving a │
+ * │ host suppression to its org's tenant server would push to a server that  │
+ * │ has no such stream (Postmark 422) and never refuses a host send: the     │
+ * │ suppression would silently never land. One reading of "which server does │
+ * │ host mail use" lives here so the two can never disagree.                 │
+ * │                                                                          │
+ * │ FLIP THIS to `serverTokenForLocation(db, host.anchor_location_id)` in    │
+ * │ the SAME PR that (a) passes `locationId: host.anchor_location_id` to the │
+ * │ host send in host-campaign-queue.js and (b) creates the host's stream on │
+ * │ the tenant server (ensureTenantServerStreams, postmark-account.js).      │
+ * └──────────────────────────────────────────────────────────────────────────┘
+ *
+ * Takes the host row (not a location id) so the flip is a one-line change
+ * for every caller. `db` is unused today and part of the signature for the
+ * same reason. NEVER throws.
+ *
+ * @param {object} db - service-role client
+ * @param {{ anchor_location_id?: string|null }|null} host - an event_hosts row
+ * @returns {Promise<string|null>}
+ */
+export async function hostServerToken(db, host) {
+  if (!db || !host) return null
+  return null
+}

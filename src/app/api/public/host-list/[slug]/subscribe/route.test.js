@@ -19,14 +19,14 @@ vi.mock('@/lib/host-consent', () => ({
 }))
 vi.mock('@/lib/postmark-suppressions', () => ({ unsuppressAtPostmark: vi.fn().mockResolvedValue({ ok: 1, failed: [], skipped: [] }) }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
-vi.mock('@/lib/postmark-server-for-location', () => ({ serverTokenForLocation: vi.fn(async () => null) }))
+vi.mock('@/lib/postmark-server-for-location', () => ({ hostServerToken: vi.fn(async () => null) }))
 
 import { POST } from './route.js'
 import { createServerClient } from '@/lib/supabase'
 import { applyFormMarketingConsent } from '@/lib/marketing-consent'
 import { grantHostConsent, resubscribeHost } from '@/lib/host-consent'
 import { unsuppressAtPostmark } from '@/lib/postmark-suppressions'
-import { serverTokenForLocation } from '@/lib/postmark-server-for-location'
+import { hostServerToken } from '@/lib/postmark-server-for-location'
 import { logError } from '@/lib/log'
 
 const HOST = { id: 'h-1', name: 'Pride Training Club', slug: 'pride', organization_id: 'org-1', anchor_location_id: 'loc-a', postmark_stream_id: 'colm-events' }
@@ -62,7 +62,7 @@ const props = { params: Promise.resolve({ slug: 'pride' }) }
 
 beforeEach(() => {
   vi.clearAllMocks()
-  serverTokenForLocation.mockResolvedValue(null)
+  hostServerToken.mockResolvedValue(null)
 })
 
 describe('POST /api/public/host-list/[slug]/subscribe — HOST-CONSENT.1', () => {
@@ -85,14 +85,15 @@ describe('POST /api/public/host-list/[slug]/subscribe — HOST-CONSENT.1', () =>
     expect(unsuppressAtPostmark).toHaveBeenCalledWith('pat@example.com', { stream: 'colm-events', serverToken: null })
   })
 
-  // W1.E4 — the lift goes to the host's org server, resolved from the anchor location.
-  it('lifts on the TENANT server when the host\'s org has a live one', async () => {
-    serverTokenForLocation.mockResolvedValue('tenant-tok')
+  // W1.E4 — the lift goes to whichever server hostServerToken names (null =
+  // global today, because host sends ride the global server).
+  it('asks hostServerToken for the host and passes its answer to the lift', async () => {
+    hostServerToken.mockResolvedValue('host-srv-tok')
     const db = stubDb({ suppressed: true })
     createServerClient.mockReturnValue(db)
     await POST(req(), props)
-    expect(serverTokenForLocation).toHaveBeenCalledWith(db, 'loc-a')
-    expect(unsuppressAtPostmark).toHaveBeenCalledWith('pat@example.com', { stream: 'colm-events', serverToken: 'tenant-tok' })
+    expect(hostServerToken).toHaveBeenCalledWith(db, expect.objectContaining({ id: 'h-1', anchor_location_id: 'loc-a' }))
+    expect(unsuppressAtPostmark).toHaveBeenCalledWith('pat@example.com', { stream: 'colm-events', serverToken: 'host-srv-tok' })
   })
 
   it('skips the Postmark lift when the host has no stream yet', async () => {

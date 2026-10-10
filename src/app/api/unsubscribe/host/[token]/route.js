@@ -20,7 +20,7 @@ import { createServerClient } from '@/lib/supabase'
 import { verifyHostUnsubToken } from '@/lib/host-unsubscribe'
 import { revokeHostConsent } from '@/lib/host-consent'
 import { suppressAtPostmark } from '@/lib/postmark-suppressions'
-import { serverTokenForLocation } from '@/lib/postmark-server-for-location'
+import { hostServerToken } from '@/lib/postmark-server-for-location'
 import { getClientIp, checkRateLimit, rateLimitResponse } from '@/lib/rate-limit'
 import { logError, logWarn } from '@/lib/log'
 import { getRequestOrigin } from '@/lib/app-url'
@@ -73,13 +73,14 @@ export async function POST(request, props) {
   // cron reconciles the UN1T broadcast stream only, so a repeat click is the
   // one retry a failed host-stream push gets.
   // Second, independent refusal at Postmark on the HOST's stream — best-effort.
-  // W1.E4 — on the host's org server (resolved from the host's anchor
-  // location), or the global server when the org has no live one.
+  // W1.E4 — on the server host mail goes out on: hostServerToken answers
+  // null (global) today, because host sends ride the global server and the
+  // host stream exists only there — read its comment before changing that.
   if (host.postmark_stream_id) {
     try {
       const { data: contact } = await db.from('contacts').select('email').eq('id', ids.contactId).maybeSingle()
       if (contact?.email) {
-        const serverToken = await serverTokenForLocation(db, host.anchor_location_id)
+        const serverToken = await hostServerToken(db, host)
         const push = await suppressAtPostmark(contact.email, { stream: host.postmark_stream_id, serverToken })
         if (push?.failed?.length) logWarn('host-unsubscribe', 'Postmark host-stream suppress failed', { message: push.failed[0]?.message })
       }
