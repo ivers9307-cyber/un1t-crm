@@ -3,17 +3,21 @@
 // answered 'invalid', so ~142 refusals a day hid in `invalid` (one refused id,
 // re-read every 10 minutes since 30 Aug 2026).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+// W1.M3b — discovery now goes through the membership seam, which reads the
+// credentials ONCE at discovery (membershipSourceState) before the per-location
+// re-read these tests exercise: the first answer is the seam's, the second the
+// run's.
 
 const h = vi.hoisted(() => ({ candidates: [], runUpdates: [] }))
 
-const LOC = { id: 'loc-1', name: 'Studio', settings: { glofox: { branch_id: 'b', api_key: 'k', api_token: 't' } } }
+const LOC = { id: 'loc-1', name: 'Studio', active: true, membership_source: 'glofox', settings: { glofox: { branch_id: 'b', api_key: 'k', api_token: 't' } } }
 const GOOD = '0000000000000000000000a1'
 const REFUSED = '0000000000000000000000b2'
 const GONE = '0000000000000000000000c3'
 const CODE = 'Resource not available, empty result cant be processed'
 
 function result(st) {
-  if (st.table === 'locations') return { data: [LOC], error: null }
+  if (st.table === 'locations') return { data: st.single ? LOC : [LOC], error: null }
   if (st.table === 'glofox_sync_runs' && st.op === 'insert') return { data: { id: 'run-1' }, error: null }
   if (st.table === 'glofox_sync_runs' && st.op === 'update') { h.runUpdates.push(st.payload); return { data: null, error: null } }
   if (st.table === 'contacts' && st.head) return { data: null, count: 0, error: null }
@@ -25,6 +29,7 @@ function builder(table) {
   const b = {}
   for (const m of ['eq', 'in', 'not', 'or', 'is', 'order', 'range', 'filter', 'single']) b[m] = () => b
   b.select = (_cols, opts) => { if (opts?.head) st.head = true; return b }
+  b.maybeSingle = () => { st.single = true; return b }
   b.insert = (p) => { st.op = 'insert'; st.payload = p; return b }
   b.update = (p) => { st.op = 'update'; st.payload = p; return b }
   b.then = (resolve, reject) => Promise.resolve().then(() => result(st)).then(resolve, reject)
@@ -97,7 +102,8 @@ describe('GET /api/cron/glofox-detail-backfill — REGISTRYREAD.1b unreadable se
     const { glofoxCredentialsForLocation } = await import('@/lib/glofox')
     const { GLOFOX_SETTINGS_UNREADABLE_MESSAGE } = await import('@/lib/glofox-settings-read')
 
-    glofoxCredentialsForLocation.mockResolvedValueOnce({ branchId: null, apiKey: null, apiToken: null, readError: 'glofox_settings_unreadable' })
+    glofoxCredentialsForLocation.mockResolvedValueOnce({ branchId: 'b', apiKey: 'k', apiToken: 't', readError: null }) // the seam's discovery read
+      .mockResolvedValueOnce({ branchId: null, apiKey: null, apiToken: null, readError: 'glofox_settings_unreadable' })
     const out = await (await GET(req())).json()
     expect(out.per_location[0]).toMatchObject({ status: 'failed', first_error: GLOFOX_SETTINGS_UNREADABLE_MESSAGE })
     expect(h.runUpdates.at(-1)).toMatchObject({ status: 'failed', first_error: GLOFOX_SETTINGS_UNREADABLE_MESSAGE })
@@ -105,7 +111,8 @@ describe('GET /api/cron/glofox-detail-backfill — REGISTRYREAD.1b unreadable se
     const unreadableStamps = stampHeartbeat.mock.calls.length
 
     vi.clearAllMocks()
-    glofoxCredentialsForLocation.mockResolvedValueOnce({ branchId: null, apiKey: null, apiToken: null, readError: null })
+    glofoxCredentialsForLocation.mockResolvedValueOnce({ branchId: 'b', apiKey: 'k', apiToken: 't', readError: null }) // the seam's discovery read
+      .mockResolvedValueOnce({ branchId: null, apiKey: null, apiToken: null, readError: null })
     const missing = await (await GET(req())).json()
     expect(missing.per_location[0]).toMatchObject({ status: 'failed', first_error: 'Glofox credentials missing on this location.' })
     expect(stampHeartbeat.mock.calls.length).toBe(unreadableStamps)

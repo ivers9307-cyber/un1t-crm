@@ -45,8 +45,12 @@ export async function POST(request) {
   if (creds.readError) {
     return NextResponse.json({ success: false, code: GLOFOX_SETTINGS_UNREADABLE, error: GLOFOX_SETTINGS_UNREADABLE_MESSAGE }, { status: 503 })
   }
-  if (missingGlofoxCredentialsForLocation(creds)) {
-    return NextResponse.json({ success: false, error: 'Location not connected to Glofox' }, { status: 400 })
+  // W1.M3b — missingGlofoxCredentialsForLocation returns an ARRAY; read as a
+  // boolean it was always truthy, so this route answered 400 for every
+  // location, connected or not, since it landed.
+  const missing = missingGlofoxCredentialsForLocation(creds)
+  if (missing.length) {
+    return NextResponse.json({ success: false, error: `Location not connected to Glofox (missing: ${missing.join(', ')})` }, { status: 400 })
   }
 
   let members = 0
