@@ -19,6 +19,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { useFocusEffect, useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../../lib/member/contact-context'
+import { useMemberBrand } from '../../../lib/member/use-member-brand'
 import { supabase } from '../../../lib/member/supabase'
 import { api } from '../../../lib/member/api'
 import { crmApi } from '../../../lib/member/api'
@@ -26,7 +27,7 @@ import Card from '../../../components/member/ui/Card'
 import ErrorRetry from '../../../components/member/ErrorRetry'
 import JourneyCard from '../../../components/member/JourneyCard'
 import ZoneBar from '../../../components/member/ui/ZoneBar'
-import { GOAL_DEFS, computeProgress } from 'shared/goals'
+import { goalDefs, computeProgress } from 'shared/goals'
 import { shapeJourneyCard } from 'shared/onboarding-journey'
 import { sourceLabel, durationMinutes, sessionDate } from 'shared/format'
 import { weeklyStreak } from 'shared/hr-analytics'
@@ -797,6 +798,8 @@ function CoachKudosCard({ kudos, accent = PEARL, onPress }) {
 // are computed in the Home loader.
 function WeekDigestCard({ digest, accent = PEARL, onDismiss }) {
   const { weekLabel, classes, points, burnCount, earnedBurn, leagueFinish } = digest
+  // W1.S5 — "{Brand} Points" from the member's studio brand (bare "Points" until it loads).
+  const { productNames } = useMemberBrand()
   const finishLine = leagueFinish
     ? `#${leagueFinish.rank} of ${leagueFinish.of} friends`
     : null
@@ -829,7 +832,7 @@ function WeekDigestCard({ digest, accent = PEARL, onDismiss }) {
           class-capacity/spaces info ever surfaces here. */}
       <View className="mt-4 flex-row gap-3">
         <WeekStat value={String(classes)} label={classes === 1 ? 'class' : 'classes'} />
-        <WeekStat value={points.toLocaleString()} label="UN1T Points" />
+        <WeekStat value={points.toLocaleString()} label={productNames.points} />
         <WeekStat
           value={String(earnedBurn ? burnCount : 0)}
           label={burnCount === 1 ? 'Burn' : 'Burns'}
@@ -1078,6 +1081,9 @@ function lucideToIonicon(iconName) {
 }
 
 function GoalsCard({ goals, sessions }) {
+  // W1.S5 — goal labels name the product ("{Brand} Points this week").
+  const { shortName } = useMemberBrand()
+  const defs = goalDefs(shortName)
   const router = useRouter()
   const hasGoals = (goals || []).length > 0
   return (
@@ -1098,7 +1104,7 @@ function GoalsCard({ goals, sessions }) {
       ) : (
         <View className="mt-3 gap-3">
           {goals.slice(0, 2).map((g) => {
-            const def = GOAL_DEFS[g.kind]
+            const def = defs[g.kind]
             const p = computeProgress(g, sessions)
             return (
               <GoalRow key={g.id} label={def?.label || g.kind} progress={p} />

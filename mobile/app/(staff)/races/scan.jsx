@@ -39,7 +39,7 @@ export default function MobileCheckinScanner() {
     setLocked(true)
     const parsed = parseCheckinQr(data)
     if (!parsed) {
-      setResult({ ok: false, msg: 'That’s not a UN1T check-in code.' })
+      setResult({ ok: false, msg: 'That’s not a check-in code.' })
       return
     }
     setBusy(true)

@@ -28,6 +28,7 @@ import {
   enableAppleHealthBackground,
   syncAppleHealth,
 } from '../../../lib/member/apple-health-sync'
+import { useMemberBrand } from '../../../lib/member/use-member-brand'
 import { crmApi } from '../../../lib/member/api'
 import { setStoredPermsVersion } from '../../../lib/member/apple-health-perms'
 import { hkConnectedKey, hkCursorKey, hkPermsVersionKey } from '../../../lib/member/apple-health-keys'
@@ -38,6 +39,9 @@ export default function ConnectAppleHealth() {
   const router = useRouter()
   const { contact } = useAuth()
   const contactId = contact?.id
+  // W1.S5 — the studio that reads the workouts; bare "your studio" until it loads.
+  const { companyName } = useMemberBrand()
+  const studio = companyName || 'your studio'
 
   const [connected, setConnected] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -206,7 +210,7 @@ export default function ConnectAppleHealth() {
         </View>
 
         <Text className="mt-5 text-sm leading-5 text-chalk-2">
-          Connect Apple Health so UN1T can read your workouts and heart rate. We use them to
+          Connect Apple Health so {studio} can read your workouts and heart rate. We use them to
           score your sessions, track your progress over time, and include you in gym challenges.
         </Text>
 
@@ -231,7 +235,7 @@ export default function ConnectAppleHealth() {
                 <Text className="text-base font-display text-chalk">Connected</Text>
               </View>
               <Text className="mt-1 text-xs text-chalk-2">
-                Your Apple Health workouts and heart rate sync to UN1T automatically.
+                Your Apple Health workouts and heart rate sync to {studio} automatically.
               </Text>
             </View>
 
