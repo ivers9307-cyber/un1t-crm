@@ -23,6 +23,7 @@ import EmailSignatureForm from '@/components/EmailSignatureForm'
 import PasswordChangeForm from '@/components/PasswordChangeForm'
 import StudioPinSettings from '@/components/StudioPinSettings'
 import CalendarFeedCard from '@/components/CalendarFeedCard'
+import { getLocationBranding } from '@/lib/location-branding'
 
 export const dynamic = 'force-dynamic'
 
@@ -59,6 +60,8 @@ export default async function AccountPage() {
   // device settings card. Single targeted read; the rest of the user
   // object is already loaded by getCurrentUser.
   const db = createServerClient()
+  // W1.S2 — the contracts link names the studio's brand, never a literal.
+  const { companyName: brand } = await getLocationBranding(db, user.activeLocation?.id)
   const { data: pinInfo } = await db
     .from('profiles')
     .select('pin_hash, pin_set_at, home_screen_path')
@@ -122,7 +125,7 @@ export default async function AccountPage() {
               <div>
                 <div className="text-sm font-medium text-un1t-text">Your contracts</div>
                 <div className="text-xs text-un1t-subtle mt-0.5">
-                  Review and sign documents UN1T has issued you
+                  Review and sign documents {brand || 'your employer'} has issued you
                 </div>
               </div>
             </div>

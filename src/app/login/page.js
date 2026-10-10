@@ -14,6 +14,7 @@ import { Lock, Mail } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import { safeInternalPath } from '@/lib/urlish'
 import { DEACTIVATED_MESSAGE, isBannedSignInError, fetchAccountState } from '@/lib/login-account-state'
+import { PLATFORM_NAME } from '@/lib/brand-name'
 
 // useSearchParams wants dynamic rendering; the Suspense boundary lets Next.js
 // skip prerender at build time (permanent React 19 / Next 16 pattern).
@@ -235,7 +236,7 @@ function LoginInner() {
           {branding?.logo_url ? (
             <img src={branding.logo_url} alt={branding.company_name || 'Logo'} className="h-12 mx-auto object-contain" />
           ) : (
-            <h1 className="text-3xl font-bold tracking-wider text-un1t-text">{branding?.company_name || 'UN1T'}</h1>
+            <h1 className="text-3xl font-bold tracking-wider text-un1t-text">{branding?.company_name || PLATFORM_NAME}</h1>
           )}
           <p className="text-sm text-un1t-subtle mt-2">Lead Management</p>
         </div>

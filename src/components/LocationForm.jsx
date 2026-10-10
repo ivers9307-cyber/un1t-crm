@@ -216,7 +216,7 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
             required
             value={name}
             onChange={e => setName(e.target.value)}
-            placeholder="UN1T Dublin City"
+            placeholder="e.g. Dublin City"
             className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
           />
         </div>

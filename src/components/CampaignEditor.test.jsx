@@ -41,6 +41,7 @@ vi.mock('./AudienceBuilder', () => ({
 // below). Route-by-route coverage: CampaignEditor.routes.test.jsx.
 
 import CampaignEditor from './CampaignEditor.jsx'
+import { resetLocationBrandCache } from './use-location-brand'
 
 const BASE = {
   id: 'camp-1',
@@ -379,5 +380,48 @@ describe('CampaignEditor — a campaign whose content is locked is read-only', (
   it('keeps Save for a scheduled campaign', () => {
     renderEditor({ status: 'scheduled' })
     expect(screen.getByRole('button', { name: /^Save$/i })).toBeTruthy()
+  })
+})
+
+// W1.S2 / W1.E2 — the From ADDRESS applies when it is on the org's verified
+// sending domain; otherwise the platform address sends with the From NAME.
+// The editor keeps the From-address input (with that hint) and seeds the From
+// name from the studio's brand (never a literal gym).
+describe('CampaignEditor — sender fields after W1.E2', () => {
+  beforeEach(() => resetLocationBrandCache())
+  function stubBranding(companyName) {
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      if (String(url).includes('/api/public/branding')) {
+        return { ok: true, json: async () => ({ success: true, data: { company_name: companyName, short_name: companyName, logo_url: null, product_names: { points: `${companyName} Points`, hr: `${companyName} HR` }, points_unit: companyName } }) }
+      }
+      return { ok: true, json: async () => ({ success: true, audience_count: 10 }) }
+    }))
+  }
+
+  it('keeps the From-address input, showing the saved address, with the verified-domain hint', async () => {
+    stubBranding('Example Gym')
+    renderEditor({ from_email: 'news@example-gym.ie' })
+    fireEvent.click(screen.getByRole('button', { name: /settings/i }))
+    const input = await screen.findByLabelText('From address')
+    expect(input.value).toBe('news@example-gym.ie')
+    const note = screen.getByTestId('campaign-from-address-note')
+    expect(note.textContent).toMatch(/verified sending domain/i)
+    expect(note.textContent).toMatch(/platform address/i)
+    expect(input.getAttribute('aria-describedby')).toBe(note.id)
+    expect(input.getAttribute('placeholder')).not.toMatch(/un1t/i)
+  })
+
+  it('seeds an empty From name with the studio brand, and keeps a saved one', async () => {
+    stubBranding('Example Gym')
+    renderEditor({ from_name: null })
+    fireEvent.click(screen.getByRole('button', { name: /settings/i }))
+    const input = await screen.findByPlaceholderText(/sender name|Example Gym/i)
+    await waitFor(() => expect(input.value).toBe('Example Gym'))
+    expect(document.body.textContent).not.toContain('UN1T')
+    cleanup()
+    stubBranding('Example Gym')
+    renderEditor({ from_name: 'Garrett at the gym' })
+    fireEvent.click(screen.getByRole('button', { name: /settings/i }))
+    await screen.findByDisplayValue('Garrett at the gym')
   })
 })

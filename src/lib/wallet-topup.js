@@ -397,7 +397,9 @@ export function renderTopupInvoiceEmail({ invoice, locationName, branding, recip
 
   const header = branding?.logoUrl
     ? `<img src="${escapeAttr(branding.logoUrl)}" alt="${escapeAttr(branding.companyName || 'Logo')}" style="max-height:48px;margin-bottom:16px" />`
-    : `<div style="font-size:24px;font-weight:bold;letter-spacing:2px;margin-bottom:16px">${escapeHtml(branding?.companyName || 'UN1T')}</div>`
+    : (branding?.companyName || '').trim()
+      ? `<div style="font-size:24px;font-weight:bold;letter-spacing:2px;margin-bottom:16px">${escapeHtml(branding.companyName.trim())}</div>`
+      : ''
 
   const subject = `VAT invoice ${invoice.number}: wallet top-up for ${locationName}`
   const htmlBody = `
@@ -461,7 +463,7 @@ async function sendTopupInvoiceEmail(db, invoice) {
     logWarn('wallet-topup', 'acting user has no email — skipping VAT email', { invoiceId: invoice.id })
     return { skipped: true }
   }
-  // Branding never throws (falls back to a neutral 'UN1T') — same
+  // Branding never throws (W1.S2: an unresolved brand renders no wordmark) — same
   // resolution the contractor invoice emails use (company_settings).
   const branding = await getLocationBranding(db, invoice.location_id)
   const locationName = location?.name || 'your location'
