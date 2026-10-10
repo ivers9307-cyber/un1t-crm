@@ -22,12 +22,14 @@
 // Cached per organisation for HOST_ORG_BRAND_CACHE_TTL_MS: every portal page
 // renders the header, so an uncached walk would cost ≤5 reads per click. An
 // unresolved brand is NOT cached, so a read blip does not pin the platform
-// name for five minutes.
+// name for five minutes; nor is a brand read while the org_settings
+// short_name read FAILED, so a blip does not pin the long name in the
+// wordmark either (the next render retries).
 
 import { createServerClient } from './supabase'
 import { PLATFORM_NAME } from './brand-name'
 import { getOrgBrandName } from './location-branding'
-import { resolveHostBrand } from './host-brand'
+import { resolveTenantOrgId } from './tenant-domains-edge'
 
 export const HOST_ORG_BRAND_CACHE_TTL_MS = 5 * 60 * 1000
 
@@ -43,6 +45,8 @@ export function _resetHostOrgBrandCache() {
   cache = new Map()
 }
 
+// { value, error }: an empty value with error=false is "no short name set";
+// with error=true it is "unknown", and the caller must not cache it.
 async function readShortName(db, organizationId) {
   try {
     const { data, error } = await db
@@ -50,9 +54,10 @@ async function readShortName(db, organizationId) {
       .select('short_name')
       .eq('organization_id', organizationId)
       .limit(1)
-    return String((!error && data && data[0]?.short_name) || '').trim()
+    if (error) return { value: '', error: true }
+    return { value: String((data && data[0]?.short_name) || '').trim(), error: false }
   } catch {
-    return ''
+    return { value: '', error: true }
   }
 }
 
@@ -68,17 +73,20 @@ export async function resolveOrgBrand(db, organizationId, { nowMs = Date.now() }
   const hit = cache.get(organizationId)
   if (hit && nowMs - hit.at < HOST_ORG_BRAND_CACHE_TTL_MS) return hit.brand
   let name = ''
-  let shortName = ''
+  let short = { value: '', error: true }
   try {
-    ;[name, shortName] = await Promise.all([getOrgBrandName(db, organizationId), readShortName(db, organizationId)])
+    ;[name, short] = await Promise.all([getOrgBrandName(db, organizationId), readShortName(db, organizationId)])
     name = String(name || '').trim()
   } catch {
     return FLOOR
   }
+  const shortName = short.value
   if (!name && !shortName) return FLOOR
   const brand = Object.freeze({ name: name || shortName, shortName: shortName || name })
-  if (cache.size >= MAX_CACHED_ORGS) cache.clear()
-  cache.set(organizationId, { brand, at: nowMs })
+  if (!short.error) {
+    if (cache.size >= MAX_CACHED_ORGS) cache.clear()
+    cache.set(organizationId, { brand, at: nowMs })
+  }
   return brand
 }
 
@@ -95,9 +103,10 @@ export function resolveHostOrgBrand(db, host) {
 /**
  * Pre-auth host pages (/host/login, /host/set-password, /host-connect): no
  * session yet, so the request's hostname is the only input. The host maps to
- * an organisation through W1.L4's resolver (host.un1tdublin.com and
- * <slug>.repset.ie); the CRM host and an unmapped host have none and read
- * the platform name.
+ * an organisation through W1.L4's resolveTenantOrgId (host.un1tdublin.com and
+ * <slug>.repset.ie) — the org id only, not resolveHostBrand's logo/favicon
+ * walk; the CRM host and an unmapped host have none and read the platform
+ * name.
  * @param {string|null} requestHost  the raw Host header
  * @param {{ db?: object|null }} [opts]
  * @returns {Promise<{ name: string, shortName: string }>}
@@ -109,6 +118,11 @@ export async function resolveRequestHostOrgBrand(requestHost, { db = null } = {}
   } catch {
     return FLOOR
   }
-  const { orgId } = await resolveHostBrand({ host: requestHost || '', db: client })
+  let orgId = null
+  try {
+    orgId = await resolveTenantOrgId(requestHost || '', { db: client })
+  } catch {
+    return FLOOR
+  }
   return resolveOrgBrand(client, orgId)
 }

@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 vi.mock('./supabase', () => ({ createServerClient: vi.fn() }))
-vi.mock('./host-brand', () => ({ resolveHostBrand: vi.fn() }))
+vi.mock('./tenant-domains-edge', () => ({ resolveTenantOrgId: vi.fn() }))
 
 import {
   resolveOrgBrand,
@@ -11,13 +11,14 @@ import {
   _resetHostOrgBrandCache,
   HOST_ORG_BRAND_CACHE_TTL_MS,
 } from './host-org-brand.js'
-import { resolveHostBrand } from './host-brand'
+import { resolveTenantOrgId } from './tenant-domains-edge'
 import { PLATFORM_NAME } from './brand-name'
 
 const ORG = 'f117b7b8-5f56-4f80-8299-2c698242e4d2'
 
 // tables: { org_settings: [...], organizations: [...], locations: [...] }
-function makeDb(tables = {}, { fail = false } = {}) {
+// fail: every read errors; failTables: only reads of these tables error.
+function makeDb(tables = {}, { fail = false, failTables = [] } = {}) {
   const reads = []
   return {
     reads,
@@ -26,7 +27,9 @@ function makeDb(tables = {}, { fail = false } = {}) {
       const b = new Proxy({}, {
         get(_, method) {
           if (method === 'then') {
-            const res = fail ? { data: null, error: { message: 'down' } } : { data: tables[table] || [], error: null }
+            const res = fail || failTables.includes(table)
+              ? { data: null, error: { message: 'down' } }
+              : { data: tables[table] || [], error: null }
             const p = Promise.resolve(res)
             return p.then.bind(p)
           }
@@ -81,6 +84,23 @@ describe('resolveOrgBrand', () => {
     await resolveOrgBrand(empty, 'org-2', { nowMs: 1 })
     expect(empty.reads.length).toBe(first * 2)
   })
+
+  it('does not cache a brand read while the org_settings read failed', async () => {
+    // org_settings down: the name falls through to the master location, the
+    // short name is unknown. Serve it, but retry next render rather than
+    // pinning the long name in the wordmark for the TTL.
+    const tables = {
+      org_settings: [{ company_name: 'UN1T Dublin', short_name: 'UN1T' }],
+      organizations: [{ master_location_id: 'loc-1' }],
+      locations: [{ name: 'UN1T Stillorgan' }],
+    }
+    const down = makeDb(tables, { failTables: ['org_settings'] })
+    expect(await resolveOrgBrand(down, ORG, { nowMs: 0 })).toEqual({ name: 'UN1T Stillorgan', shortName: 'UN1T Stillorgan' })
+
+    const up = makeDb(tables)
+    expect(await resolveOrgBrand(up, ORG, { nowMs: 1 })).toEqual({ name: 'UN1T Dublin', shortName: 'UN1T' })
+    expect(up.reads).toContain('org_settings')
+  })
 })
 
 describe('resolveHostOrgBrand', () => {
@@ -97,14 +117,19 @@ describe('resolveHostOrgBrand', () => {
 
 describe('resolveRequestHostOrgBrand (pre-auth host pages)', () => {
   it("a tenant host reads its organisation's brand", async () => {
-    resolveHostBrand.mockResolvedValue({ orgId: ORG, companyName: 'UN1T Dublin' })
+    resolveTenantOrgId.mockResolvedValue(ORG)
     const db = makeDb({ org_settings: [{ company_name: 'UN1T Dublin', short_name: 'UN1T' }] })
     expect(await resolveRequestHostOrgBrand('host.un1tdublin.com', { db })).toEqual({ name: 'UN1T Dublin', shortName: 'UN1T' })
-    expect(resolveHostBrand).toHaveBeenCalledWith({ host: 'host.un1tdublin.com', db })
+    expect(resolveTenantOrgId).toHaveBeenCalledWith('host.un1tdublin.com', { db })
+  })
+
+  it('a failed tenant lookup reads the platform name', async () => {
+    resolveTenantOrgId.mockRejectedValue(new Error('down'))
+    expect(await resolveRequestHostOrgBrand('gym-a.repset.ie', { db: makeDb({}) })).toEqual({ name: PLATFORM_NAME, shortName: PLATFORM_NAME })
   })
 
   it('the CRM host (no organisation) reads the platform name', async () => {
-    resolveHostBrand.mockResolvedValue({ orgId: null, companyName: '' })
+    resolveTenantOrgId.mockResolvedValue(null)
     expect(await resolveRequestHostOrgBrand('crm.repset.ie', { db: makeDb({}) })).toEqual({ name: PLATFORM_NAME, shortName: PLATFORM_NAME })
   })
 })
