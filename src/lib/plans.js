@@ -150,6 +150,81 @@ export async function getLocationPlan(db, locationId) {
   }
 }
 
+/**
+ * W1.E1 — does ANY active pin (tier OR add-on) on this location grant `key`?
+ *
+ * getLocationPlan() answers null without a TIER pin, which made an
+ * add-on-only pin invisible: the live Test Studio pin (the
+ * custom_email_domain add-on, no tier) granted nothing, so the whole
+ * email-domain feature was unreachable. This reads the pins directly and
+ * ORs their features (an add-on can only grant, never revoke — the same
+ * polarity as resolveAllowances). Only a literal `true` grants.
+ *
+ * FAIL CLOSED: false on any error, a missing id or key. Callers gate paid
+ * resources on this, so "could not tell" must read as "no".
+ *
+ * @param {object} db - service-role client
+ * @param {string} locationId
+ * @param {string} key - a shared/plans.js FEATURE_KEYS entry
+ * @returns {Promise<boolean>}
+ */
+export async function locationHasPlanFeature(db, locationId, key) {
+  if (!db || !locationId || !key) return false
+  try {
+    const { data, error } = await db
+      .from('location_plans')
+      .select('active, version:plan_versions!plan_version_id(features, plan:plans!plan_id(kind))')
+      .eq('location_id', locationId)
+      .eq('active', true)
+    if (error) return false
+    return (data || []).some((r) => r?.version?.features?.[key] === true)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * W1.E1 — the ACTIVE catalogue plans whose version in force on `onDate`
+ * grants `key`, tiers first then add-ons (catalogue sort within each).
+ * Lets an upsell NAME the plan(s) an operator needs pinned instead of
+ * "a paid add-on". Read-only; fails safe to [] so a catalogue read can
+ * never take a settings page down.
+ *
+ * @param {object} db - service-role client
+ * @param {string} key - a shared/plans.js FEATURE_KEYS entry
+ * @param {string} [onDate] - 'YYYY-MM-DD' Dublin business date
+ * @returns {Promise<Array<{ id: string, slug: string, name: string, kind: 'tier'|'addon' }>>}
+ */
+export async function plansGrantingFeature(db, key, onDate = dublinTodayStr()) {
+  if (!db || !key) return []
+  try {
+    const { data, error } = await db
+      .from('plan_versions')
+      .select('effective_from, features, plan:plans!plan_id(id, slug, name, kind, sort, active)')
+    if (error || !Array.isArray(data)) return []
+    const byPlan = new Map()
+    for (const row of data) {
+      const plan = row?.plan
+      if (!plan?.id || plan.active === false) continue
+      if (!byPlan.has(plan.id)) byPlan.set(plan.id, { plan, versions: [] })
+      byPlan.get(plan.id).versions.push(row)
+    }
+    const out = []
+    for (const { plan, versions } of byPlan.values()) {
+      const current = pickActiveVersion(versions, onDate)
+      if (current?.features?.[key] === true) {
+        out.push({ id: plan.id, slug: plan.slug, name: plan.name, kind: plan.kind })
+      }
+    }
+    const kindRank = (k) => (k === 'tier' ? 0 : 1)
+    const sortOf = (id) => Number(byPlan.get(id)?.plan?.sort) || 0
+    out.sort((a, b) => kindRank(a.kind) - kindRank(b.kind) || sortOf(a.id) - sortOf(b.id) || String(a.name).localeCompare(String(b.name)))
+    return out
+  } catch {
+    return []
+  }
+}
+
 // ============================================================
 // BUNDLES.5 Task 3 — plan → locations.features bundle mirror.
 //

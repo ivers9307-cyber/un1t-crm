@@ -37,3 +37,36 @@ describe('deriveWizardState (SAAS4-P2 — resumable provisioning wizard)', () =>
     expect(WIZARD_STEPS.map((s) => s.key)).toEqual(['org', 'location', 'owner', 'branding', 'domain', 'done'])
   })
 })
+
+// W1.E1 — the wizard's owner step grants org_admin after the invite, and
+// the Done step links the PIN page (/admin/tenants/<orgId>), not the
+// catalogue editor (/admin/plans), which pins nothing.
+import { orgAdminGrantRequest, tenantPlansHref } from './tenant-wizard.js'
+
+describe('orgAdminGrantRequest (W1.E1)', () => {
+  it('is the desired-state PUT the master-only org-admin route takes', () => {
+    expect(orgAdminGrantRequest('prof-1', 'org-9')).toEqual({
+      url: '/api/staff/prof-1/org-admin',
+      method: 'PUT',
+      body: { organization_ids: ['org-9'] },
+    })
+  })
+
+  it('refuses to build a request without both ids (nothing to grant, nobody to grant it to)', () => {
+    expect(orgAdminGrantRequest(null, 'org-9')).toBeNull()
+    expect(orgAdminGrantRequest('prof-1', '')).toBeNull()
+  })
+
+  it('encodes the ids into the path', () => {
+    expect(orgAdminGrantRequest('a b', 'org-9').url).toBe('/api/staff/a%20b/org-admin')
+  })
+})
+
+describe('tenantPlansHref (W1.E1)', () => {
+  it('points at the tenant drill-in where plans are pinned, per org', () => {
+    expect(tenantPlansHref('org-9')).toBe('/admin/tenants/org-9')
+  })
+  it('falls back to the tenants console when the org is unknown', () => {
+    expect(tenantPlansHref(null)).toBe('/admin/tenants')
+  })
+})

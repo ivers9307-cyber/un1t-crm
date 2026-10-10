@@ -36,3 +36,33 @@ export function deriveWizardState(params = {}) {
 
   return { step, orgId, locationId }
 }
+
+/**
+ * W1.E1 — the org-admin grant the owner step sends right after the
+ * invite: PUT /api/staff/[id]/org-admin is DESIRED-STATE (the full list
+ * of orgs), master-only, which the wizard already is. A new tenant's
+ * owner needs this grant to reach /settings/email-domain (the org-admin
+ * gate; 0 profile_organizations rows existed anywhere before W1.E1).
+ *
+ * @param {string|null} profileId - the invited profile's id (POST /api/staff → data.id)
+ * @param {string|null} orgId
+ * @returns {{ url: string, method: 'PUT', body: { organization_ids: string[] } }|null}
+ */
+export function orgAdminGrantRequest(profileId, orgId) {
+  if (!profileId || !orgId) return null
+  return {
+    url: `/api/staff/${encodeURIComponent(profileId)}/org-admin`,
+    method: 'PUT',
+    body: { organization_ids: [orgId] },
+  }
+}
+
+/**
+ * W1.E1 — where a plan is PINNED to a tenant's locations: the drill-in
+ * /admin/tenants/[orgId] (TenantDetailView). /admin/plans is the
+ * catalogue editor and pins nothing — the wizard used to link it.
+ * @param {string|null} orgId
+ */
+export function tenantPlansHref(orgId) {
+  return orgId ? `/admin/tenants/${encodeURIComponent(orgId)}` : '/admin/tenants'
+}
