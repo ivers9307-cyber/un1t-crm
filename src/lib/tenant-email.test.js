@@ -88,7 +88,20 @@ describe('globalDefaultSender / senderFromRow (pure)', () => {
   })
   it('senderFromRow builds a tenant sender from a live row', () => {
     expect(senderFromRow({ postmark_server_token: 'srv-tok', from_email: 'hi@mail.gymx.com', from_name: 'GymX' }))
-      .toEqual({ serverToken: 'srv-tok', fromEmail: 'hi@mail.gymx.com', fromName: 'GymX', replyTo: null })
+      .toEqual({ serverToken: 'srv-tok', fromEmail: 'hi@mail.gymx.com', fromName: 'GymX', replyTo: null, sendingDomain: 'mail.gymx.com' })
+  })
+
+  // FROMDOMAIN — the verified domain rides ONLY the live tenant sender.
+  it('senderFromRow: sendingDomain is the row column (lower-cased, trimmed), else the from_email domain', () => {
+    expect(senderFromRow({ postmark_server_token: 't', from_email: 'hello@un1tdublin.com', sending_domain: ' UN1TDublin.com ' }).sendingDomain)
+      .toBe('un1tdublin.com')
+    expect(senderFromRow({ postmark_server_token: 't', from_email: 'Hello@UN1TDublin.com' }).sendingDomain).toBe('un1tdublin.com')
+    expect(senderFromRow({ postmark_server_token: 't' }).sendingDomain).toBeNull()
+  })
+
+  it('FROMDOMAIN — the global default and a token-less row carry no sendingDomain', () => {
+    expect(globalDefaultSender().sendingDomain).toBeUndefined()
+    expect(senderFromRow({ from_email: 'x@un1tdublin.com', sending_domain: 'un1tdublin.com' }).sendingDomain).toBeUndefined()
   })
 })
 
@@ -119,7 +132,7 @@ describe('resolveEmailSender — fail safe to the global default', () => {
       table === 'locations'
         ? { data: { organization_id: 'org-1' } }
         : { data: { postmark_server_token: 'srv-secret', from_email: 'hi@mail.gymx.com', from_name: 'GymX', status: 'live' } })
-    expect(await resolveEmailSender(db, 'loc-1')).toEqual({ serverToken: 'srv-secret', fromEmail: 'hi@mail.gymx.com', fromName: 'GymX', replyTo: null })
+    expect(await resolveEmailSender(db, 'loc-1')).toEqual({ serverToken: 'srv-secret', fromEmail: 'hi@mail.gymx.com', fromName: 'GymX', replyTo: null, sendingDomain: 'mail.gymx.com' })
   })
 
   // ── W1.E2 — the PRE-DOMAIN sender: platform address, tenant display name,
@@ -166,7 +179,17 @@ describe('resolveEmailSender — fail safe to the global default', () => {
       tenant_email_domains: [{ organization_id: 'org-a', status: 'live', postmark_server_token: 'srv-secret', from_email: 'hi@mail.gyma.ie', from_name: 'Gym A Mail' }],
     })
     expect(await resolveEmailSender(db, 'loc-1'))
-      .toEqual({ serverToken: 'srv-secret', fromEmail: 'hi@mail.gyma.ie', fromName: 'Gym A Mail', replyTo: 'hi@gyma.ie' })
+      .toEqual({ serverToken: 'srv-secret', fromEmail: 'hi@mail.gyma.ie', fromName: 'Gym A Mail', replyTo: 'hi@gyma.ie', sendingDomain: 'mail.gyma.ie' })
+  })
+
+  it('FROMDOMAIN — the live tenant sender exposes the row\'s sending_domain; the platform sender has none', async () => {
+    const db = fakeDb({
+      ...GYM_A,
+      tenant_email_domains: [{ organization_id: 'org-a', status: 'live', postmark_server_token: 'srv-secret', from_email: 'hello@un1tdublin.com', from_name: 'UN1T', sending_domain: 'un1tdublin.com' }],
+    })
+    expect((await resolveEmailSender(db, 'loc-1')).sendingDomain).toBe('un1tdublin.com')
+    _resetTenantEmailCache()
+    expect((await resolveEmailSender(fakeDb(GYM_A), 'loc-1')).sendingDomain).toBeUndefined()
   })
 
   it('W1.E2 — the whole pre-domain object is cached (brand + reply-to resolve once per TTL)', async () => {
