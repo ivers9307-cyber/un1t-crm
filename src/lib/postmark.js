@@ -8,6 +8,7 @@ import { withSendMarker } from './postmark-send-marker'
 // can read them without a cycle; both stay exported from here for callers.
 import { getDefaultMailboxAddress, getLocationInboxReplyTo as resolveInboxReplyTo } from './postmark-reply-to'
 import { wireFrom, resolvedFromOf, platformFromAddress, parseAddressHeader } from './platform-sender'
+import { withRequestedFrom } from './from-address'
 
 export { getDefaultMailboxAddress }
 
@@ -916,8 +917,12 @@ export async function sendMarketingEmail({
   // the wire; the address is the resolver's (see sendEmail).
   from,
   // W1.E2 — a display name alone (a sequence's from_name). Rides the
-  // resolver's address; the sequence's from_email is never the address.
+  // resolved address.
   fromName,
+  // FROMDOMAIN — a REQUESTED address (a sequence's from_email). Used only
+  // when it is on the org's verified sending domain (pickFromAddress in
+  // src/lib/from-address.js); otherwise the resolver's own address goes out.
+  fromEmail,
   sourceType = 'sequence', sequenceId = null, sequenceStepId = null,
 }) {
   // EMAIL-INBOX.1 — marketing sends default their Reply-To to the
@@ -933,7 +938,10 @@ export async function sendMarketingEmail({
   // the email_sends insert. Global default when no live tenant domain
   // exists (every org today) → byte-identical send + honest from_email.
   const db = (contactId || locationId) ? createServerClient() : null
-  const sender = locationId ? await resolveEmailSender(db, locationId) : null
+  // FROMDOMAIN — the requested address replaces the resolver's only when it
+  // is on the org's verified domain; with no location there is no sender and
+  // no verified domain, so nothing changes.
+  const sender = locationId ? withRequestedFrom(await resolveEmailSender(db, locationId), fromEmail) : null
 
   const result = await sendEmail({
     to,
