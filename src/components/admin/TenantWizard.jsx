@@ -197,7 +197,7 @@ function LocationStep({ orgId, onDone }) {
   return (
     <StepCard
       title="Create the first location"
-      hint="Seeds the full pipeline automatically. More locations can be added later from Settings."
+      hint="Seeds the full pipeline and settings automatically. More locations can be added later from Settings."
     >
       <form onSubmit={submit}>
         <ErrorNote error={error} />

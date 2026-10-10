@@ -187,15 +187,20 @@ export async function seedLocationDefaults(db, location) {
   // W1.W1 — settings rows a tenant location is born with (SaaS Wave 1,
   // decision 6). Both idempotent: the company_settings upsert ignores an
   // existing row (an operator's branding is never overwritten), and
-  // notification_config is written only while NULL (NULL already means
-  // "code defaults"; the explicit copy makes the settings page show real
-  // values instead of an empty form). company_name = the LOCATION's name,
-  // so the brand chain (company_settings → org_settings → locations.name)
-  // resolves to this studio's own name from day one; logo/favicon stay
-  // null and fall through to the org's. Quiet hours are NOT named: mig
-  // 514's NOT NULL DEFAULT columns (enabled, 21 → 8) apply on the insert.
-  // Host-anchor locations (host-events.js) are a technical shell with no
-  // brand or staff of their own and are never seeded with settings.
+  // notification_config is written only while NULL. NULL already means
+  // "code defaults" everywhere (getEffectiveConfig(null) renders the same
+  // values), so the explicit copy changes two things only: the settings
+  // page's "using default" indicator reads as configured, and a seeded
+  // location FREEZES today's registry defaults instead of tracking a later
+  // DEFAULT_NOTIFICATION_CONFIG change. That is decision 6's call.
+  // company_name = the LOCATION's name, so the brand chain
+  // (company_settings → org_settings → locations.name) resolves to this
+  // studio's own name from day one; logo/favicon stay null and fall through
+  // to the org's. Quiet hours are NOT named: mig 514's NOT NULL DEFAULT
+  // columns (enabled, 21 → 8) apply on the insert.
+  // The host-anchor gate is defensive: anchors are inserted directly by
+  // host-events.js and never pass through this seed, but a shell location
+  // with no brand of its own must never grow settings rows if one did.
   if (!location.is_host_anchor) {
     const { error: csErr } = await db
       .from('company_settings')

@@ -35,20 +35,26 @@ const MASTER = {
 }
 const OWNER = { ...MASTER, role: 'owner', profileRole: 'owner' }
 
-// The insert's `.select()` names no columns, so the created row carries
+// The insert's `.select()` must name no columns, so the created row carries
 // every locations column — the seed reads `name` and `is_host_anchor` off it.
+// The double records the select argument so the test can pin that (a fake
+// that fabricated `is_host_anchor` would pass even if the route selected
+// only `id, slug`); the fabricated row carries only what the insert wrote
+// plus the db-generated id.
 function makeDb({ insertError = null } = {}) {
   const inserts = []
+  const selects = []
   return {
     inserts,
+    selects,
     from(table) {
       if (table !== 'locations') throw new Error(`unexpected db.from('${table}') in POST /api/locations test`)
       const b = {
         insert: (row) => { inserts.push(row); return b },
-        select: () => b,
+        select: (cols) => { selects.push(cols); return b },
         single: () => Promise.resolve(insertError
           ? { data: null, error: insertError }
-          : { data: { id: NEW_ID, is_host_anchor: false, features: {}, notification_config: null, ...inserts.at(-1) }, error: null }),
+          : { data: { id: NEW_ID, ...inserts.at(-1) }, error: null }),
       }
       return b
     },
@@ -96,14 +102,18 @@ describe('POST /api/locations — seeds the created row', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.success).toBe(true)
-    expect(body.data).toMatchObject({ id: NEW_ID, name: 'Gym A North', slug: 'gym-a-north', is_host_anchor: false })
+    expect(body.data).toMatchObject({ id: NEW_ID, name: 'Gym A North', slug: 'gym-a-north' })
+
+    // Column-less `.select()` after the insert: the seed reads `name` and
+    // `is_host_anchor` off the created row, and a narrowed select would
+    // silently skip the W1.W1 settings seed (name → company_name,
+    // is_host_anchor → gate). Pinned on the argument, not the fake's row.
+    expect(db.selects).toEqual([undefined])
 
     expect(seedLocationDefaults).toHaveBeenCalledTimes(1)
     const [seedDb, seedRow] = seedLocationDefaults.mock.calls[0]
     expect(seedDb).toBe(db)
-    // The seed reads these three: a row without them would silently skip
-    // the W1.W1 settings seed (name → company_name, is_host_anchor → gate).
-    expect(seedRow).toMatchObject({ id: NEW_ID, name: 'Gym A North', is_host_anchor: false })
+    expect(seedRow).toMatchObject({ id: NEW_ID, name: 'Gym A North' })
     // The row the seed saw is the row the caller gets back.
     expect(body.data).toEqual(seedRow)
   })
