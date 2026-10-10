@@ -191,7 +191,7 @@ export function tenantEmailStatePayload(row, meta = {}) {
     account_configured: !!meta.accountConfigured,
   }
   if (!row) {
-    return { ...base, status: 'not_configured', sending_domain: null, from_email: null, from_name: null, dkim_verified: false, return_path_verified: false, records: [], last_error: null }
+    return { ...base, status: 'not_configured', sending_domain: null, from_email: null, from_name: null, dkim_verified: false, return_path_verified: false, records: [], last_error: null, webhooks_registered: false }
   }
   return {
     ...base,
@@ -203,5 +203,8 @@ export function tenantEmailStatePayload(row, meta = {}) {
     return_path_verified: !!row.return_path_verified,
     records: dnsRecordsFromRow(row),
     last_error: row.last_error ?? null,
+    // W1.E3 (mig 718) — the broadcast stream + six-trigger webhooks exist on
+    // the org's server. A boolean: the timestamp stays on the row.
+    webhooks_registered: !!row.webhooks_registered_at,
   }
 }
