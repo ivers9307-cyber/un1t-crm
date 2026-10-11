@@ -110,7 +110,7 @@ export async function readOrgShiftRows(db, {
       const { data: page, error } = await db
         .from('shift_assignments')
         // One literal string, so check:select-columns can resolve every column.
-        .select('id, profile_id, status, start_time_override, end_time_override, shift_blocks!inner(id, location_id, block_date, start_time, end_time, roster_id, shift_templates(name, start_time, end_time), locations(name), rosters:roster_id(status))')
+        .select('id, profile_id, status, start_time_override, end_time_override, shift_blocks!inner(id, location_id, block_date, start_time, end_time, roster_id, shift_templates(name, start_time, end_time), locations(name, timezone), rosters:roster_id(status))')
         .in('profile_id', ids)
         .in('shift_blocks.location_id', scope)
         .gte('shift_blocks.block_date', from)
@@ -132,6 +132,10 @@ export async function readOrgShiftRows(db, {
           block_date: b.block_date,
           location_id: b.location_id,
           location_name: b.locations?.name ?? null,
+          // TZ.8a — the studio's zone: shared/working-time.js reads each
+          // row's wall clock in it, so a rest between studios in two zones is
+          // real elapsed time. NULL is DEFAULT_TZ there.
+          timezone: b.locations?.timezone ?? null,
           name: b.shift_templates?.name || 'Shift',
           status: a.status ?? null,
           start_time_override: a.start_time_override ?? null,
@@ -154,7 +158,7 @@ export async function readOrgShiftRows(db, {
  * @param {{ locationId: string, profileIds: string[], from: string, to: string,
  *   countUnpublishedElsewhere?: boolean, subtractApprovedLeave?: boolean }} opts
  * @returns {Promise<{
- *   shifts: Array<{ profile_id, block_id, block_date, location_id, location_name, name, status,
+ *   shifts: Array<{ profile_id, block_id, block_date, location_id, location_name, timezone, name, status,
  *     start_time_override, end_time_override, start_time, end_time, shift_templates }>,
  *   people: Map<string, { full_name: string|null, employment_type: string|null }>,
  *   crossStudioChecked: boolean,

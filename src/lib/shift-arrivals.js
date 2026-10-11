@@ -34,7 +34,7 @@
 import { logWarn } from './log'
 import { resolveScheduledAt, inferContinuousArrivals, arrivalToTimeOnly, effectiveWindowAt } from './staff-attendance'
 import { geofenceFromLocationSettings, geofenceIsConfigured } from './geofence-attendance'
-import { resolveTz, dayStrInTz } from './tz-time'
+import { resolveZone, strictDayStrIn } from './location-time'
 
 // Review 2 — arrivals are tracked, for the absence rule, only on shifts on or
 // after this Dublin date. Stamps before it came from a matcher that has since
@@ -117,7 +117,7 @@ export function annotateOwnArrivals(rows, facts, viewerId, { now = new Date() } 
   const stamps = facts?.stamps instanceof Map ? facts.stamps : null
   if (!viewerId || !stamps) return list.map((r) => ({ ...r, arrival: null }))
 
-  const tzOf = (loc) => resolveTz(facts.timezones instanceof Map ? facts.timezones.get(loc) : null)
+  const tzOf = (loc) => resolveZone(facts.timezones instanceof Map ? facts.timezones.get(loc) : null)
   const trackedOf = (loc) => (facts.tracked instanceof Map ? facts.tracked.get(loc) === true : null)
   const asOf = now instanceof Date && Number.isFinite(now.getTime()) ? now.toISOString() : null
 
@@ -165,7 +165,7 @@ export function annotateOwnArrivals(rows, facts, viewerId, { now = new Date() } 
       arrival: {
         at: atOk ? at.toISOString() : null,
         at_local: atOk ? arrivalToTimeOnly(at, tz).slice(0, 5) : null,
-        at_local_date: atOk ? dayStrInTz(at, tz) : null,
+        at_local_date: atOk ? strictDayStrIn(at, tz) : null,
         source: b?.arrivalInferred ? null : (b?.source ?? null),
         carried: !!b?.arrivalInferred || dup.has(r.id),
         tracked: String(r.shift_date ?? '') < ARRIVAL_TRACKING_FROM ? false : trackedOf(r.location_id),

@@ -11,7 +11,7 @@ import { notifyOpenPool } from '@/lib/swap-cover-server'
 import { shiftWhenLabel } from '@/lib/swap-cover'
 import { swapShiftShape } from '@/lib/roster-read'
 import { isLiveAssignment } from '@/lib/roster'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn, zoneOfLocation } from '@/lib/location-time'
 
 const SwapCreateSchema = z.object({
   requester_shift_id: uuidLike,
@@ -165,7 +165,7 @@ export async function POST(request) {
   // shift_assignments.id — RETIRE-SHIFTS-MIRROR.5c). Pull location_id off
   // the assignment's block.
   const { data: assignment } = await db.from('shift_assignments')
-    .select('id, profile_id, status, shift_blocks!block_id(id, location_id, block_date, start_time, end_time, rosters:roster_id(status))')
+    .select('id, profile_id, status, shift_blocks!block_id(id, location_id, block_date, start_time, end_time, rosters:roster_id(status), locations(timezone))')
     .eq('id', body.requester_shift_id)
     .eq('profile_id', user.id)
     .single()
@@ -186,7 +186,11 @@ export async function POST(request) {
   if (assignment.shift_blocks?.rosters?.status !== 'published') {
     return NextResponse.json({ success: false, error: 'That shift is not published yet' }, { status: 400 })
   }
-  if ((assignment.shift_blocks?.block_date || '') < dublinTodayStr()) {
+  // TZ.8a — "future" on the studio's day (the shift's locations.timezone,
+  // embedded above). Both shifts are at this studio (checked below), so one
+  // day serves both.
+  const studioToday = todayStrIn(zoneOfLocation({ id: swapLocationId, timezone: assignment.shift_blocks?.locations?.timezone }))
+  if ((assignment.shift_blocks?.block_date || '') < studioToday) {
     return NextResponse.json({ success: false, error: 'You can only swap a future shift' }, { status: 400 })
   }
 
@@ -216,7 +220,7 @@ export async function POST(request) {
     if (targetShift.shift_blocks?.location_id !== swapLocationId) {
       return NextResponse.json({ success: false, error: 'Target shift is at a different location' }, { status: 400 })
     }
-    if ((targetShift.shift_blocks?.block_date || '') < dublinTodayStr()) {
+    if ((targetShift.shift_blocks?.block_date || '') < studioToday) {
       return NextResponse.json({ success: false, error: 'Target shift is in the past' }, { status: 400 })
     }
   }

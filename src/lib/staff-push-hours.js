@@ -8,7 +8,7 @@
 // nothing and a later tick tries again.
 //
 //   - The studio's clock is locations.timezone, a nullable free-text column.
-//     NULL (never set) is Europe/Dublin, silently. An empty or invalid value
+//     NULL (never set) is DEFAULT_TZ (Europe/Dublin), silently. An empty or invalid value
 //     is Europe/Dublin too, and the CALLER owes one warning naming the row
 //     (resolveStaffTimeZone says so with `warn`). Nothing here ever throws:
 //     one bad row must not stop a cron for every coach.
@@ -26,57 +26,43 @@
 // NOT the customer send-time quiet hours (src/lib/send-quiet-hours.js), which
 // are operator-configurable and advisory.
 
-export const STAFF_PUSH_DEFAULT_TZ = 'Europe/Dublin'
+import { DEFAULT_TZ, isValidZone, resolveZoneWithFallback, instantToZonedParts } from '@shared/zoned-time'
+
+// TZ.8a — the zone maths is the canonical helper's (shared/zoned-time.js):
+// the Dublin floor is its DEFAULT_TZ, validation is canonicalZone (any IANA
+// zone; fixed offsets rejected), and the wall clock is instantToZonedParts
+// (h23). These exports keep their names and shapes for their callers.
+export const STAFF_PUSH_DEFAULT_TZ = DEFAULT_TZ
 export const STAFF_PUSH_FROM = '07:00'   // inclusive
 export const STAFF_PUSH_UNTIL = '22:00'  // exclusive
 export const STAFF_PUSH_HOURS = Object.freeze({ start: STAFF_PUSH_FROM, end: STAFF_PUSH_UNTIL })
 
-// One cached Intl.DateTimeFormat per timezone string, the way push-reminders'
-// localToUtc caches its own: constructing one is the expensive part of a
-// wall-clock read, and a cron asks about the same handful of zones every tick.
-// An INVALID zone is remembered as null, so it is only ever tried once. Keys
-// are strings no longer than any IANA name; anything else never reaches it.
-const MAX_TZ_LENGTH = 64
-const wallClockFormatters = new Map()
-function wallClockFormatterFor(tz) {
-  if (!wallClockFormatters.has(tz)) {
-    let fmt = null
-    try {
-      // hourCycle h23: midnight is "00", never "24".
-      fmt = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
-    } catch {
-      fmt = null // not a zone Intl knows (a RangeError)
-    }
-    wallClockFormatters.set(tz, fmt)
-  }
-  return wallClockFormatters.get(tz)
-}
-
 /** Is this a timezone string Intl accepts? Empty, blank and non-strings are not. Never throws. */
 export function isValidStaffTimeZone(tz) {
-  if (typeof tz !== 'string' || tz.trim() === '' || tz.length > MAX_TZ_LENGTH) return false
-  return !!wallClockFormatterFor(tz)
+  return isValidZone(tz)
 }
 
 /**
  * The zone a studio's clock is read in, with the fallback. Never throws.
- *   valid            -> as written,     warn: false
- *   null / undefined -> Europe/Dublin,  warn: false  (never set: the default)
- *   anything else    -> Europe/Dublin,  warn: true   (the caller logs ONE warning)
+ * A thin wrapper over resolveZoneWithFallback, in this module's old shape:
+ *   valid            -> the canonical zone, warn: false
+ *   null / undefined -> DEFAULT_TZ,         warn: false  (never set: the default)
+ *   anything else    -> DEFAULT_TZ,         warn: true   (the caller logs ONE warning)
  *
  * @returns {{ timeZone: string, warn: boolean }}
  */
 export function resolveStaffTimeZone(tz) {
-  if (isValidStaffTimeZone(tz)) return { timeZone: tz, warn: false }
-  return { timeZone: STAFF_PUSH_DEFAULT_TZ, warn: tz != null }
+  const { zone, fallback } = resolveZoneWithFallback(tz)
+  return { timeZone: zone, warn: fallback }
 }
+
+const pad2 = (n) => String(n).padStart(2, '0')
 
 /** 'HH:MM' on the h23 wall clock at `tz` (fallback applied); null for an unreadable instant. */
 export function staffWallClockHHMM(ms, tz = STAFF_PUSH_DEFAULT_TZ) {
   if (typeof ms !== 'number' || !Number.isFinite(ms)) return null
-  const parts = wallClockFormatterFor(resolveStaffTimeZone(tz).timeZone).formatToParts(new Date(ms))
-  const get = (type) => parts.find((p) => p.type === type)?.value
-  return `${get('hour')}:${get('minute')}`
+  const p = instantToZonedParts(ms, resolveStaffTimeZone(tz).timeZone)
+  return `${pad2(p.h)}:${pad2(p.mi)}`
 }
 
 /** QUIET HOURS. True only while the wall clock at `tz` is inside [07:00, 22:00). */

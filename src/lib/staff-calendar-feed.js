@@ -3,14 +3,15 @@
 //
 // WHAT GOES IN (00-INDEX default 5): the person's OWN assignments, PUBLISHED
 // (block → rosters.status = 'published', the ROSTER-FIX.1 derivation) and LIVE
-// (not cancelled, isLiveAssignment), at every studio, Dublin today −14 to +56.
+// (not cancelled, isLiveAssignment), at every studio, the person's home-studio
+// today −14 to +56 (TZ.8a: the caller passes that day).
 //
 // WHAT NEVER GOES IN: colleagues (only the person's own rows are ever read),
 // assignment notes and partial_reason (manager working notes, COACHSCOPE.1 —
 // not even selected), pay, rates, minimums, capacity.
 //
 // TIMES are written in UTC from each studio's own wall clock
-// (locations.timezone via resolveTz; unknown → Europe/Dublin). Effective time
+// (locations.timezone via resolveZone; unknown → DEFAULT_TZ). Effective time
 // = the coach's override, else the block's snapshot time (the mig 604/622
 // COALESCE). A '24:00' end is the next day's midnight. An end at or before the
 // start is dropped (RFC 5545: the event then ends at DTSTART).
@@ -29,8 +30,7 @@
 // they work in more than one. Deliberate: it is their own diary, and nothing
 // about anyone else is read.
 
-import { addDaysISO } from '@/lib/dublin-time'
-import { dayStartMsInTz, resolveTz, wallMsInTz } from '@/lib/tz-time'
+import { addDaysISO, strictDayStartMsIn, resolveZone, zonedWallClockToInstant } from '@/lib/location-time'
 import { isLiveAssignment } from '@/lib/roster'
 import { buildIcsCalendar, MAX_ICS_INTEGER } from '@/lib/ics'
 
@@ -41,7 +41,7 @@ export const FEED_PRODID = '-//Repset//Staff shift feed//EN'
 export const FEED_REFRESH_MINUTES = 60
 export const FEED_EVENT_DESCRIPTION = 'Rostered shift, as published. Open the app for swaps and changes.'
 
-/** The date window, from a Dublin YYYY-MM-DD today. */
+/** The date window, from the person's YYYY-MM-DD today (their home studio's day). */
 export function feedWindow(todayIso) {
   return { from: addDaysISO(todayIso, -FEED_DAYS_BACK), to: addDaysISO(todayIso, FEED_DAYS_AHEAD) }
 }
@@ -57,13 +57,13 @@ export function wallInstant(dateIso, time, tz) {
   if (!t) return null
   if (t === '24:00') {
     // addDaysISO rolls an impossible date over ('2026-02-30' + 1 is 3 March),
-    // so prove the date exists before stepping past it. dayStartMsInTz is the
+    // so prove the date exists before stepping past it. strictDayStartMsIn is the
     // repo's "first instant of that local day" (it resolves a zone whose DST
     // starts at 00:00 to the transition, not to 23:00 the day before).
-    if (dayStartMsInTz(dateIso, tz) == null) return null
-    return dayStartMsInTz(addDaysISO(dateIso, 1), tz)
+    if (strictDayStartMsIn(dateIso, tz) == null) return null
+    return strictDayStartMsIn(addDaysISO(dateIso, 1), tz)
   }
-  return wallMsInTz(dateIso, t, tz)
+  return zonedWallClockToInstant(dateIso, t, tz)
 }
 
 // SEQUENCE counts in whole seconds from this fixed instant, so it starts small
@@ -95,7 +95,7 @@ export function isPublishedLiveRow(a) {
 /** One assignment row (FEED_SHIFT_SELECT shape) → an event for buildIcsCalendar, or null. */
 export function shiftToFeedEvent(a, location, generatedAtMs) {
   const b = a.shift_blocks
-  const tz = resolveTz(location?.timezone)
+  const tz = resolveZone(location?.timezone)
   const startMs = wallInstant(b.block_date, a.start_time_override || b.start_time, tz)
   if (startMs == null) return null
   const endMs = wallInstant(b.block_date, a.end_time_override || b.end_time, tz)

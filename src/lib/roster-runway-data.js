@@ -15,7 +15,7 @@
 // same thing on every surface.
 
 import { selectAll } from './select-all'
-import { dublinTodayStr } from './dublin-time'
+import { getLocationZones, todayStrIn } from './location-time'
 import { runwayWindow, runwayWeeksFromBlocks, rosterRunwayWeeks } from '@shared/roster-runway'
 import { isAdminShift } from '@shared/shift-kind'
 
@@ -28,9 +28,15 @@ import { isAdminShift } from '@shared/shift-kind'
  * raise an alert nobody can clear. A location whose only active templates are
  * admin is skipped the same way (SHIFTTYPE.1).
  *
+ * TZ.8a — "today" is EACH studio's own day of `nowMs` (its
+ * locations.timezone): pass `zones` (location id → IANA zone, a Map or an
+ * object) when the caller already holds the rows, else they are read here,
+ * once (getLocationZones). An unreadable zone fails the read, never a guess.
+ * `todayIso` pins one day for every studio (tests).
+ *
  * @param {object} db  service-role supabase client
  * @param {string[]} locationIds
- * @param {{ todayIso?: string }} [opts]  the Dublin business day
+ * @param {{ todayIso?: string, zones?: Map<string,string>|Record<string,string>, nowMs?: number }} [opts]
  * `byLocation[id]` is the FIRST unready week (or null): what a chip shows.
  * `weeksByLocation[id]` is EVERY unready week inside the horizon (or []): what
  * the daily push walks, so one unfillable shift next week cannot hide the week
@@ -38,7 +44,7 @@ import { isAdminShift } from '@shared/shift-kind'
  *
  * @returns {Promise<{ success: true, data: { byLocation: Record<string, object|null>, weeksByLocation: Record<string, object[]> } } | { success: false, error: string }>}
  */
-export async function fetchRosterRunways(db, locationIds, { todayIso = dublinTodayStr() } = {}) {
+export async function fetchRosterRunways(db, locationIds, { todayIso = null, zones = null, nowMs = Date.now() } = {}) {
   const ids = [...new Set((locationIds || []).filter(Boolean))]
   const byLocation = Object.fromEntries(ids.map((id) => [id, null]))
   const weeksByLocation = Object.fromEntries(ids.map((id) => [id, []]))
@@ -70,7 +76,20 @@ export async function fetchRosterRunways(db, locationIds, { todayIso = dublinTod
   )]
   if (rostered.length === 0) return { success: true, data: { byLocation, weeksByLocation } }
 
-  const { from, to } = runwayWindow(todayIso)
+  // TZ.8a — each rostered studio's own today; the read spans every window.
+  let zoneOf = null
+  if (!todayIso) {
+    try {
+      const given = zones instanceof Map ? zones : (zones ? new Map(Object.entries(zones)) : null)
+      zoneOf = given && rostered.every((id) => given.has(id)) ? given : await getLocationZones(db, rostered, { nowMs })
+    } catch (e) {
+      return { success: false, error: e?.message || 'Failed to read studio timezones' }
+    }
+  }
+  const todayOf = (id) => todayIso || todayStrIn(zoneOf.get(id), nowMs)
+  const windows = rostered.map((id) => runwayWindow(todayOf(id)))
+  const from = windows.map((w) => w.from).sort()[0]
+  const to = windows.map((w) => w.to).sort().at(-1)
   let blocks
   try {
     // Paged: two weeks x ~50 blocks x many studios can pass the 1,000-row
@@ -89,7 +108,8 @@ export async function fetchRosterRunways(db, locationIds, { todayIso = dublinTod
 
   for (const id of rostered) {
     const mine = blocks.filter((b) => b.location_id === id)
-    weeksByLocation[id] = rosterRunwayWeeks(runwayWeeksFromBlocks(mine, todayIso), todayIso)
+    const today = todayOf(id)
+    weeksByLocation[id] = rosterRunwayWeeks(runwayWeeksFromBlocks(mine, today), today)
     byLocation[id] = weeksByLocation[id][0] ?? null
   }
   return { success: true, data: { byLocation, weeksByLocation } }

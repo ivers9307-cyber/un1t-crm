@@ -77,13 +77,19 @@ export async function runAvailabilityMoveNotice(db, {
   const recipients = moveNoticeRecipients(rows)
   const locationIds = [...new Set(recipients.map((r) => r.locationId).filter(Boolean))]
   const zones = new Map()
+  let zonesUnread = false
   if (locationIds.length) {
     const { data: locs, error: locErr } = await db.from('locations').select('id, timezone').in('id', locationIds)
-    // Unreadable zones are Dublin (every studio is today); logged, never fatal.
-    if (locErr) logWarn('availability-move-notice', 'studio timezones unreadable; using Europe/Dublin', { err: locErr.message })
+    // TZ.8a — unreadable zones are never guessed: nobody is in hours this run
+    // (all deferred, logged, never fatal); quiet hours gate the notice, and
+    // the next run sends it.
+    if (locErr) {
+      zonesUnread = true
+      logWarn('availability-move-notice', 'studio timezones unreadable; everyone deferred this run', { err: locErr.message })
+    }
     for (const l of locs || []) zones.set(l.id, l.timezone)
   }
-  const inHours = recipients.filter((r) => inStaffPushHours(nowMs, resolveStaffTimeZone(zones.get(r.locationId)).timeZone))
+  const inHours = zonesUnread ? [] : recipients.filter((r) => inStaffPushHours(nowMs, resolveStaffTimeZone(zones.get(r.locationId)).timeZone))
   const deferred = recipients.length - inHours.length
 
   if (!send) return { ok: true, send: false, recipients: recipients.length, inHours: inHours.length, deferred, title, body }
