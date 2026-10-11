@@ -76,7 +76,9 @@ import { Analytics } from '@vercel/analytics/next'
 // the LEGACY path here and the shell blanked the page it had just
 // rendered. Segment-aware matcher, so no trailing slash (see the proxy's
 // list, which is raw startsWith and therefore keeps one).
-const PUBLIC_PATHS = ['/login', '/auth/callback', '/reset-password', '/welcome', '/stillorgan', '/hatch-street', '/free-class', '/start', '/offers', '/deposit', '/book', '/event', '/event/entry', '/event-pay', '/race', '/race-pay', '/class-pay', '/tv', '/present', '/studio-login', '/bca', '/host-connect', '/host', '/h', '/unsubscribe', '/preferences', '/view-email', '/privacy', '/terms', '/legal', '/technical', '/account-deletion', '/embed', '/givers', '/use-the-app', '/cancel']
+// BOOKINGSELF.1 — '/book/manage': the customer's own booking page (cancel,
+// reschedule); covered by '/book', listed so the flow survives a narrowing.
+const PUBLIC_PATHS = ['/login', '/auth/callback', '/reset-password', '/welcome', '/stillorgan', '/hatch-street', '/free-class', '/start', '/offers', '/deposit', '/book', '/book/manage', '/event', '/event/entry', '/event-pay', '/race', '/race-pay', '/class-pay', '/tv', '/present', '/studio-login', '/bca', '/host-connect', '/host', '/h', '/unsubscribe', '/preferences', '/view-email', '/privacy', '/terms', '/legal', '/technical', '/account-deletion', '/embed', '/givers', '/use-the-app', '/cancel']
 
 export default function AppShell({ user, children, isLinkedHost = false }) {
   const pathname = usePathname()

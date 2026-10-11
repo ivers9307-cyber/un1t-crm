@@ -122,6 +122,10 @@ export const BRANDS = [
       // startsWith, only /cancel/* is meant to resolve.
       '/cancel/',
       '/book/',         // public Calendly-style booking pages
+      // BOOKINGSELF.1 — the customer's own booking page (cancel/reschedule)
+      // from the {{manage_url}} link in confirmation and reminder emails.
+      // Covered by '/book/' today; listed so the flow survives a narrowing.
+      '/book/manage/',
       '/event/',        // public race / workshop / etc. signup pages
       // EVENT-MOVE.6 — the customer's entry page (change the date), from the
       // link in their confirmation email. Covered by '/event/' today; listed

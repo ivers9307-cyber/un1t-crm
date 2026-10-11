@@ -478,6 +478,57 @@ describe('EVENT-MOVE.6 — the entry page flow is public on every host', () => {
   })
 })
 
+// ── 7b. BOOKINGSELF.1 — the customer's own booking page, as a FLOW ─────
+//
+// /book/manage/<token> is the {{manage_url}} link in every booking
+// confirmation and reminder email (cancel or reschedule). Its audience never
+// has a session: the signed token in the path is the only credential. The
+// page calls /api/public/booking-manage/<token>/*. Both legs must resolve
+// anonymously on every host that may carry the link (the send path mints it
+// on the studio's customer host; the CRM host is the floor).
+
+const BOOKING_MANAGE_FLOW_PATHS = [
+  { path: '/book/manage/eyJiIjoieCJ9.c2ln', why: 'the booking page itself' },
+  { path: '/api/public/booking-manage/eyJiIjoieCJ9.c2ln/slots', why: 'the page\'s data' },
+]
+
+describe('BOOKINGSELF.1 — the booking manage page flow is public on every host', () => {
+  beforeEach(() => {
+    tenantBrandImpl = async (hostname) =>
+      hostname && hostname.split(':')[0] === TENANT_HOST
+        ? { id: `tenant:${TENANT_HOST}`, hostnames: [TENANT_HOST], ...DB_BRAND_DEFAULTS }
+        : null
+  })
+
+  for (const { path, why } of BOOKING_MANAGE_FLOW_PATHS) {
+    it(`CRM host admits ${path} anonymously — ${why}`, async () => {
+      const res = await proxy(makeReq({ host: CRM_HOST, path }))
+      expect(admitted(res), `${path} 307s to /login: missing from proxy publicPaths`).toBe(true)
+      expect(ssrClient.auth.getUser).not.toHaveBeenCalled()
+    })
+
+    for (const host of [MARKETING_HOST, TENANT_HOST]) {
+      it(`${host} does not rewrite ${path} to /welcome`, async () => {
+        const res = await proxy(makeReq({ host, path }))
+        expect(rewrittenTo(res), `${path} fell through to the /welcome fallback on ${host}`).toBe(null)
+        expect(admitted(res)).toBe(true)
+      })
+    }
+  }
+
+  it('AppShell renders the booking page with no session', () => {
+    pathnameImpl = '/book/manage/eyJiIjoieCJ9.c2ln'
+    const html = renderToStaticMarkup(<AppShell user={null}><p>page-body</p></AppShell>)
+    expect(html, '/book/manage is missing from AppShell PUBLIC_PATHS').toContain('page-body')
+  })
+
+  it('the marketing brand and the tenant defaults name the booking page explicitly', () => {
+    for (const [label, allowed] of [['un1t-marketing', marketingBrand().allowedPaths], ['DB_BRAND_DEFAULTS', DB_BRAND_DEFAULTS.allowedPaths]]) {
+      expect(allowed, `${label} lost '/book/manage/'`).toContain('/book/manage/')
+    }
+  })
+})
+
 // ── 8. W1.L2 — the customer flow is complete on a tenant domain ───────
 //
 // W1.L1 gave every organisation an automatic <slug>.repset.ie host whose

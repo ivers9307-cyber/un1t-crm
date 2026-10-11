@@ -84,6 +84,9 @@ export const DB_BRAND_DEFAULTS = Object.freeze({
   // confirmation email, with '/event-pay/' as its paid leg; covered by
   // '/event/' today, listed so the flow survives a narrowing of it.
   // LATENT, not live: tenant_domains has zero rows today.
+  // '/book/manage/' (BOOKINGSELF.1): the customer's own booking page (cancel
+  // or reschedule) from the {{manage_url}} link, minted on this host by
+  // resolveCustomerBaseUrl; covered by '/book/', listed for the same reason.
   //
   // W1.L2 — the whole CUSTOMER FLOW. Since mig 716 (W1.L1) every
   // organisation has an automatic <slug>.repset.ie platform row with
@@ -115,7 +118,7 @@ export const DB_BRAND_DEFAULTS = Object.freeze({
   // original five-entry default; THIS array is the truth (an applied
   // migration is never edited).
   allowedPaths: Object.freeze([
-    '/welcome', '/book/', '/event/', '/event/entry/', '/event-pay/', '/privacy', '/legal/', '/terms',
+    '/welcome', '/book/', '/book/manage/', '/event/', '/event/entry/', '/event-pay/', '/privacy', '/legal/', '/terms',
     '/account-deletion', '/cancel/', '/api/public/', '/api/webhooks/',
     // W1.L2 — the marketing flow a tenant's customer reaches from an email:
     '/unsubscribe/', '/preferences/', '/view-email/', '/api/unsubscribe/', '/api/preferences/',

@@ -23,6 +23,8 @@ import { logWarn } from './log'
 import { getLocationBranding } from './location-branding'
 import { transactionalEmailSuppression, transactionalWhatsappSuppression } from '@/lib/transactional-consent'
 import { maybeSendBookingWhatsappConfirm } from '@/lib/automations/booking-whatsapp-confirm'
+import { bookingManageUrl } from '@/lib/booking-manage-tokens'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 
 // BOOKING.2 — booking_date (YYYY-MM-DD) and start_time (HH:MM:SS) are
 // stored as studio-local wall-clock values without timezone semantics
@@ -75,13 +77,37 @@ export async function bookingLocationMergeExtras(db, locationId) {
   return { location_name: locationName || '', company_name: companyName || '' }
 }
 
-function applyMergeTagsWithExtras(html, contact, extras) {
+/**
+ * BOOKINGSELF.1 — {{manage_url}}: the booking's own page (/book/manage/<token>)
+ * where the customer can cancel or reschedule, minted on the booking
+ * location's customer host. '' when it cannot be built (no signing key, no
+ * app URL): the email still goes out, the tag renders empty. Never throws.
+ * WhatsApp confirmations cannot carry it: their bodies are fixed, approved
+ * Meta templates. Shared with event-reminders.js.
+ * @param {object} db
+ * @param {string} bookingId
+ * @param {string|null} locationId  the event type's location
+ * @returns {Promise<string>}
+ */
+export async function bookingManageMergeUrl(db, bookingId, locationId) {
+  try {
+    const baseUrl = await resolveCustomerBaseUrl(db, locationId || null)
+    return bookingManageUrl(bookingId, { baseUrl }) || ''
+  } catch (e) {
+    logWarn('booking-confirmation', 'manage link not built; {{manage_url}} renders empty', { bookingId, err: e })
+    return bookingManageUrl(bookingId) || ''
+  }
+}
+
+// Exported for event-reminders.js, which renders the same tag set.
+export function applyMergeTagsWithExtras(html, contact, extras) {
   let out = applyMergeTags(html, contact, {
     location_name: extras.location_name || '',
     company_name: extras.company_name || '',
   })
   out = out.replaceAll('{{event_name}}', extras.event_name || '')
   out = out.replaceAll('{{event_time}}', extras.event_time || '')
+  out = out.replaceAll('{{manage_url}}', extras.manage_url || '')
   return out
 }
 
@@ -206,6 +232,7 @@ async function sendEmailConfirmation(db, booking, ctx) {
     ...(await bookingLocationMergeExtras(db, ctx.locationId)),
     event_name: ctx.eventName,
     event_time: fmtBookingTime(booking.booking_date, booking.start_time),
+    manage_url: await bookingManageMergeUrl(db, booking.id, ctx.locationId),
   }
 
   const rawSubject =

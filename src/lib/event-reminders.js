@@ -22,35 +22,75 @@
 // FIRST send for any booking, so old surfaces that read it
 // (e.g. BookingSkipReminderToggle's hide rule) keep working.
 
+// BOOKINGSELF.1 — timing. booking_date/start_time are wall clock in the
+// event type's studio zone (locations.timezone). The runner used to read
+// them as UTC (a trailing-Z date parse) inside a ±1h tolerance, so a
+// reminder fired up to an hour early or late (an hour off all summer in
+// Dublin). Now each booking's start is an instant via
+// zonedWallClockToInstant in its studio's zone (zones read ONCE per tick with
+// getLocationZones), and a reminder is due when
+//   now >= start - minutes_before   and   now < start.
+// A studio whose zone cannot be read is skipped for that tick (logged),
+// never guessed. A reminder whose time has passed for a booking made (or
+// moved) inside its window still goes once, unless a CLOSER reminder of the
+// same type is already due: then the stale one is recorded 'skipped'
+// (superseded) instead, so nobody gets "24 hours to go" after "2 hours to
+// go", or both at once. A reschedule clears the booking's send rows
+// (booking-self-service.js), so the reminders run again for the new time.
+
 import { createServerClient } from '@/lib/supabase'
-import { sendTransactionalEmail, applyMergeTags } from '@/lib/postmark'
+import { sendTransactionalEmail } from '@/lib/postmark'
 import { logTransactionalWalletState } from '@/lib/wallet-enforcement'
-import { logWarn } from '@/lib/log'
-import { fmtBookingTime, bookingLocationMergeExtras } from '@/lib/booking-confirmations'
+import { logWarn, logError } from '@/lib/log'
+import {
+  fmtBookingTime, bookingLocationMergeExtras, bookingManageMergeUrl, applyMergeTagsWithExtras,
+} from '@/lib/booking-confirmations'
+import {
+  getLocationZones, getLocationZone, zonedWallClockToInstant, dayStrIn, addDaysISO, DEFAULT_TZ,
+} from '@/lib/location-time'
 
-// ±1h covers Dublin DST drift cleanly. Operators set reminder time in
-// coarse units (24h, 2h) so a ±1h fire-time window is acceptable.
-const TOLERANCE_MS = 60 * 60 * 1000
+// A 0-minute ("at the start") reminder still gets one cron tick (every 5
+// minutes) to go out in: its window is the last 5 minutes before the start.
+export const MIN_REMINDER_LEAD_MS = 5 * 60_000
 
-// BOOKING.2 — the reminder email body renders the event time via
-// the shared fmtBookingTime (booking-confirmations). booking_date /
-// start_time are Dublin wall-clock; the old local copy did
-// `new Date(\`${date}T${time}Z\`)` then rendered in Europe/Dublin,
-// adding the BST hour (17:00 reminder said 18:00). The shared helper
-// anchors the day label on noon-UTC and uses the time string verbatim.
-// NOTE: this is the human-facing body only — the window-matching math
-// below (the bookingMs guard) is a SEPARATE concern and stays as-is.
+/** How long before the start a reminder's window opens, in ms. */
+export function reminderLeadMs(minutesBefore) {
+  return Math.max(Number(minutesBefore) * 60_000, MIN_REMINDER_LEAD_MS)
+}
+
+/** Is a reminder due now for a booking starting at startMs (UTC ms)? Pure. */
+export function reminderIsDue(startMs, minutesBefore, nowMs) {
+  if (startMs == null || !Number.isFinite(startMs)) return false
+  return nowMs >= startMs - reminderLeadMs(minutesBefore) && nowMs < startMs
+}
+
+/** The instant a booking starts, its wall clock read in the studio zone. */
+export function bookingStartInstant(booking, zone) {
+  return zonedWallClockToInstant(booking?.booking_date, String(booking?.start_time || '').slice(0, 8), zone)
+}
+
+/**
+ * The booking_date range to pre-filter on for a reminder: every studio date
+ * an instant in [now, now + lead] can fall on in `zone`, widened a day each
+ * side (a DST day, a clock skew). The exact test is reminderIsDue.
+ */
+export function reminderDateRange(nowMs, minutesBefore, zone) {
+  return {
+    lo: addDaysISO(dayStrIn(new Date(nowMs), zone), -1),
+    hi: addDaysISO(dayStrIn(new Date(nowMs + reminderLeadMs(minutesBefore)), zone), 1),
+  }
+}
 
 /**
  * Find each booking that needs a reminder right now and send it via
  * the channel configured on its event_type. Returns a small stats
  * object the cron logs.
  *
- * @returns {Promise<{sent: number, skipped: number, failed: number}>}
+ * @param {{ db?: object, nowMs?: number }} [opts]  injectable for tests
+ * @returns {Promise<{sent: number, skipped: number, failed: number, zone_unreadable: number}>}
  */
-export async function runEventReminderSends() {
-  const db = createServerClient()
-  const stats = { sent: 0, skipped: 0, failed: 0 }
+export async function runEventReminderSends({ db = createServerClient(), nowMs = Date.now() } = {}) {
+  const stats = { sent: 0, skipped: 0, failed: 0, zone_unreadable: 0 }
 
   // Pull every active reminder + the parent event_type's
   // location + name. Small table.
@@ -64,7 +104,34 @@ export async function runEventReminderSends() {
     .eq('active', true)
   if (!reminders?.length) return stats
 
-  const now = Date.now()
+  const now = nowMs
+
+  // Every live reminder's lead per event type, for the superseded rule.
+  const leadsByType = new Map()
+  for (const r of reminders) {
+    if (!Number.isFinite(r.minutes_before) || r.minutes_before < 0 || !r.event_types?.id) continue
+    if (!Array.isArray(r.channels) || r.channels.length === 0) continue
+    const list = leadsByType.get(r.event_types.id) || []
+    list.push(r.minutes_before)
+    leadsByType.set(r.event_types.id, list)
+  }
+
+  // Studio zones, once per tick. A failed batch read leaves the map empty
+  // and each reminder tries its own location below (and is skipped if that
+  // fails too), so one bad read never sends at a guessed hour.
+  let zones = new Map()
+  try {
+    zones = await getLocationZones(db, reminders.map((r) => r.event_types?.location_id))
+  } catch (err) {
+    logWarn('event-reminders', 'studio zones unreadable in one read; trying per studio', { err })
+  }
+  const zoneFor = async (locationId) => {
+    if (!locationId) return DEFAULT_TZ
+    if (zones.has(locationId)) return zones.get(locationId)
+    const zone = await getLocationZone(db, locationId)
+    zones.set(locationId, zone)
+    return zone
+  }
 
   for (const reminder of reminders) {
     if (!Number.isFinite(reminder.minutes_before) || reminder.minutes_before < 0) continue
@@ -74,14 +141,23 @@ export async function runEventReminderSends() {
     const et = reminder.event_types
     if (!et) continue   // shouldn't happen — !inner join — but defensive
 
-    const targetMs = now + reminder.minutes_before * 60_000
-    const lo = new Date(targetMs - TOLERANCE_MS)
-    const hi = new Date(targetMs + TOLERANCE_MS)
+    let zone
+    try {
+      zone = await zoneFor(et.location_id)
+    } catch (err) {
+      logWarn('event-reminders', 'studio zone unreadable; reminder skipped this tick', { err, reminderId: reminder.id, locationId: et.location_id })
+      stats.zone_unreadable++
+      continue
+    }
 
-    // Eligible bookings — confirmed, in the time window. We don't
+    const { lo, hi } = reminderDateRange(now, reminder.minutes_before, zone)
+    const myLead = reminderLeadMs(reminder.minutes_before)
+    const closerLeads = (leadsByType.get(et.id) || []).map(reminderLeadMs).filter((l) => l < myLead)
+
+    // Eligible bookings — confirmed, in the date range. We don't
     // pre-filter on already-sent here because PostgREST doesn't
     // model "missing row in a sibling table" cleanly; instead
-    // we pull the in-window set then look up sends for THIS
+    // we pull the in-range set then look up sends for THIS
     // reminder in a second query.
     const { data: bookings } = await db
       .from('bookings')
@@ -96,8 +172,8 @@ export async function runEventReminderSends() {
       `)
       .eq('event_type_id', et.id)
       .eq('status', 'confirmed')
-      .gte('booking_date', lo.toISOString().slice(0, 10))
-      .lte('booking_date', hi.toISOString().slice(0, 10))
+      .gte('booking_date', lo)
+      .lte('booking_date', hi)
 
     if (!bookings?.length) continue
 
@@ -130,15 +206,23 @@ export async function runEventReminderSends() {
     logTransactionalWalletState(db, et.location_id, 'email_send')
 
     for (const booking of bookings) {
-      const bookingMs = new Date(`${booking.booking_date}T${booking.start_time}Z`).getTime() // eslint-disable-line guardrails/no-zulu-template-date -- reminder window-match against now-based bounds; left by the #650 verification, reminder-timing reviewed separately
-      if (bookingMs < lo.getTime() || bookingMs > hi.getTime()) continue
+      const startMs = bookingStartInstant(booking, zone)
+      if (!reminderIsDue(startMs, reminder.minutes_before, now)) continue
       if (sentBookingIds.has(booking.id)) continue
+
+      // A closer reminder of the same type is already due: this one is
+      // stale for this booking. Recorded so it is never reconsidered.
+      if (closerLeads.some((lead) => now >= startMs - lead)) {
+        await recordSend(db, { booking_id: booking.id, reminder_id: reminder.id, status: 'skipped', reason: 'superseded_by_closer_reminder' })
+        stats.skipped++
+        continue
+      }
 
       // mig 075: per-booking override. Operator flipped a flag
       // on this specific booking. Short-circuit before any
       // channel logic.
       if (booking.skip_reminder) {
-        await db.from('booking_reminder_sends').insert({
+        await recordSend(db, {
           booking_id: booking.id,
           reminder_id: reminder.id,
           status: 'skipped',
@@ -199,7 +283,7 @@ export async function runEventReminderSends() {
         continue
       }
 
-      await db.from('booking_reminder_sends').insert({
+      await recordSend(db, {
         booking_id: booking.id,
         reminder_id: reminder.id,
         status: aggregatedStatus,
@@ -223,10 +307,27 @@ export async function runEventReminderSends() {
   return stats
 }
 
+// The dedup row. A lost write means the reminder may go again next tick
+// (a duplicate, never a loss): logged loud, never thrown through the runner.
+async function recordSend(db, row) {
+  try {
+    const { error } = await db.from('booking_reminder_sends').insert(row)
+    if (error) logError('event-reminders', 'reminder send row not written; it may repeat next tick', { err: error, bookingId: row.booking_id, reminderId: row.reminder_id, status: row.status })
+  } catch (err) {
+    logError('event-reminders', 'reminder send row write threw; it may repeat next tick', { err, bookingId: row.booking_id, reminderId: row.reminder_id })
+  }
+}
+
+// A display hint only (the send rows are the dedup): a lost stamp is logged.
 async function stampLegacyReminderSentAt(db, bookingId) {
-  await db.from('bookings')
-    .update({ reminder_sent_at: new Date().toISOString() })
-    .eq('id', bookingId)
+  try {
+    const { error } = await db.from('bookings')
+      .update({ reminder_sent_at: new Date().toISOString() })
+      .eq('id', bookingId)
+    if (error) logWarn('event-reminders', 'legacy reminder_sent_at not stamped', { err: error, bookingId })
+  } catch (err) {
+    logWarn('event-reminders', 'legacy reminder_sent_at stamp threw', { err, bookingId })
+  }
 }
 
 // Exported for tests (W1.S1a); the runner above is its only caller.
@@ -279,6 +380,8 @@ export async function sendEmailReminder(db, booking, ctx) {
     ...(await bookingLocationMergeExtras(db, ctx.locationId)),
     event_name: ctx.eventName,
     event_time: fmtBookingTime(booking.booking_date, booking.start_time),
+    // BOOKINGSELF.1 — the customer's cancel / reschedule page.
+    manage_url: await bookingManageMergeUrl(db, booking.id, ctx.locationId),
   }
 
   const rawSubject =
@@ -297,22 +400,8 @@ export async function sendEmailReminder(db, booking, ctx) {
   return { status: 'sent' }
 }
 
-/**
- * Standard merge-tag substitution + a few event-reminder-specific
- * extras the regular postmark.applyMergeTags doesn't know about.
- */
-function applyMergeTagsWithExtras(html, contact, extras) {
-  // Apply the standard tags first (handles {{first_name}} etc).
-  // Pass extras.location_name through to applyMergeTags so the
-  // standard {{location_name}} tag works for reminders too.
-  let out = applyMergeTags(html, contact, {
-    location_name: extras.location_name || '',
-    company_name: extras.company_name || '',
-  })
-  out = out.replaceAll('{{event_name}}', extras.event_name || '')
-  out = out.replaceAll('{{event_time}}', extras.event_time || '')
-  return out
-}
+// applyMergeTagsWithExtras is booking-confirmations' (shared since
+// BOOKINGSELF.1, which added {{manage_url}} to both).
 
 // fillReminderTemplate (the WhatsApp body-variable filler) was
 // retired with the WhatsApp branch in mig 074. Email renders

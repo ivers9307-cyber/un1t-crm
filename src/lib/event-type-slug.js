@@ -12,6 +12,17 @@
 
 import { eventTypeSlug } from './event-type-schema.js'
 
+// BOOKINGSELF.1 — words a booking type may never take as its slug because a
+// STATIC route under /book/ owns that address: /book/manage/<token> is the
+// customer's own booking page, and Next resolves the static segment before
+// [slug], so a type slugged 'manage' would be unreachable. pickFreeSlug skips
+// them as if taken; slugTaken answers taken for them, so an explicit slug
+// (API-key callers, the slug field) is the usual 409 SLUG_IN_USE.
+export const RESERVED_EVENT_TYPE_SLUGS = Object.freeze(new Set(['manage']))
+
+/** Is `slug` reserved for a static /book/ route? */
+export const isReservedEventTypeSlug = (slug) => RESERVED_EVENT_TYPE_SLUGS.has(String(slug || '').toLowerCase())
+
 // A studio slug longer than this is not worth reading in a link (host
 // locations are `host-<uuid>`); count instead.
 const MAX_STUDIO_SUFFIX = 24
@@ -38,7 +49,7 @@ function candidates(base, studioSlug) {
  */
 export function pickFreeSlug(base, taken, studioSlug) {
   const list = candidates(base, studioSlug)
-  const free = list.find((s) => !taken.has(s))
+  const free = list.find((s) => !taken.has(s) && !isReservedEventTypeSlug(s))
   return free ?? `${list[0]}-${Math.random().toString(36).slice(2, 8)}`
 }
 
@@ -65,6 +76,7 @@ export async function resolveEventTypeSlug(db, { name, locationId, excludeId = n
 
 /** Is `slug` held by a row other than `excludeId`? `{ taken }` or `{ error }`. */
 export async function slugTaken(db, slug, excludeId = null) {
+  if (isReservedEventTypeSlug(slug)) return { taken: true }
   const { data, error } = await db.from('event_types').select('id').eq('slug', slug)
   if (error) return { error: error.message }
   return { taken: (data || []).some((r) => r.id !== excludeId) }

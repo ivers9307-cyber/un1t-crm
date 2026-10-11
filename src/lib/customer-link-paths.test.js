@@ -36,6 +36,7 @@ const SITES = [
   'src/lib/race-gap-payment.js',
   'src/app/api/public/entry/[token]/move/route.js',
   'src/lib/entry-manage-tokens.js', // entryManageUrl (race-confirmations hands in the host)
+  'src/lib/booking-manage-tokens.js', // BOOKINGSELF.1 bookingManageUrl (booking-confirmations hands in the host)
   'src/lib/event-waitlist.js',
   'src/app/api/events/[id]/qr-code/route.js',
   'src/app/(members)/events/page.js',
@@ -56,6 +57,7 @@ const HELPERS = new Set([
   'src/lib/postmark.js',
   'src/lib/campaign-web-view.js',
   'src/lib/entry-manage-tokens.js',
+  'src/lib/booking-manage-tokens.js',
 ])
 
 // The literal path that follows `${baseUrl}` (or a route's `${floor}`
