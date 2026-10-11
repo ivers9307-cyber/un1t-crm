@@ -73,9 +73,11 @@ export async function GET(request) {
       .order('started_at', { ascending: false })
       .limit(1)
       .maybeSingle()
+    // An unreadable history runs, as main's guard did: a duplicate Friday pull
+    // (its run claim dedupes per location) beats a silent skip with no heartbeat.
+    if (lastErr) console.error('[receipt-coverage-weekly] recon_runs unreadable; running the fallback slots', lastErr.message)
     for (const s of fallbackSlots) {
-      // An unreadable history is not "never ran": skip, as the old guard's caller would have been told nothing.
-      if (lastErr || (lastCron && dayStrIn(lastCron.started_at, s.zone) === s.day)) ranToday.add(s.locationId)
+      if (!lastErr && lastCron && dayStrIn(lastCron.started_at, s.zone) === s.day) ranToday.add(s.locationId)
     }
   }
 

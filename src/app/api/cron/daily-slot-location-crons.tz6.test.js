@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const acted = []
 const claims = new Map()
-const h = vi.hoisted(() => ({ claimError: null, lastRecon: null }))
+const h = vi.hoisted(() => ({ claimError: null, lastRecon: null, reconError: null }))
 const DUB = 'loc-dub'
 const NYC = 'loc-ny'
 
@@ -53,7 +53,7 @@ vi.mock('@/lib/supabase', async () => {
   function builder(table) {
     const b = {}
     for (const m of ['select', 'eq', 'order', 'limit', 'not', 'lte', 'in', 'range']) b[m] = () => b
-    b.maybeSingle = async () => ({ data: table === 'ad_accounts' ? { id: 'acc' } : table === 'recon_runs' && h.lastRecon ? { started_at: h.lastRecon } : null, error: null })
+    b.maybeSingle = async () => ({ data: table === 'ad_accounts' ? { id: 'acc' } : table === 'recon_runs' && h.lastRecon ? { started_at: h.lastRecon } : null, error: table === 'recon_runs' ? h.reconError : null })
     b.then = (res, rej) => Promise.resolve({ data: TABLES[table] || [], error: null }).then(res, rej)
     return b
   }
@@ -91,6 +91,7 @@ beforeEach(() => {
   claims.clear()
   h.claimError = null
   h.lastRecon = null
+  h.reconError = null
 })
 
 // [cron, ticks]: an hour early, the Dublin legacy instant, an hour after it
@@ -145,6 +146,12 @@ describe('TZ.6 location-loop daily crons act once per location, at its slot', ()
     h.lastRecon = '2026-07-03T06:59:00Z' // 07:59 IST: a cron pull already started on the Friday
     expect(await ticks('receipt-coverage-weekly', ['2026-07-03T07:00:00Z'])).toEqual([])
     h.lastRecon = '2026-06-26T07:00:00Z' // last Friday
+    expect(await ticks('receipt-coverage-weekly', ['2026-07-03T07:00:00Z'])).toEqual([DUB])
+  })
+
+  it('receipt-coverage-weekly before mig 720 runs when recon_runs is unreadable (main ran; a silent skip has no heartbeat)', async () => {
+    h.claimError = { code: 'PGRST205', message: 'schema cache' }
+    h.reconError = { message: 'boom' }
     expect(await ticks('receipt-coverage-weekly', ['2026-07-03T07:00:00Z'])).toEqual([DUB])
   })
 

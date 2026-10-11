@@ -81,7 +81,7 @@ const CLAIM_BATCH = 500 // rows per upsert: the RETURNING set stays under the 1k
  * Every converted cron's slot. `hour` is the legacy UTC hour (= the local hour
  * for non-legacy zones); `weekday` is ISO (1 = Monday); `anchor: 'local'` means
  * the legacy schedule was already local wall clock. The minute is vercel.json's
- * (the gate works per hour). Mirrored in mig 720's seed: change both.
+ * (the gate works per hour).
  */
 export const DAILY_SLOTS = Object.freeze({
   'equipment-inspection-reminder': Object.freeze({ hour: 6 }),
