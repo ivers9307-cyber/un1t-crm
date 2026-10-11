@@ -51,8 +51,7 @@ import { isLiveAssignment, slotKey } from './roster'
 import { shiftKindOf } from '@shared/shift-kind'
 import { normaliseBriefing } from '@shared/shift-briefing'
 import { wallInstant } from './staff-calendar-feed'
-import { resolveTz } from './tz-time'
-import { addDaysISO } from './dublin-time'
+import { resolveZone, addDaysISO } from './location-time'
 import { inferContinuousArrivals, arrivalToTimeOnly, resolveScheduledAt } from './staff-attendance'
 
 export const SNAPSHOT_FORMAT_VERSION = 1
@@ -235,13 +234,13 @@ function compareBlockOrder(x, y) {
  * @param {string|null} [args.from]    YYYY-MM-DD; narrows the window
  * @param {string|null} [args.to]
  * @param {number} args.nowMs          what "ended" is judged against
- * @param {string|null} [args.tz]      locations.timezone; unknown -> Europe/Dublin
+ * @param {string|null} [args.tz]      locations.timezone; unknown -> DEFAULT_TZ
  * @param {Record<string,string>} [args.names]  profile_id -> full_name for coaches
  *                                      not on the live roster any more
  * @returns {{ window: {from,to}|null, blocks: object[], totals: object }}
  */
 export function compareSnapshot({ snapshot, currentBlocks, from = null, to = null, nowMs = Date.now(), tz = null, names = {} }) {
-  const zone = resolveTz(tz)
+  const zone = resolveZone(tz)
   const totals = emptyTotals()
   const window = snapshot ? clipWindow(snapshot, from, to) : null
   if (!window) return { window: null, blocks: [], totals }

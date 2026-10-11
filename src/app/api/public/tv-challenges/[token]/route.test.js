@@ -98,6 +98,20 @@ describe('GET /api/public/tv-challenges/[token]', () => {
     expect(JSON.stringify(body)).not.toContain('contact_id')
   })
 
+  it("TZ.12: carries the token's location zone for the header clock (NULL column → Europe/Dublin)", async () => {
+    const ny = await (await callRoute(makeDb({
+      display: { location_id: 'loc-ny', active: true },
+      location: { id: 'loc-ny', name: 'NY', timezone: 'America/New_York' },
+    }), 'ny-token')).json()
+    expect(ny.timezone).toBe('America/New_York')
+    expect(ny.location).toEqual({ id: 'loc-ny', name: 'NY' })
+    const dub = await (await callRoute(makeDb({
+      display: { location_id: 'loc-1', active: true },
+      location: { id: 'loc-1', name: 'Stillorgan', timezone: null },
+    }), 'good-token')).json()
+    expect(dub.timezone).toBe('Europe/Dublin')
+  })
+
   it('returns 404 for an unknown token (no row) without touching challenges', async () => {
     const db = makeDb({ display: null, location: null })
     const res = await callRoute(db, 'bad-token')

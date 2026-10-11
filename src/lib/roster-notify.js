@@ -18,7 +18,7 @@ import { logWarn } from './log'
 import { isLiveAssignment } from './roster'
 import { notifyUsers } from './notify'
 import { collectUnnotifiedChanges, distinctCoachIds, markChangesNotified } from './roster-change-log'
-import { dublinTodayStr } from './dublin-time'
+import { todayStrIn, getLocationZone } from './location-time'
 // NOTIFY.1 review — shares the 'Fri 18 Sep' date formatting with the
 // moment-of-change messages. One-way import: roster-change-notify.js does
 // NOT import this module, so there is no cycle.
@@ -236,13 +236,17 @@ export function deliveryChannel(pushSent, emailsSent) {
  * @param {string} range.locationId
  * @param {string} range.periodStart
  * @param {string} range.periodEnd
- * @param {string} [range.todayStr]  Dublin 'YYYY-MM-DD' to treat as "today";
- *                                   defaults to dublinTodayStr(). Tests pass
- *                                   this to pin the past/future boundary.
+ * @param {string} [range.todayStr]  'YYYY-MM-DD' to treat as "today";
+ *                                   defaults to the STUDIO's day (TZ.8a: the
+ *                                   location's timezone; an unreadable zone
+ *                                   leaves the rows for the next publish).
+ *                                   Tests pass this to pin the boundary.
  */
 export async function renotifyChangedCoaches(db, { locationId, periodStart, periodEnd, todayStr }) {
   try {
-    const today = todayStr || dublinTodayStr()
+    // Thrown when the zone is unreadable: caught below, nothing is stamped,
+    // so the next publish retries rather than judge "past" on a guessed day.
+    const today = todayStr || todayStrIn(await getLocationZone(db, locationId))
     const changes = await collectUnnotifiedChanges(db, { locationId, periodStart, periodEnd })
     const futureChanges = changes.filter((c) => c.block_date >= today)
     const coachIds = distinctCoachIds(futureChanges)

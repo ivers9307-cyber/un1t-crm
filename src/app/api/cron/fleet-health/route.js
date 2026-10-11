@@ -58,6 +58,7 @@ import { sendPush } from '@/lib/push'
 import { getAppUrl } from '@/lib/app-url'
 import { listTailnetDevices, tailscaleConfigured } from '@/lib/tailscale-api'
 import { excludeTombstones } from '@/lib/staff-tombstone'
+import { getLocationZones, PLATFORM_TZ } from '@/lib/location-time'
 import {
   isFleetDevice,
   deviceNameOf,
@@ -177,9 +178,25 @@ export async function GET(request) {
   // correctly grades on reachability alone).
   const { data: fleetRows } = await db
     .from('fleet_devices')
-    .select('device_name, role, last_render_at')
+    .select('device_name, role, last_render_at, location_id')
     .in('device_name', names)
   const fleetByName = new Map((fleetRows || []).map((r) => [r.device_name, r]))
+
+  // TZ.12 — `quiet` (an online-but-broken device graded overnight) is the
+  // device's STUDIO night, 22:00-06:00 in its locations.timezone: the bridge's
+  // location, else the kiosk's fleet_devices.location_id. An unclaimed device
+  // has no studio and stays on the platform clock. Resolved once per tick. A
+  // failed read is a DB outage for a decision that gates alerts, so the tick
+  // is skipped (the next one, 5 min later, reads again), never guessed.
+  const deviceLocationId = (name) =>
+    bridgeByName.get(name)?.location_id ?? fleetByName.get(name)?.location_id ?? null
+  let zoneByLocation
+  try {
+    zoneByLocation = await getLocationZones(db, names.map(deviceLocationId))
+  } catch (err) {
+    logError('fleet-health', 'location zones unreadable; tick skipped', { err })
+    return NextResponse.json({ success: false, error: 'zone_read_failed' }, { status: 200 })
+  }
 
   // BRIDGE-BLIND.1 — what is happening in each bridge's room right now.
   //
@@ -205,7 +222,9 @@ export async function GET(request) {
     const visibility = bridgeRow?.location_id
       ? (visibilityByLocation.get(bridgeRow.location_id) ?? null)
       : null
-    const graded = gradeDevice(device, bridgeRow, now, fleetByName.get(name) ?? null, visibility)
+    const locationId = deviceLocationId(name)
+    const zone = (locationId && zoneByLocation.get(locationId)) || PLATFORM_TZ
+    const graded = gradeDevice(device, bridgeRow, now, fleetByName.get(name) ?? null, visibility, zone)
     const { alert, row } = decideAlert(graded, priorByName.get(name) ?? null, now)
     rows.push(row)
     if (alert) alerts.push({ ...graded, alert, row })

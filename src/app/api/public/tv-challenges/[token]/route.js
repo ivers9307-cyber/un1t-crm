@@ -16,6 +16,7 @@ import { computeStandings, computeCollective } from '@/lib/challenges-io'
 import { challengePhase, windowIso } from '@/lib/challenges'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { resolveLocationBrand } from '@/lib/host-brand'
+import { zoneOfLocation } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -55,9 +56,10 @@ export async function GET(request, props) {
     return NextResponse.json({ ok: false, error: 'Not found' }, { status: 404, headers: NO_STORE })
   }
 
+  // TZ.12 — `timezone` rides the same read, for the board's header clock.
   const { data: location } = await db
     .from('locations')
-    .select('id, name')
+    .select('id, name, timezone')
     .eq('id', display.location_id)
     .single()
   if (!location) {
@@ -99,6 +101,8 @@ export async function GET(request, props) {
 
   return NextResponse.json({
     ok: true, server_time: new Date().toISOString(),
+    // TZ.12 — the studio's zone (missing/invalid → Europe/Dublin, warned once).
+    timezone: zoneOfLocation(location),
     location: { id: location.id, name: location.name },
     brand: { name: brand.companyName, short_name: brand.shortName },
     challenges, gymBoard: project(gym),

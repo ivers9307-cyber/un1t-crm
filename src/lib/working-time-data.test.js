@@ -140,6 +140,7 @@ describe('loadWorkingTimeShifts', () => {
       profile_id: 'emp', block_id: 'b-a1', block_date: '2026-09-22', location_id: 'loc2', location_name: 'Studio South',
       name: 'Class', status: 'scheduled', start_time_override: null, end_time_override: '22:30:00',
       start_time: '20:00:00', end_time: '22:00:00', shift_templates: { start_time: '20:00:00', end_time: '22:00:00' },
+      timezone: null, // TZ.8a — the studio zone rides along (NULL = DEFAULT_TZ in the rules)
     }])
   })
 

@@ -9,7 +9,7 @@ import { evaluateSwapMoveConflicts } from './swap-lifecycle'
 import { fmtTime } from './schedule-overlap'
 import { isLiveAssignment } from './roster'
 import { MANAGER_ROLES } from './schemas'
-import { wallMsInTz } from './tz-time'
+import { zonedWallClockToInstant } from './location-time'
 import { inStaffPushHours, resolveStaffTimeZone, STAFF_PUSH_HOURS } from './staff-push-hours'
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -236,7 +236,8 @@ export function swapExpiryNote(swap, reason) {
 // THE RULE: the shift has started when now >= the instant of
 //   block_date + (the assignment's start_time_override, else the block's
 //   start_time), read as WALL CLOCK in the studio's locations.timezone
-//   (empty or invalid -> Europe/Dublin), resolved DST-exactly by wallMsInTz.
+//   (empty or invalid -> DEFAULT_TZ), resolved DST-exactly by the canonical
+//   solver (zonedWallClockToInstant, shared/zoned-time.js).
 // An unreadable date or time is NOT started: never close or refuse on a guess.
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -249,7 +250,7 @@ export function swapShiftStartMs(shift, tz) {
   if (!shift) return null
   // The SAME zone resolution the quiet-hours band uses, so a shift's start and
   // its studio's band can never be read in two different zones.
-  return wallMsInTz(shift.block_date, fmtTime(shift.start_time_override || shift.start_time), resolveStaffTimeZone(tz).timeZone)
+  return zonedWallClockToInstant(shift.block_date, fmtTime(shift.start_time_override || shift.start_time), resolveStaffTimeZone(tz).timeZone)
 }
 
 export function swapShiftHasStarted(shift, nowMs, tz) {

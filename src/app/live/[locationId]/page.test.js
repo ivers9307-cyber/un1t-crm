@@ -39,8 +39,8 @@ vi.mock('next/navigation', () => ({
 }))
 
 vi.mock('./LiveClassClient', () => ({
-  default: ({ locationId, locationName, tvToken }) => (
-    <div data-testid="live-class-client" data-tv-token={tvToken || undefined}>{locationName} / {locationId}</div>
+  default: ({ locationId, locationName, tvToken, timeZone }) => (
+    <div data-testid="live-class-client" data-tv-token={tvToken || undefined} data-time-zone={timeZone}>{locationName} / {locationId}</div>
   ),
 }))
 
@@ -141,6 +141,16 @@ describe('/live/[locationId] page', () => {
     createServerClient.mockReturnValue(mockDb({ location: { id: 'loc1', name: 'Stillorgan' } }))
     const html = renderToStaticMarkup(await LiveClassPage(props('loc1')))
     expect(html).toContain('Stillorgan')
+  })
+
+  // TZ.12 — the board's studio clock rides the location read: the client gets
+  // the location's zone, and a row with no timezone is Europe/Dublin.
+  it("passes the location's zone to the live client", async () => {
+    getCurrentUser.mockResolvedValue(user({ locations: [{ id: 'loc1' }], perms: { studio_management: true } }))
+    createServerClient.mockReturnValue(mockDb({ location: { id: 'loc1', name: 'NY', timezone: 'America/New_York' } }))
+    expect(renderToStaticMarkup(await LiveClassPage(props('loc1')))).toContain('data-time-zone="America/New_York"')
+    createServerClient.mockReturnValue(mockDb({ location: { id: 'loc1', name: 'Stillorgan' } }))
+    expect(renderToStaticMarkup(await LiveClassPage(props('loc1')))).toContain('data-time-zone="Europe/Dublin"')
   })
 
   it('masters bypass the location-membership check', async () => {
