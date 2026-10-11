@@ -31,7 +31,8 @@ import {
 } from '@/lib/person-accounts'
 import { DEFAULT_BOOKING_ISSUE_HANDOFF_TEXT } from './notify'
 import { notifyAgentApprovalRequest } from './approval-notify'
-import { formatDublinClassTime } from './dublin-format'
+import { formatClassTime } from './dublin-format'
+import { DEFAULT_TZ } from '@/lib/location-time'
 
 // REGISTRYREAD.1b — what Mia is told when the auto lane has no usable Glofox
 // credentials. A failed settings READ (creds.readError) is a blip, not "this
@@ -224,9 +225,9 @@ const MAX_CLASS_LIST = 60
 
 // MIA-REVIEW.3 — the formatter moved to ./dublin-format so account-tools
 // (which can't import this module: it statically pulls @/lib/glofox) shares
-// the exact same Dublin labelling. Re-exported so the public surface of
-// booking-tools is unchanged.
-export { formatDublinClassTime }
+// the exact same labelling (the studio's wall clock since TZ.5). Re-exported
+// so booking-tools keeps exposing the one formatter.
+export { formatClassTime }
 
 // CAPACITY-SECRECY.1 — a class with this many spaces or fewer is "limited".
 // Coarse on purpose: it lets Mia create honest urgency without ever handing
@@ -243,7 +244,9 @@ const LIMITED_SPOTS_THRESHOLD = 3
  * context (the prompt rule is the second line of defence). Operator surfaces
  * that legitimately need counts read Glofox directly, not through here.
  */
-export function shapeClassListForAgent(events, nowMs, limit = MAX_CLASS_LIST) {
+// TZ.5 — `zone` is the conversation location's (ctx.zone): the `time` label is
+// that studio's wall clock.
+export function shapeClassListForAgent(events, nowMs, limit = MAX_CLASS_LIST, zone = DEFAULT_TZ) {
   const nowSec = Math.floor(nowMs / 1000)
   const out = []
   for (const e of Array.isArray(events) ? events : []) {
@@ -259,7 +262,7 @@ export function shapeClassListForAgent(events, nowMs, limit = MAX_CLASS_LIST) {
       event_id: e._id || e.id || null,
       name: e.name || 'Class',
       start_sec: startSec,
-      time: formatDublinClassTime(startSec),
+      time: formatClassTime(startSec, zone),
       // MIA-BOARD.2 — machine-readable instant, relayed back via book_class so
       // the approval row is guardable against past-start execution. The
       // display `time` stays what the customer sees.
@@ -268,7 +271,7 @@ export function shapeClassListForAgent(events, nowMs, limit = MAX_CLASS_LIST) {
       ...(!full && size > 0 && spotsLeft <= LIMITED_SPOTS_THRESHOLD ? { limited: true } : {}),
     })
   }
-  // Sort on the numeric instant — the Dublin label doesn't sort lexically.
+  // Sort on the numeric instant — the wall-clock label doesn't sort lexically.
   out.sort((a, b) => a.start_sec - b.start_sec)
   return out.slice(0, limit).map(({ start_sec: _omitted, ...rest }) => rest)
 }
@@ -277,10 +280,10 @@ const MAX_MEMBER_BOOKINGS = 10
 
 /**
  * Shape a member's Glofox /2.0/bookings rows for the agent: future,
- * still-BOOKED rows with the booking id the cancel call needs, Dublin
- * labels, time-sorted, capped. Pure.
+ * still-BOOKED rows with the booking id the cancel call needs, wall-clock
+ * labels in the studio's zone (TZ.5), time-sorted, capped. Pure.
  */
-export function shapeMemberBookingsForAgent(bookings, nowMs, limit = MAX_MEMBER_BOOKINGS) {
+export function shapeMemberBookingsForAgent(bookings, nowMs, limit = MAX_MEMBER_BOOKINGS, zone = DEFAULT_TZ) {
   const nowSec = Math.floor(nowMs / 1000)
   const out = []
   for (const b of Array.isArray(bookings) ? bookings : []) {
@@ -293,7 +296,7 @@ export function shapeMemberBookingsForAgent(bookings, nowMs, limit = MAX_MEMBER_
       booking_id: b._id || null,
       class_name: b.event_name || b.model_name || 'Class',
       start_sec: startSec,
-      time: formatDublinClassTime(startSec),
+      time: formatClassTime(startSec, zone),
     })
   }
   out.sort((a, b) => a.start_sec - b.start_sec)
@@ -600,7 +603,7 @@ export async function executeBookingTool(toolName, input, ctx) {
     const start = Math.floor(Date.now() / 1000)
     const { ok, events } = await fetchUpcomingEvents(creds, { start, end: start + days * 86400, limit: 100 })
     if (!ok) return { error: 'list_failed', message: 'Could not load the timetable just now — offer to hand off.' }
-    return { classes: shapeClassListForAgent(events, Date.now()) }
+    return { classes: shapeClassListForAgent(events, Date.now(), MAX_CLASS_LIST, ctx.zone || DEFAULT_TZ) }
   }
 
   if (toolName === 'book_class') {
@@ -979,9 +982,9 @@ export async function executeBookingTool(toolName, input, ctx) {
 
     const nowMs = Date.now()
     // Shape ONE raw row at a time: same helper, same filtering (still-BOOKED,
-    // still in the future, same Dublin labels), but each shaped row keeps the
-    // numeric start it came from — the shaper drops it, since it is not part
-    // of the model's view, and the Dublin label does not sort.
+    // still in the future, same studio-clock labels), but each shaped row keeps
+    // the numeric start it came from — the shaper drops it, since it is not
+    // part of the model's view, and the wall-clock label does not sort.
     //
     // The rows handed back carry NOTHING about which account they came from.
     // The whole tool result is JSON-stringified into the model's context, so
@@ -997,7 +1000,7 @@ export async function executeBookingTool(toolName, input, ctx) {
         return
       }
       for (const raw of res.bookings) {
-        const [shaped] = shapeMemberBookingsForAgent([raw], nowMs)
+        const [shaped] = shapeMemberBookingsForAgent([raw], nowMs, MAX_MEMBER_BOOKINGS, ctx.zone || DEFAULT_TZ)
         if (!shaped) continue
         // No `|| 0` fallback: the shaper only emits a row whose time_start is
         // finite and in the future, so an unparseable start cannot reach here

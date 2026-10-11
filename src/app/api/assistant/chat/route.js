@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { anthropicMessages } from '@/lib/anthropic'
 import { recordUsage } from '@/lib/usage'
-import { dublinTodayStr, addDaysISO } from '@/lib/dublin-time'
+import { todayStrIn, addDaysISO, zoneOfLocation } from '@/lib/location-time'
 import { fetchScheduledShiftRows } from '@/lib/report-generator'
 import { fetchApiShiftRows } from '@/lib/roster-read'
 import { effectiveShiftStart, effectiveShiftEnd } from '@shared/roster-month'
@@ -513,7 +513,7 @@ export async function POST(request) {
 - Location: ${userContext.locationName}
 - Location ID: ${userContext.locationId || 'none'}
 - Permissions: ${JSON.stringify(userContext.permissions)}
-- Today: ${dublinTodayStr()}
+- Today: ${todayStrIn(zoneOfLocation(user.activeLocation))}
 `
 
   // Prompt caching (CACHE.1): the static SYSTEM_PROMPT (~3.1k tokens) and the

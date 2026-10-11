@@ -7,6 +7,7 @@ import { readCheckinSendsToday, readCheckinSendsAllTime } from '@/lib/agent/chec
 import { logError } from '@/lib/log'
 import { mergeLocationSettings, settingsSaveFailure } from '@/lib/location-settings'
 import { getLocationBranding } from '@/lib/location-branding'
+import { zoneOfLocation } from '@/lib/location-time'
 // MIA-HYGIENE.1 — schema, defaults and the persisted-object builder live in
 // one contract module so a unit test can assert every validated key is
 // actually WRITTEN (see settings-contract.js for the two incidents this
@@ -33,7 +34,7 @@ export async function GET() {
   // SETTINGSWIPE.1 — a failed read is NOT "Mia on her defaults". Answering
   // { ...DEFAULTS } here showed enabled:false as her saved state, and the
   // editor's Save wrote it back, switching her off.
-  const { data: loc, error: locErr } = await db.from('locations').select('name, settings, glofox_auto_cancel_memberships').eq('id', locationId).single()
+  const { data: loc, error: locErr } = await db.from('locations').select('name, settings, glofox_auto_cancel_memberships, timezone').eq('id', locationId).single()
   if (locErr || !loc) {
     logError('settings-customer-agent', 'settings read failed', { locationId, err: locErr?.message || 'no row' })
     return NextResponse.json({
@@ -101,7 +102,9 @@ export async function GET() {
     // the operator who believes test mode still scopes it.
     live_despite_test_mode: settings.enabled === true && settings.test_mode === true,
     checkin_stats: checkinStats,
-    location: { id: locationId, name: loc?.name || null },
+    // TZ.5 — the studio's zone: quiet hours with no stored tz are read in it,
+    // and the editor names it next to the quiet-hours fields.
+    location: { id: locationId, name: loc?.name || null, timezone: zoneOfLocation({ id: locationId, timezone: loc?.timezone }) },
     // W1.S3 — the editor's placeholders render the studio's own brand
     // (default hand-off / welcome copy, the "{Brand} Points" label).
     brand: { companyName: branding.companyName, shortName: branding.shortName },

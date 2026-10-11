@@ -192,3 +192,39 @@ describe('CustomerAgentClient — check-in counts (CHECKINRISKS.1)', () => {
     expect(screen.queryByText(/none yet/)).toBeNull()
   })
 })
+
+// TZ.5 — quiet hours with no stored zone are the studio's own clock: the
+// editor names the studio's zone and never writes 'Europe/Dublin' itself.
+describe('CustomerAgentClient — quiet hours follow the studio zone (TZ.5)', () => {
+  const withQuiet = async (timezone, tz) => reply(200, {
+    ...(await GOOD.json()),
+    settings: { ...DEFAULTS, enabled: true, social_enabled: false, glofox_auto_cancel: false, quiet_hours: { start: '21:00', end: '08:00', ...(tz !== undefined ? { tz } : {}) } },
+    location: { id: 'loc1', name: 'Test Studio', timezone },
+  })
+  const savedQuietHours = () => {
+    const put = global.fetch.mock.calls.find(([url, init]) => String(url).startsWith('/api/settings/customer-agent') && init?.method === 'PUT')
+    return JSON.parse(put[1].body).quiet_hours
+  }
+
+  it('a Dublin studio reads exactly as before', async () => {
+    mockFetch([await withQuiet('Europe/Dublin')])
+    render(<CustomerAgentClient canEdit />)
+    await waitFor(() => expect(screen.getByText('Europe/Dublin — agent stays quiet, a human replies.')).toBeTruthy())
+  })
+
+  it('a New York studio names its own zone, and Save writes no zone of its own', async () => {
+    mockFetch([await withQuiet('America/New_York')])
+    render(<CustomerAgentClient canEdit />)
+    await waitFor(() => expect(screen.getByText('America/New_York — agent stays quiet, a human replies.')).toBeTruthy())
+    fireEvent.click(screen.getAllByRole('button', { name: /Save settings/ })[0])
+    await waitFor(() => expect(savedQuietHours()).toEqual({ start: '21:00', end: '08:00', tz: null }))
+  })
+
+  it('a stored zone is shown and kept on save', async () => {
+    mockFetch([await withQuiet('America/New_York', 'Europe/Dublin')])
+    render(<CustomerAgentClient canEdit />)
+    await waitFor(() => expect(screen.getByText('Europe/Dublin — agent stays quiet, a human replies.')).toBeTruthy())
+    fireEvent.click(screen.getAllByRole('button', { name: /Save settings/ })[0])
+    await waitFor(() => expect(savedQuietHours()).toEqual({ start: '21:00', end: '08:00', tz: 'Europe/Dublin' }))
+  })
+})

@@ -16,7 +16,7 @@
 //             existing sequences/radars, not here.
 //
 // Safety: per-cycle one send per stage, per-location daily cap,
-// Dublin daytime only, skip handed-off/resolved/human-active threads
+// daytime on each studio's own clock only (TZ.5), skip handed-off/resolved/human-active threads
 // and pause/cancel cycles, default OFF
 // (settings.customer_agent.followups.enabled). Every skip logs a
 // structured reason — silence must always be explainable (#478).
@@ -26,7 +26,7 @@ import { resolveMembershipSource } from '@/lib/membership/source'
 import { formatHistoryForClaude, parseAgentResponse, phoneMatchesAllowlist, isSkipResponse, isWithinQuietHours } from './core'
 import { getLocationBranding } from '@/lib/location-branding'
 import { anthropicMessages } from '@/lib/anthropic'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { instantToZonedParts, todayStrIn, getLocationZones, LocationZoneReadError, DEFAULT_TZ, PLATFORM_TZ } from '@/lib/location-time'
 import { logError, logWarn } from '@/lib/log'
 import { countCheckinSends, readCheckinSendsToday, checkinDayStartIso } from './checkin-counts'
 import { isWhatsAppStaffOutbound } from '@/lib/whatsapp-staff-sources'
@@ -143,31 +143,33 @@ export function classifyFollowupCandidate({
   return { action: null, reason: 'expired' }
 }
 
-const DUBLIN_HOUR_FMT = new Intl.DateTimeFormat('en-IE', {
-  timeZone: 'Europe/Dublin', hour: 'numeric', hour12: false,
-})
-
-/** Proactive sends only between 09:00 and 19:59 Dublin. Pure. */
-export function withinDublinDaytime(nowMs) {
-  const hour = Number(DUBLIN_HOUR_FMT.format(new Date(nowMs)))
-  return hour >= 9 && hour < 20
+/**
+ * Proactive sends only between 09:00 and 19:59 on the studio's own clock
+ * (TZ.5; was Dublin for every studio). Pure.
+ * @param {number} nowMs
+ * @param {string} [zone] the location's IANA zone (getLocationZones)
+ */
+export function withinLocalDaytime(nowMs, zone = DEFAULT_TZ) {
+  const { h } = instantToZonedParts(nowMs, zone)
+  return h >= 9 && h < 20
 }
 
 /**
  * MIA-REVIEW.3 — may this LOCATION receive a Mia-initiated message right now?
  * Pure. Two gates, both must be open:
- *   1. the hard 09:00-19:59 Dublin daytime band (unchanged), and
+ *   1. the hard 09:00-19:59 daytime band on the studio's clock (TZ.5), and
  *   2. the operator's own settings.customer_agent.quiet_hours — the live REPLY
  *      path has always honoured it (core.isWithinQuietHours), and a message Mia
  *      starts herself must respect it at least as strictly. A studio that goes
  *      quiet at 18:00 was still getting nudges until 20:00.
  * A closed window is never a lost send: the runner rides a 15-minute cron and
  * the same candidate qualifies on the next tick inside the window.
+ * TZ.5 — `zone` is the location's; quiet_hours with no stored tz read it too.
  * @returns {{ open: boolean, reason?: string }}
  */
-export function proactiveWindowOpen(nowMs, settings) {
-  if (!withinDublinDaytime(nowMs)) return { open: false, reason: 'outside_daytime' }
-  if (isWithinQuietHours(new Date(nowMs), settings?.quiet_hours)) {
+export function proactiveWindowOpen(nowMs, settings, zone = DEFAULT_TZ) {
+  if (!withinLocalDaytime(nowMs, zone)) return { open: false, reason: 'outside_daytime' }
+  if (isWithinQuietHours(new Date(nowMs), settings?.quiet_hours, zone)) {
     return { open: false, reason: 'operator_quiet_hours' }
   }
   return { open: true }
@@ -359,12 +361,12 @@ const promptSourceFor = (provider) => ({ key: provider.key, label: provider.labe
 // "No knowledge has been added yet. You cannot answer factual questions" notice
 // into every nudge and check-in, which is false whenever the location HAS
 // knowledge and biases the model straight to [[SKIP]]/handoff (the first-class
-// check-in's intro-offer framing depends on those facts). `today` is the Dublin
-// business day for the same reason.
+// check-in's intro-offer framing depends on those facts). `today` is the
+// studio's business day (its own zone, TZ.5) for the same reason.
 // Exported for tests (repo convention) — compose-effort.test.js asserts the
 // request body, which is how MIA-HYGIENE.2 caught this path running at the
 // API-default effort.
-export async function composeAgentText({ location, settings, historyRows, instruction, companyName, knowledge, membershipSource = null }) {
+export async function composeAgentText({ location, settings, historyRows, instruction, companyName, knowledge, membershipSource = null, zone = DEFAULT_TZ }) {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) return { error: 'no_api_key' }
   // CACHE.2 — cache the stable prefix (no tools on this path, so it caches the
@@ -378,7 +380,7 @@ export async function composeAgentText({ location, settings, historyRows, instru
     tone: settings?.tone || null,
     extraRules: settings?.extra_rules || null,
     knowledge: knowledge || [],
-    today: dublinTodayStr(),
+    today: todayStrIn(zone),
   })
   const messages = [
     ...formatHistoryForClaude(historyRows || []),
@@ -406,10 +408,10 @@ export async function composeAgentText({ location, settings, historyRows, instru
   }
 }
 
-async function sendNudge(db, conv, location, settings, facts) {
+async function sendNudge(db, conv, location, settings, facts, zone) {
   const branding = await getLocationBranding(db, location.id)
   const composed = await composeAgentText({
-    location, settings, historyRows: facts.rows, instruction: NUDGE_INSTRUCTION,
+    location, settings, historyRows: facts.rows, instruction: NUDGE_INSTRUCTION, zone,
     companyName: branding.companyName,
     knowledge: await loadAgentKnowledge(db, location.id),
     membershipSource: promptSourceFor(await resolveMembershipSource(db, location.id)),
@@ -482,17 +484,45 @@ async function sendFollowupTemplate(db, conv, settings, facts) {
   return { sent: 'template' }
 }
 
+// TZ.5 — every studio's zone, read ONCE per tick (getLocationZones). A failed
+// read is a DB outage, never a silent Dublin: it answers null, and each
+// location it covered is skipped this tick (the next tick reads again; the
+// resolver never caches a failure).
+async function readTickZones(db, locations, runner) {
+  try {
+    return await getLocationZones(db, (locations || []).map((l) => l?.id))
+  } catch (e) {
+    if (!(e instanceof LocationZoneReadError)) throw e
+    logError('agent-followups', 'location zones unreadable; their locations skipped this tick', {
+      runner, locationIds: e.locationIds, err: e.cause || e,
+    })
+    return null
+  }
+}
+
+// TZ.5 — the old global daytime gate is now the OR of every studio's own
+// daytime: the tick is the cheap 'quiet_hours' no-op (which the heartbeat
+// rollup and the settings card read) only when NO studio is in its day. For
+// an all-Dublin estate that is exactly the old answer. An estate with no
+// active location keeps the platform clock's answer.
+function anyStudioInDaytime(nowMs, locations, zones) {
+  const list = locations || []
+  if (!list.length) return withinLocalDaytime(nowMs, PLATFORM_TZ)
+  return list.some((l) => withinLocalDaytime(nowMs, zones.get(l?.id) ?? DEFAULT_TZ))
+}
+
 /**
  * One cron tick: for every location with follow-ups enabled, find
  * quiet open agent conversations and run the ladder. Never throws.
  */
 export async function runAgentFollowups(db, { nowMs = Date.now() } = {}) {
   const results = { nudges: 0, templates: 0, skipped: 0 }
-  if (!withinDublinDaytime(nowMs)) return { ...results, reason: 'quiet_hours' }
 
   const { data: locations } = await db.from('locations')
     .select('id, name, settings')
     .eq('active', true)
+  const zones = await readTickZones(db, locations, 'followups')
+  if (zones && !anyStudioInDaytime(nowMs, locations, zones)) return { ...results, reason: 'quiet_hours' }
 
   for (const location of locations || []) {
     const settings = location?.settings?.customer_agent || null
@@ -500,9 +530,14 @@ export async function runAgentFollowups(db, { nowMs = Date.now() } = {}) {
     if (!followups.enabled) continue
     // Follow-ups ride the agent: agent fully off ⇒ no proactive sends.
     if (!settings?.enabled && !settings?.test_mode) continue
+    const zone = zones?.get(location.id)
+    if (!zone) {
+      console.warn('[radar-agent] followup-skip', JSON.stringify({ locationId: location.id, reason: 'zone_read_failed' }))
+      continue
+    }
     // MIA-REVIEW.3 — the operator's quiet_hours apply to Mia-initiated sends
-    // too, not just replies (the global daytime band is checked above).
-    const window = proactiveWindowOpen(nowMs, settings)
+    // too, not just replies. TZ.5 — the daytime band is THIS studio's.
+    const window = proactiveWindowOpen(nowMs, settings, zone)
     if (!window.open) {
       console.warn('[radar-agent] followup-skip', JSON.stringify({ locationId: location.id, reason: window.reason }))
       continue
@@ -572,7 +607,7 @@ export async function runAgentFollowups(db, { nowMs = Date.now() } = {}) {
           firstName: (contact.first_name || String(contact.name || '').split(/\s+/)[0] || 'there').trim(),
         }
         const out = decision.action === 'nudge'
-          ? await sendNudge(db, conv, location, settings, facts)
+          ? await sendNudge(db, conv, location, settings, facts, zone)
           : await sendFollowupTemplate(db, conv, settings, facts)
         if (out?.sent === 'nudge') results.nudges++
         else if (out?.sent === 'template') results.templates++
@@ -779,19 +814,23 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
   // settings card can answer "why didn't it send?" without server logs
   // (lesson from the sequence-engine incidents, CHANGELOG #289/#291).
   const bump = (reason) => { results.reasons[reason] = (results.reasons[reason] || 0) + 1 }
-  if (!withinDublinDaytime(nowMs)) return { ...results, reason: 'quiet_hours' }
 
   const { data: locations } = await db.from('locations')
     .select('id, name, settings')
     .eq('active', true)
+  const zones = await readTickZones(db, locations, 'checkins')
+  if (zones && !anyStudioInDaytime(nowMs, locations, zones)) return { ...results, reason: 'quiet_hours' }
 
   for (const location of locations || []) {
     const settings = location?.settings?.customer_agent || null
     const checkin = { ...CHECKIN_DEFAULTS, ...(settings?.first_class_checkin || {}) }
     if (!checkin.enabled) continue
     if (!settings?.enabled && !settings?.test_mode) continue
-    // MIA-REVIEW.3 — operator quiet_hours apply to check-ins too.
-    const window = proactiveWindowOpen(nowMs, settings)
+    const zone = zones?.get(location.id)
+    if (!zone) { bump('zone_read_failed'); continue }
+    // MIA-REVIEW.3 — operator quiet_hours apply to check-ins too. TZ.5 — and
+    // the daytime band is THIS studio's.
+    const window = proactiveWindowOpen(nowMs, settings, zone)
     if (!window.open) { bump(window.reason); continue }
 
     // CHECKINRISKS.1 — the claim's lease: re-open claims that never recorded
@@ -895,7 +934,7 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
           const composed = await composeAgentText({
             location, settings, historyRows: facts.rows,
             instruction: checkinInstruction(className),
-            companyName: branding.companyName, knowledge, membershipSource,
+            companyName: branding.companyName, knowledge, membershipSource, zone,
           })
           if (composed.error) {
             console.warn('[radar-agent] checkin-skip', JSON.stringify({ contactId: contact.id, reason: composed.error }))
