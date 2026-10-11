@@ -3,6 +3,7 @@
 // mirrors src/app/api/public/events/[slug]/route.js (capacity stays server-side;
 // only a boolean leaves).
 import { eventKindLabel } from '@shared/events'
+import { formatInZone, DEFAULT_TZ } from '@shared/zoned-time'
 
 const EUR = (cents) => {
   const n = (Number(cents) || 0) / 100
@@ -19,11 +20,13 @@ export function formatEventDate(iso) {
   return new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' }).format(d)
 }
 
-function formatOpensDate(iso) {
+// registration_opens_at is an INSTANT: its day is the studio's (TZ.9; the
+// page passes the studio's zone, DEFAULT_TZ when it has none).
+function formatOpensDate(iso, zone = DEFAULT_TZ) {
   if (!iso) return ''
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return ''
-  return new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', timeZone: 'Europe/Dublin' }).format(d)
+  return formatInZone(d, zone, { day: 'numeric', month: 'short' }, 'en-GB')
 }
 
 /** "Free" | "€25" | "From €15" (cheaper of member/non-member when member pricing on). */
@@ -62,18 +65,19 @@ export function formatEventTime(e) {
   return m ? `${m[1]}:${m[2]}` : ''
 }
 
-/** Row → card view-model. `now` injectable for tests.
+/** Row → card view-model. `now` injectable for tests. `zone` (TZ.9) is the
+ *  studio's (the listing studio, or a host's anchor) and dates the "Opens" badge.
  *  HOST-EVENTS-PAGE.1 added `timeLabel` + `venue` (additive; the studio
  *  listing ignores them). HOST-EVENTS-PAGE.2 added `closed` + the "Registration
  *  closed" badge (after "Opens", before "Sold out": a closed event can't be
  *  bought whether or not it is full); the studio listing still filters closed
  *  events out before calling this, so it never sees one. */
-export function toBrowseCard(e, { soldOut = false, now = Date.now() } = {}) {
+export function toBrowseCard(e, { soldOut = false, now = Date.now(), zone = DEFAULT_TZ } = {}) {
   const opensAt = e?.registration_opens_at ? Date.parse(e.registration_opens_at) : null
   const closesAt = e?.registration_closes_at ? Date.parse(e.registration_closes_at) : null
   const closed = !!(closesAt && now > closesAt)
   let badge = null
-  if (opensAt && now < opensAt) badge = `Opens ${formatOpensDate(e.registration_opens_at)}`
+  if (opensAt && now < opensAt) badge = `Opens ${formatOpensDate(e.registration_opens_at, zone)}`
   else if (closed) badge = 'Registration closed'
   else if (soldOut) badge = 'Sold out'
   return {

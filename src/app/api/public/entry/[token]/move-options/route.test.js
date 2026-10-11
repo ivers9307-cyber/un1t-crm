@@ -15,7 +15,8 @@ vi.mock('@/lib/registration-move', async (importOriginal) => ({
   listMoveTargets: vi.fn(),
   moveLocationIds: vi.fn(),
 }))
-vi.mock('@/lib/dublin-time', async (importOriginal) => ({ ...(await importOriginal()), dublinTodayStr: () => '2026-10-09' }))
+// TZ.9: "today" is the event studio's day at the (fake) clock, 2026-10-09 in
+// Dublin as the old dublinTodayStr mock pinned (see beforeEach).
 
 const { checkRateLimit } = await import('@/lib/rate-limit')
 const { readRegistrationForMove, countEntryCheckins, listMoveTargets, moveLocationIds } = await import('@/lib/registration-move')
@@ -43,6 +44,8 @@ const props = (token = signEntryManageToken({ registrationId: R1 }, SECRET)) => 
 const get = () => new Request('http://localhost/api/public/entry/x/move-options', { headers: { 'x-forwarded-for': '1.2.3.4' } })
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(new Date('2026-10-09T12:00:00Z'))
   vi.clearAllMocks()
   vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', SECRET)
   readRegistrationForMove.mockResolvedValue({ registration: REG, error: null })
@@ -50,7 +53,7 @@ beforeEach(() => {
   listMoveTargets.mockResolvedValue(TARGETS)
   moveLocationIds.mockResolvedValue(['L1', 'L2'])
 })
-afterEach(() => { vi.unstubAllEnvs() })
+afterEach(() => { vi.unstubAllEnvs(); vi.useRealTimers() })
 
 describe('GET /api/public/entry/[token]/move-options', () => {
   it('a bad token is a 404 with no read', async () => {
@@ -85,6 +88,15 @@ describe('GET /api/public/entry/[token]/move-options', () => {
     const body = await (await GET(get(), props())).json()
     expect(body.data).toEqual({ can_move: false, move_blocked_reason: expect.any(String), options: [] })
     expect(listMoveTargets).not.toHaveBeenCalled()
+  })
+  it('TZ.9: "past" is by the event studio\'s day, not Dublin\'s', async () => {
+    // 2026-11-01T03:30Z: Dublin is Sunday 1 Nov; New York is Saturday 31 Oct 23:30.
+    vi.setSystemTime(new Date('2026-11-01T03:30:00Z'))
+    const on = (timezone) => ({ ...REG, race: { ...REG.race, race_date: '2026-10-31', locations: { ...REG.race.locations, timezone } } })
+    readRegistrationForMove.mockResolvedValue({ registration: on('America/New_York'), error: null })
+    expect((await (await GET(get(), props())).json()).data.can_move).toBe(true)
+    readRegistrationForMove.mockResolvedValue({ registration: on('Europe/Dublin'), error: null })
+    expect((await (await GET(get(), props())).json()).data.can_move).toBe(false)
   })
   it('a failed read is a 500, never an empty list', async () => {
     listMoveTargets.mockResolvedValue({ ok: false, error: 'load_failed' })
