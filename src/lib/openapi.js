@@ -4954,7 +4954,7 @@ registry.registerPath({
             address: z.string().max(300).nullish(),
             phone: z.string().max(50).nullish(),
             email: z.string().email().nullish(),
-            timezone: z.string().max(64).optional(),
+            timezone: z.string().max(64).optional().openapi({ description: 'TZ.2: the studio\'s IANA timezone (any zone, e.g. Europe/Dublin, America/New_York), stored in its canonical spelling. Fixed offsets (+05:30, Etc/GMT-5, UTC+1) and unknown names are refused with 400. Omitted = Europe/Dublin; the CRM forms always send the zone the creator chose. Changed later only through the service role (no client UPDATE since mig 719).' }),
             country: z.string().length(2).optional(),
             active: z.boolean().optional(),
             monthly_contractor_budget_eur: z.number().min(0).nullish(),
@@ -4971,6 +4971,7 @@ registry.registerPath({
   },
   responses: {
     200: { description: 'Location created and seeded' },
+    400: { description: 'Validation failed (e.g. a timezone that is not an IANA zone, or a fixed offset)', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — master only', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'Slug already exists', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'Location created but seeding failed (safe to re-run)', content: { 'application/json': { schema: ErrorResponse } } },
