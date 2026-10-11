@@ -22,6 +22,13 @@ vi.mock('@/lib/push', () => ({ sendPush: vi.fn(async () => ({ sent: 0 })) }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
 vi.mock('@/lib/roster-runway-notify', () => ({ runRosterRunwayAlerts: vi.fn() }))
 vi.mock('@/lib/qualification-digest', () => ({ runQualificationDigest: vi.fn() }))
+// TZ.6 — this file's subject is not the daily-slot gate: every location is due,
+// and the clock sits on the 08:00 UTC tick the arms ride (route.tz6.test.js
+// covers the gate and the arms' hour).
+vi.mock('@/lib/cron-daily-slot', async (importOriginal) => ({
+  ...(await importOriginal()),
+  gateDailySlot: (await import('@/lib/cron-daily-slot.test-helpers')).openGate,
+}))
 
 const { GET } = await import('./route.js')
 const { runRosterRunwayAlerts } = await import('@/lib/roster-runway-notify')
@@ -39,6 +46,8 @@ const QUALS = { organizations: 1, recipients: 1, rows: 2, nothing_due: 0, quiet_
 const stampedNames = () => stampHeartbeat.mock.calls.map((c) => c[0])
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(Date.parse('2026-10-01T08:00:00Z'))
   process.env.CRON_SECRET = 'test-secret'
   vi.clearAllMocks()
   stampHeartbeat.mockImplementation(async () => {})

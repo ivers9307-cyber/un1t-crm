@@ -25,6 +25,7 @@ import {
   resolveClassReminderLeadTimes, selectDueClassReminders, classTimeLabel,
 } from '@/lib/class-reminders'
 import { logInfo, logWarn } from '@/lib/log'
+import { zoneOfLocation } from '@/lib/location-time'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 
 export const runtime = 'nodejs'
@@ -137,7 +138,7 @@ export async function GET(request) {
       dedupKey: `${d.bookingId}:${d.leadMinutes}`,
       payload: buildClassReminderPush({
         className: d.className,
-        timeLabel: classTimeLabel(d.startsAt, loc?.timezone || 'Europe/Dublin'),
+        timeLabel: classTimeLabel(d.startsAt, zoneOfLocation(loc)),
         classBookingId: d.bookingId,
       }),
       module: 'cron-class-reminders',

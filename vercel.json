@@ -6,7 +6,7 @@
     },
     {
       "path": "/api/cron/run-scheduled-reports",
-      "schedule": "0 7 * * *"
+      "schedule": "0 * * * *"
     },
     {
       "path": "/api/cron/prune-rate-limits",
@@ -98,11 +98,11 @@
     },
     {
       "path": "/api/cron/churn-radar-digest",
-      "schedule": "0 7 * * 1"
+      "schedule": "0 * * * *"
     },
     {
       "path": "/api/cron/morning-briefing",
-      "schedule": "0 6 * * 1"
+      "schedule": "0 * * * *"
     },
     {
       "path": "/api/cron/process-invoice-analysis",
@@ -150,19 +150,19 @@
     },
     {
       "path": "/api/cron/notify-streak-at-risk",
-      "schedule": "0 11 * * *"
+      "schedule": "0 * * * *"
     },
     {
       "path": "/api/cron/run-challenge-events",
-      "schedule": "0 8 * * *"
+      "schedule": "0 * * * *"
     },
     {
       "path": "/api/cron/notify-winback",
-      "schedule": "0 10 * * *"
+      "schedule": "0 * * * *"
     },
     {
       "path": "/api/cron/notify-onboarding-pace",
-      "schedule": "30 10 * * *"
+      "schedule": "30 * * * *"
     },
     {
       "path": "/api/cron/send-class-booking-reminders",
@@ -180,13 +180,12 @@
     { "path": "/api/cron/prune-hr-samples", "schedule": "0 2 * * 0" },
     { "path": "/api/cron/prune-hr-detections", "schedule": "30 2 * * 0" },
     { "path": "/api/cron/ad-insights-sync", "schedule": "0 */4 * * *" },
-    { "path": "/api/cron/ad-report-email", "schedule": "0 7 * * *" },
-    { "path": "/api/cron/receipt-coverage-weekly", "schedule": "0 7 * * 5" },
-    { "path": "/api/cron/receipt-coverage-weekly", "schedule": "0 8 * * 5" },
+    { "path": "/api/cron/ad-report-email", "schedule": "0 * * * *" },
+    { "path": "/api/cron/receipt-coverage-weekly", "schedule": "0 * * * *" },
     { "path": "/api/cron/process-receipt-hunts", "schedule": "*/5 * * * *" },
     { "path": "/api/cron/instagram-feed-sync", "schedule": "0 */6 * * *" },
     { "path": "/api/cron/instagram-token-refresh", "schedule": "0 5 * * 1" },
-    { "path": "/api/cron/event-reminders", "schedule": "0 9 * * *" },
+    { "path": "/api/cron/event-reminders", "schedule": "0 * * * *" },
     { "path": "/api/cron/event-waitlist-offers", "schedule": "*/10 * * * *" },
     { "path": "/api/cron/send-host-campaigns", "schedule": "*/2 * * * *" },
     { "path": "/api/cron/connection-health", "schedule": "40 4 * * *" },
@@ -198,9 +197,9 @@
     { "path": "/api/cron/hyrox-class-reminder", "schedule": "*/5 * * * *" },
     { "path": "/api/cron/expand-hyrox-weeks", "schedule": "0 3 * * *" },
     { "path": "/api/cron/extend-roster-horizon", "schedule": "20 3 * * *" },
-    { "path": "/api/cron/contract-reminders", "schedule": "0 8 * * *" },
-    { "path": "/api/cron/equipment-inspection-reminder", "schedule": "0 6 * * *" },
-    { "path": "/api/cron/equipment-inspection-sweep", "schedule": "0 19 * * *" },
+    { "path": "/api/cron/contract-reminders", "schedule": "0 * * * *" },
+    { "path": "/api/cron/equipment-inspection-reminder", "schedule": "0 * * * *" },
+    { "path": "/api/cron/equipment-inspection-sweep", "schedule": "0 * * * *" },
     { "path": "/api/cron/sonos-reconcile", "schedule": "* * * * *" },
     { "path": "/api/cron/shelly-reconcile", "schedule": "* * * * *" },
     { "path": "/api/cron/fleet-health", "schedule": "*/5 * * * *" },
