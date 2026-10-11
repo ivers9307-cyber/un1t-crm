@@ -1,5 +1,8 @@
 // PULSE-90.3 — Vercel cron, daily ~10:30 UTC (offset from the streak 11:00 /
 // winback 10:00 crons so the three engagement pushes don't stack).
+// TZ.6 — the schedule is hourly (30 * * * *); each location acts at its daily
+// slot: 10:30 UTC for a Europe/Dublin studio (as before), 10:30 local for any
+// other zone, at most once per local day (src/lib/cron-daily-slot.js).
 //
 // Pushes a purely motivational first-90-days pace nudge to new members who are
 // falling off the 9-classes-in-6-weeks track. Selection is compute-on-read via
@@ -25,6 +28,7 @@ import { buildOnboardingPacePush } from '@/lib/onboarding-journey'
 import { logInfo, logWarn } from '@/lib/log'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { locationsWithSource, skippedSummary } from '@/lib/membership/locations-for-source'
+import { gateDailySlot, slotFor } from '@/lib/cron-daily-slot'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -60,6 +64,16 @@ export async function GET(request) {
   const db = createServerClient()
   const nowMs = Date.now()
 
+  // TZ.6 — which locations are at their daily slot this tick (claimed, so
+  // never twice in one local day). An unreadable zone acts for nobody.
+  const gate = await gateDailySlot(db, 'notify-onboarding-pace', { nowMs, module: 'cron-onboarding-pace' })
+  if (!gate.ok) return NextResponse.json({ ok: false, slot: gate.summary }, { status: 500 })
+  if (gate.slots.size === 0) {
+    await stampHeartbeat('notify-onboarding-pace', { slot: gate.summary }).catch((err) =>
+      logWarn('cron-onboarding-pace', 'heartbeat failed', { err }))
+    return NextResponse.json({ ok: true, slot: gate.summary, locations: 0, candidates: 0, nudged: 0 })
+  }
+
   // Live locations = Glofox-connected (attendance data only exists there); same
   // discovery sync-class-occurrences uses. W1.M3b: through the membership seam
   // (membership_source = 'glofox' and configured), never the settings slice. A
@@ -76,6 +90,7 @@ export async function GET(request) {
   let reachabilityFailed = 0
 
   for (const loc of liveLocations) {
+    if (!slotFor(gate.slots, loc.id)) continue // TZ.6: not this location's slot
     let lane
     try {
       const res = await loadJourneyLane(db, loc.id, nowMs)

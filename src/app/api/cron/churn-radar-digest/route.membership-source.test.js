@@ -12,6 +12,12 @@ vi.mock('@/lib/app-url', () => ({ getAppUrl: () => 'https://crm.test' }))
 vi.mock('@/lib/churn-radar-data', () => ({ loadRadar: vi.fn(async () => ({ summary: { activeBase: 3 } })) }))
 vi.mock('@/lib/lead-radar-data', () => ({ loadFunnel: vi.fn(async () => ({ summary: { funnelTotal: 2, funnel: {} } })) }))
 vi.mock('@/lib/churn-radar-digest', () => ({ buildDigestEmail: vi.fn(() => ({ subject: 'Digest', html: '<p>x</p>' })) }))
+// TZ.6 — this file's subject is the membership seam, not the daily-slot gate:
+// every location is due (route.tz6.test.js covers the gate).
+vi.mock('@/lib/cron-daily-slot', async (importOriginal) => ({
+  ...(await importOriginal()),
+  gateDailySlot: (await import('@/lib/cron-daily-slot.test-helpers')).openGate,
+}))
 
 import { GET } from './route.js'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'

@@ -1,9 +1,13 @@
 // src/app/api/cron/receipt-coverage-weekly/route.js
 //
-// RCOV.P0/P1 — Friday 08:00 Europe/Dublin. vercel.json fires this at
-// 07:00 AND 08:00 UTC on Fridays (DST straddle); the Dublin-hour gate
-// makes exactly one firing run, and the alreadyRanToday check absorbs
-// retries/manual re-fires. (W0.7: the report is sent per organisation
+// RCOV.P0/P1 — Friday 08:00 in each Xero-connected location's own zone.
+// TZ.6: vercel.json fires this hourly (it used to fire at 07:00 AND 08:00 UTC
+// on Fridays to straddle Dublin's DST); the daily-slot gate
+// (src/lib/cron-daily-slot.js, a LOCAL-anchored slot) lets each connection's
+// location run in its Friday 08:xx local hour, once per local day, which for a
+// Europe/Dublin location is exactly the firing the old Dublin-hour gate picked.
+// The per-location claim replaces the old global alreadyRanToday check: a
+// retry or manual re-fire the same day does nothing. (W0.7: the report is sent per organisation
 // to org_settings.ops_alert_emails via sendOpsAlert; the old env
 // recipient RECEIPT_COVERAGE_REPORT_TO is retired, so nothing is
 // checked up-front here any more.)
@@ -31,10 +35,9 @@
 // with the heartbeat to process-receipt-hunts.)
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { dublinNowMinutes, dublinDayStr, dublinTodayStr } from '@/lib/dublin-time'
 import { runCoveragePull } from '@/lib/recon/pull'
 import { sweepSubmittedLines, seedHunts } from '@/lib/recon/statuses'
-import { shouldRunFridayCron } from '@/lib/recon/report-email'
+import { gateDailySlot, slotFor } from '@/lib/cron-daily-slot'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -47,17 +50,13 @@ export async function GET(request) {
   }
   const db = createServerClient()
 
-  const { data: lastCron } = await db
-    .from('recon_runs')
-    .select('started_at')
-    .eq('trigger', 'cron')
-    .order('started_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-  const alreadyRanToday = !!lastCron && dublinDayStr(lastCron.started_at) === dublinTodayStr()
-
-  if (!shouldRunFridayCron({ dublinMinutes: dublinNowMinutes(), alreadyRanToday })) {
-    return NextResponse.json({ success: true, skipped: true })
+  // TZ.6 — which locations are at their Friday 08:00 local slot this tick
+  // (claimed, so never twice in one local day). An unreadable zone acts for
+  // nobody. No heartbeat here either way (see the note above).
+  const gate = await gateDailySlot(db, 'receipt-coverage-weekly', { module: 'receipt-coverage-weekly' })
+  if (!gate.ok) return NextResponse.json({ success: false, error: 'locations unreadable', slot: gate.summary }, { status: 500 })
+  if (gate.slots.size === 0) {
+    return NextResponse.json({ success: true, skipped: true, slot: gate.summary })
   }
 
   const { data: conns, error: connErr } = await db
@@ -71,6 +70,7 @@ export async function GET(request) {
   const perLocation = []
   const errors = []
   for (const conn of conns || []) {
+    if (!slotFor(gate.slots, conn.location_id)) continue // TZ.6: not this location's slot
     const locationName = conn.location?.name || conn.location_id
     try {
       const summary = await runCoveragePull(db, conn.location_id, { trigger: 'cron' })

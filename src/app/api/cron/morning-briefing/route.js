@@ -1,7 +1,10 @@
 // BRIEFING.1 — /api/cron/morning-briefing
 //
-// Mondays 06:00 UTC (07:00 Dublin in summer, 06:00 in winter — Vercel
-// cron is UTC-only; see vercel.json). Per active location: builds the
+// Mondays 06:00 UTC (07:00 Dublin in summer, 06:00 in winter). TZ.6: the
+// schedule is hourly and each location acts at its Monday slot: Mon 06:00 UTC
+// for a Europe/Dublin studio (as before), Mon 06:00 local for any other zone,
+// once per local day (src/lib/cron-daily-slot.js); the date line is in the
+// studio's zone. Per active location: builds the
 // same "Needs attention" feed the Today dashboard shows (location
 // level — approvals row omitted, see fetchLocationTodayFeed), renders
 // it with buildMorningBriefingEmail, and emails the location's
@@ -28,6 +31,8 @@ import { getAppUrl } from '@/lib/app-url'
 import { fetchLocationTodayFeed } from '@/lib/today-feed-data'
 import { fetchStudioPulse } from '@/lib/studio-pulse-data'
 import { buildMorningBriefingEmail, shapePulseMetrics } from '@/lib/morning-briefing'
+import { gateDailySlot, slotFor } from '@/lib/cron-daily-slot'
+import { formatInZone } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -43,6 +48,16 @@ export async function GET(request) {
 
   const db = createServerClient()
   const appUrl = getAppUrl()
+  const nowMs = Date.now()
+
+  // TZ.6 — which locations are at their Monday slot this tick (claimed, so
+  // never twice in one local day). An unreadable zone acts for nobody.
+  const gate = await gateDailySlot(db, 'morning-briefing', { nowMs, module: 'morning-briefing' })
+  if (!gate.ok) return NextResponse.json({ success: false, error: 'locations unreadable', slot: gate.summary }, { status: 500 })
+  if (gate.slots.size === 0) {
+    await stampHeartbeat('morning-briefing').catch(() => {})
+    return NextResponse.json({ success: true, emails_sent: 0, perLocation: [], slot: gate.summary })
+  }
 
   const { data: locations, error: locErr } = await db
     .from('locations')
@@ -53,14 +68,12 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: locErr.message }, { status: 500 })
   }
 
-  const dateLabel = new Intl.DateTimeFormat('en-IE', {
-    weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Europe/Dublin',
-  }).format(new Date())
-
   let emailsSent = 0
   const perLocation = []
 
   for (const loc of locations || []) {
+    const slot = slotFor(gate.slots, loc.id)
+    if (!slot) continue // TZ.6: not this location's slot
     const recipients = Array.isArray(loc.churn_digest_recipients)
       ? loc.churn_digest_recipients
       : []
@@ -75,7 +88,7 @@ export async function GET(request) {
       ])
       const { subject, html } = buildMorningBriefingEmail(rows, {
         locationName: loc.name,
-        dateLabel,
+        dateLabel: formatInZone(nowMs, slot.zone, { weekday: 'long', day: 'numeric', month: 'long' }),
         appUrl,
         pulse: pulseBundle ? shapePulseMetrics(pulseBundle) : [],
       })

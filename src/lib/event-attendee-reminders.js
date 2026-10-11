@@ -207,18 +207,27 @@ async function sendReminderEmail({ db, ev, reg, offset, whenLabel, locationName,
  * QRs + event time/location — claim-before-send against event_reminder_sends
  * so it never double-sends.
  *
+ * TZ.6: the cron passes `todayFor(locationId)`, each event location's own
+ * "today" while that location is at its daily slot, or undefined when it is
+ * not (that event is skipped this tick). The race_date read covers the union of
+ * every due location's two target dates; each event is then judged against its
+ * own location's today. Without `todayFor`, one `todayStr` serves every event.
+ *
  * @param {object} args
  * @param {import('@supabase/supabase-js').SupabaseClient} args.db  service-role client (injected for tests)
  * @param {string} [args.todayStr]  Europe/Dublin YYYY-MM-DD; defaults to dublinTodayStr()
+ * @param {(locationId: string|null) => string|undefined} [args.todayFor]
+ * @param {string[]} [args.todays]  every distinct value todayFor can return (bounds the read)
  * @returns {Promise<{events:number, sent:number, skipped:number}>}
  */
-export async function runEventReminders({ db, todayStr } = {}) {
+export async function runEventReminders({ db, todayStr, todayFor, todays } = {}) {
   const result = { events: 0, sent: 0, skipped: 0 }
   if (!db) return result
 
   const today = todayStr || dublinTodayStr()
-  const d3 = addDaysISO(today, 3)
-  const d1 = addDaysISO(today, 1)
+  const todayOf = todayFor || (() => today)
+  const targetDates = [...new Set((todayFor ? todays || [] : [today]).flatMap((t) => [addDaysISO(t, 3), addDaysISO(t, 1)]))]
+  if (!targetDates.length) return result
 
   // Candidate events — only the two target dates, active, and not lead_gen
   // (lead_gen events have no date/time and are pure capture forms). Small set.
@@ -229,7 +238,7 @@ export async function runEventReminders({ db, todayStr } = {}) {
              accent_hex, hero_image_url,
              reminder_email_subject, reminder_email_intro, reminder_email_template_id,
              locations:location_id ( id, name, is_host_anchor )`)
-    .in('race_date', [d3, d1])
+    .in('race_date', targetDates)
     .eq('active', true)
     .neq('kind', 'lead_gen')
   if (evErr) {
@@ -242,7 +251,9 @@ export async function runEventReminders({ db, todayStr } = {}) {
   const checkinSecret = process.env.SUPABASE_SERVICE_ROLE_KEY || null
 
   for (const ev of events) {
-    const offset = reminderOffsetForDate(ev.race_date, today)
+    const evToday = todayOf(ev.location_id || null)
+    if (!evToday) continue // TZ.6: this event's location is not at its slot this tick
+    const offset = reminderOffsetForDate(ev.race_date, evToday)
     if (!offset) continue
     result.events++
     // BAREWRITE.4 — resolveEventCommsLocation FAILS OPEN: it logs an

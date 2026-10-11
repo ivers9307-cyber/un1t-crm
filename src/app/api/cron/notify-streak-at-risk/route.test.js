@@ -18,6 +18,7 @@ vi.mock('@/lib/customer-nudge-claim', () => ({
 }))
 
 import { GET } from './route'
+import { withSlotTables } from '@/lib/cron-daily-slot.test-helpers'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { logError } from '@/lib/log'
@@ -29,19 +30,29 @@ const at = (daysAgo) => new Date(NOW - daysAgo * DAY - 3 * 3600 * 1000).toISOStr
 const DOWN = { code: 'XX000', message: 'down' }
 
 // Candidates: the `select('contact_id')` read. History: `select('contact_id, started_at')`.
-function fakeDb({ candidates, history, candidateError = null, historyErrors = [] }) {
+// TZ.6: the daily-slot gate's tables (one Europe/Dublin studio) and the
+// members' home locations ride along.
+const DUBLIN = { id: 'loc-dub', timezone: 'Europe/Dublin' }
+function fakeDb({ candidates, history, candidateError = null, historyErrors = [], home = DUBLIN.id, locations = [DUBLIN], claims }) {
   let historyCalls = 0
-  return {
+  const windows = []
+  fakeDb.windows = windows
+  return withSlotTables({
     from(table) {
+      if (table === 'contacts') {
+        const b = { select: () => b, in: (_c, ids) => { b.ids = ids; return b }, then: (res, rej) => Promise.resolve({ data: b.ids.map((id) => ({ id, location_id: home })), error: null }).then(res, rej) }
+        return b
+      }
       if (table !== 'heart_rate_sessions') throw new Error(`unexpected ${table}`)
       const q = { cols: null }
       const b = {
         select: (cols) => { q.cols = cols; return b },
-        not: () => b, gte: () => b, lt: () => b, order: () => b, in: () => b,
+        not: () => b, gte: (_c, v) => { q.gte = v; return b }, lt: (_c, v) => { q.lt = v; return b }, order: () => b, in: () => b,
         range: () => b,
         then(res, rej) {
           let out
           if (q.cols === 'contact_id') {
+            windows.push([q.gte, q.lt])
             out = candidateError ? { data: null, error: candidateError } : { data: candidates.map((c) => ({ contact_id: c })), error: null }
           } else {
             const err = historyErrors[historyCalls++]
@@ -52,7 +63,7 @@ function fakeDb({ candidates, history, candidateError = null, historyErrors = []
       }
       return b
     },
-  }
+  }, { locations, claims })
 }
 
 // c-1 trained the last three days (streak 3, ending yesterday) → at risk.
@@ -101,6 +112,60 @@ describe('notify-streak-at-risk — a failed read is never an empty answer', () 
     expect(res.status).toBe(500)
     expect(body).toMatchObject({ ok: false, candidates_unread: 1 })
     expect(logError).toHaveBeenCalledWith('cron-streak-risk', expect.stringMatching(/candidate read failed/), expect.any(Object))
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+})
+
+describe('TZ.6 notify-streak-at-risk acts per home studio at its daily slot', () => {
+  it('a Dublin studio acts at 11:00 UTC only: 10:00 UTC reads nothing and stamps a quiet tick', async () => {
+    vi.setSystemTime(Date.parse('2026-09-16T10:00:00Z'))
+    const db = fakeDb({ candidates: ['c-1'], history: HISTORY })
+    createServerClient.mockReturnValue(db)
+    const body = await (await GET(req())).json()
+    expect(body).toMatchObject({ ok: true, candidates: 0, nudged: 0, slot: { due: 0 } })
+    expect(sendNudgeOnce).not.toHaveBeenCalled()
+    expect(stampHeartbeat).toHaveBeenCalledWith('notify-streak-at-risk')
+  })
+
+  it('the 11:00 UTC tick acts once; a re-run (or the 12:00 catch-up tick) the same day does not repeat it', async () => {
+    const claims = new Map()
+    createServerClient.mockReturnValue(fakeDb({ candidates: ['c-1'], history: HISTORY, claims }))
+    expect(await (await GET(req())).json()).toMatchObject({ nudged: 1 })
+    vi.setSystemTime(NOW + 3600_000)
+    createServerClient.mockReturnValue(fakeDb({ candidates: ['c-1'], history: HISTORY, claims }))
+    expect(await (await GET(req())).json()).toMatchObject({ ok: true, nudged: 0, slot: { due: 2, already: 2 } })
+    expect(sendNudgeOnce).toHaveBeenCalledTimes(1)
+    expect(sendNudgeOnce).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ dedupKey: '2026-09-16' }))
+  })
+
+  it('a Dublin studio keeps the exact UTC-day "yesterday" window it always read; New York reads its own local day', async () => {
+    createServerClient.mockReturnValue(fakeDb({ candidates: ['c-1'], history: HISTORY }))
+    await GET(req())
+    expect(fakeDb.windows).toEqual([['2026-09-15T00:00:00.000Z', '2026-09-16T00:00:00.000Z']])
+    vi.setSystemTime(Date.parse('2026-09-16T15:00:00Z'))
+    const NYC = { id: 'loc-ny', timezone: 'America/New_York' }
+    createServerClient.mockReturnValue(fakeDb({ candidates: ['c-1'], history: HISTORY, home: NYC.id, locations: [NYC] }))
+    await GET(req())
+    expect(fakeDb.windows).toEqual([['2026-09-15T04:00:00.000Z', '2026-09-16T04:00:00.000Z']])
+  })
+
+  it('a New York member is not nudged at 11:00 UTC (07:00 EDT) but is at 11:00 EDT, keyed on the New York day', async () => {
+    const NYC = { id: 'loc-ny', timezone: 'America/New_York' }
+    createServerClient.mockReturnValue(fakeDb({ candidates: ['c-1'], history: HISTORY, home: NYC.id, locations: [DUBLIN, NYC] }))
+    expect(await (await GET(req())).json()).toMatchObject({ ok: true, nudged: 0 })
+    vi.setSystemTime(Date.parse('2026-09-16T15:00:00Z'))
+    createServerClient.mockReturnValue(fakeDb({ candidates: ['c-1'], history: HISTORY, home: NYC.id, locations: [DUBLIN, NYC] }))
+    expect(await (await GET(req())).json()).toMatchObject({ ok: true, nudged: 1 })
+    expect(sendNudgeOnce).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ contactId: 'c-1', dedupKey: '2026-09-16' }))
+  })
+
+  it('an unreadable zone acts for nobody: 500, no stamp, no send', async () => {
+    const db = fakeDb({ candidates: ['c-1'], history: HISTORY })
+    const real = db.from
+    createServerClient.mockReturnValue({ ...db, from: (t) => (t === 'locations' ? { select: () => ({ order: () => ({ range: () => Promise.resolve({ data: null, error: DOWN }) }) }) } : real(t)) })
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    expect(sendNudgeOnce).not.toHaveBeenCalled()
     expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 })
