@@ -51,6 +51,19 @@ export const CLOSED_FUNCTIONS = [
     why: 'EVENT-MOVE.1: re-points any event entry (and its payment) to another event and clones its team; the staff/host routes judge every rule first' },
   { fn: 'private.locations_timezone_guard', args: '()', closedBy: 719,
     why: 'TZ.2: the locations.timezone validation trigger function; a trigger fires without EXECUTE' },
+  // TZ.15 (mig 721) re-states the EXECUTE decision of the five functions it
+  // rewrites with CREATE OR REPLACE (closed long before, by 448/667, 517, 521,
+  // 622 and 641); registered here from the file that last closes them.
+  { fn: 'public.hyrox_coaches_on_shift', args: '(uuid, timestamptz, timestamptz)', closedBy: 721,
+    why: 'which coaches are on shift for a class window; only the service-role Hyrox reminder runner calls it' },
+  { fn: 'public.list_health_monthly_stats', args: '(uuid, int, text[], text[], text[], text[])', closedBy: 721,
+    why: 'INVOKER with no access check of its own over a bare location id; the route asserts location access first' },
+  { fn: 'public.email_sends_monthly_stats', args: '(uuid, int)', closedBy: 721,
+    why: 'INVOKER with no access check of its own over a bare location id; the route asserts location access first' },
+  { fn: 'public.tombstone_staff_profile', args: '(uuid, uuid, timestamptz, boolean)', closedBy: 721,
+    why: 'the permanent staff delete (bans, strips PII, removes not-started shifts); master-only route, service role' },
+  { fn: 'public.claim_shift_offer', args: '(uuid, uuid)', closedBy: 721,
+    why: 'claims a shift offer for any profile id; the claim route judges the caller first' },
 ]
 
 /** The client roles a closed function is closed to. */
