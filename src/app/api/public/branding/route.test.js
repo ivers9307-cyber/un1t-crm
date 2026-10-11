@@ -14,6 +14,7 @@ import { _resetTenantDomainsCache } from '@/lib/tenant-domains-edge.js'
 import { _resetHostBrandCache } from '@/lib/host-brand.js'
 import { PLATFORM_SITE_NAME } from '@/lib/default-site-name.js'
 import { PLATFORM_FAVICON_URL } from '@/lib/default-favicon.js'
+import { resetLocationZoneCache } from '@/lib/location-time.js'
 
 vi.mock('@/lib/rate-limit', () => ({
   checkRateLimit: vi.fn(async () => ({ allowed: true, remaining: 59, resetAt: new Date(0) })),
@@ -38,7 +39,7 @@ function tables() {
     organizations: [{ id: ORG_A, slug: 'gym-a', master_location_id: null }, { id: ORG_B, slug: 'gym-b', master_location_id: null }],
     locations: [
       { id: 'loc-a1', name: 'Gym A', organization_id: ORG_A, active: true, created_at: '2026-01-01' },
-      { id: 'loc-b1', name: 'Gym B', organization_id: ORG_B, active: true, created_at: '2026-01-02' },
+      { id: 'loc-b1', name: 'Gym B', organization_id: ORG_B, active: true, created_at: '2026-01-02', timezone: 'America/New_York' },
     ],
     org_settings: [{ organization_id: ORG_A, company_name: null, short_name: 'GA', logo_url: null, favicon_url: null }],
     company_settings: [
@@ -54,6 +55,7 @@ const req = (host, qs = '') => new Request(`https://${host}/api/public/branding$
 beforeEach(() => {
   _resetTenantDomainsCache()
   _resetHostBrandCache()
+  resetLocationZoneCache()
   db = makeFakeDb(tables())
 })
 
@@ -70,7 +72,27 @@ describe('GET /api/public/branding?location_id= (W1.B2)', () => {
       short_name: 'GA',
       product_names: { points: 'GA Points', hr: 'GA HR' },
       points_unit: 'GA',
+      // TZ.14 — a NULL column answers the Europe/Dublin floor.
+      timezone: 'Europe/Dublin',
     })
+  })
+
+  // TZ.14 — the member's clock (D7): the phone reads the home studio's zone here.
+  it('carries the studio timezone', async () => {
+    const { data } = await (await GET(req('crm.repset.ie', '?location_id=loc-b1'))).json()
+    expect(data.timezone).toBe('America/New_York')
+  })
+
+  it('an unreadable locations row answers timezone null (the phone falls back), never fails the brand', async () => {
+    const real = db
+    db = { ...real, from: (t) => (t === 'locations'
+      ? { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: { message: 'down' } }) }) }) }
+      : real.from(t)) }
+    const res = await GET(req('crm.repset.ie', '?location_id=loc-a1'))
+    expect(res.status).toBe(200)
+    const { data } = await res.json()
+    expect(data.timezone).toBe(null)
+    expect(data.company_name).toBe('Gym A')
   })
 
   it('an unresolved brand yields bare nouns, never a literal', async () => {

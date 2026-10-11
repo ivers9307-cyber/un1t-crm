@@ -2,12 +2,12 @@
 // params (fed by push payloads) into a local-time Date. Pure (no RN
 // imports), runs under the root vitest like the other mobile/lib tests.
 //
-// ROSTER-FIX.7 — extended to isoDate, weekStart and dublinTodayIso. This file
+// ROSTER-FIX.7 — extended to isoDate, weekStart and studioTodayIso. This file
 // runs under whatever TZ the machine happens to be on; the pair
 // dates.tz.test.js / dates.tz-dublin.test.js pin the two that matter.
 
 import { describe, it, expect, vi } from 'vitest'
-import { parseIsoDate, isoDate, weekStart, dublinTodayIso } from './dates'
+import { parseIsoDate, isoDate, weekStart, studioTodayIso } from './dates'
 
 describe('parseIsoDate', () => {
   it('parses a valid YYYY-MM-DD into a local-time midnight Date', () => {
@@ -93,22 +93,22 @@ describe('weekStart', () => {
   })
 })
 
-describe('dublinTodayIso', () => {
+describe('studioTodayIso', () => {
   it('returns a YYYY-MM-DD string', () => {
-    expect(dublinTodayIso()).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    expect(studioTodayIso('Europe/Dublin')).toMatch(/^\d{4}-\d{2}-\d{2}$/)
   })
 
   it('is parseable as a real calendar date', () => {
-    expect(parseIsoDate(dublinTodayIso())).toBeInstanceOf(Date)
+    expect(parseIsoDate(studioTodayIso('Europe/Dublin'))).toBeInstanceOf(Date)
   })
 
   it('formats the instant it is given, not "now"', () => {
-    expect(dublinTodayIso(new Date('2026-06-15T10:00:00Z'))).toBe('2026-06-15')
-    expect(dublinTodayIso(new Date('2026-11-02T10:00:00Z'))).toBe('2026-11-02')
+    expect(studioTodayIso('Europe/Dublin', new Date('2026-06-15T10:00:00Z'))).toBe('2026-06-15')
+    expect(studioTodayIso('Europe/Dublin', new Date('2026-11-02T10:00:00Z'))).toBe('2026-11-02')
   })
 
   it('defaults to now', () => {
-    expect(dublinTodayIso()).toBe(dublinTodayIso(new Date()))
+    expect(studioTodayIso('Europe/Dublin')).toBe(studioTodayIso('Europe/Dublin', new Date()))
   })
 
   // ROSTER-FIX.7f — a Hermes build without full ICU throws on a timeZone'd
@@ -127,11 +127,11 @@ describe('dublinTodayIso', () => {
       vi.resetModules()
       const fresh = await import('./dates')
       const now = new Date(2026, 6, 5, 23, 30)
-      expect(fresh.dublinTodayIso(now)).toBe(fresh.isoDate(now))
-      expect(fresh.dublinTodayIso(now)).toBe('2026-07-05')
+      expect(fresh.studioTodayIso('Europe/Dublin', now)).toBe(fresh.isoDate(now))
+      expect(fresh.studioTodayIso('Europe/Dublin', now)).toBe('2026-07-05')
       // Still no throw on a second call, and the warning is once per session.
-      expect(fresh.dublinTodayIso(now)).toBe('2026-07-05')
-      const ours = warnSpy.mock.calls.filter(c => String(c[0]).startsWith('dublinTodayIso:'))
+      expect(fresh.studioTodayIso('Europe/Dublin', now)).toBe('2026-07-05')
+      const ours = warnSpy.mock.calls.filter(c => String(c[0]).startsWith('studioTodayIso:'))
       expect(ours).toHaveLength(1)
     } finally {
       warnSpy.mockRestore()
@@ -140,6 +140,6 @@ describe('dublinTodayIso', () => {
   })
 
   it('still works after the failing-Intl test restored the spy', () => {
-    expect(dublinTodayIso(new Date('2026-06-15T10:00:00Z'))).toBe('2026-06-15')
+    expect(studioTodayIso('Europe/Dublin', new Date('2026-06-15T10:00:00Z'))).toBe('2026-06-15')
   })
 })

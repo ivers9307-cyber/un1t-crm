@@ -23,16 +23,19 @@ import Card from './ui/Card'
 import { PEARL, VOLT } from '../../lib/member/brand'
 import { inbodyBookend } from 'shared/inbody'
 import { windowIso } from 'shared/challenges'
+import { useMemberZone } from '../../lib/member/use-member-zone'
 
 const TEXT_2 = '#B3B2AC' // muted (chalk-2)
 
 // Challenge-window ms bounds from the 'YYYY-MM-DD' starts_on/ends_on, via the
-// shared Dublin-day windowIso (same boundaries as the standings RPC). toMs is
+// shared windowIso on the challenge studio's calendar (same boundaries as the
+// standings RPC; TZ.14: the member's zone, since RLS shows a member only their
+// own studio's challenges). toMs is
 // clamped to now so a still-running challenge bookends against today, not a
 // future end date. Returns null if either date is missing/unparseable.
-function windowMs(startsOn, endsOn, nowMs) {
+function windowMs(startsOn, endsOn, nowMs, tz) {
   if (!startsOn || !endsOn) return null
-  const { fromIso, toIso } = windowIso({ starts_on: startsOn, ends_on: endsOn })
+  const { fromIso, toIso } = windowIso({ starts_on: startsOn, ends_on: endsOn }, tz)
   const fromMs = Date.parse(fromIso)
   const endMs = Date.parse(toIso)
   if (!Number.isFinite(fromMs) || !Number.isFinite(endMs)) return null
@@ -41,6 +44,7 @@ function windowMs(startsOn, endsOn, nowMs) {
 
 export default function ChallengeTransformationCard({ challenge }) {
   const router = useRouter()
+  const tz = useMemberZone()
   const [loading, setLoading] = useState(true)
   const [scans, setScans] = useState([])
   const [error, setError] = useState(null)
@@ -65,10 +69,10 @@ export default function ChallengeTransformationCard({ challenge }) {
   useFocusEffect(useCallback(() => { load() }, [load]))
 
   const bookend = useMemo(() => {
-    const win = windowMs(challenge?.startsOn, challenge?.endsOn, Date.now())
+    const win = windowMs(challenge?.startsOn, challenge?.endsOn, Date.now(), tz)
     if (!win) return null
     return inbodyBookend(scans, win)
-  }, [scans, challenge?.startsOn, challenge?.endsOn])
+  }, [scans, challenge?.startsOn, challenge?.endsOn, tz])
 
   return (
     <Card>

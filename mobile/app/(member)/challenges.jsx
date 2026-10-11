@@ -17,6 +17,7 @@ import ChallengeTransformationCard from '../../components/member/ChallengeTransf
 import { PEARL, VOLT } from '../../lib/member/brand'
 import { endedRecentlyFlagship, ownWindowStats, challengeWindowMs, metricLabels } from 'shared/challenge-wrapped'
 import { useMemberBrand } from '../../lib/member/use-member-brand'
+import { useMemberZone } from '../../lib/member/use-member-zone'
 
 // ── Everyone / Friends toggle for individual challenges ───────────────
 
@@ -136,6 +137,9 @@ function IndividualChallengesSection({ everyoneData, viewerIsNewMember = false }
 function FinishedFlagshipWrapped() {
   const router = useRouter()
   const [entries, setEntries] = useState([])
+  // TZ.14 — a challenge's window is its studio's calendar. RLS shows a member
+  // only their own studio's challenges, so that is the member's zone (D7).
+  const tz = useMemberZone()
 
   const load = useCallback(async () => {
     try {
@@ -151,14 +155,14 @@ function FinishedFlagshipWrapped() {
       if (error) throw error
 
       const now = Date.now()
-      const recent = (defs || []).filter((ch) => endedRecentlyFlagship(ch, now, 14))
+      const recent = (defs || []).filter((ch) => endedRecentlyFlagship(ch, now, 14, tz))
       if (recent.length === 0) { setEntries([]); return }
 
       // Widest window across the candidates → one own-sessions read, then check
       // participation per challenge from that set (own data only).
       let minFrom = Infinity
       for (const ch of recent) {
-        const win = challengeWindowMs(ch)
+        const win = challengeWindowMs(ch, tz)
         if (win && win.fromMs < minFrom) minFrom = win.fromMs
       }
       if (!Number.isFinite(minFrom)) { setEntries([]); return }
@@ -171,12 +175,12 @@ function FinishedFlagshipWrapped() {
         .limit(1000)
       if (sErr) throw sErr
 
-      const participated = recent.filter((ch) => ownWindowStats(sessions || [], ch, now).classes > 0)
+      const participated = recent.filter((ch) => ownWindowStats(sessions || [], ch, now, tz).classes > 0)
       setEntries(participated.map((ch) => ({ id: ch.id, name: ch.name })))
     } catch {
       setEntries([]) // best-effort — the finisher entry is a bonus, never blocks
     }
-  }, [])
+  }, [tz])
 
   useFocusEffect(useCallback(() => { load() }, [load]))
 
