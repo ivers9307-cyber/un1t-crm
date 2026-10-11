@@ -6,12 +6,13 @@
 // server re-validates with the same canonicalZone() (POST /api/locations) and
 // the DB with pg_timezone_names (mig 719), so this list is a convenience, not
 // the fence.
-import { canonicalZone } from '@shared/zoned-time'
+import { canonicalZone, PLATFORM_TZ } from '@shared/zoned-time'
 
 // Shown first in the picker, then every other zone the runtime knows. All are
 // spelled as V8 canonicalises them (see allZones' test).
+// PLATFORM_TZ is Europe/Dublin: here it is simply the first picker entry.
 export const COMMON_ZONES = Object.freeze([
-  'Europe/Dublin', 'Europe/London', 'Europe/Berlin', 'Europe/Malta', 'Asia/Nicosia', 'Africa/Cairo', 'Asia/Kuwait',
+  PLATFORM_TZ, 'Europe/London', 'Europe/Berlin', 'Europe/Malta', 'Asia/Nicosia', 'Africa/Cairo', 'Asia/Kuwait',
   'Australia/Sydney', 'Australia/Melbourne', 'Australia/Brisbane', 'Australia/Perth', 'Australia/Adelaide',
   'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles',
 ])
@@ -48,7 +49,7 @@ export function allZones() {
 
 // D8 hint: the zones a country plausibly uses. A trailing '/' is a prefix.
 const COUNTRY_ZONES = Object.freeze({
-  IE: ['Europe/Dublin'], GB: ['Europe/London'], DE: ['Europe/Berlin', 'Europe/Busingen'], MT: ['Europe/Malta'],
+  IE: [PLATFORM_TZ], GB: ['Europe/London'], DE: ['Europe/Berlin', 'Europe/Busingen'], MT: ['Europe/Malta'],
   CY: ['Asia/Nicosia', 'Asia/Famagusta'], EG: ['Africa/Cairo'], KW: ['Asia/Kuwait'],
   AU: ['Australia/', 'Antarctica/Macquarie'], US: ['America/', 'Pacific/Honolulu'],
 })
