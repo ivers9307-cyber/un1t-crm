@@ -12,6 +12,7 @@ import { createServerClient } from '@/lib/supabase'
 import { fetchFunnelCounts, fetchAdsSummary, fetchTodayOps } from '@shared/dashboard-data'
 import { buildNeedsYouRail } from '@/lib/dashboard/business-rail'
 import { buildBusinessKpis } from '@/lib/dashboard/business-kpis'
+import { adsDayZoneForDisplay } from '@/lib/ads/account-day'
 import { computeMembershipCounts } from '@/lib/membership-snapshot'
 import { fetchMembershipFlows } from '@/lib/membership-flows'
 import { KpiCard, KpiRow, formatCurrency } from '@/components/dashboard/Cards'
@@ -90,7 +91,9 @@ async function FunnelAdsBlock({ locationId, zone }) {
   try {
     const [funnel, ads] = await Promise.all([
       fetchFunnelCounts(db, locationId, undefined, zone),
-      fetchAdsSummary(db, locationId),
+      // TZ.11c: the 7-day window is in the ad account's zone (account-day.js),
+      // NOT the studio's.
+      adsDayZoneForDisplay(db, locationId).then((adsZone) => fetchAdsSummary(db, locationId, new Date(), adsZone)),
     ])
     data = { funnel, ads }
   } catch {

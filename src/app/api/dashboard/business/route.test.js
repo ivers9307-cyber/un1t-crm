@@ -16,6 +16,8 @@ vi.mock('@shared/dashboard-data', () => ({
   fetchTodayOps: vi.fn(),
 }))
 vi.mock('@/lib/dashboard/business-kpis', () => ({ buildBusinessKpis: vi.fn() }))
+// TZ.11c: the ads block's window zone (the ad account's); its own tests are src/lib/external-zones.tz.test.js.
+vi.mock('@/lib/ads/account-day', () => ({ adsDayZoneForDisplay: vi.fn(async () => 'America/New_York') }))
 vi.mock('@/lib/dashboard/business-rail', () => ({ buildNeedsYouRail: vi.fn() }))
 vi.mock('@/lib/membership-snapshot', () => ({ computeMembershipCounts: vi.fn(), fetchMembershipTrend: vi.fn() }))
 // The state resolver is stubbed; the payload shaping and the manage bit are the real ones.
@@ -74,6 +76,16 @@ beforeEach(() => {
   computeMembershipCounts.mockReset().mockResolvedValue(LIVE)
   fetchMembershipTrend.mockReset().mockResolvedValue(TREND)
   membershipStateForPage.mockReset().mockResolvedValue({ source: 'glofox', state: 'configured', label: 'Glofox', capabilities: GLOFOX_CAPS })
+})
+
+describe('GET /api/dashboard/business: the ads block (TZ.11c)', () => {
+  it('asks fetchAdsSummary for the ad account zone of the active studio', async () => {
+    expect((await GET()).status).toBe(200)
+    const [, locId, now, zone] = shared.fetchAdsSummary.mock.calls[0]
+    expect(locId).toBe(USER.activeLocation.id)
+    expect(now).toBeInstanceOf(Date)
+    expect(zone).toBe('America/New_York')
+  })
 })
 
 describe('GET /api/dashboard/business', () => {

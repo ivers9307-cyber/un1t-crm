@@ -75,3 +75,20 @@ describe('schedulePanelDefaults', () => {
     expect(schedulePanelDefaults({ scheduled_for: 'nope' }, Date.parse('2026-09-07T10:03:00Z'))).toEqual({ date: '2026-09-07', time: '11:30' })
   })
 })
+
+// TZ.9 — the composer runs on the host's own clock (its anchor studio's zone);
+// with no zone it is Europe/Dublin, as above.
+describe('the host composer on a New York host', () => {
+  const NY = 'America/New_York'
+  it('a scheduled row shows New York time, in both halves of the year', () => {
+    expect(rowSubline({ status: 'scheduled', scheduled_for: '2026-09-09T13:00:00.000Z' }, NY)).toBe('Scheduled for Wed 9 Sep, 09:00')
+    expect(rowSubline({ status: 'scheduled', scheduled_for: '2026-11-04T14:00:00.000Z' }, NY)).toBe('Scheduled for Wed 4 Nov, 09:00')
+    expect(rowSubline({ status: 'scheduled', scheduled_for: '2026-11-04T14:00:00.000Z' }, 'Europe/Dublin'))
+      .toBe(rowSubline({ status: 'scheduled', scheduled_for: '2026-11-04T14:00:00.000Z' }))
+  })
+  it('the panel opens on New York wall clock', () => {
+    expect(schedulePanelDefaults({ scheduled_for: '2026-11-04T14:00:00.000Z' }, Date.parse('2026-11-01T10:03:00Z'), NY)).toEqual({ date: '2026-11-04', time: '09:00' })
+    // 2026-11-01T03:50Z is 23:50 EDT on 31 Oct; +17 min rounds up to 00:15 EDT on 1 Nov.
+    expect(schedulePanelDefaults({ scheduled_for: null }, Date.parse('2026-11-01T03:50:00Z'), NY)).toEqual({ date: '2026-11-01', time: '00:15' })
+  })
+})

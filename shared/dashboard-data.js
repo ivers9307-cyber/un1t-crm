@@ -14,10 +14,10 @@
 
 import { upcomingWeeksBounds, summariseShifts, effectiveShiftStart, effectiveShiftEnd } from './roster-month.js'
 import { pctDelta, sumCampaignRows, shapeFunnel, FUNNEL_SLUGS } from './dashboard-metrics.js'
-// TZ.11a — the studio calendar for the server-run fetchers. A static import is
-// safe on the phone: zoned-time builds every formatter lazily, so importing it
-// constructs no Intl object (a Hermes build without full ICU loads it fine).
-import { dateKeyIn, monthStartMsIn, dayRangeMsIn, weekStartMsIn, addDaysIn, DEFAULT_TZ } from './zoned-time.js'
+// TZ.1's zone maths builds every formatter lazily, so unlike dublin-time.js it
+// is safe at module scope on a Hermes build without full ICU: the studio
+// calendar for the server-run fetchers (TZ.11a) and the ad-account day (TZ.11c).
+import { dateKeyIn, monthStartMsIn, dayRangeMsIn, weekStartMsIn, addDaysIn, DAY_MS, DEFAULT_TZ } from './zoned-time.js'
 
 // ROSTER-FIX.1 — "this assignment still puts a coach on the block".
 // Inlined rather than imported: `shared/` is the mobile seam and cannot
@@ -58,16 +58,9 @@ export function startOfMonth(d = new Date()) {
   return new Date(d.getFullYear(), d.getMonth(), 1)
 }
 
-// A4 REVENUEMTD.1 — the Europe/Dublin calendar, now for fetchAdsSummary only
-// (ad_insights_daily.date; its zone is TZ.11c's: the ad account's). Loaded on
-// first use, never at module scope: the staff app imports this module, and a
-// Hermes build without full ICU throws on the timeZone formatters
-// dublin-time.js builds at import (mobile/lib/dates.js, ROSTER-FIX.7f). The
-// phone never calls it, so it never loads it. TZ.11a moved fetchTodayOps,
-// fetchRevenueMTD and fetchFunnelCounts to the studio's zone (./zoned-time.js).
-function loadDublinTime() {
-  return import('./dublin-time.js')
-}
+// A4 REVENUEMTD.1 / TZ.11a / TZ.11c — the server-run fetchers (fetchTodayOps,
+// fetchRevenueMTD, fetchFunnelCounts, fetchAdsSummary) take their zone from the
+// caller and use ./zoned-time.js; nothing here loads dublin-time.js any more.
 
 // ============================================================
 // Shift-cost helpers (used by Business dashboard's labour estimate)
@@ -636,16 +629,21 @@ export async function fetchFunnelCounts(supabase, locationId, now = new Date(), 
 // loop pages past the 1k-row select cap so a many-campaign week can never
 // silently truncate spend (order by id for stable pages, like
 // paginatedSumCents above).
-export async function fetchAdsSummary(supabase, locationId, now = new Date()) {
-  // A4 REVENUEMTD.1 — ad_insights_daily.date is a Dublin day, as src/lib/ads/read.js
-  // reads it (that file steps back 168 h and formats a Dublin date, which differs
-  // from calendar minus 7 only in the first Dublin hour after spring-forward);
-  // the server's local day is UTC's. Leads are a rolling
+//
+// TZ.11c — `zone` is the zone ad_insights_daily.date is in: the location's
+// active Meta ad account's (Meta dates insights in the ad account's timezone),
+// else the location's. The server resolves it with adsDayZoneForDisplay()
+// (src/lib/ads/account-day.js), which `shared/` cannot import. Absent, it is
+// the platform default, the pre-TZ.11c window.
+export async function fetchAdsSummary(supabase, locationId, now = new Date(), zone = DEFAULT_TZ) {
+  // A4 REVENUEMTD.1 — ad_insights_daily.date is an ad-account-zone day, as
+  // src/lib/ads/read.js reads it (that file steps back 168 h and formats the
+  // date, which differs from calendar minus 7 only in the first local hour
+  // after spring-forward); the server's local day is UTC's. Leads are a rolling
   // 7 x 24 h over attributed_at (timestamptz), with no local time involved.
-  const { dublinDateKey, dublinAddDays, DUBLIN_DAY_MS } = await loadDublinTime()
   const nowMs = now.getTime()
-  const sinceIso = dublinAddDays(dublinDateKey(nowMs), -7)
-  const attributedSinceIso = new Date(nowMs - 7 * DUBLIN_DAY_MS).toISOString()
+  const sinceIso = addDaysIn(dateKeyIn(nowMs, zone), -7, zone)
+  const attributedSinceIso = new Date(nowMs - 7 * DAY_MS).toISOString()
   let from = 0
   const page = 1000
   const rows = []

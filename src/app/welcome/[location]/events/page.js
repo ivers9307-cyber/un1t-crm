@@ -11,7 +11,8 @@ import { SiteHeader, SiteFooter } from '@/components/landing-page/BlockRenderers
 import RevealManager from '@/components/landing-page/RevealManager'
 import { RevealArmScript } from '@/components/landing-page/reveal-arm'
 import { isPubliclyVisible } from '@/lib/landing-page-visibility'
-import { orderEventsForBrowse, todayIsoDublin } from '@shared/events'
+import { orderEventsForBrowse, todayIsoIn } from '@shared/events'
+import { zoneOfLocation } from '@/lib/location-time'
 import { isEventSoldOut, toBrowseCard } from '@/lib/public-events'
 import PublicEventsList from '@/components/landing-page/PublicEventsList'
 import InstagramStrip from '@/components/landing-page/InstagramStrip'
@@ -25,7 +26,7 @@ async function loadByPath(path) {
     const db = createServerClient()
     const { data, error } = await db
       .from('landing_page_settings')
-      .select('*, locations:location_id ( id, name, organization_id )')
+      .select('*, locations:location_id ( id, name, organization_id, timezone )')
       .eq('public_path', path)
       .maybeSingle()
     if (error) return null
@@ -94,7 +95,9 @@ export default async function StudioEventsPage(props) {
     resolveOrgChrome({ orgId: row.locations?.organization_id || null }),
   ])
   const studioName = row.locations?.name || brand.companyName
-  const today = todayIsoDublin()
+  // TZ.9 — the studio's own day and clock (the zone rides the page row).
+  const zone = zoneOfLocation(row.locations)
+  const today = todayIsoIn(zone)
   const nowMs = Date.now()
 
   const logoUrl     = row.logo_url || null
@@ -124,7 +127,7 @@ export default async function StudioEventsPage(props) {
   })
   const { upcoming } = orderEventsForBrowse(open, today)
   const cards = upcoming.map((e) =>
-    toBrowseCard(e, { soldOut: isEventSoldOut(e.waves, e.registrations, e.capacity_mode), now: nowMs })
+    toBrowseCard(e, { soldOut: isEventSoldOut(e.waves, e.registrations, e.capacity_mode), now: nowMs, zone })
   )
 
   // Instagram strip (EVENTS-IG.1) — cached posts for this studio, gated on the

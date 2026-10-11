@@ -14,7 +14,7 @@
 //
 // Mock style matches finalize.test.js: chainable fake db whose FINAL
 // method resolves, module-boundary mocks for report-email, app-url,
-// cron-heartbeat, dublin-time, log.
+// cron-heartbeat, location-time's todayStrIn, log.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -33,8 +33,11 @@ vi.mock('@/lib/app-url', () => ({ getAppUrl: (...args) => getAppUrl(...args) }))
 const stampHeartbeat = vi.fn(async () => {})
 vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: (...args) => stampHeartbeat(...args) }))
 
-const dublinTodayStr = vi.fn(() => '2026-10-09')
-vi.mock('@/lib/dublin-time', () => ({ dublinTodayStr: (...args) => dublinTodayStr(...args) }))
+const todayStrIn = vi.fn(() => '2026-10-09')
+vi.mock('@/lib/location-time', async (importOriginal) => ({
+  ...(await importOriginal()),
+  todayStrIn: (...args) => todayStrIn(...args),
+}))
 
 const logError = vi.fn()
 vi.mock('@/lib/log', () => ({
@@ -90,6 +93,8 @@ beforeEach(async () => {
   stampHeartbeat.mockReset()
   stampHeartbeat.mockResolvedValue()
   logError.mockReset()
+  todayStrIn.mockReset()
+  todayStrIn.mockReturnValue('2026-10-09')
   finalize = await import('./finalize')
 })
 
@@ -123,7 +128,7 @@ describe('maybeFinalizeWeekly — one report per organisation', () => {
 
     const result = await finalize.maybeFinalizeWeekly(mockDb)
 
-    expect(connections.select).toHaveBeenCalledWith('location_id, location:location_id(id, name, organization_id)')
+    expect(connections.select).toHaveBeenCalledWith('location_id, location:location_id(id, name, organization_id, timezone)')
 
     expect(sendCoverageReportForOrg).toHaveBeenCalledTimes(2)
     expect(renderCoverageReportHtml).toHaveBeenCalledTimes(2)
@@ -147,6 +152,33 @@ describe('maybeFinalizeWeekly — one report per organisation', () => {
     expect(reportInsert.insert.mock.calls[0][0]).toMatchObject({ trigger: 'report', status: 'ok', stats: { locations: 2 } })
     expect(stampHeartbeat).toHaveBeenCalledWith('receipt-coverage-weekly')
     expect(result).toEqual({ finalized: true, sections: 2, failedOrgs: [] })
+  })
+
+  it('TZ.11c: each organisation\'s report is dated in its own studio\'s zone (Dublin unchanged, New York its own day)', async () => {
+    const { todayStrIn: realTodayStrIn } = await import('@shared/zoned-time')
+    const NOW = Date.parse('2026-11-02T03:30:00Z') // Dublin 2 Nov 03:30 GMT; New York 1 Nov 22:30 EST
+    todayStrIn.mockImplementation((zone) => realTodayStrIn(zone, NOW))
+    queueGates()
+    const connections = chainable({
+      data: [
+        { location_id: 'loc-a', location: { id: 'loc-a', name: 'Stillorgan', organization_id: ORG_A, timezone: 'Europe/Dublin' } },
+        { location_id: 'loc-b', location: { id: 'loc-b', name: 'Tenant B Garage', organization_id: ORG_B, timezone: 'America/New_York' } },
+      ],
+      error: null,
+    }, 'order')
+    mockDb.from
+      .mockReturnValueOnce(connections)
+      .mockReturnValueOnce(chainable({ data: [], error: null }, 'gte'))
+      .mockReturnValueOnce(cleanRun('run-a')).mockReturnValueOnce(emptyLimit()).mockReturnValueOnce(emptyLimit()).mockReturnValueOnce(emptyLimit())
+      .mockReturnValueOnce(cleanRun('run-b')).mockReturnValueOnce(emptyLimit()).mockReturnValueOnce(emptyLimit()).mockReturnValueOnce(emptyLimit())
+      .mockReturnValueOnce(chainable({ data: { id: 'report-row-1' }, error: null }, 'insert'))
+
+    await finalize.maybeFinalizeWeekly(mockDb)
+
+    const byOrg = Object.fromEntries(sendCoverageReportForOrg.mock.calls.map(([a]) => [a.organizationId, a.dateStr]))
+    expect(byOrg).toEqual({ [ORG_A]: '2026-11-02', [ORG_B]: '2026-11-01' })
+    const rendered = renderCoverageReportHtml.mock.calls.map(([a]) => a.dateStr).sort()
+    expect(rendered).toEqual(['2026-11-01', '2026-11-02'])
   })
 
   it('a platform-level error with no organisation (connection whose location row is missing) is shown to EVERY organisation; heartbeat not stamped', async () => {

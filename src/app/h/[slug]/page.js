@@ -23,20 +23,34 @@ import { poppinsBody as poppins } from '@/fonts/poppins'
 import { getOrgBrandName } from '@/lib/location-branding'
 import { isEventSoldOut, toBrowseCard } from '@/lib/public-events'
 import { pickHostBranding, hostPageCopy, hostPageEvents } from '@/lib/host-public-page'
-import { todayIsoDublin } from '@shared/events'
+import { todayIsoIn } from '@shared/events'
+import { getLocationZone, DEFAULT_TZ } from '@/lib/location-time'
+import { logWarn } from '@/lib/log'
 
 // Same brand-font setup as /event/[slug] — self-hosted Poppins scoped to
 // this public subtree via the `--font-body` variable.
 
 export const dynamic = 'force-dynamic'
 
-const HOST_COLS = 'id, name, slug, organization_id, list_headline, list_blurb, list_button_label, list_success_message, hero_image_url, accent_hex, events_headline, events_blurb'
+const HOST_COLS = 'id, name, slug, organization_id, anchor_location_id, list_headline, list_blurb, list_button_label, list_success_message, hero_image_url, accent_hex, events_headline, events_blurb'
 
 // Public-safe SELECT. Embeds exist only for the sold-out boolean.
 const EVENT_COLS = 'slug, name, kind, race_date, start_time, venue_name, hero_image_url, accent_hex, capacity_mode, registration_opens_at, registration_closes_at, member_pricing_enabled, member_fee_cents, non_member_fee_cents, waves:race_waves ( id, capacity, start_time ), registrations:race_registrations ( status, wave_id, team:teams ( size ) )'
 
-async function loadHostEvents(db, hostId) {
-  const today = todayIsoDublin()
+// TZ.9 — a host's events live on its anchor location, so the page runs on
+// that studio's clock. This page is display-only: an unreadable zone falls
+// back to DEFAULT_TZ, said in a warning, rather than failing the page.
+async function hostZone(db, host) {
+  try {
+    return await getLocationZone(db, host.anchor_location_id || null)
+  } catch (err) {
+    logWarn('host-public-page', 'anchor zone unreadable; page shown on the default zone', { err, hostId: host.id })
+    return DEFAULT_TZ
+  }
+}
+
+async function loadHostEvents(db, hostId, zone) {
+  const today = todayIsoIn(zone)
   const nowMs = Date.now()
   const { data: rows } = await db
     .from('race_events')
@@ -79,12 +93,13 @@ export default async function HostPublicPage(props) {
     .maybeSingle()
   if (!host) notFound()
 
+  const zone = await hostZone(db, host)
   const [orgName, { upcoming, nowMs }] = await Promise.all([
     getOrgBrandName(db, host.organization_id),
-    loadHostEvents(db, host.id),
+    loadHostEvents(db, host.id, zone),
   ])
   const cards = upcoming.map((e) =>
-    toBrowseCard(e, { soldOut: isEventSoldOut(e.waves, e.registrations, e.capacity_mode), now: nowMs }),
+    toBrowseCard(e, { soldOut: isEventSoldOut(e.waves, e.registrations, e.capacity_mode), now: nowMs, zone }),
   )
   const { heroUrl, accentHex } = pickHostBranding(host, upcoming)
   const copy = hostPageCopy(host)

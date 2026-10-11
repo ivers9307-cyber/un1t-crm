@@ -35,6 +35,7 @@ import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { fetchFunnelCounts, fetchAdsSummary, fetchTodayOps } from '@shared/dashboard-data'
 import { buildBusinessKpis } from '@/lib/dashboard/business-kpis'
+import { adsDayZoneForDisplay } from '@/lib/ads/account-day'
 import { buildNeedsYouRail } from '@/lib/dashboard/business-rail'
 import { computeMembershipCounts, fetchMembershipTrend } from '@/lib/membership-snapshot'
 import { membershipStateForPage, membershipStatePayload, canManageMembershipSource } from '@/lib/membership/state-for-page'
@@ -91,7 +92,9 @@ export async function GET() {
   const [kpis, funnel, ads, membership, today, rail, sourceState] = await Promise.all([
     buildBusinessKpis(db, user, locationId, now.getTime()), // null on failure by contract
     blockData(fetchFunnelCounts(db, locationId, now, zone)),
-    blockData(fetchAdsSummary(db, locationId)),
+    // TZ.11c: the 7-day window is in the ad account's zone (account-day.js),
+    // NOT the studio's.
+    blockData(adsDayZoneForDisplay(db, locationId).then((adsZone) => fetchAdsSummary(db, locationId, now, adsZone))),
     membershipBlock(db, locationId, zone),
     blockData(fetchTodayOps(db, locationId, now, zone)),
     buildNeedsYouRail(db, user, locationId).then(rows => rows, () => null),

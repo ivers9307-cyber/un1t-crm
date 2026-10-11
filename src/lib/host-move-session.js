@@ -10,7 +10,7 @@ import { createServerClient } from './supabase'
 import { uuidLike } from './schemas'
 import { readRegistrationForMove, MOVE_ERRORS, MOVE_ERROR_MESSAGES } from './registration-move'
 import { logError } from './log'
-import { dublinTodayStr } from './dublin-time'
+import { eventToday, earliestLocalToday } from './event-day'
 
 const OWN_EVENTS_LOAD_FAILED_MESSAGE = 'Your events could not be read. Try again.'
 
@@ -55,17 +55,23 @@ export async function resolveHostMoveContext(session, registrationId) {
   // never judges the SOURCE: the entry's own event may be past or
   // unpublished, and is fenced by host_id above; the lib applies
   // allowedEventIds to the target only.
+  // TZ.9: "today or later" by each event's studio day (a host event's location
+  // is the host's anchor): read from the earliest studio day, then narrow
+  // each row by its own zone (the embed carries it, no second read).
   const { data: events, error: evErr } = await db
     .from('race_events')
-    .select('id')
+    .select('id, race_date, locations:location_id ( id, timezone )')
     .eq('host_id', session.host.id)
     .eq('active', true)
     .eq('status', 'published')
-    .gte('race_date', dublinTodayStr())
+    .gte('race_date', earliestLocalToday())
   if (evErr) {
     logError('host-move', 'own events read failed', { err: evErr, hostId: session.host.id, registrationId })
     return { response: json(500, { success: false, error: MOVE_ERRORS.LOAD_FAILED, message: OWN_EVENTS_LOAD_FAILED_MESSAGE }) }
   }
-  const allowedEventIds = new Set((events || []).map((e) => e.id))
+  // (The .gte above never returns a dateless row; a row without race_date in
+  // hand is not narrowed, as the old query-only fence did not narrow it.)
+  const upcoming = (e) => !e.race_date || String(e.race_date).slice(0, 10) >= eventToday(e)
+  const allowedEventIds = new Set((events || []).filter(upcoming).map((e) => e.id))
   return { db, registration, allowedEventIds, actor: hostMoveActor(session) }
 }

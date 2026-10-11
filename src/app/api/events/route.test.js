@@ -174,7 +174,7 @@ describe('GET /api/events — W0.3 shared events stay inside the owning organisa
     return Boolean(shared && row.shared === true && shared[1].split(',').includes(row.location_id))
   }
 
-  function makeDb(locationsHandler) {
+  function makeDb(locationsHandler, rows = ROWS) {
     const calls = []
     const from = vi.fn((table) => {
       const ops = []
@@ -184,7 +184,7 @@ describe('GET /api/events — W0.3 shared events stay inside the owning organisa
         if (table === 'race_events') {
           if (ops.some(([m]) => m === 'not')) return { data: [], error: null }   // HOST-EDIT.1 pass
           const or = ops.find(([m]) => m === 'or')?.[1]
-          return { data: ROWS.filter((r) => matchesOr(or, r)), error: null }
+          return { data: rows.filter((r) => matchesOr(or, r)), error: null }
         }
         return { data: null, error: null }
       }
@@ -225,6 +225,30 @@ describe('GET /api/events — W0.3 shared events stay inside the owning organisa
 
     const listing = db.calls.find((c) => c.table === 'race_events' && c.ops.some(([m]) => m === 'or'))
     expect(listing.ops).toContainEqual(['or', `location_id.eq.${STILL},and(shared.eq.true,location_id.in.(${STILL},${HATCH}))`])
+  })
+
+  it('TZ.9: each event is upcoming by its OWN studio\'s day (the list mixes studios)', async () => {
+    // 2026-11-01T03:30Z: Dublin is Sunday 1 Nov; New York is Saturday 31 Oct 23:30.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-11-01T03:30:00Z'))
+    try {
+      const rows = [
+        { id: 'ev-ny', location_id: STILL, shared: false, name: 'NY', kind: 'race', race_date: '2026-10-31', registrations: [], waves: [], locations: { id: STILL, timezone: 'America/New_York' } },
+        { id: 'ev-dub', location_id: HATCH, shared: true, name: 'Dub', kind: 'race', race_date: '2026-10-31', registrations: [], waves: [], locations: { id: HATCH, timezone: 'Europe/Dublin' } },
+      ]
+      const db = makeDb((ops, terminal) => terminal === 'maybeSingle'
+        ? { data: { id: STILL, organization_id: 'org-un1t' }, error: null }
+        : { data: [{ id: HATCH }], error: null }, rows)
+      createServerClient.mockReturnValue(db)
+      const body = await (await GET(req)).json()
+      expect(body.data.map((r) => [r.id, r.is_upcoming])).toEqual([['ev-ny', true], ['ev-dub', false]])
+      // The zone rides the read; it is not in the payload.
+      expect(JSON.stringify(body.data)).not.toMatch(/timezone/)
+      const listing = db.calls.find((c) => c.table === 'race_events' && c.ops.some(([m]) => m === 'or'))
+      expect(listing.ops.find(([m]) => m === 'select')[1]).toMatch(/locations:location_id \( id, timezone \)/)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('a sibling-lookup error narrows to own events only (never widens)', async () => {
