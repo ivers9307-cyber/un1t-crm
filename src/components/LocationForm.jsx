@@ -1,8 +1,11 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createBrowserClient } from '@/lib/supabase'
+import { PLATFORM_TZ } from '@shared/zoned-time'
+import TimezoneSelect from '@/components/settings/TimezoneSelect'
+import { COUNTRY_OPTIONS, browserZone, countryZoneMismatch, zoneOffsetLabel } from '@/lib/timezone-options'
 
 export default function LocationForm({ location, callerRole = 'owner', organizations = [], showEmailTab = false }) {
   const router = useRouter()
@@ -18,7 +21,17 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
   const [address, setAddress] = useState(location?.address || '')
   const [phone, setPhone] = useState(location?.phone || '')
   const [email, setEmail] = useState(location?.email || '')
-  const [timezone, setTimezone] = useState(location?.timezone || 'Europe/Dublin')
+  // TZ.2 — creation: the zone is REQUIRED and pre-filled from the creating
+  // browser's zone (D8), shown next to the country. Edit: shown read-only;
+  // no client may write locations.timezone since mig 719 (TZ.3 adds the
+  // preflighted change route and its dialog).
+  const [timezone, setTimezone] = useState(location?.timezone || PLATFORM_TZ)
+  const timezoneTouched = useRef(false)
+  useEffect(() => {
+    if (isEditing || timezoneTouched.current) return
+    const zone = browserZone()
+    if (zone) setTimezone(zone)
+  }, [isEditing])
   const [country, setCountry] = useState(location?.country || 'IE')
   const [active, setActive] = useState(location?.active !== false)
   // Organization (mig 079) — required for new locations. Shown read-only
@@ -107,7 +120,8 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
         address: address || null,
         phone: phone || null,
         email: email || null,
-        timezone,
+        // TZ.2 — timezone is DELIBERATELY absent: mig 719 revoked the client
+        // UPDATE on it, and naming it here would fail the WHOLE update (42501).
         country,
         active,
         // SECFIX.3b — organization_id is NOT sent: the org is read-only here,
@@ -259,42 +273,24 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
           <div>
             <label className="block text-sm mb-1.5">Country</label>
             <select
+              aria-label="Country"
               value={country}
               onChange={e => setCountry(e.target.value)}
               className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
             >
-              <option value="IE">Ireland (IE)</option>
-              <option value="GB">United Kingdom (GB)</option>
-              <option value="DE">Germany (DE)</option>
-              <option value="AU">Australia (AU)</option>
-              <option value="KW">Kuwait (KW)</option>
-              <option value="MT">Malta (MT)</option>
-              <option value="EG">Egypt (EG)</option>
-              <option value="CY">Cyprus (CY)</option>
+              {COUNTRY_OPTIONS.map(c => <option key={c.code} value={c.code}>{c.label}</option>)}
             </select>
             <p className="text-xs text-un1t-muted mt-1">Drives the public-holiday list on the schedule. All listed countries have built-in holidays through 2030.</p>
           </div>
-          <div>
-            <label className="block text-sm mb-1.5">Timezone</label>
-            <select
+          {isEditing ? (
+            <TimezoneReadOnly timezone={timezone} country={country} />
+          ) : (
+            <TimezoneSelect
               value={timezone}
-              onChange={e => setTimezone(e.target.value)}
-              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
-            >
-              <option value="Europe/Dublin">Europe/Dublin</option>
-              <option value="Europe/London">Europe/London</option>
-              <option value="Europe/Berlin">Europe/Berlin</option>
-              <option value="Europe/Malta">Europe/Malta</option>
-              <option value="Asia/Nicosia">Asia/Nicosia (Cyprus)</option>
-              <option value="Africa/Cairo">Africa/Cairo</option>
-              <option value="Asia/Kuwait">Asia/Kuwait</option>
-              <option value="Australia/Sydney">Australia/Sydney</option>
-              <option value="Australia/Melbourne">Australia/Melbourne</option>
-              <option value="Australia/Brisbane">Australia/Brisbane</option>
-              <option value="Australia/Perth">Australia/Perth</option>
-              <option value="Australia/Adelaide">Australia/Adelaide</option>
-            </select>
-          </div>
+              country={country}
+              onChange={z => { timezoneTouched.current = true; setTimezone(z) }}
+            />
+          )}
         </div>
 
         {isEditing && (
@@ -409,3 +405,29 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
   )
 }
 
+// TZ.2 — an existing location's zone, read-only. Changing it needs TZ.3's
+// preflight (what moves, typed-name confirm) and its service-role route; until
+// that ships the button is disabled, so no path saves a zone unvalidated.
+function TimezoneReadOnly({ timezone, country }) {
+  const offset = zoneOffsetLabel(timezone)
+  const hint = countryZoneMismatch(country, timezone)
+  return (
+    <div>
+      <span className="block text-sm mb-1.5">Timezone</span>
+      <div
+        aria-label="Timezone"
+        className="w-full bg-un1t-bg/60 border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-subtle"
+      >
+        {timezone.replace(/_/g, ' ')}{offset ? ` (${offset})` : ''}
+      </div>
+      <button
+        type="button"
+        disabled
+        className="mt-2 text-xs text-un1t-muted border border-un1t-border rounded-md px-2.5 py-1 disabled:opacity-60"
+      >
+        Change timezone (coming next)
+      </button>
+      {hint && <p role="status" className="text-xs text-amber-700 mt-1">{hint}</p>}
+    </div>
+  )
+}
