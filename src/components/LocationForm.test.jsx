@@ -68,13 +68,39 @@ describe('LocationForm timezone (TZ.2)', () => {
   const fakeBrowserZone = (tz) => { zone.browser = tz }
   afterEach(() => { zone.browser = null })
 
-  it('edit: shows the zone read-only with its offset; the change button is disabled until TZ.3', () => {
+  it('edit: shows the zone read-only with its offset, and an enabled Change timezone button (TZ.3)', () => {
     render(<LocationForm location={{ ...LOCATION, timezone: 'America/New_York', country: 'IE' }} organizations={[{ id: 'org-1', name: 'Org' }]} />)
     expect(screen.queryByLabelText('Search timezones')).toBeNull()
     expect(screen.getByLabelText('Timezone').textContent).toMatch(/^America\/New York \(GMT-[45]\)$/)
-    expect(screen.getByRole('button', { name: /Change timezone/ }).disabled).toBe(true)
+    expect(screen.getByRole('button', { name: /^Change timezone$/ }).disabled).toBe(false)
     // IE on a New York zone: the D8 hint shows on the settings page too.
     expect(screen.getByRole('status').textContent).toMatch(/Country is IE but the timezone is America\/New_York/)
+  })
+
+  it('edit: Change timezone opens the dialog OUTSIDE the form; a change shows the new zone and a notice, never via the browser update', async () => {
+    const fetchMock = vi.fn(async (url, init) => ({
+      ok: true,
+      json: async () => (init?.method === 'PUT'
+        ? { success: true, data: { timezone: 'America/New_York', previous: 'Europe/Dublin', changed: true,
+          broadcasts: { followed: 0, kept: [{ id: 'b1', name: 'London drip', send_window_tz: 'Europe/London' }] } } }
+        : { success: true, data: { location: LOCATION, today: '2026-10-25', unknown: [], hasFutureData: false,
+          future: { bookings: 0, shift_blocks: 0, race_events: 0, hyrox_blocks: 0, pending_enrolments: 0,
+            sonos_schedules: 0, shelly_devices: 0, drip_broadcasts: 0 } } }),
+    }))
+    globalThis.fetch = fetchMock
+    const { container } = render(<LocationForm location={LOCATION} organizations={[{ id: 'org-1', name: 'Org' }]} />)
+    fireEvent.click(screen.getByRole('button', { name: /^Change timezone$/ }))
+    const dialog = await screen.findByRole('dialog')
+    expect(container.querySelector('form').contains(dialog)).toBe(false)
+    await screen.findByText('Future bookings')
+    fireEvent.change(screen.getByLabelText(/^New timezone/), { target: { value: 'America/New_York' } })
+    fireEvent.change(screen.getByLabelText(/Type the location name/), { target: { value: 'Studio' } })
+    fireEvent.click(screen.getAllByRole('button', { name: /^Change timezone$/ }).find((b) => dialog.contains(b)))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(screen.getByLabelText('Timezone').textContent).toMatch(/^America\/New York/)
+    expect(screen.getAllByRole('status').map((n) => n.textContent).join(' '))
+      .toMatch(/Timezone changed to America\/New York\. One broadcast keeps its own timezone: London drip\./)
+    expect(calls.update).toBeNull()
   })
 
   it('create: the zone is pre-filled from the browser (D8) and posted with the country', async () => {
