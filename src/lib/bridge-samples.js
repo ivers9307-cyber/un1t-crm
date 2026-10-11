@@ -28,6 +28,7 @@
 // needed because protocol-namespaced keys can't collide.
 
 import { logWarn } from '@/lib/log'
+import { getLocationZone, zonedWallClockToInstant, DEFAULT_TZ } from '@/lib/location-time'
 import { resolveCurrentOccurrence } from '@/lib/class-occurrences'
 import { lookupBookedMember, resolveClassLinkSource, resolveBookedOccurrenceForMember } from '@/lib/class-bookings'
 import { classSessionAction, shouldCloseSupersededSession } from '@/lib/hr-session-lifecycle'
@@ -558,10 +559,22 @@ async function findOrCreateAutoSession(db, { contactId, locationId, deviceKey, n
     .gte('booking_date', yesterdayIso)
     .lte('booking_date', tomorrowIso)
 
+  // TZ.7: booking_date + start_time are wall clock in the studio's zone. Read
+  // it only when there is a booking to place. A failed read is a DB outage:
+  // link nothing this batch (the next batch retries) rather than match a
+  // booking on a guessed clock.
+  const candidates = (bookings || []).filter((b) => b.booking_date && b.start_time)
+  if (!candidates.length) return null
+  let zone
+  try {
+    zone = await getLocationZone(db, locationId)
+  } catch (err) {
+    logWarn('bridge-samples', 'booking fallback skipped: location zone unreadable', { err, contactId, locationId })
+    return null
+  }
   let activeBooking = null
-  for (const b of bookings || []) {
-    if (!b.booking_date || !b.start_time) continue
-    const bookingMs = dublinWallClockToMs(b.booking_date, b.start_time)
+  for (const b of candidates) {
+    const bookingMs = bookingWallClockToMs(b.booking_date, b.start_time, zone)
     if (!Number.isFinite(bookingMs)) continue
     const lo = nowMs - BOOKING_WINDOW_MS
     const hi = nowMs + BOOKING_PRE_GRACE_MS
@@ -635,30 +648,17 @@ async function findOrCreateAnonymousSession(db, { locationId, deviceKey, occ, no
 }
 
 /**
- * Convert a Dublin wall-clock date + time (the shape `bookings.booking_date`
- * 'YYYY-MM-DD' + `bookings.start_time` 'HH:MM[:SS]' are stored in — operator-
- * local, no tz) to an absolute epoch-ms instant. The naive
- * `new Date(\`${date}T${time}Z\`)` treats it as UTC and is off by the BST
- * offset (+1h Mar–Oct). Pure + exported for tests.
+ * Convert a booking's wall-clock date + time (the shape `bookings.booking_date`
+ * 'YYYY-MM-DD' + `bookings.start_time` 'HH:MM[:SS]' are stored in — local to
+ * the booking's studio, no tz) to an absolute epoch-ms instant in `zone`. The
+ * naive `new Date(\`${date}T${time}Z\`)` treats it as UTC and is off by the
+ * zone's offset (+1h in Irish summer time). TZ.7: was the private one-pass
+ * `dublinWallClockToMs`; now the canonical solver (identical for
+ * Europe/Dublin). NaN for malformed input. Pure + exported for tests.
  */
-export function dublinWallClockToMs(dateStr, timeStr) {
-  const dm = String(dateStr || '').match(/^(\d{4})-(\d{2})-(\d{2})$/)
-  const tm = String(timeStr || '').match(/^(\d{2}):(\d{2})(?::(\d{2}))?$/)
-  if (!dm || !tm) return NaN
-  const y = +dm[1], mo = +dm[2], d = +dm[3]
-  const h = +tm[1], mi = +tm[2], s = +(tm[3] || 0)
-  const asUtc = Date.UTC(y, mo - 1, d, h, mi, s)
-  // What Dublin wall-clock does that UTC instant show? The delta is Dublin's
-  // offset from UTC at that moment.
-  const dtf = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'Europe/Dublin', year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
-  })
-  const p = {}
-  for (const part of dtf.formatToParts(new Date(asUtc))) p[part.type] = part.value
-  const tzAsUtc = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second)
-  const offset = tzAsUtc - asUtc
-  return asUtc - offset
+export function bookingWallClockToMs(dateStr, timeStr, zone = DEFAULT_TZ) {
+  const ms = zonedWallClockToInstant(dateStr, timeStr, zone)
+  return ms === null ? NaN : ms
 }
 
 /**

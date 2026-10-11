@@ -34,7 +34,7 @@
 
 import { createServerClient } from '@/lib/supabase'
 import { logWarn, logError } from '@/lib/log'
-import { dublinDayStr } from '@/lib/dublin-time'
+import { dayStrIn, todayStrIn, DAY_MS, DEFAULT_TZ, getLocationZones, LocationZoneReadError } from '@/lib/location-time'
 import { selectAll, selectAllByKeys } from '@/lib/select-all'
 import { contactMatchesSequenceAudience } from './audience.js'
 import { enrolContacts } from './enrol.js'
@@ -163,6 +163,62 @@ export async function runEventReminderTriggers() {
   return stats
 }
 
+// ── TZ.4: each sequence's studio zone ───────────────────────────
+
+/**
+ * The zone of every sequence's location, read ONCE per run (one batched
+ * query, cached 60 s by location-time). Returns null when the read FAILED:
+ * the caller then skips every sequence this tick (counted in
+ * stats.errored and logged), because acting for a non-Dublin studio on a
+ * guessed Dublin clock would enrol the wrong day's contacts or open a send
+ * window at the wrong hour. Any other error propagates, as before.
+ *
+ * @param {object} db
+ * @param {Array<{location_id: string|null}>} sequences
+ * @param {string} runner  for the log line
+ * @returns {Promise<Map<string,string>|null>}
+ */
+async function sequenceZones(db, sequences, runner) {
+  try {
+    return await getLocationZones(db, sequences.map((s) => s.location_id))
+  } catch (e) {
+    if (!(e instanceof LocationZoneReadError)) throw e
+    logError('sequences', `${runner}: studio timezones unreadable — every sequence skipped this tick, nothing enrolled`, {
+      locationIds: e.locationIds, err: e,
+    })
+    return null
+  }
+}
+
+/** A sequence's zone from sequenceZones' map (DEFAULT_TZ for a sequence with no location). */
+function zoneOfSequence(zones, seq) {
+  return (seq.location_id && zones.get(seq.location_id)) || DEFAULT_TZ
+}
+
+/**
+ * Anniversary dedup year: the year of TODAY in the sequence's studio zone.
+ * @param {number} nowMs
+ * @param {string} zone
+ */
+export function anniversaryOccurrenceYear(nowMs, zone) {
+  return todayStrIn(zone, nowMs).slice(0, 4)
+}
+
+/**
+ * The 'MM-DD' a `dob` anniversary matches: the studio-local day `daysAfter`
+ * days before now. Kept as "the local day of now minus N×24h", the exact
+ * pre-TZ.4 arithmetic, so Europe/Dublin is byte-identical (src/lib/tz-4.tz.test.js).
+ * (Within N days after a DST change that instant is an hour off a calendar
+ * day, so during one local hour the target is the neighbouring day; a
+ * birthday still fires once a year, on the right day, give or take that hour.)
+ * @param {number} nowMs
+ * @param {number} daysAfter
+ * @param {string} zone
+ */
+export function birthdayTargetMonthDay(nowMs, daysAfter, zone) {
+  return dayStrIn(nowMs - daysAfter * DAY_MS, zone).slice(5)
+}
+
 // ── anniversary (Tier 2A) ───────────────────────────────────────
 
 /**
@@ -181,9 +237,9 @@ export async function runEventReminderTriggers() {
  *     birthday template greeted every freshly-created lead instead.)
  *   - days_after: number (required)
  *
- * 'dob' is special-cased: it matches on month+day in Dublin wall-clock
- * (year-modulo — any birth year), so birthdays actually fire on
- * birthdays. Feb-29 birthdays match only in leap years.
+ * 'dob' is special-cased: it matches on month+day in the sequence
+ * location's calendar (TZ.4; year-modulo — any birth year), so birthdays
+ * actually fire on birthdays. Feb-29 birthdays match only in leap years.
  *
  * Dedup: source_ref is `${from_field}:${days_after}:${occurrenceYear}`
  * so a contact isn't re-enrolled for the SAME occurrence, but next
@@ -207,6 +263,9 @@ export async function runAnniversaryTriggers() {
 
   const TOLERANCE_MS = 12 * 60 * 60 * 1000  // ±12h
   const now = Date.now()
+  // TZ.4 — every studio's zone, once per run; null = the read failed.
+  const zones = await sequenceZones(db, sequences, 'anniversary')
+  if (!zones) { stats.errored += sequences.length; return stats }
 
   for (const seq of sequences) {
     // CRONISO.1 — per-sequence isolation. See the module header.
@@ -233,20 +292,20 @@ export async function runAnniversaryTriggers() {
         continue
       }
 
-      // Occurrence year (Dublin wall-clock) — part of the dedup ref so the
-      // same anniversary re-fires next year (COMMSFIX.E.3).
-      const occurrenceYear = dublinDayStr(now).slice(0, 4)
+      // Occurrence year (the studio's wall clock, TZ.4) — part of the dedup
+      // ref so the same anniversary re-fires next year (COMMSFIX.E.3).
+      const zone = zoneOfSequence(zones, seq)
+      const occurrenceYear = anniversaryOccurrenceYear(now, zone)
       const sourceRef = `${fromField}:${daysAfter}:${occurrenceYear}`
 
       let contacts
       if (fromField === 'dob') {
-        // Birthdays match on month+day in the Dublin calendar, any birth
+        // Birthdays match on month+day in the studio's calendar, any birth
         // year — a gte/lte window on the raw date can never express that.
         // The target day is `days_after` days before today (days_after: 0
         // = the birthday itself). dob is a DATE column ('YYYY-MM-DD'), so
         // compare string month-day slices; no Date parsing, no TZ drift.
-        const targetDay = dublinDayStr(now - daysAfter * 24 * 3600_000)
-        const targetMonthDay = targetDay.slice(5) // 'MM-DD'
+        const targetMonthDay = birthdayTargetMonthDay(now, daysAfter, zone) // 'MM-DD'
         const withDob = await selectAll((from, to) => db
           .from('contacts')
           .select('id, dob')
@@ -497,6 +556,10 @@ export async function runAudienceMatchTriggers({ now = new Date() } = {}) {
     .eq('status', 'active')
   if (error) throw new Error(`audience_match: sequence lookup failed: ${error.message}`)
   if (!sequences?.length) return stats
+  // TZ.4 — every studio's zone, once per run; null = the read failed, and
+  // then no sequence may open its window on a guessed clock.
+  const zones = await sequenceZones(db, sequences, 'audience_match')
+  if (!zones) { stats.errored += sequences.length; return stats }
 
   for (const seq of sequences) {
     // CRONISO.1 — per-sequence isolation. See the module header.
@@ -505,7 +568,7 @@ export async function runAudienceMatchTriggers({ now = new Date() } = {}) {
       if (!seq.audience_seeded_at) { stats.awaiting_seed++; continue }
 
       // 2. Outside the sending window → the first email would land out of hours.
-      if (!isInsideSendWindow(now, seq.send_window)) { stats.out_of_window++; continue }
+      if (!isInsideSendWindow(now, seq.send_window, zoneOfSequence(zones, seq))) { stats.out_of_window++; continue }
 
       // 3. An empty filter is a half-built sequence, not "everyone".
       const filters = seq.audience_filter?.filters
@@ -572,8 +635,9 @@ export async function runAudienceMatchTriggers({ now = new Date() } = {}) {
  *
  * Reuses the runner's own clamp so the two can never disagree about what
  * "inside the window" means: if clamping `now` returns `now`, we are inside it.
+ * TZ.4: `zone` is the sequence location's zone (default Europe/Dublin).
  */
-export function isInsideSendWindow(now, sendWindow) {
+export function isInsideSendWindow(now, sendWindow, zone = DEFAULT_TZ) {
   if (!hasSendWindow(sendWindow)) return true
-  return clampToSendWindow(now, sendWindow).getTime() === now.getTime()
+  return clampToSendWindow(now, sendWindow, zone).getTime() === now.getTime()
 }

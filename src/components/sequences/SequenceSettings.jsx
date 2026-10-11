@@ -104,7 +104,7 @@ export const SECRET_JUST_SET_MESSAGE = 'Saved. Copy it now; it is not shown agai
 // (has_webhook_secret flips, Publish changes status) REMOUNTS it. The parent
 // holds the just-saved plaintext so the remount re-seeds it instead of
 // silently dropping a secret the operator has not copied yet.
-export default function SequenceSettings({ sequence, justSetSecret = null, onJustSetSecret }) {
+export default function SequenceSettings({ sequence, locationTimeZone = null, justSetSecret = null, onJustSetSecret }) {
   const [open, setOpen] = useState(!!justSetSecret)
   const [name, setName] = useState(sequence?.name || '')
   const [status, setStatus] = useState(sequence?.status || 'draft')
@@ -384,7 +384,7 @@ export default function SequenceSettings({ sequence, justSetSecret = null, onJus
               <span className="block text-[11px] text-un1t-subtle/80">Only enrol contacts who match these conditions when the trigger fires. Leave empty to allow anyone.</span>
               <span className="block text-[11px] text-un1t-subtle/80 mt-1">{AUDIENCE_CONTINUOUS_HINT}</span>
             </div>
-            <AudienceBuilder filter={audienceFilter || { logic: 'and', filters: [] }} onChange={f => { setAudienceFilter(f); touch() }} />
+            <AudienceBuilder filter={audienceFilter || { logic: 'and', filters: [] }} onChange={f => { setAudienceFilter(f); touch() }} timeZone={locationTimeZone} />
             {/* FILTER-B.3 — a MATCHING count, deliberately not a send count.
                 Since SEQEXIT.1 this filter is a continuing condition: it
                 decides who enrols AND who stays, re-checked before every

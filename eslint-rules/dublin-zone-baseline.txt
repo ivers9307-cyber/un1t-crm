@@ -36,9 +36,6 @@ shared/share-card.js
 shared/tier-window.js
 shared/week-digest.js
 shared/working-time.js
-src/app/(members)/bookings/event-types/[id]/page.js
-src/app/(members)/bookings/page.js
-src/app/(sales)/contacts/[id]/page.js
 src/app/(team)/contracts/[id]/page.js
 src/app/(team)/contracts/page.js
 src/app/(team)/contracts/templates/[id]/page.js
@@ -88,7 +85,6 @@ src/app/api/schedule/time-off/[id]/route.js
 src/app/api/schedule/time-off/[id]/unassign-clashes/route.js
 src/app/api/schedule/time-off/route.js
 src/app/api/schedule/week-cost/route.js
-src/app/api/whatsapp/broadcasts/route.js
 src/app/communications/(marketing-era)/list-health/page.js
 src/app/dashboard/today/page.js
 src/app/live/[locationId]/DetectedTab.jsx
@@ -97,10 +93,7 @@ src/app/settings/customer-agent/CustomerAgentClient.jsx
 src/app/welcome/[location]/status/page.js
 src/components/AcControlPanel.jsx
 src/components/AttendanceReportClient.jsx
-src/components/AudienceBuilder.jsx
 src/components/AuditLogTable.jsx
-src/components/BookingSkipReminderToggle.jsx
-src/components/BookingWidget.jsx
 src/components/CalendarFeedCard.jsx
 src/components/ConsultationForm.jsx
 src/components/DealCard.jsx
@@ -113,7 +106,6 @@ src/components/TasksPage.jsx
 src/components/TimeOffManager.jsx
 src/components/automations/BathroomClimateCard.jsx
 src/components/automations/ClassClimateCard.jsx
-src/components/communications/UnifiedSendComposer.jsx
 src/components/contact/ContactDrawer.jsx
 src/components/contact/ContactHeaderBand.jsx
 src/components/dashboard/AdsRefreshButton.jsx
@@ -138,15 +130,10 @@ src/lib/availability-notify.js
 src/lib/billing-page.js
 src/lib/block-edit-notify.js
 src/lib/block-edit.js
-src/lib/booking-confirmations.js
-src/lib/booking-slots.js
-src/lib/bridge-samples.js
 src/lib/cancellation-form/rules.js
 src/lib/candidates-data.js
 src/lib/challenges.js
-src/lib/class-booking-processor.js
 src/lib/class-occurrences.js
-src/lib/class-reminders.js
 src/lib/contract-pdf.js
 src/lib/contracts.js
 src/lib/customer-notifications.js
@@ -169,13 +156,10 @@ src/lib/live-board.js
 src/lib/live-class.js
 src/lib/live-poll.js
 src/lib/mail/reply-quote.js
-src/lib/manual-booking-confirm-copy.js
-src/lib/manual-timetable.js
 src/lib/membership-flows.js
 src/lib/membership-snapshot.js
 src/lib/onboarding-journey.js
 src/lib/plans.js
-src/lib/public-classes.js
 src/lib/public-events.js
 src/lib/qualification-digest.js
 src/lib/recon/finalize.js
@@ -194,9 +178,6 @@ src/lib/roster-runway-data.js
 src/lib/roster-runway-notify.js
 src/lib/roster-staffing.js
 src/lib/sale-offers.js
-src/lib/send-quiet-hours.js
-src/lib/sequences/cron-triggers.js
-src/lib/sequences/scheduler.js
 src/lib/shift-reminders.js
 src/lib/shift-replace-notify.js
 src/lib/staff-calendar-feed.js

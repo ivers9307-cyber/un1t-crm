@@ -33,6 +33,8 @@ const STATUSES = ['', 'new_lead', 'first_class', 'second_class', 'trial_done',
 export default function ContactsView({
   initialContacts,
   locationId,
+  // TZ.4 — the studio's IANA zone: the audience builder's "today".
+  locationTimeZone = null,
   crossoverContext = {},
   listFlags = {},
   initialStatus = '',
@@ -411,6 +413,7 @@ export default function ContactsView({
             onChange={handleFilterChange}
             audienceCount={apiActive ? count : null}
             locationId={locationId}
+            timeZone={locationTimeZone}
           />
 
           {/* Save-as-segment row. Only visible when there's at least
