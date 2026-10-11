@@ -190,6 +190,19 @@ const PAIRS = {
       'a gym literal; shared/ is the implementation, src/lib/brand-name.js is an `export * from` shim.',
   },
 
+  'zone-suffix.js': {
+    mode: 'reexport',
+    shared: 'shared/zone-suffix.js',
+    web: 'src/lib/record-time.js',
+    webOnly: ['formatRecordTime'],
+    why:
+      'TZ follow-up: the D3 = A "append the zone abbreviation only when the record zone is not the viewer\'s" rule ' +
+      '(needsZoneSuffix, zoneAbbreviation, zoneCity, sameZone, zoneSuffix) had two hand-written copies, the web\'s ' +
+      'src/lib/record-time.js (TZ.16) and the phone\'s mobile/lib/studio-zone.js (TZ.14). It lives once in shared/; ' +
+      'record-time.js re-exports it and keeps only its formatter (formatRecordTime), and studio-zone.js wraps it with ' +
+      'the device zone as the default viewer. Cross-named, so this entry is what makes the identity assertion run.',
+  },
+
   'zoned-time.js': {
     mode: 'reexport',
     shared: 'shared/zoned-time.js',

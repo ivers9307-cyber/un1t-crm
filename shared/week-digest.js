@@ -19,15 +19,15 @@
 // A session at Sun 23:55 local and one at Mon 00:05 local therefore fall in
 // the correct week regardless of summer time.
 
-import { weekStartMsIn, isoWeekKeyIn, dateKeyIn, DAY_MS, DEFAULT_TZ } from './zoned-time.js'
+import { weekStartMsIn, isoWeekKeyIn, dateKeyIn, addDaysISO, DAY_MS, DEFAULT_TZ } from './zoned-time.js'
 import { isBurn } from './heart-rate.js'
 
 const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
-// 'D Mon' label (e.g. '28 Jun') for the local calendar day of a UTC instant.
-function localDayLabel(ms, zone) {
-  const [y, m, d] = dateKeyIn(ms, zone).split('-').map(Number)
+// 'D Mon' label (e.g. '28 Jun') for a 'YYYY-MM-DD' calendar day.
+function dayKeyLabel(key) {
+  const [, m, d] = key.split('-').map(Number)
   return `${d} ${MONTHS_SHORT[m - 1]}`
 }
 
@@ -69,9 +69,12 @@ export function weekDigestModel(sessions, nowMs = Date.now(), { leagueFinish = n
   // ISO-week key + label anchor on a day squarely inside last week (its Monday),
   // never on the exclusive upper bound.
   const weekKey = isoWeekKeyIn(startMs, zone)
-  // Label spans Mon → Sun of last week (endMs is exclusive Monday-of-this-week,
-  // so the last day is endMs - 1 day).
-  const weekLabel = `${localDayLabel(startMs, zone)}–${localDayLabel(endMs - DAY_MS, zone)}`
+  // Label spans Mon → Sun of last week, counted on the CALENDAR: Monday's local
+  // date + 6 days. Never `endMs - DAY_MS`: a spring-forward week is only 167h
+  // long, so that instant is Saturday 23:00 local and the label read
+  // '23 Mar–28 Mar' for the week of the 2026 EU change.
+  const mondayKey = dateKeyIn(startMs, zone)
+  const weekLabel = `${dayKeyLabel(mondayKey)}–${dayKeyLabel(addDaysISO(mondayKey, 6))}`
 
   let classes = 0
   let points = 0

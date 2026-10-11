@@ -10,8 +10,16 @@
 // Pure: no React, no IO. The hooks are mobile/lib/use-studio-zone.js. Every
 // Intl formatter is built lazily through shared/zoned-time (Hermes-safe: a
 // build without full ICU can never fail this module's evaluation).
+//
+// The suffix rule (same-zone test, abbreviation, ' EST' suffix) is
+// shared/zone-suffix.js, the ONE implementation the web's
+// src/lib/record-time.js (TZ.16) re-exports too; this module only adds the
+// phone's own zone as the default viewer.
 
 import { DEFAULT_TZ, canonicalZone, resolveZone, formatInZone } from 'shared/zoned-time'
+import { zoneSuffix as sharedZoneSuffix } from 'shared/zone-suffix'
+
+export { sameZone, zoneAbbreviation as zoneAbbrev } from 'shared/zone-suffix'
 
 /** A /api/mobile/me location row → its canonical zone (Dublin floor for absent/invalid). */
 export function zoneOfLocationRow(loc) {
@@ -51,44 +59,12 @@ export function deviceZone() {
 /** Test seam. */
 export function _resetDeviceZone() { _device = undefined }
 
-/** Same zone, compared through canonicalZone (Asia/Kolkata = Asia/Calcutta). */
-export function sameZone(a, b) {
-  const ca = canonicalZone(a)
-  return ca !== null && ca === canonicalZone(b)
-}
-
-const LETTERED = /^[A-Z]{2,5}$/
-// en-US names the US zones (EST/EDT), en-GB the UK one (BST), en-IE Ireland's
-// summer time (IST), en-AU Australia's (AEST); the first LETTERED answer wins,
-// else the offset form ("GMT+4"), else the zone's city, so the suffix is never
-// silently empty. Same locale order as the web's src/lib/record-time.js
-// (TZ.16), so a record reads the same abbreviation on both.
-const ABBREV_LOCALES = ['en-US', 'en-GB', 'en-IE', 'en-AU']
-/** Short name of `zone` at `instant`: 'EST', 'IST', 'BST', 'GMT+11', or the city. */
-export function zoneAbbrev(instant, zone) {
-  let offsetForm = ''
-  for (const locale of ABBREV_LOCALES) {
-    try {
-      const part = new Intl.DateTimeFormat(locale, { timeZone: zone, timeZoneName: 'short' })
-        .formatToParts(instant instanceof Date ? instant : new Date(instant))
-        .find((p) => p.type === 'timeZoneName')
-      const name = part?.value || ''
-      if (LETTERED.test(name)) return name
-      if (!offsetForm && name) offsetForm = name
-    } catch {
-      // A runtime without timeZoneName support: try the next locale, then the city.
-    }
-  }
-  return offsetForm || String(zone || '').split('/').pop().replace(/_/g, ' ')
-}
-
 /**
  * ' EST' when the record's zone differs from the viewer's, '' otherwise (and ''
  * when the viewer's zone is unknown: the pre-TZ.14 text, never a guess).
  */
 export function zoneSuffix(instant, zone, viewerZone = deviceZone()) {
-  if (!viewerZone || sameZone(zone, viewerZone)) return ''
-  return ` ${zoneAbbrev(instant, zone)}`
+  return sharedZoneSuffix(instant, zone, viewerZone)
 }
 
 function parseInstant(iso) {
